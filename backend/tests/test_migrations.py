@@ -354,7 +354,7 @@ def test_an_existing_database_loses_the_private_parties_index_and_the_parties_re
     from backend import row_clock
     path = fresh(tmp_path)
     with sqlite3.connect(path) as c:
-        c.execute("CREATE INDEX tasks_private_parties ON tasks(id, requester_id, owner_id, guest, private) "
+        c.execute("CREATE INDEX tasks_private_parties ON tasks(id, requester_id, owner_id, readers, private) "
                   "WHERE private IS NOT 0")
         restore_config(c)
         c.execute("DELETE FROM schema_migrations WHERE version>='0042' AND version NOT LIKE 'legacy_%'")
@@ -762,6 +762,45 @@ def _migration(name):
     module = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(module)
     return module
+
+
+def test_a_private_tasks_guest_becomes_its_first_reader_and_the_guest_column_goes():
+    """20261105213649_task_readers: each guest is copied into `readers` (tasks and the trash), the indexes and
+    triggers that named `guest` go, the covering indexes come back with `readers`, and running again changes nothing."""
+    up = _migration("20261105213649_task_readers").up
+    with sqlite3.connect(":memory:") as c:
+        c.execute("CREATE TABLE tasks(id TEXT PRIMARY KEY, requester_id TEXT, owner_id TEXT, private INTEGER, "
+                  "status TEXT, waiting_on TEXT, rank REAL, created_at TEXT, guest TEXT)")
+        c.execute("CREATE INDEX tasks_private_status ON tasks(id, requester_id, owner_id, guest, private, status, "
+                  "waiting_on) WHERE private IS NOT 0")
+        c.execute("CREATE TRIGGER tasks_guest_seen AFTER UPDATE OF guest ON tasks BEGIN SELECT 1; END")
+        c.execute("CREATE TABLE task_trash(task_id TEXT PRIMARY KEY, rows TEXT, guest TEXT)")
+        c.executemany("INSERT INTO tasks(id,requester_id,owner_id,private,status,guest) VALUES(?,?,?,1,'open',?)",
+                      [("t1", "bot:cpo", "bot:ops", "human:ben"), ("t2", "bot:cpo", "bot:ops", None),
+                       ("t3", "human:ana", "bot:ops", "")])
+        c.execute("INSERT INTO task_trash VALUES('t9','[]','human:cara')")
+        up(c)
+        assert "guest" not in {row[1] for row in c.execute("PRAGMA table_info(tasks)")}
+        assert "guest" not in {row[1] for row in c.execute("PRAGMA table_info(task_trash)")}
+        moved = dict(c.execute("SELECT id, readers FROM tasks").fetchall())
+        assert moved == {"t1": '["human:ben"]', "t2": None, "t3": None}
+        assert c.execute("SELECT readers FROM task_trash").fetchone()[0] == '["human:cara"]'
+        schema = {row[0]: row[1] for row in c.execute("SELECT name, sql FROM sqlite_master WHERE tbl_name='tasks'")}
+        assert "tasks_guest_seen" not in schema and "readers" in schema["tasks_private_status"]
+        assert {"tasks_queue_cover", "tasks_owner_status_cover", "tasks_requester_status_cover"} <= set(schema)
+        before = c.execute("SELECT type, name, sql FROM sqlite_master ORDER BY name").fetchall()
+        up(c)
+        assert c.execute("SELECT type, name, sql FROM sqlite_master ORDER BY name").fetchall() == before
+        assert dict(c.execute("SELECT id, readers FROM tasks").fetchall()) == moved
+
+
+def test_a_fresh_database_has_task_readers_and_no_guest(tmp_path):
+    path = fresh(tmp_path)
+    with sqlite3.connect(path) as c:
+        for table in ("tasks", "task_trash"):
+            columns = {row[1] for row in c.execute(f"PRAGMA table_info({table})")}
+            assert "readers" in columns and "guest" not in columns, (table, columns)
+        assert not c.execute("SELECT name FROM sqlite_master WHERE sql LIKE '%guest%' AND tbl_name='tasks'").fetchall()
 
 
 def test_a_session_link_keeps_its_thread_once_in_its_url():

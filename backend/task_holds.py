@@ -111,7 +111,7 @@ def holds(conn, row):
 
 def _task_hold(conn, row, kind, other):
     """A child or blocker as a hold. A private one is named by neither title nor owner: the reason is shown to everyone
-    who reads the task (its guest and its parties' managers too), and not all of them read the other task."""
+    who reads the task (its readers and its parties' managers too), and not all of them read the other task."""
     from . import hubdb as H
     if H.task_private(conn, other):
         return {"kind": "private", "on": None, "what": "a private task"}

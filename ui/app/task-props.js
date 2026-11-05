@@ -58,10 +58,9 @@ function taskPropsHTML(t, opts = {}) {
   const asker = taskRequester(t);
   rows.push(row('asker', 'Asked by', asker ? actorFace(asker, 16) + txt(actorLabel(asker)) : txt('Unknown'), {words: actorLabel(asker) || 'Unknown', empty: !asker}));
   if (t.roles && (typed || Object.keys(t.roles).length)) rows.push(taskPeopleRowHTML(t, r));
-  // Private: the label never changes; a few words beside the box say who sees it, the tooltip says it in full
-  const seenBy = t.private ? (t.guest ? `Requester, owner, ${actorLabel(t.guest)}` : 'Requester and owner') : 'Everyone';
-  const seenTip = t.private ? (t.guest ? `Only the requester, the assignee and ${actorLabel(t.guest)}, whom the assignee brought in, can see this task` : 'Only the requester and assignee can see a private task') : 'Visible to everyone in the company';
-  rows.push(`<div class="prop" data-prop-row="private" title="${esc(seenTip)}"><span class="prop-k">Private</span><span class="prop-vwrap"><label class="prop-v prop-check"><input type="checkbox" aria-label="Private" data-task-private ${t.private ? 'checked' : ''} ${r.party && (!t.private || myActor() === t.requester_id) ? '' : 'disabled'}><span class="prop-txt">${esc(seenBy)}</span></label></span></div>`);
+  // Private: the box only; Who can see, below it, says who does
+  rows.push(`<div class="prop" data-prop-row="private"><span class="prop-k">Private</span><span class="prop-vwrap"><label class="prop-v prop-check"><input type="checkbox" aria-label="Private" data-task-private ${t.private ? 'checked' : ''} ${r.party && (!t.private || myActor() === t.requester_id) ? '' : 'disabled'}></label></span></div>`);
+  rows.push(taskReadersRowHTML(t, r));
   if (roadmapTask(t)) {
     rows.push(`<div class="prop" data-prop-row="publication"><span class="prop-k">Public</span><span class="prop-vwrap"><label class="prop-v prop-check"><input type="checkbox" aria-label="Public" data-task-public ${t.visibility === 'public' ? 'checked' : ''} ${r.reopen && !t.private ? '' : 'disabled'}><span class="prop-txt">${t.visibility === 'public' ? 'Shown on the public roadmap' : 'Team only'}</span></label></span></div>`);
     rows.push(`<div class="prop" data-prop-row="size"><span class="prop-k">Size</span><span class="prop-vwrap"><input class="roadmap-size" type="number" aria-label="Size" data-task-size data-task-field="size" min="0" step="any" value="${esc(t.size ?? '')}" ${r.reopen ? '' : 'disabled'}></span></div>`);
@@ -115,7 +114,7 @@ function taskPropsHTML(t, opts = {}) {
   return `<div class="props">${rows.join('')}</div><div class="props-msg" data-props-msg role="status" aria-live="polite"></div>`;
 }
 // A refused save's reason stays under the properties until that property saves (several: one line each, named).
-const PROP_WORDS = {status: 'Status', owner: 'Owner', due: 'Due', check_back: 'Follow up by', check_back_note: 'Expected result', tags: 'Tags', parent: 'Part of', type: 'Type', step: 'Step', people: 'People', publication: 'Public', size: 'Size'};
+const PROP_WORDS = {readers: 'Who can see', status: 'Status', owner: 'Owner', due: 'Due', check_back: 'Follow up by', check_back_note: 'Expected result', tags: 'Tags', parent: 'Part of', type: 'Type', step: 'Step', people: 'People', publication: 'Public', size: 'Size'};
 
 // Who is on a task by role (the server's `roles`): one chip per person and role, × takes one off, + adds one.
 // Roles are names the team chooses; what they mean downstream is the client's.
@@ -127,6 +126,34 @@ function taskPeopleRowHTML(t, r) {
     : chips ? `<button type="button" class="prop-add" data-prop="people" aria-haspopup="menu" aria-label="Add a person" title="Add">${TL_ICON.plus}</button>`
     : `<button type="button" class="prop-v empty" data-prop="people" aria-haspopup="menu" aria-label="People: none, add someone"><span class="prop-txt">Add</span></button>`;
   return `<div class="prop" data-prop-row="people"><span class="prop-k" aria-hidden="true">People</span><span class="prop-vwrap"><span class="prop-tags" aria-label="People">${chips}${add}</span></span></div>`;
+}
+// Who can see: Public, or a private task's requester and owner with its readers (people, bots, groups); × takes a
+// reader off, + adds one. The server decides who may change it (hubdb.set_task_readers).
+function taskReadersRowHTML(t, r) {
+  const head = '<div class="prop" data-prop-row="readers"><span class="prop-k" aria-hidden="true">Who can see</span><span class="prop-vwrap">';
+  if (!t.private) return head + '<span class="prop-v ro" aria-label="Who can see: Public"><span class="prop-txt">Public</span></span></span></div>';
+  const may = r.mover || r.party;
+  const chip = (a, off) => `<span class="prop-chip">${actorAvatar(a, 16)}<span class="prop-txt">${esc(actorName(a))}</span>${off
+    ? `<button type="button" class="prop-x" data-prop-clear-reader="${esc(a)}" aria-label="Take ${esc(actorName(a))} off" title="Take off">${TL_ICON.x}</button>` : ''}</span>`;
+  const parties = [...new Set([taskRequester(t) || t.requester_id, t.owner_id].filter(Boolean))];
+  const chips = parties.map(a => chip(a, false)).join('') + (t.readers || []).map(a => chip(a, may)).join('');
+  const add = may ? `<button type="button" class="prop-add" data-prop="readers" aria-haspopup="menu" aria-label="Add who can see" title="Add">${TL_ICON.plus}</button>` : '';
+  return head + `<span class="prop-tags" aria-label="Who can see">${chips}${add}</span></span></div>`;
+}
+// Adds or takes off readers, then draws the task again (a reader is not a task field: it has its own route).
+async function taskReaders(d, task, body) {
+  d.focusProp = 'readers';
+  try {
+    await post(`/v2/tasks/${encodeURIComponent(task.id)}/readers`, body);
+    if (d.propsErrs?.id === String(task.id)) d.propsErrs.map.delete('readers');
+    const data = await get(`/v2/tasks/${encodeURIComponent(task.id)}`);
+    if (TASKS_ST) void tasksLoad(TASKS_ST);
+    if (d.open && String(d.dataset.task) === String(task.id) && data.task) taskModalShow(data.task, d);
+  } catch (e) {
+    if (d.propsErrs?.id !== String(task.id)) d.propsErrs = {id: String(task.id), map: new Map()};
+    d.propsErrs.map.set('readers', e.message);
+    taskPropsMsgPaint(d);
+  }
 }
 function taskPropsMsgPaint(d) {
   const box = $('[data-props-msg]', d); if (!box) return;
@@ -240,6 +267,8 @@ function taskPropsBind(d, task, change) {
   const type = pipelineType(task), typed = !!type && pipelineTypeId(task) !== 'general';
   box.onclick = async ev => {
     if (ev.target.closest('[data-tag-key],[data-drop-label],[data-open-task]')) return;   // a tag opens its page; × and ↗ are bound in taskModalBind
+    const unread = ev.target.closest('[data-prop-clear-reader]');
+    if (unread) { void taskReaders(d, task, {remove: [unread.dataset.propClearReader]}); return; }
     const off = ev.target.closest('[data-prop-clear-role]');
     if (off) {
       const role = off.dataset.propClearRole, gone = off.dataset.actor;
@@ -295,6 +324,12 @@ function taskPropsBind(d, task, change) {
           if (!/^[a-z0-9][a-z0-9_-]{0,39}$/.test(role)) { d.propsErrs = {id: String(task.id), map: new Map([['people', 'A role is a short name: letters, digits, - or _.']])}; taskPropsMsgPaint(d); return; }
           setTimeout(() => pick(role));
         }});
+    } else if (key === 'readers') {
+      const have = new Set([...(task.readers || []), task.owner_id, task.requester_id]);
+      const items = threadAddable().filter(it => !have.has(it.actor)).map(it => ({value: it.actor, text: it.label,
+        html: `<span class="tl-opt-face">${actorAvatar(it.actor, 16)}</span><span>${esc(it.label)}</span>`}));
+      propMenu(d, b, {label: 'Who can see', find: 'Find a person, bot or team', items, none: 'Nobody to add',
+        onPick: it => void taskReaders(d, task, {add: [it.value]})});
     } else if (key === 'owner') {
       const opts = new DOMParser().parseFromString(`<select>${taskOwnerOptions('')}</select>`, 'text/html').querySelectorAll('option[value]:not([value=""])');
       propMenu(d, b, {label: 'Owner', find: 'Find a person or bot', items: [...opts].map(o => {

@@ -125,7 +125,7 @@ authorship name the manager who acted.
 The two sides keep their distinct rights: an owner bot's manager, bot or person, can
 complete work but not close or reopen it; a requester's manager can close and reopen it. The existing rule protecting a
 person's closure still applies. Managers gain no rights on unrelated private tasks;
-person-only private tasks stay with their parties and guest. Managers gain
+person-only private tasks stay with their parties and readers. Managers gain
 no right to edit or delete someone else's comments or decide a named approval, and
 no new credential, sending, spending, merge or bot administration permissions.
 Publishing a private task still requires its human requester. Task types, labels
@@ -401,8 +401,8 @@ priority over a negative branch such as "If you do not approve" or "If you agree
 nothing is sent and the task stays as it was. Every refusal is recorded and none counts toward a quarantine.
 A task with an open structured question to the person (`hub task question`) is already the card: it waits on them as itself, and its note is only warned
 about. Only the bot that owns the task or its managers name the person, and a private task can only ask a person who can read it,
-or, on a private task with no person on it, the one person it brings in as its guest (see "A private task with no
-person on it: its guest").
+or, on a private task with no person on it, the one person it brings in as its reader (see "A private task with no
+person on it: the person it reaches").
 
 Bot tasks that were waiting on a person before this rule are moved to it within the hour when their note is a plain
 ask; the rest stay last in the person's Needs you while their bot's task roundup lists the ask to restate it.
@@ -1549,34 +1549,53 @@ permission to change, reassign or complete work. Type bot settings continue to g
 subtask and work permissions; they cannot override Private or restricted bot activity.
 
 Turn on **Private** in the existing task controls to limit future reads to the requester,
-current assignee and the managers of any bot party. Tasks with only person parties remain
-private to those parties and their guest. The assignee or its managers may tighten visibility; only the human requester
-can publish again. Bots cannot publish a private task, including when acting for a person.
+current assignee, its readers and the managers of any bot party. The assignee or its managers may tighten visibility;
+only the human requester can publish again. Bots cannot publish a private task, including when acting for a person.
 Bot-requested private work stays private until a future explicit human publication mechanism
 exists. Mentions, administrator status, parent ownership and delegations grant no access.
 Reassigning a private task gives the new assignee access and removes the previous assignee's
-future access unless they remain its requester or manage a current bot party. Reassignment never clears Private.
+future access unless they remain its requester, a reader, or manage a current bot party. Reassignment never clears
+Private, and never changes the readers.
 
-### A private task with no person on it: its guest
+### Who can see a private task
+
+A private task is seen by its requester, its owner and its **readers**: people, bots and groups listed on the task.
+A group names everyone in it and in the groups under it, read at each check, so someone who leaves the group stops
+seeing the task. The managers of a bot party, a recorded meeting's participants and Counsel copies of a page also
+read it, as before; they are not listed. A company task is seen by everyone.
+
+- The task's **Who can see** row shows Public, or the requester, owner and readers; × takes a reader off and + adds
+  one (a person, bot or team).
+- Anyone who may change the task changes its readers: its requester, owner, their managers and delegates, a party
+  above it, or a task mover. Each add and remove is in the task's history.
+- `hub task create --private --reader X` (repeat for more; `group:<id>` for a group) files it with readers.
+  `hub task readers list|add|remove <id> [X ...]` reads and changes them (MCP: `hub_task_readers_list`,
+  `hub_task_readers_add`, `hub_task_readers_remove`).
+- API: `GET /api/v2/tasks/{id}/readers`; `POST` with `{"add": [...], "remove": [...]}`; `PUT` with `{"readers": [...]}`
+  replaces the list. A task create takes `readers` too. Each answers `{private, requester_id, owner_id, readers}`.
+- Readers go only on a private task: a company task refuses them. A task lists at most 50; add a group instead.
+- A reader reads that task only: not the task above it or its other subtasks. Reading a task's thread follows the task.
+
+### A private task with no person on it: the person it reaches
 
 A private task between two bots (or a bot's private task to itself) has nobody who could act on it, so its owning
-bot may bring in one person, its **guest**. The first time that bot hands them work from the task, they become its
-guest: a subtask for them under it (`hub task create --owner <person> --parent <task>`), a question to them on it
+bot may bring in one person as a reader. The first time that bot hands them work from the task, they become its
+reader: a subtask for them under it (`hub task create --owner <person> --parent <task>`), a question to them on it
 (`hub task question`), or setting it waiting on them (`--status waiting --on <person>`). The task's history records
-who it reached, and its Private row names them.
+who it reached, and its Who can see row names them.
 
-- The guest reads that task as its requester and owner do: its words, comments and files, even if they may not read
+- They read that task as its requester and owner do: its words, comments and files, even if they may not read
   those bots' activity. Nothing else: not the task above it, its other subtasks, or the bots' other work. Everyone else
   still gets "not found".
 - A run that also carries private work the person cannot read reaches nobody: the subtask, the question and the
   wait are all refused.
-- There is one guest. A hand-off to a different person is refused, naming the guest; hand the work to them instead.
-- Only the bot that owns the task or its managers bring a guest in; the requesting bot cannot. Reassigning the task ends the
-  guest's access; a new bot owner may then bring in one person of its own.
-- When a private task above it has a person on it, only someone who reads that task above can become the guest. From
+- The bot reaches one person. Once a person reads the task, a bot's hand-off to someone else is refused, naming who
+  reads it; hand the work to them, or ask them to add the other person under Who can see.
+- Only the bot that owns the task or its managers bring a person in this way; the requesting bot cannot.
+- When a private task above it has a person on it, only someone who reads that task above can be reached. From
   the task's own private work the hand-off is refused; otherwise the person gets their subtask alone, as before, and
-  does not become the guest.
-- The guest's answer on their subtask or question comes back to the task, and wakes its owner, as on any task.
+  does not become a reader.
+- Their answer on their subtask or question comes back to the task, and wakes its owner, as on any task.
 - Approvals stay refused from private work (they go to the default approver): ask the person with a subtask or
   `hub task question`.
 - `POST /api/v2/tasks/dry-run` makes the same privacy checks as the create and returns the same refusal text.
@@ -1589,7 +1608,7 @@ into it: never the parent (its title, words, comments or id), its other subtasks
 those stays "not found" for it, and its notices and run prompt leave the parent out.
 
 - Every private task the run carries that the other bot cannot read must have no person on it (no person requester,
-  owner or guest), nor any private task above it. Otherwise the create is refused, naming the person: ask them with
+  owner or reader), nor any private task above it. Otherwise the create is refused, naming the person: ask them with
   `hub task question`, or have them file the subtask. When the person is on a task above that the filer cannot read,
   the refusal leaves their name out and says to ask the filer's own requester to file it.
 - The subtask is private; a company-visible one is refused, as for any create from private work.
@@ -1613,7 +1632,7 @@ manager), from its own run, files it **from private work**: `hub task create --f
 criteria; the private task stays sealed.
 
 - The filer must own (or manage the owner of) the parent and every private task the run carries; a bot that is only a
-  reader or guest of one is refused. A person on any of them, or on a private task above one, gets the same refusal
+  reader of one is refused. A person on any of them, or on a private task above one, gets the same refusal
   as a sealed subtask, naming them and the route to them. The task is for a bot; the parent, when given, is private.
 - Its words are checked before it is written, and a failed check is refused naming the check, never the text: no
   secret-shaped value (as for a sealed subtask), no 12 or more words in a row copied from the parent or any private

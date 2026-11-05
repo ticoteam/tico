@@ -238,6 +238,14 @@ def _own_ask_to_a_person(who, row):
     return len(participants) == 2 and len(people) == 1 and who.actor in participants
 
 
+
+def reader_sql(c, actor):
+    """SQL over a tasks row: `actor` is on its reader list (`readers`), by name or through a group it is in. The twin
+    of hubdb.task_reader."""
+    names = A.qlist(H.reader_names(c, actor))
+    return (f"(readers IS NOT NULL AND EXISTS (SELECT 1 FROM json_each(CASE WHEN json_valid(readers) THEN readers END) "
+            f"WHERE value IN {names}))")
+
 class Auth:
     def __init__(self, store):
         self.store = store
@@ -797,15 +805,15 @@ class Auth:
         me = A.q(who.actor)
         from .meeting_audience import participant_access_sql
         participant = participant_access_sql(c, me)
-        # A private task's guest (hubdb.task_reach) reads it as its two parties do.
+        # A private task's readers (hubdb.task_reader: by name or through a group) read it as its two parties do.
         audience = (f"(owner_id IN {inherited_private} OR requester_id IN {inherited_private} "
-                    f"OR (coalesce(private,1)<>0 AND (guest={me} OR ({participant}))) "
+                    f"OR (coalesce(private,1)<>0 AND ({reader_sql(c, who.actor)} OR ({participant}))) "
                     f"OR (coalesce(private,1)=0 AND (owner_id IN {parties} OR requester_id IN {parties} OR ({clear}))))")
         if who.task_actor:
             actor = A.q(who.task_actor)
             carried = A.qlist(sorted(private_subjects(c, who.task_actor)))
             audience += (f" AND (coalesce(private,1)=0 OR owner_id IN {carried} OR requester_id IN {carried} "
-                         f"OR guest={actor} OR ({participant_access_sql(c, actor)}))")
+                         f"OR {reader_sql(c, who.task_actor)} OR ({participant_access_sql(c, actor)}))")
         from . import counsel
         denied = counsel.denied_page_copies(c, who, self)
         if denied:
@@ -1024,7 +1032,7 @@ class Auth:
             raise Problem("not_found", "Task not found", 404)
         participants = (row["owner_id"], row["requester_id"])
         if not H.task_participant(c, who.actor, row) and not (H.task_private(c, row) and H.task_private_readable(c, who.actor, row)):
-            # A party to a task, or a private task's guest, always sees it; anyone else needs Read on every bot it
+            # A party to a task, or a private task's reader, always sees it; anyone else needs Read on every bot it
             # involves.
             bots = [H.actor_id(a) for a in participants if str(a).startswith("bot:")]
             for slug, level in (self.bot_accesses(c, who, bots).items() if bots else ()):

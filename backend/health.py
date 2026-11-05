@@ -1503,7 +1503,7 @@ def unreadable_waits(c):
     """Name held questions whose recipient cannot sign in, run, or read every task source."""
     from . import ask_routing, task_privacy
     task_privacy.snapshot(c)
-    fields = "t.id,t.title,t.owner_id,t.requester_id,t.private,t.guest"
+    fields = "t.id,t.title,t.owner_id,t.requester_id,t.private,t.readers"
     rows = c.execute(
         f"SELECT * FROM (SELECT {fields},m.recipient_id AS recipient,m.id AS message_id FROM tasks t "
         "JOIN messages m ON m.sender_id=t.owner_id JOIN conversations cv ON cv.id=m.conversation_id "

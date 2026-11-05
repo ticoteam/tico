@@ -839,9 +839,9 @@ SCHEMAS = {
                 step_rank={"type": ["number", "null"], "description": "Its place within its step, lower first"},
                 waiting_on={"type": ["string", "null"], "description": "The person a waiting task waits on; "
                             "the task is in their Needs you"},
-                guest={"type": ["string", "null"], "description": "The one person a private task with no person on "
-                       "it reached: its owning bot's first subtask, question or wait for them made them its guest. "
-                       "They read the task as its requester and owner do, and nothing else of its tree"},
+                readers=items({"type": "string"}) | {"description": "Who else can see a private task besides its "
+                         "requester and owner: people, bots and group:<id>s (a group by its members now). Empty on a "
+                         "company task. GET/PUT /api/v2/tasks/{id}/readers reads and changes it"},
                 holds=items(ref("TaskHold")) | {"description": "What holds the task (docs/tasks.md, Holds): at most one "
                                                 "per kind, empty when nothing does"},
                 roles={"type": "object", "description": "Who is on the task, by role: each role a short name the team "

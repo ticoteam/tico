@@ -701,7 +701,10 @@ def tag_update(api, args):
        "check_back_at": _s("When to inspect progress: ISO timestamp or duration such as 45m; defaults automatically"),
        "check_back_note": _s("What result or handoff to inspect, at most 500 characters"),
        "due": _s("ISO-8601 date-time with timezone"),
-       "private": {"type": "boolean", "description": "Only requester and assignee may read; bot defaults also apply"},
+       "private": {"type": "boolean", "description": "Only its requester, owner and readers see it; bot defaults also apply"},
+       "readers": {"type": "array", "items": {"type": "string"},
+                   "description": "On a private task: who else sees it, people, bots or group:<id>s (a group by its "
+                                  "members now)"},
        "from_private": {"type": "boolean", "default": False,
                         "description": "From a run on your own private task with no person on it: a company-visible "
                                        "task for a bot, carrying only its own words (no 12 words copied from the private "
@@ -755,7 +758,7 @@ def task_create(api, args):
         body["relations"] = [{"task": args["parent"], "kind": "parent"}]
     for field in ("labels", "top", "links", "next_run", "request_id", "type", "step", "number", "check_model",
                   "check_role", "visibility", "public_title", "public_summary", "from_private", "model", "effort",
-                  "harness", "check_back_at", "check_back_note"):
+                  "harness", "check_back_at", "check_back_note", "readers"):
         if args.get(field) not in (None, "", [], False):
             body[field] = args[field]
     for field in ("qa", "change_paths", "qa_not_checkable_live", "blocker"):
@@ -1391,6 +1394,30 @@ def task_link(api, args):
                                                                **({"kind": "session"} if args.get("kind") == "session" else {}),
                                                                **({"wake_once": args["wake_once"]} if args.get("wake_once") is not None else {})},
                                   key=_key(args))
+
+
+READERS = {"type": "array", "items": {"type": "string"}, "minItems": 1,
+           "description": "People, bots or groups: human:<id>, bot:<slug> or group:<id>"}
+
+
+@tool("hub_task_readers_list", "Who can see a task: on a private one its requester, owner and readers (people, bots, "
+      "groups). A company task is seen by everyone.", {"id": TASK_ID}, required=("id",))
+def task_readers_list(api, args):
+    return api.get(f"tasks/{args['id']}/readers")
+
+
+@tool("hub_task_readers_add", "Let more people, bots or groups see a private task. A group's members are read live, "
+      "so leaving the group takes the access away. Anyone who may change the task may; it is in the task's history.",
+      {"id": TASK_ID, "readers": READERS}, required=("id", "readers"), writes=True)
+def task_readers_add(api, args):
+    return api.post(f"tasks/{args['id']}/readers", {"add": list(args["readers"])}, key=_key(args))
+
+
+@tool("hub_task_readers_remove", "Take people, bots or groups off a private task's readers: they stop seeing it. Its "
+      "requester and owner always see it.",
+      {"id": TASK_ID, "readers": READERS}, required=("id", "readers"), writes=True)
+def task_readers_remove(api, args):
+    return api.post(f"tasks/{args['id']}/readers", {"remove": list(args["readers"])}, key=_key(args))
 
 
 @tool("hub_task_relate", "Relate another task to this one, read as `id kind task`: parent (task is its "

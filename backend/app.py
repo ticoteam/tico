@@ -1247,7 +1247,8 @@ def create_app(settings=None):
             H.hydrate_task_tags(c, [row])
         value = {"id": row["id"], "short_id": row["id"][:8], **row, "acceptance_criteria": json.loads(row.get("acceptance", "[]")),
                  "labels": H.task_labels(row), "lane": row.get("lane") or "company",
-                 "next_run": bool(row.get("next_run")), "private": H.task_private(c, row), "cover": None}
+                 "next_run": bool(row.get("next_run")), "private": H.task_private(c, row), "cover": None,
+                 "readers": H.task_readers(row)}
         if c is not None and row.get("next_run"):
             value["next_run_waiting"] = H.next_run_waiting(c, row)
         if c is not None and (deferred := quiet_work.view(c, row)):
@@ -4033,7 +4034,7 @@ def create_app(settings=None):
                                       "check_back_note", "check_back",
                                       "requester_count", "external_requesters", "internal_requesters", "important_requesters", "organization", "size"):
                             row.pop(field, None)
-                        for field in ("verdict", "verdict_head", "check_back_at", "done_at", "closed_at", "closed_by_id", "guest"):
+                        for field in ("verdict", "verdict_head", "check_back_at", "done_at", "closed_at", "closed_by_id"):
                             if row.get(field) is None:
                                 row.pop(field, None)
                         if isinstance(row.get("step"), dict):
@@ -4413,8 +4414,8 @@ def create_app(settings=None):
             asked_botops = assistant_instruction(c, who, request_id) if assistant_direct() else None
             request_id = None
         # The same checks the dry-run makes (task_privacy.require_create); a subtask for a person under a private
-        # task with no person on it, filed by the bot that owns it, makes them its one guest.
-        guest = privacy.require_create(c, source, body.private, owner, H.task(c, parent_id) if parent_id else None,
+        # task with no person on it, filed by the bot that owns it, makes them its reader.
+        reach_to = privacy.require_create(c, source, body.private, owner, H.task(c, parent_id) if parent_id else None,
                                        actor=who.actor, title=body.title, body=body.body,
                                        from_private_work=body.from_private, texts=privacy.create_texts(body),
                                        related=[other for other, _ in others])
@@ -4422,7 +4423,7 @@ def create_app(settings=None):
         kept = privacy.from_private(c, source, owner, H.task(c, parent_id) if parent_id else None) \
             if body.from_private else []
         # A private run's subtask for a bot that cannot read its parent: sealed, the history says so (Dev 632).
-        sealed = (not guest and not kept and privacy.private_execution(c, source)
+        sealed = (not reach_to and not kept and privacy.private_execution(c, source)
                   and privacy.sealed_for(c, source, owner, H.task(c, parent_id) if parent_id else None) is not None)
         auth.require_bot_contact(c, who, owner, task_id=parent_id, kind="task")
         # A subtask is the shape that parks the filer as `waiting` and makes it care when the
@@ -4526,7 +4527,7 @@ def create_app(settings=None):
                 raise Problem("privacy", "The verified requester cannot receive this private execution's other context", 403)
         if private and actual_bot and actual_bot not in (requester_actor or who.actor, owner):
             raise Problem("privacy", "The acting bot must be a current participant of the private task", 403)
-        if guest:
+        if reach_to:
             H.task_reach(c, who.actor, parent, owner)
         row = H.task_create(c, who.actor, body.title, body.body, owner, body.due, parent_id,
                             requester_actor=requester_actor, visibility=body.visibility,
@@ -4619,9 +4620,12 @@ def create_app(settings=None):
             changed = TR.relate(c, who.actor, row["id"], other, kind, mover=mover(c, who) or None)
             readback += TR.readback(c, row["id"], other, kind, changed=changed)
             own_subtask.append(TR.own_subtask_warning(c, row["id"], other, kind))
+        if body.readers:
+            # Who else sees it, before a meeting's audience is checked against everyone who will.
+            H.set_task_readers(c, who.actor, row["id"], add=body.readers, mover=mover(c, who) or None)
         if body.live_meeting_id:
             meeting_audience.check(c, auth, who, owner, live_id=body.live_meeting_id,
-                                   roles=body.roles, guest=H.task(c, row["id"]).get("guest"),
+                                   roles=body.roles, readers=H.task_readers(H.task(c, row["id"])),
                                    requester=H.task(c, row["id"])["requester_id"])
             c.execute("UPDATE tasks SET live_meeting_id=? WHERE id=?", (body.live_meeting_id, row["id"]))
             meeting_audience.grant(c, row["id"], meeting_participants, who.actor)
@@ -5512,6 +5516,45 @@ def create_app(settings=None):
             task_id = auth.resolve_task(c, request.state.identity, tid)
             auth.task(c, request.state.identity, task_id)
             return {"links": H.task_links(c, task_id)}
+
+    def readers_answer(c, who, task_id):
+        row = H.task(c, task_id)
+        view = teammate_access.Known(c, who, auth).task({**row, "readers": H.task_readers(row)})
+        return {"private": H.task_private(c, row), "requester_id": view["requester_id"], "owner_id": view["owner_id"],
+                "readers": view["readers"]}
+
+    @app.get("/api/v2/tasks/{tid}/readers")
+    def get_task_readers(request: Request, tid: str):
+        """Who can see the task: on a private one its requester, owner and reader list (docs/tasks.md)."""
+        with store.read() as c:
+            who = request.state.identity
+            task_id = auth.resolve_task(c, who, tid)
+            auth.task(c, who, task_id)
+            return readers_answer(c, who, task_id)
+
+    def change_readers(request, tid, body, what, **change):
+        def work(c):
+            who = request.state.identity
+            task_id = auth.resolve_task(c, who, tid)
+            auth.task(c, who, task_id)
+            if who.via == "botops" and not who.confirmed:
+                # BotOps acting for a person changes who sees a task only on that person's own tap (a Confirm card).
+                return app.state.botops_propose(c, who, request.method, f"/api/v2/tasks/{tid}/readers",
+                                                body.model_dump(exclude_none=True),
+                                                what + " “" + H.task(c, task_id)["title"] + "”")
+            H.set_task_readers(c, who.actor, task_id, mover=mover(c, who) or None, **change)
+            return readers_answer(c, who, task_id)
+        return mutate(request, body, work)
+
+    @app.post("/api/v2/tasks/{tid}/readers")
+    def task_readers(request: Request, tid: str, body: M.TaskReaders):
+        """Add and remove who else sees a private task; each change is in its history."""
+        return change_readers(request, tid, body, "Change who sees", add=body.add, remove=body.remove)
+
+    @app.put("/api/v2/tasks/{tid}/readers")
+    def put_task_readers(request: Request, tid: str, body: M.TaskReaderList):
+        """Replace the reader list of a private task."""
+        return change_readers(request, tid, body, "Change who sees", replace=body.readers)
 
     @app.delete("/api/v2/tasks/{tid}/links/{link_id}")
     def delete_task_link(request: Request, tid: str, link_id: M.ID):

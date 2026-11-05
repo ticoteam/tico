@@ -316,7 +316,7 @@ def task_dry_run(c, auth, who, body):
                 not who.task_actor or H.task_private_readable(c, who.task_actor, H.task(c, dup["id"]))):
             problems.append(f"{dup['id']} already asks {H.actor_name(c, target)} for this")
         # The create's own privacy refusals, word for word (task_privacy.require_create): private work handed to
-        # someone who cannot read it, or a private task's guest refused.
+        # someone who cannot read it, or a private task's reach refused.
         from . import task_privacy as privacy
         try:
             parents = [r.task for r in body.relations if r.kind == "parent"]

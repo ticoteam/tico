@@ -199,6 +199,9 @@ class TaskBlocker(Contract):
     endpoint: str = Field(min_length=1, max_length=200)
 
 
+ReaderName = Annotated[str, Field(min_length=1, max_length=200)]
+
+
 class TaskCreate(Contract):
     live_meeting_id: ID | None = None
     visibility: Literal['public', 'private'] | None = None
@@ -235,6 +238,8 @@ class TaskCreate(Contract):
     number: TaskNumber | None = None
     # Who else is on the task, by role: {role: [actors]} (backend/task_roles.py).
     roles: dict[str, list[str]] | None = None
+    # Who else sees a private task: people, bots and group:<id>s (hubdb.set_task_readers).
+    readers: list[ReaderName] = Field(default_factory=list, max_length=50)
     # With a model, the bot's own check session; review alone is a normal review child.
     check_model: str | None = Field(default=None, max_length=120)
     check_role: Literal["review", "check"] | None = None
@@ -575,6 +580,17 @@ class TaskComment(Contract):
 class TaskAskResolve(Contract):
     # The person's words from where they answered; without them the asker withdraws the question.
     quote: Annotated[StrictStr, Field(min_length=1, max_length=4000)] | None = None
+
+
+class TaskReaders(Contract):
+    """Who else sees a private task (hubdb.set_task_readers): add and remove people, bots and group:<id>s."""
+    add: list[ReaderName] = Field(default_factory=list, max_length=50)
+    remove: list[ReaderName] = Field(default_factory=list, max_length=50)
+
+
+class TaskReaderList(Contract):
+    """The whole reader list of a private task, replacing what it had."""
+    readers: list[ReaderName] = Field(default_factory=list, max_length=50)
 
 
 class TaskLink(Contract):

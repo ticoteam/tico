@@ -598,10 +598,10 @@ def install_media(app, store, auth, mutate, send_message, task_create, review_pr
     def question_readable_by(c, who, person, private, parent):
         """The person reads the task a question makes, by every rule a read checks: a company-visible one by the bot's
         activity access; a private one as its other party, given they read the run's private work. A question under a
-        private task with no person on it, from the bot that owns it, makes the person that task's one guest
-        (task_privacy.guest_for); returned for the write to make."""
-        guest = privacy.guest_for(c, who, person, parent) if private else None
-        if private and not privacy.question_party(c, who, person, parent, guest):
+        private task with no person on it, from the bot that owns it, makes the person that task's reader
+        (task_privacy.reach_for); returned for the write to make."""
+        reach = privacy.reach_for(c, who, person, parent) if private else None
+        if private and not privacy.question_party(c, who, person, parent, reach):
             raise question_unreadable(c, person)
         try:
             auth.task_row(c, auth.identity_for_actor(c, person),
@@ -609,7 +609,7 @@ def install_media(app, store, auth, mutate, send_message, task_create, review_pr
                            "private": int(private)})
         except Problem as exc:
             raise question_unreadable(c, person) from exc
-        return guest
+        return reach
 
     def question_text(body, review_text=""):
         """What a task question says, as the org rule check reads it, one output: every line its card and task show
@@ -699,7 +699,7 @@ def install_media(app, store, auth, mutate, send_message, task_create, review_pr
         title = body.title or question
         person, parent = question_checked(c, who, body)
         private = question_private(c, who, body, parent)
-        guest = question_readable_by(c, who, person, private, parent)
+        reach = question_readable_by(c, who, person, private, parent)
         # Files under review (backend/file_reviews.py): versions the person can open, and the options they make. What
         # their card shows is judged with the question.
         review = attachments = None
@@ -717,7 +717,7 @@ def install_media(app, store, auth, mutate, send_message, task_create, review_pr
                 ask_ingest.skipped(c, ingest, "held")
             return org_rule_check.answer(rule)
         said_text = org_rule_check.warned_text(rule, question) if rule else question
-        if guest:
+        if reach:
             H.task_reach(c, who.actor, parent, person)
         topic = H.question_topic(body.topic)
         # One open question per topic: asked again while the first waits, it joins that one (hubdb.fold_question).
