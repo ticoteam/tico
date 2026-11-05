@@ -2945,6 +2945,9 @@ def spec(app):
             op["requestBody"] = TOKEN_REQUEST
             op["security"] = []
             responses["400"] = {"description": "invalid_grant, or the request is malformed", **ERROR}
+        if path == "/api/v2/mail/messages/organize":
+            op["requestBody"] = {"required": True, "content": {"application/json": {"schema": ref("MailOrganizeBody")}}}
+            responses["403"] = {"description": "Organize access or the company organize switch is off", **ERROR}
         connection = path == '/api/v2/inbound/company-connection'
         if connection:
             op['requestBody'] = {'required':True,'content':{'application/json':{'schema':{
@@ -3255,6 +3258,27 @@ STABLE.extend([
     ("/api/v2/mailboxes/{mid}/accesses/{access_id}", "delete", "Mailboxes", "removeMailboxAccess",
      "Take one person's or bot's access away", "MailboxDetail"),
 ])
+
+TAGS["Email"] = "Live Gmail organizing; Gmail holds the mail and Tico records only action details and ids."
+MAIL_ORGANIZE_ACTION = {"enum": ["archive", "unarchive", "mark_read", "mark_unread", "label", "unlabel"]}
+MAIL_ORGANIZE_IDS = {"type": "array", "items": {"type": "string", "minLength": 1, "maxLength": 128},
+                     "minItems": 1, "maxItems": 500}
+MAIL_ORGANIZE_FIELDS = {
+    "mailbox": {"type": "string", "maxLength": 254}, "action": MAIL_ORGANIZE_ACTION,
+    "ids": MAIL_ORGANIZE_IDS, "query": {"type": "string", "minLength": 1, "maxLength": 4096},
+    "label": {"type": "string", "minLength": 1, "maxLength": 225},
+    "limit": {"type": "integer", "minimum": 1, "maximum": 500, "default": 100}}
+SCHEMAS["MailOrganizeBody"] = {"oneOf": [
+    {**obj(MAIL_ORGANIZE_FIELDS, required=("mailbox", "action", "ids")), "not": {"required": ["query"]}},
+    {**obj(MAIL_ORGANIZE_FIELDS, required=("mailbox", "action", "query")), "not": {"required": ["ids"]}}]}
+SCHEMAS["MailOrganizeUndo"] = obj({"action": MAIL_ORGANIZE_ACTION, "ids": items("s"), "label": "s"},
+                                  required=("action", "ids"))
+SCHEMAS["MailOrganizeResult"] = obj({"mailbox": "s", "action": MAIL_ORGANIZE_ACTION, "label": "s", "count": "i",
+                                    "ids": items("s"), "undo": ref("MailOrganizeUndo")},
+                                    required=("mailbox", "action", "count", "ids", "undo"))
+STABLE.append(("/api/v2/mail/messages/organize", "post", "Email", "organizeMailMessages",
+               "Organize up to 500 messages live in Whole Workspace Gmail; requires organize access; never deletes",
+               "MailOrganizeResult"))
 
 TAGS["Letters out"] = "Physical letters sent through the Gateway; approvals bind the saved proof and price."
 SCHEMAS["LetterOutContents"] = obj({

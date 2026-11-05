@@ -6,6 +6,7 @@ import io
 import json
 import os
 import re
+import shlex
 import sys
 import time
 import uuid
@@ -1364,6 +1365,19 @@ def strategy_section_text(result, key):
 
 
 def email_text(result, action):
+    if action in ("archive", "unarchive", "mark-read", "mark-unread", "label", "unlabel"):
+        verb = {"archive": "Archived", "unarchive": "Unarchived", "mark-read": "Marked read",
+                "mark-unread": "Marked unread", "label": "Labeled", "unlabel": "Unlabeled"}[action]
+        text = f"{verb} {result['count']} messages in {result['mailbox']}."
+        if not result['count']:
+            return text
+        undo = result['undo']
+        words = ['hub', 'email', undo['action'].replace('_', '-'), result['mailbox']]
+        if 'label' in undo:
+            words.append(undo['label'])
+        command = shlex.join(words + undo['ids'])
+        return text + (" Undo: " + command if len(command) <= 1000 else
+                       " Undo: use the inverse action and ids from --json.")
     if action == "mailboxes":
         boxes = result.get("mailboxes") or []
         return "# Email mailboxes\n\n" + ("\n".join("- " + box["address"] for box in boxes) or "No readable mailboxes.")
@@ -1389,7 +1403,8 @@ def email_text(result, action):
 def main(args, who=None):
     try:
         result = run(args, who)
-        if args.cmd == "email" and args.sub in ("mailboxes", "inbox", "search", "thread", "message") and not args.json:
+        if args.cmd == "email" and args.sub in ("mailboxes", "inbox", "search", "thread", "message", "archive",
+                                                "unarchive", "mark-read", "mark-unread", "label", "unlabel") and not args.json:
             print(email_text(result, args.sub))
         elif args.cmd == "sql" and not args.json:
             print(sql_csv(result) if args.csv else sql_table(result))

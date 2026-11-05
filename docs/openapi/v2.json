@@ -191,6 +191,10 @@
       "description": "Which mailboxes Tico uses and who may use each: Read, or Read and write (organize, draft and send, as far as the company allows)."
     },
     {
+      "name": "Email",
+      "description": "Live Gmail organizing; Gmail holds the mail and Tico records only action details and ids."
+    },
+    {
       "name": "Letters out",
       "description": "Physical letters sent through the Gateway; approvals bind the saved proof and price."
     },
@@ -24468,6 +24472,78 @@
         },
         "tags": [
           "Finance"
+        ]
+      }
+    },
+    "/api/v2/mail/messages/organize": {
+      "post": {
+        "summary": "Organize up to 500 messages live in Whole Workspace Gmail; requires organize access; never deletes",
+        "operationId": "organizeMailMessages",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/MailOrganizeBody"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MailOrganizeResult"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "A problem: {\"error\": {\"code\", \"detail\", \"retryable\", ...}}",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "A problem: {\"error\": {\"code\", \"detail\", \"retryable\", ...}}",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "A problem: {\"error\": {\"code\", \"detail\", \"retryable\", ...}}",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        },
+        "tags": [
+          "Email"
+        ],
+        "parameters": [
+          {
+            "name": "Idempotency-Key",
+            "in": "header",
+            "required": true,
+            "schema": {
+              "type": "string"
+            },
+            "description": "1-200 characters. Reusing a key with the same body replays the first answer."
+          }
         ]
       }
     },
@@ -63080,6 +63156,188 @@
         "required": [
           "locations",
           "next_cursor"
+        ],
+        "additionalProperties": true
+      },
+      "MailOrganizeBody": {
+        "oneOf": [
+          {
+            "type": "object",
+            "properties": {
+              "mailbox": {
+                "type": "string",
+                "maxLength": 254
+              },
+              "action": {
+                "enum": [
+                  "archive",
+                  "unarchive",
+                  "mark_read",
+                  "mark_unread",
+                  "label",
+                  "unlabel"
+                ]
+              },
+              "ids": {
+                "type": "array",
+                "items": {
+                  "type": "string",
+                  "minLength": 1,
+                  "maxLength": 128
+                },
+                "minItems": 1,
+                "maxItems": 500
+              },
+              "query": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 4096
+              },
+              "label": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 225
+              },
+              "limit": {
+                "type": "integer",
+                "minimum": 1,
+                "maximum": 500,
+                "default": 100
+              }
+            },
+            "required": [
+              "action",
+              "ids",
+              "mailbox"
+            ],
+            "additionalProperties": true,
+            "not": {
+              "required": [
+                "query"
+              ]
+            }
+          },
+          {
+            "type": "object",
+            "properties": {
+              "mailbox": {
+                "type": "string",
+                "maxLength": 254
+              },
+              "action": {
+                "enum": [
+                  "archive",
+                  "unarchive",
+                  "mark_read",
+                  "mark_unread",
+                  "label",
+                  "unlabel"
+                ]
+              },
+              "ids": {
+                "type": "array",
+                "items": {
+                  "type": "string",
+                  "minLength": 1,
+                  "maxLength": 128
+                },
+                "minItems": 1,
+                "maxItems": 500
+              },
+              "query": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 4096
+              },
+              "label": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 225
+              },
+              "limit": {
+                "type": "integer",
+                "minimum": 1,
+                "maximum": 500,
+                "default": 100
+              }
+            },
+            "required": [
+              "action",
+              "mailbox",
+              "query"
+            ],
+            "additionalProperties": true,
+            "not": {
+              "required": [
+                "ids"
+              ]
+            }
+          }
+        ]
+      },
+      "MailOrganizeResult": {
+        "type": "object",
+        "properties": {
+          "mailbox": {
+            "type": "string"
+          },
+          "action": {
+            "enum": [
+              "archive",
+              "unarchive",
+              "mark_read",
+              "mark_unread",
+              "label",
+              "unlabel"
+            ]
+          },
+          "label": {
+            "type": "string"
+          },
+          "count": {
+            "type": "integer"
+          },
+          "ids": {
+            "type": "array",
+            "items": "s"
+          },
+          "undo": {
+            "$ref": "#/components/schemas/MailOrganizeUndo"
+          }
+        },
+        "required": [
+          "action",
+          "count",
+          "ids",
+          "mailbox",
+          "undo"
+        ],
+        "additionalProperties": true
+      },
+      "MailOrganizeUndo": {
+        "type": "object",
+        "properties": {
+          "action": {
+            "enum": [
+              "archive",
+              "unarchive",
+              "mark_read",
+              "mark_unread",
+              "label",
+              "unlabel"
+            ]
+          },
+          "ids": {
+            "type": "array",
+            "items": "s"
+          },
+          "label": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "action",
+          "ids"
         ],
         "additionalProperties": true
       },
