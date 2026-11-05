@@ -8054,6 +8054,7 @@ ASSISTANT_HIDDEN = frozenset({
     "hub_credential_grant", "hub_credential_revoke", "hub_credential_delete", "hub_credential_set", "hub_credential_import",
     "hub_agent_pair_approve", "hub_agent_pair_decline", "hub_call_token",
     "hub_sql", "hub_support_file", "hub_support_report", "hub_support_send", "hub_trigger_sign", "hub_message_redact",
+    "hub_tool_call",
 })
 
 

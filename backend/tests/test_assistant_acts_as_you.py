@@ -335,6 +335,7 @@ REVIEWED = {
     "PUT /api/v2/access/rules": "refused by the keys on its body (credential and Assistant rules, in admits_on_turn); the walk sends no body",
     "PUT /api/v2/usage/limits": "a spend cap, not a credential; the person sets it on their own word",
     "POST /api/v2/assistant/actions": "the Assistant's own card route: a proposal the person confirms",
+    "POST /api/v2/api-tools/{tool_id}/check": "Check now: one authenticated GET to the vendor per key; reveals and changes nothing",
     "POST /api/v2/tool-proxy/{tool_id}/{path:path}": "a proxied tool call: no Tico identity, only a run's tool token; the key stays on the server",
     "PUT /api/v2/tool-proxy/{tool_id}/{path:path}": "a proxied tool call: no Tico identity, only a run's tool token; the key stays on the server",
     "PATCH /api/v2/tool-proxy/{tool_id}/{path:path}": "a proxied tool call: no Tico identity, only a run's tool token; the key stays on the server",
