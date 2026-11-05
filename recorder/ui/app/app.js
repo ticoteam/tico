@@ -448,13 +448,12 @@
         const server = draft.base?.version > it.version ? draft.base : it;
         const current = mergeShared(mergeShared(server, draft.inflightPatch || {}), draft.patch), detail = current.detail || {};
         if (!draft.flight && !draft.sending && !Object.keys(draft.dirty).length) { draft.version = server.version; draft.base = server; }
-        const fields = it.section === 'task' ? ['owner', 'due', 'body'] : it.section === 'doc' ? ['document', 'change', 'why'] : ['side', 'app', 'area'];
+        // A task card is Title and Owner; a due date or details it already holds go out on Send.
+        const fields = it.section === 'task' ? ['owner'] : it.section === 'doc' ? ['document', 'change', 'why'] : ['side', 'app', 'area'];
         const owners = a.owners.filter(o => !data.audience || data.audience.includes(o.actor));
         return `<div class="shared-item" data-shared-row="${esc(it.id)}" data-shared-item="${esc(it.id)}"><label>Title<textarea data-defer data-shared-field="text" aria-label="Title">${esc(current.text)}</textarea></label>` + fields.map(key => {
-          const label = ({body:'Details', owner:'Owner', due:'Due'})[key] || key;
           if (key === 'owner') return `<label>Owner<select data-defer data-shared-field="owner" aria-label="Owner"><option value="">Choose</option>${owners.map(o => `<option value="${esc(o.actor)}" ${o.actor === detail.owner ? 'selected' : ''}>${esc(o.name)}</option>`).join('')}</select></label>`;
-          const value = key === 'due' ? String(detail[key] || '').slice(0, 10) : detail[key] || '';
-          return `<label>${label}<${key === 'body' ? 'textarea' : 'input'} data-defer data-shared-field="${key}" aria-label="${label}" ${key === 'due' ? 'type="date"' : ''} ${key === 'body' ? '' : `value="${esc(value)}"`}>${key === 'body' ? esc(detail.body || '') + '</textarea>' : ''}</label>`;
+          return `<label>${key}<input data-defer data-shared-field="${key}" aria-label="${key}" value="${esc(detail[key] || '')}"></label>`;
         }).join('') + `<div class="aside" data-shared-edited>${it.updated_by ? esc((a.owners.find(o => o.actor === it.updated_by)?.name || it.updated_by) + ' edited · just now') : ''}</div>
           <span class="error" data-shared-error ${draft.error ? '' : 'hidden'}>Not saved · <button class="link" data-act="shared-retry" data-id="${esc(it.id)}">Retry</button></span>
           <div class="aside" data-shared-current ${draft.current ? '' : 'hidden'}>${draft.current ? `Current: ${esc(draft.current.text)} · ${esc(Object.values(draft.current.detail || {}).join(' · '))}` : ''}</div>
@@ -494,12 +493,11 @@
       }
     }
   }
-  const sharedFieldValue = field => field.dataset.sharedField === 'due' && field.value ? new Date(field.value + 'T12:00:00').toISOString() : field.value;
   function sharedChanged(field) {
     const id = field.closest('[data-shared-item]').dataset.sharedItem, draft = sharedDraft(id), key = field.dataset.sharedField;
     if (!(key in draft.dirty)) draft.dirty[key] = sharedValue(draft.base, key);
     if (key === 'text') draft.patch.text = field.value;
-    else (draft.patch.detail ||= {})[key] = sharedFieldValue(field);
+    else (draft.patch.detail ||= {})[key] = field.value;
     clearTimeout(draft.timer);
     if (!draft.error) draft.timer = setTimeout(() => sharedSave(id), 700);
   }

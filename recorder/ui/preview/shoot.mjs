@@ -45,6 +45,12 @@ const scenes = {
   connect: [],
   demo: [],
   meeting: [open('m1')],
+  // A saved meeting's live task card: Title and Owner, then Send.
+  'live-card': ['library', async (page) => page.evaluate(() => {
+    const a = window.__PREVIEW__.state.meetings.m1.actions;
+    a.saved = true; a.shared_url = 'https://hub.tico.team';
+    a.shared = { can_send: true, presence: { actors: [] }, sections: { task: [{ version: 1, id: 's1', section: 'task', text: 'Send the pricing recap to Dana', status: 'proposed', detail: { owner: 'human:dana', due: '2026-12-01T17:00:00.000Z', body: 'Older details' } }] } };
+  }), open('m1')],
   // A created task's row is the way into Tico.
   'task-open': ['meeting', open('m1'), async (page) => { await page.focus('[data-act="add-open"]'); await page.keyboard.press('Tab'); }],
   'task-picker': ['meeting', open('m1'), async (page) => { await page.click('[data-act="task-picker-open"]'); await page.waitForSelector('[data-act="task-pick"]'); await page.click('[data-id="t42"]'); await page.click('[data-id="t44"]'); }],

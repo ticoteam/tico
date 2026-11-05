@@ -21,7 +21,7 @@ const path = require('node:path');
       a.saved = true; a.actor = 'human:dana'; a.shared_url='https://app.acme.example';
       a.shared = {can_send:true, audience:['human:sam','human:dana'],
         presence:{actors:[{actor:'human:sam',name:'Sam'}]},
-        sections:{task:[{version:1,id:'shared-1',section:'task',text:'Draft',status:'proposed',detail:{owner:'human:sam',body:'Details'}}]}};
+        sections:{task:[{version:1,id:'shared-1',section:'task',text:'Draft',status:'proposed',detail:{owner:'human:sam',due:'2026-12-01T17:00:00.000Z',body:'Older details'}}]}};
       Object.defineProperty(navigator,'clipboard',{value:{writeText:async text=>{window.copiedText=text;}},configurable:true});
       window.pendingFixture = {a, calls:0, inflight:0, max:0, fail:false};
       const original = window.__TAURI__.core.invoke;
@@ -45,44 +45,58 @@ const path = require('node:path');
     });
     await page.locator('.row[data-id="m1"]').click();
     await page.getByText('Sam is here',{exact:true}).waitFor();
-    const title=page.locator('[data-shared-item]').getByRole('textbox',{name:'Title',exact:true});
+    const card=page.locator('[data-shared-item="shared-1"]');
+    const title=card.getByRole('textbox',{name:'Title',exact:true});
+    const owner=card.getByRole('combobox',{name:'Owner',exact:true});
+    const send=card.locator('[data-act="shared-send"]');
+    // The task card is Title and Owner, then Send: no Due or Details, even when the item holds them.
+    assert.equal(await card.locator('textarea,input,select').count(),2);
+    assert.equal(await card.getByText(/^(Due|Details)$/).count(),0);
+    assert.equal(await card.locator('input[type="date"]').count(),0);
+    // Typing while a save is in flight keeps the newer words and saves them next.
     await page.evaluate(() => { const f=window.pendingFixture; f.hold=new Promise(resolve=>f.release=resolve); });
     await title.fill('Saving draft');
     await page.waitForFunction(()=>window.pendingFixture.inflight===1);
     await title.fill('Newer words');
-    await page.getByRole('textbox',{name:'Details',exact:true}).click();
+    await title.evaluate(el=>el.blur());
     assert.equal(await title.inputValue(),'Newer words');
     await page.evaluate(()=>window.pendingFixture.release());
     await page.waitForFunction(()=>window.pendingFixture.a.shared.sections.task[0].text==='Newer words' && !window.pendingFixture.inflight);
+    // A failed save offers Retry; someone else's change shows as Current and keeps my words.
     await page.evaluate(()=>window.pendingFixture.fail=true);
     await title.fill('Retry draft');
-    await page.getByRole('textbox',{name:'Details',exact:true}).click();
+    await title.evaluate(el=>el.blur());
     await page.getByRole('button',{name:'Retry',exact:true}).waitFor();
-    await page.evaluate(()=>{const item=window.pendingFixture.a.shared.sections.task[0];item.text='Someone else';item.detail.body='New remote details';item.version++;});
+    await page.evaluate(()=>{const item=window.pendingFixture.a.shared.sections.task[0];item.text='Someone else';item.version++;});
     await page.getByRole('button',{name:'Retry',exact:true}).click();
     await page.getByText(/Current: Someone else/).waitFor();
     assert.equal(await title.inputValue(),'Retry draft');
     await page.getByRole('button',{name:'Retry',exact:true}).click();
     await page.waitForFunction(()=>window.pendingFixture.a.shared.sections.task[0].text==='Retry draft');
-    await page.getByLabel('Due',{exact:true}).fill('2026-12-01');
-    await title.click();
-    await page.waitForFunction(()=>window.pendingFixture.a.shared.sections.task[0].detail.due?.endsWith('Z'));
+    // Owner saves on its own and names the Send button.
+    await owner.selectOption('human:dana');
+    await page.waitForFunction(()=>window.pendingFixture.a.shared.sections.task[0].detail.owner==='human:dana' && !window.pendingFixture.inflight);
+    await card.getByRole('button',{name:'Send to Dana Reyes',exact:true}).waitFor();
+    // Send waits for the save in flight; a newer server version stops it, and the second Send goes out.
     await page.evaluate(() => { const f=window.pendingFixture; f.hold=new Promise(resolve=>f.release=resolve); });
     await title.fill('Before send');
     await page.waitForFunction(()=>window.pendingFixture.inflight===1);
     await title.fill('Final words');
-    await page.evaluate(()=>{const item=window.pendingFixture.a.shared.sections.task[0];item.detail.body='B saved before Send';item.version++;});
-    await page.getByRole('button',{name:'Send to Sam Okafor',exact:true}).click();
+    await page.evaluate(()=>{const item=window.pendingFixture.a.shared.sections.task[0];item.detail.owner='human:sam';item.version++;});
+    await send.click();
     await page.evaluate(()=>window.pendingFixture.release());
-    await page.getByText(/Current:.*B saved before Send/).waitFor();
+    await page.getByText(/Current:.*human:sam/).waitFor();
     assert.equal(await page.evaluate(()=>window.pendingFixture.sent),undefined);
     assert.equal(await title.inputValue(),'Final words');
-    await page.getByRole('button',{name:'Send to Sam Okafor',exact:true}).click();
+    await card.getByRole('button',{name:'Send to Sam Okafor',exact:true}).click();
     await page.waitForFunction(()=>window.pendingFixture.sent?.text==='Final words');
-    assert.equal(await page.evaluate(()=>window.pendingFixture.sent.detail.body),'B saved before Send');
-    assert.match(await page.evaluate(()=>window.pendingFixture.sent.detail.due),/^2026-12-01T.*Z$/);
+    assert.equal(await page.evaluate(()=>window.pendingFixture.sent.detail.owner),'human:sam');
+    // The due date and details the item already held still go out, without a field for them.
+    assert.equal(await page.evaluate(()=>window.pendingFixture.sent.detail.due),'2026-12-01T17:00:00.000Z');
+    assert.equal(await page.evaluate(()=>window.pendingFixture.sent.detail.body),'Older details');
     assert.equal(await page.evaluate(()=>window.pendingFixture.max),1);
     assert.equal(await page.locator('[data-shared-row="shared-1"]').getByRole('button',{name:'Open',exact:true}).getAttribute('data-url'),'https://app.acme.example/#/task/created-task');
+    // A refresh during typing moves Owner to the server's value and leaves the focused Title and its caret alone.
     await page.evaluate(() => {
       const a=window.pendingFixture.a;
       a.shared.sections.task[0].status='proposed';
@@ -90,20 +104,21 @@ const path = require('node:path');
     });
     await title.fill('Title only');
     await page.waitForFunction(()=>window.pendingFixture.inflight===1);
-    const details=page.getByRole('textbox',{name:'Details',exact:true});
-    await details.evaluate(el=>{el.focus();el.setSelectionRange(2,4);});
-    await page.evaluate(()=>{const item=window.pendingFixture.a.shared.sections.task[0];item.detail.body='B saved focused Details';item.version++;});
+    await title.evaluate(el=>{el.focus();el.setSelectionRange(2,4);});
+    await page.evaluate(()=>{const item=window.pendingFixture.a.shared.sections.task[0];item.detail.owner='human:dana';item.version++;});
     await page.evaluate(()=>window.pendingFixture.release());
     await page.getByRole('button',{name:'Retry',exact:true}).waitFor();
     assert.equal(await title.inputValue(),'Title only');
-    assert.equal(await details.inputValue(),'B saved focused Details');
-    assert.deepEqual(await details.evaluate(el=>[document.activeElement===el,el.selectionStart,el.selectionEnd]),[true,2,4]);
+    await page.waitForFunction(()=>document.querySelector('[data-shared-item="shared-1"] [data-shared-field="owner"]').value==='human:dana');
+    assert.deepEqual(await title.evaluate(el=>[document.activeElement===el,el.selectionStart,el.selectionEnd]),[true,2,4]);
     const version=await page.evaluate(()=>window.pendingFixture.a.shared.sections.task[0].version);
-    await page.getByRole('button',{name:'Send to Sam Okafor',exact:true}).evaluate(el=>el.click());
+    await send.evaluate(el=>el.click());
     await page.waitForFunction(()=>window.pendingFixture.sent?.text==='Title only');
     assert.deepEqual(await page.evaluate(()=>window.pendingFixture.lastSend),{text:'Title only',version});
-    assert.equal(await page.evaluate(()=>window.pendingFixture.sent.detail.body),'B saved focused Details');
+    assert.equal(await page.evaluate(()=>window.pendingFixture.sent.detail.owner),'human:dana');
+    assert.equal(await page.evaluate(()=>window.pendingFixture.sent.detail.body),'Older details');
     assert.equal(await page.evaluate(()=>window.pendingFixture.sent.version),version+1);
+    // Sent or dismissed by someone else while I was editing: my unsaved Title and Owner stay, read-only, to copy.
     for (const [status, inFlight] of [['pushed',true],['dismissed',false]]) {
       const id='recovery-'+status;
       await page.evaluate(({id})=>{
@@ -114,7 +129,7 @@ const path = require('node:path');
       await row.waitFor();
       if(inFlight) await page.evaluate(()=>{const f=window.pendingFixture;f.hold=new Promise(resolve=>f.release=resolve);});
       await row.evaluate(el=>{
-        for(const [key,value] of [['text','My unsaved title'],['body','My unsaved details']]) {
+        for(const [key,value] of [['text','My unsaved title'],['owner','human:dana']]) {
           const field=el.querySelector(`[data-shared-field="${key}"]`);
           field.value=value;field.dispatchEvent(new Event('input',{bubbles:true}));
         }
@@ -122,19 +137,18 @@ const path = require('node:path');
       if(inFlight) await page.waitForFunction(()=>window.pendingFixture.inflight===1);
       await page.evaluate(({status})=>{
         const item=window.pendingFixture.a.shared.sections.task[0];
-        item.status=status;item.updated_by='human:sam';item.text='Sent title';item.detail.body='Sent details';item.version++;
+        item.status=status;item.updated_by='human:sam';item.text='Sent title';item.detail.owner='human:sam';item.version++;
       },{status});
       const closed=page.locator(`[data-shared-row="${id}"]`);
       await closed.getByText(status==='pushed'?'Sent by Sam Okafor':'Dismissed by Sam Okafor',{exact:true}).waitFor();
-      assert.match(await closed.locator('pre').textContent(),/My unsaved title/);
-      assert.match(await closed.locator('pre').textContent(),/My unsaved details/);
+      assert.match(await closed.locator('pre').textContent(),/My unsaved title[\s\S]*human:dana/);
       assert.equal(await closed.locator('textarea,input,select').count(),0);
       if(inFlight) {
         await page.evaluate(()=>window.pendingFixture.release());
         await page.waitForFunction(()=>!window.pendingFixture.inflight);
-        assert.match(await closed.locator('pre').textContent(),/My unsaved details/);
+        assert.match(await closed.locator('pre').textContent(),/human:dana/);
         await closed.getByRole('button',{name:'Copy',exact:true}).click();
-        assert.match(await page.evaluate(()=>window.copiedText),/My unsaved title[\s\S]*My unsaved details/);
+        assert.match(await page.evaluate(()=>window.copiedText),/My unsaved title[\s\S]*human:dana/);
       } else await closed.getByRole('button',{name:'Close',exact:true}).click();
       await closed.waitFor({state:'detached'});
     }
