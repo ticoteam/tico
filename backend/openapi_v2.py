@@ -2222,20 +2222,41 @@ STABLE.extend([
     ('/api/v2/triggers/{trigger_id}/deliveries/{delivery}/replay','post','Triggers','replayTriggerDelivery','Run a kept call again as a new occurrence',None),
     ('/api/v2/triggers/{trigger_id}/recover','post','Triggers','recoverTrigger','Run again, under the current secret and preset, the calls refused in the last since_hours (1-720) whose body is kept; each keeps its delivery id',None),
 ])
-TAGS['Connections'] = 'Every connection in one list: who reads what it brings in, its bots and where to configure it.'
+TAGS['Tools'] = 'Every way the company reaches the outside world in one list, and API tools: their keys per level, who can use each, its checks and calls.'
 STABLE.extend([
-    ('/api/v2/connections','get','Connections','listConnections','Slack, GitHub, mail bots, Tico addresses and numbers, meeting '
-     'importers, webhooks, physical mail and Listening: the owner and admins see every row, anyone else their own and the '
-     'company\'s they may read. Paged with cursor','ConnectionList'),
+    ('/api/v2/tool-index','get','Tools','listToolIndex','API tools, mailboxes, Tico addresses and numbers, mailing mail, '
+     'Slack, GitHub, meeting importers, Listening, outgoing webhooks and declared tools the caller may see, with status '
+     'and who can use each. Follow next with cursor','ToolIndex'),
+    ('/api/v2/api-tools/{tool_id}','get','Tools','getApiTool','One API tool: its keys (never a value), who can use it at '
+     'which level, its last checks and calls','ApiTool'),
+    ('/api/v2/api-tools/{tool_id}/activity','get','Tools','listApiToolActivity','Calls through the proxy and uses of its '
+     'keys, newest first. Follow next with cursor','ApiToolActivity'),
 ])
-SCHEMAS['Connection'] = obj({'id': 's', 'kind': {'enum': ['slack', 'github', 'mailbox', 'inbox', 'meetings', 'trigger',
-                                                         'webhook', 'postal', 'listening']},
-                             'name': 's', 'detail': 's', 'status': {'enum': ['on', 'off', 'waiting', 'error', 'paused']},
-                             'scope': {'enum': ['company', 'team', 'person']}, 'readers': 's',
-                             'bots': items(obj({'slug': 's', 'name': 's'})), 'more_bots': 'i', 'configure': 's',
-                             'can_configure': 'b'},
-                            required=['id', 'kind', 'name', 'status', 'scope', 'readers', 'bots', 'configure'])
-SCHEMAS['ConnectionList'] = obj({'connections': items(ref('Connection')), 'next': 'n'})
+TOOL_STATUS = obj({'tone': {'enum': ['ok', 'wait', 'fail', 'run', 'idle']}, 'text': 's'})
+SCHEMAS['ToolIndexRow'] = obj({'id': 's', 'kind': {'enum': ['api', 'mailbox', 'number', 'address', 'slack', 'github',
+                                                           'meetings', 'listening', 'webhook', 'declared', 'website']},
+                               'name': 's', 'detail': 's', 'way': 's', 'status': TOOL_STATUS,
+                               'who': items(obj({'kind': {'enum': ['bot', 'person']}, 'id': 's', 'name': 's',
+                                                 'initials': 's'})),
+                               'who_total': 'i', 'needs_you': 'b', 'href': 's'})
+SCHEMAS['ToolIndex'] = obj({'rows': items(ref('ToolIndexRow')),
+                            'counts': obj({'all': 'i', 'needs_you': 'i', 'api': 'i', 'mail': 'i', 'websites': 'i'}),
+                            'next': 'n'})
+SCHEMAS['ApiTool'] = obj({'tool': obj({'id': 's', 'name': 's', 'service': 's', 'base_url': 's', 'auth_scheme': 's',
+                                       'check_path': 's', 'delivery': {'enum': ['proxy', 'computer']}}),
+                          'keys': items(obj({'id': 's', 'name': 's', 'preview': 's',
+                                             'access_level': {'enum': ['read', 'read_write']},
+                                             'expires_on': 'n', 'last_used_at': 'n'},
+                                            required=['id', 'name', 'preview', 'access_level'])),
+                          'access': items(obj({'subject': 's', 'kind': {'enum': ['bot', 'person']}, 'name': 's',
+                                               'initials': 's', 'level': {'enum': ['read', 'read_write']},
+                                               'last_used_at': 'n'})),
+                          'checks': items(obj({'ok': 'b', 'status_code': {'type': ['integer', 'null']}, 'detail': 's',
+                                               'checked_at': 's'})),
+                          'recent': items({'type': 'object'}), 'status': TOOL_STATUS, 'can_manage': 'b'})
+SCHEMAS['ApiToolActivity'] = obj({'rows': items(obj({'id': 's', 'kind': {'enum': ['call', 'use']}, 'actor': 's',
+                                                     'result': {'enum': ['sent', 'refused', 'failed', 'use']},
+                                                     'at': 's'})), 'next': 'n'})
 TAGS['Webhook relay'] = 'Addresses for triggers through Tico Gateway: they keep deliveries while this server is off (backend/hook_relay.py).'
 STABLE.extend([
     ('/api/v2/relay', 'get', 'Webhook relay', 'getWebhookRelay', 'The Gateway key, how many relay addresses exist, the last '
