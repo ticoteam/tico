@@ -3,7 +3,6 @@
 //! diarization found (or the chunk's speaker), and speech is ordered by when it was said.
 //! Microphone words that repeat meeting audio within a second are speaker echo and are dropped,
 //! the transcript-level echo removal meeting recorders use when the call plays on speakers.
-use crate::speaker_names::Names;
 use crate::store::{Chunk, Recording, Word};
 use serde::Serialize;
 use std::collections::BTreeMap;
@@ -669,7 +668,6 @@ pub fn live_turns(
             .filter(|w| !covered("them", w.start_ms))
             .cloned(),
     );
-    let names = Names::new(record, streamed);
     let mut tails: Vec<_> = partials
         .iter()
         .filter(|partial| {
@@ -745,7 +743,7 @@ pub fn live_turns(
                             })
                     },
                 );
-            names.get(&label).to_owned()
+            crate::speaker_names::name_of(record, &label).to_owned()
         };
         out.push(LiveTurn {
             speaker,
@@ -775,12 +773,15 @@ pub fn chunk_texts(record: &Recording) -> BTreeMap<String, String> {
 
 /// Each chunk's words without echo, as `chunk_texts` has them. `speaker` is kept only where
 /// diarization named a meeting-audio voice. A chunk without word timings is one word spanning it.
-/// Meeting-audio labels carry names observed in the meeting app, where the evidence is clear.
+/// Meeting-audio labels carry the names the meeting app showed speaking, where known.
 pub fn chunk_words(record: &Recording) -> BTreeMap<String, Vec<Word>> {
-    chunk_words_named(record, &Names::new(record, &BTreeMap::new()))
+    words_with(record, true)
 }
-/// As [`chunk_words`], with names voted while streamed words were still arriving.
-pub(crate) fn chunk_words_named(record: &Recording, names: &Names) -> BTreeMap<String, Vec<Word>> {
+/// As [`chunk_words`], with every voice's label and no names.
+pub(crate) fn chunk_labels(record: &Recording) -> BTreeMap<String, Vec<Word>> {
+    words_with(record, false)
+}
+fn words_with(record: &Recording, named: bool) -> BTreeMap<String, Vec<Word>> {
     let heard = Heard::chunks(record);
     let mut out = BTreeMap::new();
     let labels = speaker_labels(record, &BTreeMap::new());
@@ -809,8 +810,13 @@ pub(crate) fn chunk_words_named(record: &Recording, names: &Names) -> BTreeMap<S
                 .into_iter()
                 .map(|word| {
                     let id = speaker_identity(chunk, &word);
+                    let label = labels.get(&id).unwrap_or(&id);
                     Word {
-                        speaker: names.get(labels.get(&id).unwrap_or(&id)).to_owned(),
+                        speaker: if named {
+                            crate::speaker_names::name_of(record, label).to_owned()
+                        } else {
+                            label.clone()
+                        },
                         ..word
                     }
                 })

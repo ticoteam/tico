@@ -4,6 +4,7 @@ pub mod meet;
 mod persistence;
 mod sharing;
 pub(crate) use persistence::migrate;
+pub(crate) use persistence::{settle_names, timeline};
 pub(crate) use sharing::correct_shared_names;
 #[cfg(target_os = "macos")]
 mod macos;
@@ -27,6 +28,12 @@ const MAX_SAMPLE_GAP_MS: u64 = 750;
 const HOLD_MS: u64 = 700;
 /// A voice is named only after this much speaking overlap, and only by a clear majority.
 const MIN_EVIDENCE_MS: u64 = 1000;
+/// The name's speaking must also cover this share (in percent) of the voice's own speech while
+/// indicators were readable, so a long talker is not named after someone's short replies.
+const MIN_COVERAGE_PCT: u64 = 40;
+/// Name-only revisions wait while this many corrections are queued for Tico, so a rename
+/// spreads over passes and never holds up Finish.
+pub(crate) const MAX_QUEUED_CORRECTIONS: i64 = 20;
 
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
 pub struct Interval {
@@ -39,6 +46,9 @@ pub struct Timeline {
     pub intervals: Vec<Interval>,
     pub participants: Vec<String>,
     pub self_names: Vec<String>,
+    /// When speaking state was readable: silence there is observed, not unknown.
+    #[serde(default)]
+    pub readable: Vec<(u64, u64)>,
 }
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct Observation {
@@ -112,12 +122,24 @@ impl<'a> Evidence<'a> {
         }
     }
 }
-/// Ambiguous overlap is evidence for neither person: a voice needs enough overlap and two
-/// thirds of it for one name.
-fn winner(scores: BTreeMap<String, u64>) -> Option<String> {
+/// Total overlap of `[start, end)` with sorted, disjoint spans.
+fn covered(spans: &[(u64, u64)], start: u64, end: u64) -> u64 {
+    let first = spans.partition_point(|(_, until)| *until <= start);
+    spans[first..]
+        .iter()
+        .take_while(|(from, _)| *from < end)
+        .map(|(from, until)| end.min(*until).saturating_sub(start.max(*from)))
+        .sum()
+}
+/// Ambiguous overlap is evidence for neither person: a voice needs enough overlap, two thirds
+/// of it for one name, and that name speaking through a real share of the voice's readable speech.
+fn winner(scores: BTreeMap<String, u64>, readable_speech: u64) -> Option<String> {
     let total: u64 = scores.values().sum();
     let (name, weight) = scores.into_iter().max_by_key(|(_, weight)| *weight)?;
-    (weight >= MIN_EVIDENCE_MS && weight * 3 >= total * 2).then_some(name)
+    (weight >= MIN_EVIDENCE_MS
+        && weight * 3 >= total * 2
+        && weight * 100 >= readable_speech * MIN_COVERAGE_PCT)
+        .then_some(name)
 }
 /// A label the recorder chose itself. A speaker a person typed is never renamed.
 fn provisional(label: &str) -> bool {
@@ -126,65 +148,80 @@ fn provisional(label: &str) -> bool {
         .is_some_and(|n| n.parse::<usize>().is_ok())
 }
 
-/// Names for provisional speaker labels. A label is one stable voice across chunks and the
-/// live stream, so it gets at most one name, voted by all its speech; the stored voices and
-/// labels never change.
-#[derive(Clone, Debug, Default, PartialEq)]
-pub struct Names(BTreeMap<String, String>);
-impl Names {
-    pub fn new(record: &Recording, streamed: &BTreeMap<String, Vec<Word>>) -> Self {
-        if record.meeting_speakers.intervals.is_empty() {
-            return Self::default();
-        }
-        let evidence = Evidence::new(&record.meeting_speakers);
-        let labels = crate::transcript::speaker_labels(record, streamed);
-        let mut votes: BTreeMap<&str, BTreeMap<String, u64>> = BTreeMap::new();
-        let mut add = |id: &str, start: u64, end: u64| {
-            if let Some(label) = labels.get(id).filter(|label| provisional(label)) {
-                evidence.add(start, end, votes.entry(label).or_default());
-            }
-        };
-        // A person's edit replaced the automatic words; it is no evidence for the voice.
-        for chunk in record
-            .chunks
-            .iter()
-            .filter(|c| c.channel == "them" && c.provider["source"] != "edit")
-        {
-            if chunk.words.is_empty() {
-                let id = crate::transcript::speaker_identity(chunk, &Word::default());
-                add(&id, chunk.start_ms, chunk.end_ms);
-            }
-            for word in &chunk.words {
-                add(
-                    &crate::transcript::speaker_identity(chunk, word),
-                    word.start_ms,
-                    word.end_ms,
-                );
-            }
-        }
-        let covered = crate::transcript::Covered::new(record, "them");
-        for word in streamed
-            .get("them")
-            .into_iter()
-            .flatten()
-            .filter(|w| !covered.contains(w.start_ms))
-        {
-            add(&word.speaker, word.start_ms, word.end_ms);
-        }
-        Self(
-            votes
-                .into_iter()
-                .filter_map(|(label, votes)| Some((label.to_owned(), winner(votes)?)))
-                .collect(),
-        )
+/// The name a label carries on this recording, or the label itself. A label is one stable
+/// voice across chunks and the live stream; the store keeps its name on the recording
+/// (`speaker_names`, see [`vote`]) so every view and Tico line agrees. Stored voices and labels
+/// never change.
+pub fn name_of<'a>(record: &'a Recording, label: &'a str) -> &'a str {
+    record
+        .speaker_names
+        .get(label)
+        .map_or(label, String::as_str)
+}
+
+/// Names that stick: a named voice changes only when another name wins outright, and never
+/// goes back to "Speaker N". Evidence that later turns out to be the local person is dropped.
+pub fn vote(
+    record: &Recording,
+    streamed: &BTreeMap<String, Vec<Word>>,
+) -> BTreeMap<String, String> {
+    let timeline = &record.meeting_speakers;
+    let mut out: BTreeMap<String, String> = record
+        .speaker_names
+        .iter()
+        .filter(|(_, name)| timeline.remote(name))
+        .map(|(label, name)| (label.clone(), name.clone()))
+        .collect();
+    if timeline.intervals.is_empty() {
+        return out;
     }
-    /// The name for a shown label, or the label itself.
-    pub fn get<'a>(&'a self, label: &'a str) -> &'a str {
-        self.0.get(label).map_or(label, String::as_str)
+    let evidence = Evidence::new(timeline);
+    let mut readable = timeline.readable.clone();
+    readable.sort();
+    let labels = crate::transcript::speaker_labels(record, streamed);
+    // Per label: overlap per name, and its own speech while indicators were readable.
+    let mut votes: BTreeMap<&str, (BTreeMap<String, u64>, u64)> = BTreeMap::new();
+    let mut add = |id: &str, start: u64, end: u64| {
+        if let Some(label) = labels.get(id).filter(|label| provisional(label)) {
+            let (scores, speech) = votes.entry(label).or_default();
+            evidence.add(start, end, scores);
+            let (start, end) = (start + LAG_MS, end.max(start + 1) + LAG_MS);
+            *speech += covered(&readable, start, end);
+        }
+    };
+    // A person's edit replaced the automatic words; it is no evidence for the voice.
+    for chunk in record
+        .chunks
+        .iter()
+        .filter(|c| c.channel == "them" && c.provider["source"] != "edit")
+    {
+        if chunk.words.is_empty() {
+            let id = crate::transcript::speaker_identity(chunk, &Word::default());
+            add(&id, chunk.start_ms, chunk.end_ms);
+        }
+        for word in &chunk.words {
+            add(
+                &crate::transcript::speaker_identity(chunk, word),
+                word.start_ms,
+                word.end_ms,
+            );
+        }
     }
-    pub fn is_empty(&self) -> bool {
-        self.0.is_empty()
+    let covered_them = crate::transcript::Covered::new(record, "them");
+    for word in streamed
+        .get("them")
+        .into_iter()
+        .flatten()
+        .filter(|w| !covered_them.contains(w.start_ms))
+    {
+        add(&word.speaker, word.start_ms, word.end_ms);
     }
+    for (label, (scores, speech)) in votes {
+        if let Some(name) = winner(scores, speech) {
+            out.insert(label.to_owned(), name);
+        }
+    }
+    out
 }
 
 /// Turn point observations into bounded intervals. A reading covers the time to the next poll;
@@ -196,15 +233,19 @@ pub(super) struct Samples {
     previous: Option<(u64, Observation)>,
     /// Per name: the end of its last emitted interval.
     open: BTreeMap<String, u64>,
+    /// The span the last push observed with readable speaking state, if any.
+    pub readable: Option<(u64, u64)>,
 }
 #[cfg(any(target_os = "macos", test))]
 impl Samples {
     pub fn push(&mut self, at: u64, observed: Observation) -> Vec<Interval> {
         let mut out = vec![];
+        self.readable = None;
         if let Some((before, previous)) = self.previous.take() {
             if at <= before || at - before > MAX_SAMPLE_GAP_MS || !previous.indicators {
                 self.open.clear();
             } else {
+                self.readable = Some((before, at));
                 for name in previous.active.iter().collect::<BTreeSet<_>>() {
                     if previous
                         .self_names

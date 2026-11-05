@@ -1,4 +1,3 @@
-use crate::speaker_names::Names;
 use crate::{
     network::{Tico, hash, ready},
     store::{Delivery, Recording, Store, Word},
@@ -300,8 +299,6 @@ impl Tico {
         }
         let frontier = transcript::delivery_frontier(&record, &streamed);
         let record = transcript::echo_snapshot(&record, &streamed);
-        // One set of names for every line this update shares or revises.
-        let names = Names::new(&record, &streamed);
         let mut db = store.db()?;
         let transaction = db.transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)?;
         scrub_pending(
@@ -314,17 +311,16 @@ impl Tico {
         let mut queue = Queue::read(&transaction, id, &self.destination.id)?;
         if live {
             let previous_seq = queue.seq;
-            queue.streamed(&transaction, &record, &streamed, frontier, &names)?;
-            queue.finished(&transaction, &record, frontier, &names)?;
+            queue.streamed(&transaction, &record, &streamed, frontier)?;
+            queue.finished(&transaction, &record, frontier)?;
             queue.order_new(&transaction, previous_seq)?;
             queue = Queue::read(&transaction, id, &self.destination.id)?;
         }
-        queue.corrections(&transaction, &record, &names)?;
+        queue.corrections(&transaction, &record)?;
         crate::speaker_names::correct_shared_names(
             &transaction,
             &record,
             &self.destination.id,
-            &names,
         )?;
         transaction.commit()?;
         if live {
@@ -1256,7 +1252,6 @@ impl<'a> Queue<'a> {
         record: &Recording,
         streamed: &BTreeMap<String, Vec<Word>>,
         frontier: u64,
-        names: &Names,
     ) -> Result<()> {
         let mut turns = vec![];
         for channel in ["me", "them"] {
@@ -1290,16 +1285,30 @@ impl<'a> Queue<'a> {
                     .into_iter()
                     .filter(|turn| turn.start_ms < frontier)
                     .map(|mut turn| {
-                        if let Some(label) = record.speaker_labels.get(&turn.speaker) {
-                            turn.speaker = names.get(label).to_owned();
+                        // Tico shows the name; the label is kept so a later name revises it.
+                        let label = record.speaker_labels.get(&turn.speaker).cloned();
+                        if let Some(label) = &label {
+                            turn.speaker =
+                                crate::speaker_names::name_of(record, label).to_owned();
                         }
-                        (channel, turn)
+                        (channel, turn, label)
                     }),
             );
         }
-        turns.sort_by_key(|(channel, turn)| (turn.start_ms, *channel != "me"));
-        for (channel, turn) in turns {
+        turns.sort_by_key(|(channel, turn, _)| (turn.start_ms, *channel != "me"));
+        for (channel, turn, label) in turns {
             let seq = self.push(transaction, None, &turn)?;
+            // A sequence number can come back after a pause scrubbed its turn.
+            transaction.execute(
+                "DELETE FROM live_span_labels WHERE recording_id=? AND destination_id=? AND seq=?",
+                rusqlite::params![self.id, self.destination, seq],
+            )?;
+            if let Some(label) = label {
+                transaction.execute(
+                    "INSERT INTO live_span_labels(recording_id,destination_id,seq,label) VALUES(?,?,?,?)",
+                    rusqlite::params![self.id, self.destination, seq, label],
+                )?;
+            }
             transaction.execute(
                 "INSERT INTO live_spans(recording_id,destination_id,seq,channel,start_ms,end_ms) VALUES(?,?,?,?,?,?)",
                 rusqlite::params![
@@ -1327,7 +1336,6 @@ impl<'a> Queue<'a> {
         transaction: &rusqlite::Transaction,
         record: &Recording,
         frontier: u64,
-        names: &Names,
     ) -> Result<()> {
         let expired = transcript::recording_ms(record)
             .map_or(0, |now| now.saturating_sub(transcript::REFERENCE_WAIT_MS));
@@ -1351,7 +1359,7 @@ impl<'a> Queue<'a> {
                 .unwrap_or(0)
         };
         let watermark = watermark.min(frontier);
-        let words = transcript::chunk_words_named(record, names);
+        let words = transcript::chunk_words(record);
         for chunk in &record.chunks {
             if self.done.contains(&chunk.id) {
                 continue;
@@ -1413,12 +1421,7 @@ impl<'a> Queue<'a> {
     /// Queues a correction for each streamed turn whose finished words differ from what Tico has.
     /// A turn is settled once every chunk under it is used. Before any chunk covers it, only a
     /// name for its voice can change.
-    fn corrections(
-        &self,
-        transaction: &rusqlite::Transaction,
-        record: &Recording,
-        names: &Names,
-    ) -> Result<()> {
+    fn corrections(&self, transaction: &rusqlite::Transaction, record: &Recording) -> Result<()> {
         if self.spans.is_empty() {
             return Ok(());
         }
@@ -1446,8 +1449,16 @@ impl<'a> Queue<'a> {
         };
         // What Tico has for each streamed turn: the original, then the latest correction.
         let mut sent: HashMap<i64, (Value, i64)> = HashMap::new();
-        // The label each streamed turn was first shared with.
-        let mut labels: HashMap<i64, String> = HashMap::new();
+        // The voice label each streamed turn was shared with, whatever it was called then.
+        let mut query = transaction.prepare(
+            "SELECT seq,label FROM live_span_labels WHERE recording_id=? AND destination_id=?",
+        )?;
+        let labels: HashMap<i64, String> = query
+            .query_map([self.id, self.destination], |row| Ok((row.get(0)?, row.get(1)?)))?
+            .collect::<std::result::Result<_, _>>()?;
+        drop(query);
+        let mut renames =
+            crate::speaker_names::MAX_QUEUED_CORRECTIONS - queued_corrections(transaction, self.id, self.destination)?;
         let mut query = transaction.prepare(
             "SELECT seq,payload_json FROM live_outbox WHERE recording_id=? AND destination_id=? AND chunk_id LIKE 'stream:%'",
         )?;
@@ -1455,9 +1466,7 @@ impl<'a> Queue<'a> {
             Ok((row.get::<_, i64>(0)?, row.get::<_, String>(1)?))
         })? {
             let (seq, text) = row?;
-            let original: Value = serde_json::from_str(&text)?;
-            labels.insert(seq, original["speaker"].as_str().unwrap_or("").to_owned());
-            sent.insert(seq, (original, 1));
+            sent.insert(seq, (serde_json::from_str(&text)?, 1));
         }
         let mut query = transaction.prepare(
             "SELECT seq,revision,state,payload_json FROM live_corrections WHERE recording_id=? AND destination_id=? ORDER BY rowid",
@@ -1481,7 +1490,7 @@ impl<'a> Queue<'a> {
                 }
             }
         }
-        let words = transcript::chunk_words_named(record, names);
+        let words = transcript::chunk_words(record);
         // A line a person edited keeps their text: finished words no longer correct it.
         let mut query = transaction
             .prepare("SELECT seq FROM live_edits WHERE recording_id=? AND destination_id=?")?;
@@ -1523,8 +1532,12 @@ impl<'a> Queue<'a> {
                 let (speaker, text) = if settled(span) {
                     corrected(words, shown["speaker"].as_str().unwrap_or(""))
                 } else if let Some(label) = labels.get(&span.seq).filter(|_| uncovered(span)) {
-                    let text = shown["text"].as_str().unwrap_or("").to_owned();
-                    (names.get(label).to_owned(), text)
+                    let speaker = crate::speaker_names::name_of(record, label);
+                    if shown["speaker"] == speaker || renames <= 0 {
+                        continue;
+                    }
+                    renames -= 1;
+                    (speaker.to_owned(), shown["text"].as_str().unwrap_or("").to_owned())
                 } else {
                     continue;
                 };
@@ -1713,6 +1726,19 @@ fn edited_seqs(db: &rusqlite::Connection, id: &str, destination: &str) -> Result
         .query_map([id, destination], |row| row.get(0))?
         .collect::<std::result::Result<_, _>>()?;
     Ok(seqs)
+}
+
+/// Corrections queued for Tico and not yet sent.
+pub(crate) fn queued_corrections(
+    db: &rusqlite::Connection,
+    id: &str,
+    destination: &str,
+) -> Result<i64> {
+    Ok(db.query_row(
+        "SELECT COUNT(*) FROM live_corrections WHERE recording_id=? AND destination_id=? AND state=0",
+        [id, destination],
+        |row| row.get(0),
+    )?)
 }
 
 /// Edits a person made that no pass has sent to Tico yet.

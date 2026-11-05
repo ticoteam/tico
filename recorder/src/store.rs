@@ -139,6 +139,9 @@ pub struct Recording {
     /// Stable voice/turn ids to their first displayed label; names can attach to these ids later.
     #[serde(default)]
     pub speaker_labels: BTreeMap<String, String>,
+    /// Labels to the participant names the meeting app showed speaking (`speaker_names::vote`).
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub speaker_names: BTreeMap<String, String>,
 }
 impl Recording {
     pub(crate) fn register_speakers(&mut self, identities: Vec<(String, String)>) {
@@ -545,6 +548,7 @@ impl Store {
             speakers: String::new(),
             meeting_speakers: Default::default(),
             speaker_labels: BTreeMap::new(),
+            speaker_names: BTreeMap::new(),
         };
         self.db()?.execute(
             "INSERT INTO recordings VALUES(?,?)",
@@ -627,8 +631,9 @@ impl Store {
         let mut connection = self.db()?;
         let db = connection.transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)?;
         let mut value = read_record(&db, id, true)?;
+        value.meeting_speakers = crate::speaker_names::timeline(&db, id)?;
+        crate::speaker_names::settle_names(&db, &mut value)?;
         db.commit()?;
-        value.meeting_speakers = self.meeting_speakers(id)?;
         Ok(value)
     }
     /// Analysis can link voices before their first display reserves a fallback label.

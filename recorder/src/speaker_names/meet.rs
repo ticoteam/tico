@@ -112,7 +112,10 @@ pub fn private_branch(role: &str, label: &str) -> bool {
 #[derive(Clone, Debug, PartialEq)]
 pub struct Row {
     pub name: String,
+    /// Marked "(You)" (English Meet only).
     pub local: bool,
+    /// Has a button, such as the mute control Meet gives every row but the local person's.
+    pub control: bool,
     /// None when the row has no indicator or its state is not one of the known classes.
     pub speaking: Option<bool>,
 }
@@ -138,9 +141,13 @@ fn row(node: &Node) -> Option<Row> {
             || node.children.iter().any(marked)
     }
     local |= node.children.iter().any(marked);
+    fn button(node: &Node) -> bool {
+        node.role == "AXButton" || node.children.iter().any(button)
+    }
     Some(Row {
         name,
         local,
+        control: node.children.iter().any(button),
         speaking: indicator(node),
     })
 }
@@ -181,6 +188,19 @@ fn tile_names(root: &Node, out: &mut BTreeSet<(String, bool)>) {
         tile_names(child, out);
     }
 }
+/// Which rows are the local person's: the "(You)" marker, or else the one row without a mute
+/// control when every other row has one (the captured layout, in any language). Empty when
+/// neither identifies anyone.
+fn local_rows(rows: &[Row]) -> Vec<bool> {
+    if rows.iter().any(|r| r.local) {
+        return rows.iter().map(|r| r.local).collect();
+    }
+    let bare = rows.iter().filter(|r| !r.control).count();
+    if rows.len() >= 2 && bare == 1 {
+        return rows.iter().map(|r| !r.control).collect();
+    }
+    vec![]
+}
 impl MeetingAdapter for GoogleMeet {
     fn detect_window(&self, _title: &str, document_url: &str) -> bool {
         let Ok(url) = reqwest::Url::parse(document_url) else {
@@ -199,26 +219,34 @@ impl MeetingAdapter for GoogleMeet {
     }
     fn observe(&self, root: &Node) -> Observation {
         let rows = rows(root);
+        let local = local_rows(&rows);
         let mut names = BTreeSet::new();
         tile_names(root, &mut names);
-        names.extend(rows.iter().map(|r| (r.name.clone(), r.local)));
+        names.extend(
+            rows.iter()
+                .zip(local.iter().chain(std::iter::repeat(&false)))
+                .map(|(r, local)| (r.name.clone(), *local)),
+        );
         let locals: BTreeSet<_> = names
             .iter()
             .filter(|(_, local)| *local)
             .map(|(n, _)| n.clone())
             .collect();
         let participants: BTreeSet<_> = names.into_iter().map(|(n, _)| n).collect();
+        // Without knowing which row is the local person's, any speaker could be the mic: rows
+        // still give names, but no speaking state.
+        let known = !local.is_empty();
         // A name with several rows (one account on two devices) speaks if any of its rows does.
         let active: BTreeSet<_> = rows
             .iter()
-            .filter(|r| r.speaking == Some(true) && !locals.contains(&r.name))
+            .filter(|r| known && r.speaking == Some(true) && !locals.contains(&r.name))
             .map(|r| r.name.clone())
             .collect();
         Observation {
             participants: participants.into_iter().take(100).collect(),
             self_names: locals.into_iter().collect(),
             active: active.into_iter().take(100).collect(),
-            indicators: rows.iter().any(|r| r.speaking.is_some()),
+            indicators: known && rows.iter().any(|r| r.speaking.is_some()),
         }
     }
 }

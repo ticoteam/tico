@@ -1,7 +1,11 @@
 //! Name-only revisions for finished-chunk lines Tico already has. Their text and sequence stay;
 //! the speaker follows the current name for the voice label the line's words carry.
-use super::Names;
-use crate::{live::corrected, store::Recording, transcript};
+use super::{MAX_QUEUED_CORRECTIONS, name_of};
+use crate::{
+    live::{corrected, queued_corrections},
+    store::Recording,
+    transcript,
+};
 use anyhow::Result;
 use rusqlite::{OptionalExtension, Transaction, params};
 use serde_json::{Value, json};
@@ -10,13 +14,15 @@ pub(crate) fn correct_shared_names(
     tx: &Transaction,
     record: &Recording,
     destination: &str,
-    names: &Names,
 ) -> Result<()> {
-    if record.meeting_speakers.intervals.is_empty() {
+    // Names are never taken back, so with none there is nothing to revise.
+    if record.speaker_names.is_empty() {
         return Ok(());
     }
+    // A rename spreads over passes rather than queueing a revision for every line at once.
+    let mut budget = MAX_QUEUED_CORRECTIONS - queued_corrections(tx, &record.id, destination)?;
     // Labels without names: what each line's voice is, whatever it is called now.
-    let words = transcript::chunk_words_named(record, &Names::default());
+    let words = transcript::chunk_labels(record);
     // Streamed turns are revised with their finished words; a person's edit is kept.
     let mut query = tx.prepare("SELECT o.seq,o.chunk_id,o.payload_json FROM live_outbox o
         WHERE o.recording_id=? AND o.destination_id=?
@@ -32,6 +38,9 @@ pub(crate) fn correct_shared_names(
         })?
         .collect::<rusqlite::Result<Vec<_>>>()?;
     for (seq, key, original) in rows {
+        if budget <= 0 {
+            break;
+        }
         // A chunk's later turns are keyed "<chunk>:turn:<n>".
         let chunk = key.split(":turn:").next().unwrap_or(&key);
         if !record
@@ -60,10 +69,10 @@ pub(crate) fn correct_shared_names(
             continue;
         }
         let (label, _) = corrected(heard, "");
-        let speaker = names.get(&label);
+        let speaker = name_of(record, &label);
         let previous: Option<(i64, String)> = tx
             .query_row(
-                "SELECT revision,payload_json FROM live_corrections WHERE recording_id=? AND destination_id=? AND seq=? ORDER BY rowid DESC LIMIT 1",
+                "SELECT revision,payload_json FROM live_corrections WHERE recording_id=? AND destination_id=? AND seq=? AND state<>2 ORDER BY rowid DESC LIMIT 1",
                 params![record.id, destination, seq],
                 |row| Ok((row.get(0)?, row.get(1)?)),
             )
@@ -75,6 +84,7 @@ pub(crate) fn correct_shared_names(
         if shown["speaker"] == speaker {
             continue;
         }
+        budget -= 1;
         let payload = json!({"revision":revision+1,"speaker":speaker,"start_ms":shown["start_ms"],"end_ms":shown["end_ms"],"text":shown["text"]});
         tx.execute(
             "INSERT INTO live_corrections(recording_id,destination_id,seq,revision,payload_json) VALUES(?,?,?,?,?)",
