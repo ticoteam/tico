@@ -2,10 +2,10 @@
    (backend/postal_mail.py, docs/physical-mail.md). Addresses and orders come from Tico Gateway (GET /v2/postal/addresses),
    letters from this server (GET /v2/postal/items). Kind 'postal': a row an address, an open order and the mail-by-email
    inbox (kept, as Not in use, while it is off and has letters); one address's page shows its Form 1583 progress and
-   its letters (sender, summary, scan, task). Scan and
-   forward requests are not offered: Tico Gateway does not take them. Ordering, the intake inbox and a retry are an
-   owner's or admin's; everyone else reads. In Inboxes > Settings > Letters in: Addresses (Get an address) and Bring
-   your own. Registry: ui/app/inboxes.js.
+   its letters (sender, summary, scan, task). Scan and forward requests are not offered: Tico Gateway does not take
+   them. Ordering, the intake inbox, a retry, Read grants and legal-mail routing are an owner's or admin's; everyone
+   else reads. An address's Who can use it gives Read on that address. In Inboxes > Settings > Letters in: Addresses
+   (Get an address), Bring your own, Who can use it (Read on all addresses) and Legal mail. Registry: ui/app/inboxes.js.
    Classic script: its globals are shared with the other files under ui/app/, loaded in the order index.html lists them. */
 'use strict';
 
@@ -20,7 +20,8 @@ const PM_LETTER_KINDS = {legal: 'Legal', government_tax: 'Government or tax', bi
   junk: 'Junk', other: 'Other'};
 const PM_LETTER_STATUS = {new: ['waiting', 'Reading'], filed: ['ok', 'Filed'], archived: ['', 'Archived'], failed: ['fail', 'Failed']};
 const PM_STEPS = [['ordered', 'Ordered'], ['pending_1583', 'Form 1583'], ['active', 'Receiving']];
-const PM = {addresses: null, orders: [], prices: {}, gatewayOff: false, error: ''};
+// legalSave: one more each Legal mail save; legalSaving: one is in flight.
+const PM = {addresses: null, orders: [], prices: {}, gatewayOff: false, error: '', legalSave: 0, legalSaving: false};
 
 const pmStateName = code => (PM_STATES.find(([c]) => c === code) || [code, code])[1];
 const PM_NONE = '<span class="muted pm-none">—</span>';
@@ -39,6 +40,8 @@ function pmPrice(kind) {
 const pmScanLine = () => `Scans ${pmDollars(pmNum(PM.prices?.scan) || PM_SCAN.scan)} each, `
   + `${pmDollars(pmNum(PM.prices?.page_over_10) || PM_SCAN.page_over_10)} a page after 10`;
 const pmId = a => String(a.assignment_id || a.id || '');
+// What a Read grant on `a` names: its Tico Gateway assignment, or an older active address by its exact text.
+const pmScope = a => pmId(a) || (a.status === 'active' && a.address) || '';
 const pmName = a => (a.status === 'active' && a.address ? a.address : `${pmStateName(a.state)} · ${PM_KINDS[a.kind] || a.kind}`);
 const pmNorm = s => String(s || '').toLowerCase().replace(/[^a-z0-9]/g, '');
 
@@ -131,11 +134,14 @@ async function pmDetail(host, id, ctx) {
   const a = pm.addresses.find(x => pmId(x) === id);
   if (!a) throw new Error('No such address');
   const [status, statusText] = PM_ADDRESS_STATUS[a.status] || ['pending', a.status || 'Pending'];
+  const scope = ctx.admin ? pmScope(a) : '';
+  const access = scope ? `<p class="muted">Read lets someone read every letter and scan here, private ones included.
+    <a href="${inboxesLink('settings', 'letters-in')}">All addresses</a></p><div data-pm-grants-slot></div>` : '';
   host.innerHTML = `${inboxesHead(host, {name: pmName(a), status, statusText,
       sub: esc(`${pmStateName(a.state)} · ${PM_KINDS[a.kind] || a.kind} · Registered agent: ${a.agent ? 'Yes' : 'No'}`),
       actions: '<button type="button" class="ghost" data-pm-check>Check connection</button>'})}
     ${a.status !== 'active' ? inboxesCard('inbox-provisioning', 'Setup', pmProgress(a.status)) : ''}
-    ${inboxesCard('inbox-access', 'Who can use it', readers)}
+    ${inboxesCard('inbox-access', 'Who can use it', readers + access)}
     ${inboxesCard('inbox-automations', 'Automations', '<div data-pm-autos></div>', inboxesAutomationsLink(a.address || ''))}${recent}`;
   host.querySelector('[data-pm-check]').addEventListener('click', async event => {
     const b = event.currentTarget; b.disabled = true;
@@ -143,7 +149,7 @@ async function pmDetail(host, id, ctx) {
     finally { if (b.isConnected) b.disabled = false; }
   });
   void inboxesAutomations(ctx, a.address || '').then(h => { const s = host.querySelector('[data-pm-autos]'); if (s) s.innerHTML = h; });
-  await pmLetters(host, ctx, id);
+  await Promise.all([pmLetters(host, ctx, id), scope && pmGrants(host.querySelector('[data-pm-grants-slot]'), scope, ctx)]);
   return {kind: 'postal', id, name: pmName(a), address: a.address || '', postal: a};
 }
 
@@ -183,6 +189,100 @@ async function pmIntakeStop(ctx) {
   if (!await settingsConfirm({title: 'Stop using in Tico?', text: 'Letters emailed to this inbox stop becoming letters.', ok: 'Stop using'})) return;
   try { await put('/v2/postal/intake', {inbox_id: null, senders: []}); toast('Stopped'); return ctx.go(''); }
   catch (e) { toast(e.message, true); }
+}
+
+// ---------------------------------------------------------------------------------------------------------- Read grants
+// Read on an address (or on 'all') lets one person or bot read its letters and scans, private legal mail included,
+// without the letter's task. Only an owner or admin sees, gives or removes it. A bot that can't take mail (its host only
+// syncs chat) shows with the reason and can't be picked; the server refuses it too.
+const PM_GRANTS = new Map();   // scope -> its block: kept across redraws, so a pick waiting for its button survives a poll
+const pmMembers = ctx => ctx.once('postal-members', async () => {
+  const bots = async () => {
+    const all = []; let after = '';
+    do {
+      const page = await get('/v2/postal/bots?limit=100' + (after ? '&after=' + encodeURIComponent(after) : ''), {fresh: true});
+      all.push(...(page.bots || [])); after = page.next || '';
+    } while (after);
+    return all;
+  };
+  const [b, p] = await Promise.all([bots(), get('/people').catch(() => ({people: []}))]);
+  return [...b.filter(x => x.state === 'active').map(x => ({type: 'bot', id: x.id || x.slug, name: x.display_name || x.slug,
+      readError: x.read_error || '', routingError: x.routing_error || ''})),
+    ...(p.people || []).filter(x => !x.hidden).map(x => ({type: 'person', id: x.id, name: x.name || x.id}))];
+});
+const pmOption = (value, name, chosen = '', why = '') => `<option value="${esc(value)}"${value === chosen ? ' selected' : ''}${
+  why ? ' disabled' : ''}>${esc(why ? `${name} — ${why}` : name)}</option>`;
+const pmGrantPath = (scope, who) => {
+  const [type, ...id] = who.split(':');
+  return `/v2/postal/addresses/${encodeURIComponent(scope)}/grants/${type}/${encodeURIComponent(id.join(':'))}`;
+};
+
+// Puts `scope`'s grants block in `slot` (the same block as last draw, when there was one) and rereads its list.
+async function pmGrants(slot, scope, ctx) {
+  let block = PM_GRANTS.get(scope);
+  if (!block) {
+    block = document.createElement('div');
+    block.className = 'pm-grants'; block.dataset.pmGrantsFor = scope;
+    block.innerHTML = `<div data-pm-grants>${skelRows(1, {dot: false})}</div>
+      <form class="pm-grant-form" data-pm-grant-form><label>Person or bot<select data-pm-grantee required><option value="">Choose…</option></select></label>
+        <button type="submit" class="ghost">Give Read access</button></form><p class="err" data-pm-access-error role="status"></p>`;
+    pmGrantsBind(block, scope);
+    PM_GRANTS.set(scope, block);
+  }
+  if (slot && slot !== block) slot.replaceWith(block);
+  const picker = block.querySelector('[data-pm-grantee]'), error = block.querySelector('[data-pm-access-error]');
+  let members;
+  try { members = await pmMembers(ctx); }
+  catch (e) { if (ctx.live()) error.textContent = e.message; return; }
+  if (!ctx.live() || !block.isConnected) return;
+  block.pmMembers = members;
+  if (!picker.value) picker.innerHTML = '<option value="">Choose…</option>'
+    + members.map(m => pmOption(`${m.type}:${m.id}`, m.name, '', m.readError)).join('');
+  await pmGrantsList(block, scope);
+}
+
+// The grants, a page at a time: a read that a newer one overtook draws nothing.
+async function pmGrantsList(block, scope, after = '') {
+  const list = block.querySelector('[data-pm-grants]'), error = block.querySelector('[data-pm-access-error]');
+  const read = block.pmRead = (block.pmRead || 0) + 1;
+  let d;
+  try { d = await get(`/v2/postal/addresses/${encodeURIComponent(scope)}/grants?limit=50${after ? '&after=' + encodeURIComponent(after) : ''}`, {fresh: true}); }
+  catch (e) { if (read === block.pmRead) error.textContent = e.message; return; }
+  if (read !== block.pmRead) return;
+  if (!after) list.replaceChildren();
+  list.querySelector('[data-pm-more-grants]')?.remove();
+  const name = g => (block.pmMembers || []).find(m => m.type === g.grantee_type && m.id === g.grantee_id)?.name || g.grantee_id;
+  for (const g of d.grants || []) {
+    const row = document.createElement('div');
+    row.className = 'row pm-grant'; row.dataset.pmGrant = `${g.grantee_type}:${g.grantee_id}`;
+    row.innerHTML = `<span>${esc(name(g))} · Read</span><button type="button" class="ghost" data-pm-revoke>Remove</button>`;
+    list.append(row);
+  }
+  if (!list.querySelector('[data-pm-grant]')) list.innerHTML = '<p class="muted" data-pm-grants-empty>No one yet.</p>';
+  if (d.next) list.insertAdjacentHTML('beforeend', `<button type="button" class="ghost" data-pm-more-grants="${esc(d.next)}">More</button>`);
+}
+
+function pmGrantsBind(block, scope) {
+  const form = block.querySelector('[data-pm-grant-form]'), picker = form.querySelector('select');
+  const error = block.querySelector('[data-pm-access-error]');
+  block.addEventListener('click', async event => {
+    const more = event.target.closest('[data-pm-more-grants]');
+    if (more) { more.disabled = true; return pmGrantsList(block, scope, more.dataset.pmMoreGrants); }
+    const revoke = event.target.closest('[data-pm-revoke]');
+    if (!revoke) return;
+    revoke.disabled = true; error.textContent = '';
+    try { await writeRequest('DELETE', pmGrantPath(scope, revoke.closest('[data-pm-grant]').dataset.pmGrant)); await pmGrantsList(block, scope); }
+    catch (e) { error.textContent = e.message; revoke.disabled = false; }
+  });
+  form.addEventListener('submit', async event => {
+    event.preventDefault();
+    if (!picker.value.includes(':')) return;
+    const button = form.querySelector('button');
+    button.disabled = true; error.textContent = '';
+    try { await put(pmGrantPath(scope, picker.value), {level: 'read'}); picker.value = ''; await pmGrantsList(block, scope); }
+    catch (e) { error.textContent = e.message; }
+    finally { button.disabled = false; }
+  });
 }
 
 // ---------------------------------------------------------------------------------------------------------- Order
@@ -294,6 +394,41 @@ async function pmIntake(host, ctx) {
   select.onchange = () => save(select);
   from.onchange = () => { if (select.value) save(from); };
 }
+
+inboxesSetting('letters-access', {section: 'letters-in', order: 30,
+  render: async (host, ctx) => {
+    if (!ctx.admin) { host.innerHTML = ''; return; }
+    host.innerHTML = inboxesCard('settings-mail-access', 'Who can use it', `<p class="muted">Read on all addresses lets someone
+      read every letter and scan, private ones included. An address’s own page gives Read on that address.</p><div data-pm-grants-slot></div>`);
+    await pmGrants(host.querySelector('[data-pm-grants-slot]'), 'all', ctx);
+  }});
+
+// Legal mail: future legal letters go to the owner, or to an active bot an owner or admin picks; the owner hears of each
+// either way. Existing tasks stay where they are. A read from before a save never replaces the choice during or after it.
+inboxesSetting('letters-legal', {section: 'letters-in', order: 40,
+  render: async (host, ctx) => {
+    const save = PM.legalSave;
+    const [d, members] = await Promise.all([get('/v2/postal/settings', {fresh: true}), ctx.admin ? pmMembers(ctx) : []])
+      .catch(e => [{error: e.message}, []]);
+    if (!ctx.live() || (PM.legalSaving || save !== PM.legalSave) && host.querySelector('[data-pm-legal]')) return;
+    const chosen = d.settings?.legal_bot_id || '';
+    const card = body => { host.innerHTML = inboxesCard('settings-mail-legal', 'Legal mail', body); };
+    if (d.error) return card(`<p class="err">${esc(d.error)}</p>`);
+    if (!ctx.admin) return card(`<p data-pm-legal-shown>Goes to ${esc(chosen || 'the owner')}</p>`);
+    const bots = members.filter(m => m.type === 'bot');
+    if (chosen && !bots.some(b => b.id === chosen)) bots.push({id: chosen, name: chosen});
+    card(`<label class="pm-pick">Goes to<select data-pm-legal>${pmOption('', 'Owner', chosen)}${
+        bots.map(b => pmOption(b.id, b.name, chosen, b.routingError)).join('')}</select></label>
+      <p class="muted">The owner receives every legal letter.</p><p class="err" data-pm-legal-error role="status"></p>`);
+    const select = host.querySelector('[data-pm-legal]'), error = host.querySelector('[data-pm-legal-error]');
+    let saved = chosen;
+    select.onchange = async () => {
+      PM.legalSave++; PM.legalSaving = true; select.disabled = true; error.textContent = '';
+      try { await put('/v2/postal/settings', {legal_bot_id: select.value || null}); saved = select.value; toast('Saved'); }
+      catch (e) { select.value = saved; error.textContent = e.message; }
+      finally { PM.legalSaving = false; select.disabled = false; }
+    };
+  }});
 
 // ---------------------------------------------------------------------------------------------------------- First run
 inboxesStep('letters-in', {order: 30, title: 'Receive letters', optional: true,

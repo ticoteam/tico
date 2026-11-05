@@ -52,6 +52,7 @@ import re
 import secrets
 import time
 import uuid
+from datetime import datetime, timedelta, timezone
 
 from . import people as P
 from . import read_cache
@@ -2871,15 +2872,22 @@ def task_opened(c, conversation, actor, requester, notice):
         _insert_delivery(c, message, requester, row, root_of(c, row), "none", "member")
 
 
-def mark_all_read(c, v, thread_id):
-    """Read up to now in the thread and every sub-thread under it."""
+def mark_all_read(c, v, thread_id, ago_ms=None):
+    """Read up to now in the thread and every sub-thread under it; with `ago_ms`, only what was written by then."""
     v = viewer(None, v) if not isinstance(v, Viewer) else v
     row = require(c, v, thread_id)
     path = row.get("path") or f"/{row['id']}/"
+    by = None
+    if ago_ms:
+        by = (datetime.now(timezone.utc) - timedelta(milliseconds=ago_ms)).strftime("%Y-%m-%dT%H:%M:%S.%f") + "Z"
     n = 0
     for sub in c.execute("SELECT id, last_seq FROM conversations WHERE path LIKE ? ESCAPE '\\'",
                          (path.replace("%", "\\%").replace("_", "\\_") + "%",)).fetchall():
-        mark_read(c, v, sub["id"], sub["last_seq"])
+        seq = sub["last_seq"]
+        if by:
+            seq = c.execute("SELECT COALESCE(MAX(seq),0) FROM messages WHERE conversation_id=? AND created_at<=?",
+                            (sub["id"], by)).fetchone()[0]
+        mark_read(c, v, sub["id"], seq)
         n += 1
     return {"threads": n}
 

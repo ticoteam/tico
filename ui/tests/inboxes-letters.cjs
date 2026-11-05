@@ -6,8 +6,12 @@
 // email inboxes and needs a sender, and a failed save goes back to the last saved inbox. An address's page shows its
 // Form 1583 progress and its letters (sender, summary, PDF, task), with no scan or forward request; a failed letter is
 // retried by an owner. Mail by email turned off stays listed as Not in use while it has letters, and its page keeps
-// them, with Retry. A member reads only. Without Tico Gateway the addresses card says so, offers no order, and the
-// list shows no error. No sideways scroll on a phone. TICO_SHOTS=<dir> saves screenshots (desktop and phone, dark and light).
+// them, with Retry. Read grants: Who can use it on all addresses (Letters in) and on one address's page gives Read,
+// with an Idempotency-Key, lists it and takes it back; a pick waiting for its button survives a redraw; a bot that can't
+// take mail can't be picked. Legal mail goes to Counsel by its stable id, a refused change goes back to the saved one,
+// and a read from before a save can't put the old choice back. A member reads only: no grants, Legal mail as text.
+// Without Tico Gateway the addresses card says so, offers no order, and the list shows no error. No sideways scroll on a
+// phone. TICO_SHOTS=<dir> saves screenshots (desktop and phone, dark and light).
 const {chromium} = require('playwright');
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
@@ -34,6 +38,11 @@ function server() {
     prices: {shared: 12, private: '25', scan: 1.5, page_over_10: '0.3'},
     intakeFail: false,
     intake: null,
+    legal_bot_id: null,
+    routingFail: false,
+    holdRouting: null,
+    grants: [],
+    got: {},
     inboxes: [{inbox_id: 'ib_mail', kind: 'email', name: 'Mail', address: 'mail@acme.example', state: 'active'},
       {inbox_id: 'ib_phone', kind: 'sms', name: 'Front desk', address: '+15550100', state: 'active'}],
     items: [
@@ -53,7 +62,7 @@ async function open(browser, {viewport = {width: 1280, height: 860}, state = ser
   await page.addInitScript(() => {
     try { localStorage.setItem('tico.inboxes.skip', '1'); } catch { /* storage off */ }
   });
-  await page.route('**/*', route => {
+  await page.route('**/*', async route => {
     const req = route.request(), url = new URL(req.url()), p = url.pathname, method = req.method();
     const json = (body, status = 200) => route.fulfill({status, contentType: 'application/json', body: JSON.stringify(body)});
     const ui = p.match(/\/tico\/ui\/((?:app\/|styles\/)?[^/]+\.(?:js|css))$/);
@@ -67,6 +76,8 @@ async function open(browser, {viewport = {width: 1280, height: 860}, state = ser
     const body = req.postData() ? req.postDataJSON() : null;
     if (method !== 'GET' && p.startsWith('/api/v2/postal/'))
       state.sent.push({method, path: p, body, key: req.headers()['idempotency-key'] || ''});
+    if (method === 'GET') state.got[p] = (state.got[p] || 0) + 1;
+    const admin = state.role === 'owner', refuse = () => json({error: {code: 'forbidden', detail: 'An owner or admin reads mail grants'}}, 403);
     if (p === '/api/me') return json({id: 'ana', role: state.role, name: 'Ana', email: 'ana@acme.example', cloud: true, registered: true, config});
     if (p === '/api/v2/config') return json(config);
     if (p === '/api/employees') return json([]);
@@ -81,6 +92,32 @@ async function open(browser, {viewport = {width: 1280, height: 860}, state = ser
     if (p === '/api/v2/postal/addresses') {
       if (!state.gateway) return json({error: {code: 'gateway', detail: 'Connect Tico Gateway first'}}, 409);
       return json({addresses: state.addresses, orders: state.orders, prices: state.prices});
+    }
+    if (p === '/api/v2/postal/bots') return admin ? json({bots: [
+      {id: 'tico-counsel', slug: 'legal', display_name: 'Counsel', state: 'active', read_error: null, routing_error: null},
+      {id: 'synced', slug: 'synced', display_name: 'Chat bot', state: 'active', read_error: 'Physical mail is unavailable: this bot only syncs chat',
+        routing_error: 'Physical mail is unavailable: this bot only syncs chat'},
+    ], next: null}) : refuse();
+    if (p === '/api/v2/postal/settings') {
+      if (method === 'PUT') {
+        if (state.holdRouting) await state.holdRouting;
+        if (state.routingFail) return json({error: {code: 'validation', detail: 'Not saved'}}, 422);
+        state.legal_bot_id = body.legal_bot_id;
+      }
+      return json({settings: {legal_bot_id: state.legal_bot_id}});
+    }
+    const grant = p.match(/^\/api\/v2\/postal\/addresses\/([^/]+)\/grants(?:\/(bot|person)\/([^/]+))?$/);
+    if (grant) {
+      if (!admin) return refuse();
+      const [address_id, grantee_type, grantee_id] = grant.slice(1).map(x => x && decodeURIComponent(x));
+      const same = g => g.address_id === address_id && g.grantee_type === grantee_type && g.grantee_id === grantee_id;
+      if (method === 'PUT') {
+        const made = state.grants.find(same) || {id: `pmg_${state.grants.length + 1}`, address_id, grantee_type, grantee_id, level: 'read'};
+        if (!state.grants.includes(made)) state.grants.push(made);
+        return json({grant: made});
+      }
+      if (method === 'DELETE') { state.grants = state.grants.filter(g => !same(g)); return json({ok: true}); }
+      return json({address_id, grants: state.grants.filter(g => g.address_id === address_id), next: null});
     }
     if (p === '/api/v2/postal/orders') {
       const order = {order_id: 'mo_' + (state.orders.length + 1), ...body, status: 'open', assignment_id: null, created_at: AGO(0), decided_at: null};
@@ -111,6 +148,13 @@ async function open(browser, {viewport = {width: 1280, height: 860}, state = ser
 const noSideways = page => page.evaluate(() => document.documentElement.scrollWidth <= innerWidth + 1);
 const rowText = async row => (await row.innerText()).replace(/\s+/g, ' ').trim();
 const go = (page, hash) => page.evaluate(h => { location.hash = h; }, hash);
+const until = async (ok, what) => {
+  for (const end = Date.now() + 5000; !ok();) {
+    if (Date.now() > end) throw new Error('timed out: ' + what);
+    await new Promise(r => setTimeout(r, 20));
+  }
+};
+const disabled = option => option.evaluate(o => o.disabled);   // the option itself: a label's disabled state follows its select
 
 (async () => {
   const browser = await chromium.launch({headless: true, channel: process.env.TICO_BROWSER_CHANNEL === undefined ? 'chrome' : process.env.TICO_BROWSER_CHANNEL || undefined});
@@ -144,8 +188,10 @@ const go = (page, hash) => page.evaluate(h => { location.hash = h; }, hash);
       await from.fill('Scans@VPM.example, @vpm.example');
       await from.dispatchEvent('change');
       assert.equal(puts(), 0, 'no inbox, nothing saved');
-      await intake.selectOption('ib_mail');
-      await page.locator('.toast', {hasText: 'Saved'}).waitFor();
+      await Promise.all([
+        page.waitForResponse(r => new URL(r.url()).pathname === '/api/v2/postal/intake' && r.request().method() === 'PUT'),
+        intake.selectOption('ib_mail'),
+      ]);
       assert.equal(puts(), 1, 'one save, though picking the inbox also blurred the senders field');
       assert.deepEqual(state.sent.find(s => s.path === '/api/v2/postal/intake')?.body,
         {inbox_id: 'ib_mail', senders: ['scans@vpm.example', '@vpm.example']});
@@ -161,6 +207,47 @@ const go = (page, hash) => page.evaluate(h => { location.hash = h; }, hash);
       await from.dispatchEvent('change');
       await pane.locator('#settings-mail-intake [data-field-err]', {hasText: 'address or @domain'}).waitFor();
       assert.equal(puts(), before, 'no save without a sender');
+      // Legal mail: a bot that can't take mail shows but can't be picked; a refused change goes back to the saved bot.
+      const legal = pane.locator('[data-pm-legal]');
+      await legal.waitFor();
+      assert.equal(await disabled(legal.locator('option[value="synced"]')), true, 'a chat-only bot cannot take legal mail');
+      const legalSaved = () => page.waitForFunction(() => document.querySelector('[data-pm-legal]')?.disabled === false);
+      await legal.selectOption('tico-counsel');
+      await legalSaved();
+      assert.equal(state.legal_bot_id, 'tico-counsel', 'legal mail goes to Counsel by its stable id');
+      state.routingFail = true;
+      await legal.selectOption('');
+      await pane.locator('[data-pm-legal-error]', {hasText: 'Not saved'}).waitFor();
+      assert.equal(await legal.inputValue(), 'tico-counsel', 'a refused change restores the saved bot');
+      state.routingFail = false;
+      // A read from before a save (the server still says Counsel) can't put Counsel back while the save is in flight.
+      let release; state.holdRouting = new Promise(r => { release = r; });
+      const reads = state.got['/api/v2/postal/settings'];
+      await legal.selectOption('');
+      await page.evaluate(() => { window.pmRedraw = renderSettingsInboxes(); });
+      await until(() => state.got['/api/v2/postal/settings'] > reads, 'the redraw reads Legal mail');
+      await page.evaluate(() => window.pmRedraw);
+      assert.equal(await legal.inputValue(), '', 'the choice being saved stays');
+      release(); state.holdRouting = null;
+      await legalSaved();
+      assert.equal(state.legal_bot_id, null, 'back to the owner');
+      assert.equal(await legal.inputValue(), '');
+      // Read on all addresses: a pick waits through a redraw; give it, see it, take it back.
+      const all = pane.locator('#settings-mail-access');
+      await all.locator('[data-pm-grants-empty]').waitFor();
+      assert.equal(await disabled(all.locator('[data-pm-grantee] option[value="bot:synced"]')), true, 'a chat-only bot cannot read mail');
+      await all.locator('[data-pm-grantee]').selectOption('person:ana');
+      await page.evaluate(() => renderSettingsInboxes());
+      assert.equal(await all.locator('[data-pm-grantee]').inputValue(), 'person:ana', 'a redraw keeps the pick');
+      await all.locator('[data-pm-grant-form] button').click();
+      await all.locator('[data-pm-grant="person:ana"]', {hasText: 'Ana · Read'}).waitFor();
+      const given = state.sent.find(s => s.path === '/api/v2/postal/addresses/all/grants/person/ana');
+      assert.equal(given.method, 'PUT');
+      assert.deepEqual(given.body, {level: 'read'});
+      assert.ok(given.key, 'a grant carries an Idempotency-Key');
+      await all.locator('[data-pm-revoke]').click();
+      await all.locator('[data-pm-grants-empty]').waitFor();
+      assert.deepEqual(state.grants, [], 'Remove takes it back');
       // Get an address: prices and lines, then one order.
       await pane.locator('[data-pm-order]').click();
       const dialog = page.locator('.pm-dialog');
@@ -196,7 +283,17 @@ const go = (page, hash) => page.evaluate(h => { location.hash = h; }, hash);
       assert.equal(await letters.locator('[data-pm-retry]').count(), 1, 'only the failed letter offers Retry');
       assert.equal(await page.locator('[data-ib-detail-body] button', {hasText: /scan|forward/i}).count(), 0, 'no scan or forward request');
       assert.equal(await page.locator('[data-ib-detail-body] [data-pm-progress]').count(), 0, 'a receiving address has no setup steps');
+      // This address's own Read, in Who can use it.
+      const access = page.locator('#inbox-access');
+      await access.locator('[data-pm-grants-empty]').waitFor();
+      await access.locator('[data-pm-grantee]').selectOption('bot:tico-counsel');
+      await access.locator('[data-pm-grant-form] button').click();
+      await access.locator('[data-pm-grant="bot:tico-counsel"]', {hasText: 'Counsel · Read'}).waitFor();
+      assert.ok(state.sent.some(s => s.method === 'PUT' && s.path === '/api/v2/postal/addresses/as_1/grants/bot/tico-counsel'));
       if (shots) await shot(page, 'address-desktop');
+      await access.locator('[data-pm-revoke]').click();
+      await access.locator('[data-pm-grants-empty]').waitFor();
+      assert.ok(state.sent.some(s => s.method === 'DELETE' && s.path === '/api/v2/postal/addresses/as_1/grants/bot/tico-counsel'));
       // Retry the failed letter: it is asked for once, and the page redraws with what the server says now.
       await letters.locator('[data-pm-retry="pm_3"]').click();
       await page.locator('#inbox-letters [data-pm-letter="pm_3"] [data-pm-task]').waitFor();
@@ -249,11 +346,14 @@ const go = (page, hash) => page.evaluate(h => { location.hash = h; }, hash);
       const pane = page.locator('#inboxes-letters-in');
       await pane.locator('[data-pm-intake-shown]').waitFor();
       await pane.locator('[data-pm-address="as_1"]').waitFor();
+      await pane.locator('#settings-mail-legal [data-pm-legal-shown]', {hasText: 'Goes to the owner'}).waitFor();
+      assert.equal(await pane.locator('#settings-mail-access').count(), 0, 'a member gives no Read');
       assert.equal(await pane.locator('[data-pm-order]').count(), 0);
       assert.equal(await pane.locator('[data-pm-intake-shown]').innerText(), 'mail@acme.example');
       await go(page, '#/settings/inboxes/postal/as_1');
       await page.locator('#inbox-letters [data-pm-letter="pm_3"]').waitFor();
       assert.equal(await page.locator('[data-pm-retry]').count(), 0);
+      assert.equal(await page.locator('#inbox-access [data-pm-grant-form]').count(), 0, 'no grants on the page for a member');
       assert.deepEqual(errors, []);
       await page.close();
     }
@@ -277,6 +377,8 @@ const go = (page, hash) => page.evaluate(h => { location.hash = h; }, hash);
       const pane = page.locator('#inboxes-letters-in');
       await pane.locator('[data-pm-address="as_1"]').waitFor();
       await pane.locator('[data-pm-intake-select]').waitFor();
+      await pane.locator('[data-pm-legal]').waitFor();
+      await pane.locator('#settings-mail-access [data-pm-grants-empty]').waitFor();
       assert.ok(await noSideways(page), 'Letters in fits a phone');
       await shot(page, 'settings-phone');
       await pane.locator('[data-pm-order]').click();
@@ -289,6 +391,7 @@ const go = (page, hash) => page.evaluate(h => { location.hash = h; }, hash);
       await dialog.locator('[data-close]').click();
       await go(page, '#/settings/inboxes/postal/as_1');
       await page.locator('#inbox-letters [data-pm-letter="pm_2"]').waitFor();
+      await page.locator('#inbox-access [data-pm-grants-empty]').waitFor();
       assert.ok(await noSideways(page), 'an address page fits a phone');
       await shot(page, 'address-phone');
       assert.deepEqual(errors, []);

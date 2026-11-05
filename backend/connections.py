@@ -237,7 +237,7 @@ def postal(v, after, n):
 
 
 def postal_rows(v):
-    """Physical mail, when this company takes it: letters go to whoever may read the task each is filed on."""
+    """Physical mail, when this company takes it: explicit Read grants and each letter's task readers."""
     if not table(v.c, "mail_intake") or not v.person:
         return []
     intake = v.c.execute("SELECT m.inbox_id, i.address FROM mail_intake m LEFT JOIN inbound_inboxes i "
@@ -247,7 +247,7 @@ def postal_rows(v):
     letters = table(v.c, "mail_items") and v.c.execute("SELECT 1 FROM mail_items LIMIT 1").fetchone()
     if not intake and not letters:
         return []
-    return [row("postal", "", "Physical mail", "on", "company", "Each letter's task readers",
+    return [row("postal", "", "Physical mail", "on", "company", "Read grants and each letter's task readers",
                 "#/settings/inboxes/settings/letters-in",
                 detail=(intake["address"] or "") if intake else "", can=v.admin)]
 

@@ -96,6 +96,12 @@
 .pm-steps li.cur::before{border-color:var(--wait, var(--accent))}
 .pm-scan-cell{white-space:nowrap}
 @media (max-width:640px){.pm-letters .pm-scan-cell{grid-column:3;grid-row:2;text-align:right}}
+.pm-grants{max-width:480px;min-width:0}
+.pm-grant{justify-content:space-between;flex-wrap:wrap;gap:4px 12px;margin:6px 0;overflow-wrap:anywhere}
+.pm-grant-form{display:flex;flex-wrap:wrap;align-items:flex-end;gap:8px;margin:10px 0 0}
+.pm-grant-form label,.pm-pick{display:grid;gap:4px;flex:1 1 220px;min-width:0}
+.pm-pick{max-width:480px;margin:0 0 6px}
+.pm-grant-form select,.pm-pick select{width:100%;min-width:0}
 
 /* Sending (ui/app/inboxes-sending.js) */
 

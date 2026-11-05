@@ -35,12 +35,12 @@ const {unrouted} = require('./support/routes.cjs');
     const helper = {name: 'helper', display_name: 'Helper', description: '', status: 'active', owner_id: 'ana', repo: 'bot-helper',
       can_manage: true, users: [], bot_owners: [], revision: 4, model: 'opus-5-5', harness: 'claude', reasoning_effort: 'high',
       thread_mode: 'personal', bot_contact: 'open', machine: {runner_id: 'r1', label: 'Box', owner_id: 'ana', generation: 7}};
-    const bots = [helper];
     const SCOUT_ID = '01990000-0000-7000-8000-00000000a11c';
     const scout = {id: SCOUT_ID, slug: 'scout', name: 'scout', display_name: 'Scout', description: '', status: 'active', owner_id: 'ana',
       repo: 'bot-scout', can_manage: true, users: [], bot_owners: [], revision: 1, model: 'opus-5-5', harness: 'claude',
       reasoning_effort: 'high', thread_mode: 'personal', bot_contact: 'open'};
     const botops = {...scout, id: 'botops', slug: 'botops', name: 'botops', display_name: 'BotOps', repo: 'bot-botops'};
+    const bots = [helper, scout, botops];
     const renames = [];
     let calls = [], refuseFallback = false, refuseDefinition = false, refuseTransition = false;
     await page.route('**/*', route => {
@@ -263,11 +263,11 @@ const {unrouted} = require('./support/routes.cjs');
     assert.equal(await editor.isVisible(), true);
     await editor.locator('[data-bot-remove]').click();
     await ask.locator('[data-confirm-ok]').click();
-    for (let i = 0; i < 50 && !calls.length; i++) await page.waitForTimeout(100);
+    // The archive reload must finish before the next editor opens.
+    await page.waitForFunction(() => location.hash === '#/settings');
     assert.deepEqual(calls.map(c => c.what), ['archive'], 'Archive bot archives once confirmed');
 
     // Slug: a bot whose id is not its slug is renamed with its definition and keeps its id.
-    bots.push(scout, botops);
     await page.evaluate(() => loadSettings());
     await page.waitForFunction(id => S.emps.some(e => e.id === id), SCOUT_ID);
     await page.evaluate(id => settingsEditBot(id), SCOUT_ID);

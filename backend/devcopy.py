@@ -131,6 +131,7 @@ HISTORY = {"attempts": "created_at", "jobs": "created_at", "messages": "created_
 # Kept whole, except rows whose parent went (a pruned attempt's events). Tokens on runners are replaced.
 KEEP = frozenset((
     "letter_outboxes", "letter_bot_settings",
+    "postal_mail_grants", "postal_mail_settings",   # access and routing settings cannot send in rehearsal mode
     "maintenance_steps",   # each step's switch, "How often" and cursor: a copy keeps the team's settings
     "agents", "approvals", "archives", "assistant_actions", "attempt_conversations", "attempt_events", "attempt_load_snapshots",
     "attempt_inputs", "backup_verified_blobs", "batches", "blob_locations", "blob_media", "blobs",
