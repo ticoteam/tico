@@ -61,9 +61,9 @@ ALLOWLIST = (
     # Status, credential requests and proposals are the turn's own checked bookkeeping/card writes.
     ("POST", r"/api/v2/(?:bots/[^/]+/status|credential-requests|assistant/actions)", False),
     ("PUT", r"/api/v2/org/order/[^/]+", False),
-    ("POST", r"/api/v2/market/evidence", False),
-    # These return bounded metadata, never raw saved run output or credential values.
-    ("GET", r"/api/v2/(?:inbox|tico/fleet|bots|bots/[^/]+(?:/(?:turns|access|repositories|tools|automations))?|credentials)", False),
+    ("POST", r"/api/v2/market/(?:evidence|entities)", False),
+    # Existing identity/configuration readers retain their object rights, never credential values.
+    ("GET", r"/api/v2/(?:inbox|tico/fleet|bots|bots/[^/]+(?:/(?:access|repositories|tools|automations))?|credentials)", False),
 )
 
 
@@ -80,6 +80,8 @@ def require_route(c, auth, who, method, path, query=None):
         # Reuse that exact route table; its broad GET classifier cannot admit unreviewed reads here.
         from . import botops_act
         routes = botops_act.DO + botops_act.CONFIRM + botops_act.ALWAYS + botops_act.THREADS
+        # The login handler owns the explicit BotOps sign-out refusal, including carried requests.
+        routes += botops_act._routes(("POST", rf"(?:runners|computers)/{botops_act._S}/logouts"))
         routes += [(verb, pattern) for verb, pattern, _ in botops_act.PERSON_ONLY]
         permitted = any(method == verb and pattern.fullmatch(path) for verb, pattern in routes)
     if not permitted:

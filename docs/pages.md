@@ -42,6 +42,8 @@ read that saved meeting.
 Scoped task turns and Make-page attempts use the reviewed method/path allowlist in
 `backend/scoped_routes.py`. Other routes return `403`, including raw SQL, CSV/exports, saved run
 history, admin APIs and event streams. File downloads must name an individually in-scope source.
+Ordinary task turns retain checked messaging, status and credential-card writes. BotOps' reviewed control
+writes still use its requester, confirmation and secret rules; the route gate grants no extra rights.
 Make page can read task context, pages, files and meeting transcripts, and publish its page; it has no
 conversation or task-history read. The runner follows work with its separate runner identity.
 

@@ -387,6 +387,15 @@ def test_make_page_cannot_bypass_page_cleaning_with_a_generic_upload(api):
     assert_no_page(api)
 
 
+def test_make_page_does_not_inherit_ordinary_turn_writes(api):
+    t = task(api, private=False)
+    _, attempt, _ = start(api, t["id"])
+    for path, body in (("messages", {"to": "human:ana", "text": "Unreviewed output"}),
+                       ("assistant/actions", {"method": "POST", "path": "/api/v2/tasks", "body": {}})):
+        post(api, path, body, attempt["token"], expected=403)
+    assert_no_page(api)
+
+
 def test_publishing_after_reading_ten_context_pages_does_not_fail_its_own_read_flush(api):
     t = task(api, private=False)
     _, publisher = turn(api, "cpo")
