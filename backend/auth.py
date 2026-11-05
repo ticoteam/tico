@@ -808,7 +808,8 @@ class Auth:
         if who.role == "runner":
             raise Problem("identity", "Runner credentials cannot act as a human or bot", 403)
 
-    def bot_contact(self, c, who, slug, conversation_id=None, task_id=None, kind="message"):
+    @staticmethod
+    def bot_contact(c, who, slug, conversation_id=None, task_id=None, kind="message"):
         """Whether this sender may open something with `slug`.
 
         `tasks` is the strict one and the simplest to reason about: work arrives as a task and
@@ -876,13 +877,14 @@ class Auth:
             return True
         return False
 
-    def require_bot_contact(self, c, who, actor, conversation_id=None, task_id=None, kind="message"):
+    @staticmethod
+    def require_bot_contact(c, who, actor, conversation_id=None, task_id=None, kind="message"):
         """`bot_contact` as a gate. The refusal names the way back in, because the sending bot
         reads it and has to decide what to do next."""
         if not str(actor).startswith("bot:"):
             return
         slug = H.actor_id(actor)
-        if self.bot_contact(c, who, slug, conversation_id, task_id, kind):
+        if Auth.bot_contact(c, who, slug, conversation_id, task_id, kind):
             return
         row = c.execute(BS.ONE_SQL, (slug,)).fetchone()
         declared = json.loads(row["config"]) if row and row["config"] else {}
@@ -1081,22 +1083,32 @@ class Auth:
         return row
 
 
-def bot_reads_task(c, bot, row):
-    """Whether `bot` may read this task under the same rules as reading it (Auth.task_row): what a notice or an
-    answer sent to it may carry. A bot's access needs none of the server's sign-in settings, so no Auth is built.
+def actor_reads_task(c, actor, row):
+    """Whether an actor may read this task under every rule in Auth.task_row, without server sign-in settings.
     With no transaction open, the read runs in a savepoint released at the end, so task_row's snapshot never leaves
     a BEGIN open on an autocommit connection."""
+    from . import access, teammate_access
     policy = Auth.__new__(Auth)
     opened = not c.in_transaction
     if opened:
-        c.execute("SAVEPOINT bot_reads_task")
+        c.execute("SAVEPOINT actor_reads_task")
     try:
+        if H.is_human(actor):
+            policy.bot_admins = read_cache.value(c, ("task_read_admins",),
+                                                lambda: set(access.owner_and_admin_emails(c)))
         if opened and row:
             row = H.task(c, row["id"])      # read in this snapshot, as task_row's own BEGIN would
-        policy.task_row(c, Identity(bot, "bot"), row)
+        who = read_cache.value(c, ("task_read_identity", actor), lambda: teammate_access._viewer_for(c, actor))
+        if who is None:
+            return False
+        policy.task_row(c, who, row)
     except Problem:
         return False
     finally:
         if opened:
-            c.execute("RELEASE bot_reads_task")
+            c.execute("RELEASE actor_reads_task")
     return True
+
+
+def bot_reads_task(c, bot, row):
+    return actor_reads_task(c, bot, row)
