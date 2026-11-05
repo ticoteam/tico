@@ -15,8 +15,13 @@ const liveConnected = () => LIVE.connected;
 // `fn(data)` for each event of `topic` (one of LIVE_TOPICS, or `reset`, `status` and `needs-list`); returns the unsubscribe.
 function liveOn(topic, fn) {
   if (!LIVE.handlers.has(topic)) LIVE.handlers.set(topic, new Set());
+  const had = LIVE.handlers.get(topic).size;
   LIVE.handlers.get(topic).add(fn);
-  return () => LIVE.handlers.get(topic)?.delete(fn);
+  if (topic === 'letters' && !had && LIVE.started) liveRestart();
+  return () => {
+    const removed = LIVE.handlers.get(topic)?.delete(fn);
+    if (removed && topic === 'letters' && !LIVE.handlers.get(topic)?.size && LIVE.started) liveRestart();
+  };
 }
 function liveEmit(topic, data) {
   for (const fn of [...(LIVE.handlers.get(topic) || [])]) {
@@ -128,7 +133,8 @@ function liveUrl() {
   LIVE.taskKey = liveTaskKey(scope);
   // Without a conversation on screen, no messages or runs: those are every room's, and only one is shown.
   const topics = (conversations.length || threads.length ? LIVE_TOPICS : LIVE_TOPICS.filter(t => t !== 'messages' && t !== 'runs'))
-    .filter(t => t !== 'tasks' || scope.all || scope.task.length || scope.party.length);
+    .filter(t => t !== 'tasks' || scope.all || scope.task.length || scope.party.length)
+    .filter(t => t !== 'letters' || LIVE.handlers.get('letters')?.size);
   // Needs you as changed ids against the list the page holds (v2NeedsChanged), not the whole list each time.
   LIVE.urlTopics = topics;
   const q = new URLSearchParams({topics: topics.join(','), needs: 'changes'});
