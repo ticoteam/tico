@@ -863,6 +863,10 @@ class Known:
             self._looked |= missing
         return {i: self._names[i] for i in ids if i in self._names}
 
+    def whole(self, message):
+        """The message with the `source` everyone who may see it all reads: nothing hidden (events._SameForAll)."""
+        return {**message, "source": sources.message_source(self._names_for(sources.actors_of([message])), message)}
+
     def source(self, message):
         """A message's `source` (backend/sources.py). A person the reader may not see is not named in it, here or as the
         Assistant's person, unless the reader is in the message's conversation."""
