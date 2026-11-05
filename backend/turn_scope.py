@@ -248,14 +248,16 @@ def blob_allowed(c, auth, who, bid):
 
 
 def file_ref_allowed(c, auth, who, ref):
-    """A message's compact file references obey the same checks as its attachment metadata."""
+    """Saved refs lose only known rejected sources; unknown refs grant no byte access."""
     if not isinstance(ref, str):
-        return False
+        return True
     fid = ref.rsplit("@", 1)[0]
     row = read_cache.one(c, "SELECT * FROM bot_files WHERE id=?", (fid,))
     if row:
         from .files import file_visible
         return not row["archived"] and file_visible(c, auth, who, row, {})
+    if not read_cache.one(c, "SELECT 1 FROM blobs WHERE id=?", (fid,)):
+        return True
     return blob_allowed(c, auth, who, fid) is not False
 
 

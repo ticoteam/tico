@@ -571,7 +571,7 @@ def decorate(c, who, files, key, base, messages, full=True, hosted=None):
         for a in items:
             if not isinstance(a, dict) or not a.get("file_id"):
                 if (attempt_id and isinstance(a, dict) and a.get("id")
-                        and turn_scope.blob_allowed(c, files.auth, who, a["id"]) is False):
+                        and not turn_scope.file_ref_allowed(c, files.auth, who, a["id"])):
                     continue
                 fresh.append(a)
                 continue
@@ -584,7 +584,7 @@ def decorate(c, who, files, key, base, messages, full=True, hosted=None):
             row = rows[fid]
             hidden = bool(row) and not row["archived"] and not files.visible(c, who, row, cache)
             if attempt_id and (hidden or row and row["archived"]
-                               or not row and turn_scope.blob_allowed(c, files.auth, who, fid) is False):
+                               or not row and not turn_scope.file_ref_allowed(c, files.auth, who, fid)):
                 continue
             if a.get("kind") not in INLINE and not hidden:
                 fresh.append(a)                  # a file kind with no address here: shown as stored, when it may be seen
