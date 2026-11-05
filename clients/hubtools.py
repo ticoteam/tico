@@ -1116,7 +1116,7 @@ def task_update(api, args):
 
 @tool("hub_task_done", "Finish a task you own with its result. A review or QA subtask adds its verdict and the pull "
       "request head it judged, and the task that asked for it is woken with both (the same as hub_task_update with "
-      "status done).",
+      "status done). Its open subtasks close with it, recursively.",
       {"id": TASK_ID, "note": _s("The result, in a few plain sentences"),
        "verdict": _s("approve or changes for a review, pass or fail for QA", enum=["approve", "changes", "pass", "fail"]),
        "verdict_head": _s("The pull request head (commit sha, 7 to 40 hex characters) the verdict judged"),
@@ -3236,7 +3236,8 @@ def docs_links(api, args):
 
 @tool("hub_task_close", "A human may close a task they can edit (its requester or owner, a party to a task above it, "
       "the person it waits on, or a person who moves tasks). A bot closes work it requested; a comment or work delegation does not grant acceptance authority. "
-      "BotOps uses the requester's rights. Close accepts or cancels a task; report completed work with hub_task_update status done.",
+      "BotOps uses the requester's rights. Close accepts or cancels a task; report completed work with hub_task_update status done. "
+      "Its open subtasks close with it, recursively; one you may not close refuses the whole action.",
       {"id": TASK_ID, "note": _s("Why it is closed"),
        "wake": {"type": "boolean", "default": True,
                 "description": "false: its bots read the close on their next run instead of being woken for it"},
@@ -5606,14 +5607,22 @@ _SLIDES = {
 
 
 @tool("hub_update_create", "Post your daily update (or, on Friday, your week in review) when Tico asks "
-      "for it. A daily is `body`: one to five markdown bullets in plain English and nothing else, no title, "
-      "headings or task ids, at most 25 words a bullet and 90 in all. A week in review is `slides`: goal, "
+      "for it. A daily is `body`: three markdown bullets of work in plain English and nothing else, no title, "
+      "headings or task ids, at most 25 words a bullet and 90 in all, plus a `Blocked:` bullet for each blocker "
+      "and a `Suggestion:` bullet for each suggestion you acted on. A week in review is `slides`: goal, "
       "kpis, done, focus, blockers. One of each a day; posting again replaces it. One that breaks the "
-      "rules is posted with a `warning` saying how to write the next one; an empty one is refused.",
-      {"body": _s("A daily: one to five lines, each starting with '- '"),
+      "rules is posted with a `warning` saying how to write the next one; an empty one is refused. A delivery "
+      "turn (learnings or suggestions only) posts nothing: report `learnings_saved`, `suggestions_seen` and "
+      "`delivery_batch_id` only if you post.",
+      {"body": _s("A daily: three lines, each starting with '- ', plus any `Blocked:` or `Suggestion:` lines"),
        "slides": _SLIDES,
        "kind": _s("daily or weekly; Tico picks from the day when omitted", enum=["daily", "weekly"]),
-       "day": _s("YYYY-MM-DD, only when Tico asks you to redo a past day")},
+       "day": _s("YYYY-MM-DD, only when Tico asks you to redo a past day"),
+       "learnings_saved": {"type": "integer", "minimum": 0, "maximum": 15,
+                           "description": "How many of the learnings Tico handed you you kept"},
+       "suggestions_seen": {"type": "array", "items": {"type": "string"}, "maxItems": 10,
+                            "description": "The suggestions you acted on, one line each"},
+       "delivery_batch_id": _s("The delivery this post answers, when Tico named one")},
       writes=True)
 def update_post(api, args):
     slides = args.get("slides")
@@ -5621,7 +5630,9 @@ def update_post(api, args):
         slides = json.loads(Path(args["slides_file"]).read_text())
     if isinstance(slides, str):
         slides = json.loads(slides)
-    fields = (("body", args.get("body")), ("slides", slides), ("kind", args.get("kind")), ("day", args.get("day")))
+    fields = (("body", args.get("body")), ("slides", slides), ("kind", args.get("kind")), ("day", args.get("day")),
+              ("learnings_saved", args.get("learnings_saved")), ("suggestions_seen", args.get("suggestions_seen")),
+              ("delivery_batch_id", args.get("delivery_batch_id")))
     out = api.post("updates", {k: v for k, v in fields if v is not None}, key=_key(args))
     if "update" not in out:
         return out                  # held by an org rule: the hold, and whom to appeal to

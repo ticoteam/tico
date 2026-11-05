@@ -20,7 +20,7 @@ In order:
 | Find stuck | The task round-up: one grouped list per bot, oldest items first, up to ten bots by default. The standalone timer and System routines control are retired; the legacy Run now endpoint runs this step. | Custom: every 6 hours |
 | Learn | Nightly learnings. Still on its own timer for now. Off by default. | Once a day |
 | Suggest | Still on its own timer for now. | Once a day |
-| Update | Still on its own timer for now. | Once a day |
+| Update | Builds the day's update queue from 05:00, skipping bots with no work unless learnings or suggestions are waiting. The server keeps sending requests and drafting people's updates after the run ends. | Once a day |
 | Dream | The auto dream: starts a dream for up to "Most bots per run" bots (three by default, 1 to 20). | Once a day |
 
 A step that is not moved here yet shows "on its old timer".
@@ -34,6 +34,8 @@ A step that is not moved here yet shows "on its old timer".
 
 When every Dream start is refused by the shared wake limiter, it keeps its daily attempt for a later run that day. A pass that starts a dream or encounters another refusal or failure counts for the day.
 
+Update skips before 05:00 company time without using up its cadence, so it can build the day's queue on a later run.
+
 ## Run now
 
 `POST /api/v2/maintenance/run`, or `hub maintenance run [--step KEY]`. A plain Run now uses the same claim and due rules as the schedule, so a step runs only when it is due. `--step` runs that one step even when it is not due; a switched off step stays off, and a step on its old timer is skipped. A run that is already going is returned instead of a second one. With an Idempotency-Key, a repeat of the same key returns the run that key made, and starts nothing.
@@ -41,6 +43,7 @@ When every Dream start is refused by the shared wake limiter, it keeps its daily
 ## Recording and recovery
 
 - Each step writes its own log row with its status (ran, skipped, failed, off or pending), reason, counts and cost.
+- Update stays pending while its day's requests are queued or out. Once the queue drains, its original step row completes, even while Maintenance is paused.
 - A step's cursor moves only when it reports `ran`, and only forward: a late `ran` for an older window does not move it back.
 - A step that raises is recorded as failed, and the run goes on.
 - A live run with no heartbeat for 30 minutes is abandoned. Its unfinished steps are marked failed, and the schedule can start a new run. A stale run is ended before the schedule checks its bucket, so it never holds a day.

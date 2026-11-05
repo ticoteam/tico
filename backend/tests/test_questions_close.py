@@ -54,7 +54,7 @@ def gone_back_line(title):
     return f'no answer in two business days to "Which {title[7:]}?"'
 
 
-def test_a_question_closes_with_its_own_task_and_outlives_a_task_above_it(api):
+def test_a_question_closes_with_its_own_task_or_an_ancestor(api):
     with api.app.state.store.transaction() as c:
         top = H.task_create(c, ANA, "Plan the offsite", "x", OPS)
         mid = H.task_create(c, OPS, "Book the venue", "x", OPS, parent_id=top["id"])
@@ -64,10 +64,10 @@ def test_a_question_closes_with_its_own_task_and_outlives_a_task_above_it(api):
         assert listed(c, sub["id"]) and listed(c, other["id"])
         H.task_update(c, OPS, sub["id"], status="done", note="Menu picked.")      # its own task done: gone
         assert H.message(c, done_q["id"])["superseded_at"] and not listed(c, sub["id"])
-        H.task_close(c, ANA, top["id"])                                 # the grandparent closed: its own task is open
-        assert not H.message(c, deep_q["id"])["superseded_at"] and listed(c, other["id"])
+        H.task_close(c, ANA, top["id"])                                 # the grandparent closes the open subtree
+        assert H.message(c, deep_q["id"])["superseded_at"] and not listed(c, other["id"])
         # One whose own task ended without the write path taking it (or a keeper "no progress" question from before
-        # stuck checks went to BotOps) leaves at the hourly sweep; one below a finished task stays.
+        # stuck checks went to BotOps) leaves at the hourly sweep.
         late = H.task_create(c, OPS, "Pick the wine", "x", OPS, parent_id=mid["id"])
         late_q = pick(c, late["id"])
         c.execute("UPDATE tasks SET status='closed' WHERE id=?", (late["id"],))
@@ -80,7 +80,7 @@ def test_a_question_closes_with_its_own_task_and_outlives_a_task_above_it(api):
         kept = pick(c, live["id"])
         swept = approval_expiry.sweep(c)["asks"]
         assert set(swept) == {late_q["id"], stuck["id"]} and not H.message(c, kept["id"])["superseded_at"]
-        assert not H.message(c, deep_q["id"])["superseded_at"]
+        assert H.message(c, deep_q["id"])["superseded_at"]
         assert approval_expiry.sweep(c)["asks"] == []
 
 
@@ -134,7 +134,7 @@ def test_unanswered_questions_go_back_to_their_bot_in_one_weekday_morning_wake(a
         assert H.ask_clock(H.message(c, again["id"])) > friday
 
 
-def test_ending_a_task_above_keeps_the_question_and_wait_on_a_task_below_and_its_own_end_takes_both(api):
+def test_closing_a_parent_closes_questions_and_waits_on_tasks_below(api):
     with api.app.state.store.transaction() as c:
         top = H.task_create(c, ANA, "Plan the launch", "x", OPS)
         now_ = H.task_create(c, OPS, "Pick the launch date", "x", OPS, parent_id=top["id"])
@@ -147,12 +147,14 @@ def test_ending_a_task_above_keeps_the_question_and_wait_on_a_task_below_and_its
     before, count = needs(api)
     assert now_["id"] in before and count == len(before)
     with api.app.state.store.transaction() as c:
-        H.task_close(c, ANA, top["id"])                         # a task above ended: the question and its wait stay
+        H.task_close(c, ANA, top["id"])                         # its descendants and their questions close with it
     after, count = needs(api)
-    assert now_["id"] in after and count == len(after)
+    assert now_["id"] not in after and count == len(after)
     with api.app.state.store.transaction() as c:
-        assert H.task(c, now_["id"])["waiting_on"] == ANA and cached_matches(c)
-        # Its own task ended without the write path taking it: the hourly sweep takes the question and its wait.
+        assert H.task(c, now_["id"])["waiting_on"] is None and cached_matches(c)    # the bot's count follows
+        # Asked under a task that already ended (reopened by hand below it): the hourly sweep takes the question and
+        # its wait.
+        H.task_update(c, ANA, late["id"], status="open")
         pick(c, late["id"])
         waiting_on_ana(c, late["id"])
         assert listed(c, late["id"])
@@ -219,9 +221,9 @@ def test_bulk_closes_recount_the_asking_bot_and_one_bad_row_does_not_undo_the_sw
         pick(c, sub["id"], by=CPO)
         H._recount(c, CPO)
         assert asking(c) == 1
-        H.task_close(c, ANA, top["id"])                                 # a task above ending keeps the question
-        assert asking(c) == 1
-        H.task_close(c, ANA, sub["id"])                                 # its own task ending recounts the asker
+        H.task_close(c, ANA, top["id"])                                 # the cascade recounts the asking bot
+        assert asking(c) == 0
+        H.task_close(c, ANA, sub["id"])                                 # an already closed subtask stays closed
         assert asking(c) == 0
         # Asked on tasks that ended without the write path: the hourly sweep takes them one row at a time.
         bad, good = (H.task_create(c, CPO, f"Pick the {what}", "x", OPS, parent_id=mid["id"]) for what in ("wine", "band"))

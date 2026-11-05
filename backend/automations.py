@@ -999,7 +999,7 @@ def _unhold(c, aid, actor, how, via=None):
     c.execute("UPDATE automation_guard_holds SET cleared_at=? WHERE automation_id=?", (now, aid))
     task = H.task(c, hold["task_id"]) if hold["task_id"] else None
     if task and task["status"] not in ("closed", "done", "declined"):
-        H.task_close(c, H.KEEPER, task["id"], note="Released." if how == "release" else "Dropped.", quiet=True)
+        H.task_close(c, H.KEEPER, task["id"], note="Released." if how == "release" else "Dropped.", quiet=True, strict=False)
     before = {"hold": {"rule": hold["rule"], "held_at": hold["held_at"], "dropped": hold["dropped"]}}
     H.event(c, actor, "automation.hold_" + ("released" if how == "release" else "dropped"), aid,
             {"runs": n, "rule": hold["rule"], "dropped": hold["dropped"]})

@@ -741,6 +741,9 @@ SCHEMAS = {
                     "created_at": "s", "in_reply_to": "n", "refs": "o"}, required=["id", "conversation_id", "sender_id", "recipient_id", "kind", "body", "created_at", "in_reply_to", "refs"],
                    sender_name={"type": "string", "description": "Display name of sender_id, when it is a person or a bot"},
                    recipient_name={"type": "string", "description": "Display name of recipient_id"},
+                   sender_can_approve_send={"type": "boolean", "description": "On GET /messages/{mid}: whether the human sender "
+                       "currently may manage the bot addressee's mail sending (Auth.bot_manager); false for bot senders "
+                       "or non-bot addressees. This checks authority only, not send intent or the draft's contents"},
                    body_raw={"type": "string", "description": "A notice Tico wrote, as stored (with actor ids); `body` shows names to people"},
                    edited_at={"type": ["string", "null"], "description": "When the author last changed a task comment's text; "
                               "null when never edited"},
@@ -3164,6 +3167,47 @@ SCHEMAS.update({
     "AssistantChangeResult": obj({"id": "s", "restored": "b", "already": "b", "object": "s"}),
 })
 
+
+# Settings > Mailboxes (backend/mailboxes.py): which inboxes Tico uses and who may use each.
+TAGS["Mailboxes"] = "Which mailboxes Tico uses and who may use each: Read, or Read and write (organize, draft and send, as far as the company allows)."
+_MAILBOX_LEVEL = {"enum": ["none", "read", "read_write"]}
+_MAILBOX_REF = obj({"id": "s", "name": "s"})
+SCHEMAS.update({
+    "Mailbox": obj({"id": "s", "address": "s", "provider": "s", "kind": {"enum": ["personal", "shared"]},
+                    "person_id": "n", "person_name": "s", "connection": {"enum": ["workspace", "personal"]},
+                    "status": {"enum": ["active", "stopped"]},
+                    "state": {"enum": ["connected", "not_connected", "awaiting_person", "stopped"]},
+                    "level": _MAILBOX_LEVEL, "routines": items(_MAILBOX_REF)}),
+    "MailboxMay": obj({"read": "b", "organize": "b", "send": "b", "change_calendar": "b"}),
+    "MailboxList": obj({"admin": "b", "domain": "s", "may": ref("MailboxMay"), "mine": {"anyOf": [ref("Mailbox"), {"type": "null"}]},
+                        "shared": items(ref("Mailbox")), "mailboxes": items(ref("Mailbox"))}),
+    "MailboxResult": obj({"mailbox": ref("Mailbox")}),
+    "MailboxDetail": obj({"mailbox": ref("Mailbox"), "can_manage": "b", "can_stop": "b",
+                          "accesses": items(obj({"id": "n", "grantee_type": {"enum": ["person", "bot", "admins"]},
+                                                 "grantee_id": "s", "name": "s", "level": {"enum": ["read", "read_write"]},
+                                                 "implicit": "b"})),
+                          "routines": items(obj({"id": "s", "name": "s", "enabled": "b", "can_edit": "b"})),
+                          "may": ref("MailboxMay"),
+                          "candidates": items(obj({"type": {"enum": ["person", "bot"]}, "id": "s", "name": "s"}))}),
+})
+STABLE.extend([
+    ("/api/v2/mailboxes", "get", "Mailboxes", "listMailboxes",
+     "An admin's every mailbox (person, status, routines); for everyone their own mailbox and the ones shared with them", "MailboxList"),
+    ("/api/v2/mailboxes", "post", "Mailboxes", "connectMailbox",
+     "An admin connects a mailbox: a person's own by verified email, else a shared inbox when `shared`, else it waits for its person", "MailboxResult"),
+    ("/api/v2/mailboxes/{mid}", "get", "Mailboxes", "getMailbox",
+     "One mailbox: who can use it, its routines, and who could be added (for whoever manages it)", "MailboxDetail"),
+    ("/api/v2/mailboxes/{mid}", "delete", "Mailboxes", "stopMailbox",
+     "Stop using this mailbox in Tico (an admin, or the person whose mailbox it is)", "MailboxResult"),
+    ("/api/v2/mailboxes/{mid}/share", "post", "Mailboxes", "shareMailbox",
+     "An admin makes a mailbox that has no person a shared inbox", "MailboxDetail"),
+    ("/api/v2/mailboxes/{mid}/accesses", "post", "Mailboxes", "addMailboxAccess",
+     "Give a person or a bot Read, or Read and write (the mailbox's owner, or an admin for a shared inbox)", "MailboxDetail"),
+    ("/api/v2/mailboxes/{mid}/accesses/{access_id}", "patch", "Mailboxes", "changeMailboxAccess",
+     "Change one access between Read and Read and write", "MailboxDetail"),
+    ("/api/v2/mailboxes/{mid}/accesses/{access_id}", "delete", "Mailboxes", "removeMailboxAccess",
+     "Take one person's or bot's access away", "MailboxDetail"),
+])
 
 def generate():
     """The document for a default installation: what docs/openapi/v2.json holds."""

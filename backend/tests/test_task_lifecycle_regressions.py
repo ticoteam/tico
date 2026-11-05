@@ -119,10 +119,11 @@ def test_worktree_wait_is_visible_and_keeps_its_task_waiting(c, state):
 
 
 @pytest.mark.parametrize("status", ["done", "declined", "closed"])
-def test_finishing_bot_task_retires_only_its_generated_person_ask_cards(c, status):
+def test_finishing_bot_task_closes_subtasks_and_declining_retires_only_generated_asks(c, status):
     parent = create(c, "Prepare export")
     card = H._ask_in_subtask(c, "bot:cmo", parent, "human:ana", "Which format should the export use?")
-    ordinary = create(c, "Independently check export", owner="human:ana", parent_id=parent["id"])
+    ordinary = H.task_create(c, "bot:cmo", "Independently check export", "Synthetic regression fixture", "human:ana",
+                             parent_id=parent["id"], lint=False)
     assert card["id"] in {t["id"] for t in H.needs_you(c, "human:ana")["tasks"]}
     if status == "closed":
         H.task_close(c, "human:ana", parent["id"])
@@ -130,18 +131,21 @@ def test_finishing_bot_task_retires_only_its_generated_person_ask_cards(c, statu
         H.task_update(c, "bot:cmo", parent["id"], status=status)
     assert H.task(c, card["id"])["status"] == "closed"
     assert card["id"] not in {t["id"] for t in H.needs_you(c, "human:ana")["tasks"]}
-    assert H.task(c, ordinary["id"])["status"] == "open"
+    assert H.task(c, ordinary["id"])["status"] == ("open" if status == "declined" else "closed")
     assert not H.open_task_asks(c, H.task(c, card["id"]))
 
 
-def test_shared_person_card_stays_until_every_dependent_task_finishes(c):
+def test_finishing_parent_closes_shared_person_card_and_releases_other_dependents(c):
     root = create(c, "Prepare campaign")
     first = create(c, "Prepare campaign export", parent_id=root["id"])
     second = create(c, "Prepare campaign report", parent_id=root["id"])
     card = H._ask_in_subtask(c, "bot:cmo", first, "human:ana", "Which format should we use?")
     assert H._ask_in_subtask(c, "bot:cmo", second, "human:ana", "Confirm the report format?")["id"] == card["id"]
     H.task_update(c, "bot:cmo", first["id"], status="done")
-    assert H.task(c, card["id"])["status"] == "open"
+    assert H.task(c, card["id"])["status"] == "closed"
+    assert TR.parent_of(c, card["id"]) == first["id"]
+    assert H.task(c, second["id"])["status"] in H.ACTIVE_STATUSES
+    assert TR.blocker_ids(c, second["id"]) == []
     H.task_update(c, "bot:cmo", second["id"], status="done")
     assert H.task(c, card["id"])["status"] == "closed"
 

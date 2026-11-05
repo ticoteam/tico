@@ -28,22 +28,19 @@ def withdrawn_label(c, ask_id):
     return (H._json(H.message(c, ask_id)["refs"], {}) or {}).get("withdrawn")
 
 
-def test_a_question_on_an_open_subtask_outlives_its_parent_ending(api):
-    """Criterion 2: the bot asks on a subtask, then marks the parent done; the question stays."""
+def test_finishing_parent_closes_its_subtask_and_withdraws_its_question(api):
+    """A subtask closes with its parent, clearing the question and its hold."""
     with api.app.state.store.transaction() as c:
         parent = bot_task(c, "Spec Settings search")
-        child = bot_task(c, "Ask Ana about search scope", parent=parent)
+        child = bot_task(c, "Ask Ana about search scope", parent=parent, actor="bot:ops")
         question = ask(c, child, "Search titles only, or bodies too?")
         wait(c, child)
         H.task_update(c, "bot:ops", parent, status="done", note="Spec written")
-        assert not H.message(c, question["id"])["superseded_at"]
+        assert H.message(c, question["id"])["superseded_at"]
         row = H.task(c, child)
-        assert row["status"] == "waiting"
-        ana = task_holds.name(c, "human:ana")
-        assert row["blocked_reason"] == f"Waiting on {ana}: Search titles only, or bodies too?"
+        assert row["status"] == "closed" and not row["blocked_reason"]
         assert approval_expiry.sweep(c)["asks"] == []
-        assert not H.message(c, question["id"])["superseded_at"]
-        assert child in [t["id"] for t in H.tasks_asked_of(c, "human:ana")]
+        assert child not in [t["id"] for t in H.tasks_asked_of(c, "human:ana")]
 
 
 def test_ending_the_question_s_own_task_tells_the_asker_whether_the_person_saw_it(api):

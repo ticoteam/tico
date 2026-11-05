@@ -175,6 +175,7 @@ class RunnerRow(TypedDict):
     screen_default_pending: int
     performance: str
     turns_at_once: int | None
+    device_id: str | None
 
 
 class RunnerStateRow(TypedDict):

@@ -473,7 +473,8 @@ the server (`backend/hubdb.py`), never here. A command is its tool's name (clien
     hub update list [--kind daily|weekly] [--bot X] [--scope all|direct] [--unread] [--limit N]
                                            the bots' updates, newest first
     hub update show <id>                   one update with its thread
-    hub update create "<- bullets>" [--kind daily|weekly]   post your own update when Tico asks
+    hub update create "<- bullets>" [--kind daily|weekly] [--learnings-saved N] [--suggestion TEXT ...] [--delivery-batch ID]
+                                           post your own update when Tico asks (three bullets)
     hub update create --slides-file week.json [--day D]   a week in review: {goal, kpis, done, focus, blockers}
     hub update redo --day D [--kind weekly|daily] [--bot B ...] [--with-managers]   ask the bots to redo a past day (owner)
     hub update mark-read [ids...] [--all] [--unread]
@@ -3307,12 +3308,16 @@ def parser():
     s.set_defaults(fn="changelog mark-read")
 
     upd = sub.add_parser("update", help="create, read and reply to the bots' daily and weekly updates").add_subparsers(dest="sub")
-    s = upd.add_parser("create", help="post your update when Tico asks for it: 1-5 plain-English bullets, "
-                                       "or a week in review's slides")
-    s.add_argument("body", nargs="?", help="a daily: one to five lines, each starting with '- '")
+    s = upd.add_parser("create", help="post your update when Tico asks for it: three plain-English bullets "
+                                       "(plus any Blocked: or Suggestion: lines), or a week in review's slides")
+    s.add_argument("body", nargs="?", help="a daily: three lines, each starting with '- ', plus any Blocked: or Suggestion: lines")
     s.add_argument("--slides-file", help="a week in review: JSON {goal, kpis, done, focus, blockers}")
     s.add_argument("--kind", choices=("daily", "weekly"))
     s.add_argument("--day", help="YYYY-MM-DD, only when Tico asks you to redo a past day")
+    s.add_argument("--learnings-saved", type=int, dest="learnings_saved", help="how many of Tico's learnings you kept (0-15)")
+    s.add_argument("--suggestion", action="append", dest="suggestions_seen",
+                   help="a suggestion you acted on (repeatable)")
+    s.add_argument("--delivery-batch", dest="delivery_batch_id", help="the delivery this post answers, when Tico named one")
     s.set_defaults(fn="update create")
     s = upd.add_parser("redo", help="ask the bots again for a past day's update in the current shape (owner)")
     s.add_argument("--day", required=True)

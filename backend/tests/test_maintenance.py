@@ -49,6 +49,7 @@ def inline(store, auth, run_id, only, wait):
 def test_the_steps_run_in_one_fixed_order_and_the_api_lists_them_so(api):
     assert M.ORDER == ("collect", "clean_up", "check_health", "find_stuck", "learn", "suggest", "update", "dream")
     assert [s["key"] for s in get(api, "maintenance")["steps"]] == list(M.ORDER)
+    assert next(s for s in get(api, "maintenance")["steps"] if s["key"] == "update")["old_timer"] is False
 
 
 def test_each_frequency_is_due_on_its_own_clock():
