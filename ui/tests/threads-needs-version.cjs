@@ -54,7 +54,10 @@ const {t} = (() => { try { return require('./support/load.cjs'); } catch { retur
   const quiet = () => page.waitForTimeout(t(800));
 
   await page.goto('https://tico-ui.test/#/updates');
-  await page.waitForFunction(() => S.v2.needsVersion === 'v1' && THREADS.needsSeen === 'v1' && liveConnected() && THREADS.on && !THREADS.loading, null, {timeout: t(8000)});
+  // Adding threads to the stream can queue a final throttled startup read. Settle it before measuring a reconnect.
+  await page.waitForFunction(() => S.v2.needsVersion === 'v1' && THREADS.needsSeen === 'v1' && liveConnected() && THREADS.on &&
+    !THREADS.loading && !THREADS.again && LIVE.es?.topics.includes('threads') && LIVE.readyTopics?.includes('threads') &&
+    !LIVE_THROTTLE.get('threads-rail')?.timer, null, {timeout: t(8000)});
   await quiet();
 
   // The first connect named v1 and the list was read (the wait above). A reconnect naming it: nothing is read again.
