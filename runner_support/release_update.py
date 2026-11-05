@@ -347,10 +347,10 @@ def binary_pending(root, old, target, version, run=subprocess.run, listed=None, 
 def in_flight(directory):
     import sqlite3
     try:
-        c = sqlite3.connect("file:" + str(Path(directory) / "runner.sqlite") + "?mode=ro", uri=True)
-        return c.execute("SELECT count(*) FROM attempts WHERE phase IN ('claimed','running')").fetchone()[0]
-    except sqlite3.Error:
-        return 0
+        with contextlib.closing(sqlite3.connect("file:" + str(Path(directory) / "runner.sqlite") + "?mode=ro", uri=True)) as c:
+            return c.execute("SELECT count(*) FROM attempts WHERE phase IN ('claimed','running')").fetchone()[0]
+    except sqlite3.Error as exc:
+        raise RuntimeError(f"cannot check running work: {exc}") from exc
 
 
 def systemd_unit(env=os.environ):

@@ -262,7 +262,7 @@ def test_an_updater_releases_its_process_lock_when_it_fails(tmp_path, monkeypatc
 @pytest.mark.parametrize("policy", ["short", "legacy"])
 @pytest.mark.parametrize("step", [
     "process_open", "process_size", "process_symlink", "process_flock", "config_json", "config_shape",
-    "registration", "drain_read", "drain_sleep", "kind", "systemd_unit", "git_lookup", "git_gate",
+    "registration", "drain_read", "drain_db", "drain_sleep", "kind", "systemd_unit", "git_lookup", "git_gate",
     "checkout_open", "checkout_size", "checkout_symlink", "checkout_flock", "status_read", "status_write",
     "early_exit", "interrupt",
 ])
@@ -280,6 +280,8 @@ def test_every_pre_apply_failure_defers_and_releases_claims(old_follower, monkey
     unsafe = process if step.startswith("process_") else checkout
     target = state / "keep"
     target.write_text("keep this inode and content")
+    if step == "drain_db":
+        (state / "runner.sqlite").write_text("cannot read this database")
     if step.endswith("_open"):
         unsafe.mkdir()
     elif step.endswith("_size"):
@@ -289,7 +291,7 @@ def test_every_pre_apply_failure_defers_and_releases_claims(old_follower, monkey
     before = unsafe.lstat() if unsafe.exists() else None
     applied = []
     original_git, original_read, original_write = ru.git, ru.read_status, ru.write_status
-    original_flock, original_defer = fcntl.flock, ru.defer_update
+    original_flock, original_defer, original_in_flight = fcntl.flock, ru.defer_update, ru.in_flight
     cause = f"cannot finish {step}"
 
     def fail(*a, **kw):
@@ -315,6 +317,8 @@ def test_every_pre_apply_failure_defers_and_releases_claims(old_follower, monkey
                 patch.setattr(git_locks, "register_checkout", fail)
             elif step == "drain_read":
                 patch.setattr(ru, "in_flight", fail)
+            elif step == "drain_db":
+                patch.setattr(ru, "in_flight", original_in_flight)
             elif step == "drain_sleep":
                 patch.setattr(ru, "in_flight", lambda directory: True)
                 patch.setattr(ru.time, "sleep", fail)
@@ -356,7 +360,9 @@ def test_every_pre_apply_failure_defers_and_releases_claims(old_follower, monkey
         assert status["state"] == ("blocked" if attempt == ru.MAX_DEFERRALS else "idle" if policy == "short" else "failed")
         assert status["cause_count"] == attempt and status["deferrals"] == attempt
         assert status["deferral_cause"] in status["error"] and len(status["error"]) <= 300
-        if step not in ("config_json", "config_shape") and not step.endswith(("_open", "_size", "_symlink")):
+        if step == "drain_db":
+            assert "cannot check running work" in status["deferral_cause"]
+        elif step not in ("config_json", "config_shape") and not step.endswith(("_open", "_size", "_symlink")):
             assert cause in status["deferral_cause"]
         if policy == "short":
             assert status["not_before"] > now[0]
