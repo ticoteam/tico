@@ -56,6 +56,10 @@ def test_counsel_copy_is_rechecked_when_group_membership_changes(api):
         assert not H.task_private_readable(c, "human:cara", H.task(c, task))
     assert api.get("/api/v2/tasks/" + task, headers=headers("cara-test")).status_code == 404
     assert post(api, "sql", {"sql": f"SELECT body FROM tasks WHERE id='{task}'"}, token="cara-test")["rows"] == []
+    send(api, "PATCH", "groups/" + legal, {"add": {"people": ["cara"]}})
+    send(api, "PATCH", "groups/" + legal, {"remove": {"people": ["cara"]}})
+    with api.app.state.store.read() as c:
+        assert c.execute("SELECT body FROM tasks WHERE id=?", (task,)).fetchone()[0] == counsel.REMOVED_PAGE
 
 
 def test_visual_token_keeps_both_principals_and_legacy_person_tokens(api):
@@ -73,6 +77,11 @@ def test_visual_token_keeps_both_principals_and_legacy_person_tokens(api):
         row = c.execute("SELECT * FROM bot_files WHERE id=?", (fid,)).fetchone()
         assert not files.file_visible(c, api.app.state.auth, delegated, row, {})
     assert api.get(src).status_code == 404
+    edit(api, fid, {"people": ["cara"], "bots": ["finance"]})
+    assert api.get(src).status_code == 200
+    edit(api, fid, {"bots": ["finance"]})
+    assert api.get(src).status_code == 404
+    edit(api, fid, {"people": ["cara"]})
     # An old five-field URL still describes its non-delegated person, never a delegated identity.
     import hashlib
     import hmac
@@ -100,12 +109,12 @@ def test_deleted_group_cannot_regain_grants_when_legal_is_recreated(api):
 
 def test_removed_person_and_archived_bot_lose_explicit_page_grants(api):
     fid, _ = promoted(api)
-    pid = post(api, "people", {"name": "New member", "email": "new-member@acme.example"})["person"]
+    pid = post(api, "access/people", {"name": "New member", "email": "new-member@acme.example"})["person"]
     edit(api, fid, {"people": [pid], "bots": ["finance"]})
     post(api, "people/" + pid, {"left": True})
-    removed = api.delete("/api/v2/humans/" + pid, headers=headers("ana-test"))
+    removed = api.delete("/api/v2/people/" + pid, headers=headers("ana-test"))
     assert removed.status_code == 200, removed.text
-    assert post(api, "people", {"name": "Replacement", "email": "new-member@acme.example"})["person"] == pid
+    assert post(api, "access/people", {"name": "Replacement", "email": "new-member@acme.example"})["person"] == pid
     with api.app.state.store.transaction() as c:
         from backend.settings_admin import archive_bot
         archive_bot(c, "human:ana", "finance")

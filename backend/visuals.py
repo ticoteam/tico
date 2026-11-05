@@ -553,7 +553,7 @@ def decorate(c, who, files, key, base, messages, full=True, hosted=None):
     cache, rows, served = {}, {}, {}
     # The visual route rebuilds a bot reader without its run (serve, token_reader), so a file this run sees but that
     # bare bot does not, a chat's file among them, gets no address: a file chip, not a link that always 404s.
-    # A token names one reader: the caller itself, even when it acts for someone else (task_privacy.actor is then a pair).
+    # A delegated token keeps both principals; serving checks the same pair as the ordinary file read.
     route = token_reader(c, files.auth, who.actor) if who.role == "bot" else who
     # Counsel sees each file a message carries as its plain ref, never an address or what the file is: what it reads is
     # the one version its run was asked to read (backend/counsel.py run_read), through its own tool.
