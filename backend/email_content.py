@@ -69,14 +69,14 @@ def body_parts(msg):
 
 def file_parts(msg):
     leaves = [p for p in msg.walk() if not p.is_multipart()]
-    nested = [p for p in msg.walk() if p.is_multipart() and p.get_content_type() == "message/rfc822"]
+    nested = [p for p in msg.walk() if p.is_multipart() and (p.get_content_type() == "message/rfc822" or p.get_filename() or p.get_content_disposition() == "attachment")]
     return leaves + nested
 
 
 def part_bytes(part):
     if part.get_content_type() == "message/rfc822" and part.is_multipart():
         return b"\n".join(message.as_bytes(policy=policy.SMTP) for message in part.get_payload())
-    return part.get_payload(decode=True) or b""
+    return part.as_bytes(policy=policy.SMTP) if part.is_multipart() else part.get_payload(decode=True) or b""
 
 
 def snapshot(raw, mailbox):

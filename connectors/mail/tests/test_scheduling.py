@@ -22,7 +22,7 @@ class Workflow(unittest.TestCase):
                                  policy={'defaults':{'max_sends_per_day':20}})
         self.ctx.calendar.create_scheduling_event.return_value={'id':'event'}
         self.ctx.gmail.create_draft.return_value={'id':'draft'}
-        self.ctx.gmail.send_draft.return_value={'id':'sent'}
+        self.ctx.gmail.send_raw.return_value={'id':'sent'}
         self.msg={'id':'accepted','from':'creator@example.org','to':['ana@acme.example'],'cc':[],
                   'date':'2030-01-01','subject':'Call','body':'Tuesday at 10 works', 'labels':[]}
         self.args=SimpleNamespace(thread='thread',category='influencer',mode='book',bd_confirmation=None,
@@ -51,7 +51,7 @@ class Workflow(unittest.TestCase):
         from backend.email_content import snapshot
         proof = snapshot(queued.call_args.args[1], self.ctx.mailbox)
         assert proof['attachments'][0]['type'] == 'text/calendar'
-        self.ctx.gmail.send_draft.assert_not_called()
+        self.ctx.gmail.send_raw.assert_not_called()
 
 
 class PermissionGrant(unittest.TestCase):

@@ -318,7 +318,7 @@ def require_preview(c, actor, row):
 
 def registry_restrictions(c, auth, row, approved_send, *, dispatch=False):
     """The server re-reads retained registry safeguards; calling the API never skips the connector's restrictions."""
-    from connectors.mail import Failure, policy as local
+    from connectors.mail import DEFAULT_TZ, Failure, policy as local, zone
     path = auth.settings.registry_dir / "mail-policy.yaml"
     try:
         pol = local.load(path) if path.is_file() else {
@@ -346,8 +346,13 @@ def registry_restrictions(c, auth, row, approved_send, *, dispatch=False):
     if dispatch or (not approved_send and caps["per_recipient_cooldown_days"]):
         sent = c.execute("SELECT * FROM email_sends WHERE mailbox=? AND id<>? AND state IN ('sent','dispatching','unknown')",
                          (row["mailbox"], row["id"])).fetchall()
-        day = H.now()[:10]
-        if dispatch and sum(item["actor"] == row["actor"] and (item["provider_attempted_at"] or item["claimed_at"] or item["created_at"])[:10] == day for item in sent) >= caps["max_sends_per_day"]:
+        local_now = H.parse_ts(H.now()).astimezone(zone(DEFAULT_TZ))
+        day_start = local_now.replace(hour=0, minute=0, second=0, microsecond=0).timestamp()
+        own_count = sum(item["actor"] == row["actor"] and H.parse_ts(item["provider_attempted_at"] or item["claimed_at"] or item["created_at"]).astimezone(zone(DEFAULT_TZ)).date() == local_now.date() for item in sent)
+        historical_count = c.execute("SELECT count(*) FROM mail_messages WHERE mailbox=? AND lower(from_addr)=? "
+                                     "AND deleted_at IS NULL AND epoch>=? AND EXISTS (SELECT 1 FROM json_each(labels) WHERE value='SENT')",
+                                     (row["mailbox"], row["mailbox"], day_start)).fetchone()[0]
+        if dispatch and max(own_count, historical_count) >= caps["max_sends_per_day"]:
             reasons.append("registry_daily_cap")
         if not approved_send and any((item["provider_attempted_at"] or item["claimed_at"] or item["created_at"]) > H.shift(H.now(), days=-caps["per_recipient_cooldown_days"])
                 and set(json.loads(item["recipients"])) & set(recipients) for item in sent):

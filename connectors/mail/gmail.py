@@ -228,14 +228,6 @@ class Gmail:
         return self._exec(self.service.users().drafts().delete(userId="me", id=draft_id),
                           "drafts.delete")
 
-    def send_draft(self, draft_id):
-        """The only path out of the company. Policy, lint and the reviewer sit in front of it."""
-        oauth.require(self.granted, "drafts", self.mailbox, "send mail")
-        oauth.company_allows(self.company, "send", self.mailbox, "send mail")
-        return self._exec(
-            self.service.users().drafts().send(userId="me", body={"id": draft_id}),
-            "drafts.send", retry=False)
-
     def send_raw(self, raw, thread_id=""):
         """Send exactly the frozen MIME in this request, with no mutable draft lookup or automatic retry."""
         oauth.require(self.granted, "drafts", self.mailbox, "send mail")

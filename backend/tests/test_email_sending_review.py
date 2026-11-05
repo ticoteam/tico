@@ -123,6 +123,21 @@ def test_unnamed_inline_files_require_approval_and_bind_the_actual_bytes(inbox):
     assert changed["state"] == "waiting_approval" and not changed["decision"]["approved"]
 
 
+def test_retained_daily_cap_counts_verified_sent_history_before_the_new_queue(inbox):
+    autonomous(inbox)
+    registry(inbox, defaults={"max_sends_per_day": 1, "per_recipient_cooldown_days": 0})
+    with inbox.app.state.store.transaction() as c:
+        incoming(c, sender=BOX, mid="old-sent")
+        c.execute("UPDATE mail_messages SET labels='[\"SENT\"]',epoch=? WHERE msg_id='old-sent'",
+                  (H.parse_ts(H.now()).timestamp(),))
+    queued = queue(inbox)
+    machine = runner(inbox)
+    assert claim(inbox, machine["token"]) is None
+    with inbox.app.state.store.read() as c:
+        row = c.execute("SELECT decision FROM email_sends WHERE id=?", (queued["id"],)).fetchone()
+        assert "registry_daily_cap" in json.loads(row["decision"])["reasons"]
+
+
 def test_classifier_sees_html_as_well_as_plain_text_and_never_truncates_to_a_no(inbox):
     msg = EmailMessage()
     msg["From"], msg["To"], msg["Subject"] = BOX, CONTACT, "Update"
