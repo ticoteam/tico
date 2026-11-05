@@ -185,7 +185,7 @@ class Inbound:
 
     def remote(self, method, path, body=None):
         if self.off:
-            raise Problem('inbound_unconfigured','Tico addresses and numbers are not connected. Ask your owner to set them up in Tools.',409)
+            raise Problem('inbound_unconfigured','Tico addresses and numbers are not connected. Ask your owner to set them up in Tools > Settings > Email.',409)
         try:
             with httpx.Client(transport=TRANSPORT,timeout=35,follow_redirects=False,verify=outbound_tls.context()) as client:
                 response = client.request(method,self.url+'/v1/inbound/'+path,json=body,

@@ -516,9 +516,9 @@ def _rejected_summary(rows):
     first = ", ".join(sorted({f"{name} on {label}" for label, name, _, _, _ in rows}))
     when, why = rows[0][2], rows[0][3]
     sources = {row[4] for row in rows}
-    fix = (" Replace the model key in Tools > Credentials." if sources == {"credentials"} else
+    fix = (" Replace the model key in Tools > Keys." if sources == {"credentials"} else
            " Update the computer-local key or sign in again from Settings > Computers." if sources == {"computer"} else
-           " If the model key is stored in Credentials, replace it in Tools > Credentials. Otherwise update the "
+           " If the model key is stored in Tools > Keys, replace it there. Otherwise update the "
            "computer-local key or sign in again from Settings > Computers.")
     return (f"Sign-in rejected for {first}" + (f" at {when}" if when else "") + (f": {why}" if why else ".")
             + fix + " It takes no work that needs it until then.")
@@ -2313,7 +2313,7 @@ def view(c, who, settings, auth, github, config):
                              "; ".join(f"{label}: sign in to {model}" for label, model in unsigned[:5])
                              + ("." if len(unsigned) <= 5 else f"; and {len(unsigned) - 5} more.")
                              + " Sign in from Settings > Computers (BotOps can start it). To have new computers sign in by "
-                             "themselves, store the company's model key in Credentials and give it to every computer.",
+                             "themselves, store the company's model key in Tools > Keys and give it to every computer.",
                              [_fix("Open Computers", "#/settings", "devices"), _fix("Open Keys", "#/tools/keys?show=credentials")]))
     # A signed-in API key can be paid and usable, but it never spends a subscription's allowance. Keep this visible
     # before an upgrade moves bots to the computer login, even when none of those bots has queued work yet.

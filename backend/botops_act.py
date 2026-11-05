@@ -676,7 +676,7 @@ def _place(path):
     if parts[0] == "tasks" and len(parts) > 1 and parts[1]:
         return "#/task/" + parts[1], "", "the task"
     if parts[0] == "credentials":
-        return "#/tools/keys?show=credentials", "", "Credentials"
+        return "#/tools/keys?show=credentials", "", "Tools > Keys"
     if parts[0] in ("runners", "computers"):
         return "#/settings", "", "Settings > Computers"
     return "#/settings", "", "Settings"
