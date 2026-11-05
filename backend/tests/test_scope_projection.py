@@ -1267,7 +1267,7 @@ def test_legacy_dependency_reasons_rebuild_from_the_scoped_question(api, monkeyp
             task_review.edit_version(c, auth, who, t['id'], fid, 1,
                                      models.FileVersionEdit(ask=version_ask('ana')))
         post(api, 'tasks/' + t['id'], {'version': get(api, 'tasks/' + t['id'])['task']['version'],
-                                     'status': 'waiting', 'on': 'ana'}, attempt['token'])
+                                     'status': 'waiting', 'waiting_on': 'human:ana'}, attempt['token'])
     with api.app.state.store.read() as c:
         row = H.task(c, t['id'])
         assert filename in row['blocked_reason']
