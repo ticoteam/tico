@@ -652,7 +652,7 @@ def test_condition_validation_matches_hq_dictionary_types_and_bounds():
 
 
 def test_migration_is_idempotent_and_preserves_receipts():
-    path = Path(__file__).resolve().parents[1] / "migrations" / "0098_suggestions.py"
+    path = Path(__file__).resolve().parents[1] / "migrations" / "20261105010200_suggestions.py"
     spec = importlib.util.spec_from_file_location("suggestions_migration", path)
     migration = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(migration)
