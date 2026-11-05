@@ -78,6 +78,9 @@ journey('e2e-tools', async ({hub, browser, phone}) => {
   const page = await open(browser, hub, 'dana', {phone, hash: '#/library/connections'});
   await page.waitForFunction(() => location.hash === '#/tools', null, {timeout: t(5000)});
   await page.locator('tr[data-tl-row="api:close-crm"]').waitFor({timeout: t(15000)});
+  // The first-result feedback question covers the page's corner; Dana skips it.
+  const skip = page.locator('#feedback-ask:not([hidden]) [data-skip]');
+  if (await skip.count()) await skip.click();
   const crmRow = page.locator('tr[data-tl-row="api:close-crm"]');
   assert.match(await crmRow.innerText(), /Close CRM[\s\S]*Proxy[\s\S]*Working/, `${where}: the Close CRM row`);
   assert.equal(await crmRow.locator('.tt-face').count(), 2, `${where}: two faces`);
@@ -127,6 +130,7 @@ journey('e2e-tools', async ({hub, browser, phone}) => {
   await go(page, '#/tools/api/ledger-export');
   await page.locator('#tool-keys [data-ta-delivery="computer"]').waitFor({timeout: t(10000)});
   assert.equal(await page.locator('#tool-keys [data-ta-proxy]').count(), 1, `${where}: Move to proxy`);
+  assert.equal(await page.locator('[data-ta-check]').count(), 0, `${where}: no Check now without a check path`);
   assert.match(await page.locator('#tool-api .tt-title').innerText(), /Key on computers/, `${where}: its status`);
   assertClean(page, `${where}: Ledger export`);
   await shots(page, `computer-${where}`);

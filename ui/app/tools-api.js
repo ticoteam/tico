@@ -55,7 +55,7 @@ function taDrawHead() {
   const sub = ['API key', taHost(tool.base_url)].filter(Boolean).join(' · ');
   root.querySelector('[data-ta-head]').innerHTML = `<header class="tt-title"><span class="tt-tile lg" aria-hidden="true"><span class="nav-icon">api</span></span>
       <div class="tt-title-text"><h1>${esc(tool.name)}</h1><p class="muted">${esc(sub)}</p></div>
-      <div class="tt-title-act">${toolsPill(status)}${manage || tool.check_path ? '<button type="button" class="ghost small" data-ta-check>Check now</button>' : ''}${
+      <div class="tt-title-act">${toolsPill(status)}${tool.base_url && tool.check_path ? '<button type="button" class="ghost small" data-ta-check>Check now</button>' : ''}${
         manage ? '<button type="button" class="ghost small" data-ta-settings>Settings</button>' : ''}</div></header>
     <nav class="tt-tabs" aria-label="${esc(tool.name)}">${[['overview', base, 'Overview'], ['activity', base + '/activity', 'Activity']].map(([k, href, label]) =>
       `<a href="${href}" data-ta-tab="${k}"${(TA.tab || 'overview') === k ? ' class="cur" aria-current="page"' : ''}>${label}</a>`).join('')}</nav>`;
