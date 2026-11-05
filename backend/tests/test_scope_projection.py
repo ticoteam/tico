@@ -271,7 +271,7 @@ def test_postal_file_ids_and_unprocessed_arrivals_share_the_audience_ceiling(api
 def test_postal_cursors_scan_past_rejected_arrivals_without_naming_them(api, hq, mail, monkeypatch):
     from backend import postal_mail
     from backend.tests.test_api import put
-    t, attempt = task_turn(api, private=True)
+    t, attempt = task_turn(api, private=True, roles={"participant": ["ben"]})
     token = attempt["token"]
     put(api, "postal/addresses/all/grants/bot/ops", {})
     with api.app.state.store.read() as c:
@@ -310,7 +310,7 @@ def test_postal_cursors_scan_past_rejected_arrivals_without_naming_them(api, hq,
 
 
 def cursor_sources(api, count=5000):
-    _, publisher = turn(api)
+    machine, publisher = turn(api)
     seed = published(api, publisher, name="bot-wide.html", botwide=True)
     # The large rejected prefix is the reviewer's seed; the page and its version start with a production write.
     with api.app.state.store.transaction() as c:
@@ -322,8 +322,13 @@ def cursor_sources(api, count=5000):
                       [copy[k] for k in columns])
             c.execute("INSERT INTO pages(file_id,cadence,created_at,updated_at) VALUES(?,'none',?,?)",
                       (copy["id"], source["first_activity_at"], source["last_activity_at"]))
-    t, attempt = task_turn(api)
-    allowed = published(api, publisher, name="last-allowed.html", task=t["id"])
+    post(api, f'attempts/{publisher["id"]}/started', {"thread_id": "cursor-source"}, machine["token"])
+    post(api, f'attempts/{publisher["id"]}/complete', {"outcome": "completed", "last_seq": 0}, machine["token"])
+    t = post(api, "tasks", {"owner": "ops", "title": "Read the cursor context", "body": "Read the permitted pages.",
+                            "private": False})
+    attempt = claim(api, machine, "ops")
+    assert attempt and attempt["task"]["id"] == t["id"]
+    allowed = published(api, attempt, name="last-allowed.html", task=t["id"])
     with api.app.state.store.transaction() as c:
         c.execute("UPDATE bot_files SET last_activity_at='2000-01-01T00:00:00Z' WHERE id=?", (allowed,))
     return attempt["token"], seed, source["last_activity_at"], allowed

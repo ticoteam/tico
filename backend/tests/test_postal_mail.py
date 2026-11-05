@@ -402,7 +402,7 @@ def test_claimed_builtin_counsel_can_read_granted_and_routed_mail_only(api, hq, 
     assert {i["external_id"] for i in get(api, "postal/items", token)["items"]} == {"171"}
     get(api, "postal/items/" + owner["id"], token, expected=404)
     assert scan(api, owner, token) == 403
-    get(api, f"files/{owner['file_id']}/meta?v=1", token, expected=404)
+    get(api, f"files/{owner['file_id']}/meta?v=1", token, expected=403)
     for row in (routed,):
         assert call(api, "hub_mail_read", {"item_id": row["id"]}, token=token)[1]["item"]["summary"] == row["summary"]
         assert scan(api, row, token) == 200

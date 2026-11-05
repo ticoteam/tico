@@ -796,8 +796,12 @@ def audience_allowed(c, auth, who, row):
     if row["file_id"]:
         stored = read_cache.one(c, "SELECT * FROM bot_files WHERE id=?", (row["file_id"],))
         return bool(stored and not stored["archived"] and turn_scope.allowed(c, auth, who, "file", stored))
-    return all(reader.actor == owner_actor(c, auth) or granted(c, reader.actor, row)
-               for task in carried for reader in turn_scope.readers(c, auth, task))
+    for task in carried:
+        audience = turn_scope.readers(c, auth, task)
+        if not audience or not all(reader.actor == owner_actor(c, auth) or granted(c, reader.actor, row)
+                                   for reader in audience):
+            return False
+    return True
 
 
 def _access(c, auth, who, row):
