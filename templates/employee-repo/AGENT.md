@@ -180,7 +180,8 @@ the top. Size it by its content, never 100vh except the card rule below. Tico sh
 ## Widget view
 A page pinned to a sidebar, the Dashboard or a team page shows as a card, and opens full size on a tap. In a card Tico
 sets `data-tico-view=card` and `data-tico-size` (small, medium or large) on `<html>`; at full size it sets `full`.
-Design for the small card (180 px tall) first: a headline and one or two numbers. `[data-tico-size=medium]` and
+Pages are dark, like the app: a dark background, light text, chart colours that read on dark. A page that sets no
+background gets Tico's dark one. Design for the small card (180 px tall) first: a headline and one or two numbers. `[data-tico-size=medium]` and
 `large` show more. A number that should stay current is `<tico-kpi bot="<your slug>" name="tasks_done_7d">`, or a
 business KPI by its id (`<tico-kpi id="...">`, from `hub kpi list`). The full guide and the KPI names are in Tico
 `docs/pages.md`, "Widget view" and "Live blocks".

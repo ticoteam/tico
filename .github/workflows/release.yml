@@ -532,12 +532,21 @@ jobs:
         env:
           APPLE_SIGNING_IDENTITY: ${{ secrets.APPLE_SIGNING_IDENTITY }}
           APPLE_ID: ${{ secrets.APPLE_ID }}
+          GH_TOKEN: ${{ github.token }}
+          PREVIOUS: ${{ needs.recorder-changes.outputs.previous }}
         run: |
           flags=()
           [ -n "$APPLE_SIGNING_IDENTITY" ] && flags+=(--signed)
           [ -n "$APPLE_ID" ] && flags+=(--notarized)
+          # The last recorder people actually got (carried-forward releases keep its version), so an entry written
+          # for any release since then still shows. The updater banner shows its first line.
+          shipped=""
+          [ -n "$PREVIOUS" ] && shipped="$(gh release download "$PREVIOUS" --pattern recorder-latest.json --output - 2>/dev/null \
+            | python3 -c 'import json,sys; print(json.load(sys.stdin).get("version",""))' 2>/dev/null || true)"
+          [ -n "$shipped" ] && flags+=(--since "$shipped")
           python3 scripts/app_release.py --github --kind recorder --version "${GITHUB_REF_NAME#v}" --tag "$GITHUB_REF_NAME" \
-            --output dist/recorder/recorder-latest.json --notes "Built from ${GITHUB_SHA::7}" "${flags[@]}" dist/recorder
+            --output dist/recorder/recorder-latest.json --notes "Built from ${GITHUB_SHA::7}" \
+            --changes recorder/CHANGES.md "${flags[@]}" dist/recorder
       - name: Carry the previous release's recorder files forward
         if: needs.recorder-changes.outputs.build != 'true'
         env:

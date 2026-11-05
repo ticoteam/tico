@@ -42,11 +42,13 @@ impl LiveSync {
                 crate::qos::utility();
                 let store = worker_store;
                 let mut config: Option<(u64, crate::settings::Settings)> = None;
+                let mut failures: HashMap<String, u32> = HashMap::new();
                 let mut paused_at: HashMap<String, std::time::Instant> = HashMap::new();
                 while !stopped.load(Ordering::Relaxed) {
                     let mark = store.changes();
                     let started = std::time::Instant::now();
                     let mut live = 0;
+                    let mut recording = false;
                     let mut failed = false;
                     // Only shared, still-live meetings are visited; the library can be large.
                     let version = store.settings_version();
@@ -58,6 +60,11 @@ impl LiveSync {
                     if let (Ok(records), Some((_, config))) = (store.summaries(), &config) {
                         let mut errors = status.lock().unwrap_or_else(|error| error.into_inner());
                         let shared = |state: &str| ["live", "paused"].contains(&state);
+                        failures.retain(|id, _| {
+                            records
+                                .iter()
+                                .any(|row| &row.id == id && shared(&row.live_state))
+                        });
                         errors.retain(|id, _| {
                             records
                                 .iter()
@@ -69,6 +76,7 @@ impl LiveSync {
                                 break;
                             }
                             live += 1;
+                            recording |= record.state == "recording";
                             let Ok(context) = store.context(&record.id) else {
                                 continue;
                             };
@@ -96,11 +104,25 @@ impl LiveSync {
                                 status.lock().unwrap_or_else(|error| error.into_inner());
                             match result {
                                 Ok(_) => {
+                                    failures.remove(&record.id);
                                     errors.remove(&record.id);
                                 }
                                 Err(error) => {
                                     failed = true;
-                                    errors.insert(record.id, format!("{error:#}"));
+                                    let count = failures.entry(record.id.clone()).or_default();
+                                    *count += 1;
+                                    let text =
+                                        crate::retry::stored(&error, "Tico sync is retrying");
+                                    let text = crate::retry::notice(
+                                        &text,
+                                        *count,
+                                        "Tico sync is retrying",
+                                    );
+                                    if text.is_empty() {
+                                        errors.remove(&record.id);
+                                    } else {
+                                        errors.insert(record.id, text);
+                                    }
                                 }
                             }
                         }
@@ -111,6 +133,9 @@ impl LiveSync {
                     }
                     let wait = if failed {
                         SYNC_GAP * 3
+                    } else if recording {
+                        // Silence must not leave an expired reference hold asleep for 30 seconds.
+                        SYNC_GAP
                     } else if live > 0 {
                         LIVE_WAIT
                     } else {
@@ -272,6 +297,8 @@ impl Tico {
         for words in streamed.values_mut() {
             words.retain(|word| !excluded(&context.paused_windows, word.start_ms, word.end_ms));
         }
+        let frontier = transcript::delivery_frontier(&record, &streamed);
+        let record = transcript::echo_snapshot(&record, &streamed);
         let mut db = store.db()?;
         let transaction = db.transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)?;
         scrub_pending(
@@ -283,47 +310,69 @@ impl Tico {
         )?;
         let mut queue = Queue::read(&transaction, id, &self.destination.id)?;
         if live {
-            queue.streamed(&transaction, &record, &streamed)?;
-            queue.finished(&transaction, &record)?;
+            let previous_seq = queue.seq;
+            queue.streamed(&transaction, &record, &streamed, frontier)?;
+            queue.finished(&transaction, &record, frontier)?;
+            queue.order_new(&transaction, previous_seq)?;
+            queue = Queue::read(&transaction, id, &self.destination.id)?;
         }
         queue.corrections(&transaction, &record)?;
         transaction.commit()?;
         if live {
-            let mut query=db.prepare("SELECT seq,payload_json FROM live_outbox WHERE recording_id=? AND destination_id=? AND acknowledged=0 ORDER BY seq")?;
-            let pending = query
-                .query_map([id, &self.destination.id], |row| {
-                    Ok((row.get::<_, i64>(0)?, row.get::<_, String>(1)?))
-                })?
-                .collect::<std::result::Result<Vec<_>, _>>()?;
-            drop(query);
-            for batch in pending.chunks(100) {
-                let chunks = batch
-                    .iter()
-                    .map(|(_, text)| serde_json::from_str::<Value>(text))
-                    .collect::<std::result::Result<Vec<_>, _>>()?;
-                let payload = json!({"chunks":chunks});
-                let reply = match self.call(
-                    &format!("{prefix}/chunks"),
-                    Some(&payload),
-                    &format!("recorder:{id}:live:{}", hash(&payload)),
-                ) {
-                    Ok(reply) => reply,
-                    // Paused (or ended) on Tico: nothing new goes until it is resumed.
-                    Err(error) if format!("{error:#}").contains("HTTP 409 (meeting_state)") => {
-                        note_state(store, id, &self.call(&prefix, None, "")?)?;
-                        return Ok(());
+            let key = format!("{id}\n{}", self.destination.id);
+            'delivery: loop {
+                let pending = unacknowledged(&db, id, &self.destination.id)?;
+                let state = hash(&json!(pending));
+                for batch in pending.chunks(100) {
+                    let chunks = batch
+                        .iter()
+                        .map(|(_, text)| serde_json::from_str::<Value>(text))
+                        .collect::<std::result::Result<Vec<_>, _>>()?;
+                    let payload = json!({"chunks":chunks});
+                    let reply = match self.call(
+                        &format!("{prefix}/chunks"),
+                        Some(&payload),
+                        &format!("recorder:{id}:live:{}", hash(&payload)),
+                    ) {
+                        Ok(reply) => reply,
+                        // Paused (or ended) on Tico: nothing new goes until it is resumed.
+                        Err(error) if format!("{error:#}").contains("HTTP 409 (meeting_state)") => {
+                            note_state(store, id, &self.call(&prefix, None, "")?)?;
+                            return Ok(());
+                        }
+                        // Old queues and uncertain replies can predate the current time frontier.
+                        // Read back after a validation refusal and durably repair pending times
+                        // before retrying, once per outbox state: a refusal the repair cannot fix
+                        // (the repaired rows refused again) retries with the sync's backoff.
+                        Err(error)
+                            if format!("{error:#}").contains("HTTP 422")
+                                && repaired_lock().get(&key) != Some(&state) =>
+                        {
+                            let view = self.call(&prefix, None, "")?;
+                            note_state(store, id, &view)?;
+                            repair_pending(&mut db, id, &self.destination.id, &view)?;
+                            if view["state"] != "live" {
+                                return Ok(());
+                            }
+                            let repaired =
+                                hash(&json!(unacknowledged(&db, id, &self.destination.id)?));
+                            repaired_lock().insert(key.clone(), repaired);
+                            continue 'delivery;
+                        }
+                        Err(error) => return Err(error),
+                    };
+                    ensure!(
+                        batch.iter().all(|(seq, _)| reply["accepted"]
+                            .as_array()
+                            .is_some_and(|rows| rows.contains(&json!(seq)))),
+                        "Tico did not acknowledge every transcript turn"
+                    );
+                    for (seq, _) in batch {
+                        db.execute("UPDATE live_outbox SET acknowledged=1 WHERE recording_id=? AND destination_id=? AND seq=?",rusqlite::params![id,self.destination.id,seq])?;
                     }
-                    Err(error) => return Err(error),
-                };
-                ensure!(
-                    batch.iter().all(|(seq, _)| reply["accepted"]
-                        .as_array()
-                        .is_some_and(|rows| rows.contains(&json!(seq)))),
-                    "Tico did not acknowledge every transcript turn"
-                );
-                for (seq, _) in batch {
-                    db.execute("UPDATE live_outbox SET acknowledged=1 WHERE recording_id=? AND destination_id=? AND seq=?",rusqlite::params![id,self.destination.id,seq])?;
                 }
+                repaired_lock().remove(&key);
+                break;
             }
         }
         // Corrections follow the turns they correct, in revision order.
@@ -352,13 +401,7 @@ impl Tico {
                 &format!("recorder:{id}:live:{seq}:r{revision}:{}", hash(&payload)),
             ) {
                 Ok(_) => 1,
-                // Tico refuses empty text, so a streamed turn the transcript has no words for
-                // keeps its streamed text there.
-                Err(error)
-                    if payload["text"] == "" && format!("{error:#}").contains("HTTP 422") =>
-                {
-                    2
-                }
+                Err(error) if correction_refused(&error, &payload) => 2,
                 Err(error) => return Err(error),
             };
             db.execute(
@@ -609,6 +652,71 @@ impl Tico {
         )?;
         Ok(())
     }
+}
+
+/// Tico refuses this correction for good: it would break the transcript's time order
+/// (`sequence_order`, the only timing refusal the corrections route makes), or an older server
+/// refuses clearing a turn's text. Tico then keeps the revision it has and later revisions
+/// proceed. Any other refusal retries with the sync's normal backoff.
+fn correction_refused(error: &anyhow::Error, payload: &Value) -> bool {
+    let error = format!("{error:#}");
+    let clear = payload["text"]
+        .as_str()
+        .is_some_and(|text| text.trim().is_empty());
+    error.contains("HTTP 422 (sequence_order)") || clear && error.contains("HTTP 422 (validation)")
+}
+
+/// The outbox state each meeting's last refused batch was repaired to, so a refusal the repair
+/// cannot fix does not read back and rewrite the outbox on every pass.
+static REPAIRED: Mutex<BTreeMap<String, String>> = Mutex::new(BTreeMap::new());
+
+fn repaired_lock() -> MutexGuard<'static, BTreeMap<String, String>> {
+    REPAIRED.lock().unwrap_or_else(|error| error.into_inner())
+}
+
+fn unacknowledged(
+    db: &rusqlite::Connection,
+    id: &str,
+    destination: &str,
+) -> Result<Vec<(i64, String)>> {
+    let mut query = db.prepare("SELECT seq,payload_json FROM live_outbox WHERE recording_id=? AND destination_id=? AND acknowledged=0 ORDER BY seq")?;
+    let rows = query
+        .query_map([id, destination], |row| {
+            Ok((row.get::<_, i64>(0)?, row.get::<_, String>(1)?))
+        })?
+        .collect::<std::result::Result<Vec<_>, _>>()?;
+    Ok(rows)
+}
+
+/// Reconcile a refused batch with the server before retrying its remaining turns. Accepted
+/// sequences may include a reply lost in transit; they must never be rewritten or renumbered.
+fn repair_pending(
+    db: &mut crate::store::Db,
+    id: &str,
+    destination: &str,
+    view: &Value,
+) -> Result<()> {
+    let accepted = view["seq"]
+        .as_i64()
+        .context("Tico did not report its transcript sequence")?;
+    let mut start = view["chunks"]
+        .as_array()
+        .context("Tico did not report its transcript turns")?
+        .iter()
+        .filter_map(|row| row["start_ms"].as_u64())
+        .max()
+        .unwrap_or(0);
+    let tx = db.transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)?;
+    tx.execute("UPDATE live_outbox SET acknowledged=1 WHERE recording_id=? AND destination_id=? AND seq<=?", rusqlite::params![id, destination, accepted])?;
+    for (seq, text) in unacknowledged(&tx, id, destination)? {
+        let mut payload: Value = serde_json::from_str(&text)?;
+        start = start.max(payload["start_ms"].as_u64().unwrap_or(0));
+        payload["start_ms"] = json!(start);
+        payload["end_ms"] = json!(start.max(payload["end_ms"].as_u64().unwrap_or(0)));
+        tx.execute("UPDATE live_outbox SET payload_json=? WHERE recording_id=? AND destination_id=? AND seq=?", rusqlite::params![payload.to_string(), id, destination, seq])?;
+    }
+    tx.commit()?;
+    Ok(())
 }
 
 /// Saves the meeting's state as Tico reports it, so new text stops while it is paused and
@@ -996,8 +1104,6 @@ struct Queue<'a> {
     id: &'a str,
     destination: &'a str,
     seq: i64,
-    /// Start of the last turn queued; the next may not start earlier.
-    last_start: u64,
     spans: Vec<Span>,
     sources: Vec<Source>,
     /// Finished chunks already used (sources, and chunks shared before sources were kept).
@@ -1014,15 +1120,6 @@ impl<'a> Queue<'a> {
             [id, destination],
             |row| row.get(0),
         )?;
-        let mut last_start = 0;
-        let mut query = transaction.prepare(
-            "SELECT payload_json FROM live_outbox WHERE recording_id=? AND destination_id=? ORDER BY seq DESC LIMIT 1",
-        )?;
-        for text in query.query_map([id, destination], |row| row.get::<_, String>(0))? {
-            last_start = serde_json::from_str::<Value>(&text?)?["start_ms"]
-                .as_u64()
-                .unwrap_or(0);
-        }
         let mut query = transaction.prepare(
             "SELECT seq,channel,start_ms,end_ms FROM live_spans WHERE recording_id=? AND destination_id=? ORDER BY seq",
         )?;
@@ -1059,7 +1156,6 @@ impl<'a> Queue<'a> {
             id,
             destination,
             seq,
-            last_start,
             spans,
             sources,
             done,
@@ -1073,8 +1169,7 @@ impl<'a> Queue<'a> {
         turn: &Turn,
     ) -> Result<i64> {
         self.seq += 1;
-        let start = turn.start_ms.max(self.last_start);
-        self.last_start = start;
+        let start = turn.start_ms;
         let payload = json!({"seq":self.seq,"speaker":turn.speaker,"start_ms":start,"end_ms":turn.end_ms.max(start),"text":turn.text});
         transaction.execute(
             "INSERT INTO live_outbox(recording_id,destination_id,seq,chunk_id,payload_json) VALUES(?,?,?,?,?)",
@@ -1087,6 +1182,49 @@ impl<'a> Queue<'a> {
             ],
         )?;
         Ok(self.seq)
+    }
+    /// Assign one sequence across new streamed and finished turns before anything is sent.
+    /// Temporary negative keys avoid collisions while moving the matching span receipts.
+    fn order_new(&self, transaction: &rusqlite::Transaction, previous: i64) -> Result<()> {
+        let mut query = transaction.prepare("SELECT seq,payload_json FROM live_outbox WHERE recording_id=? AND destination_id=? AND seq>? ORDER BY seq")?;
+        let mut rows = query
+            .query_map(
+                rusqlite::params![self.id, self.destination, previous],
+                |row| Ok((row.get::<_, i64>(0)?, row.get::<_, String>(1)?)),
+            )?
+            .collect::<std::result::Result<Vec<_>, _>>()?;
+        rows.sort_by_key(|(_, text)| {
+            serde_json::from_str::<Value>(text)
+                .ok()
+                .and_then(|v| v["start_ms"].as_u64())
+                .unwrap_or(0)
+        });
+        let mut start: u64 = transaction.query_row(
+            "SELECT COALESCE(MAX(json_extract(payload_json,'$.start_ms')),0) FROM live_outbox WHERE recording_id=? AND destination_id=? AND seq<=?",
+            rusqlite::params![self.id, self.destination, previous],
+            |row| row.get(0),
+        )?;
+        for (old, _) in &rows {
+            for table in ["live_outbox", "live_spans"] {
+                transaction.execute(&format!("UPDATE {table} SET seq=-seq WHERE recording_id=? AND destination_id=? AND seq=?"), rusqlite::params![self.id, self.destination, old])?;
+            }
+        }
+        for (index, (old, text)) in rows.iter().enumerate() {
+            let seq = previous + index as i64 + 1;
+            let mut payload: Value = serde_json::from_str(text)?;
+            payload["seq"] = json!(seq);
+            // Timeout can release a slow transcription after later speech was acknowledged.
+            // Clamp only delivery times; spans and the local transcript keep capture times.
+            start = start.max(payload["start_ms"].as_u64().unwrap_or(0));
+            payload["start_ms"] = json!(start);
+            payload["end_ms"] = json!(start.max(payload["end_ms"].as_u64().unwrap_or(0)));
+            transaction.execute("UPDATE live_outbox SET seq=?,payload_json=? WHERE recording_id=? AND destination_id=? AND seq=?", rusqlite::params![seq, serde_json::to_string(&payload)?, self.id, self.destination, -old])?;
+            transaction.execute(
+                "UPDATE live_spans SET seq=? WHERE recording_id=? AND destination_id=? AND seq=?",
+                rusqlite::params![seq, self.id, self.destination, -old],
+            )?;
+        }
+        Ok(())
     }
     /// Where a channel's shared text ends: its last streamed turn or used chunk. Streamed words
     /// before it are already shared, or are the finished transcript's to tell.
@@ -1108,38 +1246,45 @@ impl<'a> Queue<'a> {
         transaction: &rusqlite::Transaction,
         record: &Recording,
         streamed: &BTreeMap<String, Vec<Word>>,
+        frontier: u64,
     ) -> Result<()> {
         let mut turns = vec![];
         for channel in ["me", "them"] {
             let Some(words) = streamed.get(channel) else {
                 continue;
             };
-            let words = match (channel, streamed.get("them")) {
-                ("me", Some(them)) => transcript::without_echo(words, them),
-                _ => words.clone(),
+            let words = if channel == "me" {
+                transcript::live_microphone(
+                    record,
+                    words,
+                    streamed.get("them").map_or(&[], Vec::as_slice),
+                )
+            } else {
+                words.clone()
             };
             let from = self.shared_until(record, channel);
-            // After the recording stops, only words a chunk is still transcribing are early.
-            let early = |at: u64| {
-                record.state == "recording"
-                    || record.chunks.iter().any(|chunk| {
-                        chunk.channel == channel
-                            && !["done", "silence"].contains(&chunk.status.as_str())
-                            && (chunk.start_ms..chunk.end_ms).contains(&at)
-                    })
-            };
+            let captured_until = record.chunks.iter().map(|c| c.end_ms).max().unwrap_or(0);
+            let covered = transcript::Covered::new(record, channel);
             let fresh: Vec<Word> = words
                 .into_iter()
                 .filter(|word| {
                     word.start_ms >= from
-                        && !transcript::covered(record, channel, word.start_ms)
-                        && early(word.start_ms)
+                        && !covered.contains(word.start_ms)
+                        && (record.state == "recording"
+                            || captured_until == 0
+                            || word.start_ms < captured_until)
                 })
                 .collect();
             turns.extend(
                 streamed_turns(channel, &fresh)
                     .into_iter()
-                    .map(|turn| (channel, turn)),
+                    .filter(|turn| turn.start_ms < frontier)
+                    .map(|mut turn| {
+                        if let Some(label) = record.speaker_labels.get(&turn.speaker) {
+                            turn.speaker = label.clone();
+                        }
+                        (channel, turn)
+                    }),
             );
         }
         turns.sort_by_key(|(channel, turn)| (turn.start_ms, *channel != "me"));
@@ -1165,9 +1310,16 @@ impl<'a> Queue<'a> {
         }
         Ok(())
     }
-    /// Finished chunks in order. Without streamed turns on its channel a chunk is shared whole,
-    /// as before live text; otherwise only its words past the last streamed turn are new.
-    fn finished(&mut self, transaction: &rusqlite::Transaction, record: &Recording) -> Result<()> {
+    /// Finished speech uses word times and speaker turns. Words already streamed on its channel
+    /// are corrections; only words beyond those spans become new turns.
+    fn finished(
+        &mut self,
+        transaction: &rusqlite::Transaction,
+        record: &Recording,
+        frontier: u64,
+    ) -> Result<()> {
+        let expired = transcript::recording_ms(record)
+            .map_or(0, |now| now.saturating_sub(transcript::REFERENCE_WAIT_MS));
         let watermark = if record.state != "recording" {
             u64::MAX
         } else {
@@ -1182,18 +1334,22 @@ impl<'a> Queue<'a> {
                         .map(|chunk| chunk.end_ms)
                         .max()
                         .unwrap_or(0)
+                        .max(expired)
                 })
                 .min()
                 .unwrap_or(0)
         };
-        let texts = transcript::chunk_texts(record);
+        let watermark = watermark.min(frontier);
         let words = transcript::chunk_words(record);
         for chunk in &record.chunks {
             if self.done.contains(&chunk.id) {
                 continue;
             }
+            if chunk.status == "failed" {
+                continue;
+            }
             if chunk.end_ms > watermark || !["done", "silence"].contains(&chunk.status.as_str()) {
-                break;
+                continue;
             }
             let overflow_ms = self
                 .spans
@@ -1202,38 +1358,26 @@ impl<'a> Queue<'a> {
                 .map(|span| span.end_ms)
                 .max()
                 .unwrap_or(0);
-            let turn = if overflow_ms == 0 {
-                texts.get(&chunk.id).map(|text| Turn {
-                    speaker: chunk.speaker.clone(),
-                    start_ms: chunk.start_ms,
-                    end_ms: chunk.end_ms,
-                    text: text.clone(),
-                })
-            } else {
-                let rest: Vec<&Word> = words
-                    .get(&chunk.id)
-                    .into_iter()
-                    .flatten()
-                    .filter(|word| midpoint(word) >= overflow_ms)
-                    .collect();
-                rest.first().map(|first| Turn {
-                    speaker: chunk.speaker.clone(),
-                    start_ms: first.start_ms,
-                    end_ms: chunk.end_ms,
-                    text: rest
-                        .iter()
-                        .map(|word| word.text.trim())
-                        .collect::<Vec<_>>()
-                        .join(" "),
-                })
-            };
-            if let Some(turn) = turn.filter(|turn| !turn.text.trim().is_empty()) {
-                // Mixed with streamed turns a late chunk is placed at the end; alone, it is a fault.
-                ensure!(
-                    !self.spans.is_empty() || turn.start_ms >= self.last_start,
-                    "A late transcript turn precedes the shared transcript. Local audio is safe."
-                );
-                self.push(transaction, Some(&chunk.id), &turn)?;
+            let rest: Vec<Word> = words
+                .get(&chunk.id)
+                .into_iter()
+                .flatten()
+                .filter(|word| overflow_ms == 0 || midpoint(word) >= overflow_ms)
+                .cloned()
+                .collect();
+            for (index, mut turn) in streamed_turns(&chunk.channel, &rest)
+                .into_iter()
+                .enumerate()
+            {
+                if turn.speaker == "Meeting audio" {
+                    turn.speaker = chunk.speaker.clone();
+                }
+                let key = if index == 0 {
+                    chunk.id.clone()
+                } else {
+                    format!("{}:turn:{index}", chunk.id)
+                };
+                self.push(transaction, Some(&key), &turn)?;
             }
             transaction.execute(
                 "INSERT INTO live_sources(recording_id,destination_id,chunk_id,channel,end_ms,overflow_ms) VALUES(?,?,?,?,?,?)",

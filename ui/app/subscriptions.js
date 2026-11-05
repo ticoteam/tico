@@ -72,14 +72,24 @@ const subsPlural = (n, one, many = one + 's') => `${n} ${n === 1 ? one : many}`;
 const subsStopWords = n => `${subsPlural(n, 'running task')} ${n === 1 ? 'stops and restarts' : 'stop and restart'}`;
 
 // ---- Settings > Models > Subscriptions
-// Usage: what is left in the plan's window (like the computers' chips), or the month's spend for an API key.
+// Usage: the share used in the plan's window, a small bar, and the time until it resets ("4d 15h"); the share left and
+// the reset time in the tooltip. An API key shows the month's spend.
+function subsResetIn(iso) {
+  const ms = Date.parse(iso || '') - Date.now();
+  if (!(ms > 0)) return '';
+  const m = Math.max(1, Math.round(ms / 60000)), d = Math.floor(m / 1440), h = Math.floor(m % 1440 / 60);
+  return d ? `${d}d${h ? ` ${h}h` : ''}` : h ? `${h}h${m % 60 ? ` ${m % 60}m` : ''}` : `${m}m`;
+}
 function subsUsageHTML(sub) {
   const usage = sub.usage || {};
   if (typeof usage.used_pct === 'number') {
     const used = Math.max(0, Math.min(100, Math.round(usage.used_pct)));
-    const words = `${used}% used${usage.window ? ` in the ${usage.window === 'week' ? 'week' : usage.window + ' window'}` : ''}`;
+    const resetIn = subsResetIn(usage.resets_at);
+    const at = resetIn ? new Date(usage.resets_at).toLocaleString(undefined, {weekday: 'short', month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit'}) : '';
+    const words = [`${used}% used${usage.window ? ` in the ${usage.window === 'week' ? 'week' : usage.window + ' window'}` : ''}`,
+      `${100 - used}% left`, at ? `resets ${at}` : ''].filter(Boolean).join(' · ');
     const level = used >= 95 ? ' bad' : used >= 80 ? ' warn' : '';
-    return `<span class="subs-usage" title="${esc(words)}">${usage.window ? `<span class="subs-usage-w">${esc(usage.window)}</span>` : ''}<span class="subs-bar${level}" aria-hidden="true"><b style="width:${used}%"></b></span><span class="tnum">${used}%</span><span class="sr-only"> used</span></span>`;
+    return `<span class="subs-usage" title="${esc(words)}">${usage.window ? `<span class="subs-usage-w">${esc(usage.window)}</span>` : ''}<span class="subs-bar${level}" aria-hidden="true"><b style="width:${used}%"></b></span><span class="tnum">${used}%</span><span class="sr-only"> used</span>${resetIn ? `<span class="subs-reset tnum"><span class="sr-only">resets in </span>${esc(resetIn)}</span>` : ''}</span>`;
   }
   if (usage.reason) return `<span class="subs-usage muted">${esc(usage.reason)}</span>`;
   if (typeof usage.cost_usd_month === 'number') {

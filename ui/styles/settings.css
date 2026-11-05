@@ -931,7 +931,8 @@ section.card>header .settings-head-act{margin-left:auto}
 .subs-owner{color:var(--muted)}
 .subs-count{color:var(--muted)}.subs-count .nav-icon{font-size:15px;vertical-align:-3px;margin-right:4px}
 .subs-usage{display:inline-flex;align-items:center;gap:6px;color:var(--muted)}.subs-usage-w{min-width:2.4em}
-.subs-bar{display:inline-block;width:48px;height:4px;border-radius:2px;background:var(--surface2);box-shadow:inset 0 0 0 1px var(--line);overflow:hidden}
+.subs-bar{display:inline-block;width:28px;height:4px;border-radius:2px;background:var(--surface2);box-shadow:inset 0 0 0 1px var(--line);overflow:hidden}
+.subs-reset{white-space:nowrap}.subs-reset::before{content:'·';margin-right:6px;opacity:.6}
 .subs-bar b{display:block;height:100%;background:var(--ok)}.subs-bar.warn b{background:var(--wait)}.subs-bar.bad b{background:var(--fail)}
 .subs-more-cell{width:1%;text-align:right}
 .subs-more{min-height:var(--ctl-sm);padding:0 8px;line-height:1}

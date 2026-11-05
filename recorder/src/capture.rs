@@ -3,7 +3,7 @@ use anyhow::{Result, bail};
 use rtrb::{Consumer, Producer, RingBuffer};
 use std::sync::{
     Arc,
-    atomic::{AtomicU32, AtomicU64, Ordering},
+    atomic::{AtomicBool, AtomicU32, AtomicU64, Ordering},
 };
 
 pub const PACKET_SAMPLES: usize = 1024;
@@ -106,6 +106,12 @@ pub trait CaptureStream: Send {
     fn stop(&mut self) -> Result<()>;
 }
 
+/// Optional processed samples for live text. The saved source always remains unprocessed.
+pub struct LiveInput {
+    pub consumer: Consumer<Packet>,
+    pub processed: Arc<AtomicBool>,
+}
+
 pub struct Source {
     pub channel: Channel,
     pub name: String,
@@ -114,6 +120,7 @@ pub struct Source {
     pub health: Arc<Health>,
     pub consumer: Consumer<Packet>,
     pub stream: Box<dyn CaptureStream>,
+    pub live_input: Option<LiveInput>,
 }
 
 impl Drop for Source {
@@ -137,6 +144,20 @@ pub fn sources() -> Result<Vec<String>> {
                 .map_err(Into::into)
         })
         .collect()
+}
+
+/// Prefer hardware-reference echo cancellation only while recording meeting audio. Unsupported
+/// routes (including headphones) and native setup failures retain the existing microphone path.
+pub fn start_microphone_for_meeting(name: Option<&str>, meeting_audio: bool) -> Result<Source> {
+    #[cfg(target_os = "macos")]
+    if meeting_audio {
+        if let Ok(source) = macos::start_voice_microphone(name) {
+            return Ok(source);
+        }
+    }
+    #[cfg(not(target_os = "macos"))]
+    let _ = meeting_audio;
+    start_microphone(name)
 }
 
 pub fn start_microphone(name: Option<&str>) -> Result<Source> {
@@ -206,6 +227,7 @@ pub fn start_microphone(name: Option<&str>) -> Result<Source> {
         health,
         consumer,
         stream: Box::new(Microphone(stream)),
+        live_input: None,
     })
 }
 
@@ -276,6 +298,7 @@ pub fn start_paced(
         health,
         consumer,
         stream: Box::new(Paced(stop)),
+        live_input: None,
     }
 }
 

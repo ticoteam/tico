@@ -17,6 +17,8 @@ OS can be released on its own. `--dry-run` prints the manifest and uploads nothi
 manifest using public GitHub asset URLs, without credentials or S3. `--tag` preserves a tag suffix.
 `--kind recorder` does the same for Tico Recorder (macOS only, so only the darwin platforms and the mac
 installer are required); its manifest is recorder-latest.json, read by the recorder's updater.
+`--changes FILE` fills `notes` with the first line of the file's "## <version>" section (or, with `--since PREV`, of
+the newest section after PREV up to this version); without one, `--notes` stays.
 """
 import argparse
 import json
@@ -62,6 +64,36 @@ def classify(directory):
     return found
 
 
+def _version_key(text):
+    return tuple(int(part) if part.isdigit() else 0 for part in re.split(r"[-+]", text.strip().lstrip("v"))[0].split("."))
+
+
+def changes_note(text, version, since=None):
+    """The first line of the "## <version>" section in a CHANGES.md text, or None. With `since`, the newest
+    section after `since` and up to `version` counts too, so an entry written for a version that was cut
+    before it merged still reaches the next build."""
+    sections, heading = {}, None
+    for line in text.splitlines():
+        match = re.fullmatch(r"##\s+v?([0-9][0-9A-Za-z.+-]*)\s*", line)
+        if match:
+            heading = match.group(1)
+            sections.setdefault(heading, None)
+        elif heading and sections[heading] is None and line.strip():
+            if line.startswith("#"):
+                heading = None
+                continue
+            sections[heading] = re.sub(r"^[-*]\s+", "", line.strip())
+    if sections.get(version):
+        return sections[version]
+    if since:
+        low, high = _version_key(since), _version_key(version)
+        found = sorted((_version_key(v), note) for v, note in sections.items()
+                       if note and low < _version_key(v) <= high)
+        if found:
+            return found[-1][1]
+    return None
+
+
 def manifest(version, base, scans, previous, notes="", signed=False, notarized=False, github=False, tag=None,
              kind="app"):
     asset_base = f"https://github.com/ticoteam/tico/releases/download/{quote(tag or 'v' + version, safe='')}"
@@ -96,6 +128,8 @@ def main(argv):
     parser.add_argument("--tag", help="GitHub tag (defaults to v<version>)")
     parser.add_argument("--output", default="latest.json", help="manifest path for --github")
     parser.add_argument("--notes", default="")
+    parser.add_argument("--changes", help="a CHANGES.md whose section for this version gives the notes")
+    parser.add_argument("--since", help="with --changes: the previous release, so a section after it counts")
     parser.add_argument("--signed", action="store_true")
     parser.add_argument("--notarized", action="store_true")
     parser.add_argument("--dry-run", action="store_true")
@@ -126,7 +160,10 @@ def main(argv):
                 previous = None
         except Exception:
             previous = None
-    value = manifest(args.version, (args.base or "").rstrip("/"), scans, previous, args.notes, args.signed,
+    notes = args.notes
+    if args.changes and Path(args.changes).is_file():
+        notes = changes_note(Path(args.changes).read_text(), args.version, args.since) or notes
+    value = manifest(args.version, (args.base or "").rstrip("/"), scans, previous, notes, args.signed,
                      args.notarized, args.github, args.tag, args.kind)
     if args.kind == "recorder":
         required, installers_needed = {"darwin-aarch64", "darwin-x86_64"}, {"mac"}
