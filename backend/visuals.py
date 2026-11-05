@@ -611,7 +611,12 @@ def decorate(c, who, files, key, base, messages, full=True, hosted=None):
                 if a["kind"] == "video" and v["poster_blob_id"] and here is not None:
                     view["poster_url"] = here + "/visuals/" + mint(key, actor, fid, number, "poster", attempt_id=attempt_id)
             fresh.append(view)
-        message["refs"] = {**message["refs"], "attachments": fresh}
+        refs = {**message["refs"]}
+        if "attachments" in refs:
+            refs["attachments"] = fresh
+        if attempt_id and isinstance(refs.get("files"), list):
+            refs["files"] = [ref for ref in refs["files"] if turn_scope.file_ref_allowed(c, files.auth, who, ref)]
+        message["refs"] = refs
     return messages
 
 

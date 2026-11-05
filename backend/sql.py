@@ -815,17 +815,21 @@ def connect(path, c, auth, who, trace=None, seconds=None):
 
         def scoped_refs(refs):
             value = H._json(refs, {})
-            if not isinstance(value, dict) or not isinstance(value.get("attachments"), list):
+            if not isinstance(value, dict):
                 return refs
-            shown = []
-            for item in value["attachments"]:
-                if isinstance(item, dict):
-                    if item.get("file_id") and not scoped_file(item["file_id"]):
-                        continue
-                    if not item.get("file_id") and item.get("id") and turn_scope.blob_allowed(source, auth, who, item["id"]) is False:
-                        continue
-                shown.append(item)
-            return encode({**value, "attachments": shown})
+            if isinstance(value.get("attachments"), list):
+                shown = []
+                for item in value["attachments"]:
+                    if isinstance(item, dict):
+                        if item.get("file_id") and not scoped_file(item["file_id"]):
+                            continue
+                        if not item.get("file_id") and item.get("id") and turn_scope.blob_allowed(source, auth, who, item["id"]) is False:
+                            continue
+                    shown.append(item)
+                value = {**value, "attachments": shown}
+            if isinstance(value.get("files"), list):
+                value = {**value, "files": [ref for ref in value["files"] if turn_scope.file_ref_allowed(source, auth, who, ref)]}
+            return encode(value)
 
         functions = {"message": (4, index.message), "attempt": (1, index.attempt),
                      "scope_refs": (1, scoped_refs),

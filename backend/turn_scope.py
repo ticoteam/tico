@@ -213,6 +213,18 @@ def blob_allowed(c, auth, who, bid):
                and all(privacy.blob_readable(c, r.actor, bid) for r in readers(c, auth, t)) for t in carried)
 
 
+def file_ref_allowed(c, auth, who, ref):
+    """A message's compact file references obey the same checks as its attachment metadata."""
+    if not isinstance(ref, str):
+        return False
+    fid = ref.rsplit("@", 1)[0]
+    row = read_cache.one(c, "SELECT * FROM bot_files WHERE id=?", (fid,))
+    if row:
+        from .files import file_visible
+        return not row["archived"] and file_visible(c, auth, who, row, {})
+    return blob_allowed(c, auth, who, fid) is not False
+
+
 def recheck_reads(c, auth, who):
     """Call under the publishing transaction; a source that moved outside the scope blocks publication."""
     from . import context_search
