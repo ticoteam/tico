@@ -400,6 +400,7 @@ def summaries(c, runner_ids, settings, default=None, *, classify=True):
 
 def _summaries(c, runner_ids, settings, default=None, classify=True):
     from . import performance
+    from .batch_work import report, storage_error
     from .cloud_machines import ASLEEP, STALE, resting
     out: dict[str, dict[str, Any]] = {rid: dict(running=0, starting=0, waiting=0, queued=0,
                                                 start_seconds=START_SECONDS) for rid in runner_ids}
@@ -450,10 +451,15 @@ def _summaries(c, runner_ids, settings, default=None, classify=True):
             # A sleeping computer cannot refresh its samples. Explain each job's claim hold instead of its last load.
             counted = 0
             if classify:
-                for job, refused in queued_reasons(c, settings, rid, row['bot_id'], default):
-                    reason = reasons.get(refused, 'pre-start requirements') if refused and refused not in STALE else ASLEEP
-                    add(rid, reason, 1, job['created_at'])
-                    counted += 1
+                try:
+                    for job, refused in queued_reasons(c, settings, rid, row['bot_id'], default, ignore_refusals=STALE):
+                        reason = reasons.get(refused, 'pre-start requirements') if refused else ASLEEP
+                        add(rid, reason, 1, job['created_at'])
+                        counted += 1
+                except Exception as exc:
+                    if storage_error(exc):
+                        raise
+                    report('computer queue check', row['bot_id'], exc, logger='tico.health')
             if counted < row['n']:
                 add(rid, ASLEEP, row['n'] - counted, row['oldest'])
             continue

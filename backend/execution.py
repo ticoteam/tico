@@ -2427,14 +2427,15 @@ def prime_job_checks(c, jobs):
 
 
 def bot_claimable(c, settings, runner_id, bot, default=None, oldest=False, with_job=False, *, suspect=None,
-                  loads=None):
+                  loads=None, ignore_refusals=()):
     """(reason, first, person) for `bot`'s queued work on `runner_id`'s next claim: `reason` as bot_refusal says it;
     otherwise None with `first`, when the job the claim would hand out next was queued, and `person`, True when a
     person sent it. The scan keeps the claim's own order (Execution.candidate: a redirect, then a person's message, then
     a builder hand-off, then the longest waiting), so Health ages the job the claim would take: an old held job beside a young free one is
     neither held nor slow, and neither is an old free job behind a young chat the claim takes first.
     `oldest` diagnoses the oldest job outside a held lane; `with_job` also returns its ID for
-    observation aging and message-level authorization. `suspect`: as queued_reasons takes it."""
+    observation aging and message-level authorization. `suspect`: as queued_reasons takes it.
+    `ignore_refusals` diagnoses work past last-boot holds on a sleeping cloud machine; admission never uses it."""
     def result(reason, first=None, person=None, job=None):
         values = (reason, first, person, job)
         return values if with_job else values[:3]
@@ -2452,6 +2453,8 @@ def bot_claimable(c, settings, runner_id, bot, default=None, oldest=False, with_
     ready = readiness_document(runner["readiness"])
     why, config = claim_refusal(c, settings, runner, bot, row["config"], row["draining"], ready, held_bots,
                                 default=default, loads=loads)
+    if why in ignore_refusals:
+        why, config = None, H._json(row["config"], {})
     if why:
         if oldest:
             first = min(rows(c, queued_jobs_sql(), (bot,)), key=lambda j: (j["created_at"], j["id"]), default=None)
@@ -2472,8 +2475,8 @@ def bot_claimable(c, settings, runner_id, bot, default=None, oldest=False, with_
         else:
             why = job_refusal(c, job, followed, ready, busy, lanes, roots, suspect=suspect, runner=runner) or (
                 "cooling_off" if login_refusal(c, settings, runner_id, bot, followed, job["id"], loads=loads) else None)
-        if why is None or (oldest and why != "lane_held"):
-            return result(why, job["created_at"], person, job["id"])
+        if why is None or why in ignore_refusals or (oldest and why != "lane_held"):
+            return result(None if why in ignore_refusals else why, job["created_at"], person, job["id"])
         if refused is None or job["created_at"] < refused[0]:
             refused = (job["created_at"], why, person, job["id"])
     return result(refused[1], refused[0] if oldest else None, refused[2], refused[3]) if refused else result(None)
@@ -2495,9 +2498,11 @@ def _queue_suspects(c, queue):
     return suspect
 
 
-def queued_reasons(c, settings, runner_id, bot, default=None, *, oldest=False, suspect=None, loads=None):
+def queued_reasons(c, settings, runner_id, bot, default=None, *, oldest=False, suspect=None, loads=None,
+                   ignore_refusals=()):
     """Each queued job with its own claim reason; common bot fences are read once. `suspect`: the suspects of every
-    queue the caller reads at once (_queue_suspects), so a page of many bots reads them once, not a bot at a time."""
+    queue the caller reads at once (_queue_suspects), so a page of many bots reads them once, not a bot at a time.
+    `ignore_refusals`: last-boot holds to look past, as bot_claimable takes it."""
     from .read_cache import one, rows
     from .shared_bots import follow
     runner = one(c, RUNNER_SQL, (runner_id,))
@@ -2508,6 +2513,8 @@ def queued_reasons(c, settings, runner_id, bot, default=None, *, oldest=False, s
     ready = readiness_document(runner["readiness"])
     why, config = (claim_refusal(c, settings, runner, bot, row["config"], row["draining"], ready, held_bots,
                                  default=default, loads=loads) if row else ("config", {}))
+    if why in ignore_refusals:
+        why, config = None, H._json(row["config"], {})
     queue = rows(c, queued_jobs_sql(), (bot,))
     if oldest:
         queue = sorted(queue, key=lambda j: (j["created_at"], j["id"]))
@@ -2530,7 +2537,7 @@ def queued_reasons(c, settings, runner_id, bot, default=None, *, oldest=False, s
         else:
             why = job_refusal(c, job, followed, ready, busy, lanes, roots, live, suspect=suspect, runner=runner) or (
                 "cooling_off" if login_refusal(c, settings, runner_id, bot, followed, job["id"], loads=loads) else None)
-        yield job, why
+        yield job, None if why in ignore_refusals else why
 
 
 # Stop and redirect (Execution._redirect_job) reads the caller's own job in this turn's conversation. jobs.message_id is

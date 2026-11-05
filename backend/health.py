@@ -648,9 +648,10 @@ def _waiting(c, online_ids, settings=None, limits=None, loads=None):
     from .cloud_machines import GOING, STALE, homes, problem_words
     on_cloud = homes(c)
 
-    def queue_reasons(runner_id, slug):
+    def queue_reasons(runner_id, slug, ignore_refusals=()):
         groups = {}
-        for job, why in queued_reasons(c, settings, runner_id, slug, limits, suspect=suspect, loads=loads):
+        for job, why in queued_reasons(c, settings, runner_id, slug, limits, suspect=suspect, loads=loads,
+                                       ignore_refusals=ignore_refusals):
             key = why or "slow"
             group = groups.setdefault(key, {"reason": key, "queued": 0, "oldest": job["created_at"]})
             group["queued"] += 1
@@ -682,22 +683,22 @@ def _waiting(c, online_ids, settings=None, limits=None, loads=None):
             elif count and oldest and oldest < cutoff:
                 if where and cloud["state"] in GOING:
                     claimable = (('company_limit', None, False) if company_stopped else
-                                 _claimable(c, settings, where[0], slug, limits, suspect=suspect, loads=loads))
+                                 _claimable(c, settings, where[0], slug, limits, suspect=suspect, loads=loads,
+                                            ignore_refusals=STALE))
                     if claimable is None:
                         continue
                     refused, first, person = _fenced_queue_reason(row, *claimable)
-                    if refused and refused not in STALE:
-                        row["queue_reasons"] = queue_reasons(where[0], slug)
+                    if refused:
+                        row["queue_reasons"] = queue_reasons(where[0], slug, ignore_refusals=STALE)
                         held_row = {**row, "reason": refused, "runner_id": where[0], "runtime": ""}
                         if refused in QUEUE_WAITS:
                             slow.append({**held_row, "resting": True})
                         else:
                             stuck.append(held_row)
                         continue
-                    if not refused and not (first and first < (person_cutoff if person else cutoff)):
+                    if not (first and first < (person_cutoff if person else cutoff)):
                         continue        # the next claimable job is young; older held jobs do not age its wake
-                    if not refused:
-                        row["oldest_queued"], row["oldest"] = row["oldest"], first
+                    row["oldest_queued"], row["oldest"] = row["oldest"], first
                 problem = ("Starting" if cloud["state"] == "starting" else
                            f"Not started after {QUEUE_MINUTES} min" if cloud["state"] in GOING else
                            f"Not connected after {QUEUE_MINUTES} min")
@@ -2027,6 +2028,8 @@ def view(c, who, settings, auth, github, config):
 
     from .performance import load_statuses, recent_overloads
     from .start_places import NOT_REPORTING, computer_hold, hold_rows
+    from .cloud_machines import resting as resting_machines
+    resting_ids = resting_machines(c)
     loads = load_statuses(c, [computer["id"] for computer in computers])     # one read for every computer
     rows = hold_rows(c, [computer["id"] for computer in computers])          # and their runner rows, once
     for computer in computers:
@@ -2034,7 +2037,7 @@ def view(c, who, settings, auth, github, config):
             checks.append(_check("turns:" + computer["id"], "Turns", "ok", computer["label"] + ": " + computer["turn_summary"],
                                  [_fix("Open Computers", "#/settings", "devices")] if full else []))
         # Its last boot's load cannot hold a machine that is asleep on purpose.
-        hold = None if computer["resting"] else computer_hold(
+        hold = None if computer["id"] in resting_ids else computer_hold(
             c, computer["id"], status=loads[computer["id"]], row=rows.get(computer["id"]))
         if hold:
             words = ("overloaded now (CPU or memory above 90% for five minutes)." if hold[0] == "computer busy"

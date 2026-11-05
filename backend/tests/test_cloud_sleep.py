@@ -1,12 +1,13 @@
 """A cloud machine asleep on purpose explains its queue without hiding a wake that failed to happen."""
 
+import sqlite3
 import time
 
 import pytest
 
 from backend import cloud_machines as CM, execution, health, start_places, thread_bot_status, views
 from backend.store import H
-from backend.tests.test_api import api, claim, get, ready  # noqa: F401
+from backend.tests.test_api import api, assign, claim, get, ready, runner  # noqa: F401
 from backend.tests.test_cloud_machines import cloud, enrolled, stopped_when_idle, work  # noqa: F401
 from backend.tests.test_start_places import memory
 from backend.tests.test_thread_halfway import bot_status, new_thread, say
@@ -81,13 +82,86 @@ def test_claimable_work_left_asleep_past_the_cutoff_is_still_a_problem(cloud, sp
     assert body['stuck'][0]['reason'] == 'cloud_machine'
 
 
-def test_a_young_claimable_job_is_not_aged_by_an_old_task_wait(cloud):
-    asleep_bot(cloud)
+@pytest.mark.parametrize('readiness', [None, 'readiness_unknown', 'not_ready'])
+def test_a_young_claimable_job_is_not_aged_by_an_old_task_wait(cloud, readiness):
+    computer = asleep_bot(cloud)
     waiting_task(cloud)
-    work(cloud)
+    message = work(cloud)
+    if readiness:
+        document = '{}' if readiness == 'readiness_unknown' else '{"bots":{"ops":{"ready":false}}}'
+        with cloud.store.transaction() as c:
+            c.execute('UPDATE runner_states SET readiness=? WHERE runner_id=?', (document, computer['runner_id']))
+        with cloud.store.read() as c:
+            # The display looks past last-boot readiness; the real claim still refuses it.
+            assert execution.bot_claimable(c, cloud.store.settings, computer['runner_id'], 'ops')[0] == readiness
     body = get(cloud.api, 'health')
     assert next(row for row in body['checks'] if row['id'] == 'queue')['status'] == 'ok'
     assert not body['stuck']
+    row = next(row for row in get(cloud.api, 'computers')['computers'] if row['id'] == computer['runner_id'])
+    assert any('person' in w['reason'] and w['count'] == 1 for w in row['turn_counts']['waits'])
+    with cloud.store.transaction() as c:
+        c.execute('UPDATE jobs SET created_at=? WHERE message_id=?',
+                  (H.shift(H.now(), minutes=-health.QUEUE_MINUTES - 1), message['id']))
+    body = get(cloud.api, 'health')
+    queue = next(row for row in body['checks'] if row['id'] == 'queue')
+    assert queue['status'] == 'bad' and 'Not started after 15 min' in queue['summary']
+    assert body['stuck'][0]['reason'] == 'cloud_machine'
+
+
+@pytest.mark.parametrize('check', ['task', 'login'])
+def test_a_failing_sleeping_job_diagnostic_does_not_break_computer_listings(cloud, monkeypatch, check):
+    computer = asleep_bot(cloud)
+    work(cloud)
+    work(cloud, text='Please check the next item too.')
+    other = runner(cloud.api)
+    assign(cloud.api, other, 'cpo')
+    ready(cloud.api, other, ['cpo'])
+    work(cloud, 'cpo')
+    with cloud.store.read() as c:
+        jobs = list(c.execute(execution.queued_jobs_sql(), ('ops',)))
+    assert len(jobs) == 2
+    bad = jobs[-1]['id']
+    job_check, login_check = execution.job_refusal, execution.login_refusal
+    checked = []
+
+    def fail(job_id):
+        checked.append(job_id)
+        if job_id == bad:
+            raise RuntimeError('Cannot check this job')
+
+    def task_check(c, job, *args, **kwargs):
+        fail(job['id'])
+        return job_check(c, job, *args, **kwargs)
+
+    def per_job_login(c, settings, runner_id, bot, config, job_id=None, **kwargs):
+        if job_id:
+            fail(job_id)
+        return login_check(c, settings, runner_id, bot, config, job_id, **kwargs)
+
+    monkeypatch.setattr(execution, 'job_refusal' if check == 'task' else 'login_refusal',
+                        task_check if check == 'task' else per_job_login)
+    for path, key in [('computers', 'computers'), ('operations', 'machines')]:
+        checked.clear()
+        rows = {row['id']: row for row in get(cloud.api, path)[key]}
+        counts = rows[computer['runner_id']]['turn_counts']
+        assert counts['waiting'] == 2 and counts['queued'] == 0
+        assert sum(w['count'] for w in counts['waits']) == 2
+        assert checked.index(jobs[0]['id']) < checked.index(bad)
+        assert rows[other['runner_id']]['turn_counts']['queued'] == 1
+
+
+def test_a_storage_failure_in_sleeping_queue_diagnostics_still_fails_the_read(cloud, monkeypatch):
+    computer = asleep_bot(cloud)
+    work(cloud)
+
+    def full_disk(*args, **kwargs):
+        error = sqlite3.OperationalError('database or disk is full')
+        error.sqlite_errorcode = sqlite3.SQLITE_FULL
+        raise error
+
+    monkeypatch.setattr(execution, 'job_refusal', full_disk)
+    with cloud.store.read() as c, pytest.raises(sqlite3.OperationalError, match='disk is full'):
+        start_places.summary(c, computer['runner_id'], cloud.store.settings)
 
 
 def test_resting_computer_splits_job_waits_without_a_stale_sample_label(cloud):
@@ -108,6 +182,21 @@ def test_resting_computer_splits_job_waits_without_a_stale_sample_label(cloud):
         CM.save(c, 'ops', state='running')
     row = next(row for row in get(cloud.api, 'computers')['computers'] if row['id'] == rid)
     assert start_places.NOT_REPORTING in row['turn_summary']
+
+
+def test_recent_contact_does_not_keep_a_memory_warning_after_a_planned_stop(cloud):
+    computer = asleep_bot(cloud)
+    rid = computer['runner_id']
+    memory(cloud.api, computer, .86)
+    with cloud.store.transaction() as c:
+        c.execute('UPDATE runner_states SET last_seen_at=? WHERE runner_id=?', (H.now(), rid))
+    body = get(cloud.api, 'health')
+    assert next(row for row in body['computers'] if row['id'] == rid)['online']
+    assert not any(row['id'] == 'runner_load:' + rid for row in body['checks'])
+    with cloud.store.transaction() as c:
+        CM.save(c, 'ops', state='running')
+    load = next(row for row in get(cloud.api, 'health')['checks'] if row['id'] == 'runner_load:' + rid)
+    assert load['status'] == 'warn' and 'memory' in load['summary']
 
 
 @pytest.mark.parametrize('hold', ['stale_sample', 'memory', 'readiness'])
