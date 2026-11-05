@@ -1,7 +1,7 @@
 // Offline regression for company subscriptions given to computers (backend/model_subscriptions.py): a subscription is a
 // company's saved plan login or API key; a computer holds at most one per AI tool; a bot never picks one.
-//  - Settings has a Models tab between Computers and Repositories with Subscriptions, Tico Gateway, Defaults and
-//    Limits; old links (AI providers, Subscriptions, Chat, the Models card on Computers) open it;
+//  - Settings has an AI models group with Subscriptions, Tico Gateway and Defaults; old links (AI providers,
+//    Subscriptions, Chat, the Models card on Computers) open it, while Limits & billing is a separate group;
 //  - Add subscription: a kind search box that starts on Claude plan, a required name, an owner (you unless changed), the
 //    own-bots line, POST {kind, name, secret} (owner_id only when changed); an API key has no owner and no such line;
 //  - Connect: a plan signs in through a computer the server picks, in the same dialog, with Reconnect asking first when
@@ -18,6 +18,7 @@ const fs = require('node:fs');
 const path = require('node:path');
 const {html, uiFile, harnesses} = require('./support/page.cjs');
 const {unrouted} = require('./support/routes.cjs');
+const {selectSettingsGroup} = require('./support/settings.cjs');
 const SHOTS = process.env.SUBS_SHOTS || '';
 
 const KINDS = [
@@ -71,6 +72,7 @@ function fixtures() {
       {id: 'claude-sonnet-5-5', label: 'Claude Sonnet 5.5', provider: 'anthropic', runtime: 'claude'},
       {id: 'meeting-1', label: 'Meeting 1.0', provider: 'tico', runtime: 'tico', meeting: true}],
     levels: {warning_per_person: 40, stop_per_person: 100, people: 3, warning: 120, stop: 300, in_use: 18},
+    limits: {default: {monthly_usd: 100}, bots: {builder: {monthly_usd: 25}}, may_edit_default: true},
   };
 }
 
@@ -110,6 +112,10 @@ async function open(browser, {viewport = {width: 1440, height: 900}, theme = 'da
     if (p === '/api/v2/operations') return json({machines: data.machines.map(m => ({...m, bot_connections: []})), services: [], agents: []});
     if (p === '/api/v2/models') return json({models: data.models, harnesses, enabled_providers: data.providers.enabled, default: data.providers.default});
     if (p === '/api/v2/settings/history') return json({changes: [], transitions: []});
+    if (p === '/api/v2/settings/turn-budgets') return json({turns_per_hour: 20, turns_per_day: 100, defaults: {turns_per_hour: 20, turns_per_day: 100}});
+    if (p === '/api/v2/usage/limits') return json(data.limits);
+    if (p === '/api/v2/billing') return json({state: 'ok', balance_micros: 0, min_balance_micros: 0, credits: [],
+      month: '2026-11', months: [], usage: [], statement: {opening_micros: 0, credits_by_source: {}, debits_by_product: {}, closing_micros: 0}, record_only: true});
     if (p === '/api/v2/providers' && method === 'GET') return json(data.providers);
     if (p === '/api/v2/providers' && method === 'PUT') {
       const body = req.postDataJSON(); writes.push({p, method, body});
@@ -183,7 +189,8 @@ async function open(browser, {viewport = {width: 1440, height: 900}, theme = 'da
     return json(unrouted(p));
   });
   await page.goto('https://tico-ui.test/#/settings');
-  await page.locator(`#settings-${tab}`).waitFor();
+  const group = ({general: 'you', devices: 'computers', repos: 'connections', history: 'health'})[tab] || tab;
+  await page.locator(`#settings-group-${group}`).waitFor();
   return {page, errors, writes, data};
 }
 async function shot(page, name, target = page) {
@@ -201,14 +208,17 @@ async function until(page, check, what) {
 
 async function navigation(browser) {
   const {page, errors} = await open(browser, {tab: 'general'});
-  const tabs = await page.locator('#settings-tabs > [data-settings-tab]').evaluateAll(list => list.map(b => b.dataset.settingsTab));
-  assert.deepEqual(tabs.slice(tabs.indexOf('devices'), tabs.indexOf('devices') + 3), ['devices', 'models', 'repos'], 'Models sits between Computers and Repositories');
-  for (const alias of ['models', 'providers', 'chat', 'subscriptions', 'limits']) {
+  const tabs = await page.locator('#settings-tabs [data-settings-tab]').evaluateAll(list => list.map(b => b.dataset.settingsTab));
+  assert.deepEqual(tabs, ['you', 'people', 'bots', 'models', 'computers', 'limits', 'automation', 'tasks', 'connections', 'policies', 'health']);
+  for (const alias of ['models', 'providers', 'chat', 'subscriptions']) {
     await page.evaluate(() => settingsShow('general'));
     await page.evaluate(alias => settingsShow(alias), alias);
-    assert.equal(await page.locator('#settings-models').isVisible(), true, `${alias} opens Models`);
+    assert.equal(await page.locator('#settings-group-models').isVisible(), true, `${alias} opens AI models`);
     assert.equal(await page.evaluate(() => location.hash), '#/settings/models');
   }
+  await page.evaluate(() => settingsShow('limits'));
+  assert.equal(await page.locator('#settings-group-limits').isVisible(), true, 'Limits has its own group');
+  assert.equal(await page.evaluate(() => location.hash), '#/settings/limits');
   // The settings catalogue's old link to the Models card on Computers, and the old Subscriptions address.
   for (const hash of ['#/settings/devices/settings-models', '#/settings/subscriptions']) {
     await page.evaluate(() => settingsShow('general'));
@@ -216,24 +226,24 @@ async function navigation(browser) {
     await page.waitForFunction(() => location.hash === '#/settings/models' && SETTINGS_TAB === 'models');
   }
   await page.evaluate(() => { location.hash = '#/settings/computers'; });
-  await page.waitForFunction(() => location.hash === '#/settings/devices' && SETTINGS_TAB === 'devices');
+  await page.waitForFunction(() => location.hash === '#/settings/computers' && SETTINGS_TAB === 'computers');
   for (const alias of ['tags', 'types']) {
     await page.evaluate(alias => settingsShow(alias), alias);
-    assert.equal(await page.locator('#settings-tasks').isVisible(), true, `${alias} opens Tasks`);
+    assert.equal(await page.locator('#settings-group-tasks').isVisible(), true, `${alias} opens Tasks`);
   }
   for (const alias of ['credentials', 'cloud']) {
     assert.equal(await page.evaluate(alias => { settingsShow(alias); return location.hash; }, alias), '#/integrations');
   }
   assert.deepEqual(errors, []);
   await page.close();
-  console.log('Models tab and old links: ok');
+  console.log('AI models group and old links: ok');
 }
 
 async function modelsTab(browser) {
   const {page, errors, writes} = await open(browser);
   await modelsReady(page);
   const pane = page.locator('#settings-models');
-  assert.deepEqual(await pane.locator(':scope > section.card > header h2').allInnerTexts(), ['Subscriptions', 'Tico Gateway', 'Defaults', 'Limits']);
+  assert.deepEqual(await pane.locator(':scope > section.card > header h2').allInnerTexts(), ['Subscriptions', 'Tico Gateway', 'Defaults']);
   // No intro, no banner, no subtitles on the cards.
   assert.equal(await pane.locator('section.card > header .sub').count(), 0);
   // Rows: name, kind, a computer count, usage (share used, or the month's cost), Reconnect when the login stopped working.
@@ -260,7 +270,7 @@ async function modelsTab(browser) {
   assert.equal(await pane.locator('[data-gateway-key]').isVisible(), false);
   await pane.locator('[data-gateway-advanced] > summary').click();
   assert.equal(await pane.locator('[data-gateway-key]').isVisible(), true);
-  assert.match(await pane.locator('[data-gateway-line]').innerText(), /Connected · \$188\.00 of \$1,000\.00 this month/);
+  assert.match(await pane.locator('#set-gateway-card [data-gateway-line]').innerText(), /Connected · \$188\.00 of \$1,000\.00 this month/);
   await pane.locator('[data-gateway-advanced] > summary').click();
   // Turning the Gateway off saves the subscriptions-only preset with the providers as they are.
   await pane.locator('[data-gateway-toggle]').click();
@@ -278,12 +288,9 @@ async function modelsTab(browser) {
   assert.equal(saved.decide_level, 'medium');
   assert.deepEqual(saved.enabled, ['anthropic', 'openai', 'tico']);
   assert.equal('preset' in saved, false);
-  // Limits: Warn at and Stop at, in runs per person.
-  assert.deepEqual(await pane.locator('#turn-levels-form .models-row label').allInnerTexts(), ['Warn at', 'Stop at']);
-  assert.equal(await pane.locator('#turn-levels-warn').inputValue(), '40');
   assert.deepEqual(errors, []);
   await page.close();
-  console.log('Models tab cards: ok');
+  console.log('AI models group cards: ok');
 }
 
 async function addSubscription(browser) {
@@ -664,10 +671,17 @@ async function screens(browser) {
     for (const [kind, viewport] of [['desktop', {width: 1280, height: 860}], ['phone', {width: 390, height: 844}]]) {
       const {page, errors} = await open(browser, {viewport, theme});
       await modelsReady(page);
-      await page.locator('#turn-levels-form').waitFor();
       const overflow = () => page.evaluate(() => document.documentElement.scrollWidth - document.documentElement.clientWidth);
       assert.ok(await overflow() <= 0, `${kind} Models: no sideways page scroll`);
       await shot(page, `models-${kind}-${theme}`);
+      await selectSettingsGroup(page, 'limits');
+      await page.locator('#turn-levels-form').waitFor();
+      assert.deepEqual(await page.locator('#settings-group-limits > section.card > header h2').allInnerTexts(),
+        ['Bot spend limits', 'Run budget', 'Company turn levels']);
+      assert.match(await page.locator('#set-turn-budgets').innerText(), /0: no limit/);
+      assert.deepEqual(await page.locator('#turn-levels-form .models-row label').allInnerTexts(), ['Warn at', 'Stop at']);
+      assert.equal(await page.locator('#turn-levels-warn').inputValue(), '40');
+      assert.ok(await overflow() <= 0, `${kind} Limits & billing: no sideways page scroll`);
       if (kind === 'desktop' && theme === 'light') await shot(page, 'limits-desktop-light', page.locator('#settings-limits'));
       await page.evaluate(() => settingsShow('devices'));
       await page.locator('#set-machines [data-subs-pick]').first().waitFor();

@@ -110,7 +110,7 @@ const {unrouted} = require('./support/routes.cjs');
     assert.equal(await page.locator('#log-kind').inputValue(), 'decision');
     assert.equal(await page.locator('#set-log .log-row:not(.log-head) .log-result').innerText(), 'Send it Monday');
     assert.equal(await page.locator('#set-log .log-subject a').getAttribute('href'), '#/task/t1');
-    assert.equal(await page.evaluate(() => location.hash), '#/settings/history?kind=decision&bot=ops');
+    assert.equal(await page.evaluate(() => location.hash), '#/settings/health?kind=decision&bot=ops');
     // Export CSV keeps the same filters and the header row once.
     const [download] = await Promise.all([page.waitForEvent('download'), page.locator('#log-csv').click()]);
     assert.equal(download.suggestedFilename(), 'tico-history.csv');
@@ -144,7 +144,7 @@ const {unrouted} = require('./support/routes.cjs');
     assert.equal(await page.locator('#set-log [data-log-older]').count(), 0, 'the last page ends the control');
     // A new filter asks again and goes back in the address, so the view can be shared.
     await page.locator('#log-kind').selectOption('');
-    await page.waitForFunction(() => location.hash === '#/settings/history?bot=ops');
+    await page.waitForFunction(() => location.hash === '#/settings/health?bot=ops');
     assert.deepEqual(logCalls.at(-1), {bot: 'ops'});
     await page.setViewportSize({width: 390, height: 844});
     assert.equal(await page.locator('#log-csv').isVisible(), true);
@@ -156,7 +156,7 @@ const {unrouted} = require('./support/routes.cjs');
     assert.deepEqual(await page.evaluate(() => [100000, 250000].map(tokens => settingsValue('compact_at', tokens))), ['100k', '250k'],
       'a Compact at change is labelled with its size, 100k included');
     await page.locator('[data-history-view=changes]').click();
-    await page.waitForFunction(() => location.hash === '#/settings/history?view=changes');
+    await page.waitForFunction(() => location.hash === '#/settings/health?view=changes');
     await waitForChanges(owner, 2);
     assert.deepEqual(await changeIds(owner), ['h1', 'o1']);
     assert.deepEqual(calls.at(-1), {bot: '', before: ''});

@@ -4417,6 +4417,7 @@ export type ScreeningModes = {
   mail?: "off" | "warn" | "hold" | null;
   model?: boolean | null;
   patterns?: boolean | null;
+  slack?: "off" | "warn" | "hold" | null;
   watcher?: "off" | "warn" | "hold" | null;
   webhook?: "off" | "warn" | "hold" | null;
 };

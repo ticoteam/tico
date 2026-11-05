@@ -6,6 +6,7 @@ const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const {html, uiFile} = require('./support/page.cjs');
 const {unrouted} = require('./support/routes.cjs');
+const {selectSettingsGroup} = require('./support/settings.cjs');
 
 (async () => {
   const browser = await chromium.launch({channel: process.env.TICO_BROWSER_CHANNEL ?? 'chrome', headless: true});
@@ -52,7 +53,7 @@ const {unrouted} = require('./support/routes.cjs');
     };
     const open = async target => {
       await target.goto('http://tico-ui.test/#/settings');
-      await target.locator('[data-settings-tab=health]').click();
+      await selectSettingsGroup(target, 'health');
       await target.locator('#hl-page [data-hl-findings]').waitFor();
     };
 

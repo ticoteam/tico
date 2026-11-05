@@ -171,7 +171,7 @@ const shotsDir = process.env.TICO_SHOTS || '';
     // 4. Settings > Gateway: a status line, the picks in use, the services; one heading level; the key stays in Computers.
     await page.evaluate(() => settingsShow('gateway'));
     await page.locator('[data-gateway-picks]').waitFor();
-    assert.equal(await page.locator('[data-gateway-line]').innerText(), 'Connected · $12.40 of $100.00 this month');
+    assert.equal(await page.locator('#set-gateway-page [data-gateway-line]').innerText(), 'Connected · $12.40 of $100.00 this month');
     assert.equal(await page.locator('#set-gateway-page h1, #set-gateway-page h3, #set-gateway-page h4').count(), 0, 'one heading level');
     assert.deepEqual(await page.locator('[data-gateway-picks] thead th').evaluateAll(t => t.map(x => x.textContent)), ['Pick', 'Model', 'Version', 'Bots', 'Price']);
     assert.deepEqual(await page.locator('[data-gateway-pick=tico-marketing-low-fast] td').allInnerTexts(),
@@ -226,8 +226,8 @@ const shotsDir = process.env.TICO_SHOTS || '';
     assert.equal(await page.locator('[data-gateway-api-keys]').count(), 0, 'owner only');
     connected = false;
     await page.evaluate(() => { S.me.role = 'owner'; delete S.me.bot_admin; return renderSettingsGateway(); });
-    await page.locator('[data-gateway-line]').waitFor();
-    assert.equal(await page.locator('[data-gateway-line]').innerText(), 'Not connected');
+    await page.locator('#set-gateway-page [data-gateway-line]').waitFor();
+    assert.equal(await page.locator('#set-gateway-page [data-gateway-line]').innerText(), 'Not connected');
     assert.equal(await page.locator('[data-gateway-api-keys]').count(), 0, 'only with a Gateway connection');
     connected = true;
 

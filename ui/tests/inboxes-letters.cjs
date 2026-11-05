@@ -174,7 +174,7 @@ const disabled = option => option.evaluate(o => o.disabled);   // the option its
       const pane = page.locator('#inboxes-letters-in');
       await pane.locator('[data-pm-address="as_1"]').waitFor();
       assert.equal(await page.evaluate(() => location.hash), '#/settings/inboxes/settings/letters-in', 'the old Mail address opens Letters in');
-      assert.equal(await page.locator('[data-settings-tab="inboxes"]').getAttribute('aria-selected'), 'true');
+      assert.equal(await page.locator('[data-settings-tab="connections"]').getAttribute('aria-selected'), 'true');
       assert.equal(await rowText(pane.locator('[data-pm-address="as_1"]')), 'Delaware Shared 8 The Green, Suite 4000, Dover DE 19901 Yes Connected');
       assert.equal(await pane.locator('[data-pm-address="as_1"] a').getAttribute('href'), '#/settings/inboxes/postal/as_1');
       assert.equal(await rowText(pane.locator('[data-pm-address="as_2"]')), 'Texas Private — No Waiting for Form 1583', 'no address before Form 1583');

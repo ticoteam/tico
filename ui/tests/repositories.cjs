@@ -12,6 +12,7 @@ const fs = require('node:fs');
 const path = require('node:path');
 const {html, uiFile} = require('./support/page.cjs');
 const {unrouted} = require('./support/routes.cjs');
+const {selectSettingsGroup} = require('./support/settings.cjs');
 const {t} = (() => { try { return require('./support/load.cjs'); } catch { return {t: ms => ms}; } })();   // load.cjs arrives with #254
 const SHOTS = process.env.REPO_SHOTS || '';
 
@@ -172,11 +173,13 @@ async function owner(browser) {
   assert.match(await page.locator('#set-repos [data-repo="acme/legacy-billing"]').innerText(), /Not reachable/);
   assert.equal(await page.locator('#set-repos [data-repo="acme/web"] .repo-warn').count(), 0);
   await shot(page, 'settings-repositories-desktop-dark.png');
+  await selectSettingsGroup(page, 'you');
   await page.locator('[data-theme-choice=light]').click();
   await page.waitForFunction(() => document.documentElement.dataset.theme === 'light');
   await settled(page);
   await shot(page, 'settings-repositories-desktop-light.png');
   await page.locator('[data-theme-choice=dark]').click();
+  await selectSettingsGroup(page, 'connections');
 
   await page.locator('#set-repos [data-repos-bots]').check();
   assert.equal(await rows.count(), 13);
@@ -487,7 +490,7 @@ async function member(browser) {
 async function notConnected(browser) {
   const {page, errors} = await open(browser, {connected: false});
   await page.locator('#set-repos .repos-line').waitFor();
-  assert.equal((await page.locator('#set-repos').innerText()).replace(/\s+/g, ' '), "Repositories The GitHub App is not connected; bots use their computers' own GitHub sign-in. Connect GitHub");
+  assert.equal((await page.locator('#set-repos').innerText()).replace(/\s+/g, ' '), "Repositories Ask BotOps The code repositories bots may work in, and what each bot may do there. The GitHub App is not connected; bots use their computers' own GitHub sign-in. Connect GitHub");
   assert.equal(await page.locator('#set-repos a[data-repos-connect]').getAttribute('href'), '#/integrations/github');
   // The bot editor has no Repositories section then.
   await page.evaluate(() => {         // note when the Repositories section has finished deciding whether to show

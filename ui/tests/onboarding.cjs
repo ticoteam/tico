@@ -825,7 +825,7 @@ function recruitFor({department, briefing, share}) {
     await shot(page, 'desktop-5d-review');
     if (shots) { await page.setViewportSize({width: 390, height: 844}); await shot(page, 'phone-5d-review'); await page.setViewportSize({width: 1100, height: 800}); }
     assert.match(await page.locator('.onb-summary').textContent(), /AI providers\s*Your Claude and ChatGPT subscriptions, plus Tico Gateway/);
-    assert.match(await page.evaluate(() => onbSummaryHTML({...ONB, providers: null})), /Choose later in Settings &gt; Computers/);
+    assert.match(await page.evaluate(() => onbSummaryHTML({...ONB, providers: null})), /Choose later in Settings &gt; AI models/);
     for (const width of [1100, 390]) {
       await page.setViewportSize({width, height: 844});
       const aligned = await page.locator('.onb-summary > div').evaluateAll(rows => rows.every(row => {

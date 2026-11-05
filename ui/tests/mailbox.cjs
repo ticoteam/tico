@@ -121,7 +121,7 @@ const scenarios = {
     await page.locator('dialog.settings-confirm [data-confirm-ok]').click();
     await page.locator('[data-ib-row="mailbox:mb-support"]').waitFor();
     assert.equal(writes(fake, 'DELETE', '/api/v2/mailboxes/mb-support').length, 1);
-    assert.equal(await page.evaluate(() => location.hash), '#/settings/inboxes');
+    assert.equal(await page.evaluate(() => location.hash), '#/settings/connections');
     assert.equal(await page.locator('[data-ib-detail]').count(), 0);
     assert.equal(await page.locator('[data-ib-row="mailbox:mb-support"] [data-ib-status]').textContent(), 'Not in use');
     assert.deepEqual(seen.errors, []);
@@ -133,7 +133,7 @@ const scenarios = {
     const {page, seen} = await open(browser, fake, googleFake(), at('mb-ana'));
     await page.locator('.ib-crumb a[href="#/settings/inboxes"]').click();
     await page.locator('[data-ib-row]').first().waitFor();
-    assert.equal(await page.evaluate(() => location.hash), '#/settings/inboxes');
+    assert.equal(await page.evaluate(() => location.hash), '#/settings/connections');
     assert.equal(await page.locator('[data-ib-detail]').count(), 0);
     // And the address opens it again: a second visit to a page drawn before is drawn afresh.
     await page.locator('[data-ib-row="mailbox:mb-ben"] .ib-name a').click();

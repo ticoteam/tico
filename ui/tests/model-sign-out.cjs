@@ -14,6 +14,7 @@ const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const {html, uiFile, harnesses} = require('./support/page.cjs');
 const {unrouted} = require('./support/routes.cjs');
+const {selectSettingsGroup} = require('./support/settings.cjs');
 (async () => {
   const browser = await chromium.launch({headless: true, channel: process.env.TICO_BROWSER_CHANNEL === undefined ? 'chrome' : process.env.TICO_BROWSER_CHANNEL || undefined});
   try {
@@ -127,7 +128,7 @@ const {unrouted} = require('./support/routes.cjs');
         return json(unrouted(p));
       });
       await page.goto('https://tico-ui.test/#/settings');
-      await page.locator('[data-settings-tab=models]').click();
+      await selectSettingsGroup(page, 'computers');
       await page.locator('#set-machines .machine-name[data-computer-open=box]').click();
       await page.locator('#set-machines dialog.computer-detail[open] [data-connection]').first().waitFor();
       return {page, box, writes, errors, rows, finish, hold, last: () => `${['in', 'out'].find(k => rows[`${k}${seq}`])}${seq}`};

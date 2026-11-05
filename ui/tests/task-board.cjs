@@ -11,6 +11,7 @@ const fs = require('node:fs');
 const path = require('node:path');
 const {html, uiFile} = require('./support/page.cjs');
 const {unrouted} = require('./support/routes.cjs');
+const {selectSettingsGroup} = require('./support/settings.cjs');
 const {t} = (() => { try { return require('./support/load.cjs'); } catch { return {t: ms => ms}; } })();   // load.cjs arrives with #254
 const screenshotDir = process.env.TICO_SCREENSHOT_DIR;
 (async () => {
@@ -533,7 +534,7 @@ const screenshotDir = process.env.TICO_SCREENSHOT_DIR;
     assert.equal(await page.locator('[data-tag-edit]').count(), 0);
     me = {...me, mover: true};
     await page.goto('http://tico-ui.test/#/settings');
-    await page.locator('[data-settings-tab="tasks"]').click();
+    await selectSettingsGroup(page, 'tasks');
     const beforeStarter = posted.length;
     await page.locator('#settings-tags [data-release-starter]').click();
     await page.locator('.page-tags [data-tag-create]').waitFor();

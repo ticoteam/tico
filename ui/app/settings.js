@@ -455,7 +455,7 @@ function settingsAddress() {
   // Inboxes keeps its page address while Connections remains the selected Settings group.
   const inbox = SETTINGS_TAB === 'connections' && INBOXES_VIEW;
   SETTINGS_ADDRESS = inbox ? `${SETTINGS}/inboxes${inboxesAddress()}`
-    : `${SETTINGS}/${SETTINGS_TAB}${SETTINGS_TAB === 'history' ? settingsHistoryQuery() : ''}`;
+    : `${SETTINGS}/${SETTINGS_TAB}${SETTINGS_TAB === 'health' ? settingsHistoryQuery() : ''}`;
   if (location.hash !== SETTINGS_ADDRESS) history.replaceState(history.state, '', SETTINGS_ADDRESS);
 }
 // On a phone the tabs are one row that scrolls sideways (styles/settings.css); bring the current one into view.

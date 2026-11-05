@@ -63,8 +63,8 @@ const scenarios = {
     Object.assign(fake.state.mailboxes[0], {newest_epoch: Math.floor(NOW) - 7200, used_by: {people: 1, bots: 1, names: ['Ana', 'Ops']}});
     const {page, seen} = await open(browser, fake, googleFake(), {ready: LIST, extra: more.extra});
     await page.locator('[data-ib-row="postal:intake"]').waitFor();
-    assert.equal(await page.evaluate(() => location.hash), '#/settings/inboxes');
-    assert.equal(await page.locator('[data-settings-tab="inboxes"]').getAttribute('aria-selected'), 'true');
+    assert.equal(await page.evaluate(() => location.hash), '#/settings/connections');
+    assert.equal(await page.locator('[data-settings-tab="connections"]').getAttribute('aria-selected'), 'true');
     assert.deepEqual(await rows(page), [
       ['mailbox:mb-ana', 'Email', 'Connected'],
       ['mailbox:mb-ben', 'Email', 'Connected'],
@@ -265,11 +265,11 @@ const scenarios = {
   'the old Mailboxes, Email & Phone, Mail and Google addresses open Inboxes': async browser => {
     const fake = mailboxesFake();
     const {page, seen} = await open(browser, fake, googleFake(), {hash: '#/settings/mailboxes', ready: LIST});
-    assert.equal(await page.evaluate(() => location.hash), '#/settings/inboxes');
+    assert.equal(await page.evaluate(() => location.hash), '#/settings/connections');
     for (const [from, to] of [
-      ['#/settings/inbound', '#/settings/inboxes'],
-      ['#/settings/company-inbox', '#/settings/inboxes'],
-      ['#/settings/email-phone', '#/settings/inboxes'],
+      ['#/settings/inbound', '#/settings/connections'],
+      ['#/settings/company-inbox', '#/settings/connections'],
+      ['#/settings/email-phone', '#/settings/connections'],
       ['#/settings/mailboxes/mb-support', '#/settings/inboxes/mailbox/mb-support'],
       ['#/settings/mail', '#/settings/inboxes/settings/letters-in'],
       ['#/settings/inbox', '#/settings/inboxes/settings/email'],
@@ -277,19 +277,19 @@ const scenarios = {
       ['#/settings/inboxes/texts', '#/settings/inboxes/settings/texts'],
     ]) {
       await page.evaluate(hash => { location.hash = hash; }, from);
-      await page.waitForFunction(want => location.hash === want && SETTINGS_TAB === 'inboxes', to);
+      await page.waitForFunction(want => location.hash === want && SETTINGS_TAB === 'connections', to);
     }
-    await page.locator('#settings-inboxes [data-ib-section=texts]').waitFor();
+    await page.locator('#settings-group-connections [data-ib-section=texts]').waitFor();
     // A reload keeps the page it was on, and another tab leaves it.
     await page.evaluate(() => { location.hash = '#/settings/inboxes/mailbox/mb-support'; });
     await page.locator('#inbox-head h2', {hasText: 'support@acme.example'}).waitFor();
     await page.reload();
     await page.locator('#inbox-head h2', {hasText: 'support@acme.example'}).waitFor();
     assert.equal(await page.evaluate(() => location.hash), '#/settings/inboxes/mailbox/mb-support');
-    await page.locator('[data-settings-tab="general"]').click();
-    await page.waitForFunction(() => SETTINGS_TAB === 'general');
-    await page.locator('[data-settings-tab="inboxes"]').click();
-    await page.waitForFunction(() => location.hash === '#/settings/inboxes');
+    await page.locator('[data-settings-tab="you"]').click();
+    await page.waitForFunction(() => SETTINGS_TAB === 'you');
+    await page.locator('[data-settings-tab="connections"]').click();
+    await page.waitForFunction(() => location.hash === '#/settings/connections');
     await page.locator(LIST).first().waitFor();
     assert.deepEqual(seen.errors, []);
     await page.close();
