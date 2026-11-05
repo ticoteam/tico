@@ -325,9 +325,10 @@ def install_meeting_items(app, store, mutate, task_create, auth):
                         check=lambda c: media.authorized(c, request.state.identity, rid))
         with store.read_transaction() as c:
             media.authorized(c, request.state.identity, rid)
-            iid = result.get('item_id') or result['item']['id']
-            return {k: v for k, v in {**result, 'item': task_references.redact(c, auth, request.state.identity,
-                      view(one(c, rid, iid)))}.items() if k != 'item_id'}
+            result = dict(result)
+            iid = result.pop('item_id', None) or result.pop('item')['id']
+            result['item'] = task_references.redact(c, auth, request.state.identity, view(one(c, rid, iid)))
+            return result}
 
     @app.get("/api/v2/meetings/{rid}/items")
     @app.get("/api/meetings/{rid}/items")

@@ -200,7 +200,16 @@ mod tests {
         ];
         app.link_tasks = json!({"scope":app.link_scope(),"tasks":[{"id":"task","title":"Private title","number":42,"status":"open"}]});
         app.link_tasks_at = Instant::now();
-        assert_eq!(app.actions_view("one")["items"][0]["number"], 42);
+        let view = app.actions_view("one");
+        assert_eq!(
+            view["items"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .find(|row| row["id"] == "link")
+                .unwrap()["number"],
+            42
+        );
         app.destination = "two".into();
         let rows = app.actions_view("two")["items"].as_array().unwrap().clone();
         assert_eq!(rows.len(), 1);
