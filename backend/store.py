@@ -2382,14 +2382,14 @@ class Store:
                 for task_id in task_ids:
                     replay_auth.task(c, replay_principal, task_id)
                 privacy.require_payload(c, replay_principal, result)
+                if '/meetings/' in operation or operation.endswith('/meetings'):
+                    from .meeting_items import redact
+                    result = redact(c, replay_principal, replay_auth, result)
                 from . import turn_scope
                 if identity.role == "runner" and replay_principal.attempt_id:
                     result = turn_scope.project_attempt(c, replay_auth, replay_principal.attempt_id, result)
                 else:
                     result = turn_scope.project(c, turn_scope.scope(c, replay_principal), result, auth=replay_auth)
-                if '/meetings/' in operation or operation.endswith('/meetings'):
-                    from .meeting_items import redact
-                    result = redact(c, replay_principal, replay_auth, result)
                 return result
             # Who made the changes this write logs (backend/events.py).
             from . import events as changes

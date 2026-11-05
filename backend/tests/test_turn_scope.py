@@ -153,6 +153,12 @@ def test_attached_bot_reads_its_private_saved_meeting_only_outside_task_turns(ap
     get(api, "meetings/transcript?id=" + mid, unscoped["token"], expected=404)
     with api.app.state.store.transaction() as c:
         c.execute("UPDATE live_meeting_bots SET joined_by='human:ana' WHERE meeting_id=?", (live,))
+        original = meetings.get(mid, c)["metadata"]
+        meetings.snapshot({**original, "owner": "ben@acme.example", "audience": "participants",
+                           "audience_emails": ["ben@acme.example"]}, conn=c)
+    get(api, "meetings/transcript?id=" + mid, unscoped["token"], expected=404)
+    with api.app.state.store.transaction() as c:
+        meetings.snapshot(original, conn=c)
     t = task(api, owner="bot:ops", private=False)
     carry(api, unscoped, t["id"])
     get(api, "meetings/transcript?id=" + mid, unscoped["token"], expected=404)
