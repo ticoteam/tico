@@ -286,6 +286,28 @@ def test_origins_projects_the_message_before_copying_its_title(api):
     assert data["source_label"] in get(api, "origins/" + mid)["title"]
 
 
+def test_scoped_history_uses_retained_canonical_page_ids(api, monkeypatch):
+    from backend import scope_projection
+    data = sources(api)
+    tid, fid = data["task"]["id"], data["hidden"]
+    old_name = "Earlier archived page name"
+    with api.app.state.store.transaction() as c:
+        event = c.execute("SELECT id FROM history_events WHERE subject_id=? AND kind='file' "
+                          "AND json_extract(data,'$.file')=? LIMIT 1", (tid, fid)).fetchone()
+        assert event
+        # Main's history migration retains page_files after an old display/blob identity is unavailable.
+        c.execute("UPDATE history_events SET old=?,new=NULL,data=? WHERE id=?",
+                  (old_name, H._dump({"page_files": [fid]}), event["id"]))
+    _, attempt = scoped(api, data, False)
+    assert old_name in json.dumps(get(api, "tasks/" + tid, attempt["token"]))
+    narrow(api, data)
+    no_sources(get(api, "tasks/" + tid, attempt["token"]), (*secrets(data), old_name))
+    with monkeypatch.context() as patch:
+        patch.setattr(scope_projection, "SOURCE_LISTS", scope_projection.SOURCE_LISTS - {"page_files"})
+        with pytest.raises(AssertionError):
+            no_sources(get(api, "tasks/" + tid, attempt["token"]), (old_name,))
+
+
 def postal_sources(api, hq):
     from backend.tests.test_api import put
     _, attempt = task_turn(api)

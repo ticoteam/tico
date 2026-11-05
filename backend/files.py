@@ -1236,7 +1236,7 @@ class Files:
                     "SELECT v.* FROM bot_file_versions v JOIN bot_files f "
                     "ON f.id=v.file_id AND f.current_version=v.version WHERE v.file_id IN (" + marks + ")", part))
                 caches["activity"].update((a["file_id"], a) for a in c.execute(
-                    "SELECT * FROM bot_file_activity WHERE id IN (SELECT max(id) FROM bot_file_activity "
+                    "SELECT file_id,actor,action,created_at FROM bot_file_activity WHERE id IN (SELECT max(id) FROM bot_file_activity "
                     "WHERE file_id IN (" + marks + ") GROUP BY file_id)", part))
             more = start + limit < len(rows)
             nxt = (base64.urlsafe_b64encode(f"{page[-1]['last_activity_at']}|{page[-1]['id']}".encode()).decode()

@@ -13,7 +13,7 @@ from .store import H, Problem
 REF_FIELDS = frozenset({"file", "file_id", "page", "page_id", "blob_id", "meeting", "meeting_id",
                         "digest", "source_digest", "sha256", "content_sha256", "body_sha256",
                         "ref", "item", "url", "file_url", "href", "src", "path"})
-SOURCE_LISTS = frozenset({"files", "attachments", "pages", "meetings", "reviewed", "citations", "body_sources"})
+SOURCE_LISTS = frozenset({"files", "attachments", "pages", "page_files", "meetings", "reviewed", "citations", "body_sources"})
 
 
 def body_sources(value, parent=""):
@@ -84,7 +84,7 @@ def project(c, scoped, payload, *, auth=None):
         marks = ','.join('?' * len(chunk))
         for row in c.execute(f"SELECT id,data FROM history_events WHERE id IN ({marks}) AND kind='file'", chunk):
             data = H._json(row['data'], {})
-            source = data.get('body_sources') or data.get('source')
+            source = data.get('body_sources') or data.get('source') or body_sources(data)
             if source:
                 event_sources[row['id']] = source
                 collect(source)
