@@ -60,6 +60,8 @@ assert.equal(askToolStep('Ran Bash'), 'Running a command');
 assert.equal(askToolStep('Ran hub task check back'), 'Task check back', 'a name it does not know stays as it is');
 assert.equal(askToolStep('Ran github open thing'), 'Github open thing');
 assert.equal(askToolStep('Ran a tool'), '');
+assert.equal(askToolStep('Ran curl'), 'Running curl', 'a shell program the server named');
+assert.equal(askToolStep('Filing a task'), 'Filing a task', 'a label the server already says in words');
 const started = new Date(now - 4 * 60000 - 20000).toISOString();
 const run = over => ({state: 'running', label: 'Working', text: '', started_at: started, parts: [
   {kind: 'tool', text: 'Ran hub task list'}, {kind: 'progress', text: 'Clearing them out.'}, {kind: 'tool', text: 'Ran hub task bulk close'}], ...over});

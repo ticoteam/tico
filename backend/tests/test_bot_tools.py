@@ -7,6 +7,7 @@ from backend.store import H
 from backend.tests.test_api import api, assign, get, headers, post, ready, restrict, runner  # noqa: F401  (fixtures)
 from backend.tests.test_credentials import setup
 from backend.tests.test_model_subscriptions import add, company, give, machine, on
+from backend import bot_settings as BS
 
 RUNTIMES = {"codex": {"installed": True, "authenticated": "ready"}}
 TOOLS = [
@@ -20,9 +21,8 @@ TOOLS = [
 
 def configure(api, bot="ops"):
     with api.app.state.store.transaction() as c:
-        c.execute("UPDATE bot_config SET config=?,repo=? WHERE bot=?",
-                  (json.dumps({"name": bot, "runtime": "codex", "model": "gpt-6-luna", "reasoning_effort": "high"}),
-                   "acme-co/emp-" + bot, bot))
+        c.execute('UPDATE bot_config SET repo=? WHERE bot=?', ('acme-co/emp-' + bot, bot))
+        BS.write(c, bot, {'name': bot, 'runtime': 'codex', 'model': 'gpt-6-luna', 'reasoning_effort': 'high'})
 
 
 def report(api, machine, bot, tools):

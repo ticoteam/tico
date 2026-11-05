@@ -8,6 +8,7 @@ import pytest
 
 from backend.store import H, encode
 from backend.tests.test_api import api, assign, claim, get, headers, post, put, ready, runner  # noqa: F401  (fixture)
+from backend import bot_settings as BS
 
 
 def call(api, method, path, token, body=None):
@@ -27,8 +28,8 @@ def close_computer(api, machine):
 def botops(api):
     with api.app.state.store.transaction() as c:
         c.execute("INSERT INTO bots(id,slug,display_name,state) VALUES('botops','botops','BotOps','active')")
-        c.execute("INSERT INTO bot_config(bot,config,owner_id) VALUES('botops',?, 'ana')",
-                  (encode({"name": "botops", "runtime": "fake", "status": "active"}),))
+        c.execute("INSERT INTO bot_config(bot,owner_id) VALUES('botops','ana')")
+        BS.write(c, 'botops', {'name': 'botops', 'runtime': 'fake', 'status': 'active'})
     machine = runner(api)
     assign(api, machine, "botops")
     ready(api, machine, ["botops"])

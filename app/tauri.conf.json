@@ -13,7 +13,8 @@
     "security": {
       "csp": null,
       "capabilities": [
-        "server"
+        "server",
+        "rail"
       ]
     }
   },
@@ -45,7 +46,7 @@
     "category": "Productivity",
     "shortDescription": "Tico: the company's operating system, on your desk",
     "macOS": {
-      "minimumSystemVersion": "13.0",
+      "minimumSystemVersion": "14.0",
       "entitlements": "entitlements.plist",
       "signingIdentity": "-"
     },

@@ -361,8 +361,8 @@ def _runs(c, runner_id, start, end, limit=500):
     # open or finished since `start` are read (attempts_runner_finished, two index ranges): an open overload runs this
     # under the write lock on every post, and visiting each turn the computer ever ran held that lock ~100 s on a slow
     # disk (Dev 249).
-    return c.execute("SELECT a.id,a.bot_id,coalesce(a.started_at,a.created_at) started_at,a.finished_at,a.state,t.model FROM attempts a "
-                     "LEFT JOIN turns t ON t.id=a.id WHERE a.rowid IN (SELECT rowid FROM attempts WHERE runner_id=? "
+    return c.execute("SELECT a.id,a.bot_id,coalesce(a.started_at,a.created_at) started_at,a.finished_at,a.state,a.usage_model AS model "
+                     "FROM attempts a WHERE a.rowid IN (SELECT rowid FROM attempts WHERE runner_id=? "
                      "AND finished_at>=? UNION ALL SELECT rowid FROM attempts WHERE runner_id=? AND finished_at IS NULL) AND "
                      "coalesce(a.started_at,a.created_at)<? ORDER BY coalesce(a.started_at,a.created_at) DESC LIMIT ?",
                      (runner_id, _iso(start), runner_id, _iso(end), limit)).fetchall()[::-1]

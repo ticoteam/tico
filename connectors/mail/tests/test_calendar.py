@@ -43,6 +43,10 @@ access:
     can: [read, draft, schedule]
 """
     }
+    def setUp(self):
+        super().setUp()
+        fake.MAIL_LEVELS["ana"] = {"ana@acme.example": "read_write"}     # her own mailbox, as Tico answers it
+
     def hold_with_outside_guest(self):
         return self.run_json("hold", "--as", "ana", "--for", "ana@acme.example",
                              "--start", "2026-09-22T09:00:00-07:00",

@@ -971,6 +971,19 @@
      "default": null,
      "title": "Commit"
     },
+    "device_id": {
+     "anyOf": [
+      {
+       "pattern": "^[0-9a-f]{64}$",
+       "type": "string"
+      },
+      {
+       "type": "null"
+      }
+     ],
+     "default": null,
+     "title": "Device Id"
+    },
     "kind": {
      "anyOf": [
       {
@@ -2584,6 +2597,22 @@
   "SubscriptionWeekly": {
    "additionalProperties": false,
    "properties": {
+    "origin": {
+     "anyOf": [
+      {
+       "enum": [
+        "subscription",
+        "login"
+       ],
+       "type": "string"
+      },
+      {
+       "type": "null"
+      }
+     ],
+     "default": null,
+     "title": "Origin"
+    },
     "reported_at": {
      "maxLength": 50,
      "title": "Reported At",
@@ -2618,6 +2647,19 @@
      ],
      "default": null,
      "title": "Status"
+    },
+    "subscription_id": {
+     "anyOf": [
+      {
+       "maxLength": 80,
+       "type": "string"
+      },
+      {
+       "type": "null"
+      }
+     ],
+     "default": null,
+     "title": "Subscription Id"
     },
     "used_percent": {
      "anyOf": [

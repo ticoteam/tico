@@ -65,6 +65,7 @@ function route(hash = location.hash) {
   if (!S.route.startsWith('#/bot/')) botStopped();
   if (!S.route.startsWith('#/seat/')) recruitStop();
   threadsSync();      // the sidebar's Threads link and the rail's lists (ui/app/threads.js)
+  setupMark();        // the wizard's mark first: Ask stays away from it (ui/app/notices.js)
   askSync();          // Ask's button: away on the Assistant page and in setup (ui/app/ask-panel.js)
   renderTree();
   if (redesignRoute(S.route)) { /* Strategy's tabs, Automations, Connections and the old addresses that moved (ui/app/redesign.js) */ }
@@ -126,7 +127,11 @@ function route(hash = location.hash) {
   }
   else if (S.route === '#/health') { SETTINGS_TAB = 'health'; location.replace(SETTINGS); return; }   // Health moved into Settings
   else if (['#/settings/company-inbox', '#/settings/email-phone'].includes(S.route)) { SETTINGS_TAB = 'inbound'; location.replace(SETTINGS); return; }
-  else if (S.route === '#/settings/inbox') { SETTINGS_TAB = 'inbox'; location.replace(SETTINGS); return; }   // Google's sign-in returns here
+  else if (S.route === '#/settings/inbox') { SETTINGS_TAB = 'mailboxes'; MAILBOX_OPEN = ''; location.replace(SETTINGS); return; }   // Google's sign-in returns here
+  // One mailbox's page (ui/app/mailbox.js): Settings > Mailboxes with that mailbox open.
+  else if (/^#\/settings\/mailboxes\/[A-Za-z0-9-]+\/?$/.test(S.route)) {
+    MAILBOX_OPEN = S.route.split('/')[3]; SETTINGS_TAB = 'mailboxes'; location.replace(SETTINGS); return;
+  }
   else if (S.route === '#/settings/roadmap') { SETTINGS_TAB = 'tasks'; ROADMAP_SETTINGS_REVEAL = true; location.replace(SETTINGS); return; }   // Health's roadmap suggestions fix
   else if (S.route === '#/settings/storage') { SETTINGS_TAB = 'storage'; location.replace(SETTINGS); return; }   // Health's Set up S3
   // Settings > System (it was Rules, before that Routines): Tico's own jobs. Wake rules and routines are Automations now.
@@ -140,7 +145,9 @@ function route(hash = location.hash) {
   // backend/settings_entries.py). settingsShow maps old names and sections and puts the tab's own address back in
   // the bar, so a tab can be bookmarked and shared: #/settings/gateway, #/settings/models, …
   else if (/^#\/settings\/[a-z-]+(?:\/[a-z0-9-]+)?\/?(\?.*)?$/.test(S.route)) {
-    const [tab, card] = S.route.slice(11).split('?')[0].split('/'); SETTINGS_REVEAL = card ? '#' + card : '';
+    const [path, query] = S.route.slice(11).split('?'), [tab, card] = path.split('/');
+    if (tab === 'history') settingsHistoryAddress(query);   // History's view and filters (ui/app/settings-history.js)
+    SETTINGS_REVEAL = card ? '#' + card : ''; MAILBOX_OPEN = '';
     // The Models card and Company turn levels moved from Computers to Models.
     SETTINGS_TAB = tab === 'devices' && SETTINGS_MOVED_TO_MODELS.includes(SETTINGS_REVEAL) ? 'models' : tab; location.replace(SETTINGS); return;
   }

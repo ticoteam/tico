@@ -1,6 +1,6 @@
 """What woke each run, what it cost and whether it changed anything (token saving 1/9).
 
-Every run (`turns`, same id as its attempt) records three things, all in plain code, none asked of a model:
+Every run (its `attempts` row) records three things, all in plain code, none asked of a model:
 
 - `trigger_kind`: what woke it. The place that writes a wake stamps it in the wake's refs (`trigger`, plus
   `trigger_source` where there is a source to name); the claim copies it onto the run. A message a person
@@ -44,7 +44,7 @@ trigger or purpose is not known reads `unknown` for that field, and is still cou
 import re
 
 TRIGGERS = ("comment", "status_or_relation", "pr_checks", "stall_check", "schedule", "person_message",
-            "background_done", "release_published", "check_back", "other")
+            "background_done", "release_published", "check_back", "task_roundup", "other")
 OUTCOMES = ("acted", "no_change", "nothing_to_do")
 # What a person (or another bot) did with an acted run's result: `turn_result`.
 TASK_OUTCOMES = ("accepted", "edited", "overridden")
@@ -56,6 +56,7 @@ TRIGGER_PURPOSES = {
     "comment": "answer comment", "status_or_relation": "react to task change", "pr_checks": "handle PR checks",
     "check_back": "follow up task", "stall_check": "check stalled task", "schedule": "run routine", "person_message": "answer person message",
     "background_done": "resume after background work", "release_published": "follow up a release",
+    "task_roundup": "check the task roundup list",
 }
 # Bots whose work is one thing: a reviewer woken by a task change or a PR's checks is reviewing that PR.
 REVIEWERS = ("pr-reviewer-sol", "reviewer-2")
@@ -100,12 +101,16 @@ def stamp(refs, kind, source=None, purpose=None):
     return out
 
 
-def backfill(conn):
-    """Give every run with no purpose the mapped default for its bot and trigger. Safe to run twice."""
-    pairs = conn.execute("SELECT DISTINCT bot, trigger_kind FROM turns WHERE purpose IS NULL").fetchall()
+def backfill(conn, table="attempts", bot_column="bot_id"):
+    """Give every run with no purpose the mapped default for its bot and trigger. Safe to run twice. hubdb's numbered
+    step 39 passes the old `turns` table, which held run records until migration 0072: every row of it was a run. In
+    attempts an attempt with a job and no trigger never had a run record, and gets no purpose."""
+    record = "" if table == "turns" else " AND (job_id IS NULL OR trigger IS NOT NULL)"
+    pairs = conn.execute(f"SELECT DISTINCT {bot_column}, trigger_kind FROM {table} "
+                         f"WHERE purpose IS NULL{record}").fetchall()
     for bot, kind in pairs:
-        conn.execute("UPDATE turns SET purpose=? WHERE purpose IS NULL AND bot IS ? AND trigger_kind IS ?",
-                     (purpose_for(bot, kind), bot, kind))
+        conn.execute(f"UPDATE {table} SET purpose=? WHERE purpose IS NULL{record} "
+                     f"AND {bot_column} IS ? AND trigger_kind IS ?", (purpose_for(bot, kind), bot, kind))
     return len(pairs)
 
 
@@ -135,7 +140,7 @@ def counts(action):
 
 # A finished run's `outcome` and `did_nothing`, set by H.turn_finish (and by a restore that ends runs it finds open).
 OUTCOME_SQL = ("CASE WHEN coalesce(writes,0)>0 THEN 'acted' "
-               "WHEN (SELECT k.status FROM tasks k WHERE k.id=turns.task_id) IN ("
+               "WHEN (SELECT k.status FROM tasks k WHERE k.id=attempts.task_id) IN ("
                + ",".join(f"'{s}'" for s in OPEN_TASK) + ") THEN 'no_change' ELSE 'nothing_to_do' END")
 SETTLE_SQL = f"outcome={OUTCOME_SQL}, did_nothing=(coalesce(writes,0)=0)"
 
@@ -144,14 +149,14 @@ def pushed(conn, turn_id, computer, pushes):
     """Add the pushes a runner reported for a run to its `writes`: only those from a worktree of the run's own task on
     that computer, and only while the run is still open, so a result sent again is not counted twice. A runner that
     reports none (an older one, or a run that pushed nothing) leaves the run as it was."""
-    row = conn.execute("SELECT task_id FROM turns WHERE id=? AND finished_at IS NULL", (turn_id,)).fetchone()
+    row = conn.execute("SELECT task_id FROM attempts WHERE id=? AND settled_at IS NULL", (turn_id,)).fetchone()
     if not pushes or not row or not row[0]:
         return 0
     paths = {r[0] for r in conn.execute("SELECT path FROM task_links WHERE task_id=? AND kind='worktree' "
                                         "AND computer_id=?", (row[0], computer))}
     count = sum(p.count for p in pushes if p.path in paths)
     if count:
-        conn.execute("UPDATE turns SET writes=coalesce(writes,0)+? WHERE id=?", (count, turn_id))
+        conn.execute("UPDATE attempts SET writes=coalesce(writes,0)+? WHERE id=?", (count, turn_id))
     return count
 
 
@@ -160,7 +165,7 @@ def rotation(conn, turn_id, rotated):
     older one, or a run that resumed) leaves `rotated` NULL."""
     if rotated is None:
         return 0
-    return conn.execute("UPDATE turns SET rotated=? WHERE id=? AND finished_at IS NULL", (rotated.reason, turn_id)).rowcount
+    return conn.execute("UPDATE attempts SET rotated=? WHERE id=? AND settled_at IS NULL", (rotated.reason, turn_id)).rowcount
 
 
 # Why a run started a new session, in the words a task's history uses ("Started a new session: ..."). The first six are
@@ -202,10 +207,10 @@ def session(conn, turn_id, session):
     if session is None:
         return 0
     why = (session.why or "")[:60] or None
-    done = conn.execute("UPDATE turns SET session_kind=?, session_why=? WHERE id=? AND finished_at IS NULL",
+    done = conn.execute("UPDATE attempts SET session_kind=?, session_why=? WHERE id=? AND settled_at IS NULL",
                         (session.kind, why, turn_id)).rowcount
     if done and session.kind == "new" and why != "none_saved":
-        row = conn.execute("SELECT task_id FROM turns WHERE id=?", (turn_id,)).fetchone()
+        row = conn.execute("SELECT task_id FROM attempts WHERE id=?", (turn_id,)).fetchone()
         new_session(conn, row[0] if row else None, why)
     return done
 
@@ -227,10 +232,11 @@ def turn_result(conn, actor, row, outcome, event, to=None):
     if (outcome not in TASK_OUTCOMES or row.get("status") not in RESULT_STATES or not owner.startswith("bot:")
             or actor in (owner, "keeper")):
         return None
-    reached = conn.execute("SELECT max(created_at) FROM task_events WHERE task_id=? AND field='status' AND new=?",
+    reached = conn.execute("SELECT max(created_at) FROM history_events WHERE subject_type='task' AND subject_id=? "
+                           "AND kind='status' AND new=?",
                            (row["id"], row["status"])).fetchone()[0]
-    turn = conn.execute("SELECT id FROM turns WHERE bot=? AND task_id=? AND (? IS NULL OR started_at<=?) "
-                        "ORDER BY started_at DESC LIMIT 1", (owner[4:], row["id"], reached, reached)).fetchone()
+    turn = conn.execute("SELECT id FROM attempts WHERE bot_id=? AND task_id=? AND (job_id IS NULL OR trigger IS NOT NULL) "
+                        "AND (? IS NULL OR created_at<=?) ORDER BY created_at DESC LIMIT 1", (owner[4:], row["id"], reached, reached)).fetchone()
     if not turn or conn.execute("SELECT 1 FROM events WHERE target=? AND action='turn.outcome' LIMIT 1",
                                 (turn[0],)).fetchone():
         return None

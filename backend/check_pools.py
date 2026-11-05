@@ -23,6 +23,7 @@ import logging
 import re
 
 from . import hubdb as H
+from . import bot_settings as BS
 
 log = logging.getLogger("tico.check_pools")
 
@@ -75,7 +76,7 @@ def ensure(c):
 
 def capture_attempt(c, turn_id):
     """Freeze the actual check attempt and its ticket-head provenance after this run's usage is recorded."""
-    turn = c.execute("SELECT task_id FROM turns WHERE id=?", (turn_id,)).fetchone()
+    turn = c.execute("SELECT task_id FROM attempts WHERE id=?", (turn_id,)).fetchone()
     check = H.task(c, turn["task_id"]) if turn and turn["task_id"] else None
     from . import step_flow
     from . import task_relations as TR
@@ -86,17 +87,17 @@ def capture_attempt(c, turn_id):
     finished_owner = check.get("owner_id")
     head = str(check.get("verdict_head") or "").lower()
     if not head:
-        event = c.execute("SELECT new FROM task_events WHERE task_id=? AND field='review_head' "
+        event = c.execute("SELECT new FROM history_events WHERE subject_type='task' AND subject_id=? AND kind='review_head' "
                           "ORDER BY created_at DESC,rowid DESC LIMIT 1", (check["id"],)).fetchone()
         head = str(event[0] if event else "").split(",")[0].lower()
     from . import check_independence
     result = check_independence.capture_attempt(c, ticket_id, check["id"], head, turn_id)
     verdict = str(check.get("verdict") or "").lower()
-    decided = c.execute("SELECT created_at FROM task_events WHERE task_id=? AND field='verdict' "
+    decided = c.execute("SELECT created_at FROM history_events WHERE subject_type='task' AND subject_id=? AND kind='verdict' "
                         "ORDER BY created_at DESC,rowid DESC LIMIT 1", (check["id"],)).fetchone()
-    started = c.execute("SELECT started_at FROM turns WHERE id=?", (turn_id,)).fetchone()
+    started = c.execute("SELECT created_at FROM attempts WHERE id=? AND (job_id IS NULL OR trigger IS NOT NULL)", (turn_id,)).fetchone()
     from . import verdict_moves
-    if verdict and decided and started and decided["created_at"] >= started["started_at"]:
+    if verdict and decided and started and decided["created_at"] >= started["created_at"]:
         verdict_moves.after_capture(c, check["id"], head, turn_id)
     elif not verdict and check.get("status") == "done" and step_flow.check_step(c, check):
         # Finished with no verdict: its comments are the feedback, and the ticket goes to the step's on_fail.
@@ -105,7 +106,8 @@ def capture_attempt(c, turn_id):
     current = H.task(c, check["id"])
     if current and current.get("status") in H.ACTIVE_STATUSES and current.get("owner_id") == finished_owner:
         return result
-    done = c.execute("SELECT 1 FROM task_events WHERE task_id=? AND field='check_pool_freed' AND new=? LIMIT 1",
+    done = c.execute("SELECT 1 FROM history_events WHERE subject_type='task' AND subject_id=? AND kind='check_pool_freed' "
+                     "AND new=? LIMIT 1",
                      (check["id"], turn_id)).fetchone()
     if not done:
         H._task_event(c, check["id"], H.KEEPER, "check_pool_freed", None, turn_id, "")
@@ -229,7 +231,7 @@ def _task_model(c, slug):
     from clients import sessions
     from . import task_models
     from .shared_bots import follow
-    row = c.execute("SELECT config FROM bot_config WHERE bot=?", (slug,)).fetchone()
+    row = c.execute(BS.ONE_SQL, (slug,)).fetchone()
     config = follow(c, slug, H._json(row["config"], {}) or {}) if row else {}
     task = task_models.of(config) if sessions.session_key(config, slug, "check", None).startswith("task:") else None
     if not task:
@@ -269,8 +271,8 @@ def _recent_turns(c, slug, task, runs):
     cannot run now, all of them (`makers` sets aside what ran on that task model)."""
     from . import task_run_models
     where = " AND task_id IS NOT NULL" if task and runs else ""
-    rows = c.execute("SELECT id,task_id FROM turns WHERE bot=? AND finished_at IS NOT NULL" + where
-                     + " ORDER BY finished_at DESC LIMIT ?", (slug, TURNS_READ)).fetchall()
+    rows = c.execute("SELECT id,task_id FROM attempts WHERE bot_id=? AND settled_at IS NOT NULL" + where
+                     + " ORDER BY settled_at DESC LIMIT ?", (slug, TURNS_READ)).fetchall()
     return [r[0] for r in rows
             if not (r[1] and (task_run_models.of(c, r[1]) or H.check_model(c, r[1])))][:RECENT_TURNS]
 
@@ -305,7 +307,7 @@ def builder_makers(c, ticket, whole=False):
     With `whole`, a run on the ticket with a part of unknown company makes the answer empty: that part may be any."""
     from .check_independence import _executed
     built, known = _executed(c, ticket["id"])
-    if whole and not known and c.execute("SELECT 1 FROM turns WHERE task_id=?", (ticket["id"],)).fetchone():
+    if whole and not known and c.execute("SELECT 1 FROM attempts WHERE task_id=?", (ticket["id"],)).fetchone():
         return set()
     if built:
         return set(built)
@@ -323,12 +325,12 @@ def candidate_details(c, slugs):
         bot = c.execute("SELECT slug,display_name FROM bots WHERE id=? AND coalesce(state,'')<>'archived'", (slug,)).fetchone()
         if not bot:
             continue
-        row = c.execute("SELECT config FROM bot_config WHERE bot=?", (slug,)).fetchone()
+        row = c.execute(BS.ONE_SQL, (slug,)).fetchone()
         config = follow(c, slug, H._json(row["config"], {}) or {}) if row else {}
         runtime, model = providers.bot_choice(c, None, config)
         configured = providers.MODEL_BY_ID.get(model or "") or {}
         configured_provider = configured.get("provider") or providers.author_provider(runtime)
-        turn = c.execute("SELECT id FROM turns WHERE bot=? AND finished_at IS NOT NULL ORDER BY finished_at DESC,id DESC LIMIT 1",
+        turn = c.execute("SELECT id FROM attempts WHERE bot_id=? AND settled_at IS NOT NULL ORDER BY settled_at DESC,id DESC LIMIT 1",
                          (slug,)).fetchone()
         actual = None
         if turn:
@@ -470,7 +472,7 @@ def has_open_check(c, ticket, step, heads):
         found = step_flow.child_check(c, child, ticket)
         if not found or found["id"] != step["id"]:
             continue
-        seen = c.execute("SELECT new FROM task_events WHERE task_id=? AND field='review_head' "
+        seen = c.execute("SELECT new FROM history_events WHERE subject_type='task' AND subject_id=? AND kind='review_head' "
                          "ORDER BY created_at DESC, rowid DESC LIMIT 1", (child_id,)).fetchone()
         judged = set(filter(None, (seen[0] if seen else "").split(",")))
         if heads and judged and not set(heads) & judged:
@@ -659,7 +661,8 @@ def freed(c, row):
     parent = H.TR.parent_of(c, row["id"]) if H.is_bot(row.get("owner_id")) else None
     if not parent or not is_check_title(c, H.task(c, parent), row.get("title")):
         return None
-    if c.execute("SELECT 1 FROM turns WHERE task_id=? AND finished_at IS NULL LIMIT 1", (row["id"],)).fetchone():
+    if c.execute("SELECT 1 FROM attempts WHERE task_id=? AND settled_at IS NULL AND (job_id IS NULL OR trigger IS NOT NULL) LIMIT 1",
+                 (row["id"],)).fetchone():
         return None
     slug = H.actor_id(row["owner_id"])
     for wait in _all_waiting(c):

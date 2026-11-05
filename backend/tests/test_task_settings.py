@@ -12,7 +12,7 @@ def test_task_settings_routines_preserve_actual_state_and_do_not_run_jobs(api):
     mine, theirs = by_key(owner), by_key(reader)
     assert mine["task-rule-close-after-done"]["task_trigger"] == "after"
     assert mine["due_reminders"]["task_trigger"] == "open"
-    assert mine["health_scan"]["task_trigger"] is None
+    assert "health_scan" not in mine and "health_scan" not in theirs
     assert mine["stale_review"]["can_change"] and not theirs["stale_review"]["can_change"]
     assert mine["stale_review"]["on"] == theirs["stale_review"]["on"]
     with api.app.state.store.read() as c:

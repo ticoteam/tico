@@ -54,7 +54,8 @@ def _tasks(c, auth, who, attrs, base):
     if attrs.get("waiting-on") != "viewer":
         return ""
     # The same rules as Needs you: waiting on the viewer, not snoozed, and a task the reader may see (task_sql).
-    clauses, args = ["status='waiting'", "waiting_on=?", "(snoozed_until IS NULL OR snoozed_until<=?)",
+    clauses, args = ["status='waiting'", "waiting_on=?", "NOT EXISTS (SELECT 1 FROM task_holds sh WHERE sh.task_id=tasks.id AND sh.kind='snoozed' "
+                     "AND sh.released_at IS NULL AND sh.until_at>?)",
                      "(" + auth.task_sql(c, who) + ")"], [who.actor, H.now()]
     if attrs.get("bot"):
         bot = (H.resolve_bot(c, attrs["bot"]) or {}).get("id", attrs["bot"])

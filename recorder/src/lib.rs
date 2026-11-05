@@ -1,6 +1,7 @@
 pub mod assist;
 pub mod audio;
 pub mod capture;
+pub mod desktop;
 #[cfg(feature = "diarize")]
 pub mod diarize;
 pub mod engine;

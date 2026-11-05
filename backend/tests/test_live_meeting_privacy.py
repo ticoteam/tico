@@ -698,8 +698,7 @@ def test_settled_run_unsettles_when_a_moved_input_room_joins_a_private_meeting(l
                 {"message_id": moved["id"], "to_attempt": "synthetic-later-run", "tasks": [], "live_meetings": []})
         cites = H.say(c, "bot:ops", "human:ana", "Synthetic run reply", conversation_id=root_room["id"],
                       refs={"turn_id": aid})
-        c.execute("INSERT OR REPLACE INTO turns(id,bot,started_at,finished_at,trigger,message_id) VALUES(?,?,?,?,?,?)",
-                  (aid, "ops", H.now(), H.now(), "message", root["id"]))
+        c.execute("UPDATE attempts SET settled_at=?,trigger='message',message_id=? WHERE id=?", (H.now(), root["id"], aid))
         # Finance may read Ops' runs, so only the meeting decides what it reads below.
         c.execute("UPDATE bot_config SET team='engineering' WHERE bot='finance'")
         meeting_key = c.execute("SELECT room_key FROM conversations WHERE id=?",
@@ -712,7 +711,7 @@ def test_settled_run_unsettles_when_a_moved_input_room_joins_a_private_meeting(l
             conn = S.connect(store.settings.db_path, c, auth, who)
             try:
                 return tuple(bool(conn.execute(f"SELECT 1 FROM {table} WHERE id=?", (key,)).fetchall())
-                             for table, key in (("attempts", aid), ("turns", aid), ("messages", cites["id"])))
+                             for table, key in (("attempts", aid), ("messages", cites["id"])))
             finally:
                 conn.close()
 
@@ -720,21 +719,20 @@ def test_settled_run_unsettles_when_a_moved_input_room_joins_a_private_meeting(l
         with store.read() as c:
             index = ReadIndex(c, who, rooms=True)
             row = H.message(c, cites["id"])
-            run = bool(index.attempt(aid))
-            return (run, run, bool(index.message(row["id"], row["conversation_id"], row["refs"],
-                                                  row["in_reply_to"])))
+            return (bool(index.attempt(aid)), bool(index.message(row["id"], row["conversation_id"], row["refs"],
+                                                                  row["in_reply_to"])))
 
     with store.read() as c:
         read_deps.sweep(c)
         assert c.execute("SELECT 1 FROM read_index WHERE key=?", ("a:" + aid,)).fetchall()
     for token, who in readers.items():
-        assert reads(who) == gate(who) == (True, True, True), token
+        assert reads(who) == gate(who) == (True, True), token
     with store.transaction() as c:
         c.execute("UPDATE conversations SET room_key=? WHERE id=?", (meeting_key, moved_room["id"]))
     for when in ("before a sweep", "after a sweep"):
         for token, who in readers.items():
             member = token in ("ben-test", "ops-live")
-            assert reads(who) == gate(who) == (member,) * 3, (when, token)
+            assert reads(who) == gate(who) == (member,) * 2, (when, token)
         with store.read() as c:
             read_deps.sweep(c)
 

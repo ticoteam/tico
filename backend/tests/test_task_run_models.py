@@ -13,6 +13,7 @@ from backend.store import H
 from backend.tests.test_api import api, assign, claim, get, headers, post, runner  # noqa: F401  (api is a fixture)
 from backend.tests.test_check_models import finish, heartbeat
 from backend.tests.test_task_models import ops_on_sonnet, set_task_model, task_turn
+from backend import bot_settings as BS
 
 HAIKU = {"model": "claude-haiku-5-5", "effort": "low", "harness": "claude"}
 HAIKU_RAN = {"model": "claude-haiku-5-5", "runtime": "claude", "harness": "claude", "effort": "low", "billing": "api"}
@@ -103,7 +104,7 @@ def test_a_tasks_model_changes_and_clears_and_its_history_says_so(api):
     assert cleared["run_model"] is None and get(api, "tasks/" + mine["id"])["run_model"] is None
     assert get(api, "bots/ops")["task_model"] is None
     with api.app.state.store.read() as c:
-        events = c.execute("SELECT old,new FROM task_events WHERE task_id=? AND field='run_model' ORDER BY rowid",
+        events = c.execute("SELECT old,new FROM history_events WHERE subject_type='task' AND subject_id=? AND kind='run_model' ORDER BY rowid",
                            (mine["id"],)).fetchall()
     assert [tuple(e) for e in events] == [("", "claude-haiku-5-5 (low)"), ("claude-haiku-5-5 (low)", "")]
 
@@ -132,7 +133,7 @@ def test_a_routine_step_stamps_its_model_on_the_task_its_run_opens(api):
     finish(api, machine, turn, HAIKU_RAN)
     assert get(api, "tasks/" + task_id)["run_model"]["model"] == "claude-haiku-5-5"
     with api.app.state.store.read() as c:
-        notes = c.execute("SELECT note FROM task_events WHERE task_id=? AND field='run_model'", (task_id,)).fetchall()
+        notes = c.execute("SELECT note FROM history_events WHERE subject_type='task' AND subject_id=? AND kind='run_model'", (task_id,)).fetchall()
     assert [n[0] for n in notes] == ["Set by routine step audit"]
     assert get(api, "bots/ops")["task_model"] is None
 
@@ -255,7 +256,7 @@ def test_a_task_handed_to_another_bot_loses_the_model_its_old_bot_was_given(api)
     post(api, "tasks/" + mine["id"], {"version": mine["version"], "owner": "finance"})
     assert get(api, "tasks/" + mine["id"])["run_model"] is None
     with api.app.state.store.read() as c:
-        events = c.execute("SELECT old,new FROM task_events WHERE task_id=? AND field='run_model' ORDER BY rowid",
+        events = c.execute("SELECT old,new FROM history_events WHERE subject_type='task' AND subject_id=? AND kind='run_model' ORDER BY rowid",
                            (mine["id"],)).fetchall()
     assert [tuple(e) for e in events] == [("", "claude-haiku-5-5 (low)"), ("claude-haiku-5-5 (low)", "")]
     turn = claim(api, machine, "finance")
@@ -280,8 +281,8 @@ def test_a_temporary_assignment_retired_with_its_task_takes_the_model_off_it(api
     mine = filed(api, "Tidy the changelog")
     with api.app.state.store.transaction() as c:
         c.execute("INSERT INTO bots(id,slug,display_name,state,created_at) VALUES('ops-a1','ops-a1','Ops A1','active',?)", (H.now(),))
-        c.execute("INSERT INTO bot_config(bot,config,owner_id) VALUES('ops-a1',?,'ana')",
-                  (json.dumps({"assignment_branch": True, "shared_from": "ops"}),))
+        c.execute("INSERT INTO bot_config(bot,owner_id) VALUES('ops-a1','ana')")
+        BS.write(c, 'ops-a1', {'assignment_branch': True, 'shared_from': 'ops'})
         c.execute("UPDATE tasks SET owner_id='bot:ops-a1',status='doing' WHERE id=?", (mine["id"],))
         haiku = task_run_models.stamped("claude-haiku-5-5", "low", "claude")
         task_run_models.set_choice(c, "human:ana", mine["id"], haiku)

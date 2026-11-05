@@ -32,6 +32,7 @@ from . import models as M
 from . import releases
 from . import recruit_rank as R
 from .store import Problem
+from . import bot_settings as BS
 
 CANDIDATES = 8
 CHART = "chart"                         # `description_by` for a chart model's text
@@ -749,10 +750,10 @@ def _follow_filled(c, who, seat_id, bot, now):
     from .settings_admin import SettingsAdmin, _set_parent
     for seat in c.execute("SELECT filled_by FROM seats WHERE reports_to=? AND closed_at IS NOT NULL AND filled_by<>''",
                           ("seat:" + seat_id,)).fetchall():
-        found = c.execute("SELECT reports_to,config FROM bot_config WHERE bot=?", (seat["filled_by"],)).fetchone()
+        found = c.execute("SELECT reports_to FROM bot_config WHERE bot=?", (seat["filled_by"],)).fetchone()
         if not found:
             continue
-        placed = (json.loads(found["config"] or "{}") or {}).get("placed_under")
+        placed = BS.read(c, seat["filled_by"]).get("placed_under")
         if placed is None or (found["reports_to"] or "") != placed:
             continue
         try:
@@ -770,7 +771,7 @@ def onboard(c, who, onboarding, row, card, slug, *, name, description, instructi
     and a cloud agent's add to a seat both land here, so they land the same way. Returns the setup task's id, if any."""
     from . import message_bots
     if card.get("session") == "task":
-        c.execute("UPDATE bot_config SET config=json_set(config,'$.session','task') WHERE bot=?", (slug,))
+        BS.update(c, slug, {"session": "task"})
     if row["team"]:
         c.execute("UPDATE bot_config SET team=? WHERE bot=?", (row["team"], slug))
         from .finance import actions as FA

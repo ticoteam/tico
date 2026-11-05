@@ -3,6 +3,7 @@
 // the Decide's answer from the hub's judge (a steady stand-in, no model), the note. Phone, then desktop.
 const assert = require('node:assert/strict');
 const {run, open, go, ok, automationNamed, sideways, shot, t} = require('./support/redesign-e2e.cjs');
+const promoInput = require('./fixtures/redesign-automation-promo.json');
 
 const enabled = async page => (await automationNamed(page, 'Inbox triage')).enabled;
 // The hub's answer, once the switch's write has landed (or after about three seconds).
@@ -86,7 +87,7 @@ run('redesign-e2e-automations', ['org', 'toured', 'automations'], async ({hub, b
   await page.locator('.au-card[data-open="trigger"]').waitFor();
   await page.locator('[data-more]').click();
   await page.locator('.au-menu [data-mi="run"]').click();
-  await box.fill(JSON.stringify({message: {from: 'promo@deals.example', subject: 'Sale', body: '50% off'}}));
+  await box.fill(JSON.stringify(promoInput));
   await page.locator('.au-ed [data-op="save"]').click();
   await page.waitForFunction(() => document.querySelectorAll('.au-rr').length === 2, null, {timeout: t(15000)});
   await page.locator('.au-rx .au-sl').first().waitFor();

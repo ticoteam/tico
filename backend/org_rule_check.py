@@ -69,6 +69,7 @@ import weakref
 from datetime import datetime, timedelta, timezone
 
 from clients import judge as J
+from . import bot_settings as BS
 from . import judge as B
 from . import org_rules as R
 from . import groups as G
@@ -1067,9 +1068,9 @@ def _bots_below(c, person):
     authors whose holds can be held for them. More than that is fine; `represented` settles each hold."""
     found, frontier, seen = [], [person], {person}
     while frontier and len(found) < BOTS_BELOW:
-        rows = c.execute("SELECT bot FROM bot_config WHERE reports_to IN (SELECT value FROM json_each(?)) OR "
-                         "(COALESCE(reports_to,'')='' AND json_valid(config) AND "
-                         "json_extract(config,'$.reports_to') IN (SELECT value FROM json_each(?)))",
+        rows = c.execute(f"SELECT bc.bot FROM bot_config bc {BS.JOIN} WHERE bc.reports_to IN (SELECT value FROM json_each(?)) OR "
+                         "(COALESCE(bc.reports_to,'')='' AND "
+                         "json_extract(s.extra,'$.reports_to') IN (SELECT value FROM json_each(?)))",
                          (json.dumps(frontier), json.dumps(frontier))).fetchall()
         frontier = [r[0] for r in rows if r[0] not in seen]
         seen.update(frontier)
@@ -1165,7 +1166,7 @@ def _finish_task(c, hold):
     left = c.execute("SELECT 1 FROM org_rule_holds WHERE task_id=? AND state='held' LIMIT 1", (tid,)).fetchone()
     task = H.task(c, tid)
     if not left and task and task["status"] not in ("done", "closed"):
-        H.task_close(c, H.KEEPER, tid, "Every hold on this task is decided.", quiet=True)
+        H.task_close(c, H.KEEPER, tid, "Every hold on this task is decided.", quiet=True, strict=False)
 
 
 def _decide(c, who, hold, state, event=""):
@@ -1600,7 +1601,7 @@ def stats(c, settings):
 
 
 def health_findings(c, settings):
-    """A high share of unchecked outputs in a day: the rules are not being enforced (backend/health_monitor.py)."""
+    """A high share of unchecked outputs in a day: the rules are not being enforced (backend/maintenance_health.py)."""
     try:
         if not on(c):
             return []

@@ -26,11 +26,11 @@ STEP_WORDS = {"filter": "Filter", "decide": "Decide", "llm": "LLM", "find": "Fin
 DONE_WORDS = {"archive": "Archived", "leave_for_you": "Left for you", "draft_reply": "Draft reply",
               "send_reply": "Replied", "create_task": "Task created", "label": "Labeled", "forward": "Forwarded",
               "wake_bot": "Bot woken", "note": "Noted", "post_update": "Update posted", "call_webhook": "Webhook called",
-              "assign": "Assigned"}
+              "assign": "Assigned", "unsubscribe": "Unsubscribed"}
 ACTION_WORDS = {"archive": "Archive", "leave_for_you": "Leave for you", "draft_reply": "Draft reply",
                 "send_reply": "Send reply", "create_task": "Create task", "label": "Label", "forward": "Forward",
                 "wake_bot": "Wake a bot", "note": "Note", "post_update": "Post update", "call_webhook": "Call a webhook",
-                "assign": "Assign"}
+                "assign": "Assign", "unsubscribe": "Unsubscribe"}
 
 
 def window(rng):

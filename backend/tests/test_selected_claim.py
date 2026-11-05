@@ -8,6 +8,7 @@ from backend.auth import Identity
 from backend.models import Claim
 from backend.store import H, encode
 from backend.tests.test_api import api, assign, claim, post, ready, runner  # noqa: F401
+from backend import bot_settings as BS
 
 
 def queued_fleet(api, machine, start, stop):
@@ -16,8 +17,8 @@ def queued_fleet(api, machine, start, stop):
         for i in range(start, stop):
             bot = f"queued-{i}"
             c.execute("INSERT INTO bots(id,slug,state,created_at) VALUES(?,?,'active',?)", (bot, bot, H.now()))
-            c.execute("INSERT INTO bot_config(bot,config,owner_id) VALUES(?,?,'ana')",
-                      (bot, encode({'name': bot, 'runtime': 'fake'})))
+            c.execute("INSERT INTO bot_config(bot,owner_id) VALUES(?,'ana')", (bot,))
+            BS.write(c, bot, {'name': bot, 'runtime': 'fake'})
             c.execute("INSERT INTO assignments VALUES(?,?,1,?,'human:ana')", (bot, machine['runner_id'], H.now()))
             H.say(c, 'human:ana', 'bot:' + bot, 'Synthetic unrelated work')
     ready(api, machine, ['ops', *(f'queued-{i}' for i in range(stop))])

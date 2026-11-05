@@ -7,6 +7,7 @@ import pytest
 from backend import check_models
 from backend.store import H, encode
 from backend.tests.test_api import api, assign, claim, get, post, runner  # noqa: F401  (api is a fixture)
+from backend import bot_settings as BS
 
 GROK = {"model": "grok-4.6", "runtime": "grok", "harness": "grok", "billing": "api"}
 
@@ -31,10 +32,10 @@ def parent_turn(api):
     """ops on Claude, working a person's task: its claimed turn."""
     company(api, "anthropic", "xai")
     with api.app.state.store.transaction() as c:
-        config = json.loads(c.execute("SELECT config FROM bot_config WHERE bot='ops'").fetchone()[0])
+        config = BS.read(c, 'ops')
         config.update(runtime="claude", harness="claude", model="claude-sonnet-5-5",
                       fallback={"harness": "codex", "model": "gpt-6.1-sol"})
-        c.execute("UPDATE bot_config SET config=? WHERE bot='ops'", (json.dumps(config),))
+        BS.write(c, 'ops', config)
     machine = runner(api)
     assign(api, machine, "ops")
     heartbeat(api, machine)
@@ -262,7 +263,7 @@ def test_a_check_moves_to_its_next_model_once_its_default_login_is_out_of_quota(
     with api.app.state.store.read() as c:
         assert "the check moved to grok" in H.status(c, "ops")["focus"]
         assert c.execute("SELECT count(*) FROM events WHERE action='attempt.check_moved'").fetchone()[0] == 1
-        event = c.execute("SELECT old,new,note FROM task_events WHERE task_id=? AND field='check_model' "
+        event = c.execute("SELECT old,new,note FROM history_events WHERE subject_type='task' AND subject_id=? AND kind='check_model' "
                           "AND old IS NOT NULL", (sub["id"],)).fetchone()
         assert (event["old"], event["new"]) == ("codex:gpt-6-luna", "grok:grok-4.6"), dict(event)
     shown = get(api, "tasks/" + sub["id"])
@@ -300,7 +301,7 @@ def test_with_no_next_check_model_the_check_keeps_its_hold(api, monkeypatch):
 
 @pytest.mark.parametrize("recovery", ["completed", "reset"])
 def test_a_moved_check_goes_back_to_its_first_model_once_that_login_works(api, monkeypatch, recovery):
-    from backend.tests.test_health_monitor import turn as finished_turn
+    from backend.tests.test_maintenance_health import turn as finished_turn
     machine, sub, check = codex_check(api)
     start = H.now()
     reset = H.shift(start, hours=3) if recovery == "reset" else None
@@ -326,7 +327,7 @@ def test_a_moved_check_goes_back_to_its_first_model_once_that_login_works(api, m
 
 
 def test_a_check_on_a_subscription_profile_does_not_move(api, monkeypatch):
-    from backend.tests.test_health_monitor import turn as finished_turn
+    from backend.tests.test_maintenance_health import turn as finished_turn
     machine, sub, check = codex_check(api)
     finished_turn(api, machine["runner_id"], {"outcome": "failed", "limited": True, "limit_resets_at": None,
                                               "profile_used": None, "check": "codex"}, 10)
@@ -341,7 +342,7 @@ def test_a_check_on_a_subscription_profile_does_not_move(api, monkeypatch):
 
 def moved_to_grok(api):
     """Two limits in a row on the computer's default Codex login: the check has moved to Grok."""
-    from backend.tests.test_health_monitor import turn as finished_turn
+    from backend.tests.test_maintenance_health import turn as finished_turn
     machine, sub, check = codex_check(api)
     finished_turn(api, machine["runner_id"], {"outcome": "failed", "limited": True, "limit_resets_at": None,
                                               "profile_used": None, "check": "codex"}, 5)
@@ -352,7 +353,7 @@ def moved_to_grok(api):
 
 
 def test_a_moved_check_tries_its_first_model_again_on_another_computer(api):
-    from backend.health_monitor import out_of_quota_logins
+    from backend.maintenance_health import out_of_quota_logins
     machine, sub = moved_to_grok(api)
     # The bot moves to a computer where Codex works and Grok is signed out; the first computer's login stays out.
     other = runner(api, label="Other Mac")
@@ -375,7 +376,7 @@ def test_a_check_skips_a_next_model_its_computer_cannot_run(api):
                               "check_model": "codex", "check_role": "review",
                               "relations": [{"task": parent["id"], "kind": "parent"}]}, turn["token"])
     finish(api, machine, turn)
-    from backend.tests.test_health_monitor import turn as finished_turn
+    from backend.tests.test_maintenance_health import turn as finished_turn
     finished_turn(api, machine["runner_id"], {"outcome": "failed", "limited": True, "limit_resets_at": None,
                                               "profile_used": None, "check": "codex"}, 5)
     check = claim(api, machine)
@@ -397,12 +398,12 @@ def limited_check(api):
 
 def check_held(api, check, hours=None):
     """The Health Monitor's check_limited findings, with the check's limited turn `hours` old."""
-    from backend import health_monitor
+    from backend import maintenance_health
     store = api.app.state.store
     with store.transaction() as c:
         if hours is not None:
             c.execute("UPDATE attempts SET finished_at=? WHERE id=?", (H.shift(H.now(), hours=-hours), check["id"]))
-        return [f for f in health_monitor.findings(c, store.settings) if f["check_id"] == "check_limited"]
+        return [f for f in maintenance_health.findings(c, store.settings) if f["check_id"] == "check_limited"]
 
 
 def queue_on(api, sub, sender, to="bot:ops", hours=0):
@@ -490,7 +491,7 @@ def test_a_held_check_handed_to_another_bot_is_its_ordinary_task_when_it_closes(
 def test_a_check_model_at_capacity_is_not_its_default_login_out_of_quota(api, monkeypatch):
     # Two "at capacity" refusals on the computer's default Codex login: a busy provider, so the check waits its two
     # minutes on Codex and Health never calls that login out of quota.
-    from backend import health_monitor
+    from backend import maintenance_health
     machine, sub, check = codex_check(api)
     start = H.now()
     notice = "Selected model is at capacity. Please try a different model."
@@ -504,5 +505,5 @@ def test_a_check_model_at_capacity_is_not_its_default_login_out_of_quota(api, mo
         check = claim(api, machine)
         assert check["task"]["id"] == sub["id"] and check["config"]["runtime"] == "codex"
     with api.app.state.store.read() as c:
-        assert health_monitor.out_of_quota_logins(c, api.app.state.store.settings) == []
+        assert maintenance_health.out_of_quota_logins(c, api.app.state.store.settings) == []
         assert "temporary model capacity on a check" in H.status(c, "ops")["focus"]

@@ -8,7 +8,7 @@ from datetime import datetime, timedelta, timezone
 import pytest
 import time_machine
 
-from backend import automations
+from backend import automations, mailbox_access
 from backend.store import H
 from backend.tests.test_api import api, assign, claim, get, headers, post, ready, runner  # noqa: F401
 from backend.tests.test_automation_api import patch
@@ -398,7 +398,7 @@ def test_a_turn_that_ends_after_its_run_was_dropped_mid_step_is_still_charged_to
     rid = queued(api, aid)
     hub(api).drain()
     run = run_row(api, rid)
-    priced = sql(api, "SELECT est_cost_usd FROM turns")[0]["est_cost_usd"]
+    priced = sql(api, "SELECT est_cost_usd FROM attempts")[0]["est_cost_usd"]
     assert priced > 0 and run["status"] == "skipped" and run["claimed_at"] is None
     assert run["cost"] == pytest.approx(priced) and run["state"]["cost"] == pytest.approx(priced)
     with api.app.state.store.read() as c:
@@ -428,7 +428,7 @@ def test_a_run_dropped_mid_step_whose_server_stopped_is_charged_its_turn_and_nev
     assert len(sql(api, "SELECT * FROM automation_turn_answers")) == 1
     automations.tick(api.app.state.store, datetime.now(timezone.utc) + timedelta(minutes=automations.STALE_MINUTES + 5))
     run = run_row(api, rid)
-    priced = sql(api, "SELECT est_cost_usd FROM turns")[0]["est_cost_usd"]
+    priced = sql(api, "SELECT est_cost_usd FROM attempts")[0]["est_cost_usd"]
     assert priced > 0 and run["status"] == "skipped" and run["claimed_at"] is None
     assert run["cost"] == pytest.approx(priced) and run["state"].get("resumes") is None
     assert sql(api, "SELECT * FROM automation_turn_answers") == [] and sql(api, "SELECT * FROM automation_holds") == []
@@ -552,6 +552,44 @@ def test_a_sample_the_filters_drop_is_dropped_not_run(api):
     seen = get(api, f"automations/{aid}/runs")
     assert seen["runs"] == [] and seen["daily"][0]["dropped"] == 1
     assert post(api, f"automations/{aid}/run", {"input": {"mail": {"from": "ana@acme.example"}}})["run"]["id"]
+
+
+@pytest.mark.parametrize("mailbox", [None, "help@acme.example"])
+def test_a_manual_mail_sample_inherits_the_inbox_and_keeps_an_explicit_mailbox(api, mailbox):
+    if mailbox:
+        with api.app.state.store.transaction() as c:
+            mailbox_access.ensure_mailbox(c, mailbox, kind="shared")
+    aid = make(api, [{"id": "sort", "type": "filter", "rules": [
+        {"when": [{"field": "message.from", "op": "contains", "value": "promo"}],
+         "then": [{"do": "archive"}], "stop": True}]}],
+        trigger={"type": "message", "inbox": "ana@acme.example"})
+    message = {"from": "promo@deals.example", "subject": "Sale", "body": "50% off"}
+    if mailbox:
+        message["mailbox"] = mailbox
+    run = post(api, f"automations/{aid}/run", {"input": {"message": message}})["run"]
+    expected = mailbox or "ana@acme.example"
+    assert run_row(api, run["id"])["state"]["payload"]["message"] == {**message, "mailbox": expected}
+    assert run["status"] == "waiting" and run["steps"][0]["status"] == "waiting"
+    assert sql(api, "SELECT mailbox, state FROM automation_mail_actions WHERE run_id=?", (run["id"],)) == [
+        {"mailbox": expected, "state": "queued"}]
+
+
+def test_an_inherited_sample_mailbox_still_requires_the_owners_access(api):
+    with api.app.state.store.transaction() as c:
+        box = mailbox_access.ensure_mailbox(c, "ana@acme.example")
+        grant = mailbox_access.grant(c, "person:ana", box["id"], "bot", "ops", "read")
+    aid = make(api, [{"id": "sort", "type": "filter", "rules": [
+        {"when": [], "then": [{"do": "archive"}]}]}],
+        trigger={"type": "message", "inbox": "ana@acme.example"}, owner="bot:ops")
+    sample = {"input": {"message": {"subject": "Sale"}}}
+    run = post(api, f"automations/{aid}/run", sample)["run"]
+    action = run["steps"][0]["outputs"]["actions"][0]
+    assert run["status"] == "failed" and action["ok"] is False
+    assert "may not organize ana@acme.example" in action["detail"]
+    with api.app.state.store.transaction() as c:
+        mailbox_access.revoke(c, "person:ana", box["id"], grant["id"])
+    post(api, f"automations/{aid}/run", sample, expected=403)
+    assert len(get(api, f"automations/{aid}/runs")["runs"]) == 1
 
 
 # ---------------------------------------------------------------------------------------------- the find watermark

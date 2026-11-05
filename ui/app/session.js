@@ -54,6 +54,7 @@ function sessionProbe() {
 // otherwise the banner says so and waits for the person.
 function signedOut(to) {
   if (typeof clearNativeVisualOrigin === 'function') void clearNativeVisualOrigin();
+  if (typeof bootSnapDrop === 'function') void bootSnapDrop();      // no screen of theirs is shown again here
   const login = loginPage(to);
   // The demo has no sign-in to ask for: its first page visit is the sign-in, and its secret is new with every copy
   // (deploy/demo/tico-demo). A tab left open across a new copy loads again, at most once a minute.

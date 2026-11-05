@@ -20,8 +20,9 @@ signed-in person as they commit, filtered to what that person may read:
   `needs=changes` is sent its `count`, `version`, and the ids `changed` and `removed` since `base` instead (both
   null when more than NEEDS_CHANGES_MAX moved: read the list whole), and reads only those items
   (`GET /api/v2/needs-you?ids=`). The stream keeps the marks of the list it last described, from its start; a page
-  whose held version is not `base` reads the list whole. Without `needs=changes` a page gets the whole list, as
-  before, so an older page keeps working.
+  whose held version is not `base` reads the list whole. Folded task ids are sent, whole, only when their set
+  changes, and share NEEDS_CHANGES_MAX with `changed` and `removed`: past it, null reads the list whole.
+  Without `needs=changes` a page gets the whole list, as before, so an older page keeps working.
 
 `after` (or the browser's `Last-Event-ID`) resumes from the last change number seen, so a
 reconnect misses nothing; a client further behind than the log keeps (24 h), or more than BACKLOG_MAX changes behind
@@ -53,6 +54,7 @@ from concurrent.futures import Future, ThreadPoolExecutor
 from fastapi import Request
 from fastapi.responses import StreamingResponse
 
+from . import bot_settings as BS
 from . import runs
 from . import read_cache
 from . import visuals as V
@@ -163,6 +165,10 @@ _PARTIES = ("owner_id", "requester_id", "waiting_on", "guest")
 # (trigger name, event, table, WHEN or None, body). One list, so a new source is one more line. A table that does not exist is
 # skipped, and a trigger whose definition changed is replaced at the next start.
 TRIGGERS = [
+    ("changes_meeting_task_links_insert", "INSERT", "meeting_task_links", None,
+     _row("tasks", "meetings", "NEW.task_id", ref="NEW.meeting_id")),
+    ("changes_meeting_task_links_delete", "DELETE", "meeting_task_links", None,
+     _row("tasks", "meetings", "OLD.task_id", ref="OLD.meeting_id")),
     ("changes_tasks_insert", "INSERT", "tasks", None,
      _row("tasks", "insert", "NEW.id") + _needs("task", *("NEW." + p for p in _PARTIES))),
     ("changes_tasks_update", "UPDATE", "tasks", None,
@@ -196,6 +202,10 @@ TRIGGERS = [
      _fan("tags", "SELECT task_id AS id FROM task_tags WHERE tag_id=NEW.id")),
     ("changes_task_assets_insert", "INSERT", "task_assets", None, _row("tasks", "files", "NEW.task_id")),
     ("changes_task_assets_delete", "DELETE", "task_assets", None, _row("tasks", "files", "OLD.task_id")),
+    ("changes_pins_insert", "INSERT", "pins", None,
+     _row("tasks", "files", "substr(NEW.place,6)", where="NEW.place LIKE 'task:%'")),
+    ("changes_pins_delete", "DELETE", "pins", None,
+     _row("tasks", "files", "substr(OLD.place,6)", where="OLD.place LIKE 'task:%'")),
     ("changes_bot_files_insert", "INSERT", "bot_files", "NEW.task_id IS NOT NULL", _row("tasks", "files", "NEW.task_id")),
     ("changes_bot_files_update", "UPDATE", "bot_files",
      f"(NEW.task_id IS NOT NULL OR OLD.task_id IS NOT NULL) AND ({_changed('task_id', 'archived', 'current_version', 'mime', 'locator')})",
@@ -355,8 +365,12 @@ RUNNER_TRIGGERS = [
      + _tell("work", "SELECT NEW.runner_id AS rid", "NEW.bot")),
     ("changes_runner_assignments_delete", "DELETE", "assignments", None,
      _tell("assignments", "SELECT OLD.runner_id AS rid", "OLD.bot")),
-    ("changes_runner_bot_config_update", "UPDATE", "bot_config", _changed("config", "owner_id", "team", "onboarding_state"),
+    ("changes_runner_bot_config_update", "UPDATE", "bot_config", _changed("owner_id", "team", "onboarding_state"),
      _bot_runner("assignments", "NEW.bot")),
+    # Its declared settings (backend/bot_settings.py): any setting, not the row's write time.
+    ("changes_runner_bot_settings_insert", "INSERT", "bot_settings", None, _bot_runner("assignments", "NEW.bot_id")),
+    ("changes_runner_bot_settings_update", "UPDATE", "bot_settings", _changed(*BS.COLUMNS, "extra"),
+     _bot_runner("assignments", "NEW.bot_id")),
     # A bot's selected connection changes its assignment and readiness even while its old login is signed out.
     ("changes_runner_subscription_insert", "INSERT", "subscription_assignments", "NEW.scope='bot'",
      _bot_runner("assignments", "NEW.target") + _bot_runner("work", "NEW.target")),
@@ -430,7 +444,68 @@ _ATTENTION_WHERE = ("NEW.thread_id IS NOT NULL AND NEW.recipient LIKE 'human:%' 
 # A delivery that leaves the needs-you set (pending to read, say) is a change to that set too.
 _ATTENTION_CHANGE_WHERE = ("NEW.thread_id IS NOT NULL AND NEW.recipient LIKE 'human:%' "
                            "AND (NEW.state IN ('pending','delivered','capped') OR OLD.state IN ('pending','delivered','capped'))")
+# `bot_status` (backend/thread_bot_status.py): the status rows of a root may have moved. Written for the root of an open
+# wake a person's message gave a bot, of a run, of a bot's post where it had one, and of every open wake of a bot whose
+# claim refusal, state or pause moved. A run's step writes one only when the root had none in the last five seconds.
+_OPEN_WAKE = ("recipient LIKE 'bot:%' AND mode IN ('queue','steer') AND state IN ('pending','delivered','capped') "
+              "AND cause='human'")           # word for word migration 0068's message_deliveries_open_bots
+_MESSAGE_ROOT = "(SELECT COALESCE(t.root_id,t.id) FROM messages m JOIN conversations t ON t.id=m.conversation_id WHERE m.id={mid})"
+_RUN_ROOT = ("(SELECT COALESCE(t.root_id,t.id) FROM attempts a JOIN jobs j ON j.id=a.job_id JOIN messages m "
+             "ON m.id=j.message_id JOIN conversations t ON t.id=m.conversation_id WHERE a.id={aid})")
+_STATUS_QUIET = ("NOT EXISTS (SELECT 1 FROM changes WHERE topic='threads' AND kind='bot_status' AND subject_id=r "
+                 "AND created_at>strftime('%Y-%m-%dT%H:%M:%fZ','now','-5 seconds'))")
+
+
+def _bot_status(root, where=None):
+    """A `bot_status` row for the root `root` (an SQL expression), when it is a thread and `where` (on `r`) holds."""
+    return (f"INSERT INTO changes(topic,kind,subject_id,conversation_id,created_at) SELECT 'threads','bot_status',r,r,"
+            f"{_NOW} FROM (SELECT {root} AS r) WHERE r IS NOT NULL" + (f" AND {where}" if where else "") + ";")
+
+
+def _bot_status_roots(recipient):
+    """A `bot_status` row for each root where `recipient` (a bot actor, as SQL) has an open wake, fifty at most."""
+    return (f"INSERT INTO changes(topic,kind,subject_id,conversation_id,created_at) SELECT 'threads','bot_status',"
+            f"root_id,root_id,{_NOW} FROM (SELECT DISTINCT root_id FROM message_deliveries WHERE {_OPEN_WAKE} "
+            f"AND recipient={recipient} AND root_id IS NOT NULL LIMIT 50);")
+
+
 THREAD_TRIGGERS = [
+    ("changes_threads_bot_status_deliveries_insert", "INSERT", "message_deliveries",
+     "NEW.recipient LIKE 'bot:%' AND NEW.mode IN ('queue','steer') AND NEW.cause='human'",
+     _bot_status("NEW.root_id")),
+    ("changes_threads_bot_status_deliveries_update", "UPDATE", "message_deliveries",
+     f"NEW.recipient LIKE 'bot:%' AND NEW.cause='human' AND ({_changed('state', 'mode')}) "
+     "AND (NEW.mode IN ('queue','steer') OR OLD.mode IN ('queue','steer'))",
+     _bot_status("NEW.root_id")),
+    ("changes_threads_bot_status_posts", "INSERT", "messages",
+     f"NEW.sender_id LIKE 'bot:%' AND {_NOT_CARRIER}",
+     _bot_status(_MESSAGE_ROOT.format(mid="NEW.id"),
+                 f"EXISTS (SELECT 1 FROM message_deliveries WHERE root_id=r AND {_OPEN_WAKE} AND recipient=NEW.sender_id)")),
+    ("changes_threads_bot_status_attempts_insert", "INSERT", "attempts", None,
+     _bot_status(_RUN_ROOT.format(aid="NEW.id"))),
+    ("changes_threads_bot_status_attempts_update", "UPDATE", "attempts", _changed("state"),
+     _bot_status(_RUN_ROOT.format(aid="NEW.id"))),
+    ("changes_threads_bot_status_jobs", "UPDATE", "jobs", _changed("state"),
+     _bot_status(_MESSAGE_ROOT.format(mid="NEW.message_id"))),
+    # A thought is a step too: it moves the chat's "Thinking" line, so it wakes the status like a tool or a message.
+    ("changes_threads_bot_status_steps", "INSERT", "attempt_events",
+     "NEW.kind IN ('tool','message') OR (NEW.kind='delta' AND json_extract(NEW.payload,'$.delta_kind')='thought')",
+     _bot_status(_RUN_ROOT.format(aid="NEW.attempt_id"), _STATUS_QUIET)),
+    ("changes_threads_bot_status_refusals_insert", "INSERT", "registry_metadata", "NEW.key LIKE 'queue-refusal:%'",
+     _bot_status_roots("'bot:'||substr(NEW.key,15)")),
+    ("changes_threads_bot_status_refusals_update", "UPDATE", "registry_metadata",
+     "NEW.key LIKE 'queue-refusal:%' AND json_extract(CASE WHEN json_valid(OLD.value) THEN OLD.value END,'$.reason') "
+     "IS NOT json_extract(CASE WHEN json_valid(NEW.value) THEN NEW.value END,'$.reason')",
+     _bot_status_roots("'bot:'||substr(NEW.key,15)")),
+    ("changes_threads_bot_status_refusals_delete", "DELETE", "registry_metadata", "OLD.key LIKE 'queue-refusal:%'",
+     _bot_status_roots("'bot:'||substr(OLD.key,15)")),
+    ("changes_threads_bot_status_bots", "UPDATE", "bots", _changed("state"), _bot_status_roots("'bot:'||NEW.id")),
+    ("changes_threads_bot_status_control", "UPDATE", "bot_control", _changed("draining"),
+     _bot_status_roots("'bot:'||NEW.bot")),
+    ("changes_threads_routed", "INSERT", "message_routes", None,
+     _row("threads", "routed", "NEW.thread_id", ref="NEW.message_id", conversation="NEW.thread_id")),
+    ("changes_threads_routed_update", "UPDATE", "message_routes", _changed("bot_ids"),
+     _row("threads", "routed", "NEW.thread_id", ref="NEW.message_id", conversation="NEW.thread_id")),
     ("changes_threads_insert", "INSERT", "conversations", None,
      _row("threads", "created", "NEW.id", conversation="NEW.id", where="NEW.parent_id IS NULL")
      + _row("threads", "sub_thread", "NEW.id", conversation="NEW.id", where="NEW.parent_id IS NOT NULL")),
@@ -508,6 +583,16 @@ NEEDS = {
     "changes_threads_pinned": ("conversations.pinned_for_everyone_at",),
     "changes_threads_update": ("conversations.archived_at", "conversations.audience",
                                "conversations.audience_group_id"),
+    "changes_threads_bot_status_posts": ("message_deliveries", "conversations.root_id"),
+    "changes_threads_bot_status_attempts_insert": ("jobs", "messages", "conversations.root_id"),
+    "changes_threads_bot_status_attempts_update": ("jobs", "messages", "conversations.root_id"),
+    "changes_threads_bot_status_jobs": ("messages", "conversations.root_id"),
+    "changes_threads_bot_status_steps": ("attempts", "jobs", "messages", "conversations.root_id"),
+    "changes_threads_bot_status_refusals_insert": ("message_deliveries",),
+    "changes_threads_bot_status_refusals_update": ("message_deliveries",),
+    "changes_threads_bot_status_refusals_delete": ("message_deliveries",),
+    "changes_threads_bot_status_bots": ("message_deliveries",),
+    "changes_threads_bot_status_control": ("message_deliveries", "bot_control.draining"),
 }
 # #118's first cut, replaced by `changes`.
 _RETIRED = ["task_changes_insert", "task_changes_update", "task_changes_delete",
@@ -1059,14 +1144,20 @@ class _Viewer:
 
 
 def _tasks(view, rows, task_views, tasks=(), parties=()):
+    from . import meeting_task_links, task_reads
     c, who = view.c, view.who
+    rows, meeting_links = meeting_task_links.event_changes(c, who, rows)
     # A change to more tasks than one event each is worth (FAN_CAP): one `bulk` event, read lists in full.
     bulk = [row for row in rows if row["kind"] == "bulk"]
     out = [(bulk[-1], {"bulk": True})] if bulk else []
-    last = {}
+    last, kinds, public_before = {}, {}, {}
     for row in rows:
         if row["kind"] != "bulk":
             last[row["subject_id"]] = row
+            kinds.setdefault(row["subject_id"], set()).add(row["kind"])
+            was = H._json(row["ref"], None) if row["kind"] in ("update", "delete") else None
+            if isinstance(was, list) and len(was) >= 3 and not was[2]:
+                public_before.setdefault(row["subject_id"], []).append(row["ref"])
     ids = list(last)
     if not ids:
         return out
@@ -1074,7 +1165,7 @@ def _tasks(view, rows, task_views, tasks=(), parties=()):
     unreadable = {slug for slug, level in view.bots().items() if not level["read"]} if who.role == "human" else None
     visible_sql = view.auth.task_sql(c, who, unreadable=unreadable)
     marks = ",".join("?" * len(ids))
-    found = H._rows(c.execute(f"SELECT * FROM tasks WHERE id IN ({marks}) AND ({visible_sql})", ids))
+    found = H._rows(c.execute(f"SELECT * FROM {H.TASKS} tasks WHERE id IN ({marks}) AND ({visible_sql})", ids))
     if tasks or parties:
         # Before each task is built for the viewer: the parties it has now, or had before a change in this batch moved
         # it (`ref`, on that change's row, which a later row of the same task may follow).
@@ -1093,13 +1184,24 @@ def _tasks(view, rows, task_views, tasks=(), parties=()):
     views = {item["id"]: item for item in task_views(found, c, who, visible_sql)}
     present = {r[0] for r in c.execute(f"SELECT id FROM tasks WHERE id IN ({marks})", ids)}
     for task_id, row in last.items():
-        entry = {"id": task_id}
+        entry = {"id": task_id, "kind": row["kind"], "kinds": sorted(kinds[task_id])}
         if task_id in views:
             entry["task"] = views[task_id]
+            if task_id in meeting_links:
+                entry["meeting_links"] = list(meeting_links[task_id].values())
         elif task_id not in present and _trashed_visible(c, who, task_id):
+            entry["gone"] = True
+        # A formerly public row can be removed; revoked private work stays completely silent.
+        elif any(task_reads._could_read(c, visible_sql, task_id, ref) for ref in public_before.get(task_id, ())):
             entry["gone"] = True
         else:
             continue
+        if entry.get("gone"):
+            ordinary = [r for r in rows if r["subject_id"] == task_id and r["kind"] != "meetings"]
+            if not ordinary:
+                continue
+            row = ordinary[-1]
+            entry.update(kind=row["kind"], kinds=sorted({r["kind"] for r in ordinary}))
         out.append((row, entry))
     return out
 
@@ -1258,7 +1360,7 @@ def _threads(view, rows):
         if row["kind"] == "pinned" and row["ref"] and row["ref"] != view.who.actor:
             continue                # one reader's own pin; a pin for everyone has no `ref`
         # Reactions are per message: one event for each message whose reactions moved.
-        last[(row["subject_id"], row["kind"], row["ref"] if row["kind"] == "reactions" else None)] = row
+        last[(row["subject_id"], row["kind"], row["ref"] if row["kind"] in ("reactions", "routed") else None)] = row
         if row["kind"] == "activity" and row["ref"]:
             # Every message one thread's activity rows name, in order: the event stands for all of them.
             activity.setdefault(row["subject_id"], {})[row["ref"]] = None
@@ -1306,6 +1408,21 @@ def _threads(view, rows):
             # a migrated Home's old history, whose row nothing new may move.
             if threads.legacy_reader_only(view.c, view.reader, found):
                 continue
+        elif kind == "bot_status":
+            # The root's status rows as this reader reads them (backend/thread_bot_status.py), read for this one root;
+            # nothing to one who reads only a migrated Home's old history.
+            from . import thread_bot_status
+            root = found if not found.get("root_id") or found["root_id"] == tid else threads.thread_row(view.c, found["root_id"])
+            if root is None or threads.legacy_reader_only(view.c, view.reader, root):
+                continue
+            entry["thread_id"] = entry["root_id"]
+            entry["bots"] = thread_bot_status.status(view.c, view.reader, found)
+        elif kind == "routed":
+            message = H.message(view.c, ref) if ref else None
+            if not message or not threads.message_readable(view.c, view.reader, message, thread_checked=True):
+                continue
+            entry["message_id"] = ref
+            entry["routed"] = threads.routed(view.c, [ref]).get(ref)
         elif kind == "capped":
             entry["capped"] = view.c.execute("SELECT COUNT(*) FROM message_deliveries WHERE root_id=? AND state='capped'",
                                              (tid,)).fetchone()[0]
@@ -1433,17 +1550,20 @@ NEEDS_CHANGES_MAX = 100   # ids named in one `needs` event; more than this reads
 
 def needs_baseline(c, auth, who, task_view):
     """What a `needs=changes` stream describes its first change against: the list's marks as the stream starts."""
-    from .views import needs_items, needs_marks
-    marks, version = needs_marks(needs_items(c, auth, who, task_view))
-    return {"marks": marks, "version": version}
+    from .views import needs_folded_ids, needs_items, needs_marks
+    items = needs_items(c, auth, who, task_view)
+    marks, version = needs_marks(items)
+    return {"marks": marks, "version": version, "folded_task_ids": needs_folded_ids(items)}
 
 
 def _needs_list(view, rows, task_view, held=None):
-    from .views import needs_bots, needs_items, needs_marks, went_away
+    from .views import needs_bots, needs_folded_ids, needs_items, needs_kinds, needs_marks, went_away
     items = needs_items(view.c, view.auth, view.who, task_view)
+    folded = needs_folded_ids(items)
     away = went_away(view.c, view.who.actor)
     if held is None:
-        return [(rows[-1], {"count": len(items), "items": items, "went_away": away})]
+        return [(rows[-1], {"count": len(items), "items": items, "went_away": away,
+                            "folded_task_ids": folded})]
     marks, version = needs_marks(items)
     before = held.get("marks") or {}
     changed = [k for k, mark in marks.items() if before.get(k) != mark]
@@ -1451,8 +1571,14 @@ def _needs_list(view, rows, task_view, held=None):
     many = len(changed) + len(removed) > NEEDS_CHANGES_MAX
     entry = {"count": len(items), "version": version, "base": held.get("version"),
              "changed": None if many else changed, "removed": None if many else removed, "went_away": away,
-             "bots": needs_bots(items, view.who.actor)}     # each bot's count, for a page that holds only some items
-    held.update(marks=marks, version=version)
+             "bots": needs_bots(items, view.who.actor), "by_kind": needs_kinds(items)}   # whole-list facts, even on a page
+    before_folded = held.get("folded_task_ids") or []
+    if folded != before_folded:
+        # The set is sent whole, and it shares one cap with the changed and removed ids: together they could pass the
+        # live event's budget. Past it, null reads the list whole.
+        named = 0 if many else len(changed) + len(removed)
+        entry["folded_task_ids"] = None if many or named + len(folded) > NEEDS_CHANGES_MAX else folded
+    held.update(marks=marks, version=version, folded_task_ids=folded)
     return [(rows[-1], entry)]
 
 

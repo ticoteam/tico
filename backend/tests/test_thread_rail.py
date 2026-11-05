@@ -279,6 +279,48 @@ def test_the_sidebar_counts_unread_in_each_one_person_dm(api):
     assert first["person_dms"] == {"human:ana": 2} and "bot_dms" in first
 
 
+@pytest.mark.parametrize("read_list", [thread_rail.rail, threads.sidebar])
+def test_a_list_summarizes_its_roots_and_one_person_dms_in_one_statement(api, read_list):
+    root = new_thread(api)
+    say(api, root["id"], "Budget is ready")
+    dm = group_dm(api, ["human:ben"], "Lunch")
+    anchor = say(api, dm["id"], "Lunch?")
+    read_up(api, dm["id"], "ben-test")
+    reply = say(api, dm["id"], "Noon works", parent_message_id=anchor["id"])
+    seen = []
+    with api.app.state.store.read_transaction() as c:
+        v = threads.viewer(api.app.state.auth, who(api, "ben-test"))
+        c.set_trace_callback(seen.append)
+        try:
+            result = read_list(c, v)
+        finally:
+            c.set_trace_callback(None)
+    row = next(r for r in result["threads"] if r["id"] == root["id"])
+    assert row["me"]["unread"] == 1
+    counts = result["dms"] if read_list is thread_rail.rail else result["person_dms"]
+    assert counts == {"human:ana": 1} and reply["thread_id"] != dm["id"]
+    summaries = [q for q in seen if "AS active, COUNT(m.seq)" in q or q.startswith("SELECT s.root_id AS root")]
+    assert len(summaries) == 1, summaries
+
+
+def test_subtree_unread_counts_a_delivery_in_any_state_once_and_leaves_out_bot_history(api):
+    root = new_thread(api, members=("human:ben", "bot:ops"))
+    human = post_as(api, root["id"], "human:ana", "@ben please check.", to_actor="human:ben")
+    bot = post_as(api, root["id"], "bot:ops", "Numbers are ready", to_actor="human:ben")
+    post_as(api, root["id"], "bot:ops", "Indexing finished")
+    post_as(api, root["id"], "human:ana", "Imported note", refs={"import": "history"})
+    with api.app.state.store.transaction() as c:
+        c.execute("UPDATE message_deliveries SET state='moot' WHERE message_id=? AND recipient='human:ben'",
+                  (bot["id"],))
+    with api.app.state.store.read_transaction() as c:
+        v = threads.viewer(api.app.state.auth, who(api, "ben-test"))
+        summary = threads.subtree_summaries(c, v, [root["id"]])[root["id"]]
+        assert summary["unread"] == 2 and summary["new_at"] is None
+        assert thread_rail._readable_new(c, v, [root["id"]]) == {root["id"]: 2}
+        assert c.execute("SELECT COUNT(*) FROM message_deliveries WHERE message_id=? AND recipient='human:ben'",
+                         (human["id"],)).fetchone()[0] == 1  # the human half must not count its delivery again
+
+
 def test_a_pin_event_goes_to_its_reader_and_a_pin_for_everyone_to_everyone_who_reads_it(api):
     thread = new_thread(api, members=("human:ben", "human:cara"))
     hidden = new_thread(api, title="Hidden", members=())

@@ -43,6 +43,7 @@ from fastapi import Request, Response
 from . import hubdb as H
 from .batch_work import isolated
 from .store import Problem
+from . import bot_settings as BS
 
 PATH = "/api/v2/github/webhook"   # under /api/v2: the runner hostname routes only that prefix
 PR_LINK = re.compile(r"^https://github\.com/([\w.-]+)/([\w.-]+)/pull/(\d+)/?$", re.IGNORECASE)
@@ -125,7 +126,7 @@ def _preset_owner(c, task):
     owner = str(task.get("owner_id") or "")
     if not owner.startswith("bot:"):
         return False
-    row = c.execute("SELECT config FROM bot_config WHERE bot=?", (owner[4:],)).fetchone()
+    row = c.execute(BS.ONE_SQL, (owner[4:],)).fetchone()
     return wake_presets.preset_of(H._json(row[0], {}) if row else {}) != wake_presets.CURRENT
 
 
@@ -409,7 +410,7 @@ def _own_comment(c, task, payload, key, detail):
     author = author or str(detail.get("author_login") or "").lower()
     head_login = str(detail.get("head_login") or "").lower()
     app = c.execute("SELECT slug FROM github_app LIMIT 1").fetchone()
-    config = c.execute("SELECT config FROM bot_config WHERE bot=?", (H.actor_id(task["owner_id"]),)).fetchone()
+    config = c.execute(BS.ONE_SQL, (H.actor_id(task["owner_id"]),)).fetchone()
     bot_login = (H._json(config[0], {}) or {}).get("github_login", "") if config else ""
     via_app = (payload.get(key) or {}).get("performed_via_github_app") or {}
     return (app and str(via_app.get("slug") or "").lower() == str(app[0]).lower()
@@ -424,7 +425,7 @@ def by_person(c, payload, key):
     login = str((obj.get("user") or {}).get("login") or "").lower()
     if not login or login.endswith("[bot]") or obj.get("performed_via_github_app"):
         return False
-    return not c.execute("SELECT 1 FROM bot_config WHERE lower(json_extract(config,'$.github_login'))=? LIMIT 1",
+    return not c.execute(f"SELECT 1 FROM bot_config bc {BS.JOIN} WHERE lower(s.github_login)=? LIMIT 1",
                          (login,)).fetchone()
 
 

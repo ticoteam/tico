@@ -78,7 +78,7 @@ def test_a_task_the_filing_turn_finished_starts_no_turn(api):
     complete(api, machine, active)
     assert claim(api, machine) is None
     with api.app.state.store.read() as c:
-        assert c.execute("SELECT count(*) FROM turns WHERE task_id=?", (order["id"],)).fetchone()[0] == 0
+        assert c.execute("SELECT count(*) FROM attempts WHERE task_id=?", (order["id"],)).fetchone()[0] == 0
         assert c.execute("SELECT count(*) FROM events WHERE action='job.suppress' AND json_extract(detail,"
                          "'$.task_id')=?", (order["id"],)).fetchone()[0] == 1
 
@@ -227,4 +227,4 @@ def test_a_task_the_filing_turn_left_waiting_starts_no_turn(api):
     complete(api, machine, active)
     assert claim(api, machine) is None
     with api.app.state.store.read() as c:
-        assert c.execute("SELECT count(*) FROM turns WHERE task_id=?", (order["id"],)).fetchone()[0] == 0
+        assert c.execute("SELECT count(*) FROM attempts WHERE task_id=?", (order["id"],)).fetchone()[0] == 0

@@ -51,6 +51,9 @@ pub struct Context {
     pub paused_windows: Vec<(u64, Option<u64>)>,
     /// Discard is durable before the request, so recovery cannot accidentally file it.
     pub live_discarded: bool,
+    /// Kept on this computer after a live share: Tico ended the meeting and removed what was said,
+    /// so it may be saved to Tico later as a meeting recorded here.
+    pub live_removed: bool,
     pub locally_paused: bool,
     pub legacy_import_complete: bool,
     pub finalize_payload: Option<Value>,

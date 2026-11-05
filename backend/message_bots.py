@@ -4,7 +4,8 @@ The Inbox Manager template only writes `Mailbox: <email>` into the bot's instruc
 computer for a token is the roster: the person's `inbox_bot` names the bot, and the bot's `gmail` tool names the
 address (routines.token_mailboxes). `link` writes both wherever a message bot is made (Settings' add from template,
 the team builder, BotOps registering one for the person who asked), and `backfill` does it once at start for the
-bots made before that, when there is no doubt whose they are.
+bots made before that, when there is no doubt whose they are. Either gives the bot a grant on the mailbox
+(backend/mailbox_access.py), so only for a mailbox the asker may grant: their own email, or any for an owner or admin.
 
 Where the mailbox is written varies: a `Mailbox:` line, the `gmail` tool in the stored config, the same tool as the
 bot's computer reports it from bot.yaml (BotOps writes it there), or plain words in the instructions ("for my mailbox
@@ -19,6 +20,7 @@ from . import access as Access
 from . import bot_access as BA
 from . import routines
 from .store import H, P, Problem, readiness_document
+from . import bot_settings as BS
 
 TEMPLATES = frozenset({"inbox"})
 LINE = re.compile(r"^Mailbox:[ \t]*(\S+@\S+)[ \t]*$", re.M)
@@ -75,7 +77,7 @@ def owner_of(c, bot, roster, requester=None):
 
 
 def _config(c, bot):
-    row = c.execute("SELECT config FROM bot_config WHERE bot=?", (bot,)).fetchone()
+    row = c.execute(BS.ONE_SQL, (bot,)).fetchone()
     try:
         return json.loads(row["config"] or "{}") if row else {}
     except ValueError:
@@ -105,6 +107,21 @@ def _link(c, actor, roster, bot, person, mailbox):
     return person["id"]
 
 
+def may_link(c, actor, person, mailbox):
+    """Linking gives the bot a grant on `mailbox` (backend/mailbox_access.py message_bot_changed), so only whoever may
+    give one: an owner or admin, or the person themselves for their own email. A member who makes a bot naming someone
+    else's mailbox, or a shared inbox, gets no link; an admin links it in People or Mailboxes."""
+    who = str(actor or "")
+    if not who.startswith("human:"):
+        return False
+    pid = H.actor_id(who)
+    if pid == person["id"] and str(mailbox or "").strip().lower() == str(person.get("email") or "").strip().lower():
+        return True
+    human = H.human(c, pid)
+    email = str((human or {}).get("email") or "").strip().lower()
+    return bool(email) and email in set(Access.owner_and_admin_emails(c))
+
+
 def link(c, actor, bot, requester=None, instructions=None):
     """A message bot was just made for a person: link it. The person is whoever's roster email is the mailbox the bot
     reads, else the requester (who asked for it), else its owner. The mailbox is where `mailbox_of` finds one, else the
@@ -118,6 +135,8 @@ def link(c, actor, bot, requester=None, instructions=None):
     if not person:
         return None
     mailbox = declared or str(person.get("email") or "").strip().lower()
+    if not may_link(c, actor, person, mailbox):
+        return None
     return _link(c, actor, roster, bot, person, mailbox)
 
 
@@ -143,7 +162,10 @@ def backfill(c, actor="keeper"):
             continue
         person = (P.person_by_email(mailbox, roster) or owner_of(c, bot, roster)
                   or (people[0] if len(people) == 1 else None))
-        if person and not person.get("inbox_bot"):
+        # Only when whoever made the bot may give that grant (their own mailbox; any, for an admin).
+        maker = owner_of(c, bot, roster)
+        if (person and not person.get("inbox_bot") and maker
+                and may_link(c, H.human_actor(maker["id"]), person, mailbox)):
             wanted.append((bot, person, mailbox))
     claimed = [p["id"] for _, p, _ in wanted]
     linked = []

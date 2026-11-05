@@ -84,6 +84,11 @@ def install_id_in(c):
     return record["install_id"]
 
 
+def install_id_if_set(c):
+    """This install's random ID when it has one, read only: `install_id_in` makes one inside a write transaction."""
+    return str(_load(c).get("install_id") or "")
+
+
 class Census:
     def __init__(self, store, settings, clock=H.now):
         self.store, self.settings, self.clock = store, settings, clock

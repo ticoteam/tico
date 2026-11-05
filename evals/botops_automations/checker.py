@@ -44,15 +44,15 @@ def before_of(case):
 
 def canon(flow):
     """The parts a request can change, as one string: equal before and after means the live flow did not move."""
-    return json.dumps({"trigger": flow.get("trigger"), "steps": flow.get("steps") or [], "batch": flow.get("batch")},
-                      sort_keys=True, default=str)
+    return json.dumps({"trigger": flow.get("trigger"), "steps": flow.get("steps") or [], "batch": flow.get("batch"),
+                       "destinations": flow.get("destinations")}, sort_keys=True, default=str)
 
 
 def validate(flow, owner, name):
     """None when the flow passes the save check, else the reason it is refused."""
     try:
         F.check({"name": name, "owner": owner, "trigger": flow.get("trigger"), "steps": flow.get("steps") or [],
-                 "batch": flow.get("batch")})
+                 "batch": flow.get("batch"), "destinations": flow.get("destinations")})
     except Exception as exc:   # a malformed answer is a failed check, never a crash
         return str(exc) or type(exc).__name__
     return None
@@ -97,7 +97,15 @@ def _conds(wants, gots):
 def _rule(want, got):
     return (_conds(want.get("when"), got.get("when"))
             and [action.get("do") for action in got.get("then") or []] == list(want.get("then") or [])
-            and ("match" not in want or want["match"] == (got.get("match") or "all")))
+            and ("match" not in want or want["match"] == (got.get("match") or "all"))
+            and all(_same(want[key], got.get(key)) for key in ("to", "next") if key in want))
+
+
+def _destinations(wants, gots):
+    """Each expected destination is among the flow's, by id, with its actions' names in order."""
+    return all(any(_same(want["id"], got.get("id"))
+                   and [action.get("do") for action in got.get("then") or []] == list(want.get("then") or [])
+                   for got in gots or []) for want in wants or [])
 
 
 def _path(want, got):
@@ -246,6 +254,9 @@ def check_case(case, observed):
     if "batch" in expect:
         checks.append(_check("batch times", _held(_batch, expect["batch"], flow.get("batch")),
                              f"wanted {expect['batch']}, got {flow.get('batch')}"))
+    if "destinations" in expect:
+        checks.append(_check("destinations", _held(_destinations, expect["destinations"], flow.get("destinations")),
+                             f"wanted {expect['destinations']}, got {flow.get('destinations')}"))
     return _verdict(case, checks)
 
 

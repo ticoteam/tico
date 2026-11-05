@@ -55,7 +55,7 @@ def show(c, auth, who, ref):
 def resolve(c, auth, who, ref):
     """(kind, row) for the one thing `ref` names that the caller may read; 404 when none does."""
     if len(ref) >= 8:
-        rows = [dict(r) for r in c.execute("SELECT * FROM tasks WHERE id=? OR id LIKE ? LIMIT 2", (ref, ref + "%"))]
+        rows = [dict(r) for r in c.execute(f"SELECT * FROM {H.TASKS} tasks WHERE id=? OR id LIKE ? LIMIT 2", (ref, ref + "%"))]
         if len(rows) == 1:
             visible = auth.task_sql(c, who)
             if views._readable_task_ids(c, visible, [rows[0]["id"]]):
@@ -133,8 +133,10 @@ def siblings_and_stops(c, task, cause):
         for row in c.execute("SELECT refs FROM messages WHERE created_at>=? AND refs LIKE ? ORDER BY created_at LIMIT 5000",
                              (since, f'%"{key}": "{cause["id"]}"%')):
             refs = json.loads(row["refs"] or "{}") if row["refs"] else {}
-            if isinstance(refs, dict) and refs.get(key) == cause["id"] and refs.get("task"):
-                made.add(refs["task"])
+            # A list task ref (sent by a bot, or copied from one) names its first task, as in hubdb._task_ref.
+            tid = H._task_ref(refs.get("task")) if isinstance(refs, dict) else None
+            if isinstance(refs, dict) and refs.get(key) == cause["id"] and tid:
+                made.add(tid)
     elif cause["type"] == "parent_task":
         kids = task_relations.child_ids(c, cause["id"]) if cause.get("id") else []
         made = {r["id"] for part in H.chunks(kids)
