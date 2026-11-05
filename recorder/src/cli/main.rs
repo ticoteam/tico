@@ -29,6 +29,10 @@ enum Command {
         #[arg(long)]
         scenario: String,
     },
+    /// Replay transcript echo rules against a bounded, synthetic or exported recording JSON.
+    EchoReplay {
+        file: std::path::PathBuf,
+    },
     Devices,
     Inspect {
         file: std::path::PathBuf,
@@ -163,6 +167,50 @@ fn main() -> Result<()> {
                 &std::fs::read(file)?
             )?)?
         ),
+        Command::EchoReplay { file } => {
+            use tico_recorder_native::{store::Recording, transcript};
+            anyhow::ensure!(
+                std::fs::metadata(&file)?.len() <= 2_000_000,
+                "Replay is too large"
+            );
+            let record: Recording = serde_json::from_slice(&std::fs::read(file)?)?;
+            let normalize = |text: &str| {
+                text.chars()
+                    .filter(|c| c.is_alphanumeric())
+                    .flat_map(char::to_lowercase)
+                    .collect::<String>()
+            };
+            let them: Vec<_> = record
+                .chunks
+                .iter()
+                .filter(|c| c.channel == "them")
+                .flat_map(|c| c.words.iter())
+                .collect();
+            let baseline: Vec<_> = record
+                .chunks
+                .iter()
+                .filter(|c| c.channel == "me")
+                .flat_map(|c| c.words.iter())
+                .filter(|w| {
+                    !them.iter().any(|t| {
+                        w.start_ms.abs_diff(t.start_ms) <= 1000
+                            && normalize(&w.text) == normalize(&t.text)
+                    })
+                })
+                .collect();
+            let cleaned = transcript::chunk_words(&record);
+            let after: Vec<_> = record
+                .chunks
+                .iter()
+                .filter(|c| c.channel == "me")
+                .flat_map(|c| cleaned.get(&c.id).into_iter().flatten())
+                .collect();
+            println!(
+                "{}",
+                serde_json::to_string(&serde_json::json!({"before":baseline,"after":after,
+                "lines":transcript::lines(&record).into_iter().map(|l| serde_json::json!({"speaker":l.speaker,"me":l.me,"text":l.text})).collect::<Vec<_>>() }))?
+            );
+        }
         Command::VerifyTranscription {
             file,
             expected,
@@ -894,6 +942,24 @@ fn meeting_json(
     record: &tico_recorder_native::store::Recording,
     mut fields: serde_json::Value,
 ) -> serde_json::Value {
+    fields["raw_microphone_words"] = serde_json::json!(
+        record
+            .chunks
+            .iter()
+            .filter(|c| c.channel == "me")
+            .flat_map(|c| c.words.iter())
+            .collect::<Vec<_>>()
+    );
+    fields["filtered_microphone_words"] = serde_json::json!(
+        tico_recorder_native::transcript::chunk_words(record)
+            .into_iter()
+            .filter(|(id, _)| record
+                .chunks
+                .iter()
+                .any(|c| c.id == *id && c.channel == "me"))
+            .flat_map(|(_, words)| words)
+            .collect::<Vec<_>>()
+    );
     fields["lines"] = tico_recorder_native::transcript::lines(record)
         .iter()
         .map(|line| serde_json::json!({"speaker":line.speaker,"me":line.me,"start_ms":line.start_ms,"end_ms":line.end_ms,"text":line.text}))

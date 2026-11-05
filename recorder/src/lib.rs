@@ -10,6 +10,7 @@ pub mod live;
 pub mod network;
 pub mod notices;
 pub mod qos;
+pub mod retry;
 pub mod settings;
 pub mod signin;
 pub mod speech;

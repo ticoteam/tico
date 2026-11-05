@@ -214,7 +214,7 @@ impl RecordingHandle {
         Self::with_plan(store, id, plan, move |inputs| {
             setup_inputs(
                 inputs,
-                || capture::start_microphone(microphone.as_deref()),
+                || capture::start_microphone_for_meeting(microphone.as_deref(), meeting_audio),
                 meeting_audio,
                 capture::start_meeting_audio,
             )

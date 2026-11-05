@@ -622,3 +622,17 @@ fn through_your_tico_live_text_follows_what_it_can_do() {
     assert!(!uri.contains("person-token"));
     assert_eq!(auth, "Bearer person-token");
 }
+
+#[test]
+fn transport_failures_never_expose_protocol_internals() {
+    let error = tungstenite::Error::Io(std::io::Error::new(
+        std::io::ErrorKind::UnexpectedEof,
+        "unexpected EOF during chunk size line",
+    ));
+    let message = describe(&error);
+    assert!(crate::retry::notice(&message, 1, "Transcription is retrying").is_empty());
+    assert_eq!(
+        crate::retry::notice(&message, 3, "Transcription is retrying"),
+        "Transcription is retrying"
+    );
+}

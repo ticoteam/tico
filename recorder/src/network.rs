@@ -193,7 +193,11 @@ pub fn transcribe_next_with(
     })();
     let (text, mut words, error) = match result {
         Ok((text, words)) => (text, words, String::new()),
-        Err(error) => (String::new(), vec![], error.to_string()),
+        Err(error) => (
+            String::new(),
+            vec![],
+            crate::retry::stored(&error, "Transcription is retrying"),
+        ),
     };
     for word in &mut words {
         word.start_ms += chunk.start_ms;

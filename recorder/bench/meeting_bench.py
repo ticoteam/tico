@@ -23,6 +23,12 @@ It costs about $0.25 per scenario (four meetings) with the default model. Not pa
 import argparse, json, os, shutil, subprocess, sys, tempfile, urllib.request, xml.etree.ElementTree as ET, zipfile
 from pathlib import Path
 
+# The deterministic echo replay has no downloads, model calls or third-party dependencies.
+if "--bleed-check" in sys.argv:
+    from bleed_case import main as bleed_main
+    bleed_main([arg for arg in sys.argv[1:] if arg != "--bleed-check"])
+    sys.exit(0)
+
 import jiwer, meeteval, numpy as np, soundfile as sf
 from whisper_normalizer.english import EnglishTextNormalizer
 
@@ -99,10 +105,25 @@ def channels(data: Path, meeting: str, me: str, ref, start: float, end: float, s
     them = sum(heads[a] for a in "ABCD" if a != me)
     me = heads[me]
     them = them / max(1.0, np.abs(them).max() / 0.9)
-    if scenario == "speakers":
+    if scenario in ("speakers", "bleed"):
+        if scenario == "bleed":
+            them_room = room_bleed(them)
+            me = me + them_room
+            return me, them
+
         delay = int(0.04 * RATE)
         me = me + 0.2 * np.concatenate([np.zeros(delay, dtype=np.float32), them[:-delay]])
     return me, them
+
+
+def room_bleed(them):
+    """Laptop speaker bleed: -10 dB, 20 ms direct path, low-pass coloration and room reflections."""
+    lowpass = np.convolve(them, np.exp(-np.arange(48) / 8) / np.exp(-np.arange(48) / 8).sum(), "full")[:len(them)]
+    out = np.zeros_like(them)
+    for delay_ms, gain in [(20, 0.316), (43, 0.12), (79, 0.06), (131, 0.025)]:
+        delay = int(delay_ms * RATE / 1000)
+        out[delay:] += gain * lowpass[:-delay]
+    return out
 
 
 def norm(text):
@@ -122,6 +143,13 @@ def score(ref, lines, me: str):
     out["cpwer"] = float(next(iter(result.values())).error_rate)
     out["voices"] = len({l["speaker"] for l in lines if not l["me"]})
     return {k: round(v, 3) for k, v in out.items()}
+
+
+def duplicate_words(words, ref, me):
+    """Mic tokens that repeat far-end reference speech within a second, on identical STT output."""
+    return sum(any(agent != me and abs(at * 1000 - word["start_ms"]) <= 1000
+                   and set(norm(text)) & set(norm(word["text"])) for agent, at, _, text in ref)
+               for word in words)
 
 
 def main():
@@ -175,7 +203,9 @@ def main():
                 a.save.mkdir(parents=True, exist_ok=True)
                 (a.save / f"{meeting}-{scenario}.json").write_text(json.dumps(out, indent=1))
             row = {"meeting": meeting, "scenario": scenario, "model": out["model"], **score(ref, out["lines"], me),
-                   "errors": len(out["errors"]), "seconds": round(out["total_seconds"])}
+                   "errors": len(out["errors"]), "seconds": round(out["total_seconds"]),
+                   "bleed_words_before": duplicate_words(out.get("raw_microphone_words", []), ref, me),
+                   "bleed_words_after": duplicate_words(out.get("filtered_microphone_words", []), ref, me)}
             rows.append(row)
             print(json.dumps(row), flush=True)
     failed = any(row["errors"] for row in rows)

@@ -42,6 +42,7 @@ impl LiveSync {
                 crate::qos::utility();
                 let store = worker_store;
                 let mut config: Option<(u64, crate::settings::Settings)> = None;
+                let mut failures: HashMap<String, u32> = HashMap::new();
                 let mut paused_at: HashMap<String, std::time::Instant> = HashMap::new();
                 while !stopped.load(Ordering::Relaxed) {
                     let mark = store.changes();
@@ -96,11 +97,25 @@ impl LiveSync {
                                 status.lock().unwrap_or_else(|error| error.into_inner());
                             match result {
                                 Ok(_) => {
+                                    failures.remove(&record.id);
                                     errors.remove(&record.id);
                                 }
                                 Err(error) => {
                                     failed = true;
-                                    errors.insert(record.id, format!("{error:#}"));
+                                    let count = failures.entry(record.id.clone()).or_default();
+                                    *count += 1;
+                                    let text =
+                                        crate::retry::stored(&error, "Tico sync is retrying");
+                                    let text = crate::retry::notice(
+                                        &text,
+                                        *count,
+                                        "Tico sync is retrying",
+                                    );
+                                    if text.is_empty() {
+                                        errors.remove(&record.id);
+                                    } else {
+                                        errors.insert(record.id, text);
+                                    }
                                 }
                             }
                         }
@@ -272,6 +287,7 @@ impl Tico {
         for words in streamed.values_mut() {
             words.retain(|word| !excluded(&context.paused_windows, word.start_ms, word.end_ms));
         }
+        let record = transcript::echo_snapshot(&record, &streamed);
         let mut db = store.db()?;
         let transaction = db.transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)?;
         scrub_pending(
@@ -1115,7 +1131,11 @@ impl<'a> Queue<'a> {
                 continue;
             };
             let words = match (channel, streamed.get("them")) {
-                ("me", Some(them)) => transcript::without_echo(words, them),
+                ("me", Some(them)) => transcript::without_echo(
+                    &transcript::ready_microphone(record, words, them),
+                    them,
+                ),
+                ("me", None) => transcript::ready_microphone(record, words, &[]),
                 _ => words.clone(),
             };
             let from = self.shared_until(record, channel);

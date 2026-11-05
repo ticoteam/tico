@@ -4188,3 +4188,71 @@ fn recorder_later_edits_survive_other_items_links_add_and_edit_replies() {
         }
     }
 }
+
+#[test]
+fn speaker_bleed_never_enters_the_live_outbox_when_microphone_finishes_first() {
+    let dir = tempfile::tempdir().unwrap();
+    let store = Store::open(dir.path()).unwrap();
+    let record = live_recording(&store, "Speaker bleed ordering");
+    let id = record.id.as_str();
+    store
+        .mutate(id, |r| {
+            r.meeting_audio = true;
+            Ok(())
+        })
+        .unwrap();
+    finished_chunk(
+        &store,
+        id,
+        0,
+        5000,
+        vec![
+            word(1020, 1200, "Ship", ""),
+            word(1320, 1500, "tomorrow", ""),
+            word(1620, 1700, "uh", ""),
+        ],
+    );
+    store
+        .save_audio(
+            id,
+            crate::audio::Channel::Meeting,
+            0,
+            5000,
+            &vec![0.2; 16000],
+            16000,
+        )
+        .unwrap();
+    let (tico, seen, worker) = server(vec![]);
+    tico.push_live(&store, id).unwrap();
+    worker.join().unwrap();
+    assert!(seen.lock().unwrap().is_empty());
+    let count: i64 = store
+        .db()
+        .unwrap()
+        .query_row(
+            "SELECT COUNT(*) FROM live_sources WHERE recording_id=?",
+            [id],
+            |r| r.get(0),
+        )
+        .unwrap();
+    assert_eq!(count, 0, "held microphone must not be marked as delivered");
+    let remote = store.claim_transcription().unwrap().unwrap();
+    let mut words = vec![
+        word(1000, 1200, "Ship", ""),
+        word(1300, 1500, "tomorrow", ""),
+    ];
+    for word in &mut words {
+        word.turn = "remote-4".into();
+    }
+    store
+        .transcription_words(&remote, "Ship tomorrow", words, "", json!({}))
+        .unwrap();
+    let (tico, seen, worker) = server(vec![Some(json!({"accepted":[1]}))]);
+    tico.push_live(&store, id).unwrap();
+    worker.join().unwrap();
+    let seen = seen.lock().unwrap();
+    let sent = seen[0].1["chunks"].as_array().unwrap();
+    assert_eq!(sent.len(), 1);
+    assert_eq!(sent[0]["text"], "Ship tomorrow");
+    assert_ne!(sent[0]["speaker"], "Me");
+}

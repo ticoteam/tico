@@ -139,6 +139,20 @@ pub fn sources() -> Result<Vec<String>> {
         .collect()
 }
 
+/// Prefer hardware-reference echo cancellation only while recording meeting audio. Unsupported
+/// routes (including headphones) and native setup failures retain the existing microphone path.
+pub fn start_microphone_for_meeting(name: Option<&str>, meeting_audio: bool) -> Result<Source> {
+    #[cfg(target_os = "macos")]
+    if meeting_audio {
+        if let Ok(source) = macos::start_voice_microphone(name) {
+            return Ok(source);
+        }
+    }
+    #[cfg(not(target_os = "macos"))]
+    let _ = meeting_audio;
+    start_microphone(name)
+}
+
 pub fn start_microphone(name: Option<&str>) -> Result<Source> {
     use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
     let host = cpal::default_host();

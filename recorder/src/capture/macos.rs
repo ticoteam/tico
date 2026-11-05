@@ -340,3 +340,111 @@ pub fn start() -> Result<Source> {
         stream: Box::new(tap),
     })
 }
+
+unsafe extern "C" {
+    fn tico_voice_start(
+        selected: *const std::ffi::c_char,
+        context: *mut c_void,
+        receive: unsafe extern "C" fn(*mut c_void, *const *const f32, u32, u32, u64, f64),
+        release: unsafe extern "C" fn(*mut c_void),
+        rate: *mut f64,
+    ) -> *mut c_void;
+    fn tico_voice_stop(capture: *mut c_void);
+}
+
+struct VoiceInput {
+    sink: AudioSink,
+    origin: u64,
+    numer: u32,
+    denom: u32,
+}
+unsafe extern "C" fn voice_receive(
+    context: *mut c_void,
+    data: *const *const f32,
+    channels: u32,
+    frames: u32,
+    host_time: u64,
+    rate: f64,
+) {
+    // AVAudioEngine serializes the tap, and its block owns this context until the final callback.
+    let state = unsafe { &mut *context.cast::<VoiceInput>() };
+    if data.is_null() || channels == 0 || channels > 32 {
+        return;
+    }
+    let data = unsafe { std::slice::from_raw_parts(data, channels as usize) };
+    if data.iter().any(|p| p.is_null()) {
+        return;
+    }
+    let nanos =
+        host_time.saturating_sub(state.origin) as u128 * state.numer as u128 / state.denom as u128;
+    state
+        .sink
+        .set_frame((nanos as f64 * rate / 1_000_000_000.) as u64);
+    state.sink.push_frames(frames as usize, |i| {
+        data.iter().map(|p| unsafe { *p.add(i) }).sum::<f32>() / channels as f32
+    });
+}
+unsafe extern "C" fn voice_release(context: *mut c_void) {
+    drop(unsafe { Box::from_raw(context.cast::<VoiceInput>()) });
+}
+struct VoiceCapture(*mut c_void);
+// Only stop touches the handle after construction; the engine owns and serializes its callback.
+unsafe impl Send for VoiceCapture {}
+impl CaptureStream for VoiceCapture {
+    fn stop(&mut self) -> Result<()> {
+        if !self.0.is_null() {
+            unsafe { tico_voice_stop(self.0) };
+            self.0 = ptr::null_mut();
+        }
+        Ok(())
+    }
+}
+impl Drop for VoiceCapture {
+    fn drop(&mut self) {
+        let _ = self.stop();
+    }
+}
+
+pub fn start_voice_microphone(name: Option<&str>) -> Result<Source> {
+    let selected = name.map(std::ffi::CString::new).transpose()?;
+    let (sink, consumer) = AudioSink::channel();
+    let health = sink.health.clone();
+    let mut clock = Timebase { numer: 0, denom: 0 };
+    checked(
+        unsafe { mach_timebase_info(&mut clock) },
+        "Reading the microphone clock",
+    )?;
+    ensure!(clock.denom != 0, "Invalid microphone clock");
+    let started = std::time::Instant::now();
+    let context = Box::into_raw(Box::new(VoiceInput {
+        sink,
+        origin: unsafe { mach_absolute_time() },
+        numer: clock.numer,
+        denom: clock.denom,
+    }));
+    // The bridge takes ownership on success and failure and sets rate before starting callbacks.
+    let mut rate = 0.;
+    let capture = unsafe {
+        tico_voice_start(
+            selected.as_ref().map_or(ptr::null(), |s| s.as_ptr()),
+            context.cast(),
+            voice_receive,
+            voice_release,
+            &mut rate,
+        )
+    };
+    ensure!(
+        !capture.is_null(),
+        "Voice processing is unavailable for this microphone route"
+    );
+    let rate = rate as u32;
+    Ok(Source {
+        channel: Channel::Microphone,
+        name: name.unwrap_or("Built-in microphone").into(),
+        sample_rate: rate,
+        started,
+        health,
+        consumer,
+        stream: Box::new(VoiceCapture(capture)),
+    })
+}

@@ -176,6 +176,38 @@ microphone and system audio are separate channels, so "Me" versus "Them" needs n
 model. The far end is diarized on-device after the meeting with a pyannote 3.1 pipeline, and words
 take the overlapping speaker. When the transcription model labels speakers within each chunk
 (Scribe), those turns are joined across the meeting by WeSpeaker voiceprints, the usual way to
-combine an STT provider's per-request speaker labels into one meeting. Echo is removed in the
-transcript, not with acoustic echo cancellation. Speech defaults to English (Settings › Language;
+combine an STT provider's per-request speaker labels into one meeting. On the built-in Mac microphone/speaker route, macOS voice processing removes acoustic echo before
+transcription (minimum other-audio ducking, AGC off); headphones and unsupported routes keep the
+original capture. A shared transcript filter also drops utterances with at least 60% echoed words,
+including unmatched short fragments, with punctuation, hyphen, number and small spelling tolerance.
+Live mic text waits for the meeting-audio reference, so it cannot escape to the page or Tico first. Speech defaults to English (Settings › Language;
 empty guesses per chunk, which turned short "mm-hmm"s into Japanese and Chinese).
+
+
+## Speaker bleed regression
+
+The paid audio scenario `--scenarios bleed` uses a 20 ms delayed, -10 dB meeting signal with
+low-pass coloration and reflections at 43, 79 and 131 ms mixed into the microphone. It reports
+`bleed_words_before` and `bleed_words_after` from the same STT result before/after the transcript
+filter, alongside WER and cpWER. Those counts use the far-end AMI reference within one second;
+they are duplicate word counts, not a claim that all same-time acknowledgements are echo.
+
+For a deterministic, free regression on the actual Rust filter (including misspellings, number
+words and short leftover fragments):
+
+```sh
+python3 recorder/bench/meeting_bench.py --bleed-check --cli recorder/target/debug/tico-recorder-cli
+```
+
+This replays four synthetic remote-only utterances with a 20 ms microphone offset, followed by
+four independent local replies. `before` reproduces the former exact per-word filter; `after`
+uses the production utterance filter. It reports all words left in known remote-only spans,
+including fragments that exact duplicate counting would miss. This replay measures transcript
+rules, not recognition quality or acoustic cancellation. Run it on RunsOn after building the CLI.
+
+VoiceProcessingIO requires a real audio device and realtime hardware rendering; it does not run
+on Linux or in AVAudioEngine's offline rendering mode. AEC attenuation and playback/ducking need
+a Mac with a built-in mic/speaker route, using identical speaker playback and comparing raw
+`capture::start_microphone` with `capture::start_microphone_for_meeting(..., true)`. The meeting
+process tap stays the reference recording in both runs. Headphones must remain on the raw path.
+macOS PR CI compiles/links the native bridge; it cannot measure a room's acoustic response.

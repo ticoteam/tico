@@ -274,6 +274,7 @@ impl Streams {
             queued: queued.clone(),
             dropped: dropped.clone(),
             reconnects: 0,
+            voices: BTreeMap::new(),
         };
         let spawned = thread::Builder::new()
             .name(format!("tico-stream-{channel}"))
@@ -312,6 +313,7 @@ struct Worker {
     queued: Arc<AtomicU64>,
     dropped: Arc<AtomicU64>,
     reconnects: u32,
+    voices: BTreeMap<String, String>,
 }
 
 impl Worker {
@@ -363,6 +365,7 @@ impl Worker {
             return;
         }
         let mut wait = self.plan.retry;
+        let mut failures = 0;
         loop {
             self.set(
                 if self.reconnects == 0 {
@@ -390,14 +393,19 @@ impl Worker {
                 End::Lost(error) => {
                     if opened.elapsed() > Duration::from_secs(30) {
                         wait = self.plan.retry;
+                        failures = 0;
                     }
+                    failures += 1;
                     self.reconnects += 1;
                     let error = if self.plan.tico.is_some() {
                         tico_words(&error)
                     } else {
                         error
                     };
-                    self.set("retrying", &short(&error));
+                    self.set(
+                        "retrying",
+                        &crate::retry::notice(&error, failures, "Transcription is retrying"),
+                    );
                     if !self.idle(wait) {
                         break;
                     }
@@ -570,7 +578,7 @@ impl Worker {
         }
     }
     /// Handles one service event. True when the service finished the transcript.
-    fn event(&self, text: &str, anchors: &[(u64, f64)]) -> Result<bool> {
+    fn event(&mut self, text: &str, anchors: &[(u64, f64)]) -> Result<bool> {
         let event: Value =
             serde_json::from_str(text).context("The streaming service sent invalid JSON")?;
         match event["type"].as_str().unwrap_or("") {
@@ -593,7 +601,16 @@ impl Worker {
                             speaker: if self.channel == "me" {
                                 String::new()
                             } else {
-                                speaker(&word["speaker"])
+                                let raw = speaker(&word["speaker"]);
+                                if raw.is_empty() {
+                                    String::new()
+                                } else {
+                                    let next = self.voices.len() + 1;
+                                    self.voices
+                                        .entry(raw)
+                                        .or_insert_with(|| format!("Speaker {next}"))
+                                        .clone()
+                                }
                             },
                             turn: String::new(),
                         })
@@ -697,7 +714,7 @@ fn describe(error: &tungstenite::Error) -> String {
         tungstenite::Error::ConnectionClosed | tungstenite::Error::AlreadyClosed => {
             "The streaming service closed the session".into()
         }
-        other => short(&format!("Live text: {other}")),
+        _ => "Transcription is retrying".into(),
     }
 }
 

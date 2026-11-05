@@ -3104,7 +3104,7 @@ impl Recorder {
                 && (!ended || has_text),
             "place": if live { format!("Shared live · {org}") } else { "Private · on this Mac".into() },
             "sync_error": if sync_error.is_empty() { String::new() } else {
-                format!("Tico sync needs attention: {sync_error}. Audio and transcript remain saved on this Mac.")
+                sync_error
             },
             "setup": self.setup_notices(),
             "audio": audio_view(&record),
@@ -3491,7 +3491,7 @@ fn audio_view(record: &Recording) -> Value {
     let failures: Vec<_> = record
         .chunks
         .iter()
-        .filter(|chunk| chunk.status == "failed" || !chunk.error.is_empty())
+        .filter(|chunk| !tico_recorder_native::retry::chunk_notice(chunk).is_empty())
         .collect();
     // Error and drop counts are bookkeeping, not news; the live notice says when audio is
     // really being lost. A stalled input is kept.
@@ -3509,7 +3509,7 @@ fn audio_view(record: &Recording) -> Value {
         "failed": failed,
         "finding_speakers": pending == 0 && record.speakers == "running",
         "inputs": inputs,
-        "failures": failures.iter().take(12).map(|chunk| format!("{} {} · {}", clock(chunk.start_ms), chunk.speaker, chunk.error)).collect::<Vec<_>>(),
+        "failures": failures.iter().map(|chunk| tico_recorder_native::retry::chunk_notice(chunk)).collect::<std::collections::BTreeSet<_>>().into_iter().take(12).collect::<Vec<_>>(),
         "more": failures.len().saturating_sub(12),
     })
 }
