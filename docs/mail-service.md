@@ -68,8 +68,7 @@ Ana uses the same CLI interactively with `--as ana`, which has every verb.
 Legal is authorized by Ana (September 4, 2026, #130) to read messages and attachments from
 `ana@acme.example`. Its Gmail access entry has `can: [read]` and `read_only: true`. The shared
 service refuses mailbox filing, labels, rules, mark-read, starring, drafts, and sends for that
-entry. This is separate from **Send attachments** in Settings > Google (or `allow_attachments` in a registry
-mail policy), which controls adding attachments to mail Tico writes.
+entry. Attachments on outbound mail use the same draft and send permissions as the message without files.
 
 Legal's `default_mailbox: legal@acme.example` preserves its existing routines. It must explicitly use
 `--as legal --mailbox ana@acme.example` for Ana's messages; rules and filing are not allowed there.
@@ -78,7 +77,7 @@ Legal's `default_mailbox: legal@acme.example` preserves its existing routines. I
 
 Every bot with `read` access to a mailbox can list and download its attachments; no
 separate attachment grant is needed. This applies to ordinary and read-only mailbox access
-alike, and does not grant access to other mailboxes or permission to send attachments.
+alike, and does not grant access to other mailboxes or permission to draft or send mail.
 
 List files first, then use the returned reference (`a1`, `a2`, ...) with the same message ID:
 
@@ -113,23 +112,23 @@ with the reason attached; it never silently drops the work.
   to send. With the switch off, none of this applies and a send is a draft.
 - With no registry (a Docker computer has no `registry/mail-policy.yaml`) the policy is built in: sending is on
   globally, internal domains are the ones the bot's mailbox and the team roster use (public providers such as
-  gmail.com never count), the caps are 20 sends a day, one external recipient, no external Cc, and attachments off until
-  an admin enables **Settings > Google > What Tico may do > Send attachments**. The blocklist is empty.
+  gmail.com never count), the caps are 20 sends a day, one external recipient and no external Cc. The blocklist is empty.
   A `registry/mail-policy.yaml`, where there is one, replaces all of it.
 - Caps, which apply to every send including those three kinds: sends per bot per day, per-recipient cooldown (14 days
   unless they wrote last; 0 in the built-in policy, because the forward address is written to again and again and
   the daily cap is the brake),
-  one external recipient per message, no CC or BCC outside acme.example, no attachments unless the Tico setting
-  allows them (off by default). A registry policy, when present, wins: `defaults.allow_attachments`, overridden by
-  `mailboxes.<address>.allow_attachments` for a mailbox. A per-message approval (below) lifts the recipient
-  count, the external Cc rule and the cooldown for that one message; never the daily cap, the
-  blocklist, or `allow_attachments`.
+  one external recipient per message, no CC or BCC outside acme.example. A per-message approval
+  (below) lifts the recipient count, the external Cc rule and the cooldown for that one message;
+  never the daily cap or the blocklist.
 - Attachments come only from the bot's own folder, never from a secret-looking file (`.env*`, keys, `credentials*`,
-  `*secret*`, `*token*`, `secrets/`, `.ssh/` and the like), and a message carrying one always needs a per-message
-  approval, even to the sender of the thread, a forward target or an internal address. That approval names the
-  files: a Tico send approval whose payload lists the draft and each file's name, size and sha256 (`mail draft`
-  prints the request), or a GitHub Issue naming each file and its sha256. The files are hashed again from the
-  draft at send time; an owner's "send it" message does not cover attachments. See docs/mail.md, "Draft".
+  `*secret*`, `*token*`, `secrets/`, `.ssh/` and the like), up to 25 MB in all. They use the same
+  send chain as the message without files: no extra setting or approval is needed. An owner's
+  "send it" Tico message covers the attached files. Legacy `allow_attachments` keys in registry
+  defaults or mailbox entries are accepted but have no effect.
+- If a Tico send approval names files, it binds the draft id and the exact set of names, sizes
+  and sha256 hashes; the files are hashed again from the draft at send time. An approval naming
+  no files places no extra constraint on them. Drafts with files are reviewed again as they stand,
+  and the reviewer sees their names, types and sizes. See docs/mail.md, "Draft".
 - Blocklist of addresses and domains bots never email (press, counterparties, anyone Ana
   lists), and a "Ana handles personally" list that forces `hub/needs-owner`. Both beat a forward address and a
   reply to a sender.

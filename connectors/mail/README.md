@@ -120,11 +120,13 @@ crash between the call and the answer cannot become a second email; a call that 
 deletes its own claim, so a retry is still allowed. `sends` is also where `sent-log --reconcile`
 puts the owner's own sends, as employee `human`, which is how the owner's sends count towards a bot's
 per-recipient cooldown. `reviews` holds every verdict; a send re-uses one only while it is under
-24 hours old, and never for a draft with attachments, which is reviewed again as it stands and
-always needs a per-message approval to send. That approval is bound to the files: `send` hashes the
-draft's parts from Gmail and `policy.approval_check` matches them, by name, size and sha256, to the
-Tico send approval's `attachments` (and its `draft`), or to the names and hashes in a GitHub Issue.
-An owner's message to send is not accepted for attachments. `mail draft --attach` prints the request.
+24 hours old, and never for a draft with attachments, which is reviewed again as it stands.
+Attachments use the same send and approval rules as mail without files, including an owner's
+Tico message telling the bot to send. When a Tico send approval names files, `send` hashes the
+draft's parts from Gmail and `policy.approval_check` matches the exact set by name, size and
+sha256, and the draft id. A send approval naming no files places no extra constraint on them.
+`mail draft --attach --json` includes an optional approval request payload for sends that need one
+under the usual rules. Files must come from the bot's own folder, exclude secrets and total at most 25 MB.
 `mail discard` deletes a Gmail draft only when its `drafts` row names the same employee and
 mailbox and no `sends` row has sent it, then drops the row.
 
@@ -207,13 +209,13 @@ scheduling:                                     # the one mailbox that may use t
   booking_url: ''                               # optional link offered when neither time works
   meeting_title: Meeting                        # the calendar event title
 mailboxes:
-  ana@acme.example: { paused: false }         # per-mailbox pause; allow_attachments: true|false overrides the default for it
+  ana@acme.example: { paused: false }         # per-mailbox pause; legacy allow_attachments is accepted but ignored
 defaults:                                   # the stricter of these and an allowance wins
   max_sends_per_day: 20
   per_recipient_cooldown_days: 14
   max_external_recipients: 1
   allow_cc_external: false
-  allow_attachments: false                  # opt-in; true lets `draft --attach` add files from the bot's folder (a mailbox may set its own)
+  allow_attachments: false                  # legacy key, accepted but ignored; attachments use the normal send chain
 blocklist: { addresses: [], domains: [] }                  # never written to, in any verb
 owner_handles_personally: { addresses: [], domains: [] }   # forces hub/needs-owner
 allowances:

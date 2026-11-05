@@ -171,7 +171,7 @@ def install(app, store, auth, mutate):
             from .google_workspace import permissions
             may = permissions(c)
             found.update(company_send=may["send_mail"], company_organize=may["organize_mail"],
-                         company_attachments=may["send_attachments"], company_calendar=may["change_calendar"])
+                         company_calendar=may["change_calendar"])
             if who.actor == "bot:" + bot and not found["company_send"]:
                 found["outbound_send"] = False
             from . import lifecycle

@@ -117,28 +117,26 @@ command twice **updates the same Gmail draft** instead of leaving two. Change a 
 new draft. The thread gets `hub/drafted`, so Ana can see it in Gmail.
 
 `--attach <path>` adds a file; repeat it for several, up to 25 MB in all (Gmail's limit, checked
-from the file sizes before anything is read). Attachments are off by default. An admin turns them on for all mailboxes
-in **Settings > Google > What Tico may do > Send attachments**. If a `registry/mail-policy.yaml` is present, it wins:
-`mailboxes.<address>.allow_attachments` for one mailbox, or `defaults.allow_attachments` for every mailbox that does
-not set its own. The registry default is false. A file must be inside your own folder (`bot-<slug>`, or an
-older bot's `emp-<slug>`), after following symlinks; a relative path starts there, and `..` is
-refused. Files that look like keys or passwords are refused wherever they are: `.env*`, `*.pem`,
+from the file sizes before anything is read). Attachments use the same send permissions as the
+message without files; there is no separate attachment setting. Legacy `allow_attachments` keys
+in `registry/mail-policy.yaml` are accepted but do nothing. A file must be inside your own folder
+(`bot-<slug>`, or an older bot's `emp-<slug>`), after following symlinks; a relative path starts
+there, and `..` is refused. Files that look like keys or passwords are refused wherever they are: `.env*`, `*.pem`,
 `*.key`, `id_rsa*`, `id_ed25519*`, `*.p12`, `*.pfx`, `.netrc`, `.npmrc`, `.pypirc`,
 `credentials*`, `*secret*`, `*token*`, and anything under `secrets/`, `private keys/`, `.ssh/`,
 `.aws/`, `.gnupg/` or `.config/gh/`. The type comes from the file's extension. Lint and the
 reviewer read the text, and the reviewer is told each file's name, type and size, not its
-contents. Attaching lifts nothing, and sending an attached draft always needs `--approval-issue`,
-even to a recipient who needs none without files (the sender of the thread, a forward target,
-an internal address or an allowance).
+contents. Attaching lifts nothing: the same send chain applies with or without files. If the
+plain message could send without a per-message approval, the attached message can too. An owner's
+Tico message telling the bot to send covers the files attached to that send, as does an otherwise
+valid GitHub Issue or Tico send approval that names no files.
 
-That approval must name the files. `mail draft --attach` prints a ready request (and returns it
-as `approval_request` with `--json`): recipients, subject, draft id, and each file's name, size
-and sha256, as `hub approval request --kind send --payload '...'`. The send approval's payload
-carries `draft` and `attachments: [{name, size, sha256}]`. At send time the connector hashes the
-files as they are in the Gmail draft and sends only if they are exactly the approved set for
-that draft; a changed, added, removed or swapped file needs a new approval. A GitHub Issue
-counts only when its `Send to:` line matches and it names each file and its sha256 (and no
-other hash). The owner's message telling the bot to send does not cover attachments. When the draft
+If a Tico send approval names files, that binding still applies: its payload carries `draft` and
+`attachments: [{name, size, sha256}]`. At send time the connector hashes the files as they stand
+in the Gmail draft and requires the exact approved set and draft id; changed, added, removed or
+swapped files need a new approval. `mail draft --attach --json` returns an optional
+`approval_request` payload with those fields for sends that need per-message approval under the
+usual rules. Attaching files does not make that request necessary. When the draft
 belongs to a Tico task (`--issue <task id>`, or the task the run is for), `mail draft` first attaches
 each file to it and adds its `file_id` to the request, so the approver can open the file from the
 approval card; the send ignores `file_id` and matches on name, size and sha256. The card links a
@@ -432,8 +430,6 @@ below.
 - **Read mail and calendar**: always on.
 - **Organize mail** (label, archive, drafts), **Send mail** and **Create and change calendar events**: on until an admin
   turns them off. Each box saves on its own.
-- **Send attachments**: off by default. Allows workspace files on outbound drafts for every mailbox; a registry mail
-  policy, when present, takes precedence. Sending still needs an approval naming the draft and its files.
 
 Organize mail and Send mail both need Google's `gmail.modify`, so Tico holds each box itself too: the mail connector
 refuses a label, archive or draft with Organize mail off, a send with Send mail off, and a calendar write with Change
@@ -456,9 +452,8 @@ minted read only for it (`gmail.readonly`, `calendar.readonly`). Domain-wide del
 name, so step 2 below authorizes the read-only scopes too, and Check records which ones Google accepted. A Workspace
 authorized before them keeps minting its write scopes (Tico still holds each box off) and shows **Redo step 2 to narrow
 Google access.**; redo step 2, then click Check. A box turned on that a person's grant lacks shows **Connect Google again** on their card. Both agent
-prompts say what Tico will ask Google for. Send attachments is enforced by the mail tool, without a separate Google
-scope. Only an admin acting as themselves changes these settings: never a bot, BotOps or the
-Assistant.
+prompts say what Tico will ask Google for. Only an admin acting as themselves changes these settings: never a bot,
+BotOps or the Assistant.
 
 **What these settings enforce.** Where Google allows it, Tico narrows the token itself: Organize mail and Send mail both
 off gives read-only mail, and Change calendar off gives a read-only calendar. Otherwise Tico's mail tool enforces them,
@@ -732,7 +727,7 @@ exactly what its bot.yaml asks.
 **Computers with no registry (Docker).** A Docker computer has no `registry/` folder, so nothing gives the mail tool a
 `mail-policy.yaml`. Its policy is built in: sending on globally, the team's own domains as internal (from the bot's mailbox
 and the team roster, never gmail.com and other public providers; `TICO_INTERNAL_DOMAINS` names them outright), the usual
-caps (20 sends a day, one outside recipient, no outside Cc, attachments off until enabled in Settings > Google), no wait
+caps (20 sends a day, one outside recipient, no outside Cc), no wait
 between messages to the same person
 (the forward address gets many messages), and an empty blocklist. `mail policy show` prints "built-in defaults". Put a
 `mail-policy.yaml` in the registry and that file is the policy instead. The message bot's template also carries

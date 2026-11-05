@@ -88,11 +88,10 @@
   const MAY = [
     ['organize_mail', 'Organize mail', 'Label, archive and draft.'],
     ['send_mail', 'Send mail', 'Each bot also needs Mail sending on: Settings > Bots > Edit > Mail sending.'],
-    ['send_attachments', 'Send attachments', ''],
     ['change_calendar', 'Create and change calendar events', ''],
   ];
-  const allows = (g, name) => name === 'send_attachments' ? g?.permissions?.[name] === true : g?.permissions?.[name] !== false;
-  const asksFor = g => ['read mail and calendar', ...MAY.filter(([name]) => name !== 'send_attachments' && allows(g, name)).map(([, label]) => label.toLowerCase())]
+  const allows = (g, name) => g?.permissions?.[name] !== false;
+  const asksFor = g => ['read mail and calendar', ...MAY.filter(([name]) => allows(g, name)).map(([, label]) => label.toLowerCase())]
     .join(', ');
 
   function mayCard(g) {

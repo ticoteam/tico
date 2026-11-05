@@ -20,16 +20,16 @@ from backend.store import Problem
 from connectors.mail import oauth
 
 PERMISSIONS = "/api/v2/google/permissions"
-DEFAULTS = {"organize_mail": True, "send_mail": True, "send_attachments": False, "change_calendar": True}
+ALL_ON = {"organize_mail": True, "send_mail": True, "change_calendar": True}
 G = oauth.G
 
 
 def allow(api, token="ana-test", **changes):
-    return api.put(PERMISSIONS, json={**DEFAULTS, **changes}, headers=headers(token))
+    return api.put(PERMISSIONS, json={**ALL_ON, **changes}, headers=headers(token))
 
 
-def test_writes_except_attachments_are_on_until_an_admin_acting_as_themselves_turns_them_off(api):
-    assert get(api, "google", "cara-test")["permissions"] == DEFAULTS
+def test_everything_is_on_until_an_admin_acting_as_themselves_turns_it_off(api):
+    assert get(api, "google", "cara-test")["permissions"] == ALL_ON
     assert allow(api, "cara-test", send_mail=False).status_code == 403              # not an admin
     settings = api.app.state.store.settings
     settings.test_identities["ana-assistant"] = Identity("human:ana", "human", "ana@acme.example", via="assistant")
@@ -37,41 +37,36 @@ def test_writes_except_attachments_are_on_until_an_admin_acting_as_themselves_tu
     assert api.put(PERMISSIONS, json={"send_mail": False}, headers=headers()).status_code == 422   # all three named
     r = allow(api, organize_mail=False, send_mail=False)
     assert r.status_code == 200, r.text
-    off = {**DEFAULTS, "organize_mail": False, "send_mail": False}
+    off = {"organize_mail": False, "send_mail": False, "change_calendar": True}
     assert r.json()["permissions"] == off
     assert get(api, "google", "cara-test")["permissions"] == off
     with api.app.state.store.read() as c:
         assert c.execute("SELECT count(*) FROM events WHERE action='google.permissions.set'").fetchone()[0] == 1
 
 
-def test_send_attachments_round_trip_reaches_bot_turns_and_runner_jobs_and_is_audited(app):
+def test_a_stored_legacy_attachment_switch_does_not_restrict_sending(app):
     machine = runner(app)
-    assert get(app, "bots/inbox/mail-settings", "inbox-test")["company_attachments"] is False
-    assert allow(app, "inbox-test", send_attachments=True).status_code == 403
-    assert allow(app, "cara-test", send_attachments=True).status_code == 403
-    for enabled in (True, False):
-        expected = {**DEFAULTS, "send_attachments": enabled}
-        changed = allow(app, send_attachments=enabled)
-        assert changed.status_code == 200, changed.text
-        assert changed.json()["permissions"] == expected
-        assert get(app, "google", "cara-test")["permissions"] == expected
-        assert get(app, "bots/inbox/mail-settings", "inbox-test")["company_attachments"] is enabled
-        assert get(app, "connectors/mail/targets", machine["token"])["company"] == expected
-    with app.app.state.store.read() as c:
-        audits = c.execute("SELECT actor,detail FROM events WHERE action='google.permissions.set' ORDER BY rowid").fetchall()
-    assert [(r["actor"], json.loads(r["detail"])["send_attachments"]) for r in audits] == [
-        ("human:ana", True), ("human:ana", False)]
+    with app.app.state.store.transaction() as c:
+        c.execute("INSERT INTO registry_metadata(key,value) VALUES(?,?) ON CONFLICT(key) DO UPDATE SET "
+                  "value=excluded.value", (W.PERMISSIONS_KEY, json.dumps({**ALL_ON, "send_attachments": False})))
+    assert get(app, "google", "cara-test")["permissions"] == ALL_ON
+    assert get(app, "connectors/mail/targets", machine["token"])["company"] == ALL_ON
+    changed = app.post("/api/v2/bots/inbox/mail-settings", json={"outbound_send": True}, headers=headers())
+    assert changed.status_code == 200, changed.text
+    own = get(app, "bots/inbox/mail-settings", "inbox-test")
+    assert own["company_send"] is True and own["outbound_send"] is True
+    assert "company_attachments" not in own
 
 
 def test_scopes_follow_what_tico_may_do():
     send_only = {"organize_mail": False, "send_mail": True, "change_calendar": False}
-    nothing = dict.fromkeys(DEFAULTS, False)
+    nothing = dict.fromkeys(ALL_ON, False)
     assert google_connect.grantable("settings") == google_connect.READ_SCOPES + google_connect.ACT_SCOPES
     assert google_connect.grantable("settings", send_only) == google_connect.READ_SCOPES + [G + "gmail.modify"]
     assert google_connect.grantable("settings", {**nothing, "change_calendar": True}) == (
         google_connect.READ_SCOPES + [G + "calendar.events"])
     assert google_connect.grantable("settings", nothing) == google_connect.READ_SCOPES
-    assert google_connect.grantable("env", DEFAULTS) == google_connect.READ_SCOPES     # the shared app stays read only
+    assert google_connect.grantable("env", ALL_ON) == google_connect.READ_SCOPES       # the shared app stays read only
     held = json.dumps(google_connect.READ_SCOPES + google_connect.ACT_SCOPES)
     assert google_connect.refresh_scopes("gmail", held, nothing) == {G + "gmail.readonly"}
     assert google_connect.refresh_scopes("gmail", held, send_only) == {G + "gmail.readonly", G + "gmail.modify"}
