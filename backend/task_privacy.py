@@ -470,6 +470,8 @@ def page(c, who, cid, *, before=None, since=None, limit=200, task_id=None, max_b
                 return False
             if not readable(c, reader, tasks):
                 return False
+            if not page_message_readable(c, reader, H._json(stored.get("refs"), {}) or {}):
+                return False
         except Problem:
             return False
         message = {key: value for key, value in stored.items() if key not in INTERNAL_MESSAGE_COLUMNS}

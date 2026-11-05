@@ -43,7 +43,7 @@ def messages(c, rows, *, who=None, auth=None):
     for m in rows:
         if who is not None:
             from .files import readable_page_refs
-            m["refs"] = readable_page_refs(c, auth, who, m.get("refs") or {})
+            m.update(readable_page_refs(c, auth, who, m))
         if m.get("id") in stored:
             m["refs_json"] = (readable_page_refs(c, auth, who, stored[m["id"]]) if who is not None
                               else stored[m["id"]])
@@ -58,7 +58,7 @@ def message(c, m, *, as_read=False, who=None, auth=None):
         if as_read:
             if who is not None:
                 from .files import readable_page_refs
-                m["refs"] = readable_page_refs(c, auth, who, m.get("refs") or {})
+                m.update(readable_page_refs(c, auth, who, m))
             m["refs_json"] = H._dump(m.get("refs") if m.get("refs") is not None else {})
             _times("messages", m)
         else:
