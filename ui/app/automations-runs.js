@@ -68,7 +68,10 @@ function auRunStepText(rs) {
   const o = rs.outputs || {};
   // A step that is waiting (a queued mail action, a bot's turn) has already said what it did.
   if (rs.status === 'waiting') return [auRunStepDid({...rs, status: 'ok'}), 'waiting'].filter(Boolean).join(' · ');
-  if (rs.status !== 'ok') return (AU_STEP_STATUS[rs.status] || rs.status || '') + (o.error ? ' · ' + o.error : '');
+  if (rs.status !== 'ok') {
+    const reason = o.error || (rs.status === 'failed' ? o.actions?.find(a => a.ok === false)?.detail : '');
+    return (AU_STEP_STATUS[rs.status] || rs.status || '') + (reason ? ' · ' + String(reason).split('\n')[0].slice(0, 80) : '');
+  }
   return auRunStepDid(rs);
 }
 function auRunStepDid(rs) {
