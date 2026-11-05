@@ -738,8 +738,8 @@ def apply(c, verdict, payload=None, replay=None, tell=False, obj_now=None, audie
     write the bot does not see answered: a completion reply, an automation). `obj_now`: the object as the write reads
     it (`current_obj`). Moved since the check, a verdict that holds still holds (a version bump never releases a
     Block); any other comes back as {"moved": True}, and the caller does not write: its next try checks again.
-    `audience_now`: the recipients the write reads now (the route's audience, read inside the write). A hold is only made
-    for the audience the check named, so a different one comes back as {"moved": True} as well. A refused verdict
+    `audience_now`: the recipients the write reads now (the route's audience, read inside the write). Every verdict
+    belongs to the audience it checked, so a different one comes back as {"moved": True}. A refused verdict
     (`refused`) raises its error here, so the write fails with it."""
     if verdict and "refused" in verdict:
         raise verdict["refused"]
@@ -750,9 +750,9 @@ def apply(c, verdict, payload=None, replay=None, tell=False, obj_now=None, audie
     if obj_now is not None and verdict.get("obj") and obj_now != verdict["obj"] and not holds(verdict):
         return {"moved": True}
     author, operation = verdict["author"], verdict["operation"]
+    if audience_now is not None and _people(audience_now, author) != list(verdict["recipients"]):
+        return {"moved": True}
     if verdict["outcome"] in ("broken", "too_large"):
-        if audience_now is not None and _people(audience_now, author) != list(verdict["recipients"]):
-            return {"moved": True}
         # The rules in force now must be the ones checked: a rule edited, retired or added since is a new check, which
         # cannot run here (no engine under the write lock), so the output goes through unchecked.
         now = {(r["id"], r["version"])

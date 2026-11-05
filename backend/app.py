@@ -1557,102 +1557,13 @@ def create_app(settings=None):
                 raise Problem("reference", f"Unsupported reference kind: {kind}", 422)
 
     def named_destination(c, who, body, create=True):
-        """The conversation a message lands in, named before any check reads it, so each check and the write see the same
-        one. A room that moved names its Home (backend/bot_home_merge.py). A bot's message to a person that names no room
-        lands in that person's chat Home when there is one (hubdb.chat_home): where `H.say` would put it, but otherwise
-        only after the checks had run, so a private run's words would reach a Home that others read. A message to a bot,
-        or from a person with no room named, costs no lookup here."""
-        if body.conversation_id:
-            return bot_home_merge.home_for(c, body.conversation_id, create=create) or body.conversation_id
-        if H.is_human(who.actor) or str(body.to).lower() == "assistant" or str(body.to).startswith("bot:"):
-            return None
-        to = body.to if str(body.to).startswith("human:") else auth.target(c, who, body.to)
-        return H.chat_home(c, who.actor, to, {"ask": "ask", "notice": "notice"}.get(body.kind, "chat"), create=create)
+        return ask_routing.named_destination(c, who, body, auth, create=create)
 
     def send(c, who, body):
         body = routed_message(c, who, body)
-        body.conversation_id = named_destination(c, who, body)
-        in_assistant_room = False
-        if str(body.to).lower() == "assistant":
-            if who.role not in ("human", "owner") or who.via:
-                raise Problem("forbidden", "Only a human writes to their private Assistant", 403)
-            if body.conversation_id and not assistant_room(c, who, body.conversation_id):
-                raise Problem("forbidden", "Use your own Assistant room", 403)
-            info = assistant_mod.availability(c, settings, who)
-            if not info["available"]:
-                raise Problem("assistant_off", "The " + info["name"] + " is off", 409)
-            body.to = info["bot"]
-            body.conversation_id = assistant_mod.chat_room(c, settings, who)["id"]
-        to = auth.target(c, who, body.to)
-        if not body.conversation_id:
-            from .shared_bots import route
-            to = auth.target(c, who, route(c, who.actor, to))
-        if to.startswith("bot:"):
-            docs = (who.role in ("human", "owner") and body.conversation_id and to == "bot:" + views.DOC_BOT
-                    and views.docs_room(auth.conversation(c, who, body.conversation_id), who))
-            if not docs:
-                if who.role in ("human", "owner") and H.actor_id(to) == settings.assistant_bot:
-                    # The assistant takes chat in the caller's own Assistant room and nowhere else.
-                    if not assistant_room(c, who, body.conversation_id):
-                        raise Problem("forbidden", settings.assistant_name + " chats only in your own Assistant "
-                                      "(/api/v2/assistant); message one of your bots here", 403)
-                    in_assistant_room = True
-                elif who.role in ("human", "owner") and H.actor_id(to) == strategy_bot.SLUG:
-                    # No person chats with the Strategy Bot: their Assistant asks it (backend/assistant.py HELPERS). A
-                    # person's post with no room (the Goals page, `hub chat`) goes to their Assistant instead; the
-                    # owner's earlier chat with it is history, read-only. Bots still message it: its goals session.
-                    if body.conversation_id or who.via:
-                        raise Problem("forbidden", "Nobody chats with the " + strategy_bot.name(c) + " directly; ask "
-                                      "your " + settings.assistant_name + ", which hands it the work", 403)
-                    info = assistant_mod.availability(c, settings, who)
-                    if not info["available"]:
-                        raise Problem("assistant_off", "The " + info["name"] + " is off", 409)
-                    to = "bot:" + info["bot"]
-                    body.conversation_id = assistant_mod.chat_room(c, settings, who)["id"]
-                    in_assistant_room = True
-                auth.require_write(c, who, H.actor_id(to), missing="Unknown recipient")
-        if body.conversation_id:
-            auth.conversation(c, who, body.conversation_id, write=True)
-        if body.in_reply_to:
-            msg = H.message(c, body.in_reply_to)
-            if not msg:
-                raise Problem("not_found", "Original message not found", 404)
-            auth.conversation(c, who, msg["conversation_id"], write=True)
-            privacy.require_message(c, who, msg)
-            if body.conversation_id and msg["conversation_id"] != body.conversation_id:
-                raise Problem("reference", "Reply belongs to a different conversation", 422)
         check_refs(c, who, body.refs)
-        refs = dict(body.refs or {})
-        if body.command:
-            refs["command"] = True
-        if body.needs_action:
-            refs["needs_action"] = True
-        if wrong := delivery.check(body.delivery, body.defer_for):
-            raise Problem("delivery", wrong, 422)
-        if body.delivery and body.kind == "ask":
-            raise Problem("delivery", "A question always wakes the one it is for: send it without a delivery", 422)
-        # How it reaches a bot (backend/delivery.py). With none named a message goes as it always has: a person's
-        # steers, a bot's goes as bot-to-bot messages do (backend/bot_to_bot.py).
-        way = body.delivery
-        if to.startswith("bot:") and way in ("steer", "queue") and who.role == "bot":
-            refs["needs_action"] = True
-        if in_assistant_room:
-            refs["assistant"] = True           # the server's mark: this turn acts for the person
-        conversation_id = body.conversation_id
-        steer_task = H._task_ref(refs.get("task"))
-        if not conversation_id and body.kind == "steer" and who.role == "bot" and steer_task:
-            # A requester's steer goes to the task's own room, which its owner's running turn takes input from.
-            task = H.task(c, steer_task)
-            if not task or task["requester_id"] != who.actor or task["owner_id"] != to or not task.get("conversation_id"):
-                raise Problem("steer_target", "Steer a task you requested, sent to its owner", 422)
-            conversation_id = task["conversation_id"]
-        if not conversation_id and who.role in ("owner", "human") and to.startswith("bot:"):
-            conversation_id = rooms.chat_room(c, auth, who, H.actor_id(to))["id"]
-        # An onboarding bot only learns: it answers in chat and talks with its manager, and sends nothing else.
-        lifecycle.refuse_send(c, who, to, H.conversation(c, conversation_id) if conversation_id else None)
-        ask_routing.require_recipient(c, who, to, refs, conversation_id, body.in_reply_to, kind=body.kind)
-        privacy.require_destination(c, who, to, conversation_id, refs,
-                                    H.message(c, body.in_reply_to) if body.in_reply_to else None)
+        body = ask_routing.require_recipient(c, who, body.to, body=body, auth=auth)
+        to, refs, conversation_id, way = body.to, body.refs, body.conversation_id, body.delivery
         # Ride-along: a defer while the bot has a turn going in this chat goes in right after that turn.
         if way == "defer" and to.startswith("bot:") and who.role != "bot" and conversation_id \
                 and delivery.running_in_session(c, H.actor_id(to), [conversation_id]):
@@ -1663,9 +1574,7 @@ def create_app(settings=None):
             refs["quiet"] = True                 # no job: the session's next turn, or its deadline, takes it
         message = H.say(c, who.actor, to, body.text, conversation_id=conversation_id,
                         kind=body.kind, refs=refs, in_reply_to=body.in_reply_to, wait_s=body.wait_s)
-        # Everyone else it reached (its @mentions, a DM's members) is checked too; a refusal rolls the send back.
-        reach.check_delivered(c, who, message["id"], task_id=H.refs_task_id(refs),
-                              conversation_id=message.get("conversation_id"), in_reply_to=body.in_reply_to)
+        ask_routing.require_recipient(c, who, to, body=body, auth=auth, delivered=message)
         due = None
         if to.startswith("bot:") and way == "defer":
             if who.role == "bot":
@@ -1693,11 +1602,6 @@ def create_app(settings=None):
             message = {**visual_view(c, who, [H.message(c, message["id"])])[0], "visuals": report}
         if (goal and goal["status"] == "active") or body.attachments:
             H.held_queue_recheck(c, message["id"])
-        if who.role == "bot":
-            conv = H.conversation(c, message["conversation_id"])
-            if who.attempt_id and all(p.startswith("bot:") for p in conv["participants"]):
-                c.execute("INSERT OR IGNORE INTO attempt_conversations VALUES(?,?)", (who.attempt_id, conv["id"]))
-            auth.conversation(c, who, conv["id"])
         # An onboarding bot starts only a person's message or its manager's; anyone else's waits for it to be Active.
         if note := (H.held_note(c, to) or usage_limits.warning(c, to) or bot_stops.warning(c, to)
                     or (None if H.is_human(who.actor) else H.setup_hold(c, to, who.actor))):
@@ -3292,7 +3196,7 @@ def create_app(settings=None):
         if body.kind == "ask":
             from . import ask_routing
             body.to, body.refs = ask_routing.resolve(c, who.actor, body.to, body.refs,
-                                                    body.conversation_id, body.in_reply_to)
+                                                    body.conversation_id, body.in_reply_to, body=body, who=who, auth=auth)
         return body
 
     def message_write(c, who, body, rc=None, ingest=None, files=None):
