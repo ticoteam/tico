@@ -35,9 +35,9 @@ async function inboxesAlerts(host, ctx) {
     ${inboxesAlertsCheck('sms_consent', 'I agree to receive Tico alert texts at my own phone.', false)}
     ${inboxesAlertsCheck('call_consent', 'I also agree to receive urgent alert calls.', false)}
     <p class="muted ib-alert-note">US and Canada. Reply STOP to stop texts and calls; START to resume.</p>
-    <button type="submit" class="ghost" data-alert-send-code>Send code · free</button>
+    <button type="button" class="ghost" data-alert-send-code>Send code · free</button>
   </form>` : `<div class="ib-alert-phone"><strong data-alert-phone>${esc(current.phone)}</strong>${inboxesPill(tone, status)}</div>
-    ${pending ? `<form class="ib-alert-confirm" data-alert-confirm><label class="ib-alert-input">Verification code<input name="code" inputmode="numeric" autocomplete="one-time-code" pattern="[0-9]{6}" maxlength="6" required></label><button type="submit" class="ghost">Verify</button></form>` : ''}
+    ${pending ? `<form class="ib-alert-confirm" data-alert-confirm><label class="ib-alert-input">Verification code<input name="code" inputmode="numeric" autocomplete="one-time-code" pattern="[0-9]{6}" maxlength="6" required></label><button type="button" class="ghost">Verify</button></form>` : ''}
     ${message ? `<p class="ib-alert-note" role="status">${esc(message)}</p>` : ''}
     <div class="ib-alert-actions">
       <button type="button" class="ghost" data-alert-test${verified ? '' : ' disabled'}>Send a test · $1</button>
@@ -66,10 +66,10 @@ async function inboxesAlerts(host, ctx) {
         <input id="ib-alert-cap" name="monthly_cap" type="number" inputmode="numeric" min="0" max="10000" step="1" value="${esc(p.monthly_cap ?? 10)}" required>
         <p class="muted ib-alert-note">$${esc(current.monthly_spend || 0)} accepted or reserved this UTC month. Zero turns paid alerts off.</p>
       </div></div>
-      <button type="submit" class="ghost">Save alert preferences</button>
+      <button type="button" class="ghost">Save alert preferences</button>
     </form>
     <div class="ib-field"><div class="ib-field-label">Company monthly cap</div><div>
-      ${ctx.admin ? `<form class="ib-alert-company" data-alert-company><label class="ib-alert-input">Dollars<input name="monthly_cap" type="number" inputmode="numeric" min="0" max="100000" step="1" value="${esc(current.company_monthly_cap)}" required></label><button type="submit" class="ghost">Save company cap</button></form>`
+      ${ctx.admin ? `<form class="ib-alert-company" data-alert-company><label class="ib-alert-input">Dollars<input name="monthly_cap" type="number" inputmode="numeric" min="0" max="100000" step="1" value="${esc(current.company_monthly_cap)}" required></label><button type="button" class="ghost">Save company cap</button></form>`
         : `<span>$${esc(current.company_monthly_cap)}</span>`}
       <p class="muted ib-alert-note">$${esc(current.company_monthly_spend || 0)} accepted or reserved this UTC month.</p>
     </div></div>
@@ -87,7 +87,7 @@ async function inboxesAlerts(host, ctx) {
   };
   const add = card.querySelector('[data-alert-add]');
   if (add) {
-    const sms = add.elements.sms_consent, button = add.querySelector('[type=submit]');
+    const sms = add.elements.sms_consent, button = add.querySelector('[data-alert-send-code]');
     button.disabled = !sms.checked;
     sms.onchange = () => { button.disabled = !sms.checked; };
     add.onsubmit = e => { e.preventDefault(); if (!add.reportValidity() || !sms.checked) return;
@@ -114,6 +114,17 @@ async function inboxesAlerts(host, ctx) {
   if (company) company.onsubmit = e => { e.preventDefault(); if (!company.reportValidity()) return;
     void work(company, async () => { await put('/v2/alerts/company', {monthly_cap: Number(company.elements.monthly_cap.value)}); if (ctx.live()) await redraw(); });
   };
+  // Settings renders several cards together; each Alerts action submits only its own form, including Enter.
+  for (const form of card.querySelectorAll('form')) {
+    const button = form.querySelector('button');
+    button.onclick = () => form.requestSubmit();
+    form.onkeydown = e => {
+      if (e.key === 'Enter' && !e.isComposing && e.target.matches('input:not([type=checkbox])')) {
+        e.preventDefault();
+        if (!button.disabled) form.requestSubmit();
+      }
+    };
+  }
   card.querySelector('[data-alert-refresh]')?.addEventListener('click', () => { void work(card, redraw); });
   card.querySelector('[data-alert-remove]')?.addEventListener('click', async () => {
     if (!removing && !await settingsConfirm({title: 'Remove your phone?', text: 'This revokes your phone and stops queued alerts.', ok: 'Remove phone'})) return;

@@ -1,4 +1,4 @@
-CREATE TABLE alert_preferences (
+CREATE TABLE IF NOT EXISTS alert_preferences (
  person_id TEXT PRIMARY KEY REFERENCES humans(id),
  phone TEXT,
  phone_version TEXT NOT NULL DEFAULT '',
@@ -17,13 +17,13 @@ CREATE TABLE alert_preferences (
  monthly_cap INTEGER NOT NULL DEFAULT 10 CHECK(monthly_cap BETWEEN 0 AND 10000),
  updated_at TEXT NOT NULL
 );
-CREATE UNIQUE INDEX alert_preferences_verified_phone ON alert_preferences(phone) WHERE verified_at IS NOT NULL;
-CREATE TABLE alert_company_settings (
+CREATE UNIQUE INDEX IF NOT EXISTS alert_preferences_verified_phone ON alert_preferences(phone) WHERE verified_at IS NOT NULL;
+CREATE TABLE IF NOT EXISTS alert_company_settings (
  id INTEGER PRIMARY KEY CHECK(id=1),
  monthly_cap INTEGER NOT NULL DEFAULT 50 CHECK(monthly_cap BETWEEN 0 AND 100000)
 );
-INSERT INTO alert_company_settings VALUES(1,50);
-CREATE TABLE personal_alerts (
+INSERT OR IGNORE INTO alert_company_settings(id,monthly_cap) VALUES(1,50);
+CREATE TABLE IF NOT EXISTS personal_alerts (
  id TEXT PRIMARY KEY,
  person_id TEXT NOT NULL REFERENCES humans(id),
  incident_key TEXT NOT NULL,
@@ -42,5 +42,5 @@ CREATE TABLE personal_alerts (
  next_attempt_at TEXT,
  UNIQUE(person_id,incident_key)
 );
-CREATE INDEX personal_alerts_pending ON personal_alerts(state,created_at);
-CREATE INDEX personal_alerts_spend ON personal_alerts(month,reserved,person_id);
+CREATE INDEX IF NOT EXISTS personal_alerts_pending ON personal_alerts(state,created_at);
+CREATE INDEX IF NOT EXISTS personal_alerts_spend ON personal_alerts(month,reserved,person_id);
