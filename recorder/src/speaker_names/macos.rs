@@ -1,6 +1,8 @@
 //! Read-only AX transport, scoped to a Meet document in an allowlisted browser. Never uses
-//! AX actions, screenshots, keyboard shortcuts or browser automation. AXValue is read only
-//! for participant-name static text beneath Meet's name container.
+//! AX actions, screenshots, keyboard shortcuts or browser automation. The one write is
+//! Chromium's `AXManualAccessibility` switch on the browser app, which makes it build the
+//! page's AX tree (it stays empty for assistive clients otherwise). AXValue is read only for
+//! static text inside a participant row or a video tile's name container.
 use super::{
     MeetingAdapter, Observation, POLL_MS, Samples,
     meet::{self, GoogleMeet, Node},
@@ -37,6 +39,12 @@ unsafe extern "C" {
         value: *mut CFTypeRef,
     ) -> i32;
     fn AXUIElementSetMessagingTimeout(element: CFTypeRef, seconds: f32) -> i32;
+    fn AXUIElementSetAttributeValue(
+        element: CFTypeRef,
+        attribute: *const c_void,
+        value: CFTypeRef,
+    ) -> i32;
+    fn AXIsProcessTrustedWithOptions(options: *const c_void) -> bool;
     fn AXUIElementCopyMultipleAttributeValues(
         element: CFTypeRef,
         attributes: core_foundation::array::CFArrayRef,
@@ -58,6 +66,12 @@ const BROWSERS: &[&str] = &[
     "com.brave.Browser",
     "com.apple.Safari",
 ];
+const CHROMIUM: &[&str] = &[
+    "com.google.Chrome",
+    "company.thebrowser.Browser",
+    "com.microsoft.edgemac",
+    "com.brave.Browser",
+];
 const PROMPT_FILE: &str = "speaker-accessibility-dismissed";
 static PERMISSION: AtomicBool = AtomicBool::new(false);
 pub fn permission_pending() -> bool {
@@ -68,6 +82,14 @@ pub fn dismiss_permission(root: &Path) {
     PERMISSION.store(false, Ordering::Release);
 }
 pub fn open_settings(root: &Path) {
+    // Lists the app in the Accessibility pane; macOS shows its own prompt the first time.
+    let options = CFDictionary::from_CFType_pairs(&[(
+        CFString::new("AXTrustedCheckOptionPrompt"),
+        core_foundation::boolean::CFBoolean::true_value(),
+    )]);
+    unsafe {
+        AXIsProcessTrustedWithOptions(options.as_concrete_TypeRef().cast());
+    }
     let opened = std::process::Command::new("/usr/bin/open")
         .arg("x-apple.systempreferences:com.apple.preference.security?Privacy_Accessibility")
         .stdout(std::process::Stdio::null())
@@ -166,7 +188,8 @@ fn metadata(element: &CFType) -> Vec<CFType> {
     let values = unsafe { CFType::wrap_under_create_rule(values.cast()) };
     array(&values)
 }
-fn browser_windows() -> Vec<(i32, bool)> {
+/// (pid, a window title looks like Meet, Chromium).
+fn browser_windows() -> Vec<(i32, bool, bool)> {
     let raw = unsafe { CGWindowListCopyWindowInfo(16, 0) }; // Include minimized windows; exclude desktop.
     if raw.is_null() {
         return vec![];
@@ -184,10 +207,10 @@ fn browser_windows() -> Vec<(i32, bool)> {
         let Some(app) = NSRunningApplication::runningApplicationWithProcessIdentifier(pid) else {
             continue;
         };
-        if !app
-            .bundleIdentifier()
-            .is_some_and(|id| BROWSERS.contains(&id.to_string().as_str()))
-        {
+        let Some(bundle) = app.bundleIdentifier().map(|id| id.to_string()) else {
+            continue;
+        };
+        if !BROWSERS.contains(&bundle.as_str()) {
             continue;
         }
         // Window titles are used only to detect Meet when AX is denied; they are never stored.
@@ -195,9 +218,14 @@ fn browser_windows() -> Vec<(i32, bool)> {
             .find(CFString::new("kCGWindowName"))
             .and_then(|v| v.downcast::<CFString>())
             .is_some_and(|s| meet::window_title(&s.to_string()));
-        *pids.entry(pid).or_insert(false) |= is_meet;
+        let entry = pids
+            .entry(pid)
+            .or_insert((false, CHROMIUM.contains(&bundle.as_str())));
+        entry.0 |= is_meet;
     }
-    pids.into_iter().collect()
+    pids.into_iter()
+        .map(|(pid, (meet, chromium))| (pid, meet, chromium))
+        .collect()
 }
 
 /// The budget bounds work even when a browser hangs or returns a very large accessibility
@@ -274,9 +302,13 @@ fn project(
         .iter()
         .filter_map(|p| p.downcast::<CFString>())
         .map(|s| s.to_string())
-        .filter(|s| ["dkjMxf", "XEazBc"].contains(&s.as_str()))
+        .filter(|s| meet::kept_class(s))
         .collect();
-    let name_container = name_container || classes.iter().any(|c| c == "XEazBc");
+    let name_container = name_container
+        || meet::name_container(&Node {
+            classes: classes.clone(),
+            ..Default::default()
+        });
     let mut label = string(1);
     if meet::private_branch(&role, &label) {
         return None;
@@ -305,17 +337,30 @@ fn project(
         children: descendants,
     })
 }
-fn poll(canceled: Arc<AtomicBool>) -> (bool, Observation) {
-    objc2::rc::autoreleasepool(|_| poll_inner(canceled))
+fn poll(canceled: Arc<AtomicBool>, woken: &mut BTreeSet<i32>) -> (bool, Observation) {
+    objc2::rc::autoreleasepool(|_| poll_inner(canceled, woken))
 }
-fn poll_inner(canceled: Arc<AtomicBool>) -> (bool, Observation) {
+/// Chromium returns kAXErrorAttributeUnsupported here yet still enables its tree, which fills
+/// in over the next polls. Asked once per browser process; later polls retry the walk.
+fn wake(app: &CFType) {
+    let key = CFString::new("AXManualAccessibility");
+    unsafe {
+        AXUIElementSetAttributeValue(
+            app.as_CFTypeRef(),
+            key.as_CFTypeRef(),
+            core_foundation::boolean::CFBoolean::true_value().as_CFTypeRef(),
+        );
+    }
+}
+fn poll_inner(canceled: Arc<AtomicBool>, woken: &mut BTreeSet<i32>) -> (bool, Observation) {
     let windows = browser_windows();
     if !unsafe { AXIsProcessTrusted() } {
         return (
-            windows.iter().any(|(_, meet)| *meet),
+            windows.iter().any(|(_, meet, _)| *meet),
             Observation::default(),
         );
     }
+    woken.retain(|pid| windows.iter().any(|(p, _, _)| p == pid));
     PERMISSION.store(false, Ordering::Release);
     let mut budget = Budget {
         until: Instant::now() + Duration::from_millis(150),
@@ -323,7 +368,7 @@ fn poll_inner(canceled: Arc<AtomicBool>) -> (bool, Observation) {
         canceled,
     };
     let mut found = vec![];
-    for (pid, _) in windows {
+    for (pid, _, chromium) in windows {
         let raw = unsafe { AXUIElementCreateApplication(pid) };
         if raw.is_null() {
             continue;
@@ -333,6 +378,16 @@ fn poll_inner(canceled: Arc<AtomicBool>) -> (bool, Observation) {
             AXUIElementSetMessagingTimeout(app.as_CFTypeRef(), 0.025);
         }
         let windows = elements(&app, "AXWindows");
+        // Chromium page accessibility slows the browser, so only for a window showing Meet.
+        if chromium
+            && !woken.contains(&pid)
+            && windows
+                .iter()
+                .any(|w| meet::window_title(&text(w, "AXTitle")))
+        {
+            woken.insert(pid);
+            wake(&app);
+        }
         for window in &windows {
             let Some(document) = document(&window, 0, &mut budget) else {
                 continue;
@@ -381,9 +436,10 @@ impl Watch {
                 let mut samples = Samples::default();
                 let mut participants = BTreeSet::new();
                 let mut locals = BTreeSet::new();
+                let mut woken = BTreeSet::new();
                 while !canceled.load(Ordering::Acquire) {
                     let tick = Instant::now();
-                    let (denied, observed) = poll(canceled.clone());
+                    let (denied, observed) = poll(canceled.clone(), &mut woken);
                     if denied && !store.root().join(PROMPT_FILE).exists() {
                         PERMISSION.store(true, Ordering::Release);
                     }

@@ -1,9 +1,13 @@
 # Meet AX fixtures
 
-`chrome-observed.json` is a reduced projection of a live Chrome Meet AX tree inspected on macOS. Names are fictional. The observed name path is `dkjMxf → … → XEazBc → … → AXStaticText.AXValue`. `atLQQ` and `tC2Wod` visual decorations were exposed through `AXDOMClassList`, without an explicit semantic speaking label. Their presence, mute state, pin state and layout are deliberately **not** interpreted as speech. `chrome-ended.json` is a direct, anonymized AX capture taken after that inspection, when the name containers were no longer present.
+All three are reduced, anonymized projections of live Chrome Meet AX trees on macOS. No real names.
 
-`gallery.json`, `presenting.json` and `others.json` are synthetic parser contracts based on Google's [documented Meet interface](https://support.google.com/meet/answer/15738543). The explicit speaking labels in them are test inputs, **not captured or documented AX attribute guarantees**. They exercise alignment and privacy behavior if a browser exposes such a label. They do not establish that passive speaker naming works in any browser.
+`chrome-live-rows.json` comes from a read-only probe during a real call (Nov 5 2026): 591 polls 250 ms apart, with `AXManualAccessibility` set on Chrome first (its tree was empty until then). It keeps the poll times, the People-panel rows (`KV1GEc cxdMu`, AXDescription = name) as deduplicated subtrees, and the frames where the rows changed. Names are `Participant 1`; the probe's other anonymized tokens (`P38`, `P39`, …) are kept as they were. One account was signed in on two devices, so both rows share one name.
 
-Chrome was the only running supported browser during inspection. Arc, Edge, Brave and Safari still need real AX captures. Google documents a keyboard command to announce the speaker; this adapter never invokes it, changes Meet controls, opens the people panel, enables captions or reads caption/chat/presentation text.
+The speaking signal is the row's `IisKdb` indicator: `gjg47c` while silent, cycling `OgVli`/`wEsLMd`/`HX2H7`/`Oaajhc` about every 250 ms while that participant is heard. Speech bursts in the capture: 51 s, 61–70 s, 93–102 s, 115 s, 137–147 s.
 
-A release needs a live recording with two remote voices and the local microphone in each browser: confirm names against actual speaker changes in gallery, presentation, pinned/spotlight and others layouts; inspect quiet gaps and overlapping speech; verify the permission prompt on an installed app with AX denied; verify Stop ends AX polling. A passive, explicit speaking signal remains unverified. Unknown evidence keeps the audio's anonymous speaker label.
+Only the first row ever showed the indicator. That row has an extra text (`P38`) where Meet shows "(You)", and no mute control; the other device's row has "Mute …'s microphone" / "You can't unmute someone else" and never exposed a level. So the captured bursts are most likely the local person's, which the Recorder excludes (the mic is Me). A remote participant's indicator was not captured.
+
+`chrome-observed.json` (video tiles, `dkjMxf → XEazBc → AXStaticText`) supplies names only; tiles expose no speaking state. `chrome-ended.json` is the tree after the call, with no rows or tiles.
+
+Still to check live: a different remote person speaking with the People panel open (does their row show `IisKdb`?), the panel closed (expected: names only, no speakers), Arc, Edge, Brave and Safari, and the Accessibility prompt on an installed app. Unknown evidence keeps the audio's anonymous speaker label.

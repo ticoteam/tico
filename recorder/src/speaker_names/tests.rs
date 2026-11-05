@@ -61,10 +61,7 @@ fn overlap_needs_a_clear_duration_majority_and_local_names_are_excluded() {
 #[test]
 fn missed_samples_and_no_speaker_close_the_evidence_instead_of_bridging_gaps() {
     let mut samples = Samples::default();
-    let observed = Observation {
-        active: vec!["Ana Example".into()],
-        ..Default::default()
-    };
+    let observed = speaking(&["Ana Example"]);
     assert!(samples.push(1000, observed.clone()).is_empty());
     assert_eq!(
         samples.push(1250, observed.clone()),
@@ -72,27 +69,77 @@ fn missed_samples_and_no_speaker_close_the_evidence_instead_of_bridging_gaps() {
     );
     assert!(samples.push(2500, observed).is_empty());
     assert_eq!(
-        samples.push(2750, Observation::default()),
+        samples.push(2750, speaking(&[])),
         [interval(2500, 2750, "Ana Example")]
     );
-    assert!(samples.push(3000, Observation::default()).is_empty());
+    assert!(samples.push(3000, speaking(&[])).is_empty());
+}
+fn speaking(names: &[&str]) -> Observation {
+    Observation {
+        active: names.iter().map(|n| n.to_string()).collect(),
+        indicators: true,
+        ..Default::default()
+    }
+}
+#[test]
+fn short_silences_bridge_but_long_silence_unreadable_state_and_missed_polls_do_not() {
+    let mut samples = Samples::default();
+    let mut out = vec![];
+    // Speaking, two silent polls (500 ms), speaking: one turn.
+    for (at, observed) in [
+        (0, speaking(&["Ana Example"])),
+        (250, speaking(&[])),
+        (500, speaking(&[])),
+        (750, speaking(&["Ana Example"])),
+        (1000, speaking(&[])),
+        // 1 s of silence ends the turn.
+        (1250, speaking(&[])),
+        (1500, speaking(&[])),
+        (1750, speaking(&[])),
+        (2000, speaking(&["Ana Example"])),
+        // Unreadable indicator: silence is unknown, nothing is bridged through it.
+        (2250, Observation::default()),
+        (2500, speaking(&["Ana Example"])),
+        (2750, speaking(&[])),
+        // A missed poll closes evidence too.
+        (3000, speaking(&["Ana Example"])),
+        (4000, speaking(&["Ana Example"])),
+        (4250, speaking(&[])),
+    ] {
+        out.extend(samples.push(at, observed));
+    }
+    assert_eq!(
+        coalesce(out),
+        [
+            interval(0, 1000, "Ana Example"),
+            interval(2000, 2250, "Ana Example"),
+            interval(2500, 2750, "Ana Example"),
+            interval(4000, 4250, "Ana Example"),
+        ]
+    );
+}
+/// The store joins an interval that starts where the same name's last one ended.
+fn coalesce(intervals: Vec<Interval>) -> Vec<Interval> {
+    let mut out: Vec<Interval> = vec![];
+    for next in intervals {
+        match out.iter_mut().rev().find(|i| i.name == next.name) {
+            Some(last) if last.end_ms == next.start_ms => last.end_ms = next.end_ms,
+            _ => out.push(next),
+        }
+    }
+    out
 }
 #[test]
 fn self_identification_in_the_next_poll_prevents_mic_leakage() {
     let mut samples = Samples::default();
-    samples.push(
-        1000,
-        Observation {
-            active: vec!["Casey Example".into()],
-            ..Default::default()
-        },
-    );
+    samples.push(1000, speaking(&["Casey Example"]));
     assert!(
         samples
             .push(
                 1250,
                 Observation {
                     self_names: vec!["Casey Example".into()],
+                    indicators: true,
                     ..Default::default()
                 }
             )
@@ -162,6 +209,50 @@ fn provisional_stream_voices_are_scoped_away_from_offline_voice_numbers() {
     assert_eq!(named(&record).chunks[0].words[0].speaker, "Ana Example");
 }
 #[test]
+fn each_voice_gets_one_name_only_after_enough_clear_evidence() {
+    let mut record = record();
+    record.meeting_speakers.intervals = vec![
+        // Speaker 1: 2.4 s of Ana, 0.4 s of Ben (noise or overlap).
+        interval(300, 2700, "Ana Example"),
+        interval(5300, 5700, "Ben Example"),
+        // Speaker 2: 1.6 s of Ben.
+        interval(3300, 4900, "Ben Example"),
+        // Speaker 3: only 0.6 s of anything.
+        interval(8300, 8900, "Ana Example"),
+        // Speaker 4: 1.2 s Ana vs 1 s Ben is not a two-thirds majority.
+        interval(10_300, 11_500, "Ana Example"),
+        interval(11_500, 12_500, "Ben Example"),
+    ];
+    record.chunks.push(chunk(
+        "them",
+        vec![
+            word(0, 2400, "Speaker 1"),
+            word(5000, 5400, "Speaker 1"),
+            word(7000, 7200, "Speaker 1"),
+            word(3000, 4600, "Speaker 2"),
+            word(8000, 8600, "Speaker 3"),
+            word(10_000, 12_200, "Speaker 4"),
+        ],
+    ));
+    let named = named(&record);
+    let speakers: Vec<_> = named.chunks[0]
+        .words
+        .iter()
+        .map(|w| w.speaker.as_str())
+        .collect();
+    assert_eq!(
+        speakers,
+        [
+            "Ana Example",
+            "Ana Example",
+            "Ana Example",
+            "Ben Example",
+            "Speaker 3",
+            "Speaker 4"
+        ]
+    );
+}
+#[test]
 fn a_tied_voice_cluster_stays_anonymous_instead_of_switching_identity_per_word() {
     let mut record = record();
     record.meeting_speakers.intervals = vec![
@@ -193,39 +284,156 @@ fn untimed_utterances_get_names_and_manual_edits_keep_the_chosen_speaker() {
     record.chunks[0].speaker = "Chosen speaker".into();
     assert_eq!(named(&record).chunks[0].speaker, "Chosen speaker");
 }
+fn row(name: &str, extra: Vec<serde_json::Value>, indicator: &[&str]) -> serde_json::Value {
+    let mut children = vec![json!({"role":"AXStaticText","label":name})];
+    children.extend(extra);
+    children.push(json!({"role":"AXGroup","classes":["I118Fc"],"children":[
+        {"role":"AXGroup","classes":["VeFZv"],"children":[
+            {"role":"AXGroup","classes":indicator}]}]}));
+    json!({"role":"AXGroup","classes":["KV1GEc","cxdMu","other"],"description":name,"children":children})
+}
+fn panel(rows: Vec<serde_json::Value>) -> meet::Node {
+    serde_json::from_value(
+        json!({"role":"AXGroup","description":"Side panel","children":[
+        {"role":"AXList","description":"Participants","children":rows},
+        {"role":"AXGroup","label":"In-call messages","children":[
+            row("Chat Person", vec![], &["IisKdb", "OgVli"])]}]}),
+    )
+    .unwrap()
+}
 #[test]
-fn meet_layout_contracts_preserve_names_and_never_name_the_others_tile_or_pinned_tile_as_speaker() {
-    let fixtures = [
-        (
-            include_str!("../../tests/fixtures/meet-ax/gallery.json"),
-            vec!["Ana Example"],
-            vec!["Casey Example"],
+fn meet_rows_name_remote_speakers_and_never_the_local_person_or_an_unknown_state() {
+    let root = panel(vec![
+        row(
+            "Casey Example",
+            vec![json!({"role":"AXStaticText","label":"(You)"})],
+            &["IisKdb", "wEsLMd"],
         ),
-        (
-            include_str!("../../tests/fixtures/meet-ax/presenting.json"),
-            vec!["Ben Example"],
-            vec![],
-        ),
-        (
-            include_str!("../../tests/fixtures/meet-ax/others.json"),
-            vec!["Ben Example"],
-            vec!["Casey Example"],
-        ),
-    ];
-    for (fixture, active, locals) in fixtures {
+        row("Ana Example", vec![], &["IisKdb", "HX2H7", "x9nQ6"]),
+        row("Ben Example", vec![], &["IisKdb", "gjg47c"]),
+        // A new Meet state class is not proof of speech.
+        row("Dee Example", vec![], &["IisKdb", "Zz9new"]),
+        row("3 others", vec![], &["IisKdb", "OgVli"]),
+    ]);
+    let rows = meet::rows(&root);
+    assert_eq!(
+        rows.iter()
+            .map(|r| (r.name.as_str(), r.local, r.speaking))
+            .collect::<Vec<_>>(),
+        [
+            ("Casey Example", true, Some(true)),
+            ("Ana Example", false, Some(true)),
+            ("Ben Example", false, Some(false)),
+            ("Dee Example", false, None),
+        ]
+    );
+    let observed = meet::GoogleMeet.observe(&root);
+    assert_eq!(observed.active, ["Ana Example"]);
+    assert_eq!(observed.self_names, ["Casey Example"]);
+    assert!(observed.indicators);
+    assert!(!observed.participants.iter().any(|p| p.contains("Chat")));
+}
+#[test]
+fn without_the_row_structure_nothing_is_observed() {
+    for fixture in [
+        include_str!("../../tests/fixtures/meet-ax/chrome-ended.json"),
+        r#"{"role":"AXGroup","children":[{"role":"AXGroup","description":"Ana Example","classes":["IisKdb","OgVli"]}]}"#,
+    ] {
         let root: meet::Node = serde_json::from_str(fixture).unwrap();
         let observed = meet::GoogleMeet.observe(&root);
-        assert_eq!(observed.active, active);
-        assert_eq!(observed.self_names, locals);
-        assert!(
-            observed
-                .participants
-                .iter()
-                .all(|p| !p.contains("others") && !p.contains("Private"))
-        );
+        assert!(observed.active.is_empty());
+        assert!(!observed.indicators);
     }
-    let silent:meet::Node=serde_json::from_value(json!({"role":"AXGroup","label":"Pinned","children":[{"role":"AXButton","label":"More options for Ana Example"}]})).unwrap();
-    assert!(meet::GoogleMeet.read_active_speakers(&silent).is_empty());
+}
+/// Captured live in Chrome: 591 polls 250 ms apart, reduced to People-panel rows (deduplicated
+/// subtrees) and the poll times. One account was signed in on two devices, so both rows share
+/// one name; only the first row ever showed a level indicator.
+#[derive(serde::Deserialize)]
+struct Capture {
+    polls: Vec<u64>,
+    trees: Vec<serde_json::Value>,
+    frames: Vec<Frame>,
+}
+#[derive(serde::Deserialize)]
+struct Frame {
+    t: u64,
+    rows: Vec<usize>,
+}
+fn replay(edit: impl Fn(&mut serde_json::Value)) -> (Vec<Observation>, Vec<Interval>) {
+    let capture: Capture = serde_json::from_str(include_str!(
+        "../../tests/fixtures/meet-ax/chrome-live-rows.json"
+    ))
+    .unwrap();
+    let mut trees = capture.trees.clone();
+    trees.iter_mut().for_each(edit);
+    let (mut samples, mut observed, mut intervals, mut frame) =
+        (Samples::default(), vec![], vec![], 0);
+    for at in capture.polls {
+        while capture.frames.get(frame + 1).is_some_and(|f| f.t <= at) {
+            frame += 1;
+        }
+        let rows: Vec<_> = capture.frames[frame]
+            .rows
+            .iter()
+            .map(|i| trees[*i].clone())
+            .collect();
+        let root: meet::Node =
+            serde_json::from_value(json!({"role":"AXList","children":rows})).unwrap();
+        let observation = meet::GoogleMeet.observe(&root);
+        intervals.extend(samples.push(at, observation.clone()));
+        observed.push(observation);
+    }
+    (observed, coalesce(intervals))
+}
+#[test]
+fn captured_chrome_rows_yield_the_live_speech_bursts() {
+    let (observed, intervals) = replay(|_| {});
+    assert!(
+        observed
+            .iter()
+            .all(|o| o.participants.iter().all(|p| p == "Participant 1"))
+    );
+    // Rows are missing until the panel opens and during three relayouts.
+    assert_eq!(observed.iter().filter(|o| !o.indicators).count(), 149);
+    let spans: Vec<_> = intervals
+        .iter()
+        .map(|i| {
+            assert_eq!(i.name, "Participant 1");
+            (i.start_ms, i.end_ms)
+        })
+        .collect();
+    assert_eq!(
+        spans,
+        [
+            (51456, 51710),
+            (61334, 66148),
+            (67915, 68169),
+            (69191, 70710),
+            (93783, 99605),
+            // The empty tree at 100031 ms is not bridged.
+            (100122, 102143),
+            (115826, 116080),
+            (137862, 139449),
+            (143114, 143609),
+            (146149, 147405),
+        ]
+    );
+}
+#[test]
+fn captured_rows_marked_as_the_local_person_yield_nothing() {
+    // The captured row with the indicator carries an anonymized second text ("P38") where Meet
+    // shows "(You)" on the local person's row. With that marker, the bursts are the mic's.
+    fn mark(node: &mut serde_json::Value) {
+        if node["label"] == "P38" {
+            node["label"] = json!("(You)");
+        }
+        if let Some(children) = node["children"].as_array_mut() {
+            children.iter_mut().for_each(mark);
+        }
+    }
+    let (observed, intervals) = replay(mark);
+    assert!(intervals.is_empty());
+    assert!(observed.iter().any(|o| o.self_names == ["Participant 1"]));
 }
 #[test]
 fn meet_detection_rejects_landing_pages_other_sites_and_unrelated_browser_documents() {
@@ -288,6 +496,7 @@ fn old_library_migration_is_repeatable_keeps_audio_and_cascades_local_identity_d
         participants: vec!["Ana Example".into(), "Casey Example".into()],
         self_names: vec!["Casey Example".into()],
         active: vec!["Ana Example".into()],
+        indicators: true,
     };
     store
         .observe_speakers(

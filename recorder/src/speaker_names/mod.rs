@@ -22,6 +22,11 @@ pub const POLL_MS: u64 = 250;
 /// A stalled browser must not extend the last speaker across an unobserved interval.
 #[cfg(any(target_os = "macos", test))]
 const MAX_SAMPLE_GAP_MS: u64 = 750;
+/// Meet's level indicator drops to silent between syllables; readings this close are one turn.
+#[cfg(any(target_os = "macos", test))]
+const HOLD_MS: u64 = 700;
+/// A voice is named only after this much speaking overlap, and only by a clear majority.
+const MIN_EVIDENCE_MS: u64 = 1000;
 
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
 pub struct Interval {
@@ -41,21 +46,14 @@ pub struct Observation {
     pub self_names: Vec<String>,
     /// Several people may speak at once. Ties remain unknown rather than inventing a turn.
     pub active: Vec<String>,
+    /// Speaking state was readable this poll. Without it silence is unknown, not observed.
+    pub indicators: bool,
 }
 
 /// One adapter per meeting app. Browser AX transport stays outside the app's parser.
 pub trait MeetingAdapter {
     fn detect_window(&self, title: &str, document_url: &str) -> bool;
-    fn read_participants(&self, root: &meet::Node) -> (Vec<String>, Vec<String>);
-    fn read_active_speakers(&self, root: &meet::Node) -> Vec<String>;
-    fn observe(&self, root: &meet::Node) -> Observation {
-        let (participants, self_names) = self.read_participants(root);
-        Observation {
-            participants,
-            self_names,
-            active: self.read_active_speakers(root),
-        }
-    }
+    fn observe(&self, root: &meet::Node) -> Observation;
 }
 
 pub(super) fn name(value: &str) -> Option<String> {
@@ -122,14 +120,19 @@ impl<'a> Evidence<'a> {
         winner(self.scores(start, end), false).map(str::to_owned)
     }
 }
-/// Ambiguous overlap is evidence for neither person. A clear majority can name a cluster,
-/// including its short turns and words that fall in gaps in the AX observations.
+/// Ambiguous overlap is evidence for neither person. A voice cluster needs enough overlap and
+/// two thirds of it for one name; then its short turns and words in AX gaps share that name.
 fn winner(scores: BTreeMap<&str, u64>, cluster: bool) -> Option<&str> {
+    let total: u64 = scores.values().sum();
     let mut scores: Vec<_> = scores.into_iter().collect();
     scores.sort_by_key(|(_, weight)| std::cmp::Reverse(*weight));
     let (name, weight) = *scores.first()?;
     let runner_up = scores.get(1).map_or(0, |(_, n)| *n);
-    (weight > runner_up + if cluster { 0 } else { runner_up / 4 }).then_some(name)
+    if cluster {
+        (weight >= MIN_EVIDENCE_MS && weight * 3 >= total * 2).then_some(name)
+    } else {
+        (weight > runner_up + runner_up / 4).then_some(name)
+    }
 }
 
 /// Provider turn labels are local to a chunk; diarized voice labels span the recording.
@@ -248,31 +251,44 @@ pub fn named(record: &Recording) -> std::borrow::Cow<'_, Recording> {
     std::borrow::Cow::Owned(out)
 }
 
-/// Turn point observations into bounded intervals. Nothing is inferred through a missed poll.
+/// Turn point observations into bounded intervals. A reading covers the time to the next poll;
+/// silences up to [`HOLD_MS`] between readings are bridged. Nothing is bridged across a missed
+/// poll or a poll whose speaking state was unreadable.
 #[derive(Default)]
 #[cfg(any(target_os = "macos", test))]
 pub(super) struct Samples {
     previous: Option<(u64, Observation)>,
+    /// Per name: the end of its last emitted interval.
+    open: BTreeMap<String, u64>,
 }
 #[cfg(any(target_os = "macos", test))]
 impl Samples {
     pub fn push(&mut self, at: u64, observed: Observation) -> Vec<Interval> {
         let mut out = vec![];
         if let Some((before, previous)) = self.previous.take() {
-            if at > before && at - before <= MAX_SAMPLE_GAP_MS {
-                for name in previous.active.into_iter().collect::<BTreeSet<_>>() {
-                    if !previous
+            if at <= before || at - before > MAX_SAMPLE_GAP_MS || !previous.indicators {
+                self.open.clear();
+            } else {
+                for name in previous.active.iter().collect::<BTreeSet<_>>() {
+                    if previous
                         .self_names
                         .iter()
                         .chain(&observed.self_names)
-                        .any(|local| same(local, &name))
+                        .any(|local| same(local, name))
                     {
-                        out.push(Interval {
-                            start_ms: before,
-                            end_ms: at,
-                            name,
-                        });
+                        self.open.remove(name);
+                        continue;
                     }
+                    let start = match self.open.get(name) {
+                        Some(end) if before - end <= HOLD_MS => *end,
+                        _ => before,
+                    };
+                    self.open.insert(name.clone(), at);
+                    out.push(Interval {
+                        start_ms: start,
+                        end_ms: at,
+                        name: name.clone(),
+                    });
                 }
             }
         }
