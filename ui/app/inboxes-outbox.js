@@ -189,4 +189,9 @@ inboxesKind('outbox', {group: 'letters-out', label: 'Letters out', order: 50,
 inboxesSetting('letters-out', {section: 'letters-out', order: 10, render: lettersOutSettingsRender});
 inboxesStep('letters-out', {order: 40, title: 'Send letters', optional: true,
   done: async ctx => !!(await lettersOutSettings(ctx)).return_address,
-  render: lettersOutSettingsRender});
+  render: async (host, ctx) => {
+    const config = await lettersOutSettings(ctx); if (!ctx.live()) return;
+    // An older server keeps the shell's disabled setup step until its Letters API is available.
+    if (config.id !== 'company') { host.innerHTML = '<p><button type="button" class="ghost" disabled>Connect Click2Mail</button> <span class="pill">Coming soon</span></p>'; return; }
+    await lettersOutSettingsRender(host, ctx);
+  }});
