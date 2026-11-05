@@ -427,6 +427,7 @@ def test_sent_link_and_legacy_item_provenance_both_follow_current_access(api):
 
 
 def test_historical_participants_flag_and_edit_route_share_the_effective_audience(api):
+    from backend import learnings
     from backend.tests.test_api import post
     rid = record(api, {'private': True, 'audience': 'participants'})
     iid = add(api, rid, {'section': 'task', 'text': 'Private quote', 'quote': 'Confidential words',
@@ -439,10 +440,15 @@ def test_historical_participants_flag_and_edit_route_share_the_effective_audienc
     push(api, rid, iid, expected=409)
     with api.app.state.store.read() as c:
         assert c.execute('SELECT count(*) FROM tasks').fetchone()[0] == before
+        collected, _ = learnings.collect(c, api.app.state.store.settings, events.H.now(), {})
+        assert rid not in {item['ref'].get('meeting') for item in collected}
     version = get(api, 'meetings/' + rid)['version']
     edited = post(api, f'meetings/{rid}/edit', {'private': False, 'version': version})
     assert edited['private'] is False and 'audience' not in edited and 'audience_emails' not in edited
     assert items(api, rid, 'cara-test')['audience'] is None
+    with api.app.state.store.read() as c:
+        collected, _ = learnings.collect(c, api.app.state.store.settings, events.H.now(), {})
+        assert rid in {item['ref'].get('meeting') for item in collected}
     edited = post(api, f'meetings/{rid}/edit', {'private': True, 'version': edited['version']})
     assert edited['private'] is True and 'audience' not in edited
     assert api.get('/api/v2/meetings/' + rid, headers=headers('cara-test')).status_code == 403

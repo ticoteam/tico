@@ -490,7 +490,11 @@
       if (draft.flight) { try { await draft.flight; } catch {} if(draft.error) throw new Error(draft.error); }
       const reply = await invoke('shared_item', {id, action:send ? 'send' : null, body:send ? {...draft.patch,version:draft.version} : {status:'dismissed',version:draft.version}});
       if (reply.conflict) { draft.current=reply.conflict; draft.version=reply.conflict.version; draft.base=reply.conflict; throw new Error('This item changed'); }
-      draft.patch = {}; draft.dirty = {}; draft.error = ''; draft.current=null; draft.closed=null;
+      if (send && reply.pushed === false && Object.keys(draft.dirty).length) {
+        draft.closed ||= mergeShared(draft.base, draft.patch);
+      } else {
+        draft.patch = {}; draft.dirty = {}; draft.error = ''; draft.current=null; draft.closed=null;
+      }
     } catch (e) { draft.error = String(e); }
     finally { draft.sending = false; node.querySelectorAll('button,input,textarea,select').forEach(f => f.disabled = false); }
     await poll(); render();

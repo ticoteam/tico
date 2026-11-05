@@ -17,6 +17,7 @@ from . import models as M
 from . import task_privacy as privacy
 from .harnesses import is_external
 from .judge import over_spend_cap, primary_engine, server_engine
+from .media import effective_audience
 from .statuses import PARKED_SQL
 from .store import H, Problem
 from .updates import ZONE
@@ -216,7 +217,7 @@ def collect(c, settings, now, team):
                        "AND mc.deleted_at IS NULL AND m.created_at>? AND m.created_at<=? ORDER BY m.created_at",
                        (since["meeting"], now)).fetchall():
         meta = H._json(r["metadata"], {}) or {}
-        if meta.get("kind") != "meeting" or meta.get("private"):
+        if meta.get("kind") != "meeting" or effective_audience(meta) != "team":
             continue
         summary = meta.get("source_summary") or r["notes"] or ""
         text = clip(f"{r['title']}\n\n{summary}".strip(), MEETING_CHARS)

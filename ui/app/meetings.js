@@ -1266,9 +1266,13 @@ function meetPendingRender(state, rec, data) {
         node.querySelectorAll('button, input, textarea, select').forEach(field => field.disabled = true);
         try {
           if (draft.flight) { try { await draft.flight; } catch {} if (draft.error) throw new Error(draft.error); }
-          await post(`/meetings/${encodeURIComponent(rec.id)}/items/${encodeURIComponent(item.id)}${send ? '/push' : ''}`,
+          const reply = await post(`/meetings/${encodeURIComponent(rec.id)}/items/${encodeURIComponent(item.id)}${send ? '/push' : ''}`,
                      send ? {...draft.patch, force, version: draft.version} : {status: 'dismissed', version: draft.version});
-          draft.patch = {}; draft.dirty = {}; draft.error = ''; draft.current = null; draft.closed = null;
+          if (send && reply.pushed === false && Object.keys(draft.dirty).length) {
+            draft.closed ||= meetPendingMerge(draft.base, draft.patch);
+          } else {
+            draft.patch = {}; draft.dirty = {}; draft.error = ''; draft.current = null; draft.closed = null;
+          }
           await meetItemsLoad(state, rec.id);
         } catch (e) {
           draft.error = e.message;
