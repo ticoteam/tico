@@ -3596,6 +3596,10 @@ fn recorder_link_worker_restarts_before_commit_and_links_once_without_another_ac
     let (tico, seen, server) = server(vec![None, Some(json!({"results":[{"status":200}]}))]);
     // The process goes away after persisting the action, before the server commits it.
     assert!(tico.flush_saved_links(&store, &id).is_err());
+    let activity = store.task_link_activity(&id);
+    assert!(!activity.sending);
+    assert_eq!(activity.task_ids, ["task"]);
+    assert!(!activity.error.is_empty());
     drop(store);
     let reopened = Store::open(dir.path()).unwrap();
     let destination = tico.destination.clone();
@@ -3604,6 +3608,7 @@ fn recorder_link_worker_restarts_before_commit_and_links_once_without_another_ac
     });
     wait_recorder_links(&reopened, &id);
     drop(sync);
+    assert_eq!(reopened.task_link_activity(&id), Default::default());
     server.join().unwrap();
     let requests = seen.lock().unwrap();
     assert_eq!(requests.len(), 2); // Only the second request commits a relationship.
@@ -3693,6 +3698,16 @@ fn recorder_link_drainers_serialize_and_reread_the_outbox() {
         std::thread::sleep(Duration::from_millis(5));
     }
     let second_store = store.clone();
+    let activity = store.task_link_activity(&id);
+    assert!(activity.sending);
+    assert_eq!(activity.task_ids, ["task"]);
+    assert!(activity.error.is_empty());
+    let (connecting, connected) = std::sync::mpsc::channel();
+    let disconnected = crate::task_links::TaskLinkSync::start_with(store.clone(), move |_, _| {
+        connecting.send(()).unwrap();
+        anyhow::bail!("Connection unavailable")
+    });
+    connected.recv_timeout(Duration::from_secs(3)).unwrap();
     let second_id = id.clone();
     let (finished, completion) = std::sync::mpsc::channel();
     let second = std::thread::spawn(move || {
@@ -3704,12 +3719,15 @@ fn recorder_link_drainers_serialize_and_reread_the_outbox() {
         completion.recv_timeout(Duration::from_millis(100)),
         Err(std::sync::mpsc::RecvTimeoutError::Timeout)
     ));
+    assert!(store.task_link_activity(&id).sending);
     release.send(()).unwrap();
     first.join().unwrap();
     second.join().unwrap();
+    drop(disconnected);
     server.join().unwrap();
     assert_eq!(seen.lock().unwrap().len(), 1);
     assert!(store.context(&id).unwrap().task_link_operations.is_empty());
+    assert_eq!(store.task_link_activity(&id), Default::default());
 }
 
 #[test]
