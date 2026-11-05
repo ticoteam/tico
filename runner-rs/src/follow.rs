@@ -145,24 +145,79 @@ async fn runner_code_changed(root: &Path, old: &str, new: &str) -> bool {
     }
 }
 
+/// Share the link check and swap with the release updater. Repairs require the caller's checkout lock.
+async fn checkout_links(root: &Path, repair: bool) -> Value {
+    let mut cmd = tokio::process::Command::new(crate::env::python());
+    cmd.args(["-m", "runner_support.checkout_links", "--root"]).arg(root);
+    if repair { cmd.arg("--repair-locked"); }
+    cmd.current_dir(crate::env::root())
+        .stdin(Stdio::null()).stdout(Stdio::piped()).stderr(Stdio::null()).kill_on_drop(true);
+    match tokio::time::timeout(Duration::from_secs(60), cmd.output()).await {
+        Ok(Ok(out)) if out.status.success() => serde_json::from_slice(&out.stdout).unwrap_or(Value::Null),
+        _ => Value::Null,
+    }
+}
+
+fn flattened_note(found: &Value) -> String {
+    let names: Vec<_> = found["flattened"].as_array().into_iter().flatten().filter_map(Value::as_str).collect();
+    if found["only_flattened"] == true {
+        format!("only flattened Tico links: {}; repaired automatically on the next update", names.join(", "))
+    } else if !names.is_empty() {
+        format!("flattened links: {}", names.join(", "))
+    } else {
+        String::new()
+    }
+}
+
 /// Fast-forward the checkout to origin/main when that is safe (service.py self_update): (restart, note), restart
 /// when HEAD is now newer than what this process runs, the note saying why nothing was done.
 async fn self_update(root: &Path, running: &str) -> (bool, String) {
     let out = |r: Option<(i32, String)>| r.map(|(_, o)| o).unwrap_or_default();
+    let common = out(git_in(root, &["rev-parse", "--git-common-dir"], 30).await);
+    if common.is_empty() {
+        return (false, "cannot find the checkout update lock".into());
+    }
+    let _lock = match crate::lock::acquire(&root.join(common).join("tico-update.lock")) {
+        Ok(lock) => lock,
+        Err(_) => return (false, "waiting for the checkout update lock".into()),
+    };
     let branch = out(git_in(root, &["rev-parse", "--abbrev-ref", "HEAD"], 30).await);
     if branch != "main" {
         return (false, format!("checkout is on {}, not main", if branch.is_empty() { "an unknown branch" } else { &branch }));
     }
-    if let Some(note) = crate::repositories::repair_instruction_links(root, &crate::safegit::clean_environment(&crate::env::process_environment())).await {
-        let status = git_in(root, &["status", "--porcelain", "--untracked-files=no"], 30).await.map(|(_, status)| status).unwrap_or_default();
-        return (false, format!("{note}; changed files: {}", crate::repositories::changed_file_names(&status)));
-    }
-    let status = match git_in(root, &["status", "--porcelain", "--untracked-files=no"], 30).await {
+    let mut repair_note = String::new();
+    let mut status = match git_in(root, &["status", "--porcelain", "--untracked-files=no"], 30).await {
         Some((0, status)) => status,
         _ => return (false, "could not inspect checkout changes".into()),
     };
+    let mut found = Value::Null;
     if !status.is_empty() {
-        return (false, format!("checkout has uncommitted changes: {}", crate::repositories::changed_file_names(&status)));
+        found = checkout_links(root, true).await;
+        let restored = found["restored"].as_array().map_or(0, Vec::len);
+        if restored > 0 {
+            repair_note = found["note"].as_str().unwrap_or_default().to_string();
+            log(&format!("Tico update: {repair_note}"));
+        }
+        status = match git_in(root, &["status", "--porcelain", "--untracked-files=no"], 30).await {
+            Some((0, status)) => status,
+            _ => return (false, "could not inspect checkout changes".into()),
+        };
+    }
+    // A refused batch must reach the dirty-checkout path without a second repair changing part of it.
+    if status.is_empty() || found["flattened"].as_array().is_none_or(Vec::is_empty) {
+        if let Some(note) = crate::repositories::repair_instruction_links(root, &crate::safegit::clean_environment(&crate::env::process_environment())).await {
+            let status = git_in(root, &["status", "--porcelain", "--untracked-files=no"], 30).await.map(|(_, status)| status).unwrap_or_default();
+            return (false, format!("{note}; changed files: {}", crate::repositories::changed_file_names(&status)));
+        }
+        status = match git_in(root, &["status", "--porcelain", "--untracked-files=no"], 30).await {
+            Some((0, status)) => status,
+            _ => return (false, "could not inspect checkout changes".into()),
+        };
+    }
+    if !status.is_empty() {
+        let note = flattened_note(&found);
+        return (false, format!("checkout has uncommitted changes: {}{}", crate::repositories::changed_file_names(&status),
+            if note.is_empty() { note } else { format!("; {note}") }));
     }
     let old = out(git_in(root, &["rev-parse", "HEAD"], 30).await);
     if git_in(root, &["fetch", "--quiet", "origin", "main"], 60).await.is_none_or(|(c, _)| c != 0) {
@@ -179,7 +234,7 @@ async fn self_update(root: &Path, running: &str) -> (bool, String) {
     if head != old {
         log(&format!("Tico runner: updated its checkout {}..{}; restarting when no turn is running", &old[..old.len().min(7)], &head[..head.len().min(7)]));
     }
-    (!running.is_empty() && !head.is_empty() && head != running, String::new())
+    (!running.is_empty() && !head.is_empty() && head != running, repair_note)
 }
 
 fn checkout_commit(root: &Path) -> String {
@@ -598,8 +653,18 @@ impl Follower {
                 Some(("failed".into(), error.into()))
             }
             s @ ("failed" | "rolled_back" | "blocked") if age < RETRY_AFTER_S => {
-                let error = text_of(&status["error"]);
-                (!self.space_freed(&status, &error)).then(|| (s.into(), disk_error_message(&error)))
+                let mut error = text_of(&status["error"]);
+                if s == "blocked" && error.starts_with("the checkout has ") {
+                    let found = checkout_links(&self.root, false).await;
+                    let note = flattened_note(&found);
+                    if found["only_flattened"] == true {
+                        error = note;
+                    } else if !note.is_empty() && !error.contains("flattened link") {
+                        error = format!("{error}; {note}");
+                    }
+                }
+                // Checkout file names are not disk errors.
+                (!self.space_freed(&status, &error)).then(|| (s.into(), if s == "blocked" { error } else { disk_error_message(&error) }))
             }
             _ => None,
         }
@@ -960,6 +1025,9 @@ impl Follower {
             return Moved::Not(self.inner.lock().unwrap().update_note.clone());
         }
         let (restart, note) = self_update(&self.root, running).await;
+        if note.starts_with("restored ") {
+            write_status(&self.directory, json!({"state": "healthy", "target": "main", "error": "", "note": note, "at": epoch_s()}));
+        }
         let head = if restart { checkout_commit(&self.root) } else { String::new() };
         if !restart || head.is_empty() {
             return Moved::Not(note);
@@ -1050,13 +1118,7 @@ source = subprocess.check_output(['git', 'show', 'origin/main:runner_support/rel
 main = next(n for n in ast.parse(source).body if isinstance(n, ast.FunctionDef) and n.name == 'main')
 parse = next(n for n in ast.walk(main) if isinstance(n, ast.Assign) and isinstance(n.value, ast.Call)
              and isinstance(n.value.func, ast.Attribute) and n.value.func.attr == 'parse_args')
-prefix = []
-for statement in main.body:
-    if any(node is parse for node in ast.walk(statement)):
-        break
-    prefix.append(statement)
-# Keep parser setup and only the parse call, including when startup error handling wraps it.
-main.body = prefix + [parse]
+main.body = [n for n in main.body if n.end_lineno < parse.lineno] + [parse]
 scope = {'argparse': argparse, 'ROOT': Path('.')}
 exec(compile(ast.Module(body=[main], type_ignores=[]), '<origin/main updater parser>', 'exec'), scope)
 scope['main'](sys.argv[1:])
@@ -1606,6 +1668,8 @@ scope['main'](sys.argv[1:])
         };
         std::fs::create_dir_all(origin.join("runner_support")).unwrap();
         std::fs::write(origin.join("runner_support/a.py"), "1").unwrap();
+        std::fs::write(origin.join("CLAUDE.md"), "# Rules\n").unwrap();
+        std::os::unix::fs::symlink("CLAUDE.md", origin.join("AGENTS.md")).unwrap();
         sh(&origin, &["init", "-q"]);
         sh(&origin, &["add", "."]);
         sh(&origin, &["commit", "-qm", "one"]);
@@ -1614,12 +1678,55 @@ scope['main'](sys.argv[1:])
         let stands = checkout_status(&here, &first).await.unwrap();
         assert_eq!((stands["ahead"].as_u64(), stands["behind"].as_u64()), (Some(0), Some(0)));
         assert!(stands["checked_at"].as_str().unwrap().ends_with('Z'));
+        let check_backup = |note: &str| {
+            let backup = Path::new(note.strip_prefix("restored 1 flattened links; originals kept in ").unwrap());
+            assert_eq!(backup.parent().unwrap(), here.join(".git/tico-flattened-links"));
+            assert_eq!(std::fs::read_to_string(backup.join("AGENTS.md")).unwrap(), "# Rules\n");
+        };
+
+        // The same check serves release Health and the main follower, including core.symlinks=false clones.
+        for symlinks in ["true", "false"] {
+            sh(&here, &["config", "core.symlinks", symlinks]);
+            std::fs::remove_file(here.join("AGENTS.md")).unwrap();
+            std::fs::write(here.join("AGENTS.md"), "# Rules\n").unwrap();
+            let found = checkout_links(&here, false).await;
+            assert_eq!(found["only_flattened"], true);
+            assert!(flattened_note(&found).contains("repaired automatically on the next update"));
+            let (restart, note) = self_update(&here, &first).await;
+            assert!(!restart);
+            check_backup(&note);
+            assert!(here.join("AGENTS.md").is_symlink());
+        }
+
+        std::fs::remove_file(here.join("AGENTS.md")).unwrap();
+        std::fs::write(here.join("AGENTS.md"), "# Rules\n").unwrap();
+        std::fs::write(here.join("runner_support/a.py"), "local work\n").unwrap();
+        let (restart, note) = self_update(&here, &first).await;
+        assert!(!restart && note.contains("flattened links: AGENTS.md"));
+        assert!(note.contains("runner_support/a.py"));
+        assert!(!here.join("AGENTS.md").is_symlink());
+        assert_eq!(std::fs::read_to_string(here.join("runner_support/a.py")).unwrap(), "local work\n");
+        sh(&here, &["-c", "core.symlinks=true", "checkout", "HEAD", "--", "runner_support/a.py", "AGENTS.md"]);
+
+        std::fs::remove_file(here.join("AGENTS.md")).unwrap();
+        std::fs::write(here.join("AGENTS.md"), "# Rules\n").unwrap();
+        std::fs::write(here.join("CLAUDE.md"), "local work\n").unwrap();
+        assert_ne!(checkout_links(&here, false).await["only_flattened"], true);
+        assert_eq!(self_update(&here, &first).await.1, "checkout has uncommitted changes: AGENTS.md, CLAUDE.md");
+        assert!(!here.join("AGENTS.md").is_symlink());
+        sh(&here, &["-c", "core.symlinks=true", "checkout", "HEAD", "--", "CLAUDE.md", "AGENTS.md"]);
+
+        // A matching copy is repaired before the follower fast-forwards to the next commit.
+        std::fs::remove_file(here.join("AGENTS.md")).unwrap();
+        std::fs::write(here.join("AGENTS.md"), "# Rules\n").unwrap();
 
         std::fs::write(origin.join("README.md"), "docs").unwrap();
         sh(&origin, &["add", "."]);
         sh(&origin, &["commit", "-qm", "docs"]);
         assert_eq!(checkout_status(&here, &first).await.unwrap()["behind"], 1);
-        assert_eq!(self_update(&here, &first).await, (true, String::new()));
+        let (restart, note) = self_update(&here, &first).await;
+        assert!(restart);
+        check_backup(&note);
         let head = checkout_commit(&here);
         assert!(!runner_code_changed(&here, &first, &head).await);
         std::fs::write(origin.join("runner_support/a.py"), "2").unwrap();

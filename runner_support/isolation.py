@@ -75,6 +75,8 @@ def chown(path, *, recursive=False):
 
 def mkdir(path, mode=0o700):
     """`mkdir -p` where every directory it creates belongs to the bot user when isolation is on."""
+    from clients.repo_safety import outside_installation
+    outside_installation(path)
     path = Path(path)
     missing = []
     for part in (path, *path.parents):

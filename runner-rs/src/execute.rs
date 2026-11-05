@@ -332,6 +332,9 @@ fn git_reason(stderr: &str, env: &Env) -> String {
 
 /// Fast-forward a clean checkout to its upstream before the turn (service.py pull_repo). "" when fine.
 pub async fn pull_repo(path: &Path, env: &Env) -> String {
+    if let Err(problem) = crate::repo_safety::outside_installation(path) {
+        return problem;
+    }
     if !path.join(".git").exists() {
         return String::new();
     }
@@ -553,6 +556,9 @@ impl Runner {
 /// scoped token. Never forces; a remote holding history this checkout lacks is left alone and reported.
 /// (state, detail): `published`, `current` (nothing to do), `skipped` or `failed`.
 pub async fn publish_history(path: &Path, repository: &str, env: &Env) -> (&'static str, String) {
+    if let Err(problem) = crate::repo_safety::outside_installation(path) {
+        return ("failed", problem);
+    }
     if repository.is_empty() || !path.join(".git").exists() {
         return ("skipped", if repository.is_empty() { "no repository link" } else { "not a git checkout" }.into());
     }
@@ -1585,7 +1591,7 @@ impl Runner {
                     return Err(Fail::runtime(format!("this computer's copy of {bot} shares no history with GitHub ({detail}); no turn runs on it")));
                 }
                 let refresh = async {
-                    self.refresh_checkout(p, &mut attempt, &env).await;
+                    self.refresh_checkout(p, &mut attempt, &env).await.map_err(Fail::runtime)?;
                     Ok(())
                 };
                 if p.task.is_empty() {

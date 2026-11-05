@@ -466,7 +466,11 @@ own writes (also through their Assistant), required approvals and Tico's own ite
 count toward how full the plate is. When your Tico has a [decision model](how-it-works.md), one call per item asks
 the `person-ask-ingest` question set (`questions/person-ask-ingest.json`): is it clear, what kind of ask it is, which
 of your lines it meets, whether it repeats one of your open items, how urgent it is and whether the bot recommends
-something. Plain code then decides from the answers, your settings and your open items (snoozed ones left out):
+something. The model reads the whole ask: the question line, its why, each option with its then, the recommended option
+and the task body. The question lines come first and are never cut; the body follows and fills what is left of 1,500
+characters, and is left out when the lines use up that room. A question set can run past 1,500 characters on its own;
+then it reads in full, with no body. An ask without structured questions is cut to 1,500 characters. Plain code then
+decides from the answers, your settings and your open items (snoozed ones left out):
 
 | The item | What happens |
 | --- | --- |
