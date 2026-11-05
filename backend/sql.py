@@ -762,11 +762,13 @@ def connect(path, c, auth, who, trace=None, seconds=None):
         columns = schema_columns(conn, path)
         unseen = TA.hidden(conn, who, "see", ("human", "group"), auth)
         tables = guarded(conn, auth, who, inner, function, columns, unseen=unseen)
+        # Trusted callbacks traverse page, task and letter provenance in this snapshot.
         source_tables = set(tables) | {
             "blob_media", "live_meetings", "live_meeting_access", "live_meeting_bots", "live_meeting_turns",
             "pins", "pages", "page_identities", "meeting_task_links", "bot_settings", "sqlite_master",
             "row_clock", "roster_clock", "provenance_clock", "task_trash_assets", "mail_items",
-            "postal_mail_grants", "rule_reads", "pin_places", "teammate_accesses", "home_merges", "home_merge_messages"}
+            "postal_mail_grants", "rule_reads", "pin_places", "teammate_accesses", "home_merges", "home_merge_messages",
+            "letters", "letter_proofs", "letter_outbox_grants", "agents"}
         class Source:
             def __init__(self):
                 self.statements = {}

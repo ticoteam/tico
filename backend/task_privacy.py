@@ -317,6 +317,13 @@ def prime_messages(c, messages):
     and answer, their rooms and meeting provenance, and the runs behind them together, so a long task's comments are
     not a few queries per comment."""
     messages = [dict(m) for m in messages]
+    if has_letters(c) and read_cache.cache(c) is not None:
+        for part in H.chunks(sorted({m["id"] for m in messages if m.get("id")})):
+            found = {row["approval_message_id"]: row for row in c.execute(
+                "SELECT l.*,a.message_id AS approval_message_id FROM approvals a JOIN letters l "
+                "ON l.id=json_extract(a.payload,'$.letter_id') WHERE a.kind='letter' "
+                f"AND a.message_id IN ({','.join('?' * len(part))})", part)}
+            read_cache.prime(c, LETTER_MESSAGE_SQL, {(mid,): found.get(mid) for mid in part})
     refs = [H._json(m.get("refs"), {}) or {} for m in messages]
     # The walks read each message's parents by id, and on a long task those are mostly the page's own messages,
     # given here as views: they are read as stored with the rest of their ancestry.
@@ -383,6 +390,10 @@ def message_readable(c, actor, message, current=False):
     message = stored or message
     if message.get("deleted_at") or message.get("deleted"):
         return False
+    if has_letters(c) and message.get("id"):
+        letter = read_cache.one(c, LETTER_MESSAGE_SQL, (message["id"],))
+        if letter and not letter_content_readable(c, actor, letter):
+            return False
     from . import threads
     if not threads.legacy_gate(c, actor, message):
         return False
@@ -593,6 +604,10 @@ def require_payload(c, who, payload, principal=None, checked_for=None):
     if principal != checked_for and not meeting_sources(c).readable(principal, meeting_sources(c).references(payload)):
         raise Problem("privacy", "This response contains a meeting you can no longer read", 403)
     if isinstance(payload, dict):
+        if isinstance(payload.get("letter_id"), str) and "approval_hash" in payload:
+            letter = c.execute("SELECT * FROM letters WHERE id=?", (payload["letter_id"],)).fetchone() if has_letters(c) else None
+            if not letter or not letter_content_readable(c, principal, letter):
+                raise Problem("privacy", "This letter is no longer readable", 403)
         key = payload.get("key")
         if isinstance(key, str) and key.startswith("report:") and not message_readable(c, principal, H.message(c, key[7:])):
             raise Problem("privacy", "This report is no longer available", 403)
@@ -1364,6 +1379,72 @@ BLOB_FILES_SQL = ("SELECT f.task_id,f.scope,v.attempt_id FROM bot_files f "
                   "OR v.poster_blob_id=? OR v.thumb_blob_id=?")
 BLOB_MESSAGES_SQL = "SELECT m.* FROM message_assets a JOIN messages m ON m.id=a.message_id WHERE a.blob_id=?"
 BLOB_TRASHED_SQL = "SELECT 1 FROM task_trash_assets WHERE blob_id=?"
+LETTER_BLOBS_SQL = ("SELECT original_blob_id,task_id,attempt_id,thread_id,source_provenance,requested_by,acting_bot_id "
+                    "FROM letters l WHERE source_blob_id=? OR "
+                    "EXISTS (SELECT 1 FROM letter_proofs p WHERE p.letter_id=l.id AND p.blob_id=?)")
+LETTER_MESSAGE_SQL = ("SELECT l.* FROM approvals a JOIN letters l ON l.id=json_extract(a.payload,'$.letter_id') "
+                      "WHERE a.kind='letter' AND a.message_id=?")
+
+
+def letter_content_readable(c, principals, row):
+    from . import letters
+    from .auth import bot_identity
+    for principal in principals if isinstance(principals, tuple) else (principals,):
+        if H.is_bot(principal):
+            try:
+                bot_identity(c, principal)
+            except Problem:
+                return False
+            if not letters.bot_reader(c, principal, row):
+                return False
+    return blob_readable(c, principals, row["source_blob_id"])
+
+
+def has_letters(c):
+    # Privacy also runs while upgrading older schemas, before the Letters tables exist.
+    return read_cache.value(c, "privacy_letters_table", lambda: bool(c.execute(
+        "SELECT 1 FROM sqlite_master WHERE type='table' AND name='letters'").fetchone()))
+
+
+def letter_blob_readable(c, principals, row, seen, memo):
+    from . import letters
+    from .auth import bot_identity
+    for principal in principals if isinstance(principals, tuple) else (principals,):
+        if H.is_bot(principal):
+            try:
+                bot_identity(c, principal)
+            except Problem:
+                return False
+            if not letters.bot_reader(c, principal, row):
+                return False
+    sources = H._json(row["source_provenance"], {}) or {}
+    tasks = set(sources.get("tasks", [])) | ({row["task_id"]} if row["task_id"] else set())
+    attempts = set(sources.get("attempts", [])) | ({row["attempt_id"]} if row["attempt_id"] else set())
+    rooms = set(sources.get("threads", [])) | ({row["thread_id"]} if row["thread_id"] else set())
+    if not readable(c, principals, tasks):
+        return False
+    if any(not attempt_readable(c, principals, aid, memo) for aid in attempts):
+        return False
+    if rooms:
+        from . import threads
+        for cid in rooms:
+            room = H.conversation(c, cid)
+            for principal in principals if isinstance(principals, tuple) else (principals,):
+                try:
+                    viewer = (threads.Viewer(None, bot_identity(c, principal)) if H.is_bot(principal)
+                              else threads.actor_viewer(c, principal))
+                except Problem:
+                    return False
+                viewers = [viewer] if viewer else []
+                if viewer and H.is_bot(principal) and not viewer.who.agent:
+                    # A stored proof keeps the original bot run's thread grant, with current task privacy.
+                    for aid in attempts:
+                        attempt = read_cache.one(c, "SELECT bot_id FROM attempts WHERE id=?", (aid,))
+                        if attempt and "bot:" + attempt["bot_id"] == principal:
+                            viewers.append(threads.Viewer(None, bot_identity(c, principal, attempt_id=aid)))
+                if not any(threads.denial(c, candidate, room) is None for candidate in viewers):
+                    return False
+    return not row["original_blob_id"] or blob_readable(c, principals, row["original_blob_id"], seen, memo)
 
 
 def prime_blobs(c, bids):
@@ -1435,6 +1516,31 @@ def _prime_blob_links(c, bids):
         for row in c.execute(f"SELECT * FROM mail_items WHERE blob_id IN ({marks})", part):
             scans[row["blob_id"]].append(row)
         read_cache.prime_rows(c, postal_mail.SCANS_SQL, {(bid,): scans[bid] for bid in part})
+        if has_letters(c):
+            links = {bid: [] for bid in part}
+            rows = c.execute("SELECT original_blob_id,task_id,attempt_id,thread_id,source_provenance,requested_by,acting_bot_id,"
+                "source_blob_id AS bid FROM letters "
+                f"WHERE source_blob_id IN ({marks}) UNION ALL SELECT l.original_blob_id,l.task_id,l.attempt_id,"
+                "l.thread_id,l.source_provenance,l.requested_by,l.acting_bot_id,p.blob_id AS bid "
+                f"FROM letter_proofs p JOIN letters l ON l.id=p.letter_id WHERE p.blob_id IN ({marks})",
+                part * 2)
+            rooms = set()
+            for row in rows:
+                links[row["bid"]].append(row)
+                frozen = H._json(row["source_provenance"], {}) or {}
+                task_ids.update(frozen.get("tasks", []))
+                attempt_ids.update(frozen.get("attempts", []))
+                rooms.update(frozen.get("threads", []))
+                if row["original_blob_id"]:
+                    parent_ids.add(row["original_blob_id"])
+                if row["task_id"]:
+                    task_ids.add(row["task_id"])
+                if row["attempt_id"]:
+                    attempt_ids.add(row["attempt_id"])
+                if row["thread_id"]:
+                    rooms.add(row["thread_id"])
+            H.prime_conversations(c, rooms)
+            read_cache.prime_rows(c, LETTER_BLOBS_SQL, {(bid, bid): links[bid] for bid in part})
     return parent_ids, task_ids, attempt_ids, message_rows
 
 
@@ -1457,6 +1563,10 @@ def blob_readable(c, actor, bid, seen=None, memo=None):
     if len(seen) >= 100:
         return False
     seen.add(bid)
+    if has_letters(c):
+        for row in read_cache.rows(c, LETTER_BLOBS_SQL, (bid, bid)):
+            if not letter_blob_readable(c, actor, row, seen, memo):
+                return False
     for parent in read_cache.rows(c, BLOB_PARENTS_SQL, (bid, bid)):
         if not blob_readable(c, actor, parent[0], seen, memo):
             return False
@@ -1483,6 +1593,15 @@ def blob_readable(c, actor, bid, seen=None, memo=None):
 
 def event_readable(c, actor, event):
     event = dict(event)
+    if has_letters(c):
+        letter = None
+        if str(event.get("action", "")).startswith("letter."):
+            letter = c.execute("SELECT * FROM letters WHERE id=?", (event.get("target"),)).fetchone()
+        elif str(event.get("action", "")).startswith("approval."):
+            letter = c.execute("SELECT l.* FROM approvals a JOIN letters l ON l.id=json_extract(a.payload,'$.letter_id') "
+                "WHERE a.kind='letter' AND a.id=?", (event.get("target"),)).fetchone()
+        if letter and not letter_content_readable(c, actor, letter):
+            return False
     from . import files, teammate_access
     principals = actor if isinstance(actor, (tuple, list, set)) else [actor]
     for principal in principals:

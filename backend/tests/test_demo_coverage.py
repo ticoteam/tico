@@ -61,6 +61,7 @@ PAGES = {
     "replay": page("replay", "items", **{"from": WEEK_AGO.isoformat(), "to": NOW.isoformat()}),
     "changelog": page("changelog", "entries"),
     "settings": page("bots"),
+    "settings-inboxes-letters-out": page("letters", "items"),
     # History reuses the runs, task changes and decisions the existing demo sections record.
     "settings-history": page("history", "items"),
     "settings-alerts": page("alerts/me"),

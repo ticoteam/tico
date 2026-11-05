@@ -357,6 +357,7 @@ const HUB_PATHS: &[&str] = &[
     "kpi list", "kpi log", "kpi readings", "kpi restore", "kpi show", "kpi target", "kpi unlink", "kpi update",
     "learn", "lens", "lens list", "lens run", "lens runs", "lens show", "listen", "listen judge", "listening",
     "listening decide", "listening item", "listening item list", "listening item resolve", "listening runs",
+    "letter", "letter cancel", "letter list", "letter quote", "letter send", "letter show",
     "listening save", "listening show", "listening stats", "live", "live brief", "live stats", "mail",
     "mail list", "mail read", "maintenance", "maintenance run", "maintenance runs",
     "maintenance set", "maintenance status", "market", "market apply", "market ask", "market briefing",
