@@ -21,8 +21,11 @@ def no_sources(value, secrets):
 
 
 def sources(api):
-    t = task(api, owner="bot:ops", requester="bot:cpo", private=False)
-    _, publisher = turn(api, "cpo")
+    machine = runner(api)
+    assign(api, machine, "ops")
+    ready(api, machine, ["ops"])
+    t = post(api, "tasks", {"owner": "ops", "title": "Review source context", "body": "Review the sources.", "private": False})
+    publisher = claim(api, machine, "ops", key="source-publish")
     hidden = published(api, publisher, task=t["id"], name="restricted.html", title="Restricted source")
     allowed = published(api, publisher, task=t["id"], name="allowed.html", title="Allowed source")
     made = ask(api, publisher["token"], [{"file": hidden}, {"file": allowed}], pick=True,
@@ -35,7 +38,7 @@ def sources(api):
     bid = blob(api, hidden)
     with api.app.state.store.read() as c:
         version = dict(c.execute("SELECT * FROM bot_file_versions WHERE file_id=?", (hidden,)).fetchone())
-    return dict(task=t, hidden=hidden, allowed=allowed, made=made, answered=answered, meeting=meeting,
+    return dict(task=t, machine=machine, publisher=publisher, hidden=hidden, allowed=allowed, made=made, answered=answered, meeting=meeting,
                 good_meeting=good_meeting, bid=bid, version=version)
 
 
@@ -59,10 +62,12 @@ def scoped(api, data, make):
         machine, attempt = assistant_turn(api, "ana-test")
         make_scope(api, attempt, data["task"]["id"])
     else:
-        machine = runner(api)
-        assign(api, machine, "ops")
-        ready(api, machine, ["ops"])
+        machine, publisher = data["machine"], data["publisher"]
+        post(api, f'attempts/{publisher["id"]}/started', {"thread_id": "source-publish"}, machine["token"])
+        post(api, f'attempts/{publisher["id"]}/complete', {"outcome": "completed", "last_seq": 0}, machine["token"])
+        post(api, f'tasks/{data["task"]["id"]}/comments', {"text": "Continue reviewing this task"})
         attempt = claim(api, machine, "ops", key="real-write-claim")
+        assert attempt and attempt["task"]["id"] == data["task"]["id"]
     return machine, attempt
 
 
@@ -86,7 +91,7 @@ def test_real_write_leak_sweep(api, make):
                   "messages/" + data["answered"]["comment"]["id"],
                   "conversations/" + data["made"]["task"]["conversation_id"] + "/messages",
                   "conversations/" + data["made"]["task"]["conversation_id"] + "/snapshot",
-                  "files/" + data["allowed"] + "/meta", "bots/cpo/files", "pages", "files/search?q=source"]
+                  "files/" + data["allowed"] + "/meta", "bots/ops/files", "pages", "files/search?q=source"]
     for path in paths:
         no_sources(get(api, path, token), secrets(data))
     for path in ("files/" + data["hidden"], "files/" + data["bid"], "files/" + data["hidden"] + "/versions/1"):
@@ -141,12 +146,15 @@ def test_prose_unknown_references_and_task_origins_keep_their_bytes(api, monkeyp
     assert origin.content == baseline.content
     monkeypatch.setattr(turn_scope, "project", original)
     # Ordinary readers take the same unprojected response path as main, byte for byte.
-    for path in ("tasks/" + t["id"], "origins/" + t["id"]):
-        before = api.get("/api/v2/" + path, headers=headers())
-        monkeypatch.setattr(turn_scope, "project", lambda c, scoped, payload, **kw: payload)
-        after = api.get("/api/v2/" + path, headers=headers())
-        assert before.content == after.content
-        monkeypatch.setattr(turn_scope, "project", original)
+    _, unscoped = turn(api, "finance")
+    for ordinary in ("ana-test", unscoped["token"]):
+        for path in ("tasks/" + t["id"], "origins/" + t["id"]):
+            before = api.get("/api/v2/" + path, headers=headers(ordinary))
+            assert before.status_code == 200
+            monkeypatch.setattr(turn_scope, "project", lambda c, scoped, payload, **kw: payload)
+            after = api.get("/api/v2/" + path, headers=headers(ordinary))
+            assert before.content == after.content
+            monkeypatch.setattr(turn_scope, "project", original)
 
 
 def test_legacy_exact_title_labels_and_generated_answers_are_projected(api):

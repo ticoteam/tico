@@ -42,8 +42,8 @@ ALLOWLIST = (
     ("POST", r"/api/v2/tasks/[^/]+/worktrees(?:/attach)?", False),
     # The local worktree CLI reads this computer's writable repository configuration.
     ("GET", r"/api/v2/runners/me/repositories", False),
-    # Task fields and worktree reports retain the existing write/provenance guards.
-    ("PATCH", r"/api/v2/tasks/[^/]+(?:/links/[^/]+)?", False),
+    # Worktree reports retain the existing write/provenance guards for that exact link.
+    ("PATCH", r"/api/v2/tasks/[^/]+/links/[^/]+", False),
     # The task prompt sends approval requests to a person before an outward action.
     ("POST", r"/api/v2/approvals", False),
     # Bot output publication and review use the file service's provenance checks.

@@ -1,9 +1,9 @@
 """Project source-bearing fields of the task/source APIs and runner wire schema.
 
-Text is opaque. Only refs_json is decoded: it is the runner's named copy of message.refs.
+Text is opaque. The runner's refs_json follows structured message.refs when those refs change.
+Task history provenance comes from its stored data column, addressed by event id.
 Unknown references survive; only a resolved source that fails containment is removed.
 """
-import json
 import re
 from urllib.parse import unquote
 
