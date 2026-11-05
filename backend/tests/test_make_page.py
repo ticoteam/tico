@@ -437,7 +437,7 @@ def test_make_page_replacement_requires_person_management_and_the_same_task(api,
     assert original.status_code == 200, original.text
     fid = original.json()["page"]["file_id"]
     post(api, f"attempts/{first['id']}/complete", {"outcome": "completed", "last_seq": 0}, machine["token"])
-    target = task(api, private=False) if another_task else t
+    target = task(api, title="Review the launch", private=False) if another_task else t
     _, attempt, _ = start(api, target["id"], person=person, machine=machine)
     get(api, "pages/" + fid, attempt["token"])
     refused = page(api, attempt, task=target["id"], name="replacement.html", replaces=fid)
