@@ -1037,14 +1037,19 @@ export type ComputerSubscriptionResult = {
 
 export type Config = {
   administration_url?: string;
-  app_name: string;
-  assistant_bot: string;
-  assistant_name: string;
-  company_name: string;
-  owner_email: string;
-  public_url: string;
+  app_name?: string;
+  assistant_bot?: string;
+  assistant_name?: string;
+  company_name?: string;
+  features: {
+  file_media_stream: boolean;
+  task_files_multipart: boolean;
+};
+  owner_email?: string;
+  public_url?: string;
   s3_view_urls?: Record<string, string>;
-  version: string;
+  upload_max_bytes: number;
+  version?: string;
   visual_files?: string;
   visual_origin?: string;
   visuals?: "full" | "hosted" | "media";

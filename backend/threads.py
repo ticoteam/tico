@@ -1740,8 +1740,9 @@ def _carrier(c, thread, message, bot, reason, rule, wake="thread", body=None, wa
     cid = _new_id()
     refs = {"carries": message["id"], "wake": wake, "reason": reason, "from": message.get("sender_id")}
     from .turn_scope import message_view
+    from .scope_projection import body_sources
     message = message_view(c, message)
-    refs["body_sources"] = [H._json(message.get("refs"), {}) or {}]
+    refs["body_sources"] = [body_sources(H._json(message.get("refs"), {}) or {})]
     if rule:
         refs["rule"] = rule
     if way == "queue":
@@ -2729,6 +2730,7 @@ def members(c, v, thread_id, *, cursor=None, limit=100):
     limit = max(1, min(int(limit or 100), MAX_PAGE))
     known = v.known(c)
     hidden = set() if known.member(root["id"]) else known.strangers
+    # Fill the page from the same Known audience that filters the rendered rows.
     rows = [dict(r) for r in c.execute("SELECT actor, role, added_by, created_at FROM thread_members WHERE thread_id=? "
                                        f"AND actor>? AND actor NOT IN {_qlist(sorted(hidden))} ORDER BY actor LIMIT ?",
                                        (root["id"], cursor or "", limit + 1))]

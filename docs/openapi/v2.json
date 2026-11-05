@@ -49346,6 +49346,26 @@
       "Config": {
         "type": "object",
         "properties": {
+          "features": {
+            "type": "object",
+            "properties": {
+              "task_files_multipart": {
+                "type": "boolean"
+              },
+              "file_media_stream": {
+                "type": "boolean"
+              }
+            },
+            "required": [
+              "file_media_stream",
+              "task_files_multipart"
+            ],
+            "additionalProperties": true
+          },
+          "upload_max_bytes": {
+            "type": "integer",
+            "description": "Scoped turns receive only this limit and features; ordinary clients also receive installation settings."
+          },
           "company_name": {
             "type": "string"
           },
@@ -49397,13 +49417,8 @@
           }
         },
         "required": [
-          "app_name",
-          "assistant_bot",
-          "assistant_name",
-          "company_name",
-          "owner_email",
-          "public_url",
-          "version"
+          "features",
+          "upload_max_bytes"
         ],
         "additionalProperties": true
       },

@@ -201,6 +201,8 @@ def answer_text(c, auth, who, asked, text, *, unknown=False, warn=""):
     if asked["recipient_id"] != who.actor or asked["sender_id"] == who.actor:
         raise Problem("forbidden", "Only the question's recipient may answer it", 403)
     privacy.require_message(c, who, asked)
+    from .turn_scope import message_view
+    asked = message_view(c, asked, who=who, auth=auth)
     task_id = H.message_task_id(asked, H.conversation(c, asked["conversation_id"]))
     questions = asked["refs"]["questions"]
     matches = [o["label"] for q in questions for o in q["options"] if o["label"] == text]

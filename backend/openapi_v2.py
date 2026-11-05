@@ -900,7 +900,9 @@ SCHEMAS = {
                                "teams": items({"type": "object"})},
                               required=["target", "see", "read", "write", "revision"]),
     "Me": obj({"actor": "s", "role": "s", "email": "s", "slug": {"type": "string", "description": "A bot caller: its slug (a label; the actor holds its id)."}}, required=["actor", "role", "email"]),
-    "Config": obj({"company_name": "s", "app_name": "s", "assistant_name": "s", "assistant_bot": "s",
+    "Config": obj({"features": obj({"task_files_multipart": "b", "file_media_stream": "b"}),
+                   "upload_max_bytes": {"type": "integer", "description": "Scoped turns receive only this limit and features; ordinary clients also receive installation settings."},
+                   "company_name": "s", "app_name": "s", "assistant_name": "s", "assistant_bot": "s",
                    "public_url": "s", "owner_email": "s", "version": "s",
                    "administration_url": {"type": "string", "description": "Signed-in humans: the Tico account portal "
                                           "URL, or empty for an install without a Tico account or portal company. "
@@ -919,8 +921,7 @@ SCHEMAS = {
                    "s3_view_urls": {"type": "object", "additionalProperties": {"type": "string"},
                                     "description": "Signed-in callers: bucket -> https base an s3://bucket/key opens at "
                                                    "(base + '/' + key, each segment URL-encoded; TICO_S3_VIEW_URLS)"}},
-                  required=["company_name", "app_name", "assistant_name", "assistant_bot", "public_url", "owner_email",
-                            "version"]),
+                  required=["features", "upload_max_bytes"]),
     "Group": obj({"id": "s", "name": "s", "parent": "s", "people": items({"type": "string"}),
                   "bots": items({"type": "string"}), "bot_slugs": items({"type": "string"}), "order": "i"}),
     "GroupList": items(ref("Group")),

@@ -569,17 +569,19 @@ def test_derived_message_text_uses_one_scoped_view(api, monkeypatch):
     assert data['source_label'] in get(api, 'threads/' + before['id'])['title']
 
 
-def test_approval_notice_keeps_payload_provenance_and_projects_before_serializing(api, monkeypatch):
+@pytest.mark.parametrize("digest_only", [False, True])
+def test_approval_notice_keeps_payload_provenance_and_projects_before_serializing(api, monkeypatch, digest_only):
     from backend import scope_projection
     data = sources(api)
     _, attempt = scoped(api, data, False)
     token, tid = attempt['token'], data['task']['id']
-    payload = {'url': '/api/v2/files/' + data['hidden'], 'content_sha256': data['version']['digest']}
+    payload = {'url': 'https://acme.example/release' if digest_only else '/api/v2/files/' + data['hidden'],
+               'content_sha256': data['version']['digest']}
     made = post(api, 'approvals', {'kind': 'publish', 'payload': payload, 'task_id': tid}, token)
     mid = made['message_id']
-    assert data['hidden'] in get(api, 'messages/' + mid, token)['body']
+    assert data['version']['digest'] in get(api, 'messages/' + mid, token)['body']
     with api.app.state.store.read() as c:
-        assert H.message(c, mid)['refs']['body_sources'] == [{'url': payload['url']}]
+        assert H.message(c, mid)['refs']['body_sources'] == [payload]
     with monkeypatch.context() as patch:
         patch.setattr(scope_projection, 'body_sources', lambda *a: {})
         bare = post(api, 'approvals', {'kind': 'publish', 'payload': {**payload, 'reason': 'Missing refs'},
@@ -588,7 +590,7 @@ def test_approval_notice_keeps_payload_provenance_and_projects_before_serializin
     with pytest.raises(AssertionError):
         no_sources(get(api, 'messages/' + bare['message_id'], token), secrets(data))
     no_sources(get(api, 'messages/' + mid, token), secrets(data))
-    no_sources(get(api, 'origins/' + mid, token), secrets(data))
+    get(api, 'origins/' + mid, token, expected=404)
     with monkeypatch.context() as patch:
         original = turn_scope.project
         patch.setattr(turn_scope, 'project', lambda c, scoped, value, **kw:
@@ -619,10 +621,8 @@ def test_embedded_members_filter_before_paging_and_cursor(api, monkeypatch):
         bot(api, f'cursor-member-{i:02}')
     actors = ['bot:' + bot_id(api, f'cursor-member-{i:02}') for i in range(51)]
     thread = post(api, 'threads', {'title': 'Shared membership', 'audience': 'company', 'members': actors})
-    # The starter is also stored; choose the row that used to end the embedded 50-row page.
-    with api.app.state.store.read() as c:
-        hidden = c.execute('SELECT actor FROM thread_members WHERE thread_id=? ORDER BY actor LIMIT 1 OFFSET 49',
-                           (thread['id'],)).fetchone()[0]
+    # Public threads keep their bot participants on the root, rather than granting membership.
+    hidden = sorted(actors)[49]
     assert hidden.startswith('bot:')
     set_access(api, 'bots/' + H.actor_id(hidden), see={'people': ['ana']}, read={'people': ['ana']},
                write={'people': ['ana']})
@@ -631,7 +631,7 @@ def test_embedded_members_filter_before_paging_and_cursor(api, monkeypatch):
         shown = get(api, 'threads/' + thread['id'], attempt['token'])['members']
         assert len(shown['members']) == 50
         no_sources(shown, (hidden,))
-        assert shown['next_cursor'] == shown['members'][-1]['actor']
+        assert shown['next_cursor'] is None
     check()
     # Disabling Known's visibility also disables its SQL prefilter and must expose the rejected actor.
     with monkeypatch.context() as patch:
@@ -648,7 +648,7 @@ def test_origins_counts_only_readable_siblings(api, monkeypatch):
     path = 'origins/' + t['id']
     baseline = get(api, path, attempt['token'])['siblings']
     assert baseline['made'] == baseline['open'] == 1
-    post(api, 'tasks/' + private['id'] + '/close', {})
+    post(api, 'tasks/' + private['id'], {'version': private['version'], 'close': True})
     assert get(api, path, attempt['token'])['siblings'] == baseline
     with monkeypatch.context() as patch:
         original = why_here.siblings_and_stops
@@ -722,3 +722,37 @@ def test_scoped_hub_task_attach_streams_twelve_mb(api, tmp_path, monkeypatch):
     second = hubtools.task_attach(client, {'id': t['id'], 'name': 'mcp-report.pdf', 'path': str(path)})
     assert second['file']['size'] == path.stat().st_size
     assert get(api, 'config')['company_name']
+
+
+def test_folded_questions_do_not_copy_scrubbed_message_text(api, monkeypatch):
+    data = sources(api)
+    _, attempt = scoped(api, data, False)
+    token, tid = attempt['token'], data['task']['id']
+    question = 'Review ' + data['source_label'] + '?'
+    request = {'on': 'ana', 'question': question, 'parent': tid, 'topic': 'source-followup',
+               'options': [{'label': 'Continue', 'then': 'Continue'}, {'label': 'Wait', 'then': 'Wait'}]}
+    made = post(api, 'task-questions', request, token)
+    # This is a generated question: retain the same structured provenance as real review answers.
+    with api.app.state.store.transaction() as c:
+        refs = H.message(c, made['question']['id'])['refs']
+        refs['body_sources'] = [{'file': data['hidden']}]
+        c.execute('UPDATE messages SET refs=? WHERE id=?', (H._dump(refs), made['question']['id']))
+    narrow(api, data)
+    request['question'] = 'Continue with the remaining source?'
+    folded = post(api, 'task-questions', request, token)
+    assert folded['folded']
+    no_sources(folded, secrets(data))
+    no_sources(get(api, 'tasks/' + made['task']['id'], token), secrets(data))
+
+
+def test_origins_task_prefix_ignores_unreadable_matches(api):
+    t, attempt = task_turn(api)
+    private = post(api, 'tasks', {'owner': 'human:ben', 'title': 'Private prefix match', 'body': 'Private', 'private': True})
+    # Reproduce a short-id collision without depending on random UUIDs colliding.
+    with api.app.state.store.transaction() as c:
+        row = dict(c.execute('SELECT * FROM tasks WHERE id=?', (private['id'],)).fetchone())
+        row['id'] = t['id'][:8] + '-0000-0000-0000-000000000000'
+        c.execute('INSERT INTO tasks (' + ','.join(row) + ') VALUES (' + ','.join('?' * len(row)) + ')', tuple(row.values()))
+    get(api, 'origins/' + row['id'], attempt['token'], expected=404)
+    shown = get(api, 'origins/' + t['id'][:8], attempt['token'])
+    assert shown['id'] == t['id']

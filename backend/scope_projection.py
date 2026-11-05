@@ -11,7 +11,8 @@ from .store import H, Problem
 
 # These fields belong to source/reference schemas, never prose or arbitrary JSON strings.
 REF_FIELDS = frozenset({"file", "file_id", "page", "page_id", "blob_id", "meeting", "meeting_id",
-                        "digest", "source_digest", "ref", "item", "url", "file_url", "href", "src", "path"})
+                        "digest", "source_digest", "content_sha256", "body_sha256",
+                        "ref", "item", "url", "file_url", "href", "src", "path"})
 SOURCE_LISTS = frozenset({"files", "attachments", "pages", "meetings", "reviewed", "citations", "body_sources"})
 
 
@@ -266,6 +267,10 @@ def project(c, scoped, payload, *, auth=None):
                 for key in ('body', 'text'):
                     if key in out:
                         out[key] = ''
+                # Generated asks keep their wording in both the message body and the structured question.
+                for container in (out.get('refs'), out.get('ask')):
+                    if isinstance(container, dict) and isinstance(container.get('questions'), list):
+                        container['questions'] = [{**q, 'question': ''} for q in container['questions']]
             if 'refs_json' in value:
                 # Keep the original bytes when the named wire copy does not change.
                 if shown_refs == refs:
