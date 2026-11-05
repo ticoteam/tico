@@ -224,8 +224,8 @@ const {t} = (() => { try { return require('./support/load.cjs'); } catch { retur
       await page.mouse.up();
       for (let i = 0; posted.length === sent && i < 200; i++) await page.waitForTimeout(t(10));
     };
-    // Blocked: the strip names the blocker and focuses the board on the two; X shows every card again.
-    assert.equal(await page.locator('#task-body [data-board-blocked="tbrief"]').innerText(), 'Blocked by Plan the launch');
+    // Blocked: one line names the blocker and focuses the board on the two; X shows every card again.
+    assert.equal(await page.locator('#task-body [data-board-blocked="tbrief"]').innerText(), 'Blocked: Plan the launch');
     await page.locator('#task-body [data-board-blocked="tbrief"]').click();
     assert.deepEqual((await page.locator('#task-body .bcard-title').allTextContents()).sort(), ['Brief the agency', 'Plan the launch']);
     await page.locator('#task-body [data-board-unfocus]').waitFor();
@@ -244,7 +244,7 @@ const {t} = (() => { try { return require('./support/load.cjs'); } catch { retur
       'Waiting on Ops: Needs the launch plan reviewed first.');
     await peek.locator('[data-modal-close]').click();
     await peek.waitFor({state: 'hidden'});
-    // Its Blocked hold is that wait: one line on the card, with the hold's age. A review-gate hold says its own why.
+    // Its Blocked hold is that wait: one line on the card, with the hold's age. A review-gate hold's why is the tooltip.
     Object.assign(brief, {holds: [{kind: 'blocked', reason: 'Needs the launch plan reviewed first.', since: '2026-10-02T10:00:00Z', until: null, by: 'keeper', cause: 'dependency'}]});
     await page.evaluate(() => tasksLoad(TASKS_ST));
     await page.waitForFunction(() => /· since/.test(document.querySelector('#task-body [data-board-blocked="tbrief"]')?.title || ''));
@@ -253,25 +253,26 @@ const {t} = (() => { try { return require('./support/load.cjs'); } catch { retur
       /^Waiting on Ops: Needs the launch plan reviewed first\. · since .+\nBlocked by Plan the launch$/);
     Object.assign(brief.holds[0], {cause: 'gate', reason: 'Review 1 has no verdict yet'});
     await page.evaluate(() => tasksLoad(TASKS_ST));
-    await page.waitForFunction(() => document.querySelector('#task-body [data-board-blocked="tbrief"] span')?.innerText === 'Blocked by Plan the launch');
-    assert.match(await page.locator('#task-body [data-task-key="tbrief"] .bcard-blocked').first().innerText(), /^Review 1 has no verdict yet · since/);
+    await page.waitForFunction(() => /^Blocked \d+d: Plan the launch$/.test(document.querySelector('#task-body [data-board-blocked="tbrief"] span')?.innerText || ''));
+    assert.equal(await page.locator('#task-body [data-task-key="tbrief"] .bcard-blocked').count(), 1, 'one line, not a hold line above the blocker');
+    assert.match(await page.locator('#task-body [data-board-blocked="tbrief"]').getAttribute('title'), /^Review 1 has no verdict yet · since .+\nBlocked by Plan the launch$/);
     Object.assign(brief, {holds: []});
     // Only the first open blocker's owner is named: a person's task linked ahead of the bot's reads "Blocked by".
     const opsBlocker = brief.relations.blocks[0];
     brief.relations = {blocks: [{id: 'legal-review', title: 'Legal review', status: 'doing', owner_id: 'human:ana', direction: 'in'}, opsBlocker]};
     await page.evaluate(() => tasksLoad(TASKS_ST));
-    await page.waitForFunction(() => document.querySelector('#task-body [data-board-blocked="tbrief"] span')?.innerText === 'Blocked by Legal review');
+    await page.waitForFunction(() => document.querySelector('#task-body [data-board-blocked="tbrief"] span')?.innerText === 'Blocked: Legal review');
     // A task that waits on a person keeps their ask: on them directly, or through the ask card a bot's task files,
     // which the server serves as a blocker the person owns, linked after the bot's.
     for (const held of [{waiting_on: 'human:ana'}, {relations: {blocks: [opsBlocker,
       {id: 'ask-ana', title: 'Approve the launch post?', status: 'open', owner_id: 'human:ana', direction: 'in'}]}}]) {
       Object.assign(brief, {relations: {blocks: [opsBlocker]}, waiting_on: null}, held);
       await page.evaluate(() => tasksLoad(TASKS_ST));
-      await page.waitForFunction(() => document.querySelector('#task-body [data-board-blocked="tbrief"] span')?.innerText === 'Blocked by Plan the launch');
+      await page.waitForFunction(() => document.querySelector('#task-body [data-board-blocked="tbrief"] span')?.innerText === 'Blocked: Plan the launch');
     }
     Object.assign(brief, {status: 'review', note: '', waiting_on: null, relations: {blocks: [opsBlocker]}});
     await page.evaluate(() => tasksLoad(TASKS_ST));
-    await page.waitForFunction(() => document.querySelector('#task-body [data-board-blocked="tbrief"]')?.innerText === 'Blocked by Plan the launch');
+    await page.waitForFunction(() => document.querySelector('#task-body [data-board-blocked="tbrief"]')?.innerText === 'Blocked: Plan the launch');
     await drag('tbrief', '#task-body [data-task-key="tplan"]', 0.1);
     await page.waitForFunction(() => TASKS_ST.tasks.find(t => t.id === 'brief').version === 2);
     assert.deepEqual(posted.at(-1), {path: '/api/v2/tasks/brief', body: {version: 1, step_rank: 0}}, 'above the top card: its rank less one');
@@ -384,7 +385,8 @@ const {t} = (() => { try { return require('./support/load.cjs'); } catch { retur
       assert.equal(await page.locator('[data-col="dev-building"] .bcard').count(), 0);
       assert.equal(await page.locator('[data-col="dev-blocked"] [data-board-select]').isVisible(), true, 'select all in a column at every width');
       assert.equal(await page.locator('[data-col="dev-building"] [data-board-select]').count(), 0, 'an empty column has nothing to select');
-      assert.match(await page.locator('[data-task-key="tdev-held"] .bcard-blocked').innerText(), /Waiting for a test machine <script>.*since/);
+      assert.match(await page.locator('[data-task-key="tdev-held"] .bcard-blocked').innerText(), /^Blocked \d+d: Waiting for a test machine <script>$/);
+      assert.match(await page.locator('[data-task-key="tdev-held"] .bcard-blocked').getAttribute('title'), /^Waiting for a test machine <script> · since /);
       assert.equal(await page.locator('[data-task-key="tdev-held"] script').count(), 0);
       await page.locator('[data-open-task="tdev-held"]').click();
       await page.locator('#task-peek .task-wait').waitFor();

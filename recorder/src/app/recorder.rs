@@ -373,6 +373,7 @@ pub struct Recorder {
     pub calendar: Value,
     pub live: Value,
     pub roster: Vec<(String, String)>,
+    draft_people: (String, Vec<assist::Person>),
     chat_private: bool,
     asking: String,
     asking_for: Option<String>,
@@ -507,6 +508,7 @@ impl Recorder {
             calendar,
             live: json!({}),
             roster: vec![],
+            draft_people: Default::default(),
             chat_private: false,
             asking: String::new(),
             asking_for: None,
@@ -1113,6 +1115,34 @@ impl Recorder {
         }
         let (config, store) = (self.config.clone(), self.store.clone());
         let destination = self.draft_destination(&id);
+        let people = (self.draft_people.0 == destination).then(|| self.draft_people.1.clone());
+        let me = config
+            .destinations
+            .iter()
+            .find(|d| d.id == destination)
+            .map(|d| d.actor.clone())
+            .unwrap_or_default();
+        let mut participants = vec![];
+        if self.meeting.as_deref() == Some(id.as_str()) {
+            for field in ["humans", "access"] {
+                participants.extend(
+                    self.live[field]
+                        .as_array()
+                        .into_iter()
+                        .flatten()
+                        .filter_map(|p| p["actor"].as_str())
+                        .map(str::to_owned),
+                );
+            }
+            participants.extend(
+                self.live["bots"]
+                    .as_array()
+                    .into_iter()
+                    .flatten()
+                    .filter_map(|p| p["bot"].as_str())
+                    .map(|slug| format!("bot:{slug}")),
+            );
+        }
         self.job_for("autodraft", Some(id.clone()), move || {
             let mut config = config;
             if speech::source(&config) == speech::TICO
@@ -1120,11 +1150,15 @@ impl Recorder {
             {
                 config.destinations.swap(0, at);
             }
-            let tasks = Tico::saved(&config, &destination)
-                .and_then(|tico| tico.draft_tasks(&store, &id))
-                .unwrap_or_default();
+            let tico = Tico::saved(&config, &destination).ok();
+            let tasks = tico.as_ref().and_then(|tico| tico.draft_tasks(&store, &id).ok()).unwrap_or_default();
+            let roster = assist::Roster {
+                people: people.or_else(|| tico.as_ref().and_then(|tico| tico.draft_people().ok())).unwrap_or_default(),
+                me,
+                participants,
+            };
             let (config, key) = speech::assist(&config)?;
-            Ok(json!({"added":assist::draft_with_tasks(&store, &config, &key, &id, &tasks)?}))
+            Ok(json!({"added":assist::draft_with_roster(&store, &config, &key, &id, &tasks, &roster)?}))
         });
     }
     /// Background work: finished jobs, the recording's end, refreshes, live sync, calendar and
@@ -1396,7 +1430,16 @@ impl Recorder {
                             self.last_sync = Instant::now() - Duration::from_secs(5);
                         }
                         "roster" => {
-                            self.roster = serde_json::from_value(value).unwrap_or_default();
+                            let people: Vec<assist::Person> =
+                                serde_json::from_value(value["people"].clone()).unwrap_or_default();
+                            self.roster = people
+                                .iter()
+                                .map(|p| (p.actor.clone(), p.name.clone()))
+                                .collect();
+                            self.draft_people = (
+                                value["destination"].as_str().unwrap_or_default().into(),
+                                people,
+                            );
                         }
                         "send" => self.say("Saved to Tico"),
                         "import" => {
@@ -1957,7 +2000,9 @@ impl Recorder {
     pub fn load_roster(&mut self) {
         if !self.router_name().is_empty() {
             self.roster_for = self.router();
-            self.network_job("roster", |tico, _, _| Ok(json!(tico.roster()?)));
+            self.network_job("roster", |tico, _, _| {
+                Ok(json!({"destination":tico.destination.id,"people":tico.draft_people()?}))
+            });
         }
     }
 
@@ -3247,12 +3292,12 @@ impl Recorder {
             .map(|item| {
                 let linked = self.linked_task(&item.task_id);
                 let proposal = (item.task_destination.is_empty() || item.task_destination == self.router()).then(|| self.linked_task(&item.proposed_task_id)).flatten();
-                let chosen = if item.owner.is_empty() {
+                let chosen = if item.owner.is_empty() && !item.id.starts_with("draft-") {
                     self.last_owner.clone()
                 } else {
                     item.owner.clone()
                 };
-                let owner_name = owners
+                let owner_name = self.roster
                     .iter()
                     .find(|row| row.0 == chosen)
                     .map(|row| row.1.clone())
@@ -3653,6 +3698,39 @@ fn wait_stopped(store: &Store, id: &str) -> anyhow::Result<()> {
 #[cfg(test)]
 mod saved_panel_tests {
     use super::*;
+    #[test]
+    fn suggested_owners_show_by_name_and_unclear_drafts_do_not_reuse_the_last_owner() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = Store::open(dir.path()).unwrap();
+        let record = store.create("Planning").unwrap();
+        let mut app = Recorder::new(store, None, true).unwrap();
+        app.open(&record.id).unwrap();
+        app.choosing_org = false;
+        app.last_owner = "human:ana".into();
+        app.roster = vec![("bot:concierge".into(), "Guest Relations".into())];
+        app.context.live_id = "live-planning".into();
+        app.live = json!({"visibility":"private", "owner_actor":"human:ana"});
+        app.context.items = vec![
+            Item {
+                id: "draft-assigned".into(),
+                title: "Negotiate quotes".into(),
+                owner: "bot:concierge".into(),
+                ..Default::default()
+            },
+            Item {
+                id: "draft-unclear".into(),
+                title: "Send prices".into(),
+                ..Default::default()
+            },
+        ];
+        let view = app.actions_view("Acme");
+        assert_eq!(view["items"][0]["owner"], "bot:concierge");
+        assert_eq!(view["items"][0]["owner_name"], "Guest Relations");
+        assert_eq!(view["items"][1]["owner"], "");
+        assert_eq!(view["items"][1]["owner_name"], "");
+        assert_eq!(view["items"][1]["can_send"], false);
+    }
+
     #[test]
     fn private_action_recipients_include_bots_added_by_participants() {
         let dir = tempfile::tempdir().unwrap();

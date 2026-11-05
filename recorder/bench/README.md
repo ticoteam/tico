@@ -179,3 +179,42 @@ take the overlapping speaker. When the transcription model labels speakers withi
 combine an STT provider's per-request speaker labels into one meeting. Echo is removed in the
 transcript, not with acoustic echo cancellation. Speech defaults to English (Settings › Language;
 empty guesses per chunk, which turned short "mm-hmm"s into Japanese and Chinese).
+
+## Suggested tasks: work, titles and owners
+
+`assist_cases.json` covers commitments, named requests, concierge bot/team work, multiple recipients,
+and unknown speakers or absent teammates. It also covers bare pings, messages and reminders, pings
+with stated work, vague syncs, immediate meeting steps, EXISTING restatements, and five small real
+commitments in one stretch. Names and actors are fictional. The original twelve owner scenarios
+retain the same transcript and owner expectations.
+
+Each case supplies transcript speaker labels and an `expected` array (empty means no new items).
+Each expected item has an exact `owner` and `title_keywords`: every group must have at least one
+case-insensitive substring in the title. `banned_title_starts` rejects communication-only leading
+verbs at a word boundary. Optional `existing` titles seed the meeting's draft list. The shared
+roster and signed-in identity apply to each case, with `omit` removing absent teammates.
+
+The opt-in Rust eval calls the production draft request, validates owners against PEOPLE, and
+checks stored Items. It repeats each case at least three times and prints per-case and overall
+selection/title accuracy, owner accuracy, and combined accuracy. Items match without relying on
+output order; combined matching checks the title and owner on the same item. Missing or extra
+items and request errors fail all scores, so returning no suggestions cannot pass a positive case.
+Title checks use no judge model. Owners alone are compared as a multiset; use the combined score
+to detect ownership swapped between several deliverables.
+
+Run on RunsOn with `scripts/remote.py --setup rust --minutes 4 -- ...` and a secure credential source
+on the VM, using:
+
+```sh
+TICO_RECORDER_ASSIST_KEY=<model key> cargo test --manifest-path recorder/Cargo.toml --locked \
+  --features desktop,cli assist::tests::owner_eval -- --ignored --nocapture
+```
+
+`TICO_RECORDER_ASSIST_MODEL` and `TICO_RECORDER_ASSIST_URL` optionally select a compatible model or
+Tico recorder relay; defaults match Settings. `TICO_RECORDER_ASSIST_REPEATS` defaults to 3 and must be
+at least 3. This is a paid, manual eval, excluded from ordinary test runs. Never put a provider key
+in a workflow command or its logs.
+
+Drafting reserves up to 2,400 completion tokens for model reasoning plus the JSON reply; private
+answers retain 1,200. The five-item review limit is unchanged. The repeated eval exposed truncated
+replies at the earlier 1,200-token draft budget.

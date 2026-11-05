@@ -113,7 +113,6 @@ commands! {
     link_selected_tasks(ids: Vec<String>) => |app| app.link_selected_tasks(ids);
     accept_link_item(id: String) => |app| app.accept_link_item(&id);
     unlink_item(id: String) => |app| app.unlink_item(&id);
-    edit_task_detail(id: String, due: String, body: String) => |app| app.edit_task_detail(&id, &due, &body);
     stop_screen() => |app| app.screen.stop("");
     record(event: Option<Value>) => |app| app.record(event);
     open_meeting(id: String) => |app| { let opened = app.open(&id); app.report(opened) };
@@ -448,7 +447,6 @@ fn main() {
             link_selected_tasks,
             accept_link_item,
             unlink_item,
-            edit_task_detail,
             view,
             meeting_link,
             share_screen,

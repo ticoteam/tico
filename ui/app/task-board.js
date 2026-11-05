@@ -37,20 +37,33 @@ function taskBoardShows(it, state) {
   return !!type && !taskBoardFolds(state, type).finished;
 }
 
-// ---- blocked: a card with open blockers says so at its top; the strip focuses the board on it and them
+// ---- blocked: one line at a card's top, "Blocked 7h: <first open blocker>", clipped to the card; the line focuses
+// the board on the card and its blockers. The hold's reason and date and every blocker are the tooltip.
 const taskOpenBlockers = t => taskBlockers(t).filter(r => !['done', 'closed', 'declined'].includes(String(r.status || '')));
+// How long a hold has held: 7m, 7h, 9d (no date fallback, unlike ageShort).
+function taskHeldFor(iso) {
+  const at = Date.parse(iso || ''); if (!at) return '';
+  const s = Math.max(0, (Date.now() - at) / 1000);
+  return s < 3600 ? `${Math.max(1, Math.round(s / 60))}m` : s < 86400 ? `${Math.round(s / 3600)}h` : `${Math.round(s / 86400)}d`;
+}
+// Reasons the server writes when a hold has no note of its own: the line says only how long.
+const TASK_PLAIN_HOLDS = new Set(['Waiting on a hold', 'Waiting on a dependency']);
 function taskBlockedStrip(it) {
-  const t = it.task;
-  // A Blocked hold that is a bot's prerequisite is the bot's wait line, not a second line above it.
-  const bot = taskBotWait(t);
-  const hold = taskBlockedHold(t) && !bot ? `<div class="bcard-blocked">${esc(taskBlockedLine(t))}</div>` : '';
-  const open = taskOpenBlockers(t); if (!open.length) return hold;
-  const first = open[0], name = first.title ? clipLine(first.title, 48) : '#' + (first.number ?? first.id);
-  const all = open.map(r => r.title || '#' + (r.number ?? r.id)).join(', ');
+  const t = it.task, held = taskBlockedHold(t), open = taskOpenBlockers(t);
+  if (!held && !open.length) return '';
+  const age = held ? taskHeldFor(held.since) : '', head = `Blocked${age ? ' ' + age : ''}`;
+  const line = what => `<span>${esc(what ? `${head}: ${what}` : head)}</span>`;
+  if (!open.length) {
+    const why = String(held.reason || '').trim();
+    return `<div class="bcard-blocked" title="${esc(taskBlockedLine(t))}">${line(TASK_PLAIN_HOLDS.has(why) ? '' : why)}</div>`;
+  }
   // A bot's prerequisite work names the bot; the reason, its age and what blocks it are the tooltip.
-  const label = bot ? `Waiting on ${clipLine(bot.name, 48)}` : `Blocked by ${name}`;
-  const tip = bot ? `${taskWaitLine(t)}\nBlocked by ${all}` : `Blocked by ${all}`;
-  return hold + `<button type="button" class="bcard-blocked" data-board-blocked="${esc(it.key)}"${bot ? ' data-board-waits-bot' : ''} title="${esc(tip)}"><span>${esc(label)}</span>${open.length > 1 ? `<span class="tnum">+${open.length - 1}</span>` : ''}</button>`;
+  const bot = taskBotWait(t);
+  const all = open.map(r => r.title || '#' + (r.number ?? r.id)).join(', ');
+  const first = open[0], name = first.title || '#' + (first.number ?? first.id);
+  const label = bot ? `<span>${esc(`Waiting on ${bot.name}`)}</span>` : line(name);
+  const tip = `${bot ? taskWaitLine(t) : held ? taskBlockedLine(t) : ''}${bot || held ? '\n' : ''}Blocked by ${all}`;
+  return `<button type="button" class="bcard-blocked" data-board-blocked="${esc(it.key)}"${bot ? ' data-board-waits-bot' : ''} title="${esc(tip)}">${label}${open.length > 1 ? `<span class="tnum">+${open.length - 1}</span>` : ''}</button>`;
 }
 function taskBoardFocused(items, state) {
   const focus = state.boardFocus;

@@ -14,12 +14,13 @@ a.pg-open:hover{background:var(--hover);text-decoration:none}
 /* An Open card reads as a widget placeholder: one-line title, the status line at most two lines. */
 .pg-open .pg-status{display:-webkit-box;-webkit-box-orient:vertical;-webkit-line-clamp:2;line-clamp:2;overflow:hidden;overflow-wrap:anywhere}
 .pg-open-btn{flex:none;color:var(--link-quiet);font-size:var(--t-sm)}
-/* A framed card is a widget: a one-line status bar, then the page's top at the size's fixed height with nothing
+/* A framed card is a widget: a one-line status bar, then the page at its own height up to the size, with nothing
    scrolling inside, a fade at the bottom when the page runs on (pg-cut, from its reported height), one tap target
    over the whole card and an expand icon in its corner. */
 .pg-framed:not(.pg-full){position:relative;gap:0;border:1px solid var(--line);border-radius:10px;overflow:hidden;background:var(--surface)}
 .pg-framed:not(.pg-full)>.pg-status{padding:6px 40px 6px 10px;border-bottom:1px solid var(--line);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
-.pg-framed:not(.pg-full) .pg-box{border:0;border-radius:0;height:var(--pg-h,320px)}
+.pg-framed:not(.pg-full) .pg-box{border:0;border-radius:0;max-height:var(--pg-h,320px)}
+.pg-framed:not(.pg-full) .pg-box:not(.pg-sized){height:var(--pg-h,320px)}
 .pg-small{--pg-h:180px}.pg-medium{--pg-h:320px}.pg-large{--pg-h:520px}
 .pg-box.pg-cut::after{content:"";position:absolute;left:0;right:0;bottom:0;height:48px;pointer-events:none;background:linear-gradient(transparent,var(--surface))}
 .pg-tap{position:absolute;inset:0;z-index:1;border-radius:inherit}
