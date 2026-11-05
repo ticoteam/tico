@@ -2892,6 +2892,10 @@ STABLE.extend([
      'Remove a link as its creator, meeting owner, task owner or requester, or org owner', 'MeetingTaskRemoved'),
     ('/api/v2/tasks/{tid}/context', 'get', 'Tasks', 'getTaskContext',
      'Up to 10 pages and 10 meetings, newest first, filtered by your current read access; metadata only', 'TaskContext'),
+    ('/api/v2/tasks/{tid}/make-page', 'post', 'Tasks', 'makeTaskPage',
+     "Ask the caller's Assistant to make and pin a task page with their normal rights; 409 at 60 pins", 'AssistantSent'),
+    ('/api/v2/tasks/{tid}/make-page', 'get', 'Tasks', 'getTaskMakePage',
+     "The caller's latest Make page request: making, made, failed or update_required", 'TaskMakePage'),
     ('/api/v2/tasks/{tid}/meetings', 'get', 'Tasks', 'listTaskMeetings',
      'Readable linked meetings, newest first; limit 20 by default, at most 50, cursor and 64 KB cap', 'TaskMeetings'),
 ])
@@ -2908,6 +2912,9 @@ SCHEMAS.update({
     'TaskContextMeeting': obj({'id': 's', 'title': 's', 'date': 's'}),
     'TaskContext': obj({'pages': {**items(ref('TaskContextPage')), 'maxItems': 10},
                         'meetings': {**items(ref('TaskContextMeeting')), 'maxItems': 10}}),
+    'TaskMakePage': obj({'make_page': {'anyOf': [obj({'message_id': 's', 'conversation_id': 's',
+                                                  'state': {'enum': ['making', 'made', 'failed', 'update_required']}}),
+                                               {'type': 'null'}]}}),
     'MeetingTaskRemoved': obj({'ok': 'b'}),
 })
 

@@ -3236,9 +3236,17 @@ def _opener(conn, conversation_id):
 
 
 # ----------------------------------------------------------------------------- messages
+def check_message_refs(refs, *, make_page=False):
+    """Only the task Make page route mints the initiating marker."""
+    if refs and "make_page" in refs and not make_page:
+        from .store import Problem
+        raise Problem("forbidden", "Use the task’s Make page control", 403)
+
+
 def say(conn, actor, to_actor, body, conversation_id=None, kind="say", refs=None,
-        in_reply_to=None, wait_s=None):
+        in_reply_to=None, wait_s=None, *, make_page=False):
     """The one write every message goes through: rules 1, 2, 3, 4, 7 and 8 all live here."""
+    check_message_refs(refs, make_page=make_page)
     on_task = message_task_id({"refs": refs}, conversation(conn, conversation_id) if conversation_id else None)
     with refusal_task(on_task):
         return _say(conn, actor, to_actor, body, conversation_id, kind, refs, in_reply_to, wait_s)

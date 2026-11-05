@@ -242,6 +242,7 @@ class AttemptRow(TypedDict):
     gateway_key_id: str | None
     handed_runtime: str | None
     handed_model: str | None
+    acting_person: str | None
     lane: str
     wake: str | None
     model: str | None

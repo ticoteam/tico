@@ -26,6 +26,8 @@ pub const CAPABILITIES: &[&str] = &[
     "memory_tidy_keep_v1",
     // Report the process allocation boundary so the hub can recheck memory on unused grants.
     "harness_allocation_v1",
+    // Make page uses a fresh provider session in disposable scratch, apart from the private Assistant's session.
+    "make_page",
 ];
 const DROP_FOR: Duration = Duration::from_secs(600);
 
@@ -125,7 +127,7 @@ pub fn refused_field(detail: &str, body: &Value) -> Option<String> {
                 if CAPABILITIES.contains(&name.as_str()) { return Some(name.clone()); }
             }
         }
-        for name in ["harness_allocation_v1", "memory_tidy_packets_v1", "model_subscription_activation_v1", "browser_exit_v1", "model_subscriptions_v1", "private_lanes_v1", "turns_at_once_v1", "capacity_continue_v1", "source_continue_v1",
+        for name in ["make_page", "harness_allocation_v1", "memory_tidy_packets_v1", "model_subscription_activation_v1", "browser_exit_v1", "model_subscriptions_v1", "private_lanes_v1", "turns_at_once_v1", "capacity_continue_v1", "source_continue_v1",
                      crate::login::CONNECT_CAPABILITY, crate::login::SWITCH_TO_KEY_CAPABILITY, crate::login::REMOVE_CAPABILITY,
                      crate::login::SWITCH_TYPE_CAPABILITY, crate::login::KEYS_CAPABILITY,
                      crate::login::SIGN_OUT_CAPABILITY, crate::screen::CAPABILITY, "task_goals_v1",
@@ -210,6 +212,18 @@ mod tests {
         let all = json!({"capabilities": CAPABILITIES});
         assert_eq!(refused_field("body.capabilities.3: Input should be 'task_lanes_v2'", &all).as_deref(), Some("capacity_continue_v1"));
         assert_eq!(refused_field("body.capabilities.4: Input should be 'capacity_continue_v1'", &all).as_deref(), Some("source_continue_v1"));
+    }
+
+    #[test]
+    fn an_older_server_can_drop_make_page_without_losing_ordinary_work() {
+        let mut body = json!({"capabilities": ["task_lanes_v2", "threads_v1", "make_page"]});
+        assert!(CAPABILITIES.contains(&"make_page"));
+        assert_eq!(refused_field("body.capabilities.2: Input should be 'task_lanes_v2'", &body).as_deref(), Some("make_page"));
+        assert_eq!(refused_field("body.capabilities: bad", &body).as_deref(), Some("make_page"));
+        hold_back("make_page");
+        drop_held(&mut body);
+        release("make_page");
+        assert_eq!(body["capabilities"], json!(["task_lanes_v2", "threads_v1"]));
     }
 
     #[test]

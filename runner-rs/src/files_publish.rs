@@ -225,12 +225,18 @@ pub fn pushed_commit(root: &Path, rel: &str) -> String {
     }
 }
 
+pub const MAKE_PAGE_ORIGIN: &str = ".tico-make-page-attempt";
+
 fn now() -> f64 {
     crate::util::epoch_s()
 }
 
 /// Queue what changed since the last publish; (queued, refused). `skip` names files that hold a granted secret.
 pub fn prepare(state: &State, bot: &str, attempt_id: &str, root: &Path, config: &Value, pushed: bool, skip: &[String]) -> Result<(usize, usize), String> {
+    // Even an accidental later scan keeps this directory's original provenance and never queues its output.
+    if root.join(MAKE_PAGE_ORIGIN).exists() {
+        return Ok((0, 0));
+    }
     let seen: HashSet<String> = state.with(|c| {
         c.execute_batch(TABLES)?;
         let mut q = c.prepare("SELECT rel FROM file_published WHERE bot=?1 UNION SELECT rel FROM file_refused WHERE bot=?1")?;
@@ -413,6 +419,10 @@ async fn report_not_synced(client: &Client, row: &Row) {
 
 /// The one call after a completed turn. Never fails the turn: a report that cannot be published is logged.
 pub async fn after_turn(state: &State, client: &Client, attempt: &Value, root: &Path, pushed: bool, skip: &[String]) {
+    // Make page publishes explicitly as its person through the page API.
+    if attempt["make_page"]["task"].is_object() {
+        return;
+    }
     let bot = crate::util::text_of(&attempt["bot"]);
     let config = if attempt["config"].is_object() { attempt["config"].clone() } else { Value::Object(Default::default()) };
     // The scan stats and reads the checkout and asks git about each file: blocking work, kept off the async workers.
@@ -520,6 +530,32 @@ mod tests {
             }
         });
         (url, seen)
+    }
+
+    #[tokio::test]
+    async fn make_page_does_not_publish_shared_reports_with_runner_credentials() {
+        let dir = checkout();
+        let state = State::open(&dir.join("state")).unwrap();
+        state.with(|c| c.execute_batch(TABLES)).unwrap();
+        let scratch = crate::sessions::MakePageScratch::new("make-1").unwrap();
+        let path = scratch.0.clone();
+        std::fs::create_dir(path.join("reports")).unwrap();
+        std::fs::write(path.join("reports/page.html"), "<h1>Private page marker</h1>").unwrap();
+        let (url, seen) = hub(vec![]).await;
+        let client = Client::new(&url, "t", 5, 0).unwrap();
+        let attempt = json!({"id": "make-1", "bot": "coo", "make_page": {"task": {"id": "t1"}}});
+        after_turn(&state, &client, &attempt, &path, false, &[]).await;
+        let queued: i64 = state.with(|c| c.query_row("SELECT count(*) FROM file_outbox", [], |r| r.get(0))).unwrap();
+        assert_eq!(queued, 0);
+        assert!(seen.lock().unwrap().is_empty());
+        assert_eq!(prepare(&state, "coo", "ordinary", &path, &json!({}), false, &[]).unwrap().0, 0);
+        drop(scratch);
+        assert!(!path.exists());
+        after_turn(&state, &client, &json!({"id": "ordinary", "bot": "coo"}), &dir, false, &[]).await;
+        let queued: i64 = state.with(|c| c.query_row("SELECT count(*) FROM file_outbox", [], |r| r.get(0))).unwrap();
+        assert_eq!(queued, 0);
+        assert!(seen.lock().unwrap().is_empty());
+        std::fs::remove_dir_all(dir).ok();
     }
 
     #[tokio::test]

@@ -130,6 +130,9 @@ SOURCE_CONTINUE = "source_continue_v1"
 # so the server gives it each chat's own session instead (start_claimed).
 THREADS = "threads_v1"
 
+# These requests need a fresh provider session and disposable scratch.
+MAKE_PAGE = "make_page"
+
 
 def positive_effect(c, aid, body):
     """Evidence the turn did real work even when its event stream looks empty (sparse host telemetry).
@@ -2164,12 +2167,17 @@ FOLD_TEXT = 4000           # characters of each one given in the prompt; the bot
 PRIME_QUEUED = 50          # queued messages a claim or an input poll reads together before checking them one by one
 
 
+def job_message_readable(c, bot, message):
+    # Claiming the person's page request does not grant the shared bot later access to its private task.
+    return privacy.message_readable(c, privacy.make_page_actor(c, "bot:" + bot, message), message)
+
+
 def job_refusal(c, job, followed, ready, busy, lanes, roots, live=frozenset(), *, suspect=None, runner=None):
     """Why the claim passes over one queued job of a bot claim_refusal let through, or None when it hands it out.
     `followed` is the bot's followed config; `busy` the taken (bot, lane) pairs; `live` the (bot, task) pairs with a
     turn out (live_tasks); `runner` the computer's row, whose company subscription signs a check's runtime in."""
     message = H.message(c, job["message_id"])
-    if not privacy.message_readable(c, "bot:" + job["bot_id"], message):
+    if not job_message_readable(c, job["bot_id"], message):
         return "unreadable"
     # The bot's budget and back-off are the bot's own state: an error reading them is shared_check's, and the whole
     # bot is passed over. The checks below depend on this job, so an error in them holds this job alone.
@@ -2184,6 +2192,8 @@ def job_refusal(c, job, followed, ready, busy, lanes, roots, live=frozenset(), *
     task_id = work_task_id(message, conversation)
     task = H.task(c, task_id) if task_id else None
     refs = message.get("refs") or {}
+    if "make_page" in refs and (not runner or MAKE_PAGE not in capability_set(runner["capabilities"])):
+        return "make_page_upgrade"
     from . import task_check_backs
     if task_check_backs.stale(c, message, job):
         return "obsolete_check_back"
@@ -3698,7 +3708,7 @@ class Execution:
         savepoint of its own (claim), so an error here rolls back only this job's writes."""
         msg = H.message(c, row["message_id"])
         from . import threads
-        if (not privacy.message_readable(c, "bot:" + row["bot_id"], msg)
+        if (not job_message_readable(c, row["bot_id"], msg)
                 or not threads.still_addressed(c, msg, "bot:" + row["bot_id"])):
             c.execute("UPDATE jobs SET state='canceled' WHERE id=?", (row["id"],))
             threads.moot_delivery(c, msg, "bot:" + row["bot_id"])
@@ -3936,8 +3946,9 @@ class Execution:
         # A bot limited to one task (scoped_sql) carries only that task's work: its other next-run tasks and waiting
         # notes stay where they are for a run after the scope is released.
         scope = claim_scope(c, row["bot_id"])
+        making_page = (msg.get("refs") or {}).get("make_page")
         # A check runs on another model for one subtask: the bot's other work waits for its own turns.
-        if getattr(body, "next_run", False) and not check:
+        if getattr(body, "next_run", False) and not check and not making_page:
             if row["bot_id"] == "librarian":
                 from .docs import refresh_generated_docs
                 refresh_generated_docs(c)  # Also covers a Librarian enabled after the upgrade.
@@ -3963,7 +3974,7 @@ class Execution:
         # Quiet notes ride the same way: every note waiting for this bot, each with when it was
         # sent, so the run can tell yesterday's from this morning's.
         notes = []
-        if getattr(body, "next_run", False) and not check and not scope:
+        if getattr(body, "next_run", False) and not check and not scope and not making_page:
             from . import bot_to_bot
             from . import threads
             # A deferred thread note goes only while the bot still reads its source (a lost one is canceled here), and
@@ -3985,7 +3996,7 @@ class Execution:
         # met. A deferred task this turn works as its own is met too, though not counted: it is the turn's task.
         from . import delivery
         own = [task["id"]] if task and task.get("id") else []
-        deferred = delivery.summary(
+        deferred = "" if making_page else delivery.summary(
             delivery.carried(c, row["bot_id"], aid, [conv["id"], (task or {}).get("conversation_id")],
                              [item["id"] for item in carried] + own, [item["id"] for item in notes],
                              job=row["id"], current=msg["id"]),
@@ -3995,14 +4006,22 @@ class Execution:
         from . import mailbox_access
         attempt_row = c.execute("SELECT * FROM attempts WHERE id=?", (aid,)).fetchone()
         acting = self.auth.assistant_principal(c, attempt_row) if attempt_row else None
+        if making_page and acting is None:
+            raise Problem("forbidden", "The person can no longer run this page request", 403)
+        if making_page:
+            # Receipts outlive the lease and must retain the person whose rights admitted this request.
+            c.execute("UPDATE attempts SET acting_person=? WHERE id=?", (acting.actor, aid))
         mail_levels = mailbox_access.levels_for(c, acting or ("bot:" + row["bot_id"]))
         subscriptions = model_subscriptions.hand_out(c, aid, subscribed)
         parked = c.execute("SELECT onboarding_state FROM bot_config WHERE bot=?", (row["bot_id"],)).fetchone()
         from .chat_goals import current
         from . import task_context, worktrees
+        make_page_task = self.auth.task(c, acting or bot_who, making_page["task"]) if making_page else None
+        if making_page:
+            history = [msg]
         # A runner from before task goals would treat a task room's goal as running without ever setting it.
         chat_goal = current(c, conv["id"]) if not (conv.get("kind") == "task" and not task_goals_on(runner)) else None
-        if chat_goal and chat_goal["bot"] != row["bot_id"]:
+        if chat_goal and (making_page or chat_goal["bot"] != row["bot_id"]):
             # Another bot's turn in the room (the requester answering) works without the owner's goal.
             chat_goal = None
         # Runner wire names (backend/runner_wire.py): the stored text beside the decoded values, as runners read them.
@@ -4051,7 +4070,8 @@ class Execution:
                             # (backend/learned.py; rendered by runner-rs/src/prompt.rs). Outside their own chat only
                             # `strategy`, the team's published strategy, which every turn carries (backend/strategy.py).
                             "learned": learned.for_turn(c, self.store.settings, conv, row["bot_id"]),
-                            "task_context": task_context.for_turn(c, self.auth, acting or bot_who, task),
+                            "task_context": task_context.for_turn(c, self.auth, acting or bot_who, make_page_task or task),
+                            **({"make_page": {"task": runner_wire.task(make_page_task)}} if making_page else {}),
                             # Asked from the Updates chat: the recent updates that person may read and open, read now as
                             # them (backend/updates_chat.py). None for every other turn.
                             "updates": updates_chat.for_turn(c, self.auth, self.store.settings, conv, row["bot_id"], msg, aid),
@@ -4121,7 +4141,9 @@ class Execution:
             # never started has no result worth that: the sweep requeues or fails it as before.
             self.expire(c, attempt_ids=[aid])
             row = read()
-        if not privacy.attempt_readable(c, "bot:" + row["bot_id"], aid):
+        origin = H.message(c, c.execute("SELECT message_id FROM jobs WHERE id=?", (row["job_id"],)).fetchone()[0])
+        principal = privacy.make_page_actor(c, "bot:" + row["bot_id"], origin)
+        if not privacy.attempt_readable(c, principal, aid):
             raise Problem("stale_lease", "Task access expired; stop this attempt", 409)
         if (row["state"] in ("leased", "running") and row["lease_until"] > H.now()
                 and row["assigned_runner"] == who.runner_id and row["assigned_generation"] == row["generation"]
@@ -4621,6 +4643,8 @@ class Execution:
         # whose words are already gone, so the turn keeps polling. Its follow-ups are read the normal way below.
         origin = H.message(c, c.execute("SELECT message_id FROM jobs WHERE id=?", (attempt["job_id"],)).fetchone()[0],
                            include_deleted=True)
+        if "make_page" in (origin.get("refs") or {}):
+            return {"messages": []}
         origin_task = work_task_id(origin, H.conversation(c, origin["conversation_id"]))
         origin_notice = wake_rule_engine.notice_only(origin)
         capabilities = c.execute("SELECT capabilities FROM runners_with_state WHERE id=?", (attempt["runner_id"],)).fetchone()
@@ -4895,6 +4919,10 @@ class Execution:
         the thread, where the wake rule and the loop guard decide whom it starts. A thread the bot may no longer read
         or post in (it was removed, the thread was archived) withholds that reply, and the run is still done."""
         from . import threads
+        if not carried and privacy.make_page_actor(c, actor, msg) == target:
+            # The Assistant's answer belongs in the initiating person's private room, as its request does.
+            return H._write_message(c, actor, target, text, conv, "say", refs, msg["id"], None,
+                                    delivered_at=H.now())
         to = target if not carried or H.is_human(target) or msg["kind"] == "ask" else None
         v = threads.viewer(None, Identity(actor, "bot", attempt_id=aid))
         thread, under = conv, None
@@ -5060,7 +5088,7 @@ class Execution:
                             **({"warnings": notices} if notices and msg["kind"] != "ask" else {})}
                     refused = False
                     try:
-                        if replyable:
+                        if replyable and privacy.make_page_actor(c, actor, msg) != target:
                             privacy.require_destination(c, Identity(actor, "bot", attempt_id=aid), target, conv["id"],
                                                         refs, source)
                     except Problem as refusal:
@@ -5929,7 +5957,7 @@ class Execution:
                              " ORDER BY j.created_at,j.id", job_ids or ()).fetchall():
             with isolated(c, "drop_unreadable", row["id"]):
                 # job_refusal's own check, with its arguments.
-                if privacy.message_readable(c, "bot:" + row["bot_id"], H.message(c, row["message_id"])):
+                if job_message_readable(c, row["bot_id"], H.message(c, row["message_id"])):
                     continue
                 c.execute("UPDATE jobs SET state='canceled' WHERE id=? AND state='queued'", (row["id"],))
                 from . import threads
@@ -6102,7 +6130,7 @@ class Execution:
                 conv = H.conversation(c, msg['conversation_id']) if msg else None
                 task_id = work_task_id(msg, conv) if msg else None
                 task = H.task(c, task_id) if task_id else None
-                if not privacy.message_readable(c, 'bot:' + row['bot_id'], msg):
+                if not job_message_readable(c, row['bot_id'], msg):
                     decided.append(self._decide(c, row, row['attempt_id'], 'dismiss',
                                                'Task access was revoked.', H.KEEPER, action='job.auto_reconcile'))
                     continue

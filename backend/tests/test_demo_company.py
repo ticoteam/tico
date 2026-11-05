@@ -208,7 +208,8 @@ def test_the_assistant_answers_whats_waiting_with_the_open_decisions(ana):
 
 
 def test_home_has_a_bot_page_settings_has_a_team_icon_and_granola_syncs(ana):
-    assert [page["title"] for page in ana.get("/api/v2/pages").json()["pages"]] == [D.PAGE["title"]]
+    pages = ana.get("/api/v2/pages").json()["pages"]
+    assert {page["bot_id"] for page in pages} == {D.PAGE["bot"], "coo"}
     assert ana.get("/api/v2/team/icon").status_code == 200
     assert ana.post("/api/v2/meetings/granola/sync").status_code == 200
 

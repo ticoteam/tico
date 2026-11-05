@@ -181,7 +181,7 @@ CREATE TABLE IF NOT EXISTS attempts(
  token_hash TEXT UNIQUE, state TEXT, lease_until TEXT,
  created_at TEXT NOT NULL, started_at TEXT, finished_at TEXT, thread_id TEXT,
  result TEXT, final_text TEXT, last_seq INTEGER NOT NULL DEFAULT 0,
- stop_requested_at TEXT, gateway_key_id TEXT, handed_runtime TEXT, handed_model TEXT,
+ stop_requested_at TEXT, gateway_key_id TEXT, handed_runtime TEXT, handed_model TEXT, acting_person TEXT,
  lane TEXT NOT NULL DEFAULT 'main', wake TEXT, model TEXT,
  settled_at TEXT, trigger TEXT, message_id TEXT, task_id TEXT, exit TEXT, summary TEXT,
  trigger_kind TEXT, trigger_source TEXT, purpose TEXT, rule_id TEXT, writes INTEGER, outcome TEXT,
@@ -2340,32 +2340,24 @@ class Store:
                     legacy = retry_body(c, result) if retry_body else None
                     if legacy is None or row["request_hash"] != digest(encode(legacy)):
                         raise Problem("idempotency_conflict", "This key was used for different content", 409)
-                from .auth import Auth, Identity
+                from .auth import Auth
                 from . import task_privacy as privacy
                 replay_auth = Auth(self)
                 replay_auth.sync_access(c)
-                replay_principal = identity
+                aid = saved = None
                 if identity.role == "runner" and isinstance(result, dict):
                     saved = result.get("attempt")
                     aid = result.get("attempt_id") or (saved.get("id") if isinstance(saved, dict) else None)
-                    if aid:
-                        # A finished attempt can replay its receipt without a live bot lease, but
-                        # the computer must still own that generation and the bot must still see it.
-                        hosted = c.execute("SELECT a.bot_id FROM attempts a JOIN assignments x ON x.bot=a.bot_id "
-                                           "JOIN bots b ON b.id=a.bot_id WHERE a.id=? AND a.runner_id=? "
-                                           "AND x.runner_id=? AND x.generation=a.generation AND b.state='active'",
-                                           (aid, identity.runner_id, identity.runner_id)).fetchone()
-                        if not hosted:
-                            raise Problem("privacy", "This execution is no longer assigned to this computer", 403)
-                        replay_principal = Identity("bot:" + hosted["bot_id"], "bot", runner_id=identity.runner_id,
-                                                    attempt_id=aid)
-                        if not privacy.attempt_readable(c, replay_principal.actor, aid):
-                            raise Problem("privacy", "This execution is no longer available", 403)
-                        if operation == "/api/v2/jobs/claim" and isinstance(saved, dict):
-                            from . import task_context
-                            attempt = c.execute("SELECT * FROM attempts WHERE id=?", (aid,)).fetchone()
-                            acting = replay_auth.assistant_principal(c, attempt) or replay_principal
-                            saved["task_context"] = task_context.for_turn(c, replay_auth, acting, saved.get("task"))
+                    # Several receipts contain only an acknowledgement; the route or file request still binds the turn.
+                    if operation.startswith("/api/v2/attempts/"):
+                        aid = operation.split("/")[4]
+                    elif operation in ("/api/v2/files/uploads", "/api/v2/files/imports"):
+                        aid = body.get("attempt") or aid
+                replay_principal = replay_auth.runner_receipt_principal(c, identity, aid)
+                if identity.role == "runner" and operation == "/api/v2/jobs/claim" and isinstance(saved, dict):
+                    from . import task_context
+                    task = (saved.get("make_page") or {}).get("task") or saved.get("task")
+                    saved["task_context"] = task_context.for_turn(c, replay_auth, replay_principal, task)
                 # Cached results keep their retry semantics, but access is current on every retry.
                 task_ids = set()
                 for part in operation.split("/"):

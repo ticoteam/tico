@@ -380,6 +380,25 @@ def readable(c, actor, ids):
                for row in rows.values())
 
 
+def make_page_actor(c, actor, message):
+    """The Assistant reads its person's own Make page request with that person's rights."""
+    message = dict(message or {})
+    refs = H._json(message.get("refs"), {}) or {}
+    if (not isinstance(refs, dict) or not isinstance(actor, str) or not actor.startswith("bot:")
+            or actor != message.get("recipient_id")
+            or not isinstance(refs.get("make_page"), dict) or refs.get("assistant") is not True
+            or refs.get("via") or message.get("deleted_at")):
+        return actor
+    from . import rooms
+    room = H.conversation(c, message.get("conversation_id")) or {}
+    owner = room.get("owner_id")
+    if (room.get("scope") == "personal" and room.get("room_key") == rooms.ASSISTANT_ROOM
+            and not room.get("closed_at") and owner == message.get("sender_id")
+            and str(owner).startswith("human:")):
+        return owner
+    return actor
+
+
 def message_readable(c, actor, message, current=False):
     """`current`: `message` is its full messages row, read in this snapshot (a join's `m.*`)."""
     snapshot(c)
@@ -582,6 +601,11 @@ def require_payload(c, who, payload, principal=None, checked_for=None):
             principal = "bot:" + hosted["bot_id"]
         if isinstance(attempt, dict) and attempt.get("bot_id"):
             principal = "bot:" + attempt["bot_id"]
+        if aid:
+            origin = read_cache.one(c, "SELECT m.* FROM attempts a JOIN jobs j ON j.id=a.job_id "
+                                    "JOIN messages m ON m.id=j.message_id WHERE a.id=?", (aid,))
+            principal = make_page_actor(c, principal, origin)
+        if isinstance(attempt, dict) and attempt.get("bot_id"):
             if not attempt_readable(c, principal, attempt.get("id")):
                 raise Problem("privacy", "This execution is no longer available", 403)
     if (who.role == "runner" and principal == who.actor and isinstance(payload, dict)
