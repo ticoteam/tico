@@ -23,6 +23,7 @@ const server = http.createServer(async (req, res) => {
       const API='/api', me=new URLSearchParams(location.search).get('viewer');
       const S={me:{id:me},people:[{id:'ana',name:'Ana'},{id:'ben',name:'Sam'}]};
       const $=s=>document.querySelector(s), esc=s=>String(s??'').replaceAll('&','&amp;').replaceAll('<','&lt;').replaceAll('"','&quot;');
+      const newRequestId=()=>crypto.randomUUID();
       const actorLabel=a=>a==='human:ben'?'Sam':'Ana', activeEmps=()=>[], getForget=()=>{}, toast=()=>{}, liveOn=()=>{};
       const taskOwnerOptions=()=>'<option value="human:ben">Sam</option>', botByRef=()=>null;
       const get=p=>fetch(API+p).then(r=>r.json());

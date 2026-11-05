@@ -72,8 +72,14 @@ function taskLiveBind(d, task) {
   }
   const may = taskPropRights(task).edit;
   const title = $('.tmodal-title', d);
-  title.contentEditable = may ? 'plaintext-only' : 'false';
-  if (may) { title.dataset.taskField = 'title'; title.setAttribute('role', 'textbox'); title.setAttribute('aria-label', 'Title'); }
+  const titleMode = editing => {
+    live.titleEditing = may && editing;
+    title.contentEditable = live.titleEditing ? 'plaintext-only' : 'false';
+    if (live.titleEditing) title.setAttribute('role', 'textbox'); else title.removeAttribute('role');
+  };
+  titleMode(live.titleEditing);
+  title.onclick = () => { if (may) { titleMode(true); title.focus(); } };
+  if (may) { title.dataset.taskField = 'title'; title.setAttribute('aria-label', 'Title'); }
   else { delete title.dataset.taskField; title.removeAttribute('role'); title.removeAttribute('aria-label'); }
   const details = $('[data-task-field="body"]', d), edit = $('[data-task-body-edit]', d);
   if (details) details.disabled = !may;
@@ -84,8 +90,12 @@ function taskLiveBind(d, task) {
       clearTimeout(draft.timer);
       if (!draft.error) draft.timer = setTimeout(() => taskLiveSave(d, live), 700);
     };
-    field.onblur = () => { if (!draft.error) void taskLiveSave(d, live); taskLivePaint(d, live); };
-    if (field === title) field.onkeydown = event => { if (event.key === 'Enter') { event.preventDefault(); field.blur(); } };
+    field.onblur = () => { if (field === title) titleMode(false); if (!draft.error) void taskLiveSave(d, live); taskLivePaint(d, live); };
+    if (field === title) field.onkeydown = event => {
+      if (event.key !== 'Enter') return;
+      event.preventDefault(); event.stopPropagation();
+      if (live.titleEditing) field.blur(); else titleMode(true);
+    };
   }
   $('[data-task-edit-retry]', d).onclick = () => taskLiveSave(d, live);
   taskLivePaint(d, live);

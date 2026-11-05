@@ -55,7 +55,7 @@ function sharedPlaceStart(state, options) {
   const {id, place, topic, filter, changed, gone, present} = options;
   if (state.shared?.place === place) return;
   sharedPlaceStop(state);
-  const shared = state.shared = {id, place, session: crypto.randomUUID()};
+  const shared = state.shared = {id, place, session: newRequestId()};
   const current = () => state.shared === shared;
   const lost = error => { if (current() && [403, 404].includes(error.status)) gone(); };
   const presence = async () => {

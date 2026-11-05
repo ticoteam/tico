@@ -114,7 +114,7 @@
 .rc-done{font-size:12.5px;color:var(--ok);font-weight:600}
 
 /* Editors stay mounted through live task redraws. */
-.tmodal-title[contenteditable="plaintext-only"] { cursor: text; white-space: pre-wrap; overflow-wrap: anywhere; }
+.tmodal-title[data-task-field="title"] { cursor: text; min-height: 1.25em; white-space: pre-wrap; overflow-wrap: anywhere; }
 .task-edit-meta { display: flex; flex-wrap: wrap; gap: 6px 16px; margin: 0 24px 12px; font-size: 12px; }
 .task-edit-meta:empty { display: none; }
 [data-task-edit-body] { position: relative; }
