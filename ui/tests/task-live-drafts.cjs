@@ -127,6 +127,14 @@ const init = () => {
     assert.equal(await error.count(), 1, key + ' blur keeps its failed save until Retry');
     await retry();
    }
+   // Invalid dates keep their feedback and send nothing; a successful date edit clears its own error.
+   const beforeDate = writes.length, date = page.locator('#task-modal [data-prop-date]');
+   await date.evaluate(el => { el.value = '0002-10-09'; el.dispatchEvent(new Event('input')); el.dispatchEvent(new Event('change')); });
+   assert.equal(writes.length, beforeDate);
+   assert.ok(await page.locator('#task-modal [data-props-msg]').textContent());
+   await date.evaluate(el => { el.value = '2026-12-05'; el.dispatchEvent(new Event('input')); el.dispatchEvent(new Event('change')); });
+   await idle();
+   assert.equal(await page.locator('#task-modal [data-props-msg]').textContent(), '');
    // A routine's due day retains its calendar date across viewer timezones.
    task.occurrence = 'routine:2026-12-10'; task.due_at = '2026-12-10T23:59:59-11:00'; task.version++;
    await update();

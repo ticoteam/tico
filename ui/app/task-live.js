@@ -292,7 +292,10 @@ function taskLiveWireField(d, live, field) {
       const m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(value);
       if (!m) return;
       const [y, mo, day] = m.slice(1).map(Number), when = new Date(y, mo - 1, day, 17, 0);
-      if (y < 2000 || y > 2200 || when.getMonth() !== mo - 1 || when.getDate() !== day) return;
+      if (y < 2000 || y > 2200 || when.getMonth() !== mo - 1 || when.getDate() !== day) {
+        if (d.propsErrs?.id !== live.id) d.propsErrs = {id: live.id, map: new Map()};
+        d.propsErrs.map.set('due', 'That date is not valid.'); taskPropsMsgPaint(d); return;
+      }
       value = when.toISOString();
     }
     if (key === 'size') { if (!field.checkValidity()) return; value = value === '' ? null : Number(value); }
@@ -385,6 +388,10 @@ async function taskLiveSave(d, live) {
         for (const key of Object.keys(patch)) {
           const base = live.draft.bases[key] = {value: taskLiveValue(reply.task, key), version: reply.task.version};
           if (d.taskLive?.draft === live.draft) d.taskLive.fields[key] = {...base};
+        }
+        if (d.taskLive === live) {
+          for (const key of Object.keys(patch)) d.propsErrs?.map.delete(key);
+          taskPropsMsgPaint(d);
         }
         if (d.taskLive === live && Number(reply.task.version) >= Number(d.liveTask?.version || 0)) d.liveTask = reply.task;
         // Text edits update the held list directly, with no whole-list read.
