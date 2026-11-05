@@ -72,6 +72,10 @@ def test_every_stored_shape_is_projected_at_every_delivery(api, assistant):
         good = dict(c.execute("SELECT * FROM bot_file_versions WHERE file_id=?", (allowed,)).fetchone())
     bid, digest = version["blob_id"], version["digest"]
     refs = all_shapes(hidden, bid, digest, "Forbidden page title", mid)
+    missing = H.new_id()
+    refs["attachments"].append({"id": missing, "title": "Missing source title"})
+    refs["files"].append(missing + "@1")
+    refs["review"]["files"].append({"file": missing, "version": 1, "title": "Missing source title"})
     append_allowed(refs, allowed, good["blob_id"], good["digest"])
     if version["source_digest"]:
         refs["versions"].append({"source_digest": version["source_digest"], "title": "Forbidden page title"})
@@ -100,6 +104,7 @@ def test_every_stored_shape_is_projected_at_every_delivery(api, assistant):
             original["make_page"] = {"task": t["id"]}
         c.execute("UPDATE messages SET refs=? WHERE id=?", (encode(original), origin["id"]))
     secrets = (hidden, hidden + "@1", bid, digest, "Forbidden page title", "forbidden-page.html", mid, "Forbidden meeting title")
+    secrets += (missing, "Missing source title")
     if version["source_digest"]:
         secrets += (version["source_digest"],)
     attempt = claim(api, machine, bot, key="all-shapes-claim")
@@ -125,12 +130,14 @@ def test_every_stored_shape_is_projected_at_every_delivery(api, assistant):
              "messages/" + question["id"], "inbox", "pages", "pages?ids=" + hidden + "," + allowed,
              "pages/" + allowed, "files/" + allowed + "/meta", "files/" + allowed + "/versions",
              "files/" + allowed + "/activity", "bots/cpo/files", "meetings/search", "recordings/search",
-             "meetings/transcript?id=" + shared]
+             "meetings/transcript?id=" + shared, "docs/manual"]
     for path in paths:
         response = api.get("/api/v2/" + path, headers=headers(token))
         assert response.status_code == 200, (path, response.status_code, response.text)
         no_sources(response.json(), secrets)
         assert int(response.headers["content-length"]) == len(response.content)
+        if path == "docs/manual":
+            assert response.json()["pages"] and all(p["id"].startswith("manual:") for p in response.json()["pages"])
     if assistant:
         response = api.get("/api/v2/assistant", headers=headers(token))
         assert response.status_code == 403

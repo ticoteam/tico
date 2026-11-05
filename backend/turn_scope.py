@@ -70,9 +70,20 @@ def project(c, scoped, payload, *, auth=None):
     from .files import file_visible, prime_visible
 
     tokens = re.compile(r"[A-Za-z0-9_-]+")
-    parsed, names = {}, set()
+    source_id = re.compile(r"file-[A-Za-z0-9_-]+|[0-9a-fA-F]{8}(?:-[0-9a-fA-F]{4}){3}-[0-9a-fA-F]{12}")
+    parsed, names, explicit, digest_refs = {}, set(), set(), set()
 
-    def strings(value):
+    def source_ref(value):
+        if not isinstance(value, str):
+            return
+        value = unquote(value)
+        found = re.findall(r"(?:page:|file:|/pages?/|/files/|[?&]page=)([A-Za-z0-9_-]+)", value)
+        compact = value.rsplit("@", 1)[0]
+        if source_id.fullmatch(compact):
+            found.append(compact)
+        explicit.update(ref for ref in found if source_id.fullmatch(ref))
+
+    def strings(value, parent=""):
         if isinstance(value, str):
             if value.lstrip()[:1] in ("{", "["):
                 try:
@@ -85,17 +96,28 @@ def project(c, scoped, payload, *, auth=None):
                         strings(decoded)
                         return
             names.update(tokens.findall(unquote(value)))
+            if parent in {"file", "files", "ref", "page", "path", "url", "href", "src", "item"}:
+                source_ref(value)
+            if value and parent in {"file_id", "blob_id", "page_id", "meeting_id", "digest", "source_digest"}:
+                explicit.add(value)
+            if parent in {"digest", "source_digest"} and value:
+                digest_refs.add(value)
         elif isinstance(value, dict):
+            # Other namespaces also call their rows pages (the public manual, for example).
+            if (parent in {"attachments", "files", "pages", "meetings"} and isinstance(value.get("id"), str)
+                    and source_id.fullmatch(value["id"])):
+                explicit.add(value["id"])
             for key, item in value.items():
                 strings(key)
-                strings(item)
+                strings(item, key)
         elif isinstance(value, (list, tuple)):
             for item in value:
-                strings(item)
+                strings(item, parent)
     strings(payload)
+    names.update(explicit)
     denied, files, blob_rows, meeting_ids, live = set(), {}, {}, set(), {}
     # Blob digests have their own index. Version source digests may differ from stored bytes.
-    digests = {s for s in names if re.fullmatch(r"[0-9a-fA-F]{64}", s)}
+    digests = digest_refs | {s for s in names if re.fullmatch(r"[0-9a-fA-F]{64}", s)}
     for chunk in H.chunks(sorted(names)):
         marks = ",".join("?" * len(chunk))
         files.update((r["id"], r) for r in c.execute(f"SELECT * FROM bot_files WHERE id IN ({marks})", chunk))
@@ -128,6 +150,8 @@ def project(c, scoped, payload, *, auth=None):
             if digest:
                 digest_access[digest] = digest_access.get(digest, False) or visible.get(row["file_id"], False)
     denied.update(digest for digest, ok in digest_access.items() if not ok)
+    known = files.keys() | blob_rows.keys() | meeting_ids | live.keys() | digest_access.keys()
+    denied.update(explicit - known)
     for mid in meeting_ids:
         try:
             context_search.readable(c, scoped.who, mid, auth=auth)
@@ -151,7 +175,10 @@ def project(c, scoped, payload, *, auth=None):
     gone = object()
 
     def rejected(value):
-        return isinstance(value, str) and value not in parsed and bool(denied.intersection(tokens.findall(unquote(value))))
+        if not isinstance(value, str) or value in parsed:
+            return False
+        decoded = unquote(value)
+        return decoded in denied or bool(denied.intersection(tokens.findall(decoded)))
 
     def walk(value, parent=""):
         if isinstance(value, str):
