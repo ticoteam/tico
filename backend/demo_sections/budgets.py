@@ -20,7 +20,7 @@ CONTENT = {
     "groups": {"marketing": {"monthly": 1.6}, "engineering": {"monthly": 1.7}},
     "near_group": "support",
     "bots": {"sales": {"daily": 3.0}, "firmware": {"weekly": 2.5}, "video-producer": {"monthly": 2.0}},
-    # The first of these with spend in the near window is the bot near its limit (none in the near group).
+    # The first with enough spend to stay near after rounding is near its limit (none in the near group).
     "near_bots": ("content", "botops", "pricing", "release-notes", "community"),
     "near": 0.86,
     # The longest window with this much spend in it holds a near limit (else the day): for a group, for a bot.
@@ -47,13 +47,14 @@ def _nice(amount):
 
 
 def _near(spent, floors):
-    """{period_usd: cap} at about CONTENT["near"] of the longest window with real spend, or None when even the day has
-    none (a build just after midnight UTC)."""
+    """{period_usd: cap} at about CONTENT["near"] of the longest window with real spend, or None when the spend is
+    too small for the rounded cap to show near (including a build just after midnight UTC)."""
     name, label = next(((name, label) for name, label, floor in floors if spent[label] >= floor), ("daily", "day"))
     if spent[label] <= 0:
         return None
     cap = spent[label] / CONTENT["near"]
-    return {name + "_usd": _up(cap, 0.01 if cap < 2 else 0.1 if cap < 20 else 1)}
+    rounded = _up(cap, 0.01 if cap < 2 else 0.1 if cap < 20 else 1)
+    return {name + "_usd": rounded} if spent[label] / rounded >= 0.8 else None
 
 
 def seed(b):

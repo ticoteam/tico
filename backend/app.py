@@ -8705,8 +8705,8 @@ def create_app(settings=None):
     install_support_access(app, store, settings, auth)
     from .watchers import install as install_watchers
     install_watchers(app, store, auth, execution, mutate)
-    from .health_monitor import install as install_health_monitor
-    install_health_monitor(app, store, auth, mutate, onboarding, settings_admin, settings)
+    from .maintenance_health import install as install_health
+    install_health(app, store, auth, mutate, settings)
     from .task_manager import install as install_task_manager
     install_task_manager(app, store, auth, mutate, onboarding, settings_admin, settings)
     # A computer's screen in the app (backend/screen.py); its websockets go before the static mounts below.
