@@ -427,7 +427,7 @@ fn captured_rows_marked_as_the_local_person_yield_nothing() {
         if node["label"] == "P38" {
             node["label"] = json!("(You)");
         }
-        if let Some(children) = node["children"].as_array_mut() {
+        if let Some(children) = node.get_mut("children").and_then(|c| c.as_array_mut()) {
             children.iter_mut().for_each(mark);
         }
     }
