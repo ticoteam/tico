@@ -1222,9 +1222,10 @@ class Store:
             c.executescript(_task_manager.SCHEMA)
             from . import bookkeeper as _bookkeeper
             c.executescript(_bookkeeper.SCHEMA)
-            from . import health_monitor as _health_monitor
-            c.executescript(_health_monitor.SCHEMA)
-            # When a finding last woke the Health Monitor, and how bad it is: a rise wakes it (backend/health_monitor.py).
+            from . import maintenance_health as _maintenance_health
+            c.executescript(_maintenance_health.SCHEMA)
+            # How bad a finding is (a rise is a change), and whether a noisy check has been seen once and waits for its
+            # confirmation run (backend/maintenance_steps/check_health.py). Only a filed finding is listed or reported.
             H.add_column(c, "health_findings", "last_woke_at", "TEXT NOT NULL DEFAULT ''")
             H.add_column(c, "health_findings", "severity", "TEXT NOT NULL DEFAULT 'warn'")
             # The production checks' last answers and alert tasks (backend/invariants.py).

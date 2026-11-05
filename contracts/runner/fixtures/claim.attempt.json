@@ -89,6 +89,7 @@
    "lease_seconds": 90,
    "lease_until": "2026-01-01T00:00:00.000000Z",
    "login_class": "review",
+   "mailbox_levels": {},
    "mailboxes": [],
    "message": {
     "answered_by": null,

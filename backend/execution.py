@@ -17,7 +17,7 @@ from . import browser_exit, claim_holds, claim_loads, cloud_access, cloud_machin
 from .auth import Identity
 from .batch_work import isolated, report, shared_check, shared_scope, storage_error
 from .harnesses import bot_keyed, reports_tool_calls
-from .run_diagnostics import RESTART_TEXT, clean_stop_reported
+from .run_diagnostics import HANDED_BACK, RESTART_TEXT, clean_stop_reported
 from .statuses import PARKED_SQL
 from .verdict_moves import HANDOFF_FIRST_SQL
 from .store import H, P, Problem, bot_readiness, digest, encode, message_page, readiness_document
@@ -46,6 +46,8 @@ HELD_UNREVIEWED = 2 * 3600
 SILENT_KINDS = {"error", "diagnostic", "status"}
 NO_EFFECT_TRIES = 3
 PRE_START_TRIES = 10        # lapsed leases before start: a broken computer must not retry forever
+# Count missed starts across hub restarts without making old computer trouble exhaust today's retries.
+PRE_START_WINDOW_HOURS = 24
 # A run that found the Tico AI Gateway unavailable goes back in the queue (at most NO_EFFECT_TRIES - 1 times), and the
 # bot first waits this long, doubled for each try: an outage is not asked again every few seconds.
 GATEWAY_BACKOFF = 60
@@ -631,9 +633,6 @@ def last_stop(c, bot, status):
     return None
 
 
-HANDED_BACK = "Its computer handed the run back before starting it"
-
-
 def queued_task_sql():
     """Match message_task_id's string/list handling before testing interrupted work."""
     refs = []
@@ -796,16 +795,22 @@ def restart_cause(facts):
 
 def run_limit_minutes(c, attempt_id):
     """Recognize the runner's terminal run-budget cut, never a provider quota or Gateway limit."""
-    row = c.execute("SELECT * FROM attempts WHERE id=?", (attempt_id,)).fetchone()
-    if not row or row['state'] not in ('interrupted', 'expired'):
+    row = c.execute("SELECT state,stop_requested_at,result FROM attempts WHERE id=?", (attempt_id,)).fetchone()
+    if not row or row['state'] != 'interrupted' or row['stop_requested_at']:
         return None
     result = json.loads(row['result'] or '{}')
-    if result.get('outcome') != 'interrupted':
+    if result.get('outcome') != 'interrupted' or restart_reported(c, attempt_id):
         return None
-    from .run_diagnostics import reason
-    match = re.fullmatch(r'Timeout: max_run_minutes \(([0-9]+(?:\.[0-9]+)?) minutes\)',
-                         reason(c, row, 'interrupted'))
-    return match[1] if match and float(match[1]) > 0 else None
+    # Recovery reads the terminal report, never the display reason: a pause may explain the run without making
+    # its outside actions safe to repeat. As in diagnostics, the newest terminal cause wins over earlier failures.
+    events = c.execute("SELECT payload FROM attempt_events WHERE attempt_id=? "
+                        "AND kind IN ('error','diagnostic') ORDER BY seq DESC LIMIT 50", (attempt_id,))
+    for event in events:
+        cause = json.loads(event['payload']).get('end_reason')
+        if cause:
+            match = re.fullmatch(r'Timeout: max_run_minutes \(([0-9]+(?:\.[0-9]+)?) minutes\)', str(cause))
+            return match[1] if match and float(match[1]) > 0 else None
+    return None
 
 
 def run_limit_cuts(c, job):
@@ -2272,6 +2277,20 @@ HAND_BACK_WAIT = 15          # seconds before a handed-back job is handed out ag
 HAND_BACK_MAX = 300
 
 
+def failed_starts(c, job_id):
+    """Recent missed starts caused by the computer, excluding hub cuts and planned hand-backs.
+
+    flag_cut records leased attempts too; cut_by_update requires a started run because it decides resumption.
+    A drain's pause event can arrive before its completion, so it excuses a lapsed lease on its own."""
+    return c.execute("SELECT count(*) FROM attempts a WHERE a.job_id=? AND a.started_at IS NULL "
+                     "AND a.state='expired' AND a.finished_at>=? "
+                     "AND NOT EXISTS(SELECT 1 FROM events e WHERE e.target=a.id AND e.action=?) "
+                     "AND NOT coalesce(json_extract(a.result,'$.yielded'),0) "
+                     "AND NOT EXISTS(SELECT 1 FROM attempt_events e WHERE e.attempt_id=a.id AND e.kind='status' "
+                     "AND json_type(e.payload,'$.yielded')='text' AND trim(json_extract(e.payload,'$.yielded'))!='')",
+                     (job_id, H.shift(H.now(), hours=-PRE_START_WINDOW_HOURS), UPDATE_CUT)).fetchone()[0]
+
+
 def handed_back_until(c, job):
     """When a job its computer last handed back before starting (Execution.hand_back) may be claimed again, or None.
     A runner claims every quarter second, so without this wait a step that fails fast before every start would spend
@@ -2536,7 +2555,6 @@ REDIRECT_CARRIERS = ("SELECT carrier_id FROM message_deliveries WHERE message_id
 class Execution:
     def __init__(self, store, auth):
         self.store, self.auth = store, auth
-        self.booted = H.now()
         # Set by create_app: onboarding gives a newly enrolled machine the bots nobody placed.
         self.runner_enrolled = None
         # Set by create_app: a readiness report finishes the go-lives that were waiting for this computer to get a
@@ -3071,8 +3089,7 @@ class Execution:
                 stamp_attempt(c, row["id"], row["runner_id"], "end")
                 gateway_connection.forget(c, row["id"])
                 if row["state"] == "leased" and state == "queued" and not benched:
-                    tries = c.execute("SELECT count(*) FROM attempts WHERE job_id=? AND started_at IS NULL "
-                                      "AND state='expired' AND finished_at>=?", (row["job_id"], self.booted)).fetchone()[0]
+                    tries = failed_starts(c, row["job_id"])
                     if tries >= PRE_START_TRIES:
                         computer = c.execute("SELECT label FROM runners WHERE id=?", (row["runner_id"],)).fetchone()
                         label = (computer["label"] if computer else None) or "its Computer"
@@ -3127,11 +3144,10 @@ class Execution:
         """A run its computer took and never started, its attempt already `expired`: its lease lapsed, or its
         computer handed it back (hand_back). Nothing ran, so nothing is held for review and the bot is not crashed:
         the job waits in the queue again and the bot's status line says so softly (last_stop). After PRE_START_TRIES
-        such runs since this server started the job fails instead, with a reason that names the computer, told to
-        the person who asked: a broken computer must not take it forever."""
+        such runs within PRE_START_WINDOW_HOURS the job fails instead, with a reason that names the computer, told
+        to the person who asked. Hub cuts and planned pauses do not count; the window survives server restarts."""
         state, reason = "queued", ""
-        tries = c.execute("SELECT count(*) FROM attempts WHERE job_id=? AND started_at IS NULL "
-                          "AND state='expired' AND finished_at>=?", (row["job_id"], self.booted)).fetchone()[0]
+        tries = failed_starts(c, row["job_id"])
         bot = H.bot(c, row["bot_id"])
         if tries >= PRE_START_TRIES:
             computer = c.execute("SELECT label FROM runners WHERE id=?", (row["runner_id"],)).fetchone()
@@ -3952,9 +3968,12 @@ class Execution:
                              [item["id"] for item in carried] + own, [item["id"] for item in notes],
                              job=row["id"], current=msg["id"]),
             tasks=len(carried), notes=len(notes))
-        from .views import roster
-        people = roster(c)
-        inbox = P.inbox_person(row["bot_id"], people)
+        # The mailboxes this turn may ask its runner for mail access to (backend/mailbox_access.py): the bot's own, or
+        # for a person's own Assistant turn, exactly that person's. `mailboxes` is the list older runners read.
+        from . import mailbox_access
+        attempt_row = c.execute("SELECT * FROM attempts WHERE id=?", (aid,)).fetchone()
+        acting = self.auth.assistant_principal(c, attempt_row) if attempt_row else None
+        mail_levels = mailbox_access.levels_for(c, acting or ("bot:" + row["bot_id"]))
         subscriptions = model_subscriptions.hand_out(c, aid, subscribed)
         parked = c.execute("SELECT onboarding_state FROM bot_config WHERE bot=?", (row["bot_id"],)).fetchone()
         from .chat_goals import current
@@ -3982,9 +4001,7 @@ class Execution:
                             "browser_exit": browser_exit.for_turn(c, row["bot_id"]),
                             # A starter bot's chat while it is `needs_setup` is its setup (runner prompt).
                             "onboarding": (parked["onboarding_state"] if parked else "") or "",
-                            # The mailboxes an inbox bot's turn may ask its runner for mail access to: the one it declares
-                            # (its person's email when it declares none), then the people below them.
-                            "mailboxes": routines.token_mailboxes(c, row["bot_id"], people) if inbox else [], "next_run": carried, "notes": notes, "job_id": row["id"], "bot": row["bot_id"], "lane": lane,
+                            "mailboxes": list(mail_levels), "mailbox_levels": mail_levels, "next_run": carried, "notes": notes, "job_id": row["id"], "bot": row["bot_id"], "lane": lane,
                             "credential_vault": bool(subscriptions) or c.execute(
                                 "SELECT 1 FROM credential_grants WHERE subject=? AND revoked_at IS NULL LIMIT 1",
                                 ("bot:" + row["bot_id"],)).fetchone() is not None,
@@ -5578,7 +5595,7 @@ class Execution:
             # Paused at its hold cap so another turn could use the shared login: it is back in the queue and
             # continues next, so the bot is idle with the pause line, not crashed until the continuation starts.
             from .login_waits import paused
-            settle_status(c, row["bot_id"], "idle", paused(c, aid, "interrupted", '{"yielded": true}'),
+            settle_status(c, row["bot_id"], "idle", paused(c, aid, "interrupted", '{"yielded": true}', row["stop_requested_at"]),
                           claimed=row["created_at"])
         elif retryable:
             # Not a crash and not a limit: the box's sign-in lapsed. Say so plainly, leave the
