@@ -905,7 +905,9 @@ def queued_label(c, bot, location, settings=None, human=False, behind=False, que
     person's message; `behind`: the bot is still answering earlier work in this same conversation; `queued`: it was
     sent with queue, so it waits for that turn to end rather than steering into it (backend/delivery.py)."""
     from .start_places import computer_hold
+    from .cloud_machines import resting
     from . import org_turns
+    asleep = (location.get("machine") or {}).get("runner_id") in resting(c)
     bot_state = H.bot(c, bot)["state"]
     label, readiness_reason = "Saved — queued", ""
     draining = c.execute("SELECT 1 FROM bot_control WHERE bot=? AND draining=1", (bot,)).fetchone()
@@ -920,7 +922,7 @@ def queued_label(c, bot, location, settings=None, human=False, behind=False, que
     elif (stop := bot_stops.queued_reason(c, bot, human)):
         # Tico stopped the bot (failed runs, run budget) or it waits out a failed run: the words say why.
         label = "Saved — " + stop
-    elif not location["online"] and (cloud := cloud_machine_wait(c, bot)):
+    elif (not location["online"] or asleep) and (cloud := cloud_machine_wait(c, bot)):
         # Its own cloud machine is stopped or starting (backend/cloud_machines.py): the words say which, or why not.
         label = "Saved — " + cloud
     elif not location["online"]:
