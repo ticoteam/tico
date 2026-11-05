@@ -120,7 +120,7 @@ async function pageRdTools() {
     if (LC !== state || location.hash.split('?')[0] !== path) return;
   } else if (!LC || !document.body.contains(LC.root)) {
     $('#main').innerHTML = `<div class="lc" id="lc-root">
-      <header class="lc-ph"><nav class="tl-crumb" aria-label="Breadcrumb"><a href="${TOOLS_ROUTE}">Tools</a><span aria-hidden="true">›</span><span>Keys</span></nav>
+      <header class="lc-ph"><nav class="tt-crumb" aria-label="Breadcrumb"><a href="${TOOLS_ROUTE}">Tools</a><span aria-hidden="true">›</span><span>Keys</span></nav>
         <span class="spacer"></span><button class="docs-ask" id="lc-ask" type="button" data-ask-open aria-label="Ask" title="Ask">${ldotHTML({state: 'still', size: 16})}<span class="docs-ask-word">Ask</span></button><span class="lc-add"></span></header>
       <div class="lc-body"><aside class="lc-list" aria-label="Tools">
           <div class="lc-filters"><input class="lc-q" type="search" placeholder="Search" aria-label="Search tools" autocomplete="off">
@@ -379,8 +379,8 @@ function lcVaultChanged() {
 // The tool's page full width under Tools (#/tools/<service>): who has it, its credentials and issues, what its page
 // says, and Slack's and GitHub's connect cards. It reads what Keys reads, so a vault dialog's change redraws it alike.
 async function pageToolService(service) {
-  $('#main').innerHTML = `<div class="tl tl-page" id="tool-service">
-    <nav class="tl-crumb" aria-label="Breadcrumb"><a href="${TOOLS_ROUTE}">Tools</a><span aria-hidden="true">›</span><span data-tl-crumb>${esc(service)}</span></nav>
+  $('#main').innerHTML = `<div class="tt tt-page" id="tool-service">
+    <nav class="tt-crumb" aria-label="Breadcrumb"><a href="${TOOLS_ROUTE}">Tools</a><span aria-hidden="true">›</span><span data-tl-crumb>${esc(service)}</span></nav>
     <div id="int-detail">${skelRows(4, {card: true})}</div>
     <dialog class="bot-editor" id="credential-dialog" aria-label="Credential"></dialog></div>`;
   LC = {rows: null, groups: [], items: [], error: '', key: service, root: $('#tool-service'), loading: null, single: true,

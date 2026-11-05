@@ -81,16 +81,16 @@ function mbWhoRow(a, d) {
     : personAvatar((S.people || []).find(p => p.id === a.grantee_id) || {id: a.grantee_id, name: a.name}, 22);
   const edit = d.can_manage && !a.implicit;
   return `<tr data-mb-access-row="${esc(a.id || a.grantee_type)}">
-      <td class="tl-who-name">${face}<span>${esc(a.name)}${a.grantee_type === 'bot' ? ' <span class="muted">· bot</span>' : ''}</span></td>
+      <td class="tt-who-name">${face}<span>${esc(a.name)}${a.grantee_type === 'bot' ? ' <span class="muted">· bot</span>' : ''}</span></td>
       <td>${edit ? mbLevelSeg(a) : esc(mbLevelName(a.level))}</td>
-      <td class="mb-act">${edit ? `<button type="button" class="ghost tl-x" data-mb-remove="${esc(a.id)}" aria-label="Remove ${esc(a.name)}" title="Remove">×</button>` : ''}</td></tr>`;
+      <td class="mb-act">${edit ? `<button type="button" class="ghost tt-x" data-mb-remove="${esc(a.id)}" aria-label="Remove ${esc(a.name)}" title="Remove">×</button>` : ''}</td></tr>`;
 }
 // The key Tico reads it with: the company's Workspace key, or its person's own sign-in.
 function mbKeysHTML(d) {
   const m = d.mailbox, row = (dt, dd) => dd ? `<dt>${esc(dt)}</dt><dd>${dd}</dd>` : '';
   const key = m.connection === 'workspace' ? `Google Workspace${d.domain ? ' · ' + esc(d.domain) : ''}` : m.person_id ? `${esc(m.person_name || m.person_id)}'s Google sign-in` : 'Google sign-in';
   const allows = d.may ? esc(mbMayLine(d.may).replace(/^./, c => c.toUpperCase())) : '';
-  return `<dl class="tl-kv">${row('Key', key)}${row('Allows', allows)}${row('Last sync', m.synced_at ? `<span title="${esc(fmt(m.synced_at))}">${esc(ago(m.synced_at))}</span>` : '')}</dl>`;
+  return `<dl class="tt-kv">${row('Key', key)}${row('Allows', allows)}${row('Last sync', m.synced_at ? `<span title="${esc(fmt(m.synced_at))}">${esc(ago(m.synced_at))}</span>` : '')}</dl>`;
 }
 
 function mbOneDraw(host, d) {
@@ -118,8 +118,8 @@ function mbOneDraw(host, d) {
     <section class="card" id="mailbox-access"><header><h2>Who can use it</h2>
       ${d.can_manage && d.candidates?.length ? '<button class="ghost small settings-head-act" type="button" data-mb-add-open>Add</button>' : ''}</header>
       ${pick}
-      <table class="settings-table mb-table tl-who-table"><tbody>${d.accesses.map(a => mbWhoRow(a, d)).join('')}</tbody></table>
-      <p class="muted tl-foot">Assistants act as their person.</p></section>
+      <table class="settings-table mb-table tt-who-table"><tbody>${d.accesses.map(a => mbWhoRow(a, d)).join('')}</tbody></table>
+      <p class="muted tt-foot">Assistants act as their person.</p></section>
     <section class="card" id="mailbox-keys"><header><h2>Keys</h2>${admin ? '<a class="ghost small settings-head-act" href="#/tools/settings/email">Settings</a>' : ''}</header>${mbKeysHTML(d)}</section>
     <section class="card" id="mailbox-routines"><header><h2>Automations</h2>${inboxesAutomationsLink(m.address)}</header>${routines}</section>
     <section class="card" id="mailbox-recent"><header><h2>Recent</h2>${m.level !== 'none'
@@ -141,18 +141,18 @@ async function mbActivity(host, id, ctx) {
   const m = d.mailbox, [status, statusText] = mbStatus(m);
   const state = {rows: [], cursor: '', show: ''};
   host.innerHTML = `${inboxesHead(host, {name: m.address, status, statusText, sub: 'Mailbox · Google'})}
-    <div class="tl-bar"><div class="theme-seg" role="radiogroup" aria-label="Show" data-mb-act-filter>${MB_SEND_FILTERS.map(([k, label]) =>
+    <div class="tt-bar"><div class="theme-seg" role="radiogroup" aria-label="Show" data-mb-act-filter>${MB_SEND_FILTERS.map(([k, label]) =>
       `<button type="button" role="radio" data-mb-act-show="${k}" aria-checked="${k === ''}">${label}</button>`).join('')}</div></div>
     <div data-mb-act>${skelRows(3)}</div><div class="row" data-mb-act-more hidden><button type="button" class="ghost">More</button></div>`;
   const box = host.querySelector('[data-mb-act]'), more = host.querySelector('[data-mb-act-more]');
   const draw = () => {
     const test = MB_SEND_FILTERS.find(([k]) => k === state.show)[2], rows = state.rows.filter(test);
-    box.innerHTML = rows.length ? `<table class="tl-log"><thead><tr><th>Time</th><th>Who</th><th>Action</th><th>Message</th><th>Result</th></tr></thead><tbody>${rows.map(x => {
+    box.innerHTML = rows.length ? `<table class="tt-log"><thead><tr><th>Time</th><th>Who</th><th>Action</th><th>Message</th><th>Result</th></tr></thead><tbody>${rows.map(x => {
       const [word, tone] = MB_SEND_RESULT[x.state] || [x.state, ''];
       return `<tr data-mb-send="${esc(x.id)}" data-state="${esc(x.state)}"><td class="tnum" title="${esc(fmt(x.created_at))}">${esc(ago(x.created_at))}</td>
         <td>${esc(x.bot ? botDisplayName(x.bot) : x.actor || '')}</td><td>Send</td>
-        <td class="tl-log-what"><strong>${esc(x.subject || '(No subject)')}</strong><span class="muted">${esc((x.recipients || []).join(', '))}</span></td>
-        <td><span class="pill${tone ? ' ' + tone : ''}">${esc(word)}</span>${x.state === 'blocked' && x.decision?.reasons?.length ? `<span class="muted tl-log-why">${esc(x.decision.reasons.join(', '))}</span>` : ''}</td></tr>`;
+        <td class="tt-log-what"><strong>${esc(x.subject || '(No subject)')}</strong><span class="muted">${esc((x.recipients || []).join(', '))}</span></td>
+        <td><span class="pill${tone ? ' ' + tone : ''}">${esc(word)}</span>${x.state === 'blocked' && x.decision?.reasons?.length ? `<span class="muted tt-log-why">${esc(x.decision.reasons.join(', '))}</span>` : ''}</td></tr>`;
     }).join('')}</tbody></table>` : '<div class="empty" data-mb-act-none>Nothing yet.</div>';
     more.hidden = !state.cursor;
   };

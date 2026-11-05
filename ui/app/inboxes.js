@@ -120,7 +120,7 @@ function inboxesBind(el) {
     if (b && el.contains(b)) $('#inboxes-' + b.dataset.ibJump)?.scrollIntoView({block: 'start', behavior: 'smooth'});
   });
 }
-const inboxesCrumb = name => `<nav class="tl-crumb" aria-label="Breadcrumb"><a href="${TOOLS_ROUTE}">Tools</a><span aria-hidden="true">›</span><span data-ib-crumb>${esc(name)}</span></nav>`;
+const inboxesCrumb = name => `<nav class="tt-crumb" aria-label="Breadcrumb"><a href="${TOOLS_ROUTE}">Tools</a><span aria-hidden="true">›</span><span data-ib-crumb>${esc(name)}</span></nav>`;
 
 // ---------------------------------------------------------------------------------------------------------- Settings
 // Built once a visit (and again when the viewer's role changes), then drawn card by card in place: each card keeps
@@ -190,7 +190,7 @@ function inboxesHead(host, {name, status, statusText, sub = '', actions = ''}) {
   const page = host.closest('.ib-detail'), crumb = page?.querySelector('[data-ib-crumb]');
   if (crumb) crumb.textContent = name;
   const base = page?.dataset.ibTabs, tab = page?.dataset.ibTab;
-  const tabs = base ? `<nav class="tl-tabs" aria-label="${esc(name)}">${[['overview', base, 'Overview'], ['activity', base + '/activity', 'Activity']]
+  const tabs = base ? `<nav class="tt-tabs" aria-label="${esc(name)}">${[['overview', base, 'Overview'], ['activity', base + '/activity', 'Activity']]
     .map(([k, href, label]) => `<a href="${esc(href)}" data-ib-tab-link="${k}"${tab === k ? ' class="cur" aria-current="page"' : ''}>${label}</a>`).join('')}</nav>` : '';
   return `<header class="ib-title" id="inbox-head"><div class="ib-title-text"><h1>${esc(name)}</h1>
       <p class="ib-title-sub">${inboxesPill(status, statusText)}${sub ? ` <span class="muted" data-ib-sub>${sub}</span>` : ''}</p></div>

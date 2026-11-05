@@ -29,8 +29,8 @@ const taFace = a => a.kind === 'bot' ? avatar(a.subject.slice(4), 22)
 async function pageToolApi(id, tab) {
   const run = (TA?.run || 0) + 1, same = TA?.id === id && $('#tool-api');
   TA = {run, id, tab, data: same ? TA.data : null, act: {rows: [], cursor: '', result: same ? TA.act.result : ''}};
-  if (!same) $('#main').innerHTML = `<div class="tl tl-page" id="tool-api" data-tool="${esc(id)}">
-    <nav class="tl-crumb" aria-label="Breadcrumb"><a href="${TOOLS_ROUTE}">Tools</a><span aria-hidden="true">›</span><span data-ta-crumb>${esc(id)}</span></nav>
+  if (!same) $('#main').innerHTML = `<div class="tt tt-page" id="tool-api" data-tool="${esc(id)}">
+    <nav class="tt-crumb" aria-label="Breadcrumb"><a href="${TOOLS_ROUTE}">Tools</a><span aria-hidden="true">›</span><span data-ta-crumb>${esc(id)}</span></nav>
     <div data-ta-head></div><div data-ta-body>${skelRows(4, {card: true})}</div></div>`;
   const root = $('#tool-api');
   root.dataset.tab = tab || 'overview';
@@ -49,10 +49,10 @@ function taDrawHead() {
   const root = $('#tool-api'), {tool, status, can_manage: manage} = TA.data, base = '#/tools/api/' + encodeURIComponent(TA.id);
   root.querySelector('[data-ta-crumb]').textContent = tool.name;
   const sub = ['API key', taHost(tool.base_url)].filter(Boolean).join(' · ');
-  root.querySelector('[data-ta-head]').innerHTML = `<header class="tl-title"><span class="tl-tile lg" aria-hidden="true"><span class="nav-icon">api</span></span>
-      <div class="tl-title-text"><h1>${esc(tool.name)}</h1><p class="muted">${esc(sub)}</p></div>
-      <div class="tl-title-act">${toolsPill(status)}${manage ? '<button type="button" class="ghost small" data-ta-check>Check now</button>' : ''}</div></header>
-    <nav class="tl-tabs" aria-label="${esc(tool.name)}">${[['overview', base, 'Overview'], ['activity', base + '/activity', 'Activity']].map(([k, href, label]) =>
+  root.querySelector('[data-ta-head]').innerHTML = `<header class="tt-title"><span class="tt-tile lg" aria-hidden="true"><span class="nav-icon">api</span></span>
+      <div class="tt-title-text"><h1>${esc(tool.name)}</h1><p class="muted">${esc(sub)}</p></div>
+      <div class="tt-title-act">${toolsPill(status)}${manage ? '<button type="button" class="ghost small" data-ta-check>Check now</button>' : ''}</div></header>
+    <nav class="tt-tabs" aria-label="${esc(tool.name)}">${[['overview', base, 'Overview'], ['activity', base + '/activity', 'Activity']].map(([k, href, label]) =>
       `<a href="${href}" data-ta-tab="${k}"${(TA.tab || 'overview') === k ? ' class="cur" aria-current="page"' : ''}>${label}</a>`).join('')}</nav>`;
 }
 
@@ -60,42 +60,42 @@ function taDrawHead() {
 function taDrawOverview() {
   const d = TA.data, body = $('#tool-api [data-ta-body]');
   if (formBusy(body)) return;   // a half-typed Add stays put
-  body.innerHTML = `<div class="tl-cols"><div class="tl-col">${taWhoCard(d)}${taRecentCard(d)}</div>
-    <div class="tl-col">${taKeysCard(d)}${taCheckCard(d)}${taLimitsCard()}</div></div>`;
+  body.innerHTML = `<div class="tt-cols"><div class="tt-col">${taWhoCard(d)}${taRecentCard(d)}</div>
+    <div class="tt-col">${taKeysCard(d)}${taCheckCard(d)}${taLimitsCard()}</div></div>`;
 }
 function taWhoCard(d) {
   const manage = d.can_manage;
   const rows = (d.access || []).map(a => `<tr data-ta-subject-row="${esc(a.subject)}">
-      <td class="tl-who-name">${taFace(a)}<span>${esc(a.name || a.subject)}${a.kind === 'bot' ? ' <span class="muted">· bot</span>' : ''}</span></td>
+      <td class="tt-who-name">${taFace(a)}<span>${esc(a.name || a.subject)}${a.kind === 'bot' ? ' <span class="muted">· bot</span>' : ''}</span></td>
       <td>${manage ? `<div class="theme-seg" role="radiogroup" aria-label="Level for ${esc(a.name)}">${TA_LEVELS.map(([k, label]) =>
         `<button type="button" role="radio" aria-checked="${a.level === k}" data-ta-level="${k}" data-ta-subject="${esc(a.subject)}">${label}</button>`).join('')}</div>` : esc(taLevelName(a.level))}</td>
-      <td class="muted tl-used">${a.last_used_at ? esc(ago(a.last_used_at)) : ''}</td>
-      <td class="mb-act">${manage ? `<button type="button" class="ghost tl-x" data-ta-remove="${esc(a.subject)}" aria-label="Remove ${esc(a.name)}" title="Remove">×</button>` : ''}</td></tr>`).join('');
+      <td class="muted tt-used">${a.last_used_at ? esc(ago(a.last_used_at)) : ''}</td>
+      <td class="mb-act">${manage ? `<button type="button" class="ghost tt-x" data-ta-remove="${esc(a.subject)}" aria-label="Remove ${esc(a.name)}" title="Remove">×</button>` : ''}</td></tr>`).join('');
   const taken = new Set((d.access || []).map(a => a.subject));
   const people = (S.people || []).filter(p => !p.hidden && !p.archived && !taken.has('human:' + p.id));
   const bots = (S.emps || []).filter(e => e.status !== 'archived' && !taken.has('bot:' + e.id));
-  const add = manage && (people.length || bots.length) ? `<form class="tl-add-form" data-ta-add-form hidden>
+  const add = manage && (people.length || bots.length) ? `<form class="tt-add-form" data-ta-add-form hidden>
       <select name="subject" aria-label="Who">${people.length ? `<optgroup label="People">${people.map(p => `<option value="human:${esc(p.id)}">${esc(p.name || p.email || p.id)}</option>`).join('')}</optgroup>` : ''}${
         bots.length ? `<optgroup label="Bots">${bots.map(b => `<option value="bot:${esc(b.id)}">${esc(botDisplayName(b.id))}</option>`).join('')}</optgroup>` : ''}</select>
       <select name="level" aria-label="Level">${TA_LEVELS.map(([k, label]) => `<option value="${k}">${label}</option>`).join('')}</select>
       <button type="submit" class="primary small">Add</button><button type="button" class="ghost small" data-ta-add-cancel>Cancel</button></form>` : '';
   return `<section class="card" id="tool-access"><header><h2>Who can use it</h2>${add ? '<button type="button" class="ghost small settings-head-act" data-ta-add-open>Add</button>' : ''}</header>
-    ${add}${rows ? `<table class="settings-table tl-who-table"><tbody>${rows}</tbody></table>` : '<p class="muted" data-ta-nobody>Nobody yet.</p>'}
-    <p class="muted tl-foot">Assistants act as their person.</p></section>`;
+    ${add}${rows ? `<table class="settings-table tt-who-table"><tbody>${rows}</tbody></table>` : '<p class="muted" data-ta-nobody>Nobody yet.</p>'}
+    <p class="muted tt-foot">Assistants act as their person.</p></section>`;
 }
 function taRecentCard(d) {
   const base = '#/tools/api/' + encodeURIComponent(TA.id);
   const rows = (d.recent || []).map(c => `<tr><td class="muted tnum" title="${esc(fmt(c.created_at))}">${esc(ago(c.created_at))}</td><td>${esc(taWho(c))}</td>
-      <td class="mono tl-call">${esc(c.method ? `${c.method} ${c.path || ''}` : 'Key read')}</td><td>${taResult(c.result)}</td></tr>`).join('');
+      <td class="mono tt-call">${esc(c.method ? `${c.method} ${c.path || ''}` : 'Key read')}</td><td>${taResult(c.result)}</td></tr>`).join('');
   return `<section class="card" id="tool-recent"><header><h2>Recent activity</h2><a class="ghost small settings-head-act" href="${base}/activity">See all</a></header>
-    ${rows ? `<table class="tl-log tl-log-short"><tbody>${rows}</tbody></table>` : '<p class="muted">No calls yet.</p>'}</section>`;
+    ${rows ? `<table class="tt-log tt-log-short"><tbody>${rows}</tbody></table>` : '<p class="muted">No calls yet.</p>'}</section>`;
 }
 function taKeysCard(d) {
   const manage = d.can_manage, keys = d.keys || [], tool = d.tool;
-  const rows = keys.map(k => `<div class="tl-key" data-ta-key="${esc(k.id)}"><span class="nav-icon" aria-hidden="true">key_vertical</span>
-      <span class="tl-key-name"><b>${esc(k.name)}</b>${k.preview ? ` <span class="mono muted">${esc(k.preview)}</span>` : ''}</span>
+  const rows = keys.map(k => `<div class="tt-key" data-ta-key="${esc(k.id)}"><span class="nav-icon" aria-hidden="true">key_vertical</span>
+      <span class="tt-key-name"><b>${esc(k.name)}</b>${k.preview ? ` <span class="mono muted">${esc(k.preview)}</span>` : ''}</span>
       <span class="pill${k.access_level === 'read' ? '' : ' in-progress'}" data-key-level="${esc(k.access_level)}">${esc(taLevelName(k.access_level))}</span>
-      <span class="tl-key-acts">${manage ? `<button type="button" class="linkish" data-ta-rotate="${esc(k.id)}">Rotate</button>` : ''}<button type="button" class="linkish" data-ta-reveal="${esc(k.id)}">Reveal · logged</button>${
+      <span class="tt-key-acts">${manage ? `<button type="button" class="linkish" data-ta-rotate="${esc(k.id)}">Rotate</button>` : ''}<button type="button" class="linkish" data-ta-reveal="${esc(k.id)}">Reveal · logged</button>${
         manage ? `<button type="button" class="linkish danger" data-ta-key-delete="${esc(k.id)}">Remove</button>` : ''}</span></div>`).join('');
   const soonest = keys.map(k => k.expires_on).filter(Boolean).sort()[0];
   const used = keys.map(k => k.last_used_at).filter(Boolean).sort().pop();
@@ -107,30 +107,30 @@ function taKeysCard(d) {
   const expires = `${soonest ? esc(soonest) : 'No date'}${manage && keys.length ? ' · <button type="button" class="linkish" data-ta-expires>Set</button>' : ''}`;
   return `<section class="card" id="tool-keys"><header><h2>Keys</h2>${manage ? '<button type="button" class="ghost small settings-head-act" data-ta-key-add>Add key</button>' : ''}</header>
     ${rows || '<p class="muted" data-ta-no-keys>No keys yet.</p>'}
-    <dl class="tl-kv">${row('Calls', calls)}${keys.length ? row('Expires', expires) : ''}${row('Added', added && `<span title="${esc(fmt(added))}">${esc(ago(added))}</span>`)}${
+    <dl class="tt-kv">${row('Calls', calls)}${keys.length ? row('Expires', expires) : ''}${row('Added', added && `<span title="${esc(fmt(added))}">${esc(ago(added))}</span>`)}${
       row('Last used', used && `<span title="${esc(fmt(used))}">${esc(ago(used))}</span>`)}</dl></section>`;
 }
 // The last 24 checks, oldest first: a square each, green when it worked.
 function taCheckCard(d) {
   const checks = (d.checks || []).slice(0, TA_CHECKS), last = checks[0], tool = d.tool;
   const squares = [...Array(TA_CHECKS - checks.length).fill(null), ...checks.slice().reverse()].map(c => c
-    ? `<span class="tl-sq ${c.ok ? 'ok' : 'fail'}" title="${esc(`${fmt(c.checked_at)} · ${c.status_code || ''} ${c.detail || ''}`.trim())}"></span>`
-    : '<span class="tl-sq"></span>').join('');
+    ? `<span class="tt-sq ${c.ok ? 'ok' : 'fail'}" title="${esc(`${fmt(c.checked_at)} · ${c.status_code || ''} ${c.detail || ''}`.trim())}"></span>`
+    : '<span class="tt-sq"></span>').join('');
   const line = tool.check_path ? `GET ${tool.check_path}${last ? ` → ${last.status_code || last.detail || ''}` : ''}` : 'No check path';
   return `<section class="card" id="tool-check"><header><h2>Check</h2></header>
-    <p class="muted">Every 30 min</p><p class="mono tl-check-line">${esc(line)}</p>
-    <div class="tl-squares" role="img" aria-label="${checks.filter(c => c.ok).length} of ${checks.length} checks worked">${squares}</div>
-    <p class="muted tl-foot">Last 12 hours</p></section>`;
+    <p class="muted">Every 30 min</p><p class="mono tt-check-line">${esc(line)}</p>
+    <div class="tt-squares" role="img" aria-label="${checks.filter(c => c.ok).length} of ${checks.length} checks worked">${squares}</div>
+    <p class="muted tt-foot">Last 12 hours</p></section>`;
 }
 // Limits per action come later (the spec's next step); the card shows where they will be.
-const taLimitsCard = () => `<section class="card tl-soon" id="tool-limits"><header><h2>Limits</h2><span class="pill" data-ta-soon>Not available yet</span></header>
-  <label class="tl-off"><input type="checkbox" role="switch" class="people-switch" disabled> Check calls against limits</label></section>`;
+const taLimitsCard = () => `<section class="card tt-soon" id="tool-limits"><header><h2>Limits</h2><span class="pill" data-ta-soon>Not available yet</span></header>
+  <label class="tt-off"><input type="checkbox" role="switch" class="people-switch" disabled> Check calls against limits</label></section>`;
 
 // ----------------------------------------------------------------- Activity
 async function taActivity(fresh) {
   const state = TA, body = $('#tool-api [data-ta-body]');
   if (fresh) {
-    body.innerHTML = `<div class="tl-bar"><div class="theme-seg" role="radiogroup" aria-label="Show">${TA_FILTERS.map(([k, label]) =>
+    body.innerHTML = `<div class="tt-bar"><div class="theme-seg" role="radiogroup" aria-label="Show">${TA_FILTERS.map(([k, label]) =>
       `<button type="button" role="radio" data-ta-show="${k}" aria-checked="${state.act.result === k}">${label}</button>`).join('')}</div></div>
       <div data-ta-log>${skelRows(4)}</div><div class="row" data-ta-more hidden><button type="button" class="ghost" data-ta-more-btn>More</button></div>`;
     state.act.rows = []; state.act.cursor = '';
@@ -145,10 +145,10 @@ async function taActivity(fresh) {
   state.act.rows = state.act.rows.concat(d.calls || d.activity || []);
   state.act.cursor = d.next_cursor || '';
   const rows = state.act.rows;
-  body.querySelector('[data-ta-log]').innerHTML = rows.length ? `<table class="tl-log"><thead><tr><th>Time</th><th>Who</th><th>Call</th><th>Level</th><th>Result</th></tr></thead>
+  body.querySelector('[data-ta-log]').innerHTML = rows.length ? `<table class="tt-log"><thead><tr><th>Time</th><th>Who</th><th>Call</th><th>Level</th><th>Result</th></tr></thead>
     <tbody>${rows.map(c => `<tr data-ta-call="${esc(c.id || '')}"><td class="tnum" title="${esc(fmt(c.created_at))}">${esc(ago(c.created_at))}</td><td>${esc(taWho(c))}</td>
-      <td class="mono tl-call">${esc(c.method ? `${c.method} ${c.path || ''}` : 'Key read')}${c.status_code ? ` <span class="muted">→ ${esc(c.status_code)}</span>` : ''}</td>
-      <td>${esc(taLevelName(c.access_level))}</td><td>${taResult(c.result)}${c.detail && c.result !== 'sent' ? `<span class="muted tl-log-why">${esc(c.detail)}</span>` : ''}</td></tr>`).join('')}</tbody></table>`
+      <td class="mono tt-call">${esc(c.method ? `${c.method} ${c.path || ''}` : 'Key read')}${c.status_code ? ` <span class="muted">→ ${esc(c.status_code)}</span>` : ''}</td>
+      <td>${esc(taLevelName(c.access_level))}</td><td>${taResult(c.result)}${c.detail && c.result !== 'sent' ? `<span class="muted tt-log-why">${esc(c.detail)}</span>` : ''}</td></tr>`).join('')}</tbody></table>`
     : '<div class="empty" data-ta-none>Nothing yet.</div>';
   body.querySelector('[data-ta-more]').hidden = !state.act.cursor;
 }

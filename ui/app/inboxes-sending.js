@@ -82,9 +82,9 @@ async function ibSendBots(host, bots, ctx, mailbox = '', editable = false) {
   }));
   if (!ctx.live()) return;
   const shown = rows.filter(Boolean);
-  host.innerHTML = shown.length ? `<table class="ib-send-bots tl-limits"><thead><tr><th>Bot</th><th>Sends</th><th>What</th><th>A day</th></tr></thead><tbody>${shown.map(({bot, id, d}) => {
+  host.innerHTML = shown.length ? `<table class="ib-send-bots tt-limits"><thead><tr><th>Bot</th><th>Sends</th><th>What</th><th>A day</th></tr></thead><tbody>${shown.map(({bot, id, d}) => {
     const name = bot.display_name || bot.name || bot.slug || id, e = d.effective || {};
-    return `<tr data-send-bot-row="${esc(id)}"><td class="tl-who-name">${avatar(id, 20)}<span>${esc(name)}</span></td>
+    return `<tr data-send-bot-row="${esc(id)}"><td class="tt-who-name">${avatar(id, 20)}<span>${esc(name)}</span></td>
       <td>${editable ? `<select aria-label="${esc(name)} sends" data-send-bot="${esc(id)}">${ibSendOptions([['', 'Use default'], ...IB_SEND_MODES], d.bot.mode || '')}</select>` : ''}<span class="ib-send-rule">${esc(ibSendEffective(e))}</span></td>
       <td>${esc(IB_SEND_WHAT[e.what] || e.what || '')}</td><td class="tnum">${esc(ibSendNum(e.daily_cap))}</td></tr>`;
   }).join('')}</tbody></table>` : '<p class="muted">No bots can send from it.</p>';
@@ -100,7 +100,7 @@ function ibSendSummary(e) {
   const asks = IB_SEND_ASKS.filter(([k]) => e[k]).map(([, label]) => label);
   const row = (dt, dd) => dd ? `<dt>${esc(dt)}</dt><dd>${esc(dd)}</dd>` : '';
   const approvers = IB_SEND_APPROVERS[e.who_can_ok] || e.who_can_ok || '';
-  return `<dl class="tl-kv ib-send-summary">${row('Always ask for', asks.join(', ') || 'Nothing')}
+  return `<dl class="tt-kv ib-send-summary">${row('Always ask for', asks.join(', ') || 'Nothing')}
     ${row('This mailbox', `${ibSendNum(e.mailbox_daily_cap)} a day`)}${row('Company', `${ibSendNum(e.company_daily_cap)} a day`)}
     ${row('Pacing', `${ibSendNum(e.pacing_seconds)} s between sends`)}${row('Undo', ibSendUndo(e.undo_seconds))}
     ${e.blocked?.length ? row('Blocked', e.blocked.join(', ')) : ''}
@@ -123,7 +123,7 @@ inboxesPanel('email.sending', {kinds: ['mailbox'], order: 40, render: async (hos
   if (!ctx.live()) return;
   const editable = !!inbox.can_manage;
   host.innerHTML = inboxesCard('inbox-sending', 'Limits', `<div data-send-bots></div>${ibSendSummary(document.effective || {})}
-      <p class="muted tl-foot">People send as themselves, with no limits.</p>
+      <p class="muted tt-foot">People send as themselves, with no limits.</p>
       <div data-send-edit-body hidden>${ibSendForm(document, false, !editable)}</div>`,
       editable ? '<button type="button" class="ghost small settings-head-act" data-send-edit aria-expanded="false">Edit</button>' : '') +
     inboxesCard('inbox-waiting-to-send', 'Waiting to send', `<ul class="ib-send-pending">${(pending.sends || []).map(send =>

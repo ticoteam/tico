@@ -110,9 +110,9 @@ async function start(browser, hash, {width = 1440, ready} = {}) {
         assert.equal(await rows.count(), 6, `${tag}: all rows`);
         assert.equal(await page.locator('[data-tl-show="websites"]').count(), 0, `${tag}: no Websites filter at zero`);
         const crm = page.locator('tr[data-tl-row="api:t-crm"]');
-        assert.equal(await crm.locator('.tl-face').count(), 4, `${tag}: four faces`);
-        assert.match(await crm.locator('.tl-more').innerText(), /\+3 more/, `${tag}: the rest counted`);
-        assert.equal(await crm.locator('.tl-face').first().getAttribute('title'), 'Ana', `${tag}: named on hover`);
+        assert.equal(await crm.locator('.tt-face').count(), 4, `${tag}: four faces`);
+        assert.match(await crm.locator('.tt-more').innerText(), /\+3 more/, `${tag}: the rest counted`);
+        assert.equal(await crm.locator('.tt-face').first().getAttribute('title'), 'Ana', `${tag}: named on hover`);
         await page.locator('[data-tl-show="needs"]').click();
         assert.deepEqual(await rows.evaluateAll(r => r.map(x => x.dataset.tlRow)), ['api:t-billing', 'slack'], `${tag}: Needs you`);
         assert.equal(await page.evaluate(() => location.hash), '#/tools?show=needs', `${tag}: the filter is in the address`);
@@ -124,7 +124,7 @@ async function start(browser, hash, {width = 1440, ready} = {}) {
         assert.equal(await sideways(page), false, `${tag}: the list has no sideways scroll`);
         if (tag === 'desktop') await page.locator('#side a[data-nav="tools"].cur').waitFor({state: 'attached'});
         await shot(page, `list-${tag}`);
-        await rows.filter({hasText: 'Acme CRM'}).locator('.tl-st').click();
+        await rows.filter({hasText: 'Acme CRM'}).locator('.tt-st').click();
         await page.waitForFunction(() => location.hash === '#/tools/api/t-crm');
         await page.locator('#tool-access').waitFor();
         assert.deepEqual(seen.errors, [], `${tag}: list errors`);
@@ -138,8 +138,8 @@ async function start(browser, hash, {width = 1440, ready} = {}) {
         assert.equal(await page.locator('#tool-keys [data-ta-key]').count(), 2, `${tag}: keys`);
         assert.match(await page.locator('#tool-keys').innerText(), /Through Tico · logged/, `${tag}: proxied`);
         assert.equal(await page.locator('#tool-keys [data-ta-proxy]').count(), 0, `${tag}: nothing to move`);
-        assert.equal(await page.locator('#tool-check .tl-sq').count(), 24, `${tag}: 24 squares`);
-        assert.equal(await page.locator('#tool-check .tl-sq.fail').count(), 1, `${tag}: the failed check`);
+        assert.equal(await page.locator('#tool-check .tt-sq').count(), 24, `${tag}: 24 squares`);
+        assert.equal(await page.locator('#tool-check .tt-sq.fail').count(), 1, `${tag}: the failed check`);
         assert.match(await page.locator('#tool-limits').innerText(), /Not available yet/, `${tag}: Limits placeholder`);
         assert.equal(await page.locator('#tool-limits input').isDisabled(), true, `${tag}: Limits switch off`);
         // Read → Read and write calls PUT access.
@@ -148,13 +148,13 @@ async function start(browser, hash, {width = 1440, ready} = {}) {
         assert.deepEqual(api.writes.at(-1), {method: 'PUT', path: '/api/v2/api-tools/t-crm/access/bot%3Asupport-bot', body: {level: 'read_write'}}, `${tag}: level write`);
         // Check now posts and redraws the squares with the new one last.
         await page.locator('[data-ta-check]').click();
-        await page.waitForFunction(() => document.querySelector('#tool-check .tl-squares')?.lastElementChild?.title.includes('Checked now'));
+        await page.waitForFunction(() => document.querySelector('#tool-check .tt-squares')?.lastElementChild?.title.includes('Checked now'));
         assert.equal(api.writes.at(-1).path, '/api/v2/api-tools/t-crm/check', `${tag}: check write`);
-        assert.equal(await page.locator('#tool-check .tl-sq.fail').count(), 1, `${tag}: still 24 squares, one failed`);
+        assert.equal(await page.locator('#tool-check .tt-sq.fail').count(), 1, `${tag}: still 24 squares, one failed`);
         assert.equal(await sideways(page), false, `${tag}: the API page has no sideways scroll`);
         await shot(page, `api-${tag}`);
         // Activity: the log and its filter.
-        await page.locator('.tl-tabs a[data-ta-tab="activity"]').click();
+        await page.locator('.tt-tabs a[data-ta-tab="activity"]').click();
         await page.locator('#tool-api [data-ta-call]').first().waitFor();
         assert.equal(await page.locator('#tool-api [data-ta-call]').count(), 4, `${tag}: every call`);
         await page.locator('[data-ta-show="refused"]').click();
@@ -170,7 +170,7 @@ async function start(browser, hash, {width = 1440, ready} = {}) {
       {
         const {page, seen, api} = await start(browser, '#/tools/api/t-billing', {width, ready: '#tool-keys [data-ta-proxy]'});
         assert.match(await page.locator('#tool-keys').innerText(), /Key on computers/, `${tag}: on computers`);
-        assert.match(await page.locator('#tool-api .tl-title').innerText(), /Key rejected/, `${tag}: status`);
+        assert.match(await page.locator('#tool-api .tt-title').innerText(), /Key rejected/, `${tag}: status`);
         await page.locator('#tool-keys [data-ta-proxy]').click();
         await page.locator('dialog [data-confirm-ok]').click();
         await page.locator('#tool-keys [data-ta-delivery="proxy"]').waitFor();
@@ -192,9 +192,9 @@ async function start(browser, hash, {width = 1440, ready} = {}) {
         await limits.locator('[data-send-edit]').click();
         await limits.locator('[data-send-edit-body] [data-send-form]').waitFor();
         await limits.locator('[data-send-edit]').click();
-        assert.equal(await page.locator('#mailbox-access .tl-who-table tr').count() >= 2, true, `${tag}: who can use it`);
+        assert.equal(await page.locator('#mailbox-access .tt-who-table tr').count() >= 2, true, `${tag}: who can use it`);
         assert.match(await page.locator('#mailbox-keys').innerText(), /Google Workspace/, `${tag}: its key`);
-        assert.equal(await page.locator('.tl-tabs a[data-ib-tab-link="activity"]').getAttribute('href'), '#/tools/mailbox/support%40acme.example/activity', `${tag}: Activity tab`);
+        assert.equal(await page.locator('.tt-tabs a[data-ib-tab-link="activity"]').getAttribute('href'), '#/tools/mailbox/support%40acme.example/activity', `${tag}: Activity tab`);
         assert.equal(await sideways(page), false, `${tag}: the mailbox page has no sideways scroll`);
         await shot(page, `mailbox-${tag}`);
         assert.deepEqual(seen.errors, [], `${tag}: mailbox errors`);
