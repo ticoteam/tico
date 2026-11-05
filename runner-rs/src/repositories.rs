@@ -1887,7 +1887,8 @@ mod tests {
         // A writer starting after the idle check must fail while repair holds config.lock.
         let lock = BaseConfigLock::acquire(&config).unwrap();
         let writer = run_as_bot(&[], &["-C", f.base.to_str().unwrap(), "config", "--local", "owner.edit", "concurrent"], &f.env, 10).await.ok().unwrap();
-        assert!(!writer.ok() && writer.stderr.contains("config.lock"), "{}", writer.stderr);
+        assert!(!writer.ok(), "a concurrent Git writer acquired repair's lock");
+        assert!(config.with_file_name("config.lock").exists());
         assert_eq!(std::fs::read(&config).unwrap(), original);
         assert!(lock.install(Some(&original), &rebuilt).is_ok());
         assert_eq!(std::fs::read(&config).unwrap(), replacement);
