@@ -422,8 +422,9 @@ A bot with no fallback of its own, or whose named fallback is another model on t
 once the login is spent), still gets one on a usage limit (a spend cap such as "monthly spend limit" counts): the runner
 runs that turn once on the first of the company's other providers that is signed in on the same computer, either by its
 own sign-in or by a company subscription given to that computer ([Computers](computers.md)), with the company's default
-model on that tool, or that provider's recommended model when the company's default is on another tool
-(`fallback_models` in `GET /api/v2/config`), and reports `fallback` with `primary_limited`. A
+model on that tool, or that provider's recommended model when the company's default is on another tool or is a Tico
+Gateway model, since a Gateway model runs only through Tico's own provider (`fallback_models` in `GET /api/v2/config`),
+and reports `fallback` with `primary_limited`. A
 provider signed in only by a key in the environment is skipped (a turn carries only its own runtime's keys; Codex turns
 its key into a login).
 A login on that computer that failed a turn on its usage limit is skipped until the provider's reset time, or for
