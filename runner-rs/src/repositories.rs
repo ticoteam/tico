@@ -1967,7 +1967,7 @@ mod tests {
         std::fs::remove_file(f.base.join(".git/config.lock")).unwrap();
         std::fs::write(f.base.join(".git/config"), "[broken\n").unwrap();
         let refused = configure_base(&f.base, &settings, &prefix, &f.env, "acme/web").await;
-        assert!(matches!(refused, Err(Fail::Msg(m)) if m.contains("repository format cannot be read safely")));
+        assert!(matches!(&refused, Err(Fail::Msg(m)) if m.contains("repository format cannot be read safely")), "{refused:?}");
         assert_eq!(std::fs::read_to_string(f.base.join(".git/config")).unwrap(), "[broken\n");
         std::fs::write(f.base.join(".git/config"), &original).unwrap();
         assert!(configure_base(&f.base, &settings, &prefix, &f.env, "acme/web").await.is_ok());
