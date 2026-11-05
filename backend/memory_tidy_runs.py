@@ -47,10 +47,12 @@ def refresh_costs(c):
                 # Priced when the run finished, each request on its own (the host listed them): keep that figure.
                 total += stored
                 continue
-            # No per-request counts are kept here, so the run's tokens are priced as one request: a prompt over the
-            # long-prompt limit pays that tier. A row the host did not price per request may be low, so keep the larger.
+            # No per-request counts are kept here. For a model whose long tier is billed per request, the run's tokens
+            # are priced as one request; any other model pays its standard rate. A row the host did not price per
+            # request may be low, so keep the larger.
+            one = [(r['input_tokens'], r['cached_tokens'], r['output_tokens'])]
             estimate = providers.estimate_cost(r['model'], r['input_tokens'], r['cached_tokens'], r['output_tokens'],
-                                               [(r['input_tokens'], r['cached_tokens'], r['output_tokens'])])
+                                               one if providers.per_request_long_tier(r['model']) else None)
             total += max(stored, float(estimate or 0))
         c.execute("UPDATE memory_tidy_passes SET cost_usd=max(cost_usd,?) WHERE id=?", (total, p['id']))
     return c.execute("SELECT coalesce(sum(cost_usd),0) FROM memory_tidy_passes").fetchone()[0]

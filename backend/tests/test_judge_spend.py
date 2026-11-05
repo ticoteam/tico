@@ -63,6 +63,13 @@ def test_a_terra_call_at_272000_prompt_tokens_is_priced_at_the_long_tier_as_one_
         round((200_000 * 2.5 + 72_000 * 0.125 + 1_000 * 9.375) / 1_000_000, 6)
 
 
+def test_a_haiku_judge_call_over_its_long_tier_keeps_the_standard_price(tmp_path):
+    settings = Settings(db_path=tmp_path / "hub.db")
+    # Claude Haiku 5.5's long-prompt tier (over 100,000 prompt tokens) stays off judge calls until its rate is approved.
+    assert B.cost_usd(settings, "claude-haiku-5-5", {"input_tokens": 100_001, "output_tokens": 1_000}) == \
+        round((100_001 * 0.10 + 1_000 * 0.50) / 1_000_000, 6)
+
+
 def test_the_audit_keeps_model_tokens_latency_and_cost_and_says_when_the_fallback_answered(api, monkeypatch):
     priced(api.app.state.store.settings)
     jev = fake(api)

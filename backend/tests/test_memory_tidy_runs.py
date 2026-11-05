@@ -196,6 +196,18 @@ def test_a_terra_check_run_is_priced_as_one_request_at_the_long_prompt_limit(api
         assert runs.refresh_costs(c) == pytest.approx((prompt * rate[0] + 1_000 * rate[2]) / 1_000_000)
 
 
+def test_a_haiku_check_run_over_its_long_tier_keeps_the_standard_price(api):
+    store = setup(api)
+    with store.transaction() as c:
+        last(c)
+        c.execute("UPDATE memory_tidy_passes SET check_task_id='synthetic-check'")
+        c.execute("INSERT INTO attempts(id,bot_id,task_id,created_at,usage_model,input_tokens,cached_tokens,output_tokens,"
+                  "est_cost_usd,billing) VALUES(?,?,?,?,?,?,?,?,?,?)",
+                  ('synthetic-haiku-turn', 'ops', 'synthetic-check', '2026-11-01T11:31:00Z',
+                   'claude-haiku-5-5', 100_001, 0, 1_000, 0, 'api'))
+        assert runs.refresh_costs(c) == pytest.approx((100_001 * 0.10 + 1_000 * 0.50) / 1_000_000)
+
+
 def test_two_requests_under_the_limit_that_cross_it_together_keep_their_own_price(api):
     store = setup(api)
     requests = [(200_000, 0, 500), (200_000, 0, 500)]           # each under 272,000; together 400,000
