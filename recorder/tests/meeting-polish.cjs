@@ -79,15 +79,15 @@ const rows = page => page.locator('#sheet [data-act="task-pick"] .grow').allInne
     const add = page.getByRole('textbox', {name:'Add a task', exact:true});
     await add.pressSequentially('Send notes to @me');
     await page.locator('#mention [data-opt]').first().waitFor();
-    assert.equal(await page.locator('#mention [data-opt]').first().innerText(), 'Mara Novak');
+    assert.equal(await page.locator('#mention [data-opt] .grow').first().innerText(), 'Tina Alvarez');
     await page.keyboard.press('Enter');
-    assert.equal(await add.inputValue(), 'Send notes to @Mara Novak ');
+    assert.equal(await add.inputValue(), 'Send notes to @Tina Alvarez ');
     await page.keyboard.press('Enter');
-    await page.waitForFunction(() => window.__PREVIEW__.state.meetings.m1.actions.items.some(i => i.title === 'Send notes to @Mara Novak'));
+    await page.waitForFunction(() => window.__PREVIEW__.state.meetings.m1.actions.items.some(i => i.title === 'Send notes to @Tina Alvarez'));
     assert.equal(await add.inputValue(), '');
     // With nothing typed after @, the person is first too.
     await add.pressSequentially('@');
-    assert.equal(await page.locator('#mention [data-opt]').first().innerText(), 'Mara Novak');
+    assert.equal(await page.locator('#mention [data-opt] .grow').first().innerText(), 'Tina Alvarez');
     await page.keyboard.press('Escape');
 
     // ---- Copy transcript from the header ----

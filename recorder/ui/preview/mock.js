@@ -88,7 +88,7 @@
       targets: targets(), live: null, live_org: '', live_state: '', live_url: '', kept_local: false,
       can_control: false, can_discard: false, discarded: false, discard_pending: false,
       place: 'On this Mac', sync_error: '', setup: [], audio: clone(audioOk),
-      actions: { mode: 'ready', can_link: true, link_scope: ['m1','team'], actor: 'human:mara', org: 'Tico Team', orgs, multiple: true, can_change: true, draft_status: '', items: clone(items), waiting: 3, owners },
+      actions: { mode: 'ready', can_link: true, link_scope: ['m1','team'], actor: 'human:tina', org: 'Tico Team', orgs, multiple: true, can_change: true, draft_status: '', items: clone(items), waiting: 3, owners },
       notes: { text: 'Decided: one task at a time, private, quote attached.\nFollow up on hosted pricing cap next week.', editable: true },
       people: clone(peopleLocal), chat: clone(chatEmpty),
       ...over,
@@ -172,7 +172,7 @@
     id: 'm0', title: 'Streaming rollout check-in', started_at: iso(-1), duration_ms: 34000, state: 'recording', recording_here: true,
     title_editable: true, audio: { ...clone(audioOk), pending: 1 },
     actions: {
-      mode: 'ready', actor: 'human:mara', org: 'Tico Team', orgs, multiple: true, can_change: true, draft_status: '', waiting: 1, owners,
+      mode: 'ready', actor: 'human:tina', org: 'Tico Team', orgs, multiple: true, can_change: true, draft_status: '', waiting: 1, owners,
       items: [
         item({ id: 'r1', title: 'Write up how live text reconnects after a drop', quote: 'What happens when the connection drops?', at_ms: 26000, owner: 'bot:head-of-engineering', owner_name: 'Head of Engineering', can_send: true }),
         item({ id: 'r2', title: 'Check the chunked pass replaces streamed words', quote: 'And the chunked pass still replaces them', at_ms: 17000 }),
