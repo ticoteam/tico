@@ -76,11 +76,11 @@ class Computer:
         return answer
 
     def action(self, action):
-        return run_cli(["mail-action", "--as", access.OWNER, "--json"], json.dumps(action))[1]
+        return run_cli(["mail-action", "--as", access.CONNECTOR, "--json"], json.dumps(action))[1]
 
     def event(self, action):
         """ConnectorPublisher.calendar_event, in this process: exit 2 is a refusal before Google was asked."""
-        rc, answer = run_cli(["connector-event", "--as", access.OWNER, "--json"], json.dumps(action))
+        rc, answer = run_cli(["connector-event", "--as", access.CONNECTOR, "--json"], json.dumps(action))
         if rc == 2:
             raise CalendarRefused("Tico refused the calendar event before calling Google")
         assert rc == 0, answer
@@ -105,10 +105,14 @@ def computer(api, tmp_path, monkeypatch):
     monkeypatch.setattr(cli, "open_db", lambda: db.connect(tmp_path / "mail.db"))
     monkeypatch.setattr(audit_log, "AUDIT_PATH", tmp_path / "audit.jsonl")
     monkeypatch.setattr(access, "PROJECTS", tmp_path)
-    # The CLI runs as the owner and reads What Tico may do from the hub as this runner (policy.runner_company). The
+    # The CLI runs as the connector and reads What Tico may do from the hub as this runner (policy.runner_company). The
     # registration lives where TICO_RUNNER_CONFIG says, with none in the home, as a custom install has it: nothing the
     # runner runs looks for one.
     monkeypatch.setattr(pl, "RUNNER_GET", lambda path: box.worker.client.get(path))
+    # The CLI's connector principal reads the mailboxes this computer acts for as the worker does (its mail targets;
+    # here the mailbox it was given).
+    monkeypatch.setattr(access, "RUNNER_ACCESS", lambda: {**box.worker.client.get("connectors/mail/targets"),
+                                                          "mailboxes": [{"address": a} for a in box.worker.mail_boxes]})
     monkeypatch.setattr(cli, "open_calendar", lambda mailbox: box.calendar)
     (tmp_path / "home").mkdir()
     (tmp_path / "elsewhere").mkdir()
@@ -122,6 +126,15 @@ def computer(api, tmp_path, monkeypatch):
 def automate(api, *steps, **extra):
     return post(api, "automations", {"name": "Invoices", "owner": "person:ana",
                                      "trigger": {"type": "message", "inbox": BOX}, "steps": list(steps), **extra})["id"]
+
+
+def owned_by_ana(c, *ids):
+    """Automation rows for actions a test queues by hand: the claim checks each action's owner holds the mailbox."""
+    now = H.now()
+    for aid in ids:
+        c.execute("INSERT OR IGNORE INTO automations(id,name,owner_id,trigger_type,enabled,flow,version,created_at,"
+                  "created_by_id,updated_at) VALUES(?,?,?,'manual',0,?,1,?,?,?)",
+                  (aid, aid, "person:ana", json.dumps({"owner": "person:ana", "steps": []}), now, "person:ana", now))
 
 
 def last_run(api, aid):
@@ -289,6 +302,7 @@ def test_a_claim_stops_inside_the_byte_budget_and_the_rest_wait_for_the_next(api
     computer.sync()
     body = json.dumps({"body": "x" * 100_000})                   # 100 KB each: a claim takes two or three at most
     with api.app.state.store.transaction() as c:
+        owned_by_ana(c, "auto_x")
         for i in range(5):
             c.execute("INSERT INTO automation_mail_actions(id,automation_id,run_id,mailbox,msg_id,action,args,"
                       "state,created_at,attempts) VALUES(?,?,?,?,?,?,?,?,?,0)",
@@ -318,27 +332,38 @@ def test_a_send_claimed_after_the_switch_went_off_is_a_draft(api, computer):
 
 def test_what_tico_may_do_holds_automations_a_send_is_claimed_as_a_draft_which_organize_off_refuses(api, computer):
     """Settings > Google > What Tico may do covers automations: Send mail off claims a send as a draft, as the inbox's
-    own switch does, and the connector reads the setting from the hub itself, so with Organize mail off too it refuses
-    the draft and the archive before Gmail is asked. An action that says otherwise on stdin changes nothing."""
-    automate(api, SEND)
-    automate(api, ARCHIVE)
+    own switch does. With Send mail off only, the send is leased as a draft; with Organize mail off too the server's
+    one check (backend/mailbox_access.py action_refusal) fails the draft and the archive at the claim, so no computer
+    is asked, and the connector still refuses whatever an action on stdin says, from the hub's own setting."""
+    send = automate(api, SEND)
+    archive = automate(api, ARCHIVE)
     automate(api, DRAFT)
     computer.sync()
+    r = api.put("/api/v2/google/permissions", json={"organize_mail": True, "send_mail": False, "change_calendar": True},
+                headers=headers())
+    assert r.status_code == 200, r.text
+    leased = claim(api, computer.token)["actions"]
+    assert sorted(a["action"] for a in leased) == ["archive", "draft", "draft"]      # the send became a draft
+    assert all("company" not in a for a in leased)
+    drafted = next(a for a in leased if a["action"] == "draft")
+    answer = computer.action(dict(drafted, action="send", company={}))   # a send made up on stdin, past the draft
+    assert answer["ok"] is False and "What Tico may do" in answer["detail"], answer
+    assert computer.gmail.sent == []                      # at most a draft: Organize mail is still on
+    drafts = len(computer.drafts())
+
+    with api.app.state.store.transaction() as c:          # queue them again, then turn Organize mail off too
+        c.execute("UPDATE automation_mail_actions SET state='queued', claimed_at=NULL, claimed_by=NULL, attempts=0")
     r = api.put("/api/v2/google/permissions", json={"organize_mail": False, "send_mail": False, "change_calendar": True},
                 headers=headers())
     assert r.status_code == 200, r.text
-    actions = claim(api, computer.token)["actions"]
-    assert sorted(a["action"] for a in actions) == ["archive", "draft", "draft"]     # the send became a draft
-    assert all("company" not in a for a in actions)
-    for action in actions:
-        for forged in ({}, {"company": {}}, {"company": dict.fromkeys(("organize_mail", "send_mail"), True)}):
-            answer = computer.action(dict(action, **forged))
-            assert (answer["ok"], answer["retry"]) == (False, False) and "What Tico may do" in answer["detail"], answer
-    # A send made up on stdin, past the claim's draft, is refused the same way.
-    drafted = next(a for a in actions if a["action"] == "draft")
-    answer = computer.action(dict(drafted, action="send", company={}))
-    assert answer["ok"] is False and "What Tico may do" in answer["detail"], answer
-    assert "INBOX" in computer.gmail.store["m1"]["labelIds"] and computer.drafts() == [] and computer.gmail.sent == []
+    assert claim(api, computer.token)["actions"] == []
+    for aid in (send, archive):
+        step = last_run(api, aid)["steps"][0]
+        assert step["status"] == "failed" and "What Tico may do" in json.dumps(step["outputs"]), step
+    with api.app.state.store.transaction() as c:
+        assert {r["state"] for r in c.execute("SELECT state FROM automation_mail_actions")} == {"failed"}
+    assert "INBOX" in computer.gmail.store["m1"]["labelIds"] and len(computer.drafts()) == drafts
+    assert computer.gmail.sent == []
 
 
 def test_a_mail_action_that_cannot_read_what_tico_may_do_writes_nothing_and_is_retried(api, computer, monkeypatch):
@@ -482,6 +507,7 @@ def test_a_lease_another_computer_let_run_out_is_not_run_again_unless_the_action
 def test_no_computer_claims_or_reports_for_a_mailbox_not_published_yet(api, computer):
     claim(api, computer.token, expected=403)
     with api.app.state.store.transaction() as c:
+        owned_by_ana(c, "auto_1")
         c.execute("INSERT INTO automation_mail_actions(id,automation_id,mailbox,msg_id,action,args,state,created_at) "
                   "VALUES('ma_1','auto_1',?,'m1','send','{}','queued',?)", (BOX, "2026-10-28T09:00:00Z"))
     post(api, "automations/mail-actions/ma_1/result", {"ok": True, "detail": "sent"}, computer.token, expected=403)
@@ -655,6 +681,7 @@ def test_a_chain_longer_than_the_recursion_limit_settles_and_the_mailbox_still_c
     and the mailbox's next claim is not held up by them."""
     computer.sync()
     with api.app.state.store.transaction() as c:
+        owned_by_ana(c, "auto_x")
         for i in range(1100):
             c.execute('INSERT INTO automation_mail_actions(id,automation_id,run_id,mailbox,msg_id,action,args,state,'
                       'created_at,attempts,step,"after") VALUES(?,?,?,?,?,?,?,?,?,0,?,?)',
@@ -669,6 +696,7 @@ def test_a_chain_longer_than_the_recursion_limit_settles_and_the_mailbox_still_c
             "SELECT state, COUNT(*) FROM automation_mail_actions WHERE automation_id='auto_x' GROUP BY state")}
     assert states == {"failed": 1, "skipped": 1099}
     with api.app.state.store.transaction() as c:
+        owned_by_ana(c, "auto_y")
         c.execute("INSERT INTO automation_mail_actions(id,automation_id,run_id,mailbox,msg_id,action,args,state,"
                   "created_at,attempts) VALUES('free','auto_y',NULL,?,'m1','archive','{}','queued',"
                   "'2026-10-28T01:00:00.000000Z',0)", (BOX,))
@@ -710,6 +738,11 @@ def bot_ops(api):
     r = runner(api, label="Bot Mac")
     assign(api, r, "ops")
     ready(api, r, ["ops"])
+    # ana let ops use her mailbox (Settings > Mailboxes): a bot's automation acts on a mailbox it was given.
+    from backend import mailbox_access
+    with api.app.state.store.transaction() as c:
+        bot = H.resolve_bot(c, "ops")["id"]
+        mailbox_access.give(c, mailbox_access.ensure_mailbox(c, BOX), "bot", bot, "read_write", "human:ana")
     return r
 
 
