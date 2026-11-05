@@ -756,6 +756,7 @@ def test_revoked_external_identity_stops_deferred_send_instead_of_becoming_inter
     approve(api, row)
     assert fetch(api, row)["error"] == "identity" and hq.provider_submits == 0
     with api.app.state.store.read() as c:
+        assert c.execute("SELECT next_sync_at FROM letters WHERE id=?", (row["id"],)).fetchone()[0] is None
         from backend.auth import bot_identity
         from backend.store import Problem
         with pytest.raises(Problem):

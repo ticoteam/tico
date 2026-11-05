@@ -665,7 +665,7 @@ class Letters:
             with self.store.transaction() as c:
                 c.execute("UPDATE letters SET error=?,attempts=attempts+1,next_sync_at=?,updated_at=? WHERE id=?",
                     (exc.code, None if exc.code in ("unconfigured", "billing_required", "cap_reached", "out_of_credit",
-                                                   "letters_disabled", "forbidden", "letters_cap", "unstable_proof")
+                                                   "letters_disabled", "forbidden", "identity", "letters_cap", "unstable_proof")
                      else later(BACKOFF[min(row["attempts"], len(BACKOFF)-1)]), H.now(), ident))
 
     def check_sender(self, c, row):
