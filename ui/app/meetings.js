@@ -22,8 +22,7 @@ async function pageNotes() {
   if (linked.get('live')) return pageLiveMeetings(linked.get('live'));
   // New imports wait in Pending, so the page opens there when it has any; an empty Pending falls back to Shared.
   const state = MEET = {connectGranola: linked.get('connect') === 'granola', review: linked.get('meeting') || linked.get('recording') ? 'live' : 'pending', landing: true, checked: new Set(), pendingCount: 0, loadSeq: 0, filter: 'all', when: 'all', person: '', source: '', people: new Map(), selected: '', list: [], poll: 0,
-    sourcesPoll: 0, items: {}, itemEdit: '', itemAdd: '', itemConfirm: '', itemDup: {},
-    confirmDelete: '', editing: false, open: false};
+    sourcesPoll: 0, items: {}, itemAdd: '', confirmDelete: '', open: false};
   $('#main').innerHTML = `<div class="notes-head"><h1>Meetings</h1>
       <input type="search" id="notes-search" autocomplete="off" aria-label="Search meetings" placeholder="Search meetings">
       <div class="notes-head-actions"><button class="docs-ask" id="meet-ask" type="button" data-ask-open aria-label="Ask" title="Ask">${ldotHTML({state: 'still', size: 16})}<span class="docs-ask-word">Ask</span></button><button class="ghost" type="button" id="meet-live-now">Live now${betaPill('live_meetings')}</button>
@@ -42,7 +41,7 @@ async function pageNotes() {
       <div class="meet-syncing" id="meet-syncing" role="status" hidden>${meetLogo('granola', 30)}<div class="meet-main"><b>Checking Granola</b><div class="meet-meta"><span>New notes arrive once Granola has a summary</span></div></div><div class="meet-side"><span class="meet-state"><i class="mg-spin" aria-hidden="true"></i>Syncing</span></div></div>
       <section class="notes-list"><div class="notes-filters" id="notes-filters" hidden><label class="meet-select-all" id="meet-select-all" hidden><input type="checkbox" aria-label="Select all shown meetings"></label><select id="notes-when" aria-label="When"><option value="all">Any time</option><option value="today">Today</option><option value="7">Past 7 days</option><option value="30">Past 30 days</option><option value="older">Older than 30 days</option></select><select id="notes-person" aria-label="Participant"><option value="">All participants</option></select><select id="notes-source" aria-label="Source"><option value="">All sources</option></select><select id="notes-status" aria-label="Status"><option value="all">All statuses</option><option value="unsent">Not sent</option><option value="sent">Sent</option><option value="sending">Sending</option><option value="failed">Failed</option></select><span class="notes-count muted" id="notes-count"></span></div><div class="notes-rows" id="notes-rows"><div class="notes-empty">Loading…</div></div></section>
     </div>
-    <dialog class="tmodal notes-modal" id="notes-modal" aria-label="Meeting details"><div class="notes-modal-close"><button class="ghost" type="button" id="notes-modal-window" aria-label="Open in its own window" title="Open in its own window"><span class="nav-icon" aria-hidden="true">open_in_new</span></button><button class="ghost" type="button" id="notes-modal-close" aria-label="Close meeting" title="Close (Esc)">✕</button></div><section class="notes-detail" id="notes-detail"></section></dialog>
+    <dialog class="tmodal notes-modal" id="notes-modal" aria-label="Meeting details"><div class="notes-modal-close"><span class="mp-tools" id="notes-modal-tools"></span><button class="mp-icon" type="button" id="notes-modal-window" aria-label="Open in new tab" title="Open in new tab"><span class="nav-icon" aria-hidden="true">open_in_new</span></button><button class="mp-icon" type="button" id="notes-modal-close" aria-label="Close meeting" title="Close (Esc)"><span class="nav-icon" aria-hidden="true">close</span></button></div><section class="notes-detail" id="notes-detail"></section></dialog>
     <dialog class="tmodal import-modal" id="manual-modal" aria-label="Add notes"></dialog>`;
   document.querySelectorAll('[data-review]').forEach(button => button.onclick = () => {
     if (state.review === button.dataset.review) return;
@@ -55,17 +54,21 @@ async function pageNotes() {
   meetRecorderLink();
   $('#meet-live-now').onclick = () => pageLiveMeetings();
   const dialog = $('#notes-modal');
-  const closeNote = () => {
-    if (state.editing && !confirm('Discard unsaved changes?')) return;
-    meetShow(state, false);
-  };
+  const closeNote = () => meetShow(state, false);
   $('#notes-modal-close').onclick = closeNote;
   // A meeting opens here; its own window is a choice, because a window that fails to open would look like a dead click.
   const own = $('#notes-modal-window');
   own.hidden = MEET_WINDOW;
   own.onclick = () => { if (meetWindow(state.selected)) meetShow(state, false); };
-  dialog.oncancel = e => { e.preventDefault(); closeNote(); };
-  dialog.onclick = e => { if (e.target === dialog) { const r = dialog.getBoundingClientRect(); if (e.clientX < r.left || e.clientX > r.right || e.clientY < r.top || e.clientY > r.bottom) closeNote(); } };
+  // Escape and a click elsewhere close an open menu first.
+  dialog.oncancel = e => {
+    e.preventDefault();
+    const menu = dialog.querySelector('details.mp-pop[open]');
+    if (menu) { menu.open = false; menu.querySelector('summary').focus(); } else closeNote();
+  };
+  dialog.onclick = e => {
+    dialog.querySelectorAll('details.mp-pop[open]').forEach(menu => { if (!menu.contains(e.target)) menu.open = false; });
+    if (e.target === dialog) { const r = dialog.getBoundingClientRect(); if (e.clientX < r.left || e.clientX > r.right || e.clientY < r.top || e.clientY > r.bottom) closeNote(); } };
   $('#notes-manual').onclick = () => meetNotesOpen(state);
   const applyFilters = () => {
     state.person = $('#notes-person').value; state.source = $('#notes-source').value; state.filter = $('#notes-status').value; state.when = $('#notes-when').value;
@@ -92,7 +95,7 @@ async function pageNotes() {
   state.landing = false;
   const open = linked.get('meeting') || linked.get('recording');
   if (open) { state.selected = open; meetShow(state, true); meetDetail(state, open); }
-  state.poll = setInterval(() => { if (!document.hidden && !state.editing && !state.open) meetLoad(state, false); }, 30000);
+  state.poll = setInterval(() => { if (!document.hidden && !state.open) meetLoad(state, false); }, 30000);
   state.sourcesPoll = setInterval(() => { if (!document.hidden) meetSources(state); }, 60000);
 }
 
@@ -162,7 +165,7 @@ async function meetReviewAct(state, button, action, id) {
 }
 function meetReviewDetail(rec) {
   const sendTo = `<option value="auto">Send to ${esc(assistantName())}</option>` + activeEmps().filter(e => e.id !== 'coo').map(e => `<option value="${esc(e.id)}">Send to ${esc(e.display_name)}</option>`).join('') + '<option value="">Don\'t send</option>';
-  return `<div class="note-send meet-review-detail"><span class="meet-review-tag">${rec.review_state === 'pending' ? 'Pending' : 'Dismissed'}</span><span class="muted meet-review-who">Only you see this</span><span class="spacer"></span>
+  return `<div class="meet-review-detail"><span class="meet-review-tag">${rec.review_state === 'pending' ? 'Pending' : 'Dismissed'}</span><span class="muted meet-review-who">Only you see this</span><span class="spacer"></span>
     ${rec.review_state === 'pending' ? `<select id="meet-review-private" aria-label="Who sees it once shared"><option value="team"${!rec.private ? ' selected' : ''}>Team</option><option value="private"${rec.private ? ' selected' : ''}>Private</option></select>
     <select id="meet-review-send" aria-label="Bot that files its tasks">${sendTo}</select>
     <button class="primary" type="button" data-review-action="approve" data-id="${esc(rec.id)}" id="meet-review-go">Share & send</button><button class="ghost" type="button" data-review-action="dismiss" data-id="${esc(rec.id)}">Dismiss</button>`
@@ -345,8 +348,10 @@ function meetShow(state, open) {
   if (open && !dialog.open) dialog.showModal();
   if (!open) {
     meetSharedStop(state);
-    state.editing = false;
-    state.itemEdit = ''; state.itemAdd = ''; state.itemConfirm = '';
+    state.noteSave?.(); state.noteSave = null;
+    state.itemAdd = ''; state.linkOpen = false; state.showDismissed = false; state.confirmDelete = '';
+    state.tsearch = false; state.tq = ''; state.sideTab = '';
+    const tools = $('#notes-modal-tools'); if (tools) tools.innerHTML = '';
     dialog.close();
   }
 }
@@ -382,16 +387,6 @@ const meetEmptyHTML = state => meetConnected(state) ? '<div class="notes-empty">
   : `<div class="meet-blank"><div class="meet-tiles big" data-meet-tiles>${meetTilesHTML(state)}</div></div>`;
 const meetPill = r => r.delivery?.status === 'pending' ? '<span class="pill in-progress">sending</span>' : r.delivery?.status === 'error' ? '<span class="pill fail">delivery failed</span>' : r.status === 'error' ? '<span class="pill fail">failed</span>'
   : r.sent ? '<span class="pill ok">sent</span>' : '';
-const meetPeople = r => {
-  // An imported Close activity has no Tico invitees: the lead is who was on it.
-  if (r.source === 'close') {
-    const lead = r.source_context?.lead_name || r.source_context?.contact_name || '';
-    const kind = r.source_type === 'meeting' ? 'Close meeting' : 'Close call';
-    return `${esc(lead || kind)}<span class="note-sub">${kind}${r.source_context?.direction ? ' · ' + esc(r.source_context.direction) : ''}</span>`;
-  }
-  const names = meetPeopleList(r).map(p => p.name || p.id);
-  return names.length ? esc(names.join(', ')) : '<span class="muted">None listed</span>';
-};
 function meetPersonFor(value) {
   const raw = String(value || '').trim();
   if (!raw) return null;
@@ -461,10 +456,6 @@ function meetMadeChips(r) {
   }
   return chips.join('');
 }
-// `bot` is the bot's id; a record sent before ids says `slug`.
-const sentLink = s => { const bot = s?.bot || s?.slug; return s?.task
-  ? `<a href="#/bot/${encodeURIComponent(bot)}/tasks">${empName(bot)}</a>`
-  : `<a href="${esc(s.url || `${GH}/issues/${s.issue}`)}" target="_blank" rel="noopener">${empName(bot)}</a>`; };
 // "Today, 2:37 PM" / "Yesterday, 9:12 AM" / "Sep 4, 2:37 PM"
 function meetWhen(iso) {
   if (!iso) return '';
@@ -483,23 +474,6 @@ function meetOneLine(text) {
   return line.length > 140 ? line.slice(0, 137).replace(/\s+\S*$/, '') + '…' : line;
 }
 // The top of an open meeting: every task it turned into, each a link. The bot's progress is the Outcome below.
-function meetMadeHTML(rec) {
-  const made = meetMade(rec);
-  if (!made.length) return '';
-  const link = m => m.id ? `<a href="#/task/${encodeURIComponent(m.id)}">${esc(m.title)}</a>` : m.url ? `<a href="${esc(m.url)}" target="_blank" rel="noopener">${esc(m.title)}</a>` : esc(m.title);
-  return `<section class="meet-made"><h3>Created</h3><ul>${made.map(m => `<li><span class="meet-made-kind">${esc(MEET_KINDS[m.kind][2])}</span>${link(m)}</li>`).join('')}</ul></section>`;
-}
-function noteOutcomeHTML(record, detail = false) {
-  const out = record.outcome;
-  if (!out) return '<span class="muted">No outcome reported yet.</span>';
-  const labels = {open:'Awaiting review',doing:'In progress',waiting:'Waiting',done:'Reviewed',closed:'Closed',pending:'Sending',error:'Delivery failed',sent:'Sent',not_sent:'Not sent'};
-  const counts = out.followups ? `<span class="note-sub">${out.followups} follow-ups · ${out.open_followups ? `${out.open_followups} outstanding` : 'all finished'}</span>` : '';
-  const summary = detail
-    ? `<div class="md" style="margin:6px 0;overflow-wrap:anywhere">${safeMd(out.summary || '')}</div>`
-    : `<p class="note-outcome-line" title="${esc(plainMd(out.summary))}">${esc(meetOneLine(plainMd(out.summary)))}</p>`;
-  const spin = detail && meetWorking(record)?.spin ? '<i class="mg-spin" aria-hidden="true"></i>' : '';
-  return `<strong class="${spin ? 'meet-state' : ''}">${spin}${out.bot ? esc(empName(out.bot)) + ' · ' : ''}${esc(labels[out.status] || out.status)}</strong>${summary}${counts}${detail && out.task_id && out.bot ? `<a href="#/bot/${encodeURIComponent(out.bot)}/tasks">View bot tasks and follow-ups</a> ${taskConversationButton(out.task_id)}` : ''}`;
-}
 function meetList(state) {
   const el = $('#notes-rows'); if (!el) return;
   const list = meetVisible(state);
@@ -538,157 +512,236 @@ async function meetDetail(state, id) {
 const IMPORT_SOURCES = {upload: 'Upload', zoom: 'Zoom', 'google-meet': 'Google Meet', granola: 'Granola', otter: 'Otter', fireflies: 'Fireflies', other: 'Other'};
 const meetSourceLabel = s => ({...IMPORT_SOURCES, manual: 'Typed', close: 'Close', submitted: 'Imported', api: 'API', tico: 'Tico'})[s || 'tico']
   || String(s).replace(/[-_]+/g, ' ').replace(/^./, c => c.toUpperCase());
+// The source in words; a meeting the Recorder filed says so.
+const meetSourceName = r => r.client === 'tico-recorder' ? 'Tico Recorder' : r.source === 'tico-live' ? 'Tico live' : meetSourceLabel(r.source);
+const meetIcon = (name, label = '') => `<span class="nav-icon" aria-hidden="true">${name}</span>${label}`;
+const meetStatusWord = s => (typeof STATUS_WORD === 'object' && STATUS_WORD[s]) || s || '';
+// Who was there: people, then the bots attached to its live meeting and the bot it was shared with. Each is an
+// avatar; its name shows on hover, or on tap (focus) on a phone.
+function meetFaces(state, rec) {
+  const faces = meetPeopleList(rec).map(p => ({name: p.name || p.id, html: personAvatar(p, 26)}));
+  const bots = new Map((state.live?.[rec.id]?.bots || []).map(b => [b.bot, b.name]));
+  const sent = rec.sent?.bot || rec.sent?.slug || rec.delivery?.destination;
+  if (sent && !bots.has(sent)) bots.set(sent, '');
+  for (const [bot, name] of bots) faces.push({name: name || botDisplayName(bot), html: botAvatar(bot, 26), bot});
+  return faces.map(f => `<span class="mp-face" tabindex="0" role="img" aria-label="${esc(f.name)}" data-name="${esc(f.name)}"${f.bot ? ` data-face-bot="${esc(f.bot)}"` : ''}>${f.html}</span>`).join('');
+}
+// Team: everyone signed in can open it. Private: its participants, its owner and the team owner.
+function meetVisibilityHTML(rec, mayEdit) {
+  const priv = !!rec.private;
+  if (!mayEdit) return `<span class="mp-vis-ro">${meetIcon(priv ? 'lock' : 'groups', priv ? 'Private' : 'Team')}</span>`;
+  return `<div class="mp-vis" role="group" aria-label="Who can see it">${[['team', 'groups', 'Team'], ['private', 'lock', 'Private']].map(([v, icon, label]) =>
+    `<button type="button" data-vis="${v}" aria-pressed="${(v === 'private') === priv}">${meetIcon(icon, label)}</button>`).join('')}</div>`;
+}
+// Share: a link for a person, and the bot this meeting goes to. Sending is once, so a sent meeting shows its bot.
+function meetShareHTML(rec, mayEdit) {
+  const sent = rec.sent?.bot || rec.sent?.slug || rec.delivery?.destination || '';
+  const bots = !mayEdit ? [] : sent ? [{id: sent}] : activeEmps();
+  return `<details class="mp-pop" id="meet-share"><summary class="mp-icon" aria-label="Share" title="Share">${meetIcon('person_add')}</summary>
+    <div class="mp-pop-list" role="menu">
+      <button type="button" role="menuitem" data-share-copy>${meetIcon('link', 'Copy link')}</button>
+      ${bots.length ? `<div class="mp-pop-h">Bots</div>${bots.length > 8 ? '<input type="search" class="mp-pop-find" data-share-find aria-label="Find a bot" placeholder="Find">' : ''}
+      ${bots.map(b => `<button type="button" role="menuitemcheckbox" aria-checked="${sent === b.id}" data-share-bot="${esc(b.id)}"${sent ? ' disabled' : ''}>${botAvatar(b.id, 18)}<span>${esc(botDisplayName(b.id))}</span>${sent ? meetIcon('check') : ''}</button>`).join('')}` : ''}
+    </div></details>`;
+}
+const meetMoreHTML = (state, rec) => `<details class="mp-pop" id="meet-more-menu"><summary class="mp-icon" aria-label="More" title="More">${meetIcon('more_horiz')}</summary>
+  <div class="mp-pop-list" role="menu"><button type="button" role="menuitem" class="danger" id="meet-del">${meetIcon('delete', state.confirmDelete === rec.id ? 'Really delete?' : 'Delete')}</button></div></details>`;
 function meetPaint(state, rec) {
   const el = $('#notes-detail'); if (!el) return;
-  const id = rec.id, turns = rec.turns || [], sent = rec.sent, typed = rec.kind === 'note';
-  const outcome = rec.outcome && rec.outcome.status !== 'not_sent' ? rec.outcome : null;   // "Not sent" is said once, by the send bar
+  const id = rec.id, typed = rec.kind === 'note';
+  state.rec = rec;
   // The server decides who may change a meeting; `can_edit: false` is somebody else's, open here to read.
   const mayEdit = rec.can_edit !== false;
   const reviewing = rec.review_state === 'pending' || rec.review_state === 'dismissed';
-  const transcript = turns.length ? `<div class="note-transcript">${turns.map(t => `<p><span class="muted mono">[${mmss(t.start_ms)}]</span> ${t.speaker ? `<strong>${esc(t.speaker)}</strong> ` : ''}${esc(t.text)}</p>`).join('')}</div>`
-    : rec.transcript_readable ? `<div class="md">${safeMd(rec.transcript_readable)}</div>`
-    : '<div class="empty">No transcript yet.</div>';
-  const alternateTranscripts = (rec.transcript_sources || []).filter(t => !t.primary).map(t =>
-    `<details data-note-section="source-${t.id}"><summary>${esc(meetSourceLabel(t.source))} ${esc(t.resource_type)} transcript${t.transcript_index ? ` ${t.transcript_index + 1}` : ''}</summary>
-      ${t.summary ? `<div class="note-body">${esc(t.summary).replace(/\n/g, '<br>')}</div>` : ''}
-      <div class="note-transcript">${(t.turns || []).map(turn => `<p><span class="muted mono">[${mmss(turn.start_ms)}]</span> ${turn.speaker ? `<strong>${esc(turn.speaker)}</strong> ` : ''}${esc(turn.text)}</p>`).join('')}</div></details>`).join('');
-  const options = `<option value="auto">Auto — ${esc(assistantName())} routes it</option>` + activeEmps().map(e => `<option value="${esc(e.id)}">${esc(e.display_name)}</option>`).join('');
-  const owner = rec.owner === 'owner' ? 'the owner' : (rec.owner || 'the sender');
-  const meta = [meetWhen(rec.started), rec.duration_ms ? mmss(rec.duration_ms) : '', owner, meetSourceLabel(rec.source)].filter(Boolean).map(esc).join(' · ');
-  const leadLink = rec.source === 'close' && /^https:\/\//i.test(rec.source_context?.lead_url || '')
-    ? ` <span class="sep">·</span> <a href="${esc(rec.source_context.lead_url)}" target="_blank" rel="noopener">Open in Close</a>` : '';
+  const meta = [meetWhen(rec.started || rec.created), rec.duration_ms ? mmss(rec.duration_ms) : '', meetSourceName(rec)].filter(Boolean).map(esc);
+  if (rec.source === 'close') {
+    const lead = rec.source_context?.lead_name || rec.source_context?.contact_name;
+    if (lead) meta.push(esc(lead));
+    if (/^https:\/\//i.test(rec.source_context?.lead_url || '')) meta.push(`<a href="${esc(rec.source_context.lead_url)}" target="_blank" rel="noopener">Open in Close</a>`);
+  }
   // Only an https link is drawn as one; the server refuses anything else, and this keeps a bad row inert.
-  const mediaLink = /^https:\/\//i.test(rec.media_url || '')
-    ? ` <span class="sep">·</span> <a href="${esc(rec.media_url)}" target="_blank" rel="noopener noreferrer">Open the recording</a>` : '';
-  // the content itself, no headings: a typed note is its text; a meeting is its summary, with any
-  // log you added under it. Editing, adding a log and the transcript are quiet links below.
-  const writeup = rec.notes ? `<details data-note-section="summary"${state.sections?.[id]?.summary ? ' open' : ''}><summary>Summary</summary><div class="md">${safeMd(rec.notes)}</div></details>`
-    : '';
-  const voiceText = rec.voice_text ? `<div class="note-body"><span class="lbl">Voice transcript</span>${esc(rec.voice_text)}</div>` : '';
-  const noteText = voiceText + (rec.note ? `<div class="note-body${typed ? '' : ' aside'}">${typed ? '' : '<span class="lbl">Your log</span>'}${esc(rec.note)}</div>`
-    : typed && !voiceText ? '<div class="muted">Nothing logged yet.</div>' : '');
-  // Private is the owner's switch: on, only its participants and the owner can open it;
-  // off, everyone signed in can.
-  const privateLink = typed || reviewing ? ''
-    : mayEdit ? `<button class="linkish" type="button" id="meet-private">${rec.private ? 'Private — make it visible to the team' : 'Make this meeting private'}</button>`
-    : rec.private ? '<span class="muted">Private: participants, its owner and the team owner only</span>' : '';
-  const content = state.editing
-    ? `<div class="note-content note-edit"><textarea id="meet-note" aria-label="Meeting log" placeholder="${typed ? 'What happened in this meeting?' : 'A log to go with this meeting'}">${esc(rec.note || '')}</textarea>
-       <div class="row" style="gap:8px;margin-top:8px"><button class="primary" type="button" id="meet-save">Save</button><button class="ghost" type="button" id="meet-cancel">Cancel</button><span class="muted" id="meet-editmsg"></span></div></div>`
-    : `<div class="note-content">${typed ? noteText : writeup + noteText}</div>
-       <div class="note-links">${mayEdit ? `<button class="linkish" type="button" id="meet-edit">${rec.note ? 'Edit log' : typed ? 'Write the log' : 'Add a log'}</button>` : ''}${typed ? privateLink : ''}
-         ${rec.attachments?.length ? rec.attachments.map(f => S.me?.cloud && f.id
-           ? `<a class="pill" href="${API}/v2/files/${encodeURIComponent(f.id)}" download>${esc(f.name)}</a>`
-           : `<span class="pill">${esc(typeof f === 'string' ? f : f.name || 'Attachment')}</span>`).join('') : ''}
-         ${!typed || turns.length ? `<details data-note-section="transcript"${state.sections?.[id]?.transcript ? ' open' : ''}><summary>Transcript · ${esc(meetSourceLabel(rec.source))}</summary>${transcript}</details>${alternateTranscripts}` : ''}
-       </div>`;
-  const delBtn = mayEdit ? `<button class="ghost danger" type="button" id="meet-del">${state.confirmDelete === id ? 'Really delete?' : 'Delete'}</button>` : '';
-  // What was said and written on the left, the sections on the right. The outcome is only a
-  // section once there is one; until then the send row says so.
-  const body = typed || reviewing ? content
-    : `<div class="meet-done-cols"><section class="meet-done-main">${content}<div class="meet-comments" id="live-comments"></div></section>
-       <section class="meet-live-items"><section class="meet-sections" id="meet-sections"></section></section></div>`;
-  el.innerHTML = `<div class="note-head"><div>
-      ${state.editing
-        ? `<input type="text" id="meet-title" aria-label="Title" value="${esc(rec.title || '')}" placeholder="Title">`
-        : `<h2 id="meet-heading">${esc(noteTitle(rec))}</h2>`}
-      <div class="meta">${meta}</div>${rec.client === 'tico-recorder' ? '<div class="meta">From Tico Recorder</div>' : ''}${!typed ? `<div class="meta">Participants: ${meetPeople(rec)}${leadLink}${mediaLink}${privateLink ? ` <span class="sep">·</span> ${privateLink}` : ''}</div>` : ''}
-    </div>${meetPill(rec)}</div>
-    ${rec.error ? `<div class="err" style="margin-top:12px">${esc(rec.error)}</div>` : ''}
-    ${rec.warning ? `<div class="muted" style="font-size:12.5px;margin-top:8px">${esc(rec.warning)}</div>` : ''}
-    ${rec.meeting_context ? `<details class="note-content"><summary>Meeting context</summary><div class="md">${safeMd(rec.meeting_context)}</div></details>` : ''}
-    ${meetMadeHTML(rec)}
-    ${outcome || sent ? `<section class="note-content note-outcome"><h3>Outcome</h3>${noteOutcomeHTML(rec, true)}</section>` : ''}
-    ${rec.delivery?.status === 'pending' ? '<p class="hint">Saved. Delivery continues in the background.</p>' : ''}
-    ${rec.delivery?.error ? `<p class="err">Delivery failed: ${esc(rec.delivery.error)}. Press Send to retry.</p>` : ''}
-    ${body}
-    ${reviewing ? meetReviewDetail(rec) : sent ? `<div class="note-send"><span>Sent to ${sentLink(sent)}${sent.picked_by === 'auto' ? ' <span class="muted">(the sender\'s own bot)</span>' : sent.picked_by === 'coo' ? ' <span class="muted">(Auto)</span>' : ''}.</span>
-        <span class="spacer"></span>${delBtn}
-        ${sent.reason ? `<div class="hint">${esc(sent.reason)}</div>` : ''}</div>`
-    : !mayEdit ? `<div class="note-send"><span class="hint">${esc(meetRecorder(rec))} owns this meeting; only ${esc(meetRecorder(rec))} sends it on.</span></div>`
-    : `<div class="note-send">
-        <select id="meet-dest" aria-label="Which bot receives this">${options}</select>
-        <button class="primary" type="button" id="meet-send">Send to bot</button>
-        <button class="linkish" type="button" id="meet-more" style="font-size:12.5px;text-decoration:none">Add instructions</button>
-        <span class="spacer"></span>${delBtn}
-        <textarea id="meet-instructions" aria-label="Anything else for the bot" placeholder="Anything else the bot should know" hidden></textarea>
-        <span class="hint" id="meet-msg">${outcome || sent ? '' : 'Not sent to a bot yet.'}</span></div>`}`;
-  if (mayEdit && !state.editing) meetRenameable(state, rec, $('#meet-heading'), () => meetPaint(state, rec));
-  if (!typed && !reviewing) meetComments(state, rec);
+  if (/^https:\/\//i.test(rec.media_url || '')) meta.push(`<a href="${esc(rec.media_url)}" target="_blank" rel="noopener noreferrer">Recording</a>`);
+  const draft = state.noteDraft?.id === id ? state.noteDraft.value : null;
+  const notes = mayEdit ? `<section class="mp-sec"><div class="mp-label">Notes</div><textarea id="meet-note" class="mp-notes" aria-label="Notes" placeholder="Write notes…">${esc(draft ?? rec.note ?? '')}</textarea></section>`
+    : rec.note ? `<section class="mp-sec"><div class="mp-label">Notes</div><div class="mp-notes mp-notes-ro">${esc(rec.note)}</div></section>` : '';
+  const files = rec.attachments?.length ? `<div class="mp-files">${rec.attachments.map(f => S.me?.cloud && f.id
+    ? `<a class="pill" href="${API}/v2/files/${encodeURIComponent(f.id)}" download>${esc(f.name)}</a>`
+    : `<span class="pill">${esc(typeof f === 'string' ? f : f.name || 'Attachment')}</span>`).join('')}</div>` : '';
+  const summary = rec.notes ? `<section class="mp-sec"><div class="mp-label">Summary</div><div class="md">${safeMd(rec.notes)}</div></section>` : '';
+  const side = !typed || (rec.turns || []).length || rec.voice_text;
+  el.innerHTML = `<div class="mp${side ? '' : ' mp-one'}">
+    <header class="mp-head">
+      <h2 id="meet-heading">${esc(noteTitle(rec))}</h2>
+      <div class="mp-meta">${meta.join('<span class="sep" aria-hidden="true"> · </span>')}</div>
+      ${reviewing && typed ? '' : `<div class="mp-who">${typed ? '' : `<div class="mp-faces" id="meet-faces">${meetFaces(state, rec)}</div>`}${reviewing ? '' : meetVisibilityHTML(rec, mayEdit)}</div>`}
+      ${rec.error ? `<div class="err">${esc(rec.error)}</div>` : ''}
+      ${rec.warning ? `<div class="muted mp-warn">${esc(rec.warning)}</div>` : ''}
+    </header>
+    <div class="mp-cols">
+      <div class="mp-main">
+        ${typed || reviewing ? '' : '<section class="mp-sec" id="meet-sections"></section>'}
+        ${notes}${files}${summary}
+      </div>
+      ${side ? '<aside class="mp-side" id="meet-side" aria-label="Transcript"></aside>' : ''}
+    </div>
+    ${reviewing ? meetReviewDetail(rec) : ''}</div>`;
+  const tools = $('#notes-modal-tools');
+  if (tools) tools.innerHTML = reviewing ? '' : meetShareHTML(rec, mayEdit) + (mayEdit ? meetMoreHTML(state, rec) : '');
+  if (mayEdit) meetRenameable(state, rec, $('#meet-heading'), () => meetPaint(state, rec));
   if (reviewing) meetReviewWire(state, el);
   const reviewSend = $('#meet-review-send');
   if (reviewSend) reviewSend.onchange = () => { $('#meet-review-go').textContent = reviewSend.value ? 'Share & send' : 'Share'; };
-
-  el.querySelectorAll('[data-note-section]').forEach(section => {
-    section.ontoggle = () => {
-      state.sections ||= {}; state.sections[id] ||= {};
-      state.sections[id][section.dataset.noteSection] = section.open;
-    };
-  });
-  state.sendDrafts ||= {};
-  const draft = state.sendDrafts[id] ||= {destination:'auto',instructions:'',expanded:false};
-  const destination = $('#meet-dest'), instructions = $('#meet-instructions');
-  if (destination) {
-    destination.value = draft.destination;
-    destination.onchange = () => {draft.destination = destination.value;};
-  }
-  if (instructions) {
-    instructions.value = draft.instructions; instructions.hidden = !draft.expanded;
-    instructions.oninput = () => {draft.instructions = instructions.value;};
-  }
-  const more = $('#meet-more');
-  if (more) more.hidden = draft.expanded;
-  if (more) more.onclick = () => { draft.expanded = true; more.hidden = true; const t = $('#meet-instructions'); t.hidden = false; t.focus(); };
-  const priv = $('#meet-private');
-  if (priv) priv.onclick = async () => {
-    const wanted = !rec.private;
-    priv.disabled = true;
+  meetSideRender(state, rec);
+  meetNoteWire(state, rec);
+  meetToolsWire(state, rec);
+  el.querySelectorAll('[data-vis]').forEach(b => b.onclick = async () => {
+    const wanted = b.dataset.vis === 'private';
+    if (wanted === !!rec.private) return;
+    el.querySelectorAll('[data-vis]').forEach(x => x.disabled = true);
     try {
-      const d = await post(`/meetings/${encodeURIComponent(id)}/edit`,
-        {private: wanted, ...(S.me?.cloud ? {version: rec.version} : {})});
-      toast(wanted ? 'Private: participants, its owner and the team owner only' : 'Visible to everyone signed in');
+      const d = await post(`/meetings/${encodeURIComponent(id)}/edit`, {private: wanted, ...(S.me?.cloud ? {version: rec.version} : {})});
+      toast(wanted ? 'Private' : 'Visible to the team');
       await meetLoad(state, false);
       if (MEET === state && state.selected === id) meetPaint(state, {...rec, ...(d || {})});
-    } catch (e) { toast(e.message, true); priv.disabled = false; }
+    } catch (e) { toast(e.message, true); el.querySelectorAll('[data-vis]').forEach(x => x.disabled = false); }
+  });
+  if (!typed && !reviewing) meetItemsWire(state, rec);
+  meetLiveLoad(state, rec);
+}
+// Notes are edited in place and saved a moment after typing stops, on blur, and when the meeting closes.
+function meetNoteWire(state, rec) {
+  const area = $('#meet-note'); if (!area) return;
+  const id = rec.id;
+  const grow = () => { area.style.height = 'auto'; area.style.height = Math.max(72, area.scrollHeight + 2) + 'px'; };
+  grow();
+  const save = async () => {
+    clearTimeout(state.noteTimer); state.noteTimer = 0;
+    if (state.noteDraft?.id !== id) return;
+    const value = state.noteDraft.value.trim();
+    if (value === String(rec.note || '').trim()) { state.noteDraft = null; return; }
+    if (state.noteSaving) { state.noteAgain = true; return; }
+    state.noteSaving = true;
+    try {
+      const d = await post(`/meetings/${encodeURIComponent(id)}/edit`, {note: value, ...(S.me?.cloud ? {version: rec.version} : {})});
+      rec.note = value; if (d?.version !== undefined) rec.version = d.version;
+      const row = state.list.find(r => r.id === id); if (row) row.note = value;
+      if (state.noteDraft?.id === id && state.noteDraft.value.trim() === value) state.noteDraft = null;
+    } catch (e) { toast(e.message, true); }
+    finally { state.noteSaving = false; if (state.noteAgain) { state.noteAgain = false; save(); } }
   };
-  const edit = $('#meet-edit');
-  if (edit) edit.onclick = () => { state.editing = true; state.confirmDelete = ''; meetPaint(state, rec); const t = $('#meet-note'); if (t) { t.focus(); t.setSelectionRange(t.value.length, t.value.length); } };
-  const cancel = $('#meet-cancel');
-  if (cancel) cancel.onclick = () => { state.editing = false; meetPaint(state, rec); };
-  const save = $('#meet-save');
-  if (save) {
-    save.onclick = async () => {
-      const msg = $('#meet-editmsg'); save.disabled = true; msg.textContent = 'Saving…';
-      try {
-        const d = await post(`/meetings/${encodeURIComponent(id)}/edit`, {note: $('#meet-note').value.trim(), title: $('#meet-title').value.trim(),
-          ...(S.me?.cloud ? {version:rec.version} : {})});
-        state.editing = false; toast('Saved');
-        await meetLoad(state, false); if (MEET === state && state.selected === id) meetPaint(state, {...rec, ...(d || {})});
-      } catch (e) { msg.innerHTML = `<span class="err">${esc(e.message)}</span>`; save.disabled = false; }
-    };
-    const keys = ev => {
-      if ((ev.metaKey || ev.ctrlKey) && ev.key === 'Enter') { ev.preventDefault(); save.click(); }
-      if (ev.key === 'Escape') cancel.click();
-    };
-    $('#meet-note').onkeydown = keys; $('#meet-title').onkeydown = keys;
-  }
+  area.oninput = () => {
+    grow(); state.noteDraft = {id, value: area.value};
+    clearTimeout(state.noteTimer); state.noteTimer = setTimeout(save, 900);
+  };
+  area.onblur = save;
+  state.noteSave = save;
+}
+function meetToolsWire(state, rec) {
+  const id = rec.id, root = $('#notes-modal');
+  const copy = root?.querySelector('[data-share-copy]');
+  if (copy) copy.onclick = async () => {
+    try { await copyText(`${location.origin}${location.pathname}${location.search}${MEETINGS}?meeting=${encodeURIComponent(id)}`); toast('Link copied'); }
+    catch (e) { toast(e.message, true); }
+    copy.closest('details').open = false;
+  };
+  const find = root?.querySelector('[data-share-find]');
+  if (find) find.oninput = () => {
+    const q = find.value.trim().toLowerCase();
+    root.querySelectorAll('[data-share-bot]').forEach(b => { b.hidden = !!q && !b.textContent.toLowerCase().includes(q); });
+  };
+  root?.querySelectorAll('[data-share-bot]').forEach(b => b.onclick = async () => {
+    root.querySelectorAll('[data-share-bot]').forEach(x => x.disabled = true);
+    try {
+      toastSent(await post(`/meetings/${encodeURIComponent(id)}/send`, {bot_id: b.dataset.shareBot, instructions: ''}));
+      await meetLoad(state, false);
+    } catch (e) { toast(e.message, true); root.querySelectorAll('[data-share-bot]').forEach(x => x.disabled = false); }
+  });
   const del = $('#meet-del');
   if (del) del.onclick = async () => {
-    if (state.confirmDelete !== id) { state.confirmDelete = id; del.textContent = 'Really delete?'; return; }
+    if (state.confirmDelete !== id) { state.confirmDelete = id; del.innerHTML = meetIcon('delete', 'Really delete?'); return; }
     del.disabled = true;
-    try { await post(`/meetings/${encodeURIComponent(id)}/delete`); toast(S.me?.cloud ? 'Removed from the list; recoverable server history is retained.' : 'Deleted'); state.confirmDelete = ''; state.selected = ''; meetShow(state, false); await meetLoad(state, true); }
-    catch (e) { toast(e.message, true); del.disabled = false; del.textContent = 'Delete'; }
-  };
-  const send = $('#meet-send');
-  if (send) send.onclick = async () => {
-    const msg = $('#meet-msg');
-    send.disabled = true; send.title = msg.textContent = 'Sending…';
     try {
-      toastSent(await post(`/meetings/${encodeURIComponent(id)}/send`, {bot_id: $('#meet-dest').value, instructions: $('#meet-instructions').value.trim()}));
-      await refresh(true); await meetLoad(state, true);
-    } catch (e) { msg.innerHTML = `<span class="err">${esc(e.message)}</span>`; send.disabled = false; send.removeAttribute('title'); }
+      await post(`/meetings/${encodeURIComponent(id)}/delete`);
+      toast(S.me?.cloud ? 'Removed from the list; recoverable server history is retained.' : 'Deleted');
+      state.confirmDelete = ''; state.selected = ''; meetShow(state, false); await meetLoad(state, true);
+    } catch (e) { toast(e.message, true); del.disabled = false; del.innerHTML = meetIcon('delete', 'Delete'); }
   };
-  if (!typed && !reviewing) meetItemsWire(state, rec);
+}
+// The live meeting a saved one was filed from holds its chat and the bots that sat in; they are read with the
+// live meeting's own rules, so a viewer who cannot open it sees neither.
+async function meetLiveLoad(state, rec) {
+  const live = rec.live_meeting_id;
+  if (!live || state.live?.[rec.id]) return;
+  (state.live ||= {})[rec.id] = {chat: [], bots: []};
+  let d;
+  try { d = await get(`/v2/live-meetings/${encodeURIComponent(live)}`); } catch { return; }
+  if (MEET !== state || state.selected !== rec.id) return;
+  state.live[rec.id] = {chat: d?.chat || [], bots: d?.bots || []};
+  const faces = $('#meet-faces');
+  if (faces) faces.innerHTML = meetFaces(state, rec);
+  meetSideRender(state, rec);
+}
+// ---- the transcript (and the live meeting's chat) on the side
+const meetMarked = (text, q) => {
+  const safe = esc(text);
+  if (!q) return safe;
+  const needle = esc(q).replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  return safe.replace(new RegExp(needle, 'gi'), m => `<mark>${m}</mark>`);
+};
+const meetTurnHTML = (who, at, text, q) => `<div class="mp-turn"><div class="who">${who ? `<b>${esc(who)}</b>` : ''}${at ? `<span class="time">${esc(at)}</span>` : ''}</div><p class="said">${meetMarked(text, q)}</p></div>`;
+function meetTranscriptHTML(rec, q) {
+  const turns = rec.turns || [];
+  const main = turns.length ? turns.map(t => meetTurnHTML(t.speaker, mmss(t.start_ms), t.text, q)).join('')
+    : rec.voice_text ? meetTurnHTML('', '', rec.voice_text, q)
+    : rec.transcript_readable ? String(rec.transcript_readable).split(/\n+/).filter(l => l.trim()).map(l => `<p class="said">${meetMarked(plainMd(l), q)}</p>`).join('')
+    : '<div class="mp-empty">No transcript</div>';
+  const others = (rec.transcript_sources || []).filter(t => !t.primary).map(t =>
+    `<details class="mp-alt"><summary>${esc(meetSourceLabel(t.source))} ${esc(t.resource_type)}${t.transcript_index ? ` ${t.transcript_index + 1}` : ''}</summary>
+      ${(t.turns || []).map(turn => meetTurnHTML(turn.speaker, mmss(turn.start_ms), turn.text, q)).join('')}</details>`).join('');
+  return main + others;
+}
+const meetTranscriptText = rec => (rec.turns || []).length
+  ? rec.turns.map(t => `${t.speaker ? t.speaker + ' ' : ''}[${mmss(t.start_ms)}] ${t.text}`).join('\n')
+  : rec.voice_text || plainMd(rec.transcript_readable || '');
+const meetChatName = m => m.actor ? actorLabel(m.actor) : m.role || '';
+const meetChatHTML = chat => chat.map(m => meetTurnHTML(meetChatName(m), m.at_ms === null || m.at_ms === undefined ? '' : mmss(m.at_ms), m.text, '')).join('');
+function meetSideRender(state, rec) {
+  const side = $('#meet-side'); if (!side) return;
+  const chat = state.live?.[rec.id]?.chat || [];
+  const tab = chat.length && state.sideTab === 'chat' ? 'chat' : 'transcript';
+  const searching = tab === 'transcript' && state.tsearch;
+  side.innerHTML = `<div class="mp-side-head">${chat.length ? `<div class="mp-tabs" role="tablist" aria-label="Transcript and chat">${[['transcript', 'Transcript'], ['chat', 'Chat']].map(([k, label]) =>
+      `<button type="button" role="tab" data-side-tab="${k}" aria-selected="${tab === k}">${label}</button>`).join('')}</div>` : '<h3>Transcript</h3>'}<span class="grow"></span>
+    ${tab === 'transcript' ? `<button class="mp-icon" type="button" data-tsearch aria-pressed="${!!searching}" aria-label="Search transcript" title="Search">${meetIcon('search')}</button>` : ''}
+    <button class="mp-icon" type="button" data-tcopy aria-label="${tab === 'chat' ? 'Copy chat' : 'Copy transcript'}" title="Copy">${meetIcon('content_copy')}</button></div>
+    ${searching ? `<label class="mp-search">${meetIcon('search')}<input type="search" data-tq aria-label="Find in transcript" placeholder="Find" value="${esc(state.tq || '')}"><span class="mp-hits" data-thits></span></label>` : ''}
+    <div class="mp-side-body" data-tbody>${tab === 'chat' ? meetChatHTML(chat) : meetTranscriptHTML(rec, searching ? state.tq : '')}</div>`;
+  const body = side.querySelector('[data-tbody]');
+  const hits = () => {
+    const marks = [...body.querySelectorAll('mark')], out = side.querySelector('[data-thits]');
+    if (out) out.textContent = state.tq ? `${marks.length ? Math.min(state.thit || 0, marks.length - 1) + 1 : 0}/${marks.length}` : '';
+    marks.forEach((m, i) => m.classList.toggle('now', i === (state.thit || 0)));
+    marks[state.thit || 0]?.scrollIntoView({block: 'center'});
+  };
+  side.querySelectorAll('[data-side-tab]').forEach(b => b.onclick = () => { state.sideTab = b.dataset.sideTab; meetSideRender(state, rec); });
+  const search = side.querySelector('[data-tsearch]');
+  if (search) search.onclick = () => { state.tsearch = !state.tsearch; if (!state.tsearch) state.tq = ''; meetSideRender(state, rec); side.querySelector('[data-tq]')?.focus(); };
+  side.querySelector('[data-tcopy]').onclick = async () => {
+    try { await copyText(tab === 'chat' ? chat.map(m => `${meetChatName(m)}: ${m.text}`).join('\n') : meetTranscriptText(rec)); toast('Copied'); }
+    catch (e) { toast(e.message, true); }
+  };
+  const input = side.querySelector('[data-tq]');
+  if (input) {
+    input.oninput = () => { state.tq = input.value.trim(); state.thit = 0; body.innerHTML = meetTranscriptHTML(rec, state.tq); hits(); };
+    input.onkeydown = ev => {
+      if (ev.key === 'Escape' && input.value) { ev.preventDefault(); ev.stopPropagation(); input.value = ''; input.oninput(); }
+      if (ev.key !== 'Enter') return;
+      ev.preventDefault();
+      const count = body.querySelectorAll('mark').length; if (!count) return;
+      state.thit = ((state.thit || 0) + (ev.shiftKey ? count - 1 : 1)) % count; hits();
+    };
+    if (state.tq) hits();
+  }
 }
 
 // ---- Add notes: typed notes, an uploaded or pasted transcript, or both, filed through POST /api/v2/meetings/import ----
@@ -792,157 +845,111 @@ function meetNotesOpen(state) {
   q('#manual-title').focus();
 }
 
-// ----------------------------------------------------------------- the three sections and Push
-// A meeting is an outbox a human empties: Doc updates, Tasks and Feature requests, each row with
-// its quote and Edit / Delete / Push. Anyone who can read the meeting edits and deletes; Push is
-// the meeting's owner only, which is what `can_push` says, and it makes a hub task.
-const MEET_SECTIONS = [
-  {key: 'doc', title: 'Doc updates', fields: [['document', 'Document, e.g. docs/pricing.md'], ['change', 'What it should say now'], ['why', 'Why']]},
-  {key: 'task', title: 'Tasks', fields: [['owner', 'Owner — human:<id> or bot:<slug>'], ['due', 'Due — 2026-09-18T17:00:00-07:00'], ['priority', 'Priority'], ['body', 'Details']]},
-  {key: 'feature', title: 'Feature requests', fields: [['side', 'Product area (optional)'], ['app', 'App (optional)'], ['area', 'Label (optional)']]},
-];
+// ----------------------------------------------------------------- Tasks: one list
+// What the meeting proposes (Create / Dismiss), what it already made, and the tasks linked to it, each once.
 const meetAuthor = a => a === 'brain' ? 'Tico' : actorLabel(a);
-// One line under the text: who owns a task and when, which document, which side of a feature.
-const meetItemLine = it => {
-  const d = it.detail || {};
-  // A bare "ana" or "support" is a person's id or a bot's name: show the name, as everywhere else.
-  const who = o => String(o).includes(':') ? actorLabel(o) : (S.people || []).find(p => p.id === o)?.name
-    || (botByRef(o) ? botDisplayName(botByRef(o).id) : o);
-  if (it.section === 'task') return [d.owner ? who(d.owner) : 'No owner yet', d.due ? 'due ' + String(d.due).slice(0, 10) : '',
-    /^p\d$/i.test(d.priority || '') ? 'priority ' + d.priority.toUpperCase() : d.priority || ''].filter(Boolean).join(' · ');
-  if (it.section === 'doc') return [d.document || 'No document named', d.change].filter(Boolean).join(' — ');
-  if (it.section === 'feature') return [({B: 'Backend', F: 'Frontend', 'B/F': 'Backend and frontend'})[d.side] || d.side, ({CA: 'Client app', PA: 'Pro app'})[d.app] || d.app, d.area, d.bug ? 'bug' : ''].filter(Boolean).join(' · ');
-  return '';
-};
-// Where a pushed item ended up: the task it became, or a link.
-const meetResultLink = it => {
-  const ref = it.result_ref || '';
-  if (!ref) return '<span class="muted">Sent</span>';
-  if (/^https?:\/\//.test(ref)) return `<a href="${esc(ref)}" target="_blank" rel="noopener">the link</a>`;
-  return `<a href="#/task/${encodeURIComponent(ref)}">the task</a>`;   // a hub task id opens it in full
-};
-// Clicking a quote jumps the transcript to the moment it was said, when that line is on the page.
-function meetSeek(ms) {
-  const box = $('#notes-detail');
-  if (box === null || ms === null || ms === undefined) return;
-  const stamp = '[' + mmss(ms) + ']';
-  const line = [...box.querySelectorAll('.note-transcript p, .md p, .md li')].find(p => p.textContent.includes(stamp));
-  if (!line) return;
-  line.closest('details')?.setAttribute('open', '');
-  line.scrollIntoView({block: 'center', behavior: 'smooth'});
-  line.classList.add('meet-seeked');
-  setTimeout(() => line.classList.remove('meet-seeked'), 1500);
-}
+const MEET_SEP = '<span class="sep" aria-hidden="true"> · </span>';
 // The owner picker's bot options are bare ids; a task owner is the actor, `bot:<id>`.
 const meetFieldValue = f => { const v = f.value.trim(); return f.dataset.field === 'owner' && !v.includes(':') ? 'bot:' + v : v; };
-function meetItemFields(section, detail) {
-  const fields = (MEET_SECTIONS.find(s => s.key === section) || {fields: []}).fields;
-  return fields.map(([name, label]) => {
-    if (name === 'owner') {
-      // An owner the notes named by slug (or a bare name) is picked by its id.
-      const named = String((detail || {}).owner || ''), bot = !named.includes(':') || named.startsWith('bot:') ? botByRef(named) : null;
-      const current = bot ? bot.id : named;
-      return `<select data-field="owner" aria-label="${esc(label)}">${taskOwnerOptions(current)}</select>`;
-    }
-    return `<input type="text" data-field="${name}" placeholder="${esc(label)}" aria-label="${esc(label)}" value="${esc((detail || {})[name] || '')}">`;
-  }).join('');
+const meetTaskId = ref => /^https?:/i.test(ref || '') ? '' : ref || '';
+function meetTaskRowHTML(t) {
+  const done = t.status === 'done' || t.status === 'closed';
+  const href = t.id ? `#/task/${encodeURIComponent(t.id)}` : /^https:\/\//i.test(t.url || '') ? t.url : '';
+  const title = esc(t.title || 'Task');
+  const parts = [t.number ? '#' + esc(t.number) : '', esc(meetStatusWord(t.status)), t.who ? esc(t.who) : ''].filter(Boolean);
+  return `<span class="mp-check${done ? ' done' : ''}${t.spin ? ' spin' : ''}" aria-hidden="true"></span>
+    <span class="mp-task-main">${href ? `<a class="t" href="${esc(href)}"${t.url && !t.id ? ' target="_blank" rel="noopener"' : ''}>${title}</a>` : `<span class="t">${title}</span>`}
+      ${parts.length ? `<span class="mp-sub">${parts.join(MEET_SEP)}</span>` : ''}
+      ${t.line ? `<span class="mp-sub mp-line">${esc(t.line)}</span>` : ''}</span>
+    ${t.unlink ? `<button class="mp-icon mp-unlink" type="button" data-unlink="${esc(t.id)}" aria-label="Unlink" title="Unlink">${meetIcon('close')}</button>` : ''}`;
 }
-function meetItemHTML(state, it, canPush) {
-  const id = it.id, dup = state.itemDup?.[id];
-  if (state.itemEdit === id) {
-    return `<div class="meet-item" data-item="${esc(id)}"><form data-edit="${esc(id)}">
-        <textarea data-text aria-label="What this item says">${esc(it.text)}</textarea>
-        ${meetItemFields(it.section, it.detail)}
-        <div class="row"><button class="primary" type="submit">Save</button>
-          <button class="ghost" type="button" data-cancel>Cancel</button></div></form></div>`;
+// Tasks made from the meeting: items a person created, the task it was shared to a bot as, and that task's follow-ups.
+function meetMadeTasks(state, rec) {
+  const out = new Map(), add = t => { const key = t.id || t.url || t.title; if (key && !out.has(key)) out.set(key, t); };
+  const items = state.items?.[rec.id]?.sections?.task || rec.outbox?.task || [];
+  for (const it of items) if (it.status === 'pushed')
+    add({id: meetTaskId(it.result_ref), url: /^https:\/\//i.test(it.result_ref || '') ? it.result_ref : '', title: it.text});
+  const bot = rec.sent?.bot || rec.sent?.slug || rec.delivery?.destination || rec.outcome?.bot;
+  const work = rec.delivery?.status === 'pending' ? 'Sending' : rec.delivery?.status === 'error' ? 'Delivery failed' : '';
+  if (rec.sent?.task || work) {
+    const st = rec.outcome?.status;
+    add({id: rec.sent?.task || '', title: bot ? `Review by ${botDisplayName(bot)}` : 'Review', status: work ? '' : st,
+         who: work, spin: work === 'Sending' || ['open', 'doing', 'review', 'ready'].includes(st),
+         line: rec.outcome?.task_id ? meetOneLine(plainMd(rec.outcome.summary || '')) : ''});
   }
-  const pill = it.status === 'pushed' ? `<span class="pill ok">Sent</span> <span class="muted">→ ${meetResultLink(it)}</span>`
-    : it.status === 'dismissed' ? '<span class="pill">Dismissed</span>'
-    : '<span class="pill">proposed</span>';
-  const line = meetItemLine(it);
-  const buttons = it.status === 'proposed' ? [
-    `<button class="linkish" type="button" data-act="edit" data-id="${esc(id)}">Edit</button>`,
-    `<button class="linkish" type="button" data-act="del" data-id="${esc(id)}">${state.itemConfirm === id ? 'Really delete?' : 'Delete'}</button>`,
-    canPush ? `<button class="linkish" type="button" data-act="push" data-id="${esc(id)}">Push</button>` : '',
-  ].filter(Boolean).join('') : '';
-  const at = it.at_ms === null || it.at_ms === undefined ? '' : `<span class="at" data-seek="${it.at_ms}" title="Jump to this moment">${mmss(it.at_ms)}</span>`;
-  return `<div class="meet-item${it.status === 'dismissed' ? ' gone' : ''}" data-item="${esc(id)}">
-      <span class="t">${esc(it.text)}</span>${at}
-      ${line ? `<span class="sub">${esc(line)}</span>` : ''}
-      ${it.quote && it.quote.trim().toLowerCase() !== String(it.text || '').trim().toLowerCase() ? `<blockquote data-seek="${it.at_ms === null || it.at_ms === undefined ? '' : it.at_ms}" title="Jump to this moment in the transcript">${esc(it.quote)}</blockquote>` : ''}
-      <div class="row">${pill}${buttons}<span class="sub" style="margin:0">${esc(meetAuthor(it.updated_by || it.created_by))}</span></div>
-      ${dup ? `<div class="dup">Already on the board (${esc(STATUS_WORD[dup.list] || dup.list)}): <a href="${esc(dup.url)}" target="_blank" rel="noopener">${esc(dup.name)}</a>
-        <button class="linkish" type="button" data-act="force" data-id="${esc(id)}">Push anyway</button></div>` : ''}</div>`;
+  for (const t of rec.outcome?.tasks || []) add({id: t.id, title: t.title, status: t.status});
+  return [...out.values()];
+}
+const meetRecFor = (state, id) => state.rec?.id === id ? state.rec : {...(state.list.find(r => r.id === id) || {}), id};
+function meetTasksShell(box) {
+  if (box.querySelector('[data-pending-panel]')) return;
+  box.innerHTML = `<div class="mp-label-row"><span class="mp-label">Tasks</span><span data-meet-presence class="muted"></span><span class="grow"></span>
+      <button class="mp-text" type="button" data-link-open>Link</button><button class="mp-text" type="button" data-add="task">${meetIcon('add', 'Add')}</button></div>
+    <div data-link-slot></div>
+    <div data-pending-panel><div data-pending-rows></div></div>
+    <ul class="mp-tasks" data-made-tasks></ul>
+    <ul class="mp-tasks" data-linked-tasks></ul>
+    <div data-add-slot></div>
+    <div class="mp-empty" data-tasks-empty hidden>No tasks</div>
+    <div data-dismissed></div>`;
 }
 function meetItemsRender(state, rec) {
   const box = $('#meet-sections');
   if (!box) return;
+  meetTasksShell(box);
   const data = state.items?.[rec.id];
-  if (!data) { box.innerHTML = ''; return; }
-  const canPush = !!(data.can_send ?? data.can_push);
-  const sections = MEET_SECTIONS.map(({key, title}) => {
-    const rows = (data.sections?.[key] || []).filter(it => it.status !== 'proposed');
-    const proposed = (data.sections?.[key] || []).filter(it => it.status === 'proposed').length;
-    return `<section class="meet-sec" data-sec="${key}"><header><h4>${esc(title)}</h4>
-        ${proposed ? `<span class="count">${proposed}</span>` : ''}
-        <button class="linkish" type="button" data-add="${key}">Add</button></header>
-      ${rows.map(it => meetItemHTML(state, it, canPush)).join('') || '<div class="meet-empty">Nothing yet.</div>'}
-      ${key === 'task' ? '<div data-linked-tasks></div>' : ''}
-      ${state.itemAdd === key ? `<div class="meet-item"><form data-new="${key}">
-          <textarea data-text aria-label="What to add" placeholder="What should happen?"></textarea>
-          ${meetItemFields(key, {})}
-          <div class="row"><button class="primary" type="submit">Add</button>
-            <button class="ghost" type="button" data-cancel>Cancel</button></div></form></div>` : ''}</section>`;
-  }).join('');
-  if (!box.querySelector('[data-pending-panel]')) box.innerHTML = '<div data-pending-panel></div><div data-other-items></div>';
-  const other = box.querySelector('[data-other-items]');
-  if (!other.firstElementChild) other.innerHTML = '<div class="cols"></div>';
-  const template = document.createElement('template'); template.innerHTML = sections;
-  for (const next of template.content.children) {
-    let section = other.querySelector(`[data-sec="${next.dataset.sec}"]`);
-    if (!section) { other.firstElementChild.append(next.cloneNode(true)); continue; }
-    const keep = [...section.children].filter(n => n.querySelector('form'));
-    const children = [...next.children].map(child => {
-      if (child.matches('[data-linked-tasks]')) return section.querySelector('[data-linked-tasks]') || child;
-      const form = child.querySelector('form');
-      const existing = form && keep.find(n => n.querySelector(`form[${form.dataset.new ? 'data-new' : 'data-edit'}="${form.dataset.new || form.dataset.edit}"]`));
-      return existing || child;
-    });
-    // Retain form nodes themselves, including their text, focus and selection.
-    for (const child of [...section.children]) if (!children.includes(child)) child.remove();
-    children.forEach((child, index) => { if (section.children[index] !== child) section.insertBefore(child, section.children[index] || null); });
-  }
-  meetPendingRender(state, rec, data);
+  if (data) meetPendingRender(state, rec, data);
+  // The add and link forms are built when they open and kept across repaints, with their text, focus and caret.
+  const slot = box.querySelector('[data-add-slot]'), form = slot.querySelector('form[data-new]');
+  if (state.itemAdd === 'task' && !form) {
+    slot.innerHTML = `<form class="mp-form" data-new="task">
+        <textarea data-text aria-label="What to add" placeholder="Add a task" rows="2"></textarea>
+        <div class="mp-form-row"><select data-field="owner" aria-label="Owner">${taskOwnerOptions('')}</select><span class="grow"></span>
+          <button class="ghost" type="button" data-cancel>Cancel</button><button class="primary" type="submit">Add</button></div></form>`;
+  } else if (state.itemAdd !== 'task' && form) slot.innerHTML = '';
+  const linkSlot = box.querySelector('[data-link-slot]'), linkForm = linkSlot.querySelector('form[data-link-form]');
+  if (state.linkOpen && !linkForm) {
+    linkSlot.innerHTML = `<form class="mp-form mp-form-row" data-link-form><input type="text" data-link-ref aria-label="Task to link" placeholder="#123 or task link">
+        <button class="ghost" type="button" data-cancel>Cancel</button><button class="primary" type="submit">Link</button></form>`;
+  } else if (!state.linkOpen && linkForm) linkSlot.innerHTML = '';
+  meetDismissedRender(state, rec, data);
   meetItemsHandlers(state, rec);
   meetLinkedTasksRender(state, rec.id);
-  box.querySelectorAll('.at[data-seek]').forEach(b => { b.onclick = () => meetSeek(Number(b.dataset.seek)); });
+}
+// Dismissed proposals stay out of the way, behind one toggle.
+function meetDismissedRender(state, rec, data) {
+  const box = $('#meet-sections [data-dismissed]'); if (!box) return;
+  const gone = (data?.sections?.task || []).filter(it => it.status === 'dismissed' && !$(`#meet-sections [data-pending="${it.id}"]`));
+  const open = !!state.showDismissed;
+  const html = gone.length ? `<button class="mp-text mp-dismissed-toggle" type="button" data-show-dismissed aria-expanded="${open}">Dismissed (${gone.length})</button>
+    ${open ? `<ul class="mp-tasks mp-gone">${gone.map(it => `<li>${meetTaskRowHTML({title: it.text, who: it.updated_by ? meetAuthor(it.updated_by) : ''})}</li>`).join('')}</ul>` : ''}` : '';
+  if (box.innerHTML !== html) box.innerHTML = html;
+  const toggle = box.querySelector('[data-show-dismissed]');
+  if (toggle) toggle.onclick = () => { state.showDismissed = !state.showDismissed; meetDismissedRender(state, rec, state.items?.[rec.id]); };
+}
+function meetMadeRender(state, id) {
+  const list = $('#meet-sections [data-made-tasks]'); if (!list) return;
+  const linked = new Set((state.linkedTasks?.[id]?.tasks || []).map(t => t.task_id));
+  const made = meetMadeTasks(state, meetRecFor(state, id)).filter(t => !t.id || !linked.has(t.id));
+  const html = made.map(t => `<li${t.id ? ` data-made-task="${esc(t.id)}"` : ''}>${meetTaskRowHTML(t)}</li>`).join('');
+  if (list.innerHTML !== html) list.innerHTML = html;
+  const box = $('#meet-sections'), empty = box.querySelector('[data-tasks-empty]');
+  if (empty) empty.hidden = !!(made.length || linked.size || box.querySelector('[data-pending-rows]')?.children.length || box.querySelector('form[data-new]'));
 }
 function meetItemsHandlers(state, rec) {
   const box = $('#meet-sections'), id = rec.id;
   if (!box) return;
   const repaint = () => meetItemsRender(state, rec);
-  const call = async (path, body, item = '') => {
-    try {
-      const reply = await post(`/meetings/${encodeURIComponent(id)}/items${path}`, body);
-      state.itemDup = {...(state.itemDup || {})};
-      delete state.itemDup[reply?.item?.id || item];
-      await meetItemsLoad(state, id);
-      return reply;
-    } catch (e) {
-      const duplicate = e.body?.error?.duplicate;
-      if (duplicate) {
-        state.itemDup = {...(state.itemDup || {}), [item]: duplicate};
-        repaint();
-      } else toast(e.message, true);
-      return null;
-    }
+  box.querySelector('[data-add]').onclick = () => {
+    state.itemAdd = state.itemAdd === 'task' ? '' : 'task'; state.linkOpen = false; repaint();
+    box.querySelector('form[data-new] [data-text]')?.focus();
   };
-  box.querySelectorAll('blockquote[data-seek]').forEach(q => q.onclick = () => meetSeek(q.dataset.seek === '' ? null : +q.dataset.seek));
-  box.querySelectorAll('[data-add]').forEach(b => b.onclick = () => {
-    state.itemAdd = state.itemAdd === b.dataset.add ? '' : b.dataset.add; state.itemEdit = ''; repaint();
-    $('#meet-sections form[data-new] [data-text]')?.focus();
-  });
-  box.querySelectorAll('form[data-new]').forEach(form => {
+  box.querySelector('[data-link-open]').onclick = () => {
+    state.linkOpen = !state.linkOpen; state.itemAdd = ''; repaint();
+    box.querySelector('[data-link-ref]')?.focus();
+  };
+  const form = box.querySelector('form[data-new]');
+  if (form) {
     form.querySelector('[data-cancel]').onclick = () => { state.itemAdd = ''; repaint(); };
     form.onsubmit = async ev => {
       ev.preventDefault();
@@ -950,60 +957,41 @@ function meetItemsHandlers(state, rec) {
       if (!text) return;
       const detail = {};
       form.querySelectorAll('[data-field]').forEach(f => { if (f.value.trim()) detail[f.dataset.field] = meetFieldValue(f); });
-      state.itemAdd = '';
-      if (await call('', {section: form.dataset.new, text, detail})) toast('Added');
-      else repaint();
+      form.querySelectorAll('button').forEach(b => b.disabled = true);
+      try {
+        await post(`/meetings/${encodeURIComponent(id)}/items`, {section: 'task', text, detail});
+        state.itemAdd = ''; repaint(); toast('Added');
+        await meetItemsLoad(state, id);
+      } catch (e) { toast(e.message, true); form.querySelectorAll('button').forEach(b => b.disabled = false); }
     };
-  });
-  box.querySelectorAll('form[data-edit]').forEach(form => {
-    form.querySelector('[data-cancel]').onclick = () => { state.itemEdit = ''; repaint(); };
-    form.onsubmit = async ev => {
+  }
+  const link = box.querySelector('form[data-link-form]');
+  if (link) {
+    link.querySelector('[data-cancel]').onclick = () => { state.linkOpen = false; repaint(); };
+    link.onsubmit = async ev => {
       ev.preventDefault();
-      const text = form.querySelector('[data-text]').value.trim();
-      if (!text) return;
-      const detail = {};
-      form.querySelectorAll('[data-field]').forEach(f => { if (f.value.trim()) detail[f.dataset.field] = meetFieldValue(f); });
-      const item = Object.values(state.items[id].sections).flat().find(i => i.id === form.dataset.edit);
-      if (await call('/' + encodeURIComponent(form.dataset.edit), {text, detail, version:item.version}, form.dataset.edit)) { state.itemEdit = ''; repaint(); toast('Saved'); }
-      else repaint();
+      const raw = link.querySelector('[data-link-ref]').value.trim();
+      const ref = (raw.match(/#\/task\/([^/?#]+)/) || [])[1] || raw.replace(/^#/, '');
+      if (!ref) return;
+      link.querySelectorAll('button').forEach(b => b.disabled = true);
+      try {
+        const reply = await post(`/v2/meetings/${encodeURIComponent(id)}/tasks`, {task_ids: [decodeURIComponent(ref)]});
+        if (reply?.results?.[0]?.status === 404) throw new Error('Task not found');
+        state.linkOpen = false; repaint(); toast('Linked');
+        meetLinkedTasksLoad(state, id);
+      } catch (e) { toast(e.message, true); link.querySelectorAll('button').forEach(b => b.disabled = false); }
     };
-  });
-  box.querySelectorAll('[data-act]').forEach(b => b.onclick = async () => {
-    const item = b.dataset.id, act = b.dataset.act;
-    if (act === 'edit') { state.itemEdit = item; state.itemAdd = ''; state.itemConfirm = ''; repaint(); return; }
-    if (act === 'del') {
-      if (state.itemConfirm !== item) { state.itemConfirm = item; b.textContent = 'Really delete?'; return; }
-      state.itemConfirm = '';
-      b.disabled = true;
-      if (await call('/' + encodeURIComponent(item), {status: 'dismissed', version:Object.values(state.items[id].sections).flat().find(i => i.id === item).version}, item)) toast('Deleted');
-      return;
-    }
-    b.disabled = true;
-    const done = await call('/' + encodeURIComponent(item) + '/push', {force: act === 'force', version:Object.values(state.items[id].sections).flat().find(i => i.id === item).version}, item);
-    if (done) toast(done.pushed ? 'Pushed' : 'Already pushed');
-    else b.disabled = false;
-  });
-  box.querySelectorAll('[data-all]').forEach(b => b.onclick = async () => {
-    const section = b.dataset.all;
-    b.disabled = true;
-    for (const it of (state.items?.[id]?.sections?.[section] || []).filter(x => x.status === 'proposed')) {
-      if (!await call('/' + encodeURIComponent(it.id) + '/push', {force: false, version:it.version}, it.id)) break;
-    }
-    b.disabled = false;
-  });
+  }
 }
 async function meetItemsLoad(state, id) {
   const sequence = state.itemLoadSequence = (state.itemLoadSequence || 0) + 1;
   getForget();
   let data;
   try { data = await get(`/meetings/${encodeURIComponent(id)}/items`); }
-  catch { return null; }                        // a meeting that went away takes its sections with it
+  catch { return null; }                        // a meeting that went away takes its items with it
   if (MEET !== state || sequence !== state.itemLoadSequence) return null;
   state.items = {...(state.items || {}), [id]: data};
-  if (state.open && state.selected === id) {
-    const rec = {...(state.list.find(r => r.id === id) || {}), id};
-    meetItemsRender(state, rec);
-  }
+  if (state.open && state.selected === id) meetItemsRender(state, meetRecFor(state, id));
   return data;
 }
 function meetLinkedTasksRender(state, id) {
@@ -1011,25 +999,31 @@ function meetLinkedTasksRender(state, id) {
   const slot = $('[data-linked-tasks]');
   if (!slot) return;
   const linked = state.linkedTasks?.[id];
+  const mayEdit = meetRecFor(state, id).can_edit !== false;
   const held = new Map([...slot.querySelectorAll('[data-linked-task]')].map(row => [row.dataset.linkedTask, row]));
   for (const task of linked?.tasks || []) {
     let row = held.get(task.task_id);
     held.delete(task.task_id);
-    if (!row) { row = document.createElement('div'); row.className = 'meet-item'; row.dataset.linkedTask = task.task_id; }
-    const html = `<span class="t">${task.number ? '#' + esc(task.number) + ' ' : ''}${esc(task.title)} · ${esc(task.status)}</span><a href="#/task/${encodeURIComponent(task.task_id)}">Open</a>`;
+    if (!row) { row = document.createElement('li'); row.dataset.linkedTask = task.task_id; }
+    const html = meetTaskRowHTML({id: task.task_id, number: task.number, title: task.title, status: task.status, unlink: mayEdit});
     if (row.innerHTML !== html) row.innerHTML = html;
+    const unlink = row.querySelector('[data-unlink]');
+    if (unlink) unlink.onclick = async () => {
+      unlink.disabled = true;
+      try { await writeRequest('DELETE', `/v2/meetings/${encodeURIComponent(id)}/tasks/${encodeURIComponent(task.task_id)}`); meetLinkedTasksLoad(state, id); }
+      catch (e) { toast(e.message, true); unlink.disabled = false; }
+    };
     slot.append(row);
   }
   for (const row of held.values()) row.remove();
-  const empty = $('[data-sec="task"] .meet-empty');
-  if (empty) empty.hidden = !!linked?.tasks?.length;
-  let more = $('[data-linked-more]', slot);
+  let more = $('[data-linked-more]', slot.parentElement);
   if (!linked?.next_cursor) { more?.remove(); more = null; }
   else {
-    if (!more) { more = document.createElement('button'); more.type = 'button'; more.className = 'linkish'; more.dataset.linkedMore = ''; more.textContent = 'More'; }
-    slot.append(more);
+    if (!more) { more = document.createElement('button'); more.type = 'button'; more.className = 'mp-text'; more.dataset.linkedMore = ''; more.textContent = 'More'; }
+    slot.after(more);
   }
   if (more) more.onclick = () => { more.disabled = true; meetLinkedTasksLoad(state, id, linked.next_cursor); };
+  meetMadeRender(state, id);
 }
 async function meetLinkedTasksLoad(state, id, cursor) {
   const changes = new Map();
@@ -1128,36 +1122,6 @@ function meetRenameable(state, rec, title, repaint) {
   title.onclick = rename;
   title.onkeydown = ev => { if (ev.key === 'Enter' || ev.key === ' ') { ev.preventDefault(); rename(); } };
 }
-// The thread beside the meeting: anyone who can open it can add to it.
-async function meetComments(state, rec, quiet) {
-  const box = $('#live-comments'); if (!box) return;
-  const T = (state.thread ||= {});
-  T[rec.id] ||= [];
-  if (!quiet || !box.querySelector('textarea:focus')) {
-    let d = null;
-    try { d = await get(`/meetings/${encodeURIComponent(rec.id)}/comments`); } catch { /* an old server: no thread */ }
-    if (MEET !== state || state.selected !== rec.id || !$('#live-comments')) return;
-    const next = d?.comments || [];
-    if (quiet && next.length === T[rec.id].length && box.querySelector('.meet-comment-form')) return;
-    T[rec.id] = next;
-  }
-  const draft = box.querySelector('textarea')?.value || '';
-  box.innerHTML = `<h4>Comments</h4>
-    ${T[rec.id].map(c => `<div class="meet-comment"><span class="who">${esc(c.author_name || c.author)}</span>${esc(c.text)}${c.at_ms !== null && c.at_ms !== undefined ? `<span class="when">${mmss(c.at_ms)}</span>` : ''}</div>`).join('') || '<div class="muted" style="font-size:12.5px">Nothing yet. Anyone who can open this meeting can add a comment.</div>'}
-    <form class="meet-comment-form"><textarea aria-label="Add a comment" placeholder="Add a comment… (⏎ to post)">${esc(draft)}</textarea><button class="primary" type="submit">Post</button></form>`;
-  const form = box.querySelector('form'), text = form.querySelector('textarea');
-  form.onsubmit = async ev => {
-    ev.preventDefault();
-    const value = text.value.trim(); if (!value) return;
-    form.querySelector('button').disabled = true;
-    try {
-      await post(`/meetings/${encodeURIComponent(rec.id)}/comments`, {text: value});
-      text.value = ''; await meetComments(state, rec, false);
-    } catch (e) { toast(e.message, true); form.querySelector('button').disabled = false; }
-  };
-  text.onkeydown = ev => { if (ev.key === 'Enter' && !ev.shiftKey) { ev.preventDefault(); form.requestSubmit(); } };
-}
-
 
 // Pending items keep text at the root and their editable details under detail.
 function meetPendingDraft(state, id) {
@@ -1177,9 +1141,9 @@ async function meetPendingSave(state, rid, iid) {
 function meetPendingRender(state, rec, data) {
   const panel = $('#meet-sections [data-pending-panel]');
   if (!panel) return;
-  if (!panel.firstElementChild) panel.innerHTML = '<header class="row"><h4>Pending tasks</h4><span data-meet-presence class="muted"></span></header><div data-pending-rows></div>';
+  if (!panel.firstElementChild) panel.innerHTML = '<div data-pending-rows></div>';
   const list = panel.querySelector('[data-pending-rows]');
-  const pending = Object.values(data.sections || {}).flat().filter(it => {
+  const pending = (data.sections?.task || []).filter(it => {
     const draft = meetPendingDraft(state, it.id);
     if (it.status === 'proposed') return true;
     if (draft.sending && it.updated_by === 'human:' + S.me?.id) return false;
@@ -1200,10 +1164,10 @@ function meetPendingRender(state, rec, data) {
     let node = [...list.children].find(row => row.dataset.pending === item.id);
     if (item.status !== 'proposed') {
       if (!node) {
-        node = document.createElement('section'); node.className = 'meet-item meet-pending'; node.dataset.pending = item.id; list.append(node);
+        node = document.createElement('section'); node.className = 'mp-prop mp-closed'; node.dataset.pending = item.id; list.append(node);
       }
       const text = [draft.closed.text, ...Object.values(draft.closed.detail || {})].filter(Boolean).join('\n\n');
-      node.innerHTML = `<div>${esc(item.status === 'pushed' ? 'Sent by ' : 'Dismissed by ')}${esc(meetAuthor(item.updated_by))}</div><pre class="selectable" style="white-space:pre-wrap;overflow-wrap:anywhere"></pre><button type="button" class="ghost" data-copy>Copy</button> <button type="button" class="ghost" data-close>Close</button>`;
+      node.innerHTML = `<div class="mp-sub">${esc(item.status === 'pushed' ? 'Sent by ' : 'Dismissed by ')}${esc(meetAuthor(item.updated_by))}</div><pre class="selectable"></pre><div class="mp-form-row"><span class="grow"></span><button type="button" class="ghost" data-copy>Copy</button><button type="button" class="ghost" data-close>Close</button></div>`;
       node.querySelector('pre').textContent = text;
       const close = () => { draft.closedAcknowledged = true; draft.closed = null; draft.patch = {}; draft.dirty = {}; node.remove(); panel.hidden = !list.children.length; };
       node.querySelector('[data-copy]').onclick = async () => { try { await copyText(text); close(); } catch (e) { toast(e.message, true); } };
@@ -1211,13 +1175,14 @@ function meetPendingRender(state, rec, data) {
       continue;
     }
     if (!node) {
-      node = document.createElement('section'); node.className = 'meet-item meet-pending'; node.dataset.pending = item.id;
-      node.innerHTML = `<label>Title<textarea data-pending-field="text" aria-label="Title"></textarea></label>
-        ${item.section === 'task' ? '<div class="row"><label>Owner<select data-pending-field="owner" aria-label="Owner"></select></label><label>Due<input data-pending-field="due" type="date" aria-label="Due"></label></div><label>Details<textarea data-pending-field="body" aria-label="Details"></textarea></label>'
-          : MEET_SECTIONS.find(s => s.key === item.section).fields.map(([key]) => `<label>${esc(key)}<input data-pending-field="${key}" aria-label="${key}"></label>`).join('')}
-        <div class="row"><span class="muted" data-edited></span><span data-save-error hidden>Not saved · <button type="button" class="linkish" data-retry>Retry</button></span></div>
-        <div data-pending-duplicate hidden></div>
-        <div class="row"><button type="button" class="ghost" data-dismiss>Dismiss</button><button type="button" class="primary" data-send>Send</button></div>`;
+      node = document.createElement('section'); node.className = 'mp-prop'; node.dataset.pending = item.id;
+      node.innerHTML = `<span class="mp-check mp-check-new" aria-hidden="true"></span><div class="mp-prop-body">
+        <textarea class="mp-prop-title" data-pending-field="text" aria-label="Title" rows="1"></textarea>
+        <textarea class="mp-prop-detail" data-pending-field="body" aria-label="Details" rows="1" placeholder="Details"></textarea>
+        <div class="mp-form-row"><select data-pending-field="owner" aria-label="Owner"></select><input data-pending-field="due" type="date" aria-label="Due">
+          <span class="grow"></span><button type="button" class="ghost" data-dismiss>Dismiss</button><button type="button" class="primary" data-send>Create</button></div>
+        <div class="mp-sub"><span data-edited></span><span class="err" data-save-error hidden>Not saved · <button type="button" class="linkish" data-retry>Retry</button></span></div>
+        <div class="mp-sub" data-pending-duplicate hidden></div></div>`;
       list.append(node);
       for (const field of node.querySelectorAll('[data-pending-field]')) {
         const changed = () => {
@@ -1243,7 +1208,7 @@ function meetPendingRender(state, rec, data) {
             const patch = draft.patch;
             const saved = await post(`/meetings/${encodeURIComponent(rec.id)}/items/${encodeURIComponent(item.id)}`, {...patch, version: draft.version});
             draft.patch = {};
-            meetPendingAccepted(draft, patch, saved.item);
+            sharedDraftAccepted(draft, patch, saved.item);
           }
           const route = send ? (proposal ? '/link' : '/push') : '';
           const reply = await post(`/meetings/${encodeURIComponent(rec.id)}/items/${encodeURIComponent(item.id)}${route}`,
@@ -1299,13 +1264,13 @@ function meetPendingRender(state, rec, data) {
     node.querySelector('[data-edited]').textContent = item.updated_by ? sharedEdited(item.updated_by, meetAuthor) : '';
     node.querySelector('[data-save-error]').hidden = !draft.error;
     let conflict = node.querySelector('[data-current]');
-    if (!conflict) { conflict = document.createElement('div'); conflict.dataset.current = ''; node.append(conflict); }
+    if (!conflict) { conflict = document.createElement('div'); conflict.className = 'mp-sub'; conflict.dataset.current = ''; node.querySelector('.mp-prop-body').append(conflict); }
     conflict.hidden = !draft.current;
     conflict.textContent = draft.current ? 'Current: ' + draft.current.text + ' · ' + Object.values(draft.current.detail || {}).join(' · ') : '';
     const owner = displayed.detail.owner;
     const proposal = item.section === 'task' && item.proposed_task_id;
-    node.querySelector('[data-send]').textContent = proposal ? 'Link' : item.section === 'task' ? 'Create' : owner ? `Send to ${actorLabel(owner)}` : 'Send';
-    node.querySelector('[data-send]').disabled = draft.sending || !(data.can_send ?? data.can_push) || (!proposal && item.section === 'task' && !owner);
+    node.querySelector('[data-send]').textContent = proposal ? 'Link' : 'Create';
+    node.querySelector('[data-send]').disabled = draft.sending || !(data.can_send ?? data.can_push) || (!proposal && !owner);
   }
 }
 function meetSharedStop(state) { sharedPlaceStop(state); }
