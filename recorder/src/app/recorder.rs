@@ -3148,10 +3148,11 @@ impl Recorder {
                         .into_iter()
                         .flatten()
                         .any(|a| a["actor"] == row.0)
-                    || self.live["bots"].as_array().into_iter().flatten().any(|b| {
-                        row.0 == format!("bot:{}", b["bot"].as_str().unwrap_or_default())
-                            && b["joined_by"] == self.live["owner_actor"]
-                    })
+                    || self.live["bots"]
+                        .as_array()
+                        .into_iter()
+                        .flatten()
+                        .any(|b| row.0 == format!("bot:{}", b["bot"].as_str().unwrap_or_default()))
             });
         }
         let send_blocked = tico_recorder_native::live::item_send_blocked(&self.context);
@@ -3595,6 +3596,38 @@ fn wait_stopped(store: &Store, id: &str) -> anyhow::Result<()> {
 #[cfg(test)]
 mod saved_panel_tests {
     use super::*;
+    #[test]
+    fn private_action_recipients_include_bots_added_by_participants() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = Store::open(dir.path()).unwrap();
+        let record = store.create("Planning").unwrap();
+        let mut app = Recorder::new(store, None, true).unwrap();
+        app.open(&record.id).unwrap();
+        app.context.live_id = "live-planning".into();
+        app.live = json!({
+            "visibility": "private", "owner_actor": "human:ana",
+            "access": [{"actor": "human:ben"}],
+            "bots": [{"bot": "ops", "joined_by": "human:ben"}]
+        });
+        app.roster = [
+            ("human:ana", "Ana"),
+            ("human:ben", "Ben"),
+            ("bot:ops", "Operations"),
+            ("bot:outside", "Outside"),
+        ]
+        .into_iter()
+        .map(|(actor, name)| (actor.into(), name.into()))
+        .collect();
+        let view = app.actions_view("one");
+        let owners: Vec<_> = view["owners"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|row| row["actor"].as_str().unwrap())
+            .collect();
+        assert_eq!(owners, vec!["bot:ops", "human:ana", "human:ben"]);
+    }
+
     fn fixture() -> (tempfile::TempDir, Recorder) {
         let dir = tempfile::tempdir().unwrap();
         let store = Store::open(dir.path()).unwrap();
