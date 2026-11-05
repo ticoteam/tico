@@ -251,6 +251,35 @@ async function themed(page, name) {
       await page.close();
     }
 
+    // While a run is live, the follow's refresh keeps a number being typed; Runs read before a Run now shows the new run
+    // on the way back.
+    {
+      const {page, errors, writes, db} = await openAutomations(browser, {viewport: DESKTOP, maintenance: true,
+        hash: '#/automations/maintenance'});
+      await page.waitForSelector('.mt-step');
+      await page.getByRole('tab', {name: 'Runs'}).click();
+      await page.waitForSelector('tr.au-rr[data-mt-run]');
+      await page.getByRole('tab', {name: 'Settings'}).click();
+      await page.waitForSelector('.mt-step');
+      await page.locator('[data-mt-now]').click();
+      await page.waitForSelector('[data-mt-now][disabled]');
+      const step = k => page.locator(`.mt-step[data-mt-step="${k}"]`);
+      await step('find_stuck').locator('[data-mt-open]').click();
+      const bots = step('find_stuck').locator('[data-mt-bots]');
+      await bots.fill('7');
+      await page.waitForTimeout(3500);   // one follow refresh
+      assert.equal(await bots.inputValue(), '7');
+      assert.equal(await bots.evaluate(el => el === document.activeElement), true, 'the field keeps focus');
+      await bots.press('Tab');
+      await until(() => writes.some(w => w.body?.steps?.[0]?.max_bots === 7), 'the bots save');
+      finish(db.maint);
+      await page.waitForSelector('[data-mt-now]:not([disabled])', {timeout: 8000});
+      await page.getByRole('tab', {name: 'Runs'}).click();
+      await page.waitForSelector('tr.au-rr[data-mt-run="mrun_now"]');
+      assert.deepEqual(errors, []);
+      await page.close();
+    }
+
     // A member reads it all with every control off and no Run now.
     {
       const {page, errors, writes} = await openAutomations(browser, {viewport: DESKTOP, maintenance: true, viewer: 'omar',

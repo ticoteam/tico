@@ -167,7 +167,7 @@ async function pageAutomations() {
   auDrawHead(); auDrawPane(); auDrawSide();
   if (id) auFacetsDraw(); else auOverviewShow(state);
   if (state.view === 'runs' && state.cur && !state.runs) void auRunsLoad(state);
-  if (state.view === 'runs' && id === AU_MAINT && !state.mtRuns) void auMaintRunsLoad(state);
+  if (state.view === 'runs' && id === AU_MAINT) void auMaintRunsLoad(state);   // each visit: a run may have ended since
 }
 // GET answers the automation itself; a wrapped {automation} is read the same.
 const auNormal = x => { const a = x?.automation || x || {}; a.steps ||= []; a.trigger ||= {}; return a; };

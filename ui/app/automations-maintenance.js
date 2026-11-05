@@ -48,21 +48,25 @@ function auMaintList(list, m) {
   if (!auMaintOk(m)) return list;
   return [auMaintRow(m), ...list.filter(a => !(a.readonly && AU_MAINT_RETIRED.has(a.trigger?.name)) && a.id !== AU_MAINT)];
 }
-// A fresh listing (a save, Run now's follow): kept, the list row matched, and what is shown drawn again.
-function auMaintAdopt(state, m) {
+// A fresh listing (a save, Run now's follow): kept, the list row matched, and what is shown drawn again. A follow's
+// refresh leaves Settings as it is while a field there is being edited, so a value not yet saved is not lost.
+function auMaintAdopt(state, m, {keepEdits = false} = {}) {
   if (!auMaintOk(m) || AU !== state) return;
   state.maint = m;
   if (state.list) state.list = auMaintList(state.list, m);
   if (m.live_run_id && !state.mtFollow) auMaintFollow(state);
-  if (state.id === AU_MAINT) { auDrawHead(); auDrawPane(); } else auDrawList();
+  if (state.id !== AU_MAINT) { auDrawList(); return; }
+  auDrawHead();
+  const f = document.activeElement;
+  if (!(keepEdits && f?.matches?.('input:not([role="switch"]),select') && state.root?.querySelector('.au-pane')?.contains(f))) auDrawPane();
 }
-async function auMaintLoad(state) {
+async function auMaintLoad(state, opts) {
   const gen = state.mtGen;
   try {
     const m = await get('/v2/maintenance');
     if (AU !== state || state.mtGen !== gen) return;
     state.maintError = auMaintOk(m) ? '' : 'Maintenance needs a newer hub';
-    if (auMaintOk(m)) auMaintAdopt(state, m);
+    if (auMaintOk(m)) auMaintAdopt(state, m, opts);
   } catch (e) { if (AU === state && state.mtGen === gen) state.maintError = [403, 404].includes(e.status) ? 'Maintenance needs a newer hub' : e.message; }
 }
 
@@ -232,10 +236,10 @@ async function auMaintSave(body) {
   auDrawHead(); auDrawPane();
   try {
     const m = await patch('/v2/maintenance', body);
-    state.mtBusy = false;
+    state.mtBusy = false; state.mtGen++;   // a read that started during the save holds the old values
     auMaintAdopt(state, m);
   } catch (e) {
-    state.mtBusy = false;
+    state.mtBusy = false; state.mtGen++;
     toast(e.message, true);
     if (AU === state && state.id === AU_MAINT) { auDrawHead(); auDrawPane(); }
   }
@@ -258,18 +262,19 @@ async function auMaintRunNow() {
     auMaintFollow(state);
   } catch (e) { toast(e.message, true); if (AU === state) { state.mtStarting = false; auDrawHead(); } }
 }
+// Every 3 s for the first two minutes, then every 15 s for as long as the run is live.
 function auMaintFollow(state, tries = 0) {
   clearTimeout(state.mtFollow);
   state.mtFollow = null;
-  if (AU !== state || tries > 40) return;
+  if (AU !== state) return;
   state.mtFollow = setTimeout(async () => {
     if (AU !== state) return;
-    await auMaintLoad(state);
+    await auMaintLoad(state, {keepEdits: true});
     state.mtFollow = null;
     if (AU !== state) return;
     if (state.id === AU_MAINT && state.view === 'runs') void auMaintRunsLoad(state);
     if (state.maint?.live_run_id) auMaintFollow(state, tries + 1);
-  }, 3000);
+  }, tries < 40 ? 3000 : 15000);
 }
 
 // -------------------------------------------------------------------------------------------- events
