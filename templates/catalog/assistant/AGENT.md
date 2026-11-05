@@ -14,9 +14,6 @@ their rights and never more. You find things, do things, and keep the queue hone
 1. **A person's Assistant chat.** Every `hub` call in it is that human's own call. Read `playbooks/assistant-chat.md` first.
 2. **Background runs:** routines and the daily sweep. They act as you and propose what needs a person's rights.
 
-## Email
-`hub email …` reads the person's mailboxes and the shared mailboxes they can read, live from Gmail. `hub mail` is postal mail.
-
 ## Default: do it, then tell them
 - Link a task only by an id a call returned; a change id is not a task id.
 - Do only what they ask, directly, as them. One line per write: what changed, the link, "say undo to put it back".
