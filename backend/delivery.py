@@ -188,12 +188,14 @@ def _drop_jobs(conn, H, jobs, note, attempt_id=None):
 
 
 def task_closed(conn, task):
-    """Settle a task's pending deliveries and drop deadline runs that only carried them."""
+    """Settle a task's pending deliveries and drop deadline runs that only carried them. A message is the task's by
+    its refs or its dedicated room (hubdb.MESSAGE_TASK_SQL), not by the chat room it was filed from."""
     H = _H()
     rows = H._rows(conn.execute(
-        "SELECT id,fired_job FROM deferrals WHERE settled_at IS NULL AND "
-        "((kind IN ('comment','message') AND conversation_id=?) OR (kind='task' AND item=?))",
-        (task["conversation_id"], task["id"])))
+        "SELECT d.id,d.fired_job FROM deferrals d LEFT JOIN messages m ON m.id=d.item "
+        "LEFT JOIN conversations cv ON cv.id=m.conversation_id WHERE d.settled_at IS NULL AND "
+        f"((d.kind IN ('comment','message') AND {H.MESSAGE_TASK_SQL}=?) OR (d.kind='task' AND d.item=?))",
+        (task["id"], task["id"])))
     _settle(conn, H, rows, H.now(), "moot")
     jobs = dict.fromkeys(r["fired_job"] for r in rows if r["fired_job"])
     _drop_jobs(conn, H, jobs, "Its task ended, canceling its deferred deliveries.")
@@ -238,16 +240,17 @@ def _alive(conn, row):
         return H.next_run_waiting(conn, H.task(conn, row["item"]))
     if row["kind"] == "note":
         return H.note_waiting(conn, H.note(conn, row["item"]))
-    found = conn.execute("SELECT m.refs, m.conversation_id FROM messages m WHERE m.id=? AND m.deleted_at IS NULL AND "
+    found = conn.execute("SELECT m.refs, m.conversation_id, cv.task_id FROM messages m "
+                         "LEFT JOIN conversations cv ON cv.id=m.conversation_id "
+                         "WHERE m.id=? AND m.deleted_at IS NULL AND "
                          "NOT EXISTS(SELECT 1 FROM jobs j WHERE j.message_id=m.id)", (row["item"],)).fetchone()
     if found is None:
         return False
     refs = H._json(found[0], {}) or {}
-    task_id = H.refs_task_id(refs)
-    ended = conn.execute(
-        "SELECT 1 FROM tasks WHERE (conversation_id=? OR id=?) "
-        f"AND status IN ({','.join('?' * len(H.TASK_ENDED))}) LIMIT 1",
-        (row["conversation_id"], task_id, *H.TASK_ENDED)).fetchone()
+    task_id = H.message_task_id({"refs": refs}, {"task_id": found[2]})
+    ended = task_id and conn.execute(
+        f"SELECT 1 FROM tasks WHERE id=? AND status IN ({','.join('?' * len(H.TASK_ENDED))}) LIMIT 1",
+        (task_id, *H.TASK_ENDED)).fetchone()
     return not ended and _carrier_ok(conn, row["bot"], row["item"], refs, found[1], row["conversation_id"])
 
 

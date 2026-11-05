@@ -168,6 +168,30 @@ def test_a_closed_tasks_deferred_message_is_moot_without_the_close_hook(api, via
     assert job_of(api, held["id"]) is None and fired(api) == []
 
 
+def test_ending_a_task_filed_from_a_shared_room_leaves_the_rooms_other_messages(api):
+    setup(api)
+    open_task, ended = [post(api, "tasks", {"owner": "ops", "title": title, "body": "For the team.",
+                                            "delivery": "defer", "defer_for": "never"})
+                        for title in ("Plan the launch", "Draft the FAQ")]
+    msgs = {key: post(api, "chat/ops", {"text": text, "delivery": "defer", "defer_for": "24h"})
+            for key, text in (("open", "Billing first."), ("plain", "Some day: the docs."), ("ended", "Skip the FAQ."))}
+    room = msgs["open"]["conversation_id"]
+    with api.app.state.store.transaction() as c:
+        # Both tasks were filed from the chat room: it is no task's dedicated room.
+        c.execute("UPDATE tasks SET conversation_id=? WHERE id=?", (room, ended["id"]))
+        c.execute("UPDATE messages SET refs=json_object('task',?) WHERE id=?", (open_task["id"], msgs["open"]["id"]))
+        c.execute("UPDATE messages SET refs=json_object('task',?) WHERE id=?", (ended["id"], msgs["ended"]["id"]))
+        H.task_close(c, "human:ana", ended["id"], quiet=True)
+    settled = {key: rows(api, item=m["id"])[0] for key, m in msgs.items()}
+    assert settled["ended"]["settled_at"] and settled["ended"]["how"] == "moot"
+    assert settled["open"]["settled_at"] is None and settled["plain"]["settled_at"] is None
+    with api.app.state.store.transaction() as c:
+        [job] = delivery.due(c, H.shift(H.now(), hours=25))
+    assert job_of(api, msgs["plain"]["id"])[1] == "queued" and job_of(api, msgs["ended"]["id"]) is None
+    assert [rows(api, item=msgs[k]["id"])[0]["fired_job"] for k in ("open", "plain")] == [job, job]
+    assert fired(api) == [job]
+
+
 def test_an_open_tasks_deferred_comment_still_fires(api):
     setup(api)
     task = post(api, "tasks", {"owner": "ops", "title": "Plan the launch", "body": "For the team.",
