@@ -40,7 +40,7 @@ const {t} = require('./support/load.cjs');
         task = await call('POST', 'tasks/' + task.id, {version: task.version, title: 'Review the final plan on ' + surface, status: 'doing'});
         await page.waitForFunction(id => {
           const text = document.querySelector(`[data-linked-task="${id}"]`)?.textContent || '';
-          return text.includes('Review the final plan') && text.includes('doing');
+          return text.includes('Review the final plan') && text.toLowerCase().includes('doing');
         }, task.id, {timeout: t(20000)});
         assert.equal(await page.evaluate(id => window.heldLinkedTask === document.querySelector(`[data-linked-task="${id}"]`), task.id), true);
         await call('DELETE', `meetings/${meeting.id}/tasks/${task.id}`);

@@ -253,8 +253,7 @@ OUTWARD = tuple(re.compile(pattern) for pattern in (
     r"^/api/v2/conversations/[^/]+/messages$",
     r"^/api/v2/assistant/messages$",
     r"^/api/send$",
-    r"^/api/meetings/[^/]+/(send|comments)$",
-    r"^/api/v2/meetings/[^/]+/comments$",
+    r"^/api/meetings/[^/]+/send$",
     r"^/api/v2/updates/[^/]+/reply$",
     r"^/api/v2/automations/mail-actions/claim$",                 # a mail action to send
     r"^/api/v2/connectors/(mail/google/claim|calendar/actions/claim)$",

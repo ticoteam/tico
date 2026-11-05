@@ -79,6 +79,8 @@ The default list is live; `review=dismissed` reads the person's dismissed meetin
 meeting has `review_state` (`pending`, `live` or `dismissed`). The rail's existing
 `GET /api/v2/updates/unread` also returns `meetings_pending`, scoped to the caller.
 `GET /api/v2/meetings/{id}` opens a meeting under the same access rules as the older detail route.
+Its `live_meeting_id` names the live meeting it was filed from, or is null; the page reads that live meeting's chat
+and attached bots through `GET /api/v2/live-meetings/{id}` under the live meeting's own rules.
 
 - `POST /api/v2/meetings/{id}/review {"action": "approve", "private": false}` shares a pending meeting.
   `send_to` (a bot's id or slug, or `auto`) also hands it to that bot once shared, as Send does.
@@ -224,11 +226,15 @@ format is a `422` that names the problem.
 
 ## What a meeting turns into
 
-- **Send to a bot** (the button, `POST /api/meetings/{id}/send`, or `send_to` on import): one Tico task
-  for the bot, carrying the notes, the readable transcript and the meeting context. Sending is once;
-  asking again for the same bot returns the same task.
-- **Pending tasks.** Beside each meeting are three lists: **Doc updates**, **Tasks** and **Feature
-  requests**. A human adds items (with the quote and time they came from if they like) and the
+- **Share with a bot** (the meeting page's Share menu, `POST /api/meetings/{id}/send`, or `send_to` on import):
+  one Tico task for the bot, carrying the notes, the readable transcript and the meeting context. Sending is once;
+  asking again for the same bot returns the same task. Share also copies the meeting's link for a person; a saved
+  meeting has no route to add a person or attach a bot, since `/api/v2/live-meetings/{id}/access` and `/bots` work
+  only while its live meeting is live or paused.
+- **Tasks.** The meeting page shows one list: proposed tasks (**Create** or **Dismiss**), tasks made from the
+  meeting (created items, the task it was shared to a bot as, and that task's follow-ups) and tasks linked with
+  `POST /api/v2/meetings/{id}/tasks`, each once; dismissed proposals sit behind **Dismissed (n)**. The API still
+  accepts the older `doc` and `feature` sections. A human adds items (with the quote and time they came from if they like) and the
   readers edit, Send or Dismiss them once the meeting is shared. Send creates ordinary Tico tasks, never a card in another tool: a
   task item becomes a task for its named owner; a doc update becomes a task for `doc-updater`; a
   feature request becomes a task for whoever is primary for the product group. Product area, app and label
@@ -256,7 +262,6 @@ format is a `422` that names the problem.
   `POST /api/v2/meetings/{rid}/items/{iid}/push` accepts `version` and a `result_ref` for a task you requested to record that
   existing task without creating another; repeating it keeps the same result. Pushing an already sent item
   returns its current item and `pushed: false`, including when the supplied version is stale.
-- **Comments.** Anyone who can open the meeting can add to the thread beside it.
 - **Routines.** `meeting.ready` fires when a team meeting with a transcript is first imported,
   once per meeting however often it is re-imported; a routine written `on: meeting.ready` gets one
   task carrying the notes and transcript. A private meeting fires nothing. The older name

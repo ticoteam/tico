@@ -1,10 +1,10 @@
-/* ui/app/meetings.js — The Meetings page: list, detail, Add notes, sections and Push
+/* ui/app/meetings.js — The Meetings page: list, a meeting (tasks, notes, transcript), Add notes
    Classic script: its globals are shared with the other files under ui/app/, loaded in the order index.html lists them. */
 'use strict';
 
 // ----------------------------------------------------------------- meetings page (docs/meetings.md)
 // Meeting transcripts and notes imported from other tools: a searchable table, a detail dialog
-// with the transcript, the sections a human pushes to tasks, and an Import action.
+// with its tasks, notes and transcript, and an Import action.
 let MEET = null;
 function meetStop() {
   if (MEET) {
@@ -296,7 +296,6 @@ async function meetSources(state) {
 
 const noteTitle = r => r.title || (r.kind === 'note' ? 'Meeting log' : 'Meeting');
 const notePreview = r => plainMd(r.note || r.voice_text || r.preview || '');
-const meetRecorder = r => r.recorded_by || (r.owner === 'owner' ? 'the owner' : r.owner) || 'someone';
 const meetPersonKey = value => String(value || '').trim().toLowerCase();
 const meetPersonNames = r => [...(r.participants || []).map(p => p.name || p.email), ...(r.confirmed_attendees || []), ...(r.calendar?.attendees || []), ...(r.speakers || []).filter(v => !/^(?:[A-Z]|speaker[\s_-]*[A-Z0-9]+)$/i.test(String(v).trim())), r.source_context?.lead_name, r.source_context?.contact_name, r.recorded_by, r.owner !== 'owner' ? r.owner : ''].filter(v => typeof v === 'string' && v.trim());
 const meetStatus = r => r.delivery?.status === 'pending' ? 'sending'
