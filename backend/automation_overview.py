@@ -6,7 +6,9 @@ Run rows are kept 30 days (`automations.prune` drops only their step detail), so
 `automation_runs` directly. The system jobs Tico runs on its own timers record their runs in `system_runs`
 (backend/system_routines.py), not here; their read-only built-in automations (`tico.builtin.job.<key>`, the
 migration's mirrors) read them from there. A quiet run that repeats its job's last result is folded into that row, so a
-system job counts one run per row, with `count` the runs folded into it."""
+system job counts one run per row, with `count` the runs folded into it. The Maintenance run (backend/maintenance.py)
+keeps its own run log, `maintenance_runs`; anyone signed in sees it, as GET /api/v2/maintenance does, so its runs are
+listed and counted here under the list's Maintenance row (ui/app/automations-maintenance.js)."""
 import json
 from datetime import timedelta
 
@@ -20,6 +22,8 @@ STATUSES = {"done": ("ok", "empty", "skipped"), "ok": ("ok", "empty", "skipped")
             "waiting": ("waiting",), "running": ("queued", "running"), "held": ("held",)}
 JOB_PREFIX = "tico.builtin.job."
 SYSTEM_RUN = "sys_"          # a system job's run id, so it never meets an automation run's
+MAINT = "maintenance"        # the Maintenance row's id and the run's owner: Tico itself
+MAINT_RUN = "mnt_"           # a Maintenance run's id here
 IDS_MAX = 500
 STEP_WORDS = {"filter": "Filter", "decide": "Decide", "llm": "LLM", "find": "Find", "bot_turn": "Bot turn",
               "paths": "Paths", "action": "Action"}
@@ -221,6 +225,24 @@ def system_row(run, row):
             "step_count": None, "count": run["runs"] or 1}
 
 
+def maint_row(run):
+    status = _system_status(run)
+    return {"id": MAINT_RUN + run["id"], "automation_id": MAINT, "automation_name": "Maintenance", "trigger": "system",
+            "owner_id": "tico", "version": 1, "trigger_ref": run["trigger"], "started_at": run["started_at"],
+            "finished_at": run["finished_at"], "status": status, "cost": run["cost_usd"] or 0,
+            "started_by": "Run now" if run["trigger"] == "run_now" else "Scheduled",
+            "outcome": str(run["result"] or ("Done" if status == "ok" else "Failed" if status == "failed" else "Running"))[:140],
+            "step_count": None, "count": 1}
+
+
+def _maint_shown(c, trigger="", owner="", ids=""):
+    """Whether the Maintenance run's log is in a listing narrowed by trigger, owner and ids."""
+    kinds = {k for k in str(trigger or "").split(",") if k}
+    wanted = {i for i in str(ids or "").split(",") if i}
+    return (H._has_table(c, "maintenance_runs") and (not kinds or "system" in kinds)
+            and (not owner or owner == "tico") and (not wanted or MAINT in wanted))
+
+
 def system_runs_of(c, key, limit, before=""):
     """One system job's runs as an automation's run log shows them (GET /{id}/runs on its mirror)."""
     at = None
@@ -281,11 +303,17 @@ def runs(c, who, rng="1h", status="", trigger="", owner="", ids="", limit=50, be
         found += [("s", r) for r in c.execute(
             "SELECT * FROM system_runs WHERE started_at>=? AND job IN (SELECT value FROM json_each(?))" + where + page_at
             + " ORDER BY started_at DESC, id DESC LIMIT ?", (since, json.dumps(list(jobs)), *marks, limit + 1)).fetchall()]
+    if status not in ("waiting", "held") and _maint_shown(c, trigger, owner, ids):
+        where = {"done": " AND ok=1 AND finished_at IS NOT NULL", "ok": " AND ok=1 AND finished_at IS NOT NULL",
+                 "failed": " AND finished_at IS NOT NULL AND ok=0", "running": " AND finished_at IS NULL"}.get(status, "")
+        found += [("m", r) for r in c.execute(
+            "SELECT * FROM maintenance_runs WHERE started_at>=?" + where + page_at
+            + " ORDER BY started_at DESC, id DESC LIMIT ?", (since, *marks, limit + 1)).fetchall()]
     found.sort(key=lambda x: (x[1]["started_at"], x[1]["id"]), reverse=True)
     more = len(found) > limit
     found = found[:limit]
-    out = [run_row(r, *by_id[r["automation_id"]]) if src == "a" else system_row(r, jobs[r["job"]][0])
-           for src, r in found]
+    out = [run_row(r, *by_id[r["automation_id"]]) if src == "a" else system_row(r, jobs[r["job"]][0]) if src == "s"
+           else maint_row(r) for src, r in found]
     shown, cut = AU.page(out, limit, 0, AU.RUN_BYTES)
     nxt = None
     if (more or cut is not None) and shown:
@@ -342,6 +370,11 @@ def stats(c, who, rng="1h"):
                     buckets[b] = buckets.get(b, 0) + 1
             for b, m in buckets.items():
                 add(jobs[r["job"]], b, m, 0 if r["ok"] else m, (r["cost_usd"] or 0) * m / len(times))
+    if _maint_shown(c):
+        for r in c.execute("SELECT CAST((julianday(substr(started_at,1,23)) - julianday(?)) * 86400.0 / ? AS INTEGER) AS b, "
+                           "COUNT(*) AS n, SUM(finished_at IS NOT NULL AND ok=0) AS f, SUM(cost_usd) AS cost "
+                           "FROM maintenance_runs WHERE started_at>=? GROUP BY b", (since[:23], width, since)):
+            add(MAINT, r["b"], r["n"], r["f"] or 0, r["cost"])
     totals = {"runs": 0, "failed": 0, "cost": 0.0, "buckets": [{"ok": 0, "failed": 0} for _ in range(n)]}
     for s in per.values():
         s["cost"] = round(s["cost"], 6)
