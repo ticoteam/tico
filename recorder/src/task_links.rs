@@ -119,7 +119,7 @@ impl Store {
 #[derive(Clone, Debug, Deserialize, Serialize)]
 pub struct Task {
     pub id: String,
-    pub number: u64,
+    pub number: Option<u64>,
     pub title: String,
     pub status: String,
     #[serde(default)]

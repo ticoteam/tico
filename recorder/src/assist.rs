@@ -196,9 +196,13 @@ pub fn draft_with_tasks(
         .iter()
         .map(|item| item.title.as_str())
         .collect();
-    let offered: Vec<Value> = tasks
+    let candidates: Vec<_> = tasks
         .iter()
+        .filter(|task| task.number.is_some())
         .take(30)
+        .collect();
+    let offered: Vec<Value> = candidates
+        .iter()
         .map(|task| json!({"number":task.number,"title":task.title}))
         .collect();
     let input = json!({"TASKS":offered,"EXISTING":existing,"EARLIER":earlier,"NEW":fresh.iter().map(row).collect::<Vec<_>>()});
@@ -220,9 +224,12 @@ pub fn draft_with_tasks(
             .flatten()
             .take(MAX_PER_REVIEW)
         {
-            let matched = row["link"]
-                .as_u64()
-                .and_then(|number| tasks.iter().take(30).find(|task| task.number == number));
+            let matched = row["link"].as_u64().and_then(|number| {
+                candidates
+                    .iter()
+                    .copied()
+                    .find(|task| task.number == Some(number))
+            });
             if row.get("link").is_some() && matched.is_none() {
                 continue;
             }

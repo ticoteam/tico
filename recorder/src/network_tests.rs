@@ -3156,7 +3156,10 @@ fn recorder_drafts_only_offer_active_tasks_and_reauthorize_cached_candidates() {
         ),
         Some(json!({"tasks":[]})),
     ]);
-    assert_eq!(tico.draft_tasks(&store, &record.id).unwrap()[0].number, 42);
+    assert_eq!(
+        tico.draft_tasks(&store, &record.id).unwrap()[0].number,
+        Some(42)
+    );
     assert!(tico.draft_tasks(&store, &record.id).unwrap().is_empty());
     worker.join().unwrap();
     let calls = seen.lock().unwrap();
@@ -3184,7 +3187,7 @@ fn recorder_note_taker_rejects_unoffered_task_numbers() {
     };
     let candidates = vec![crate::task_links::Task {
         id: "visible".into(),
-        number: 42,
+        number: Some(42),
         title: "Review pricing".into(),
         status: "open".into(),
         owner_id: "human:test".into(),
@@ -3868,4 +3871,26 @@ fn recorder_save_reads_fields_typed_while_the_item_upload_is_waiting() {
                 .is_none()
         );
     }
+}
+
+#[test]
+fn recorder_picker_and_link_queue_accept_tasks_without_a_number() {
+    let dir = tempfile::tempdir().unwrap();
+    let store = Store::open(dir.path()).unwrap();
+    let record = transcript(&store, "Unnumbered task");
+    let task = json!({"id":"no-number","number":null,"title":"Review pricing","status":"open","owner_id":"human:test"});
+    let (tico, seen, worker) = server(vec![
+        Some(json!({"tasks":[task.clone()]})),
+        Some(json!({"tasks":[task]})),
+    ]);
+    let page = tico.search_tasks("pricing", 0).unwrap();
+    assert!(page["tasks"][0]["number"].is_null());
+    tico.queue_links(&store, &record.id, &["no-number".into()])
+        .unwrap();
+    worker.join().unwrap();
+    assert_eq!(
+        store.context(&record.id).unwrap().items[0].task_id,
+        "no-number"
+    );
+    assert_eq!(seen.lock().unwrap().len(), 2);
 }

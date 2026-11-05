@@ -1,5 +1,5 @@
 //! Synthetic Recorder rows through the real transport and an isolated loopback Tico.
-use anyhow::{Result, ensure};
+use anyhow::{Context, Result, ensure};
 use serde_json::json;
 use tico_recorder_native::{
     audio::Channel, network::Tico, settings::Destination, store::Store, workspace::Item,
@@ -47,13 +47,16 @@ pub fn run(store: &Store, base: &str) -> Result<()> {
     let tasks: Vec<String> = serde_json::from_str(&std::env::var("TICO_LINK_TEST_TASKS")?)?;
     ensure!(tasks.len() == 45, "Use 45 synthetic tasks");
     let id = recording(store, "Recorder rows synthetic")?;
-    tico.queue_links(store, &id, &tasks)?;
+    tico.queue_links(store, &id, &tasks)
+        .context("Queue existing tasks")?;
     ensure!(
         tico.send_to(store, &id, false, "team").is_err(),
         "Fixture interrupts batch two"
     );
     let reopened = Store::open(store.root())?;
-    let meeting = tico.send_to(&reopened, &id, false, "team")?;
+    let meeting = tico
+        .send_to(&reopened, &id, false, "team")
+        .context("Resume queued link batches")?;
     reopened.update_context(&id, |c| {
         c.items.push(Item {
             id: "proposal".into(),
@@ -87,10 +90,13 @@ pub fn run(store: &Store, base: &str) -> Result<()> {
         .task_id;
 
     let local = recording(store, "This Mac synthetic")?;
-    tico.ensure_live(store, &local, false)?;
-    tico.finish_live(store, &local)?;
+    tico.ensure_live(store, &local, false)
+        .context("Share This Mac fixture")?;
+    tico.finish_live(store, &local)
+        .context("Finalize This Mac fixture")?;
     tico.queue_links(store, &local, &tasks[..1])?;
-    tico.keep_local(store, &local)?;
+    tico.keep_local(store, &local)
+        .context("Keep finalized fixture on This Mac")?;
     ensure!(
         store.context(&local)?.items.is_empty(),
         "This Mac drops queued links"

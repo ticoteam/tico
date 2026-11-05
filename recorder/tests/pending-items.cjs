@@ -213,6 +213,7 @@ const path = require('node:path');
       a.linked={tasks:[{task_id:'linked-task',number:45,title:'Linked pricing',status:'open'}]};
       a.shared={can_send:true,sections:{task:[{id:'link-proposal',version:1,section:'task',status:'proposed',text:'Pricing follow up',proposed_task_id:'linked-task',proposed_number:45,detail:{}}]}};
       window.__TAURI__.core.invoke=async (cmd,args) => {
+        if(cmd==='task_picker') return {tasks:[{id:'unnumbered',number:null,title:'Unnumbered target',status:'open'}],next_offset:null};
         if(cmd==='shared_item') {
           f.linkAction=args.action; f.linkBody=args.body;
           const item=a.shared.sections.task[0]; item.status='pushed';item.result_ref='linked-task';item.version++;
@@ -234,7 +235,10 @@ const path = require('node:path');
     await page.getByRole('button',{name:'Add',exact:true}).click();
     await page.getByRole('textbox',{name:'Add a task',exact:true}).fill('Added after Save');
     assert.equal(await page.getByRole('textbox',{name:'Add a task',exact:true}).inputValue(),'Added after Save');
-        assert.deepEqual(errors,[]);
+        await page.getByRole('button',{name:'Link',exact:true}).click();
+    await page.getByRole('button',{name:'Unnumbered target · open',exact:true}).waitFor();
+    await page.getByRole('button',{name:'Cancel',exact:true}).click();
+    assert.deepEqual(errors,[]);
     console.log('Recorder: in-flight draft, retry and final Send passed');
   } finally { await browser.close(); }
 })().catch(error=>{console.error(error);process.exitCode=1;});
