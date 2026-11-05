@@ -254,6 +254,7 @@ fn round1(v: f64) -> f64 {
 }
 
 /// Why a step failed: a message for the row, a timeout, a full disk, or something else.
+#[derive(Debug)]
 enum Fail {
     Msg(String),
     Timeout(u64),
