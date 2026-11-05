@@ -62,6 +62,8 @@ def _context(value):
 
 def refuse_retired(choice):
     """A retired model stays in the catalog for bots already on it; nothing new may pick it."""
+    if choice.get("held"):
+        raise Problem("model", f"{choice['label']} is not offered yet", 422)
     if choice.get("deprecated"):
         raise Problem("model", f"{choice['label']} is retired; choose a current model", 422)
 

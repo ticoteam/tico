@@ -285,7 +285,8 @@ PRICES = _Priced({
 # 2026-10-17: only Claude Haiku 5.5; Claude 4.6 and later models bill their whole context at the standard rate.
 # The Gateway's (Low tiers, Cheap 1.1) come from its own price (backend/gateway_tiers.py), not Anthropic's page.
 # gpt-6.1-terra's row is Tico's approved long-prompt tier (Product, 2026-11-01), set at or over 272,000 tokens
-# as ruled on 2026-11-03; Product is confirming the wording before the row ships.
+# as ruled on 2026-11-03 (Product confirmed the wording that day). OpenRouter's public model list sets
+# min_prompt_tokens 272000 for openai/gpt-6.1-terra (read by engineering-lead, 2026-11-05).
 LONG_PROMPT_AS_OF = "2026-10-17"
 LONG_PROMPT = _Priced({
     "claude-haiku-5-5": (100_000, (0.50, 0.05, 2.50)),

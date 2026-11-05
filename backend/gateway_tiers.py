@@ -645,6 +645,11 @@ def default_model(department=DEFAULT_DEPARTMENT, level=DEFAULT_LEVEL, fast=False
     if tier_id(department, level, fast) not in _index(cat):
         department = DEFAULT_DEPARTMENT
     if tier_id(department, level, fast) not in _index(cat):
+        # General Medium may itself run a held model: the first department tier still offered takes its place.
+        for row in cat["models"]:
+            live = live_row(row)
+            if live is not None and live.get("department"):
+                return f"{live['id']}-{live['current']}"
         return f"{tier_id(DEFAULT_DEPARTMENT, DEFAULT_LEVEL)}-{FIRST_VERSION}"
     return f"{tier_id(department, level, fast)}-{current_version(department, level, fast, cat)}"
 
