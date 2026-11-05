@@ -134,7 +134,7 @@ def test_encrypted_cursor_passes_five_thousand_hidden_rows(api, endpoint, field)
 @pytest.mark.slow
 def test_restricted_page_leak_matrix_across_stored_shapes_transports_and_deletion(api, live):
     """One canary follows every persisted attachment form through both outsider identities and a real SSE socket."""
-    from backend.tests.test_api import assign, claim, ready, runner
+    from backend.tests.test_api import assign, ready, runner
     from backend.tests.test_events import ready as stream_ready
     from backend.tests.test_assistant import room
     from backend.task_review import file_added
@@ -269,7 +269,8 @@ def test_restricted_page_leak_matrix_across_stored_shapes_transports_and_deletio
                         clean(state + ":event guard:" + token, dict(record))
             assert ordinary in json.dumps(get(api, "pages/" + ordinary, token=token))
         response(state + ":signed visual", api.get(signed))
-        clean(state + ":runner claim", claim(api, machine, "finance", key="matrix-claim"))
+        response(state + ":runner claim", api.post("/api/v2/jobs/claim",
+                 json={"bot": "finance", "start_places": True}, headers=headers(machine["token"], "matrix-claim")))
     assert not failures, failures
 
 
