@@ -264,7 +264,7 @@ def test_an_updater_releases_its_process_lock_when_it_fails(tmp_path, monkeypatc
     "process_open", "process_size", "process_symlink", "process_flock", "config_json", "config_shape",
     "registration", "drain_read", "drain_db", "drain_sleep", "kind", "systemd_unit", "git_lookup", "git_gate",
     "checkout_open", "checkout_size", "checkout_symlink", "checkout_flock", "status_read", "status_write",
-    "early_exit", "interrupt",
+    "early_exit", "exit_zero", "cli_exit", "interrupt",
 ])
 def test_every_pre_apply_failure_defers_and_releases_claims(old_follower, monkeypatch, policy, step):
     from runner_support import git_locks
@@ -327,8 +327,10 @@ def test_every_pre_apply_failure_defers_and_releases_claims(old_follower, monkey
             elif step == "git_gate":
                 patch.setattr(ru, "git", original_git)
                 patch.setattr(git_locks, "command_lock", fail)
-            elif step in ("early_exit", "interrupt"):
+            elif step in ("early_exit", "exit_zero", "interrupt"):
                 def exit_early(*a, **kw):
+                    if step == "exit_zero":
+                        raise SystemExit(0)
                     raise SystemExit(cause) if step == "early_exit" else KeyboardInterrupt(cause)
                 patch.setattr(ru, "in_flight", exit_early)
             if step.endswith("_flock") or step.startswith("status_"):
@@ -354,14 +356,16 @@ def test_every_pre_apply_failure_defers_and_releases_claims(old_follower, monkey
                         fail()
                     return original_write(directory, **fields)
                 patch.setattr(ru, "write_status", write)
-            assert ru.main(["--root", str(root), "--version", "v0.3.45", "--state-dir", str(state),
-                            "--pid", "42"]) == 1
+            argv = ["--root", str(root), "--version", "v0.3.45", "--state-dir", str(state), "--pid", "42"]
+            assert ru.main(argv + (["--unknown"] if step == "cli_exit" else [])) == 1
         status = original_read(state)
         assert status["state"] == ("blocked" if attempt == ru.MAX_DEFERRALS else "idle" if policy == "short" else "failed")
         assert status["cause_count"] == attempt and status["deferrals"] == attempt
         assert status["deferral_cause"] in status["error"] and len(status["error"]) <= 300
         if step == "drain_db":
             assert "cannot check running work" in status["deferral_cause"]
+        elif step in ("exit_zero", "cli_exit"):
+            assert "the update stopped before it finished" in status["deferral_cause"]
         elif step not in ("config_json", "config_shape") and not step.endswith(("_open", "_size", "_symlink")):
             assert cause in status["deferral_cause"]
         if policy == "short":

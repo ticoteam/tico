@@ -649,8 +649,9 @@ def main(argv=None):
     parser.add_argument("--state-dir", required=True)
     parser.add_argument("--pid", type=int, required=True)
     parser.add_argument("--started", default="")     # the commit the runner started on; "" from an older runner
-    args = parser.parse_args(argv)
+    args = argparse.Namespace()
     try:
+        args = parser.parse_args(argv, namespace=args)
         with updater_lock(args.state_dir) as acquired:
             if not acquired:
                 print("Tico update: an updater is already running for this computer", flush=True)
@@ -666,7 +667,14 @@ def main(argv=None):
             return run_update(args)
     except BaseException as exc:
         # Every stopped attempt needs an outcome, including exits before apply can write one.
-        cause = str(exc) or type(exc).__name__
+        if not getattr(args, "version", None) or not getattr(args, "state_dir", None):
+            raise  # There is no runner status to write for help or an incomplete command.
+        if isinstance(exc, SystemExit) and (exc.code is None or isinstance(exc.code, int)):
+            cause = f"the update stopped before it finished (exit {exc.code or 0})"
+        elif isinstance(exc, KeyboardInterrupt):
+            cause = str(exc) or "the update was interrupted"
+        else:
+            cause = str(exc) or type(exc).__name__
         result = defer_update(args.state_dir, args.version, cause)
         print(json.dumps(result))
         return 1
