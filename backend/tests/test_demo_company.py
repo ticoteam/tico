@@ -117,8 +117,20 @@ def test_tasks_cover_every_status_and_some_have_chains(ana):
     assert tree.status_code == 200 and tree.json()
 
 
-def test_no_task_is_left_stuck_for_days(ana):
+def test_no_task_is_left_stuck_for_days(ana, monkeypatch):
+    # Read the company's age at its build time; the machine's clock can hide old work or age fresh assignments.
+    monkeypatch.setattr(hubdb, "now", lambda: NOW.strftime("%Y-%m-%dT%H:%M:%S.%fZ"))
     assert ana.get("/api/v2/tasks/stuck").json()["tasks"] == []
+
+
+@pytest.mark.parametrize("hour", [0, 12])
+def test_no_task_is_left_stuck_at_other_build_hours(tmp_path, monkeypatch, hour):
+    moment = NOW.replace(hour=hour)
+    settings = demo.build(tmp_path, now=moment)
+    monkeypatch.setattr(hubdb, "now", lambda: moment.strftime("%Y-%m-%dT%H:%M:%S.%fZ"))
+    with TestClient(create_app(settings), base_url="http://127.0.0.1:8765") as api:
+        api.headers["Authorization"] = "Bearer " + settings.local_owner_token_file.read_text().strip()
+        assert api.get("/api/v2/tasks/stuck").json()["tasks"] == []
 
 
 def test_a_meeting_waiting_for_review_is_not_in_the_live_list(ana):

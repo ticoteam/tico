@@ -132,7 +132,7 @@ CONTENT = {
              "owner": "release-notes"}}]},
     ],
     # Events the company's systems report, in any order: the seed plays them oldest first. `at` is [days ago, hours before
-    # that].
+    # that]. Unfinished bot work comes from the last day.
     "events": [
         {"at": [6, 6.0], "name": "custom.calibration.failed", "subject": "unit/U-1042", "actor": "bot:support-qa",
          "data": {"unit": "U-1042", "attempt": 1}, "close": "calibration"},
@@ -171,7 +171,7 @@ CONTENT = {
          "data": {"stars": 4, "product": "Home Pro", "text": "Good, but set-up took a while."}},
         {"at": [2, 10.0], "name": "custom.review.posted", "subject": "review/R-2230", "actor": "bot:marketplace",
          "data": {"stars": 5, "product": "Home Pro", "text": "Easy to calibrate."}},
-        {"at": [2, 16.0], "name": "custom.review.posted", "subject": "review/R-2233", "actor": "bot:marketplace",
+        {"at": [0, 16.0], "name": "custom.review.posted", "subject": "review/R-2233", "actor": "bot:marketplace",
          "data": {"stars": 1, "product": "Storefront", "text": "Unit stopped at dusk on the second night."}},
         {"at": [0, 0.9], "name": "custom.review.posted", "subject": "review/R-2240", "actor": "bot:marketplace",
          "data": {"stars": 3, "product": "Home Pro", "text": "Fine for the price."}},
@@ -187,7 +187,7 @@ CONTENT = {
          "data": {"version": "cloud 1.8.1"}, "close": "deploys"},
         {"at": [6, 15.0], "name": "custom.deploy.finished", "subject": "deploy/app-3.1.0", "actor": "bot:devops",
          "data": {"version": "app 3.1.0"}, "close": "deploys"},
-        {"at": [1, 15.0], "name": "custom.deploy.finished", "subject": "deploy/cloud-1.8.2", "actor": "bot:devops",
+        {"at": [0, 15.0], "name": "custom.deploy.finished", "subject": "deploy/cloud-1.8.2", "actor": "bot:devops",
          "data": {"version": "cloud 1.8.2"}},
     ],
     # Mail to Ben's inbox. Orders come from the marketplace; the rest are questions the filter drops.
@@ -206,7 +206,7 @@ CONTENT = {
          "subject": "Can I move the unit to the garage?"},
         {"at": [2, 12.0], "id": "order-4455", "from": "orders@bigmarket.example",
          "subject": "Order 4455: Home Pro x1", "close": "orders"},
-        {"at": [1, 9.0], "id": "order-4470", "from": "orders@bigmarket.example",
+        {"at": [0, 9.0], "id": "order-4470", "from": "orders@bigmarket.example",
          "subject": "Order 4470: Storefront x1"},
         {"at": [0, 0.4], "id": "order-4478", "from": "orders@bigmarket.example",
          "subject": "Order 4478: Home Pro x1"},
