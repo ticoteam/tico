@@ -300,6 +300,42 @@ def test_unconfigured_is_coming_soon_and_does_not_poll_in_a_loop(api, hq):
     assert get(api, "letters/settings")["availability"] == "unconfigured"
 
 
+def test_gateway_billing_and_cap_refusals_wait_for_an_explicit_retry(api, hq, monkeypatch):
+    row = send(api, quote(api))
+    real = hq.__call__
+    for code in ("billing_required", "cap_reached", "out_of_credit"):
+        attempts = []
+        def refused(key, base, path="", **kwargs):
+            attempts.append(path)
+            if path == "/quotes":
+                raise G.LettersError(403, code)
+            return real(key, base, path, **kwargs)
+        monkeypatch.setattr(G, "letters", refused)
+        if code == "billing_required":
+            approve(api, row)
+        else:
+            send(api, row)
+        after = fetch(api, row)
+        assert after["error"] == code and not hq.jobs
+        calls = len(attempts)
+        api.app.state.letters.drain()
+        assert calls == 1 and len(attempts) == calls
+
+
+def test_gateway_client_preserves_billing_required(monkeypatch):
+    import io
+    import urllib.error
+    from types import SimpleNamespace
+
+    def refused(*args, **kwargs):
+        raise urllib.error.HTTPError("https://gateway.acme.example", 403, "Forbidden", {},
+                                     io.BytesIO(b'{"error":"billing_required"}'))
+    monkeypatch.setattr(G, "branded_opener", lambda *args: SimpleNamespace(open=refused))
+    with pytest.raises(G.LettersError) as error:
+        G.letters("tgw_test", "https://gateway.acme.example/v1/gateway", "/quotes", body={})
+    assert (error.value.status, error.value.code) == (403, "billing_required")
+
+
 def test_status_sync_patches_one_letter_and_emits_authorized_live_change(api, hq):
     from backend import events
     row = send(api, quote(api))
