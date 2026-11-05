@@ -34,15 +34,18 @@ async function replay(browser) {
     await page.locator('.row[data-id="m2"]').click();
     await page.getByRole('button', {name: 'Open in Tico', exact: true}).click();
     assert.deepEqual(await page.evaluate(() => window.opened), ['https://acme.example/#/meetings?live=synthetic-room']);
-    await page.locator('[data-pop="people"]').first().click();
-    const notice = page.locator('#popover .vis .grow');
-    await notice.filter({hasText: 'Only you and people you add in Tico can see this meeting'}).waitFor();
-    await page.locator('[data-act="set-team"]').click();
-    await notice.filter({hasText: 'Everyone signed in to Acme <test> can see this meeting as it happens'}).waitFor();
-    assert.equal(await page.locator('#popover .vis test').count(), 0);
-    await page.locator('[data-act="set-team"]').click();
-    await notice.filter({hasText: 'Only you and people you add in Tico can see this meeting'}).waitFor();
-    console.log('PASS: synthetic Open in Tico click; Private → Team → Private without polling; escaped instance. 0 failures.');
+    // Who can join lives in the Share sheet; a live change applies at once and redraws without polling.
+    await page.locator('[data-act="share-open"]').click();
+    const sheet = page.locator('#sheet.share');
+    const radio = team => sheet.locator(`[data-act="share-team"][data-team="${team}"]`);
+    await radio(false).and(page.locator('[aria-checked="true"]')).waitFor();
+    await radio(true).click();
+    await radio(true).and(page.locator('[aria-checked="true"]')).waitFor();
+    await page.locator('[data-act="share-open"]').filter({hasText: 'Anyone on Acme <test>'}).waitFor();
+    assert.equal(await page.locator('#app test').count(), 0);
+    await radio(false).click();
+    await radio(false).and(page.locator('[aria-checked="true"]')).waitFor();
+    console.log('PASS: synthetic Open in Tico click; Only people I add → Anyone → Only people I add without polling; escaped org name. 0 failures.');
   } finally { await context.close(); }
 }
 module.exports = {replay};

@@ -15,8 +15,9 @@ model subscriptions and sends the results back. The in-app Help page (**?** in t
   the owner's too; the other three are helpers it hands work to. BotOps sets up and
   fixes bots, computers, Tools and Credentials; the [Librarian](librarian.md) answers from the team's docs and the Tico
   manual; the [Strategy Bot](goals-and-kpis.md#the-strategy-bot) keeps KPIs and goal status current. The [Task Manager](task-manager.md)
-  and the [Health Monitor](health-monitor.md) are built-in helpers outside the chart: once an hour they look for tasks
-  that stopped moving and for install faults, and wake only when they find something.
+  is a built-in helper outside the chart: once an hour it looks for tasks that stopped moving, and wakes only when it
+  finds something. [Check health](health-monitor.md) is a plain-code step that runs hourly and opens one BotOps task
+  per install problem.
 - **Message bots** work a human's email or a Slack channel. **External agents** (Hermes, OpenClaw, Codex, Claude) connect
   over MCP with a token ([Connect an external agent](connect-an-agent.md)).
 - **Tools and Credentials**: a bot gets only the Credentials granted to it, and drafts to outsiders until its send switch
@@ -67,7 +68,7 @@ Words are defined in the [Glossary](glossary.md).
   approval. Only a human decides; an approval is spent once and does not turn outbound sending on. Rules: `policies/approvals.md`.
   Each one records when its exact payload was ready (`ready_since`, when the request passed its checks) and whose decision
   it is (`decision_owner`, the person it was sent to); reads add `age_s`, and its card says "Ready 2 h 10 min, waiting on
-  Sam". A release's publish approval waiting over an hour is a [Health Monitor](health-monitor.md) finding.
+  Sam". A release's publish approval waiting over an hour is a [Check health](health-monitor.md) finding.
 - **Routine** — a cron schedule owned by a bot: `id`, `title`, `cron`, `timezone`, `template`
   (a playbook file) or inline `instructions`, `labels`. Each occurrence becomes a task.
 - **Goal** — what a human or a bot is for: a title, an owner (`company`, a human or a bot), the goal it
@@ -144,9 +145,11 @@ The database itself is readable with plain SQL (`hub sql`, the SQL page, `POST /
 one `SELECT` at a time, each caller seeing only what the JSON API would show it, credentials never
 ([Querying Tico with SQL](hub-sql.md)).
 
-**Your Mac's runner** — the Rust runner `tico-runner` (`runner-rs/`), with Python helpers in `runner/` for the side
+**Your Mac's runner** — the Rust runner `tico-runner` (`runner-rs/`), with Python helpers in `runner_support/` for the side
 jobs, registered once with **Add computer** in **Settings → Computers** (`scripts/setup-runner.sh`, credential in
-`~/.config/tico/runner.json`). Four launchd jobs, installed and managed with `scripts/tico`:
+`~/.config/tico/runner.json`). Four launchd jobs, installed and managed with `scripts/tico`. Their plists name
+`runner`, which forwards to `runner_support/` (runner/__init__.py), so a computer moved back to an older release still
+starts them:
 
 | Job | Command | What it does |
 |---|---|---|
@@ -249,8 +252,8 @@ the bot's Home gets one-line reports ([Sessions](sessions.md)).
 **A message to a bot may wake it, or wait.** One set of wake rules decides, each with an id: a person's message,
 an ask, an approval and a gate verdict always wake the bot (`person_message`, `ask`, `approval`, `verdict`), except that a
 Manager hears of a verdict as a note (`profile_manager_note`); a bot's own
-write (`own_write`), news about a task that waits on something (`parked`), a stall check on a task that has not moved
-(`same_state`; Stalled task check can let one wake through, see [Tasks](tasks.md)) and a plain bot-to-bot message (`bot_to_bot`) wait for the bot's next run; a deferred item waits too, until its deadline (`deferred`, [Steer, queue or defer](using-tico.md#steer-queue-or-defer)); a finished request and a
+write (`own_write`), news about a task that waits on something (`parked`), a legacy stall or status check on a task that has not moved
+(`same_state`; the [task roundup](tasks.md) lists such tasks instead, three times a day by default) and a plain bot-to-bot message (`bot_to_bot`) wait for the bot's next run; a deferred item waits too, until its deadline (`deferred`, [Steer, queue or defer](using-tico.md#steer-queue-or-defer)); a finished request and a
 person's review comments are batched (`batch_*`); one check finishing is ignored (`pr_check`) and a head whose checks
 all finished wakes the ticket's owner at a working step (`pr_checks_done`) or is a note (`pr_checks_note`); work wakes
 (an assignment, a review request, a blocker, a routine, a due date, a follow-up time that has come (even on a task that waits on a handoff, see [Following up bot work](tasks.md#following-up-bot-work)), a finished subtask, a published release) and anything
@@ -327,12 +330,7 @@ BotOps resumes or dismisses it after checking what already happened. Nothing is 
 While such a review is owed the bot's tasks and routines wait, but a human's own
 messages still run: nothing about them is uncertain.
 
-**Needs you.** Every issue Tico derives says whether a human has to act. Those that do (a
-review owed, a computer gone for more than ten minutes, a missing agent credential, a stale backup,
-a usage limit hit three times) open in a dialog in front of the human the first time they appear,
-wherever they are in the app. Each item is a title, at most one short line and at most two buttons: the title opens
-the details (the stopped runs, with *Open bot*, or the bot, the computer or Health). Closing it is remembered per issue and *Snooze* quiets it for an hour;
-the alert under the sidebar reopens it any time. Issues Tico resolves itself (a computer that
+**Needs you.** Every issue Tico derives says whether a human has to act. Those that do reach a person only as a Needs you card that BotOps raises on its task. The status dot left of your name shows only two states: "Can't reach Tico", and "Tico stopped / bots aren't running" (which includes no computer online). Health checks are not in the account menu or on the dot; they are listed on **Settings → Health**, one line per problem, each with its fix (a computer with a Tico update waiting gets *Restart* on its line). Stopped runs and quarantined bots are BotOps's to review, so they stay off the dot; **Settings → Health** lists them as notes, with *Review stopped runs* for a bot's stopped runs. Issues Tico resolves itself (a computer that
 just dropped off, a usage limit that is retrying) stay out of the way as *resolves on its own* in
 **Settings → Health**, one row per computer rather than one per bot. A cloud deploy is different: hub.acme.example is
 unreachable for a few minutes, the runner keeps the run going and the server extends every
@@ -512,7 +510,7 @@ copies can rotate apart when the provider refreshes the token.
 **Settings → Health** counts this company fallback: a limited bot covered by it gets no "has no fallback
 model" finding. When a computer's default login (no subscription) keeps stopping on a usage limit, Health
 says so once per computer and tool, e.g. "Team box's default Codex login is out of quota", until a turn on
-it completes or the reset time passes ([Health Monitor](health-monitor.md), `default_login_limited`).
+it completes or the reset time passes ([Check health](health-monitor.md), `default_login_limited`).
 
 The company's **check model** (*Check model* in **Settings → Models**, `check_models` on
 `/api/v2/providers`) is what review and check subtasks run on when they name no model: an ordered list such as
@@ -552,8 +550,7 @@ files a task for you, or sets its own task waiting on you (`hub task update --st
 <you> --note "<what you need to do>"`). A bot's waiting note, or the first paragraph of a task it gives
 you, must say in one or two plain sentences what it needs and what happens after, with no ids, file
 paths or tool names; Tico refuses it otherwise. A task a bot set waiting on you before that rule, with
-no plain ask, sits at the bottom of Needs you as "Waiting for <bot> to explain" while the bot is asked,
-once, to restate it. All of these appear in **Needs you** at the top of **Tasks** with
+no plain ask, sits at the bottom of Needs you as "Waiting for <bot> to explain" while the bot's task roundup lists it to restate it. All of these appear in **Needs you** at the top of **Tasks** with
 **Reply**, **Approve** / **Decline**, **Done** / **Close**. Needs you is your queue: approvals and
 questions first (each blocks a bot), then your own tasks in rank order. Tickets on a numbered type
 stay on their board and come to Needs you only with a question for you ([Tasks](tasks.md)). There
@@ -588,14 +585,14 @@ window and a gap between sweeps, and it grants no right.
 | **Doer** (the default) | people, hand-offs, asks, awaited results | batched, 15 minutes | any task; pulls its open tasks by itself |
 | **Reviewer** | its review or QA request, a verdict it waits for, people | a note | review and QA requests only (a subtask titled Review 1/2, QA or Security, a live-acceptance check, or a top-level "Release QA:" / "Post-release QA:" task); any other task is refused with the reason |
 | **Lead** | people, escalations, a ticket it asked for ending declined, blocked or done, approvals | one digest a day (09:00 team time by default) | any task, started only when a person or a bot asks |
-| **Manager** | people, a task given to it, its own clock, its exceptions list having a new entry | a note for its next run, verdicts and its subtasks' results included | any task, started only when a person or a bot asks |
+| **Manager** | people, a task given to it, its own clock | a note for its next run, verdicts and its subtasks' results included | any task, started only when a person or a bot asks |
 | **Responder** | people | a note | no task: refused like a bot synced from another platform |
 | **Monitor** | its own watcher, people | a note | its watcher's tasks only |
 | **Custom** | what its rules say | its rules | what its settings say |
 
 A bot's own clock still wakes it: a routine or schedule wakes a Reviewer, Lead, Manager and Monitor, and a due date or a
-snooze ending wakes a Lead, Manager and Monitor; a Responder has no routines. Stall and status checks run only for a Doer (and for a
-Custom bot that keeps them on). Doers pull open tasks themselves; the others start a task only when it is handed to them.
+snooze ending wakes a Lead, Manager and Monitor; a Responder has no routines. The task roundup's task lines go only to bots with sweeps on (a Manager or a Doer, or a
+Custom bot that keeps them on); a Reviewer, Lead, Responder or Monitor is listed only its questions and its own follow-up times. Doers pull open tasks themselves; the others start a task only when it is handed to them.
 **Custom** copies the profile's rows into the Rules table, marked as the profile's, to edit there; choosing a named profile
 again deletes them after a confirm. Set a profile in **Settings → Bots → Edit**, with `hub bot profile <bot> [name]`, MCP
 `hub_bot_profile`, or `POST /api/v2/bots/{bot}/profile` with `expected_revision` (`GET /api/v2/profiles` lists the choices
@@ -604,7 +601,7 @@ with a line each); the bot's owner, operator, a person it reports up to, or BotO
 Starting the server gives each bot without a profile one by its name once: `*-monitor`, `*-watch`, `listening` and
 `sentry-triage` are Monitors; `*reviewer*`, `qa-*`, `security*` and `reviewer-*` Reviewers (a bot named `pr-reviewer` that
 owns Dev tickets stays a Doer); the leads, the C-level Heads and `*-manager` Leads; the Assistant and bots synced from
-another platform Responders; BotOps, the Health Monitor, the Task Manager and the Librarian Custom; everything else a Doer.
+another platform Responders; BotOps, the Task Manager and the Librarian Custom; everything else a Doer.
 Each owner gets one notice naming their bots and profiles. The old wake preset is part of the profile: Token saver became a
 Doer with a 30-minute window and Performance a Doer; `wake_preset` and `POST /api/v2/bots/{bot}/wake-preset` still read and
 set that window. **Keep N tasks going** stays the Doer's cap. Health reports a Reviewer that owns tasks other than reviews,
@@ -640,7 +637,7 @@ made or revoked is an `events` row (`token.create`, `token.revoke`).
 |---|---|
 | `backend/` | the cloud API, authorization, write layer, scheduler, backups (FastAPI, SQLite) |
 | `runner-rs/` | the local runner (`tico-runner`): enrolment, readiness, leases, runs, harnesses, updates |
-| `runner/` | the runner's Python helpers: the `python -m runner run` shim, connectors, Close call and meeting import, catalog set-up, the update process |
+| `runner_support/` | the runner's Python helpers: the `python -m runner_support run` shim, connectors, Close call and meeting import, catalog set-up, the update process |
 | `clients/` | what bots and the runner call: the `hub` CLI, the HTTP client, attachment download, routine validation, preflight, the docs read and write commands |
 | `connectors/` | shared Slack, mail/calendar and browser adapters bots use instead of vendor APIs |
 | `integrations/` | one page per outside system (what it is, how a bot uses it, rules, recipes) and the query lists; served as **Tools** and `hub tool show <service>`, with the learnings bots add |

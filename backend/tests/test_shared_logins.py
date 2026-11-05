@@ -95,6 +95,11 @@ def test_a_turns_login_class_puts_release_blockers_first_then_reviews_and_a_pers
     # A standing watch never jumps the queue, labelled or not.
     assert login_class(c, release, {"sender_id": "keeper", "refs": {"wake": "next-run"}}, None) == "other"
     assert login_class(c, release, person, {"id": "r1"}) == "other"
+    # The keeper's carrier of a person's message is the person's turn, not a standing watch.
+    carrier = {"sender_id": "keeper", "refs": {"carries": "m1", "from": "human:ana", "wake": "thread"}}
+    assert login_class(c, plain, carrier, None) == "review"
+    assert login_class(c, plain, {"sender_id": "keeper", "refs": {"carries": "m1", "from": "bot:lead", "wake": "thread"}},
+                       None) == "other"
 
 
 def test_a_turn_that_gave_its_login_up_at_the_cap_goes_back_in_the_queue_unanswered_and_not_held_for_review(api):

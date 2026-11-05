@@ -83,8 +83,7 @@ def _plan(c, actor):
         readable = [m for m in window if threads.readable(c, viewer, dict(m))]
         if not any(m["seq"] > row["emailed"] for m in readable):
             continue
-        outside = threads.title_from_outside(c, {"id": row["thread_id"], "root_id": row["root_id"]})    # another company's
-        listed.append({"thread_id": row["thread_id"], "title": title_of(None if outside else row["subject"]),
+        listed.append({"thread_id": row["thread_id"], "title": title_of(row["subject"]),
                        "unread": min(len(readable), MAX_UNREAD), "covers": window[0]["seq"]})
     listed = listed[:MAX_THREADS]
     return {"actor": actor, "email": email,

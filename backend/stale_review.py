@@ -146,7 +146,8 @@ def _blocker_reason(c, row):
 
 
 def _snooze_reason(c, row, at):
-    ended = c.execute("SELECT created_at FROM task_events WHERE task_id=? AND field='snoozed_until' AND note='snooze over' "
+    ended = c.execute("SELECT created_at FROM history_events WHERE subject_type='task' AND subject_id=? AND kind='snoozed_until' "
+                      "AND note='snooze over' "
                       "ORDER BY created_at DESC LIMIT 1", (row["id"],)).fetchone()
     if not ended or ended[0] > H.shift(at, hours=-SNOOZE_GRACE_HOURS):
         return None
@@ -184,7 +185,7 @@ def reason(c, row, at):
 
 def _live(c, task_id):
     try:
-        return c.execute("SELECT 1 FROM turns t JOIN attempts a ON a.id=t.id WHERE t.task_id=? "
+        return c.execute("SELECT 1 FROM attempts a WHERE a.task_id=? "
                          "AND a.state IN ('leased','running') LIMIT 1", (task_id,)).fetchone() is not None
     except Exception:               # a local hub has no attempts table
         return False
@@ -201,7 +202,7 @@ def candidates(c, at):
     go to Decide."""
     marks = ",".join("?" * len(STATUSES))
     out = []
-    for row in H._rows(c.execute(f"SELECT * FROM tasks WHERE status IN ({marks}) AND private=0 ORDER BY created_at,id",
+    for row in H._rows(c.execute(f"SELECT * FROM {H.TASKS} tasks WHERE status IN ({marks}) AND private=0 ORDER BY created_at,id",
                                  STATUSES)):
         if H.TS.snoozed(row, at) or not (H.is_bot(row["owner_id"]) or H.is_human(row["owner_id"])):
             continue

@@ -142,7 +142,7 @@ def readiness(c, bot, choice, runner_id=None):
     can = can_run(c, bot, choice["runtime"], runner=runner_id, harness=choice["harness"], model=choice["model"])
     computer = can.get("computer") or {}
     where = computer.get("label") or "this bot's computer"
-    row = c.execute("SELECT readiness FROM runners WHERE id=?", (computer.get("id") or "",)).fetchone()
+    row = c.execute("SELECT readiness FROM runners_with_state WHERE id=?", (computer.get("id") or "",)).fetchone()
     ready = readiness_document(row[0]) if row else {}
     state = (ready.get("runtimes") or {}).get(choice["runtime"])
     if ready.get("schema_version") == 1 and isinstance(state, dict) and state.get("installed") is False:
@@ -391,7 +391,8 @@ def handed(c, attempt_id, task_id, record):
     c.execute("UPDATE attempts SET model=? WHERE id=?", (json.dumps(record), attempt_id))
     if (record["source"] != "fallback" and not record.get("below_minimum")) or not task_id:
         return
-    last = c.execute("SELECT note FROM task_events WHERE task_id=? AND field='task_model' ORDER BY rowid DESC LIMIT 1",
+    last = c.execute("SELECT note FROM history_events WHERE subject_type='task' AND subject_id=? AND kind='task_model' "
+                     "ORDER BY rowid DESC LIMIT 1",
                      (task_id,)).fetchone()
     if not last or last[0] != record["note"]:
         H._task_event(c, task_id, H.KEEPER, "task_model", label(record["asked"]),

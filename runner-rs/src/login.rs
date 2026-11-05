@@ -132,6 +132,10 @@ const MIN_TOKEN: usize = 90;
 const TOKEN_GRACE: Duration = Duration::from_secs(10);
 #[cfg(test)]
 const TOKEN_GRACE: Duration = Duration::from_millis(500);
+/// How long after the code Enter is typed. `claude setup-token` takes a code and Enter written together as a paste and
+/// waits for an Enter that never comes ("Code sent. Waiting for the computer to finish…", Nov 3): typed alone a moment
+/// later, it signs in at once.
+const ENTER_AFTER_CODE: Duration = Duration::from_millis(1200);
 
 /// The token `prefix` starts, from what a Connect's command has printed so far. Until the command has `ended` a token
 /// counts only once something follows it: the rest of it may still be arriving.
@@ -233,6 +237,8 @@ struct Inner {
     /// A Connect's result, until the server has taken it (`Logins::flush`).
     captured: Option<String>,
     save_retry_logged: bool,
+    /// Every byte the command has printed, so the part after a typed code can be found once `raw` is trimmed.
+    seen: usize,
 }
 
 /// One login command, from start to a verdict.
@@ -321,6 +327,9 @@ impl Session {
                 }
             }
         }
+        // Every finish is after its action (a sign-in, a sign-out's logout, a switch, a removal, or a failure that undid
+        // its marks), so the probe reads the result of that action, whatever the verdict.
+        crate::readiness::request_probe();
     }
 }
 
@@ -397,6 +406,60 @@ fn sign_in_status(runtime: &str, exe: &str, env: &Env) -> Option<(bool, String)>
         // No status command: the login file in this sign-in's config folder is the sign-in, as readiness checks it.
         "file" => crate::hosts::file_signed_in(runtime, env).map(|on| (on, if on { crate::hosts::file_sign_in_detail(runtime, env).map(String::from).unwrap_or(status.ready_detail) } else { String::new() })),
         _ => None,
+    }
+}
+
+/// A Connect's screen after the code went in, as one line for the runner's log: links, the typed code and anything
+/// token-shaped taken out (`redact`), the last 240 characters. A code that the CLI accepted but then stops on (a
+/// question, a choice, an error with no retry) shows here; before, the log went quiet between code_written and cancel.
+fn screen_digest(raw: &str, typed: &str) -> String {
+    let mut text = plain(raw);
+    if !typed.is_empty() {
+        text = text.replace(typed, "");
+    }
+    let text = squash(&redact(&patterns().link.replace_all(&text, "[link]")));
+    let skip = text.chars().count().saturating_sub(240);
+    text.chars().skip(skip).collect()
+}
+
+struct AfterCode {
+    seen_at: usize,
+    checked: Instant,
+    logged: Instant,
+    last: String,
+}
+
+impl AfterCode {
+    fn new(seen_at: usize) -> AfterCode {
+        let now = Instant::now();
+        AfterCode { seen_at, checked: now, logged: now, last: String::new() }
+    }
+
+    /// Every 2 s: a changed screen is logged; an unchanged one says it is still waiting every 20 s.
+    fn check(&mut self, s: &Session) {
+        if self.checked.elapsed() < Duration::from_secs(2) {
+            return;
+        }
+        self.checked = Instant::now();
+        let (since, digest) = {
+            let i = s.inner.lock().unwrap();
+            let since = i.seen.saturating_sub(self.seen_at);
+            let mut from = i.raw.len().saturating_sub(since);
+            while !i.raw.is_char_boundary(from) {
+                from += 1;
+            }
+            (since, screen_digest(&i.raw[from..], i.typed.as_deref().unwrap_or("")))
+        };
+        if digest != self.last {
+            log(&format!("Tico runner: model sign-in {}", json!({"login_id": s.id, "runtime": s.runtime,
+                "phase": "after_code_screen", "elapsed_ms": s.started.elapsed().as_millis(), "bytes": since, "screen": digest})));
+            self.last = digest;
+            self.logged = Instant::now();
+        } else if self.logged.elapsed() >= Duration::from_secs(20) {
+            log(&format!("Tico runner: model sign-in {}", json!({"login_id": s.id, "runtime": s.runtime,
+                "phase": "waiting_after_code", "elapsed_ms": s.started.elapsed().as_millis(), "bytes": since})));
+            self.logged = Instant::now();
+        }
     }
 }
 
@@ -730,6 +793,7 @@ fn run_session(s: Arc<Session>, runner: Arc<Runner>, config: Config, lifetime: D
                 let (raw, hide) = {
                     let mut i = s.inner.lock().unwrap();
                     i.raw.push_str(&String::from_utf8_lossy(&buf[..n]));
+                    i.seen += n;
                     if i.raw.len() > KEEP_RAW {
                         let mut cut = i.raw.len() - KEEP_RAW;
                         while !i.raw.is_char_boundary(cut) {
@@ -768,6 +832,9 @@ fn run_session(s: Arc<Session>, runner: Arc<Runner>, config: Config, lifetime: D
     // A Connect's command that printed its token and then would not end: its token still counts.
     let mut token_at = None;
     let mut stopped_after_token = false;
+    // After a Connect's code is typed: what the command shows, as a scrubbed line, when it changes (`after_code`).
+    let mut watch: Option<AfterCode> = None;
+    let mut enter_at: Option<Instant> = None;
     let verdict: Option<(String, String)> = loop {
         match child.try_wait() {
             Ok(Some(_)) | Err(_) => break None,
@@ -798,20 +865,38 @@ fn run_session(s: Arc<Session>, runner: Arc<Runner>, config: Config, lifetime: D
         if let Some(w) = &writer {
             let code = s.inner.lock().unwrap().pending.take();
             if let Some(code) = code {
-                let line = format!("{code}\r");
-                let wrote = unsafe { libc::write(w.as_raw_fd(), line.as_ptr() as *const _, line.len()) };
-                if wrote == line.len() as isize {
+                // The code alone; Enter follows on its own write (ENTER_AFTER_CODE).
+                let wrote = unsafe { libc::write(w.as_raw_fd(), code.as_ptr() as *const _, code.len()) };
+                if wrote == code.len() as isize {
                     let mut i = s.inner.lock().unwrap();
                     i.typed = Some(code);
                     i.taken = true;
                     i.dirty = true;
                     s.trace("code_written", None);
+                    watch = connect.then(|| AfterCode::new(i.seen));
+                    enter_at = Some(Instant::now() + ENTER_AFTER_CODE);
                 } else {
                     s.trace("code_delivery_failed", None);
                     kill(&mut child);
                     break Some(("failed".into(), "The code could not reach the sign-in command. Choose Try again.".into()));
                 }
             }
+        }
+        if let (Some(w), Some(at)) = (&writer, enter_at) {
+            if Instant::now() >= at {
+                enter_at = None;
+                let wrote = unsafe { libc::write(w.as_raw_fd(), b"\r".as_ptr() as *const _, 1) };
+                if wrote == 1 {
+                    s.trace("enter_written", None);
+                } else {
+                    s.trace("code_delivery_failed", None);
+                    kill(&mut child);
+                    break Some(("failed".into(), "The code could not reach the sign-in command. Choose Try again.".into()));
+                }
+            }
+        }
+        if let Some(w) = watch.as_mut() {
+            w.check(&s);
         }
         std::thread::sleep(Duration::from_millis(100));
     };
@@ -904,10 +989,15 @@ fn run_session(s: Arc<Session>, runner: Arc<Runner>, config: Config, lifetime: D
         if !keep_side {
             discard(side);
         }
-        if state == "signed_in" {
-            // The new account's email and plan are read afresh, not the old one's.
-            crate::accounts::forget(&profile.as_ref().map(|p| p.name.clone()).unwrap_or_default(), &s.runtime);
-        }
+    }
+    if state == "signed_in" {
+        // The new account's email, plan, usage windows and fallback hold are read afresh, not the old one's, after a
+        // switch or a plain sign-in alike; a read of the old account still running is then not kept
+        // (accounts::keep_if_current). With the account forgotten, remember() can no longer see the change of account,
+        // so the windows it would have dropped are dropped here.
+        let name = profile.as_ref().map(|p| p.name.clone()).unwrap_or_default();
+        crate::accounts::forget(&name, &s.runtime);
+        crate::profiles::forget_windows(&name, &s.runtime);
     }
     // A captured Connect ends once the server has taken it (`Logins::flush`).
     if !captured {
@@ -1642,6 +1732,20 @@ mod tests {
     use super::*;
 
     #[test]
+    fn the_screen_after_a_code_is_logged_without_its_link_code_or_token() {
+        let raw = "\x1b[2GSelect\x1b[9Gan\x1b[12Gorganization\r\n\x1b]8;;https://claude.com/cai/oauth/authorize?code=true\x07link\x1b]8;;\x07 \
+                   https://claude.com/x?state=abc \r\nsecretcode12345\r\nsk-ant-oat01-abcdefghijklmnopqrstuvwxyz0123456789\r\n> Acme\r\n";
+        let digest = screen_digest(raw, "secretcode12345");
+        assert!(digest.contains("Select an organization"), "{digest}");
+        assert!(digest.contains("> Acme"), "{digest}");
+        for leak in ["secretcode12345", "sk-ant-oat01", "abcdefghijklmnop", "https://", "state=abc"] {
+            assert!(!digest.contains(leak), "{leak} in {digest}");
+        }
+        let long = "word ".repeat(200);
+        assert!(screen_digest(&long, "").chars().count() <= 240);
+    }
+
+    #[test]
     fn connect_takes_a_printed_token_only_once_it_has_all_arrived() {
         let token = format!("sk-ant-oat01-{}", "a1_B-".repeat(20));
         let shown = format!("\x1b[1mYour token:\x1b[0m\r\n{token}\x1b[0m\r\nStore it safely.\r\n");
@@ -1682,7 +1786,13 @@ case "$*" in
   setup-token)
     test -z "$ANTHROPIC_API_KEY" || exit 3
     echo 'Use the url below to sign in'; echo 'https://claude.example/authorize?x=1'; echo 'Paste code here if prompted >'
-    read code
+    # Like the real CLI: an Enter that arrives with the code is part of a paste, and the sign-in never finishes.
+    stty -icanon min 1 time 0
+    code=$(head -c 11)
+    stty min 0 time 5
+    test -z "$(head -c 1)" || exit 6
+    stty icanon min 1
+    read rest
     test "$code" = pasted-code || exit 4
     if test -e "$HOME/rejects-code"; then
       trap 'touch "$HOME/rejected-stopped"; exit 0' TERM
@@ -1716,7 +1826,7 @@ esac
             std::fs::remove_dir_all(&root).ok();
             assert!(out.status.success(), "{}{}", String::from_utf8_lossy(&out.stdout), String::from_utf8_lossy(&out.stderr));
             let diagnostics = String::from_utf8_lossy(&out.stdout);
-            for phase in ["cli_started", "instructions_ready", "code_received", "code_written", "oauth_code_rejected", "credential_captured", "cli_exited", "canceled"] {
+            for phase in ["cli_started", "instructions_ready", "code_received", "code_written", "enter_written", "oauth_code_rejected", "credential_captured", "cli_exited", "canceled"] {
                 assert!(diagnostics.contains(&format!("\"phase\":\"{phase}\"")), "missing {phase}: {diagnostics}");
             }
             assert!(!diagnostics.contains("pasted-code") && !diagnostics.contains("sk-ant-oat")
@@ -2276,6 +2386,7 @@ exit 2
 
     #[test]
     fn clear_and_replace_the_computers_own_codex_key() {
+        let _guard = crate::readiness::probe_tests::PATH_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         const CHILD: &str = "TICO_TEST_MODEL_KEYS";
         let Some(root) = std::env::var_os(CHILD).map(std::path::PathBuf::from) else {
             // A process of its own: PATH, HOME and CODEX_HOME point at a stand-in CLI and a scratch home.
@@ -3339,5 +3450,23 @@ esac
         assert_eq!(url, "https://claude.ai/oauth/authorize?code=true");
         assert!(prompt);
         assert!(!lines.iter().any(|l| l.contains("secretcode")));
+    }
+
+    /// A finished login asks for a probe, whatever its verdict, once its action has run (finding 1): a sign-out's logout
+    /// and a named profile's removal are read again after they finish, not before.
+    #[tokio::test]
+    async fn a_finished_login_asks_for_a_probe_whatever_the_verdict() {
+        let root = std::env::temp_dir().join(format!("tico-finish-{}", uuid::Uuid::new_v4().simple()));
+        std::fs::create_dir_all(root.join("projects")).unwrap();
+        let data = json!({"projects_dir": root.join("projects").display().to_string()}).as_object().unwrap().clone();
+        let config = Config { path: std::path::PathBuf::new(), data };
+        let client = crate::client::Client::new("http://127.0.0.1:9", "t", 1, 0).unwrap();
+        let runner = Runner::new(config, client, crate::state::State::open(&root.join("state")).unwrap());
+        for (state, message) in [("signed_out", "Signed out"), ("failed", "The logout did not finish")] {
+            let before = crate::readiness::requests();
+            session("sign_out").finish(state, message, &runner, "");
+            assert!(crate::readiness::requests() > before, "{state} asks for a probe");
+        }
+        std::fs::remove_dir_all(root).unwrap();
     }
 }

@@ -1,4 +1,6 @@
 from datetime import datetime, timezone
+import sqlite3
+from unittest.mock import Mock
 
 import pytest
 
@@ -6,6 +8,24 @@ from backend import routines
 from backend.tests.test_api import api, post  # noqa: F401
 from backend.scheduler import Scheduler
 from backend.store import H
+
+
+def test_failed_computer_retirement_records_failure_and_runs_the_remaining_cleanup(api, monkeypatch, caplog):
+    from backend import computers, screening, support_triage
+
+    retirement = Mock(side_effect=sqlite3.OperationalError("writer lock timeout"))
+    monkeypatch.setattr(computers, "sweep", retirement)
+    following = []
+    for module in (support_triage, screening):          # the deadline sweeps after retirement (pruning is Clean up's)
+        sweep = Mock(wraps=module.sweep)
+        monkeypatch.setattr(module, "sweep", sweep)
+        following.append(sweep)
+    result = Scheduler(api.app.state.store, api.app.state.execution).tick()
+    assert result["failures"] == [{"computer_retirement": "OperationalError"}]
+    retirement.assert_called_once()
+    for sweep in following:
+        sweep.assert_called_once()
+    assert any(record.name == "tico.scheduler" and record.exc_info for record in caplog.records)
 
 
 def test_schedule_survives_restart_without_duplicate_work(api):
@@ -213,7 +233,7 @@ def test_claim_query_matches_old_python_oracle_on_200_rows(api):
                       refs={'task': refs[(i // 12) % len(refs)]})
             c.execute("UPDATE jobs SET created_at=?,state=? WHERE message_id=?", ('2026-09-01T00:00:00Z' if i % 5 == 0 else '2026-09-02T00:00:00Z', 'uncertain' if i % 17 == 0 else 'queued', m['id']))
         c.execute("UPDATE bot_config SET onboarding_state='needs_setup' WHERE bot='finance'")
-        readiness = readiness_document(c.execute('SELECT readiness FROM runners WHERE id=?', (r['runner_id'],)).fetchone()[0])
+        readiness = readiness_document(c.execute('SELECT readiness FROM runners_with_state WHERE id=?', (r['runner_id'],)).fetchone()[0])
         # The old candidate's Python predicate, with readiness and onboarding gates.
         def old_claimable(job):
             check = bot_readiness(readiness, job['bot_id'])
@@ -241,6 +261,75 @@ def test_claim_query_matches_old_python_oracle_on_200_rows(api):
             if actual is None:
                 break
             c.execute("UPDATE jobs SET state='completed' WHERE id=?", (actual['id'],))
+
+
+def _ops_runner(api):
+    from backend.auth import Identity
+    from backend.tests.test_api import assign, ready, runner
+    r = runner(api)
+    assign(api, r, 'ops')
+    ready(api, r, ['ops'])
+    return Identity('runner:' + r['runner_id'], 'runner', runner_id=r['runner_id'])
+
+
+def _wake_by_hand(c, message_id, bot):
+    """H.say marks a keeper notice quiet, so it queues no job. This queues it as a notice that wakes the bot: the job
+    enqueue writes for a notice that is not quiet."""
+    c.execute("INSERT INTO jobs(id,message_id,bot_id,created_at) VALUES(?,?,?,?)", (message_id, message_id, bot, H.now()))
+    return message_id
+
+
+def _carrier_job(c, message_id):
+    """The queued job of the keeper carrier a thread wrote for this message (threads._carrier)."""
+    return c.execute("SELECT j.id FROM jobs j JOIN messages m ON m.id=j.message_id WHERE m.sender_id='keeper' "
+                     "AND json_extract(m.refs,'$.carries')=?", (message_id,)).fetchone()[0]
+
+
+def test_a_persons_home_message_carried_by_a_notice_is_claimed_before_an_older_notice(api):
+    from backend import threads
+    from backend.models import Claim
+    who = _ops_runner(api)
+    execution, store = api.app.state.execution, api.app.state.store
+    with store.transaction() as c:
+        older = H.say(c, H.KEEPER, 'bot:ops', 'Older keeper notice', kind='notice')
+        older_job = _wake_by_hand(c, older['id'], 'ops')
+        home = threads.home(c, 'bot:ops', create=True)
+        mine = threads.post(c, 'human:ana', home['id'], 'Stop the April numbers')
+        carrier = _carrier_job(c, mine['id'])
+        c.execute("UPDATE jobs SET created_at=? WHERE id=?", ('2026-09-01T00:00:00Z', older_job))
+        c.execute("UPDATE jobs SET created_at=? WHERE id=?", ('2026-09-02T00:00:00Z', carrier))
+        claimed = execution.candidate(c, who, Claim(), execution.runner(c, who))
+        assert claimed['id'] == carrier
+
+
+def test_a_bots_message_carried_by_a_notice_keeps_its_place_behind_an_older_notice(api):
+    from backend.models import Claim
+    who = _ops_runner(api)
+    execution, store = api.app.state.execution, api.app.state.store
+    with store.transaction() as c:
+        older = H.say(c, H.KEEPER, 'bot:ops', 'Older keeper notice', kind='notice')
+        said = H.say(c, 'bot:finance', 'human:ana', 'Finance has the numbers')
+        carrier = H.say(c, H.KEEPER, 'bot:ops', 'bot:finance: Finance has the numbers', kind='notice',
+                        refs={'carries': said['id'], 'from': 'bot:finance', 'wake': 'thread'})
+        older_job = _wake_by_hand(c, older['id'], 'ops')
+        carrier_job = _wake_by_hand(c, carrier['id'], 'ops')
+        c.execute("UPDATE jobs SET created_at=? WHERE id=?", ('2026-09-01T00:00:00Z', older_job))
+        c.execute("UPDATE jobs SET created_at=? WHERE id=?", ('2026-09-02T00:00:00Z', carrier_job))
+        claimed = execution.candidate(c, who, Claim(), execution.runner(c, who))
+        assert claimed['id'] == older_job
+
+
+def test_a_carried_persons_home_chat_stays_claimable_past_an_interrupted_run_on_the_bot(api):
+    from backend import threads
+    from backend.execution import queued_jobs_sql
+    _ops_runner(api)
+    with api.app.state.store.transaction() as c:
+        home = threads.home(c, 'bot:ops', create=True)
+        earlier = threads.post(c, 'human:ana', home['id'], 'Earlier question')
+        c.execute("UPDATE jobs SET state='uncertain' WHERE id=?", (_carrier_job(c, earlier['id']),))
+        mine = threads.post(c, 'human:ana', home['id'], 'Now this one')
+        free = {row['id']: row['free'] for row in c.execute(queued_jobs_sql(), ('ops',))}
+        assert free[_carrier_job(c, mine['id'])] == 1
 
 
 def test_row_isolation_keeps_standalone_task_databases_working(tmp_path):

@@ -11,6 +11,7 @@ from backend.auth import Identity
 from backend.store import H, digest
 from backend.tests.test_api import api, as_member, assign, get, headers, post, ready, runner  # noqa: F401
 from backend.tests.test_assistant import asked, say, turn_message
+from backend import bot_settings as BS
 
 
 def strategy_bot(api):
@@ -18,8 +19,8 @@ def strategy_bot(api):
     with api.app.state.store.transaction() as c:
         c.execute("INSERT INTO bots(id,slug,display_name,effort,state,created_at) "
                   "VALUES('goal-manager','goal-manager','Strategy Bot','','active',?)", (H.now(),))
-        c.execute("INSERT INTO bot_config(bot,config,team,owner_id) VALUES('goal-manager',?,NULL,'ana')",
-                  ('{"runtime":"fake","host":"keeper"}',))
+        c.execute("INSERT INTO bot_config(bot,team,owner_id) VALUES('goal-manager',NULL,'ana')")
+        BS.write(c, 'goal-manager', {"runtime": "fake", "host": "keeper"})
 
 
 def personal(api, pid):
@@ -45,8 +46,8 @@ def helper(api, slug, name):
     with api.app.state.store.transaction() as c:
         c.execute("INSERT INTO bots(id,slug,display_name,effort,state,created_at) "
                   "VALUES(?,?,?,'','active',?)", (slug, slug, name, H.now()))
-        c.execute("INSERT INTO bot_config(bot,config,team,owner_id) VALUES(?,?,NULL,'ana')",
-                  (slug, '{"runtime":"fake","host":"keeper"}'))
+        c.execute("INSERT INTO bot_config(bot,team,owner_id) VALUES(?,NULL,'ana')", (slug,))
+        BS.write(c, slug, {"runtime": "fake", "host": "keeper"})
 
 
 def earlier_chat(api, owner="human:ana", said=("Grow revenue 20% this year", "Here is a plan for that.")):
@@ -242,8 +243,10 @@ def test_a_members_cited_strategy_change_is_refused_and_the_strategy_bot_cannot_
     task = task.get("task", task)
     # Her Assistant cannot make a strategy write on her words: it is the owner's, and not even a card.
     draft = {"revision": 0, "summary": "Win the enterprise market"}
-    refused = asked(api, "strategy/draft", draft, coo["token"], "turn", expected=403)
-    assert refused["error"]["code"] in ("confirm_required", "forbidden")
+    # The draft is saved with PUT (backend/strategy.py): the route's own owner check refuses the member's Assistant.
+    refused = api.put("/api/v2/strategy/draft", json=draft,
+                      headers={**headers(coo["token"]), "X-Tico-On-Behalf-Of": "turn"})
+    assert refused.status_code == 403 and refused.json()["error"]["code"] in ("confirm_required", "forbidden"), refused.text
     asked(api, "assistant/actions", {"summary": "Change the strategy", "method": "PUT", "path": "/api/v2/strategy/draft",
                                      "body": draft}, coo["token"], "turn", expected=422)
     # The Strategy Bot works her task as itself: the owner's strategy stays the owner's to change.

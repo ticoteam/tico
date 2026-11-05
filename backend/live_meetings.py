@@ -459,6 +459,42 @@ def _turn_conversation(c, rid, slug, title):
     return conv
 
 
+# What a bot's meeting conversation says once the meeting was kept on the recorder's computer.
+DISCARDED = "Removed: this meeting was kept on the recorder's computer."
+
+
+# Words a run's result can carry; the rest of it (outcome, fallback, limits) stays.
+_RUN_TEXT = {"text", "final_text", "reply", "summary", "message", "body", "content", "output", "delta", "quote"}
+
+
+def _without_words(value):
+    if isinstance(value, dict):
+        return {k: DISCARDED if k in _RUN_TEXT and isinstance(v, str) else _without_words(v) for k, v in value.items()}
+    if isinstance(value, list):
+        return [_without_words(v) for v in value]
+    return value
+
+
+def _discard_runs(c, conv):
+    """The runs a kept-local meeting's turns started, in its bot conversation: their rows stay, their words go."""
+    runs = [row[0] for row in c.execute(
+        "SELECT a.id FROM attempts a JOIN jobs j ON j.id=a.job_id JOIN messages m ON m.id=j.message_id "
+        "WHERE m.conversation_id=? UNION SELECT a.id FROM attempts a JOIN messages m ON m.id=a.message_id "
+        "WHERE m.conversation_id=? UNION SELECT attempt_id FROM attempt_conversations WHERE conversation_id=?",
+        (conv, conv, conv))]
+    for run in runs:
+        row = c.execute("SELECT result,final_text,summary FROM attempts WHERE id=?", (run,)).fetchone()
+        try:
+            result = json.loads(row["result"]) if row["result"] else None
+        except ValueError:
+            result = None
+        c.execute("UPDATE attempts SET result=?,final_text=?,summary=? WHERE id=?",
+                  (None if result is None else json.dumps(_without_words(result)),
+                   DISCARDED if row["final_text"] else row["final_text"],
+                   DISCARDED if row["summary"] else row["summary"], run))
+        c.execute("UPDATE attempt_events SET payload=? WHERE attempt_id=?", (json.dumps({"discarded": True}), run))
+
+
 def _dispatch_turn(c, rid, turn_id, slug, retry=0):
     """Put one scoped reply request on the existing durable runner job queue, in this bot's meeting conversation. A
     request that arrives while the bot's reply in this meeting runs is a follow-up in that conversation: a runtime that
@@ -476,11 +512,11 @@ def _dispatch_turn(c, rid, turn_id, slug, retry=0):
 def _wait_for_update(c, rid, turn_id, slug):
     """Say once per meeting and bot when no computer running the bot can take a private meeting's turn: one without
     private lanes is never handed it (execution.PRIVATE_LANES), so the turn waits for its runner's update."""
-    from .execution import PRIVATE_LANES, _capability_set
-    computers = c.execute("SELECT r.label,r.capabilities FROM assignments a JOIN runners r ON r.id=a.runner_id "
+    from .execution import PRIVATE_LANES, capability_set
+    computers = c.execute("SELECT r.label,r.capabilities FROM assignments a JOIN runners_with_state r ON r.id=a.runner_id "
                           "WHERE a.bot=? AND r.revoked_at IS NULL", (slug,)).fetchall()
     old = [r["label"] or "This bot's computer" for r in computers
-           if PRIVATE_LANES not in _capability_set(r["capabilities"])]
+           if PRIVATE_LANES not in capability_set(r["capabilities"])]
     if not computers or len(old) < len(computers):
         return
     if c.execute("SELECT 1 FROM live_meeting_events WHERE meeting_id=? AND type='meeting.bot_turn_waiting' "
@@ -1250,7 +1286,7 @@ def install_live_meetings(app, store, auth, write):
                                          (who.actor, body.client_id)).fetchone()
                     if existing:
                         _require_read(c, auth, who, existing["id"])
-                cached = c.execute("SELECT response FROM idempotency WHERE actor=? AND operation=? AND key=?",
+                cached = c.execute("SELECT response FROM idempotency WHERE binding IS NULL AND actor=? AND operation=? AND key=?",
                                    (who.actor, request.url.path, request.headers.get("idempotency-key"))).fetchone()
                 if cached:
                     _require_read(c, auth, who, (H._json(cached["response"], {}) or {}).get("id"))
@@ -1650,6 +1686,37 @@ def install_live_meetings(app, store, auth, write):
             return {"id": rid, "meeting_id": imported_id, "existing": result.get("existing", False),
                     "changed": result.get("changed", False), "event_id": _meeting(c, rid)["next_event_id"]}
         return mutate(request, body, work)
+
+    @app.post("/api/v2/live-meetings/{rid}/discard")
+    def discard(request: Request, rid: str, body: Join):
+        """The connector kept the meeting on their own computer: it ends here and what was said leaves Tico.
+
+        Turns and the bots' runs stay (the privacy index reads them to keep the bots' replies private), but lose
+        their words: the messages in each bot's meeting conversation, and those runs' replies, results and events.
+        """
+        who = request.state.identity
+        def work(c):
+            row = _connector(c, auth, who, rid)
+            if row["thread_id"]:
+                raise Problem("call_meeting", "This meeting is a call. Control it through the call.", 409)
+            if row["state"] != "ended":
+                c.execute("UPDATE live_meetings SET state='ended',ended_at=?,updated_at=? WHERE id=?",
+                          (H.now(), H.now(), rid))
+                _end_open_turns(c, rid)
+            for table in ("live_meeting_chunk_versions", "live_meeting_chunks", "live_meeting_chat_routes",
+                          "live_meeting_chat", "live_meeting_windows", "live_meeting_events"):
+                c.execute(f"DELETE FROM {table} WHERE meeting_id=?", (rid,))
+            # Each bot's turns carried the transcript and chat into its meeting conversation: those copies go too.
+            for (conv,) in c.execute("SELECT id FROM conversations WHERE room_key=?",
+                                     ("live-meeting:" + rid,)).fetchall():
+                _discard_runs(c, conv)
+                c.execute("UPDATE messages SET body=? WHERE conversation_id=?", (DISCARDED, conv))
+                c.execute("UPDATE conversations SET closed_at=COALESCE(closed_at,?) WHERE id=?", (H.now(), conv))
+            _event(c, rid, "meeting.state", {"state": "ended", "by": who.actor, "action": "discard"})
+            return {"id": rid, "state": "ended", "discarded": True}
+        result = mutate(request, body, work)
+        app.state.meeting_frames.stop(rid)
+        return result
 
     @app.get("/api/v2/live-meetings/{rid}/events")
     async def events(request: Request, rid: str, after: int = 0):

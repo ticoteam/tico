@@ -18,7 +18,7 @@ The Waitlist page has five views. Each view's link shows HQ's count.
 | **Approved** | Sign-ups staff approved. |
 | **Declined** | Sign-ups staff declined, newest decision first. |
 | **Approved (before waitlist)** | Accounts that had a hosted preview before the waitlist. They keep their servers. |
-| **Credit requests** | Open requests from the customer’s account page, oldest first, with balance and usage. |
+| **Credit requests** | Requests sent from the account page before its form was removed (Oct 25), oldest first, with balance and usage. Customers now contact support instead, so no new rows are expected. |
 
 A row shows the name, email, company, the customer's answer (line breaks kept) and the sign-up date. A decided row also shows who decided and when. A declined row shows your private note, and "Email not sent" if the decline email failed.
 

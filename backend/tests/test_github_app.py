@@ -20,6 +20,8 @@ from backend.app import create_app
 from backend.auth import Identity
 from backend.config import Settings
 from backend.store import Problem, encode
+from backend.enqueue import enqueue_stored
+from backend import bot_settings as BS
 
 KEY = rsa.generate_private_key(public_exponent=65537, key_size=2048)
 PEM = KEY.private_bytes(serialization.Encoding.PEM, serialization.PrivateFormat.TraditionalOpenSSL,
@@ -152,8 +154,8 @@ def api(tmp_path, gh):
             H.sync_registry(c, bots, {"people": [{"id": "ana", "email": "ana@acme.example", "team": "leadership"}, {"id": "ben", "email": "ben@acme.example", "team": "leadership"}, {"id": "riley", "email": "riley@acme.example", "team": "leadership"}]})
             repos = {"botops": "emp-botops", "newbie": "emp-newbie", "oldie": "emp-oldie", "cpo": "emp-cpo", "cmo": "https://github.com/Acme/emp-cmo.git", "cfo": "elsewhere/emp-cfo"}
             for slug, config in bots.items():
-                c.execute("INSERT INTO bot_config(bot,config,team,owner_id,repo) VALUES(?,?,?,?,?)",
-                          (slug, encode(config), "t", "ana", repos[slug]))
+                c.execute('INSERT INTO bot_config(bot,team,owner_id,repo) VALUES(?,?,?,?)', (slug, 't', 'ana', repos[slug]))
+                BS.write(c, slug, config)
             c.execute("INSERT INTO registry_metadata VALUES('onboarding',?)", (encode({"completed": "2026-01-01T00:00:00Z"}),))
         client.app_state = app.state
         yield client
@@ -408,9 +410,11 @@ def runner_token(api, bot):
         if not c.execute("SELECT 1 FROM runners WHERE id='r1'").fetchone():
             cols = [r[1] for r in c.execute("PRAGMA table_info(runners)")]
             values = {"id": "r1", "owner_id": "ana", "label": "mac", "token_hash": "x", "created_at": H.now(), "created_by": "ana",
-                      "last_seen_at": H.now(), "hostname": "h", "version": "1", "state": "active"}
+                      "hostname": "h", "state": "active"}
             use = {k: v for k, v in values.items() if k in cols}
             c.execute(f"INSERT INTO runners({','.join(use)}) VALUES({','.join('?' * len(use))})", tuple(use.values()))
+            # Last contact and version are runner_states columns (migration 0062); the insert made the row.
+            c.execute("UPDATE runner_states SET last_seen_at=?,version=? WHERE runner_id='r1'", (H.now(), "1"))
         c.execute("INSERT OR REPLACE INTO assignments VALUES(?,?,?,?,?)", (bot, "r1", 1, H.now(), "ana"))
 
 
@@ -588,6 +592,7 @@ def botops_turn(api):
     with api.app_state.store.transaction() as c:
         c.execute("INSERT INTO messages(id,sender_id,recipient_id,kind,body,created_at) VALUES('m-botops','keeper','bot:botops','request','hi',?)",
                   (H.now(),))
+        enqueue_stored(c, 'm-botops')
         job = c.execute("SELECT id FROM jobs WHERE bot_id='botops'").fetchone()["id"]
         c.execute("INSERT INTO attempts(id,job_id,bot_id,runner_id,generation,token_hash,state,lease_until,created_at) "
                   "VALUES('a2',?,'botops','r1',1,'x','running',?,?)", (job, H.shift(H.now(), hours=1), H.now()))
@@ -658,13 +663,13 @@ def test_owner_product_creation_uses_exact_name_private_empty_and_idempotent_rec
         assert event and event["target"] == "Acme/tico-recorder"
         assert c.execute("SELECT COUNT(*) FROM bot_repo_access").fetchone()[0] == 0
         assert c.execute("SELECT COUNT(*) FROM idempotency WHERE operation='/api/v2/github/product-repos' AND key='product-create-same'").fetchone()[0] == 1
-        operation = c.execute("SELECT state,target_org,target_name FROM github_product_repo_operations "
-                              "WHERE operation='/api/v2/github/product-repos' AND key='product-create-same'").fetchone()
-        assert tuple(operation) == ("completed", "Acme", "tico-recorder")
+        operation = c.execute("SELECT state,subject FROM idempotency WHERE binding='github_product_repo' "
+                              "AND operation='/api/v2/github/product-repos' AND key='product-create-same'").fetchone()
+        assert tuple(operation) == ("completed", "Acme/tico-recorder")
     calls_before_durable_replay = len([call for call in gh.calls if call[0] == "POST" and call[1] == "/orgs/Acme/repos"])
     with api.app_state.store.transaction() as c:
-        c.execute("DELETE FROM idempotency WHERE actor='human:ana' AND operation=? AND key=?",
-                  ("/api/v2/github/product-repos", "product-create-same"))
+        c.execute("DELETE FROM idempotency WHERE actor='human:ana' AND operation=? AND key=? AND binding IS NULL",
+                  ("/api/v2/github/product-repos", "product-create-same"))     # the answer only; the binding stays
     durable_replay = product_repo_request(api, body, key="product-create-same")
     assert durable_replay.status_code == 200 and durable_replay.json() == created.json()
     assert len([call for call in gh.calls if call[0] == "POST" and call[1] == "/orgs/Acme/repos"]) == calls_before_durable_replay
@@ -737,14 +742,14 @@ def test_lost_github_create_response_keeps_durable_key_binding_and_never_retries
     assert len(create_calls) == 1
     assert gh.created_repositories == {"Acme/tico-recorder"}
     with api.app_state.store.read() as c:
-        operation = c.execute("SELECT actor,operation,key,request_hash,target_org,target_name,state,response "
-                              "FROM github_product_repo_operations WHERE actor='human:ana' AND key=?",
+        operation = c.execute("SELECT actor,operation,key,request_hash,subject,state,response "
+                              "FROM idempotency WHERE binding='github_product_repo' AND actor='human:ana' AND key=?",
                               ("lost-create-response",)).fetchone()
         assert operation["actor"] == "human:ana"
         assert operation["operation"] == "/api/v2/github/product-repos"
         assert operation["key"] == "lost-create-response"
         assert operation["request_hash"] == G.digest(encode(body))
-        assert operation["target_org"] == "Acme" and operation["target_name"] == "tico-recorder"
+        assert operation["subject"] == "Acme/tico-recorder"
         assert operation["state"] == "pending" and operation["response"] is None
 
 
@@ -773,6 +778,7 @@ def test_selected_bot_repository_creation_grant_and_revocation(api, gh):
     runner_token(api, 'cmo')
     with api.app_state.store.transaction() as c:
         c.execute("INSERT INTO messages(id,sender_id,recipient_id,kind,body,created_at) VALUES('m-cmo','keeper','bot:cmo','request','Prepare the repository',?)", (H.now(),))
+        enqueue_stored(c, 'm-cmo')
         job = c.execute("SELECT id FROM jobs WHERE bot_id='cmo'").fetchone()['id']
         c.execute("INSERT INTO attempts(id,job_id,bot_id,runner_id,generation,token_hash,state,lease_until,created_at) "
                   "VALUES('a1',?,'cmo','r1',1,'x','running',?,?)", (job, H.shift(H.now(), hours=1), H.now()))
@@ -795,7 +801,7 @@ def test_selected_bot_repository_creation_grant_and_revocation(api, gh):
     assert gh.created_repositories == {"Acme/bot-newbie"}, "the existing bot creator keeps its bot- name contract"
     with api.app_state.store.read() as c:
         assert c.execute("SELECT actor FROM events WHERE action='github.repo_created'").fetchone()[0] == 'bot:cmo'
-        assert json.loads(c.execute("SELECT config FROM bot_config WHERE bot='cmo'").fetchone()[0]).get('create_repositories') is None
+        assert BS.read(c, 'cmo').get('create_repositories') is None
     # A local grant never replaces GitHub's own Administration permission.
     gh.permissions = {'administration': 'read', 'contents': 'write'}
     missing = create({'slug': 'newbie', 'empty': True})
@@ -979,9 +985,11 @@ def _box(api):
     with api.app_state.store.transaction() as c:
         cols = [r[1] for r in c.execute("PRAGMA table_info(runners)")]
         values = {"id": "r2", "owner_id": "ana", "label": "box", "token_hash": "y", "created_at": H.now(), "created_by": "ana",
-                  "last_seen_at": H.now(), "hostname": "box", "version": "1", "state": "active"}
+                  "hostname": "box", "state": "active"}
         use = {k: v for k, v in values.items() if k in cols}
         c.execute(f"INSERT INTO runners({','.join(use)}) VALUES({','.join('?' * len(use))})", tuple(use.values()))
+        # Last contact and version are runner_states columns (migration 0062); the insert made the row.
+        c.execute("UPDATE runner_states SET last_seen_at=?,version=? WHERE runner_id='r2'", (H.now(), "1"))
 
 
 def _built_by_botops(api, gh):
@@ -1049,6 +1057,7 @@ def test_only_botops_records_where_a_bot_was_built_and_never_over_another_record
     with api.app_state.store.transaction() as c:
         save_metadata(c, "repository-creation-grants", {"cmo": True})
         c.execute("INSERT INTO messages(id,sender_id,recipient_id,kind,body,created_at) VALUES('m-cmo','keeper','bot:cmo','request','hi',?)", (H.now(),))
+        enqueue_stored(c, 'm-cmo')
         job = c.execute("SELECT id FROM jobs WHERE bot_id='cmo'").fetchone()["id"]
         c.execute("INSERT INTO attempts(id,job_id,bot_id,runner_id,generation,token_hash,state,lease_until,created_at) "
                   "VALUES('a1',?,'cmo','r1',1,'cmo-turn','running',?,?)", (job, H.shift(H.now(), hours=1), H.now()))

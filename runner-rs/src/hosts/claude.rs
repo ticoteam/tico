@@ -413,11 +413,36 @@ struct Shared {
 #[derive(Clone)]
 pub struct ClaudeHost(Arc<Shared>);
 
-#[allow(clippy::type_complexity)]
-fn cache() -> &'static Mutex<HashMap<(Vec<String>, &'static str), bool>> {
-    #[allow(clippy::type_complexity)]
-    static C: OnceLock<Mutex<HashMap<(Vec<String>, &'static str), bool>>> = OnceLock::new();
+/// The features of the Claude Code at a command, as the readiness probe last read them, with the version they were read at.
+#[derive(Clone)]
+struct Features {
+    version: String,
+    steer: bool,
+    autocompact: bool,
+}
+
+fn features() -> &'static Mutex<HashMap<Vec<String>, Features>> {
+    static C: OnceLock<Mutex<HashMap<Vec<String>, Features>>> = OnceLock::new();
     C.get_or_init(|| Mutex::new(HashMap::new()))
+}
+
+/// Steering needs a Claude Code that replays its input (STEER_MIN_VERSION), and `--autocompact` one whose `--help` lists it.
+async fn read_features(cmd: &[String], version: &str) -> Features {
+    Features {
+        version: version.to_string(),
+        steer: version_tuple(version).unwrap_or((0, 0, 0)) >= STEER_MIN_VERSION,
+        autocompact: installed_version(cmd, "--help").await.contains("--autocompact"),
+    }
+}
+
+/// The readiness probe's version of the Claude Code at `cmd` (readiness::runtime_readiness): its features are read again
+/// only when that version differs from the one they were read at, so a turn never runs them itself.
+pub async fn note_version(cmd: &[String], version: &str) {
+    if version.is_empty() || features().lock().unwrap().get(cmd).is_some_and(|f| f.version == version) {
+        return;
+    }
+    let read = read_features(cmd, version).await;
+    features().lock().unwrap().insert(cmd.to_vec(), read);
 }
 
 impl ClaudeHost {
@@ -454,30 +479,22 @@ impl ClaudeHost {
         self.0.steer.load(std::sync::atomic::Ordering::Relaxed)
     }
 
-    /// Steering needs a Claude Code that replays its input, and `--autocompact` one whose `--help` lists it;
-    /// each is read once per command for the runner's life.
+    /// The features of this command's Claude Code, as the readiness probe read them: no process starts here. A command
+    /// the probe has not read (none on a computer where it is installed) is read once for this turn.
     pub async fn start(&self) -> Result<(), HostError> {
         let key = self.0.cmd.clone();
-        let known = cache().lock().unwrap().get(&(key.clone(), "steer")).copied();
-        let steer = match known {
-            Some(v) => v,
+        let known = features().lock().unwrap().get(&key).cloned();
+        let known = match known {
+            Some(f) => f,
             None => {
-                let v = version_tuple(&installed_version(&key, "--version").await).unwrap_or((0, 0, 0)) >= STEER_MIN_VERSION;
-                cache().lock().unwrap().insert((key.clone(), "steer"), v);
-                v
+                // Before the first probe has read this command: read it once here, and keep it under its version.
+                let read = read_features(&key, &installed_version(&key, "--version").await).await;
+                features().lock().unwrap().insert(key.clone(), read.clone());
+                read
             }
         };
-        let known = cache().lock().unwrap().get(&(key.clone(), "autocompact")).copied();
-        let auto = match known {
-            Some(v) => v,
-            None => {
-                let v = installed_version(&key, "--help").await.contains("--autocompact");
-                cache().lock().unwrap().insert((key, "autocompact"), v);
-                v
-            }
-        };
-        self.0.steer.store(steer, std::sync::atomic::Ordering::Relaxed);
-        self.0.autocompact.store(auto, std::sync::atomic::Ordering::Relaxed);
+        self.0.steer.store(known.steer, std::sync::atomic::Ordering::Relaxed);
+        self.0.autocompact.store(known.autocompact, std::sync::atomic::Ordering::Relaxed);
         self.inner().up = true;
         Ok(())
     }
@@ -583,10 +600,9 @@ impl ClaudeHost {
         }
         // Only the hub, the bot's declared servers and the bot repo's own `.mcp.json`, for every bot:
         // `--strict-mcp-config` keeps out the operator's own servers (~/.claude.json, user settings, plugins,
-        // claude.ai connectors) (hosts/claude.py _argv).
-        if t.settings.shared {
-            argv.extend(["--setting-sources".into(), if t.settings.packet_only { "".into() } else { "project,local".into() }]);
-        }
+        // claude.ai connectors). Every turn excludes the operator's own instructions, settings and hooks, even
+        // when HOME is the operator's. Packet-only turns also exclude the repository's settings.
+        argv.extend(["--setting-sources".into(), if t.settings.packet_only { "".into() } else { "project,local".into() }]);
         argv.push("--strict-mcp-config".into());
         if t.settings.packet_only {
             argv.extend(["--tools".into(), "".into(), "--disable-slash-commands".into(),
@@ -1602,14 +1618,16 @@ mod tests {
     #[test]
     fn packet_turns_keep_the_login_but_drop_memory_hooks_and_tools() {
         let host = ClaudeHost::new("synthetic", vec!["claude".into()], tokio::sync::mpsc::unbounded_channel().0);
-        let settings = Settings { packet_only: true, shared: true, ..Settings::default() };
-        let thread = host.start_thread(&settings);
-        let argv = host.argv(&thread, &host.inner().threads[&thread].clone(), Some("low"));
-        assert!(argv.windows(2).any(|w| w == ["--tools", ""]));
-        assert!(argv.windows(2).any(|w| w == ["--setting-sources", ""]));
-        assert!(argv.contains(&"{\"disableAllHooks\":true}".into()));
-        assert_eq!(turn_env(&settings)["CLAUDE_CODE_DISABLE_CLAUDE_MDS"], "1");
-        assert!(!argv.contains(&"--bare".into()), "subscription login must remain available");
+        for shared in [false, true] {
+            let settings = Settings { packet_only: true, shared, ..Settings::default() };
+            let thread = host.start_thread(&settings);
+            let argv = host.argv(&thread, &host.inner().threads[&thread].clone(), Some("low"));
+            assert!(argv.windows(2).any(|w| w == ["--tools", ""]));
+            assert!(argv.windows(2).any(|w| w == ["--setting-sources", ""]));
+            assert!(argv.contains(&"{\"disableAllHooks\":true}".into()));
+            assert_eq!(turn_env(&settings)["CLAUDE_CODE_DISABLE_CLAUDE_MDS"], "1");
+            assert!(!argv.contains(&"--bare".into()), "subscription login must remain available");
+        }
     }
 
     #[tokio::test]
@@ -1714,7 +1732,10 @@ mod tests {
         }
         let thread = host.start_thread(&settings);
         let argv = host.argv(&thread, &host.inner().threads[&thread].clone(), None);
-        assert!(argv.contains(&"--strict-mcp-config".to_string()) && !argv.contains(&"--setting-sources".to_string()));
+        assert!(argv.contains(&"--strict-mcp-config".to_string()));
+        // A bot without branches keeps out the operator's own CLAUDE.md, settings and hooks as a branch bot does.
+        let at = argv.iter().position(|a| a == "--setting-sources").expect("--setting-sources on every turn");
+        assert_eq!(argv[at + 1], "project,local");
         let config: Value = serde_json::from_str(&argv[argv.iter().position(|a| a == "--mcp-config").unwrap() + 1]).unwrap();
         assert_eq!(config["mcpServers"]["repo"]["command"], "x");
         assert_ne!(config["mcpServers"]["hub"]["command"], "stale");
@@ -2443,5 +2464,74 @@ mod tests {
             bytes[25], bytes[0], bytes[49], micros[25]
         );
         std::fs::remove_dir_all(dir).unwrap();
+    }
+}
+
+#[cfg(test)]
+mod feature_tests {
+    use super::*;
+
+    /// A fake Claude Code that logs each run's arguments and lists `--autocompact` in its help.
+    fn fake_claude(root: &std::path::Path) -> (Vec<String>, std::path::PathBuf) {
+        let exe = root.join("claude");
+        let log = root.join("spawns.log");
+        std::fs::write(&exe, format!("#!/bin/sh\necho \"$*\" >> '{}'\necho '2.1.300 (Claude Code)'\necho '--autocompact'\n", log.display())).unwrap();
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::set_permissions(&exe, std::fs::Permissions::from_mode(0o755)).unwrap();
+        (vec![exe.display().to_string()], log)
+    }
+
+    fn runs(log: &std::path::Path) -> usize {
+        std::fs::read_to_string(log).map(|s| s.lines().count()).unwrap_or(0)
+    }
+
+    #[tokio::test]
+    async fn a_turn_starts_with_the_features_the_probe_noted_and_a_new_version_is_read_once() {
+        let root = std::env::temp_dir().join(format!("tico-features-{}", uuid::Uuid::new_v4().simple()));
+        std::fs::create_dir_all(&root).unwrap();
+        let (cmd, log) = fake_claude(&root);
+        let (tx, _rx) = tokio::sync::mpsc::unbounded_channel();
+        // The probe passes the version as `installed_version` reads it, which is what a turn's start is keyed by too.
+        let version = installed_version(&cmd, "--version").await;
+        let read = runs(&log);
+        note_version(&cmd, &version).await;
+        assert_eq!(runs(&log), read + 1, "a new version is read once, for --help");
+        note_version(&cmd, &version).await;
+        assert_eq!(runs(&log), read + 1, "the same version reads nothing again");
+        let before_turns = runs(&log);
+        for _ in 0..40 {
+            let host = ClaudeHost::new("bench", cmd.clone(), tx.clone());
+            host.start().await.unwrap();
+            assert!(host.supports_steer(), "2.1.300 steers");
+        }
+        assert_eq!(runs(&log), before_turns, "forty turn starts run no process");
+        note_version(&cmd, "2.1.301 (Claude Code)").await;
+        assert_eq!(runs(&log), before_turns + 1, "a changed version is read once");
+        std::fs::remove_dir_all(root).ok();
+    }
+
+    /// Process runs of forty turn starts with no probe, and of a probe followed by forty turn starts. Run with --ignored --nocapture.
+    #[tokio::test]
+    #[ignore]
+    async fn claude_turn_start_spawns_bench() {
+        let root = std::env::temp_dir().join(format!("tico-claude-bench-{}", uuid::Uuid::new_v4().simple()));
+        std::fs::create_dir_all(root.join("cold")).unwrap();
+        std::fs::create_dir_all(root.join("probed")).unwrap();
+        let (cold_cmd, cold_log) = fake_claude(&root.join("cold"));
+        let (probed_cmd, probed_log) = fake_claude(&root.join("probed"));
+        let (tx, _rx) = tokio::sync::mpsc::unbounded_channel();
+        for _ in 0..40 {
+            let _ = ClaudeHost::new("bench", cold_cmd.clone(), tx.clone()).start().await;
+        }
+        let cold = runs(&cold_log);
+        let version = installed_version(&probed_cmd, "--version").await;
+        note_version(&probed_cmd, &version).await;
+        let probe = runs(&probed_log);
+        for _ in 0..40 {
+            let _ = ClaudeHost::new("bench", probed_cmd.clone(), tx.clone()).start().await;
+        }
+        let warm = runs(&probed_log) - probe;
+        eprintln!("BENCH claude_turn_starts=40 no_probe_runs={cold} probe_runs={probe} runs_during_40_starts_after_probe={warm}");
+        std::fs::remove_dir_all(root).ok();
     }
 }

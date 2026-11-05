@@ -231,7 +231,7 @@ def released_event(c, row, detail):
     data = {'link': row['id'], 'path': row['path'], 'reason': reason}
     if reason == 'task finished' and (detail.get('dirty_files') or detail.get('ahead')) \
             and not detail.get('snapshot_skipped'):
-        data['wip_branch'] = 'wip/' + row['task_id'][:8] + '-' + row['id'][:6]     # runner/worktrees.py wip_branch
+        data['wip_branch'] = 'wip/' + row['task_id'][:8] + '-' + row['id'][:6]     # runner_support/worktrees.py wip_branch
     if detail.get('stale_push_cleared'):
         data['reason'] += f" (stale push {detail['stale_push_cleared'][:12]} cleared)"
     H.event(c, H.KEEPER, 'worktree.released', row['task_id'], data)
@@ -468,7 +468,7 @@ def heartbeat(c, who, reports, capable, default_org="", live_tasks=None):
                 ('missing_woke', detail.get('missing_since'), 1, 'Worktree missing for a day'),
                 ('stalled_woke', detail.get('activity_at') if report.ahead else None, 3, 'Worktree has unpushed commits and no activity for three days')):
                 if since and not detail.get(key) and (datetime.now(timezone.utc) - datetime.fromisoformat(since.replace('Z', '+00:00'))).total_seconds() >= days * 86400:
-                    task = H._one(c, "SELECT * FROM tasks WHERE id=?", (row['task_id'],))
+                    task = H._one(c, f"SELECT * FROM {H.TASKS} tasks WHERE id=?", (row['task_id'],))
                     if task['status'] not in CLOSED:
                         H._wake(c, task, task['owner_id'], message + ': ' + row['path'], trigger='stall_check', source=row['id'])
                         detail[key] = True
@@ -557,7 +557,7 @@ def heartbeat(c, who, reports, capable, default_org="", live_tasks=None):
         closed = row['task_status'] in CLOSED or row['bot_state'] == 'archived' or detail.get('delete_requested')
         # A worktree whose pull requests are all merged or closed has done its job even while its task waits on
         # something else (a release, an acceptance): it is released so it stops counting against the bot's limit.
-        # The computer removes it only while the bot is idle and only when it is clean and pushed (runner/worktrees.py).
+        # The computer removes it only while the bot is idle and only when it is clean and pushed (runner_support/worktrees.py).
         # A `pending` one too: a reservation or checkout that never finished must not hold a place for work that is
         # done (one sat pending for days after its pull request shipped).
         # A tree coming back for a reopened task is new work starting: it is judged once it is present.
@@ -654,7 +654,7 @@ def provision(c, who, task, repo, path=None, branch=None, default_org='', brief=
             git_repository.address(repo)
         except ValueError as exc:
             raise Problem('worktree_repo', str(exc), 422) from None
-    assigned = c.execute('SELECT r.id,r.readiness FROM assignments a JOIN runners r ON r.id=a.runner_id WHERE a.bot=? AND r.revoked_at IS NULL', (bot,)).fetchone()
+    assigned = c.execute('SELECT r.id,r.readiness FROM assignments a JOIN runners_with_state r ON r.id=a.runner_id WHERE a.bot=? AND r.revoked_at IS NULL', (bot,)).fetchone()
     if not assigned or not readiness_document(assigned['readiness']).get('worktrees'):
         raise Problem('computer_update', 'Update this computer to use task worktrees', 409)
     if (who.role == 'bot' and who.runner_id != assigned['id']

@@ -230,8 +230,9 @@ def redact_value(c, person, value, env, conversation_id="", attempt_id="", messa
     scrub_value(c, value, label, attempt_id, conversation_id)
     # The answers kept for retries (the chat send that carried it, the claim that delivered it to the run).
     for form in forms:
-        for row in c.execute("SELECT actor,operation,key,response FROM idempotency WHERE instr(response, ?) > 0", (form,)).fetchall():
-            c.execute("UPDATE idempotency SET response=? WHERE actor=? AND operation=? AND key=?",
+        for row in c.execute("SELECT actor,operation,key,response FROM idempotency "
+                             "WHERE binding IS NULL AND instr(response, ?) > 0", (form,)).fetchall():
+            c.execute("UPDATE idempotency SET response=? WHERE binding IS NULL AND actor=? AND operation=? AND key=?",
                       (row["response"].replace(form, label), row["actor"], row["operation"], row["key"]))
     if count:
         H.event(c, person.actor, "message.redacted", conversation_id or message_id, {"messages": count, "env": env})
@@ -300,7 +301,8 @@ def install_credential_cards(app, store, vault, auth, botops, delegate, manager)
         if not msg:
             return None
         conversation = H.conversation(c, msg["conversation_id"]) or {}
-        task_id = conversation.get("task_id") or ((msg.get("refs") or {}).get("task") if msg["recipient_id"] == owner else None)
+        task_id = conversation.get("task_id") or (H._task_ref((msg.get("refs") or {}).get("task"))
+                                                   if msg["recipient_id"] == owner else None)
         task = H.task(c, task_id) if task_id else None
         if task and task["owner_id"] == owner and task["status"] in H.ACTIVE_STATUSES:
             return task
@@ -489,7 +491,7 @@ def install_credential_cards(app, store, vault, auth, botops, delegate, manager)
                 raise Problem("env", f"{body.env} is a setting of the computer or of Tico, not a credential a bot can be given", 422)
             if not H.bot(c, bot):
                 raise Problem("not_found", "Bot not found", 404)
-            place = c.execute("SELECT r.last_seen_at,r.label FROM assignments a JOIN runners r ON r.id=a.runner_id "
+            place = c.execute("SELECT r.last_seen_at,r.label FROM assignments a JOIN runners_with_state r ON r.id=a.runner_id "
                               "WHERE a.bot=? AND r.revoked_at IS NULL", (bot,)).fetchone()
             if not place:
                 raise Problem("no_computer", "That bot is not on a computer, so there is no secrets file to read", 409)

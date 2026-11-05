@@ -20,6 +20,10 @@ from backend import marketing_tasks as MT
 from backend import strategy as S
 from backend import task_relations as TR
 from backend import wake_presets as WP
+from backend import bot_settings as BS
+
+# The table's DDL: migration 0070 owns it (bot_settings.py has none).
+_BOT_SETTINGS_TABLE = importlib.import_module("backend.migrations.0070_bot_settings").TABLE
 
 EMPLOYEES = {
     "coo": {"display_name": "COO", "status": "active", "host": "keeper", "runtime": "codex",
@@ -42,6 +46,22 @@ CMO = H.bot_actor("cmo")
 SEO = H.bot_actor("seo")
 COO = H.bot_actor("coo")
 ANALYTICS = H.bot_actor("analytics")
+
+# The run table as an install from before migration 0072 had it: a run's record in `turns` (the attempts table keeps
+# the lease). Its usage went to usage_facts in migration 0053, which also dropped turn_usage_segments.
+LEGACY_TURNS = ("CREATE TABLE turns (id TEXT PRIMARY KEY, bot TEXT, thread_id TEXT, started_at TEXT, finished_at TEXT, "
+                "trigger TEXT, message_id TEXT, task_id TEXT, exit TEXT, summary TEXT, input_tokens INTEGER, "
+                "cached_tokens INTEGER, output_tokens INTEGER, model TEXT, provider TEXT, est_cost_usd REAL, "
+                "billing TEXT, trigger_kind TEXT, trigger_source TEXT, writes INTEGER, outcome TEXT, "
+                "did_nothing INTEGER, purpose TEXT)")
+
+
+def with_legacy_run_tables(conn):
+    """Put back `turns` (empty) on a file `H.connect` made, and forget migration 0072, so
+    the numbered steps and the migrations run on them again as on an install from before it."""
+    conn.execute("DELETE FROM schema_migrations WHERE version>='0072' AND version NOT LIKE 'legacy%'")
+    conn.execute(LEGACY_TURNS)
+    conn.commit()
 
 
 class HubCase(unittest.TestCase):
@@ -71,16 +91,17 @@ class Schema(HubCase):
         task = H.task_create(self.conn, ANA, "Prepare packet", "Keep this task through upgrade.", CMO, lint=False)
         # Main has already applied the purpose migration; rotation must be appended after it.
         published_version = H.MIGRATIONS.index(H.RUN_PURPOSE_SCHEMA) + 1
+        with_legacy_run_tables(self.conn)
         self.conn.execute("INSERT INTO turns(id,bot,started_at,purpose) VALUES('before-rotation','cmo',?,'review PR')",
                           (H.now(),))
-        self.conn.execute("ALTER TABLE turns DROP COLUMN rotated")
         self.conn.execute(f"PRAGMA user_version={published_version}")
         self.conn.commit()
         H.migrate(self.conn)
-        self.assertIn("rotated", {r[1] for r in self.conn.execute("PRAGMA table_info(turns)")})
+        self.assertNotIn("turns", {r[0] for r in self.conn.execute("SELECT name FROM sqlite_master WHERE type='table'")})
+        self.assertIn("rotated", {r[1] for r in self.conn.execute("PRAGMA table_info(attempts)")})
         self.assertEqual(self.conn.execute("SELECT title FROM tasks WHERE id=?", (task["id"],)).fetchone()[0],
                          "Prepare packet")
-        self.assertEqual(self.conn.execute("SELECT purpose FROM turns WHERE id='before-rotation'").fetchone()[0],
+        self.assertEqual(self.conn.execute("SELECT purpose FROM attempts WHERE id='before-rotation'").fetchone()[0],
                          "review PR")
         self.assertEqual(self.conn.execute("PRAGMA user_version").fetchone()[0], len(H.MIGRATIONS))
 
@@ -109,8 +130,8 @@ class Schema(HubCase):
         names = {r["name"] for r in self.conn.execute(
             "SELECT name FROM sqlite_master WHERE type='table'")}
         self.assertLessEqual({"bots", "humans", "conversations", "messages", "tasks",
-                              "task_events", "approvals", "bot_status", "bot_status_history",
-                              "schedules", "turns", "deltas", "rate_limits", "refusals",
+                              "history_events", "approvals", "bot_status", "bot_status_history",
+                              "schedules", "attempts", "deltas", "rate_limits", "refusals",
                               "events"}, names)
         indexes = {r["name"] for r in self.conn.execute(
             "SELECT name FROM sqlite_master WHERE type='index'")}
@@ -163,6 +184,25 @@ class GrowthRethink(unittest.TestCase):
         self.addCleanup(self.dir.cleanup)
         self.path = Path(self.dir.name) / "hub.db"
 
+    # The retired tables and columns as the release before the rethink created them. Growth's startup schema no
+    # longer makes them, so a file from that release is rebuilt with them here.
+    BEFORE = """
+CREATE TABLE gtm_drafts (id INTEGER PRIMARY KEY CHECK(id=1), body TEXT NOT NULL DEFAULT '{}',
+  revision INTEGER NOT NULL DEFAULT 0, updated_by TEXT, updated_at TEXT);
+CREATE TABLE gtm_versions (id TEXT PRIMARY KEY, n INTEGER NOT NULL UNIQUE, body TEXT NOT NULL DEFAULT '{}',
+  note TEXT NOT NULL DEFAULT '', published_by TEXT, published_at TEXT NOT NULL);
+CREATE TABLE growth_ideas (
+  task_id TEXT PRIMARY KEY REFERENCES tasks(id), hypothesis TEXT NOT NULL DEFAULT '', prediction TEXT NOT NULL DEFAULT '',
+  bet_id TEXT, kpi_id TEXT, judged_kpi_id TEXT, ice_i INTEGER, ice_c INTEGER, ice_e INTEGER,
+  status TEXT NOT NULL DEFAULT 'idea', source_kind TEXT, source_ref TEXT, test_from TEXT, test_to TEXT, change TEXT,
+  stop_if TEXT, min_events INTEGER, audience TEXT, external_ref TEXT, result TEXT, learning TEXT, bet_effect TEXT,
+  confidence TEXT, verdict_at TEXT, verdict_by TEXT, created_at TEXT NOT NULL, updated_at TEXT NOT NULL);
+CREATE TABLE growth_idea_channels (
+  task_id TEXT NOT NULL REFERENCES tasks(id), channel_id TEXT NOT NULL, PRIMARY KEY(task_id, channel_id));
+ALTER TABLE growth_settings ADD COLUMN framework TEXT NOT NULL DEFAULT '';
+ALTER TABLE growth_settings ADD COLUMN verdict_win_pct REAL NOT NULL DEFAULT 60;
+"""
+
     def before_rethink(self):
         """The file as the release before the rethink left it: every migration before it (not the ones after, which
         would then sort after an applied one), the threads schema that release's modules made after the migrations
@@ -183,6 +223,8 @@ class GrowthRethink(unittest.TestCase):
                                         lambda directory=None: [m for m in every if m.version < "0035_growth_rethink"]), \
                 unittest.mock.patch.object(migrations, "apply", apply_then_threads):
             H.migrate(conn)
+        for statement in migrations.statements(self.BEFORE):
+            conn.execute(statement)
         for statement in S.SCHEMA:
             conn.execute(statement)
         return conn
@@ -369,7 +411,7 @@ class Rule5Tasks(HubCase):
         self.assertEqual(opened["status"], "open")
         for column, field in (("done_at", "done_at"), ("closed_at", "closed_at"), ("closed_by_id", "closed_by")):
             self.assertIsNone(opened[column])
-            event = self.conn.execute("SELECT old,new FROM task_events WHERE task_id=? AND field=? ORDER BY id DESC LIMIT 1",
+            event = self.conn.execute("SELECT old,new FROM history_events WHERE subject_type='task' AND subject_id=? AND kind=? ORDER BY id DESC LIMIT 1",
                                       (row["id"], field)).fetchone()
             self.assertEqual(event["old"], closed[column])
             self.assertIsNone(event["new"])
@@ -431,10 +473,11 @@ class Rule5Tasks(HubCase):
         # Superseding its ask card exercises the server's versioned unblock path.
         self.conn.execute("ALTER TABLE tasks ADD COLUMN version INTEGER NOT NULL DEFAULT 1")
         self.conn.execute(re.search(r"CREATE TABLE IF NOT EXISTS bot_config\(.*?\);", SCHEMA, re.S).group(0))
+        self.conn.execute(_BOT_SETTINGS_TABLE)
         self.conn.execute("ALTER TABLE bot_config ADD COLUMN access TEXT")
         self.conn.execute("ALTER TABLE bot_config ADD COLUMN onboarding_state TEXT")
-        self.conn.execute("INSERT INTO bot_config(bot,config,owner_id) VALUES('cmo',?, 'ana')",
-                          (json.dumps({"bot_contact": "tasks"}),))
+        self.conn.execute("INSERT INTO bot_config(bot,owner_id) VALUES('cmo','ana')")
+        BS.write(self.conn, 'cmo', {'bot_contact': 'tasks'})
         parent = H.task_create(self.conn, CMO, "Plan the launch week", "All of it.", ANALYTICS)
         row = H.task_create(self.conn, CMO, "Pick the hero image", "Two drafts.", SEO, parent_id=parent["id"])
         H.task_update(self.conn, SEO, row["id"], status="waiting", waiting_on="ana", note="Pick one image.")
@@ -887,7 +930,6 @@ class WaitingWithDependency(HubCase):
         self.assertEqual(H.waiting_for(self.conn, after), 'an open blocker')
         future = H.shift(H.now(), hours=48)
         self.assertNotIn(task['id'], [r['id'] for r in H.stalled_tasks(self.conn, at=future)])
-        self.assertEqual(H.sweep_stranded(self.conn, at=future), [])
         H.task_update(self.conn, CMO, blocker['id'], status='done')
         self.assertEqual(TR.blocker_ids(self.conn, task['id']), [])
         self.assertTrue(any('Unblocked:' in m['body'] for m in H._rows(
@@ -906,37 +948,25 @@ class WaitingWithDependency(HubCase):
         # A note naming what it waits on parks it, with a hint on recording the wait.
         parked = H.task_update(self.conn, CMO, task['id'], status='waiting', note='Waiting on the vendor reply')
         self.assertEqual(parked['status'], 'waiting')
-        self.assertIn('goes back to open', parked['warnings'][0])
+        self.assertIn('nothing will move it', parked['warnings'][0])
         self.assertIn('hub task create --parent', parked['warnings'][0])
 
-    def test_a_note_only_wait_on_a_person_requested_task_warns_and_reopens_in_hours(self):
+    def test_a_note_only_wait_on_a_person_requested_task_warns(self):
         # Seen live: a person's task parked "waiting on BotOps's snapshot" that BotOps never heard of.
         task = H.task_create(self.conn, ANA, 'Check the box resources', '', CMO)
         parked = H.task_update(self.conn, CMO, task['id'], status='waiting', note="Waiting on BotOps's snapshot")
         self.assertIn(f"--parent {task['id']}", parked['warnings'][0])
-        soon = H.shift(H.now(), hours=H.STRANDED_GRACE_HOURS - 1)
-        self.assertEqual(H.sweep_stranded(self.conn, at=soon), [])
-        later = H.shift(H.now(), hours=H.STRANDED_GRACE_HOURS + 1)
-        self.assertEqual(H.sweep_stranded(self.conn, at=later), [(task['id'], 'open')])
-        # A due date says when to look again; a subtask is something to wait on.
-        other = H.task_create(self.conn, ANA, 'Check the crawl', '', CMO)
-        H.task_update(self.conn, CMO, other['id'], status='waiting', note='Waiting on the crawl',
-                      due=H.shift(H.now(), hours=48))
-        sub = H.task_create(self.conn, ANA, 'Check the disk', '', CMO)
-        H.task_create(self.conn, CMO, 'Send the disk snapshot', '', SEO, parent_id=sub['id'])
-        H.task_update(self.conn, CMO, sub['id'], status='waiting', note='Waiting on the snapshot')
-        self.assertEqual(H.sweep_stranded(self.conn, at=later), [])
 
-    def test_a_bot_marks_its_task_done_with_subtasks_still_open(self):
+    def test_a_bot_marks_its_task_done_and_closes_open_subtasks(self):
         parent = H.task_create(self.conn, ANA, 'Launch the pricing page', '', CMO)
         child = H.task_create(self.conn, CMO, 'Approve the final copy', 'Say yes or change it.', ANA,
                               parent_id=parent['id'])
         done = H.task_update(self.conn, CMO, parent['id'], status='done', note='Page is live')
         self.assertEqual(done['status'], 'done')
-        self.assertEqual(H.task(self.conn, child['id'])['status'], 'open', 'the subtask stays open')
+        self.assertEqual(H.task(self.conn, child['id'])['status'], 'closed')
         said = [e['new'] for e in H._rows(self.conn.execute(
-            "SELECT new FROM task_events WHERE task_id=? AND field='children'", (parent['id'],)))]
-        self.assertEqual(said, ['Still open: Approve the final copy'])
+            "SELECT new FROM history_events WHERE subject_type='task' AND subject_id=? AND kind='children'", (parent['id'],)))]
+        self.assertEqual(said, ['Closed with it: Approve the final copy'])
 
     def test_invalid_dependency_is_refused(self):
         task = H.task_create(self.conn, CMO, 'Validate the release candidate', '', CMO)
@@ -969,7 +999,6 @@ class WaitingWithDependency(HubCase):
         self.assertEqual(([t['id'] for t in mine['tasks']], mine['waiting']), ([card['id']], []))
         self.assertEqual(needs(), 1)
         self.assertEqual(H.waiting_for(self.conn, H.task(self.conn, task['id'])), 'an open child task')
-        self.assertEqual(H.sweep_stranded(self.conn, at=H.shift(H.now(), hours=48)), [])
         # Asking again, as the note reads now or as first said, makes no second card.
         for note in (None, ask):
             H.task_update(self.conn, CMO, task['id'], status='waiting', waiting_on='ana', note=note)
@@ -1119,7 +1148,7 @@ class WaitingWithDependency(HubCase):
                          (CMO, 'waiting', None, f'Blocked on Ana Rivera: {plain}'))
         [card] = [H.task(self.conn, t) for t in TR.child_ids(self.conn, moved['id'])]
         self.assertEqual((card['owner_id'], card['title'], card['body']), (ANA, 'Approve the venue for Friday?', plain))
-        # The one with no plain ask stays for its bot to restate (backend/restate_asks.py).
+        # The one with no plain ask stays for its bot to restate (the task roundup lists it).
         self.assertEqual(H.task(self.conn, unclear['id'])['waiting_on'], ANA)
 
     def test_a_plain_ask_passes_and_shorthand_does_not(self):
@@ -1538,6 +1567,7 @@ class TurnLegacyUsageDropped(HubCase):
 
     def install_as_before_measured_usage(self):
         self.before("0009")
+        with_legacy_run_tables(self.conn)
         for column, kind in (("tokens_in", "INTEGER"), ("tokens_out", "INTEGER"), ("cost", "REAL")):
             self.conn.execute(f"ALTER TABLE turns ADD COLUMN {column} {kind}")
         now = H.now()
@@ -1553,14 +1583,28 @@ class TurnLegacyUsageDropped(HubCase):
     def test_the_upgrade_moves_the_legacy_tokens_and_cost_and_drops_the_columns(self):
         self.install_as_before_measured_usage()
         migrations.apply(self.conn)
-        columns = {r[1] for r in self.conn.execute("PRAGMA table_info(turns)")}
+        columns = {r[1] for r in self.conn.execute("PRAGMA table_info(attempts)")}
         self.assertFalse({"tokens_in", "tokens_out", "cost"} & columns)
         self.assertEqual([tuple(r) for r in self.conn.execute(
-            "SELECT id, input_tokens, cached_tokens, output_tokens, est_cost_usd FROM turns ORDER BY id")],
+            "SELECT id, input_tokens, cached_tokens, output_tokens, est_cost_usd FROM attempts ORDER BY id")],
             [("cost-only", None, None, None, 9.0), ("measured", 100, 50, 10, 0.2), ("old-run", 500, None, 5, 0.75)])
 
     def test_the_run_totals_read_the_moved_numbers(self):
         self.install_as_before_measured_usage()
         migrations.apply(self.conn)
-        totals = {r[0]: r[1] for r in self.conn.execute(f"SELECT t.id, {WP.RUN_TOKENS} FROM turns t")}
+        totals = {r[0]: r[1] for r in self.conn.execute(f"SELECT a.id, {WP.RUN_TOKENS} FROM attempts a")}
         self.assertEqual(totals, {"cost-only": 0, "measured": 160, "old-run": 505})
+
+
+def test_task_ref_sql_matches_a_scalar_or_a_list_element_and_no_other_shape():
+    """One predicate for both shapes of a task ref: the id itself, or an array holding it. Any other shape never matches,
+    and the same id is bound to both `?`."""
+    conn = sqlite3.connect(":memory:")
+    conn.execute("CREATE TABLE m(id INTEGER PRIMARY KEY, refs TEXT)")
+    shapes = {1: {"task": "T"}, 2: {"task": ["X", "T"]}, 3: {"task": ["X"]}, 4: {"task": "X"}, 5: {"task": {"id": "T"}},
+              6: {"task": []}, 7: {"task": [["T"]]}, 8: {"task_id": "T"}, 9: {}}
+    conn.executemany("INSERT INTO m VALUES(?,?)", [(i, json.dumps(refs)) for i, refs in shapes.items()])
+    sql = f"SELECT id FROM m WHERE {H.task_ref_sql('refs')} ORDER BY id"
+    assert [row[0] for row in conn.execute(sql, ("T", "T"))] == [1, 2]
+    by_task_id = f"SELECT id FROM m WHERE {H.task_ref_sql('refs', '$.task_id')} ORDER BY id"
+    assert [row[0] for row in conn.execute(by_task_id, ("T", "T"))] == [8]

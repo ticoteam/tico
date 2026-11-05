@@ -2,7 +2,7 @@
 
 The command surface (docs/history/hub-v2.md §5) and the exit codes are the contract every bot's AGENT.md
 depends on: 0 fine, 2 refused or a non-retryable API error, 1 anything else. The real HTTP round
-trip is `runner/tests/test_conformance.py`; here the API is a stub or absent.
+trip is `runner_support/tests/test_conformance.py`; here the API is a stub or absent.
 """
 import contextlib
 import io
@@ -22,10 +22,11 @@ import pytest
 from clients import hubcli
 
 HUB = Path(__file__).resolve().parents[2] / "scripts" / "hub"
+ALIASES = {"approvals", "automations", "bots", "rule", "tasks"}
 SUBCOMMANDS = ["whoami", "inbound", "connections", "mail", "company-page", "audiences", "editions", "readers", "meeting", "message", "conversation", "thread", "question", "note", "feedback", "file", "page", "card", "pin", "doc", "chat", "assistant", "tag", "task", "replay", "goal", "kpi",
-               "proposal", "rules", "strategy", "brand", "growth", "lens", "market", "listening", "tool", "automation", "audit", "event-types", "peer", "trigger", "relay", "call", "sleep", "notice", "settings", "release", "approval", "webhook", "pipeline", "brief", "mcp", "needs-you", "run", "team", "seat", "org", "health",
+               "proposal", "rules", "strategy", "brand", "growth", "lens", "market", "listening", "tool", "automation", "audit", "event-types", "trigger", "relay", "call", "sleep", "notice", "settings", "release", "approval", "webhook", "pipeline", "brief", "mcp", "origin", "needs-you", "run", "team", "seat", "org", "health",
                "changelog", "update", "grokbot", "external", "calendar", "sql", "db", "classify", "gateway", "decision", "template", "bot", "repo", "skill", "agent", "human", "group", "api", "computer",
-               "credential", "slack", "support", "health-monitor", "finance", "task-manager", "stall-triage", "roadmap", "service-key"]
+               "credential", "slack", "support", "finance", "task-manager", "maintenance", "roadmap", "service-key"]
 
 
 def run_hub(*args, env=None):
@@ -57,6 +58,50 @@ def test_wake_url_commands_reach_the_tools_that_put_the_owners_address(monkeypat
     assert calls == [("GET", "hooks/wake-url"), ("PUT", "hooks/wake-url", {"url": "https://wake.acme.example/start"}),
                      ("PUT", "hooks/wake-url", {"url": None})]
     assert {"hub_relay_wake_url_show", "hub_relay_wake_url_set", "hub_relay_wake_url_off"} <= set(hubtools.BY_NAME)
+
+
+def test_page_link_queries_reach_the_api_through_cli_and_mcp(monkeypatch):
+    from clients import hubtools, remotecli
+    calls = []
+
+    class Api:
+        def __init__(self, *args, **kw):
+            self.__dict__["_tico_is_botops"] = False
+
+        def get(self, path, **query):
+            calls.append((path, {k: v for k, v in query.items() if v is not None}))
+            return {"pages": [], "results": []}
+
+    monkeypatch.setattr(remotecli, "Client", Api)
+    monkeypatch.setenv("HUB_API_URL", "https://tico.acme.example/api/v2")
+    remotecli.run(hubcli.parser().parse_args(["page", "list", "--task", "task-1", "--limit", "2", "--cursor", "next"]))
+    remotecli.run(hubcli.parser().parse_args(["file", "search", "plan", "--kind", "page"]))
+    hubtools.pages_list(Api(), {"task": "task-1", "limit": 2, "cursor": "next"})
+    hubtools.files_search(Api(), {"q": "plan", "kind": "page"})
+    assert calls == [("pages", {"task": "task-1", "limit": 2, "cursor": "next"}),
+                     ("files/search", {"q": "plan", "kind": "page"})] * 2
+
+
+def test_health_findings_and_report_reach_their_routes(monkeypatch):
+    from clients import hubtools, remotecli
+    calls = []
+    class Api:
+        def __init__(self, *args, **kw):
+            self.__dict__["_tico_is_botops"] = False
+        def get(self, path, **query):
+            if path == "me":
+                return {"actor": "human:ana"}
+            calls.append(("GET", path))
+            return {"findings": [], "botops": True, "reports_without_asking": False}
+        def post(self, path, body=None, key=None):
+            calls.append(("POST", path))
+            return {"ticket": "t1"}
+    monkeypatch.setattr(remotecli, "Client", Api)
+    monkeypatch.setenv("HUB_API_URL", "https://tico.acme.example/api/v2")
+    remotecli.run(hubcli.parser().parse_args(["health", "findings"]))
+    remotecli.run(hubcli.parser().parse_args(["health", "report", "hm-0123456789ab"]))
+    assert calls == [("GET", "health/findings"), ("POST", "health/findings/hm-0123456789ab/report")]
+    assert {"hub_health_findings", "hub_health_report"} <= set(hubtools.BY_NAME)
 
 
 def test_thread_commands_reach_their_routes_with_their_flags(monkeypatch):
@@ -100,6 +145,10 @@ def test_thread_commands_reach_their_routes_with_their_flags(monkeypatch):
         (["thread", "post", "th1", "Hello", "--kind", "ask", "--to", "human:ana", "--ref", "task:t9", "--ref", "task:t10"],
          ("POST", "threads/th1/messages", {"text": "Hello", "kind": "ask", "to": "human:ana",
                                            "refs": {"task": ["t9", "t10"]}})),
+        (["thread", "post", "th1", "Yes", "--reply-to", "m7"],
+         ("POST", "threads/th1/messages", {"text": "Yes", "kind": "say", "in_reply_to": "m7"})),
+        (["thread", "show", "th1", "--flat"], ("GET", "threads/th1/timeline", {"flat": 1})),
+        (["thread", "bot-status", "th1"], ("GET", "threads/th1/bot-status", {})),
         (["thread", "reply", "th1", "m7", "Side note"],
          ("POST", "threads/th1/messages", {"text": "Side note", "kind": "say", "parent_message_id": "m7"})),
         (["thread", "edit", "m7", "Fixed"], ("PATCH", "messages/m7", {"text": "Fixed"})),
@@ -107,6 +156,15 @@ def test_thread_commands_reach_their_routes_with_their_flags(monkeypatch):
         (["thread", "follow", "th1", "--notify", "mentions"], ("PUT", "threads/th1/follow", {"notify": "mentions"})),
         (["thread", "follow", "th1"], ("PUT", "threads/th1/follow", {"notify": "live"})),
         (["thread", "unfollow", "th1"], ("DELETE", "threads/th1/follow", None)),
+        (["thread", "pin", "th1"], ("PUT", "threads/th1/pin", None)),
+        (["thread", "unpin", "th1"], ("DELETE", "threads/th1/pin", None)),
+        (["thread", "catch-up", "--limit", "5"], ("GET", "threads/catch-up", {"limit": 5})),
+        (["thread", "update", "th1", "--pin-for-everyone"], ("PATCH", "threads/th1", {"pinned_for_everyone": True})),
+        (["thread", "update", "th1", "--unpin-for-everyone"], ("PATCH", "threads/th1", {"pinned_for_everyone": False})),
+        (["thread", "dm-group", "human:ana", "bot:ops", "--title", "Launch"],
+         ("POST", "threads/dm", {"members": ["human:ana", "bot:ops"], "body": None, "title": "Launch"})),
+        (["thread", "create", "Launch", "--member", "human:ana", "--pin-for-members"],
+         ("POST", "threads", {"title": "Launch", "members": ["human:ana"], "pin_for_members": True})),
         (["thread", "read", "th1", "--seq", "42"], ("POST", "threads/th1/read", {"seq": 42})),
         (["thread", "read", "th1", "--all"], ("POST", "threads/th1/read-all", {})),
         (["thread", "search", "refund terms"], ("GET", "threads/search", {"q": "refund terms"})),
@@ -278,7 +336,9 @@ def test_product_repository_cli_confirms_without_a_terminal_only_with_the_exact_
 class Parser(unittest.TestCase):
     def test_every_subcommand_is_still_there(self):
         text = hubcli.parser().format_help()
-        self.assertIn("{" + ",".join(SUBCOMMANDS) + "}", text)
+        # The plural aliases (`tasks`, `bots`, ...) sit in the same braces; the commands themselves keep their order.
+        choices = text.split("{", 1)[1].split("}", 1)[0].split(",")
+        self.assertEqual([c for c in choices if c not in ALIASES], SUBCOMMANDS)
 
     def test_task_update_help_and_mcp_offer_only_writable_statuses(self):
         from clients import hubtools
@@ -736,6 +796,88 @@ def test_market_watch_and_briefing_commands_reach_their_routes(monkeypatch, tmp_
                             'items': [{'text': 'Example Co raised prices.', 'kind': 'change', 'entity_ids': ['company/example-co']}]}
 
 
+def test_market_apply_sends_the_verified_date_to_an_entity_or_a_new_one_and_only_when_given(monkeypatch):
+    """`hub market apply --last-verified-at` puts the date on the existing entity, or on the new entity it creates;
+    without the flag the body is what it was. The date is passed through: the server refuses a bad one."""
+    import pytest
+    from clients import remotecli
+    from clients.tico import APIError
+    calls = []
+
+    class Api:
+        def get(self, path, **kw):
+            return {'actor': 'bot:librarian'} if path == 'me' else {}
+
+        def post(self, path, body, **kw):
+            calls.append((path, body))
+            return {}
+    monkeypatch.setenv('HUB_API_URL', 'https://api.example.invalid')
+    monkeypatch.setattr(remotecli, 'Client', lambda *a, **kw: Api())
+    base = ['market', 'apply', 'ins-1', '--source', 'https://acme.example/pricing', '--quote', 'Pro is $12',
+            '--our-read', 'A price rise.']
+    remotecli.run(hubcli.parser().parse_args(base + ['--entity-id', 'company/x', '--last-verified-at', '2026-11-03']))
+    remotecli.run(hubcli.parser().parse_args(base + ['--entity-type', 'company', '--entity-name', 'Acme',
+                                                     '--last-verified-at', '2026-11-03']))
+    remotecli.run(hubcli.parser().parse_args(base + ['--entity-id', 'company/x']))
+    with pytest.raises(APIError):
+        remotecli.run(hubcli.parser().parse_args(base + ['--last-verified-at', '2026-11-03']))
+    evidence = {'source_url': 'https://acme.example/pricing', 'source_kind': 'other', 'quote': 'Pro is $12',
+                'our_read': 'A price rise.'}
+    assert calls == [
+        ('market/insights/ins-1/apply', {'evidence': evidence, 'entity_id': 'company/x', 'last_verified_at': '2026-11-03'}),
+        ('market/insights/ins-1/apply', {'evidence': evidence, 'entity': {'type': 'company', 'name': 'Acme', 'summary': '',
+                                                                          'last_verified_at': '2026-11-03'}}),
+        ('market/insights/ins-1/apply', {'evidence': evidence, 'entity_id': 'company/x'}),
+    ]
+
+
+def test_the_market_apply_tool_puts_the_verified_date_in_the_body_for_an_entity_or_a_new_one():
+    from clients.hubtools import BY_NAME
+    calls = []
+
+    class Api:
+        def post(self, path, body=None, key=None):
+            calls.append((path, body))
+            return {}
+    fn = BY_NAME['hub_market_apply']['fn']
+    fn(Api(), {'id': 'ins-1', 'entity_id': 'company/x', 'last_verified_at': '2026-11-03'})
+    fn(Api(), {'id': 'ins-1', 'entity_type': 'company', 'entity_name': 'Acme', 'last_verified_at': '2026-11-03'})
+    assert calls[0][1]['last_verified_at'] == '2026-11-03' and 'entity' not in calls[0][1]
+    assert calls[1][1]['entity']['last_verified_at'] == '2026-11-03' and 'last_verified_at' not in calls[1][1]
+    assert 'last_verified_at' in BY_NAME['hub_market_apply']['inputSchema']['properties']
+
+
+def test_market_apply_refuses_a_timestamp_or_a_written_date_and_sends_nothing(monkeypatch):
+    """--last-verified-at takes a plain YYYY-MM-DD: a timestamp or a written date is refused before any request, never cut down."""
+    import pytest
+    from clients import remotecli
+    from clients.hubtools import BY_NAME
+    from clients.tico import APIError
+    sent = []
+
+    class Api:
+        def get(self, path, **kw):
+            return {'actor': 'bot:librarian'} if path == 'me' else {}
+
+        def post(self, path, body, **kw):
+            sent.append((path, body))
+            return {}
+    monkeypatch.setenv('HUB_API_URL', 'https://api.example.invalid')
+    monkeypatch.setattr(remotecli, 'Client', lambda *a, **kw: Api())
+    base = ['market', 'apply', 'ins-1', '--entity-id', 'company/x', '--source', 'https://acme.example/pricing']
+    for bad in ('2026-11-03T09:00:00Z', '3 Nov 2026', '2026-11-3', '2026-02-31', '2026-13-01'):
+        with pytest.raises(APIError) as refused:
+            remotecli.run(hubcli.parser().parse_args(base + ['--last-verified-at', bad]))
+        assert refused.value.status == 422 and 'YYYY-MM-DD' in str(refused.value)
+    assert sent == []
+
+    api = BY_NAME['hub_market_apply']
+    for bad in ('2026-11-03T09:00:00Z', '2026-02-31'):
+        with pytest.raises(ValueError):
+            api['fn'](Api(), {'id': 'ins-1', 'entity_id': 'company/x', 'last_verified_at': bad})
+    assert sent == []
+
+
 def test_thread_link_slack_runs_the_mcp_tool_for_each_of_its_three_behaviours(monkeypatch):
     """`hub thread link-slack` runs `hub_thread_link_slack` (clients/hubtools.py): a channel asks for the link, the thread
     alone lists its links, and --off lists them and deletes each one."""
@@ -831,6 +973,14 @@ def test_hub_notice_list_is_not_the_renamed_notice_send():
     assert argv == ["message", "send", "Deploy done", "--fyi"] and "is now" in said
 
 
+def test_goal_checkin_list_with_the_list_word_is_checkin_list():
+    """`goal checkin list <id>` is the noun-sub-noun-verb form of `goal checkin-list <id>`: matched before the parse, so it
+    never posts a check-in on a goal named "list"."""
+    argv, said = hubcli.rename_argv(["goal", "checkin", "list", "g1"])
+    assert argv == ["goal", "checkin-list", "g1"] and "is now" in said
+    assert hubcli.parser().parse_args(argv).fn == "goal checkin-list"
+
+
 class _Recorder:
     """A client for `remotecli.run` that records each write and whether it asked to act as the requester."""
     calls = []
@@ -839,7 +989,7 @@ class _Recorder:
         self.__dict__["_tico_is_botops"] = True
 
     def get(self, path, **query):
-        return {"actor": "bot:botops", "kind": "botops", "jobs": [{"key": "stall_triage", "on": True}]}
+        return {"actor": "bot:botops", "kind": "botops", "jobs": []}
 
     def call(self, method, path, body=None, key=None, query=None, delegate=False):
         if method != "GET":
@@ -866,7 +1016,7 @@ def test_botops_settings_commands_run_as_the_person_who_asked(monkeypatch):
         ["task", "types", "--name", "Legacy"],
         ["release", "schedule", "--off"], ["release", "now", "--note", "hotfix"],
         ["task-manager", "on"], ["task-manager", "schedule", "daily", "--at", "09:00"], ["task-manager", "run"],
-        ["task-manager", "bot", "off"], ["stall-triage", "--off"],
+        ["task-manager", "bot", "off"], ["maintenance", "set", "--step", "learn", "--off"],
         ["team", "budget", "--hour", "5"],
         ["trigger", "create", "Orders"], ["trigger", "update", "orders", "--name", "Shop"], ["trigger", "rotate", "orders"],
         ["trigger", "sign", "orders", "--off"], ["trigger", "recover", "orders"], ["trigger", "replay", "orders", "d1"],
@@ -1223,3 +1373,96 @@ def test_task_check_back_reaches_the_same_api_from_cli_and_mcp(monkeypatch):
     remotecli.run(hubcli.parser().parse_args(["task", "check-back", "t1", "--in", "45m", "--for", "Inspect the result."]))
     hubtools.task_check_back(Api(), {"id": "t1", "at": "45m", "note": "Inspect the result."})
     assert calls == [("tasks/t1/check-back", {"at": "45m", "note": "Inspect the result."})] * 2
+
+
+def test_the_background_card_names_its_person_on_the_wire(monkeypatch):
+    """`hub assistant propose --for human:<id>` reaches the server as the body's `for`: remotecli.run used to drop it."""
+    from clients import hubcli, remotecli
+    client = mock.Mock()
+    client.post.return_value = {"action": {"id": "a1"}}
+    monkeypatch.setenv("HUB_API_URL", "https://api.example.invalid")
+    monkeypatch.setattr(remotecli, "Client", lambda *a, **kw: client)
+    remotecli.run(hubcli.parser().parse_args(["assistant", "propose", "--summary", "Archive the Ops bot",
+                                              "--path", "/api/v2/bots/ops/archive", "--body", '{"expected_revision": 1}',
+                                              "--for", "human:ana"]))
+    path, body = client.post.call_args.args[0], client.post.call_args.args[1]
+    assert path == "assistant/actions"
+    assert body["for"] == "human:ana" and body["path"] == "/api/v2/bots/ops/archive" and body["method"] == "POST"
+
+
+def test_a_propose_without_for_sends_no_recipient(monkeypatch):
+    from clients import hubcli, remotecli
+    client = mock.Mock()
+    client.post.return_value = {"action": {"id": "a1"}}
+    monkeypatch.setenv("HUB_API_URL", "https://api.example.invalid")
+    monkeypatch.setattr(remotecli, "Client", lambda *a, **kw: client)
+    remotecli.run(hubcli.parser().parse_args(["assistant", "propose", "--summary", "Archive", "--path", "/api/v2/bots/ops/archive"]))
+    assert "for" not in client.post.call_args.args[1]
+
+
+def test_approval_list_is_the_pending_default_and_the_mcp_tool_matches(monkeypatch):
+    """`hub approval list` runs `approval list` (GET approvals, pending by default, with --from/--since passed through),
+    and the MCP tool `hub_approval_list` takes the same arguments."""
+    from clients import remotecli, hubtools
+    from unittest.mock import Mock
+    client = Mock()
+    client.get.return_value = {"actor": "human:ana", "status": "pending", "total": 0, "approvals": [], "next": None}
+    monkeypatch.setenv("HUB_API_URL", "https://api.example.invalid")
+    monkeypatch.setattr(remotecli, "Client", lambda *a, **kw: client)
+    args = hubcli.parser().parse_args(["approval", "list"])
+    assert args.fn == "approval list" and remotecli.tool_name(args.fn) == "hub_approval_list"
+    remotecli.run(args)
+    client.get.assert_called_with("approvals", status="pending", limit=20, offset=0)
+    remotecli.run(hubcli.parser().parse_args(
+        ["approval", "list", "--status", "declined", "--from", "bot:finance", "--since", "2026-10-01", "--limit", "5"]))
+    client.get.assert_called_with("approvals", status="declined", limit=5, offset=0, **{"from": "bot:finance"},
+                                  since="2026-10-01")
+    tool = hubtools.BY_NAME["hub_approval_list"]
+    assert set(tool["inputSchema"]["properties"]) == {"status", "from", "before", "since", "limit", "offset"}
+    tool["fn"](client, {"from": "bot:finance", "since": "2026-10-01"})
+    client.get.assert_called_with("approvals", status="pending", limit=20, offset=0, **{"from": "bot:finance"},
+                                  since="2026-10-01")
+
+
+@pytest.mark.parametrize("alias, canonical", [
+    (["tasks", "list"], ["task", "list"]),
+    (["task", "defer", "T1", "--handled"], ["task", "later", "T1", "--handled"]),
+    (["tasks", "defer", "T1", "--handled"], ["task", "later", "T1", "--handled"]),
+    (["approvals", "list"], ["approval", "list"]),
+    (["automations", "list"], ["automation", "list"]),
+    (["bots", "show", "ops"], ["bot", "show", "ops"]),
+    (["rule", "list"], ["rules", "list"]),
+])
+def test_an_alias_runs_the_same_calls_as_the_command_it_names(alias, canonical, monkeypatch):
+    """The parser keeps the spelling typed, so dispatch renames an alias first: `hub tasks list` makes the calls of
+    `hub task list` and never reaches the "unsupported" fallback."""
+    from clients import remotecli
+    from unittest.mock import MagicMock
+    monkeypatch.setenv("HUB_API_URL", "https://api.example.invalid")
+    made = []
+    for words in (alias, canonical):
+        client = MagicMock()
+        monkeypatch.setattr(remotecli, "Client", lambda *a, **kw: client)
+        remotecli.run(hubcli.parser().parse_args(words))
+        made.append(client.mock_calls)
+    assert made[0] == made[1] and made[0]
+
+
+def test_maintenance_status_reads_the_one_maintenance_tool(monkeypatch):
+    """`hub maintenance status` has no tool of its own: its command name is hub_maintenance_status only in the parser's
+    listing (CLI_TOOL_ALIASES), so the dispatch must name the tool that exists, hub_maintenance."""
+    from clients import remotecli
+    reads = []
+
+    class Api:
+        def __init__(self, *args, **kw):
+            self.__dict__["_tico_is_botops"] = False
+
+        def get(self, path, **query):
+            reads.append((path, query))
+            return {}
+
+    monkeypatch.setattr(remotecli, "Client", Api)
+    monkeypatch.setenv("HUB_API_URL", "https://tico.acme.example/api/v2")
+    remotecli.run(hubcli.parser().parse_args(["maintenance", "status"]))
+    assert reads == [("maintenance", {})]

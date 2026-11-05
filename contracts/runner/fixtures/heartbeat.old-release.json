@@ -33,6 +33,7 @@
   "server_time": "2026-01-01T00:00:00.000000Z",
   "start_places": true,
   "subscription_accounts": true,
+  "subscription_usage_sources": true,
   "turns_at_once": null,
   "worktree_actions": [],
   "worktree_record_stamp": true

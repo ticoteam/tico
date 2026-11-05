@@ -1,13 +1,15 @@
 """Screening: outside text checked for prompt injection at the doors it comes in by, before a bot reads it
 (questions/injection-screen.json, docs/permissions.md "Screening").
 
-Four doors, each with its own mode (off, warn or hold; Settings > System > Screening):
+Six doors, each with its own mode (off, warn or hold; Settings > System > Screening):
 
   webhook  a call whose automation opens a task or starts a bot's turn, and a `create_task` rule on `webhook.received`
   mail     an inbound message (backend/inbound.py) a bot reads
   idea     the public roadmap's suggestion form (backend/public_roadmaps.py)
   watcher  a watcher's new task (backend/watchers.py), except the Support Agent's HQ tickets, which support triage
            checks (backend/support_triage.py)
+  document a document's text as Counsel reads it (backend/counsel.py)
+  slack    an inbound Slack message (backend/slack_threads.py, backend/slack_gateway.py)
 
 Layers, each on its own: the fencing of outside text as data, which every door already does and is not a switch; then
 two detectors, each switched on or off for all doors (`layers`, on by default); then the door's mode. Patterns first:
@@ -44,16 +46,14 @@ from .store import H, Problem
 log = logging.getLogger("tico.screening")
 
 SET = "injection-screen"
-SOURCES = ("webhook", "mail", "idea", "watcher", "document", "slack", "federation")
+SOURCES = ("webhook", "mail", "idea", "watcher", "document", "slack")
 MODES = ("off", "warn", "hold")
 LAYERS = ("patterns", "model")  # the two detectors, each switched on or off for every door
 # The first release observes only: Warn at every door, so nothing is held until the live eval
 # (`python -m evals.screening.run --live`) and a week of `screening.warned` audit rows show the hold line is safe. Turning
 # Hold on by default is this one line (webhook, idea and watcher; mail is never held).
-DEFAULTS = {"webhook": "warn", "mail": "warn", "idea": "warn", "watcher": "warn", "document": "warn", "slack": "warn",
-            "federation": "warn"}
-NAMES = {"webhook": "Webhooks", "mail": "Mail", "idea": "Ideas", "watcher": "Watchers", "document": "Documents", "slack": "Slack",
-         "federation": "Other Tico installs"}
+DEFAULTS = {"webhook": "warn", "mail": "warn", "idea": "warn", "watcher": "warn", "document": "warn", "slack": "warn"}
+NAMES = {"webhook": "Webhooks", "mail": "Mail", "idea": "Ideas", "watcher": "Watchers", "document": "Documents", "slack": "Slack"}
 KEY = "screening"               # registry_metadata: the modes
 MIN_CHARS = 200                 # shorter text gets the patterns only: too little to carry an attack worth a call
 MAX_CHARS = 20_000              # what the model reads, the same cut as a webhook's body in a task

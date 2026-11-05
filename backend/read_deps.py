@@ -32,8 +32,7 @@ from .store import Problem
 
 BATCH = 100
 SPAN = 20000
-SLICE = 20          # rows walked between looks at the clock
-HOLD_MS = 200       # a sweep write gives the lock back after about this long, and queues again behind any waiter
+HOLD_MS = 200       # a sweep write gives the lock back once a row ends past this long, and queues again behind any waiter
 RUN_EVENTS = "('task.next-run.carried','attempt.input.moved')"
 
 
@@ -275,18 +274,19 @@ def _write(conn, work, gate=None):
 
 
 def _settle_some(conn, keys, gate=None):
-    """Settle the first of `keys` in one write, SLICE rows at a time, until about HOLD_MS has passed; returns how many.
+    """Settle the first of `keys` in one write, row by row, until HOLD_MS has passed (the row that passes it is the
+    last); returns how many.
 
     The walks run under the lock (a walk outside it could miss a change landing before its write), so a write is cut
-    short by time instead: a claim or heartbeat waiting at the gate goes before the next one (TK-INSRN53V)."""
+    short by time instead: a claim or heartbeat waiting at the gate goes before the next one (TK-INSRN53V). The clock is
+    read after every row, so a starved write overruns the budget by one row at most."""
     settled = [0]
 
     def work():
         start, walk = time.monotonic(), Walk(conn)
-        while settled[0] < len(keys):
-            piece = keys[settled[0]:settled[0] + SLICE]
-            settle(conn, piece, walk)
-            settled[0] += len(piece)
+        for key in keys:
+            settle(conn, [key], walk)
+            settled[0] += 1
             if (time.monotonic() - start) * 1000 >= HOLD_MS:
                 break
     _write(conn, work, gate)
@@ -328,10 +328,13 @@ def sweep(conn, batch=BATCH, span=SPAN, stop=None, gate=None, searched=None):
     return done
 
 
-def loop(store, stop, seconds=10):
-    """`sweep` on its own connection beside the server until it stops; a failed pass is retried on the next."""
+def loop(store, stop, seconds=10, first_wait=60):
+    """`sweep` on its own connection beside the server until it stops; a failed pass is retried on the next. The first
+    pass waits `first_wait` seconds: a server that has just started has every runner replaying its queued writes at
+    once, and a pass started then competes with that burst for the CPU and the writer lock."""
     import logging
     searched, file = {}, None
+    stop.wait(first_wait)
     while not stop.is_set():
         try:
             with store.read() as conn:
