@@ -2537,6 +2537,15 @@ def run_view(run, detail=True):
     return out
 
 
+def _sample_in_trigger_inbox(trigger, given):
+    """A sample message for a mail trigger that names no mailbox is mail in the trigger's inbox, as real mail is:
+    its mail actions then target (and are checked against) that mailbox instead of none."""
+    message, inbox = (given or {}).get("message"), str(trigger.get("inbox") or "").strip().lower()
+    if trigger.get("type") != "message" or "@" not in inbox or not isinstance(message, dict) or message.get("mailbox"):
+        return given or {}
+    return {**given, "message": {**message, "mailbox": inbox}}
+
+
 def _input_readable(c, owner, given):
     """A manual run's input names only what the owner may read: a task it may not see, or mail in someone else's
     mailbox, is refused before any run is queued."""
@@ -2802,12 +2811,13 @@ def install(app, store, auth, mutate):
             if not _approved(c, row) and (blocked := _stamp_blocked(c, auth, who, flow)):
                 raise Problem("forbidden", f"Only whoever may change {blocked}'s model may run a routine that sets it "
                               "before it is turned on", 403)
-            _input_readable(c, flow["owner"], body.input)
-            if body.input and not F.all_hold(flow["trigger"].get("filters") or [], body.input):
+            given = _sample_in_trigger_inbox(flow["trigger"], body.input)
+            _input_readable(c, flow["owner"], given)
+            if given and not F.all_hold(flow["trigger"].get("filters") or [], given):
                 # A sample the trigger's filters drop is dropped as the trigger would drop it: counted, no run row.
                 _count(c, aid, "dropped")
                 return {"run": None, "dropped": True}
-            start = dict(body.input)
+            start = dict(given)
             if not start and flow["trigger"].get("type") == "due":
                 # A due routine run by hand with no sample starts as its scheduler would for its next due day.
                 day = _next_due_day(row, flow["trigger"], datetime.now(timezone.utc)) or D.first_due(flow["trigger"])
