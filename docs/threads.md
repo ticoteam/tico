@@ -203,9 +203,14 @@ thread yet and sends no event ([Webhooks](webhooks.md)).
 ## Older conversations
 
 `hub conversation show` and `/api/v2/conversations/*` keep working as aliases for one release. Older conversations
-map onto threads as follows: a bot's main chat becomes its Home, a personal chat becomes a DM, a bot's shared chat
-becomes a thread for its members, a task's discussion stays with the task, and a direct conversation becomes a thread among its
-participants.
+map onto threads as follows: a bot's main chat becomes its Home, a personal chat with a bot joins that bot's Home, a bot's
+shared chat becomes a thread for its members, a task's discussion stays with the task, and a direct conversation becomes a
+thread among its participants.
+
+From v0.5.107 a personal chat joins the Home of the bot it was with, its messages in the order they were written. Its
+history reads as the Home does: everyone in the bot's Read audience can read it, not only the person who had the chat.
+The Assistant, the Strategy Bot, a bot synced from an outside app, and a chat whose person cannot read that Home keep
+their personal chats as DMs. A new chat with a bot that moved goes into its Home too.
 
 A thread with six or more prompts shows an **Outline** pill. It lists the prompts people sent, across every page, and
 choosing one loads older pages until that message is on screen. Each row passes the same checks a page does
