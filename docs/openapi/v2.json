@@ -8469,7 +8469,7 @@
     },
     "/api/v2/connections": {
       "get": {
-        "summary": "Slack, GitHub, mail bots, Email & Phone inboxes, meeting importers, webhooks, physical mail and Listening: the owner and admins see every row, anyone else their own and the company's they may read. Paged with cursor",
+        "summary": "Slack, GitHub, mail bots, Tico addresses and numbers, meeting importers, webhooks, physical mail and Listening: the owner and admins see every row, anyone else their own and the company's they may read. Paged with cursor",
         "operationId": "listConnections",
         "parameters": [
           {
@@ -59691,6 +59691,51 @@
               ],
               "additionalProperties": true
             }
+          },
+          "used_by": {
+            "type": "object",
+            "properties": {
+              "people": {
+                "type": "integer"
+              },
+              "bots": {
+                "type": "integer"
+              },
+              "names": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              }
+            },
+            "required": [
+              "bots",
+              "names",
+              "people"
+            ],
+            "additionalProperties": true
+          },
+          "synced_at": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "newest_epoch": {
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "sync": {
+            "enum": [
+              "",
+              "signin",
+              "failed"
+            ]
+          },
+          "sync_error": {
+            "type": "string"
           }
         },
         "required": [
@@ -59699,12 +59744,17 @@
           "id",
           "kind",
           "level",
+          "newest_epoch",
           "person_id",
           "person_name",
           "provider",
           "routines",
           "state",
-          "status"
+          "status",
+          "sync",
+          "sync_error",
+          "synced_at",
+          "used_by"
         ],
         "additionalProperties": true
       },

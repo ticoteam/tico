@@ -135,7 +135,7 @@ function finDocEmailDraw() {
     ? `Forward to <b>${esc(email)}</b>` : 'Bills address'}</button>`;
   else box.innerHTML = email ? `<button type="button" class="ghost fin-copy" data-fin-copy="${esc(email)}" aria-label="Copy ${esc(email)}">Forward to <b>${esc(email)}</b></button>` : '';
 }
-// One input: an address sets it, empty clears it. An address no Email & Phone inbox has is kept but named here.
+// One input: an address sets it, empty clears it. An address no Tico address has is kept but named here.
 function finDocEmailSet() {
   const state = FIN.doc;
   finDialog('Bills address', `<label>Address<input type="email" name="address" maxlength="254" autocomplete="off" value="${esc(state.email || '')}"></label>`, 'Save', async form => {

@@ -53,7 +53,7 @@ PUT /api/v2/finance/bills-address   {"address": "bills@acme.example"}    # null 
 
 `GET /api/v2/finance/bills` returns it as `bills_email`.
 
-Mail reaches Tico through an Email & Phone inbox. When the bills address is one of those inboxes (or is exactly one of
+Mail reaches Tico through a Tico address. When the bills address is one of those inboxes (or is exactly one of
 an email's recipient addresses; a display name or a look-alike address does not count), each PDF or image
 attached to an email that reaches it is filed once in the Bookkeeper's Library and handed to Finance as an unmatched
 receipt. The next Books check lists it with the sender and subject. The Bookkeeper reads the file, finds or adds the
