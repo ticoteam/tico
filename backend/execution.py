@@ -18,7 +18,7 @@ from .auth import Identity
 from .batch_work import isolated, report, shared_check, shared_scope, storage_error
 from .harnesses import bot_keyed, reports_tool_calls
 from .run_diagnostics import HANDED_BACK, RESTART_TEXT, clean_stop_reported
-from .statuses import PARKED_SQL
+from . import lifecycle
 from .verdict_moves import HANDOFF_FIRST_SQL
 from .store import H, P, Problem, bot_readiness, digest, encode, message_page, readiness_document
 from .config import Settings
@@ -3325,10 +3325,7 @@ class Execution:
             f"LEFT JOIN tasks qt ON qt.id={H.MESSAGE_TASK_SQL} "
             # A job its wake preset holds waits for its release (backend/wake_presets.py tick).
             f"WHERE j.state='queued' AND j.held=0 AND j.bot_id IN ({marks}) AND a.runner_id=? "
-            # An onboarding bot takes a person's message and its manager's, nothing else (backend/lifecycle.py).
-            "AND (" + H.person_sent_sql() + " OR NOT EXISTS(SELECT 1 FROM bot_config pc "
-            "WHERE pc.bot=j.bot_id AND pc.onboarding_state IN " + PARKED_SQL + " "
-            "AND m.sender_id<>'bot:'||coalesce(pc.reports_to,''))) "
+            f"AND {lifecycle.claim_message_sql()} "
             f"AND {unfenced_sql()} AND {scoped_sql()} " + ("AND j.id=? " if job_id is not None else "") +
             ("AND " + H.person_sent_sql() + " " if people_only else "") +
             # A redirect first (it replaces a turn just stopped); then a person's chat; then the bot holding the

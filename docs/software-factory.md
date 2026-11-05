@@ -100,7 +100,11 @@ ticket stays at its step with a Waiting tag.
   for the same check on the same head is refused with the open one's id.
 - **Tico files the check.** Each check step has a pool of bots, set on the step in Settings → Tasks. Entering the step
   files its check to a free pool bot, preferring another model company than the Builder, or leaves it "Waiting for a
-  reviewer" until the first one finishes a check ([Tasks](tasks.md#check-pools-who-takes-a-tickets-check)).
+  reviewer" until one finishes a check or the once-a-minute retry finds room ([Tasks](tasks.md#check-pools-who-takes-a-tickets-check)).
+- **Health names the next move at the current PR head.** Changes are the Builder’s move; a passed check is the
+  Builder’s move to merge or move on. An old-head verdict needs a new review. A check still open names its owner
+  even after a push, and an unfiled check names its pool and wait reason. Human subtasks are not check verdicts.
+  Private check owners and verdicts stay hidden; incomplete evidence cannot approve a merge or move on.
 - **Moving a step wakes nobody unless a rule says so.** A Dev tickets type comes with three editable rules: **QA Fixes**
   wakes the Builder, **In QA** wakes QA only, and **Pending Release** is a note to the Release Manager. Change them in the type's
   **What wakes** automation on the Automations page.

@@ -167,10 +167,11 @@ def main():
     args = parser.parse_args()
     if args.repair:
         from .release_update import lock_path
+        from .regular_file import lock
         path = lock_path(args.root)
         if path is None:
             raise ValueError("Could not find the checkout update lock")
-        with path.open("a") as handle:
+        with lock(path) as handle:
             fcntl.flock(handle, fcntl.LOCK_EX)
             found = restore(args.root)
     elif args.repair_locked:

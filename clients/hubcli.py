@@ -1341,7 +1341,7 @@ def parser():
     s.set_defaults(fn="thread link-slack")
 
     question = sub.add_parser("question", help="ask other bots a question and wait; answer one asked of you").add_subparsers(dest="sub")
-    s = question.add_parser("ask")
+    s = question.add_parser("ask", description="Ask a teammate. A system recipient routes to your manager or the company owner.")
     s.add_argument("words", nargs="*")
     s.add_argument("--wait", type=float, default=60)
     s.set_defaults(fn="question ask")
@@ -1747,7 +1747,7 @@ def parser():
     s.add_argument("--steps-file", dest="steps_file", help="JSON array of steps; keep ids when editing")
     s.add_argument("--delete", action="store_true", help="delete an unused type")
     s.set_defaults(fn="task types")
-    s = task.add_parser("ask")
+    s = task.add_parser("ask", description="Ask the requester. A system requester routes to your manager or the company owner.")
     s.add_argument("id")
     s.add_argument("text")
     s.set_defaults(fn="task ask")

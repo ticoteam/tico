@@ -46,6 +46,7 @@ mod follow;
 mod fetchrepo;
 mod gateway_relay;
 mod gitrun;
+mod gitlocks;
 #[cfg(test)]
 mod gittests;
 mod files_publish;
@@ -84,6 +85,7 @@ mod continuity;
 mod readiness;
 mod readiness_extra;
 mod redact;
+mod regular_file;
 mod relays;
 mod repositories;
 mod repo_safety;
@@ -348,6 +350,8 @@ fn main() {
         std::process::exit(0);
     }
     let mut config = config::Config::load(&path).unwrap_or_else(|e| fail(&e));
+    gitlocks::own(&[config.projects_dir(), config.state_dir(), env::root()]);
+    gitlocks::own_checkout(&env::root());
     // Before any thread starts, and before `profile login` looks for its harness.
     harness_tools::expose_if_owned(&config);
     if let Command::Profile { action } = cli.command {

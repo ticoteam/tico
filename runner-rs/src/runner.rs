@@ -1000,6 +1000,7 @@ impl Runner {
             if follower.blocks_claims(!workers.is_empty()).await {
                 return Ok(()); // an update is due or under way: the updater restarts this runner once nothing runs
             }
+            if !follower.draining() { self.drain.end(); } // a timed-out drain can release claims in this tick
         }
         // Programs bots declare in `watchers:` (crate::watchers); a failure is logged and never stops the runner.
         let assignments = self.assignments_seen();

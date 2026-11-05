@@ -447,6 +447,7 @@ impl Tico {
     /// discard call still ends the meeting, then says what stays there.
     pub fn keep_local(&self, store: &Store, id: &str) -> Result<()> {
         let _guard = store.live_lock();
+        let _drain = store.task_links_lock();
         let context = store.context(id)?;
         ensure!(
             context.live_destination == self.destination.id && !context.live_id.is_empty(),
@@ -465,6 +466,12 @@ impl Tico {
         // Durable first, so recovery cannot file it while the requests run.
         store.update_context(id, |c| {
             c.live_discarded = true;
+            c.kept_on_mac = true;
+            c.task_link_operations.clear();
+            c.items.retain(|item| item.kind != "link");
+            for item in &mut c.items {
+                item.proposed_task_id.clear();
+            }
             Ok(())
         })?;
         if let Some(entry) = filed.filter(|entry| !entry.meeting_id.is_empty()) {

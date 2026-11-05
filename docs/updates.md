@@ -170,6 +170,29 @@ environments (`scripts/tico -e <env> install`) may share one checkout: the first
 runner, still on the old release, finds the checkout already there, runs the install step for its own Python and
 restarts onto it (with its own jobs). The same happens after a `git checkout` of a release by hand. Their updates take
 turns on a lock in the checkout's git directory, so one never moves the checkout while another is mid-update.
+If the Git gate stays busy for ten seconds, or Git cannot find that shared update lock, the updater exits with
+a reason and lets the runner take new work. The same rule covers a ten-minute wait for another updater's checkout
+lock, work still running after the drain wait, work that starts before the final check, and a release whose runner
+binary is not published yet. Current Rust runners retry these delays after 2, 5, 15, 30, then 60 minutes,
+capped at 60 minutes. The status file saves a `not_before` time, so a restart keeps the wait. Between tries the
+runner reports `idle` for the update and takes new work. If a drain has not finished within ten minutes
+(or the configured active-turn limit, when longer), it ends that attempt and uses the same short wait. The
+updater's second check for active work also ends after ten minutes.
+Active work and busy locks never count as blocked. Other causes report `blocked` only after the same cause occurs
+three times in a row, or after two hours of such delays. Active work or a busy lock resets that cause history.
+Blocked deferrals keep the short retry schedule, with the cause in Settings > Computers and Health. Lock waits
+preserve the retry history; a new target release or a completed update clears it.
+An error before the update starts uses the same wait and releases new work. This includes bad settings,
+failed status reads, and locks that cannot be opened or checked. These errors count toward `blocked` and
+show the plain cause. A lock that is a link, a special file, or larger than 4 KiB stays refused and untouched.
+The Rust runner also saves this wait when its own lock check or updater launch fails. Polls keep the saved
+retry time; they do not start a fresh wait on each check.
+
+The Rust follower sets `TICO_UPDATE_RETRY=short` for the updater, including under systemd. Older Python followers,
+including v0.3.45, ignore `not_before` and treat `waiting` and `busy` as due at once. For them alone, the updater
+uses `failed` and the six-hour wait they already honor, so they take work between tries instead of draining
+without an end. Persistent causes use the same blocked rule. It never installs, restarts or rolls back without
+the shared update lock.
 
 ### Linux from a checkout: run `scripts/tico install` once
 
@@ -191,6 +214,8 @@ the runner knows something will start it again and how the update restarts it th
 process itself runs as a transient `tico-update-<pid>-<random>` unit so the restart does not kill it. Each attempt gets
 a new name, so a retry cannot collide with a unit left from an earlier attempt. A lock in the runner's state folder
 keeps a second updater from running, even when the first is waiting for the checkout lock or its status is old.
+The Rust runner releases its registration lock and update-lock probes directly, so a child started by another
+thread cannot keep a finished operation's lock held while it waits to run.
 The runner fills in missing user-bus settings from `/run/user/<uid>` and passes them to the updater. If only
 `DBUS_SESSION_BUS_ADDRESS` is set, it leaves `XDG_RUNTIME_DIR` unset so systemd uses that bus address. If `systemd-run`
 fails, its error is saved as one short line in Health, the computer's update status and `update.log`. A detached
@@ -201,13 +226,16 @@ An unknown stop policy also refuses that fallback.
 Linger is checked at install time; if it is off the command prints `loginctl enable-linger $USER`, because without it the jobs stop when the last session
 logs out and do not start at boot. `scripts/tico status`, `restart`, `logs` and `uninstall` work the same as on a Mac.
 
-A checkout with uncommitted changes, or on a branch other than `main`, refuses the update. Settings > Health and
-Computers show "the checkout has 2 changed files" until someone commits or stashes them.
+A checkout with uncommitted changes, or on a branch other than `main`, is refused: nothing is
+stashed, reset or discarded. Settings > Health and Computers name the changed files until someone
+commits or stashes them.
 
 There is one repair for Tico's own links: if every tracked change is a link from HEAD replaced by a regular file
 with exactly its target's HEAD bytes, the updater restores those links under `tico-update.lock` and continues.
 The target must still be unchanged, and nothing may be staged. A different file, different bytes, changed target,
 or any staged change blocks the whole repair. The blocked message marks any matching flattened links by name.
+A refused repair uses the same blocked-checkout status as other local changes. Busy work and locks still use
+the update's usual retry delays.
 Health and BotOps say when only flattened Tico links remain: they are repaired on the next update and need no
 decision about local work. The same check applies on Mac and Linux, including `core.symlinks=false`; the repair
 uses real links without changing that Git setting.
@@ -226,6 +254,25 @@ No other local work is stashed, reset or discarded.
 Bot repositories and shared or named checkouts must resolve outside the active Tico install, including through
 linked parents. Template refresh also refuses file or folder links that lead outside the bot's repo; it writes
 through a new file and rename in a checked folder.
+
+The updater also keeps the instruction-link repair for tracked `AGENTS.md` and `CLAUDE.md` files
+that contain exactly the committed link text. It does not run a second repair on a refused batch
+of flattened target copies. Staged changes and different instruction edits stay intact.
+This instruction repair's content reads are limited to 1 MiB and require regular files opened nonblocking without
+following the final symlink. FIFOs, devices and oversized files stay untouched; unreadable retained
+backups remain for review, without holding up the updater on a file read.
+Retained backups are compared with their accepted content hash, so later releases can change or
+remove the target without blocking updates. A late write to a backup still blocks the update and
+names the saved file in Health. Instruction backups stay in place even when unchanged, so an open
+writer can finish safely. The runner and updater register the native install's own Tico checkout,
+even when it is outside the projects and state folders, so Git lock reports work during release updates.
+For a linked checkout (`.git` is a file), this includes its admin and common Git directories after
+checking that the worktree registration points back to the checkout. The runner passes its roots in
+`TICO_GIT_OWNED_ROOTS` as a JSON list on both launch paths. Older updaters ignore it, so updates still
+start if another environment moved the shared checkout to an older release.
+Git lock files also stay in place: once a lock is 30 minutes old, the updater
+reports its full path, age and one removal command. Check no Git is running for that repository
+before running that command on the Computer.
 `scripts/tico update` still works by hand and still follows `main`.
 
 A launch failure waits six hours before another attempt at the same release. A newly installed runner retries a
