@@ -872,15 +872,12 @@ def test_plain_answer_previews_keep_the_message_body_provenance(api):
 
 
 def publication_collision(api, kind):
-    machine, publisher = turn(api)
+    from backend.auth import Identity
+    api.app.state.store.settings.test_identities['unscoped-ops'] = Identity('bot:ops', 'bot')
     body = ({'url': 'https://acme.example/roadmap'} if kind == 'links' else
             {'name': 'roadmap.md', 'text': '# Caller supplied bytes'}) | {'scope': 'bot'}
-    hidden = post(api, 'files/' + kind, {**body, 'title': 'Restricted roadmap name'}, publisher['token'])['file']
-    post(api, f'attempts/{publisher["id"]}/started', {'thread_id': 'publication-source'}, machine['token'])
-    post(api, f'attempts/{publisher["id"]}/complete', {'outcome': 'completed', 'last_seq': 0}, machine['token'])
-    task = post(api, 'tasks', {'owner': 'ops', 'title': 'Prepare a public plan', 'body': 'Write the plan.', 'private': False})
-    attempt = claim(api, machine, 'ops', key='publication-task')
-    assert attempt['task']['id'] == task['id']
+    hidden = post(api, 'files/' + kind, {**body, 'title': 'Restricted roadmap name'}, 'unscoped-ops')['file']
+    task, attempt = task_turn(api)
     no_sources(get(api, 'bots/ops/files', attempt['token']), (hidden['id'], hidden['title']))
     return body, hidden, task, attempt
 
@@ -891,15 +888,19 @@ def test_publication_matches_only_readable_files_and_keeps_hidden_series(api, mo
     body, hidden, task, attempt = publication_collision(api, kind)
     token, path = attempt['token'], 'files/' + kind
     shown = post(api, path, body, token, key='publication-collision')
-    assert shown['created'] and shown['file']['id'] != hidden['id']
+    assert shown['created'] and 'file' not in shown
     no_sources(shown, (hidden['id'], hidden['title']))
     assert post(api, path, body, token, key='publication-collision') == shown
-    again = post(api, path, body, token)
-    assert not again['created'] and again['file']['id'] == shown['file']['id']
     with api.app.state.store.read() as c:
         original = c.execute('SELECT * FROM bot_files WHERE id=?', (hidden['id'],)).fetchone()
         assert original['title'] == hidden['title'] and original['task_id'] is None
         assert original['current_version'] == (1 if kind == 'uploads' else 0)
+        created = c.execute('SELECT * FROM bot_files WHERE task_id=? AND scope=?', (task['id'], 'bot')).fetchall()
+        assert len(created) == 1 and created[0]['id'] != hidden['id'] and created[0]['title'] != hidden['title']
+    # A readable match still continues its existing series.
+    readable = post(api, path, {**body, 'scope': 'task'}, token)
+    again = post(api, path, {**body, 'scope': 'task'}, token)
+    assert readable['created'] and not again['created'] and again['file']['id'] == readable['file']['id']
     # The matcher must protect the write itself, independently of response projection.
     with monkeypatch.context() as patch:
         find = Files.find
@@ -907,7 +908,7 @@ def test_publication_matches_only_readable_files_and_keeps_hidden_series(api, mo
                       find(self, c, bot, scope, identity))
         with pytest.raises(AssertionError):
             result = post(api, path, body, token)
-            assert result['created'] and result['file']['id'] != hidden['id']
+            assert result['created']
 
 
 def test_reference_objects_are_projected_under_any_response_key(api, monkeypatch):
@@ -970,7 +971,7 @@ def test_quoted_answers_clear_other_on_answer_and_message_paths(api, monkeypatch
     made = ask(api, attempt['token'], [{'file': hidden}, {'file': allowed}], pick=True, parent=t['id'], private=False)
     tid, qid = made['task']['id'], made['question']['id']
     resolved = post(api, f'tasks/{tid}/comments/{qid}/resolve', {'quote': 'Confidential draft'})
-    mid = resolved['answer']['id']
+    mid = resolved['comment']['id']
     assert get(api, 'messages/' + mid)['refs']['answer']['other'] == 'Confidential draft'
     archived = api.patch('/api/v2/files/' + hidden, json={'archived': True}, headers=headers())
     assert archived.status_code == 200, archived.text
