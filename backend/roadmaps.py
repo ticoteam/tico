@@ -408,6 +408,7 @@ def install_internal(app, store, auth, mutate, mover):
             msg = H.comment_on(c, row, mid)
             if not msg or not msg.get('public') or msg.get('deleted_at'):
                 raise Problem('not_found', 'Public comment not found', 404)
+            H._message_writer(c, who.actor, msg, H.conversation(c, msg['conversation_id']))
             if body.action == 'delete':
                 c.execute("UPDATE messages SET body='',deleted_at=?,hidden_at=? WHERE id=?", (H.now(), H.now(), mid))
                 H._withdraw_queued_comment_copies(c, mid)

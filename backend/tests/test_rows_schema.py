@@ -13,9 +13,11 @@ from backend.store import Store
 
 TABLES = {
     rows.MeetingTaskLinkRow: "meeting_task_links",
+    rows.SuggestionRow: "suggestions",
     rows.TaskRow: "tasks",
     rows.TaskCheckBackWakeRow: "task_check_back_wakes",
     rows.TaskHoldRow: "task_holds",
+    rows.QuarantineHoldRow: "quarantine_holds",
     rows.MaintenanceStepRow: "maintenance_steps",
     rows.MaintenanceRunRow: "maintenance_runs",
     rows.MaintenanceRunStepRow: "maintenance_run_steps",

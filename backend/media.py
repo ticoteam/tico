@@ -999,6 +999,7 @@ def install_media(app, store, auth, mutate, send_message, task_create, review_pr
             digest = await asyncio.to_thread(blobs.put, data, content_type)
         def work(c):
             task = comment_rights(c, auth, who, tid)
+            H._writer(c, who.actor, task_id=tid)
             item = register(c, who, digest, size, body.name, content_type)
             bot_actor = next((a for a in (who.actor, task["owner_id"], task["requester_id"]) if H.is_bot(a)), None)
             fid, number = files.attach_task(c, who, tid, item, digest,

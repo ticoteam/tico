@@ -1,12 +1,25 @@
 # Privacy
 
-What a Tico install sends outside your own server, and what the receiving side keeps: the anonymous usage count, the
-suggestions while you build your team chart, and, only when you press Send, a support ticket. Each has its own switch.
+What a Tico install sends outside your own server, and what the receiving side keeps: the anonymous usage count,
+Maintenance suggestions, suggestions while you build your team chart, and, only when you press Send, a support ticket.
+Each has its own switch.
 The setup page on tico.team, which you use before installing, has its own section ([below](#the-setup-page-on-ticoteam)).
 Ask Tico, the chat on tico.team's pages, has its own section too ([below](#ask-tico-the-chat-on-ticoteam)).
 Separately, the server calls AI model providers with your own keys for a few features ([below](#the-servers-own-model-calls)). Bots you set to use Tico Cheap, Mid or Power send their model calls through Tico HQ to OpenRouter ([below](#tico-cheap-mid-and-power-through-tico-hq)). Tico's source is available, so you can read the code that
-sends them (`backend/census.py`, `backend/releases.py`, `backend/recruit.py`, `backend/support.py`). The service that receives them,
+sends them (`backend/census.py`, `backend/releases.py`, `backend/suggestions.py`, `backend/recruit.py`, `backend/support.py`). The service that receives them,
 Tico HQ, is run by the Tico team from a separate, private repository; its code is not published. What it is sent and what it keeps is described in [docs/tico-hq.md](docs/tico-hq.md).
+
+## Maintenance suggestions
+
+**Share stats for suggestions**, in Settings > General > Privacy, starts off. Enabling it requires the owner's consent
+and a hosted install or Tico Gateway connection. Suggest sends counts at most once every 24 hours through the install's
+authenticated Gateway connection: snapshot version, active bots in total and by role, open tasks and automations.
+It sends no names or message text. Demo, rehearsal and plain open-source installs never send these requests.
+
+**Report suggestion outcomes** starts on, only while sharing is on. Its JSON contains only the HQ suggestion id and
+`delivered`, `acted`, `dismissed`, `expired` or `condition_false`, at most 100 per run. It sends no bot ids, timestamps,
+suggestion text or local facts. Turn either switch off to stop its requests. This is separate from usage counting.
+See [Suggest](docs/learnings.md#suggest) and `backend/suggestions.py` for the full install-side contract.
 
 ## The anonymous usage count
 

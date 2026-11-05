@@ -923,6 +923,8 @@ def require_manage(ctx, place):
             "bot": "The bot and the people who manage it arrange its sidebar",
             "task": "A task's people arrange what is pinned to it",
             "person": "Only its person arranges My dashboard"}[kind], 403)
+    if kind == "task":
+        H._writer(ctx.c, ctx.who.actor, task_id=ident)
     return kind, ident
 
 
@@ -1108,6 +1110,8 @@ def size_of(value):
 
 
 def file_activity(c, fid, actor, action, place):
+    row = c.execute("SELECT task_id FROM bot_files WHERE id=?", (fid,)).fetchone()
+    H._writer(c, actor, task_id=row["task_id"] if row else None)
     c.execute("INSERT INTO bot_file_activity(file_id,actor,action,created_at,detail) VALUES(?,?,?,?,?)",
               (fid, actor, action, H.now(), encode({"place": place})))
 
@@ -1177,6 +1181,8 @@ def drop_pin(ctx, pin):
 
 def add_pin(ctx, place, item, size="medium", position=None):
     kind, ident = require_view(ctx, place)
+    if kind == "task":
+        H._writer(ctx.c, ctx.who.actor, task_id=ident)
     if kind == "task" and item.startswith("page:"):
         if not may_link(ctx, kind, ident):
             raise Problem("forbidden", "You cannot link pages here", 403)
@@ -1224,6 +1230,8 @@ def remove_pin(ctx, pid):
     if not may_unpin(ctx, pin, kind, ident):
         raise Problem("forbidden", "Only whoever pinned it, the task's owner or requester, or the org owner unpins it"
                       if kind == "task" else "You cannot unpin here", 403)
+    if kind == "task":
+        H._writer(ctx.c, ctx.who.actor, task_id=ident)
     if kind == "bot":
         from . import bot_task_tabs as T
         T.remove_widget(ctx, ident, pin["item"])
@@ -1323,6 +1331,10 @@ def edit_card(ctx, cid, title=None, settings=None):
     row = card_or_404(ctx, cid)
     if not may_edit_card(ctx, row):
         raise Problem("forbidden", "Whoever arranges the places it is pinned to changes a card", 403)
+    for place in card_places(ctx, row):
+        kind, _, ident = place.partition(":")
+        if kind == "task":
+            H._writer(ctx.c, ctx.who.actor, task_id=ident)
     fields = {}
     if title is not None:
         fields["title"] = title.strip()
@@ -1341,6 +1353,10 @@ def remove_card(ctx, cid):
     row = card_or_404(ctx, cid)
     if not may_edit_card(ctx, row):
         raise Problem("forbidden", "Whoever arranges the places it is pinned to removes a card", 403)
+    for place in card_places(ctx, row):
+        kind, _, ident = place.partition(":")
+        if kind == "task":
+            H._writer(ctx.c, ctx.who.actor, task_id=ident)
     private = on_person_place(card_places(ctx, row))
     for pin in [dict(r) for r in ctx.c.execute("SELECT * FROM pins WHERE item=?", ("card:" + cid,))]:
         kind, ident = parse(ctx, pin["place"])
