@@ -365,6 +365,22 @@ def test_empty_page_cursor_does_not_name_the_last_rejected_source(api):
     assert decode_cursor(mixed["next_cursor"]) == ("2099-01-01", allowed)
 
 
+def test_archived_scoped_files_are_rejected_before_metadata_and_cursor_creation(api, monkeypatch):
+    from backend import file_library
+    t, attempt = task_turn(api)
+    fid = published(api, attempt, name="archived.html", task=t["id"])
+    response = api.patch("/api/v2/files/" + fid, json={"archived": True}, headers=headers())
+    assert response.status_code == 200, response.text
+    token = attempt["token"]
+    assert_file_metadata_hidden(api, fid, token)
+    get(api, "pages/" + fid, token, expected=404)
+    monkeypatch.setattr(file_library, "SCAN_MAX", 1)
+    shown = get(api, "pages?archived=1&limit=1", token)
+    assert shown["pages"] == []
+    assert_cursor_hides_rejected_rows(shown["next_cursor"], (fid,))
+    assert get(api, "files/" + fid + "/meta")["id"] == fid
+
+
 def test_new_leak_matrix_detects_each_disabled_guard(api, hq, mail, monkeypatch):
     from backend import files, list_cursors, postal_mail
     data = sources(api)

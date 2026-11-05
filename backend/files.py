@@ -166,6 +166,8 @@ def asked_to_read(c, who, file_id, version=None, cache=None):
 
 def file_visible(c, auth, who, row, cache, *, version=None):
     from . import turn_scope
+    if row["archived"] and turn_scope.scope(c, who) is not None:
+        return False
     if version is not None:
         from . import postal_mail
         scan = postal_mail.scan_access(c, auth, who, version["blob_id"])
