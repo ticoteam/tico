@@ -500,6 +500,7 @@ struct Inner {
 }
 
 struct Shared {
+    allocation: super::Allocation,
     bot: String,
     cmd: Vec<String>,
     /// `echo` is Muse's offline provider (tests and smoke runs); it takes no model or effort.
@@ -526,7 +527,7 @@ impl MuseCodeHost {
     /// `homes`: Muse's (XDG_CONFIG_HOME, XDG_DATA_HOME) for every turn.
     pub fn on_config(bot: &str, cmd: Vec<String>, provider: Option<String>, state_dir: PathBuf, homes: (PathBuf, PathBuf), tx: Events) -> MuseCodeHost {
         let (config_home, data_home) = homes;
-        MuseCodeHost(Arc::new(Shared { bot: bot.into(), cmd, provider, state_dir, config_home, data_home, tx, inner: Mutex::new(Inner::default()) }))
+        MuseCodeHost(Arc::new(Shared { allocation: super::Allocation::default(), bot: bot.into(), cmd, provider, state_dir, config_home, data_home, tx, inner: Mutex::new(Inner::default()) }))
     }
 
     fn inner(&self) -> std::sync::MutexGuard<'_, Inner> {
@@ -556,6 +557,10 @@ impl MuseCodeHost {
         if let Some(r) = reader {
             let _ = tokio::time::timeout(STOP_TIMEOUT + Duration::from_secs(1), r).await;
         }
+    }
+
+    pub fn track_allocation(&self, turn: std::sync::Arc<std::sync::atomic::AtomicBool>) {
+        self.0.allocation.track(turn);
     }
 
     pub fn alive(&self) -> bool {
@@ -653,6 +658,7 @@ impl MuseCodeHost {
                 let mut child = self.command(thread_id, &settings, &prompt, effort)
                     .stderr(Stdio::piped())
                     .spawn()?;
+                self.0.allocation.mark();
                 let stderr = crate::run_diagnostics::Stderr::capture(&mut child, self.0.tx.clone(), &env);
                 Ok::<_, std::io::Error>((child, stderr))
             })();

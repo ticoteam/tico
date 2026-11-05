@@ -31,8 +31,8 @@ published port. Ordinary local installs still check their configured port.
 ## It cannot be mistaken for a real install
 
 - A **Demo — sample data** strip stays across the top of every page and cannot be closed.
-- Everything is fictional: humans are `@acme.example`, and dates are relative to now, so the week
-  always ends today.
+- Everything is fictional: humans are `@acme.example`, and dates are relative to when the demo is built, so its
+  week ends on the day it starts.
 - Nothing leaves the computer. The update check is off, there is no telemetry, and the process
   refuses every connection to a non-local address.
 - Bots do not run. There is no scheduler; **Run now** says so; a message to a bot is answered with one
@@ -43,6 +43,9 @@ published port. Ordinary local installs still check their configured port.
   demo is read-only.
 
 Poking around is safe: changes go to a temporary database.
+
+`--data-dir PATH` keeps the sample company and your edits between starts. Its dates keep their original build
+time; use an empty directory to start a fresh week.
 
 ## Tico's public demo
 
