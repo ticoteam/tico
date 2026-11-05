@@ -13,12 +13,12 @@ from backend.tests.test_review_gate import HEAD, OLD, move, ticket
 from backend.tests.test_review_gate_fresh import github
 
 
-def waiting_ticket(api, number, reviewer):
+def waiting_ticket(api, number, reviewer, kind='review'):
     with api.app.state.store.transaction() as c:
         typ = H.type_create(c, H.KEEPER, f'Retry queue {number}', [
             {'name': 'Build', 'status': 'doing'},
             {'name': 'Check', 'status': 'review',
-             'flow': {'check': 'review', 'on_pass': 'Build', 'on_fail': 'Build'}},
+             'flow': {'check': kind, 'on_pass': 'Build', 'on_fail': 'Build'}},
         ])
         task = H.task_create(c, 'human:ana', f'Change {number}', '', 'bot:cpo', type=typ['id'], step='Check',
                              private=False, mover=True)
@@ -28,8 +28,63 @@ def waiting_ticket(api, number, reviewer):
         c.execute('UPDATE task_steps SET check_pool=?,check_limit=1 WHERE id=?',
                   (json.dumps([reviewer]), task['step_id']))
         step = dict(c.execute('SELECT * FROM task_steps WHERE id=?', (task['step_id'],)).fetchone())
-        wait = P._wait(c, task, step, f'Check: PR #{number}', [HEAD], 'no reviewer in the pool is online')
+        wait = P._wait(c, task, step, f'{P.kind(step)}: PR #{number}', [HEAD], 'no reviewer in the pool is online')
     return task, wait
+
+
+@pytest.mark.parametrize('kind,ci', [('review', 'success'), ('qa', 'failure'), ('release_qa', 'success')])
+def test_retry_requests_the_fresh_head_after_the_cached_pr_moves_on(api, monkeypatch, kind, ci):
+    from backend import verdict_moves as V
+    team(api, seen=H.shift(H.now(), minutes=-10))
+    task, wait = waiting_ticket(api, 509, 'rev-a', kind=kind)
+    store, service = api.app.state.store, api.app.state.github_app
+    with store.transaction() as c:
+        # The wait has H, but a PR refresh records J before a checker comes online.
+        c.execute("UPDATE task_links SET detail=?,state=? WHERE task_id=? AND kind='pr'",
+                  (json.dumps({'head_sha': OLD}), 'merged' if kind == 'release_qa' else 'open', task['id']))
+        c.execute("UPDATE runner_states SET last_seen_at=? WHERE runner_id='r1'", (H.now(),))
+    reads = github(api, monkeypatch, {'python': ci}, head=OLD)
+    [cid] = P.retry(store, service=service)
+    assert any('/pulls/509' in path for path in reads)
+    with store.transaction() as c:
+        check = H.task(c, cid)
+        assert f'at head {OLD}.' in check['body'] and HEAD not in check['body']
+        assert c.execute('SELECT state,child_id,heads FROM check_waits WHERE id=?',
+                         (wait['id'],)).fetchone()[:] == ('filed', cid, OLD)
+        assert c.execute("SELECT new FROM history_events WHERE subject_id=? AND kind='review_head'",
+                         (cid,)).fetchone()[0] == OLD
+        attempt = H.new_id()
+        c.execute('INSERT INTO attempts(id,bot_id,task_id,created_at,settled_at) VALUES(?,?,?,?,?)',
+                  (attempt, 'rev-a', cid, H.now(), H.now()))
+        H.task_update(c, 'bot:rev-a', cid, status='done', note='Checked.',
+                      verdict='changes' if kind == 'review' else 'fail', verdict_head=OLD)
+        outcome = V.after_capture(c, cid, OLD, attempt)
+        assert outcome and outcome['moved'] == 'Build'
+
+
+def test_a_qa_retry_waits_without_writes_when_the_fresh_head_is_unavailable(api, monkeypatch):
+    team(api)
+    task, wait = waiting_ticket(api, 510, 'rev-a', kind='qa')
+    store, service = api.app.state.store, api.app.state.github_app
+    github(api, monkeypatch, {'python': 'success'}, head=OLD)
+    with store.transaction() as c:
+        c.execute("UPDATE task_links SET detail=? WHERE task_id=? AND kind='pr'",
+                  (json.dumps({'head_sha': OLD}), task['id']))
+
+    def unavailable(*args, **kwargs):
+        raise ConnectionError('GitHub unavailable')
+
+    def unexpected(*args, **kwargs):
+        raise AssertionError('an unread head must leave the QA wait alone')
+
+    with monkeypatch.context() as patched:
+        patched.setattr(service, 'mint', unavailable)
+        patched.setattr(store, 'transaction', unexpected)
+        assert P.retry(store, service=service) == []
+    with store.read_transaction() as c:
+        assert P.waiting(c, task['id']) == [wait]
+    [cid] = P.retry(store, service=service)
+    assert [check['id'] for check in checks(api, task)] == [cid]
 
 
 def backlog(c, wait, count, prefix='older'):

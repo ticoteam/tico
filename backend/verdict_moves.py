@@ -338,7 +338,7 @@ def verdict_route(c, row, head, *, step=None, evidence=None):
     if step is None:
         step = evidence["step"] if evidence is not None else F.step(c, row.get("step_id"))
         if step and not F.is_check(step):
-            step = F.fixes_for(c, step, board=evidence["board"] if evidence is not None else None)
+            step = F.fixes_for(c, step, row, evidence=evidence)
     verdict = _verdict_at(c, row, step, head, evidence=evidence) if step else None
     if not verdict:
         return None
@@ -392,7 +392,7 @@ def merge_ready(c, row, *, evidence=None):
 
 def _judged_by(c, row, step, *, evidence=None):
     """The head the check that sent the ticket to work step `step` judged, lowered, or None."""
-    check = F.fixes_for(c, step, board=evidence["board"] if evidence is not None else None)
+    check = F.fixes_for(c, step, row, evidence=evidence)
     if not check:
         return None
     found = next((t for t in reversed(_checks(c, row, check, evidence=evidence)) if _verdict(t)), None)

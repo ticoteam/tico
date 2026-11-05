@@ -265,10 +265,28 @@ def reviews_before(c, s):
     return [x for x in checks(c, s["type_id"], "review") if x["position"] < s["position"] and x["id"] != s["id"]]
 
 
-def fixes_for(c, s, *, board=None):
-    """The check step whose changes come to work step `s` (its `on_fail` is `s`), or None."""
-    return next((x for x in (steps(c, s["type_id"]) if board is None else board)
-                 if of(x).get("on_fail") == s["id"]), None)
+def fixes_for(c, s, ticket, *, evidence=None):
+    """The check step that last sent this ticket to work step `s`, or its sole configured source.
+
+    A shared fixes target needs the recorded move, not board order. Pair each verdict move with its step event:
+    step ids survive renames, and later checks that moved nothing cannot replace the source of the feedback.
+    """
+    board = evidence["board"] if evidence is not None else steps(c, s["type_id"])
+    sources = {x["id"]: x for x in board if of(x).get("on_fail") == s["id"]}
+    if not sources:
+        return None
+    events = (evidence["events"] if evidence is not None else
+              c.execute("SELECT kind,old,new FROM history_events WHERE subject_type='task' AND subject_id=? "
+                        "AND kind IN ('step','verdict_move') ORDER BY created_at,rowid", (ticket["id"],)))
+    entered, source = None, None
+    for event in events:
+        if event["kind"] == "step":
+            entered = event
+        elif event["kind"] == "verdict_move" and entered and entered["new"] == s["id"]:
+            source = entered["old"]
+    if source is not None:
+        return sources.get(source)
+    return next(iter(sources.values())) if len(sources) == 1 else None
 
 
 def at_or_past(c, row, target):

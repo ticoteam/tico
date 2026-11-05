@@ -1589,9 +1589,9 @@ def _review_actors(c, who, auth, tickets):
     events = {}
     ids = set(states) | {t["id"] for state in states.values() for t in state["children"]}
     for part in H.chunks(sorted(ids)):
-        for raw in c.execute("SELECT subject_id,kind,new,created_at FROM history_events WHERE subject_type='task' "
+        for raw in c.execute("SELECT subject_id,kind,old,new,created_at FROM history_events WHERE subject_type='task' "
                              f"AND subject_id IN ({','.join('?' * len(part))}) "
-                             "AND kind IN ('step','check_filed','review_head','round_skipped') ORDER BY created_at,rowid", part):
+                             "AND kind IN ('step','check_filed','review_head','round_skipped','verdict_move') ORDER BY created_at,rowid", part):
             events.setdefault(raw["subject_id"], []).append(dict(raw))
     for tid, state in states.items():
         ticket = state["ticket"]

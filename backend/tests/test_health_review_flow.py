@@ -1,6 +1,8 @@
 """Health follows the factory's check evidence at the current PR head, with set reads and private children hidden."""
 import json
 
+import pytest
+
 from backend import health, hubdb as H
 from backend.tests.test_health import add_bot, environment, signed_in  # noqa: F401
 
@@ -332,3 +334,39 @@ def test_same_head_qa_reentry_keeps_health_at_changes_until_a_new_head(environme
         c.execute('UPDATE task_links SET detail=? WHERE id=?', (json.dumps(detail), link['id']))
         assert V.merge_ready(c, H.task(c, task['id'])) is not None
     assert 'bot:builder: merge PR #206' in items(api)[0]['fix']
+
+
+@pytest.mark.parametrize('first,second', [('First look', 'Second look'), ('Second look', 'First look')])
+def test_shared_fixes_uses_the_review_that_last_returned_the_ticket(environment, first, second):
+    from backend import step_flow as F, verdict_moves as V
+    api = setup(environment)
+    task = ticket(api, step=first)
+    store = api.app.state.store
+    with store.transaction() as c:
+        c.execute('UPDATE task_steps SET check_pool=NULL WHERE type_id=?', (task['type_id'],))
+        H._task_event(c, task['id'], H.KEEPER, 'step', None, task['step_id'], '')
+
+    def finish(name, value):
+        check = child(api, task, title=f'{name}: PR #206', status='open')
+        with store.transaction() as c:
+            attempt = H.new_id()
+            c.execute('INSERT INTO attempts(id,bot_id,task_id,created_at,settled_at) VALUES(?,?,?,?,?)',
+                      (attempt, 'reviewer', check['id'], H.now(), H.now()))
+            H.task_update(c, 'bot:reviewer', check['id'], status='done', note='Reviewed.',
+                          verdict=value, verdict_head=HEAD)
+            outcome = V.after_capture(c, check['id'], HEAD, attempt)
+            assert outcome and outcome['moved'] == 'Build'
+
+    finish(first, 'approve')
+    assert 'move PR #206 on' in items(api)[0]['fix']
+    with store.transaction() as c:
+        H.task_update(c, 'bot:builder', task['id'], step=second)
+    finish(second, 'changes')
+    with store.read_transaction() as c:
+        current = H.task(c, task['id'])
+        assert F.fixes_for(c, F.step(c, current['step_id']), current)['name'] == second
+        assert V.verdict_route(c, current, HEAD)['verdict'] == 'changes'
+    [item] = items(api)
+    assert item['whose_move'] == 'bot:builder'
+    assert 'address review changes on PR #206' in item['fix']
+    assert 'move PR' not in item['fix'] and 'merge PR' not in item['fix']

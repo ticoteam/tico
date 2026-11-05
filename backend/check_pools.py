@@ -530,6 +530,12 @@ def _file(c, ticket, step, slug, title, heads, snapshots, why):
         H._task_event(c, ticket["id"], H.KEEPER, "check_not_filed", None, slug, f"{title}: {exc.detail}"[:500])
         return None
     c.execute("RELEASE check_pool_file")
+    if heads:
+        recorded = c.execute("SELECT new FROM history_events WHERE subject_type='task' AND subject_id=? AND kind='review_head' "
+                             "ORDER BY created_at DESC,rowid DESC LIMIT 1", (child["id"],)).fetchone()
+        if not recorded or recorded["new"] != ",".join(heads):
+            # Checks after release also judge merged PRs, which the review gate leaves out.
+            H._task_event(c, child["id"], ticket["owner_id"], "review_head", None, ",".join(heads), "")
     label = (H.bot(c, slug) or {}).get("slug", slug)
     H._task_event(c, ticket["id"], H.KEEPER, "check_filed", None, child["id"], f"{title} to {label} ({why})")
     return child
@@ -614,7 +620,7 @@ def _take_plan(c, wait, only=None, snapshots=None):
     if not found:
         return {"drop": "the step has no pool"}
     step, slugs, limit = found
-    # Entry can record a newer head than the webhook cache; only fresh CI may replace that head.
+    # Entry can record a newer head than the webhook cache; only a fresh PR read may replace that head.
     heads = [h for h in wait["heads"].split(",") if h]
     if snapshots is not None:
         prs = _prs(c, ticket, step)
@@ -636,7 +642,13 @@ def _take_plan(c, wait, only=None, snapshots=None):
 def _admission_problem(c, wait, plan, snapshots):
     """Read the same gate as child creation, without recording a refusal for an idle wait."""
     from . import review_gate
-    if "drop" not in plan and plan["free"] and review_gate.is_review(c, plan["ticket"], wait["title"]):
+    if "drop" in plan or not plan["free"]:
+        return None
+    if snapshots is not None and any(not (snapshots.get(pr["id"]) or {}).get("head_sha")
+                                     or (snapshots.get(pr["id"]) or {}).get("error")
+                                     for pr in _prs(c, plan["ticket"], plan["step"])):
+        return "the current PR head could not be read"
+    if review_gate.is_review(c, plan["ticket"], wait["title"]):
         return review_gate.problem(c, plan["ticket"], plan["ticket"]["owner_id"], snapshots, require_pr=True)
 
 
@@ -769,8 +781,7 @@ def retry(store, limit=RETRY_LIMIT, *, service=None):
             plan = _take_plan(c, dict(row))
             if "drop" not in plan and not plan["free"] and (not plan["reason"] or plan["reason"] == row["reason"]):
                 continue
-            prs = (review_gate.links(c, plan["ticket"]) if "drop" not in plan and plan["free"]
-                   and review_gate.is_review(c, plan["ticket"], row["title"]) else [])
+            prs = _prs(c, plan["ticket"], plan["step"]) if "drop" not in plan and plan["free"] else []
         snapshots = review_gate.snapshot(service, prs) if prs and service else None
         with store.read_transaction() as c:
             row = c.execute("SELECT * FROM check_waits WHERE id=? AND state='waiting'", (wid,)).fetchone()
