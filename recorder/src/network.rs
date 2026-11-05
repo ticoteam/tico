@@ -789,7 +789,14 @@ impl Tico {
                 let detail = if section == "doc" {
                     json!({"document":item.document,"change":item.change,"why":"Proposed from the meeting transcript"})
                 } else {
-                    json!({"owner":item.owner,"due":item.due,"body":item.body})
+                    let mut detail = json!({"owner":item.owner});
+                    if !item.due.is_empty() {
+                        detail["due"] = json!(item.due);
+                    }
+                    if !item.body.is_empty() {
+                        detail["body"] = json!(item.body);
+                    }
+                    detail
                 };
                 let at_ms = (!item.quote.is_empty()).then_some(item.at_ms);
                 let mut payload = json!({"section":section,"text":item.title,"quote":item.quote,"at_ms":at_ms,"detail":detail});
