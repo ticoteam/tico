@@ -448,3 +448,19 @@ def test_an_asker_withdrawing_its_own_question_through_the_resolve_route_recompu
         assert row["waiting_on"] is None and row["status"] == "open"
         assert row["note"] == f"{task_holds.name(c, 'bot:ops')} withdrew your question to {ben}; nothing left to wait on"
         assert not (row["blocked_reason"] or "").startswith("Waiting on")
+
+
+def test_withdrawing_the_only_question_a_bot_waits_on_reopens_it_through_the_resolve_route(api):
+    """The last question to the person a bot waits on: its clear of the wait must not hide the reason from the recompute."""
+    with api.app.state.store.transaction() as c:
+        ana = task_holds.name(c, "human:ana")
+        tid = bot_task(c, "Choose a vendor")
+        question = ask(c, tid, "Vendor A or B?")
+        H.task_update(c, "bot:ops", tid, status="waiting", waiting_on="human:ana", note="Waiting on Ana's pick.")
+        row = H.task(c, tid)
+        assert row["waiting_on"] == "human:ana" and row["blocked_reason"].startswith(f"Waiting on {ana}")
+        H.task_ask_resolve(c, "bot:ops", tid, question["id"])
+        row = H.task(c, tid)
+        assert row["waiting_on"] is None and row["status"] == "open"
+        assert row["note"] == f"{task_holds.name(c, 'bot:ops')} withdrew your question to {ana}; nothing left to wait on"
+        assert not (row["blocked_reason"] or "").startswith("Waiting on")
