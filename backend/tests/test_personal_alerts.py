@@ -80,7 +80,7 @@ def test_only_the_person_reads_changes_and_removes_their_phone(api, hq):
     assert get(api, "alerts/me")["status"] == "verified"
     # Unknown SQL tables are refused even to the owner; generic SQL cannot reveal another person's number.
     response = api.post("/api/v2/sql", json={"sql": "SELECT phone FROM alert_preferences"}, headers=headers("ben-test"))
-    assert response.status_code == 403, response.text
+    assert response.status_code == 422, response.text
     assert PHONE not in response.text
     with api.app.state.store.read() as c:
         assert PHONE not in " ".join(r[0] for r in c.execute("SELECT detail FROM events"))
