@@ -8,6 +8,7 @@ from backend.auth import Identity
 from backend.store import H, Problem
 from backend.tests.test_api import api, headers, post  # noqa: F401
 from backend.tests.test_ask_delivery import Api
+from backend.tests.test_ask_ingest import FakeModel
 from backend.tests.test_org_rule_check import bodies, color_rule, hold_row, ruled, send_anyway  # noqa: F401
 from backend.tests.test_tasks_board import bot_token
 from clients import hubtools
@@ -57,8 +58,23 @@ def test_structured_comment_routes_the_system_requester_or_explicit_keeper(api, 
         assert msg["recipient_id"] == "human:ben" and msg["refs"]["rerouted_from"] == H.KEEPER
 
 
-def test_held_system_task_ask_releases_to_the_recipient_its_rule_checked(ruled):
-    api, judge = ruled
+@pytest.fixture
+def ruled_asks(ruled):
+    """Rules and ask ingest each get an answer in their own format, as on a real send."""
+    api, rules = ruled
+    ingest = FakeModel()
+
+    def judge(state, questions, label=None, level=None):
+        if str(label).startswith("person-ask-ingest"):
+            return ingest(state, questions, label)
+        return rules(state, questions, label, level)
+
+    api.app.state.judge = judge
+    return api, rules
+
+
+def test_held_system_task_ask_releases_to_the_recipient_its_rule_checked(ruled_asks):
+    api, judge = ruled_asks
     color_rule(api, reviewer="ben", **{"with": {"people": ["ben"]}})
     with api.app.state.store.transaction() as c:
         task = system_task(c)
@@ -79,8 +95,8 @@ def test_held_system_task_ask_releases_to_the_recipient_its_rule_checked(ruled):
 
 
 @pytest.mark.parametrize("recipient", [None, "keeper"])
-def test_system_comment_ask_matches_the_routed_recipients_rule_and_releases(ruled, recipient):
-    api, judge = ruled
+def test_system_comment_ask_matches_the_routed_recipients_rule_and_releases(ruled_asks, recipient):
+    api, judge = ruled_asks
     color_rule(api, reviewer="ben", **{"with": {"people": ["ben"]}})
     with api.app.state.store.transaction() as c:
         task = system_task(c)
@@ -98,8 +114,8 @@ def test_system_comment_ask_matches_the_routed_recipients_rule_and_releases(rule
 
 
 @pytest.mark.parametrize("kind", ["task", "comment"])
-def test_system_ask_replay_keeps_the_hold_if_its_manager_changed(ruled, kind):
-    api, _ = ruled
+def test_system_ask_replay_keeps_the_hold_if_its_manager_changed(ruled_asks, kind):
+    api, _ = ruled_asks
     color_rule(api, reviewer="ben", **{"with": {"people": ["ben"]}})
     with api.app.state.store.transaction() as c:
         task = system_task(c)
@@ -120,9 +136,9 @@ def test_system_ask_replay_keeps_the_hold_if_its_manager_changed(ruled, kind):
 
 
 @pytest.mark.parametrize("kind", ["task", "comment"])
-def test_system_ask_refuses_a_hold_for_a_recipient_that_changed_during_its_check(ruled, monkeypatch, kind):
+def test_system_ask_refuses_a_hold_for_a_recipient_that_changed_during_its_check(ruled_asks, monkeypatch, kind):
     from backend import org_rule_check
-    api, _ = ruled
+    api, _ = ruled_asks
     color_rule(api, reviewer="ben", **{"with": {"people": ["ben"]}})
     with api.app.state.store.transaction() as c:
         task = system_task(c)
@@ -147,9 +163,9 @@ def test_system_ask_refuses_a_hold_for_a_recipient_that_changed_during_its_check
         assert not c.execute("SELECT 1 FROM org_rule_holds WHERE author='bot:ops'").fetchone()
 
 
-def test_held_direct_ask_routes_an_older_replay_recipient_for_rules_and_ingest(ruled, monkeypatch):
+def test_held_direct_ask_routes_an_older_replay_recipient_for_rules_and_ingest(ruled_asks, monkeypatch):
     from backend import ask_ingest
-    api, _ = ruled
+    api, _ = ruled_asks
     color_rule(api, reviewer="ben", **{"with": {"people": ["ben"]}})
     with api.app.state.store.transaction() as c:
         system_task(c)
