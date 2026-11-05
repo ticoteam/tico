@@ -123,6 +123,8 @@ A file inherits the visibility of where it came from:
   unpin is in the file's activity (`pinned`, `unpinned`, with the place).
 
 The check applies to every list row, the total, metadata, activity, versions and every download.
+Bot task turns also check the shared [task context scope](pages.md#publishing) on each read. A person's Dashboard or
+Growth pin admits bots too; a team pin alone does not admit every task reader.
 
 A bot cannot make a thread's file bot-wide. The owner or a bot administrator **promotes** a task or
 thread file to bot-wide, explicitly and never automatically (`PATCH /api/v2/files/{id}` with `promote: true`); the move is

@@ -491,18 +491,27 @@ class Files:
                 "name": name, "digest": digest, "identity": identity, "etag": str(fields.get("etag") or ""),
                 "sync": "failed" if failed else "", **(extra_body or {})}
 
+        def page_target(c, scope, task, attempt):
+            previous = c.execute("SELECT f.* FROM bot_files f JOIN pages p ON p.file_id=f.id WHERE f.id=?",
+                                 (version_page,)).fetchone()
+            if not previous or previous["state"] == "deleted" or not self.visible(c, who, previous, {}):
+                raise Problem("not_found", "Page not found", 404)
+            if (not task or scope != "task:" + task or previous["scope"] != scope
+                    or not attempt or privacy.attempt_tasks(c, attempt) != {task}):
+                raise Problem("forbidden", "A page version must be filed on the turn's only task", 403)
+            return previous
+
+        def current_page_access(c):
+            if version_page:
+                scope, task, _, attempt = self.target(c, who, bot, fields)
+                page_target(c, scope, task, attempt)
+
         def work(c):
             scope, task, conversation, attempt = self.target(c, who, bot, fields)
             actor = self.actor_of(who, bot)
             maintainer, file_identity = bot, identity
             if version_page:
-                previous = c.execute("SELECT f.* FROM bot_files f JOIN pages p ON p.file_id=f.id WHERE f.id=?",
-                                     (version_page,)).fetchone()
-                if not previous or previous["state"] == "deleted" or not self.visible(c, who, previous, {}):
-                    raise Problem("not_found", "Page not found", 404)
-                if (not task or scope != "task:" + task or previous["scope"] != scope
-                        or not attempt or privacy.attempt_tasks(c, attempt) != {task}):
-                    raise Problem("forbidden", "A page version must be filed on the turn's only task", 403)
+                previous = page_target(c, scope, task, attempt)
                 if base_version != previous["current_version"]:
                     raise Problem("conflict", "The page has a newer version", 409)
                 maintainer, file_identity = previous["bot_id"], previous["identity"]
@@ -531,7 +540,7 @@ class Files:
             if extra:
                 result.update(extra(c, row, changed) or {})
             return result
-        return self.write(request, who, body, work)
+        return self.write(request, who, body, work, check=current_page_access)
 
     async def publish_stream(self, request, who, fields, *, imported=False):
         """A video or audio file (raw body) streamed to a private spool and hashed as it arrives, then published the same
@@ -578,11 +587,15 @@ class Files:
             staged = Staged(stream, digest.hexdigest(), size)
             return await asyncio.to_thread(self.publish, request, who, fields, staged, imported=imported)
 
-    def write(self, request, who, body, work):
+    def write(self, request, who, body, work, check=None):
         # File mutations use their own wrapper, so repeat the current fence under Store's lock too.
         source = getattr(request.state, "privacy_source", who)
+        def current_access(c):
+            privacy.guard_write(c, source, request.url.path, self.auth)
+            if check:
+                check(c)
         result = self.store.mutate(who, request.url.path, request.headers.get("idempotency-key"), body, work,
-                                  check=lambda c: privacy.guard_write(c, source, request.url.path, self.auth))
+                                  check=current_access)
         if isinstance(result, dict) and "_refusal" in result:
             refusal = result["_refusal"]
             raise Problem(refusal["code"], refusal["detail"], refusal["status"])

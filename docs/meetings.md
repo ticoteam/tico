@@ -6,6 +6,12 @@
 `hub task meetings <task>` lists the meetings you can open. Their MCP equivalents are `hub_meeting_link`,
 `hub_meeting_unlink` and `hub_task_meetings`. Links preserve each meeting and task's own access.
 
+`hub task context <task>` lists up to ten linked Team meetings and ten pages that the task's readers may share.
+`hub meeting read <id>` includes saved notes at transcript offset zero; `--notes` prints only the notes and pages
+through them with `--offset`. Bot task turns recheck this shared scope on every read. A private meeting is never task
+context, even for an attached bot; outside task turns, a bot attached by the live meeting's owner can read the saved
+meeting while that attachment remains.
+
 `GET /api/v2/meetings/{id}/tasks` returns `{tasks, next_cursor}`; `POST` on that path takes
 `{task_ids: [id, ...], kind: "linked"}` (up to 20). `kind: "sent"` is only for tasks you requested.
 `DELETE /api/v2/meetings/{id}/tasks/{task_id}` removes the pair. The linker, meeting owner, task owner or requester,

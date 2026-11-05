@@ -3,7 +3,7 @@ from fastapi import Request
 
 from . import context_search, meetings, turn_scope
 from .files import file_visible
-from .store import H, Problem
+from .store import Problem
 
 MAX_ITEMS = 10
 
@@ -40,7 +40,7 @@ def listing(c, auth, who, tid, *, carried=None):
                 raise
             continue
         linked.append({"id": row["id"], "title": row["title"][:200],
-                       "date": row["metadata"].get("started") or row["created_at"]})
+                       "date": str(row["metadata"].get("started") or row["created_at"])[:40]})
         if len(linked) == MAX_ITEMS:
             break
     return {"pages": pages, "meetings": linked}

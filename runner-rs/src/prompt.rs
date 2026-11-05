@@ -55,10 +55,10 @@ fn task_context(context: &Value) -> String {
             let date: String = s(&row[if key == "pages" { "updated_at" } else { "date" }]).chars().take(10).collect();
             let version = if key == "pages" { format!(" v{}", row["version"].as_u64().unwrap_or(0)) } else { String::new() };
             let line = format!("{id}{version} {date} {title}\n");
-            if out.chars().count() + block.chars().count() + line.chars().count() > 1498 { break; }
+            if block.chars().count() + line.chars().count() > 748 { break; }
             block.push_str(&line);
         }
-        if !out.is_empty() { out.push('\n'); }
+        if !out.is_empty() { out.push_str("\n\n"); }
         out.push_str(block.trim_end());
     }
     out

@@ -1077,6 +1077,8 @@ def guard_write(c, who, path, auth):
         return private_thread_destination(c, who, thread)
     if path == "/api/v2/task-questions":
         return              # a private task of its own, to a person question_party lets read the run's work (media.py)
+    if path == "/api/v2/pages":
+        return              # Files.target keeps task scope and every version retains its private attempt provenance.
     if path.startswith(("/api/v2/files/", "/api/v2/messages",
                         "/api/v2/conversations/", "/api/v2/chat/", "/api/v2/tasks")):
         task_path = re.fullmatch(r"/api/v2/tasks/([^/]+)(?:/.*)?", path)

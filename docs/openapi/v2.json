@@ -23760,6 +23760,16 @@
               "default": 20000,
               "title": "Limit"
             }
+          },
+          {
+            "name": "notes",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "boolean",
+              "default": false,
+              "title": "Notes"
+            }
           }
         ],
         "responses": {
@@ -25776,6 +25786,14 @@
                   },
                   "path": {
                     "type": "string"
+                  },
+                  "page": {
+                    "type": "string",
+                    "description": "Add a version to this page filed on the turn's only task"
+                  },
+                  "base_version": {
+                    "type": "integer",
+                    "minimum": 1
                   },
                   "scope": {
                     "enum": [
@@ -35206,6 +35224,58 @@
               "application/json": {
                 "schema": {
                   "$ref": "#/components/schemas/CommentResult"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "A problem: {\"error\": {\"code\", \"detail\", \"retryable\", ...}}",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "A problem: {\"error\": {\"code\", \"detail\", \"retryable\", ...}}",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        },
+        "tags": [
+          "Tasks"
+        ]
+      }
+    },
+    "/api/v2/tasks/{tid}/context": {
+      "get": {
+        "summary": "Up to 10 pages and 10 meetings shared by the task readers, filtered by current access; metadata only",
+        "operationId": "getTaskContext",
+        "parameters": [
+          {
+            "name": "tid",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Tid"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TaskContext"
                 }
               }
             }
@@ -67240,6 +67310,72 @@
         },
         "required": [
           "comments"
+        ],
+        "additionalProperties": true
+      },
+      "TaskContext": {
+        "type": "object",
+        "properties": {
+          "pages": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/TaskContextPage"
+            }
+          },
+          "meetings": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/TaskContextMeeting"
+            }
+          }
+        },
+        "required": [
+          "meetings",
+          "pages"
+        ],
+        "additionalProperties": true
+      },
+      "TaskContextMeeting": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "title": {
+            "type": "string"
+          },
+          "date": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "date",
+          "id",
+          "title"
+        ],
+        "additionalProperties": true
+      },
+      "TaskContextPage": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "title": {
+            "type": "string"
+          },
+          "version": {
+            "type": "integer"
+          },
+          "updated_at": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "title",
+          "updated_at",
+          "version"
         ],
         "additionalProperties": true
       },

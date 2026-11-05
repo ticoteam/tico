@@ -232,6 +232,8 @@ class Pages:
         version_page = str(fields.get("page") or "").strip()
         base = fields.get("base_version")
         if version_page:
+            if replaces:
+                raise Problem("validation", "A page version cannot replace another page", 422)
             if isinstance(base, bool) or not str(base or "").isdigit() or int(base) < 1:
                 raise Problem("validation", "base_version is the page version you read", 422)
             base = int(base)
@@ -252,7 +254,8 @@ class Pages:
             if replaces:
                 old = c.execute("SELECT f.* FROM pages p JOIN bot_files f ON f.id=p.file_id WHERE p.file_id=?",
                                 (replaces,)).fetchone()
-                if not old or old["bot_id"] != row["bot_id"] or old["state"] == "deleted":
+                if (not old or old["bot_id"] != row["bot_id"] or old["state"] == "deleted"
+                        or not self.files.visible(c, who, old, {})):
                     raise Problem("not_found", "replaces names a page of this bot's", 404)
                 if old["id"] == row["id"]:
                     raise Problem("validation", "A page cannot replace itself", 422)

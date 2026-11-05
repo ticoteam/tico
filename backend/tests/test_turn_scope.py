@@ -38,6 +38,16 @@ def blob(api, fid):
         return c.execute("SELECT blob_id FROM bot_file_versions WHERE file_id=?", (fid,)).fetchone()[0]
 
 
+def published(api, attempt, *, botwide=False, **fields):
+    response = page(api, attempt, **fields)
+    assert response.status_code == 200, response.text
+    fid = response.json()["page"]["file_id"]
+    if botwide:
+        promoted = api.patch("/api/v2/files/" + fid, json={"promote": True}, headers=headers("ben-test"))
+        assert promoted.status_code == 200, promoted.text
+    return fid
+
+
 def make_scope(api, attempt, tid):
     with api.app.state.store.transaction() as c:
         row = c.execute("SELECT m.id,m.refs FROM attempts a JOIN jobs j ON j.id=a.job_id "
@@ -50,9 +60,9 @@ def test_task_turn_meetings_and_pages_use_containment_on_every_read(api):
     shared = record(api, {"private": False, "notes": "Decisions only"})
     hidden = record(api, {"private": True, "participants": ["ana@acme.example"]})
     _, source = turn(api, "cpo")
-    botwide = page(api, source, name="bot.html", scope="bot").json()["page"]["file_id"]
-    dashboard = page(api, source, name="dashboard.html", scope="bot").json()["page"]["file_id"]
-    team = page(api, source, name="team.html", scope="bot").json()["page"]["file_id"]
+    botwide = published(api, source, name="bot.html", botwide=True)
+    dashboard = published(api, source, name="dashboard.html", botwide=True)
+    team = published(api, source, name="team.html", botwide=True)
     post(api, "pins", {"place": "dashboard", "item": "page:" + dashboard})
     # A team pin may widen to its group, but never to every task reader.
     with api.app.state.store.transaction() as c:
@@ -135,13 +145,15 @@ def test_attached_bot_reads_its_private_saved_meeting_only_outside_task_turns(ap
         c.execute("UPDATE live_meetings SET imported_meeting_id=? WHERE id=?", (mid, live))
         c.execute("INSERT INTO live_meeting_bots(meeting_id,bot,joined_by,joined_at) VALUES(?,'ops','human:ana',?)",
                   (live, H.now()))
-    api.app.state.store.settings.test_identities["attached"] = Identity("bot:ops", "bot")
-    get(api, "meetings/transcript?id=" + mid, "attached")
-    _, attempt = task_turn(api)
-    get(api, "meetings/transcript?id=" + mid, attempt["token"], expected=404)
+    _, unscoped = turn(api)
+    get(api, "meetings/transcript?id=" + mid, unscoped["token"])
     with api.app.state.store.transaction() as c:
         c.execute("UPDATE live_meeting_bots SET joined_by='human:ben' WHERE meeting_id=?", (live,))
-    get(api, "meetings/transcript?id=" + mid, "attached", expected=404)
+    get(api, "meetings/transcript?id=" + mid, unscoped["token"], expected=404)
+    with api.app.state.store.transaction() as c:
+        c.execute("UPDATE live_meeting_bots SET joined_by='human:ana' WHERE meeting_id=?", (live,))
+    _, attempt = task_turn(api)
+    get(api, "meetings/transcript?id=" + mid, attempt["token"], expected=404)
 
 
 def test_make_scope_guards_legacy_routes_logs_reads_and_rechecks_revocation(api, monkeypatch):
@@ -164,7 +176,8 @@ def test_make_scope_guards_legacy_routes_logs_reads_and_rechecks_revocation(api,
     with store.read() as c:
         assert [tuple(r) for r in c.execute("SELECT kind,ref FROM attempt_reads WHERE attempt_id=?", (attempt["id"],))] == [
             ("meeting", linked)]
-        who = api.app.state.auth.authenticate(headers(attempt["token"]), "/api/v2/pages", "POST")
+        who = api.app.state.auth.authenticate({k.lower(): v for k, v in headers(attempt["token"]).items()},
+                                             "/api/v2/pages", "POST")
         turn_scope.recheck_reads(c, api.app.state.auth, who)
     with store.transaction() as c:
         row = meetings.get(linked, c)
@@ -221,7 +234,7 @@ def test_only_a_filed_page_on_the_exact_single_task_accepts_cross_bot_versions(a
     assert (current["file_id"], current["bot_id"], current["updated_by"], current["version"]) == (fid, "cpo", "bot:ops", 2)
     stale = page(api, attempt, task=t["id"], page=fid, base_version=1, data=HTML + b"<p>Lost update</p>")
     assert stale.status_code == 409, stale.text
-    pinned = page(api, publisher, name="pinned.html", scope="bot").json()["page"]["file_id"]
+    pinned = published(api, publisher, name="pinned.html", botwide=True)
     post(api, "pins", {"place": "dashboard", "item": "page:" + pinned})
     post(api, "pins", {"place": "task:" + t["id"], "item": "page:" + pinned})
     assert page(api, attempt, task=t["id"], page=pinned, base_version=1).status_code == 403

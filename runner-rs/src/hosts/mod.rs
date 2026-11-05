@@ -378,7 +378,7 @@ const HUB_PATHS: &[&str] = &[
     "tasks cap set", "tasks caps", "tasks check-back", "tasks child", "tasks close", "tasks comment",
     "tasks comment-delete", "tasks comment-edit", "tasks comment-moderate", "tasks create", "tasks defer",
     "tasks delete", "tasks deleted", "tasks done", "tasks label", "tasks later", "tasks link", "tasks list",
-    "tasks meetings", "tasks model", "tasks publication-preview", "tasks question", "tasks relate", "tasks requester-remove",
+    "tasks context", "tasks meetings", "tasks model", "tasks publication-preview", "tasks question", "tasks relate", "tasks requester-remove",
     "tasks requester-save", "tasks requesters", "tasks restore", "tasks run", "tasks show", "tasks snooze",
     "tasks tree", "tasks type", "tasks type create", "tasks type delete", "tasks type update", "tasks types",
     "tasks unsnooze", "tasks update", "tasks wait", "tasks waive-qa", "tasks worktree", "tasks worktree add",
