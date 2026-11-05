@@ -28,16 +28,16 @@ class VisibleHTML(HTMLParser):
         self.complete = True
 
     def handle_starttag(self, tag, attrs):
-        if tag in ("img", "svg", "video", "audio", "canvas", "object", "iframe"):
+        if tag in ("img", "svg", "video", "audio", "canvas", "object", "iframe", "style", "link") or any(name == "style" for name, _ in attrs):
             self.complete = False
-        if tag in ("script", "style"):
+        if tag == "script":
             self.ignored += 1
         if not self.ignored:
             self.text.append("\n")
-            self.text.extend(value for name, value in attrs if name in ("alt", "title", "href", "src") and value)
+            self.text.extend(value for name, value in attrs if name in ("alt", "title", "href", "src", "style", "value", "label", "placeholder", "aria-label") and value)
 
     def handle_endtag(self, tag):
-        if tag in ("script", "style") and self.ignored:
+        if tag == "script" and self.ignored:
             self.ignored -= 1
         if not self.ignored:
             self.text.append("\n")

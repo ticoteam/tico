@@ -303,3 +303,27 @@ def test_rehearsal_keeps_restrictions_but_discards_send_permits_and_proofs(inbox
             assert c.execute("SELECT count(*) FROM " + table).fetchone()[0] == 0
         assert c.execute("SELECT scope FROM email_sending_policies").fetchall() == [("company",)]
         assert c.execute("SELECT mailbox,address FROM email_suppressed_recipients").fetchall() == [(BOX, CONTACT)]
+
+
+@pytest.mark.parametrize("html", [
+    '<style>p::before { content: "We agree to pay $100000"; }</style><p>Thanks.</p>',
+    '<p style="content: \'We agree to pay $100000\'">Thanks.</p>',
+    '<link rel="stylesheet" href="https://assets.acme.example/contract.css"><p>Thanks.</p>',
+])
+def test_css_dependent_body_is_previewed_but_cannot_be_classified_as_harmless(inbox, html):
+    autonomous(inbox, ask_legal_money=True)
+    msg = EmailMessage()
+    msg["From"], msg["To"], msg["Subject"] = BOX, CONTACT, "Update"
+    msg.set_content(html, subtype="html")
+    frozen = S.snapshot(raw(msg), BOX)
+    assert not frozen["classification_complete"]
+    preview = "\n".join(body["text"] for body in frozen["visible_bodies"])
+    assert "Thanks." in preview
+    assert "$100000" in preview or "contract.css" in preview
+    with mock.patch.object(judge, "ask") as ask:
+        queued = api_post(inbox, "email/sends", {"mailbox": BOX, "raw": raw(msg)})["send"]
+    ask.assert_not_called()
+    assert queued["state"] == "waiting_approval"
+    assert queued["classification"]["status"] == "incomplete_content"
+    shown = inbox.get("/api/v2/email/sends/" + queued["id"], headers=headers()).json()
+    assert shown["preview_complete"] and shown["bodies"] == frozen["visible_bodies"]
