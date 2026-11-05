@@ -536,6 +536,8 @@ def run(args, who=None):
         pending, failed = hubtools.ask_create(client, args.words[:-1], args.words[-1], wait, fields)
         # Said before the wait: a shell that kills a long wait still leaves the bot holding each id.
         for mid, bot in pending.items():
+            if routed := pending.routed.get(bot):
+                print("hub: " + routed["rerouted"], file=sys.stderr, flush=True)
             print(f"hub: asked {bot}, message {mid}; waiting up to {wait} s for the answer", file=sys.stderr, flush=True)
         return {**failed, **hubtools.ask_wait(client, pending, wait, fields)}
     if fn == "note create":

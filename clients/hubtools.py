@@ -442,10 +442,16 @@ def ask_key(args, bot, text, wait, i):
     return "ask:" + hashlib.sha256(json.dumps([bot, text, wait]).encode()).hexdigest()[:48]
 
 
+class PendingAsks(dict):
+    def __init__(self):
+        super().__init__()
+        self.routed = {}
+
+
 def ask_create(api, bots, text, wait, args):
     """Send the ask to each bot: `({message_id: bot}, {bot: {"error": why} or {"warning": why, "message_id": id}})`. Each send is one short request;
     the wait is separate (`ask_wait`), so a wait that ends early never loses an id that was handed out."""
-    pending, failed = {}, {}
+    pending, failed = PendingAsks(), {}
     for i, bot in enumerate(bots):
         try:
             msg = api.post("messages", {"to": bot, "text": text, "kind": "ask", "wait_s": wait},
@@ -458,8 +464,10 @@ def ask_create(api, bots, text, wait, args):
             else:
                 failed[bot] = {"error": f"The question was not delivered: {exc.detail}. Retry, or put it in the task note."}
             continue
+        if msg.get("rerouted"):
+            pending.routed[bot] = {"recipient_id": msg["recipient_id"], "rerouted": msg["rerouted"]}
         if msg.get("warning"):          # over its spend limit: delivered, but no answer comes before it resets
-            failed[bot] = {"warning": msg["warning"], "message_id": msg["id"]}
+            failed[bot] = {"warning": msg["warning"], "message_id": msg["id"], **pending.routed.get(bot, {})}
             continue
         pending[msg["id"]] = bot
     if failed and not pending and not any("warning" in v for v in failed.values()):
@@ -471,6 +479,7 @@ def ask_create(api, bots, text, wait, args):
 def ask_wait(api, pending, wait, args):
     """Poll for the answers until `wait` runs out. An entry that has none yet is `timeout` with its `message_id`,
     also when Tico stops answering the poll: the ask was delivered and its answer reaches the bot later."""
+    routed = getattr(pending, "routed", {})
     pending, result = dict(pending), {}
     deadline = time.monotonic() + wait
     while pending:
@@ -490,7 +499,7 @@ def ask_wait(api, pending, wait, args):
             break
         time.sleep(1)
     result.update({bot: {"timeout": True, "message_id": mid} for mid, bot in pending.items()})
-    return result
+    return {bot: {**item, **routed.get(bot, {})} for bot, item in result.items()}
 
 
 # The Assistant, citing the person's message for something they asked for (`_asked`).
@@ -512,7 +521,7 @@ def answer(api, args):
 
 
 # ----------------------------------------------------------------------------- meetings
-@tool("hub_meeting_link", "Link existing tasks to a saved meeting. Links preserve each resource's access.",
+@tool("hub_meeting_link", "Link existing tasks to a saved meeting. Results match input order; status 404 skips an unavailable task. Links preserve each resource's access.",
       {"id": _s("Meeting id"), "task_ids": {"type": "array", "items": TASK_ID, "minItems": 1, "maxItems": 20},
        "kind": _s("linked (default), or sent for tasks you requested", enum=["linked", "sent"])},
       required=("id", "task_ids"), writes=True)
@@ -918,7 +927,7 @@ def task_list(api, args):
     return {"tasks": rows, "bots": api.get("bots")} if args.get("all") else rows
 
 
-@tool("hub_task_ask", "Ask the task's requester one question that unblocks you. One open question at a time; wait for its answer before asking another.",
+@tool("hub_task_ask", "Ask the task's requester one question that unblocks you. A system requester routes to your manager or the company owner. One open question at a time; wait for its answer before asking another.",
       {"id": TASK_ID, "text": _s("The question, and only the question")},
       required=("id", "text"), writes=True)
 def task_ask(api, args):
