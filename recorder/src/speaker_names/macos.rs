@@ -1,5 +1,6 @@
 //! Read-only AX transport, scoped to a Meet document in an allowlisted browser. Never uses
-//! AX actions, AXValue, screenshots, keyboard shortcuts or browser automation.
+//! AX actions, screenshots, keyboard shortcuts or browser automation. AXValue is read only
+//! for participant-name static text beneath Meet's name container.
 use super::{
     MeetingAdapter, Observation, POLL_MS, Samples,
     meet::{self, GoogleMeet, Node},
@@ -36,6 +37,12 @@ unsafe extern "C" {
         value: *mut CFTypeRef,
     ) -> i32;
     fn AXUIElementSetMessagingTimeout(element: CFTypeRef, seconds: f32) -> i32;
+    fn AXUIElementCopyMultipleAttributeValues(
+        element: CFTypeRef,
+        attributes: core_foundation::array::CFArrayRef,
+        options: u32,
+        values: *mut core_foundation::array::CFArrayRef,
+    ) -> i32;
 }
 #[link(name = "CoreGraphics", kind = "framework")]
 unsafe extern "C" {
@@ -117,6 +124,48 @@ fn elements(element: &CFType, key: &str) -> Vec<CFType> {
         })
         .unwrap_or_default()
 }
+fn array(value: &CFType) -> Vec<CFType> {
+    value
+        .downcast::<CFArray>()
+        .map(|a| {
+            a.iter()
+                .take(200)
+                .map(|p| unsafe { CFType::wrap_under_get_rule(*p) })
+                .collect()
+        })
+        .unwrap_or_default()
+}
+fn metadata(element: &CFType) -> Vec<CFType> {
+    let keys: Vec<_> = [
+        "AXRole",
+        "AXTitle",
+        "AXDescription",
+        "AXDOMClassList",
+        "AXChildren",
+    ]
+    .iter()
+    .map(|key| CFString::new(key).as_CFType())
+    .collect();
+    let keys = CFArray::from_CFTypes(&keys);
+    let mut values = std::ptr::null();
+    unsafe {
+        AXUIElementSetMessagingTimeout(element.as_CFTypeRef(), 0.025);
+    }
+    if unsafe {
+        AXUIElementCopyMultipleAttributeValues(
+            element.as_CFTypeRef(),
+            keys.as_concrete_TypeRef(),
+            0,
+            &mut values,
+        )
+    } != 0
+        || values.is_null()
+    {
+        return vec![];
+    }
+    let values = unsafe { CFType::wrap_under_create_rule(values.cast()) };
+    array(&values)
+}
 fn browser_windows() -> Vec<(i32, bool)> {
     let raw = unsafe { CGWindowListCopyWindowInfo(16, 0) }; // Include minimized windows; exclude desktop.
     if raw.is_null() {
@@ -196,7 +245,18 @@ fn project(
     if depth > 24 || !budget.take() {
         return None;
     }
-    let role = text(element, "AXRole");
+    // One IPC per structural node bounds the cost of a full poll.
+    let values = metadata(element);
+    if values.len() != 5 {
+        return None;
+    }
+    let string = |i: usize| {
+        values[i]
+            .downcast::<CFString>()
+            .map(|s| s.to_string())
+            .unwrap_or_default()
+    };
+    let role = string(0);
     if role == "AXStaticText" {
         return name_container.then(|| Node {
             role,
@@ -210,22 +270,18 @@ fn project(
     ) {
         return None;
     }
-    let classes: Vec<String> = attr(element, "AXDOMClassList")
-        .and_then(|v| v.downcast::<CFArray>())
-        .map(|a| {
-            a.iter()
-                .filter_map(|p| unsafe { CFType::wrap_under_get_rule(*p) }.downcast::<CFString>())
-                .map(|s| s.to_string())
-                .filter(|s| ["dkjMxf", "XEazBc"].contains(&s.as_str()))
-                .collect()
-        })
-        .unwrap_or_default();
+    let classes: Vec<String> = array(&values[3])
+        .iter()
+        .filter_map(|p| p.downcast::<CFString>())
+        .map(|s| s.to_string())
+        .filter(|s| ["dkjMxf", "XEazBc"].contains(&s.as_str()))
+        .collect();
     let name_container = name_container || classes.iter().any(|c| c == "XEazBc");
-    let mut label = text(element, "AXTitle");
+    let mut label = string(1);
     if meet::private_branch(&role, &label) {
         return None;
     }
-    let description = text(element, "AXDescription");
+    let description = string(2);
     if meet::private_branch(&role, &description) {
         return None;
     }
@@ -236,7 +292,7 @@ fn project(
     let descendants = if matches!(role.as_str(), "AXImage" | "AXCanvas") {
         vec![]
     } else {
-        children(element)
+        array(&values[4])
             .iter()
             .filter_map(|child| project(child, depth + 1, name_container, budget))
             .collect()
@@ -321,6 +377,7 @@ impl Watch {
                 crate::qos::background();
                 let mut samples = Samples::default();
                 let mut participants = BTreeSet::new();
+                let mut locals = BTreeSet::new();
                 while !canceled.load(Ordering::Acquire) {
                     let tick = Instant::now();
                     let (denied, observed) = poll(canceled.clone());
@@ -330,8 +387,11 @@ impl Watch {
                     let at = offset + started.elapsed().as_millis() as u64;
                     let intervals = samples.push(at, observed.clone());
                     let mut new_names = false;
-                    for name in observed.participants.iter().chain(&observed.self_names) {
+                    for name in &observed.participants {
                         new_names |= participants.insert(name.clone());
+                    }
+                    for name in &observed.self_names {
+                        new_names |= locals.insert(name.clone());
                     }
                     if (!intervals.is_empty() || new_names) && !canceled.load(Ordering::Acquire) {
                         if store.observe_speakers(&id, &observed, &intervals).is_err() {

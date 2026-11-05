@@ -114,7 +114,9 @@ fn voice_cluster_uses_duration_votes_for_short_turns_overlap_and_gaps() {
             word(6000, 6200, "Speaker 2"),
         ],
     ));
-    record.chunks.push(chunk("me", vec![word(0, 2000, "")]));
+    let mut local_word = word(0, 2000, "");
+    local_word.text = "local".into();
+    record.chunks.push(chunk("me", vec![local_word]));
     let named = named(&record);
     assert!(
         named.chunks[0]
@@ -210,6 +212,22 @@ fn meet_detection_rejects_landing_pages_other_sites_and_unrelated_browser_docume
     ] {
         assert!(!meet::GoogleMeet.detect_window("Google Meet", url));
     }
+}
+#[test]
+fn captured_chrome_tree_exposes_names_but_visual_classes_do_not_invent_speech() {
+    let root: meet::Node = serde_json::from_str(include_str!(
+        "../../tests/fixtures/meet-ax/chrome-observed.json"
+    ))
+    .unwrap();
+    let observed = meet::GoogleMeet.observe(&root);
+    assert!(!observed.participants.is_empty());
+    assert!(
+        observed
+            .participants
+            .iter()
+            .all(|name| name.starts_with("Participant "))
+    );
+    assert!(observed.active.is_empty());
 }
 #[test]
 fn old_library_migration_is_repeatable_keeps_audio_and_cascades_local_identity_data() {

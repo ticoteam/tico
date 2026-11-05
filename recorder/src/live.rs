@@ -1734,3 +1734,124 @@ pub fn shared_transcript(store: &Store, record: &Recording, recording: bool) -> 
 pub fn saved_in_tico(entry: &crate::store::Delivery) -> bool {
     entry.status == "sent" || entry.receipt["approved"] == true
 }
+
+#[cfg(test)]
+mod speaker_name_tests {
+    use super::*;
+    use crate::speaker_names::{Interval, Names, Timeline};
+
+    fn chunk(id: &str, words: Vec<Word>) -> crate::store::Chunk {
+        serde_json::from_value(json!({"id":"chunk","recording_id":id,"channel":"them","speaker":"Speaker 1",
+            "start_ms":0,"end_ms":4000,"file":"","status":"done","text":"First Second",
+            "signal":{"samples":1,"nonzero":1,"peak":0.5,"rms":0.5,"duration_ms":4000,"sample_rate":16000},
+            "error":"","attempts":1,"provider":{},"words":words})).unwrap()
+    }
+    fn words() -> Vec<Word> {
+        vec![
+            Word {
+                start_ms: 0,
+                end_ms: 1000,
+                text: "First".into(),
+                speaker: "Speaker 1".into(),
+                turn: String::new(),
+            },
+            Word {
+                start_ms: 2000,
+                end_ms: 3000,
+                text: "Second".into(),
+                speaker: "Speaker 2".into(),
+                turn: String::new(),
+            },
+        ]
+    }
+    fn timeline() -> Timeline {
+        Timeline {
+            intervals: vec![
+                Interval {
+                    start_ms: 300,
+                    end_ms: 1300,
+                    name: "Ana Example".into(),
+                },
+                Interval {
+                    start_ms: 2300,
+                    end_ms: 3300,
+                    name: "Ben Example".into(),
+                },
+            ],
+            participants: vec!["Ana Example".into(), "Ben Example".into()],
+            self_names: vec![],
+        }
+    }
+    #[test]
+    fn speaker_names_split_finished_chunks_for_live_sharing_without_duplicate_turns() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = Store::open(dir.path()).unwrap();
+        let mut record = store.create("Meeting").unwrap();
+        record.meeting_speakers = timeline();
+        record.chunks.push(chunk(&record.id, words()));
+        let mut db = store.db().unwrap();
+        let tx = db.transaction().unwrap();
+        let mut queue = Queue::read(&tx, &record.id, "destination").unwrap();
+        queue.finished(&tx, &record).unwrap();
+        queue.finished(&tx, &record).unwrap();
+        let mut query = tx
+            .prepare("SELECT payload_json FROM live_outbox ORDER BY seq")
+            .unwrap();
+        let rows: Vec<Value> = query
+            .query_map([], |r| r.get::<_, String>(0))
+            .unwrap()
+            .map(|r| serde_json::from_str(&r.unwrap()).unwrap())
+            .collect();
+        assert_eq!(rows.len(), 2);
+        assert_eq!(rows[0]["speaker"], "Ana Example");
+        assert_eq!(rows[1]["speaker"], "Ben Example");
+        assert_eq!(rows[0]["text"], "First");
+        assert_eq!(rows[1]["text"], "Second");
+    }
+    #[test]
+    fn speaker_names_correct_already_shared_streams_before_chunks_finish_and_preserve_edits() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = Store::open(dir.path()).unwrap();
+        let mut record = store.create("Meeting").unwrap();
+        record.state = "recording".into();
+        let raw = BTreeMap::from([("them".into(), words())]);
+        let mut db = store.db().unwrap();
+        let tx = db.transaction().unwrap();
+        let mut queue = Queue::read(&tx, &record.id, "destination").unwrap();
+        queue.streamed(&tx, &record, &raw).unwrap();
+        record.meeting_speakers = timeline();
+        let names = Names::new(&record, &raw);
+        let mut named = raw.clone();
+        names.streamed("them", named.get_mut("them").unwrap());
+        queue.corrections(&tx, &record, &named).unwrap();
+        let count: i64 = tx
+            .query_row("SELECT COUNT(*) FROM live_corrections", [], |r| r.get(0))
+            .unwrap();
+        assert_eq!(count, 2);
+        let text: String = tx
+            .query_row(
+                "SELECT payload_json FROM live_corrections WHERE seq=1",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        let row: Value = serde_json::from_str(&text).unwrap();
+        assert_eq!(row["speaker"], "Ana Example");
+        assert_eq!(row["text"], "First");
+        tx.execute(
+            "INSERT INTO live_edits VALUES(?,'destination',1)",
+            [&record.id],
+        )
+        .unwrap();
+        named.get_mut("them").unwrap()[0].speaker = "Ben Example".into();
+        queue.corrections(&tx, &record, &named).unwrap();
+        let count: i64 = tx
+            .query_row(
+                "SELECT COUNT(*) FROM live_corrections WHERE seq=1",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(count, 1);
+    }
+}

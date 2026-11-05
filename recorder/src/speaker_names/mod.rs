@@ -65,27 +65,55 @@ impl Timeline {
     fn remote(&self, name: &str) -> bool {
         !self.self_names.iter().any(|local| same(local, name))
     }
-    /// Score only direct overlap, with the bounded UI lag removed. Adjacent samples of one
-    /// speaker are coalesced at capture time, so a poll boundary does not count twice.
-    fn scores(&self, start: u64, end: u64) -> BTreeMap<&str, u64> {
+    pub fn at(&self, start: u64, end: u64) -> Option<String> {
+        Evidence::new(self).at(start, end)
+    }
+}
+/// Prefix end times let each word visit just the overlapping observations, including
+/// overlapping speakers, instead of rescanning an entire long meeting's timeline.
+struct Evidence<'a> {
+    intervals: Vec<&'a Interval>,
+    ends: Vec<u64>,
+}
+impl<'a> Evidence<'a> {
+    fn new(timeline: &'a Timeline) -> Self {
+        let mut intervals: Vec<_> = timeline
+            .intervals
+            .iter()
+            .filter(|i| i.end_ms > i.start_ms && timeline.remote(&i.name))
+            .collect();
+        intervals.sort_by_key(|i| i.start_ms);
+        let mut end = 0;
+        let ends = intervals
+            .iter()
+            .map(|i| {
+                end = end.max(i.end_ms);
+                end
+            })
+            .collect();
+        Self { intervals, ends }
+    }
+    fn scores(&self, start: u64, end: u64) -> BTreeMap<&'a str, u64> {
+        let start = start.saturating_add(LAG_MS);
+        let end = end.saturating_add(LAG_MS).max(start.saturating_add(1));
+        let first = self.ends.partition_point(|at| *at <= start);
         let mut scores = BTreeMap::new();
-        for interval in &self.intervals {
-            if !self.remote(&interval.name) {
-                continue;
-            }
-            let from = interval.start_ms.saturating_sub(LAG_MS);
-            let to = interval.end_ms.saturating_sub(LAG_MS);
+        for interval in self
+            .intervals
+            .iter()
+            .skip(first)
+            .take_while(|i| i.start_ms < end)
+        {
             let overlap = end
-                .max(start.saturating_add(1))
-                .min(to)
-                .saturating_sub(start.max(from));
+                .min(interval.end_ms)
+                .saturating_sub(start.max(interval.start_ms));
             if overlap > 0 {
                 *scores.entry(interval.name.as_str()).or_default() += overlap;
             }
         }
         scores
     }
-    pub fn at(&self, start: u64, end: u64) -> Option<String> {
+    fn at(&self, start: u64, end: u64) -> Option<String> {
         winner(self.scores(start, end)).map(str::to_owned)
     }
 }
@@ -112,15 +140,16 @@ fn cluster(chunk: &str, word: &Word) -> Option<String> {
     }
 }
 pub struct Names<'a> {
-    timeline: &'a Timeline,
+    evidence: Evidence<'a>,
     voices: BTreeMap<String, String>,
 }
 impl<'a> Names<'a> {
     pub fn new(record: &'a Recording, streamed: &BTreeMap<String, Vec<Word>>) -> Self {
+        let evidence = Evidence::new(&record.meeting_speakers);
         let mut votes: BTreeMap<String, BTreeMap<&str, u64>> = BTreeMap::new();
         let mut add = |chunk: &str, word: &Word| {
             if let Some(key) = cluster(chunk, word) {
-                for (name, weight) in record.meeting_speakers.scores(word.start_ms, word.end_ms) {
+                for (name, weight) in evidence.scores(word.start_ms, word.end_ms) {
                     *votes
                         .entry(key.clone())
                         .or_default()
@@ -151,7 +180,7 @@ impl<'a> Names<'a> {
             }
         }
         Self {
-            timeline: &record.meeting_speakers,
+            evidence,
             voices: votes
                 .into_iter()
                 .filter_map(|(voice, votes)| winner(votes).map(|name| (voice, name.to_owned())))
@@ -161,7 +190,7 @@ impl<'a> Names<'a> {
     pub fn word(&self, chunk: &str, word: &Word) -> String {
         cluster(chunk, word)
             .and_then(|key| self.voices.get(&key).cloned())
-            .or_else(|| self.timeline.at(word.start_ms, word.end_ms))
+            .or_else(|| self.evidence.at(word.start_ms, word.end_ms))
             .unwrap_or_else(|| word.speaker.clone())
     }
     pub fn streamed(&self, channel: &str, words: &mut [Word]) {

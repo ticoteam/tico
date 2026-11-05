@@ -4,8 +4,8 @@ use super::{MeetingAdapter, name};
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeSet;
 
-/// Only AX roles and name/state labels enter this projection. No AXValue, chat, captions,
-/// presentation contents, document text or screenshots are collected.
+/// Only AX roles and name/state labels enter this projection. AXValue is read only for
+/// static text in a participant-name container, never chat, captions or presentation text.
 #[derive(Clone, Debug, Default, Serialize, Deserialize)]
 #[serde(default)]
 pub struct Node {
@@ -173,16 +173,14 @@ impl MeetingAdapter for GoogleMeet {
         };
         let path = url.path().trim_matches('/');
         let code = path.strip_prefix("meet/").unwrap_or(path);
+        let parts: Vec<_> = code.split('-').collect();
         url.scheme() == "https"
             && url.host_str() == Some("meet.google.com")
-            && Some(code).is_some_and(|code| {
-                let parts: Vec<_> = code.split('-').collect();
-                parts.len() == 3
-                    && parts.iter().map(|p| p.len()).eq([3, 4, 3])
-                    && parts
-                        .iter()
-                        .all(|part| part.bytes().all(|c| c.is_ascii_lowercase()))
-            })
+            && parts.len() == 3
+            && parts.iter().map(|p| p.len()).eq([3, 4, 3])
+            && parts
+                .iter()
+                .all(|part| part.bytes().all(|c| c.is_ascii_lowercase()))
     }
     fn read_participants(&self, root: &Node) -> (Vec<String>, Vec<String>) {
         let (people, local, _) = collect(root);

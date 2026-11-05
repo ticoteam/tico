@@ -67,7 +67,8 @@ impl Store {
             let local = observed.self_names.iter().any(|s| super::same(s, &person));
             tx.execute("INSERT INTO meeting_participants(recording_id,name,is_self)
                 SELECT ?,?,? WHERE (SELECT COUNT(*) FROM meeting_participants WHERE recording_id=?)<100
-                ON CONFLICT(recording_id,name) DO UPDATE SET is_self=MAX(is_self,excluded.is_self)", params![id,person,local,id])?;
+                    OR EXISTS(SELECT 1 FROM meeting_participants WHERE recording_id=? AND name=?)
+                ON CONFLICT(recording_id,name) DO UPDATE SET is_self=MAX(is_self,excluded.is_self)", params![id,person,local,id,id,person])?;
         }
         for interval in intervals.iter().take(100) {
             if interval.end_ms <= interval.start_ms || name(&interval.name).is_none() {
