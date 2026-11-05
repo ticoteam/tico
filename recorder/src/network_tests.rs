@@ -1076,13 +1076,11 @@ fn finished_words_go_to_the_streamed_turn_they_fall_in_or_the_nearest() {
         corrected(vec![word(0, 1, "Hi", "")], "S1"),
         ("S1".into(), "Hi".into())
     );
-    // Streamed microphone words that repeat streamed meeting audio are echo.
-    assert!(
-        crate::transcript::without_echo(
-            &[word(1000, 1200, "Hello", "")],
-            &[word(1100, 1300, "hello,", "S1")]
-        )
-        .is_empty()
+    // One shared greeting is insufficient evidence to delete a genuine local reply.
+    let greeting = word(1000, 1200, "Hello", "");
+    assert_eq!(
+        crate::transcript::without_echo(&[greeting.clone()], &[word(1100, 1300, "hello,", "S1")]),
+        [greeting]
     );
     // A turn the finished transcript has no words for is emptied.
     assert_eq!(corrected(vec![], "S1"), ("S1".into(), String::new()));
@@ -1183,7 +1181,7 @@ fn streamed_finals_reach_the_meeting_at_once_and_the_finished_transcript_correct
         requests[0].1["chunks"],
         json!([
             {"seq":1,"speaker":"Me","start_ms":1000,"end_ms":1550,"text":"helo there"},
-            {"seq":2,"speaker":"S1","start_ms":1200,"end_ms":1750,"text":"hi all"},
+            {"seq":2,"speaker":"Speaker 1","start_ms":1200,"end_ms":1750,"text":"hi all"},
         ])
     );
     // Only new finals go next time; seq stays contiguous.
@@ -1352,7 +1350,7 @@ fn without_streamed_text_finished_chunks_go_whole_and_a_paused_meeting_gets_noth
     assert_eq!(
         requests[0].1["chunks"],
         json!([
-            {"seq":1,"speaker":"Me","start_ms":0,"end_ms":5000,"text":"[removed]"}
+            {"seq":1,"speaker":"Me","start_ms":400,"end_ms":1000,"text":"[removed]"}
         ])
     );
 }
@@ -1454,7 +1452,7 @@ fn edits_and_removals_of_shared_lines_go_up_as_revisions_and_win_over_automatic_
             ),
             (
                 "POST /api/v2/live-meetings/live-fixture/chunks/2/corrections HTTP/1.1".to_owned(),
-                json!({"revision":2,"speaker":"S1","start_ms":1200,"end_ms":1750,"text":"[removed]"})
+                json!({"revision":2,"speaker":"Speaker 1","start_ms":1200,"end_ms":1750,"text":"[removed]"})
             ),
         ]
     );
@@ -4518,4 +4516,49 @@ fn held_microphone_and_remote_turn_share_one_frontier_and_keep_capture_timestamp
         assert_eq!(sent[1]["text"], "remote reply", "{release}");
         assert_eq!(sent[1]["start_ms"], 1500, "{release}");
     }
+}
+
+#[test]
+fn finished_inputs_share_word_turns_in_one_order_with_their_real_times() {
+    let dir = tempfile::tempdir().unwrap();
+    let store = Store::open(dir.path()).unwrap();
+    let record = live_recording(&store, "Finished turn ordering");
+    let id = record.id.as_str();
+    store
+        .mutate(id, |r| {
+            r.meeting_audio = true;
+            Ok(())
+        })
+        .unwrap();
+    finished_chunk(&store, id, 0, 5000, vec![word(1000, 1200, "My reply", "")]);
+    store
+        .save_audio(
+            id,
+            crate::audio::Channel::Meeting,
+            0,
+            5000,
+            &[0.2; 1600],
+            16000,
+        )
+        .unwrap();
+    let remote = store.claim_transcription().unwrap().unwrap();
+    store
+        .transcription_words(
+            &remote,
+            "Remote reply",
+            vec![word(1500, 1900, "Remote reply", "Speaker 1")],
+            "",
+            json!({}),
+        )
+        .unwrap();
+    let (tico, seen, worker) = server(vec![Some(json!({"accepted":[1,2]}))]);
+    tico.push_live(&store, id).unwrap();
+    worker.join().unwrap();
+    let calls = seen.lock().unwrap();
+    let sent = calls[0].1["chunks"].as_array().unwrap();
+    assert_eq!(sent[0]["start_ms"], 1000);
+    assert_eq!(sent[0]["end_ms"], 1200);
+    assert_eq!(sent[1]["start_ms"], 1500);
+    assert_eq!(sent[1]["end_ms"], 1900);
+    assert_eq!(sent[1]["speaker"], "Speaker 1");
 }

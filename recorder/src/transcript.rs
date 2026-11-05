@@ -139,6 +139,9 @@ impl Heard {
         };
         let mut removed = vec![false; mic.len()];
         for from in 0..mic.len() {
+            if removed[from] {
+                continue;
+            }
             let first = self
                 .0
                 .partition_point(|(at, _)| at.saturating_add(ECHO_MS) < mic[from].0);
@@ -331,7 +334,10 @@ pub fn echo_ready(record: &Recording, from: u64, to: u64, them: &[Word]) -> bool
     // Inputs can start/stop a little apart. Missing audio before the tap starts or after Stop
     // is not an unfinished transcription; only recorded overlapping ranges can be pending.
     let reached = record.state != "recording" || chunks.iter().any(|c| c.end_ms >= to);
-    reached
+    let failed = chunks
+        .iter()
+        .any(|c| c.start_ms < to && c.end_ms > from && c.status == "failed");
+    (reached || failed)
         && chunks
             .iter()
             .filter(|c| c.start_ms < to && c.end_ms > from)

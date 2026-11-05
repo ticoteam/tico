@@ -159,7 +159,14 @@ impl Recording {
     }
     fn reserve_speaker(&mut self, id: &str, preferred: &str) {
         let used = |label: &str| self.speaker_labels.values().any(|v| v == label);
-        let label = if preferred.starts_with("Speaker ") && !used(preferred) {
+        let provisional = preferred.starts_with("stream:")
+            || preferred.starts_with("Speaker ")
+            || preferred
+                .strip_prefix('S')
+                .is_some_and(|n| n.parse::<usize>().is_ok());
+        let label = if !preferred.is_empty() && !provisional {
+            preferred.to_owned()
+        } else if preferred.starts_with("Speaker ") && !used(preferred) {
             preferred.to_owned()
         } else {
             let next = self
@@ -1435,5 +1442,48 @@ mod tests {
             crate::transcript::lines(&store.get(&record.id).unwrap())[1].speaker,
             "Speaker 2"
         );
+    }
+    #[test]
+    fn replacing_a_visible_stream_with_batch_words_keeps_its_speaker_identity() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = Store::open(dir.path()).unwrap();
+        let record = store.create("Stream voice identity").unwrap();
+        let live = Word {
+            start_ms: 1000,
+            end_ms: 1300,
+            text: "Hello".into(),
+            speaker: "stream:S4".into(),
+            ..Default::default()
+        };
+        store
+            .replace_live_words(&record.id, "them", 1000, 1300, &[live])
+            .unwrap();
+        assert_eq!(
+            store.get(&record.id).unwrap().speaker_labels["stream:S4"],
+            "Speaker 1"
+        );
+        store
+            .save_audio(&record.id, Channel::Meeting, 0, 2000, &[0.2; 1600], 16000)
+            .unwrap();
+        let claimed = store.claim_transcription().unwrap().unwrap();
+        store
+            .transcription_words(
+                &claimed,
+                "Hello",
+                vec![Word {
+                    start_ms: 1020,
+                    end_ms: 1320,
+                    text: "Hello".into(),
+                    speaker: "Speaker 1".into(),
+                    turn: "service-7".into(),
+                }],
+                "",
+                serde_json::json!({}),
+            )
+            .unwrap();
+        let batch = store.get(&record.id).unwrap();
+        let id = format!("chunk:{}:turn:service-7", claimed.id);
+        assert_eq!(batch.speaker_labels[&id], "Speaker 1");
+        assert_eq!(crate::transcript::lines(&batch)[0].speaker, "Speaker 1");
     }
 }

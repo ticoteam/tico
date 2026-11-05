@@ -48,6 +48,7 @@ impl LiveSync {
                     let mark = store.changes();
                     let started = std::time::Instant::now();
                     let mut live = 0;
+                    let mut recording = false;
                     let mut failed = false;
                     // Only shared, still-live meetings are visited; the library can be large.
                     let version = store.settings_version();
@@ -75,6 +76,7 @@ impl LiveSync {
                                 break;
                             }
                             live += 1;
+                            recording |= record.state == "recording";
                             let Ok(context) = store.context(&record.id) else {
                                 continue;
                             };
@@ -131,6 +133,9 @@ impl LiveSync {
                     }
                     let wait = if failed {
                         SYNC_GAP * 3
+                    } else if recording {
+                        // Silence must not leave an expired reference hold asleep for 30 seconds.
+                        SYNC_GAP
                     } else if live > 0 {
                         LIVE_WAIT
                     } else {
@@ -1021,8 +1026,6 @@ struct Queue<'a> {
     id: &'a str,
     destination: &'a str,
     seq: i64,
-    /// Start of the last turn queued; the next may not start earlier.
-    last_start: u64,
     spans: Vec<Span>,
     sources: Vec<Source>,
     /// Finished chunks already used (sources, and chunks shared before sources were kept).
@@ -1039,15 +1042,6 @@ impl<'a> Queue<'a> {
             [id, destination],
             |row| row.get(0),
         )?;
-        let mut last_start = 0;
-        let mut query = transaction.prepare(
-            "SELECT payload_json FROM live_outbox WHERE recording_id=? AND destination_id=? ORDER BY seq DESC LIMIT 1",
-        )?;
-        for text in query.query_map([id, destination], |row| row.get::<_, String>(0))? {
-            last_start = serde_json::from_str::<Value>(&text?)?["start_ms"]
-                .as_u64()
-                .unwrap_or(0);
-        }
         let mut query = transaction.prepare(
             "SELECT seq,channel,start_ms,end_ms FROM live_spans WHERE recording_id=? AND destination_id=? ORDER BY seq",
         )?;
@@ -1084,7 +1078,6 @@ impl<'a> Queue<'a> {
             id,
             destination,
             seq,
-            last_start,
             spans,
             sources,
             done,
@@ -1099,7 +1092,6 @@ impl<'a> Queue<'a> {
     ) -> Result<i64> {
         self.seq += 1;
         let start = turn.start_ms;
-        self.last_start = self.last_start.max(start);
         let payload = json!({"seq":self.seq,"speaker":turn.speaker,"start_ms":start,"end_ms":turn.end_ms.max(start),"text":turn.text});
         transaction.execute(
             "INSERT INTO live_outbox(recording_id,destination_id,seq,chunk_id,payload_json) VALUES(?,?,?,?,?)",
@@ -1183,18 +1175,28 @@ impl<'a> Queue<'a> {
                 words.clone()
             };
             let from = self.shared_until(record, channel);
+            let captured_until = record.chunks.iter().map(|c| c.end_ms).max().unwrap_or(0);
             let fresh: Vec<Word> = words
                 .into_iter()
                 .filter(|word| {
-                    word.start_ms >= from && !transcript::covered(record, channel, word.start_ms)
+                    word.start_ms >= from
+                        && !transcript::covered(record, channel, word.start_ms)
+                        && (record.state == "recording"
+                            || captured_until == 0
+                            || word.start_ms < captured_until)
                 })
                 .collect();
-            turns.extend(streamed_turns(channel, &fresh).into_iter().map(|mut turn| {
-                if let Some(label) = record.speaker_labels.get(&turn.speaker) {
-                    turn.speaker = label.clone();
-                }
-                (channel, turn)
-            }));
+            turns.extend(
+                streamed_turns(channel, &fresh)
+                    .into_iter()
+                    .filter(|turn| turn.start_ms < frontier)
+                    .map(|mut turn| {
+                        if let Some(label) = record.speaker_labels.get(&turn.speaker) {
+                            turn.speaker = label.clone();
+                        }
+                        (channel, turn)
+                    }),
+            );
         }
         turns.sort_by_key(|(channel, turn)| (turn.start_ms, *channel != "me"));
         for (channel, turn) in turns {
@@ -1219,8 +1221,8 @@ impl<'a> Queue<'a> {
         }
         Ok(())
     }
-    /// Finished chunks in order. Without streamed turns on its channel a chunk is shared whole,
-    /// as before live text; otherwise only its words past the last streamed turn are new.
+    /// Finished speech uses word times and speaker turns. Words already streamed on its channel
+    /// are corrections; only words beyond those spans become new turns.
     fn finished(
         &mut self,
         transaction: &rusqlite::Transaction,
