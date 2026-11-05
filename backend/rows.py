@@ -423,3 +423,77 @@ class BotSettingsRow(TypedDict):
     app_delivery: str | None
     extra: str
     updated_at: str | None
+
+
+class MaintenanceStepRow(TypedDict):
+    """One `maintenance_steps` row (SELECT *): a Maintenance step's switch, "How often", custom interval, "Most bots per
+    run" and cursors (migration 0090, backend/maintenance.py)."""
+    key: str
+    enabled: int
+    frequency: str
+    custom_every: int | None
+    custom_unit: str | None
+    max_bots: int | None
+    cursor_at: str | None
+    last_started_at: str | None
+    last_ran_at: str | None
+    updated_at: str | None
+    updated_by_id: str | None
+
+
+class MaintenanceRunRow(TypedDict):
+    """One `maintenance_runs` row (SELECT *): one Maintenance run, claimed by its occurrence key (migration 0090)."""
+    id: str
+    occurrence_key: str
+    trigger: str
+    step: str | None
+    started_at: str
+    heartbeat_at: str
+    finished_at: str | None
+    ok: int | None
+    result: str
+    cost_usd: float
+
+
+class MaintenanceRunStepRow(TypedDict):
+    """One `maintenance_run_steps` row (SELECT *): one step of one Maintenance run, with its status and counts."""
+    id: str
+    maintenance_run_id: str
+    step: str
+    status: str
+    reason: str
+    checked: int
+    found: int
+    woke: int
+    cost_usd: float
+    started_at: str
+    finished_at: str | None
+    window_end: str | None
+    details: str
+
+
+class MaintenanceListingRow(TypedDict):
+    """One `maintenance_listings` row (SELECT *): a task Find stuck listed for one reason at one appointment."""
+    task_id: str
+    kind: str
+    appointment: str
+    bot_id: str
+    listed_at: str
+
+
+class MaintenanceHandoffRow(TypedDict):
+    """One `maintenance_handoffs` row (SELECT *): a quiet task waiting to ride along in its bot's Update turn."""
+    id: str
+    bot_id: str
+    task_id: str
+    kind: str
+    created_at: str
+    delivered_at: str | None
+
+
+class MaintenanceRequestRow(TypedDict):
+    """One `maintenance_requests` row (SELECT *): the run an actor's Idempotency-Key was given to."""
+    actor: str
+    request_key: str
+    maintenance_run_id: str
+    created_at: str

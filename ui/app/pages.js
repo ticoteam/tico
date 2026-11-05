@@ -196,21 +196,84 @@ async function pageFullAct(state, act) {
 }
 
 // ----------------------------------------------------------------- a task's pages
-// The pages filed on a task, as cards at its top. The section moves into each redraw of the task (as its files do,
+// The pages pinned to a task, as cards at its top. The section moves into each redraw of the task (as its files do,
 // tfAdopt), so a loaded frame is not loaded again.
 function taskPagesAdopt(d, task) {
   const slot = $('[data-task-pages]', d);
   if (!slot) return;
   const id = String(task.id);
   if (d.tpEl && d.tpEl.dataset.task === id) { slot.replaceWith(d.tpEl); return; }
+  d.tpOff?.();
   d.tpEl = slot; slot.dataset.task = id;
-  // The pages pinned to the task (a page published with --task pins itself there), in their order.
-  get('/v2/places/' + encodeURIComponent('task:' + id)).then(r => {
-    if (d.tpEl !== slot) return;
-    const pins = (r.pins || []).filter(x => x.page && !x.page.replaced_by_id && !x.page.archived);   // a replaced page links on
-    slot.hidden = !pins.length;
-    slot.replaceChildren(...pins.map(x => window.pageCard(x.page, {size: x.size || 'medium'})));
-  }).catch(() => {});
+  slot.innerHTML = `<header class="tp-head"><span class="lbl">Pages</span><div class="tp-actions"><button type="button" class="ghost" data-tp-link hidden>Link page</button></div></header>
+    <div class="tp-picker" hidden><div class="tp-search"><input type="search" placeholder="Search pages" aria-label="Search pages" autocomplete="off">
+      <button type="button" class="ghost" data-tp-close aria-label="Close page picker">Close</button></div><div class="tp-results" aria-live="polite"></div></div><div class="tp-pages"></div>`;
+  const picker = $('.tp-picker', slot), input = $('input', picker), results = $('.tp-results', picker);
+  $('[data-tp-link]', slot).onclick = () => { picker.hidden = false; input.focus(); };
+  $('[data-tp-close]', slot).onclick = () => { picker.hidden = true; $('[data-tp-link]', slot).focus(); };
+  let soon = 0, search = 0;
+  input.oninput = () => {
+    clearTimeout(soon);
+    const seq = ++search, q = input.value.trim();
+    results.replaceChildren();
+    if (!q) return;
+    soon = setTimeout(async () => {
+      try {
+        const r = await get('/v2/files/search?' + new URLSearchParams({q, kind: 'page'}), {fresh: true});
+        if (d.tpEl !== slot || seq !== search) return;
+        results.innerHTML = (r.results || []).map(p => `<button type="button" class="tp-result" data-tp-page="${esc(p.id)}">${esc(p.title)}</button>`).join('') || '<p class="muted">No pages</p>';
+      } catch (e) { if (d.tpEl === slot && seq === search) results.innerHTML = `<p class="err">${esc(e.message)}</p>`; }
+    }, 250);
+  };
+  slot.onclick = async ev => {
+    const link = ev.target.closest('[data-tp-page]'), unlink = ev.target.closest('[data-tp-unlink]');
+    if ((!link && !unlink) || slot.tpBusy) return;
+    slot.tpBusy = true;
+    const button = link || unlink; button.disabled = true;
+    try {
+      if (link) await post('/v2/pins', {place: 'task:' + id, item: 'page:' + link.dataset.tpPage});
+      else await writeRequest('DELETE', '/v2/pins/' + encodeURIComponent(unlink.dataset.tpUnlink));
+      if (d.tpEl !== slot) return;
+      if (link) { picker.hidden = true; input.value = ''; results.replaceChildren(); ++search; }
+      await taskPagesLoad(d);
+    } catch (e) { toast(e.message, true); }
+    finally { slot.tpBusy = false; button.disabled = false; }
+  };
+  d.tpOff = liveOn('tasks', e => {
+    if (d.open && d.tpEl === slot && (e.kinds || [e.kind]).includes('files') && String(e.id) === id)
+      liveSoon('task-pages:' + d.id + ':' + id, () => { if (d.open && d.tpEl === slot) void taskPagesLoad(d); }, 200);
+  });
+  void taskPagesLoad(d);
+}
+async function taskPagesLoad(d) {
+  const slot = d.tpEl;
+  if (!slot) return;
+  const seq = slot.tpSeq = (slot.tpSeq || 0) + 1;
+  try {
+    const r = await get('/v2/places/' + encodeURIComponent('task:' + slot.dataset.task), {fresh: true});
+    if (d.tpEl !== slot || seq !== slot.tpSeq) return;
+    const pins = (r.pins || []).filter(x => x.page && !x.page.replaced_by_id && !x.page.archived);
+    slot.hidden = !r.can_link && !pins.length;
+    $('[data-tp-link]', slot).hidden = !r.can_link;
+    const kept = slot.tpCards || new Map(), cards = new Map();
+    for (const pin of pins) {
+      const key = JSON.stringify([pin.page, pin.size, pin.can_unpin]);
+      let row = kept.get(pin.id);
+      if (!row || row.key !== key) {
+        const el = document.createElement('div'); el.className = 'tp-page';
+        el.append(window.pageCard(pin.page, {size: pin.size || 'medium'}));
+        if (pin.can_unpin) {
+          const b = document.createElement('button'); b.type = 'button'; b.className = 'ghost tp-unlink';
+          b.dataset.tpUnlink = pin.id; b.textContent = 'Unlink'; b.setAttribute('aria-label', 'Unlink ' + pin.page.title);
+          el.append(b);
+        }
+        row = {key, el};
+      }
+      cards.set(pin.id, row);
+    }
+    slot.tpCards = cards;
+    $('.tp-pages', slot).replaceChildren(...[...cards.values()].map(x => x.el));
+  } catch (e) { if (d.tpEl === slot) toast(e.message, true); }
 }
 
 // ----------------------------------------------------------------- Library › Files

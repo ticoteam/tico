@@ -355,6 +355,7 @@ mod tests {
     #[test]
     #[ignore = "requires a disposable Linux two-user environment"]
     fn isolated_the_account_reader_writes_in_a_bot_owned_codex_home() {
+        let _guard = crate::readiness::probe_tests::PATH_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         use std::os::unix::fs::{chown, MetadataExt, PermissionsExt};
         const CHILD: &str = "TICO_TEST_ACCOUNT_READER_HOME";
         assert_eq!(unsafe { libc::geteuid() }, 0, "disposable supervisor fixture");

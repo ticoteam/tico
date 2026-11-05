@@ -108,11 +108,12 @@ const homes = {'bot:ops': 'h-ops', 'human:bea': 'h-bea', 'human:cy': 'h-cy', 'hu
 let dmRows = null, callsOff = false, railOff = false, threadsOff = false, threadsGate = null;
 // Start call as the server answers it: the call it makes (after a moment), or none.
 let callMade = null, joinRefused = false, startWait = 150;
+let startGate = null, leaveGate = null, callLive = null;
 async function open(browser, who, {phone = false, sse = null} = {}) {
   const page = await browser.newPage({viewport: phone ? {width: 390, height: 844} : {width: 1300, height: 860}, serviceWorkers: 'block', reducedMotion: 'reduce',
     ...(phone ? {isMobile: true, hasTouch: true} : {})});
   const seen = {errors: [], posts: [], reads: [], readSeqs: [], homes: [], steps: [], tasks: [], calls: [], catchUps: [], follows: [], earlier: [], withdrawn: [], patches: [],
-    readAll: [], pins: [], created: [], browsed: [], rails: 0, threadGets: []};
+    readAll: [], pins: [], created: [], browsed: [], rails: 0, threadGets: [], callSeats: new Set()};
   page.on('pageerror', e => seen.errors.push(e.message));
   page.on('dialog', d => d.accept());
   // A stand-in media client: rooms connect after a moment and remember whether their microphone is on.
@@ -129,7 +130,9 @@ async function open(browser, who, {phone = false, sse = null} = {}) {
             room.mic = on; if (on) room.localParticipant.trackPublications.set('mic', {track: room.mic_track}); }, setScreenShareEnabled: async () => {}};
           window.__rooms.push(this); }
         on() { return this; }
-        async connect(url, token) { this.token = token; await new Promise(r => setTimeout(r, 200)); }
+        async connect(url, token) { this.token = token;
+          if (window.__connectGate) await new Promise(go => window.__connectGate.push(go));
+          else await new Promise(r => setTimeout(r, 200)); }
         disconnect() { this.gone = true; }
       },
     };
@@ -220,10 +223,12 @@ async function open(browser, who, {phone = false, sse = null} = {}) {
     if (one) { seen.reads.push(one[1]); seen.readSeqs.push(one[1] + ':' + JSON.parse(req.postData() || '{}').seq); return json({ok: true}); }
     if (callMade && method === 'POST' && /^\/api\/v2\/threads\/[^/]+\/calls$/.test(p)) {
       seen.calls.push('start:' + callMade.id);
-      await new Promise(r => setTimeout(r, startWait));
+      seen.callSeats.add(callMade.id);
+      if (startGate) await new Promise(go => startGate.push(go));
+      else await new Promise(r => setTimeout(r, startWait));
       return json({call: callMade});
     }
-    if (/^\/api\/v2\/threads\/[^/]+\/calls$/.test(p)) return callsOff && method === 'POST' ? json({error: {code: 'meet_unavailable'}}, 503) : json({calls: [], next_before: null, available: !callsOff});
+    if (/^\/api\/v2\/threads\/[^/]+\/calls$/.test(p)) return callsOff && method === 'POST' ? json({error: {code: 'meet_unavailable'}}, 503) : json({calls: callLive ? [callLive] : [], next_before: null, available: !callsOff});
     const settings = p.match(/^\/api\/v2\/threads\/([^/]+)$/);
     if (settings && method === 'PATCH') {
       const body = JSON.parse(req.postData() || '{}');
@@ -260,8 +265,10 @@ async function open(browser, who, {phone = false, sse = null} = {}) {
     const call = p.match(/^\/api\/v2\/calls\/([^/]+)\/(join|leave|end|token)$/);
     if (call) {
       seen.calls.push(call[2] + ':' + call[1]);
+      if (call[2] === 'leave' && leaveGate) await new Promise(go => leaveGate.push(go));
       if (call[2] === 'join' && joinRefused) return json({error: {code: 'call_access_removed'}}, 403);
-      if (call[2] === 'join') { await new Promise(r => setTimeout(r, 150)); return json({token: 'tok-' + call[1], url: 'wss://meet.acme.example', call: {id: call[1], connector: 'human:ana'}}); }
+      if (call[2] === 'join') { await new Promise(r => setTimeout(r, 150)); seen.callSeats.add(call[1]); return json({token: 'tok-' + call[1], url: 'wss://meet.acme.example', call: {id: call[1], connector: 'human:ana'}}); }
+      if (call[2] === 'leave') seen.callSeats.delete(call[1]);
       if (call[2] === 'end') return json({error: {code: 'internal', detail: 'Could not end'}}, 500);
       return json({ok: true});
     }
@@ -541,6 +548,126 @@ let browser = null;
     await page.locator('#call-bar [data-cb="leave"]').click();
     await page.waitForFunction(() => !document.querySelector('#call-bar'));
     callMade = null; startWait = 150;
+
+    // Start B while in A; its event redraws Join before Start answers. Join waits for A's held leave, then Start
+    // answers and leaves the seat to Join. Hidden or refused, Join owes that seat back once; connected, it keeps it.
+    for (const [id, finish] of [['c8', 'hidden'], ['c9', 'refused'], ['c10', 'joined']]) {
+      await page.evaluate(async id => { window.__rooms.length = 0; await callJoin('t4', {id: id + '-a'}, 'A'); }, id);
+      await page.locator('.thv-call[data-call="start"]').first().waitFor();
+      callMade = {id, state: 'live', connector: 'human:ana'}; startGate = []; leaveGate = [];
+      await page.evaluate(() => { window.__starting = callAction([...THV_VIEWS].find(v => v.id === 't-plan'), 'start'); });
+      for (let i = 0; i < 20 && !startGate.length; i++) await page.waitForTimeout(25);
+      assert.equal(startGate.length, 1, 'Start B waits for its response');
+      callLive = callMade;
+      await page.evaluate(() => threadViewsLive('threads', {kind: 'call.started', thread_id: 't-plan'}));
+      await page.locator('.thv-call[data-call="join"]').first().click();
+      for (let i = 0; i < 20 && !leaveGate.length; i++) await page.waitForTimeout(25);
+      assert.equal(leaveGate.length, 1, 'Join B waits for A to leave');
+      const starts = startGate; startGate = null; starts.forEach(go => go());
+      await page.evaluate(() => window.__starting);
+      assert.deepEqual(await page.evaluate(id => [CALL?.id, CALL_JOINING.get(id)], id), [id + '-a', 1]);
+      assert.equal(seen.calls.filter(c => c === 'leave:' + id).length, 0, 'Start B defers cleanup to Join');
+      if (finish === 'hidden') assert.deepEqual(await page.evaluate(() => window.ticoPageHidden()), {inCall: true});
+      joinRefused = finish === 'refused';
+      const leaves = leaveGate; leaveGate = finish === 'hidden' ? [] : null; leaves.forEach(go => go());
+      await page.waitForFunction(() => CALL_JOINS === 0);
+      await page.waitForTimeout(150);
+      assert.equal(seen.calls.filter(c => c === 'leave:' + id).length, finish === 'joined' ? 0 : 1,
+        'only an abandoned Join gives Start B\'s seat back, once: ' + seen.calls);
+      assert.equal(seen.calls.filter(c => c === 'join:' + id).length, finish === 'hidden' ? 0 : 1);
+      if (finish === 'joined') {
+        assert.deepEqual(await page.evaluate(() => [CALL?.id, window.__rooms.filter(r => r.mic && !r.gone).length]), [id, 1]);
+        callLive = null;
+        await page.locator('#call-bar [data-cb="leave"]').click();
+        await page.waitForFunction(() => !document.querySelector('#call-bar'));
+      } else {
+        assert.deepEqual(await page.evaluate(() => [CALL, window.__rooms.filter(r => !r.gone).length]), [null, 0]);
+        assert.equal(await page.locator('#call-bar').count(), 0);
+        if (finish === 'hidden') {
+          // Hold the finalizer's leave while B tries to rejoin: cleanup must finish before the new seat is taken.
+          assert.equal(seen.callSeats.has(id), true, 'B\'s cleanup is held before returning its original seat');
+          const rejoinPosted = await page.evaluate(id => {
+            window.__rejoining = callJoin('t-plan', {id}, 'B');
+            return pendingWrites.has('POST /v2/calls/' + id + '/join\n{}');
+          }, id);
+          assert.equal(rejoinPosted, false, 'rejoining B waits for its pending finalizer leave');
+          const cleanupLeft = page.waitForResponse(r => r.url().endsWith('/calls/' + id + '/leave'));
+          const cleanups = leaveGate; leaveGate = null; cleanups.forEach(go => go());
+          await (await cleanupLeft).finished();
+          await page.evaluate(() => window.__rejoining);
+          assert.equal(seen.callSeats.has(id), true, 'delayed cleanup cannot remove B\'s rejoined seat');
+          assert.deepEqual(await page.evaluate(() => [CALL?.id, window.__rooms.filter(r => r.mic && !r.gone).length]), [id, 1]);
+          callLive = null;
+          await page.locator('#call-bar [data-cb="leave"]').click();
+          await page.waitForFunction(() => !document.querySelector('#call-bar'));
+        }
+      }
+      callMade = callLive = null; joinRefused = false;
+      await page.evaluate(() => { const v = [...THV_VIEWS].find(x => x.id === 't-plan'); CALL_THREADS.set('t-plan', {call: null}); thvDraw(v); });
+    }
+
+    // Join B connects while Start's response waits. Hidden gives the seat back before Start answers; a late Start
+    // must not recreate that debt. Hold any duplicate leave until after rejoining B, when it would remove the new seat.
+    callMade = {id: 'c11', state: 'live', connector: 'human:ana'}; startGate = []; leaveGate = [];
+    await page.evaluate(() => { window.__rooms.length = 0; window.__connectGate = [];
+      window.__starting = callAction([...THV_VIEWS].find(v => v.id === 't-plan'), 'start'); });
+    for (let i = 0; i < 20 && !startGate.length; i++) await page.waitForTimeout(25);
+    assert.equal(startGate.length, 1, 'Start B waits for its response');
+    callLive = callMade;
+    await page.evaluate(() => threadViewsLive('threads', {kind: 'call.started', thread_id: 't-plan'}));
+    await page.locator('.thv-call[data-call="join"]').first().click();
+    await page.waitForFunction(() => window.__connectGate.length === 1);
+    const hiddenLeave = page.waitForResponse(r => r.url().endsWith('/calls/c11/leave'));
+    assert.deepEqual(await page.evaluate(() => window.ticoPageHidden()), {inCall: true});
+    for (let i = 0; i < 20 && !leaveGate.length; i++) await page.waitForTimeout(25);
+    assert.equal(leaveGate.length, 1, 'Hidden gives B its seat back');
+    leaveGate.shift()();
+    await (await hiddenLeave).finished();
+    await page.waitForFunction(() => !pendingWrites.has('POST /v2/calls/c11/leave\n{}'));
+    assert.equal(seen.callSeats.has('c11'), false, 'the first leave has settled B\'s seat');
+    const starts = startGate; startGate = null; starts.forEach(go => go());
+    await page.evaluate(() => window.__starting);
+    await page.evaluate(() => { const connects = window.__connectGate; window.__connectGate = null; connects.forEach(go => go()); });
+    await page.waitForFunction(() => CALL_JOINS === 0);
+    // The API registers a write before sending it, so wait for its route only if the cancelled Join sent one.
+    const duplicate = await page.evaluate(() => pendingWrites.has('POST /v2/calls/c11/leave\n{}'));
+    if (duplicate) {
+      for (let i = 0; i < 20 && !leaveGate.length; i++) await page.waitForTimeout(25);
+      assert.equal(leaveGate.length, 1, 'the duplicate leave is held before reaching the seat');
+    }
+    await page.evaluate(() => callJoin('t-plan', {id: 'c11'}, 'B'));
+    assert.deepEqual(await page.evaluate(() => [CALL?.id, window.__rooms.filter(r => r.mic && !r.gone).length]), ['c11', 1]);
+    assert.equal(seen.callSeats.has('c11'), true, 'B has successfully rejoined');
+    const duplicateLeft = duplicate ? page.waitForResponse(r => r.url().endsWith('/calls/c11/leave')) : null;
+    const leaves = leaveGate; leaveGate = null; leaves.forEach(go => go());
+    if (duplicateLeft) await (await duplicateLeft).finished();
+    assert.equal(seen.callSeats.has('c11'), true, 'a delayed cleanup cannot remove the rejoined seat');
+    assert.equal(seen.calls.filter(c => c === 'leave:c11').length, 1, 'B leaves only once before rejoining');
+    callMade = callLive = null;
+    await page.locator('#call-bar [data-cb="leave"]').click();
+    await page.waitForFunction(() => !document.querySelector('#call-bar'));
+
+    // The hidden page's leave never answers: returning and clicking Join waits only for its deadline, then joins.
+    callLive = {id: 'c12', state: 'live', connector: 'human:ana'};
+    await page.evaluate(() => { window.__rooms.length = 0; window.__callLeaveTimeoutMs = 250;
+      threadViewsLive('threads', {kind: 'call.started', thread_id: 't-plan'}); });
+    await page.locator('.thv-call[data-call="join"]').first().click();
+    await page.waitForFunction(() => CALL?.id === 'c12' && window.__rooms.some(r => r.mic));
+    leaveGate = [];       // Never released, including after the timeout.
+    const stalledLeave = page.waitForRequest(r => r.url().endsWith('/calls/c12/leave'));
+    assert.deepEqual(await page.evaluate(() => [window.ticoPageHidden(), CALL_LEAVING.has('c12')]), [{inCall: true}, true]);
+    await stalledLeave;
+    const rejoined = page.waitForRequest(r => r.url().endsWith('/calls/c12/join'), {timeout: 1500});
+    await page.locator('.thv-call[data-call="join"]').first().click();
+    await rejoined;
+    await page.waitForFunction(() => CALL?.id === 'c12' && CALL_JOINS === 0 && window.__rooms.some(r => r.mic && !r.gone), null, {timeout: 1500});
+    assert.equal(seen.calls.filter(c => c === 'join:c12').length, 2, 'Join proceeds after the stalled leave times out');
+    assert.deepEqual(await page.evaluate(() => [CALL_LEAVING.has('c12'), CALL_JOINING.has('c12'), window.__rooms.filter(r => r.mic && !r.gone).length]),
+      [false, false, 1], 'the timed-out leave and rejoin settle their tracking and leave one live call');
+    leaveGate = callLive = null;
+    await page.evaluate(() => { delete window.__callLeaveTimeoutMs; });
+    await page.locator('#call-bar [data-cb="leave"]').click();
+    await page.waitForFunction(() => !document.querySelector('#call-bar'));
 
     // An older sub-thread opened by its link keeps the way back, and reads flat too.
     await page.goto('https://tico-ui.test/#/thread/t-sub');

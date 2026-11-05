@@ -194,9 +194,9 @@ the Finish setup cards) show a human picker when the template is `inbox`. The ch
 appended to the instructions as `Mailbox: <email>`, and BotOps fills `{{mailbox}}` in
 `bot.yaml` from that line. The bot is created `planned`, with `outbound_send: false`, one
 routine, the weekday 07:30 email brief in America/Los_Angeles (change its time zone on its automation in Automations),
-declared off and switched on when its setup starts, and gmail `read`/`draft` plus calendar `read` on that mailbox. It reads only that mailbox;
-`org_read: true`, which also reads everyone who reports to the human, is added by the owner
-deliberately. It starts with filing off (no labels, no archive) and shows what it would do.
+declared off and switched on when its setup starts, and gmail `read`/`draft` plus calendar `read` on that mailbox. It reads only that mailbox,
+through the grant it gets as its person's message bot (Settings > Mailboxes); another mailbox is that mailbox's
+person's grant to give. It starts with filing off (no labels, no archive) and shows what it would do.
 
 There is no per-user OAuth. One Google service account acts as every mailbox; the `tools:` block
 names the address, never a personal login. Mail-local calendar commands can read and create events on every address in `registry/people.yaml`,
@@ -555,6 +555,9 @@ borrows another bot's credential. To let it use one, the owner grants it (Tools 
 into the vault if needed and grants it as them ([credential-vault.md](credential-vault.md)).
 
 A run's MCP servers are `hub`, the `mcp:` tools above and the repository's `.mcp.json`; never the computer operator's own.
+Nor does a run read the operator's own instructions or settings: a Claude Code turn loads only the repository's
+(`--setting-sources project,local`), never `~/.claude/CLAUDE.md`, user settings or hooks, even on the computer's own login.
+Packet-only turns use an empty settings-source list and also disable repository instructions, hooks and built-in tools.
 
 ### What humans see about a bot's tools
 
@@ -672,7 +675,7 @@ Levers set in **Settings → Bots**, not in the repository:
   template that runs on the [Tico AI Gateway](ai-gateway.md) with no model of its own starts on its department's pick at that
   level, for example `gateway: {level: low}` on a mail watcher, or `level: high` on an engineering builder. It
   is read once when the bot is created and kept in the bot's settings; the pick in **Settings → Bots** replaces it. Left
-  out, it is Medium and not Fast. The Inbox, Health Monitor, Dispatcher, Issue Triage and Spend Watcher templates use Low;
+  out, it is Medium and not Fast. The Inbox, Dispatcher, Issue Triage and Spend Watcher templates use Low;
   DevOps, Security and Software Architect use High.
 - **`background_wait_s`** (Claude bots): how long an answered turn may wait only on its own background commands
   before the runner ends it, in seconds; 300 when unset, 0 to wait for them as before. The commands keep running,

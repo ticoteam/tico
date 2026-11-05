@@ -250,6 +250,8 @@ def run(args, who=None):
         return via_tool(client, _rules_args(args))
     if args.cmd in ("mail", "connections"):
         return via_tool(client, args)
+    if args.cmd == "maintenance":
+        return via_tool(client, args)
     if args.cmd == "thread":
         return via_tool(client, args)
     if args.cmd == "finance":
@@ -358,7 +360,7 @@ def run(args, who=None):
                                                   "operation_id": os.environ.get("HUB_OPERATION_ID")})
     if args.cmd in ("chat", "replay"):
         return via_tool(client, args)
-    if fn in ("stall-triage", "audit"):
+    if fn == "audit":
         return via_tool(client, args)
     if fn and fn.startswith("task-manager "):
         from clients import hubtools
@@ -371,12 +373,6 @@ def run(args, who=None):
                   "task-manager schedule": {"preset": getattr(args, "preset", None), "at": getattr(args, "at", None)},
                   "task-manager bot": {"bot": getattr(args, "state", None)}}[fn]
         return hubtools.task_manager_set(client, {**change, "operation_id": op})
-    if fn in ("health-monitor findings", "health-monitor report"):
-        from clients import hubtools
-        if fn == "health-monitor findings":
-            return hubtools.health_monitor_findings(client, {})
-        return hubtools.health_monitor_report(client, {"key": args.key, "process": args.process, "cpu": args.cpu,
-                                                       "mb": args.mb, "operation_id": os.environ.get("HUB_OPERATION_ID")})
     if fn in ("support report", "support send"):
         from clients import hubtools
         key = os.environ.get("HUB_OPERATION_ID")
@@ -1049,7 +1045,7 @@ def local_slug(client, args, workspace):
         known = {b.get("slug") or b.get("name") for b in client.get("bots", include_archived="1")}
     except (APIError, AttributeError, TypeError):
         known = set()
-    reserved = ("assistant", "botops", "librarian", "goal-manager", "coo", "task-manager", "health-monitor", "bookkeeper")
+    reserved = ("assistant", "botops", "librarian", "goal-manager", "coo", "task-manager", "bookkeeper")
     return catalog.free_slug(args.name or card.get("name") or args.template, lambda slug: (
         slug in known or slug in reserved
         or any((workspace / (prefix + slug)).exists() for prefix in (REPO_PREFIX, OLD_REPO_PREFIX))))

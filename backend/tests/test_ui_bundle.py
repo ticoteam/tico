@@ -2,6 +2,7 @@
 import os
 import re
 from pathlib import Path
+from unittest.mock import patch
 
 import pytest
 
@@ -146,6 +147,47 @@ def test_the_bundle_is_cut_into_parts_a_webkit_cache_keeps(api):
         assert v == ui_bundle._etag(whole)[1:17]
     assert len(re.findall(r"app\.bundle(?:\.\d+)?\.js\?v=", page)) > 1      # today's 4 MB script is more than one part
     assert api.get("/tico/ui/app.bundle.99.js", headers=AUTH).status_code == 404
+
+
+@served
+@pytest.mark.parametrize("kind", ("js", "css"))
+@pytest.mark.parametrize("n", (0, 1))
+def test_an_old_bundle_url_is_complete_and_never_cached(api, monkeypatch, kind, n):
+    bundle = ui_bundle.Bundle(b"", [b"'use strict';\nconst A = 1;\n", b"'use strict';\nconst B = A + 1;\n"],
+                              [b"a{color:red}\n", b"b{color:blue}\n"])
+    monkeypatch.setattr(ui_bundle.UiBundle, "get", lambda self: bundle)
+    path = ui_bundle.part_path(kind, n)
+    old = f"{path}?v=old-build"
+    expected = getattr(bundle, kind) if n == 0 else bundle.parts[path]
+    with patch.object(ui_bundle.gzip, "compress", wraps=ui_bundle.gzip.compress) as compress:
+        plain = api.get(old, headers={**AUTH, "Accept-Encoding": "identity"})
+        assert plain.status_code == 200 and plain.content == expected
+        assert plain.headers["cache-control"] == "no-store" and "content-encoding" not in plain.headers
+        assert plain.headers["etag"].startswith('"') and plain.headers["vary"] == "Accept-Encoding"
+        if n == 0:
+            assert plain.headers["etag"] != bundle.etag[path]
+        # Current and unversioned URLs still serve just this part, with the same cache policy and tags.
+        for suffix in (f"?v={bundle.version[kind]}", ""):
+            kept = api.get(path + suffix, headers={**AUTH, "Accept-Encoding": "identity"})
+            assert kept.status_code == 200 and kept.content == bundle.parts[path]
+            assert kept.headers["cache-control"] == ui_bundle.IMMUTABLE and kept.headers["etag"] == bundle.etag[path]
+            zipped_part = api.get(path + suffix, headers={**AUTH, "Accept-Encoding": "gzip"})
+            assert zipped_part.content == bundle.parts[path] and zipped_part.headers["content-encoding"] == "gzip"
+            assert zipped_part.headers["cache-control"] == ui_bundle.IMMUTABLE
+            assert zipped_part.headers["etag"] == bundle.gz_etag[path]
+        compress.assert_not_called()
+        assert bundle.whole_gz == {}
+        zipped = api.get(old, headers={**AUTH, "Accept-Encoding": "gzip"})
+        assert zipped.status_code == 200 and zipped.content == expected       # TestClient decodes gzip
+        assert zipped.headers["cache-control"] == "no-store" and zipped.headers["content-encoding"] == "gzip"
+        assert zipped.headers["etag"].startswith('"') and zipped.headers["etag"] != plain.headers["etag"]
+        if n == 0:
+            assert zipped.headers["etag"] != bundle.gz_etag[path]
+        again = api.get(old, headers={**AUTH, "Accept-Encoding": "gzip"})
+        assert again.content == expected and again.headers["etag"] == zipped.headers["etag"]
+        unchanged = api.get(old, headers={**AUTH, "Accept-Encoding": "gzip", "If-None-Match": zipped.headers["etag"]})
+        assert unchanged.status_code == 304 and unchanged.headers["cache-control"] == "no-store"
+        assert compress.call_count == (1 if n == 0 else 0)
 
 
 def test_parts_are_cut_between_files_in_order():

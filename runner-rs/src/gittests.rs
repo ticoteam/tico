@@ -801,13 +801,25 @@ async fn a_removal_with_a_changed_name_that_is_not_utf8_keeps_the_worktree_and_s
     std::fs::write(tree.join("draft.txt"), "half done\n").unwrap();
     let mut action_row = row.as_object().unwrap().clone();
     action_row.insert("full_name".into(), json!("org/product"));
+    let branch_before = sh(&tree, &["symbolic-ref", "--short", "HEAD"]);
+    let index_before = sh(&tree, &["ls-files", "--stage"]);
     let kept = worktrees::act(&workspace, &mut action_row, "remove", &env, &[], || async { true }).await;
     let why = kept.err().map(|e| e.text()).unwrap_or_default();
     assert!(why.contains("not valid UTF-8"), "{why}");
 
-    // Nothing is added, committed or pushed: the worktree, its files and its HEAD stay as they were.
+    // Nothing is added, committed or pushed: the worktree, its files, HEAD, branch and index stay as they were.
     assert!(tree.exists() && odd.exists() && tree.join("draft.txt").exists());
     assert_eq!(sh(&tree, &["rev-parse", "HEAD"]), head_before);
+    assert_eq!(
+        sh(&tree, &["symbolic-ref", "--short", "HEAD"]),
+        branch_before,
+        "the removal must not switch branches"
+    );
+    assert_eq!(
+        sh(&tree, &["ls-files", "--stage"]),
+        index_before,
+        "the removal must not add to the index"
+    );
     let wip = worktrees::wip_branch(&row);
     let heads = sh(&tmp.0, &["--git-dir", bare.to_str().unwrap(), "for-each-ref", "--format=%(refname)", "refs/heads"]);
     assert!(!heads.lines().any(|line| line == format!("refs/heads/{wip}")), "{heads}");

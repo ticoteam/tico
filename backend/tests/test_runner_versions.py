@@ -128,7 +128,7 @@ def test_a_pinned_computer_shows_outdated_but_its_owner_is_not_nudged(api):
 def test_queued_work_says_it_waits_for_the_computer_to_update_only_once_the_computer_stops_taking_work(api):
     """A computer due an update keeps claiming for 20 minutes, then takes no new work until its running turns end.
     Chat and task said only "Queued" for that hold; now they say why, and only while it lasts."""
-    from backend import health, health_monitor
+    from backend import health, maintenance_health
     from backend.store import H
     r = runner(api, label="Team box")
     assign(api, r, "ops")
@@ -163,7 +163,7 @@ def test_queued_work_says_it_waits_for_the_computer_to_update_only_once_the_comp
         c.execute("UPDATE jobs SET created_at=? WHERE bot_id='ops'", (H.shift(H.now(), minutes=-30),))
         online = {x["id"] for x in health._online_runners(c)}
         assert {row["reason"] for row in health._waiting(c, online)[2]} == {"updating"}
-        found = {f["check_id"]: f for f in health_monitor.findings(c, store.settings)}
+        found = {f["check_id"]: f for f in maintenance_health.findings(c, store.settings)}
     assert "queue_idle" not in found
     assert "UTC (1 min), waiting to update." in found["runner_outdated"]["detail"]
     update("updating")                                                  # the hold goes on into the update itself

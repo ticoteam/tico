@@ -294,6 +294,31 @@ def test_a_task_filed_with_a_check_model_deletes_and_comes_back_with_it(api):
         assert c.execute("PRAGMA foreign_key_check").fetchall() == []
 
 
+def test_a_deleted_task_takes_its_maintenance_listings_and_handoffs_and_restores_them(api):
+    store = api.app.state.store
+    ticket = post(api, "tasks", {"owner": "priya", "title": "Check the shipment", "body": "x"}, token="ben-test")
+    with store.transaction() as c:
+        now = H.now()
+        c.execute("INSERT INTO maintenance_listings(task_id,kind,appointment,bot_id,listed_at) "
+                  "VALUES(?,'quiet',?,'ops',?)", (ticket["id"], now, now))
+        c.execute("INSERT INTO maintenance_handoffs(id,bot_id,task_id,kind,created_at) "
+                  "VALUES('handoff','ops',?,'quiet',?)", (ticket["id"], now))
+    tables = ("maintenance_listings", "maintenance_handoffs")
+
+    def rows():
+        with store.read() as c:
+            return {table: [tuple(r) for r in c.execute(f"SELECT * FROM {table} WHERE task_id=?", (ticket["id"],))]
+                    for table in tables}
+
+    before = rows()
+    assert post(api, f"tasks/{ticket['id']}/delete", {}, token="ben-test") == {"deleted": ticket["id"]}
+    assert rows() == {table: [] for table in tables}
+    post(api, f"tasks/{ticket['id']}/restore", {}, token="ben-test")
+    assert rows() == before
+    with store.read() as c:
+        assert c.execute("PRAGMA foreign_key_check").fetchall() == []
+
+
 def test_every_table_that_points_at_a_task_is_moved_kept_or_refuses_the_delete(api):
     # A new table with a key to tasks(id) must be named in task_delete, or deleting a task that has a row in it fails.
     from backend import task_delete as D

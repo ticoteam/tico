@@ -1,5 +1,6 @@
 """Production invariants (backend/invariants.py): each check fires on what it should and not on what it should not;
-one alert task per episode, closed when the check passes; Health lists the firing checks for owners and admins only;
+the sweep keeps each check's state for Health and raises no task (Check health files the firing checks, see
+tests/test_maintenance_health.py); Health lists the firing checks for owners and admins only;
 the scheduler runs the sweep with no model; every check reads through an index. Synthetic fixtures only (Ana owns the
 team, Cara is a member; the bots are those of backend/tests/test_api.py)."""
 
@@ -35,12 +36,17 @@ def examples(api, check):
 
 
 def alerts(api, check):
-    """Alert tasks raised for one check that are still open."""
+    """Open tasks titled as a production check's alert: the sweep raises none, so this is always empty."""
     title = "Production check: " + I.BY_ID[check].label
     marks = ",".join("?" * len(H.ACTIVE_STATUSES))
     with api.app.state.store.read() as c:
         return [row["id"] for row in c.execute(f"SELECT id FROM tasks WHERE title=? AND status IN ({marks}) "
                                                "ORDER BY created_at", (title, *H.ACTIVE_STATUSES))]
+
+
+def task_count(api):
+    with api.app.state.store.read() as c:
+        return c.execute("SELECT count(*) FROM tasks").fetchone()[0]
 
 
 def flight_event(c, at, site="backend/app.py:4100 in mutate", route="PATCH /api/v2/tasks/{tid}", hold_s=6.5):
@@ -254,7 +260,7 @@ def test_a_sweep_with_nothing_changed_opens_no_write_transaction_and_a_change_op
 
     monkeypatch.setattr(store, "transaction", counting)
     I.sweep(store, auth, store.settings, NOW)
-    assert len(opened) == 1, "a new firing episode is one change: one transaction for its alert and row"
+    assert len(opened) == 1, "a new firing episode is one change: one transaction for its state row"
     I.sweep(store, auth, store.settings, NOW + timedelta(minutes=15))
     assert len(opened) == 1, "still firing and unchanged: no write transaction"
     I.sweep(store, auth, store.settings, NOW + timedelta(minutes=30))
@@ -267,40 +273,24 @@ def test_a_sweep_with_nothing_changed_opens_no_write_transaction_and_a_change_op
     assert len(opened) == 2, "passing and passed before: no write"
 
 
-def test_one_alert_task_per_episode_and_it_closes_when_the_check_passes(api):
+def test_a_firing_check_keeps_one_state_row_and_raises_no_task_and_clears_when_it_passes(api):
     _, _, attempt = setup_attempt(api)
     store = api.app.state.store
     with store.transaction() as c:
         c.execute("UPDATE attempts SET state='running', lease_until=? WHERE id=?", (ago(minutes=30), attempt["id"]))
-    sweep(api)
-    first = alerts(api, "lease_overdue")
-    assert len(first) == 1
+    tasks = task_count(api)
     sweep(api)
     sweep(api, NOW + timedelta(minutes=15))
-    assert alerts(api, "lease_overdue") == first, "still firing: no second alert while the first is open"
+    assert alerts(api, "lease_overdue") == [] and task_count(api) == tasks, "the sweep raises no task"
+    with store.read() as c:
+        row = c.execute("SELECT firing, task_id, started_firing_at FROM invariant_state WHERE check_id='lease_overdue'").fetchone()
+    assert (row["firing"], row["task_id"], row["started_firing_at"]) == (1, None, stamp(NOW)), "the episode starts at its first sweep"
     with store.transaction() as c:
         c.execute("UPDATE attempts SET state='completed' WHERE id=?", (attempt["id"],))
     sweep(api, NOW + timedelta(minutes=30))
-    assert alerts(api, "lease_overdue") == []
     with store.read() as c:
-        assert H.task(c, first[0])["status"] not in H.ACTIVE_STATUSES
-    with store.transaction() as c:
-        c.execute("UPDATE attempts SET state='running' WHERE id=?", (attempt["id"],))
-    sweep(api, NOW + timedelta(minutes=45))
-    assert len(alerts(api, "lease_overdue")) == 1, "a new episode raises a new alert"
-
-
-def test_a_closed_alert_is_not_reopened_while_the_check_still_fires(api):
-    _, _, attempt = setup_attempt(api)
-    store = api.app.state.store
-    with store.transaction() as c:
-        c.execute("UPDATE attempts SET state='running', lease_until=? WHERE id=?", (ago(minutes=30), attempt["id"]))
-    sweep(api)
-    tid = alerts(api, "lease_overdue")[0]
-    with store.transaction() as c:
-        H.task_close(c, H.KEEPER, tid, note="Known; leave it.")
-    sweep(api, NOW + timedelta(minutes=15))
-    assert alerts(api, "lease_overdue") == [], "a person closed it; the same episode does not raise it again"
+        assert c.execute("SELECT firing FROM invariant_state WHERE check_id='lease_overdue'").fetchone()[0] == 0
+    assert task_count(api) == tasks and alerts(api, "lease_overdue") == []
 
 
 def test_health_lists_the_firing_check_for_an_owner_and_hides_it_from_a_member(api):
@@ -312,7 +302,7 @@ def test_health_lists_the_firing_check_for_an_owner_and_hides_it_from_a_member(a
     owner = {x["id"]: x for x in get(api, "health")["checks"]}
     assert owner["invariant:lease_overdue"]["status"] == "warn"
     assert attempt["id"] in owner["invariant:lease_overdue"]["summary"]
-    assert owner["invariant:lease_overdue"]["fixes"], "the alert's task is one click away"
+    assert owner["invariant:lease_overdue"]["fixes"] == [], "no task from the sweep: Check health links its task once it files one"
     member = {x["id"] for x in get(api, "health", token="cara-test")["checks"]}
     assert "invariant:lease_overdue" not in member
 

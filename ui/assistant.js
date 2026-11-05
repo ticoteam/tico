@@ -69,7 +69,8 @@
     const title = plain ? what : summary || 'A change for you';
     // A task change (old → new) and a bulk card's one line per step read as words; any other card's fields are the
     // request itself, so they go under Details with the method and path.
-    const readable = action.path === '/api/v2/assistant/batch' || (action.diff || []).some(d => 'old' in d || d.group) || !plain && !summary;
+    const routine = (action.diff || []).some(d => d.routine);
+    const readable = routine || action.path === '/api/v2/assistant/batch' || (action.diff || []).some(d => 'old' in d || d.group) || !plain && !summary;
     const fields = action.diff?.length
       ? `<ul class="asst-body" aria-label="Changes">${action.diff.map(d => `<li><strong>${esc(d.field)}</strong>: ${'old' in d ? shown(d.old ?? '') + ' → ' : ''}${shown(d.new)}</li>`).join('')}</ul>`
       : Object.keys(action.body || {}).length
@@ -84,7 +85,7 @@
     return `<div class="asst-card" tabindex="-1" data-action="${esc(action.id)}" data-status="${esc(action.status)}">
       <div class="asst-who">${esc(name.replace(/^The /, ''))} asks</div>
       <details class="asst-raw"${open ? ' open' : ''}><summary title="Details"><b data-what>${esc(title)}</b><span class="nav-icon" aria-hidden="true">expand_more</span></summary>
-        ${said && !repeats ? `<p class="asst-state">${esc(who)}“${esc(said)}”</p>` : ''}${readable ? '' : fields}${action.original_summary
+        ${said && !repeats ? `<p class="asst-state">${esc(who)}“${esc(said)}”</p>` : ''}${routine ? `<ul class="asst-body" aria-label="Request">${Object.entries(action.body || {}).map(([k, v]) => `<li><strong>${esc(k)}</strong>: ${shown(v)}</li>`).join('')}</ul>` : readable ? '' : fields}${action.original_summary
         ? `<p class="asst-state">First written as: “${esc(action.original_summary)}”</p>` : ''}<code>${esc(action.method)} ${esc(action.path)}</code></details>
       ${sends}${readable ? fields : ''}
       ${action.status === 'pending'

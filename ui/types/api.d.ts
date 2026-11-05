@@ -148,6 +148,7 @@ export type AuditPage = {
 };
 
 export type Automation = {
+  action?: Record<string, unknown>;
   batch?: Record<string, unknown> | null;
   can_edit: boolean;
   can_pause?: boolean;
@@ -169,7 +170,9 @@ export type Automation = {
   id: string;
   kind?: string;
   last_run?: Record<string, unknown> | null;
+  message_id?: string;
   name?: string;
+  needs_confirm?: boolean;
   next_due_at?: string | null;
   next_run?: string | null;
   owner_id?: string;
@@ -198,6 +201,7 @@ export type AutomationGuide = {
 };
 
 export type AutomationHeld = {
+  action?: Record<string, unknown>;
   batch?: Record<string, unknown> | null;
   can_edit: boolean;
   can_pause?: boolean;
@@ -219,8 +223,10 @@ export type AutomationHeld = {
   id: string;
   kind?: string;
   last_run?: Record<string, unknown> | null;
+  message_id?: string;
   moved?: number;
   name?: string;
+  needs_confirm?: boolean;
   next_due_at?: string | null;
   next_run?: string | null;
   owner_id?: string;
@@ -3133,12 +3139,6 @@ export type LinkedDocResult = {
   linked: LinkedDoc;
 };
 
-export type LocalFinding = {
-  cpu: number;
-  mb: number;
-  process: string;
-};
-
 export type Location = {
   address: Record<string, unknown>;
   archived_at?: string | null;
@@ -3155,6 +3155,26 @@ export type LocationOne = {
 export type Locations = {
   locations: Array<Location>;
   next_cursor: string | null;
+};
+
+export type MaintenanceRunRequest = {
+  step?: "collect" | "clean_up" | "check_health" | "find_stuck" | "learn" | "suggest" | "update" | "dream" | null;
+};
+
+export type MaintenanceStepChange = {
+  custom_every?: number | null;
+  custom_unit?: "hours" | "days" | null;
+  enabled?: boolean | null;
+  frequency?: "run" | "day" | "week" | "custom" | null;
+  key: "collect" | "clean_up" | "check_health" | "find_stuck" | "learn" | "suggest" | "update" | "dream";
+  max_bots?: number | null;
+};
+
+export type MaintenanceUpdate = {
+  monthly_cap_usd?: number | null;
+  paused?: boolean | null;
+  schedule?: "hourly" | "2h" | "3h" | "6h" | "12h" | "daily" | null;
+  steps?: Array<MaintenanceStepChange> | null;
 };
 
 export type MarketAnswers = {
@@ -3366,7 +3386,9 @@ export type NeedsSummary = {
 export type NeedsYou = {
   actor: string;
   bots?: Record<string, number>;
+  by_kind?: Record<string, number>;
   count?: number;
+  folded_task_ids?: Array<string>;
   items: Array<NeedsYouItem>;
   next?: string | null;
   older?: Array<Record<string, unknown>>;
@@ -3576,12 +3598,14 @@ export type PinEdit = {
 export type Place = {
   audience?: Record<string, unknown>;
   can_edit: boolean;
+  can_link?: boolean;
   group?: string;
   kind: "dashboard" | "growth" | "team" | "bot" | "task" | "person";
   month?: string;
   months?: Array<string>;
   name?: string;
   pins: Array<{
+  can_unpin?: boolean;
   card?: Card;
   id: string | null;
   item: string | null;
@@ -3778,6 +3802,17 @@ export type QuestionSets = {
 }>;
 };
 
+export type QueuePurge = {
+  scope?: string;
+};
+
+export type QueuePurgeResult = {
+  cancelled: number;
+  kept_people: number;
+  scope: string;
+  still_running: number;
+};
+
 export type RanOn = {
   fallback: string | null;
   family: string | null;
@@ -3909,6 +3944,7 @@ export type RequesterInput = {
 
 export type Review = {
   action: "approve" | "dismiss" | "restore";
+  audience?: "team" | "participants" | "private" | null;
   private?: boolean | null;
   send_to?: string | null;
 };
@@ -4905,6 +4941,17 @@ export type TaskDetail = {
   run_model?: TaskRunChoice | null;
   runs?: Array<TaskRun>;
   task: Task;
+};
+
+export type TaskEvent = {
+  actor: string | null;
+  at: string;
+  gone?: boolean;
+  id: string;
+  kind: string;
+  kinds: Array<string>;
+  seq: number;
+  task?: Task;
 };
 
 export type TaskFileList = {
@@ -7274,10 +7321,10 @@ export type GetHealthParams = Record<string, never>;
 export type GetHealthBody = never;
 export type GetHealthResponse = Health;
 
-/** GET /api/v2/health-monitor */
-export type GetHealthMonitorParams = Record<string, never>;
-export type GetHealthMonitorBody = never;
-export type GetHealthMonitorResponse = unknown;
+/** GET /api/v2/health/findings */
+export type GetHealthFindingsParams = Record<string, never>;
+export type GetHealthFindingsBody = never;
+export type GetHealthFindingsResponse = unknown;
 
 /** GET /api/v2/inbound/cursor */
 export type GetInboundCursorParams = {
@@ -7345,6 +7392,11 @@ export type GetLocationParams = {
 };
 export type GetLocationBody = never;
 export type GetLocationResponse = LocationOne;
+
+/** GET /api/v2/maintenance */
+export type GetMaintenanceParams = Record<string, never>;
+export type GetMaintenanceBody = never;
+export type GetMaintenanceResponse = unknown;
 
 /** GET /api/v2/me */
 export type GetMeParams = Record<string, never>;
@@ -7759,6 +7811,7 @@ export type ImportMeetingParams = {
   "Idempotency-Key": string;
 };
 export type ImportMeetingBody = {
+  audience?: "participants" | null;
   context?: Record<string, unknown>;
   duration_seconds?: number | null;
   external_id?: string;
@@ -8442,6 +8495,14 @@ export type ListLocationsParams = {
 export type ListLocationsBody = never;
 export type ListLocationsResponse = Locations;
 
+/** GET /api/v2/maintenance/runs */
+export type ListMaintenanceRunsParams = {
+  before?: string | null;
+  limit?: number;
+};
+export type ListMaintenanceRunsBody = never;
+export type ListMaintenanceRunsResponse = unknown;
+
 /** GET /api/v2/meetings */
 export type ListMeetingsParams = {
   q?: string;
@@ -9056,6 +9117,13 @@ export type PublishStrategyParams = {
 export type PublishStrategyBody = StrategyPublish;
 export type PublishStrategyResponse = unknown;
 
+/** POST /api/v2/usage/queues/purge */
+export type PurgeAutomaticQueueParams = {
+  "Idempotency-Key": string;
+};
+export type PurgeAutomaticQueueBody = QueuePurge;
+export type PurgeAutomaticQueueResponse = QueuePurgeResult;
+
 /** GET /api/v2/inbound/phone-quote */
 export type QuoteInboundPhoneParams = Record<string, never>;
 export type QuoteInboundPhoneBody = never;
@@ -9115,13 +9183,6 @@ export type ReadRuleDocumentParams = {
 };
 export type ReadRuleDocumentBody = RuleRead;
 export type ReadRuleDocumentResponse = unknown;
-
-/** POST /api/v2/health-monitor/local-findings */
-export type RecordLocalHealthFindingParams = {
-  "Idempotency-Key": string;
-};
-export type RecordLocalHealthFindingBody = LocalFinding;
-export type RecordLocalHealthFindingResponse = unknown;
 
 /** POST /api/v2/strategy-bot/level3-offer */
 export type RecordStrategyBotLevel3OfferParams = {
@@ -9416,7 +9477,7 @@ export type ReplyToUpdateParams = {
 export type ReplyToUpdateBody = UpdateReply;
 export type ReplyToUpdateResponse = unknown;
 
-/** POST /api/v2/health-monitor/findings/{key}/report */
+/** POST /api/v2/health/findings/{key}/report */
 export type ReportHealthFindingParams = {
   "Idempotency-Key": string;
   key: string;
@@ -9676,6 +9737,13 @@ export type RunAutomationParams = {
 export type RunAutomationBody = RunNow | null;
 export type RunAutomationResponse = AutomationRunNow;
 
+/** POST /api/v2/maintenance/run */
+export type RunMaintenanceParams = {
+  "Idempotency-Key": string;
+};
+export type RunMaintenanceBody = MaintenanceRunRequest;
+export type RunMaintenanceResponse = MaintenanceRunRequest;
+
 /** POST /api/v2/system-routines/{key}/run */
 export type RunSystemRoutineParams = {
   "Idempotency-Key": string;
@@ -9683,6 +9751,13 @@ export type RunSystemRoutineParams = {
 };
 export type RunSystemRoutineBody = Empty;
 export type RunSystemRoutineResponse = unknown;
+
+/** PATCH /api/v2/maintenance */
+export type SaveMaintenanceParams = {
+  "Idempotency-Key": string;
+};
+export type SaveMaintenanceBody = MaintenanceUpdate;
+export type SaveMaintenanceResponse = MaintenanceUpdate;
 
 /** PUT /api/v2/places/{place} */
 export type SavePlaceParams = {
@@ -9709,6 +9784,7 @@ export type SearchDocsResponse = DocSearch;
 
 /** GET /api/v2/files/search */
 export type SearchFilesParams = {
+  kind?: string;
   limit?: number;
   q?: string;
 };
@@ -10217,13 +10293,6 @@ export type TestScreeningParams = {
 export type TestScreeningBody = ScreeningTest;
 export type TestScreeningResponse = unknown;
 
-/** POST /api/v2/health-monitor/turn-off */
-export type TurnOffHealthMonitorParams = {
-  "Idempotency-Key": string;
-};
-export type TurnOffHealthMonitorBody = Empty;
-export type TurnOffHealthMonitorResponse = unknown;
-
 /** POST /api/v2/task-manager/turn-off */
 export type TurnOffTaskManagerParams = {
   "Idempotency-Key": string;
@@ -10244,13 +10313,6 @@ export type TurnOnGoalManagerParams = {
 };
 export type TurnOnGoalManagerBody = Empty;
 export type TurnOnGoalManagerResponse = unknown;
-
-/** POST /api/v2/health-monitor/turn-on */
-export type TurnOnHealthMonitorParams = {
-  "Idempotency-Key": string;
-};
-export type TurnOnHealthMonitorBody = Empty;
-export type TurnOnHealthMonitorResponse = unknown;
 
 /** POST /api/v2/librarian/turn-on */
 export type TurnOnLibrarianParams = {

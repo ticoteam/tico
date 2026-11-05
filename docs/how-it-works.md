@@ -15,8 +15,9 @@ model subscriptions and sends the results back. The in-app Help page (**?** in t
   the owner's too; the other three are helpers it hands work to. BotOps sets up and
   fixes bots, computers, Tools and Credentials; the [Librarian](librarian.md) answers from the team's docs and the Tico
   manual; the [Strategy Bot](goals-and-kpis.md#the-strategy-bot) keeps KPIs and goal status current. The [Task Manager](task-manager.md)
-  and the [Health Monitor](health-monitor.md) are built-in helpers outside the chart: once an hour they look for tasks
-  that stopped moving and for install faults, and wake only when they find something.
+  is a built-in helper outside the chart: once an hour it looks for tasks that stopped moving, and wakes only when it
+  finds something. [Check health](health-monitor.md) is a plain-code step that runs hourly and opens one BotOps task
+  per install problem.
 - **Message bots** work a human's email or a Slack channel. **External agents** (Hermes, OpenClaw, Codex, Claude) connect
   over MCP with a token ([Connect an external agent](connect-an-agent.md)).
 - **Tools and Credentials**: a bot gets only the Credentials granted to it, and drafts to outsiders until its send switch
@@ -67,7 +68,7 @@ Words are defined in the [Glossary](glossary.md).
   approval. Only a human decides; an approval is spent once and does not turn outbound sending on. Rules: `policies/approvals.md`.
   Each one records when its exact payload was ready (`ready_since`, when the request passed its checks) and whose decision
   it is (`decision_owner`, the person it was sent to); reads add `age_s`, and its card says "Ready 2 h 10 min, waiting on
-  Sam". A release's publish approval waiting over an hour is a [Health Monitor](health-monitor.md) finding.
+  Sam". A release's publish approval waiting over an hour is a [Check health](health-monitor.md) finding.
 - **Routine** — a cron schedule owned by a bot: `id`, `title`, `cron`, `timezone`, `template`
   (a playbook file) or inline `instructions`, `labels`. Each occurrence becomes a task.
 - **Goal** — what a human or a bot is for: a title, an owner (`company`, a human or a bot), the goal it
@@ -339,7 +340,7 @@ BotOps resumes or dismisses it after checking what already happened. Nothing is 
 While such a review is owed the bot's tasks and routines wait, but a human's own
 messages still run: nothing about them is uncertain.
 
-**Needs you.** Every issue Tico derives says whether a human has to act. Those that do light the status dot left of your name: red when something is broken, amber for a warning. Its lines sit in the account menu and on a hover over the dot, one per problem, each with its fix (a computer with a Tico update waiting gets *Restart* on its line). The same issues are listed in **Settings → System checks**. Stopped runs and quarantined bots are BotOps's to review, so they stay off the dot; **Settings → Health** lists them as notes, with *Review stopped runs* for a bot's stopped runs. Issues Tico resolves itself (a computer that
+**Needs you.** Every issue Tico derives says whether a human has to act. Those that do reach a person only as a Needs you card that BotOps raises on its task. The status dot left of your name shows only two states: "Can't reach Tico", and "Tico stopped / bots aren't running" (which includes no computer online). Health checks are not in the account menu or on the dot; they are listed on **Settings → Health**, one line per problem, each with its fix (a computer with a Tico update waiting gets *Restart* on its line). Stopped runs and quarantined bots are BotOps's to review, so they stay off the dot; **Settings → Health** lists them as notes, with *Review stopped runs* for a bot's stopped runs. Issues Tico resolves itself (a computer that
 just dropped off, a usage limit that is retrying) stay out of the way as *resolves on its own* in
 **Settings → Health**, one row per computer rather than one per bot. A cloud deploy is different: hub.acme.example is
 unreachable for a few minutes, the runner keeps the run going and the server extends every
@@ -519,7 +520,7 @@ copies can rotate apart when the provider refreshes the token.
 **Settings → Health** counts this company fallback: a limited bot covered by it gets no "has no fallback
 model" finding. When a computer's default login (no subscription) keeps stopping on a usage limit, Health
 says so once per computer and tool, e.g. "Team box's default Codex login is out of quota", until a turn on
-it completes or the reset time passes ([Health Monitor](health-monitor.md), `default_login_limited`).
+it completes or the reset time passes ([Check health](health-monitor.md), `default_login_limited`).
 
 The company's **check model** (*Check model* in **Settings → Models**, `check_models` on
 `/api/v2/providers`) is what review and check subtasks run on when they name no model: an ordered list such as
@@ -610,7 +611,7 @@ with a line each); the bot's owner, operator, a person it reports up to, or BotO
 Starting the server gives each bot without a profile one by its name once: `*-monitor`, `*-watch`, `listening` and
 `sentry-triage` are Monitors; `*reviewer*`, `qa-*`, `security*` and `reviewer-*` Reviewers (a bot named `pr-reviewer` that
 owns Dev tickets stays a Doer); the leads, the C-level Heads and `*-manager` Leads; the Assistant and bots synced from
-another platform Responders; BotOps, the Health Monitor, the Task Manager and the Librarian Custom; everything else a Doer.
+another platform Responders; BotOps, the Task Manager and the Librarian Custom; everything else a Doer.
 Each owner gets one notice naming their bots and profiles. The old wake preset is part of the profile: Token saver became a
 Doer with a 30-minute window and Performance a Doer; `wake_preset` and `POST /api/v2/bots/{bot}/wake-preset` still read and
 set that window. **Keep N tasks going** stays the Doer's cap. Health reports a Reviewer that owns tasks other than reviews,
