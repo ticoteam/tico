@@ -15,8 +15,9 @@ model subscriptions and sends the results back. The in-app Help page (**?** in t
   the owner's too; the other three are helpers it hands work to. BotOps sets up and
   fixes bots, computers, Tools and Credentials; the [Librarian](librarian.md) answers from the team's docs and the Tico
   manual; the [Strategy Bot](goals-and-kpis.md#the-strategy-bot) keeps KPIs and goal status current. The [Task Manager](task-manager.md)
-  and the [Health Monitor](health-monitor.md) are built-in helpers outside the chart: once an hour they look for tasks
-  that stopped moving and for install faults, and wake only when they find something.
+  is a built-in helper outside the chart: once an hour it looks for tasks that stopped moving, and wakes only when it
+  finds something. [Check health](health-monitor.md) is a plain-code step that runs hourly and opens one BotOps task
+  per install problem.
 - **Message bots** work a human's email or a Slack channel. **External agents** (Hermes, OpenClaw, Codex, Claude) connect
   over MCP with a token ([Connect an external agent](connect-an-agent.md)).
 - **Tools and Credentials**: a bot gets only the Credentials granted to it, and drafts to outsiders until its send switch
@@ -67,7 +68,7 @@ Words are defined in the [Glossary](glossary.md).
   approval. Only a human decides; an approval is spent once and does not turn outbound sending on. Rules: `policies/approvals.md`.
   Each one records when its exact payload was ready (`ready_since`, when the request passed its checks) and whose decision
   it is (`decision_owner`, the person it was sent to); reads add `age_s`, and its card says "Ready 2 h 10 min, waiting on
-  Sam". A release's publish approval waiting over an hour is a [Health Monitor](health-monitor.md) finding.
+  Sam". A release's publish approval waiting over an hour is a [Check health](health-monitor.md) finding.
 - **Routine** — a cron schedule owned by a bot: `id`, `title`, `cron`, `timezone`, `template`
   (a playbook file) or inline `instructions`, `labels`. Each occurrence becomes a task.
 - **Goal** — what a human or a bot is for: a title, an owner (`company`, a human or a bot), the goal it
@@ -94,8 +95,9 @@ first; the first-line check does not judge whether it is an ask. Replies to the 
 request-format lint, and so is a task on a custom type, which is a ticket on that type's board
 rather than a request ([Tasks](tasks.md)); title and Credential checks apply separately. Refusals open a
 review task at 3 a day. A refusal counts toward the pause only when it repeats one the bot already had that day (same
-rule, same words): at 10 such repeats the bot is paused for an hour and resumes by itself. A bot's first try at
-something new that is refused is recorded, not counted, until 30 refusals of any kind in a day, which also pause it
+rule, same words): at 10 such repeats the responsible task/chat, or the bot when the sources are mixed or unknown,
+is held for an hour and resumes by itself. A bot's first try at
+something new that is refused is recorded, not counted, until 30 refusals of any kind in a day, which also hold it
 for an hour (a loop over new targets). A refused label change (rule `label`, which says who may make it instead)
 counts once per task an hour, however often the bot retries it. Words that name another bot's folder or a `secrets/` path are written
 as they are: naming a path opens nothing, so it is never refused or counted, only recorded (`path.mentioned`).
@@ -313,12 +315,29 @@ A known primary login reset keeps runnable jobs queued until that reset when no 
 a new message does not start another attempt on the spent login. An interrupted fallback returns to this queue
 only when its host acknowledged the end, reported its tools completely, and recorded no output, tools or consumed
 approval. Missing telemetry or any output or possible effect keeps the safe review path.
-A quarantine stops each running turn through the runner's normal Stop response, carrying
+A refusal-count quarantine holds only the responsible task or chat when every counted refusal comes from that
+one source. Its task note or chat notice says why and when the hour's cooldown ends; other tasks of the same bot
+keep running. A chat wake with no task keeps its chat scope even when its task reference is blank.
+Refusals from an already held source stay contained and do not count against other work or the
+bot-wide limit. Without a run token, an external agent's writes are fenced by the task being changed, and
+validation refusals throughout that mutation stay attributed to the task even when the write rolls back.
+Native thread posts and file publishing check the resolved task; files also check the publishing attempt's hold.
+Message mutations check the stored message and thread associations independently, so a reference to another task
+cannot mask the thread's own hold. Approvals check their task when requested or consumed, and replacement checks
+the older approval's stored task too. Thread metadata and read marks, task-backed note cancellation, page changes,
+file reviews, task pins and cards, and status updates that retain the held task follow the same fence.
+Two or more distinct tasks/chats in the remaining count, or any refusal with no attributable task/chat, still
+quarantine the whole bot. A run's source takes precedence over the task its refused write names. Escape quarantines
+always stop the whole bot and require a person to clear them. The cooldown resets only the held source's count;
+`hub api POST /api/v2/bots/<bot>/quarantine/clear` also clears its task/chat holds, with the same management permission.
+The hold leaves the task's status, snooze and dependencies intact, and BotOps still receives the refused-write review.
+
+A quarantine stops each affected running turn through the runner's normal Stop response, carrying
 `stop_reason`. Its end reason says *Quarantined: <reason>, resumes about HH:MM UTC*
-(or *until a person clears it*). A stopped run goes back in the queue when the quarantine lifts,
-and the bot's activity says it will run again. A run is held for review like a lost run instead if
-it consumed an approval, is a fallback whose work is unknown, or recorded a named irreversible
-outside action. So lifting the quarantine never repeats an outside action. An answer the run finished as the quarantine began is kept on the run,
+(or *until a person clears it*). A run returns to the queue until the quarantine lifts, with a note to check what it
+already did first. A consumed approval, a fallback whose work is unknown, or a named outside action (merge, publish,
+send or payment) instead holds it for review, so lifting the quarantine never repeats an outside action.
+An answer the run finished as the quarantine began is kept on the run,
 never posted. A real lease loss still says the computer stopped answering. Later held runs are named on the bot's existing review task, and
 closing that task while runs remain held reopens it on the next sweep.
 Runs held this way stay *owner review needed*, because Tico cannot see what a
@@ -328,7 +347,7 @@ BotOps resumes or dismisses it after checking what already happened. Nothing is 
 While such a review is owed the bot's tasks and routines wait, but a human's own
 messages still run: nothing about them is uncertain.
 
-**Needs you.** Every issue Tico derives says whether a human has to act. Those that do light the status dot left of your name: red when something is broken, amber for a warning. Its lines sit in the account menu and on a hover over the dot, one per problem, each with its fix (a computer with a Tico update waiting gets *Restart* on its line). The same issues are listed in **Settings → System checks**. Stopped runs and quarantined bots are BotOps's to review, so they stay off the dot; **Settings → Health** lists them as notes, with *Review stopped runs* for a bot's stopped runs. Issues Tico resolves itself (a computer that
+**Needs you.** Every issue Tico derives says whether a human has to act. Those that do reach a person only as a Needs you card that BotOps raises on its task. The status dot left of your name shows only two states: "Can't reach Tico", and "Tico stopped / bots aren't running" (which includes no computer online). Health checks are not in the account menu or on the dot; they are listed on **Settings → Health**, one line per problem, each with its fix (a computer with a Tico update waiting gets *Restart* on its line). Stopped runs and quarantined bots are BotOps's to review, so they stay off the dot; **Settings → Health** lists them as notes, with *Review stopped runs* for a bot's stopped runs. Issues Tico resolves itself (a computer that
 just dropped off, a usage limit that is retrying) stay out of the way as *resolves on its own* in
 **Settings → Health**, one row per computer rather than one per bot. A cloud deploy is different: hub.acme.example is
 unreachable for a few minutes, the runner keeps the run going and the server extends every
@@ -508,7 +527,7 @@ copies can rotate apart when the provider refreshes the token.
 **Settings → Health** counts this company fallback: a limited bot covered by it gets no "has no fallback
 model" finding. When a computer's default login (no subscription) keeps stopping on a usage limit, Health
 says so once per computer and tool, e.g. "Team box's default Codex login is out of quota", until a turn on
-it completes or the reset time passes ([Health Monitor](health-monitor.md), `default_login_limited`).
+it completes or the reset time passes ([Check health](health-monitor.md), `default_login_limited`).
 
 The company's **check model** (*Check model* in **Settings → Models**, `check_models` on
 `/api/v2/providers`) is what review and check subtasks run on when they name no model: an ordered list such as
@@ -599,7 +618,7 @@ with a line each); the bot's owner, operator, a person it reports up to, or BotO
 Starting the server gives each bot without a profile one by its name once: `*-monitor`, `*-watch`, `listening` and
 `sentry-triage` are Monitors; `*reviewer*`, `qa-*`, `security*` and `reviewer-*` Reviewers (a bot named `pr-reviewer` that
 owns Dev tickets stays a Doer); the leads, the C-level Heads and `*-manager` Leads; the Assistant and bots synced from
-another platform Responders; BotOps, the Health Monitor, the Task Manager and the Librarian Custom; everything else a Doer.
+another platform Responders; BotOps, the Task Manager and the Librarian Custom; everything else a Doer.
 Each owner gets one notice naming their bots and profiles. The old wake preset is part of the profile: Token saver became a
 Doer with a 30-minute window and Performance a Doer; `wake_preset` and `POST /api/v2/bots/{bot}/wake-preset` still read and
 set that window. **Keep N tasks going** stays the Doer's cap. Health reports a Reviewer that owns tasks other than reviews,

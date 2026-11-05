@@ -9,6 +9,62 @@ use tico_recorder_native::{
     workspace::{Item, Turn},
 };
 
+#[test]
+fn picker_search_runs_blocking_http_outside_the_tauri_runtime() {
+    use std::{
+        io::{Read, Write},
+        net::TcpListener,
+    };
+    let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+    let url = format!("http://{}", listener.local_addr().unwrap());
+    listener.set_nonblocking(true).unwrap();
+    let server = std::thread::spawn(move || {
+        let deadline = Instant::now() + Duration::from_secs(8);
+        let mut stream = loop {
+            match listener.accept() {
+                Ok((stream, _)) => break stream,
+                Err(e) if e.kind() == std::io::ErrorKind::WouldBlock => {
+                    assert!(Instant::now() < deadline, "Picker did not reach HTTP");
+                    std::thread::sleep(Duration::from_millis(5));
+                }
+                Err(e) => panic!("{e}"),
+            }
+        };
+        stream
+            .set_read_timeout(Some(Duration::from_secs(3)))
+            .unwrap();
+        let mut headers = vec![];
+        while !headers.ends_with(b"\r\n\r\n") {
+            let mut byte = [0];
+            stream.read_exact(&mut byte).unwrap();
+            headers.push(byte[0]);
+        }
+        let headers = String::from_utf8(headers).unwrap();
+        assert!(headers.starts_with("GET /api/v2/tasks?q=%2342&limit=30&brief=true&offset=30 "));
+        let body = r##"{"tasks":[{"id":"task","number":42,"title":"Review pricing","status":"open"}],"next_offset":60}"##;
+        write!(stream, "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}", body.len()).unwrap();
+    });
+    let reply = tauri::async_runtime::block_on(super::picker_search(
+        move || {
+            tico_recorder_native::network::Tico::new(
+                Destination {
+                    id: "synthetic".into(),
+                    name: "Acme".into(),
+                    base_url: url,
+                    actor: "human:test".into(),
+                },
+                "synthetic-token".into(),
+            )
+        },
+        "#42".into(),
+        30,
+    ))
+    .unwrap();
+    server.join().unwrap();
+    assert_eq!(reply["tasks"][0]["number"], 42);
+    assert_eq!(reply["next_offset"], 60);
+}
+
 fn app(store: Store, directory: &std::path::Path) -> Recorder {
     let lock = AppLock::acquire(directory).unwrap();
     Recorder::new(store, Some(lock), true).unwrap()
@@ -689,12 +745,131 @@ fn delete_while_recording_here_stops_capture_then_deletes() {
     app.open(&recording.id).unwrap();
     // Finish → Delete on a recording that was never shared.
     app.delete(&recording.id);
-    settle(&mut app, |app| {
-        app.store.get(&recording.id).is_err() && app.status_view()["recording"].is_null()
-    });
+    settle(&mut app, |app| !app.busy);
+    assert!(!app.busy, "delete did not finish");
+    assert!(app.error.is_empty(), "{}", app.error);
     assert!(app.store.get(&recording.id).is_err());
     assert!(full_view(&mut app)["status"]["recording"].is_null());
+}
+
+fn delete_during_capture_stop(fail_stop: bool, shutdown: bool) {
+    use std::sync::mpsc;
+    use tico_recorder_native::capture::{AudioSink, CaptureStream, Source};
+
+    struct GatedStop {
+        entered: mpsc::Sender<()>,
+        release: Option<mpsc::Receiver<()>>,
+        fail: bool,
+    }
+    impl CaptureStream for GatedStop {
+        fn stop(&mut self) -> anyhow::Result<()> {
+            if let Some(release) = self.release.take() {
+                self.entered.send(())?;
+                release.recv_timeout(Duration::from_secs(2))?;
+            }
+            anyhow::ensure!(!self.fail, "Synthetic capture stop failure");
+            Ok(())
+        }
+    }
+
+    let directory = tempfile::tempdir().unwrap();
+    let store = Store::open(directory.path()).unwrap();
+    let recording = store.create("Delete buffered audio").unwrap();
+    let (entered, stopping) = mpsc::channel();
+    let (release, gate) = mpsc::channel();
+    let handle = tico_recorder_native::engine::RecordingHandle::with_sources(
+        store.clone(),
+        recording.id.clone(),
+        move || {
+            let (mut sink, consumer) = AudioSink::channel();
+            let health = sink.health.clone();
+            sink.push_interleaved(&vec![0.2; 16000], 1);
+            Ok((
+                vec![Source {
+                    channel: tico_recorder_native::audio::Channel::Microphone,
+                    name: "synthetic".into(),
+                    sample_rate: 16000,
+                    started: Instant::now(),
+                    health,
+                    consumer,
+                    stream: Box::new(GatedStop {
+                        entered,
+                        release: Some(gate),
+                        fail: fail_stop,
+                    }),
+                }],
+                String::new(),
+            ))
+        },
+    )
+    .unwrap();
+    let mut app = app(store, directory.path());
+    app.set_active(recording.id.clone(), handle);
+    app.open(&recording.id).unwrap();
+    settle(&mut app, |app| {
+        app.status_view()["recording"]["sources"]
+            .as_array()
+            .is_some_and(|sources| sources.len() == 1)
+    });
+    app.delete(&recording.id);
+    stopping.recv_timeout(Duration::from_secs(2)).unwrap();
+    assert!(app.busy);
+    assert!(app.update_hold().is_some());
+    assert!(app.store.get(&recording.id).is_ok());
+    release.send(()).unwrap();
+    if shutdown {
+        app.shutdown();
+        assert!(app.store.get(&recording.id).is_err());
+    }
+    settle(&mut app, |app| !app.busy);
+    assert!(!app.busy, "delete did not finish");
+    assert!(app.update_hold().is_none());
     assert!(app.error.is_empty(), "{}", app.error);
+    assert!(app.store.get(&recording.id).is_err());
+    assert!(!directory.path().join("audio").join(&recording.id).exists());
+    assert!(
+        full_view(&mut app)["library"]["data"]["rows"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .all(|row| row["id"] != recording.id)
+    );
+}
+
+#[test]
+fn delete_waits_for_the_last_audio_write_and_removes_its_files() {
+    delete_during_capture_stop(false, false);
+}
+
+#[test]
+fn delete_still_removes_audio_after_capture_stop_fails() {
+    delete_during_capture_stop(true, false);
+}
+
+#[test]
+fn shutdown_waits_for_delete_to_remove_the_last_audio() {
+    delete_during_capture_stop(false, true);
+}
+
+#[test]
+fn delete_does_not_take_capture_when_another_job_holds_the_controls() {
+    let directory = tempfile::tempdir().unwrap();
+    let store = Store::open(directory.path()).unwrap();
+    let recording = store.create("Busy recording").unwrap();
+    let handle = tico_recorder_native::engine::RecordingHandle::with_sources(
+        store.clone(),
+        recording.id.clone(),
+        || Ok((vec![], String::new())),
+    )
+    .unwrap();
+    let mut app = app(store, directory.path());
+    app.set_active(recording.id.clone(), handle);
+    app.open(&recording.id).unwrap();
+    app.busy = true;
+    app.delete(&recording.id);
+    assert_eq!(app.status_view()["recording"]["id"], recording.id);
+    assert_eq!(app.meeting.as_deref(), Some(recording.id.as_str()));
+    assert!(app.store.get(&recording.id).is_ok());
 }
 
 #[test]

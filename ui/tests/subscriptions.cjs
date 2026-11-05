@@ -38,7 +38,8 @@ function fixtures() {
         {version: '0.5.4', release: '0.5.19',
           turn_counts: {running: 1, starting: 0, waiting: 0, queued: 55, waits: []}, turn_summary: '1 running · 0 starting · 55 queued · 0 waiting'}),
       machine('r2', 'Cloud · shared', 'ana', ['scout'], {claude: missing, codex: missing}),
-      machine('r3', 'Cloud · Video Producer', 'ana', ['video'], {claude: missing, codex: missing}, {cloud_machine: {state: 'stopped'}}),
+      machine('r3', 'Cloud · Video Producer', 'ana', ['video'], {claude: missing, codex: missing},
+        {cloud_machine: {state: 'stopped'}, last_seen_at: new Date(Date.now() - 2 * 3600e3).toISOString()}),
       machine('r4', "Sam's Mac", 'sam', [], {claude: ready, codex: missing}, {version: '0.4.2',
         turn_counts: {running: 0, starting: 0, waiting: 3, queued: 0, waits: []},
         update: {state: 'needs_update', label: 'Needs update', release: '0.4.2', commit: 'c0ffee'.padEnd(40, '0'), outdated: true, server_release: '0.5.14', error: ''}}),
@@ -585,9 +586,14 @@ async function computersTable(browser) {
   await page.locator('dialog.settings-confirm[open] [data-confirm-ok]').click();
   await page.waitForFunction(() => document.querySelector('[data-computer-row=r1] [data-subs-pick=claude]')?.dataset.current === 's4');
   assert.deepEqual(writes.at(-1).body, {runner_id: 'r1', runtime: 'claude', subscription: 's4', confirm: true});
-  assert.match(await page.locator('#toast, .toast').last().innerText(), /Tico Team box's Claude Code: Claude Max \(Sam\) · 2 tasks restarted/);
-  // A login that needs reconnecting says so beside the picker.
-  assert.equal(await row('r1').locator('[data-subs-reconnect]').count(), 1);
+  const switchMessage = /Tico Team box's Claude Code: Claude Max \(Sam\) · 2 tasks restarted/;
+  const switchedToast = page.locator('#toast, .toast', {hasText: switchMessage}).last();
+  await switchedToast.waitFor();
+  assert.match(await switchedToast.innerText(), switchMessage);
+  // The saved picker and toast precede subsRefresh's redraw, which adds the reconnect action.
+  const reconnect = row('r1').locator('[data-subs-reconnect]');
+  await reconnect.waitFor();
+  assert.equal(await reconnect.count(), 1);
   // A click on the row's name opens the computer's pop-up, with the queue line and one connection per AI tool.
   await row('r1').locator('.machine-name').click();
   const detail = page.locator('#set-machines dialog.computer-detail[open]');

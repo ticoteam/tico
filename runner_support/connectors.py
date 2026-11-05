@@ -21,6 +21,11 @@ MAIL_FIELDS = ("thread_id", "epoch", "date", "from_addr", "from_header", "to", "
                "is_internal", "has_unsubscribe", "rule_hits", "known_sender")
 
 
+# Who the connector job runs the mail CLI as: the computer's own connector (connectors/mail/access.py CONNECTOR), which
+# reads the mailboxes this computer may act for and writes only what the server leased it. Never the owner's handle.
+MAIL_PRINCIPAL = "connector"
+
+
 def owner_handle(config=None):
     """`owner_handle` in the connector config, else TICO_OWNER_HANDLE, else the roster's owner."""
     named = str((config or {}).get("owner_handle") or "").strip().lower()
@@ -142,7 +147,7 @@ class ConnectorPublisher:
         # The script this checkout ships, not one named after a company's folder: an environment
         # whose workspace is ~/Companies/Acme has no `tico` beside it.
         self.script = ROOT / "scripts/mail.sh"
-        # The owner's roster handle: the identity that holds every verb on the local mail CLI.
+        # The owner's roster handle, kept for what names them; the mail CLI runs as MAIL_PRINCIPAL.
         self.owner = owner_handle(config)
         self.fetch = fetch or self.calendar
         self.run_mail = mail or self.mail_cli
@@ -188,7 +193,7 @@ class ConnectorPublisher:
             print("Tico connectors: could not prepare the mail environment: " + str(detail)[-300:], flush=True)
 
     def calendar(self, email, hours):
-        result = subprocess.run([str(self.script), "upcoming", "--as", self.owner, "--for", email,
+        result = subprocess.run([str(self.script), "upcoming", "--as", MAIL_PRINCIPAL, "--for", email,
                                  "--hours", str(hours), "--json"], cwd=self.script.parents[1],
                                 stdin=subprocess.DEVNULL, capture_output=True, text=True, timeout=40,
                                 env=self.mail_env(), **mail_umask())
@@ -210,7 +215,7 @@ class ConnectorPublisher:
     def calendar_event(self, action):
         env = self.mail_env()
         result = subprocess.run(
-            [str(self.script), "connector-event", "--as", self.owner, "--json"],
+            [str(self.script), "connector-event", "--as", MAIL_PRINCIPAL, "--json"],
             cwd=self.script.parents[1], input=json.dumps(action), capture_output=True,
             text=True, timeout=40, env=env, **mail_umask())
         if result.returncode == 2:
@@ -255,7 +260,7 @@ class ConnectorPublisher:
                 "message": str(answer.get("message") or "")[:500], "hint": str(answer.get("hint") or "")[:500]}
 
     def google_connect_tick(self, limit=5):
-        """Finish the Connect Google sign-ins and disconnects people started in Settings > Inbox."""
+        """Finish the Connect Google sign-ins and disconnects people started in Settings > Inboxes."""
         done = 0
         for _ in range(limit):
             if self.stop.is_set():
@@ -308,7 +313,7 @@ class ConnectorPublisher:
         """Run `mail.sh mail-action` for one claimed automation mail action (on stdin). Returns {ok, detail, retry,
         ...} for the hub; a CLI that gave no answer is a failure worth a retry (a retried send never sends twice)."""
         try:
-            result = subprocess.run([str(self.script), "mail-action", "--as", self.owner, "--json"],
+            result = subprocess.run([str(self.script), "mail-action", "--as", MAIL_PRINCIPAL, "--json"],
                                     cwd=self.script.parents[1], input=json.dumps(action), capture_output=True,
                                     text=True, timeout=60, env=self.mail_env(), **mail_umask())
             answer = json.loads(result.stdout or "{}")
@@ -500,16 +505,16 @@ class ConnectorPublisher:
         return posted
 
     def _mail_mailbox(self, address, box, batch):
-        args = ["sync", "--as", self.owner, "--mailbox", address, "--json"]
+        args = ["sync", "--as", MAIL_PRINCIPAL, "--mailbox", address, "--json"]
         if not box.get("message_count"):
-            args = ["sync", "--as", self.owner, "--mailbox", address, "--backfill", "90d", "--json"]
+            args = ["sync", "--as", MAIL_PRINCIPAL, "--mailbox", address, "--backfill", "90d", "--json"]
         result = self.run_mail(args)
         history_id = result.get("history_id") if isinstance(result, dict) else None
         posted = 0
         for _ in range(50):
             if self.stop.is_set():          # a stop lands between batches, never inside one
                 break
-            export = self.run_mail(["sync", "export", "--as", self.owner, "--mailbox", address,
+            export = self.run_mail(["sync", "export", "--as", MAIL_PRINCIPAL, "--mailbox", address,
                                     "--limit", str(int(batch)), "--json"])
             rows = export.get("messages") if isinstance(export, dict) else None
             if not rows:
@@ -529,7 +534,7 @@ class ConnectorPublisher:
             if history_id:
                 body["history_id"] = str(history_id)
             self._post_mail(body)
-            self.run_mail(["sync", "ack", *ids, "--as", self.owner, "--mailbox", address, "--json"])
+            self.run_mail(["sync", "ack", *ids, "--as", MAIL_PRINCIPAL, "--mailbox", address, "--json"])
             posted += len(ids)
         return posted
 

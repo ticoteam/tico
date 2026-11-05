@@ -18,9 +18,36 @@ row. A card with an open blocker says **Blocked by** it across its top; click th
 card and its blockers. The faces over the board filter by owner; **Q** shows only yours, **X** clears.
 When a Dev ticket's bot owner or a bot assigned the optional `builder` task role is quarantined, its card, column and ticket page show
 when the builder resumes in UTC, or that a person must clear it. The notice clears when the quarantine lifts.
+When repeated refusals all come from one task, only that bot's work on the task is held. A quiet task note explains
+the hold and its cooldown; the bot continues its other tasks. A person who manages the bot can clear the hold with
+quarantine clear, and the task keeps its existing status and other holds.
+The held task does not consume the bot's optional limit on tasks in progress.
+Every task change by that bot, including an external agent's snoozes, relations and waits, respects the hold.
+Its task-scoped validation refusals count against that task throughout the write, including after rollback.
+Posts in the task's native thread and file uploads, imports and links also respect the task hold; publishing
+files from a held attempt stays refused even when the bot is active. Updating an existing file checks its stored
+task too, even if the request omits the task.
+Messages, replies, acknowledgements and reactions check both the message's stored task reference and its thread's
+own task; naming a different task cannot bypass either hold. The bot can still read feedback on the held task;
+these reads record no refusal. Thread changes and read marks, task-linked pages,
+file reviews, and pins or cards on the task also respect the hold. Approval requests, replacement of an existing
+request and consumption of an approved request check the approval's task before changing it. A status update that
+keeps its stored task checks that task; the bot may still switch its status to unrelated work.
+Withdrawing or appealing a rule hold also checks its stored review task. Pinning a page checks the page's own task
+as well as the task it is pinned to.
+Another run of the bot cannot change the held task either. Notes copied from messages on a held task or chat
+stay pending and unread until release; their task references use the same whitespace and list normalization
+as claims. Other tasks' runs carry only notes from sources that are free.
+The cooldown still releases a hold if its bot has been archived or its release notice cannot be sent.
+Each release runs independently, so a failed release does not hold up other cooldowns or scheduled work.
 Your selection is remembered, shared links carry it, and new
 tasks start with that type. Clearing filters keeps the selected type. Older combined views and
 deleted types fall back to General.
+
+**Needs you** counts the tasks waiting on you in the selected type and filters, plus approvals and
+questions outside any task. The count includes those on unread pages and stays the same on a phone
+and desktop. Tasks folded or merged into another card count only through that card, even before it loads.
+Thread mentions, unread DMs and held messages are counted in Inbox.
 
 Picking a step sets the task's status. Steps can move in any order. Bots, older runners and
 existing scripts can keep setting `status`:
@@ -592,6 +619,26 @@ This ordering applies to Decide; it does not change the order of Needs you elsew
 
 ### When nobody answers a bot's ask
 
+`keeper` is the system and cannot answer. An ask to it, including a system-filed task's requester, goes to the
+asker's first reachable person who can sign in or active bot that takes asks up its manager chain, else the company owner.
+Bot states use the runner's claim check. An onboarding manager cannot take a report's question, so Tico tries
+the next manager. Synced bots qualify only with desktop delivery; their sync inbox takes only their person's chat messages.
+Each candidate must pass the same checks as a send: Nearby reach, access to the task, every source and the room,
+contact policy, Write access, onboarding limits, and a way to receive the question. If any check refuses a
+candidate, Tico tries the next manager, then the company owner.
+These active-state and answer checks apply only when Tico picks the recipient. An ask sent to a named paused bot
+is saved and queued with a warning, and runs when the bot resumes.
+Org rules check the person or bot who will receive the ask, including a comment's question with no named recipient.
+Tico records the checked route even when no rule matches, and compares it again before sending.
+If it changed, nothing is sent; send the question again to check the new route.
+**Send anyway** checks that same route. If it now goes to someone else, it stays held; send a new question to check it.
+The send says who received it. An existing open system ask already in its task room is re-sent there once,
+keeping its text, files, reviews and meeting limits. An ask in another room stays there with its meeting limits
+and files. The task gets a fresh notice asking the recipient to have the owner restate the question there.
+The old ask links to its replacement, and the hold names the new recipient.
+A failed repair leaves that ask for Health and continues with the others.
+Health names a task waiting on a recipient who cannot read or answer.
+
 A bot's question may say what it will do if nobody answers (`hub task question ... --if-no-answer "Yes"
 --default-kind reversible [--by <date>]`; MCP `if_no_answer: {do, kind, by}`), and the card says it: "If you don't
 answer by Fri, Oct 16, Writer goes ahead: Yes". When that step is reversible and internal and the person has said
@@ -983,9 +1030,10 @@ including with `--all`/`all`, and support `number` lookup.
 `GET /api/v2/pipeline` (`hub pipeline`, `hub_pipeline`) is a board's numbers in one read, counted over the same
 tickets the board shows the caller: per working step the count, how many are snoozed, the oldest and median time
 since tickets entered the step, owners, whom they wait on (a bot, a person, something external or nothing) and their
-open pull requests. It also gives each bot the caller may read its running, queued, held, `dead` and uncertain jobs
+open pull requests. It also gives each bot the caller may read its running, queued, held, `quarantine_held`, `dead` and uncertain jobs
 (a dead job is queued behind an interrupted run nobody has reviewed, so it never runs until that run is resumed or
-dismissed; a bot's page and Health's queue line count its work the same way, and Health names each part) and failed runs since `since` by cause (quota, capacity, restart, timeout, crash, stopped); past
+dismissed; `quarantine_held` jobs resume after the refusal cooldown or quarantine clear; a bot's page and Health's
+queue line count its work the same way, and Health names each part) and failed runs since `since` by cause (quota, capacity, restart, timeout, crash, stopped); past
 5000 readable failures it stops, sets `truncated` and says in `complete_after` from when the counts are whole. Filters:
 `type` (default the engineering board), `owner`, `label`, `updated_since`, `snoozed=all|hide|only` (default all),
 `bot`, and `since` up to 7 days. Each bot also lists, in `decisions`, its stopped runs with a resume or dismiss
@@ -1037,9 +1085,27 @@ Only the task's owner, requester, their managers or a human mover can re-parent 
 request or manage the new parent. Moving or detaching a subtask also requires its current
 parent's owner, requester, their managers or a human mover. Moving a task moves its whole subtree,
 and cycles are refused.
-A parent may be marked Done or closed, by a bot or a person, while subtasks are still open. The
-subtasks stay open, and the parent's history and its Finished or Closed notice end with
-"Still open:" and their titles. Finishing or moving away the last open subtask wakes the
+Closing a task, or finishing it (status `done`, or a step whose status is done or closed),
+closes every open descendant, including those below an already finished subtask. There is no prompt
+or detach choice. Each subtask keeps its parent link and records "Closed with #N" in its history,
+where N is the task that finished; an unnumbered parent is recorded as "Closed with its parent task".
+The usual close events and question cleanup run for each changed subtask. The parent's
+history and Finished or Closed notice list "Closed with it:" and the subtask titles, keeping private
+titles hidden even when the parent is private. A closed subtask sends no separate notice to its parties,
+unless it has a leased or running turn: then its parties receive the usual direct-close notice so the
+bot stops working. Already Done, Closed or Declined subtasks keep their status, notes and history.
+Dependency links still clear, but a task closing in the same cascade receives no "Unblocked" notice;
+tasks outside the cascade that become unblocked receive their usual notice.
+An explicit close or finish through the API, CLI or MCP requires the actor's usual close permission
+and status rules on every open descendant, including steps-only types; a refusal leaves the whole action
+unchanged, without detaching anything.
+An automatic finish, including roadmap completion or a runner reporting its task goal met, closes every open descendant
+the actor may close and leaves the rest open. The parent's history and completion notice list
+"Still open:" with those titles (private subtasks are always "a private subtask"), and each left-open
+subtask's requester receives one notice asking them to close it when ready. Runner output and the
+final result are still saved. Reopening the parent leaves its subtasks closed;
+its history lists which ones to reopen by hand.
+Finishing or moving away the last open subtask wakes the
 immediate parent's owner with “All subtasks done”, unless its result already resumed that parent or
 that owner made the change (a bot finishing a subtask it filed
 for itself, which runs in its own session, still wakes the parent).
@@ -1146,7 +1212,7 @@ preference: with none that can run, it runs on an author's own, and the subtask'
   session. Closing it is a cancellation and wakes nobody.
 - A usage limit on the check's model holds that subtask alone until the provider's reset: the bot's other work
   goes on, on its own model, and the bot is not marked limited. Held 12 hours with every turn stopped on the limit,
-  it is a Health Monitor setup finding (`check_limited`, docs/health-monitor.md). Once the subtask is done, closed or
+  it is a Check health finding (`check_limited`, docs/health-monitor.md). Once the subtask is done, closed or
   declined, its held turn is let go instead of retrying after each reset; a person's message on it stays queued.
 - When the limit is on the computer's default login (no subscription) and Health already marks that login out of
   quota (`default_login_limited`, docs/health-monitor.md), the check does not wait: its next turn runs at once on

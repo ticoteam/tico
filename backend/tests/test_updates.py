@@ -5,7 +5,10 @@ message in the bot's chat."""
 import json
 from datetime import datetime, timezone
 
-from backend import updates
+import pytest
+
+from backend import threads, updates
+from backend.auth import Identity
 from backend.store import H, Problem, digest
 from backend.tests.test_api import api, get, headers, post, setup_attempt  # noqa: F401
 
@@ -29,6 +32,38 @@ def bid(api, slug):
         return bot_id(c, slug)
 
 
+@pytest.mark.parametrize("kind", ["daily", "weekly"])
+def test_update_requests_never_wake_counsel_which_cannot_publish(api, kind):
+    from backend.tests.test_counsel import counsel_on
+
+    counsel_on(api)
+    with api.app.state.store.transaction() as c:
+        # Older installs may have both switches on. The posting boundary still applies.
+        c.execute("INSERT OR REPLACE INTO update_settings(bot,daily,weekly) VALUES(?,1,1)", (H.COUNSEL,))
+        updates.build_queue(c, "2026-09-29", kind)
+        assert not c.execute("SELECT 1 FROM update_queue WHERE bot=?", (H.COUNSEL,)).fetchone()
+        assert c.execute("SELECT 1 FROM update_queue WHERE bot='ops'").fetchone()
+        assert H.COUNSEL not in updates.redo(c, kind, "2026-09-29")
+        with pytest.raises(Problem):
+            updates.redo(c, kind, "2026-09-29", [H.COUNSEL])
+        assert updates.settings(c, H.COUNSEL) == {"daily": False, "weekly": False}
+        with pytest.raises(Problem):
+            updates.set_settings(c, H.COUNSEL, **{kind: True})
+
+
+def test_an_old_queued_counsel_update_is_skipped_without_sending_a_request(api):
+    from backend.tests.test_counsel import counsel_on
+
+    counsel_on(api)
+    with api.app.state.store.transaction() as c:
+        c.execute("INSERT INTO update_queue(id,bot,kind,day,rank,state) VALUES(?,?,'daily',?,0,'queued')",
+                  ("old-counsel-update", H.COUNSEL, MORNING.date().isoformat()))
+        assert updates.dispatch(c, MORNING) is None
+        row = c.execute("SELECT state,message_id FROM update_queue WHERE id='old-counsel-update'").fetchone()
+        assert tuple(row) == ("skipped", None)
+        assert not c.execute("SELECT 1 FROM jobs WHERE bot_id=?", (H.COUNSEL,)).fetchone()
+
+
 def test_the_queue_asks_one_bot_at_a_time_and_moves_on_when_it_posts(api):
     store = api.app.state.store
     with store.transaction() as c:
@@ -47,6 +82,38 @@ def test_the_queue_asks_one_bot_at_a_time_and_moves_on_when_it_posts(api):
         second = updates.dispatch(c, MORNING)
         assert second and second != first
         assert c.execute("SELECT state FROM update_queue WHERE bot=? AND day='2026-09-29'", (first,)).fetchone()[0] == "posted"
+
+
+@pytest.mark.parametrize("delivery", [False, True])
+def test_update_requests_keep_their_readers_through_thread_migration(api, delivery):
+    store, auth = api.app.state.store, api.app.state.auth
+    with store.transaction() as c:
+        recipient = bot_id(c, "ops")
+        updates.build_queue(c, "2026-09-29", "daily")
+        row = c.execute("SELECT * FROM update_queue WHERE bot=?", (recipient,)).fetchone()
+        message = updates.send_request(c, row, delivery=delivery)
+        owner = auth.owner_identity(c)
+        people = [owner, Identity("human:ben", "human", "ben@acme.example"),
+                  Identity("human:cara", "human", "cara@acme.example")]
+        bots = [Identity(H.bot_actor(bot["id"]), "bot", agent="standing") for bot in H.bots(c)]
+        expected = {owner.actor, H.bot_actor(recipient)}
+
+        # A request can carry Learn's sources and task facts. Read access to another bot's activity must not
+        # turn its request into a company conversation, either before or after the migration.
+        before = set()
+        for who in people + bots:
+            try:
+                auth.conversation(c, who, message["conversation_id"])
+                before.add(who.actor)
+            except Problem:
+                pass
+        assert before == expected
+        c.execute("DELETE FROM registry_metadata WHERE key IN (?,?)",
+                  (threads.MIGRATION_KEY, threads.MIGRATION_PROGRESS_KEY))
+        assert threads.migrate(c)
+        for target in (message["conversation_id"], H.message(c, message["id"])):
+            after = {who.actor for who in people + bots if threads.readable(c, threads.viewer(auth, who), target)}
+            assert after == expected
 
 
 def test_a_bot_posts_once_a_day_and_each_person_has_their_own_read_state(api, monkeypatch):

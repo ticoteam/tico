@@ -225,3 +225,156 @@ def test_recorder_sends_one_action_item_to_a_bot_and_files_the_meeting(api, tmp_
         sock.close()
         provider.shutdown()
         provider.server_close()
+
+
+@pytest.mark.slow
+@pytest.mark.skipif(not os.environ.get('TICO_NATIVE_CLI'), reason='Build CLI and set TICO_NATIVE_CLI')
+def test_recorder_rows_link_both_ways_resume_batches_and_reconcile_save(api, tmp_path):
+    import asyncio
+    from starlette.responses import JSONResponse
+    from backend.tests.test_api import post
+    targets = [post(api, 'tasks', {'title': f'Review pricing {n}', 'body': 'Review pricing and report back.', 'owner': 'human:ana', **({'number': 42} if n == 0 else {})}, 'ana-test')['id']
+               for n in range(45)]
+    batches, uploads, sent_tasks_before_delete, races = [], [], {}, {}
+    lost_item = False
+    sock = socket.socket()
+    sock.bind(('127.0.0.1', 0))
+
+    async def transport(scope, receive, send):
+        nonlocal lost_item
+        path = scope.get('path', '')
+        if scope.get('method') != 'POST':
+            return await api.app(scope, receive, send)
+        body = b''
+        while True:
+            message = await receive()
+            body += message.get('body', b'')
+            if not message.get('more_body'):
+                break
+        payload = json.loads(body or '{}')
+        delivered = False
+        async def replay_body():
+            nonlocal delivered
+            if delivered:
+                return await receive()
+            delivered = True
+            return {'type': 'http.request', 'body': body, 'more_body': False}
+        if path.startswith('/recorder-test/races/'):
+            parts = path.split('/')
+            rid = parts[3]
+            if len(parts) == 4:
+                races[rid] = {'order': payload['order'], 'held': asyncio.Event(),
+                              'release': asyncio.Event(), 'links': [], 'uploads': []}
+            elif parts[4] == 'wait':
+                await asyncio.wait_for(races[rid]['held'].wait(), timeout=5)
+            elif parts[4] == 'release':
+                races[rid]['release'].set()
+            return await JSONResponse({'ok': True})(scope, replay_body, send)
+        race = races.get(path.split('/')[4]) if path.startswith('/api/v2/meetings/') else None
+        if path.endswith('/delete') and '/meetings/' in path:
+            rid = path.split('/')[-2]
+            with api.app.state.store.read() as c:
+                sent_tasks_before_delete.update({row['id']: dict(row) for row in c.execute(
+                    'SELECT * FROM tasks WHERE id IN (SELECT task_id FROM meeting_task_links WHERE meeting_id=?)',
+                    (rid,))})
+        fail = False
+        if path.endswith('/tasks') and '/meetings/' in path:
+            batch = (payload['task_ids'], dict(scope['headers']).get(b'idempotency-key'))
+            if race:
+                race['links'].append(batch)
+                fail = len(race['links']) == 1
+                if not fail and race['order'] == 'link-last':
+                    race['held'].set()
+                    await asyncio.wait_for(race['release'].wait(), timeout=10)
+            else:
+                batches.append(batch)
+                fail = len(batches) == 2
+        lose = path.endswith('/items') and payload.get('text') == 'Original retry title' and not lost_item
+        if path.endswith('/items'):
+            uploads.append((payload, dict(scope['headers']).get(b'idempotency-key')))
+            if race:
+                race['uploads'].append(payload)
+                if race['order'] == 'upload-last':
+                    race['held'].set()
+                    await asyncio.wait_for(race['release'].wait(), timeout=10)
+        if lose:
+            messages = []
+            async def collect(message):
+                messages.append(message)
+            await api.app(scope, replay_body, collect)
+            assert messages[0]['status'] == 200
+            lost_item = True
+        if fail or lose:
+            await send({'type': 'http.response.start', 'status': 503, 'headers': []})
+            return await send({'type': 'http.response.body', 'body': b'Interrupted synthetic delivery'})
+        await api.app(scope, replay_body, send)
+
+    server = uvicorn.Server(uvicorn.Config(transport, lifespan='off', log_level='error'))
+    thread = threading.Thread(target=lambda: server.run(sockets=[sock]), daemon=True)
+    thread.start()
+    deadline = time.monotonic() + 10
+    while not server.started and time.monotonic() < deadline:
+        threading.Event().wait(.02)
+    assert server.started
+    try:
+        result = subprocess.run([os.environ['TICO_NATIVE_CLI'], 'task-rows-test', '--tico-url',
+                                 f'http://127.0.0.1:{sock.getsockname()[1]}'],
+                                env={**os.environ, 'TICO_RECORDER_DATA_DIR': str(tmp_path / 'rows-library'),
+                                     'TICO_REPLAY_TEST_TOKEN': 'ana-test', 'TICO_LINK_TEST_TASKS': json.dumps(targets)},
+                                text=True, capture_output=True, timeout=60)
+        assert result.returncode == 0, result.stderr
+        out = json.loads(result.stdout)
+        assert out['synthetic'] and out['local']['kept_on_mac'] and len(out['local']['items']) == 1
+        assert [len(ids) for ids, _ in batches] == [20, 20, 20, 5]
+        assert batches[1] == batches[2]
+        linked = get(api, f"meetings/{out['meeting']}/tasks?limit=50")['tasks']
+        assert {row['task_id'] for row in linked} == {*targets, out['created']}
+        for target in (targets[0], targets[-1], out['created']):
+            assert out['meeting'] in {row['meeting_id'] for row in get(api, f'tasks/{target}/meetings')['meetings']}
+        get(api, f"meetings/{out['pending']}", expected=404)
+        assert out['local']['live_discarded'] and out['local']['live_removed']
+        assert out['local']['task_link_operations'] == []
+        retry_uploads = [row for row in uploads if row[0]['text'] == 'Original retry title']
+        assert len(retry_uploads) == 2 and retry_uploads[0] == retry_uploads[1]
+        retry = get(api, f"meetings/{out['retry_meeting']}/items")['sections']['task'][0]
+        assert retry['text'] == 'Current retry title' and retry['version'] == 2
+        assert {key: retry['detail'][key] for key in ('owner', 'body', 'due')} == {
+            'owner': 'human:ben', 'body': 'Current retry details', 'due': '2026-12-01T12:00:00Z'}
+        assert {race['order'] for race in out['races']} == {'link-last', 'upload-last'}
+        for replay in out['races']:
+            race = races[replay['meeting']]
+            assert len(race['uploads']) == 1  # Create reuses Add's item after choosing an owner.
+            assert len(race['links']) == 2 and race['links'][0] == race['links'][1]
+            original = replay['original']
+            web = post(api, f"meetings/{replay['meeting']}/items/{original['id']}/push",
+                       {'version': original['version'], 'detail': {'owner': 'human:ana'}}, 'ben-test')
+            assert not web['pushed'] and web['item']['result_ref'] == replay['created']
+            rows = get(api, f"meetings/{replay['meeting']}/items")['sections']['task']
+            assert len(rows) == 1 and rows[0]['id'] == original['id']
+            with api.app.state.store.read() as c:
+                created = c.execute('SELECT id,owner_id FROM tasks WHERE title=?', (original['text'],)).fetchall()
+                assert [(row['id'], row['owner_id']) for row in created] == [(replay['created'], 'human:ben')]
+        with api.app.state.store.read() as c:
+            assert c.execute('SELECT count(*) FROM tasks').fetchone()[0] == 48
+            assert c.execute('SELECT count(*) FROM meetings m LEFT JOIN media_control mc ON mc.meeting_id=m.id '
+                             'WHERE mc.deleted_at IS NULL').fetchone()[0] == 4
+            assert c.execute('SELECT count(*) FROM media_control WHERE deleted_at IS NOT NULL').fetchone()[0] == 1
+            assert c.execute('SELECT deleted_at FROM media_control WHERE meeting_id=?', (out['pending'],)).fetchone()[0]
+            assert c.execute('SELECT discarded_at FROM live_meetings WHERE id=?', (out['live'],)).fetchone()[0]
+            for table in ('live_meeting_chunks', 'live_meeting_chunk_versions', 'live_meeting_chat', 'live_meeting_events'):
+                rows = c.execute(f'SELECT * FROM {table} WHERE meeting_id=?', (out['live'],)).fetchall()
+                if table == 'live_meeting_events':
+                    assert len(rows) == 1 and json.loads(rows[0]['payload'])['action'] == 'discard'
+                else:
+                    assert not rows
+            assert not c.execute('SELECT 1 FROM meeting_task_links WHERE meeting_id=?', (out['pending'],)).fetchone()
+            assert out['created'] in sent_tasks_before_delete
+            for tid, before in sent_tasks_before_delete.items():
+                assert dict(c.execute('SELECT * FROM tasks WHERE id=?', (tid,)).fetchone()) == before
+            proposal = c.execute("SELECT * FROM meeting_items WHERE proposed_task_id IS NOT NULL").fetchone()
+            assert proposal['status'] == 'pushed' and proposal['result_ref'] == targets[0]
+            assert c.execute('SELECT count(*) FROM jobs').fetchone()[0] == 0
+    finally:
+        server.should_exit = True
+        thread.join(5)
+        sock.close()

@@ -2,7 +2,7 @@
 company the size of a busy one: 70 bots, a few hundred threads with messages and deliveries, a month of daily updates
 from every bot, and a large message history.
 
-    python3 -m pytest bench/perf-web-home.py -n 0 -s -q
+    nice -n 19 python3 bench/perf-web-home.py
 
 Per read it prints the statements one call takes and the median wall time of RUNS calls, and per Home card the same.
 """
@@ -11,7 +11,13 @@ import os
 import json
 import random
 import statistics
+import sys
 import time
+from pathlib import Path
+
+if __name__ == "__main__":
+    sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+    import conftest  # noqa: F401  (the fictional registry and isolated benchmark settings)
 
 from backend import bot_settings as BS, threads
 from backend.store import H, Problem
@@ -161,3 +167,13 @@ def test_home_and_its_neighbours(api):
         shapes = collections.Counter(re.sub(r"'[^']*'|\b\d+\b", "?", q)[:160] for q in seen)
         for q, k in shapes.most_common(15):
             print(f"{k:5d}  {q}")
+
+
+if __name__ == "__main__":
+    import tempfile
+    with tempfile.TemporaryDirectory(prefix=".tmp-home-", dir=Path(__file__).resolve().parents[1]) as directory:
+        install = api.__wrapped__(Path(directory), None)
+        try:
+            test_home_and_its_neighbours(next(install))
+        finally:
+            install.close()

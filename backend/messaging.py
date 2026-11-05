@@ -26,7 +26,7 @@ def _json(value, fallback):
 
 def _sources(c, who, settings, bot, config, people, allowed, channels, mailboxes, reads):
     sources = []
-    for address in routines.inbox_of(bot, config, people)["mailboxes"]:
+    for address in routines.inbox_of(c, bot)["mailboxes"]:
         if address not in allowed:
             continue
         row = mailboxes.get(address) or {}

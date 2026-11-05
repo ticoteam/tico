@@ -524,7 +524,9 @@ def release(args):
         built = all(code == 0 for code in build_codes)
         ready.write_text('ok' if built else 'failed')
     if runs('python'):
-        python_cmd = [sys.executable, '-m', 'pytest', '-q', '-n', workers, '-m', 'slow or not slow',
+        # Count-based batches can strand several expensive migration tests on one worker when a shard also has
+        # hundreds of cheap tests. Keep batches small so the other workers can share the expensive tests.
+        python_cmd = [sys.executable, '-m', 'pytest', '-q', '-n', workers, '--maxschedchunk=2', '-m', 'slow or not slow',
                       f'--ignore={ISOLATION_FILE}', '--api-database-snapshots']
         name = 'all-python'
         if shard:

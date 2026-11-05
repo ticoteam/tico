@@ -1,4 +1,4 @@
-"""Settings > Google > What Tico may do in the mail connector (connectors/mail/oauth.py company_allows).
+"""Settings > Inboxes > Settings > What Tico may do in the mail connector (connectors/mail/oauth.py company_allows).
 
 Google's scopes cannot tell Organize mail from Send mail (both are gmail.modify), and a computer's own service-account
 key or a standalone grant never asks the server for a narrowed token. So the connector holds each box itself, from the
@@ -137,7 +137,7 @@ class CompanyGates(Base):
             self.assertEqual(rc, 0, out + err)
 
     def test_a_runner_s_calendar_action_reads_change_calendar_as_the_runner_and_an_unread_one_is_refused(self):
-        """connector-event runs as the owner, so What Tico may do comes from the runner's own registration
+        """connector-event runs as the connector, so What Tico may do comes from the runner's own registration
         (connectors/mail/targets), as a mail action's does; nothing on its stdin decides it."""
         action = json.dumps({"id": "ca-1", "calendar": BOX, "title": "Planning", "attendees": [],
                              "start": "2026-09-22T09:00:00-07:00", "end": "2026-09-22T09:30:00-07:00",
@@ -150,7 +150,7 @@ class CompanyGates(Base):
                 return answer
             pl.RUNNER_GET = get
             with mock.patch.object(sys, "stdin", io.StringIO(action)):
-                return self.run_cli("connector-event", "--as", access.OWNER, "--json")
+                return self.run_cli("connector-event", "--as", access.CONNECTOR, "--json")
         off = {"organize_mail": True, "send_mail": True, "change_calendar": False}
         for answer, says in (({"company": off}, "Create and change calendar events"),
                              (OSError("Tico is unreachable"), "Tico couldn't check")):
@@ -201,9 +201,10 @@ class CompanyGates(Base):
         self.assertFalse(self.in_inbox())
 
 
-class TheOwnerIsHeldToo(Base):
-    """`--as <owner handle>` (the runner's own commands, a person's run) reads What Tico may do over the runner's
-    registration (connectors/mail/targets); no token, name or answer on stdin exempts it."""
+class TheConnectorIsHeldToo(Base):
+    """`--as connector` (the runner's connector job) reads What Tico may do over the runner's registration
+    (connectors/mail/targets), and writes only what the server leased it; no token, name or answer on stdin exempts it.
+    The owner's handle holds no mail rights of its own."""
 
     def runner(self, answer):
         def get(path):
@@ -213,26 +214,42 @@ class TheOwnerIsHeldToo(Base):
             return answer
         pl.RUNNER_GET = get
 
-    def owner_archive(self):
-        return self.run_cli("archive", "--as", access.OWNER, "--mailbox", BOX, "m-ava", "--json")
+    def leased(self, *argv):
+        access.LEASED = True                            # as mail-action / connector-event set it (main() clears it)
+        return self.run_cli(*argv)
 
-    def test_the_owner_s_writes_follow_what_tico_may_do(self):
+    def connector_archive(self):
+        return self.leased("archive", "--as", access.CONNECTOR, "--mailbox", BOX, "m-ava", "--json")
+
+    def test_the_connector_s_leased_writes_follow_what_tico_may_do(self):
         self.runner({"company": {"organize_mail": False, "send_mail": False, "change_calendar": True}})
-        rc, out, _ = self.owner_archive()
+        rc, out, _ = self.connector_archive()
         self.assertEqual(rc, 2, out)
         self.assertIn("Organize mail", out)
-        rc, out, _ = self.reply("--as", access.OWNER, "--mailbox", BOX)
+        access.LEASED = True
+        rc, out, _ = self.reply("--as", access.CONNECTOR, "--mailbox", BOX)
         self.assertEqual(rc, 2, out)
         self.assertEqual((self.service.sent, self.service.drafts_by_id), ([], {}))
         self.assertTrue(self.in_inbox())
         self.runner({"company": dict.fromkeys(pl.COMPANY_FIELDS, True)})
-        rc, out, err = self.owner_archive()
+        rc, out, err = self.connector_archive()
         self.assertEqual(rc, 0, out + err)
         self.assertFalse(self.in_inbox())
 
-    def test_an_owner_run_tico_cannot_be_asked_for_writes_nothing_and_still_reads(self):
-        """Without the runner's registration (a bot's turn, a terminal) or with Tico down, the owner's writes are
-        refused like a bot's."""
+    def test_the_connector_writes_nothing_without_a_lease(self):
+        rc, out, _ = self.run_cli("archive", "--as", access.CONNECTOR, "--mailbox", BOX, "m-ava", "--json")
+        self.assertEqual(rc, 2, out)
+        self.assertTrue(self.in_inbox())
+        self.assertFalse(access.LEASED)
+
+    def test_the_owner_handle_holds_nothing(self):
+        rc, out, _ = self.run_cli("inbox", "--as", access.OWNER, "--mailbox", BOX, "--json")
+        self.assertEqual(rc, 2, out)
+        self.assertIn("Settings > Inboxes", out)
+
+    def test_a_connector_run_tico_cannot_be_asked_for_writes_nothing_and_still_reads(self):
+        """Without the runner's registration (a terminal) or with Tico down, the connector's writes are refused like a
+        bot's."""
         for answer in (OSError("Tico is unreachable"), None):
             if answer is None:
                 pl.RUNNER_GET = None                        # the real read: no broker URL or registration here
@@ -240,11 +257,11 @@ class TheOwnerIsHeldToo(Base):
                     os.environ.pop(name, None)
             else:
                 self.runner(answer)
-            rc, out, _ = self.owner_archive()
+            rc, out, _ = self.connector_archive()
             self.assertEqual(rc, 1, out)
             self.assertIn("Tico couldn't check the company's mail settings; try again", out)
             self.assertTrue(self.in_inbox())
-            rc, out, err = self.run_cli("inbox", "--as", access.OWNER, "--mailbox", BOX, "--json")
+            rc, out, err = self.run_cli("inbox", "--as", access.CONNECTOR, "--mailbox", BOX, "--json")
             self.assertEqual(rc, 0, out + err)
 
 

@@ -370,6 +370,7 @@
       "labels": [],
       "lane": "company",
       "links": [],
+      "live_meeting_id": null,
       "milestone_waits": [],
       "next_run": false,
       "note": "Accepted.",

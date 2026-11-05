@@ -809,7 +809,15 @@ def operation_issues(c, who, auth):
         if key and key["status"] == "failing":
             add("google_workspace", "The Google Workspace key is failing",
                 key["last_error"] or "Google has refused the Workspace key for too long.",
-                needs_person=True, action="Check the key in Settings > Google.")
+                needs_person=True, action="Check the key in Settings > Inboxes.")
+        sync_owners = google_workspace.workspace_sync_owners(c)
+        for box in google_workspace.workspace_mailboxes(c):
+            if box["address"] not in sync_owners:
+                add("google_workspace", box["address"] + " has no sync computer",
+                    "Mail and calendar for " + box["address"] + " are not syncing because no eligible computer is online.",
+                    needs_person=False, severity="warning",
+                    action="Bring an isolated company server online." if box["kind"] == "shared" else
+                           "Bring the person's computer, their Assistant's host or an isolated company server online.")
         labels = {row["id"]: row["label"] for row in c.execute("SELECT id,label FROM runners_with_state")}
         hosts = google_rights.inbox_hosts(c)
         for grant in c.execute("SELECT person_id,mailbox,holder FROM google_connects WHERE status='connected' "
@@ -819,9 +827,9 @@ def operation_issues(c, who, auth):
                 holder = labels.get(grant["holder"]) or "another computer"
                 bot_computer = labels.get(host) or "the computer that runs their message bot"
                 add("google_grant", grant["mailbox"] + "'s Google grant is on " + holder,
-                    grant["mailbox"] + "'s Google grant is on " + holder + ". Reconnect in Settings > Google to move it "
+                    grant["mailbox"] + "'s Google grant is on " + holder + ". Reconnect in Settings > Inboxes to move it "
                     "to " + bot_computer + ", where their message bot runs.", machine=grant["holder"], needs_person=True,
-                    action="Open Settings > Google")
+                    action="Open Settings > Inboxes")
         # A connector that stopped refreshing (the Mac lost the network, or the sync hung) writes no
         # error, so its age is checked while a Mac is online: calendar refreshes every 45 s, mail
         # reports every 10 minutes.
@@ -897,7 +905,9 @@ def queued_label(c, bot, location, settings=None, human=False, behind=False, que
     person's message; `behind`: the bot is still answering earlier work in this same conversation; `queued`: it was
     sent with queue, so it waits for that turn to end rather than steering into it (backend/delivery.py)."""
     from .start_places import computer_hold
+    from .cloud_machines import resting
     from . import org_turns
+    asleep = (location.get("machine") or {}).get("runner_id") in resting(c)
     bot_state = H.bot(c, bot)["state"]
     label, readiness_reason = "Saved — queued", ""
     draining = c.execute("SELECT 1 FROM bot_control WHERE bot=? AND draining=1", (bot,)).fetchone()
@@ -912,7 +922,7 @@ def queued_label(c, bot, location, settings=None, human=False, behind=False, que
     elif (stop := bot_stops.queued_reason(c, bot, human)):
         # Tico stopped the bot (failed runs, run budget) or it waits out a failed run: the words say why.
         label = "Saved — " + stop
-    elif not location["online"] and (cloud := cloud_machine_wait(c, bot)):
+    elif (not location["online"] or asleep) and (cloud := cloud_machine_wait(c, bot)):
         # Its own cloud machine is stopped or starting (backend/cloud_machines.py): the words say which, or why not.
         label = "Saved — " + cloud
     elif not location["online"]:
@@ -923,9 +933,9 @@ def queued_label(c, bot, location, settings=None, human=False, behind=False, que
     elif settings and org_turns.admission(c)['at_stop']:
         # Admission only: queued labels must not classify every bot's readiness and spend on each chat/status poll.
         label = 'Saved — ' + org_turns.REASON
-    elif not human and (location.get("machine") or {}).get("runner_id") and (
-            hold := computer_hold(c, location["machine"]["runner_id"])):
-        # A person's own message still starts on a busy computer (start_places.from_person); it may wait for a turn.
+    elif (location.get("machine") or {}).get("runner_id") and (
+            hold := computer_hold(c, location["machine"]["runner_id"], person=human)):
+        # On Linux, a person's priority cannot make memory available for another process.
         label = "Saved — waiting: " + hold[1]
     elif not location["ready"]:
         problems = (location.get("readiness") or {}).get("problems") or []
@@ -1007,7 +1017,7 @@ def conversation_execution(c, cid, who=None, settings=None, bot=None, auth=None,
     """The newest run in this conversation as the chat shows it while it works: its state, a label and its reply so
     far, or None. `bot` keeps to that bot's runs (a task's page follows its owner's session); `people` also takes the
     run for a message a person sent, whichever bot it went to (a person's task answered by the bot that asked it).
-    A run waiting for its ChatGPT login (backend/login_waits.py) says so in `waiting` and its label; `auth` lets it
+    A run waiting for memory or its ChatGPT login (backend/login_waits.py) says so in `waiting` and its label; `auth` lets it
     name the bot holding it."""
     person = H.person_sent_sql()
     which = (f"AND (j.bot_id=? OR {person}) " if bot and people else "AND j.bot_id=? " if bot
@@ -1015,9 +1025,10 @@ def conversation_execution(c, cid, who=None, settings=None, bot=None, auth=None,
     # A send the duplicate trigger dismissed (wake_presets.HOLD_TRIGGER) repeats a run still going: the chat shows that run.
     # person_sent: the message is a person's, or the keeper carrier of one (the sender alone is the keeper).
     job = c.execute(f"SELECT j.*,m.sender_id AS sender,{person} AS person_sent,a.state AS attempt_state,a.lease_until,"
-                    "a.stop_requested_at,a.started_at AS attempt_started_at "
+                    "a.stop_requested_at,a.started_at AS attempt_started_at,p.wait_reason AS start_wait_reason "
                     "FROM jobs j JOIN messages m ON m.id=j.message_id "
-                    "LEFT JOIN attempts a ON a.id=j.attempt_id WHERE m.conversation_id=? "
+                    "LEFT JOIN attempts a ON a.id=j.attempt_id LEFT JOIN start_places p ON p.attempt_id=a.id "
+                    "WHERE m.conversation_id=? "
                     "AND coalesce(json_extract(m.refs,'$.maintenance'),'')!='checkpoint' "
                     "AND NOT (j.state='canceled' AND coalesce(j.wake_class,'')='duplicate') "
                     + which + "ORDER BY m.rowid DESC LIMIT 1", (cid, bot) if bot else (cid,)).fetchone()
@@ -1046,6 +1057,8 @@ def conversation_execution(c, cid, who=None, settings=None, bot=None, auth=None,
             # Before it starts, or after: a fallback hop takes its own login once the turn has started.
             from .login_waits import waiting as login_wait
             waiting = login_wait(c, job["attempt_id"], job["bot_id"], who, auth)
+            if state == "leased" and (job["start_wait_reason"] or "").startswith(start_places.MEMORY_HOLD):
+                waiting = "Waiting: " + job["start_wait_reason"]
             label = waiting or label
         readiness_reason = ""
         if state == "queued":
@@ -1964,6 +1977,20 @@ def needs_bots(items, me):
     return counts
 
 
+def needs_kinds(items):
+    """Whole-list counts by kind: Tasks leaves thread attention in Inbox, even before every page is read."""
+    counts = {}
+    for it in items:
+        counts[it["kind"]] = counts.get(it["kind"], 0) + 1
+    return counts
+
+
+def needs_folded_ids(items):
+    """Task ids represented by another card, including cards on unread pages, so Tasks counts each blocker once."""
+    return sorted({str(f["id"]) for it in items for f in it.get("folded", [])}
+                  | {str(tid) for it in items for tid in it.get("merged", [])})
+
+
 def needs_actor(it, me):
     """The teammate one Needs-you item goes with (needs_bots), or None."""
     actor = None
@@ -2263,7 +2290,7 @@ def install_views(app, store, auth, mutate, task_view):
         company = providers.load(c, store.settings)
         from . import cloud_machines
         # Each bot's cloud machine, own or shared, Tico Cloud only (backend/cloud_machines.py): one read for every bot.
-        cloud_rows = cloud_machines.rows(c) if cloud_machines.offered(c, store.settings) else None
+        cloud_rows = cloud_machines.visible_rows(c) if cloud_machines.offered(c, store.settings) else None
         # Each bot's last finished run, one attempts_bot_settled seek per bot rather than a sort of every run there is.
         latest_run = {slug: tid for slug, tid in c.execute(
             "SELECT b.id,(SELECT t.id FROM attempts t WHERE t.bot_id=b.id AND t.settled_at IS NOT NULL "
@@ -2600,7 +2627,7 @@ def install_views(app, store, auth, mutate, task_view):
             cloud_of = {r["runner_id"]: {"bot": None if r["bot"] == cloud_machines.SHARED else r["bot"],
                                          "shared": r["bot"] == cloud_machines.SHARED,
                                          "size": r["machine_size"] or r["size"], "state": r["state"]}
-                        for r in cloud_machines.rows(c).values() if r["runner_id"]}
+                        for r in cloud_machines.visible_rows(c).values() if r["runner_id"]}
             from . import browser_exit
             # One pass each for every computer's internet sharing and today's bytes through it.
             exit_policies, exit_used = browser_exit.policies(c), browser_exit.used_today_all(c)
@@ -3005,7 +3032,9 @@ def install_views(app, store, auth, mutate, task_view):
         `version=<the one held>` answers `unchanged` with no items when it still holds, and `ids=a,b` sends only those
         items, with each one's place in the whole list (`positions`), to mend a held copy after a live `needs` event.
         `limit` (at most NEEDS_PAGE_MAX) sends a page, with `next` to pass as `cursor` for the one after it and `bots`,
-        each bot's count over the whole list; a cursor from an older version starts again from the top (`restart`).
+        each bot's count over the whole list; `by_kind` counts each kind and `folded_task_ids` names tasks represented
+        by other cards over the whole list, including unread pages.
+        A cursor from an older version starts again from the top (`restart`).
         Without either, the whole list. Every page is cut from the list built whole, so its `version` and each
         item's place are the same as the full read's and the live event's."""
         who = request.state.identity
@@ -3026,7 +3055,8 @@ def install_views(app, store, auth, mutate, task_view):
                 positions = {str(x["id"]): n for n, x in enumerate(items) if str(x["id"]) in wanted}
                 return {"actor": who.actor, "count": len(items), "version": current, "positions": positions,
                         "items": needs_visuals(c, who, [x for x in items if str(x["id"]) in positions])}
-            out = {"actor": who.actor, "count": len(items), "items": items, "older": older,
+            out = {"actor": who.actor, "count": len(items), "by_kind": needs_kinds(items),
+                   "folded_task_ids": needs_folded_ids(items), "items": items, "older": older,
                    "went_away": went_away(c, who.actor), "version": current, "next": None}
             if limit is not None or cursor:
                 out["items"], out["next"], restarted = needs_page(items, current, limit, cursor)

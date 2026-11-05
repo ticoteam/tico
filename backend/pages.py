@@ -200,9 +200,11 @@ class Pages:
             where.append("f.bot_id=?")
             params.append(bot)
         if task:
-            where.append("f.task_id=?")
-            params.append(task)
+            where.append("(f.task_id=? OR EXISTS (SELECT 1 FROM pins WHERE place=? AND item='page:' || f.id))")
+            params += [task, "task:" + task]
         with self.store.read() as c:
+            if task:
+                self.auth.task(c, who, task)
             cache = {}
             found, nxt = scan(c, "SELECT f.*,p.cadence,p.as_of,p.replaced_by_id,p.archived AS page_archived FROM pages p "
                               "JOIN bot_files f ON f.id=p.file_id", where, params, limit, cursor,
@@ -246,6 +248,7 @@ class Pages:
                     raise Problem("not_found", "replaces names a page of this bot's", 404)
                 if old["id"] == row["id"]:
                     raise Problem("validation", "A page cannot replace itself", 422)
+                H._writer(c, "bot:" + row["bot_id"], task_id=old["task_id"])
                 c.execute("UPDATE pages SET replaced_by_id=?,updated_at=? WHERE file_id=?", (row["id"], now, old["id"]))
                 self.files.activity(c, old["id"], "bot:" + row["bot_id"], "modified", now=now,
                                     detail={"replaced_by": row["id"]})
@@ -289,6 +292,7 @@ class Pages:
                 raise Problem("not_found", "Page not found", 404)
             if not self.may_manage(c, who, r):
                 raise Problem("forbidden", "Only the page's bot, its managers, the owner and admins change a page", 403)
+            H._writer(c, who.actor, task_id=r["task_id"])
             fields = {}
             if body.cadence is not None:
                 fields["cadence"] = check_cadence(body.cadence)
@@ -341,7 +345,7 @@ def install_pages(app, store, auth, files):
     def listing(request: Request, ids: str = "", bot: str = "", task: str = "", archived: bool = False,
                 limit: int = 20, cursor: str = ""):
         """Pages the caller may read. `ids` (up to 50, comma-separated) reads those pages in that order and leaves out
-        the unreadable; otherwise the newest first, filtered by bot or task."""
+        the unreadable; otherwise the newest first, filtered by bot or task (filed or pinned there)."""
         who = request.state.identity
         if ids:
             return pages.many(who, [i.strip() for i in ids.split(",")])

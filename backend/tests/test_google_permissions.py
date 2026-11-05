@@ -1,4 +1,4 @@
-"""Settings > Google > What Tico may do (backend/google_workspace.py `permissions`): the company's own say over what
+"""Settings > Inboxes > Settings > What Tico may do (backend/google_workspace.py `permissions`): the company's own say over what
 Tico does in Google beyond reading. Organize mail and Send mail need gmail.modify, Change calendar needs calendar
 events; reading is always on. Connect Google with the company's own app asks only for what is ticked, a refresh and a
 Workspace mint are narrowed to it on the next token, and Send mail off stops every bot's sends whatever its own switch
@@ -42,6 +42,20 @@ def test_everything_is_on_until_an_admin_acting_as_themselves_turns_it_off(api):
     assert get(api, "google", "cara-test")["permissions"] == off
     with api.app.state.store.read() as c:
         assert c.execute("SELECT count(*) FROM events WHERE action='google.permissions.set'").fetchone()[0] == 1
+
+
+def test_a_stored_legacy_attachment_switch_does_not_restrict_sending(app):
+    machine = runner(app)
+    with app.app.state.store.transaction() as c:
+        c.execute("INSERT INTO registry_metadata(key,value) VALUES(?,?) ON CONFLICT(key) DO UPDATE SET "
+                  "value=excluded.value", (W.PERMISSIONS_KEY, json.dumps({**ALL_ON, "send_attachments": False})))
+    assert get(app, "google", "cara-test")["permissions"] == ALL_ON
+    assert get(app, "connectors/mail/targets", machine["token"])["company"] == ALL_ON
+    changed = app.post("/api/v2/bots/inbox/mail-settings", json={"outbound_send": True}, headers=headers())
+    assert changed.status_code == 200, changed.text
+    own = get(app, "bots/inbox/mail-settings", "inbox-test")
+    assert own["company_send"] is True and own["outbound_send"] is True
+    assert "company_attachments" not in own
 
 
 def test_scopes_follow_what_tico_may_do():

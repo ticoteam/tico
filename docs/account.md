@@ -9,6 +9,13 @@ It stays available when your Tico server or bot computer stops.
 Sign in with your Tico account and select your company from the **Company** menu.
 The page shows only companies you belong to.
 
+In Tico, open your account menu at the bottom of the left navigation and choose **Admin**.
+Only the owner and admins see it. It appears for organizations using Tico account sign-in, companies with a Tico Cloud account, and self-run servers
+linked to a Tico company in Settings. It opens the default browser from the desktop app, or a new tab on the web.
+A linked server uses the portal address supplied by its company connection, and a Cloud company uses its account's
+billing address when available; otherwise it opens the portal home.
+The browser uses its own Tico account session, so you may need to sign in and select your company.
+
 ## Before approval
 
 While you wait, the page shows **You’re on the waitlist**.
@@ -130,10 +137,12 @@ and stop the bot computers with it (**Stop bot computers too**, on by default). 
 
 The server is quiet when, for all of those hours, nobody used the app signed in and no run started or ended, and right
 now nothing is queued or running, no computer is working on a job, nothing is being sent or due to be retried within
-15 minutes (Slack posts, outgoing webhooks) and no routine, daily system job or release hour is due in the next 15 minutes.
-Jobs that repeat every few hours or less are housekeeping that catches up after a wake and never keep it up.
+15 minutes (Slack posts, outgoing webhooks) and no routine, time-sensitive Maintenance step, daily system job or release
+hour is due in the next 15 minutes. Maintenance wakes the server only for a run where enabled Find stuck or Update is
+due, following the run's schedule and each step's cadence. Pause stops those wakes; a run already going keeps the
+server up. Collect, Clean up, Check health, Learn, Suggest, Dream and other interval housekeeping catch up after a wake.
 Tico then records "server.sleep" in History and asks to stop the
-server, passing the time of the next routine, daily job, release hour or send retry as its wake-up time.
+server, passing the time of the next routine, Maintenance run, daily job, release hour or send retry as its wake-up time.
 
 A sleeping server starts again when a webhook arrives at an address through Tico Gateway (Settings > Webhooks >
 Through Tico Gateway), when that routine time comes, or when someone signs in at your account page. A server Tico stopped

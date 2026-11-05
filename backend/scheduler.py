@@ -1,5 +1,6 @@
 """Deterministic, transactionally deduplicated scheduling independent of local runners."""
 
+import logging
 import threading
 import time
 from contextlib import contextmanager
@@ -13,6 +14,8 @@ from . import placement, run_triggers
 from . import system_routines as SR
 from .batch_work import isolated
 from .store import H, encode
+
+LOG = logging.getLogger("tico.scheduler")
 
 
 def stamp(at):
@@ -52,15 +55,6 @@ def run_kpi_asks(store, auth, at, failures=None):
             found = goal_asks.sync(c, auth.owner_id(c), at, goal_asks.readers(c, auth))
         run.did(SR.words_of({"asked": (found or {}).get("created") or [],
                              "closed": (found or {}).get("closed") or []}, none="Nothing to ask"))
-
-
-def run_health_scan(store, auth, at, failures=None):
-    # Only while the owner has the Health Monitor on (backend/health_monitor.py). Plain code; it wakes the bot only for a
-    # finding the last scan did not have.
-    with SR.recording(store, "health_scan", failures, "health_monitor") as run:
-        from . import health_monitor
-        woke = health_monitor.check(store, auth, store.settings)
-        run.did(SR.words_of(woke, "new finding", "No new findings"))
 
 
 def run_ask_deadlines(store, auth, at, failures=None):
@@ -168,32 +162,9 @@ def run_thread_retention(store, auth, at, failures=None):
         run.did(SR.words_of(purged, "message", "Nothing past its time"), quiet=not purged)
 
 
-def run_task_roundup(store, auth, at, failures=None):
-    # Three times a day by default (6am, noon and 6pm company time), each active bot gets at most one list of its tasks:
-    # a follow-up time that came, an unanswered question, a task to restate, a late Dev ticket, a manager's engineering
-    # exceptions, a step's backlog, a missed update or a task gone quiet (backend/task_roundup.py). Plain code: no model call,
-    # and nothing to list is a quiet run. The run is the schedule's time at or before this tick, and a bot already sent a
-    # list since that time gets no more. The lists are read in one read transaction; each bot is then sent in its own short
-    # transaction, which rebuilds its list from the live database.
-    from . import task_roundup
-    with SR.recording(store, "task_roundup", failures) as run:
-        with store.read_transaction() as c:
-            run_at = SR.occurrence(SR.config_of(c, "task_roundup"), at)
-            plans = task_roundup.discover(c, stamp(run_at))
-        woke, listed = [], 0
-        for plan in plans:
-            with store.transaction() as c:
-                count = task_roundup.send(c, plan)
-            if count:
-                woke.append(plan["slug"])
-                listed += count
-        run.did(SR.words_of({"bots woken": woke, "tasks listed": listed}, none="Nothing to list"), quiet=not woke)
-
-
-QUICK = {"kpi_asks": run_kpi_asks, "health_scan": run_health_scan,
+QUICK = {"kpi_asks": run_kpi_asks,
          "ask_deadlines": run_ask_deadlines, "task_manager_report": run_task_manager_report,
-         "bookkeeper_check": run_bookkeeper_check,
-         "task_roundup": run_task_roundup}
+         "bookkeeper_check": run_bookkeeper_check}
 
 # The Bookkeeper's Watch (daily) and rules digest (weekly): their own cadence, not controlled jobs (CONTROLS has the
 # a person switches). The Bookkeeper's pause is their off switch.
@@ -207,8 +178,8 @@ FIXED = {"bookkeeper_watch": (run_bookkeeper_watch, timedelta(days=1)),
 
 def run_now(store, auth, key, actor):
     """Run now (Settings > Routines): one controlled job, once. A plain-code job runs here and its run record is on its
-    row when this returns (a failure is recorded, not raised); the stale ticket review and the learning run start on
-    their own thread, as when scheduled, and return True. Raises a 409 when that one is already running."""
+    row when this returns (a failure is recorded, not raised); stale ticket review starts on its own thread. Learn
+    runs through Maintenance. Returns whether background work started. Raises a 409 when stale review is running."""
     from .store import Problem
     at = datetime.now(timezone.utc)
     if key in QUICK:
@@ -225,11 +196,8 @@ def run_now(store, auth, key, actor):
         from . import memory_tidy_controls
         running = memory_tidy_controls.run_now(store, auth, actor)
     elif key == "learnings":
-        from . import learnings
-        with store.transaction() as c:
-            run_id = learnings.claim_tonight(c)
-        learnings.start(store, run_id)
-        running = True
+        from . import maintenance
+        _, running = maintenance.run_now(store, auth, actor, step="learn")
     else:
         raise Problem("invalid", "Nothing to run", 422)
     with store.transaction() as c:
@@ -500,7 +468,7 @@ class Scheduler:
                                "hold_ms": round(longest[0] * 1000), "hold_step": longest[2],
                                "wait_ms": round(max((h[1] for h in holds), default=0) * 1000),
                                "transactions": len(holds)})))
-        # Updates (backend/updates.py): today's queue, one bot asked at a time. Its own short
+        # Updates (backend/updates.py): pump the queue built by Maintenance, one bot asked at a time. Its own short
         # transaction, so a failure here never holds back the routines above.
         # A person's draft is written by the company's model in a background thread, so the call never
         # holds the write lock; its row stays out until the thread posts it (or gives up on it).
@@ -519,7 +487,7 @@ class Scheduler:
             settings = self.store.settings
             with self.store.transaction() as c:
                 writer = updates.writer_for(c, settings, self.store)
-                sent = updates.dispatch(c, at, settings.assistant_bot if writer else None)
+                sent = updates.dispatch(c, at, settings.assistant_bot if writer else None, build=False)
             if sent and updates.is_person(sent):
                 threading.Thread(target=updates.write_draft, args=(self.store, sent, writer, settings.assistant_bot),
                                  name="update-draft", daemon=True).start()
@@ -536,13 +504,6 @@ class Scheduler:
             company_page_readers.tick(self.store)
         except Exception as exc:
             failures.append({"company_page_readers": type(exc).__name__})
-        # The nightly learning run (backend/learnings.py): one row per night claims it; the work runs
-        # in a background thread, so the decision model's calls never hold the write lock.
-        try:
-            from . import learnings
-            learnings.nightly(self.store, at)
-        except Exception as exc:
-            failures.append({"learnings": type(exc).__name__})
         # Maintenance (backend/maintenance.py): the run starts when its schedule says it is due; its steps run on a thread.
         from . import maintenance
         maintenance.tick(self.store, self.execution.auth, at, failures)
@@ -586,6 +547,12 @@ class Scheduler:
                 with self.store.transaction() as c:
                     from . import webhooks
                     webhooks.auto_disable(c, stamp(at))           # an endpoint that failed every attempt for five days is off
+                try:
+                    from . import computers
+                    computers.sweep(self.store, stamp(at))       # replaced self-hosted computers retire only when unused
+                except Exception as exc:
+                    LOG.exception("Computer retirement failed")
+                    failures.append({"computer_retirement": type(exc).__name__})
                 from . import support_triage
                 support_triage.sweep(self.store, stamp(at))      # a support ticket waits here at most an hour
                 from . import screening
@@ -611,8 +578,7 @@ class Scheduler:
                     strategy_bot.reconcile(c)
             except Exception as exc:
                 failures.append({"strategy_bot": type(exc).__name__})
-        # The controlled jobs, each on its saved preset (Settings > Routines): KPI stale asks, the Health Monitor's scan
-        # (hourly by default) and ask go-ahead.
+        # The controlled jobs, each on its saved preset (Settings > Routines): KPI stale asks, ask go-ahead and reports.
         for key, run in QUICK.items():
             if cfgs and self.due(key, at, cfgs, last):
                 run(self.store, self.execution.auth, at, failures)

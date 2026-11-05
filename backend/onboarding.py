@@ -308,6 +308,9 @@ def config_view(c, settings, who=None):
     record = load(c)
     value = {**settings.environment(), **display_names(settings, record)}
     value["onboarding_needed"] = needed(c, who, record)
+    if who is not None and who.role in ("owner", "human"):
+        from . import company_server
+        value["administration_url"] = company_server.administration_url(c, settings)
     chosen = providers.load(c, settings)
     value["providers_configured"] = providers.configured(chosen)
     # The model a computer's sign-in is for; empty until a provider is chosen, so no sign-in is asked before then. A
@@ -890,11 +893,6 @@ class Onboarding:
             except ValueError:
                 pass
         return True
-
-    def turn_on_health_monitor(self, c, who):
-        """Settings > Health's switch: the optional Health Monitor (docs/health-monitor.md). Never added on its own."""
-        from .health_monitor import NAME, SLUG
-        return self._turn_on(c, who, SLUG, SLUG, NAME, "health_monitor.turned_on")
 
     def turn_on_goal_manager(self, c, who):
         """The same for the built-in Strategy Bot (docs/strategy-bot.md)."""

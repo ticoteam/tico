@@ -666,7 +666,7 @@ async function kpiAddBind(form, goal, done) {
 function goalTreeShape() {
   const people = (S.people || []).filter(p => !p.hidden);
   const bots = (S.emps || []).filter(e => !['archived', 'retired'].includes(e.status));
-  // The sidebar's own rule: built-in and message bots stay outside the chart. The Strategy Bot is placed and then lifted
+  // The sidebar's own rule: built-ins and explicit helpers stay outside the chart. The Strategy Bot is placed and then lifted
   // out (orgTreeWithHelpers), so the Heads and groups the server hangs under it show under the owner, as on the sidebar.
   const placed = bots.filter(e => !isHelperBot(e) || e.id === 'goal-manager');
   const keys = new Set([...(S.orgGroups || []).map(g => 'g:' + g.id), ...people.map(p => 'p:' + p.id), ...placed.map(e => 'b:' + e.id)]);
@@ -675,7 +675,7 @@ function goalTreeShape() {
   for (const g of (S.orgGroups || [])) put(orgGroupParent(g, keys), {kind: 'group', id: g.id, name: g.name, order: g.order || 0});
   for (const p of people) put(orgHang('p:' + p.id, orgBossKey({kind: 'person', person: p}), groupOf), {kind: 'person', id: p.id, person: p});
   for (const e of placed) {
-    // A bot under a built-in or message bot (or a bot that is gone) hangs from the next one up, else its owner.
+    // A bot under a helper (or a bot that is gone) hangs from the next one up, else its owner.
     let parent = orgBossKey({kind: 'bot', ...e});
     for (let hops = 0; parent.startsWith('b:') && !keys.has(parent) && hops < 5; hops++)
       parent = orgBossKey({kind: 'bot', ...(botRow(parent.slice(2)) || {})});

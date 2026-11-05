@@ -15,5 +15,6 @@ pub mod signin;
 pub mod speech;
 pub mod store;
 pub mod stream;
+pub mod task_links;
 pub mod transcript;
 pub mod workspace;

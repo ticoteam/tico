@@ -109,11 +109,12 @@ def check_ask(c, task_id, ask, auth, who, lint=True):
                 option.pop("then", None)
             if not option.get("recommended"):
                 option.pop("recommended", None)
+    row = H.task(c, task_id)
+    target, refs = H.task_ask_route(c, who.actor, row, value)
+    value = {k: v for k, v in refs.items() if k != "task"}
     if lint and who.role == "bot":
-        row = H.task(c, task_id)
-        H.require_plain_question(c, who.actor, H.task_ask_recipient(c, who.actor, row, value), ask.questions)
+        H.require_plain_question(c, who.actor, target, ask.questions)
     if ask.who:
-        target = H.resolve_actor(c, ask.who)
         if not H.bot(c, H.actor_id(target)) and not H.human(c, H.actor_id(target)):
             raise Problem("validation", "Question recipient not found", 422)
         if not H.task_private_readable(c, target, H.task(c, task_id)):
@@ -156,6 +157,7 @@ def version_review(c, fid, number, *, actor):
 
 def edit_version(c, auth, who, task_id, fid, number, body):
     auth.task(c, who, task_id)
+    H._writer(c, who.actor, task_id=task_id)
     if body.ask is not None:
         comment_rights(c, auth, who, task_id)
     version = file_version(c, task_id, fid, number)
@@ -176,10 +178,11 @@ def edit_version(c, auth, who, task_id, fid, number, body):
             if H.answers_to(c, [existing]):
                 raise Problem("validation", "This version's question was answered; attach a new version for another review", 422)
             asked = H.message(c, existing)
+            H._message_writer(c, who.actor, asked, H.conversation(c, asked["conversation_id"]))
             row = H.task(c, task_id)
-            recipient = H.task_ask_recipient(c, who.actor, row, value)
+            recipient, refs = H.task_ask_route(c, who.actor, row, {**asked["refs"], **value})
             c.execute("UPDATE messages SET refs=?,recipient_id=? WHERE id=?",
-                      (encode({**asked["refs"], **value}), recipient, existing))
+                      (encode(refs), recipient, existing))
             return version_review(c, fid, number, actor=privacy.actor(who))
         if value:
             msg = H.task_comment(c, who.actor, task_id, body.note or f'Review "{version["name"]}" v{number}.',
@@ -233,6 +236,7 @@ def reply_answer(c, auth, who, asked, text, warn=""):
 def answer_task(c, auth, who, task_id, body, wake, warn=""):
     """A structured answer. `warn` (an org rule's Warn) opens the answer comment its readers get; the answer itself
     (its picks and Other text) is recorded as given."""
+    H._writer(c, who.actor, task_id=task_id)
     mark = H.jobs_mark(c)
     comment_rights(c, auth, who, task_id)
     target = body.target.model_dump(exclude_none=True)
@@ -251,6 +255,7 @@ def answer_task(c, auth, who, task_id, body, wake, warn=""):
     if not asked or asked["kind"] != "ask" or not asked["refs"].get("questions"):
         raise Problem("validation", "The target has no structured question", 422)
     privacy.require_message(c, who, asked)
+    H._message_writer(c, who.actor, asked, H.conversation(c, asked["conversation_id"]))
     if asked["sender_id"] == who.actor:
         raise Problem("forbidden", "The asker cannot answer their own question", 403)
     # A bot's question answered by the person it was put to (or its task waits on) is that bot's next move: it wakes.

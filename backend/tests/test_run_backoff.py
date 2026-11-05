@@ -1,7 +1,7 @@
 """Failed runs wait, then stop; a run that starts too many runs is held; a provider limit in any error is the limit's."""
 from datetime import datetime, timezone
 
-from backend import health_monitor, login_holds, run_backoff, turn_budgets
+from backend import maintenance_health, login_holds, run_backoff, turn_budgets
 from backend.store import H
 from backend.tests.test_api import api, assign, claim, get, post, ready, runner  # noqa: F401
 
@@ -105,7 +105,7 @@ def test_a_prompt_too_large_to_send_compacts_first_then_starts_a_fresh_session_a
         assert H.status(c, "ops") is not None
         task = c.execute("SELECT title,owner_id,status FROM tasks WHERE title LIKE '%failed runs in a row'").fetchone()
         assert task["owner_id"] == "human:ana" and task["status"] in H.ACTIVE_STATUSES
-        found = [f for f in health_monitor.findings(c, api.app.state.store.settings) if f["check_id"] == "run_hold"]
+        found = [f for f in maintenance_health.findings(c, api.app.state.store.settings) if f["check_id"] == "run_hold"]
         assert len(found) == 1 and "ops" in found[0]["title"]
     # Only someone who manages the bot releases it; one action clears the hold and its Needs-you item.
     post(api, "bots/ops/release", {}, token="cara-test", expected=403)

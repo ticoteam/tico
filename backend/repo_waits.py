@@ -133,7 +133,7 @@ def _finish(store, bot, wait, how):
         row = H.task(c, task_id) if task_id else None
         if row and row["status"] != "closed":
             try:
-                H.task_close(c, H.KEEPER, task_id, note=how)
+                H.task_close(c, H.KEEPER, task_id, note=how, strict=False)
             except H.Refused:
                 log.warning("Could not close the Needs-you task for %s's repository", bot)
         H.event(c, H.KEEPER, "github.repo_wait_resolved", bot, {"repository": wait.get("repository"), "how": how})

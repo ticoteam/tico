@@ -110,7 +110,6 @@ ACTIONS = {
                      ("tasks", "stalled", "overdue", "department", "report")),
     "wake_task_manager": ("open a Task check task for each department that has something to fix",
                           ("tasks", "wake", "task manager")),
-    "wake_health_monitor": ("wake the Health Monitor for a new finding", ("health", "wake")),
     "check_books": ("read the Bookkeeper's Finance work queue: rows to categorize, bills, payments due, overdue "
                     "invoices, receipts, failed syncs, months ready to close", ("finance", "books", "bills", "inbox")),
     "wake_bookkeeper": ("open or update one Books check task for the Bookkeeper only when the queue has something new",
@@ -123,10 +122,7 @@ ACTIONS = {
                            ("finance", "rules", "digest")),
     "wake_rules_digest": ("open the week's rules digest task for the Bookkeeper when there are new rules",
                           ("finance", "rules", "digest", "wake")),
-    "read_activity": ("read yesterday's chats, tasks, Slack, mail and meetings",
-                      ("learnings", "chat", "slack", "mail", "meetings")),
     "propose_memory_tidy": ("propose memory and knowledge edits for the pilot bots", ("memory", "tidy", "pilot")),
-    "send_learnings": ("send each bot what it should remember", ("learnings", "memory", "send")),
     "remind_due": ("tell a bot when one of its tasks reaches its due time", ("due", "remind", "tasks")),
     "go_ahead": ("go ahead on a past-deadline question's default answer, or expire it",
                  ("ask", "question", "deadline", "expire")),
@@ -198,9 +194,6 @@ JOBS = [
     Job("kpi_asks", "KPI stale asks",
         "Asks a KPI's keeper for a reading when it goes out of date, and a goal's owner when a KPI goes off track.",
         CHECKS, "Hourly", 3600, control=True, then=("ask_kpi_keeper", "ask_goal_owner")),
-    Job("health_scan", "Health scan",
-        "Checks Tico's health and wakes the Health Monitor only for a finding the last scan did not have.",
-        CHECKS, "Hourly", 3600, control=True, then=("check_health", "wake_health_monitor")),
     Job("task_manager_report", "Task Manager report",
         "Lists each department's quiet tasks, overdue asks, review tickets without a pull request, merged work that did "
         "not move and held bots in plain code, and opens one task for the Task Manager per department that has something.",
@@ -220,9 +213,6 @@ JOBS = [
     Job("memory_tidy", "Nightly memory tidy",
         "Proposes memory and knowledge edits for up to three pilot bots on their named models. Pilot stop: $50.",
         LEARNING, "Nightly at 03:30", control=True, then=("propose_memory_tidy",)),
-    Job("learnings", "Nightly learnings",
-        "Reads yesterday's chats, tasks, Slack, mail and meetings and sends each bot what it should remember.",
-        LEARNING, "Nightly at 03:00", ai=True, control=True, labels=("learnings-route",), then=("read_activity", "send_learnings")),
     Job("due_reminders", "Due reminders", "Tells a bot when one of its tasks reaches its due time.",
         REMINDERS, "Every 10 seconds", 10, then=("remind_due",)),
     Job("ask_deadlines", "Ask go-ahead",
@@ -255,12 +245,6 @@ JOBS = [
         "alerts once when an Engineering task has been blocked over four hours. It wakes no bot about a quiet task: "
         "the task roundup lists those.",
         HOUSEKEEPING, "Every minute", 60, then=("drop_unreadable",)),
-    Job("task_roundup", "Task roundup",
-        "Sends each bot one list of its tasks: a follow-up time that came, a question that went unanswered, an assignment not started, a task to "
-        "restate, a Dev ticket late at its step, a manager's engineering exceptions, a step's backlog, an update it may have "
-        "missed, or a quiet task. Managers and doers get every line; a reviewer, lead, responder or monitor gets its questions "
-        "and its own follow-up times only. Plain code: no model is called, and nothing to list is a quiet run.",
-        HOUSEKEEPING, "Three times a day (6am, noon, 6pm company time)", 21600, control=True, then=("send_task_roundup",)),
     Job("turn_fixer", "Turn fixer",
         "Frees turns proven dead, keeps one Health finding per busy-turns incident and hands what it cannot fix to "
         "BotOps.", HOUSEKEEPING, "Every 10 seconds", 10, then=("free_dead_starts", "turns_finding")),
@@ -279,8 +263,8 @@ JOBS = [
         "code: nothing past its time is a quiet run.",
         HOUSEKEEPING, "Every 15 minutes", 900, then=("purge_thread_messages",)),
     Job("invariant_checks", "Production checks",
-        "Reads a few production invariants in plain code, shows each failing one on Health and raises one task for its "
-        "owner; the task is closed when the check passes.",
+        "Reads a few production invariants in plain code and shows each failing one on Health. Check health files each "
+        "one as a BotOps task, closed when the check passes.",
         HOUSEKEEPING, "Every 15 minutes", 900, then=("check_invariants",)),
     Job("go_live_expiry", "Go-live expiry", "Ends a go-live waiting for a computer that never reports.",
         HOUSEKEEPING, "Every 10 minutes", 600, then=("end_go_live",)),
@@ -341,7 +325,6 @@ WAITS_FOR_ANCHOR = (THREE_DAILY,)
 AI_PRESETS = (HOURLY, FOUR_HOURS, DAILY)        # a job that asks Decide is never offered every 15 minutes
 CONFIG_KEY = "system_routines"
 AT_RE = re.compile(r"^([01]\d|2[0-3]):([0-5]\d)$")
-NIGHT_CLAIMS = ("learnings",)   # one run a night, claimed per company night (next_night reads the claim)
 
 
 @dataclass(frozen=True)
@@ -351,31 +334,25 @@ class Control:
     presets: tuple = ()         # the schedule presets offered; () is a switch only
     preset: str | None = None   # the default preset
     at: str | None = None       # the default "HH:MM" (company time, updates.ZONE) for DAILY
-    owner_only: bool = False    # only the owner changes it (Health scan, as in Settings > Health)
+    owner_only: bool = False    # only the owner changes it; no job uses that now
 
 
 CONTROLS = {
     "stale_review": Control(rule="stale_review", presets=AI_PRESETS, preset=HOURLY, at="09:00"),
     "kpi_asks": Control(presets=EVERY_PRESET, preset=HOURLY, at="09:00"),
-    "health_scan": Control(presets=EVERY_PRESET, preset=HOURLY, at="09:00", owner_only=True),
-    # One run a night reads the day before (backend/learnings.py claims one per night): the choice is its time.
-    "learnings": Control(presets=(DAILY,), preset=DAILY, at="03:00"),
     "memory_tidy": Control(on=False, presets=(DAILY,), preset=DAILY, at="03:30"),
     "ask_deadlines": Control(presets=EVERY_PRESET, preset=HOURLY, at="09:00"),
     # Hourly while people are at work: a report outside business hours would wait on nobody to read it.
     "task_manager_report": Control(presets=(BUSINESS, HOURLY, FOUR_HOURS, DAILY), preset=BUSINESS, at="09:00"),
     "bookkeeper_check": Control(presets=EVERY_PRESET, preset=HOURLY, at="09:00"),
     "topic_fresh": Control(rule="topic_fresh"),
-    # Three times a day in company time (6am, noon, 6pm; the time applies to Daily only): one list to each bot per run
-    # (backend/task_roundup.py).
-    "task_roundup": Control(presets=(THREE_DAILY, DAILY), preset=THREE_DAILY, at="06:00"),
 }
 
 
-QUICK_KEYS = ("kpi_asks", "health_scan", "ask_deadlines", "task_manager_report",
+# Last runs read by backend/scheduler.py (QUICK and FIXED).
+QUICK_KEYS = ("kpi_asks", "ask_deadlines", "task_manager_report",
               "bookkeeper_check", "bookkeeper_watch",
-              "bookkeeper_rules_digest", "thread_followups", "thread_digest", "thread_bot_digest", "thread_retention",
-              "task_roundup")   # last runs read by backend/scheduler.py (QUICK and FIXED)
+              "bookkeeper_rules_digest", "thread_followups", "thread_digest", "thread_bot_digest", "thread_retention")
 
 
 def zone():
@@ -416,11 +393,11 @@ def schedule_words(key, cfg):
     if not cfg or not cfg.get("preset"):
         return BY_KEY[key].schedule
     words = PRESETS[cfg["preset"]][0].format(at=cfg.get("at") or "")
-    return "Nightly at " + cfg["at"] if key in ("learnings", "memory_tidy") else words
+    return "Nightly at " + cfg["at"] if key == "memory_tidy" else words
 
 
 def may_change(auth, who, key):
-    """An owner or an admin changes a job's switch, schedule and Run now; Health scan only the owner. Raises a 403."""
+    """An owner or an admin changes a job's switch, schedule and Run now. Raises a 403."""
     auth.domain(who)
     job = BY_KEY.get(key)
     if key not in CONTROLS or not job:
@@ -706,8 +683,6 @@ def next_at(job, last, now, settings=None, c=None, cfg=None):
     if cfg is not None:
         if not cfg["on"]:
             return None
-        if job.key in NIGHT_CLAIMS and c is not None:
-            return next_night(c, cfg, now, job.key)
         return next_due(cfg, H.parse_ts(last["started_at"]) if last else None, now)
     every = job.every
     if job.key == "directory_sync" and c is not None:
@@ -718,21 +693,6 @@ def next_at(job, last, now, settings=None, c=None, cfg=None):
         return None
     started = H.parse_ts(last["started_at"])
     return max(started + timedelta(seconds=every), now)
-
-
-def next_night(c, cfg, now, key="learnings"):
-    """A nightly run (NIGHT_CLAIMS) runs once per company night (backend/learnings.py `nightly`, backend/dream_auto.py
-    `nightly`), not once after each time: tonight's start while tonight is unclaimed, else tomorrow's. The scheduled
-    claim never retries a night that is claimed (only Run now does), so an unconfigured, capped or failed night also
-    waits for tomorrow."""
-    from . import learnings
-    hour, minute = (int(x) for x in (cfg.get("at") or "03:00").split(":"))
-    start = now.astimezone(zone()).replace(hour=hour, minute=minute, second=0, microsecond=0)
-    night = learnings.night_of(now)
-    claimed = c.execute("SELECT 1 FROM learning_runs WHERE night=?", (night,)).fetchone()
-    if claimed:
-        return start + timedelta(days=1)
-    return max(start, now)
 
 
 def directory_minutes(c):
@@ -845,10 +805,6 @@ def listing(c, settings, now=None, who=None, auth=None):
         if job.key in ("bookkeeper_check", "bookkeeper_watch", "bookkeeper_rules_digest"):
             from .bookkeeper import active as bookkeeper_active
             item["note"] = None if bookkeeper_active(c) else "Opens no tasks while the Bookkeeper is paused (Settings > Bots)"
-        if job.key == "health_scan":
-            # Its own switch only says whether it may run; it finds nothing while the Health Monitor itself is off.
-            from .health_monitor import active
-            item["note"] = None if active(c) else "Finds nothing while the Health Monitor is off (Settings > Health)"
         if row:
             item["last"] = {"started_at": row["started_at"], "finished_at": row["finished_at"], "ok": bool(row["ok"]),
                             "result": row["result"], "runs": row["runs"]}
@@ -888,8 +844,8 @@ def install(app, store, auth, mutate):
 
     @app.put("/api/v2/system-routines/{key}")
     def system_routine_save(key: str, request: Request, body: M.SystemRoutineUpdate):
-        """Switch a job on or off, or pick its schedule preset and daily time. An owner or an admin; Health scan only the
-        owner. Stale ticket review's and Topic changed's switch is their team rule (backend/team_rules.py)."""
+        """Switch a job on or off, or pick its schedule preset and daily time. An owner or an admin.
+        Stale ticket review's and Topic changed's switch is their team rule (backend/team_rules.py)."""
         who = request.state.identity
         may_change(auth, who, key)
         if body.pilots is not None and key != "memory_tidy":
@@ -908,8 +864,16 @@ def install(app, store, auth, mutate):
     def system_routine_run(key: str, request: Request, body: M.Empty):
         """Run one of the controlled jobs once, now, through the code and caps of its scheduled run (a stale ticket
         review still makes at most its hourly Decide calls); its result lands on its row. `running` while a job that
-        asks Decide works on its own thread. 409 while it is off or already running."""
+        asks Decide works on its own thread. 409 while it is off or already running. The retired task_roundup and
+        learnings jobs run Maintenance Find stuck and Learn respectively and return {run, started}."""
         who = request.state.identity
+        if key in ("task_roundup", "learnings"):
+            from . import maintenance
+            maintenance.may_change(auth, who)
+            step = "find_stuck" if key == "task_roundup" else "learn"
+            run, started = maintenance.run_now(store, auth, who.actor, step=step,
+                                               key=request.headers.get("idempotency-key"))
+            return {"run": run, "started": started}
         may_change(auth, who, key)
         job = BY_KEY[key]
         if not job.control:

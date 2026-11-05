@@ -10,7 +10,8 @@ and answers "can I...?" from the rules in force (docs/rules-plan.md §2, §5).
   version attached to that task, one file per link and requester, so a later change never alters an earlier cite and a
   teammate who cannot read the task cannot read the text. A document cut at DOC_CHARS is marked truncated.
 - Counsel has no credentials and sends nothing: its tool list is `clients/hubtools.py` COUNSEL_TOOLS. It reads its task and
-  the rules in force, and writes suggestions through `POST /api/v2/rules` as `suggested`. A cite is checked here: Counsel
+  the rules in force, plus explicitly granted physical mail or the legal letter its current task handles, and writes
+  suggestions through `POST /api/v2/rules` as `suggested`. A cite is checked here: Counsel
   cites only the exact (file, version) it was asked to read, named in the cite, and the quote must appear in that
   version's normalized text. A quote that does not is dropped (the response says so, and `rules.quote_dropped` counts
   it), never stored. Only Counsel and a person cite; no other bot can.
@@ -436,6 +437,37 @@ def run_read(c, who):
     return attempt_read(c, who.attempt_id)
 
 
+def postal_task(c, who, letter):
+    """Without an explicit mail grant, Counsel reads only the legal letter its current task handles."""
+    if not who.attempt_id or letter["kind"] != "legal" or not letter["task_id"]:
+        return False
+    from . import read_cache
+    from .task_privacy import carried_tasks
+    carried = read_cache.value(c, ("counsel_postal_tasks", who.attempt_id),
+                               lambda: carried_tasks(c, who.attempt_id), shared=True)
+    task = H.task(c, letter["task_id"])
+    return bool(task and task["owner_id"] == who.actor and task["id"] in carried)
+
+
+def postal_scan(c, auth, who, ident, rest, query):
+    """Only bytes that are a readable letter's scan, at the exact requested file version."""
+    from . import postal_mail
+    file = c.execute("SELECT current_version FROM bot_files WHERE id=?", (ident,)).fetchone()
+    if file:
+        if rest:
+            number = _version(rest[1])
+        elif query.get("v"):
+            number = _version(query["v"])
+        else:
+            number = file[0] if F.is_file_id(ident) else 1
+        version = c.execute("SELECT blob_id FROM bot_file_versions WHERE file_id=? AND version=?",
+                            (ident, number)).fetchone()
+        ident = version[0] if version else ""
+    elif rest:
+        return False
+    return postal_mail.scan_access(c, auth, who, ident) is True
+
+
 def private_suggestion(c, who, data):
     """A rule Counsel writes from a private run. Its read tasks are private, and a private run publishes nothing
     company-wide (backend/task_privacy.py guard_write), except this: on its own read task, Counsel suggests external
@@ -480,9 +512,10 @@ COUNSEL_ROUTES = tuple((methods, re.compile(r"^/api/v2/" + pattern + r"$")) for 
     (WRITE, r"tasks/[^/]+/comments"),
     (GET, r"files/[^/]+"),
     (GET, r"files/[^/]+/versions/\d+"),
+    (GET, r"postal/items(?:/[^/]+)?"),
     (ANY, r"(attempts|turns)/[^/]+(/.*)?"),
 ))
-READ_SCOPE = "Counsel reads only its own task, the document version it was asked to read and its own run."
+READ_SCOPE = "Counsel reads only its own task and run, its requested document version, and authorized physical mail."
 # Counsel outside a run: every turn it takes carries the run's own token (runner-rs env.rs and warm.rs HUB_TOKEN; its
 # credentials are fetched with that token too), and it has no agent credential unless someone makes it an external
 # agent. Such a token owns every read task, so it calls nothing but `me`.
@@ -498,7 +531,8 @@ def read_refused(store, auth, who, method, path, query):
     allow (another run's summary, an answer to another run's question, a page or a review of another version). On those:
     a run's attempt and steps are its own run's alone; a Counsel run reads only the tasks it carries
     (task_privacy.carried_tasks: its read task, or the question it answers) and, on a document's read (run_read), that
-    file at that version, which it names. Counsel outside a run (no attempt) calls only STANDING."""
+    file at that version, which it names. Postal reads independently require a mail grant or the legal letter carried
+    by its current task. Counsel outside a run (no attempt) calls only STANDING."""
     if not is_counsel(who):
         return None
     if SQL_READS.match(path):
@@ -523,6 +557,8 @@ def read_refused(store, auth, who, method, path, query):
             except Problem:
                 refused = True
         else:
+            if postal_scan(c, auth, who, ident, rest, query):
+                return None
             read = run_read(c, who)
             refused = not read or ident != read["file_id"] or (
                 rest != ["versions", str(read["version"])] if rest else _version(query.get("v")) != read["version"])
@@ -570,7 +606,7 @@ def turn_done(c, attempt, outcome, task_id, text):
     if not row or row["owner_id"] != "bot:" + SLUG or row["status"] not in ("open", "doing"):
         return
     lines = [line.strip() for line in str(text or "").splitlines() if line.strip() and not _disclaimer(line)]
-    H.task_update(c, "bot:" + SLUG, task_id, status="done", note=(lines[-1][:500] if lines else None))
+    H.task_update(c, "bot:" + SLUG, task_id, status="done", note=(lines[-1][:500] if lines else None), strict=False)
 
 
 def check_cite(c, auth, who, blobs, cite):

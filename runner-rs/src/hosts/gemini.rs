@@ -173,6 +173,7 @@ struct Inner {
 }
 
 struct Shared {
+    allocation: super::Allocation,
     bot: String,
     home: PathBuf,
     cmd: Vec<String>,
@@ -185,7 +186,7 @@ pub struct GeminiHost(Arc<Shared>);
 
 impl GeminiHost {
     pub fn new(bot: &str, home: &Path, cmd: Vec<String>, tx: Events) -> GeminiHost {
-        GeminiHost(Arc::new(Shared { bot: bot.into(), home: home.to_path_buf(), cmd, tx, inner: Mutex::new(Inner::default()) }))
+        GeminiHost(Arc::new(Shared { allocation: super::Allocation::default(), bot: bot.into(), home: home.to_path_buf(), cmd, tx, inner: Mutex::new(Inner::default()) }))
     }
 
     fn inner(&self) -> std::sync::MutexGuard<'_, Inner> {
@@ -215,6 +216,10 @@ impl GeminiHost {
         if let Some(r) = reader {
             let _ = tokio::time::timeout(STOP_TIMEOUT + Duration::from_secs(1), r).await;
         }
+    }
+
+    pub fn track_allocation(&self, turn: std::sync::Arc<std::sync::atomic::AtomicBool>) {
+        self.0.allocation.track(turn);
     }
 
     pub fn alive(&self) -> bool {
@@ -307,6 +312,7 @@ impl GeminiHost {
         let mut command = self.command(thread_id, t);
         command.stderr(Stdio::piped());
         let mut child = command.spawn()?;
+        self.0.allocation.mark();
         let stderr = crate::run_diagnostics::Stderr::capture(&mut child, self.0.tx.clone(), &t.settings.env);
         Ok((child, stderr))
     }

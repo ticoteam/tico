@@ -6,7 +6,7 @@
 // no group headings, with a search box that matches name, trigger, action, department tag and group word. Each row reads
 // WHEN <trigger> THEN <action>, with its department tag, schedule, last and next run and, for a job that asks Decide,
 // which route answered and this month's spend. An owner or admin switches the six AI/people jobs (and Topic changed),
-// picks their schedule preset and runs them now; Health scan only the owner (`can_change`, enforced by the server too).
+// picks their schedule preset and runs them now. Who may change a job is the server's `can_change`, enforced there too.
 // Fetched again at most once a minute while the tab is open.
 let SYSTEM_ROUTINES = null, SYSTEM_ROUTINES_AT = 0, SYSTEM_ROUTINES_Q = '', SYSTEM_ROUTINES_HELD = false;
 const SYSTEM_ROUTINE_BUSY = new Set();
@@ -45,7 +45,7 @@ function systemRoutineControlHTML(j) {
   if (!j.switch) return j.needed ? '<span class="muted sysr-needed">Tico needs this to run</span>' : '';
   const busy = SYSTEM_ROUTINE_BUSY.has(j.key);
   if (!j.can_change) {
-    // A member reads on or off; an admin looking at Health scan sees why they cannot change it.
+    // A member reads on or off; an admin looking at a job only the owner changes sees why they cannot change it.
     return `<span class="sysr-state" data-sysr-state>${j.on ? 'On' : 'Off'}</span>${j.owner_only && settingsIsAdmin() ? '<span class="muted sysr-owner" data-sysr-owner>Only the owner changes this</span>' : ''}`;
   }
   return `<label class="sysr-switch">${peopleSwitch('data-sysr-on', j.on, busy, j.name)}<span>${j.on ? 'On' : 'Off'}</span></label>

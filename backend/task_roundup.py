@@ -20,6 +20,11 @@ A bot's list has these lines, in this order, MAX_LINES in all (the rest are coun
 - a step's backlog over its limit (backend/step_backlog.py), on each bot it names, on the oldest ticket waiting there,
   relisted after the step's every_hours;
 - a missed update, then a quiet task, on a task the bot owns (below).
+A missed start is a task the bot owns, live and readable to it, whose snooze ended at its deadline, or whose deferred time
+passed, within the last three days and more than 15 minutes before the run, with no turn on the task and no delivery to it since
+that time: one line per such time (START). A task waiting on bots only is listed on the list of each bot it waits on, not its
+owner's, once per update of the task: every hold on it is on a bot (backend/task_holds.py), none on a person, nobody or a private
+task (BLOCKED). A task a person holds gets no missed start. These two are sweep lines: a bot with its sweeps off gets neither.
 A task is named once on a list, whatever its reason.
 
 A missed update is a task the bot owns, live (H.ACTIVE_STATUSES), readable to it, not snoozed, not already being run for it
@@ -61,7 +66,7 @@ The scheduler selects the bots in one read transaction (discover), then sends ea
 which rebuilds that bot's list from the live database before it writes anything."""
 
 import sqlite3
-from datetime import timedelta
+from datetime import datetime, timedelta, timezone
 
 from .batch_work import isolated
 from .store import H
@@ -79,8 +84,11 @@ FOLLOW_UP_CHARS = 160                  # a follow-up's note on its list line, tr
 ASK_CHARS = 120                        # a question's text on its line, trimmed to this
 ASK_DAYS = 30                          # an unanswered question is looked for this far back
 CREATED_WITHIN = 1                     # seconds: a status or step row this close to its task's creation is the creation
+MISSED_START_GRACE = timedelta(minutes=15)    # a snooze or deferred time must have passed this long before a missed start
+MISSED_START_LOOKBACK = timedelta(days=3)     # a missed start older than this is history, not a line
+DELIVERED_JOBS = ("input", "running", "uncertain", "completed")     # a job that reached its bot: a turn on the task started
 # The lines' order on a list (a group sorts its own lines; a missed update newest first).
-DUE, ASKS, ASSIGNED, RESTATE, LATE, EXCEPTIONS, BACKLOG, MISSED, QUIET = range(9)
+DUE, ASKS, ASSIGNED, START, RESTATE, LATE, EXCEPTIONS, BACKLOG, BLOCKED, MISSED, QUIET = range(11)
 # The changes to a task itself. Anything else a history row records (check-backs, rank, checkpoints) is bookkeeping.
 TASK_KINDS = ("status", "owner", "step", "waiting_on", "due", "title", "body", "acceptance")
 _TASK_KINDS_SQL = ",".join(f"'{kind}'" for kind in TASK_KINDS)
@@ -119,6 +127,7 @@ def _candidates(c, at, shared):
         (still_needed.ACTION, H.shift(at, days=-ASK_DAYS)))}
     actors |= {item["to"] for item in _shared(shared, "late", lambda: step_age.late_items(c, at))}
     actors |= {H.bot_actor(manager) for _, manager in _shared(shared, "types", lambda: _engineering_types(c))}
+    actors |= {H.bot_actor(slug) for slug in _shared(shared, "blocked", lambda: _blocked_waits(c, at))}
     actors |= {who for warning in _shared(shared, "backlog", lambda: step_backlog.warnings(c)) for who in warning["targets"]}
     return {H.actor_id(actor) for actor in actors if actor}
 
@@ -136,8 +145,10 @@ def discover(c, at=None):
         slug = bot["id"]
         if slug not in wanted or _sent_before(c, slug, at):
             continue
-        if _list(c, slug, at, shared)[0]:
-            plans.append({"slug": slug, "at": at})
+        items = _items(c, slug, at, shared)
+        if items:
+            plans.append({"slug": slug, "at": at, "lines": len(items),
+                          "oldest": min(item["sort"] for item in items)})
     return plans
 
 
@@ -146,14 +157,21 @@ def send(c, plan):
     the bot), and the bot is sent only if it was not already sent one this run. A bot with nothing to list gets no message.
     The run's time, each line's registry key, the consumed follow-ups and the events are written only once the message is
     delivered. Returns how many lines the list named, or 0 when nothing was sent."""
+    return send_detail(c, plan)[0]
+
+
+def send_detail(c, plan, skip_tasks=(), *, allowed=None):
+    """send, and the ids of the tasks its shown lines named: (lines, [task ids]), or (0, []) when nothing was sent. The
+    Maintenance limiter counts a delivered list once, with these ids (backend/maintenance_steps/find_stuck.py). A task in
+    skip_tasks or refused by allowed(task_id) has its lines named nowhere; allowed runs before the list is capped."""
     from . import run_triggers as RT, task_check_backs
     slug, at = plan["slug"], plan["at"]
     if _sent_before(c, slug, at) or not _active(c, slug):
-        return 0
+        return 0, []
     built = _later(at, _built_at())        # stamped before the read: an update racing it is listed again, never missed
-    text, count, shown = _list(c, slug, at, {})
+    text, count, shown = _list(c, slug, at, {}, skip_tasks, allowed=allowed)
     if not text:
-        return 0
+        return 0, []
     actor = H.bot_actor(slug)
     with isolated(c, WAKE, slug):
         try:
@@ -161,20 +179,38 @@ def send(c, plan):
             message = H._write_message(c, H.KEEPER, actor, text, _room(c, slug), "notice",
                                        RT.stamp({"wake": WAKE, "no_mentions": True}, WAKE), None, None)
         except H.Refused:
-            return 0                    # not told this run: a later run may try again
+            return 0, []               # not told this run: a later run may try again
         if not _delivered(c, slug, message):
-            return 0                    # a rule held it, so no bot was woken: not sent, and a later run may try again
+            return 0, []               # a rule held it, so no bot was woken: not sent, and a later run may try again
         _set(c, SENT_KEY + slug, at)
         for item in shown:
             _set(c, item["mark"], built)
+            if item["also"]:
+                _set(c, item["also"], built)
             if item["event"]:
                 H.event(c, H.KEEPER, *item["event"])
             if item["due"]:
                 task_check_backs.consume(c, item["tid"], H.KEEPER)
         H.event(c, H.KEEPER, EVENT, slug, {"at": at, "tasks": count,
                                            "follow_ups": sum(1 for item in shown if item["due"])})
-        return count
-    return 0
+        return count, _task_ids(shown)
+    return 0, []
+
+
+def line_tasks(c, plan):
+    """The task ids the bot's list would name this run, before any per-task limit.
+    Read only: it runs in the caller's transaction and writes nothing."""
+    _, _, shown = _list(c, plan["slug"], plan["at"], {})
+    return _task_ids(shown)
+
+
+def _task_ids(shown):
+    """The distinct task ids the shown lines name, in list order (a line that names no task names none)."""
+    out = []
+    for item in shown:
+        if item["tid"] and item["tid"] not in out:
+            out.append(item["tid"])
+    return out
 
 
 def _set(c, key, value):
@@ -234,15 +270,28 @@ def _shared(shared, name, make):
     return shared[name]
 
 
-def _item(tid, line, key, *, due=False, event=None):
+def _item(tid, line, key, *, due=False, event=None, also=None):
     """One line on a list: the task it names (None when it names none), its text, the registry key it is recorded under
-    once sent, whether it consumes a due follow-up, and an event written with it (action, target, detail) or None."""
-    return {"tid": tid, "line": line, "mark": key, "due": due, "event": event}
+    once sent, whether it consumes a due follow-up, an event written with it (action, target, detail) or None, and the
+    task's quiet-clock key (`also`) when the line lists the task as a whole (a missed start)."""
+    return {"tid": tid, "line": line, "mark": key, "due": due, "event": event, "also": also}
 
 
-def _list(c, slug, at, shared):
+def _list(c, slug, at, shared, skip_tasks=(), *, allowed=None):
     """The bot's list as one message's text, how many lines it has, and the items shown on it (each with the registry key it
-    is recorded under once sent). (None, 0, []) when nothing needs a look."""
+    is recorded under once sent). (None, 0, []) when nothing needs a look. Task limits apply before the display cap."""
+    ordered = _items(c, slug, at, shared, skip_tasks, allowed=allowed)
+    if not ordered:
+        return None, 0, []
+    shown = ordered[:MAX_LINES]
+    lines = [HEADING, *(item["line"] for item in shown)]
+    if len(ordered) > len(shown):
+        lines.append(f"- and {len(ordered) - len(shown)} more")
+    return "\n".join(lines), len(ordered), shown
+
+
+def _items(c, slug, at, shared, skip_tasks=(), *, allowed=None):
+    """All eligible lines in list order, one per task, before the display cap."""
     from . import rules, task_snooze as TS
     actor = H.bot_actor(slug)
     now = H.parse_ts(at)
@@ -283,25 +332,135 @@ def _list(c, slug, at, shared):
             reason = (f"Waiting on nothing for {span}" if row["status"] == "waiting"
                       else f"Quiet for {span}, nothing waiting on anyone")
             groups[QUIET].append((quiet_since, _item(row["id"], _line(row, reason, private), LISTED_KEY + row["id"])))
-    sweep_lines = (_assigned(c, slug, actor, at) + _late(c, slug, actor, at, shared) + _exceptions(c, slug, actor, at, shared)
-                   + _backlogs(c, slug, actor, at, shared)) if sweeping else []
+    sweep_lines = (_assigned(c, slug, actor, at) + _missed_starts(c, slug, actor, at) + _late(c, slug, actor, at, shared)
+                   + _exceptions(c, slug, actor, at, shared) + _backlogs(c, slug, actor, at, shared)
+                   + _blocked_by(c, slug, actor, at, shared)) if sweeping else []
     for group, sort, item in _asks_back(c, slug, actor, at) + sweep_lines:
         groups[group].append((sort, item))
     ordered, seen = [], set()
     for group in range(QUIET + 1):
-        for _, item in sorted(groups[group], key=lambda found: found[0], reverse=group == MISSED):
+        for sort, item in sorted(groups[group], key=lambda found: found[0], reverse=group == MISSED):
             if item["tid"] is not None:
                 if item["tid"] in seen:         # a task is named once on a list
                     continue
                 seen.add(item["tid"])
+                if item["tid"] in skip_tasks or (allowed is not None and not allowed(item["tid"])):
+                    continue
+            item["sort"] = _when(sort)
             ordered.append(item)
-    if not ordered:
-        return None, 0, []
-    shown = ordered[:MAX_LINES]
-    lines = [HEADING, *(item["line"] for item in shown)]
-    if len(ordered) > len(shown):
-        lines.append(f"- and {len(ordered) - len(shown)} more")
-    return "\n".join(lines), len(ordered), shown
+    return ordered
+
+
+def _when(value):
+    """A line's sort time as an aware datetime, the oldest possible when it has none, so lines of every kind compare."""
+    found = H.parse_ts(str(value)) if value else None
+    if found is None:
+        return datetime.min.replace(tzinfo=timezone.utc)
+    return found if found.tzinfo else found.replace(tzinfo=timezone.utc)
+
+
+def _missed_starts(c, slug, actor, at):
+    """A snooze that ended at its deadline, or a deferred time that passed, within MISSED_START_LOOKBACK and more than
+    MISSED_START_GRACE before the run, on a live task the bot owns (a deferral it made on a task it owns), with no turn on the
+    task and no delivery to it since that time: one line per such time. A deferred task must still wait for its next run,
+    with no resume condition holding it (H.next_run_waiting)."""
+    from . import task_snooze as TS
+    since = H.shift(at, seconds=-int(MISSED_START_LOOKBACK.total_seconds()))
+    before = H.shift(at, seconds=-int(MISSED_START_GRACE.total_seconds()))
+    marks = _marks()
+    # A snooze's appointment is its deadline (the row's old value), not the sweep that wrote its end.
+    ended = H._rows(c.execute(
+        f"SELECT e.old AS appointment, t.* FROM history_events e JOIN {H.TASKS} t ON t.id=e.subject_id "
+        "WHERE e.subject_type='task' AND e.kind='snoozed_until' AND e.new IS NULL AND e.note='snooze over' "
+        f"AND e.old>? AND e.old<=? AND t.owner_id=? AND t.status IN ({marks}) ORDER BY e.old",
+        (since, before, actor, *H.ACTIVE_STATUSES)))
+    deferred = H._rows(c.execute(
+        f"SELECT d.due_at AS appointment, t.* FROM deferrals d JOIN {H.TASKS} t ON t.id=d.item "
+        "WHERE d.kind='task' AND d.bot=? AND t.owner_id=? AND d.settled_at IS NULL AND d.fired_job IS NULL "
+        f"AND d.due_at IS NOT NULL AND d.due_at>? AND d.due_at<=? AND t.status IN ({marks}) ORDER BY d.due_at",
+        (slug, actor, since, before, *H.ACTIVE_STATUSES)))
+    external = _external(c, slug)     # an external inbox has no job: a message written to it is its delivery (_delivered)
+    out = []
+    for what, rows in (("Snooze ended", ended), ("Deferred time passed", deferred)):
+        for row in rows:
+            appointment = row["appointment"]
+            key = _key("start", slug, f"{row['id']}:{appointment}")
+            if (_mark(c, key) is not None or TS.snoozed(row, at) or not H.task_private_readable(c, actor, row)
+                    or (what == "Deferred time passed" and not H.next_run_waiting(c, row))
+                    or _turned_since(c, row, appointment, actor, external) or _running(c, slug, row) or _person_held(c, row)):
+                continue
+            reason = f"{what} at {_clock(appointment)} and nothing has picked it up"
+            out.append((START, appointment, _item(row["id"], _line(row, reason, H.task_private(c, row)), key,
+                                                  also=LISTED_KEY + row["id"])))
+    return out
+
+
+def _turned_since(c, row, since, actor, external):
+    """Whether a turn on the task, or a delivery in its conversation, started since `since` (a snooze's or deferred time). An
+    external inbox has no job, so a message written to it since then is its delivery (the _delivered rule)."""
+    try:
+        if c.execute("SELECT 1 FROM attempts WHERE task_id=? AND created_at>=? LIMIT 1", (row["id"], since)).fetchone():
+            return True
+        if external:
+            return c.execute("SELECT 1 FROM messages WHERE conversation_id=? AND recipient_id=? AND created_at>=? "
+                             "AND deleted_at IS NULL LIMIT 1", (row["conversation_id"], actor, since)).fetchone() is not None
+        marks = ",".join("?" * len(DELIVERED_JOBS))
+        return c.execute(f"SELECT 1 FROM jobs j JOIN messages m ON m.id=j.message_id WHERE m.conversation_id=? "
+                         f"AND m.created_at>=? AND j.state IN ({marks}) LIMIT 1",
+                         (row["conversation_id"], since, *DELIVERED_JOBS)).fetchone() is not None
+    except sqlite3.OperationalError:    # a local hub has no attempts or jobs table
+        return False
+
+
+def _clock(ts):
+    return H.parse_ts(ts).strftime("%H:%M") + " UTC"
+
+
+def _person_held(c, row):
+    """Whether a person holds the task: a hold on a person, on nobody, or on a task the reader cannot see (backend/task_holds.py)."""
+    from . import task_holds as TH
+    return any(h["on"] is None or H.is_human(h["on"]) or h["kind"] == "private" for h in TH.holds(c, row))
+
+
+def _blocked_waits(c, at):
+    """{bot id: [(task row, what)]}: each waiting task a bot owns, of an active bot, whose every hold is on a bot
+    (backend/task_holds.py), under the bot it waits on. The owner and active-bot filters are in the query, so a person's
+    task never reaches task_holds. Each recipient's mark suppresses only that recipient's line for this update.
+    Read once per run (the shared reads of discover and of each send)."""
+    from . import task_holds as TH, task_snooze as TS
+    out = {}
+    rows = H._rows(c.execute("SELECT tasks.* FROM " + H.TASKS + " tasks JOIN bots b ON tasks.owner_id='bot:'||b.id "
+                             "WHERE tasks.status='waiting' AND tasks.owner_id LIKE 'bot:%' AND b.state='active' "
+                             "ORDER BY tasks.updated_at"))
+    for row in rows:
+        if TS.snoozed(row, at):
+            continue
+        found = TH.holds(c, row)
+        if not found or any(h["kind"] == "private" or not h["on"] or not H.is_bot(h["on"]) for h in found):
+            continue
+        whats = {}
+        for hold in found:
+            whats.setdefault(H.actor_id(hold["on"]), hold["what"])
+        for slug, what in whats.items():
+            if _mark(c, _key("blocked", slug, f"{row['id']}:{row['updated_at']}")) is None:
+                out.setdefault(slug, []).append((row, what))
+    return out
+
+
+def _blocked_by(c, slug, actor, at, shared):
+    """A waiting task that the bot's own work holds, on this bot's list (the bot it waits on), not its owner's: listed once per
+    update of the task, since its key carries the task's updated_at. A task the bot cannot read (its privacy, or
+    H.bot_reads_task), or one it is already running for, is named nowhere."""
+    out = []
+    for row, what in _shared(shared, "blocked", lambda: _blocked_waits(c, at)).get(slug, []):
+        key = _key("blocked", slug, f"{row['id']}:{row['updated_at']}")
+        if (_mark(c, key) is not None or not H.task_private_readable(c, actor, row) or not H.bot_reads_task(c, actor, row)
+                or _running(c, slug, row)):
+            continue
+        private = H.task_private(c, row)
+        reason = "Waiting on you" + (f": {_clip(what, ASK_CHARS)}" if what and not private else "")
+        out.append((BLOCKED, row["updated_at"] or "", _item(row["id"], _line(row, reason, private), key)))
+    return out
 
 
 def _asks_back(c, slug, actor, at):

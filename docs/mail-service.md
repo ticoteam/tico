@@ -68,8 +68,7 @@ Ana uses the same CLI interactively with `--as ana`, which has every verb.
 Legal is authorized by Ana (September 4, 2026, #130) to read messages and attachments from
 `ana@acme.example`. Its Gmail access entry has `can: [read]` and `read_only: true`. The shared
 service refuses mailbox filing, labels, rules, mark-read, starring, drafts, and sends for that
-entry. This is separate from `allow_attachments` in the outbound policy, which controls adding
-attachments to mail Tico writes and remains unchanged.
+entry. Attachments on outbound mail use the same draft and send permissions as the message without files.
 
 Legal's `default_mailbox: legal@acme.example` preserves its existing routines. It must explicitly use
 `--as legal --mailbox ana@acme.example` for Ana's messages; rules and filing are not allowed there.
@@ -78,7 +77,7 @@ Legal's `default_mailbox: legal@acme.example` preserves its existing routines. I
 
 Every bot with `read` access to a mailbox can list and download its attachments; no
 separate attachment grant is needed. This applies to ordinary and read-only mailbox access
-alike, and does not grant access to other mailboxes or permission to send attachments.
+alike, and does not grant access to other mailboxes or permission to draft or send mail.
 
 List files first, then use the returned reference (`a1`, `a2`, ...) with the same message ID:
 
@@ -109,25 +108,27 @@ with the reason attached; it never silently drops the work.
   the bot is replying to (a reply, to that one person, nobody added; an outside Cc makes it something else).
   Any other external recipient needs one of: a standing allowance in the policy file (Influencer: recipient must be
   in its creator table, 10 per day, never the same address twice) or `--approval-issue`, which is a closed
-  `owner:ana` `type:decision` GitHub Issue, a decided Tico `send` approval, or Ana's Tico message telling this bot
-  to send. With the switch off, none of this applies and a send is a draft.
+  `owner:ana` `type:decision` GitHub Issue, a decided Tico `send` approval, or a Tico message from a person who manages
+  this bot telling it to send. With the switch off, a send needs a full per-message approval.
 - With no registry (a Docker computer has no `registry/mail-policy.yaml`) the policy is built in: sending is on
   globally, internal domains are the ones the bot's mailbox and the team roster use (public providers such as
-  gmail.com never count), the caps are 20 sends a day, one external recipient, no external Cc, no attachments, and
-  the blocklist is empty. A `registry/mail-policy.yaml`, where there is one, replaces all of it.
+  gmail.com never count), the caps are 20 sends a day, one external recipient and no external Cc. The blocklist is empty.
+  A `registry/mail-policy.yaml`, where there is one, replaces all of it.
 - Caps, which apply to every send including those three kinds: sends per bot per day, per-recipient cooldown (14 days
   unless they wrote last; 0 in the built-in policy, because the forward address is written to again and again and
   the daily cap is the brake),
-  one external recipient per message, no CC or BCC outside acme.example, no attachments unless the
-  policy sets `defaults.allow_attachments: true` (it is off by default). A per-message approval (below) lifts the recipient
-  count, the external Cc rule and the cooldown for that one message; never the daily cap, the
-  blocklist, or `allow_attachments`.
+  one external recipient per message, no CC or BCC outside acme.example. A per-message approval
+  (below) lifts the recipient count, the external Cc rule and the cooldown for that one message;
+  never the daily cap or the blocklist.
 - Attachments come only from the bot's own folder, never from a secret-looking file (`.env*`, keys, `credentials*`,
-  `*secret*`, `*token*`, `secrets/`, `.ssh/` and the like), and a message carrying one always needs a per-message
-  approval, even to the sender of the thread, a forward target or an internal address. That approval names the
-  files: a Tico send approval whose payload lists the draft and each file's name, size and sha256 (`mail draft`
-  prints the request), or a GitHub Issue naming each file and its sha256. The files are hashed again from the
-  draft at send time; an owner's "send it" message does not cover attachments. See docs/mail.md, "Draft".
+  `*secret*`, `*token*`, `secrets/`, `.ssh/` and the like), up to 25 MB in all. They use the same
+  send chain as the message without files: no extra setting or approval is needed. An owner's
+  "send it" Tico message covers the attached files. Legacy `allow_attachments` keys in registry
+  defaults or mailbox entries are accepted but have no effect.
+- If a Tico send approval names files, it binds the draft id and the exact set of names, sizes
+  and sha256 hashes; the files are hashed again from the draft at send time. An approval naming
+  no files places no extra constraint on them. Drafts with files are reviewed again as they stand,
+  and the reviewer sees their names, types and sizes. See docs/mail.md, "Draft".
 - Blocklist of addresses and domains bots never email (press, counterparties, anyone Ana
   lists), and a "Ana handles personally" list that forces `hub/needs-owner`. Both beat a forward address and a
   reply to a sender.
@@ -144,14 +145,26 @@ Cc: partner@lawfirm.example; associate@lawfirm.example
 
 When `--approval-issue` is a full yes — a closed `owner:ana` `type:decision` GitHub Issue with a
 matching block, a decided Tico `send` approval whose payload names every external address
-and this exact text (its `body_sha256`), or a Tico message in which Ana told this bot to send — that message may carry more
-than one external recipient and external Cc, the cooldown does not apply to it, lint L056
-does not apply to it, the second reviewer runs but advises instead of blocking (its verdict
-is still recorded and shown), and the switch being off is lifted for that
+and this exact text (its `body_sha256`), or a Tico message in which a person who manages this bot told it to send —
+that message may carry more than one external recipient and external Cc, the cooldown does not apply to it, lint L056
+does not apply to it, and the switch being off is lifted for that
 message only. The bot still has to declare `send` on the mailbox, the daily cap and
 the blocklist still apply, and `mail draft` accepts the same `--approval-issue` so the
 draft can be written with the external Cc in the first place. Everything else about the
 bot stays draft-only.
+
+A Tico message's sender must currently be allowed to change that bot's mail sending: the company owner, an admin,
+a bot owner or a person above the bot on the org chart (`Auth.bot_manager`). Built-in bots, including Counsel, are
+the company owner's alone. `GET /api/v2/messages/{id}` answers `sender_can_approve_send` after checking the caller may
+read the message. Merely holding Write access to chat with the bot does not qualify, and a bot sender never does.
+The connector uses this server answer even on a computer with no local owner configuration. On an older server
+that omits the field, it falls back to `TICO_OWNER_HANDLE` or the owner resolved from local email/registry settings.
+GitHub Issues still require the configured `owner:<handle>` and `type:decision` labels.
+
+The second reviewer sees the verified person's message or approval Issue as permission for what
+it explicitly covers, and still blocks additions beyond it. The review audit records the
+instruction's source and id. A hash-bound Tico `send` approval keeps the review advisory, with
+its verdict still recorded and shown.
 
 **2. Lint (deterministic, each rule has an id, `mail lint` runs standalone).**
 - Forbidden phrases from the team writing rules and the playbooks, for example "we guarantee"

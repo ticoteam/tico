@@ -4,6 +4,20 @@ On Tico Cloud a bot can run on a cloud machine: a boat sandbox that Tico HQ star
 server (`backend/cloud_machines.py` decides when; HQ talks to boat). This page is for whoever builds the machine
 image: how the base snapshot is made and refreshed, and how a new machine becomes a runner.
 
+Machine status follows live runner contact: a runner seen within the normal online window shows **Running** when
+HQ's last machine record still says **Starting**. **Stopping**, **Stopped**, **Deleted** and **Failed** stay as recorded,
+even while a runner still checks in. Enrollment and subsequent heartbeats finish a
+pending `starting` transition, so the next heartbeat repairs an old record too. A heartbeat does not cancel a stop
+already reserved by the scheduler.
+
+A stopped machine stays asleep while its queued tasks wait for a person, a snooze, a prerequisite or a check.
+Health and Computers show those waits. With no other reason, Computers says **asleep; starts when work can run**.
+Samples and load from the last boot do not mean an asleep machine is failing to report. They still hold new starts
+once it is running, but raise no load warning after a planned stop, even with recent runner contact. Last-boot
+readiness can wake the machine for a fresh report too; stale samples and memory holds do not block that wake.
+Health ages the next job that can run past those last-boot holds, so old task waits do not age newly queued work.
+Work that can run but has waited over 15 minutes for the machine to start is a Health problem.
+
 ## Shared or own
 
 A bot in cloud mode is either on the company's **shared** cloud machine or on its **own**. Light bots (marketing,
