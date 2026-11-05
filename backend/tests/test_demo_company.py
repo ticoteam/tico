@@ -7,7 +7,6 @@ from contextlib import closing, contextmanager
 from datetime import datetime, timedelta, timezone
 
 import pytest
-import time_machine
 from fastapi.testclient import TestClient
 
 from backend import demo, demo_seed, hubdb
@@ -79,7 +78,7 @@ def built(tmp_path_factory):
 @pytest.fixture(scope="module")
 def ana(built):
     settings, _rows, _again = built
-    with time_machine.travel(NOW, tick=False), TestClient(create_app(settings), base_url="http://127.0.0.1:8765") as api:
+    with TestClient(create_app(settings), base_url="http://127.0.0.1:8765") as api:
         api.headers["Authorization"] = "Bearer " + settings.local_owner_token_file.read_text().strip()
         yield api
 
