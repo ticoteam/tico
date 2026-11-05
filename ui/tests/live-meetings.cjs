@@ -112,7 +112,14 @@ async function main() {
         }
         if (operation === 'join') world.detail.humans.push({actor: 'human:ben', name: 'Ben'});
         if (operation === 'bots') world.detail.bots.push({bot: body.bots[0], name: 'Finance', joined_by: 'human:ana'});
-        if (operation === 'access') world.detail.access.push(...body.add.map(id => ({actor: 'human:' + id, name: id === 'cara' ? 'Cara' : 'Ben'})));
+        if (operation === 'access') {
+          world.detail.access.push(...(body.add || []).map(id => ({actor: 'human:' + id, name: id === 'cara' ? 'Cara' : 'Ben'})));
+          const gone = new Set((body.remove || []).map(id => 'human:' + id));
+          world.detail.access = world.detail.access.filter(person => !gone.has(person.actor));
+          world.detail.humans = world.detail.humans.filter(person => !gone.has(person.actor));
+          // Leaving a private meeting takes it out of reach.
+          if (gone.has('human:ana')) { world.meetings = []; return json({id: 'live-1', left: true}); }
+        }
         if (operation === 'control') world.detail.state = body.action === 'end' ? 'ended' : body.action === 'resume' ? 'live' : 'paused';
         if (operation === 'finalize') world.detail.imported_meeting_id = 'meeting-imported';
         if (operation === 'chat') world.detail.chat.push({actor: 'human:ana', role: 'human', text: body.text});
@@ -156,6 +163,12 @@ async function main() {
     await page.locator('#live-people-picker button').click();
     await page.locator('.live-members').getByText(/Cara/).waitFor();
     assert(calls.some(([op, body]) => op === 'access' && body.add.includes('cara')), 'a private participant can add a person');
+    assert.equal(await page.locator('[data-live-person-remove]').count(), 0, 'only the connector removes others');
+    assert.equal(await page.locator('[data-live-leave]').count(), 1, 'a participant can leave');
+    world.detail.bots[0].joined_by = 'human:ana';
+    await page.locator('[data-live-id=live-1]').click();
+    await page.locator('[data-live-bot-remove=ops]').waitFor();
+    delete world.detail.bots[0].joined_by;
     world.detail.humans = [];
     world.detail.access.push({actor: 'human:ana', name: 'Ana'});
     await page.locator('[data-live-id=live-1]').click();
@@ -168,11 +181,22 @@ async function main() {
           const box = form.getBoundingClientRect(); return box.left >= 0 && box.right <= innerWidth;
         }), 'added participants have sharing controls at phone and desktop widths');
       }
+      assert(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth), 'no sideways scroll at ' + width);
     }
+    await page.locator('[data-live-leave]').click();
+    await page.locator('.live-status').getByText('You left the meeting.').waitFor();
+    await page.locator('.live-detail').getByText(/No live meetings/).waitFor();
+    assert(calls.some(([op, body]) => op === 'access' && body.remove?.includes('ana')), 'Leave removes only yourself');
+    world.meetings = [world.detail];
+    await page.evaluate(() => liveLoad(LIVE_MEETINGS));
     world.detail.humans = [{actor: 'human:ana', name: 'Ana'}];
     world.detail.owner_actor = 'human:ana';
     await page.locator('[data-live-id=live-1]').click();
     await page.locator('[data-live-control=pause]').waitFor();
+    assert.equal(await page.locator('[data-live-leave], [data-live-person-remove=ana]').count(), 0, 'the connector neither leaves nor removes themselves');
+    await page.locator('[data-live-person-remove=cara]').click();
+    await page.locator('[data-live-person-remove=cara]').waitFor({state: 'detached'});
+    assert(calls.some(([op, body]) => op === 'access' && body.remove?.includes('cara')), 'the connector removes others');
     await page.locator(`#live-bot-picker select option[value="${FINANCE}"]`).waitFor();
     await page.locator('#live-bot-picker select').selectOption(FINANCE);
     const draft = 'Please review this plan';

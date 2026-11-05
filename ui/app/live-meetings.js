@@ -194,7 +194,9 @@ function livePaintDetail(state, detail) {
     ${canAdd && active ? `<form class="live-bot-picker" id="live-bot-picker"><label>Attach teammates<select name="bots" data-live-focus-key="bot-picker" multiple size="${Math.min(5, Math.max(2, candidates.length))}" aria-label="Choose visible bots">
       ${candidates.map(bot => `<option value="${esc(bot.id)}">${esc(bot.name)}${bot.team ? ' · ' + esc(bot.team) : ''}</option>`).join('')}
       </select></label><button class="ghost" type="submit"${candidates.length ? '' : ' disabled'}>Attach bots</button></form>` : ''}
-    <div class="live-members"><span>People: ${people.map(person => esc(person.name || person.actor)).join(', ') || '—'}</span>
+    <div class="live-members"><span>People: ${people.map(person => `<span class="live-teammate">${esc(person.name || person.actor)}${active && controls && person.actor !== actor ?
+      ` <button class="ghost" type="button" data-live-person-remove="${esc(person.actor.slice(6))}" aria-label="Remove ${esc(person.name || person.actor)} from this meeting">Remove</button>`
+      : active && !controls && person.actor === actor ? ' <button class="ghost" type="button" data-live-leave>Leave</button>' : ''}</span>`).join(' ') || '—'}</span>
       <span>Teammates: ${teammates || '—'}</span></div>
     <section class="live-section"><h3>Transcript</h3><div class="live-transcript" aria-live="polite">${chunks.length ? chunks.map(chunk => `<p id="live-chunk-${chunk.seq}" data-seq="${chunk.seq}"><small>#${chunk.seq}${chunk.revision > 1 ? ' · revision ' + chunk.revision : ''} · ${esc(chunk.speaker || 'Speaker')}</small><span>${esc(chunk.text)}</span></p>`).join('') : '<p class="muted">Waiting for transcript text from Recorder.</p>'}</div></section>
     <section class="live-section"><h3>Chat</h3><div class="live-chat" aria-live="polite">${chat.length || notices.length ? liveChatRows(chat, notices) : '<p class="muted">No chat messages yet.</p>'}</div>
@@ -221,6 +223,9 @@ function livePaintDetail(state, detail) {
     event.preventDefault(); const bots = [...event.currentTarget.elements.bots.selectedOptions].map(option => option.value);
     void liveAttach(state, detail.id, bots);
   });
+  host.querySelectorAll('[data-live-person-remove]').forEach(button => button.onclick = () =>
+    void liveAction(state, detail.id, '/access', {remove: [button.dataset.livePersonRemove]}, 'Removed from this meeting.'));
+  host.querySelector('[data-live-leave]')?.addEventListener('click', () => void liveLeave(state, detail));
   host.querySelector('#live-people-picker')?.addEventListener('submit', event => {
     event.preventDefault(); const add = [...event.currentTarget.elements.people.selectedOptions].map(option => option.value);
     void liveAction(state, detail.id, '/access', {add}, 'People added.');
@@ -320,6 +325,23 @@ const liveJoin = (state, id) => liveAction(state, id, '/join', {}, 'You joined t
 const liveControl = (state, id, action) => liveAction(state, id, '/control', {action},
   action === 'end' ? 'Meeting ended.' : ({pause: 'Meeting paused.', disconnect: 'Recorder disconnected; meeting paused.', resume: 'Meeting resumed.'}[action] || 'Meeting updated.'));
 const liveAttach = (state, id, bots) => liveAction(state, id, '/bots', {bots}, 'Teammates attached to this meeting.');
+// Leaving answers {left: true}. A private meeting is then out of reach, so the list opens instead of a 403.
+async function liveLeave(state, detail) {
+  if (state.busy) return;
+  try {
+    state.busy = true;
+    await post(LIVE_API + '/' + encodeURIComponent(detail.id) + '/access', {remove: [S.me?.id || '']});
+    state.busy = false;
+    delete state.drafts[detail.id];
+    if (detail.visibility !== 'team' && state.selected === detail.id) {
+      liveScreenStop(state); state.sources.get(detail.id)?.close(); state.sources.delete(detail.id);
+      state.pinned = state.selected = state.paintedId = ''; state.detail = null;
+    }
+    liveStatus(state, 'You left the meeting.');
+    await liveLoad(state);
+  } catch (error) { liveStatus(state, error.message); }
+  finally { state.busy = false; }
+}
 const liveFinalize = (state, id) => liveAction(state, id, '/finalize', {}, 'Transcript saved to Meetings.');
 
 async function liveRemoveBot(state, id, bot) {
