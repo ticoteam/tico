@@ -265,12 +265,17 @@ def test_stale_save_and_send_return_current_without_overwriting_or_creating(api)
     assert items(api, rid)['sections']['task'][0]['detail']['body'] == 'B details'
 
 
-def test_live_participant_grants_end_with_removal_narrowing_and_discard(api):
+def test_participant_grants_end_with_removal_narrowing_and_discard(api):
     from backend.tests.test_api import post
     for action in ('remove', 'narrow', 'discard'):
-        mid = post(api, 'live-meetings', {'title':'Private source', 'visibility':'private'})['id']
-        post(api, f'live-meetings/{mid}/access', {'add':['human:ben', 'human:cara']})
-        tid = post(api, 'tasks', {'title':'Sent words', 'body':'Words', 'owner':'human:ana', 'live_meeting_id':mid})['id']
+        if action == 'narrow':
+            rid = record(api, {'private':True, 'participants':['ben@acme.example','cara@acme.example']})
+            iid = add(api,rid,{'section':'task','text':'Sent words','detail':{'owner':'human:ana'}})['item']['id']
+            tid = push(api,rid,iid)['item']['result_ref']
+        else:
+            mid = post(api, 'live-meetings', {'title':'Private source', 'visibility':'private'})['id']
+            post(api, f'live-meetings/{mid}/access', {'add':['human:ben', 'human:cara']})
+            tid = post(api, 'tasks', {'title':'Sent words', 'body':'Words', 'owner':'human:ana', 'live_meeting_id':mid})['id']
         store, auth = api.app.state.store, api.app.state.auth
         with store.transaction() as c:
             # A task guest keeps independent access after the participant grant is removed.
@@ -281,9 +286,6 @@ def test_live_participant_grants_end_with_removal_narrowing_and_discard(api):
         if action == 'remove':
             post(api, f'live-meetings/{mid}/access', {'remove':['human:ben','human:cara']})
         elif action == 'narrow':
-            rid = record(api, {'private':True, 'participants':['ben@acme.example','cara@acme.example']})
-            with store.transaction() as c:
-                c.execute('UPDATE live_meetings SET imported_meeting_id=? WHERE id=?', (rid,mid))
             post(api, f'meetings/{rid}/review', {'action':'approve','audience':'participants'})
         else:
             post(api, f'live-meetings/{mid}/discard', {})

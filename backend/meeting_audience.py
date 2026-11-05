@@ -72,25 +72,10 @@ def record_sent_link(c, meeting_id, task_id, author):
                   "VALUES(?,?,?,'sent',?,?)", (H.new_id(), meeting_id, task_id, author, H.now()))
 
 
-def saved_read_sql(actor_sql, *, human=None):
-    # CASE keeps nesting shallow enough for SQLite inside the queue's permission predicate.
-    reader = human or 'h'
-    allowed = ("CASE "
-               "WHEN EXISTS (SELECT 1 FROM media_control mc WHERE mc.meeting_id=m.id AND mc.deleted_at IS NOT NULL) THEN 0 "
-               f"WHEN lower({reader}.email)=lower(m.owner) THEN 1 "
-               "WHEN m.review_state<>'live' THEN 0 "
-               "WHEN coalesce(json_extract(m.metadata,'$.audience'),'')<>'participants' AND "
-               f"lower({reader}.email)=(SELECT lower(json_extract(value,'$.email')) FROM registry_metadata WHERE key='owner') THEN 1 "
-               "WHEN coalesce(json_extract(m.metadata,'$.kind'),'')<>'meeting' THEN 0 "
-               "WHEN json_extract(m.metadata,'$.audience')='participants' THEN "
-               f"EXISTS (SELECT 1 FROM json_each(m.metadata,'$.audience_emails') a WHERE lower(trim(a.value))=lower({reader}.email)) "
-               "WHEN NOT coalesce(json_extract(m.metadata,'$.private'),0) THEN 1 "
-               f"WHEN EXISTS (SELECT 1 FROM json_each(m.metadata,'$.calendar.attendees') a WHERE lower(trim(a.value))=lower({reader}.email)) THEN 1 "
-               f"ELSE EXISTS (SELECT 1 FROM json_each(m.metadata,'$.participants') a WHERE lower(trim(json_extract(a.value,'$.email')))=lower({reader}.email)) END")
-    if human:
-        return allowed
-    return (f"EXISTS (SELECT 1 FROM humans h WHERE h.id=substr({actor_sql},7) AND {actor_sql} LIKE 'human:%' "
-            f"AND h.email<>'' AND {allowed})")
+def saved_read_sql(actor_sql):
+    # The view holds the source policy so deeply embedded task predicates stay below SQLite's parser limit.
+    return ("EXISTS (SELECT 1 FROM meeting_participant_readers mr WHERE mr.meeting_id=m.id "
+            f"AND mr.human_id=substr({actor_sql},7) AND {actor_sql} LIKE 'human:%')")
 
 
 def live_read_sql(actor_sql, table='m'):
@@ -101,18 +86,19 @@ def live_read_sql(actor_sql, table='m'):
 
 
 def participant_sql(c, actor_sql, table='tasks'):
-    saved = saved_read_sql('r.actor', human='h')
-    sent = (f"WHEN EXISTS (SELECT 1 FROM meeting_items i JOIN meetings m ON m.id=i.meeting_id "
-            f"WHERE i.result_ref={table}.id AND i.status='pushed' AND {saved}) THEN 1 ")
+    sent = ("WHEN EXISTS (SELECT 1 FROM meeting_items i JOIN meeting_participant_readers mr "
+            "ON mr.meeting_id=i.meeting_id "
+            f"WHERE i.result_ref={table}.id AND i.status='pushed' AND mr.human_id=substr(r.actor,7)) THEN 1 ")
     if read_cache.one(c, "SELECT 1 FROM sqlite_master WHERE type='table' AND name='meeting_task_links'"):
-        sent += (f"WHEN EXISTS (SELECT 1 FROM meeting_task_links l JOIN meetings m ON m.id=l.meeting_id "
-                 f"WHERE l.task_id={table}.id AND l.kind='sent' AND {saved}) THEN 1 ")
-    sent += ("WHEN EXISTS (SELECT 1 FROM live_meetings lm LEFT JOIN meetings m ON m.id=lm.imported_meeting_id "
+        sent += ("WHEN EXISTS (SELECT 1 FROM meeting_task_links l JOIN meeting_participant_readers mr "
+                 "ON mr.meeting_id=l.meeting_id "
+                 f"WHERE l.task_id={table}.id AND l.kind='sent' AND mr.human_id=substr(r.actor,7)) THEN 1 ")
+    sent += ("WHEN EXISTS (SELECT 1 FROM live_meetings lm LEFT JOIN meeting_participant_readers mr "
+             "ON mr.meeting_id=lm.imported_meeting_id AND mr.human_id=substr(r.actor,7) "
              f"WHERE lm.id={table}.live_meeting_id AND {live_read_sql('r.actor', 'lm')} "
-             f"AND CASE WHEN lm.imported_meeting_id IS NULL THEN 1 ELSE {saved} END) THEN 1 ELSE 0 END")
-    return ("EXISTS (SELECT 1 FROM task_roles r JOIN humans h ON h.id=substr(r.actor,7) "
-            f"WHERE r.task_id={table}.id AND r.role='participant' AND r.actor={actor_sql} "
-            f"AND r.actor LIKE 'human:%' AND h.email<>'' AND CASE {sent})")
+             "AND (lm.imported_meeting_id IS NULL OR mr.human_id IS NOT NULL)) THEN 1 ELSE 0 END")
+    return (f"EXISTS (SELECT 1 FROM task_roles r WHERE r.task_id={table}.id AND r.role='participant' "
+            f"AND r.actor={actor_sql} AND r.actor LIKE 'human:%' AND CASE {sent})")
 
 
 def revoke_saved(c, rid):
