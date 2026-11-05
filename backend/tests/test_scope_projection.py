@@ -927,8 +927,7 @@ def test_reference_objects_are_projected_under_any_response_key(api, monkeypatch
     comment = post(api, 'tasks/' + task['id'] + '/comments', {'text': 'Ordinary task comment'})['comment']
     fields = {key: 'Restricted copied text' for key in H.SOURCED_TEXT_FIELDS}
     opaque = {'id': 'unknown-source', 'text': 'Keep literal ' + hidden['id'],
-              'other': json.dumps({'file': hidden['id']}), 'refs': {'answer': 'Opaque answer'},
-              'answers': {'draft': 'Keep this string'}}
+              'other': json.dumps({'file': hidden['id']})}
     with api.app.state.store.transaction() as c:
         refs = H.message(c, comment['id'])['refs']
         refs.update({'file': {'id': hidden['id'], **fields}, 'page': {'id': hidden['id'], **fields},
@@ -953,8 +952,10 @@ def test_reference_objects_are_projected_under_any_response_key(api, monkeypatch
         auth = api.app.state.auth
         who = auth.authenticate({'authorization': 'Bearer ' + attempt['token']})
         metadata = {'task_copy': {'id': private['id'], 'title': private['title']},
-                    'message_copy': {'handle': private_message['id'], 'text': private_message['body']}}
+                    'message_copy': {'handle': private_message['id'], 'text': private_message['body']},
+                    'opaque': {**opaque, 'refs': {'answer': 'Opaque answer'}, 'answers': {'draft': 'Keep this string'}}}
         shown = turn_scope.project(c, turn_scope.scope(c, who), metadata, auth=auth)
+        assert shown['opaque'] == metadata['opaque']
         no_sources(shown, (private['title'], private_message['body']))
 
 
