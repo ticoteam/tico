@@ -756,7 +756,7 @@ def drain(store, auth, limit=20):
                     token = google_workspace.mint(c, mailbox, "gmail",
                                                   scopes=google_workspace.WORKSPACE_SCOPES["gmail"])["access_token"]
                 except Problem:
-                    token = None                 # the key is failing: the email waits; Settings > Inboxes says why
+                    token = None                 # the key is failing: the email waits; Tools > Settings > Email says why
         for _ in range(limit):
             with store.transaction(durable=True) as c:
                 row = _lease(c, auth, mailbox, SERVER, permit=True, lease=token is not None)

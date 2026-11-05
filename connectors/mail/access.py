@@ -30,7 +30,7 @@ CALENDAR_ACTIONS = {"calendar_read": "read", "calendar_schedule": "schedule"}
 # Commands that only move a message around inside the mailbox: they need `organize`.
 STATE_VERBS = {"label": "organize", "archive": "organize", "mark_read": "organize", "star": "organize",
                "triaged": "organize", "rules": "organize"}
-ASK = ("Who may use a mailbox is set in Tico: Settings > Inboxes > Who can use it (its person, or an admin "
+ASK = ("Who may use a mailbox is set in Tico: Tools > the mailbox > Who can use it (its person, or an admin "
        "for a shared inbox, decides).")
 
 # Set by the commands that carry out what the server leased this computer (mail-action, connector-event): only then
@@ -334,7 +334,7 @@ def resolve(slug, mailbox=None, verb="read", manifest=None, roster=None):
         level = "Read" if held[addr]["level"] == "read" else "Read and write"
         raise Refused(f"{slug} may {', '.join(verbs) or 'nothing'} on {addr} ({level}), not {need}.",
                       "Organizing, drafts and sends need Read and write on the mailbox and the company's What Tico "
-                      "may do (Settings > Inboxes > Settings). " + ASK)
+                      "may do (Tools > Settings > Email). " + ASK)
     return addr, verbs
 
 

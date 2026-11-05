@@ -8,7 +8,7 @@ const IB_SEND_MODES = [['ask_first', 'Ask first'], ['on_their_own', 'On their ow
 const IB_SEND_SOURCES = {company: 'Company', inbox: 'Inbox', bot: 'Bot'};
 const ibSendPath = address => address ? `/v2/email/inboxes/${encodeURIComponent(address)}/sending-policy` : '/v2/email/sending-policy';
 const ibSendOptions = (items, selected) => items.map(([key, label]) => `<option value="${esc(key)}"${key === selected ? ' selected' : ''}>${esc(label)}</option>`).join('');
-const ibSendEffective = e => `${IB_SEND_MODES.find(([key]) => key === e.mode)?.[1] || 'Ask first'} · ${IB_SEND_SOURCES[e.sources?.mode] || 'Company'}${e.legacy ? ' · kept from before' : ''}`;
+const ibSendEffective = e => `${IB_SEND_MODES.find(([key]) => key === e.mode)?.[1] || 'Ask first'} · ${IB_SEND_SOURCES[e.sources?.mode] || 'Company'}`;
 const IB_SEND_WHAT = {replies_only: 'Replies only', replies_and_new: 'Replies and new'};
 const IB_SEND_ASKS = [['ask_new_address', 'New addresses'], ['ask_legal_money', 'Legal or money'], ['ask_attachments', 'Attachments'],
   ['ask_many_recipients', 'Over 10 recipients']];
@@ -35,7 +35,6 @@ function ibSendForm(document, company = false, disabled = false) {
     <div class="ib-send-effective">${esc(ibSendEffective(e))}</div>
     ${(e.recipient_rules || []).length ? `<div class="ib-send-effective">${esc(e.recipient_rules.map(rule => `${({internal: 'Inside the company', known_addresses: 'Known addresses'})[rule.value]} · ${IB_SEND_SOURCES[rule.source]}`).join(' + '))}</div>` : ''}
     ${(e.approval_rules || []).length > 1 ? `<div class="ib-send-effective">${esc(e.approval_rules.map(rule => `${({bot_managers: 'Bot managers', inbox_admins: 'Inbox admins', named_people: 'Named people'})[rule.value]} · ${IB_SEND_SOURCES[rule.source]}`).join(' + '))}</div>` : ''}
-    ${document.legacy_automation_count ? `<p class="muted"><a href="#/automations">${Number(document.legacy_automation_count)} automations</a> · On their own · kept from before</p>` : ''}
     ${disabled ? '' : '<div class="ib-actions"><button class="primary" type="submit">Save</button>' + (company ? '' : '<button type="button" class="ghost" data-send-inherit>Use company default</button>') + '</div>'}
     <p class="err" data-send-error role="alert"></p></fieldset></form>`;
 }
