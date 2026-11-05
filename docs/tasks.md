@@ -622,7 +622,9 @@ This ordering applies to Decide; it does not change the order of Needs you elsew
 `keeper` is the system and cannot answer. An ask to it, including a system-filed task's requester, goes to the
 asker's first reachable person who can sign in or active bot that takes asks up its manager chain, else the company owner.
 Synced bots qualify only with desktop delivery; their sync inbox takes only their person's chat messages.
-The recipient must be able to read the task and every source, including bot activity; Nearby reach still applies.
+Each candidate must pass the same checks as a send: Nearby reach, access to the task, every source and the room,
+contact policy, and a way to receive the question. Tico skips a bot whose contact policy refuses the ask and tries
+the next manager, then the company owner.
 Org rules check the person or bot who will receive the ask, including a comment's question with no named recipient.
 **Send anyway** checks that same route. If it now goes to someone else, it stays held; send a new question to check it.
 The send says who received it. An existing open system ask already in its task room is re-sent there once,

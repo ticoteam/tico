@@ -3,7 +3,7 @@ import logging
 
 from . import hubdb as H
 from . import reach, read_cache, task_privacy
-from .auth import Identity
+from .auth import Auth, Identity
 from .store import Problem
 
 
@@ -37,6 +37,32 @@ def can_answer(c, target, refs=None, conversation_id=None, in_reply_to=None, sou
         return False
 
 
+def require_recipient(c, who, target, refs=None, conversation_id=None, in_reply_to=None, *,
+                      kind="ask", source=None, ctx=None):
+    """Routing tries the same recipient gates as send before choosing someone."""
+    Auth.require_bot_contact(c, who, target, conversation_id, H.refs_task_id(refs), kind="message")
+    reach.check(c, who, target, "chat", task_id=H.refs_task_id(refs), conversation_id=conversation_id,
+                in_reply_to=in_reply_to, ctx=ctx)
+    if kind == "ask" and not can_answer(c, target, refs, conversation_id, in_reply_to, source):
+        raise Problem("recipient", "Recipient cannot read or answer the question", 409)
+    if conversation_id:
+        from . import threads
+        from .auth import actor_reads_task
+        conv = H.conversation(c, conversation_id)
+        if not conv:
+            raise Problem("not_found", "Conversation not found", 404)
+        if conv.get("audience") == "home":
+            allowed = threads.readable(c, threads.actor_viewer(c, target), conv["id"])
+        else:
+            allowed = target in threads.legacy_participants(c, conv) or (
+                conv.get("task_id") and actor_reads_task(c, target, H.task(c, conv["task_id"]))
+                and threads.readable(c, threads.actor_viewer(c, target), conv["id"]))
+        if not allowed:
+            raise Problem("forbidden", "Recipient is not a conversation participant", 403)
+    task_privacy.require_destination(c, who, target, conversation_id, refs,
+                                     H.message(c, in_reply_to) if in_reply_to else None)
+
+
 def resolve(c, actor, target, refs=None, conversation_id=None, in_reply_to=None, source=None):
     """Route a system question up the asker's chart, preserving reach and private sources."""
     resolved = H.resolve_actor(c, target)
@@ -59,12 +85,7 @@ def resolve(c, actor, target, refs=None, conversation_id=None, in_reply_to=None,
         if candidate == actor:
             continue
         try:
-            if not can_answer(c, candidate, refs, conversation_id, in_reply_to, source):
-                continue
-            reach.check(c, who, candidate, "chat", task_id=H.refs_task_id(refs),
-                        conversation_id=conversation_id, in_reply_to=in_reply_to, ctx=ctx)
-            task_privacy.require_destination(c, who, candidate, None, refs,
-                                             H.message(c, in_reply_to) if in_reply_to else None)
+            require_recipient(c, who, candidate, refs, conversation_id, in_reply_to, source=source, ctx=ctx)
         except Problem as exc:
             last = exc
             continue

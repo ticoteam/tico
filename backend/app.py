@@ -33,7 +33,7 @@ from . import outcome_stats
 from . import assistant_changes, why_here
 from . import teammate_access
 from . import start_places
-from . import ask_ingest, delivery, strategy_bot, invites, owner_link
+from . import ask_ingest, ask_routing, delivery, strategy_bot, invites, owner_link
 from . import org_rule_check
 from . import bot_home_merge
 from .roadmaps import exact_approval
@@ -1611,23 +1611,8 @@ def create_app(settings=None):
                     body.conversation_id = assistant_mod.chat_room(c, settings, who)["id"]
                     in_assistant_room = True
                 auth.require_write(c, who, H.actor_id(to), missing="Unknown recipient")
-        auth.require_bot_contact(c, who, to, body.conversation_id, H.refs_task_id(body.refs), kind="message")
-        # A bot's message to a teammate out of its reach (docs/reach.md) is refused before anything is written.
-        reach.check(c, who, to, "chat", task_id=H.refs_task_id(body.refs),
-                    conversation_id=body.conversation_id, in_reply_to=body.in_reply_to)
         if body.conversation_id:
-            conv = auth.conversation(c, who, body.conversation_id, write=True)
-            from . import threads
-            if conv.get("audience") == "home":
-                # A bot's Home is read by its readers, not by its participant list (which names the bot alone).
-                if not threads.readable(c, threads.actor_viewer(c, to), conv["id"]):
-                    raise Problem("forbidden", "Recipient is not a conversation participant", 403)
-            elif to not in threads.legacy_participants(c, conv):
-                from .auth import actor_reads_task
-                # A task's readers include its parties' managers, who need not be literal room participants.
-                if not (conv.get("task_id") and actor_reads_task(c, to, H.task(c, conv["task_id"]))
-                        and threads.readable(c, threads.actor_viewer(c, to), conv["id"])):
-                    raise Problem("forbidden", "Recipient is not a conversation participant", 403)
+            auth.conversation(c, who, body.conversation_id, write=True)
         if body.in_reply_to:
             msg = H.message(c, body.in_reply_to)
             if not msg:
@@ -1665,8 +1650,7 @@ def create_app(settings=None):
             conversation_id = rooms.chat_room(c, auth, who, H.actor_id(to))["id"]
         # An onboarding bot only learns: it answers in chat and talks with its manager, and sends nothing else.
         lifecycle.refuse_send(c, who, to, H.conversation(c, conversation_id) if conversation_id else None)
-        privacy.require_destination(c, who, to, conversation_id, refs,
-                                    H.message(c, body.in_reply_to) if body.in_reply_to else None)
+        ask_routing.require_recipient(c, who, to, refs, conversation_id, body.in_reply_to, kind=body.kind)
         # Ride-along: a defer while the bot has a turn going in this chat goes in right after that turn.
         if way == "defer" and to.startswith("bot:") and who.role != "bot" and conversation_id \
                 and delivery.running_in_session(c, H.actor_id(to), [conversation_id]):

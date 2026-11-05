@@ -805,7 +805,8 @@ class Auth:
         if who.role == "runner":
             raise Problem("identity", "Runner credentials cannot act as a human or bot", 403)
 
-    def bot_contact(self, c, who, slug, conversation_id=None, task_id=None, kind="message"):
+    @staticmethod
+    def bot_contact(c, who, slug, conversation_id=None, task_id=None, kind="message"):
         """Whether this sender may open something with `slug`.
 
         `tasks` is the strict one and the simplest to reason about: work arrives as a task and
@@ -873,13 +874,14 @@ class Auth:
             return True
         return False
 
-    def require_bot_contact(self, c, who, actor, conversation_id=None, task_id=None, kind="message"):
+    @staticmethod
+    def require_bot_contact(c, who, actor, conversation_id=None, task_id=None, kind="message"):
         """`bot_contact` as a gate. The refusal names the way back in, because the sending bot
         reads it and has to decide what to do next."""
         if not str(actor).startswith("bot:"):
             return
         slug = H.actor_id(actor)
-        if self.bot_contact(c, who, slug, conversation_id, task_id, kind):
+        if Auth.bot_contact(c, who, slug, conversation_id, task_id, kind):
             return
         row = c.execute(BS.ONE_SQL, (slug,)).fetchone()
         declared = json.loads(row["config"]) if row and row["config"] else {}

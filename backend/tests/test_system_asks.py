@@ -212,6 +212,28 @@ def test_inactive_manager_is_skipped_up_the_chain_when_reachable(api, monkeypatc
         assert msg["recipient_id"] == "human:ben"
 
 
+def test_keeper_ask_skips_an_active_manager_whose_contact_policy_refuses_it(api, monkeypatch):
+    monkeypatch.delenv("TICO_REACH_DEFAULT", raising=False)
+    token = bot_token(api)
+    with api.app.state.store.transaction() as c:
+        system_task(c, "cpo")
+        BS.write(c, "cpo", {"bot_contact": "tasks"})
+        c.execute("UPDATE bot_config SET reports_to='human:ben' WHERE bot='cpo'")
+        c.execute("INSERT INTO reach_lines(id,sender_id,receiver_id,created_at,updated_at,created_by_id,updated_by_id) "
+                  "VALUES('manager-line','bot:ops','human:ben',?,?,'human:ana','human:ana')", (H.now(), H.now()))
+        assert H.bot(c, "cpo")["state"] == "active"
+    body = {"to": "bot:cpo", "kind": "ask", "text": "Should this cover the beta?"}
+    refused = post(api, "messages", body, token=token, expected=403)
+    assert refused["error"]["code"] == "bot_contact"
+    result = hubtools.ask(Api(api, token), {"bots": ["keeper"], "text": body["text"], "wait_s": 0})["keeper"]
+    assert result["recipient_id"] == "human:ben"
+    with api.app.state.store.transaction() as c:
+        msg = H.message(c, result["message_id"])
+        assert msg["recipient_id"] == "human:ben" and msg["refs"]["rerouted_from"] == H.KEEPER
+        assert not c.execute("SELECT 1 FROM jobs WHERE message_id=?", (msg["id"],)).fetchone()
+        assert H.answer(c, "human:ben", msg["id"], "Yes, cover it.")["in_reply_to"] == msg["id"]
+
+
 def test_routing_respects_nearby_and_private_sources(api, monkeypatch):
     monkeypatch.delenv("TICO_REACH_DEFAULT", raising=False)
     with api.app.state.store.transaction() as c:
