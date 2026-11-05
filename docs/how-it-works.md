@@ -609,9 +609,12 @@ window and a gap between sweeps, and it grants no right.
 
 A production acceptance run is recognised by its title: a run verb (run, rerun, re-run, execute, perform, carry out,
 complete, finish, check, verify or do), then at most two words, none of them a build or change verb such as write,
-update or fix, then "production acceptance". A title that starts "Production acceptance run" also counts. The same title
-counts whether the task is top-level or a subtask. "Run production acceptance for billing" is a run; "Write production
-acceptance tests" and "Finish writing production acceptance tests" are ordinary work and go to a Doer.
+update or fix, then "production acceptance", then the end of the title, a colon, a comma, an opening bracket, or one of
+these words: for, after, on, against, in, at, with, from, to, before, during, of, and, through, across, test, tests,
+suite, run, pass, sweep, check, checks, again, now, today, as or once. A title that starts "Production acceptance run"
+also counts. The same title counts whether the task is top-level or a subtask. "Run production acceptance for billing"
+is a run. "Write production acceptance tests" and "Finish writing production acceptance tests" are ordinary work and go
+to a Doer, and so is "Run production acceptance plan": "plan" is not one of those words, so that title is not a run.
 
 A bot's own clock still wakes it: a routine or schedule wakes a Reviewer, Lead, Manager and Monitor, and a due date or a
 snooze ending wakes a Lead, Manager and Monitor; a Responder has no routines. The task roundup's task lines go only to bots with sweeps on (a Manager or a Doer, or a
