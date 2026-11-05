@@ -677,3 +677,37 @@ def test_a_task_context_length_of_100k_saves_and_reads_back(api):
     assert saved["task_model"] == {"harness": "", "model": "", "reasoning_effort": "high", "runtime": "",
                                    "compact_at": 100000}
     assert get(api, "bots/ops")["task_model"]["compact_at"] == 100000
+
+
+def test_undoing_a_save_over_the_bots_own_model_restores_it_after_the_model_is_held(api, monkeypatch):
+    """Undo restores the record a save replaced (Dev 693 review, Nov 5, 2026). When that record named no model, the bot
+    runs its own model again, at the effort it had, even if the model the save added is held by the time of the undo.
+    Covers a bot with its own model at a set effort, and one with no task model at all."""
+    from backend import providers
+    ops_on_sonnet(api)
+
+    def undo_last():
+        history = [h for h in get(api, "settings/history")["changes"] if h["field"] == "task_model"]
+        post(api, f"settings/history/{history[0]['id']}/undo", {"expected_revision": revision(api)})
+
+    def save_terra_then_hold_it(effort):
+        # Terra is not held while the save is made, then it is held again, as it is now, before the undo.
+        monkeypatch.setitem(providers.MODEL_BY_ID["gpt-6.1-terra"], "held", False)
+        monkeypatch.setitem(providers.MODEL_BY_ID["gpt-6.1-terra"], "deprecated", False)
+        set_task_model(api, {"harness": "codex", "model": "gpt-6.1-terra", "effort": effort})
+        monkeypatch.setitem(providers.MODEL_BY_ID["gpt-6.1-terra"], "held", True)
+        monkeypatch.setitem(providers.MODEL_BY_ID["gpt-6.1-terra"], "deprecated", True)
+        assert get(api, "bots/ops")["task_model"]["model"] == "gpt-6.1-terra"
+
+    # The bot's own model with a task effort of low saved (no model named), then Terra saved over it.
+    set_task_model(api, {"effort": "low"})
+    own_at_low = get(api, "bots/ops")["task_model"]
+    save_terra_then_hold_it("medium")
+    undo_last()
+    assert get(api, "bots/ops")["task_model"] == own_at_low
+    # No task model at all before the save: the undo clears the held model it added.
+    set_task_model(api, None)
+    assert get(api, "bots/ops")["task_model"] is None
+    save_terra_then_hold_it("medium")
+    undo_last()
+    assert get(api, "bots/ops")["task_model"] is None
