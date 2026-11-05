@@ -104,7 +104,7 @@ async function taskModalShow(task, d = taskModal(), opts = {}) {
     d.taskOpening = {pending: !d.open}; d.askDrafts = new Map(); d.tfEl = null; d.tfOpen = null;
     d.classList.toggle('thread', !peek && !!opts.thread);     // a redraw of the same task keeps the view it had
   } else askDraftCapture(d);
-  const opening = d.taskOpening, scroll = d.open ? d.scrollTop : 0;
+  const opening = d.taskOpening, scroll = opts.detail && d.open ? d.scrollTop : 0;
   // A redraw of the open task (a property saved, the task changed) keeps its conversation and its runs as they are, as
   // the files keep theirs (tfAdopt): the thread stays on screen, scrolled where it was, with what is typed in its box,
   // instead of "Loading the conversation…" and a fresh read every time something on the task is saved.

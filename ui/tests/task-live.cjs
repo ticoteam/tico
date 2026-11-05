@@ -8,7 +8,7 @@ const gate = () => { let resolve; const promise = new Promise(r => { resolve = r
  const pages = [];
  try {
   for (const width of [390, 1440]) {
-   let readHold, readStarted, task, events = [], sessions = new Map(), writes = [], hold, fail = false, inflight = 0, max = 0, reads = 0;
+   let readHold, readStarted, task, events = [], sessions = new Map(), writes = [], hold, fail = false, inflight = 0, max = 0;
    const viewers = [], viewerErrors = [];
    const emit = async data => {
     for (const page of viewers) if (!page.isClosed()) await page.evaluate(data => {
@@ -19,7 +19,7 @@ const gate = () => { let resolve; const promise = new Promise(r => { resolve = r
     const {page, data, errors} = await open(browser, {at: '#/task/t-checkout', viewport: {width: viewport, height: 900}});
     pages.push(page); viewers.push(page); viewerErrors.push(errors);
     await page.locator('#task-modal[open] textarea[aria-label="Message"]').waitFor();
-    task ||= {...data.tasks[0], title: 'Review the launch', body: 'Initial details', version: 1, links: [], children_summary: undefined};
+    task ||= {...data.tasks[0], title: 'Review the launch', body: 'Initial details', links: [], children_summary: undefined};
     await page.evaluate(viewer => {
      taskLiveStop(taskModal());
      S.me.id = viewer;
@@ -36,7 +36,7 @@ const gate = () => { let resolve; const promise = new Promise(r => { resolve = r
      await route.fulfill({json: {actors}});
     });
     await page.route('**/api/v2/tasks/' + task.id, async route => {
-     if (route.request().method() === 'GET') { reads++; if (viewer === 'ana' && readHold) { const wait = readHold; readHold = null; readStarted.resolve(); await wait.promise; } return route.fulfill({json: {task, events, children: [], comments: []}}); }
+     if (route.request().method() === 'GET') { if (viewer === 'ana' && readHold) { const wait = readHold; readHold = null; readStarted.resolve(); await wait.promise; } return route.fulfill({json: {task, events, children: [], comments: []}}); }
      const patch = route.request().postDataJSON();
      writes.push({viewer, patch}); if (viewer === 'ana') { inflight++; max = Math.max(max, inflight); }
      if (viewer === 'ana' && hold) { const wait = hold; hold = null; await wait.promise; }
@@ -53,6 +53,10 @@ const gate = () => { let resolve; const promise = new Promise(r => { resolve = r
     assert.deepEqual(errors, []);
    }
    const [a, b] = viewers;
+   let listReads = 0;
+   for (const page of viewers) page.on('request', request => {
+    if (request.method() === 'GET' && new URL(request.url()).pathname === '/api/v2/tasks') listReads++;
+   });
    const update = () => emit({topic: 'tasks', body: {task_id: task.id, kinds: ['update']}});
    const title = a.locator('#task-modal .tmodal-title');
    const fillTitle = async value => { await title.click(); await title.fill(value); };
@@ -79,6 +83,7 @@ const gate = () => { let resolve; const promise = new Promise(r => { resolve = r
    assert.equal(task.title, 'Final title'); assert.equal(task.body, 'Sam changed only details');
    assert.deepEqual(Object.keys(writes.filter(w => w.viewer === 'ana').at(-1).patch).sort(), ['title', 'version']);
    await a.getByText('You edited · just now', {exact: true}).waitFor();
+   assert.equal(listReads, 0, 'autosave and task invalidations never reread the task list');
    // A slow successful save coalesces the later title, still sharing the dialog's property queue.
    const slow = gate(); hold = slow;
    await fillTitle('Slow title');
@@ -150,7 +155,6 @@ const gate = () => { let resolve; const promise = new Promise(r => { resolve = r
    assert.equal(await a.evaluate(() => TASK_EDIT_DRAFTS.size), 0);
    await b.waitForFunction(async () => !(await get('/v2/presence?place=task:t-checkout', {fresh: true})).actors.length);
    assert.equal(sessions.size, 0);
-   assert(reads < 40, 'changes refetch only this task');
    assert.deepEqual(viewerErrors.flat(), []);
    for (const page of viewers) await page.close();
   }

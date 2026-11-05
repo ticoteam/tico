@@ -120,7 +120,10 @@ function taskLivePaint(d, live) {
   }
   const preview = $('[data-task-body-preview]', d);
   const body = taskBody(shown), original = body.trim() === String(shown.title || '').trim() ? '' : body;
-  if (preview) preview.innerHTML = original ? safeMd(original) : '<p class="muted">No details.</p>';
+  if (preview && preview.taskBody !== original) {
+    preview.taskBody = original;
+    preview.innerHTML = original ? safeMd(original) : '<p class="muted">No details.</p>';
+  }
   const error = $('[data-task-edit-error]', d);
   if (error) { error.hidden = !draft.error; error.title = draft.error || ''; }
   const conflict = $('[data-task-edit-current]', d);
