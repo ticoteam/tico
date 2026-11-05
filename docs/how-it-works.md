@@ -723,9 +723,13 @@ when it has no registered worktrees, no runner repository uses its objects throu
 file, and every local ref has the same SHA on the remote. Unknown refs or an unreachable remote
 stop repair. One broken copy is retained for review; another repair waits for that review instead
 of deleting it. Refusals say `repository copy needs attention: <reason>` in Health. Retiring a
-repository keeps its mirror too. If a base clone's config cannot be written, the runner recreates
-that config from a fresh clone, keeping the old config as `.git/tico-config-backup-*`. Its files,
-index, branches, stash and task worktree registrations stay in place, including unpublished bot work.
+repository keeps its mirror too. On a same-user computer, if a base clone's config cannot be written,
+the runner recreates that config from a fresh clone, keeping the old config as `.git/tico-config-backup-*`.
+An adopted checkout requires a readable config with a verified GitHub `origin` that can be preserved;
+otherwise replacement is refused. Computers running bots as a separate user, including Docker runners,
+refuse automatic base config replacement because the scratch paths are bot-controlled. Health reports
+the refusal and asks for manual config and permissions repair. Files, index, branches, stash and task
+worktree registrations stay in place, including unpublished bot work.
 
 Flattened instruction links are repaired only after checking the index and committed content.
 The regular file is first renamed into the Git admin directory's `tico-instruction-backups/`, with

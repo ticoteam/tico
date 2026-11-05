@@ -1106,8 +1106,8 @@ impl Repositories {
     }
 }
 
-/// Rebuild only a broken base's config from a fresh clone. Refs, index, stash, files and worktree registrations
-/// stay in place, even when corrupt config prevents proving whether the base has unpublished work.
+/// Rebuild only a broken base's config on a same-user computer. Refs, index, stash, files and worktree
+/// registrations stay in place; an adopted base also needs a verifiable origin in its preserved config.
 async fn configure_base(
     path: &Path, source: &str, branch: &str, settings: &[(String, String)], local: &[String], env: &Env, full: &str,
 ) -> Result<(), Fail> {
@@ -1121,12 +1121,24 @@ async fn configure_base(
     let first = configure(path, settings, local, env).await?;
     if first.ok() { return Ok(()); }
     let reason = git_error("Configuring base clone mirror", full, &first, env);
+    // The scratch checkout and its parents are bot-controlled; supervisor filesystem operations cannot trust them.
+    if crate::isolation::enabled() {
+        return Err(attention(format!("{reason}; automatic base config replacement is disabled when bots run as a separate user; repair the base clone's config and permissions manually")));
+    }
     let git = path.join(".git");
     let config = git.join("config");
     if !real_dir(&git) || is_symlink(&config) || !crate::gitlocks::idle(&git).await {
         return Err(msg(format!("{reason}; config left intact because its Git metadata is linked or locked")));
     }
     let old = std::fs::read(&config).ok();
+    let readable = run_as_bot(local, &["-C", &path.display().to_string(), "config", "--local", "--no-includes", "--list"], env, 10).await?;
+    // Only runner-created bases receive an origin in settings. An adopted base must retain its owner's verified origin.
+    if !settings.iter().any(|(key, _)| key == "remote.origin.url") {
+        let origin = run_as_bot(local, &["-C", &path.display().to_string(), "config", "--local", "--no-includes", "--get-all", "remote.origin.url"], env, 10).await?;
+        if old.is_none() || !readable.ok() || !origin.ok() || !github_origin(origin.stdout.trim(), full) {
+            return Err(attention(format!("{reason}; adopted base config left intact because its original GitHub origin cannot be verified and preserved; repair the config manually")));
+        }
+    }
     struct Scratch(PathBuf);
     impl Drop for Scratch {
         fn drop(&mut self) { let _ = std::fs::remove_dir_all(&self.0); }
@@ -1138,7 +1150,6 @@ async fn configure_base(
         return Err(msg(format!("{reason}; {}", git_error("Rebuilding base config", full, &fresh, env))));
     }
     // Valid custom branch/upstream settings survive a permissions repair. Invalid config is retained as a backup.
-    let readable = run_as_bot(local, &["-C", &path.display().to_string(), "config", "--local", "--no-includes", "--list"], env, 10).await?;
     if readable.ok() {
         if let Some(bytes) = &old { std::fs::write(scratch.0.join(".git/config"), bytes)?; }
     }
@@ -1797,6 +1808,50 @@ mod tests {
         let backups: Vec<_> = std::fs::read_dir(f.base.join(".git")).unwrap().flatten().filter(|e| e.file_name().to_string_lossy().starts_with("tico-config-backup-")).collect();
         assert_eq!(backups.len(), 1);
         assert_eq!(std::fs::read_to_string(backups[0].path()).unwrap(), "[broken\n");
+    }
+
+    #[cfg(target_os = "linux")]
+    #[tokio::test]
+    #[ignore = "requires a disposable Linux two-user environment"]
+    async fn isolated_base_config_failure_refuses_before_creating_bot_controlled_scratch() {
+        assert_eq!(unsafe { libc::geteuid() }, 0);
+        assert_eq!(crate::isolation::identity(), Some((10003, 10002)));
+        let f = RepoFixture::new();
+        crate::isolation::adopt(std::slice::from_ref(&f.base));
+        let git = f.base.join(".git");
+        let original = std::fs::read(git.join("config")).unwrap();
+        // The bot owns the metadata and can make config updates fail while leaving the config readable.
+        set_mode(&git, 0o555);
+        let settings = vec![("remote.origin.url".into(), "https://github.com/acme/web.git".into())];
+        let prefix = vec!["-c".into(), "protocol.file.allow=always".into()];
+        let failed = run_as_bot(&prefix, &["-C", f.base.to_str().unwrap(), "config", "--local", "remote.origin.url", "https://github.com/acme/web.git"], &f.env, 10).await.ok().unwrap();
+        assert!(!failed.ok() && failed.stderr.contains("Permission denied"), "{}", failed.stderr);
+        let result = configure_base(&f.base, &file_uri(&f.remote), "main", &settings, &prefix, &f.env, "acme/web").await;
+        assert!(matches!(result, Err(Fail::Msg(m)) if m.contains("repository copy needs attention") && m.contains("separate user")));
+        assert_eq!(std::fs::read(git.join("config")).unwrap(), original);
+        assert!(!std::fs::read_dir(&f.root).unwrap().flatten().any(|e| e.file_name().to_string_lossy().starts_with(".tico-base-repair-")),
+            "no scratch checkout can expose a bot-controlled config symlink to the supervisor");
+        assert!(!std::fs::read_dir(&git).unwrap().flatten().any(|e| e.file_name().to_string_lossy().starts_with("tico-config-backup-")));
+    }
+
+    #[tokio::test]
+    async fn malformed_adopted_base_config_keeps_the_original_instead_of_a_local_mirror_origin() {
+        let f = RepoFixture::new();
+        sh(&f.base, &["remote", "set-url", "origin", "git@github.com:acme/web.git"]);
+        mark_managed(&f.base, Some("acme/web"), true).unwrap();
+        let config = f.base.join(".git/config");
+        let mut original = std::fs::read(&config).unwrap();
+        original.extend_from_slice(b"\n[broken\n");
+        std::fs::write(&config, &original).unwrap();
+        let index = std::fs::read(f.base.join(".git/index")).unwrap();
+        let settings = vec![("remote.tico-mirror.url".into(), file_uri(&f.remote)), ("remote.tico-mirror.fetch".into(), "+refs/heads/main:refs/remotes/tico-mirror/main".into())];
+        let prefix = vec!["-c".into(), "protocol.file.allow=always".into()];
+        let result = configure_base(&f.base, &file_uri(&f.remote), "main", &settings, &prefix, &f.env, "acme/web").await;
+        assert!(matches!(result, Err(Fail::Msg(m)) if m.contains("original GitHub origin cannot be verified and preserved")));
+        assert_eq!(std::fs::read(config).unwrap(), original);
+        assert_eq!(std::fs::read(f.base.join(".git/index")).unwrap(), index);
+        assert!(!std::fs::read_dir(f.base.join(".git")).unwrap().flatten().any(|e| e.file_name().to_string_lossy().starts_with("tico-config-backup-")));
+        assert!(!std::fs::read_dir(&f.root).unwrap().flatten().any(|e| e.file_name().to_string_lossy().starts_with(".tico-base-repair-")));
     }
 
     #[tokio::test]
