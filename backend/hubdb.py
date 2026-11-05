@@ -1109,8 +1109,8 @@ def _dump(value):
     return json.dumps(value, sort_keys=True, default=str) if value is not None else None
 
 
-SOURCED_TEXT_FIELDS = ("title", "name", "filename", "label", "text", "body", "other", "summary", "preview",
-                       "note", "old", "new", "recommend", "question")
+SOURCED_TEXT_FIELDS = ("title", "name", "filename", "label", "text", "body", "other", "summary", "description",
+                       "preview", "note", "old", "new", "field", "recommend", "question", "original_summary")
 SOURCED_TEXT_SOURCES = ("body_sources", "sources")
 
 

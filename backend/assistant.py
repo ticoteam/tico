@@ -50,7 +50,7 @@ def ensure_schema(c):
     c.executescript(SCHEMA)
     have = {r[1] for r in c.execute("PRAGMA table_info(assistant_actions)")}
     # ask: the ask a card carries to someone who may (backend/settings_asks.py), settled with the card.
-    for column in ("confirm_hash", "running_since", "description", "diff", "proposer", "ask"):
+    for column in ("confirm_hash", "running_since", "description", "diff", "proposer", "ask", "refs"):
         if column not in have:
             c.execute("ALTER TABLE assistant_actions ADD COLUMN %s TEXT" % column)
 
@@ -1122,6 +1122,30 @@ def refuse_unrunnable(routes, method, path, body):
                                               for e in errors), 422)
 
 
+def action_sources(c, path, body):
+    """Keep request identities and the stored sources behind copied target text, before any projection."""
+    from .scope_projection import body_sources
+    sources = [body_sources(body)]
+    if path == BATCH_PATH:
+        for step in body.get("actions") or []:
+            sources.extend(action_sources(c, step["path"], step["body"]))
+    elif m := re.fullmatch(r"/api/v2/messages/([^/]+)/answer", path):
+        message = H.message(c, m[1]) or {}
+        sources.extend([{"message": m[1]}, body_sources(message.get("refs") or {})])
+    elif m := re.match(r"/api/v2/tasks/([^/]+)(?:/|$)", path):
+        sources.append({"task": m[1]})
+    elif m := re.fullmatch(r"/api/v2/approvals/([^/]+)", path):
+        sources.append(body_sources((H.approval(c, m[1]) or {}).get("payload") or {}))
+    return [source for source in sources if source]
+
+
+def action_text(c, row, text, refs=None):
+    """Every copy of a card's prose carries the card's original provenance, including older cards."""
+    stored = H._json(row.get("refs"), {}) or {}
+    sources = stored.get("body_sources") or action_sources(c, row["path"], H._json(row["body"], {}))
+    return H.sourced_text(text, sources, refs)
+
+
 def create_proposal(c, settings, who, room, proposer, summary, method, path, body, asked=None, what=None, routes=None,
                     shown=None):
     """One pending action for `who` to confirm, and its card in `room`, written by the bot that proposed it.
@@ -1209,18 +1233,22 @@ def create_proposal(c, settings, who, room, proposer, summary, method, path, bod
         diff = [{"field": k, "new": v} for k, v in body.items()]
     if shown is not None:
         diff = shown
+    summary, refs = H.sourced_text(summary, action_sources(c, path, body))
+    what, refs = H.sourced_text(what, refs=refs)
+    diff = [H.sourced_text(None, refs.get("body_sources", []), line)[1] for line in diff]
     row = {"id": H.new_id(), "owner": who.actor, "conversation_id": room["id"], "summary": summary,
            "method": method, "path": path, "body": json.dumps(body),
            "status": "pending", "proposed_via": proposer, "created_at": H.now(),
-           "description": what, "diff": json.dumps(diff, default=str), "proposer": proposer}
+           "description": what, "diff": json.dumps(diff, default=str), "proposer": proposer, "refs": H._dump(refs)}
     c.execute("INSERT INTO assistant_actions(id,owner,conversation_id,summary,method,path,body,status,"
-              "proposed_via,created_at,description,diff,proposer) VALUES(:id,:owner,:conversation_id,:summary,"
-              ":method,:path,:body,:status,:proposed_via,:created_at,:description,:diff,:proposer)", row)
+              "proposed_via,created_at,description,diff,proposer,refs) VALUES(:id,:owner,:conversation_id,:summary,"
+              ":method,:path,:body,:status,:proposed_via,:created_at,:description,:diff,:proposer,:refs)", row)
     bot = room_bot(settings, room) if proposer == "assistant" else proposer
-    card = H._write_message(c, "bot:" + bot, who.actor, "Needs your OK: " + summary, room, "say",
-                            {"assistant": True, "action": row["id"]}, None, None, delivered_at=H.now())
+    text, card_refs = action_text(c, row, "Needs your OK: " + summary, {"assistant": True, "action": row["id"]})
+    card = H._write_message(c, "bot:" + bot, who.actor, text, room, "say", card_refs,
+                            None, None, delivered_at=H.now())
     H.event(c, who.actor, "assistant.action.proposed", row["id"],
-            {"summary": summary[:200], "method": method, "path": path, "proposer": proposer})
+            {"summary": summary[:200], "method": method, "path": path, "proposer": proposer, **refs})
     return {"action": action_view(row, c), "message_id": card["id"]}
 
 
@@ -1308,13 +1336,15 @@ def migrate(c, settings):
     earlier owner was already withdrawn when the seat moved on (`move_strategy_room`). Each card moves once: after the
     move none is left in that room."""
     moved = 0
-    for row in c.execute("SELECT a.id, a.owner, a.summary FROM assistant_actions a JOIN conversations v "
+    for row in c.execute("SELECT a.* FROM assistant_actions a JOIN conversations v "
                          "ON v.id=a.conversation_id WHERE a.status='pending' AND v.scope='personal' AND v.room_key=? "
                          "AND a.owner=v.owner_id ORDER BY a.created_at", (rooms.STRATEGY_ROOM,)).fetchall():
         room = ensure_room(c, row["owner"], settings.assistant_bot)
         c.execute("UPDATE assistant_actions SET conversation_id=? WHERE id=?", (room["id"], row["id"]))
-        H._write_message(c, "bot:" + settings.assistant_bot, row["owner"], "Needs your OK: " + row["summary"], room,
-                         "say", {"assistant": True, "action": row["id"]}, None, None, delivered_at=H.now())
+        text, refs = action_text(c, dict(row), "Needs your OK: " + row["summary"],
+                                 {"assistant": True, "action": row["id"]})
+        H._write_message(c, "bot:" + settings.assistant_bot, row["owner"], text, room,
+                         "say", refs, None, None, delivered_at=H.now())
         moved += 1
     if moved:
         H.event(c, H.KEEPER, "assistant.strategy_cards_moved", "", {"cards": moved})
@@ -1373,6 +1403,17 @@ def action_view(row, c=None):
             view["description"] = plain_request((H.resolve_bot(c, m.group(1)) or {}).get("display_name") or m.group(1), view["body"])
         if OLD_REPO_SUMMARY.match(view["summary"] or ""):
             view["original_summary"], view["summary"] = view["summary"], ""
+    if c is not None:
+        from . import turn_scope
+        from .files import readable_page_refs
+        _, view["refs"] = action_text(c, row, None)
+        # Legacy cards recover sources from their stored request; each diff line carries its own prose.
+        view["diff"] = [H.sourced_text(None, view["refs"].get("body_sources", []), line)[1]
+                        for line in view["diff"]]
+        who, auth = turn_scope.WHO.get(), turn_scope.AUTH.get()
+        view = turn_scope.project(c, turn_scope.scope(c), view, auth=auth)
+        if who is not None:
+            view = readable_page_refs(c, auth, who, view)
     return view
 
 
@@ -1790,8 +1831,9 @@ def install(app, store, auth, mutate, onboarding):
             room = H.conversation(c, row["conversation_id"]) if row["conversation_id"] else None
             if room and note:
                 by = row.get("proposer") or "assistant"
+                note, refs = action_text(c, row, note, {"assistant": True, "action_result": aid})
                 H._write_message(c, "bot:" + (room_bot(settings, room) if by == "assistant" else by), who.actor, note,
-                                 room, "say", {"assistant": True, "action_result": aid}, None, None,
+                                 room, "say", refs, None, None,
                                  delivered_at=H.now())
             return {"action": action_view(row, c)}
 
@@ -1829,7 +1871,8 @@ def install(app, store, auth, mutate, onboarding):
                         or who.actor.removeprefix("bot:"))
             c.execute("UPDATE assistant_actions SET status='withdrawn', decided_at=? WHERE id=?", (H.now(), aid))
             H.event(c, who.actor, "assistant.action.withdrawn", aid,
-                    {"summary": row["summary"][:200], "reason": reason, "owner": row["owner"]})
+                    {"summary": row["summary"][:200], "reason": reason, "owner": row["owner"],
+                     **action_text(c, dict(row), None)[1]})
             settings_asks.settled(c, row, "withdrawn")
             room = H.conversation(c, row["conversation_id"]) if row["conversation_id"] else None
             if room and not room.get("closed_at"):
@@ -1861,8 +1904,9 @@ def install(app, store, auth, mutate, onboarding):
             args.append(owner)
         with store.read() as c:
             rows = c.execute(sql + " ORDER BY created_at DESC LIMIT 100", args).fetchall()
-            return {"actions": [{"id": r["id"], "owner": r["owner"], "proposer": r["proposer"], "summary": r["summary"],
-                                 "description": r["description"], "created_at": r["created_at"]} for r in rows]}
+            return {"actions": [{key: shown[key] for key in
+                                 ("id", "owner", "proposer", "summary", "description", "created_at", "refs")}
+                                for r in rows if (shown := action_view(dict(r), c))]}
 
     @app.post("/api/v2/assistant/actions/{aid}/confirm")
     async def action_confirm(request: Request, aid: str):
@@ -1886,7 +1930,8 @@ def install(app, store, auth, mutate, onboarding):
                 c.execute("UPDATE assistant_actions SET status='running', decided_at=?, running_since=?, "
                           "confirm_hash=? WHERE id=?", (H.now(), H.now(), digest(secret), aid))
                 H.event(c, who.actor, "assistant.action.confirmed", aid,
-                        {"summary": row["summary"][:200], "method": row["method"], "path": row["path"]})
+                        {"summary": row["summary"][:200], "method": row["method"], "path": row["path"],
+                         **action_text(c, row, None)[1]})
                 # A card stored before its task change was made runnable (`runnable`) still runs, read as it is now.
                 sent = json.loads(row["body"] or "{}")
                 if row["path"] == BATCH_PATH and isinstance(sent, dict) and isinstance(sent.get("actions"), list):

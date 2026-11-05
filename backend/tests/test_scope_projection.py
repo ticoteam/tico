@@ -1094,3 +1094,92 @@ def test_letter_blob_metadata_checks_scope_before_letter_access(api, outgoing_hq
         patch.setattr(turn_scope, 'blob_allowed', lambda *a: True)
         with pytest.raises(AssertionError):
             get(api, path, attempt['token'], expected=404)
+
+
+@pytest.mark.parametrize('revocation', ['archive', 'audience'])
+@pytest.mark.parametrize('legacy', [False, True], ids=['stored-sources', 'legacy-card'])
+def test_assistant_action_review_filename_clears_on_every_return(api, monkeypatch, revocation, legacy):
+    from backend import assistant, files
+    from backend.tests.test_page_audience import edit
+    from backend.tests.test_task_review import ask as version_ask
+    t, attempt = task_turn(api, bot='coo')
+    _, finance = turn(api, 'finance')
+    filename = 'confidential-plan.html'
+    fid = published(api, finance, task=t['id'], name=filename)
+    response = api.patch(f'/api/v2/files/{fid}/versions/1', json={'ask': version_ask('ana')},
+                         headers=headers(finance['token']))
+    assert response.status_code == 200, response.text
+    with api.app.state.store.read() as c:
+        qid = c.execute('SELECT ask_message_id FROM task_file_reviews WHERE file_id=? AND version=1', (fid,)).fetchone()[0]
+        assert filename in H.message(c, qid)['body']
+    request = {'summary': 'Answer about ' + filename, 'path': f'/api/v2/messages/{qid}/answer', 'body': {'text': 'Yes'}}
+    made = post(api, 'assistant/actions', request)
+    aid = made['action']['id']
+    assert filename in made['action']['description']
+    assert filename in get(api, 'assistant/actions/' + aid)['action']['description']
+    assert filename in json.dumps(get(api, 'assistant/proposals'))
+    with api.app.state.store.transaction() as c:
+        row = dict(c.execute('SELECT * FROM assistant_actions WHERE id=?', (aid,)).fetchone())
+        assert fid in row['refs']
+        assert fid in json.dumps(H.message(c, made['message_id'])['refs']['body_sources'])
+        event = c.execute("SELECT detail FROM events WHERE action='assistant.action.proposed' AND target=?", (aid,)).fetchone()[0]
+        assert fid in event
+        if legacy:
+            c.execute('UPDATE assistant_actions SET refs=NULL WHERE id=?', (aid,))
+    if revocation == 'archive':
+        response = api.patch('/api/v2/files/' + fid, json={'archived': True}, headers=headers())
+        assert response.status_code == 200, response.text
+    else:
+        edit(api, fid, {'people': ['ben']})
+        # Ordinary get/list/chat returns also apply the shared clearer when Ana loses page access.
+        for path in ('assistant/actions/' + aid, 'assistant/proposals', 'assistant'):
+            no_sources(get(api, path), (filename,))
+    token = attempt['token']
+    get(api, 'files/' + fid, token, expected=403)
+    no_sources(get(api, 'messages/' + qid, token), (filename,))
+    proposed = {**request, 'for': 'human:ana'}
+
+    def check(key):
+        repeated = post(api, 'assistant/actions', proposed, token, key=key)
+        assert repeated['repeated'] and repeated['action']['id'] == aid
+        no_sources(repeated, (filename,))
+    check('assistant-review-duplicate')
+    check('assistant-review-duplicate')
+    check('assistant-review-fresh-key')
+    # A distinct request exercises create after revocation, including the caller-supplied summary.
+    fresh = post(api, 'assistant/actions', {**proposed, 'body': {'text': 'Yes, proceed'}}, token)
+    assert fresh['action']['id'] != aid
+    no_sources(fresh, (filename,))
+    for field in ('description', 'summary'):
+        with monkeypatch.context() as patch:
+            patch.setattr(H, 'SOURCED_TEXT_FIELDS', tuple(key for key in H.SOURCED_TEXT_FIELDS if key != field))
+            with pytest.raises(AssertionError):
+                check('assistant-review-without-' + field)
+    # The legacy recovery is independently necessary; it cannot infer provenance from display text.
+    with api.app.state.store.transaction() as c:
+        c.execute('UPDATE assistant_actions SET refs=NULL WHERE id=?', (aid,))
+    with monkeypatch.context() as patch:
+        patch.setattr(assistant, 'action_sources', lambda *a: [])
+        with pytest.raises(AssertionError):
+            check('assistant-review-without-sources')
+    # Test each action-view guard directly, before middleware can repair an unprojected return.
+    with api.app.state.store.read() as c:
+        auth = api.app.state.auth
+        who = auth.authenticate({'authorization': 'Bearer ' + token})
+        row = dict(c.execute('SELECT * FROM assistant_actions WHERE id=?', (aid,)).fetchone())
+        principal, granting = turn_scope.WHO.set(who), turn_scope.AUTH.set(auth)
+        try:
+            no_sources(assistant.action_view(row, c), (filename,))
+            with monkeypatch.context() as patch:
+                if revocation == 'archive':
+                    patch.setattr(turn_scope, 'project', lambda c, scoped, value, **kw: value)
+                else:
+                    # The page guard must clear immediately even when it is the first guard to run.
+                    patch.setattr(turn_scope, 'project', lambda c, scoped, value, **kw: value)
+                    no_sources(assistant.action_view(row, c), (filename,))
+                    patch.setattr(files, 'readable_page_refs', lambda c, auth, who, value, **kw: value)
+                with pytest.raises(AssertionError):
+                    no_sources(assistant.action_view(row, c), (filename,))
+        finally:
+            turn_scope.AUTH.reset(granting)
+            turn_scope.WHO.reset(principal)
