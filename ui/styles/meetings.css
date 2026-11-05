@@ -432,3 +432,10 @@ a.mg-open{display:inline-flex;align-items:center;padding:5px 11px;border-radius:
   .live-bot-picker{align-items:stretch;flex-direction:column}.live-bot-picker select{max-width:none}
   .live-transcript>p,.live-chat>p{grid-template-columns:1fr;gap:3px}.live-transcript>p small,.live-transcript>p>small:first-child,.live-chat>p small{grid-column:1}
 }
+
+.meet-pending { display: grid; gap: 12px; max-width: 680px; }
+.meet-pending label { display: grid; gap: 6px; flex: 1; min-width: 0; }
+.meet-pending textarea, .meet-pending input, .meet-pending select { width: 100%; box-sizing: border-box; }
+.meet-pending textarea { min-height: 76px; resize: vertical; }
+.meet-pending [data-save-error] { color: var(--danger); }
+@media (max-width: 600px) { .meet-pending .row { flex-wrap: wrap; } }

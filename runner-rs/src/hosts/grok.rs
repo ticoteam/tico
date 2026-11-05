@@ -141,6 +141,7 @@ enum Slot {
 type Running = (Vec<String>, Env, super::Stopper, Arc<AtomicBool>);
 
 struct Shared {
+    allocation: super::Allocation,
     bot: String,
     program: String,
     tx: Events,
@@ -163,6 +164,7 @@ pub struct GrokHost(Arc<Shared>);
 impl GrokHost {
     pub fn new(bot: &str, program: &str, tx: Events) -> GrokHost {
         GrokHost(Arc::new(Shared {
+            allocation: super::Allocation::default(),
             bot: bot.into(),
             program: program.into(),
             tx,
@@ -182,6 +184,10 @@ impl GrokHost {
         let _ = self.0.tx.send(ev);
     }
 
+    pub fn track_allocation(&self, turn: std::sync::Arc<std::sync::atomic::AtomicBool>) {
+        self.0.allocation.track(turn);
+    }
+
     pub fn alive(&self) -> bool {
         self.0.child.lock().unwrap().as_ref().is_some_and(|(_, _, _, gone)| !gone.load(Ordering::SeqCst))
     }
@@ -194,6 +200,7 @@ impl GrokHost {
         command.args(&cmd[1..]).stdin(Stdio::piped()).stdout(Stdio::piped()).stderr(Stdio::piped()).env_clear().envs(&full);
         super::new_group(&mut command);
         let mut child = command.spawn().map_err(|e| failed(format!("could not start grok agent: {e}")))?;
+        self.0.allocation.mark();
         let _stderr = crate::run_diagnostics::Stderr::capture(&mut child, self.0.tx.clone(), &full);
         let stdout = child.stdout.take().ok_or_else(|| failed("grok agent has no stdout"))?;
         *self.0.stdin.lock().await = child.stdin.take();

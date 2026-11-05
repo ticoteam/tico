@@ -32,8 +32,8 @@ HIDDEN_TASK = "A task you can't open"
 
 
 def task_key(visible):
-    return (f"coalesce((SELECT CASE WHEN tk.private=1 THEN 'A private task' WHEN NOT ({visible}) THEN "
-            f"'{HIDDEN_TASK.replace(chr(39), chr(39) * 2)}' ELSE tk.title END FROM tasks tk WHERE tk.id=t.task_id), '')")
+    return (f"coalesce((SELECT CASE WHEN tasks.private=1 THEN 'A private task' WHEN NOT ({visible}) THEN "
+            f"'{HIDDEN_TASK.replace(chr(39), chr(39) * 2)}' ELSE tasks.title END FROM tasks WHERE tasks.id=t.task_id), '')")
 GROUPS = ("bot", "day", "routine", "task", *DIMENSIONS)
 MAX_DAYS = 366
 TOP_ROUTINES = 10

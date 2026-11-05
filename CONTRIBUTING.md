@@ -6,8 +6,8 @@ and [Apache License 2.0](https://www.apache.org/licenses/LICENSE-2.0). This lets
 include your contribution in the current Tico or in a future Apache 2.0 release. It does not
 license Tico as a whole under Apache 2.0.
 
-There is no separate contributor license agreement (CLA): you sign off each commit instead
-(see below). Please follow the [Code of Conduct](CODE_OF_CONDUCT.md).
+There is no separate contributor license agreement (CLA): outside contributors sign off each
+commit instead (see below). Please follow the [Code of Conduct](CODE_OF_CONDUCT.md).
 
 ## Before you start
 
@@ -71,7 +71,7 @@ documented in `app/vendor/README.md`; retain them when updating Cargo locks.
 
 ## Developer Certificate of Origin
 
-Every commit in a pull request must be signed off, which says you wrote it or have the right to
+Every commit in an outside contributor's pull request must be signed off, which says you wrote it or have the right to
 submit it under the contribution licenses above, as set out in the
 [Developer Certificate of Origin](https://developercertificate.org/). Add the sign-off with `-s`:
 
@@ -83,6 +83,9 @@ That appends `Signed-off-by: Your Name <you@example.com>`, using your git `user.
 `user.email`, which must be your real name and an address you use. To add it to commits you
 have already made: `git rebase --signoff main` (then `git push --force-with-lease`). A pull request
 with unsigned commits will be asked to sign them before it is merged.
+
+This applies to outside contributors. Tico team members and the company's own bots commit work the
+company already owns, so their commits need no sign-off, and their pull requests are never held for one.
 
 ## Pull requests
 

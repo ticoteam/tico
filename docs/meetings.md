@@ -215,14 +215,35 @@ format is a `422` that names the problem.
 - **Send to a bot** (the button, `POST /api/meetings/{id}/send`, or `send_to` on import): one Tico task
   for the bot, carrying the notes, the readable transcript and the meeting context. Sending is once;
   asking again for the same bot returns the same task.
-- **Action items.** Beside each meeting are three lists: **Doc updates**, **Tasks** and **Feature
+- **Pending tasks.** Beside each meeting are three lists: **Doc updates**, **Tasks** and **Feature
   requests**. A human adds items (with the quote and time they came from if they like) and the
-  meeting's owner pushes them. Push creates ordinary Tico tasks, never a card in another tool: a
+  readers edit, Send or Dismiss them once the meeting is shared. Send creates ordinary Tico tasks, never a card in another tool: a
   task item becomes a task for its named owner; a doc update becomes a task for `doc-updater`; a
   feature request becomes a task for whoever is primary for the product group. Product area, app and label
   are optional: use your team's names or leave them blank. Existing B/F and CA/PA codes still work.
-  A near-identical open task returns a link (**Push anyway** overrides).
-  Every pushed task ends with a footer naming the meeting and quoting the line.
+  A near-identical open task returns a link only if the sender can read it.
+  Every sent task ends with a footer naming the meeting and quoting the line. Participants-only meetings send
+  private tasks only when every reader (including a bot owner's managers) is already in the meeting.
+  The Recorder applies that check before Save too, using `live_meeting_id` on task creation.
+  Title, owner, due and details autosave after 700 ms or on blur, one write at a time. **Not saved · Retry** keeps
+  a failed draft. Save and Send carry the item’s `version`; a stale write returns 409 with the current item,
+  keeps changed fields and shows the current values for retry. Untouched fields adopt the server's values even
+  while a field is focused. Retry and Send submit only changed keys. Send applies the final fields atomically,
+  advancing the version once.
+  Incoming edits preserve open forms, focus and caret.
+  If another editor Sends or Dismisses an item with unsaved edits, both clients keep a closed card with
+  their name, your draft and **Copy** and **Close** buttons until you copy or close it.
+  The web and saved Recorder views refetch on authorized `meeting_items` events, and close on `gone`.
+  `GET /api/v2/presence?place=meeting:<id>` lists current people; each window heartbeats its own `session_id`
+  every 15 seconds and leaves with `gone: true`. Sessions expire after 30 seconds; Maintenance deletes expired sessions in bounded batches, and deleting
+  a meeting removes its sessions. Participant grants end only when no remaining source meeting permits access; task parties and guests
+  retain their independent task access. Tasks created in Recorder before Save are uploaded as sent items.
+  If Save partly succeeds, Create replays any uncertain item upload with its original request and key, then
+  uses the server item and adopts its existing task if another editor already sent it. Local edits stay in
+  the closed card with **Copy** and **Close**. Retrying Save recovers without creating another task.
+  `POST /api/v2/meetings/{rid}/items/{iid}/push` accepts `version` and a `result_ref` for a task you requested to record that
+  existing task without creating another; repeating it keeps the same result. Pushing an already sent item
+  returns its current item and `pushed: false`, including when the supplied version is stale.
 - **Comments.** Anyone who can open the meeting can add to the thread beside it.
 - **Routines.** `meeting.ready` fires when a team meeting with a transcript is first imported,
   once per meeting however often it is re-imported; a routine written `on: meeting.ready` gets one
@@ -605,3 +626,8 @@ stays is everything that was ever imported or recorded. An upgrading install kee
   (with no menu-bar item since a later release). It no longer asks for microphone or system-audio permission.
 - `TICO_GEMINI_SECRET_ARN` and `TICO_XAI_SECRET_ARN` are no longer read;
   `TICO_PROCESSING_OPERATORS` still names the computers that may run importers and calendar publishers.
+
+Recorder Save replays interrupted item uploads before applying current local fields with the item's version.
+If another teammate has changed or sent the item, the Recorder keeps the local draft with Copy and Close.
+Tasks added after Save go onto the meeting before Create sends them. Link proposals use Link, and queued task
+links are sent last in batches of 20; an interrupted Save resumes the remaining batches.

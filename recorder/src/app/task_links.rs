@@ -1,6 +1,23 @@
 use super::*;
 
 impl Recorder {
+    pub(super) fn saved_items_with_links(&self) -> Value {
+        let mut data = self.saved_items.clone();
+        if let Some(sections) = data["sections"].as_object_mut() {
+            for rows in sections.values_mut().filter_map(Value::as_array_mut) {
+                for row in rows {
+                    if let Some(task) = row["proposed_task_id"]
+                        .as_str()
+                        .and_then(|id| self.linked_task(id))
+                    {
+                        row["proposed_number"] = task["number"].clone();
+                    }
+                }
+            }
+        }
+        data
+    }
+
     pub(super) fn pending_task_link(&self, task: &str) -> bool {
         if task.is_empty() {
             return false;
@@ -123,7 +140,7 @@ impl Recorder {
         let Some(id) = self.meeting.clone() else {
             return;
         };
-        let ids: Vec<String> = self
+        let mut ids: Vec<String> = self
             .context
             .items
             .iter()
@@ -136,6 +153,17 @@ impl Recorder {
             .collect::<BTreeSet<_>>()
             .into_iter()
             .collect();
+        ids.extend(
+            self.saved_items["sections"]
+                .as_object()
+                .into_iter()
+                .flat_map(|s| s.values())
+                .filter_map(Value::as_array)
+                .flatten()
+                .filter_map(|row| row["proposed_task_id"].as_str().map(str::to_owned)),
+        );
+        ids.sort();
+        ids.dedup();
         let scope = self.link_scope();
         let config = self.config.clone();
         let destination = self.router();

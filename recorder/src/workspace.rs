@@ -26,6 +26,8 @@ pub struct Item {
     pub task_url: String,
     /// Who it went to, by name, as shown after sending.
     pub sent_to: String,
+    /// A completed shared item that did not accept this person's local edits.
+    pub closed_draft: Option<Value>,
     /// The transcript line the item was drafted from, as it read then. Streamed text can be
     /// rewritten by the chunked transcript later; the quote is checked against this. Stays local.
     pub source: String,

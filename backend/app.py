@@ -1243,7 +1243,13 @@ def create_app(settings=None):
             token = H.PRIVATE_WRITE.set(H.PRIVATE_WRITE.get() or privacy.private_execution(c, source))
             path = org_rule_check.PATH.set(request.url.path)     # a hold keeps its route, for Send anyway's guard
             try:
-                return fn(c)
+                # Only bot refusals count; human-only routes also address tasks in the trash.
+                tid = request.path_params.get("tid") if H.is_bot(request.state.identity.actor) else None
+                task_id = auth.resolve_task(c, request.state.identity, tid) if tid else None
+                with H.refusal_task(task_id):
+                    if task_id:
+                        H._writer(c, request.state.identity.actor, task_id=task_id)
+                    return fn(c)
             except H.Refused as exc:
                 exc.private = getattr(exc, "private", False) or H.PRIVATE_WRITE.get()
                 raise
@@ -1764,6 +1770,22 @@ def create_app(settings=None):
                 counts[state] = counts.get(state, 0) + 1
         return counts
 
+    @app.get("/api/v2/system/suggestions")
+    def suggestion_settings(request: Request):
+        from . import suggestions
+        owner_only(request.state.identity, "sees suggestion privacy settings")
+        with store.read() as c:
+            return suggestions.privacy(c, settings)
+
+    @app.put("/api/v2/system/suggestions")
+    def suggestion_settings_save(request: Request, body: M.SuggestionSettings):
+        from . import suggestions
+        owner_only(request.state.identity, "changes suggestion privacy settings")
+        if body.share_stats_for_suggestions is not None:
+            person_only(request.state.identity, "consents to sharing suggestion statistics")
+        return mutate(request, body, lambda c: suggestions.save_privacy(
+            c, settings, request.state.identity.actor, body.model_dump(exclude_none=True)))
+
     @app.get("/api/v2/system/usage-count")
     def usage_count_status(request: Request):
         owner_only(request.state.identity, "sees the anonymous usage count settings")
@@ -1848,8 +1870,8 @@ def create_app(settings=None):
 
     @app.get("/api/v2/gateway")
     def gateway_overview(request: Request):
-        """Settings > Gateway: the connection (with spend against the cap for the owner), the picks the bots use and the
-        services."""
+        """Settings > Gateway: the connection (with spend against the cap for the owner), the picks the bots use, the
+        models and the services."""
         who = request.state.identity
         auth.domain(who)
         if who.role == "owner":
@@ -4423,6 +4445,13 @@ def create_app(settings=None):
         from .shared_bots import route
         original = auth.target(c, who, body.owner, need="write")
         owner = auth.target(c, who, route(c, who.actor, original), need="write")
+        from . import meeting_audience
+        meeting_participants = meeting_audience.check(
+            c, auth, who, owner, live_id=body.live_meeting_id, roles=body.roles) if body.live_meeting_id else None
+        if meeting_participants is not None:
+            if body.visibility == "public":
+                raise Problem("meeting_audience", meeting_audience.REFUSAL, 409)
+            body = body.model_copy(update={"private": True})
         task_caps.check(c, who.actor, owner)      # the first hub check on a send (CONTRACT §1): nothing is written
         # A bot's task for a teammate out of its reach, or its question to one (docs/reach.md), is refused next.
         reach.check(c, who, owner, "task", task_id=parent_id)
@@ -4645,6 +4674,12 @@ def create_app(settings=None):
             changed = TR.relate(c, who.actor, row["id"], other, kind, mover=mover(c, who) or None)
             readback += TR.readback(c, row["id"], other, kind, changed=changed)
             own_subtask.append(TR.own_subtask_warning(c, row["id"], other, kind))
+        if body.live_meeting_id:
+            meeting_audience.check(c, auth, who, owner, live_id=body.live_meeting_id,
+                                   roles=body.roles, guest=H.task(c, row["id"]).get("guest"),
+                                   requester=H.task(c, row["id"])["requester_id"])
+            c.execute("UPDATE tasks SET live_meeting_id=? WHERE id=?", (body.live_meeting_id, row["id"]))
+            meeting_audience.grant(c, row["id"], meeting_participants, who.actor)
         if body.roles:
             try:
                 TRo.set_roles(c, who.actor, row["id"], body.roles, mover=mover(c, who) or None)
@@ -5729,7 +5764,7 @@ def create_app(settings=None):
                 readback = TR.readback(c, task_id, other_id, "blocked_by", remove=body.remove, changed=changed)
                 note = None if body.remove else TR.own_subtask_warning(c, task_id, other_id, "blocked_by")
             else:
-                H._writer(c, who.actor)
+                H._writer(c, who.actor, task_id=task_id)
                 H._task_private_writer(c, who.actor, row)
                 # The same gate as a blocked_by: a wait parks the task's news just as a blocker does.
                 TR._blocker_gate(c, who.actor, row, TR._mover(c, who.actor, mover(c, who) or None))
@@ -6785,9 +6820,16 @@ def create_app(settings=None):
                         {"on_behalf_of": who.actor, "message_id": body.on_behalf_of})
             if not (auth.operator(c, who, bot) or auth.bot_manager(c, who, bot)):
                 raise Problem("forbidden", "Only a person who manages this bot can clear quarantine", 403)
-            if (H.bot(c, bot) or {}).get("state") != "quarantined":
+            from . import task_quarantine
+            quarantined = (H.bot(c, bot) or {}).get("state") == "quarantined"
+            held = c.execute("SELECT 1 FROM quarantine_holds WHERE bot_id=? AND released_at IS NULL LIMIT 1", (bot,)).fetchone()
+            if not quarantined and not held:
                 raise Problem("quarantined", "This bot is not quarantined", 409)
-            settings_admin.ensure_activation(c, who, bot)
+            if quarantined:
+                settings_admin.ensure_activation(c, who, bot)
+            task_quarantine.release(c, who.actor, bot=bot)
+            if not quarantined:
+                return {"status": H.status(c, bot)}
             # Stopped runs settle on their own (execution.auto_reconcile); they no longer hold a resume.
             return {"status": H.status_set(c, who.actor, bot, state="active", focus="",
                                             reason=(body.note or "").strip() or "Resumed")}
@@ -6863,6 +6905,7 @@ def create_app(settings=None):
                 raise Problem("forbidden", "You may acknowledge only messages addressed to you", 403)
             auth.conversation(c, who, msg["conversation_id"])
             privacy.require_message(c, who, msg)
+            H._message_writer(c, who.actor, msg, H.conversation(c, msg["conversation_id"]))
             H.mark_read(c, who.actor, mid, recipient=who.actor)
             H.mark_delivered(c, who.actor, mid, recipient=who.actor)
             # A waiting CLI has already consumed the answer in its current turn.
@@ -8510,6 +8553,8 @@ def create_app(settings=None):
     install_team_icon(app, store)
     from .meeting_items import install_meeting_items
     install_meeting_items(app, store, mutate, task_create, auth)
+    from . import presence
+    presence.install(app, store, mutate, auth)
     from .meeting_task_links import install as install_meeting_task_links
     install_meeting_task_links(app, store, auth, mutate)
     from .connectors import install_connectors
