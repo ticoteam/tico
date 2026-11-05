@@ -223,12 +223,19 @@ def test_legacy_fallback_keeps_unrelated_labels_and_opaque_text(api):
     post(api, f'tasks/{other["id"]}/comments', {"text": "Choose a label", "ask": {
         "who": "ben", "questions": [{"id": "label", "header": "Label", "question": "Which label?", "options": [
             {"label": "Restricted source", "then": "Use this label"}, {"label": "Keep", "then": "Keep this label"}]}]}})
+    parent_question = post(api, f'tasks/{data["task"]["id"]}/comments', {"text": "Choose a source", "ask": {
+        "who": "ben", "questions": [{"id": "label", "header": "Source", "question": "Which source?", "options": [
+            {"label": "Restricted source", "then": "Use this source"}, {"label": "Keep", "then": "Keep this source"}]}]}})["comment"]
+    place = get(api, "places/task:" + data["task"]["id"])
+    assert "page:" + data["hidden"] in [p["item"] for p in place["pins"]]
     text = '{"digest":"example"} ' + data["hidden"]
     comment = post(api, f'tasks/{data["task"]["id"]}/comments', {"text": text})["comment"]
     narrow(api, data)
     shown = get(api, "tasks", attempt["token"])
     row = next(t for t in shown["tasks"] if t["id"] == other["id"])
     assert row["ask"]["refs"]["questions"][0]["options"][0]["label"] == "Restricted source"
+    parent_shown = get(api, "messages/" + parent_question["id"], attempt["token"])
+    assert [o["label"] for o in parent_shown["refs"]["questions"][0]["options"]] == ["Keep"]
     assert get(api, "messages/" + comment["id"], attempt["token"])["body"] == text
 
 

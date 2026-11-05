@@ -75,6 +75,9 @@ def project(c, scoped, payload, *, auth=None):
         marks = ','.join('?' * len(chunk))
         legacy_sources.extend(c.execute(f"SELECT id,title,task_id,scope FROM bot_files WHERE task_id IN ({marks}) OR scope IN ({marks})",
                                          (*chunk, *("task:" + tid for tid in chunk))))
+        legacy_sources.extend(c.execute(f"SELECT f.id,f.title,substr(p.place,6) AS task_id,'' AS scope FROM pins p "
+                                         f"JOIN bot_files f ON p.item='page:' || f.id WHERE p.place IN ({marks})",
+                                         tuple("task:" + tid for tid in chunk)))
         legacy_sources.extend(c.execute(f"SELECT f.id,v.name AS title,f.task_id,f.scope FROM bot_files f JOIN bot_file_versions v ON v.file_id=f.id "
                                          f"WHERE f.task_id IN ({marks})", chunk))
         legacy_sources.extend(c.execute(f"SELECT b.id,b.name AS title,a.task_id,'' AS scope FROM blobs b JOIN task_assets a ON a.blob_id=b.id "
@@ -214,7 +217,7 @@ def project(c, scoped, payload, *, auth=None):
                 return gone
             if parent in SOURCE_LISTS and rejected(value.get('id')):
                 return gone
-            if has_denied(value.get('source')):
+            if has_denied(value.get('source')) or has_denied(value.get('ref')):
                 return gone
             if parent == 'options' and not value.get('file') and not value.get('source') and value.get('label') in legacy_titles:
                 return gone
