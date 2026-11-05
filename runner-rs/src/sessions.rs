@@ -825,6 +825,10 @@ pub async fn ensure_reads(workspace: &Path, path: &Path) {
     }
     for name in reads {
         let sibling = workspace.join(sibling_repo(&name, workspace));
+        if let Err(problem) = crate::repo_safety::outside_installation(&sibling) {
+            log(&format!("Tico runner: {problem}"));
+            continue;
+        }
         if sibling.is_dir() {
             let error = crate::execute::pull_repo(&sibling, &crate::env::process_environment()).await;
             if !error.is_empty() {
@@ -1357,6 +1361,29 @@ impl Runner {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[tokio::test]
+    async fn turns_refuse_explicit_named_and_shared_roots_inside_the_install() {
+        let dir = std::env::temp_dir().join(format!("tico-root-guard-{}", uuid::Uuid::new_v4()));
+        let projects = dir.join("projects");
+        std::fs::create_dir_all(&projects).unwrap();
+        for name in ["alias", "bot-named", "bot-shared"] {
+            std::os::unix::fs::symlink(crate::env::root(), projects.join(name)).unwrap();
+        }
+        let config_path = dir.join("runner.json");
+        std::fs::write(&config_path, json!({"projects_dir": projects, "repos": {"root-guard": projects.join("alias/templates")}}).to_string()).unwrap();
+        let config = crate::config::Config::load(&config_path).unwrap();
+        let client = crate::client::Client::new("http://127.0.0.1:9", "t", 1, 0).unwrap();
+        let runner = Runner::new(config, client, crate::state::State::open(&dir.join("state")).unwrap());
+        let lost = AtomicBool::new(false);
+        for attempt in [json!({"bot": "root-guard", "config": {}}),
+                        json!({"bot": "named-guard", "config": {"folder": "bot-named"}}),
+                        json!({"bot": "shared-guard", "config": {"shared_from": "source-guard", "repo": "acme/bot-shared"}})] {
+            let problem = runner.enter_lanes(&attempt, &lost).await.err().expect("install root must be refused");
+            assert!(problem.contains("inside the Tico install"), "{problem}");
+        }
+        std::fs::remove_dir_all(dir).unwrap();
+    }
 
     #[tokio::test]
     async fn a_persons_turn_gets_the_checkout_before_a_routine_waiting_for_it() {

@@ -10,7 +10,7 @@ Tico reads both for one release (the new name wins), and a template refresh rena
   groups.yaml  <- departments.yaml         the template catalog's groups
   group:       <- department:              a catalog card's group
 
-Nothing else here: no I/O beyond checking which name exists.
+Repository folders are checked against the active Tico installation after resolving links.
 """
 from pathlib import Path
 from typing import Any
