@@ -5,11 +5,11 @@
 .ib-head{display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:8px 12px;margin:0 0 12px}
 .ib-head h2{margin:0;font-size:var(--t-lg, 1.15rem)}
 .ib-head h2 .muted{font-weight:500;margin-left:4px}
-.ib-head-act{display:flex;align-items:center;gap:8px;flex-wrap:wrap}
+.ib-head-act{display:flex;align-items:center;gap:8px;flex-wrap:wrap;margin-left:auto}
 .ib-add{position:relative}
 .ib-add>summary{list-style:none;cursor:pointer;display:inline-flex;align-items:center;min-height:var(--ctl-sm, 32px);padding:0 12px;border-radius:8px;background:var(--accent);color:var(--surface);font-weight:600;font-size:var(--t-sm)}
 .ib-add>summary::-webkit-details-marker{display:none}
-.ib-add-menu{position:absolute;right:0;top:calc(100% + 4px);z-index:5;display:grid;min-width:200px;padding:4px;border:1px solid var(--line);border-radius:10px;background:var(--surface);box-shadow:0 8px 24px color-mix(in srgb,var(--ink) 14%,transparent)}
+.ib-add-menu{position:absolute;right:0;top:calc(100% + 4px);z-index:5;display:grid;min-width:200px;max-width:calc(100vw - 32px);padding:4px;border:1px solid var(--line);border-radius:10px;background:var(--surface);box-shadow:0 8px 24px color-mix(in srgb,var(--ink) 14%,transparent)}
 .ib-add-menu button{all:unset;cursor:pointer;padding:8px 10px;border-radius:6px;font-size:var(--t-sm);color:var(--ink)}
 .ib-add-menu button:hover,.ib-add-menu button:focus-visible{background:var(--surface2)}
 .ib-filters{display:grid;grid-template-columns:minmax(200px,1fr) repeat(3,minmax(0,auto));gap:8px;margin:0 0 12px;min-width:0}
@@ -76,7 +76,6 @@
   .ib-table .ib-latest{grid-column:2/3;text-align:right;font-size:var(--t-sm)}
   .ib-table .ib-chev{display:none}
   .ib-step-body{margin-left:0}
-  .ib-add-menu{right:auto;left:0}
 }
 
 /* Email: Google mailboxes (ui/app/inboxes-email.js) */
@@ -84,7 +83,8 @@
 .mb-dialog .task-rule-form>label:not(.mb-check){display:grid;gap:4px}
 
 /* Tico addresses and Texts in (ui/app/inboxes-texts.js) */
-#inbox-recent .inbound-filters{margin-bottom:8px}
+#inbox-recent .inbound-filters,#inbox-messages .inbound-filters{margin-bottom:8px}
+#inbox-messages .inbound-filters label{min-width:0}
 .wh-dialog .task-rule-form>label{display:grid;gap:4px}
 
 /* Letters in (ui/app/inboxes-letters.js) */

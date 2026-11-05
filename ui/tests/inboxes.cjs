@@ -438,6 +438,42 @@ const scenarios = {
     await page.close();
   },
 
+  'leaving Settings mid-save and coming back keeps What Tico may do locked on what the save sends, then what the server kept': async browser => {
+    const fake = mailboxesFake(), google = googleFake();
+    fake.may.send = true;
+    const {page, seen} = await open(browser, fake, google, {hash: '#/settings/inboxes/settings', ready: '#mailboxes-may [data-google-may]'});
+    const card = page.locator('#mailboxes-may');
+    const controls = () => card.locator('[data-google-may]').evaluateAll(els => els.map(el => [el.dataset.googleMay, el.checked, el.disabled]));
+    assert.deepEqual(await controls(), [['organize_mail', true, false], ['send_mail', true, false], ['change_calendar', false, false]]);
+    let saveStarted;
+    const saving = new Promise(resolve => { saveStarted = resolve; });
+    await page.route('**/api/v2/google/permissions', route => route.request().method() === 'PUT' ? saveStarted(route) : route.fallback());
+    await card.locator('[data-google-may=send_mail]').uncheck();
+    const save = await saving;
+    const body = save.request().postDataJSON();
+    assert.deepEqual(body, {organize_mail: true, send_mail: false, change_calendar: false});
+    // Out by the breadcrumb and back while the save is in flight: the server still reads Send on.
+    await page.locator('#set-inboxes .ib-crumb a', {hasText: 'Inboxes'}).click();
+    await page.locator(LIST).first().waitFor();
+    await page.evaluate(() => { location.hash = '#/settings/inboxes/settings'; });
+    await card.locator('[data-google-may]').first().waitFor();
+    await settle(page);
+    assert.deepEqual(await controls(), [['organize_mail', true, true], ['send_mail', false, true], ['change_calendar', false, true]],
+      'a card drawn mid-save shows what the save sends, locked');
+    Object.assign(fake.may, {send: false});
+    const answer = google.answer('/api/v2/google/permissions', save.request().url(), 'PUT', body);
+    await save.fulfill({contentType: 'application/json', body: JSON.stringify(answer)});
+    await page.waitForFunction(() => [...document.querySelectorAll('#mailboxes-may [data-google-may]')].every(el => !el.disabled));
+    assert.deepEqual(await controls(), [['organize_mail', true, false], ['send_mail', false, false], ['change_calendar', false, false]]);
+    // The next save carries Send off, never the old Send on.
+    await page.unroute('**/api/v2/google/permissions');
+    const second = page.waitForRequest(r => new URL(r.url()).pathname === '/api/v2/google/permissions' && r.method() === 'PUT');
+    await card.locator('[data-google-may=organize_mail]').uncheck();
+    assert.deepEqual((await second).postDataJSON(), {organize_mail: false, send_mail: false, change_calendar: false});
+    assert.deepEqual(seen.errors, []);
+    await page.close();
+  },
+
   'phone width: the list, Settings and a page fit with no sideways scroll, light and dark': async browser => {
     for (const theme of ['light', 'dark']) {
       const fake = mailboxesFake(), more = others();
@@ -446,6 +482,14 @@ const scenarios = {
       assert.ok(await fits(page), `the list fits a phone (${theme})`);
       assert.equal(await page.locator('.ib-table thead').isHidden(), true, 'rows are cards on a phone');
       await shot(page, `inboxes-list-phone-${theme}.png`, theme);
+      // Add inbox opens inside the screen, every item whole.
+      await page.locator('[data-ib-add] > summary').click();
+      const menu = await page.locator('.ib-add-menu').boundingBox();
+      assert.ok(menu.x >= 0 && menu.x + menu.width <= 390, `the Add inbox menu stays on screen (${menu.x}..${menu.x + menu.width})`);
+      assert.ok(await page.evaluate(() => { const m = document.querySelector('#main'); return !m || m.scrollWidth <= m.clientWidth; }),
+        'opening it scrolls nothing sideways');
+      assert.ok(await page.locator('.ib-add-menu button').evaluateAll(bs => bs.every(b => b.scrollWidth <= b.clientWidth)), 'no item is cut off');
+      await page.locator('[data-ib-add] > summary').click();
       await page.evaluate(() => { location.hash = '#/settings/inboxes/settings'; });
       await page.locator('#settings-mail-addresses [data-pm-address="as_1"]').waitFor();
       await settle(page);

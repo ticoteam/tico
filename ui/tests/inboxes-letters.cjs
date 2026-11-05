@@ -5,7 +5,8 @@
 // the order once with an Idempotency-Key, after which it shows as Pending; the intake inbox is picked from the company's
 // email inboxes and needs a sender, and a failed save goes back to the last saved inbox. An address's page shows its
 // Form 1583 progress and its letters (sender, summary, PDF, task), with no scan or forward request; a failed letter is
-// retried by an owner. A member reads only. Without Tico Gateway the addresses card says so, offers no order, and the
+// retried by an owner. Mail by email turned off stays listed as Not in use while it has letters, and its page keeps
+// them, with Retry. A member reads only. Without Tico Gateway the addresses card says so, offers no order, and the
 // list shows no error. No sideways scroll on a phone. TICO_SHOTS=<dir> saves screenshots (desktop and phone, dark and light).
 const {chromium} = require('playwright');
 const assert = require('node:assert/strict');
@@ -209,6 +210,35 @@ const go = (page, hash) => page.evaluate(h => { location.hash = h; }, hash);
         [['Ordered', 'done'], ['Form 1583', 'cur'], ['Receiving', '']]);
       assert.ok(!(await page.locator('#set-inboxes').innerText()).includes('Keller Pkwy'));
       await page.locator('#inbox-letters .empty', {hasText: 'No letters yet.'}).waitFor();
+      assert.deepEqual(errors, []);
+      await page.close();
+    }
+    {
+      // Mail by email turned off with letters in: listed as Not in use, its page keeps them, and a failed one is retried.
+      const base = server();
+      const state = Object.assign(base, {intake: null, items: [{id: 'pm_e1', provider: 'email', received_at: AGO(10), kind: null, summary: '',
+        sender: '', status: 'failed', task_id: null, attempts: 5, error: 'unreadable'}, ...base.items]});
+      const {page, errors} = await open(browser, {state, hash: '#/settings/inboxes'});
+      const row = page.locator('[data-ib-row="postal:intake"]');
+      await row.waitFor();
+      assert.equal(await row.locator('[data-ib-status]').getAttribute('data-ib-status'), 'off');
+      assert.equal(await row.locator('[data-ib-status]').innerText(), 'Not in use');
+      await row.locator('.ib-name a').click();
+      const letters = page.locator('#inbox-letters');
+      await letters.locator('[data-pm-letter="pm_e1"]').waitFor();
+      assert.equal(await page.evaluate(() => location.hash), '#/settings/inboxes/postal/intake');
+      assert.deepEqual(await letters.locator('[data-pm-letter]').evaluateAll(trs => trs.map(tr => tr.dataset.pmLetter)), ['pm_e1'], 'only emailed letters');
+      assert.equal(await page.locator('#inbox-head [data-ib-status]').getAttribute('data-ib-status'), 'off');
+      assert.equal(await page.locator('[data-pm-intake-stop]').count(), 0, 'nothing to stop');
+      assert.equal(await page.locator('[data-pm-intake-on]').getAttribute('href'), '#/settings/inboxes/settings/letters-in');
+      await letters.locator('[data-pm-retry="pm_e1"]').click();
+      await page.locator('#inbox-letters [data-pm-letter="pm_e1"] [data-pm-task]').waitFor();
+      assert.deepEqual(state.sent.filter(s => s.path.endsWith('/retry')).map(s => s.path), ['/api/v2/postal/items/pm_e1/retry']);
+      // With no emailed letters, mail by email that is off has no row.
+      state.items = state.items.filter(m => m.provider !== 'email');
+      await go(page, '#/settings/inboxes');
+      await page.locator('[data-ib-row="postal:as_1"]').waitFor();
+      assert.equal(await page.locator('[data-ib-row="postal:intake"]').count(), 0);
       assert.deepEqual(errors, []);
       await page.close();
     }

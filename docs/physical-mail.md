@@ -70,7 +70,8 @@ second task.
 ## Settings > Inboxes
 
 Each address is a Letters in row in Settings > Inboxes (`#/settings/inboxes`), with open orders as Pending and the
-email-in inbox as Mail by email. An address's page shows its Form 1583 progress until it is active, who reads it, its
+email-in inbox as Mail by email (still listed, as Not in use, once it is turned off while letters it brought in remain,
+so a failed one can be retried). An address's page shows its Form 1583 progress until it is active, who reads it, its
 automations and its letters (date, sender, kind, scan, the task it went to, status), with Retry on a failed one for an
 owner or admin. Inboxes > Settings > Letters in has the addresses with Get an address (owner or admin: state, kind,
 monthly and scan prices) and Bring your own (the intake inbox).

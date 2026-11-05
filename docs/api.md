@@ -311,7 +311,9 @@ Who may make and send is in [Permissions](permissions.md#outgoing-webhooks).
 **Settings > Inboxes** lists the company's Tico addresses and numbers with every other inbox (`#/settings/inboxes`;
 the old `#/settings/inbound`, `#/settings/company-inbox` and `#/settings/email-phone` links open it). Each one's page
 (`#/settings/inboxes/tico/<id>`, `#/settings/inboxes/number/<id>`) shows who reads it, its automations and its recent
-messages. All current people, native bot runs and registered external agents can read them. Runner/service credentials
+messages; a released address stays listed as Not in use with the messages it received. **Messages**
+(`#/settings/inboxes/messages`) reads every inbox at once, or the ones picked, with channel, sender, search, code and spam
+filters and older pages. All current people, native bot runs and registered external agents can read them. Runner/service credentials
 and support sessions cannot. No read hides a message from another agent. Your connected Google inbox is separate.
 
 `GET /api/v2/inbound/inboxes` lists inboxes and sync status (pages of `limit` ≤ 100; follow `next` with `after`); `POST` with `{kind:"email",name}`

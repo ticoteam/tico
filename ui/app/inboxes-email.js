@@ -7,8 +7,10 @@
    Classic script: its globals are shared with the other files under ui/app/, loaded in the order index.html lists them. */
 'use strict';
 
-// may: one more each What Tico may do save; saving: one is in flight; refreshAfterMay: a draw waited for it.
-const MB = {run: 0, may: 0, saving: false, refreshAfterMay: false};
+// What Tico may do, kept here rather than in a card so leaving Settings and coming back mid-save keeps it: may counts the
+// saves, pending holds what the one in flight sends (by PUT field), known what the last one left the server with, and
+// refreshAfterMay that a draw waited for it.
+const MB = {run: 0, may: 0, pending: null, known: null, refreshAfterMay: false};
 const MB_LEVELS = [['read', 'Read'], ['read_write', 'Read and write']];
 // What Tico may do (PUT /v2/google/permissions): the field the server keeps, the key GET /v2/mailboxes reads it back as.
 const MB_MAY = [['organize_mail', 'organize', 'Organize', 'label, archive, draft'], ['send_mail', 'send', 'Send', ''],
@@ -240,38 +242,41 @@ inboxesSetting('email-may', {section: 'email', order: 20,
     const save = MB.may;
     const d = await mbMailboxes(ctx);
     if (!ctx.live()) return;
-    // A read from before or during a save cannot replace its controls or put the old permissions back; one that
-    // lands mid-save draws again once the save settles.
-    if ((MB.saving || save !== MB.may) && host.querySelector('[data-google-may]')) {
-      if (MB.saving) MB.refreshAfterMay = true;
-      return;
-    }
-    const may = d.may || {};
+    // A read from before or during a save never puts the old permissions back. Drawn controls stay as they are; a card
+    // drawn afresh (Settings left and opened again) shows what the save in flight sends, locked, or what the last save
+    // left. A draw during a save asks for another once it settles.
+    const old = !!MB.pending || save !== MB.may;
+    if (MB.pending) MB.refreshAfterMay = true;
+    if (old && host.querySelector('[data-google-may]')) return;
+    const values = MB.pending || (old && MB.known);
+    const may = values ? Object.fromEntries(MB_MAY.map(([field, key]) => [key, values[field]])) : d.may || {};
     const box = ([field, key, label, note]) => `<label class="google-may-row"><input type="checkbox" data-google-may="${field}"${
-      may[key] ? ' checked' : ''}><span>${label}${note ? `<span class="muted">${note}</span>` : ''}</span></label>`;
+      may[key] ? ' checked' : ''}${MB.pending ? ' disabled' : ''}><span>${label}${note ? `<span class="muted">${note}</span>` : ''}</span></label>`;
     host.innerHTML = inboxesCard('mailboxes-may', 'What Tico may do', `
       <div class="google-may-row" data-google-may-read><span class="google-may-always" aria-hidden="true"></span><span>Read<span class="muted">always</span></span></div>
       ${MB_MAY.map(box).join('')}<p class="muted">Each bot's own sending is in its settings.</p>`);
-    host.onchange = event => { if (event.target.matches('[data-google-may]')) void mbSaveMay(host, event.target); };
+    host.onchange = event => { if (event.target.matches('[data-google-may]')) void mbSaveMay(event.target); };
   }});
 
-// Each box saves on its own change, all three sent together (the server takes the whole setting). The Connection
-// card's setup prompt names what Tico asks Google for, so it is drawn again.
-async function mbSaveMay(host, input) {
-  const boxes = [...host.querySelectorAll('[data-google-may]')];
-  const body = Object.fromEntries(boxes.map(box => [box.dataset.googleMay, box.checked]));
-  MB.may++; MB.saving = true;
-  boxes.forEach(box => { box.disabled = true; });
+// Each box saves on its own change, all three sent together (the server takes the whole setting), one save at a time.
+// When it settles, whichever card shows now (the one clicked, or one drawn since) shows what the server kept. The
+// Connection card's setup prompt names what Tico asks Google for, so it is drawn again.
+const mbMayBoxes = () => [...document.querySelectorAll('#mailboxes-may [data-google-may]')];
+async function mbSaveMay(input) {
+  if (MB.pending) { input.checked = !input.checked; return; }
+  const body = Object.fromEntries(mbMayBoxes().map(box => [box.dataset.googleMay, box.checked]));
+  const before = {...body, [input.dataset.googleMay]: !input.checked};
+  MB.may++; MB.pending = body;
+  mbMayBoxes().forEach(box => { box.disabled = true; });
+  let saved = false;
   try {
     await put('/v2/google/permissions', body);
-    toast('Saved');
+    saved = true; toast('Saved');
     void window.mountGoogleConnect?.($('#set-google'), {force: true});
-  } catch (e) {
-    input.checked = !input.checked;
-    toast(e.message, true);
-  } finally {
-    MB.saving = false;
-    boxes.forEach(box => { box.disabled = false; });
+  } catch (e) { toast(e.message, true); }
+  finally {
+    MB.known = saved ? body : before; MB.pending = null;
+    for (const box of mbMayBoxes()) { box.checked = !!MB.known[box.dataset.googleMay]; box.disabled = false; }
     if (MB.refreshAfterMay) { MB.refreshAfterMay = false; void renderSettingsInboxes(); }
   }
 }
