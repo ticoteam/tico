@@ -12,6 +12,8 @@ from backend.config import Settings
 from backend.store import Store
 
 TABLES = {
+    rows.PostalMailGrantRow: "postal_mail_grants",
+    rows.PostalMailSettingsRow: "postal_mail_settings",
     rows.MeetingTaskLinkRow: "meeting_task_links",
     rows.SuggestionRow: "suggestions",
     rows.TaskRow: "tasks",

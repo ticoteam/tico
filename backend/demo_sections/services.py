@@ -119,6 +119,10 @@ def _derived(label, size=40):
 
 def seed(b):
     _inboxes(b)
+    # SQLite stamps the migration's singleton with wall time; the demo install starts on its fictional clock.
+    def mail_clock(c):
+        c.execute("UPDATE postal_mail_settings SET created_at=?,updated_at=? WHERE id=1", (H.now(), H.now()))
+    b.write(mail_clock)
     _letters(b)
     _gateway(b)
     _runners(b)
@@ -126,6 +130,11 @@ def seed(b):
     _models(b)
     _subscription(b)
     _connectors(b)
+
+
+def mail_access(b):
+    """Seed after the company's conversations so the grant's audit ids do not shift their stable ids."""
+    b.call("PUT", "postal/addresses/all/grants/bot/legal-review", {"level": "read"})
 
 
 def _inboxes(b):

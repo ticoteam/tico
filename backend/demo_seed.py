@@ -731,6 +731,8 @@ class Builder:
         # owner already had (backend/profiles.py).
         from . import profiles as Profiles
         self.write(lambda c: Profiles.migrate(c, tell=False))
+        from .demo_sections import services
+        services.mail_access(self)
 
         def work(c):
             c.execute("UPDATE messages SET delivered_at=created_at WHERE delivered_at IS NULL AND recipient_id LIKE 'bot:%'")

@@ -30,6 +30,9 @@ function server() {
     prices: {shared: 12, private: '25', scan: 1.5, page_over_10: '0.3'},
     intakeFail: false,
     intake: null,
+    legal_bot_id: null,
+    routingFail: false,
+    grants: [],
     inboxes: [{inbox_id: 'ib_mail', kind: 'email', name: 'Mail', address: 'mail@acme.example'},
       {inbox_id: 'ib_phone', kind: 'phone', name: 'Front desk', address: '+15550100'}],
     items: [
@@ -66,11 +69,37 @@ async function open(browser, viewport = {width: 1280, height: 860}, state = serv
     if (p === '/api/humans' || p === '/api/people') return json({people: [{id: 'ana', name: 'Ana'}], teams: {}});
     if (p === '/api/status') return json({cloud: true, active: [], queued: [], recent_runs: [], keeper_alive: true, health_issues: [], schedules: []});
     if (p === '/api/v2/status') return json({bots: []});
+    if (p === '/api/v2/bots') return json([{id: 'legal', slug: 'legal', display_name: 'Counsel', state: 'active'}]);
+    if (p === '/api/v2/postal/bots') return json({bots: [
+      {id: 'tico-counsel', slug: 'legal', display_name: 'Counsel', state: 'active', read_error: null, routing_error: null},
+      {id: 'synced', slug: 'synced', display_name: 'Chat bot', state: 'active',
+        read_error: 'Physical mail is unavailable: this bot only syncs chat', routing_error: 'Physical mail is unavailable: this bot only syncs chat'},
+    ], next: null});
     if (p === '/api/v2/needs-you') return json({items: []});
     if (p === '/api/v2/operations') return json({machines: [], services: []});
     if (p === '/api/v2/postal/addresses') {
       if (!state.gateway) return json({error: {code: 'gateway', detail: 'Connect Tico Gateway first'}}, 409);
       return json({addresses: state.addresses, orders: state.orders, prices: state.prices});
+    }
+    if (p === '/api/v2/postal/settings') {
+      if (method === 'PUT') {
+        if (state.routingFail) return json({error: {code: 'validation', detail: 'Not saved'}}, 422);
+        state.legal_bot_id = req.postDataJSON().legal_bot_id;
+      }
+      return json({settings: {legal_bot_id: state.legal_bot_id}});
+    }
+    const grant = p.match(/^\/api\/v2\/postal\/addresses\/([^/]+)\/grants(?:\/(bot|person)\/([^/]+))?$/);
+    if (grant) {
+      const [, address_id, grantee_type, grantee_id] = grant;
+      if (method === 'PUT') {
+        const made = {id: 'pmg_1', address_id, grantee_type, grantee_id, level: 'read'};
+        state.grants.push(made); return json({grant: made});
+      }
+      if (method === 'DELETE') {
+        state.grants = state.grants.filter(g => g.address_id !== address_id || g.grantee_type !== grantee_type || g.grantee_id !== grantee_id);
+        return json({ok: true});
+      }
+      return json({address_id, grants: state.grants.filter(g => g.address_id === address_id), next: null});
     }
     if (p === '/api/v2/postal/orders') {
       const body = req.postDataJSON();
@@ -133,14 +162,45 @@ const rowText = async row => (await row.innerText()).replace(/\s+/g, ' ').trim()
       // The intake inbox: only email inboxes are offered.
       const intake = pane.locator('[data-pm-intake-select]');
       assert.deepEqual(await intake.locator('option').allInnerTexts(), ['None', 'Mail · mail@acme.example']);
+      const legal = pane.locator('[data-pm-legal]');
+      await legal.waitFor();
+      // Playwright's disabled-state locator follows the enclosing label to its select; inspect the option itself.
+      assert.equal(await legal.locator('option[value="synced"]').evaluate(option => option.disabled), true,
+        'unsupported routing bot is disabled');
+      assert.equal(await pane.locator('[data-pm-grantee] option[value="bot:synced"]').evaluate(option => option.disabled), true,
+        'unsupported scan reader is disabled');
+      await legal.selectOption('tico-counsel');
+      await page.waitForFunction(() => document.querySelector('[data-pm-legal]')?.disabled === false);
+      assert.equal(state.legal_bot_id, 'tico-counsel', 'route legal mail to Counsel by its stable id');
+      state.routingFail = true;
+      await legal.selectOption('');
+      await pane.locator('[data-pm-access-error]', {hasText: 'Not saved'}).waitFor();
+      assert.equal(await legal.inputValue(), 'tico-counsel', 'failed routing changes restore the saved bot');
+      state.routingFail = false;
+      await legal.selectOption('');
+      await page.waitForFunction(() => document.querySelector('[data-pm-legal]')?.disabled === false);
+      assert.equal(state.legal_bot_id, null, 'restore owner routing');
+      await pane.locator('[data-pm-scope]').selectOption('as_1');
+      await pane.locator('[data-pm-grantee]').selectOption('bot:tico-counsel');
+      await pane.locator('[data-pm-grant-form] button').click();
+      await pane.locator('[data-pm-grants]', {hasText: 'Counsel · Read'}).waitFor();
+      const access = state.sent.find(s => s.path === '/api/v2/postal/addresses/as_1/grants/bot/tico-counsel');
+      assert.equal(access.method, 'PUT'); assert.deepEqual(access.body, {level: 'read'});
+      assert.ok(access.key, 'grant carries an Idempotency-Key');
+      await pane.locator('[data-pm-revoke]').click();
+      await pane.locator('[data-pm-grants]', {hasText: 'No grants'}).waitFor();
+      assert.equal(state.grants.length, 0, 'remove a per-address grant');
+      assert.ok(state.sent.some(s => s.method === 'DELETE' && s.path.endsWith('/as_1/grants/bot/tico-counsel')));
       await shot(page, 'desktop');
       // Senders alone save nothing; with an inbox picked both go in one save.
       const from = pane.locator('[data-pm-intake-senders]'), puts = () => state.sent.filter(s => s.path === '/api/v2/postal/intake').length;
       await from.fill('Scans@VPM.example, @vpm.example');
       await from.dispatchEvent('change');
       assert.equal(puts(), 0, 'no inbox, nothing saved');
-      await intake.selectOption('ib_mail');
-      await page.locator('.toast', {hasText: 'Saved'}).waitFor();
+      await Promise.all([
+        page.waitForResponse(r => new URL(r.url()).pathname === '/api/v2/postal/intake' && r.request().method() === 'PUT'),
+        intake.selectOption('ib_mail'),
+      ]);
       assert.equal(puts(), 1, 'one save, though picking the inbox also blurred the senders field');
       assert.deepEqual(state.sent.find(s => s.path === '/api/v2/postal/intake')?.body,
         {inbox_id: 'ib_mail', senders: ['scans@vpm.example', '@vpm.example']});
@@ -192,6 +252,8 @@ const rowText = async row => (await row.innerText()).replace(/\s+/g, ' ').trim()
       const pane = page.locator('#settings-mail');
       await pane.locator('[data-pm-letter="pm_3"]').waitFor();
       await pane.locator('[data-pm-intake-shown]').waitFor();
+      await pane.locator('#settings-mail-access', {hasText: 'Legal mail: Owner'}).waitFor();
+      assert.equal(await pane.locator('[data-pm-grant-form]').count(), 0, 'members cannot grant access');
       assert.equal(await pane.locator('[data-pm-order]').count(), 0);
       assert.equal(await pane.locator('[data-pm-retry]').count(), 0);
       assert.equal(await pane.locator('[data-pm-intake-shown]').innerText(), 'mail@acme.example');
@@ -215,6 +277,8 @@ const rowText = async row => (await row.innerText()).replace(/\s+/g, ' ').trim()
       await pane.locator('[data-pm-address="as_1"]').waitFor();
       await pane.locator('[data-pm-letter="pm_2"]').waitFor();
       await pane.locator('[data-pm-intake-select]').waitFor();
+      await pane.locator('[data-pm-legal]').waitFor();
+      await pane.locator('[data-pm-grants]', {hasText: 'No grants'}).waitFor();
       assert.ok(await noSideways(page), 'Mail fits a phone');
       await shot(page, 'phone');
       await pane.locator('[data-pm-order]').click();
