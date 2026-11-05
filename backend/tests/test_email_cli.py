@@ -8,7 +8,7 @@ from backend.tests.test_api import api  # noqa: F401
 from backend.tests.test_automation_cli import Client
 from backend.tests.test_gmail_live import BOX, NEXT, gmail_http  # noqa: F401
 from backend.tests.test_google_workspace_authz import workspace_key  # noqa: F401
-from backend.tests.test_mail_live import SHARED, live, no_cached_tokens  # noqa: F401
+from backend.tests.test_mail_live import SHARED, assistant_token, live, no_cached_tokens  # noqa: F401
 from backend.tests.test_mcp import call
 from clients import hubcli, hubtools, remotecli
 
@@ -25,8 +25,9 @@ def email_cli(api, live, monkeypatch):
     return run
 
 
-@pytest.mark.parametrize("token", ["ana-test", "assistant-test"])
-def test_email_commands_reach_the_api_as_the_person_or_their_assistant(email_cli, live, capsys, token):
+@pytest.mark.parametrize("caller", ["person", "assistant"])
+def test_email_commands_reach_the_api_as_the_person_or_their_assistant(email_cli, live, capsys, assistant_token, caller):
+    token = "ana-test" if caller == "person" else assistant_token
     assert email_cli(token, "mailboxes", "--json") == 0
     boxes = json.loads(capsys.readouterr().out)["mailboxes"]
     assert {BOX, SHARED} <= {box["address"] for box in boxes}
@@ -44,12 +45,12 @@ def test_email_commands_reach_the_api_as_the_person_or_their_assistant(email_cli
     assert json.loads(capsys.readouterr().out)["body"] == "Live contract body."
 
 
-def test_email_markdown_includes_ids_bodies_and_paging(email_cli, capsys):
-    assert email_cli("assistant-test", "inbox", SHARED) == 0
+def test_email_markdown_includes_ids_bodies_and_paging(email_cli, capsys, assistant_token):
+    assert email_cli(assistant_token, "inbox", SHARED) == 0
     text = capsys.readouterr().out
     assert "## A contract" in text and "Message: m2 · Thread: t1" in text
     assert "Next cursor: " + NEXT in text
-    assert email_cli("assistant-test", "message", SHARED, "m1") == 0
+    assert email_cli(assistant_token, "message", SHARED, "m1") == 0
     text = capsys.readouterr().out
     assert "Live contract body." in text and "contract.pdf" in text
 
@@ -60,7 +61,7 @@ def test_email_cli_returns_refusal_for_a_member_without_mailbox_access(email_cli
     assert live["calls"] == []
 
 
-def test_email_mcp_reads_share_the_same_rights_and_are_offered_to_the_assistant(api, live):
+def test_email_mcp_reads_share_the_same_rights_and_are_offered_to_the_assistant(api, live, assistant_token):
     names = {"hub_email_" + action for action in ("mailboxes", "inbox", "search", "thread", "message")}
     assert names <= {tool["name"] for tool in hubtools.listing(kind="assistant")}
     assert not names & {tool["name"] for tool in hubtools.listing(kind="bot")}
@@ -68,7 +69,7 @@ def test_email_mcp_reads_share_the_same_rights_and_are_offered_to_the_assistant(
                        ("search", {"mailbox": BOX, "q": "from:sender"}),
                        ("thread", {"mailbox": SHARED, "id": "t1"}),
                        ("message", {"mailbox": SHARED, "id": "m1"})):
-        error, result = call(api, "hub_email_" + name, args, token="assistant-test")
+        error, result = call(api, "hub_email_" + name, args, token=assistant_token)
         assert not error, result
     error, result = call(api, "hub_email_message", {"mailbox": SHARED, "id": "m1"}, token="cara-test")
     assert error and result["error"] == "forbidden"

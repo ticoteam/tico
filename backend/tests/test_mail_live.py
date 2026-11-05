@@ -6,8 +6,8 @@ import jwt
 import pytest
 
 from backend import google_workspace, mailbox_access
-from backend.auth import Identity
 from backend.tests.test_api import api, get, headers  # noqa: F401
+from backend.tests.test_assistant import assistant_turn
 from backend.tests.test_gmail_live import BOX, NEXT, gmail_http  # noqa: F401
 from backend.tests.test_google_workspace import personal
 from backend.tests.test_google_workspace_authz import workspace_key  # noqa: F401
@@ -27,9 +27,13 @@ def no_cached_tokens():
 def live(api, workspace_key, gmail_http):
     with api.app.state.store.transaction() as c:
         mailbox_access.ensure_mailbox(c, SHARED, kind="shared", created_by="human:ana")
-    api.app.state.store.settings.test_identities["assistant-test"] = Identity(
-        "human:ana", "owner", BOX, via_token=True, via="assistant", task_actor="bot:coo")
     return gmail_http
+
+
+@pytest.fixture
+def assistant_token(api):
+    _, attempt = assistant_turn(api, "ana-test", "Read my mail and the shared mailboxes I can access.")
+    return attempt["token"]
 
 
 def read(api, path, token="ana-test", **params):
@@ -38,8 +42,9 @@ def read(api, path, token="ana-test", **params):
     return answer.json()
 
 
-def test_owner_and_assistant_read_personal_and_shared_workspace_mail_without_a_copy(api, live, workspace_key):
-    for token, mailbox in (("ana-test", BOX), ("assistant-test", BOX), ("assistant-test", SHARED)):
+def test_owner_and_assistant_read_personal_and_shared_workspace_mail_without_a_copy(
+        api, live, workspace_key, assistant_token):
+    for token, mailbox in (("ana-test", BOX), (assistant_token, BOX), (assistant_token, SHARED)):
         page = read(api, "messages", token, mailbox=mailbox, q="from:sender OR is:unread",
                     label="INBOX", since="100", until="200", has_attachment="true", limit=999)
         assert page["messages"][0]["mailbox"] == mailbox and "body" not in page["messages"][0]
@@ -57,10 +62,11 @@ def test_owner_and_assistant_read_personal_and_shared_workspace_mail_without_a_c
         assert c.execute("SELECT COUNT(*) FROM mail_mailboxes").fetchone()[0] == 0
 
 
-def test_opening_live_mail_keeps_the_public_shape_and_audits_every_open(api, live):
-    message = read(api, "messages/m1", "assistant-test", mailbox=SHARED)
-    thread = read(api, "threads/t1", "assistant-test", mailbox=SHARED)
-    read(api, "messages/m1", "assistant-test", mailbox=SHARED)
+@pytest.mark.parametrize("mailbox", [BOX, SHARED])
+def test_opening_live_mail_keeps_the_public_shape_and_audits_every_open(api, live, assistant_token, mailbox):
+    message = read(api, "messages/m1", assistant_token, mailbox=mailbox)
+    thread = read(api, "threads/t1", assistant_token, mailbox=mailbox)
+    read(api, "messages/m1", assistant_token, mailbox=mailbox)
     assert message["body"] == "Live contract body." and message["attachment_count"] == 1
     assert message["has_attachment"] and message["has_unsubscribe"] and message["is_internal"]
     assert message["rule_hits"] == [] and message["list_id"] == "contracts.acme.example"
@@ -70,23 +76,28 @@ def test_opening_live_mail_keeps_the_public_shape_and_audits_every_open(api, liv
         assert len(rows) == 3 and all(row["actor"] == "human:ana" for row in rows)
         details = [json.loads(row["detail"]) for row in rows]
         assert [item["kind"] for item in details] == ["message", "thread", "message"]
-        assert all(item["mailbox"] == SHARED for item in details)
+        assert all(item["mailbox"] == mailbox and item["via"] == "assistant" for item in details)
         assert "Live contract body" not in json.dumps(details)
         assert c.execute("SELECT COUNT(*) FROM mail_messages").fetchone()[0] == 0
 
 
 def test_member_is_refused_before_gmail_and_a_grant_is_checked_each_time(api, live):
-    for path in ("messages", "messages/m1", "threads/t1"):
-        get(api, "mail/" + path + "?mailbox=" + SHARED, "cara-test", expected=403)
+    _, attempt = assistant_turn(api, "cara-test", "Read the shared mailbox if I have access.")
+    tokens = ("cara-test", attempt["token"])
+    for token in tokens:
+        for path in ("messages", "messages/m1", "threads/t1"):
+            get(api, "mail/" + path + "?mailbox=" + SHARED, token, expected=403)
     assert live["calls"] == []
     with api.app.state.store.transaction() as c:
         row = mailbox_access.ensure_mailbox(c, SHARED, kind="shared", created_by="human:ana")
         mailbox_access.grant(c, "human:ana", row["id"], "person", "cara", "read")
-    read(api, "messages/m1", "cara-test", mailbox=SHARED)
+    for token in tokens:
+        read(api, "messages/m1", token, mailbox=SHARED)
     before = len(live["calls"])
     with api.app.state.store.transaction() as c:
         c.execute("DELETE FROM mailbox_accesses WHERE mailbox_id=? AND grantee_id='cara'", (row["id"],))
-    get(api, "mail/messages/m1?mailbox=" + SHARED, "cara-test", expected=403)
+    for token in tokens:
+        get(api, "mail/messages/m1?mailbox=" + SHARED, token, expected=403)
     assert len(live["calls"]) == before
 
 
