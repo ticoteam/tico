@@ -791,7 +791,49 @@ let browser = null;
     assert.equal(await cu.locator('.cu-you').count(), 1, 'it says the viewer is named');
     assert.match(await cu.locator('.cu-msgs').innerText(), /Booked for Friday\.\s*…/, 'a clipped message ends in …');
     await themed(page, 'catch-up');
+    // A reply: Send shows once there is text, and the sent message shows on the card, which stays until Mark read.
+    const reply = cu.locator('.cu-reply input'), sendBtn = cu.locator('.cu-send');
+    assert.equal(await sendBtn.isVisible(), false, 'no Send while the box is empty');
+    await reply.fill('On it.');
+    await sendBtn.waitFor();
+    await themed(page, 'catch-up-typing');
+    await sendBtn.click();
+    await cu.locator('.cu-msg', {hasText: 'On it.'}).waitFor();
+    assert.equal(seen.posts.at(-1).text, 'On it.');
+    assert.equal(await reply.inputValue(), '');
+    assert.equal(await sendBtn.isVisible(), false);
+    assert.equal(await cu.locator('.cu-pos').textContent(), '1 of 3', 'the card stays after a reply');
+    // Mark read can be taken back: nothing goes to the server while Undo shows.
     await cu.locator('[data-cu-read]').click();
+    await cu.locator('.cu-card h3', {hasText: 'Thread 4'}).waitFor();
+    assert.equal(await cu.locator('.cu-pos').textContent(), '2 of 3');
+    await cu.locator('.cu-undo', {hasText: 'Marked read'}).waitFor();
+    if (shots) await page.evaluate(() => clearTimeout(CU.undo?.timer));    // the screenshots take longer than Undo shows
+    await themed(page, 'catch-up-undo');
+    await cu.locator('[data-cu-undo]').click();
+    await cu.locator('.cu-card h3', {hasText: 'Thread 11'}).waitFor();
+    assert.equal(await cu.locator('.cu-pos').textContent(), '1 of 3');
+    assert.match(await cu.locator('.cu-msgs').innerText(), /On it\./, 'the sent reply is still on the card');
+    assert.deepEqual(seen.readAll, [], 'an undone Mark read sends nothing');
+    // A draft stays with its card through Mark read and Undo.
+    await reply.fill('Half a thought');
+    await cu.locator('[data-cu-read]').click();
+    await cu.locator('.cu-card h3', {hasText: 'Thread 4'}).waitFor();
+    assert.equal(await cu.locator('.cu-reply input').inputValue(), '');
+    await cu.locator('[data-cu-undo]').click();
+    await cu.locator('.cu-card h3', {hasText: 'Thread 11'}).waitFor();
+    assert.equal(await cu.locator('.cu-reply input').inputValue(), 'Half a thought');
+    assert.equal(await sendBtn.isVisible(), true);
+    await cu.locator('.cu-reply input').fill('');
+    await cu.locator('[data-cu-read]').click();
+    await cu.locator('.cu-card h3', {hasText: 'Thread 4'}).waitFor();
+    // The next action makes the last one final: Later sends the read it followed.
+    await cu.locator('[data-cu-later]').click();
+    await cu.locator('.cu-card h3', {hasText: 'Bea, Cy'}).waitFor();
+    for (let i = 0; i < 40 && !seen.readAll.length; i++) await page.waitForTimeout(50);
+    assert.deepEqual(seen.readAll, ['t11']);
+    // Ctrl+Z undoes too (here a Later).
+    await page.keyboard.press('Control+z');
     await cu.locator('.cu-card h3', {hasText: 'Thread 4'}).waitFor();
     assert.equal(await cu.locator('.cu-pos').textContent(), '2 of 3');
     await cu.locator('[data-cu-later]').click();
@@ -802,6 +844,10 @@ let browser = null;
     assert.equal(await cu.locator('.cu-pos').textContent(), '3 of 3', 'what was put off comes last');
     await cu.locator('[data-cu-mute]').click();
     await cu.getByText('All caught up').waitFor();
+    await cu.locator('.cu-empty .cu-undo', {hasText: 'Muted'}).waitFor();
+    assert.deepEqual(seen.readAll, ['t11', 't-gdm'], 'the mute waits while Undo shows');
+    // Undo goes by itself after a few seconds, and then the mute and read go out.
+    await cu.locator('.cu-undo').waitFor({state: 'detached', timeout: 8000});
     for (let i = 0; i < 40 && seen.readAll.length < 3; i++) await page.waitForTimeout(50);
     assert.deepEqual(seen.readAll, ['t11', 't-gdm', 't4']);
     assert.equal(seen.follows.at(-1), 'muted');

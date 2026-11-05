@@ -113,8 +113,16 @@
 .cu-msg-body{margin-top:2px;overflow-wrap:anywhere}
 .cu-msg-body>:first-child{margin-top:0}.cu-msg-body>:last-child{margin-bottom:0}
 .cu-more{align-self:flex-start;margin:2px 18px 0 58px;color:var(--muted);font-size:var(--t-sm)}
-.cu-reply{padding:0 18px 12px}
-.cu-reply input{height:40px;border-color:var(--g4);border-radius:10px;background:var(--bg);padding:0 12px}
+.cu-reply{display:flex;align-items:center;gap:8px;padding:0 18px 12px}
+.cu-reply input{flex:1;min-width:0;height:40px;border-color:var(--g4);border-radius:10px;background:var(--bg);padding:0 12px}
+.cu-reply .cu-send{display:none;flex:none;place-items:center;width:40px;height:40px;padding:0;border-radius:10px}
+.cu-reply.has-text .cu-send{display:inline-grid}
+/* Undo floats over the foot of the messages (a zero-height sticky row), so the card keeps its size when it goes. */
+.cu-undo{position:sticky;bottom:8px;display:flex;justify-content:center;height:0;margin-top:auto;pointer-events:none}
+.cu-undo-pill{display:flex;align-items:center;gap:14px;max-width:calc(100% - 32px);padding:8px 14px;box-sizing:border-box;border-radius:10px;background:var(--ink);color:var(--bg);font-size:var(--t-sm);box-shadow:0 6px 24px rgba(0,0,0,.25);transform:translateY(-100%);pointer-events:auto}
+.cu-undo-pill button{flex:none;padding:0;border:0;background:none;color:inherit;font:600 var(--t-sm) var(--sans);text-decoration:underline;cursor:pointer}
+.cu-empty .cu-undo{position:static;height:auto;margin-top:var(--s2)}
+.cu-empty .cu-undo-pill{transform:none}
 .cu-foot{display:flex;align-items:center;gap:8px;padding:12px 18px;border-top:1px solid var(--line)}
 .cu-foot .spacer{flex:1}
 .cu-later{height:32px;padding:0 12px;border:1px solid var(--g4);border-radius:8px;background:none;color:var(--ink);font-weight:500;cursor:pointer}
@@ -200,6 +208,7 @@ legend.nt-lbl{margin-bottom:6px}
   .cu-card{flex:1;box-shadow:none;border-radius:14px;overflow:hidden}
   .cu-msgs{flex:1}
   .cu-reply input{height:44px;border-radius:12px}
+  .cu-reply .cu-send{width:44px;height:44px;border-radius:12px}
   .cu-card-head{padding:14px 16px}
   .cu-msg{padding-left:calc(16px + var(--d) * 16px);padding-right:16px}
   .cu-mute{display:none}
