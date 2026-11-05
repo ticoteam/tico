@@ -267,9 +267,10 @@ Strategy Bot is on ([Strategy Bot](strategy-bot.md#what-it-has-learned)).
 
 ## On the Updates page
 
-Updates has no Assistant chat beside the feed. To talk to your Assistant, open its DM from the left rail (**Assistant**);
-the same thread shows there. While the Assistant is off, whoever may turn it on sees one line with **Turn on** there;
-anyone else gets no DM.
+Updates has no Assistant chat beside the feed. To talk to your Assistant, press **Ask Tico** at the bottom of the sidebar
+(⌘J; the middle tab on a phone). It opens over any page, and the full page (`#/assistant`) shows the same thread. While
+the Assistant is off, the owner sees one line with **Turn on** there; anyone else sees the same line without the button,
+telling them to ask the owner.
 
 Each question is one ordinary turn. It costs no more than any other message to your Assistant, and it acts only as you,
 as everywhere.
@@ -282,7 +283,7 @@ own session, not a personal token.
 | Request | Answer |
 |---|---|
 | `GET /api/v2/assistant` | `{"available", "state", "bot", "name", "can_turn_on", "room_id", "messages": [...], "has_more", "next_before", "execution", "actions": {id: action}, "pending": [...]}`. Creates your DM the first time. `execution` is the assistant's current run (null when idle): show a thinking state while it is set and poll again. A message whose `refs.action` names an id in `actions` is a Confirm / Cancel card; `refs.fast` marks a server answer; `refs.links` lists what it linked. |
-| `POST /api/v2/assistant/messages` `{"text", "place"}` | `{"message", "reply", "fast", "intent"}`. `fast: true` carries the answer as `reply`; otherwise the bot is working. `"place": "updates"` (the Updates DM) always takes a turn, handed the recent updates you may read. `409 assistant_off` when it is off. |
+| `POST /api/v2/assistant/messages` `{"text", "place"}` | `{"message", "reply", "fast", "intent"}`. `fast: true` carries the answer as `reply`; otherwise the bot is working. `"place": "updates"` always takes a turn, handed the recent updates you may read. `409 assistant_off` when it is off. |
 | `POST /api/v2/assistant/turn-on` | Owner only. `{"bot", "state", "restored", "placed"}`. |
 | `POST /api/v2/assistant/actions` `{"summary", "method", "path", "body"}` | A proposal `{"action": {...}}` (what the assistant's tool calls). |
 | `GET /api/v2/assistant/actions/{id}` | `{"action": {"status": "pending"\|"running"\|"done"\|"failed"\|"canceled"\|"expired", "result": {...}}}` |
