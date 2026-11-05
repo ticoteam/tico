@@ -251,7 +251,7 @@ def test_restore_remote_branch_then_default(trees):
     workspace, base, remote, row, client = trees
     path = Path(W.command(client, 'add', 'org/product')['workspace_path'])
     (path / 'file').write_text('published task work')
-    git(path, 'commit', '-am', 'Task work')
+    git(path, '-c', 'user.name=Sam', '-c', 'user.email=sam@example.com', 'commit', '-am', 'Task work')
     published = git(path, 'rev-parse', 'HEAD')
     git(path, 'push', 'origin', row['branch'])
     git(base, 'worktree', 'remove', '--force', str(path))

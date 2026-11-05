@@ -417,8 +417,10 @@ def test_served_wait_restores_a_removed_human_link_before_preparing(prepared):
                         checkout_target='refs/heads/' + link['branch'], expected_base='b' * 64).status_code == 200
     assert [(a['link_id'], a['action']) for a in beat(api)] == [(link['link_id'], 'prepare')]
     assert not wakes(api, tid)
-    assert runner_patch(api, tid, link['link_id'], state='present', checkout_state='ready',
-                        setup_pending=False).status_code == 200
+    ready = runner_patch(api, tid, link['link_id'], state='present', checkout_state='ready',
+                         setup_pending=False, expected_head='c' * 40,
+                         checkout_target='refs/heads/' + link['branch'], expected_base='b' * 64)
+    assert ready.status_code == 200, ready.text
     assert len(wakes(api, tid)) == 1 and rows(api, 'SELECT state FROM worktree_waits')[0]['state'] == 'woken'
     assert beat(api) == [] and len(wakes(api, tid)) == 1
 
