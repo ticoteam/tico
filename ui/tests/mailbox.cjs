@@ -40,7 +40,9 @@ const scenarios = {
     assert.equal(await pill(page).textContent(), 'Connected');
     assert.equal(await page.locator('[data-mb-status]').textContent(), 'Shared inbox · Not synced yet · Tico may read and organize');
     assert.equal(await page.locator('[data-ib-list]').count(), 0, 'the list is not drawn under the page');
-    assert.deepEqual(await page.locator('.ib-detail .card > header h2').allTextContents(), ['Who can use it', 'Automations', 'Recent']);
+    await page.locator('#inbox-send-audit').waitFor();
+    assert.deepEqual(await page.locator('.ib-detail .card > header h2').allTextContents(), ['Who can use it', 'Automations', 'Recent', 'Sending', 'Waiting to send', 'Send audit']);
+    assert.equal(await page.locator('#mailbox-access thead th').nth(2).textContent(), 'Sends');
     assert.deepEqual(await accessRows(page), [
       ['Admins', 'Read and write', false],
       ['Cara', '[Read]', true],

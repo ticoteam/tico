@@ -3082,6 +3082,15 @@ def install(app, store, auth, mutate):
                 mail_computer(c, who, row["mailbox"])
             if row["state"] in ("done", "failed", "canceled"):
                 return {"id": mid, "state": row["state"]}
+            if body.send_queue_id:
+                queued = c.execute("SELECT state FROM email_sends WHERE id=? AND automation_action_id=?",
+                                   (body.send_queue_id, mid)).fetchone()
+                if not queued:
+                    raise Problem("queue", "No durable send belongs to this action", 409)
+                if queued["state"] in ("pending", "waiting_approval", "dispatching"):
+                    c.execute("UPDATE automation_mail_actions SET state='waiting_send',result=? WHERE id=?",
+                              (json.dumps({"send_queue_id": body.send_queue_id}), mid))
+                    return {"id": mid, "state": "waiting_send"}
             state = ("done" if body.ok else _requeue(c, row) if body.retry and row["attempts"] < MAIL_TRIES else "failed")
             result = {**json.loads(row["result"] or "{}"), "ok": body.ok, "detail": body.detail,
                       **{k: v for k, v in (("message", body.message), ("draft", body.draft), ("thread", body.thread))
@@ -3102,3 +3111,4 @@ class MailResult(Contract):
     message: str = Field(default="", max_length=200)        # the Gmail message sent
     draft: str = Field(default="", max_length=200)          # the Gmail draft made
     thread: str = Field(default="", max_length=200)
+    send_queue_id: str = Field(default="", max_length=100)
