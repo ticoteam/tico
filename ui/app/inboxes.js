@@ -131,7 +131,9 @@ function inboxesBind(el) {
     if (b.dataset.ibJump) { $('#inboxes-' + b.dataset.ibJump)?.scrollIntoView({block: 'start', behavior: 'smooth'}); return; }
     if (b.dataset.ibAddKind) { b.closest('details')?.removeAttribute('open'); INBOX_KINDS[b.dataset.ibAddKind]?.add?.open(inboxesCtx(IB.run)); return; }
     if (b.hasAttribute('data-ib-skip')) { inboxesStore(INBOX_SKIP_KEY, '1'); void renderSettingsInboxes(); return; }
-    if (b.hasAttribute('data-ib-setup')) { inboxesStore(INBOX_SKIP_KEY, null); void renderSettingsInboxes(); return; }
+    if (b.hasAttribute('data-ib-setup')) {   // set up again: every step, dismissed ones included
+      inboxesStore(INBOX_SKIP_KEY, null); inboxesStore(INBOX_DISMISS_KEY, null); void renderSettingsInboxes(); return;
+    }
     if (b.dataset.ibDismiss) {
       inboxesStore(INBOX_DISMISS_KEY, JSON.stringify([...new Set([...inboxesDismissed(), b.dataset.ibDismiss])]));
       b.closest('[data-ib-step]')?.remove();
