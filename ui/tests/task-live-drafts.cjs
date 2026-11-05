@@ -76,6 +76,7 @@ const init = () => {
    for (let i = 0; i < boxes.length; i++) {
     const box = page.getByRole('textbox', {name: boxes[i], exact: true});
     await box.focus(); await box.press('Home'); await box.press('ArrowRight'); await box.press('ArrowRight');
+    if (i === 0) { task.run_model = null; task.can_set_run_model = false; task.version++; }
     for (const redraw of [update, refresh]) {
      await redraw();
      for (let j = 0; j < boxes.length; j++) assert.equal(await page.getByRole('textbox', {name: boxes[j], exact: true}).inputValue(), values[j]);

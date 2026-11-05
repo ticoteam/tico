@@ -79,6 +79,8 @@ function taskFormKey(el, root) {
       .find(key => node.hasAttribute(key));
     path.unshift(node.tagName.toLowerCase() + (attr ? `[${attr}="${CSS.escape(node.getAttribute(attr))}"]`
       : `:nth-of-type(${[...node.parentElement.children].filter(n => n.tagName === node.tagName).indexOf(node) + 1})`));
+    // A unique semantic key survives inserted sections. Only repeated fields need their containing form's scope.
+    if (attr && root.querySelectorAll(path.join(' > ')).length === 1) return path.join(' > ');
   }
   return path.join(' > ');
 }
