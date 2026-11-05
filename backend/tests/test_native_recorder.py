@@ -306,7 +306,9 @@ def test_recorder_rows_link_both_ways_resume_batches_and_reconcile_save(api, tmp
             'owner': 'human:ben', 'body': 'Current retry details', 'due': '2026-12-01T12:00:00Z'}
         with api.app.state.store.read() as c:
             assert c.execute('SELECT count(*) FROM tasks').fetchone()[0] == 46
-            assert c.execute('SELECT count(*) FROM meetings').fetchone()[0] == 2
+            assert c.execute('SELECT count(*) FROM meetings m LEFT JOIN media_control mc ON mc.meeting_id=m.id '
+                             'WHERE mc.deleted_at IS NULL').fetchone()[0] == 2
+            assert c.execute('SELECT count(*) FROM media_control WHERE deleted_at IS NOT NULL').fetchone()[0] == 1
             proposal = c.execute("SELECT * FROM meeting_items WHERE proposed_task_id IS NOT NULL").fetchone()
             assert proposal['status'] == 'pushed' and proposal['result_ref'] == targets[0]
             assert c.execute('SELECT count(*) FROM jobs').fetchone()[0] == 0
