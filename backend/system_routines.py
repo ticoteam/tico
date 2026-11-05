@@ -110,7 +110,6 @@ ACTIONS = {
                      ("tasks", "stalled", "overdue", "department", "report")),
     "wake_task_manager": ("open a Task check task for each department that has something to fix",
                           ("tasks", "wake", "task manager")),
-    "wake_health_monitor": ("wake the Health Monitor for a new finding", ("health", "wake")),
     "check_books": ("read the Bookkeeper's Finance work queue: rows to categorize, bills, payments due, overdue "
                     "invoices, receipts, failed syncs, months ready to close", ("finance", "books", "bills", "inbox")),
     "wake_bookkeeper": ("open or update one Books check task for the Bookkeeper only when the queue has something new",
@@ -198,9 +197,6 @@ JOBS = [
     Job("kpi_asks", "KPI stale asks",
         "Asks a KPI's keeper for a reading when it goes out of date, and a goal's owner when a KPI goes off track.",
         CHECKS, "Hourly", 3600, control=True, then=("ask_kpi_keeper", "ask_goal_owner")),
-    Job("health_scan", "Health scan",
-        "Checks Tico's health and wakes the Health Monitor only for a finding the last scan did not have.",
-        CHECKS, "Hourly", 3600, control=True, then=("check_health", "wake_health_monitor")),
     Job("task_manager_report", "Task Manager report",
         "Lists each department's quiet tasks, overdue asks, review tickets without a pull request, merged work that did "
         "not move and held bots in plain code, and opens one task for the Task Manager per department that has something.",
@@ -273,8 +269,8 @@ JOBS = [
         "code: nothing past its time is a quiet run.",
         HOUSEKEEPING, "Every 15 minutes", 900, then=("purge_thread_messages",)),
     Job("invariant_checks", "Production checks",
-        "Reads a few production invariants in plain code, shows each failing one on Health and raises one task for its "
-        "owner; the task is closed when the check passes.",
+        "Reads a few production invariants in plain code and shows each failing one on Health. Check health files each "
+        "one as a BotOps task, closed when the check passes.",
         HOUSEKEEPING, "Every 15 minutes", 900, then=("check_invariants",)),
     Job("go_live_expiry", "Go-live expiry", "Ends a go-live waiting for a computer that never reports.",
         HOUSEKEEPING, "Every 10 minutes", 600, then=("end_go_live",)),
@@ -345,13 +341,12 @@ class Control:
     presets: tuple = ()         # the schedule presets offered; () is a switch only
     preset: str | None = None   # the default preset
     at: str | None = None       # the default "HH:MM" (company time, updates.ZONE) for DAILY
-    owner_only: bool = False    # only the owner changes it (Health scan, as in Settings > Health)
+    owner_only: bool = False    # only the owner changes it; no job uses that now
 
 
 CONTROLS = {
     "stale_review": Control(rule="stale_review", presets=AI_PRESETS, preset=HOURLY, at="09:00"),
     "kpi_asks": Control(presets=EVERY_PRESET, preset=HOURLY, at="09:00"),
-    "health_scan": Control(presets=EVERY_PRESET, preset=HOURLY, at="09:00", owner_only=True),
     # One run a night reads the day before (backend/learnings.py claims one per night): the choice is its time.
     "learnings": Control(presets=(DAILY,), preset=DAILY, at="03:00"),
     "memory_tidy": Control(on=False, presets=(DAILY,), preset=DAILY, at="03:30"),
@@ -364,7 +359,7 @@ CONTROLS = {
 
 
 # Last runs read by backend/scheduler.py (QUICK and FIXED).
-QUICK_KEYS = ("kpi_asks", "health_scan", "ask_deadlines", "task_manager_report",
+QUICK_KEYS = ("kpi_asks", "ask_deadlines", "task_manager_report",
               "bookkeeper_check", "bookkeeper_watch",
               "bookkeeper_rules_digest", "thread_followups", "thread_digest", "thread_bot_digest", "thread_retention")
 
@@ -411,7 +406,7 @@ def schedule_words(key, cfg):
 
 
 def may_change(auth, who, key):
-    """An owner or an admin changes a job's switch, schedule and Run now; Health scan only the owner. Raises a 403."""
+    """An owner or an admin changes a job's switch, schedule and Run now. Raises a 403."""
     auth.domain(who)
     job = BY_KEY.get(key)
     if key not in CONTROLS or not job:
@@ -836,10 +831,6 @@ def listing(c, settings, now=None, who=None, auth=None):
         if job.key in ("bookkeeper_check", "bookkeeper_watch", "bookkeeper_rules_digest"):
             from .bookkeeper import active as bookkeeper_active
             item["note"] = None if bookkeeper_active(c) else "Opens no tasks while the Bookkeeper is paused (Settings > Bots)"
-        if job.key == "health_scan":
-            # Its own switch only says whether it may run; it finds nothing while the Health Monitor itself is off.
-            from .health_monitor import active
-            item["note"] = None if active(c) else "Finds nothing while the Health Monitor is off (Settings > Health)"
         if row:
             item["last"] = {"started_at": row["started_at"], "finished_at": row["finished_at"], "ok": bool(row["ok"]),
                             "result": row["result"], "runs": row["runs"]}
@@ -879,8 +870,8 @@ def install(app, store, auth, mutate):
 
     @app.put("/api/v2/system-routines/{key}")
     def system_routine_save(key: str, request: Request, body: M.SystemRoutineUpdate):
-        """Switch a job on or off, or pick its schedule preset and daily time. An owner or an admin; Health scan only the
-        owner. Stale ticket review's and Topic changed's switch is their team rule (backend/team_rules.py)."""
+        """Switch a job on or off, or pick its schedule preset and daily time. An owner or an admin.
+        Stale ticket review's and Topic changed's switch is their team rule (backend/team_rules.py)."""
         who = request.state.identity
         may_change(auth, who, key)
         if body.pilots is not None and key != "memory_tidy":

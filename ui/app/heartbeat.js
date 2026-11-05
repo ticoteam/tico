@@ -2,24 +2,18 @@
    Classic script: its globals are shared with the other files under ui/app/, loaded in the order index.html lists them. */
 'use strict';
 
-// Only urgent issues with a concrete human action interrupt the person. The full diagnostic
-// list remains in Settings, including temporary outages and bot execution reviews.
-const needsPerson = issue => issue.needs_person === true && !!(issue.action || issue.restart);
-// Health checks BotOps reviews (backend/health.py): a stopped run or a quarantined bot stays in Settings > Health and
-// never lights the person's status dot.
-const BOTOPS_CHECKS = new Set(['stopped_runs', 'quarantine']);
-// One status dot, left of the person's name in the account button (Chris, Oct 22): coloured by the worst line,
-// red when something is broken and needs the person, amber for a warning or something that clears by itself.
-// The same lines head the account menu and a hover card on the dot, one plain line each with its fix. No line, no dot.
+// The account menu, its status dot and the hover card on the dot show two states only (Chris, Nov 4): Tico cannot be
+// reached, or bots are not running. Health's checks and the person's operation issues are listed in Settings > Health,
+// never here. The dot is coloured by the worst line: red when bots are not running, amber while the connection is lost.
 const ACCOUNT_HEALTH = '<a class="ghost" href="#/settings" data-gs-tab="health" title="Open Health in Settings">Fix</a>';
-const firstSentence = text => { const s = String(text || '').trim(); const m = s.match(/^.*?[.!?](?=\s|$)/); return (m ? m[0] : s).replace(/[.]$/, ''); };
-function accountIssueFix(issue) {
-  if (issue.kind === 'uncertain_work' && issue.bot) return `<button class="ghost" type="button" data-account-review="${esc(issue.bot)}">Review</button>`;
-  if (issue.restart && issue.machine) return runnerRestartButton(issue);
-  if (issue.kind === 'machine' && issue.machine) return '<a class="ghost" href="#/settings" data-gs-tab="devices">Fix</a>';
-  if (issue.bot) return `<a class="ghost" href="#/bot/${encodeURIComponent(issue.bot)}/more" title="Open the bot">Fix</a>`;
-  return ACCOUNT_HEALTH;
-}
+// The issues Settings asks a person to act on (ui/app/settings.js). Diagnostics that need nobody stay in Health.
+const needsPerson = issue => issue.needs_person === true && !!(issue.action || issue.restart);
+// With no computer online, no bot can run, so it is red like a stopped scheduler. Health lists the computers for owners
+// and admins; for anyone else there is no list, and this state is not shown.
+const noComputerOnline = () => {
+  const computers = window.hlComputers?.();
+  return Array.isArray(computers) && !computers.some(computer => computer.online);
+};
 function accountStatusLines() {
   const st = S.status, lines = [];
   if (!st) {
@@ -27,36 +21,10 @@ function accountStatusLines() {
     if (!S.statusPending) lines.push({level: 'warn', text: "Can't reach Tico. Trying again", fix: '<button class="ghost" type="button" data-account-retry>Retry</button>'});
   } else if (!st.keeper_alive) {
     lines.push({level: 'bad', text: st.cloud ? "Bots aren't running: the cloud scheduler stopped" : "Tico stopped on this computer, so bots aren't running", fix: ACCOUNT_HEALTH});
+  } else if (noComputerOnline()) {
+    lines.push({level: 'bad', text: "Bots aren't running: no computer is online", fix: ACCOUNT_HEALTH});
   }
-  for (const issue of (st?.health_issues || []).filter(needsPerson)) {
-    lines.push({level: issue.severity === 'warning' ? 'warn' : 'bad', text: [issue.title, issue.kind === 'machine' ? String(issue.detail || '').replace(/[.]$/, '') : firstSentence(issue.detail)].filter(Boolean).join(': '), fix: accountIssueFix(issue)});
-  }
-  // A computer offline for a moment (asleep, a restart) comes back by itself: Health calls it bad at once, but the
-  // server asks a person only after NEEDS_YOU_MINUTES (backend/views.py, "stopped checking in"). Until a machine issue
-  // needs this person, the offline checks are amber; with no computer set up at all, nothing clears, so red stays.
-  const attention = (window.hlAttention?.() || []).filter(check => !BOTOPS_CHECKS.has(check.id));
-  const machineNeedsYou = (st?.health_issues || []).some(issue => issue.kind === 'machine' && needsPerson(issue));
-  const computers = window.hlComputers?.();
-  const noComputer = Array.isArray(computers) && !computers.length;
-  const offlineComputers = (computers || []).filter(computer => !computer.online);
-  const namedOutages = new Set((st?.health_issues || []).filter(issue => issue.kind === 'machine' && needsPerson(issue)).map(issue => issue.machine));
-  // Omit the aggregate only when every offline computer has its own actionable line.
-  const allOutagesNamed = offlineComputers.length > 0 && offlineComputers.every(computer => namedOutages.has(computer.id));
-  const offline = new Set(['computers', 'waiting']);
-  // The aggregate keeps the affected bot names when no per-computer action covers them.
-  const computersLine = attention.some(check => check.id === 'computers');
-  const waiting = attention.find(check => check.id === 'waiting');
-  for (const check of attention) {
-    if ((check.id === 'computers' || check.id === 'waiting') && allOutagesNamed) continue;
-    if (check.id === 'waiting' && computersLine) continue;
-    const fix = check.fixes?.[0];
-    const level = check.status !== 'bad' ? 'warn' : offline.has(check.id) && !machineNeedsYou && !noComputer ? 'warn' : 'bad';
-    // A fix that leaves Tico (GitHub's settings, a provider's docs) opens in its own tab.
-    const away = /^https?:/.test(fix?.href || '') ? ' target="_blank" rel="noopener"' : '';
-    lines.push({level, text: [check.label, [firstSentence(check.summary), check.id === 'computers' && waiting ? firstSentence(waiting.summary) : ''].filter(Boolean).join('. ')].filter(Boolean).join(': '),
-      fix: fix ? window.hlFixHtml({...fix, label: 'Fix'}).replace(/^<(a|button) /, `<$1 title="${esc(fix.label)}"${away} `) : ACCOUNT_HEALTH});
-  }
-  return lines.sort((a, b) => (a.level === 'bad' ? 0 : 1) - (b.level === 'bad' ? 0 : 1));
+  return lines;
 }
 function renderAccountStatus() {
   const hb = $('#heartbeat');
@@ -100,8 +68,6 @@ document.addEventListener('click', ev => {
   if (ev.target.closest('[data-account-retry]')) { void refresh(false); return; }
   const restart = ev.target.closest('[data-runner-restart]');
   if (restart) { void restartComputer(restart); return; }
-  const review = ev.target.closest('[data-account-review]');
-  if (review) executionReview(review.dataset.accountReview);
 });
 // A computer with a Tico update restarts from here. The runner takes main when
 // that is safe and restarts once nothing is running, so the line can say nothing is interrupted.

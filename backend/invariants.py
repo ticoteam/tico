@@ -3,9 +3,9 @@ tasks nothing is running, questions to people who cannot be reached, refusal loo
 webhooks and automations that stopped, a hook relay nobody pulls).
 
 The scheduler runs `sweep` every 15 minutes (backend/scheduler.py). Plain code only: no model runs. A check that fires
-shows on Health with its count and example ids (`health_checks`) and raises ONE task for its owner, through the same
-path as a Needs-you task for a stopped bot (`H.task_create`). While the check keeps firing no second task is raised,
-even if the first was closed by hand. When it passes again its task is closed. Nothing is fixed automatically.
+shows on Health with its count and example ids (`health_checks`). The sweep keeps that state and nothing else: it raises
+and closes no task. Check health (backend/maintenance_steps/check_health.py) reads these checks as `inv:<id>` findings and
+files each firing one as a single BotOps task, closed when the check passes. Nothing is fixed automatically.
 
 Each check reads indexed rows only (partial indexes here and in backend/store.py's index list; EXPLAIN QUERY PLAN
 checked in backend/tests/test_invariants.py). A rehearsal or demo copy checks nothing: its data is a copy of a live install's and its runners
@@ -264,93 +264,39 @@ CHECKS = (
 BY_ID = {check.id: check for check in CHECKS}
 
 
-def _owner(c, auth, role):
-    """The actor a check's task goes to, in order: BotOps when it is active (role "botops"), then the owner."""
-    actors = []
-    if role == "botops":
-        from .onboarding import BOTOPS
-        if (H.bot(c, BOTOPS) or {}).get("state") == "active":
-            actors.append("bot:" + BOTOPS)
-    try:
-        owner = auth.owner_id(c)
-    except Exception:  # noqa: BLE001 - an owner who cannot be read leaves the alert to BotOps alone
-        owner = ""
-    if owner:
-        actors.append(H.human_actor(owner))
-    return actors
-
-
-def _alert(c, auth, check, hits):
-    """One task for the check's owner, or None when nobody can take it (it is retried on the next sweep)."""
-    title = f"Production check: {check.label}"
-    body = (f"{check.says}\n\n{len(hits)} found. Examples: {', '.join(hits[:EXAMPLES])}.\n\n"
-            f"Where to look: {check.look}\n\n"
-            "Tico checks this every 15 minutes, shows it on Health, and closes this task when the check passes. "
-            "Nothing is fixed automatically.")
-    for actor in _owner(c, auth, check.owner):
-        try:
-            c.execute("SAVEPOINT invariant_alert")
-            task = H.task_create(c, H.KEEPER, title, body, actor, lint=False)
-            c.execute("RELEASE invariant_alert")
-            return task["id"]
-        except Exception:  # noqa: BLE001 - a refusal to file one line must not undo the check's record
-            c.execute("ROLLBACK TO invariant_alert")
-            c.execute("RELEASE invariant_alert")
-            log.warning("Could not file the alert for production check %s to %s", check.id, actor, exc_info=True)
-    return None
-
-
-def _close(c, task_id):
-    row = H.task(c, task_id) if task_id else None
-    if not row or row["status"] not in H.ACTIVE_STATUSES:
-        return
-    try:
-        c.execute("SAVEPOINT invariant_close")
-        H.task_close(c, H.KEEPER, task_id, note="Cleared: the production check passes now.", strict=False)
-        c.execute("RELEASE invariant_close")
-    except Exception:  # noqa: BLE001 - a task that cannot be closed stays open for a person to close
-        c.execute("ROLLBACK TO invariant_close")
-        c.execute("RELEASE invariant_close")
-        log.warning("Could not close the alert task %s", task_id, exc_info=True)
-
-
-def _apply(c, auth, check, hits, now):
-    row = c.execute("SELECT * FROM invariant_state WHERE check_id=?", (check.id,)).fetchone()
-    was = bool(row and row["firing"])
-    task_id = row["task_id"] if row else None
-    since = row["started_firing_at"] if row else None
-    if hits:
-        if not was:
-            since, task_id = now, None           # a new episode: one alert for it
-        if not task_id:
-            task_id = _alert(c, auth, check, hits)
-        firing = 1
-    else:
-        if was:
-            _close(c, task_id)
-        firing, task_id, since = 0, None, None
-    c.execute("INSERT INTO invariant_state(check_id,firing,count,examples,checked_at,started_firing_at,task_id) "
-              "VALUES(?,?,?,?,?,?,?) ON CONFLICT(check_id) DO UPDATE SET firing=excluded.firing, count=excluded.count, "
-              "examples=excluded.examples, checked_at=excluded.checked_at, started_firing_at=excluded.started_firing_at, "
-              "task_id=excluded.task_id",
-              (check.id, firing, len(hits), json.dumps(hits[:EXAMPLES]), now, since, task_id))
-
-
 def _changed(row, hits):
-    """Whether a sweep must write this check's row or alert: a new firing episode, a firing check whose alert is
-    missing, a count or example list that moved, or a check that stopped firing. A check that passes and passed
-    before writes nothing."""
+    """Whether a sweep must write this check's row: a new firing episode, a count or example list that moved, or a check
+    that stopped firing. A check that passes and passed before writes nothing."""
     was = bool(row and row["firing"])
     if not hits:
         return was
-    if not was or not row["task_id"]:
+    if not was:
         return True
     return row["count"] != len(hits) or row["examples"] != json.dumps(hits[:EXAMPLES])
 
 
+def _apply(c, check, hits, now):
+    """Writes the check's state for the Health page. No task: Check health files each firing check (`inv:<id>`)."""
+    row = c.execute("SELECT * FROM invariant_state WHERE check_id=?", (check.id,)).fetchone()
+    was = bool(row and row["firing"])
+    since = row["started_firing_at"] if row else None
+    if hits:
+        if not was:
+            since = now                           # a new firing episode
+        firing = 1
+    else:
+        firing, since = 0, None
+    c.execute("INSERT INTO invariant_state(check_id,firing,count,examples,checked_at,started_firing_at,task_id) "
+              "VALUES(?,?,?,?,?,?,NULL) ON CONFLICT(check_id) DO UPDATE SET firing=excluded.firing, count=excluded.count, "
+              "examples=excluded.examples, checked_at=excluded.checked_at, started_firing_at=excluded.started_firing_at, "
+              "task_id=NULL",
+              (check.id, firing, len(hits), json.dumps(hits[:EXAMPLES]), now, since))
+
+
 def sweep(store, auth, settings, at, record=None):
-    """Reads every check in one read snapshot (no write lock), then, only if a check's state changed, opens ONE write
-    transaction that raises or clears its alert and writes its row. `record(c, counts)`, when given, runs inside that
+    """Reads every check in one read snapshot (no write lock), then, only if a check's state changed, writes those checks'
+    invariant_state rows in one write transaction. Creates and closes no task: Check health files the firing checks (see
+    the module docstring). `auth` is not used; the call keeps its shape. `record(c, counts)`, when given, runs inside that
     transaction and only then (the run record goes there). Answers {check id: count} for the checks run, or {} on a
     rehearsal or demo copy."""
     if settings.rehearsal or settings.demo:
@@ -364,14 +310,17 @@ def sweep(store, auth, settings, at, record=None):
     if changed:
         with store.transaction() as c:
             for check in changed:
-                _apply(c, auth, check, found[check.id], ctx.now)
+                _apply(c, check, found[check.id], ctx.now)
             if record is not None:
                 record(c, counts)
     return counts
 
 
 def health_checks(c):
-    """Health's rows for the checks that fire now: count and example ids, and a link to the alert's task."""
+    """Health's rows for the checks that fire now: count and example ids. The fix links the check's BotOps task while Check
+    health's task for it is open (`task_of`, a read)."""
+    from . import maintenance_health as MH
+    from .maintenance_steps import check_health
     out = []
     for row in c.execute("SELECT * FROM invariant_state WHERE firing=1 ORDER BY check_id"):
         check = BY_ID.get(row["check_id"])
@@ -382,8 +331,8 @@ def health_checks(c):
         shown = f"{count}{'+' if count >= LIMIT else ''}"
         more = f" and {count - len(examples)} more" if count > len(examples) else ""
         since = (row["started_firing_at"] or "")[:16].replace("T", " ")
-        fixes = [{"label": "Open the alert", "href": "#/tasks/" + row["task_id"], "tab": "", "click": ""}] \
-            if row["task_id"] else []
+        task = check_health.task_of(c, MH.signature("inv:" + check.id))
+        fixes = [{"label": "Open the alert", "href": "#/tasks/" + task, "tab": "", "click": ""}] if task else []
         out.append({"id": "invariant:" + check.id, "label": check.label, "status": "warn",
                     "summary": f"{check.says} {shown} found: {', '.join(examples)}{more}. Since {since} UTC.",
                     "fixes": fixes})

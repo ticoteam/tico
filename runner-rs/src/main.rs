@@ -53,6 +53,7 @@ mod harness_memory;
 mod harness_tools;
 mod goals;
 mod hosts;
+mod idle_load;
 mod lanes;
 mod lease;
 mod login_turns;

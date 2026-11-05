@@ -653,7 +653,7 @@ class Support:
 
     def note(self, row, text):
         """Tell HQ that a ticket this install filed has changed, such as a request withdrawn (backend/cloud_agents.py) or
-        the Health Monitor saw its problem again (backend/health_monitor.py). It
+        Check health saw its problem again (backend/maintenance_health.py). It
         goes with the ticket's own secret, not as a person's words; a ticket HQ already deleted has no one to hear it."""
         answer = _ask_hq("POST", f"/v1/support/{row['hq_id']}/messages", body={"message": clean_message(text)},
                          secret=self.secret(row))
@@ -763,7 +763,8 @@ def install(app, store, settings, census):
 
     vault = app.state.vault
     support = Support(store, settings, census, vault)
-    app.state.support = support          # the Health Monitor files its reports through it (backend/health_monitor.py)
+    app.state.support = support          # the Health Monitor files its reports through it (backend/maintenance_health.py)
+    store.report_support = support       # and so does the Check health step, from the scheduler's timer (no app here)
     try:
         seal_plaintext_secrets(store, vault)
     except Exception as exc:              # KMS unreachable, or credential.key missing: Health names the vault's state

@@ -977,9 +977,6 @@ def _hold_told(c, row, rule, counted, held):
         task = H.task_create(c, H.KEEPER, f"Automation {flow['name']} on hold"[:300], words, "human:" + person,
                              lint=False, deduplicate=False, wake_refs=refs)
         c.execute("UPDATE automation_guard_holds SET task_id=? WHERE automation_id=?", (task["id"], row["id"]))
-    from . import health_monitor
-    if health_monitor.active(c):   # the optional Health Monitor, when it is on
-        H.notice(c, H.KEEPER, "bot:" + health_monitor.SLUG, words, refs=refs)
 
 
 def _unhold(c, aid, actor, how, via=None):

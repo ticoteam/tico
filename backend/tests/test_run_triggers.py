@@ -337,9 +337,9 @@ def lost(c, bot, why, n, kind="new", hours=1):
 
 
 def session_findings(api):
-    from backend import health_monitor
+    from backend import maintenance_health
     with api.app.state.store.read() as c:
-        return {f["key"]: f for f in health_monitor._session_checks(c)}
+        return {f["key"]: f for f in maintenance_health._session_checks(c)}
 
 
 def test_health_names_a_bot_that_lost_its_session_more_than_twice_in_a_day(api):

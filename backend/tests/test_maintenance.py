@@ -88,7 +88,7 @@ def test_run_now_runs_every_step_in_order_like_a_scheduled_run(api):
     assert steps["collect"]["status"] == "ran"
     assert steps["find_stuck"]["status"] == "ran" and cursor(store, "find_stuck"), "Find stuck is live"
     assert steps["learn"]["status"] == "off", "learn is off by default"
-    assert steps["check_health"]["status"] == "skipped" and steps["check_health"]["reason"] == "on its old timer"
+    assert steps["check_health"]["status"] == "ran"
     assert steps["suggest"]["reason"] == "on its old timer"
     assert steps["dream"]["status"] in ("ran", "skipped")
     assert run["finished_at"] and run["ok"] == 1, run
