@@ -287,7 +287,8 @@ def test_undoing_a_held_terra_save_restores_the_effort_and_context_length_it_rep
         history = [h for h in get(api, "settings/history")["changes"] if h["field"] == "task_model"]
         post(api, f"settings/history/{history[0]['id']}/undo", {"expected_revision": revision(api)})
 
-    # An effort-only save on the held model, then undone: the effort comes back and the unset context length stays unset.
+    # An effort-only save on the held model, then undone: the effort comes back, and the unset context length stays
+    # unset.
     set_task_model(api, {"effort": "high"})
     assert get(api, "bots/ops")["task_model"]["reasoning_effort"] == "high"
     undo_last()
