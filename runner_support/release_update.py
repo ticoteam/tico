@@ -641,7 +641,8 @@ def update(root, version, directory, *, run=subprocess.run, install=pip_install,
         # Recheck after fetch/binary waits, under tico-update.lock and after the runner's drain.
         checked = release_branch.inspect(root, g)
         if checked["branch"] != branch or not checked["recover"] or g("rev-parse", "HEAD").stdout.strip() != old:
-            return say("blocked", checked["error"] if not checked["recover"] else "the checkout changed during the update; retry")
+            return say("blocked", checked["error"] if not checked["recover"] and checked["error"] else
+                       "the checkout changed during the update; retry")
         preview = g("read-tree", "--dry-run", "-m", "-u", "HEAD", target)
         if preview.returncode:
             return say("blocked", f"the checkout is on branch {branch}; cannot recover: local files are in the way")

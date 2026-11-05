@@ -523,7 +523,7 @@ def test_unsafe_branch_recovery_leaves_the_install_and_its_work_alone(repos, cas
         inspected = release_branch.inspect(checkout, lambda *a: ru.git(checkout, *a), "0.3.0")
         assert not inspected["recover"] and "local files are in the way" in inspected["error"]
     elif case in operations:
-        assert operations[case].split("-")[0].lower() in result["error"].lower()
+        assert case in result["error"]
     elif case in ("dirty", "staged"):
         assert "changed file" in result["error"] and (checkout / "app.py").read_text() == "keep this work"
 
@@ -565,6 +565,26 @@ def test_recovery_waits_for_writers_and_holds_the_update_lock(repos, monkeypatch
     result, _ = run_apply(checkout, state, busy=lambda: False)
     assert result["state"] == "healthy" and checked == ["update-ref", "checkout"]
     assert (checkout / "safe-untracked.txt").read_text() == "keep this too"
+
+
+@pytest.mark.slow
+@pytest.mark.parametrize("change", ["branch", "dirty", "operation"])
+def test_recovery_rechecks_the_checkout_after_fetching(repos, change):
+    _, checkout, state = repos
+    sh(checkout, "git", "checkout", "-qb", "tico/b427e9ee-fix-runner")
+
+    def busy():
+        if change == "branch":
+            sh(checkout, "git", "checkout", "-q", "main")
+        elif change == "dirty":
+            (checkout / "app.py").write_text("keep this late edit")
+        else:
+            (checkout / ".git/MERGE_HEAD").write_text(head(checkout) + "\n")
+        return False
+
+    result, calls = run_apply(checkout, state, busy=busy)
+    assert result["state"] == "blocked" and result["error"] and calls.restarts == 0
+    assert not sh(checkout, "git", "for-each-ref", "refs/tico/recovered/")
 
 
 def test_a_checkout_with_changes_is_refused_and_left_alone(repos):
