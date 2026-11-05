@@ -1,5 +1,5 @@
 """System routines 2/3 (backend/system_routines.py CONTROLS): on/off and a schedule preset for the timed jobs (those that use
-AI or reach people, the books, and the nightly auto dream), Run now, who may change them (owner and admins; Health scan only the owner; enforced on the server), the
+AI or reach people, the books, and the nightly auto dream), Run now, who may change them (owner and admins; enforced on the server), the
 flat list's WHEN/THEN rows, department tag and search words, and the stale review and Topic changed switches moved from
 Settings > General > Team. Routines spec tests 3-9 and 12, task-rules spec tests 1-3 (built-in rows). Ana owns the
 team, Ben is an admin, Cara a member (backend/tests/test_api.py). Synthetic fixtures only."""
@@ -18,7 +18,7 @@ from backend.store import H
 from backend.tests.test_api import api, get, post, put  # noqa: F401  (fixture)
 from backend.tests.test_stale_review import FakeDecide
 
-TIMED = {"stale_review", "kpi_asks", "learnings", "health_scan", "ask_deadlines", "task_manager_report",
+TIMED = {"stale_review", "kpi_asks", "learnings", "ask_deadlines", "task_manager_report",
          "bookkeeper_check", "memory_tidy"}   # the jobs with a schedule preset
 
 
@@ -31,7 +31,7 @@ def test_admin_sees_a_switch_and_a_schedule_on_the_timed_jobs_and_housekeeping_h
     timed = {k for k, j in jobs.items() if j["presets"]}
     assert timed == TIMED | {"task-rule-close-after-done"}
     assert {k for k, j in jobs.items() if j["switch"]} == TIMED | {"topic_fresh", "task-rule-close-after-done"}
-    for key in TIMED - {"health_scan"}:
+    for key in TIMED:
         assert jobs[key]["can_change"] is True, key
     for key, job in jobs.items():
         if job["needed"]:
@@ -61,17 +61,30 @@ def test_a_member_sees_the_list_with_nothing_to_change_and_the_server_refuses_th
     post(api, "learnings/run", {}, token="cara-test", expected=403)      # the Learnings API's run is the same run
 
 
-def test_health_scan_is_owner_only_an_admin_reads_it_and_the_owner_changes_it(api):
-    assert rows(api, "ben-test")["health_scan"]["can_change"] is False
-    assert rows(api, "ben-test")["health_scan"]["owner_only"] is True
-    assert "Health Monitor is off" in rows(api)["health_scan"]["note"], "its switch alone does not make it find things"
-    put(api, "system-routines/health_scan", {"on": False}, token="ben-test", expected=403)
-    post(api, "system-routines/health_scan/run", {}, token="ben-test", expected=403)
-    assert rows(api)["health_scan"]["can_change"] is True
-    job = put(api, "system-routines/health_scan", {"preset": "4h"})["job"]
-    assert job["schedule"] == "Every 4 hours"
-    assert put(api, "system-routines/health_scan", {"on": False})["job"]["on"] is False
-    assert rows(api)["health_scan"]["next"] is None, "off: no next run"
+def test_health_scan_is_replaced_by_the_maintenance_step(api):
+    for token in ("ana-test", "ben-test", "cara-test"):
+        assert "health_scan" not in rows(api, token)
+        put(api, "system-routines/health_scan", {"on": True}, token=token, expected=404)
+        post(api, "system-routines/health_scan/run", {}, token=token, expected=404)
+
+
+def test_an_old_saved_health_scan_schedule_cannot_bypass_paused_maintenance(api, monkeypatch):
+    from backend import maintenance, maintenance_health
+    store = api.app.state.store
+    scans = []
+    monkeypatch.setattr(maintenance_health, "check", lambda *args, **kwargs: scans.append(True) or {})
+    with store.transaction() as c:
+        c.execute("INSERT INTO registry_metadata VALUES(?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value",
+                  (SR.CONFIG_KEY, json.dumps({"health_scan": {"on": True, "preset": "15m", "at": "09:00"}})))
+        maintenance.save_settings(c, "human:ana", paused=True)
+    scheduler = Scheduler(store, api.app.state.execution)
+    at = datetime.now(timezone.utc)
+    scheduler.tick(at)
+    scheduler.tick(at + timedelta(hours=1))
+    assert scans == []
+    with store.read() as c:
+        assert c.execute("SELECT count(*) FROM system_runs WHERE job='health_scan'").fetchone()[0] == 0
+        assert c.execute("SELECT count(*) FROM maintenance_runs").fetchone()[0] == 0
 
 
 def test_stale_review_every_4_hours_spaces_its_passes_and_its_next_run_follows(api):

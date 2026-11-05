@@ -236,7 +236,7 @@ def test_claim_cleans_a_bounded_page_of_obsolete_notices(api):
 
 def test_health_flags_runner_p95_and_clears_after_the_window(api):
     import sqlite3
-    from backend import health, health_monitor
+    from backend import health, maintenance_health
     with sqlite3.connect(":memory:") as empty:
         assert health.runner_route_latency(empty) is None
     store = api.app.state.store
@@ -249,7 +249,7 @@ def test_health_flags_runner_p95_and_clears_after_the_window(api):
     with store.transaction() as c:
         flight.write(c, rec.take(now // 60 * 60))
         assert "renew" in health.runner_route_latency(c, now)["summary"]
-        assert any(row["key"] == "runner_route_latency" for row in health_monitor._server_checks(c))
+        assert any(row["key"] == "runner_route_latency" for row in maintenance_health._server_checks(c))
         assert health.runner_route_latency(c, now + 16 * 60) is None
 
 

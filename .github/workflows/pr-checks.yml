@@ -140,7 +140,7 @@ jobs:
 
   static:
     # Every PR: pinned ruff against its baseline (no new findings or suppressions), pyright on the boundary modules,
-    # the UI's generated API types and the runner wire contract. Seconds each; tools are pinned in the scripts.
+    # migration names, the UI's generated API types and the runner wire contract. Seconds each; tools are pinned.
     name: static checks
     runs-on: ${{ (github.event_name != 'pull_request' || !github.event.pull_request.head.repo.fork) && format('runs-on={0}/runner=2cpu-linux-x64/extras=s3-cache', github.run_id) || 'ubuntu-24.04' }}
     timeout-minutes: 12
@@ -149,6 +149,15 @@ jobs:
         with:
           persist-credentials: false
           fetch-depth: 0
+      - name: New migrations have unique UTC timestamps
+        if: github.event_name == 'pull_request'
+        env:
+          BASE_BRANCH: ${{ github.base_ref }}
+          PR_HEAD: ${{ github.event.pull_request.head.sha }}
+        run: |
+          # Checkout has full history; refresh the base tip because the PR event's base SHA can be stale.
+          git fetch --no-tags origin "+refs/heads/$BASE_BRANCH:refs/remotes/origin/$BASE_BRANCH"
+          python3 scripts/check_migration_order.py --base "refs/remotes/origin/$BASE_BRANCH" --head "$PR_HEAD" --base-name "$BASE_BRANCH"
       - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6
         with:
           python-version: '3.15'
