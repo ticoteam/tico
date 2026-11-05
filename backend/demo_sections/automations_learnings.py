@@ -4,8 +4,8 @@ release checks), a week of Learnings nights, and Tico release updates delivered 
 Everything goes through the code a real install runs: automations are saved through the API, events and mail reach the
 automation engine through its own entry points (`hubdb.hook`, `automations.on_mail`), the engine drains the runs, and
 the Learnings and update-feed modules write their own rows. Bots work their queue through the runner's own endpoints
-(claim, started, memory report, complete), and a person reads a thread through the thread API. The only direct SQL is
-the scheduler's bookkeeping and reads of Update delivery receipts and task threads.
+(claim, started, memory report, complete), and a person reads a thread through the thread API. Direct SQL keeps the
+scheduler's bookkeeping, holds unrelated jobs during the replay, and reads Update delivery receipts and task threads.
 """
 
 import hashlib
@@ -472,19 +472,36 @@ def _learn(b):
     today = learnings.local(b.now).date()
     previous = None
     work_after = timedelta(minutes=CONTENT["learnings"]["work_after_minutes"])
-    for spec in CONTENT["learnings"]["nights"]:
-        day = today - timedelta(days=spec["days"])
-        run_at = datetime.combine(day, time(learnings.HOUR), tzinfo=learnings.ZONE).astimezone(timezone.utc)
-        if run_at + work_after + WORK_WINDOW > b.now:
-            break   # this run and its delivery turns have not finished yet
-        if previous:
-            b.clock.at = run_at - timedelta(hours=2)
-            _finish_deliveries(b, previous)
-        b.clock.at = run_at
-        previous = _night(b, spec, day.isoformat(), run_at)
-        for learned in spec.get("learned", []):
-            b.clock.at = run_at + work_after
-            _run(b, learned["bot"], dict(previous["deliveries"])[learned["bot"]], learned["summary"], learned)
+    # The story already contains assignments from later in the week. Claiming them during an earlier delivery
+    # starts their tasks days too soon; an empty completion then leaves that work stuck in Doing.
+    queued = b.write(_hold_queued)
+    try:
+        for spec in CONTENT["learnings"]["nights"]:
+            day = today - timedelta(days=spec["days"])
+            run_at = datetime.combine(day, time(learnings.HOUR), tzinfo=learnings.ZONE).astimezone(timezone.utc)
+            if run_at + work_after + WORK_WINDOW > b.now:
+                break   # this run and its delivery turns have not finished yet
+            if previous:
+                b.clock.at = run_at - timedelta(hours=2)
+                _finish_deliveries(b, previous)
+            b.clock.at = run_at
+            previous = _night(b, spec, day.isoformat(), run_at)
+            for learned in spec.get("learned", []):
+                b.clock.at = run_at + work_after
+                _run(b, learned["bot"], dict(previous["deliveries"])[learned["bot"]], learned["summary"], learned)
+    finally:
+        b.write(lambda c: _release(c, queued))
+
+
+def _hold_queued(c):
+    """Hold existing jobs while a section replays its own turns; held jobs are skipped by the runner's claim."""
+    ids = [row[0] for row in c.execute("SELECT id FROM jobs WHERE state='queued' AND held=0").fetchall()]
+    c.executemany("UPDATE jobs SET held=1 WHERE id=?", [(job,) for job in ids])
+    return ids
+
+
+def _release(c, ids):
+    c.executemany("UPDATE jobs SET held=0 WHERE id=?", [(job,) for job in ids])
 
 
 def _night(b, spec, night, run_at):

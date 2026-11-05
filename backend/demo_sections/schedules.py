@@ -18,7 +18,7 @@ from .. import automations, cloud_access, demo_content as D, judge, routines, st
 from .. import runner_states
 from ..scheduler import next_due
 from ..store import H
-from .automations_learnings import _keep_focus
+from .automations_learnings import _hold_queued, _keep_focus, _release
 
 WINDOW = timedelta(days=7)
 START_LAG = timedelta(seconds=12)  # a run's start after its time: the pass fires it and the run's step starts its turn
@@ -122,17 +122,6 @@ def _occurrences(trigger, start, end):
     while due < end:
         yield due.astimezone(timezone.utc)
         due = next_due(trigger["cron"], due, zone)
-
-
-def _hold_queued(c):
-    """Holds the jobs queued now (raw SQL: `held` is the flag the claim's candidates skip). Returns their ids."""
-    ids = [row[0] for row in c.execute("SELECT id FROM jobs WHERE state='queued' AND held=0").fetchall()]
-    c.executemany("UPDATE jobs SET held=1 WHERE id=?", [(job,) for job in ids])
-    return ids
-
-
-def _release(c, ids):
-    c.executemany("UPDATE jobs SET held=0 WHERE id=?", [(job,) for job in ids])
 
 
 def _contact_before(c, start):
