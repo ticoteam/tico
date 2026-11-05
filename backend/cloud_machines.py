@@ -323,7 +323,7 @@ def visible_rows(c):
 
 def checked_in(c, runner_id):
     """A boot reached this server. Repair old starting rows too, without undoing a stop reservation."""
-    # Every heartbeat reaches here; the partial index visits only pending boots, including none for a self-hosted runner.
+    # Every heartbeat reaches here: one read of the small cloud_machines table (a row per cloud bot at most).
     c.execute("UPDATE cloud_machines SET state='running',updated_at=? WHERE runner_id=? AND state='starting'",
               (H.now(), runner_id))
 

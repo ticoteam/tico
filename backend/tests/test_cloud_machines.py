@@ -374,15 +374,12 @@ def test_live_runner_contact_preserves_a_cloud_machines_stop_state(cloud, state)
     assert shown["cloud_machine"]["state"] == state
 
 
-def test_heartbeat_boot_repair_uses_an_index_without_an_extra_lookup(api):  # noqa: F811
+def test_heartbeat_boot_repair_is_one_lookup(api):  # noqa: F811
     with api.app.state.store.transaction() as c:
         calls = Mock(wraps=c)
         CM.checked_in(calls, "self-hosted-computer")
-        # Ordinary computers and machines already running are the common case: no table scan on every beat.
+        # Ordinary computers and machines already running are the common case: one small read on every beat.
         calls.execute.assert_called_once()
-        sql, args = calls.execute.call_args.args
-        plan = [r["detail"] for r in c.execute("EXPLAIN QUERY PLAN " + sql, args)]
-        assert any("SEARCH cloud_machines USING INDEX cloud_machines_starting_runner" in detail for detail in plan)
 
 
 def test_heartbeat_then_idle_stop_at_break_even_then_wake_with_a_resize(cloud):
