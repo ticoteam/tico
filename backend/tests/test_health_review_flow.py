@@ -170,12 +170,13 @@ def test_a_completed_human_subtask_is_not_review_feedback(environment):
     from backend import step_flow as F, verdict_moves as V
     api = setup(environment)
     task = ticket(api)
-    check = child(api, task, status='open')
     with api.app.state.store.transaction() as c:
         human = H.task_create(c, 'human:morgan', 'Second look: human notes', '', 'human:morgan',
                               parent_id=task['id'], private=False, lint=False)
         c.execute("UPDATE tasks SET status='done' WHERE id=?", (human['id'],))
         H._task_event(c, human['id'], H.KEEPER, 'review_head', None, HEAD, '')
+    check = child(api, task, status='open')
+    with api.app.state.store.read_transaction() as c:
         assert [t['id'] for t in V._checks(c, task, F.step(c, task['step_id']))] == [check['id']]
     [item] = items(api)
     assert item['whose_move'] == 'bot:reviewer'
