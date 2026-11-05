@@ -26,6 +26,7 @@ TABLES = {
     rows.LetterSourceRow: "letter_sources",
     rows.PageIdentityRow: "page_identities",
     rows.AlertPreferenceRow: "alert_preferences",
+    rows.RecorderInstallRow: "recorder_installs",
     rows.AlertCompanySettingRow: "alert_company_settings",
     rows.PersonalAlertRow: "personal_alerts",
     rows.PostalMailGrantRow: "postal_mail_grants",
