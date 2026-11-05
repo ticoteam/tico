@@ -2309,6 +2309,8 @@ class LoadSnapshot(Contract):
 
 
 class StartPlace(Contract):
+    # A real process allocated to this turn stays admitted even if its own memory raises the computer's load.
+    harness_allocated: bool = False
     # The reasons runner-rs reports while a claimed turn gives its computer place back (execute.rs wait_before_start).
     waiting: str = Field(default="", max_length=40,
                          pattern=r"^(?:|shared login|pre-start requirements|Docker turn user|computer busy: memory (?:100|[1-9]?[0-9])%)$")
@@ -2316,6 +2318,7 @@ class StartPlace(Contract):
 
 class Started(Contract):
     thread_id: ID
+    harness_allocated: bool = False
     load_snapshot: LoadSnapshot | None = None
 
 

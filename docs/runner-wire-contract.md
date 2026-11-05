@@ -9,6 +9,12 @@ renew, complete and the `GET runners/me/events` stream. Everything else a runner
   test and the Rust runner (`runner-rs/src/wire.rs`) both read them.
 - `contracts/runner/releases/<version>/`: the contract and fixtures as each kept release shipped them.
 
+A runner reports `harness_allocated: true` on `start_place` and `started` only after a process actually launches for
+that turn, including a live process acquired from a pool. Host and thread preparation alone do not count. The hub
+retains an allocated turn's admission under memory pressure; omitted fields default to false for older runners.
+A 422 naming this field makes the runner retry the request without it for an older hub. The signal remains true
+through fallback within the same turn.
+
 ## Supported skew
 
 A runner and a server work together when each is on the current or the previous minor release, in either direction:

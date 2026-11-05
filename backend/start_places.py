@@ -60,7 +60,7 @@ def hold_rows(c, runner_ids):
     return out
 
 
-def computer_hold(c, runner_id, now=None, status=None, row=None, *, person=False):
+def computer_hold(c, runner_id, now=None, status=None, row=None, *, person=False, harness_allocated=False):
     """Why this computer holds a bot's new start, as (wait reason, words for people), or None. Diagnostics on only.
 
     - Sustained CPU or memory overload (performance.load_status): "computer busy", as before.
@@ -88,7 +88,7 @@ def computer_hold(c, runner_id, now=None, status=None, row=None, *, person=False
     if status is None:
         if not diagnostics_on():
             return None
-        status = load_status(c, runner_id, now)
+        status = load_status(c, runner_id, now, include_memory=not harness_allocated)
     latest = status['latest_sample']
     if latest is None:
         # Samples past retention are gone, but a computer that reported before still reports nothing now.
@@ -99,6 +99,8 @@ def computer_hold(c, runner_id, now=None, status=None, row=None, *, person=False
         return None if person else (NOT_REPORTING, NOT_REPORTING)
     if status['overloaded'] and not person:
         return 'computer busy', 'computer busy'
+    if harness_allocated:
+        return None
     mem = latest['mem_pct']
     if mem is None:
         return None
@@ -322,13 +324,15 @@ def person_queued(c, runner_id):
                           "LIMIT 1", (runner_id,)).fetchone())
 
 
-def reserve(c, attempt, settings=None):
+def reserve(c, attempt, settings=None, *, harness_allocated=False):
     """Called inside the API writer transaction; two contenders cannot win the last place."""
     aid, rid = attempt['id'], attempt['runner_id']
     if attempt['stop_requested_at']:
         return {"reserved": False, "stop": True}
+    # Admission precedes allocation. A runner with a real process keeps its existing grant: revoking it here
+    # leaves that process alive and renewing, and its own memory can prevent the computer from ever recovering.
     person = from_person(c, attempt['job_id'])
-    hold = computer_hold(c, rid, person=person)
+    hold = computer_hold(c, rid, person=person, harness_allocated=harness_allocated)
     if hold:
         waiting(c, aid, hold[0])
         return {"reserved": False, "waiting": hold[1]}

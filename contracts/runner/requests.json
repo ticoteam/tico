@@ -2236,6 +2236,11 @@
   "StartPlace": {
    "additionalProperties": false,
    "properties": {
+    "harness_allocated": {
+     "default": false,
+     "title": "Harness Allocated",
+     "type": "boolean"
+    },
     "waiting": {
      "default": "",
      "maxLength": 40,
@@ -2250,6 +2255,11 @@
   "Started": {
    "additionalProperties": false,
    "properties": {
+    "harness_allocated": {
+     "default": false,
+     "title": "Harness Allocated",
+     "type": "boolean"
+    },
     "load_snapshot": {
      "anyOf": [
       {

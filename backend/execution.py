@@ -4440,7 +4440,7 @@ class Execution:
             return {"reserved": False, "stop": True}
         if body.waiting:
             return {"reserved": False, **({"stop": True} if row["stop_requested_at"] else {})}
-        return start_places.reserve(c, row, self.store.settings)
+        return start_places.reserve(c, row, self.store.settings, harness_allocated=body.harness_allocated)
 
     def started(self, c, who, aid, body):
         row = self.attempt(c, who, aid)
@@ -4449,7 +4449,7 @@ class Execution:
         # Older workers did not negotiate a short start; their in-flight delivery lease stays valid.
         if start_places.is_waiting(c, aid) and finished_before_start(c, row):
             raise Problem("start_wait", "Task finished while this turn was waiting", 409)
-        reserved = start_places.reserve(c, row, self.store.settings) if start_places.managed(c, aid) else {"reserved": not row["stop_requested_at"]}
+        reserved = start_places.reserve(c, row, self.store.settings, harness_allocated=body.harness_allocated) if start_places.managed(c, aid) else {"reserved": not row["stop_requested_at"]}
         if not reserved["reserved"]:
             raise Problem("start_wait", reserved.get("waiting", "Start reservation expired or stopped"), 409)
         c.execute("UPDATE attempts SET state='running',started_at=? WHERE id=?", (H.now(), aid))

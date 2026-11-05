@@ -574,7 +574,7 @@ mod tests {
     }
 
     fn flags(lost: bool) -> Flags {
-        Flags { lost: AtomicBool::new(lost), stopped: AtomicBool::new(false), stop_reason: Mutex::new(None), done: AtomicBool::new(false), harness_started: AtomicBool::new(false),
+        Flags { lost: AtomicBool::new(lost), stopped: AtomicBool::new(false), stop_reason: Mutex::new(None), done: AtomicBool::new(false), harness_allocated: Arc::new(AtomicBool::new(false)),
                 done_notify: Notify::new(), deadline: Mutex::new(Instant::now()) }
     }
 

@@ -672,7 +672,7 @@ pub(crate) struct Flags {
     pub(crate) stop_reason: Mutex<Option<String>>,
     pub(crate) done: AtomicBool,
     /// A harness allocated for this turn must not park on the memory it just allocated.
-    pub(crate) harness_started: AtomicBool,
+    pub(crate) harness_allocated: Arc<AtomicBool>,
     pub(crate) done_notify: Notify,
     pub(crate) deadline: Mutex<Instant>,
 }
@@ -767,13 +767,13 @@ impl Runner {
     /// One ask for a computer place: false while this computer is full or the server says wait.
     async fn try_start_place(&self, attempt: &Value, flags: &Flags) -> Result<bool, Fail> {
         #[cfg(not(test))]
-        let memory = if cfg!(target_os = "linux") && !flags.harness_started.load(Ordering::SeqCst) {
+        let memory = if cfg!(target_os = "linux") && !flags.harness_allocated.load(Ordering::SeqCst) {
             crate::perf::start_memory().await
         } else { None };
         // Synthetic turns must not depend on the test host's load; memory admission tests supply their readings.
         #[cfg(test)]
-        let memory = Some(if tests::MEMORY_RISES_AFTER_START.with(|on| on.get())
-            && hosts::TEST_STARTS.with(|starts| starts.get()) > 0 { 98.0 } else { 0.0 });
+        let memory = Some(tests::MEMORY_OVERRIDE.with(|reading| reading.get()).unwrap_or_else(|| if tests::MEMORY_RISES_AFTER_ALLOCATION.with(|on| on.get())
+            && flags.harness_allocated.load(Ordering::SeqCst) { 98.0 } else { 0.0 }));
         self.start_place_with_memory(attempt, flags, memory, crate::runner::platform()).await
     }
 
@@ -784,7 +784,7 @@ impl Runner {
             || self.stop.load(Ordering::SeqCst) {
             return Err(Fail::runtime("Lease expired before the turn started"));
         }
-        let memory = memory.filter(|_| platform == "linux" && !flags.harness_started.load(Ordering::SeqCst));
+        let memory = memory.filter(|_| platform == "linux" && !flags.harness_allocated.load(Ordering::SeqCst));
         let memory_held = {
             let mut held = self.memory_hold.lock().unwrap();
             if let Some(mem) = memory {
@@ -813,7 +813,9 @@ impl Runner {
         if !local_free {
             return Ok(false);
         }
-        let place = self.client.post(&format!("attempts/{aid}/start-place"), &json!({}), None).await;
+        let mut body = json!({});
+        if flags.harness_allocated.load(Ordering::SeqCst) { body["harness_allocated"] = json!(true); }
+        let place = self.post_allocated(&format!("attempts/{aid}/start-place"), &body, None).await;
         let answer = match place.and_then(decode::<StartPlaceAnswer>) {
             Ok(answer) => answer,
             Err(e) => {
@@ -831,6 +833,18 @@ impl Runner {
         }
         self.places.lock().unwrap().remove(&aid);
         Ok(false)
+    }
+
+    /// A rollback server keeps its original admission contract.
+    async fn post_allocated(&self, path: &str, body: &Value, key: Option<&str>) -> Result<Value, crate::client::ApiError> {
+        match self.client.post(path, body, key).await {
+            Err(e) if e.status == 422 && body.get("harness_allocated").is_some() && e.detail.contains("harness_allocated") => {
+                let mut legacy = body.clone();
+                legacy.as_object_mut().unwrap().remove("harness_allocated");
+                self.client.post(path, &legacy, key).await
+            },
+            answer => answer,
+        }
     }
 
     async fn wait_before_start(&self, attempt: &Value, reason: &str) -> Result<(), Fail> {
@@ -857,9 +871,10 @@ impl Runner {
         loop {
             self.wait_start_place(attempt, flags).await?;
             let active = self.active.lock().unwrap().len();
-            let started = crate::perf::with_snapshot(json!({"thread_id": thread}), active).await;
+            let mut started = crate::perf::with_snapshot(json!({"thread_id": thread}), active).await;
+            if flags.harness_allocated.load(Ordering::SeqCst) { started["harness_allocated"] = json!(true); }
             let key = if tries == 0 { format!("started:{aid}") } else { format!("started:{aid}:{tries}") };
-            match self.client.post(&format!("attempts/{aid}/started"), &started, Some(&key)).await {
+            match self.post_allocated(&format!("attempts/{aid}/started"), &started, Some(&key)).await {
                 Ok(_) => return Ok(()),
                 Err(e) if e.code == "start_wait" => {
                     self.places.lock().unwrap().remove(&aid);
@@ -1334,7 +1349,7 @@ impl Runner {
             stopped: AtomicBool::new(false),
             stop_reason: Mutex::new(None),
             done: AtomicBool::new(false),
-            harness_started: AtomicBool::new(false),
+            harness_allocated: Arc::new(AtomicBool::new(false)),
             done_notify: Notify::new(),
             deadline: Mutex::new(Instant::now() + Duration::from_secs_f64((lease - 15.0).max(0.0))),
         });
@@ -1659,8 +1674,6 @@ impl Runner {
                 crate::turn_users::share_workspace(paths).await.map_err(Fail::runtime)?;
             }
             self.during_drain(&aid, self.wait_start_place(&attempt, &flags)).await?;
-            // Warm acquisition can start a harness too. Memory admission ends before either path allocates it.
-            flags.harness_started.store(true, Ordering::SeqCst);
             let made = if session_runtime != runtime {
                 let make = |home: &Path, _: &Env| AntigravityHost::new(home, vec!["agy".into()], tx.clone());
                 // A fresh stateless chat turn starts a new process, never the last one's (warm.rs discard).
@@ -1675,6 +1688,7 @@ impl Runner {
                 self.make_host(&bot, &runtime, &config, &env, selected.as_ref(), tx)?
             };
             let h = host.insert(made);
+            h.track_allocation(flags.harness_allocated.clone());
             if let Some(held) = login_held.as_mut() {
                 held.bind(h.clone()); // kept until this host stops, however the turn ends
             }
@@ -1705,7 +1719,7 @@ impl Runner {
             } else if let Some(prev) = &previous {
                 // Be very reluctant to start a new session: a refusal is retried once, and only a thread this
                 // computer does not have, or a second refusal, gives it up.
-                match self.resume_saved(h, prev, &settings).await {
+                match self.resume_saved(h, prev, &settings, &attempt, &flags).await {
                     Ok(t) => {
                         thread = Some(t);
                         resumed = true;
@@ -1721,6 +1735,7 @@ impl Runner {
                 let other = !continuing.is_empty() && prev != &continuing && thread.as_deref() != Some(continuing.as_str());
                 if resumed && !other && truthy(config.get("compact_first")) && !truthy(refs.get("command")) {
                     let th = thread.clone().unwrap_or_default();
+                    self.during_drain(&aid, self.wait_start_place(&attempt, &flags)).await?;
                     match self.compact_saved(&aid, h, &th, effort.as_deref(), &runtime, &text_of(&config["harness"]), rx, segments.last_mut().map(|s| &mut s.meter)).await {
                         Ok(()) => session = Some(crate::continuity::Session::compacted()),
                         Err(error) => {
@@ -1738,6 +1753,7 @@ impl Runner {
                 session = Some(crate::continuity::Session::new(crate::continuity::NONE_SAVED, None));
             }
             if thread.is_none() {
+                self.during_drain(&aid, self.wait_start_place(&attempt, &flags)).await?;
                 // A capacity continuation must acknowledge its lost thread so the server holds it for review,
                 // without creating or saving a replacement session before that acknowledgement.
                 thread = Some(if continuing.is_empty() { h.start_thread(&bot, &settings).await? } else { continuing.clone() });
@@ -1774,12 +1790,13 @@ impl Runner {
             let active = self.active.lock().unwrap().len();
             // The thread the task has until the new one is confirmed (Fresh::told).
             let told = fresh.as_ref().map_or(th.as_str(), |f| f.told.as_str());
-            let started = crate::perf::with_snapshot(json!({"thread_id": told}), active).await;
+            let mut started = crate::perf::with_snapshot(json!({"thread_id": told}), active).await;
+            if flags.harness_allocated.load(Ordering::SeqCst) { started["harness_allocated"] = json!(true); }
             self.during_drain(&aid, async {
                 let mut start_try = 0;
                 loop {
                     let key = if start_try == 0 { format!("started:{aid}") } else { format!("started:{aid}:{start_try}") };
-                    match self.client.post(&format!("attempts/{aid}/started"), &started, Some(&key)).await {
+                    match self.post_allocated(&format!("attempts/{aid}/started"), &started, Some(&key)).await {
                         Ok(_) => break,
                         Err(e) if e.code == "start_wait" => {
                             drop(cold_guard.take());
@@ -2129,11 +2146,11 @@ impl Runner {
                     self.turn_git(&mut vault, &mut hop_env, &paths)?;
                     crate::turn_users::share_workspace(paths).await.map_err(Fail::runtime)?;
                 }
-                if !flags.harness_started.load(Ordering::SeqCst) {
+                if !flags.harness_allocated.load(Ordering::SeqCst) {
                     self.during_drain(&aid, self.wait_start_place(&attempt, &flags)).await?;
-                    flags.harness_started.store(true, Ordering::SeqCst);
                 }
                 let h = host.insert(self.make_host(&bot, &hop.runtime, &hop_config, &hop_env, selected.as_ref(), tx)?);
+                h.track_allocation(flags.harness_allocated.clone());
                 if let Some(held) = login_held.as_mut() {
                     held.bind(h.clone());
                 }
@@ -2158,6 +2175,9 @@ impl Runner {
                     require_existing_session: false,
                     packet_only: false,
                 };
+                if !flags.harness_allocated.load(Ordering::SeqCst) {
+                    self.during_drain(&aid, self.wait_start_place(&attempt, &flags)).await?;
+                }
                 let th = h.start_thread(&bot, &settings).await?;
                 thread = Some(th.clone());
                 // Said once the fallback's host is up: a hop that cannot start has run nothing.
@@ -2685,9 +2705,11 @@ impl Runner {
 
     /// Resumes the thread this computer saved. A host that refuses is asked once more after a short pause; one that
     /// says the thread is not on this computer is not (Err: whether it is missing, and the host's words).
-    async fn resume_saved(&self, h: &Host, thread: &str, settings: &Settings) -> Result<String, (bool, String)> {
+    async fn resume_saved(&self, h: &Host, thread: &str, settings: &Settings, turn: &Value, flags: &Flags) -> Result<String, (bool, String)> {
         let mut last = String::new();
         for attempt in 0..2 {
+            self.during_drain(&text_of(&turn["id"]), self.wait_start_place(turn, flags)).await
+                .map_err(|e| (false, e.text))?;
             match h.resume_thread(thread, settings).await {
                 Ok(t) => return Ok(t),
                 Err(e) => {
@@ -2847,7 +2869,8 @@ mod tests {
     use tokio::sync::mpsc::unbounded_channel;
 
     thread_local! {
-        pub(super) static MEMORY_RISES_AFTER_START: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+        pub(super) static MEMORY_OVERRIDE: std::cell::Cell<Option<f64>> = const { std::cell::Cell::new(None) };
+        pub(super) static MEMORY_RISES_AFTER_ALLOCATION: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
         pub(super) static RENEW_EVERY: RefCell<Option<Duration>> = const { RefCell::new(None) };
         pub(super) static RUN_CLOCK: RefCell<VecDeque<Instant>> = const { RefCell::new(VecDeque::new()) };
         pub(super) static RUN_RELAY: RefCell<Option<crate::gateway_relay::Relay>> = const { RefCell::new(None) };
@@ -2875,7 +2898,8 @@ mod tests {
             HOST_CLAUDE.with(|claude| claude.set(false));
             RUN_SESSION.with(|on| on.set(None));
             HOST_CODEX.with(|env| env.borrow_mut().take());
-            MEMORY_RISES_AFTER_START.with(|on| on.set(false));
+            MEMORY_RISES_AFTER_ALLOCATION.with(|on| on.set(false));
+            MEMORY_OVERRIDE.with(|reading| reading.set(None));
             hosts::TEST_STARTS.with(|starts| starts.set(0));
         }
     }
@@ -3053,7 +3077,7 @@ mod tests {
         let client = crate::client::Client::new(&config.url(), &config.token(), 5, 0).unwrap();
         let runner = Runner::new(config, client, crate::state::State::open(&dir.join("state")).unwrap());
         let turn = json!({"id": "a1", "start_reservation_seconds": 180});
-        let flags = Flags { lost: AtomicBool::new(false), stopped: AtomicBool::new(false), stop_reason: Mutex::new(None), done: AtomicBool::new(false), harness_started: AtomicBool::new(false),
+        let flags = Flags { lost: AtomicBool::new(false), stopped: AtomicBool::new(false), stop_reason: Mutex::new(None), done: AtomicBool::new(false), harness_allocated: Arc::new(AtomicBool::new(false)),
                             done_notify: Notify::new(), deadline: Mutex::new(Instant::now() + Duration::from_secs(30)) };
         runner.active.lock().unwrap().extend(["a1".into(), "another-waiter".into()]);
         runner.places.lock().unwrap().insert("a1".into());
@@ -3081,8 +3105,70 @@ mod tests {
     }
 
     fn lease_flags() -> Flags {
-        Flags { lost: AtomicBool::new(false), stopped: AtomicBool::new(false), stop_reason: Mutex::new(None), done: AtomicBool::new(false), harness_started: AtomicBool::new(false),
+        Flags { lost: AtomicBool::new(false), stopped: AtomicBool::new(false), stop_reason: Mutex::new(None), done: AtomicBool::new(false), harness_allocated: Arc::new(AtomicBool::new(false)),
                 done_notify: Notify::new(), deadline: Mutex::new(Instant::now() + Duration::from_secs(30)) }
+    }
+
+    #[cfg(target_os = "linux")]
+    #[tokio::test]
+    async fn lazy_claude_checks_memory_after_waiting_for_cold_start_until_it_really_spawns() {
+        let _controls = RunControls;
+        let (url, seen, server) = recording_server().await;
+        let (runner, dir) = lease_runner(&url, "lazy-memory-admission");
+        let attempt = json!({"id": "a1", "start_reservation_seconds": 180});
+        let flags = lease_flags();
+        let host = Host::Claude(crate::hosts::claude::ClaudeHost::new("ops", vec!["/bin/true".into()], unbounded_channel().0));
+        host.track_allocation(flags.harness_allocated.clone());
+        host.start().await.unwrap();
+        let thread = host.start_thread("ops", &Settings { cwd: dir.display().to_string(), ..Default::default() }).await.unwrap();
+        assert!(!flags.harness_allocated.load(Ordering::SeqCst), "start and thread preparation launch no Claude process");
+        let blocker = claude_cold_start().lock().await;
+        let monitor = async {
+            while !seen.lock().unwrap().iter().any(|(_, _, body)| body["waiting"] == "shared login") {
+                tokio::task::yield_now().await;
+            }
+            MEMORY_OVERRIDE.with(|reading| reading.set(Some(98.0)));
+            drop(blocker);
+            while !seen.lock().unwrap().iter().any(|(_, _, body)| body["waiting"] == "computer busy: memory 98%") {
+                tokio::task::yield_now().await;
+            }
+            assert!(!flags.harness_allocated.load(Ordering::SeqCst));
+            MEMORY_OVERRIDE.with(|reading| reading.set(Some(79.0)));
+        };
+        let (guard, ()) = tokio::time::timeout(Duration::from_secs(10), async {
+            tokio::join!(runner.wait_cold_start(&attempt, &flags), monitor)
+        }).await.unwrap();
+        drop(guard.unwrap());
+        host.start_turn(&thread, "Next", None).await.unwrap();
+        assert!(flags.harness_allocated.load(Ordering::SeqCst), "the successful process launch crosses admission");
+        assert!(runner.start_place_with_memory(&attempt, &flags, Some(98.0), "linux").await.unwrap());
+        runner.start_fallback(&attempt, &flags, &thread).await.unwrap();
+        assert!(seen.lock().unwrap().iter().any(|(_, path, body)| path.ends_with("/started") && body["harness_allocated"] == true));
+        host.stop().await;
+        assert!(flags.harness_allocated.load(Ordering::SeqCst), "fallback retains this turn's allocation boundary");
+        server.abort();
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[tokio::test]
+    async fn allocated_start_requests_drop_the_new_field_on_an_older_server() {
+        let (url, seen) = crate::client::tests::serve(vec![
+            (422, r#"{"error":{"code":"validation","detail":"body.harness_allocated: Extra inputs are not permitted"}}"#),
+            (200, r#"{"reserved":true}"#),
+            (422, r#"{"error":{"code":"validation","detail":"body.harness_allocated: Extra inputs are not permitted"}}"#),
+            (200, r#"{"started":true}"#),
+        ]).await;
+        let (runner, dir) = lease_runner(&url, "old-allocated-admission");
+        let attempt = json!({"id": "a1", "start_reservation_seconds": 180});
+        let flags = lease_flags();
+        flags.harness_allocated.store(true, Ordering::SeqCst);
+        assert!(runner.start_place_with_memory(&attempt, &flags, Some(98.0), "linux").await.unwrap());
+        runner.post_allocated("attempts/a1/started", &json!({"thread_id": "t1", "harness_allocated": true}), Some("started:a1")).await.unwrap();
+        let requests = seen.lock().unwrap();
+        assert_eq!(requests.len(), 4);
+        assert!(requests[0].contains("harness_allocated") && requests[2].contains("harness_allocated"));
+        assert!(!requests[1].contains("harness_allocated") && !requests[3].contains("harness_allocated"));
+        std::fs::remove_dir_all(dir).unwrap();
     }
 
     #[tokio::test]
@@ -3254,7 +3340,7 @@ mod tests {
         let client = crate::client::Client::new(&config.url(), &config.token(), 5, 0).unwrap();
         let runner = Runner::new(config, client, crate::state::State::open(&dir.join("state")).unwrap());
         let turn = json!({"id": "a1", "start_reservation_seconds": 180});
-        let flags = Flags { lost: AtomicBool::new(false), stopped: AtomicBool::new(false), stop_reason: Mutex::new(None), done: AtomicBool::new(false), harness_started: AtomicBool::new(false),
+        let flags = Flags { lost: AtomicBool::new(false), stopped: AtomicBool::new(false), stop_reason: Mutex::new(None), done: AtomicBool::new(false), harness_allocated: Arc::new(AtomicBool::new(false)),
                             done_notify: Notify::new(), deadline: Mutex::new(Instant::now() + Duration::from_secs(30)) };
         runner.places.lock().unwrap().insert("a1".into());
         runner.pre_start_lock(&turn, &flags, async { Ok(()) }).await.unwrap();
@@ -3450,7 +3536,7 @@ mod tests {
         *runner.runtime_rows.lock().unwrap() = Default::default();
 
         let login = crate::login_turns::Login::new("codex", "");
-        let flags = || Flags { lost: AtomicBool::new(false), stopped: AtomicBool::new(false), stop_reason: Mutex::new(None), done: AtomicBool::new(false), harness_started: AtomicBool::new(false),
+        let flags = || Flags { lost: AtomicBool::new(false), stopped: AtomicBool::new(false), stop_reason: Mutex::new(None), done: AtomicBool::new(false), harness_allocated: Arc::new(AtomicBool::new(false)),
                                done_notify: Notify::new(), deadline: Mutex::new(Instant::now() + Duration::from_secs(60)) };
         let over = |f: &Flags| runner.login_wait_over(f, &login).unwrap_or_default();
         assert_eq!(over(&flags()), "");
@@ -3650,7 +3736,7 @@ mod tests {
     async fn execute_after_harness_memory_rises(fallback: bool) {
         let _controls = RunControls;
         hosts::TEST_STARTS.with(|starts| starts.set(0));
-        MEMORY_RISES_AFTER_START.with(|on| on.set(true));
+        MEMORY_RISES_AFTER_ALLOCATION.with(|on| on.set(true));
         let dir = std::env::temp_dir().join(format!("tico-bounded-prepare-{}", uuid::Uuid::new_v4().simple()));
         std::fs::create_dir_all(dir.join("projects/bot-ops")).unwrap();
         let fixture = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/pi/turn.jsonl");
@@ -3805,7 +3891,7 @@ for line in sys.stdin:
             tokio::time::sleep(Duration::from_millis(10)).await;
         }
         let t = host.start_turn("th1", "Write the release notes", None).await.unwrap();
-        let flags = Flags { lost: AtomicBool::new(false), stopped: AtomicBool::new(false), stop_reason: Mutex::new(None), done: AtomicBool::new(false), harness_started: AtomicBool::new(false),
+        let flags = Flags { lost: AtomicBool::new(false), stopped: AtomicBool::new(false), stop_reason: Mutex::new(None), done: AtomicBool::new(false), harness_allocated: Arc::new(AtomicBool::new(false)),
                             done_notify: Notify::new(), deadline: Mutex::new(Instant::now() + Duration::from_secs(60)) };
         let wake = Notify::new();
         let d = crate::drive::Drive { limit_name: "max_run_minutes (60 minutes)", aid: "a-ops", host: &host, thread: "th1", effort: None, limit: Instant::now() + Duration::from_secs(60), flags: &flags,
@@ -3881,7 +3967,7 @@ for line in sys.stdin:
             tokio::time::sleep(Duration::from_millis(10)).await;
         }
         let t = host.start_turn("th1", "Write the release notes", None).await.unwrap();
-        let flags = Flags { lost: AtomicBool::new(false), stopped: AtomicBool::new(false), stop_reason: Mutex::new(None), done: AtomicBool::new(false), harness_started: AtomicBool::new(false),
+        let flags = Flags { lost: AtomicBool::new(false), stopped: AtomicBool::new(false), stop_reason: Mutex::new(None), done: AtomicBool::new(false), harness_allocated: Arc::new(AtomicBool::new(false)),
                             done_notify: Notify::new(), deadline: Mutex::new(Instant::now() + Duration::from_secs(60)) };
         let wake = Notify::new();
         let d = crate::drive::Drive { limit_name: "max_run_minutes (60 minutes)", aid: "a-ops", host: &host, thread: "th1", effort: None, limit: Instant::now() + Duration::from_secs(60), flags: &flags,
@@ -4886,7 +4972,7 @@ for line in sys.stdin:
         let (runner, dir, server) = drain_test_runner(300).await;
         let login = Login::new("codex", &format!("drain-{}", uuid::Uuid::new_v4()));
         let held = crate::login_turns::try_take(&login.key, &Turn::new("holder", "", Class::Other)).unwrap();
-        let flags = Flags { lost: AtomicBool::new(false), stopped: AtomicBool::new(false), stop_reason: Mutex::new(None), done: AtomicBool::new(false), harness_started: AtomicBool::new(false),
+        let flags = Flags { lost: AtomicBool::new(false), stopped: AtomicBool::new(false), stop_reason: Mutex::new(None), done: AtomicBool::new(false), harness_allocated: Arc::new(AtomicBool::new(false)),
                             done_notify: Notify::new(), deadline: Mutex::new(Instant::now() + Duration::from_secs(60)) };
         let turns: Vec<_> = (0..3).map(|i| Turn::new(&format!("waiter{i}"), "", Class::Other).of(&format!("work{i}"), &format!("a{i}"))).collect();
         for turn in &turns { runner.state.record(&json!({"id": turn.attempt, "bot": turn.bot})).unwrap(); }
@@ -4932,7 +5018,7 @@ for line in sys.stdin:
         let th = host.start_thread("ops", &settings).await.unwrap();
         runner.state.save_session("ops", "c-cap", "pi", &th).unwrap();
         let t = host.start_turn(&th, "Wait", None).await.unwrap();
-        let flags = Flags { lost: AtomicBool::new(false), stopped: AtomicBool::new(false), stop_reason: Mutex::new(None), done: AtomicBool::new(false), harness_started: AtomicBool::new(false),
+        let flags = Flags { lost: AtomicBool::new(false), stopped: AtomicBool::new(false), stop_reason: Mutex::new(None), done: AtomicBool::new(false), harness_allocated: Arc::new(AtomicBool::new(false)),
                             done_notify: Notify::new(), deadline: Mutex::new(Instant::now() + Duration::from_secs(60)) };
         let wake = Notify::new();
         let d = Drive { aid: "a-cap", host: &host, thread: &th, effort: None, limit: Instant::now() + Duration::from_secs(60), limit_name: "synthetic drain", flags: &flags,

@@ -15,6 +15,8 @@
   },
   "error": "ErrorEnvelope",
   "gated": {
+    "start_place.request.harness_allocated": "runner-rs/src/execute.rs post_allocated: a 422 naming harness_allocated retries without the field",
+    "started.request.harness_allocated": "runner-rs/src/execute.rs post_allocated: a 422 naming harness_allocated retries without the field",
     "start_place.request.waiting": "runner-rs/src/execute.rs wait_before_start: an older server's 422 on a computer busy: memory N% reason retries with pre-start requirements",
     "x-note": "Request fields, values and endpoints a runner sends only after the server says it takes them (or drops on a 422 that names them). The check allows them in the new-runner/old-server direction. Key: '<endpoint>.request<path>' as the check prints it; value: how the runner gates it.",
     "heartbeat.request.device_id": "runner-rs/src/lanes.rs refused_field drops it on an older server's 422 for ten minutes; computers without a device identity are never auto-retired",

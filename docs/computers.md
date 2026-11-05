@@ -98,8 +98,12 @@ a person's messages pass the server's memory hold too.
 The Linux runner also checks current memory before starting a harness or preparing its thread, including when a
 fallback is the first harness for the turn. Its local hold uses the same 85% and 80% thresholds, even with diagnostics
 off. While waiting it gives its start place back and keeps its delivery lease. The run, Computers and Health say
-**waiting: computer busy: memory N%**. Once a harness has been allocated for the turn, the runner does not park it on
-local memory pressure: that allocation is already made. The Mac runner never parks a turn on local memory readings;
+**waiting: computer busy: memory N%**. Memory admission ends only when a harness process actually launches or the turn
+acquires a live pooled process. Preparing a lazy host or its thread (such as Claude before its first send) does not
+cross that boundary: waits for sign-in renewal still check current memory before launching. The runner reports an
+allocated process on start-place and started requests, so neither the runner nor the hub parks that turn on its own
+allocation’s memory use. The boundary stays crossed through fallback. Older runners retain their existing hub checks;
+a runner talking to an older hub drops the new field if that hub refuses it. The Mac runner never parks a turn on local memory readings;
 macOS's Memory Used includes memory it can reclaim through compression and swap. This does not cap the memory of
 tools already running inside a turn, or change your account, model or computer size.
 
