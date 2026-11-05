@@ -14,11 +14,12 @@ def test_reader_merges_edits_and_send_applies_final_fields_once(api):
     change(api, rid, item, {'detail': {'body': 'The details'}}, 'ben-test')
     edited = change(api, rid, item, {'detail': {'due': '2026-12-01T00:00:00Z', 'priority': None}}, 'cara-test')['item']
     assert edited['detail'] == {'owner': 'human:ben', 'body': 'The details', 'due': '2026-12-01T00:00:00Z'}
+    final = {'version': edited['version'], 'text': 'Final words', 'detail': {'body': 'Final details'}}
     with ThreadPoolExecutor(max_workers=2) as pool:
-        results = list(pool.map(lambda token: push(api, rid, item, {'text': 'Final words', 'detail': {'body': 'Final details'}}, token),
+        results = list(pool.map(lambda token: api.post(f'/api/meetings/{rid}/items/{item}/push', json=final, headers=headers(token)),
                                 ['ben-test', 'cara-test']))
-    assert sorted(r['pushed'] for r in results) == [False, True]
-    tid = results[0]['item']['result_ref']
+    assert sorted(r.status_code for r in results) == [200, 409]
+    tid = next(r.json()['item']['result_ref'] for r in results if r.status_code == 200)
     task = get(api, 'tasks/' + tid)['task']
     assert task['title'] == 'Final words' and 'Final details' in task['body']
     change(api, rid, item, {'text': 'Too late'}, expected=409)
@@ -223,7 +224,7 @@ def test_future_link_proposal_column_is_redacted_at_every_boundary(api):
     proposal = next(i for i in items(api, rid, 'cara-test')['sections']['task'] if i['id'] == iid)
     assert proposal['proposed_task_id'] is None
     for _ in range(2):
-        result = change(api, rid, iid, {'text': 'Reviewed'}, 'cara-test', key='proposal-edit')
+        result = change(api, rid, iid, {'version':1, 'text': 'Reviewed'}, 'cara-test', key='proposal-edit')
         assert result['item']['proposed_task_id'] is None
     outbox = api.get('/api/meetings/' + rid, headers=headers('cara-test')).json()['outbox']['task']
     assert all(i['proposed_task_id'] is None for i in outbox)
@@ -243,3 +244,83 @@ def test_redesign_participants_audience_change_invalidates_access(api):
     with store.read() as c:
         events.read(c, auth, who, after, topics=('meeting_items',), meetings=(rid,), watch=watch)
     assert watch.drain() == [('meeting_items', {'meeting_id': rid, 'gone': True})]
+
+
+def test_stale_save_and_send_return_current_without_overwriting_or_creating(api):
+    rid = record(api)
+    item = add(api, rid, {'section':'task', 'text':'A title', 'detail':{'owner':'human:ana','body':'A details'}})['item']
+    newer = change(api, rid, item['id'], {'version':item['version'], 'detail':{'body':'B details'}}, 'ben-test')['item']
+    stale = {'version':item['version'], 'text':'A unsent title', 'detail':item['detail']}
+    with api.app.state.store.read() as c:
+        before = c.execute('SELECT count(*) FROM tasks').fetchone()[0]
+    for suffix in ('', '/push'):
+        response = api.post(f"/api/v2/meetings/{rid}/items/{item['id']}{suffix}", json=stale, headers=headers())
+        assert response.status_code == 409, response.text
+        assert response.json()['error']['item'] == newer
+    with api.app.state.store.read() as c:
+        assert c.execute('SELECT count(*) FROM tasks').fetchone()[0] == before
+    sent = push(api, rid, item['id'], {'version':newer['version'], 'text':'A unsent title'})['item']
+    again = push(api, rid, item['id'], {'version':newer['version']}, expected=409)
+    assert again['error']['item'] == sent
+    assert items(api, rid)['sections']['task'][0]['detail']['body'] == 'B details'
+
+
+def test_live_participant_grants_end_with_removal_narrowing_and_discard(api):
+    from backend.tests.test_api import post
+    for action in ('remove', 'narrow', 'discard'):
+        mid = post(api, 'live-meetings', {'title':'Private source', 'visibility':'private'})['id']
+        post(api, f'live-meetings/{mid}/access', {'add':['human:ben', 'human:cara']})
+        tid = post(api, 'tasks', {'title':'Sent words', 'body':'Words', 'owner':'human:ana', 'live_meeting_id':mid})['id']
+        store, auth = api.app.state.store, api.app.state.auth
+        with store.transaction() as c:
+            # A task guest keeps independent access after the participant grant is removed.
+            c.execute("UPDATE tasks SET guest='human:cara' WHERE id=?", (tid,))
+            who = auth.identity_for_actor(c, 'human:ben')
+            after = events.latest(c)
+        watch = events.Watch(store, auth, who, tasks=[tid]); watch()
+        if action == 'remove':
+            post(api, f'live-meetings/{mid}/access', {'remove':['human:ben','human:cara']})
+        elif action == 'narrow':
+            rid = record(api, {'private':True, 'participants':['ben@acme.example','cara@acme.example']})
+            with store.transaction() as c:
+                c.execute('UPDATE live_meetings SET imported_meeting_id=? WHERE id=?', (rid,mid))
+            post(api, f'meetings/{rid}/review', {'action':'approve','audience':'participants'})
+        else:
+            post(api, f'live-meetings/{mid}/discard', {})
+        assert api.get('/api/v2/tasks/'+tid, headers=headers('ben-test')).status_code in (403,404)
+        assert get(api, 'tasks/'+tid)['task']['id'] == tid
+        assert get(api, 'tasks/'+tid, 'cara-test')['task']['id'] == tid
+        with store.read() as c:
+            assert not c.execute("SELECT 1 FROM task_roles WHERE task_id=? AND role='participant' AND actor='human:ben'",(tid,)).fetchone()
+            assert tid not in __import__('backend.meeting_audience', fromlist=['participant_tasks']).participant_tasks(c,'human:ben')
+            assert not c.execute('SELECT id FROM tasks WHERE id=? AND ('+auth.task_sql(c,who)+')',(tid,)).fetchone()
+            changes = events.read(c,auth,who,after,topics=('tasks',),tasks=(tid,),watch=watch)
+        assert watch.drain() == [('tasks',{'task_id':tid,'gone':True})]
+        assert not any(data.get('title') for _,_,data in changes[0])
+
+
+def test_sent_item_upload_survives_save_and_redacts_reference(api):
+    from backend.tests.test_api import post
+    tid = post(api, 'tasks', {'title':'Already created', 'body':'Words', 'owner':'human:ana','private':True})['id']
+    rid = record(api)
+    sent = add(api,rid,{'section':'task','text':'Already created','status':'pushed','result_ref':tid})['item']
+    assert sent['status'] == 'pushed' and sent['result_ref'] == tid
+    assert items(api,rid,'ben-test')['sections']['task'][0]['result_ref'] is None
+
+
+def test_presence_cleanup_is_bounded_and_meeting_delete_cleans_sessions(api):
+    from backend import presence
+    from backend.maintenance_steps import clean_up
+    rid = record(api)
+    store = api.app.state.store
+    with store.transaction() as c:
+        for index in range(3):
+            c.execute('INSERT INTO presences VALUES(?,?,?,?,?)',(str(index),'meeting:'+rid,'human:ana',str(index),'2000-01-01T00:00:00Z'))
+        assert presence.sweep(c, limit=2) == 2
+    with store.read() as c:
+        clean_up.run(c, {'store':store,'now':events.H.now()})
+    with store.transaction() as c:
+        assert c.execute('SELECT count(*) FROM presences').fetchone()[0] == 0
+        c.execute('INSERT INTO presences VALUES(?,?,?,?,?)',('fresh','meeting:'+rid,'human:ana','fresh',events.H.now()))
+        c.execute('DELETE FROM meetings WHERE id=?',(rid,))
+        assert not c.execute('SELECT 1 FROM presences WHERE place=?',('meeting:'+rid,)).fetchone()

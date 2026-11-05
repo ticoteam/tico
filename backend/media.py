@@ -220,6 +220,8 @@ def save(c, meta, *, transcript=None, notes=None, readable=None):
     MS.snapshot(meta, transcript if transcript is not None else (old or {}).get("transcript_original", ""),
                 notes if notes is not None else (old or {}).get("notes", ""), conn=c, readable=readable)
     control(c, meta["id"])
+    from . import meeting_audience
+    meeting_audience.revoke_saved(c, meta["id"])
     # Typed notes need version history too, including intentionally empty edits.
     c.execute("INSERT OR IGNORE INTO meeting_versions(meeting_id,content_hash,metadata,"
               "transcript_original,transcript_readable,notes,created_at) "
@@ -1164,6 +1166,9 @@ def install_media(app, store, auth, mutate, send_message, task_create, review_pr
             authorized(c, request.state.identity, rid, include_deleted=True, write=True)
             control(c, rid)
             c.execute("UPDATE media_control SET deleted_at=coalesce(deleted_at,?),version=version+1 WHERE meeting_id=?", (H.now(), rid))
+            from . import meeting_audience
+            meeting_audience.revoke_saved(c, rid)
+            c.execute("DELETE FROM presences WHERE place=?", ("meeting:" + rid,))
             H.event(c, request.state.identity.actor, "note.deleted", rid, {"recoverable": True})
             return {"ok": True, "recoverable": True}
         return mutate(request, body, work)

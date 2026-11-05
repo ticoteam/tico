@@ -21,7 +21,7 @@ const path = require('node:path');
       a.saved = true; a.actor = 'human:dana';
       a.shared = {can_send:true, audience:['human:sam','human:dana'],
         presence:{actors:[{actor:'human:sam',name:'Sam'}]},
-        sections:{task:[{id:'shared-1',section:'task',text:'Draft',status:'proposed',detail:{owner:'human:sam',body:'Details'}}]}};
+        sections:{task:[{version:1,id:'shared-1',section:'task',text:'Draft',status:'proposed',detail:{owner:'human:sam',body:'Details'}}]}};
       window.pendingFixture = {a, calls:0, inflight:0, max:0, fail:false};
       const original = window.__TAURI__.core.invoke;
       window.__TAURI__.core.invoke = async (cmd, args) => {
@@ -32,6 +32,8 @@ const path = require('node:path');
         f.inflight--;
         if (f.fail) { f.fail=false; throw new Error('Offline'); }
         const item = a.shared.sections.task[0];
+        if (args.body.version !== item.version) return {conflict:structuredClone(item)};
+        item.version++;
         if (args.body.text !== undefined) item.text=args.body.text;
         Object.assign(item.detail,args.body.detail || {});
         if (args.action === 'send') { item.status='pushed'; f.sent=args.body; }
@@ -53,7 +55,10 @@ const path = require('node:path');
     await title.fill('Retry draft');
     await page.getByRole('textbox',{name:'Details',exact:true}).click();
     await page.getByRole('button',{name:'Retry',exact:true}).waitFor();
-    await page.evaluate(()=>window.pendingFixture.a.shared.sections.task[0].text='Someone else');
+    await page.evaluate(()=>{const item=window.pendingFixture.a.shared.sections.task[0];item.text='Someone else';item.detail.body='New remote details';item.version++;});
+    await page.getByRole('button',{name:'Retry',exact:true}).click();
+    await page.getByText(/Current: Someone else/).waitFor();
+    assert.equal(await title.inputValue(),'Retry draft');
     await page.getByRole('button',{name:'Retry',exact:true}).click();
     await page.waitForFunction(()=>window.pendingFixture.a.shared.sections.task[0].text==='Retry draft');
     await page.getByLabel('Due',{exact:true}).fill('2026-12-01');

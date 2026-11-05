@@ -896,7 +896,22 @@ function meetItemsRender(state, rec) {
             <button class="ghost" type="button" data-cancel>Cancel</button></div></form></div>` : ''}</section>`;
   }).join('');
   if (!box.querySelector('[data-pending-panel]')) box.innerHTML = '<div data-pending-panel></div><div data-other-items></div>';
-  box.querySelector('[data-other-items]').innerHTML = `<div class="cols">${sections}</div>`;
+  const other = box.querySelector('[data-other-items]');
+  if (!other.firstElementChild) other.innerHTML = '<div class="cols"></div>';
+  const template = document.createElement('template'); template.innerHTML = sections;
+  for (const next of template.content.children) {
+    let section = other.querySelector(`[data-sec="${next.dataset.sec}"]`);
+    if (!section) { other.firstElementChild.append(next.cloneNode(true)); continue; }
+    const keep = [...section.children].filter(n => n.querySelector('form'));
+    const children = [...next.children].map(child => {
+      const form = child.querySelector('form');
+      const existing = form && keep.find(n => n.querySelector(`form[${form.dataset.new ? 'data-new' : 'data-edit'}="${form.dataset.new || form.dataset.edit}"]`));
+      return existing || child;
+    });
+    // Retain form nodes themselves, including their text, focus and selection.
+    for (const child of [...section.children]) if (!children.includes(child)) child.remove();
+    children.forEach((child, index) => { if (section.children[index] !== child) section.insertBefore(child, section.children[index] || null); });
+  }
   meetPendingRender(state, rec, data);
   meetItemsHandlers(state, rec);
   box.querySelectorAll('.at[data-seek]').forEach(b => { b.onclick = () => meetSeek(Number(b.dataset.seek)); });
@@ -947,8 +962,8 @@ function meetItemsHandlers(state, rec) {
       if (!text) return;
       const detail = {};
       form.querySelectorAll('[data-field]').forEach(f => { if (f.value.trim()) detail[f.dataset.field] = meetFieldValue(f); });
-      state.itemEdit = '';
-      if (await call('/' + encodeURIComponent(form.dataset.edit), {text, detail}, form.dataset.edit)) toast('Saved');
+      const item = Object.values(state.items[id].sections).flat().find(i => i.id === form.dataset.edit);
+      if (await call('/' + encodeURIComponent(form.dataset.edit), {text, detail, version:item.version}, form.dataset.edit)) { state.itemEdit = ''; repaint(); toast('Saved'); }
       else repaint();
     };
   });
@@ -959,11 +974,11 @@ function meetItemsHandlers(state, rec) {
       if (state.itemConfirm !== item) { state.itemConfirm = item; b.textContent = 'Really delete?'; return; }
       state.itemConfirm = '';
       b.disabled = true;
-      if (await call('/' + encodeURIComponent(item), {status: 'dismissed'}, item)) toast('Deleted');
+      if (await call('/' + encodeURIComponent(item), {status: 'dismissed', version:Object.values(state.items[id].sections).flat().find(i => i.id === item).version}, item)) toast('Deleted');
       return;
     }
     b.disabled = true;
-    const done = await call('/' + encodeURIComponent(item) + '/push', {force: act === 'force'}, item);
+    const done = await call('/' + encodeURIComponent(item) + '/push', {force: act === 'force', version:Object.values(state.items[id].sections).flat().find(i => i.id === item).version}, item);
     if (done) toast(done.pushed ? 'Pushed' : 'Already pushed');
     else b.disabled = false;
   });
@@ -971,7 +986,7 @@ function meetItemsHandlers(state, rec) {
     const section = b.dataset.all;
     b.disabled = true;
     for (const it of (state.items?.[id]?.sections?.[section] || []).filter(x => x.status === 'proposed')) {
-      if (!await call('/' + encodeURIComponent(it.id) + '/push', {force: false}, it.id)) break;
+      if (!await call('/' + encodeURIComponent(it.id) + '/push', {force: false, version:it.version}, it.id)) break;
     }
     b.disabled = false;
   });
@@ -1060,7 +1075,7 @@ async function meetComments(state, rec, quiet) {
 // One queue per item. Only changed keys are sent; newer edits survive either an old reply or a failed write.
 function meetPendingDraft(state, id) {
   state.pendingDrafts ||= new Map();
-  if (!state.pendingDrafts.has(id)) state.pendingDrafts.set(id, {patch: {}, flight: null, error: '', timer: 0});
+  if (!state.pendingDrafts.has(id)) state.pendingDrafts.set(id, {patch: {}, flight: null, error: '', timer: 0, version: null, current: null});
   return state.pendingDrafts.get(id);
 }
 function meetPendingPatch(draft, key, value) {
@@ -1076,9 +1091,12 @@ async function meetPendingSave(state, rid, iid) {
   if (draft.flight || draft.sending || !Object.keys(draft.patch).length) return draft.flight?.catch(() => {});
   const patch = draft.patch;
   draft.patch = {}; draft.error = '';
-  draft.flight = post(`/meetings/${encodeURIComponent(rid)}/items/${encodeURIComponent(iid)}`, patch);
-  try { await draft.flight; }
-  catch (e) { draft.patch = meetPendingMerge(patch, draft.patch); draft.error = e.message; }
+  draft.flight = post(`/meetings/${encodeURIComponent(rid)}/items/${encodeURIComponent(iid)}`, {...patch, version: draft.version});
+  try { const reply = await draft.flight; draft.version = reply.item.version; draft.current = null; }
+  catch (e) {
+    draft.patch = meetPendingMerge(patch, draft.patch); draft.error = e.message;
+    if (e.body?.error?.item) { draft.current = e.body.error.item; draft.version = draft.current.version; }
+  }
   finally { draft.flight = null; }
   if (!draft.error && Object.keys(draft.patch).length && !draft.sending) return meetPendingSave(state, rid, iid);
   await meetItemsLoad(state, rid);
@@ -1093,6 +1111,7 @@ function meetPendingRender(state, rec, data) {
   panel.hidden = !pending.length;
   for (const item of pending) {
     const draft = meetPendingDraft(state, item.id);
+    if (!draft.flight && !draft.sending && !Object.keys(draft.patch).length) draft.version = item.version;
     let node = [...list.children].find(row => row.dataset.pending === item.id);
     if (!node) {
       node = document.createElement('section'); node.className = 'meet-item meet-pending'; node.dataset.pending = item.id;
@@ -1130,11 +1149,20 @@ function meetPendingRender(state, rec, data) {
             else final.detail[key] = key === 'due' && field.value ? new Date(field.value + 'T12:00:00').toISOString() : field.value;
           }
           await post(`/meetings/${encodeURIComponent(rec.id)}/items/${encodeURIComponent(item.id)}${send ? '/push' : ''}`,
-                     send ? {...final, force} : {status: 'dismissed'});
-          draft.patch = {}; draft.error = '';
+                     send ? {...final, force, version: draft.version} : {status: 'dismissed', version: draft.version});
+          draft.patch = {}; draft.error = ''; draft.current = null;
           await meetItemsLoad(state, rec.id);
         } catch (e) {
           draft.error = e.message;
+          if (e.body?.error?.item) {
+            const current = e.body.error.item;
+            const final = {detail:{}};
+            for (const field of node.querySelectorAll('[data-pending-field]')) {
+              if (field.dataset.pendingField === 'text') final.text = field.value;
+              else final.detail[field.dataset.pendingField] = field.dataset.pendingField === 'due' && field.value ? new Date(field.value + 'T12:00:00').toISOString() : field.value;
+            }
+            draft.patch = meetPendingMerge(final, draft.patch); draft.current = current; draft.version = current.version;
+          }
           const duplicate = e.body?.error?.duplicate;
           if (duplicate) {
             const box = node.querySelector('[data-pending-duplicate]');
@@ -1144,11 +1172,13 @@ function meetPendingRender(state, rec, data) {
           } else toast(e.message, true);
         }
         finally { draft.sending = false; node.querySelectorAll('button, input, textarea, select').forEach(field => field.disabled = false); }
+        await meetItemsLoad(state, rec.id);
         node.querySelector('[data-save-error]').hidden = !draft.error;
       };
       node.querySelector('[data-send]').onclick = () => finish(true);
       node.querySelector('[data-dismiss]').onclick = () => finish(false);
     }
+    node._item = item;
     const displayed = meetPendingMerge({text: item.text, detail: item.detail || {}}, draft.patch);
     for (const field of node.querySelectorAll('[data-pending-field]')) {
       const key = field.dataset.pendingField;
@@ -1164,6 +1194,10 @@ function meetPendingRender(state, rec, data) {
     }
     node.querySelector('[data-edited]').textContent = item.updated_by ? `${meetAuthor(item.updated_by)} edited · just now` : '';
     node.querySelector('[data-save-error]').hidden = !draft.error;
+    let conflict = node.querySelector('[data-current]');
+    if (!conflict) { conflict = document.createElement('div'); conflict.dataset.current = ''; node.append(conflict); }
+    conflict.hidden = !draft.current;
+    conflict.textContent = draft.current ? 'Current: ' + draft.current.text + ' · ' + Object.values(draft.current.detail || {}).join(' · ') : '';
     const owner = displayed.detail.owner;
     node.querySelector('[data-send]').textContent = owner ? `Send to ${actorLabel(owner)}` : 'Send';
     node.querySelector('[data-send]').disabled = draft.sending || !(data.can_send ?? data.can_push) || (item.section === 'task' && !owner);

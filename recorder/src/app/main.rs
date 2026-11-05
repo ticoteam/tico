@@ -67,13 +67,13 @@ fn shared_item(
     action: Option<String>,
     body: Option<Value>,
 ) -> Result<Value, String> {
-    let (config, destination, meeting) = {
+    let (config, destination, meeting, generation) = {
         let app = lock(&state);
         let (destination, meeting) = app.saved_target().ok_or("Save the meeting first")?;
-        (app.config.clone(), destination, meeting)
+        (app.config.clone(), destination, meeting, app.saved_scope())
     };
     let tico = tico_recorder_native::network::Tico::saved(&config, &destination)
-        .map_err(|e| e.to_string())?;
+        .map_err(|e| format!("{e:#}"))?;
     let mut path = format!("/api/v2/meetings/{meeting}/items");
     if let Some(id) = &id {
         path.push_str(&format!("/{id}"));
@@ -83,15 +83,31 @@ fn shared_item(
     }
     let reply = tico
         .call(&path, body.as_ref(), &uuid::Uuid::new_v4().to_string())
-        .map_err(|e| e.to_string())?;
+        .map_err(|e| format!("{e:#}"));
     let data = tico
         .call(&format!("/api/v2/meetings/{meeting}/items"), None, "")
-        .map_err(|e| e.to_string())?;
+        .map_err(|e| format!("{e:#}"))?;
     let mut app = lock(&state);
-    if app.saved_target() == Some((destination, meeting)) {
-        app.shared_items_reply(data);
+    if app.saved_target() == Some((destination, meeting)) && app.saved_scope() == generation {
+        app.shared_items_reply(data.clone());
+    } else {
+        return Err("The Tico connection changed".into());
     }
-    Ok(reply)
+    match reply {
+        Ok(value) => Ok(value),
+        Err(error) if error.contains("409") => {
+            let item = data["sections"]
+                .as_object()
+                .into_iter()
+                .flat_map(|s| s.values())
+                .filter_map(|v| v.as_array())
+                .flatten()
+                .find(|item| item["id"].as_str() == id.as_deref())
+                .cloned();
+            Ok(serde_json::json!({"conflict":item,"error":error}))
+        }
+        Err(error) => Err(error),
+    }
 }
 
 commands! {
@@ -215,7 +231,7 @@ fn meeting_link(
     })().map(|mut value| {
         value["copied"] = serde_json::json!(copy && value["url"].as_str().is_some_and(|url| copy_meeting_url(&handle, url)));
         value
-    }).map_err(|e| e.to_string())
+    }).map_err(|e| format!("{e:#}"))
 }
 #[tauri::command(async)]
 fn share_screen(
@@ -246,7 +262,7 @@ fn share_screen(
             expected_team,
         )
     })()
-    .map_err(|e| e.to_string())
+    .map_err(|e| format!("{e:#}"))
 }
 
 /// Background work, and telling the window when to redraw. Runs whether or not the window is

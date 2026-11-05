@@ -60,7 +60,7 @@ const SEND_WAIT: Duration = Duration::from_secs(600);
 /// Jobs that run beside the person's own actions instead of disabling the controls.
 /// Shown when a recording or a send is asked for while an update installs.
 const UPDATING: &str = "Tico Recorder is updating. Try again in a moment.";
-const BACKGROUND: [&str; 8] = [
+const BACKGROUND: [&str; 9] = [
     "live",
     "calendar",
     "autodraft",
@@ -69,6 +69,7 @@ const BACKGROUND: [&str; 8] = [
     "roster",
     "speech",
     "items",
+    "presence",
 ];
 /// Drafting reads streamed text too, so it can follow speech closely; one model call per
 /// interval at most.
@@ -78,6 +79,8 @@ const MESSAGE_FOR: Duration = Duration::from_secs(6);
 
 struct Reply {
     kind: String,
+    generation: u64,
+    connection: Option<(String, String, String)>,
     meeting: Option<String>,
     result: Result<Value, String>,
 }
@@ -321,6 +324,8 @@ pub struct Recorder {
     saved_items: Value,
     items_cursor: u64,
     items_generation: u64,
+    items_epoch: u64,
+    presence_at: Option<Instant>,
     items_at: Instant,
     presence_session: String,
     presence_target: Option<(String, String)>,
@@ -448,6 +453,8 @@ impl Recorder {
             saved_items: Value::Null,
             items_cursor: 0,
             items_generation: 0,
+            items_epoch: 0,
+            presence_at: None,
             items_at: Instant::now() - Duration::from_secs(30),
             presence_session: uuid::Uuid::new_v4().to_string(),
             presence_target: None,
@@ -531,6 +538,8 @@ impl Recorder {
         let store = self.store.clone();
         let background = BACKGROUND.contains(&kind);
         let deleting = kind == "delete";
+        let generation = self.items_generation;
+        let connection = self.saved_connection();
         let kind = kind.to_string();
         let worker = std::thread::spawn(move || {
             if background {
@@ -539,6 +548,8 @@ impl Recorder {
             let result = work().map_err(|error| format!("{error:#}"));
             let _ = tx.send(Reply {
                 kind,
+                generation,
+                connection,
                 meeting,
                 result,
             });
@@ -591,8 +602,7 @@ impl Recorder {
         let record = self.store.get(id)?;
         self.context = self.store.context(id).unwrap_or_default();
         self.current = Some(record);
-        self.leave_saved();
-        self.saved_items = Value::Null;
+        self.reset_saved();
         self.items_cursor = 0;
         self.meeting = Some(id.to_owned());
         self.live = json!({});
@@ -612,8 +622,7 @@ impl Recorder {
         Ok(())
     }
     pub fn close(&mut self) {
-        self.leave_saved();
-        self.saved_items = Value::Null;
+        self.reset_saved();
         self.save_context();
         self.meeting = None;
         self.current = None;
@@ -751,7 +760,28 @@ impl Recorder {
             .map(|worker| worker.error(id))
             .unwrap_or_default()
     }
+    fn saved_connection(&self) -> Option<(String, String, String)> {
+        let router = self.router();
+        self.config
+            .destinations
+            .iter()
+            .find(|d| d.id == router)
+            .map(|d| (d.id.clone(), d.actor.clone(), d.base_url.clone()))
+    }
+    pub fn saved_scope(&self) -> u64 {
+        self.items_generation
+    }
+    fn reset_saved(&mut self) {
+        self.leave_saved();
+        self.saved_items = Value::Null;
+        self.items_generation += 1;
+        self.items_epoch += 1;
+        self.items_cursor = 0;
+        self.presence_at = None;
+        self.bump();
+    }
     pub fn saved_target(&self) -> Option<(String, String)> {
+        self.saved_connection()?;
         self.current
             .as_ref()?
             .deliveries
@@ -790,6 +820,33 @@ impl Recorder {
             self.leave_saved();
         }
     }
+    fn presence_due(&self, now: Instant) -> bool {
+        self.presence_at
+            .is_none_or(|at| now.duration_since(at) >= Duration::from_secs(15))
+    }
+    fn sync_presence(&mut self) {
+        if !self.visible
+            || self.saved_items["gone"] == true
+            || self.background.contains("presence")
+            || !self.presence_due(Instant::now())
+        {
+            return;
+        }
+        let Some((destination, remote)) = self.saved_target() else {
+            return;
+        };
+        self.presence_at = Some(Instant::now());
+        self.presence_target = Some((destination.clone(), remote.clone()));
+        let config = self.config.clone();
+        let session = self.presence_session.clone();
+        self.job("presence", move || {
+            Tico::saved(&config, &destination)?.call(
+                "/api/v2/presence",
+                Some(&json!({"place":format!("meeting:{remote}"), "session_id":session})),
+                &uuid::Uuid::new_v4().to_string(),
+            )
+        });
+    }
     fn sync_saved(&mut self) {
         if !self.visible
             || self.saved_items["gone"] == true
@@ -801,18 +858,13 @@ impl Recorder {
         let Some((destination, remote)) = self.saved_target() else {
             return;
         };
-        self.presence_target = Some((destination.clone(), remote.clone()));
         self.items_at = Instant::now();
-        let session = self.presence_session.clone();
         let after = self.items_cursor;
         let generation = self.items_generation;
         let config = self.config.clone();
         let initial = self.saved_items.is_null();
         self.job("items", move || {
             let tico = Tico::saved(&config, &destination)?;
-            // A refused heartbeat must not prevent the stream from delivering its access-loss event.
-            let _ = tico.call("/api/v2/presence", Some(&json!({"place":format!("meeting:{remote}"),
-                "session_id":session})), &uuid::Uuid::new_v4().to_string());
             let mut cursor = after;
             if !initial {
                 for (seq, kind, value) in tico.events_until_change(&format!(
@@ -1003,10 +1055,21 @@ impl Recorder {
                 self.busy = false;
             }
             let here = reply.meeting == self.meeting;
+            if ["items", "presence"].contains(&reply.kind.as_str())
+                && (!here
+                    || reply.generation != self.items_generation
+                    || reply.connection != self.saved_connection())
+            {
+                continue;
+            }
+            if reply.kind == "presence" {
+                continue;
+            }
             if reply.kind == "signin" {
                 self.signing_in = false;
                 // Signing in to several orgs keeps the ones that worked when a later one fails.
                 self.config = settings::read(self.store.root()).unwrap_or(self.config.clone());
+                self.reset_saved();
                 self.keep_destination();
                 self.services_at = None;
             }
@@ -1130,8 +1193,10 @@ impl Recorder {
                         && (["HTTP 401 (", "HTTP 403 (", "HTTP 404 ("]
                             .iter()
                             .any(|status| error.contains(status))
-                            || error.contains("Sign in to Tico again"))
+                            || error.contains("Sign in to Tico again")
+                            || error.contains("Choose a Tico connection"))
                     {
+                        self.reset_saved();
                         self.saved_items = json!({"gone":true});
                         self.bump();
                     }
@@ -1151,6 +1216,7 @@ impl Recorder {
                         "settings" => {
                             self.config =
                                 settings::read(self.store.root()).unwrap_or(self.config.clone());
+                            self.reset_saved();
                             self.keep_destination();
                             self.services_at = None;
                             self.say("Settings saved");
@@ -1167,9 +1233,7 @@ impl Recorder {
                         "items" => {
                             self.items_cursor =
                                 value["cursor"].as_u64().unwrap_or(self.items_cursor);
-                            if value["gone"] == true
-                                || value["generation"].as_u64() == Some(self.items_generation)
-                            {
+                            if value["generation"].as_u64() == Some(self.items_generation) {
                                 self.saved_items = value;
                             }
                         }
@@ -1254,6 +1318,7 @@ impl Recorder {
         {
             self.reload();
         }
+        self.sync_presence();
         self.sync_saved();
         self.watch_inputs();
         let outside = self.outside_state();
@@ -1725,6 +1790,7 @@ impl Recorder {
             .any(|row| row.id == destination)
             && self.context.live_destination.is_empty()
         {
+            self.reset_saved();
             self.destination = destination.into();
             self.choosing_org = false;
             self.roster_for.clear();
@@ -2319,6 +2385,7 @@ impl Recorder {
     }
     /// Change the saved connection list now.
     fn connections(&mut self, change: impl Fn(&mut Settings)) {
+        self.reset_saved();
         let mut saved = settings::read(self.store.root()).unwrap_or(self.config.clone());
         change(&mut saved);
         change(&mut self.config);
@@ -2995,6 +3062,8 @@ impl Recorder {
             "actor": self.config.destinations.iter().find(|d| d.id == self.router()).map(|d| &d.actor),
             "saved": self.saved_target().is_some(),
             "shared": self.saved_items,
+            "shared_url": self.config.destinations.iter().find(|d| d.id == self.router()).map(|d| &d.base_url),
+            "shared_scope": format!("{}:{}", self.router(), self.items_epoch),
             "mode": mode,
             "org": org,
             "orgs": self.config.destinations.iter().map(|row| json!({"id":row.id,"name":row.name})).collect::<Vec<_>>(),
@@ -3335,4 +3404,89 @@ fn wait_stopped(store: &Store, id: &str) -> anyhow::Result<()> {
         std::thread::sleep(Duration::from_millis(250));
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod saved_panel_tests {
+    use super::*;
+    fn fixture() -> (tempfile::TempDir, Recorder) {
+        let dir = tempfile::tempdir().unwrap();
+        let store = Store::open(dir.path()).unwrap();
+        let record = store.create("Saved meeting").unwrap();
+        let mut app = Recorder::new(store, None, true).unwrap();
+        app.config.destinations = vec!["one", "two"]
+            .into_iter()
+            .map(|id| settings::Destination {
+                id: id.into(),
+                name: id.into(),
+                base_url: format!("https://{id}.example"),
+                actor: "human:ana".into(),
+            })
+            .collect();
+        app.destination = "one".into();
+        app.open(&record.id).unwrap();
+        app.visible = false;
+        (dir, app)
+    }
+    fn late_reply(app: &Recorder) -> Reply {
+        Reply {
+            kind: "items".into(),
+            meeting: app.meeting.clone(),
+            generation: app.items_generation,
+            connection: app.saved_connection(),
+            result: Ok(
+                json!({"generation":app.items_generation,"sections":{"task":[{"text":"Old org words"}]},"presence":{"actors":[{"name":"Old person"}]}}),
+            ),
+        }
+    }
+    #[test]
+    fn saved_panel_drops_reply_after_sign_out_and_org_switch() {
+        for sign_out in [true, false] {
+            let (_dir, mut app) = fixture();
+            let reply = late_reply(&app);
+            app.saved_items = json!({"sections":{"task":[{"text":"Cached"}]}});
+            // The destination stays pinned in a live meeting even after it is disconnected.
+            if sign_out {
+                app.context.live_destination = "one".into();
+                app.sign_out("one");
+            } else {
+                app.choose_org("two");
+            }
+            assert!(app.saved_items.is_null());
+            assert!(app.presence_target.is_none());
+            assert!(app.items_generation > reply.generation);
+            app.tx.send(reply).unwrap();
+            app.tick();
+            assert!(app.saved_items.is_null());
+            if sign_out {
+                assert!(app.saved_target().is_none());
+            }
+        }
+    }
+    #[test]
+    fn saved_panel_connection_error_clears_cached_words() {
+        let (_dir, mut app) = fixture();
+        app.saved_items = json!({"sections":{"task":[{"text":"Cached"}]}});
+        let mut reply = late_reply(&app);
+        reply.result = Err("Choose a Tico connection".into());
+        app.tx.send(reply).unwrap();
+        app.tick();
+        assert_eq!(app.saved_items, json!({"gone":true}));
+    }
+    #[test]
+    fn saved_panel_presence_deadline_is_independent_of_continuous_edits() {
+        let (_dir, mut app) = fixture();
+        let start = Instant::now();
+        let mut beats = vec![];
+        for second in 0..61 {
+            // Every second brings a new item reply, just as a busy shared panel does.
+            app.shared_items_reply(json!({"sections":{"task":[]}}));
+            let now = start + Duration::from_secs(second);
+            if app.presence_due(now) {
+                beats.push(second);
+                app.presence_at = Some(now);
+            }
+        }
+        assert_eq!(beats, vec![0, 15, 30, 45, 60]);
+    }
 }

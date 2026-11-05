@@ -6,7 +6,7 @@ const http = require('node:http');
 const fs = require('node:fs');
 const path = require('node:path');
 const code = fs.readFileSync(path.join(__dirname, '../app/meetings.js'), 'utf8');
-const item = {id:'i1', section:'task', text:'Draft', detail:{owner:'human:ben', body:'Initial'}, status:'proposed', created_by:'human:ana'};
+const item = {version:1, id:'i1', section:'task', text:'Draft', detail:{owner:'human:ben', body:'Initial'}, status:'proposed', created_by:'human:ana'};
 const streams = new Set(), sessions = new Map(), errors = [];
 let hold = null, release = null, fail = false, writes = 0, inflight = 0, maxInflight = 0, sent = 0;
 const emit = (topic, data) => { for (const res of streams) res.write(`event: ${topic}\ndata: ${JSON.stringify(data)}\n\n`); };
@@ -22,8 +22,9 @@ const server = http.createServer(async (req, res) => {
       const S={me:{id:me},people:[{id:'ana',name:'Ana'},{id:'ben',name:'Sam'}]};
       const $=s=>document.querySelector(s), esc=s=>String(s??'').replaceAll('&','&amp;').replaceAll('<','&lt;').replaceAll('"','&quot;');
       const actorLabel=a=>a==='human:ben'?'Sam':'Ana', activeEmps=()=>[], getForget=()=>{}, toast=()=>{};
+      const taskOwnerOptions=()=>'<option value="human:ben">Sam</option>', botByRef=()=>null;
       const get=p=>fetch(API+p).then(r=>r.json());
-      const post=async(p,body)=>{const r=await fetch(API+p,{method:'POST',headers:{'Content-Type':'application/json','X-Viewer':me},body:JSON.stringify(body)});const data=await r.json();if(!r.ok)throw new Error(data.error);return data;};
+      const post=async(p,body)=>{const r=await fetch(API+p,{method:'POST',headers:{'Content-Type':'application/json','X-Viewer':me},body:JSON.stringify(body)});const data=await r.json();if(!r.ok){const e=new Error(data.error?.detail || data.error);e.body=data;throw e;}return data;};
     </script><script src="/meetings.js"></script><script>
       MEET={open:true,selected:'m1',list:[{id:'m1'}],items:{},itemDup:{}}; meetItemsWire(MEET,{id:'m1'});
     </script>`);
@@ -52,6 +53,8 @@ const server = http.createServer(async (req, res) => {
       inflight--;
       if (fail) { fail=false; return answer({error:'Offline'},503); }
     }
+    if(body.version !== item.version) return answer({error:{detail:'This item changed',item:structuredClone(item)}},409);
+    item.version++;
     if (body.text !== undefined) item.text=body.text;
     if (body.detail) Object.assign(item.detail, body.detail);
     if (pushing && item.status === 'proposed') { item.status='pushed'; sent++; }
@@ -79,9 +82,22 @@ function pauseWrite() { hold = new Promise(resolve => { release=resolve; }); }
     await b.waitForFunction(()=>MEET.items.m1.sections.task[0].detail.body==='Sam changed the details');
     assert.equal(await title.inputValue(),'Newer draft','incoming changes preserve the focused title');
     release();
+    await a.getByRole('button',{name:'Retry',exact:true}).waitFor();
+    assert.equal(await title.inputValue(),'Newer draft');
+    await a.getByText(/Current: Draft/).waitFor();
+    await a.getByRole('button',{name:'Retry',exact:true}).click();
     await a.waitForFunction(()=>!meetPendingDraft(MEET,'i1').flight && !Object.keys(meetPendingDraft(MEET,'i1').patch).length);
     assert.equal(item.text,'Newer draft'); assert.equal(item.detail.body,'Sam changed the details');
     assert.equal(maxInflight,1,'one write per item in flight');
+    await a.locator('[data-add="task"]').click();
+    const addText=a.getByRole('textbox',{name:'What to add',exact:true});
+    await addText.fill('Keep typing here');
+    await addText.evaluate(el=>el.setSelectionRange(5,11));
+    item.detail.body='Another live edit'; item.version++; emit('meeting_items',{meeting_id:'m1',kind:'items'});
+    await a.waitForFunction(()=>MEET.items.m1.sections.task[0].detail.body==='Another live edit');
+    assert.equal(await addText.inputValue(),'Keep typing here');
+    assert.deepEqual(await addText.evaluate(el=>[document.activeElement===el,el.selectionStart,el.selectionEnd]),[true,5,11]);
+    await a.locator('form[data-new] [data-cancel]').click();
     await a.locator('#blur').click();
     fail=true; await title.fill('Retry words'); await a.locator('#blur').click();
     await a.getByRole('button',{name:'Retry',exact:true}).waitFor();
@@ -97,7 +113,7 @@ function pauseWrite() { hold = new Promise(resolve => { release=resolve; }); }
     release();
     await a.locator('[data-pending="i1"]').waitFor({state:'detached'});
     assert.equal(item.text,'Final words'); assert.equal(sent,1);
-    assert.equal(item.detail.body,'Sam changed the details');
+    assert.equal(item.detail.body,'Another live edit');
     emit('meeting_items',{meeting_id:'m1',gone:true});
     await b.waitForFunction(()=>MEET.open===false);
     assert.deepEqual(errors,[]);

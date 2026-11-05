@@ -50,15 +50,19 @@ class ItemCreate(M.Contract):
     detail: dict = Field(default_factory=dict)
     quote: str = Field(default="", max_length=4_000)
     at_ms: int | None = Field(default=None, ge=0, le=86_400_000)
+    status: Literal["proposed", "pushed"] = "proposed"
+    result_ref: str | None = Field(default=None, max_length=240)
 
 
 class ItemEdit(M.Contract):
+    version: int = Field(default=1, ge=1)
     text: str | None = Field(default=None, min_length=1, max_length=2_000)
     detail: dict | None = None
     status: Literal["dismissed"] | None = None
 
 
 class ItemPush(M.Contract):
+    version: int = Field(default=1, ge=1)
     force: bool = False
     text: str | None = Field(default=None, min_length=1, max_length=2_000)
     detail: dict | None = None
@@ -177,15 +181,21 @@ def add(c, record, author, body):
     return view(one(c, record["id"], iid))
 
 
+def require_version(row, version):
+    if row["version"] != version:
+        raise Problem("version_conflict", "This item changed", 409, extra={"item": view(row)})
+
+
 def edit(c, rid, author, iid, body):
     row = one(c, rid, iid)
+    require_version(row, body.version)
     if body.text is None and body.detail is None and body.status is None:
         raise Problem("validation", "Change the text, the detail, or delete the item", 422)
     if (body.text is not None or body.detail is not None) and row["status"] != "proposed":
         raise Problem("status", "Already sent", 409)
     if body.status == "dismissed" and row["status"] != "proposed":
         raise Problem("status", "Only a proposed item can be deleted", 409)
-    sets, args = ["updated_by=?", "updated_at=?"], [author, H.now()]
+    sets, args = ["version=version+1", "updated_by=?", "updated_at=?"], [author, H.now()]
     if body.text is not None:
         sets.append("text=?"); args.append(body.text.strip())
     if body.detail is not None:
@@ -338,7 +348,7 @@ def record_push(c, who, rid, iid, ref):
     if row["status"] == "pushed":                 # a second click, or a concurrent one: one result
         return view(row)
     ts = H.now()
-    c.execute("UPDATE meeting_items SET status='pushed',result_ref=?,pushed_at=?,updated_by=?,updated_at=? "
+    c.execute("UPDATE meeting_items SET version=version+1,status='pushed',result_ref=?,pushed_at=?,updated_by=?,updated_at=? "
               "WHERE id=? AND meeting_id=?", (ref, ts, who.actor, ts, iid, rid))
     H.event(c, who.actor, "meeting.item_pushed", rid,
             {"item": iid, "section": row["section"], "result": ref})
@@ -350,7 +360,13 @@ def install_meeting_items(app, store, mutate, task_create, auth):
     settings = store.settings
 
     def reply(request, body, work, rid):
-        result = mutate(request, body, work, check=lambda c: media.authorized(c, request.state.identity, rid))
+        try:
+            result = mutate(request, body, work, check=lambda c: media.authorized(c, request.state.identity, rid))
+        except Problem as exc:
+            if exc.code == "version_conflict":
+                with store.read() as c:
+                    exc.extra = redact(c, request.state.identity, auth, exc.extra)
+            raise
         with store.read() as c:
             return redact(c, request.state.identity, auth, result)
 
@@ -388,7 +404,17 @@ def install_meeting_items(app, store, mutate, task_create, auth):
         human_only(who)
         def work(c):
             record = media.authorized(c, who, rid)
-            return {"item": add(c, record, who.actor, body)}
+            if body.status == "pushed":
+                if not body.result_ref:
+                    raise Problem("result_ref", "A sent item needs a task", 422)
+                auth.task(c, who, body.result_ref)
+            elif body.result_ref:
+                raise Problem("result_ref", "Only a sent item has a task", 422)
+            item = add(c, record, who.actor, body)
+            if body.status == "pushed":
+                item = record_push(c, who, rid, item["id"], body.result_ref)
+                meeting_audience.record_sent_link(c, rid, body.result_ref, who.actor)
+            return {"item": item}
         return reply(request, body, work, rid)
 
     @app.post("/api/v2/meetings/{rid}/items/{iid}")
@@ -408,10 +434,11 @@ def install_meeting_items(app, store, mutate, task_create, auth):
         human_only(who)
         def work(c):
             record, row = pushable(c, who, rid, iid)
+            require_version(row, body.version)
             if row["status"] == "pushed":
                 return {"item": view(row), "pushed": False}
             if body.text is not None or body.detail is not None:
-                edit(c, rid, who.actor, iid, ItemEdit(text=body.text, detail=body.detail))
+                edit(c, rid, who.actor, iid, ItemEdit(version=body.version, text=body.text, detail=body.detail))
                 row = one(c, rid, iid)
             detail = json.loads(row["detail"] or "{}")
             owner = (owner_of(c, detail) if row["section"] == "task" else

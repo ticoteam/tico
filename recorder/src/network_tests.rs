@@ -2626,3 +2626,34 @@ fn a_retry_names_the_audience_and_a_narrowing_tico_refuses_is_shown_as_said() {
     );
     assert!(calls[1].2.contains("refile"));
 }
+
+#[test]
+fn a_task_created_before_save_is_uploaded_as_a_sent_meeting_item() {
+    let dir = tempfile::tempdir().unwrap();
+    let store = Store::open(dir.path()).unwrap();
+    let record = transcript(&store, "Sent before Save");
+    store
+        .update_context(&record.id, |context| {
+            context.items.push(crate::workspace::Item {
+                id: "sent-item".into(),
+                title: "Send the proposal".into(),
+                task_id: "created-task".into(),
+                kind: "task".into(),
+                ..Default::default()
+            });
+            Ok(())
+        })
+        .unwrap();
+    let (tico, seen, worker) = server(vec![
+        Some(json!({"actor":"human:test"})),
+        Some(json!({"id":"saved-meeting"})),
+        Some(json!({"sections":{"task":[]}})),
+        Some(json!({"item":{"id":"sent-row","status":"pushed","result_ref":"created-task"}})),
+    ]);
+    tico.send(&store, &record.id, false).unwrap();
+    worker.join().unwrap();
+    let calls = seen.lock().unwrap();
+    assert_eq!(calls[3].1["status"], "pushed");
+    assert_eq!(calls[3].1["result_ref"], "created-task");
+    assert!(!calls.iter().any(|r| r.0.contains("/push")));
+}

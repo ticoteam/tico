@@ -27,8 +27,13 @@ def authorized(c, auth, who, place):
     raise Problem('not_found', 'Place not found', 404)
 
 
-def cutoff():
-    return (H.parse_ts(H.now()) - timedelta(seconds=30)).isoformat().replace('+00:00', 'Z')
+def cutoff(now=None):
+    return (H.parse_ts(now or H.now()) - timedelta(seconds=30)).isoformat().replace('+00:00', 'Z')
+
+
+def sweep(c, now=None, limit=1000):
+    return c.execute('DELETE FROM presences WHERE id IN (SELECT id FROM presences WHERE seen_at<=? '
+                     'ORDER BY seen_at LIMIT ?)', (cutoff(now), limit)).rowcount
 
 
 def listing(c, place):

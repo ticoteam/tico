@@ -201,10 +201,14 @@ format is a `422` that names the problem.
   private tasks only when every reader (including a bot owner's managers) is already in the meeting.
   The Recorder applies that check before Save too, using `live_meeting_id` on task creation.
   Title, owner, due and details autosave after 700 ms or on blur, one write at a time. **Not saved · Retry** keeps
-  a failed draft; Send carries the final fields atomically. Incoming edits leave the focused field alone.
+  a failed draft. Save and Send carry the item’s `version`; a stale write returns 409 with the current item,
+  keeps unsent edits in the fields and shows the current values for retry. Send applies the final fields atomically.
+  Incoming edits preserve open forms, focus and caret.
   The web and saved Recorder views refetch on authorized `meeting_items` events, and close on `gone`.
   `GET /api/v2/presence?place=meeting:<id>` lists current people; each window heartbeats its own `session_id`
-  every 15 seconds and leaves with `gone: true`. Sessions expire after 30 seconds.
+  every 15 seconds and leaves with `gone: true`. Sessions expire after 30 seconds; Maintenance deletes expired sessions in bounded batches, and deleting
+  a meeting removes its sessions. Participant grants end with access to the source meeting; task parties and guests
+  retain their independent task access. Tasks created in Recorder before Save are uploaded as sent items.
 - **Comments.** Anyone who can open the meeting can add to the thread beside it.
 - **Routines.** `meeting.ready` fires when a team meeting with a transcript is first imported,
   once per meeting however often it is re-imported; a routine written `on: meeting.ready` gets one

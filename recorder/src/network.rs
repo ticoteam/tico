@@ -612,15 +612,15 @@ impl Tico {
             "Finish the connected live meeting first"
         );
         // Items already sent to a bot are tasks; the rest go along as the meeting's proposed items.
-        let selected: Vec<_> = context
-            .items
-            .iter()
-            .filter(|item| item.task_id.is_empty())
-            .collect();
-        if push_items && selected.iter().any(|item| item.kind == "task") {
+        let selected: Vec<_> = context.items.iter().collect();
+        if push_items
+            && selected
+                .iter()
+                .any(|item| item.kind == "task" && item.task_id.is_empty())
+        {
             let roster = self.roster()?;
             for item in &selected {
-                if item.kind == "task" {
+                if item.kind == "task" && item.task_id.is_empty() {
                     ensure!(
                         roster.iter().any(|entry| entry.0 == item.owner),
                         "Choose a verified owner for: {}",
@@ -784,7 +784,11 @@ impl Tico {
                     json!({"owner":item.owner})
                 };
                 let at_ms = (!item.quote.is_empty()).then_some(item.at_ms);
-                let payload = json!({"section":section,"text":item.title,"quote":item.quote,"at_ms":at_ms,"detail":detail});
+                let mut payload = json!({"section":section,"text":item.title,"quote":item.quote,"at_ms":at_ms,"detail":detail});
+                if !item.task_id.is_empty() {
+                    payload["status"] = json!("pushed");
+                    payload["result_ref"] = json!(item.task_id);
+                }
                 let mut item_id = delivery.receipt["items"][&item.id]["id"]
                     .as_str()
                     .unwrap_or("")
@@ -818,7 +822,7 @@ impl Tico {
                 }
                 delivery.receipt["items"][&item.id] = json!({"id":item_id,"status":"proposed"});
                 store.delivery(id, &delivery)?;
-                if push_items {
+                if push_items && item.task_id.is_empty() {
                     let reply = self.call_meeting(
                         &format!("{path}/{item_id}/push"),
                         Some(&json!({})),
