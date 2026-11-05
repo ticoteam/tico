@@ -7,6 +7,7 @@ from contextlib import closing, contextmanager
 from datetime import datetime, timedelta, timezone
 
 import pytest
+import time_machine
 from fastapi.testclient import TestClient
 
 from backend import demo, demo_seed, hubdb
@@ -118,7 +119,9 @@ def test_tasks_cover_every_status_and_some_have_chains(ana):
 
 
 def test_no_task_is_left_stuck_for_days(ana):
-    assert ana.get("/api/v2/tasks/stuck").json()["tasks"] == []
+    # Read at the build's own now: the real clock before it hides old work behind future-dated rows, after it ages them.
+    with time_machine.travel(NOW, tick=False):
+        assert ana.get("/api/v2/tasks/stuck").json()["tasks"] == []
 
 
 def test_a_meeting_waiting_for_review_is_not_in_the_live_list(ana):
