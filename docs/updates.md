@@ -160,13 +160,13 @@ The runner is a git checkout. When the server's release is newer, the runner:
    or until the server's release changes. A disk-space failure retries as soon as free space increases.
 6. once the runner is healthy on the new release, restarts the background jobs that are installed on this Mac
    (`connectors`, `close-calls`, `importers`; the same `launchctl kickstart -k` or `systemctl --user restart` as
-   `scripts/tico restart`), so none keeps the old release in memory. A job that is not installed is left alone. Each job also checks the checkout's
+   `scripts/tico-computer restart`), so none keeps the old release in memory. A job that is not installed is left alone. Each job also checks the checkout's
    revision about once a minute and exits when it changes, so its supervisor starts it on the new code even after a
-   `scripts/tico update` or a pull by hand. Each restart is a line in the job's log
-   (`scripts/tico logs connectors`) and in `update.log`. A Docker runner replaces its container, jobs included.
+   `scripts/tico-computer update` or a pull by hand. Each restart is a line in the job's log
+   (`scripts/tico-computer logs connectors`) and in `update.log`. A Docker runner replaces its container, jobs included.
 
 A runner's release is the one it started on, not whatever the checkout names now. The runners of several company
-environments (`scripts/tico -e <env> install`) may share one checkout: the first to update moves it, and each other
+environments (`scripts/tico-computer -e <env> install`) may share one checkout: the first to update moves it, and each other
 runner, still on the old release, finds the checkout already there, runs the install step for its own Python and
 restarts onto it (with its own jobs). The same happens after a `git checkout` of a release by hand. Their updates take
 turns on a lock in the checkout's git directory, so one never moves the checkout while another is mid-update.
@@ -194,17 +194,17 @@ uses `failed` and the six-hour wait they already honor, so they take work betwee
 without an end. Persistent causes use the same blocked rule. It never installs, restarts or rolls back without
 the shared update lock.
 
-### Linux from a checkout: run `scripts/tico install` once
+### Linux from a checkout: run `scripts/tico-computer install` once
 
 A Mac has launchd to start the runner again after an update. A Linux computer running from a Tico checkout has nothing
 unless you give it something, and an update that stopped the runner with no supervisor would leave the computer offline.
 So a checkout runner that nothing supervises **refuses the update and says so** in Settings > Computers and Health:
-"no supervisor would start this runner again after an update: run `scripts/tico install` once".
+"no supervisor would start this runner again after an update: run `scripts/tico-computer install` once".
 
 Run it once on that computer, as the user the runner runs as (enroll first: [install.md](install.md#a-linux-checkout-systemd)):
 
 ```
-scripts/tico install            # the runner, connectors, close-calls and importers
+scripts/tico-computer install            # the runner, connectors, close-calls and importers
 ```
 
 It writes four systemd **user** units under `~/.config/systemd/user` (`tico-bot.service`, `tico-connectors.service`,
@@ -224,7 +224,7 @@ errors, and only if systemd confirms the runner's `KillMode` is `process` or `no
 default `control-group`; a detached updater would be killed on restart, so a launch failure is reported instead.
 An unknown stop policy also refuses that fallback.
 Linger is checked at install time; if it is off the command prints `loginctl enable-linger $USER`, because without it the jobs stop when the last session
-logs out and do not start at boot. `scripts/tico status`, `restart`, `logs` and `uninstall` work the same as on a Mac.
+logs out and do not start at boot. `scripts/tico-computer status`, `restart`, `logs` and `uninstall` work the same as on a Mac.
 
 A checkout with uncommitted changes, or on a person's development branch, is refused: nothing is
 stashed, reset or discarded. Settings > Health and Computers name the changed files until someone
@@ -295,7 +295,9 @@ start if another environment moved the shared checkout to an older release.
 Git lock files also stay in place: once a lock is 30 minutes old, the updater
 reports its full path, age and one removal command. Check no Git is running for that repository
 before running that command on the Computer.
-`scripts/tico update` still works by hand and still follows `main`.
+`scripts/tico-computer update` still works by hand and still follows `main`. It ends with `tico-computer restart
+all`; a `scripts/tico` from before `tico-computer` existed ends with `scripts/tico restart all`, which `scripts/tico`
+now hands to `tico-computer`, so that first update lands too.
 
 A launch failure waits six hours before another attempt at the same release. A newly installed runner retries a
 launch failure from an older runner build at once; if that attempt fails, the six-hour wait applies again. A dead
@@ -408,7 +410,7 @@ Every computer runs the Rust runner (`tico-runner`, from `runner-rs/`). The laun
 - **Docker:** the image ships the binary (`/usr/local/bin/tico-runner`), built from the same tree.
 - **Mac or Linux checkout:** a checkout on a release tag downloads that release's `tico-runner-<os>-<arch>.gz` from
   GitHub, checked against the release's `tico-runner-SHA256SUMS`, into `runner-rs/target/dist/`. Any other checkout
-  with `cargo` on PATH builds it (`cargo build --release`). `scripts/tico install` and every update get the binary
+  with `cargo` on PATH builds it (`cargo build --release`). `scripts/tico-computer install` and every update get the binary
   before the runner restarts (`python -m runner_support.engine prepare`); an update that cannot get it backs out and the
   runner keeps running the old release.
 - **A Mac checkout's wait for its binary:** when a release changed the runner's sources, the Mac binaries are added to
@@ -425,7 +427,7 @@ still runs the side jobs (connectors, Close calls, meeting importers), the catal
 `runner_support/`. A small `runner/` package forwards the old `python -m runner ...` commands and imports there, so
 launchd plists, systemd units and cloud machine images written before the move, and a runner or update process of an
 earlier release still running while its checkout moves, keep working. What is saved on a computer and started later
-keeps the old names on purpose: `scripts/tico install` still writes `python -m runner --config <path> <job>` into the
+keeps the old names on purpose: `scripts/tico-computer install` still writes `python -m runner --config <path> <job>` into the
 launchd plists and systemd units, and a cloud machine image still boots `python -m runner.cloud_machine boot`. So a
 computer moved back to a release from before the move (hosted staff can set an older target) still starts.
 
@@ -481,7 +483,7 @@ Automatic rollback covers a release that does not come up. To go back by choice:
 
   Then set `TICO_TAG=vX.Y.Z` in `.env`, `docker compose pull` and `docker compose up -d`. Without a database change,
   skip the middle step. Computers newer than the server are left as they are (they still work, as long as they are at or above the minimum).
-- **Mac:** `git -C <checkout> checkout vX.Y.Z`, `scripts/tico restart`, and pin it (above) or the next heartbeat moves it
+- **Mac:** `git -C <checkout> checkout vX.Y.Z`, `scripts/tico-computer restart`, and pin it (above) or the next heartbeat moves it
   back to the server's release.
 - **Docker runner:** set `TICO_TAG=vX.Y.Z` and `TICO_RUNNER_PINNED=1` in `.env`, then `docker compose -f runner.compose.yaml up -d`.
 

@@ -148,7 +148,7 @@ Explicit **Replace machine** (or replacing the shared machine) clears the marker
 2. HQ runs the equivalent of `boat new --from <HQ_BOAT_BASE_SNAPSHOT>` (default `tico-runner-base`) with two
    per-sandbox variables: `TICO_ENROLL_TOKEN` (that code) and `TICO_HUB_URL` (the server).
 3. At boot, `tico-cloud-machine.service` (`python -m runner.cloud_machine boot`, forwarded to runner_support/cloud_machine.py) finds the two variables, enrolls the
-   runner once with `tico-runner enroll`, and runs `scripts/tico install`, which starts the runner and its helper jobs
+   runner once with `tico-runner enroll`, and runs `scripts/tico-computer install`, which starts the runner and its helper jobs
    as systemd user units.
 4. The server sees a cloud code. For a bot's own machine it names the computer "&lt;bot&gt; (cloud)", closes it to
    every other bot (`accepts_member_bots=0`, and placement never offers one bot's machine to another) and assigns
@@ -207,11 +207,11 @@ keep their own harnesses current ([What's on a machine](#whats-on-a-machine)), o
 The base step (below) installs these, so every machine made from the snapshot has them:
 
 - **Google Chrome stable**, headed (x86_64; arm64 gets the distro's Chromium, since Google ships no Linux arm64 Chrome).
-- **Xvfb, x11vnc and matchbox-window-manager**: the same packages as the computer screen (`scripts/tico screen on`),
+- **Xvfb, x11vnc and matchbox-window-manager**: the same packages as the computer screen (`scripts/tico-computer screen on`),
   so Chrome can run headed on a virtual display. The runner picks the display (`:99` and up); nothing to configure.
   The screen is on by default on a cloud machine, so bots get a display, and the computer's operator and admins can
   open it in Settings > Computers. Screen Off there stops people opening it; the display stays up for bots.
-  `scripts/tico screen off` takes the display down.
+  `scripts/tico-computer screen off` takes the display down.
   A bot whose browser should come from a home connection sets **Browse through** to a computer that shares its internet
   ([Share internet with bots](computers.md#share-internet-with-bots)).
 - **Fonts** (`fonts-liberation`, `fonts-noto-color-emoji`).
