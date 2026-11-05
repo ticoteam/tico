@@ -83,7 +83,7 @@ const scenarios = {
     const {page, seen} = await open(browser, fake, googleFake(), at('mb-support'));
     const row = page.locator('[data-mb-routine-row=au-triage]');
     assert.equal(await row.locator('a').getAttribute('href'), '#/automations/au-triage');
-    assert.equal(await row.locator('a').textContent(), 'Support triage');
+    assert.equal(await row.locator('a').evaluate(a => a.lastChild.textContent), 'Support triage', 'its name, after its icon');
     const on = row.locator('[data-mb-routine]');
     assert.equal(await on.isChecked(), true);
     await on.click();   // a click, not uncheck(): a second draw of the page may replace the switch mid-click
