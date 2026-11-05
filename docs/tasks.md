@@ -1295,7 +1295,8 @@ bot's DM uses ([Steer, queue or defer](using-tico.md#steer-queue-or-defer)): **S
 now (right after it, if the bot's harness cannot steer); **Queue** goes right after that turn, or now when the bot is
 idle; **Defer** wakes nobody and goes in with the bot's next turn on this task, at the latest after the time picked
 under it (30m to 7d, or Never; 24h unless picked). A Defer sent while the bot works on this task goes in queued; a turn
-on another task does not count. **Set as goal**, apart in the menu, makes the text the goal of the bot's session for
+on another task does not count. Closing, finishing or declining the task cancels every Defer still waiting on it, and
+reopening it does not bring them back. **Set as goal**, apart in the menu, makes the text the goal of the bot's session for
 this task, as `/goal` does in a thread (no files, not public; [chat goals](chat-goals.md)). Only someone on the task (its
 owner, requester or a mover) may steer, queue or set the goal; anyone else may defer. Send's icon shows the way, and the caret
 (or a right-click or long press on Send) opens the ways. The web always sends the shown way: your kept way

@@ -9,10 +9,6 @@ const assert = require('node:assert/strict');
 const path = require('node:path');
 const {openAutomations, PHONE, DESKTOP, sideways} = require('./support/automations-fake.cjs');
 
-const RETIRED = {id: 'au_sys_cleanup', name: 'Cleanup', owner_id: 'person:dana', enabled: true, builtin: true, readonly: true, kind: 'system',
-  version: 1, schedule: 'Nightly', trigger: {type: 'event', name: 'tico.builtin.job.cleanup'}, steps: [], controls: {on: true},
-  source: {kind: 'system_job', id: 'job:cleanup'}};
-const tweak = fx => { fx.automations.push(JSON.parse(JSON.stringify(RETIRED))); };
 const until = async (fn, what, ms = 6000) => {
   for (const end = Date.now() + ms; !(await fn());) {
     if (Date.now() > end) throw new Error('timed out waiting for ' + what);
@@ -43,15 +39,25 @@ async function themed(page, name) {
   try {
     // An owner on a computer: the list row, the screen, a save of every control kind, Run now and the run history.
     {
-      const {page, errors, writes, db, hold} = await openAutomations(browser, {viewport: DESKTOP, maintenance: true, tweak});
+      const {page, errors, writes, db, hold} = await openAutomations(browser, {viewport: DESKTOP, maintenance: true});
       await page.waitForSelector('tr.au-row[data-row="maintenance"]');
-      assert.equal(await page.locator('tr.au-row[data-row="au_sys_cleanup"]').count(), 0, 'a retired mirror is not listed');
       const row = page.locator('tr.au-row[data-row="maintenance"]');
       assert.match(await row.innerText(), /Maintenance[\s\S]*Every hour/);
       assert.equal(await page.locator('tr.au-grp[data-agrp="system"]').count(), 1);
       await page.locator('[data-range="24h"]').click();
       await until(async () => (await row.locator('td.au-cf').innerText()).trim() === '1', 'the failed count');
       assert.ok(Number((await row.locator('td.au-cn').innerText()).replace(/\D/g, '')) >= 20, 'runs over 24h');
+      // The overview's Runs tab lists Maintenance's runs beside the automations' runs; a tap opens its run history.
+      await page.locator('[data-tab="runs"]').click();
+      await page.waitForSelector('tr.au-arow[data-aid="maintenance"]');
+      const first = page.locator('tr.au-arow[data-aid="maintenance"]').first();
+      assert.match(await first.innerText(), /Maintenance/);
+      const tapped = (await first.getAttribute('data-arun')).slice(4);
+      await first.click();
+      await page.waitForSelector(`tr.au-rr.open[data-mt-run="${tapped}"]`);
+      await page.goBack();
+      await page.locator('[data-tab="list"]').click();
+      await page.waitForSelector('tr.au-row[data-row="maintenance"]');
 
       await row.locator('a').click();
       await page.waitForSelector('.mt-step');
@@ -317,10 +323,9 @@ async function themed(page, name) {
 
     // A hub without Maintenance: the list is as it was.
     {
-      const {page, errors} = await openAutomations(browser, {viewport: DESKTOP, tweak});
+      const {page, errors} = await openAutomations(browser, {viewport: DESKTOP});
       await page.waitForSelector('tr.au-row');
       assert.equal(await page.locator('tr.au-row[data-row="maintenance"]').count(), 0);
-      assert.equal(await page.locator('tr.au-row[data-row="au_sys_cleanup"]').count(), 1);
       assert.deepEqual(errors, []);
       await page.close();
     }

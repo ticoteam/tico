@@ -512,7 +512,7 @@ def test_duplicate_versions_across_sql_and_python_are_refused_before_either_runs
 
 
 def test_every_shipped_migration_file_keeps_its_checksum():
-    """The fixture lists each migration that shipped (v0.5.109) with the SHA-256 of its file then. A database that applied
+    """The fixture lists each migration that shipped (v0.5.109; 0070 on as of v0.5.178) with the SHA-256 of its file then. A database that applied
     one records that checksum, and a start refuses a file whose checksum changed (`_verify`): a shipped file is never
     edited, a fix is a new migration. A shipped file that is gone fails too."""
     shipped = [line.split() for line in (FIXTURES / "shipped_migration_checksums.txt").read_text().splitlines()]
