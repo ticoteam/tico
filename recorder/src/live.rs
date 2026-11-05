@@ -59,6 +59,11 @@ impl LiveSync {
                     if let (Ok(records), Some((_, config))) = (store.summaries(), &config) {
                         let mut errors = status.lock().unwrap_or_else(|error| error.into_inner());
                         let shared = |state: &str| ["live", "paused"].contains(&state);
+                        failures.retain(|id, _| {
+                            records
+                                .iter()
+                                .any(|row| &row.id == id && shared(&row.live_state))
+                        });
                         errors.retain(|id, _| {
                             records
                                 .iter()
@@ -1130,13 +1135,14 @@ impl<'a> Queue<'a> {
             let Some(words) = streamed.get(channel) else {
                 continue;
             };
-            let words = match (channel, streamed.get("them")) {
-                ("me", Some(them)) => transcript::without_echo(
-                    &transcript::ready_microphone(record, words, them),
-                    them,
-                ),
-                ("me", None) => transcript::ready_microphone(record, words, &[]),
-                _ => words.clone(),
+            let words = if channel == "me" {
+                transcript::live_microphone(
+                    record,
+                    words,
+                    streamed.get("them").map_or(&[], Vec::as_slice),
+                )
+            } else {
+                words.clone()
             };
             let from = self.shared_until(record, channel);
             // After the recording stops, only words a chunk is still transcribing are early.

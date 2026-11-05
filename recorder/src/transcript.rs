@@ -340,6 +340,20 @@ pub fn ready_microphone(record: &Recording, words: &[Word], them: &[Word]) -> Ve
     ready
 }
 
+/// Filter streamed mic speech against both reference paths. The meeting stream may reconnect
+/// while a finished batch already supplies the words that must keep speaker bleed local.
+pub fn live_microphone(record: &Recording, me: &[Word], streamed_them: &[Word]) -> Vec<Word> {
+    let reference: Vec<Word> = record
+        .chunks
+        .iter()
+        .filter(|c| c.channel == "them")
+        .flat_map(|c| c.words.iter())
+        .chain(streamed_them.iter())
+        .cloned()
+        .collect();
+    without_echo(&ready_microphone(record, me, &reference), &reference)
+}
+
 /// A live-delivery snapshot: pending reference ranges stay pending, even when the microphone
 /// request completed first. Streamed meeting words can release and clean finished mic chunks.
 pub fn echo_snapshot(record: &Recording, streamed: &BTreeMap<String, Vec<Word>>) -> Recording {
@@ -1150,5 +1164,36 @@ mod tests {
             chunk_texts(&record(vec![mic, remote]))["m"],
             "Opening Closing"
         );
+    }
+
+    #[test]
+    fn streamed_microphone_uses_finished_reference_when_meeting_stream_is_missing() {
+        let record = record(vec![chunk(
+            "t",
+            "them",
+            0,
+            &[(1000, "Ship", ""), (1300, "tomorrow", "")],
+        )]);
+        let mic = vec![
+            Word {
+                start_ms: 1020,
+                end_ms: 1200,
+                text: "Ship".into(),
+                ..Default::default()
+            },
+            Word {
+                start_ms: 1320,
+                end_ms: 1500,
+                text: "tomorrow".into(),
+                ..Default::default()
+            },
+            Word {
+                start_ms: 1620,
+                end_ms: 1700,
+                text: "uh".into(),
+                ..Default::default()
+            },
+        ];
+        assert!(live_microphone(&record, &mic, &[]).is_empty());
     }
 }

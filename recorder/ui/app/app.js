@@ -685,8 +685,8 @@
   /** Live text per channel: nothing extra while it works, a quiet note while it reconnects. */
   function streamState(rec) {
     const list = rec?.stream || [];
-    const bad = list.find((x) => x.state === 'retrying') || list.find((x) => x.state === 'stopped' && x.error);
-    const note = !bad ? '' : bad.state === 'retrying' ? `Live text reconnecting${bad.error ? ` · ${bad.error}` : ''}` : bad.error;
+    const bad = list.find((x) => x.state === 'retrying' && x.error) || list.find((x) => x.state === 'stopped' && x.error);
+    const note = bad?.error || '';
     return { live: list.some((x) => x.state === 'live'), bad, note };
   }
   function transcriptBlocks() {
