@@ -2978,14 +2978,12 @@ fn recorder_link_unlink_link_uses_fresh_actions_and_retries_the_durable_unlink()
     tico.queue_links(&store, &record.id, &ids).unwrap();
     assert!(tico.queue_unlink(&store, &record.id, "task").is_err());
     let reopened = Store::open(dir.path()).unwrap();
-    let mut delivery = reopened.get(&record.id).unwrap().deliveries[0].clone();
-    tico.save_links(
-        &reopened,
-        &record.id,
-        &reopened.context(&record.id).unwrap(),
-        &mut delivery,
-    )
-    .unwrap();
+    let destination = tico.destination.clone();
+    let sync = crate::task_links::TaskLinkSync::start_with(reopened.clone(), move |_, _| {
+        Tico::new(destination.clone(), "synthetic-token".into())
+    });
+    wait_recorder_links(&reopened, &record.id);
+    drop(sync);
     assert!(reopened.context(&record.id).unwrap().items.is_empty());
     tico.queue_links(&reopened, &record.id, &ids).unwrap();
     worker.join().unwrap();

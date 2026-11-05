@@ -2,12 +2,33 @@ use super::*;
 
 impl Recorder {
     pub(super) fn pending_task_link(&self, task: &str) -> bool {
-        !task.is_empty()
-            && self
-                .context
-                .task_link_operations
-                .iter()
-                .any(|op| op.task_ids.iter().any(|id| id == task))
+        if task.is_empty() {
+            return false;
+        }
+        if self
+            .context
+            .task_link_operations
+            .iter()
+            .any(|op| op.task_ids.iter().any(|id| id == task))
+        {
+            return true;
+        }
+        // An accepted proposal can be a local link before its first Save creates an outbox action.
+        self.context
+            .items
+            .iter()
+            .any(|item| item.kind == "link" && item.task_id == task)
+            && !self.current.as_ref().is_some_and(|record| {
+                record.deliveries.iter().any(|delivery| {
+                    delivery.destination_id == self.router()
+                        && delivery.receipt["links"][task].is_string()
+                })
+            })
+            && !self.link_tasks["linked"]["tasks"]
+                .as_array()
+                .into_iter()
+                .flatten()
+                .any(|row| row["task_id"] == task)
     }
 
     pub(super) fn linked_tasks_view(&self) -> Value {
@@ -386,6 +407,34 @@ mod tests {
         assert!(stored.items.is_empty());
         assert_eq!(stored.skipped_task_links, 1);
         assert_eq!(stored.notes, "Notes after the skip");
+    }
+
+    #[test]
+    fn an_accepted_local_link_stays_pending_until_saved() {
+        let (_dir, mut app, id) = local_app();
+        app.context.items.push(Item {
+            id: "link".into(),
+            kind: "link".into(),
+            task_id: "task".into(),
+            ..Default::default()
+        });
+        app.link_tasks = json!({"scope":app.link_scope(),"tasks":[{"id":"task","title":"Review pricing","number":42}]});
+        app.link_tasks_at = Instant::now();
+        assert_eq!(app.actions_view("one")["items"][0]["pending"], true);
+        app.store
+            .delivery(
+                &id,
+                &store::Delivery {
+                    destination_id: "one".into(),
+                    meeting_id: "saved".into(),
+                    status: "sent".into(),
+                    error: String::new(),
+                    receipt: json!({"links":{"task":"linked"}}),
+                },
+            )
+            .unwrap();
+        app.reload_open();
+        assert_eq!(app.actions_view("one")["items"][0]["pending"], false);
     }
 
     #[test]

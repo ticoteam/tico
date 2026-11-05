@@ -412,6 +412,9 @@ impl Tico {
                 ids.sort();
                 ids.dedup();
                 if !ids.is_empty() {
+                    if c.live_destination.is_empty() {
+                        c.live_destination = self.destination.id.clone();
+                    }
                     c.task_link_operations.push(TaskLinkOperation {
                         id: uuid::Uuid::new_v4().to_string(),
                         kind: kind.into(),
