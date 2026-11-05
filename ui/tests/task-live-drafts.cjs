@@ -242,7 +242,8 @@ const init = () => {
    task.title = 'Other title while signed out'; task.body = 'Other details while signed out'; task.version++;
    const beforeReturn = writes.length;
    expired = false;
-   await page.goto('https://tico-ui.test/#/tasks');
+   await page.evaluate(() => history.replaceState(null, '', '#/tasks'));
+   await page.reload();
    await page.waitForFunction(() => SESSION.identity === JSON.stringify(['acme-org', 'ana']));
    await tasksReady();
    assert.equal(await page.locator('#task-modal[open]').count(), 0, 'the closed task stays closed after sign-in');
