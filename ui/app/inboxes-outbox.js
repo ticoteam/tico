@@ -107,7 +107,8 @@ async function lettersOutDetail(host, id, ctx) {
   if (!ctx.live()) return;
   const [status, statusText] = lettersOutStatus(config), grants = grantData.grants || [];
   const rows = new Map((activity.items || []).map(row => [row.id, row])); let next = activity.next_before;
-  let refreshing = null, epoch = 0;
+  let refreshing = null, epoch = 0, revision = 0;
+  const rowRevisions = new Map();
   host.innerHTML = inboxesHead(host, {name: 'Letters out', status, statusText, sub: 'Tico Gateway · At cost + 25%',
     actions: '<a class="ghost" href="#/settings/inboxes/settings/letters-out">Settings</a>'}) +
     '<div class="lo-layout"><div><div data-lo-access></div>' +
@@ -143,15 +144,18 @@ async function lettersOutDetail(host, id, ctx) {
   };
   host.querySelector('[data-lo-activity]').onclick = async event => {
     const button = event.target.closest('[data-lo-cancel]'); if (!button) return; button.disabled = true;
+    const id = button.dataset.loCancel, started = epoch, seen = rowRevisions.get(id);
     try { const row = await post(`/v2/letters/${encodeURIComponent(button.dataset.loCancel)}/cancel`, {});
-      if (ctx.live()) { rows.set(row.id, row); paint(); toast(row.status === 'cancelled' ? 'Cancelled' : row.status); } }
+      if (ctx.live() && started === epoch && seen === rowRevisions.get(id)) {
+        rows.set(row.id, row); paint(); toast(row.status === 'cancelled' ? 'Cancelled' : row.status); } }
     catch (e) { if (ctx.live()) { toast(e.message, true); button.disabled = false; } }
   };
   host.querySelector('[data-lo-more]').onclick = async event => {
     const button = event.currentTarget; button.disabled = true;
-    const started = epoch;
+    const started = epoch, seen = revision;
     try { const more = await get(`/v2/letters?limit=25&before=${encodeURIComponent(next)}`, {fresh: true}); if (!ctx.live() || started !== epoch) return;
-      for (const row of more.items || []) rows.set(row.id, row); next = more.next_before; paint(); }
+      for (const row of more.items || []) if ((rowRevisions.get(row.id) || 0) <= seen) rows.set(row.id, row);
+      next = more.next_before; paint(); }
     catch (e) { if (ctx.live()) toast(e.message, true); }
     finally { if (ctx.live()) button.disabled = false; }
   };
@@ -159,6 +163,7 @@ async function lettersOutDetail(host, id, ctx) {
     if (!ctx.live()) { LETTERS_OUT_LIVE?.(); LETTERS_OUT_LIVE = null; return; }
     if (event.invalidate) { invalidate(); return; }
     if (event.gone || event.letter) {
+      rowRevisions.set(event.id, ++revision);
       refreshing?.set(event.id, event); apply(event); paint();
     }
   });
