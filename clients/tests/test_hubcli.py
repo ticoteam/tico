@@ -23,7 +23,7 @@ from clients import hubcli
 
 HUB = Path(__file__).resolve().parents[2] / "scripts" / "hub"
 ALIASES = {"approvals", "automations", "bots", "rule", "tasks"}
-SUBCOMMANDS = ["whoami", "inbound", "connections", "mail", "email", "company-page", "audiences", "editions", "readers", "meeting", "message", "conversation", "thread", "question", "note", "feedback", "file", "page", "card", "pin", "doc", "chat", "assistant", "tag", "task", "replay", "goal", "kpi",
+SUBCOMMANDS = ["whoami", "inbound", "connections", "letter", "mail", "email", "company-page", "audiences", "editions", "readers", "meeting", "message", "conversation", "thread", "question", "note", "feedback", "file", "page", "card", "pin", "doc", "chat", "assistant", "tag", "task", "replay", "goal", "kpi",
                "proposal", "rules", "strategy", "brand", "growth", "lens", "market", "listening", "tool", "automation", "audit", "event-types", "trigger", "relay", "call", "sleep", "notice", "settings", "release", "approval", "webhook", "pipeline", "brief", "mcp", "origin", "needs-you", "run", "team", "seat", "org", "health",
                "changelog", "update", "grokbot", "external", "calendar", "sql", "db", "classify", "gateway", "decision", "template", "bot", "repo", "skill", "agent", "human", "group", "api", "computer",
                "credential", "slack", "support", "finance", "task-manager", "maintenance", "roadmap", "service-key"]
