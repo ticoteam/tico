@@ -26,8 +26,9 @@ cloud machine" under Computer).
 - Its computer is "Shared cloud machine", owned by the company owner and open to member bots: a bot that joins is
   assigned to it, one that leaves (to its own machine or a computer) is unassigned, and the machine keeps running.
   When the last bot leaves it idles to a stop like any other. Health does not call a machine stopped this way offline:
-  its row reads **stopped until work comes**, and the Computers check says how many are stopped. A machine with a
-  problem (out of credit, stuck, never enrolled) is still named as one.
+  its row reads **stopped until work comes**. The Computers check counts these stopped machines only when no other
+  computer is offline. A machine with a problem (out of credit, stuck, never enrolled, or a start or create that failed)
+  is not stopped: its row reads **offline**, and the check treats it as offline.
 - A bot's own machine pauses by the same rule, with its own Pause after (`pause_minutes` on `POST /api/v2/bots/{bot}/cloud-machine`).
 - A new cloud machine gets the company's plan when an admin moves a bot onto it. Before this, the bot waited on "login required" until someone
   signed in to the machine by hand. The machine takes a plan only when all of these hold: the machine is that bot's own cloud

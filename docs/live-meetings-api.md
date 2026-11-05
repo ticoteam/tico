@@ -336,5 +336,9 @@ Sharing a whole display needs Screen Recording permission in System Settings; wi
 Recorder's own windows are left out of display shares. Stopping the share ends it at once.
 
 While a share runs, making the meeting public asks you to confirm **Stop sharing and make public**. Confirming
-stops the share, then makes the meeting public. **Cancel** keeps the share and the audience as they are.
-**Copy meeting link** copies the `link` above, and people must still be added to see the meeting.
+stops the share, then sets `team` visibility, so everyone in the company can open the meeting. **Cancel** keeps the
+share and the audience as they are.
+
+**Copy meeting link** is in the meeting's menu. It opens a sheet with the `link` above. The sheet copies the link
+straight away when the link is ready and one Tico is the only destination; otherwise press **Copy link**. A meeting
+that is not team-visible opens only for you and the people added in People.
