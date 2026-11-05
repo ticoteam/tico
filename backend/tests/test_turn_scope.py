@@ -57,6 +57,18 @@ def make_scope(api, attempt, tid):
                   (encode({**json.loads(row["refs"] or "{}"), "make_page": {"task": tid}}), row["id"]))
 
 
+def test_archived_scoped_sources_and_their_blob_aliases_stay_unreadable_until_restored(api):
+    t, attempt = task_turn(api)
+    fid = published(api, attempt, task=t["id"])
+    bid = blob(api, fid)
+    for archived in (True, False):
+        changed = api.patch("/api/v2/files/" + fid, json={"archived": archived}, headers=headers())
+        assert changed.status_code == 200, changed.text
+        for ref in (fid, bid):
+            response = api.get("/api/v2/files/" + ref, headers=headers(attempt["token"]))
+            assert response.status_code == (403 if archived else 200), response.text
+
+
 def test_task_turn_meetings_and_pages_use_containment_on_every_read(api):
     shared = record(api, {"private": False, "notes": "Decisions only"})
     hidden = record(api, {"private": True, "participants": ["ana@acme.example"]})
