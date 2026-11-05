@@ -496,7 +496,7 @@ def _held(blobs, location, digest, size, mime):
 # The stored type of each kind's copy; the edge sends a 404 for any other (infra/files-edge/response.js).
 VISUAL_TYPES = {"page": "text/html; charset=utf-8", "svg": "image/svg+xml"}
 # Raise when visuals.clean or visuals.with_reporter change what a copy holds: every copy is then made again.
-VISUAL_COPY = 1
+VISUAL_COPY = 2
 # The frame-ancestors sources the edge keeps (docs/files.md): the app writes only those, at most 8.
 ANCESTOR = re.compile(r"^(?:'self'|https://[a-z0-9.-]+(?::[0-9]{1,5})?|http://(?:localhost|127\.0\.0\.1)(?::[0-9]{1,5})?)$")
 

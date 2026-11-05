@@ -120,6 +120,10 @@ gets a different page.
 
   The `100vh` rule applies only in the card view: the page fills the card at its full size and does not scroll. A page with no
   such CSS looks as it always did. The bot's guide (`AGENT.md`, "Widget view") has the short form.
+- **Dark by default.** Tico shows pages dark, like the app. A page that colours neither `<html>` nor `<body>` gets a
+  dark background (`#191b1a`) and light text (`#e8eae9`) from Tico's height script; a page that sets its own dark
+  text and no background stays light. A page with its own background keeps its look. Design pages dark: a dark
+  background, light text, and chart colours that read on dark.
 - **The full view** has the page's versions (an older one opens in place) and, for whoever may manage it,
   **Archive**. The owner also has **Delete for good** ([Files](files.md#deleting-a-file-for-good)).
 - **A task** shows the pages pinned to it as cards at the top, a replaced page left out. **Link page** searches
