@@ -1,17 +1,20 @@
-// Settings > Mail (ui/app/settings-mail.js) against a fake server. Guards: addresses list state, kind, the full
-// address only once active, registered agent and Form 1583 status, with open orders as Pending; Get an address shows
-// shared and private, each with its price and line, and the scan price (Tico Gateway's `prices` win, else Tico's own),
-// and sends the order once with an Idempotency-Key, after which it shows as Pending; the intake inbox is picked from
-// the company's email inboxes and needs a sender, and a failed save goes back to the last saved inbox; a failed letter is retried by an
-// owner, and its task is a link. A member reads only.
-// Without Tico Gateway the addresses card says so and offers no order. No sideways scroll on a phone.
-// TICO_SHOTS=<dir> saves screenshots (desktop and phone, dark and light).
+// Letters in (ui/app/inboxes-letters.js) in Settings > Inboxes against a fake server. Guards: Inboxes > Settings > Letters
+// in (where the old Mail address lands) lists each address's state, kind, the full address only once active, registered
+// agent and Form 1583 status, with open orders as Pending, each linking to its page; Get an address shows shared and
+// private, each with its price and line, and the scan price (Tico Gateway's `prices` win, else Tico's own), and sends
+// the order once with an Idempotency-Key, after which it shows as Pending; the intake inbox is picked from the company's
+// email inboxes and needs a sender, and a failed save goes back to the last saved inbox. An address's page shows its
+// Form 1583 progress and its letters (sender, summary, PDF, task), with no scan or forward request; a failed letter is
+// retried by an owner. A member reads only. Without Tico Gateway the addresses card says so, offers no order, and the
+// list shows no error. No sideways scroll on a phone. TICO_SHOTS=<dir> saves screenshots (desktop and phone, dark and light).
 const {chromium} = require('playwright');
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const path = require('node:path');
 const {html, uiFile} = require('./support/page.cjs');
 const {unrouted} = require('./support/routes.cjs');
+const {googleFake} = require('./support/google-fake.cjs');
+const {mailboxesFake} = require('./support/mailboxes-fake.cjs');
 const shots = process.env.TICO_SHOTS || '';
 const AGO = m => new Date(Date.now() - m * 60000).toISOString();
 
@@ -30,25 +33,26 @@ function server() {
     prices: {shared: 12, private: '25', scan: 1.5, page_over_10: '0.3'},
     intakeFail: false,
     intake: null,
-    legal_bot_id: null,
-    routingFail: false,
-    grants: [],
-    inboxes: [{inbox_id: 'ib_mail', kind: 'email', name: 'Mail', address: 'mail@acme.example'},
-      {inbox_id: 'ib_phone', kind: 'phone', name: 'Front desk', address: '+15550100'}],
+    inboxes: [{inbox_id: 'ib_mail', kind: 'email', name: 'Mail', address: 'mail@acme.example', state: 'active'},
+      {inbox_id: 'ib_phone', kind: 'sms', name: 'Front desk', address: '+15550100', state: 'active'}],
     items: [
       {id: 'pm_3', received_at: AGO(20), kind: null, summary: '', sender: '', status: 'failed', task_id: null, attempts: 5, error: 'unreadable'},
       {id: 'pm_2', received_at: AGO(1500), kind: 'legal', summary: 'Summons, answer within 21 days', sender: 'Superior Court of California',
-        status: 'filed', task_id: 't-42', attempts: 1, error: ''},
+        status: 'filed', task_id: 't-42', attempts: 1, error: '', file_url: '/api/v2/postal/items/pm_2/file'},
       {id: 'pm_1', received_at: AGO(4000), kind: 'junk', summary: 'Credit card offer', sender: 'Big Bank', status: 'archived', task_id: null, attempts: 1, error: ''},
     ],
     sent: [],
   };
 }
 
-async function open(browser, viewport = {width: 1280, height: 860}, state = server()) {
+async function open(browser, {viewport = {width: 1280, height: 860}, state = server(), hash = '#/settings/mail', theme = ''} = {}) {
   const page = await browser.newPage({viewport, serviceWorkers: 'block'});
-  const errors = [];
+  const errors = [], mailboxes = mailboxesFake({admin: state.role === 'owner'}), google = googleFake();
   page.on('pageerror', e => errors.push(e.message));
+  await page.addInitScript(theme => {
+    try { localStorage.setItem('tico.inboxes.skip', '1'); } catch { /* storage off */ }
+    if (theme) document.documentElement.setAttribute('data-theme', theme);
+  }, theme);
   await page.route('**/*', route => {
     const req = route.request(), url = new URL(req.url()), p = url.pathname, method = req.method();
     const json = (body, status = 200) => route.fulfill({status, contentType: 'application/json', body: JSON.stringify(body)});
@@ -60,8 +64,9 @@ async function open(browser, viewport = {width: 1280, height: 860}, state = serv
     if (p.endsWith('.js')) return route.fulfill({contentType: 'application/javascript', body: ''});
     if (p === '/') return route.fulfill({contentType: 'text/html', body: html});
     const config = {version: '0.5.14', app_name: 'Tico', company_name: 'Acme Inc'};
+    const body = req.postData() ? req.postDataJSON() : null;
     if (method !== 'GET' && p.startsWith('/api/v2/postal/'))
-      state.sent.push({method, path: p, body: req.postDataJSON(), key: req.headers()['idempotency-key'] || ''});
+      state.sent.push({method, path: p, body, key: req.headers()['idempotency-key'] || ''});
     if (p === '/api/me') return json({id: 'ana', role: state.role, name: 'Ana', email: 'ana@acme.example', cloud: true, registered: true, config});
     if (p === '/api/v2/config') return json(config);
     if (p === '/api/employees') return json([]);
@@ -69,40 +74,15 @@ async function open(browser, viewport = {width: 1280, height: 860}, state = serv
     if (p === '/api/humans' || p === '/api/people') return json({people: [{id: 'ana', name: 'Ana'}], teams: {}});
     if (p === '/api/status') return json({cloud: true, active: [], queued: [], recent_runs: [], keeper_alive: true, health_issues: [], schedules: []});
     if (p === '/api/v2/status') return json({bots: []});
-    if (p === '/api/v2/bots') return json([{id: 'legal', slug: 'legal', display_name: 'Counsel', state: 'active'}]);
-    if (p === '/api/v2/postal/bots') return json({bots: [
-      {id: 'tico-counsel', slug: 'legal', display_name: 'Counsel', state: 'active', read_error: null, routing_error: null},
-      {id: 'synced', slug: 'synced', display_name: 'Chat bot', state: 'active',
-        read_error: 'Physical mail is unavailable: this bot only syncs chat', routing_error: 'Physical mail is unavailable: this bot only syncs chat'},
-    ], next: null});
     if (p === '/api/v2/needs-you') return json({items: []});
     if (p === '/api/v2/operations') return json({machines: [], services: []});
+    if (p.startsWith('/api/v2/mailboxes')) { const answer = mailboxes.answer(p, method, body); if (answer !== undefined) return json(answer); }
+    if (p.startsWith('/api/v2/google')) { const answer = google.answer(p, req.url(), method, body); if (answer !== undefined) return json(answer); }
     if (p === '/api/v2/postal/addresses') {
       if (!state.gateway) return json({error: {code: 'gateway', detail: 'Connect Tico Gateway first'}}, 409);
       return json({addresses: state.addresses, orders: state.orders, prices: state.prices});
     }
-    if (p === '/api/v2/postal/settings') {
-      if (method === 'PUT') {
-        if (state.routingFail) return json({error: {code: 'validation', detail: 'Not saved'}}, 422);
-        state.legal_bot_id = req.postDataJSON().legal_bot_id;
-      }
-      return json({settings: {legal_bot_id: state.legal_bot_id}});
-    }
-    const grant = p.match(/^\/api\/v2\/postal\/addresses\/([^/]+)\/grants(?:\/(bot|person)\/([^/]+))?$/);
-    if (grant) {
-      const [, address_id, grantee_type, grantee_id] = grant;
-      if (method === 'PUT') {
-        const made = {id: 'pmg_1', address_id, grantee_type, grantee_id, level: 'read'};
-        state.grants.push(made); return json({grant: made});
-      }
-      if (method === 'DELETE') {
-        state.grants = state.grants.filter(g => g.address_id !== address_id || g.grantee_type !== grantee_type || g.grantee_id !== grantee_id);
-        return json({ok: true});
-      }
-      return json({address_id, grants: state.grants.filter(g => g.address_id === address_id), next: null});
-    }
     if (p === '/api/v2/postal/orders') {
-      const body = req.postDataJSON();
       const order = {order_id: 'mo_' + (state.orders.length + 1), ...body, status: 'open', assignment_id: null, created_at: AGO(0), decided_at: null};
       state.orders.push(order);
       return json({order});
@@ -110,7 +90,7 @@ async function open(browser, viewport = {width: 1280, height: 860}, state = serv
     if (p === '/api/v2/postal/intake') {
       if (method === 'PUT') {
         if (state.intakeFail) return json({error: {code: 'bad_request', detail: 'Not saved'}}, 422);
-        const {inbox_id: id, senders} = req.postDataJSON(), box = state.inboxes.find(i => i.inbox_id === id);
+        const {inbox_id: id, senders} = body, box = state.inboxes.find(i => i.inbox_id === id);
         state.intake = id ? {inbox_id: id, address: box.address, senders, set_by: 'human:ana', set_at: AGO(0)} : null;
       }
       return json({intake: state.intake});
@@ -125,11 +105,12 @@ async function open(browser, viewport = {width: 1280, height: 860}, state = serv
     if (p.endsWith('/watch')) return route.fulfill({contentType: 'text/event-stream', body: ': fixture\n\n'});
     return json(unrouted(p));
   });
-  await page.goto('https://tico-ui.test/#/settings/mail');
+  await page.goto(`https://tico-ui.test/${hash}`);
   return {page, errors, state};
 }
 const noSideways = page => page.evaluate(() => document.documentElement.scrollWidth <= innerWidth + 1);
 const rowText = async row => (await row.innerText()).replace(/\s+/g, ' ').trim();
+const go = (page, hash) => page.evaluate(h => { location.hash = h; }, hash);
 
 (async () => {
   const browser = await chromium.launch({headless: true, channel: process.env.TICO_BROWSER_CHANNEL === undefined ? 'chrome' : process.env.TICO_BROWSER_CHANNEL || undefined});
@@ -137,70 +118,34 @@ const rowText = async row => (await row.innerText()).replace(/\s+/g, ' ').trim()
     if (!shots) return;
     for (const mode of ['dark', 'light']) {
       await page.evaluate(m => document.documentElement.setAttribute('data-theme', m), mode);
-      await page.locator('#settings-mail').screenshot({path: path.join(shots, `mail-${name}-${mode}.png`)});
+      await page.locator('#set-inboxes').screenshot({path: path.join(shots, `letters-${name}-${mode}.png`)});
     }
   };
   try {
     {
-      // The owner: addresses, ordering, the intake inbox and a retry.
+      // The owner: addresses, the intake inbox, ordering; an address's page with its letters and a retry.
       const {page, errors, state} = await open(browser);
-      const pane = page.locator('#settings-mail');
+      const pane = page.locator('#inboxes-letters-in');
       await pane.locator('[data-pm-address="as_1"]').waitFor();
-      assert.equal(await page.locator('[data-settings-tab="mail"]').getAttribute('aria-selected'), 'true', 'Mail is a Settings tab');
-      assert.equal(await rowText(pane.locator('[data-pm-address="as_1"]')), 'Delaware Shared 8 The Green, Suite 4000, Dover DE 19901 Yes Active');
-      const waiting = pane.locator('[data-pm-address="as_2"]');
-      assert.equal(await rowText(waiting), 'Texas Private — No Waiting for Form 1583', 'no address before Form 1583');
+      assert.equal(await page.evaluate(() => location.hash), '#/settings/inboxes/settings/letters-in', 'the old Mail address opens Letters in');
+      assert.equal(await page.locator('[data-settings-tab="inboxes"]').getAttribute('aria-selected'), 'true');
+      assert.equal(await rowText(pane.locator('[data-pm-address="as_1"]')), 'Delaware Shared 8 The Green, Suite 4000, Dover DE 19901 Yes Connected');
+      assert.equal(await pane.locator('[data-pm-address="as_1"] a').getAttribute('href'), '#/settings/inboxes/postal/as_1');
+      assert.equal(await rowText(pane.locator('[data-pm-address="as_2"]')), 'Texas Private — No Waiting for Form 1583', 'no address before Form 1583');
       assert.ok(!(await pane.innerText()).includes('Keller Pkwy'));
       assert.equal(await rowText(pane.locator('[data-pm-pending="mo_1"]')), 'Nevada Shared — Pending', 'an open order is pending');
       assert.equal(await pane.locator('[data-pm-pending="mo_0"]').count(), 0, 'a fulfilled order is its address');
-      // Letters: newest first, the failed one has Retry, a filed one links to its task, junk reads Archived.
-      await pane.locator('[data-pm-letter="pm_2"]').waitFor();
-      assert.equal(await pane.locator('[data-pm-letter="pm_2"] [data-pm-task]').getAttribute('href'), '#/task/t-42');
-      assert.match(await rowText(pane.locator('[data-pm-letter="pm_2"]')), /Superior Court of California Summons, answer within 21 days Legal Task Filed$/);
-      assert.match(await rowText(pane.locator('[data-pm-letter="pm_1"]')), /Big Bank Credit card offer Junk Archived Archived$/);
-      assert.equal(await pane.locator('[data-pm-retry]').count(), 1, 'only the failed letter offers Retry');
       // The intake inbox: only email inboxes are offered.
       const intake = pane.locator('[data-pm-intake-select]');
       assert.deepEqual(await intake.locator('option').allInnerTexts(), ['None', 'Mail · mail@acme.example']);
-      const legal = pane.locator('[data-pm-legal]');
-      await legal.waitFor();
-      // Playwright's disabled-state locator follows the enclosing label to its select; inspect the option itself.
-      assert.equal(await legal.locator('option[value="synced"]').evaluate(option => option.disabled), true,
-        'unsupported routing bot is disabled');
-      assert.equal(await pane.locator('[data-pm-grantee] option[value="bot:synced"]').evaluate(option => option.disabled), true,
-        'unsupported scan reader is disabled');
-      await legal.selectOption('tico-counsel');
-      await page.waitForFunction(() => document.querySelector('[data-pm-legal]')?.disabled === false);
-      assert.equal(state.legal_bot_id, 'tico-counsel', 'route legal mail to Counsel by its stable id');
-      state.routingFail = true;
-      await legal.selectOption('');
-      await pane.locator('[data-pm-access-error]', {hasText: 'Not saved'}).waitFor();
-      assert.equal(await legal.inputValue(), 'tico-counsel', 'failed routing changes restore the saved bot');
-      state.routingFail = false;
-      await legal.selectOption('');
-      await page.waitForFunction(() => document.querySelector('[data-pm-legal]')?.disabled === false);
-      assert.equal(state.legal_bot_id, null, 'restore owner routing');
-      await pane.locator('[data-pm-scope]').selectOption('as_1');
-      await pane.locator('[data-pm-grantee]').selectOption('bot:tico-counsel');
-      await pane.locator('[data-pm-grant-form] button').click();
-      await pane.locator('[data-pm-grants]', {hasText: 'Counsel · Read'}).waitFor();
-      const access = state.sent.find(s => s.path === '/api/v2/postal/addresses/as_1/grants/bot/tico-counsel');
-      assert.equal(access.method, 'PUT'); assert.deepEqual(access.body, {level: 'read'});
-      assert.ok(access.key, 'grant carries an Idempotency-Key');
-      await pane.locator('[data-pm-revoke]').click();
-      await pane.locator('[data-pm-grants]', {hasText: 'No grants'}).waitFor();
-      assert.equal(state.grants.length, 0, 'remove a per-address grant');
-      assert.ok(state.sent.some(s => s.method === 'DELETE' && s.path.endsWith('/as_1/grants/bot/tico-counsel')));
-      await shot(page, 'desktop');
+      await shot(page, 'settings-desktop');
       // Senders alone save nothing; with an inbox picked both go in one save.
       const from = pane.locator('[data-pm-intake-senders]'), puts = () => state.sent.filter(s => s.path === '/api/v2/postal/intake').length;
       await from.fill('Scans@VPM.example, @vpm.example');
       await from.dispatchEvent('change');
       assert.equal(puts(), 0, 'no inbox, nothing saved');
-      await Promise.all([
-        page.waitForResponse(r => new URL(r.url()).pathname === '/api/v2/postal/intake' && r.request().method() === 'PUT'),
-        intake.selectOption('ib_mail'),
-      ]);
+      await intake.selectOption('ib_mail');
+      await page.locator('.toast', {hasText: 'Saved'}).waitFor();
       assert.equal(puts(), 1, 'one save, though picking the inbox also blurred the senders field');
       assert.deepEqual(state.sent.find(s => s.path === '/api/v2/postal/intake')?.body,
         {inbox_id: 'ib_mail', senders: ['scans@vpm.example', '@vpm.example']});
@@ -228,69 +173,98 @@ const rowText = async row => (await row.innerText()).replace(/\s+/g, ' ').trim()
       assert.equal(await dialog.locator('[name=company_name]').inputValue(), 'Acme Inc');
       await dialog.locator('[name=state]').selectOption('CA');
       await kind('private').locator('input').check();
-      if (shots) await dialog.screenshot({path: path.join(shots, 'mail-order-dark.png')});
+      if (shots) await dialog.screenshot({path: path.join(shots, 'letters-order-dark.png')});
       await dialog.locator('[data-pm-submit]').click();
-      await pane.locator('[data-pm-pending="mo_3"]').waitFor();
+      await page.locator('#inboxes-letters-in [data-pm-pending="mo_3"]').waitFor();
       const orders = state.sent.filter(s => s.path === '/api/v2/postal/orders');
       assert.equal(orders.length, 1, 'one order');
       assert.deepEqual(orders[0].body, {kind: 'private', state: 'CA', company_name: 'Acme Inc'});
       assert.ok(orders[0].key, 'the order carries an Idempotency-Key');
-      assert.equal(await rowText(pane.locator('[data-pm-pending="mo_3"]')), 'California Private — Pending');
+      assert.equal(await rowText(page.locator('#inboxes-letters-in [data-pm-pending="mo_3"]')), 'California Private — Pending');
       await page.locator('.pm-dialog').waitFor({state: 'detached'});   // the dialog closes
-      // Retry the failed letter: it is asked for once, and the list redraws with what the server says now.
-      await pane.locator('[data-pm-retry="pm_3"]').click();
-      await pane.locator('[data-pm-letter="pm_3"] [data-pm-task]').waitFor();
+      // An address's page: its letters, newest first; the failed one has Retry, a filed one links its task and PDF.
+      await page.locator('#inboxes-letters-in [data-pm-address="as_1"] a').click();
+      const letters = page.locator('#inbox-letters');
+      await letters.locator('[data-pm-letter="pm_2"]').waitFor();
+      assert.equal(await page.evaluate(() => location.hash), '#/settings/inboxes/postal/as_1');
+      assert.equal(await page.locator('#inbox-head h2').textContent(), '8 The Green, Suite 4000, Dover DE 19901');
+      assert.deepEqual(await letters.locator('[data-pm-letter]').evaluateAll(trs => trs.map(tr => tr.dataset.pmLetter)), ['pm_3', 'pm_2', 'pm_1']);
+      assert.equal(await letters.locator('[data-pm-letter="pm_2"] [data-pm-task]').getAttribute('href'), '#/task/t-42');
+      assert.equal(await letters.locator('[data-pm-letter="pm_2"] [data-pm-pdf]').getAttribute('href'), '/api/v2/postal/items/pm_2/file');
+      assert.match(await rowText(letters.locator('[data-pm-letter="pm_2"]')), /Superior Court of California Summons, answer within 21 days Legal PDF Task Filed$/);
+      assert.match(await rowText(letters.locator('[data-pm-letter="pm_1"]')), /Big Bank Credit card offer Junk — Archived Archived$/);
+      assert.equal(await letters.locator('[data-pm-retry]').count(), 1, 'only the failed letter offers Retry');
+      assert.equal(await page.locator('[data-ib-detail-body] button', {hasText: /scan|forward/i}).count(), 0, 'no scan or forward request');
+      assert.equal(await page.locator('[data-ib-detail-body] [data-pm-progress]').count(), 0, 'a receiving address has no setup steps');
+      if (shots) await shot(page, 'address-desktop');
+      // Retry the failed letter: it is asked for once, and the page redraws with what the server says now.
+      await letters.locator('[data-pm-retry="pm_3"]').click();
+      await page.locator('#inbox-letters [data-pm-letter="pm_3"] [data-pm-task]').waitFor();
       assert.deepEqual(state.sent.filter(s => s.path.endsWith('/retry')).map(s => s.path), ['/api/v2/postal/items/pm_3/retry']);
-      assert.equal(await pane.locator('[data-pm-retry]').count(), 0);
+      assert.equal(await page.locator('#inbox-letters [data-pm-retry]').count(), 0);
+      // An address waiting for Form 1583 shows where it is, and not its address yet.
+      await go(page, '#/settings/inboxes/postal/as_2');
+      await page.locator('[data-pm-progress="pending_1583"]').waitFor();
+      assert.equal(await page.locator('#inbox-head h2').textContent(), 'Texas · Private');
+      assert.deepEqual(await page.locator('[data-pm-progress] li').evaluateAll(lis => lis.map(li => [li.textContent, li.className])),
+        [['Ordered', 'done'], ['Form 1583', 'cur'], ['Receiving', '']]);
+      assert.ok(!(await page.locator('#set-inboxes').innerText()).includes('Keller Pkwy'));
+      await page.locator('#inbox-letters .empty', {hasText: 'No letters yet.'}).waitFor();
       assert.deepEqual(errors, []);
       await page.close();
     }
     {
       // A member reads: no order, no inbox picker, no retry.
       const state = Object.assign(server(), {role: 'member', intake: {inbox_id: 'ib_mail', address: 'mail@acme.example'}});
-      const {page, errors} = await open(browser, undefined, state);
-      const pane = page.locator('#settings-mail');
-      await pane.locator('[data-pm-letter="pm_3"]').waitFor();
+      const {page, errors} = await open(browser, {state});
+      const pane = page.locator('#inboxes-letters-in');
       await pane.locator('[data-pm-intake-shown]').waitFor();
-      await pane.locator('#settings-mail-access', {hasText: 'Legal mail: Owner'}).waitFor();
-      assert.equal(await pane.locator('[data-pm-grant-form]').count(), 0, 'members cannot grant access');
+      await pane.locator('[data-pm-address="as_1"]').waitFor();
       assert.equal(await pane.locator('[data-pm-order]').count(), 0);
-      assert.equal(await pane.locator('[data-pm-retry]').count(), 0);
       assert.equal(await pane.locator('[data-pm-intake-shown]').innerText(), 'mail@acme.example');
+      await go(page, '#/settings/inboxes/postal/as_1');
+      await page.locator('#inbox-letters [data-pm-letter="pm_3"]').waitFor();
+      assert.equal(await page.locator('[data-pm-retry]').count(), 0);
       assert.deepEqual(errors, []);
       await page.close();
     }
     {
-      // No Tico Gateway: the card says so, with the way to connect, and nothing can be ordered.
-      const {page, errors} = await open(browser, undefined, Object.assign(server(), {gateway: false}));
-      const pane = page.locator('#settings-mail');
+      // No Tico Gateway: the card says so, with the way to connect, nothing can be ordered, and the list shows no error.
+      const {page, errors} = await open(browser, {state: Object.assign(server(), {gateway: false})});
+      const pane = page.locator('#inboxes-letters-in');
       await pane.locator('[data-pm-gateway]').waitFor();
       assert.equal(await pane.locator('[data-pm-gateway]').innerText(), 'Connect Tico Gateway first. Key and connection');
       assert.equal(await pane.locator('[data-pm-order]').isDisabled(), true);
+      await go(page, '#/settings/inboxes');
+      await page.locator('[data-ib-row="tico:ib_mail"]').waitFor();
+      assert.equal(await page.locator('[data-ib-error]').count(), 0);
+      assert.equal(await page.locator('[data-ib-kind="postal"]').count(), 0);
       assert.deepEqual(errors, []);
       await page.close();
     }
     {
       // Phone: nothing sideways, the dialog fits. Tico Gateway sends no prices, so Tico's own show.
-      const {page, errors} = await open(browser, {width: 390, height: 844}, Object.assign(server(), {prices: {}}));
-      const pane = page.locator('#settings-mail');
+      const {page, errors} = await open(browser, {viewport: {width: 390, height: 844}, state: Object.assign(server(), {prices: {}})});
+      const pane = page.locator('#inboxes-letters-in');
       await pane.locator('[data-pm-address="as_1"]').waitFor();
-      await pane.locator('[data-pm-letter="pm_2"]').waitFor();
       await pane.locator('[data-pm-intake-select]').waitFor();
-      await pane.locator('[data-pm-legal]').waitFor();
-      await pane.locator('[data-pm-grants]', {hasText: 'No grants'}).waitFor();
-      assert.ok(await noSideways(page), 'Mail fits a phone');
-      await shot(page, 'phone');
+      assert.ok(await noSideways(page), 'Letters in fits a phone');
+      await shot(page, 'settings-phone');
       await pane.locator('[data-pm-order]').click();
       const dialog = page.locator('.pm-dialog');
       await dialog.waitFor();
       assert.ok(await dialog.evaluate(d => d.scrollWidth <= d.clientWidth + 1), 'the order form fits');
       assert.deepEqual(await dialog.locator('[data-pm-price]').allInnerTexts(), ['$10/mo', 'from $25/mo']);
       assert.equal(await dialog.locator('[data-pm-scan]').innerText(), 'Scans $1 each, $0.25 a page after 10');
-      if (shots) await dialog.screenshot({path: path.join(shots, 'mail-order-phone.png')});
+      if (shots) await dialog.screenshot({path: path.join(shots, 'letters-order-phone.png')});
+      await dialog.locator('[data-close]').click();
+      await go(page, '#/settings/inboxes/postal/as_1');
+      await page.locator('#inbox-letters [data-pm-letter="pm_2"]').waitFor();
+      assert.ok(await noSideways(page), 'an address page fits a phone');
+      await shot(page, 'address-phone');
       assert.deepEqual(errors, []);
       await page.close();
     }
   } finally { await browser.close(); }
-  console.log('settings-mail ok');
+  console.log('inboxes-letters ok');
 })().catch(error => { console.error(error); process.exit(1); });

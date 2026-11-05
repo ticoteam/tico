@@ -5,7 +5,7 @@ A scanned letter reaches the company one of two ways, and each is a provider her
 - `gateway`: Tico HQ owns the mailbox (VirtualPostMail today). HQ queues one delivery per letter on this install's
   system relay with the trigger `_mail` (delivery id `mail:<item id>`), the same queue and pull as Tico Team's notices
   (backend/hook_relay.py). The PDF comes from `GET /v1/gateway/mail/items/{id}/pdf` with the Gateway key.
-- `email`: any other provider that emails its scans. The owner names one Email & Phone inbox as the mail-intake
+- `email`: any other provider that emails its scans. The owner names one Tico address as the mail-intake
   address (`PUT /api/v2/postal/intake`); a message to it with a PDF or image attached becomes a letter as
   backend/inbound.py takes it in. The attachment's bytes come from HQ's inbound service.
 
@@ -1091,7 +1091,7 @@ def install(app, settings, store, auth):
 
     @app.get("/api/v2/postal/intake")
     def mail_intake_read(request: Request):
-        """The email-in address: the Email & Phone inbox whose PDF and image attachments become letters, or null."""
+        """The email-in address: the Tico address whose PDF and image attachments become letters, or null."""
         who = request.state.identity
         with store.read() as c:
             member(c, who)

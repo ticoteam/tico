@@ -2,7 +2,7 @@
 `finance.actions.set_bills_email` and read with `finance.reads.bills_email`), and the path that turns a PDF or image
 emailed to it into a file the Bookkeeper enters as a bill.
 
-Mail reaches Tico through an Email & Phone inbox (backend/inbound.py). When the bills email is that inbox's address (or
+Mail reaches Tico through a Tico address (backend/inbound.py). When the bills email is that inbox's address (or
 the message was sent to it), each PDF or image attachment is kept once per (delivery, sha256) inside the inbound ingest
 transaction, so a re-delivered page never makes a second row. The inbound loop then fetches the bytes from HQ (outside
 any transaction), files them in the Bookkeeper's Library and hands them to Finance as an unmatched receipt (`attach`,
@@ -58,7 +58,7 @@ def bills_email(c):
 
 
 def inbox_for(c, address):
-    """The Email & Phone inbox whose address is the bills email, or None: then mail to it never reaches Tico."""
+    """The Tico address whose address is the bills email, or None: then mail to it never reaches Tico."""
     if not address:
         return None
     row = c.execute("SELECT inbox_id FROM inbound_inboxes WHERE kind='email' AND lower(address)=? LIMIT 1",
@@ -227,7 +227,7 @@ def install(app, store, auth):
     @app.put("/api/v2/finance/bills-address")
     def bills_address_set(request: Request, body: BillsAddress):
         """Set the bills email vendors send bills to (`address`), or clear it (`null`). Owner or admin. `inbox_id` says
-        which Email & Phone inbox receives it; null means mail to it never reaches Tico, and uploads still work."""
+        which Tico address receives it; null means mail to it never reaches Tico, and uploads still work."""
         import uuid
         from .finance import actions as FA
         who = request.state.identity
