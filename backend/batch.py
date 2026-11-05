@@ -306,14 +306,15 @@ def candidates(c, actor, items):
     return rows, notes, reports
 
 
-def start(c, actor, items, snapshot, scope=None):
+def start(c, actor, items, snapshot, scope=None, reader=None):
     """The open batch if there is one (resume), otherwise a new one from `items` (needs-you rows):
-    the whole list, or one group of it when `scope` names a bot, a person, `me`, or `next`."""
+    the whole list, or one group of it when `scope` names a bot, a person, `me`, or `next`. `reader` is the privacy
+    actor the person reads with (task_privacy.actor): only the questions it may read are marked read."""
     rows, notes, reports = candidates(c, actor, items)
     line = lineup(c, actor, notes + rows)
     open_ = current(c, actor)
     if open_:
-        return _presented(c, actor, {**view(c, open_, resumed=True), "lineup": line})
+        return _presented(c, actor, {**view(c, open_, resumed=True), "lineup": line}, reader)
     group = _scope(c, actor, line, scope)
     if group:
         rows = [r for r in rows if group_of(r, actor) == group]
@@ -337,17 +338,20 @@ def start(c, actor, items, snapshot, scope=None):
                                        "responses", "alerts", "message_id", "report", "scope")))
     H.event(c, actor, "batch.started", batch["id"], {"items": len(rows), "alerts": len(alerts(snapshot)),
                                                      "scope": group})
-    return _presented(c, actor, {**view(c, batch), "lineup": line})
+    return _presented(c, actor, {**view(c, batch), "lineup": line}, reader)
 
 
-def _presented(c, actor, out):
-    """The item the person now hears in full is opened: its task's questions to them are read (delivered and read
-    set, as opening it in Needs you does; backend/task_holds.py says so when one is withdrawn)."""
+def _presented(c, actor, out, reader=None):
+    """The item the person now hears in full is opened: its task's questions to them that they may read are read
+    (delivered and read set, as opening it in Needs you does; backend/task_holds.py says so when one is withdrawn).
+    A question they may not read stays unread, as on the task page."""
     key = str((out.get("item") or {}).get("key") or "")
     if key.startswith("task:"):
         row = H.task(c, key[5:])
         if row:
-            H.asks_seen(c, actor, [a["id"] for a in H.open_task_asks(c, row) if a["recipient_id"] == actor], read=True)
+            mine = [a["id"] for a in H.open_task_asks(c, row, actor=reader or actor)
+                    if a["recipient_id"] == actor]
+            H.asks_seen(c, actor, mine, read=True)
     return out
 
 
@@ -387,7 +391,7 @@ def _load(c, actor, batch_id):
     return dict(row)
 
 
-def next_item(c, actor, batch_id):
+def next_item(c, actor, batch_id, reader=None):
     batch = _load(c, actor, batch_id)
     if batch["state"] != "open":
         raise Problem("state", f"This batch is {batch['state']}", 409)
@@ -395,7 +399,7 @@ def next_item(c, actor, batch_id):
     cursor = min(int(batch["cursor"] or 0) + 1, len(items))
     c.execute("UPDATE batches SET cursor=? WHERE id=?", (cursor, batch["id"]))
     batch["cursor"] = cursor
-    return _presented(c, actor, view(c, batch))
+    return _presented(c, actor, view(c, batch), reader)
 
 
 def respond(c, actor, batch_id, kind, text="", n=None, decision=None, heard="", until=None):

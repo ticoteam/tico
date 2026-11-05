@@ -72,3 +72,18 @@ def test_a_question_read_on_its_task_is_withdrawn_after_the_person_saw_it(api):
         H.task_close(c, "human:ben", unread_tid, "Board cleanup")
         assert withdrawn_label(c, mid) == f"Withdrawn after {ana} saw it: its task was closed"
         assert withdrawn_label(c, unread) == f"Withdrawn before {ana} saw it: its task was closed"
+
+
+def test_the_item_an_assistant_reads_leaves_a_question_the_person_cannot_read_unread(api):
+    """Review 2 of PR 1750: the batch path marked every question to the person read, including one on a private task
+    they may not read; a later withdrawal then said they had seen it. The read follows the task page's readability."""
+    from backend import batch
+    from backend.tests.test_api import unrelated_task_managers
+    with api.app.state.store.transaction() as c:
+        unrelated_task_managers(c)
+        tid = H.task_create(c, "human:ben", "Sensitive packet", "x", "bot:ops", private=True, lint=False)["id"]
+        ask = H.say(c, "bot:ops", "human:ana", "Which lawyer?", kind="ask",
+                    conversation_id=H.task(c, tid)["conversation_id"], refs={"task": tid})
+        assert ask["id"] not in [a["id"] for a in H.open_task_asks(c, H.task(c, tid), actor="human:ana")]
+        batch._presented(c, "human:ana", {"item": {"key": "task:" + tid}})
+        assert H.message(c, ask["id"])["read_at"] is None and H.message(c, ask["id"])["delivered_at"] is None
