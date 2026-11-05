@@ -580,7 +580,7 @@ RUN_EVENTS = "('task.next-run.carried','attempt.input.moved')"
 class Gates:
     """SQL that answers yes, without Python, for a row the privacy functions in backend/privacy_index.py allow.
 
-    Each gate is `(fast OR privacy function)`: a fast yes skips the function and anything else still asks it, so a
+    Each gate is `CASE WHEN fast THEN 1 ELSE privacy function END`: anything but a fast yes still asks Python, so a
     fast clause may only be narrower than the function, never wider. A clause reads small sets built once per request
     (the caller's denied private tasks, the rooms whose plain messages they may not read, the runs that carry a denied
     task) and allows a message only when every message its provenance reaches is settled by its own row: its parent
@@ -625,13 +625,16 @@ class Gates:
         """The row's own refs: an object naming no meeting, no denied string and only known readable tasks.
 
         Only the message being read (`top`) may name ancestors, a bounded few, and a run, which must itself pass."""
-        once = " AND ".join(f"instr(substr({refs},instr({refs},'\"{key}\"')+1),'\"{key}\"')=0" for key in self.KEYS)
+        once = " AND ".join(f"(instr({refs},'\"{key}\"')=0 OR "
+                            f"instr(substr({refs},instr({refs},'\"{key}\"')+1),'\"{key}\"')=0)" for key in self.KEYS)
         checks = (f"json_valid({refs}) AND json_type({refs})='object' AND instr({refs},'\\')=0 "
                   f"AND instr({refs},'live_meeting')=0 AND {once} "
                   f"AND {self.task(refs, 'task')} AND {self.task(refs, 'task_id')} AND {self.strings(refs)}")
+        # CASE's WHEN short-circuits the checks. Plain refs need no JSON walk, absent keys need no duplicate-key
+        # scan, and a failed root stops before probing its run, inputs and retained events.
         if not top:
-            return (f"(coalesce({refs},'') IN ('','{{}}') OR ({checks} "
-                    f"AND instr({refs},'\"answers\"')=0 AND instr({refs},'\"inputs\"')=0))")
+            return (f"(CASE WHEN coalesce({refs},'') IN ('','{{}}') THEN 1 WHEN {checks} "
+                    f"AND instr({refs},'\"answers\"')=0 AND instr({refs},'\"inputs\"')=0 THEN 1 ELSE 0 END)")
         turn, run_id = f"json_extract({refs},'$.turn_id')", f"json_extract({refs},'$.run.attempt_id')"
         checks += (f" AND coalesce(json_type({refs},'$.answers'),'array')='array' "
                    f"AND coalesce(json_type({refs},'$.inputs'),'array')='array' "
@@ -640,12 +643,12 @@ class Gates:
                    f"THEN json_type({refs},'$.turn_id')='text' AND {self.attempt(turn)} "
                    f"WHEN json_type({refs},'$.run.attempt_id') IS NOT NULL "
                    f"THEN json_type({refs},'$.run.attempt_id')='text' AND {self.attempt(run_id)} ELSE 1 END")
-        return f"(coalesce({refs},'') IN ('','{{}}') OR ({checks}))"
+        return f"(CASE WHEN coalesce({refs},'') IN ('','{{}}') THEN 1 WHEN {checks} THEN 1 ELSE 0 END)"
 
     def root(self, alias):
         """A message settled by its own row: no parent, answers or inputs, and (unread here) no run."""
-        return (f"coalesce(coalesce({alias}.in_reply_to,'')='' AND {alias}.conversation_id NOT IN "
-                f"(SELECT id FROM {self.rooms}) AND {self.refs(alias + '.refs', top=False)}, 0)")
+        return (f"CASE WHEN coalesce({alias}.in_reply_to,'')='' AND {alias}.conversation_id NOT IN "
+                f"(SELECT id FROM {self.rooms}) AND {self.refs(alias + '.refs', top=False)} THEN 1 ELSE 0 END")
 
     def message(self, alias="source"):
         """ReadIndex.message: the row, its run, and each message it replies to, answers or took in as input."""
@@ -653,16 +656,16 @@ class Gates:
         ancestors = (f"SELECT {alias}.in_reply_to AS id UNION ALL "
                      f"SELECT value FROM json_each({refs},'$.answers') WHERE type='text' UNION ALL "
                      f"SELECT value FROM json_each({refs},'$.inputs') WHERE type='text'")
-        return (f"coalesce({alias}.conversation_id NOT IN (SELECT id FROM {self.rooms}) AND {self.refs(refs, top=True)} "
+        return (f"CASE WHEN {alias}.conversation_id NOT IN (SELECT id FROM {self.rooms}) AND {self.refs(refs, top=True)} "
                 f"AND (coalesce({alias}.in_reply_to,'')='' AND coalesce(instr({refs},'\"answers\"'),0)=0 "
                 f"AND coalesce(instr({refs},'\"inputs\"'),0)=0 OR NOT EXISTS (SELECT 1 FROM ({ancestors}) ancestor JOIN {self.messages} parent "
-                f"ON parent.id=ancestor.id WHERE parent.id<>{alias}.id AND NOT {self.root('parent')})), 0)")
+                f"ON parent.id=ancestor.id WHERE parent.id<>{alias}.id AND NOT {self.root('parent')})) THEN 1 ELSE 0 END")
 
     def attempt(self, aid):
         """ReadIndex.attempt: its message and inputs are settled by their own rows, it carries no denied task and its
         retained run events name none."""
         jobs, attempts, inputs, events = (self.inner(t) for t in ("jobs", "attempts", "attempt_inputs", "events"))
-        return (f"coalesce(EXISTS (SELECT 1 FROM {attempts} run JOIN {jobs} job ON job.id=run.job_id "
+        return (f"CASE WHEN EXISTS (SELECT 1 FROM {attempts} run JOIN {jobs} job ON job.id=run.job_id "
                 f"JOIN {self.messages} root ON root.id=job.message_id WHERE run.id={aid} AND {self.root('root')}) "
                 f"AND NOT EXISTS (SELECT 1 FROM {inputs} input JOIN {self.messages} root ON root.id=input.message_id "
                 f"WHERE input.attempt_id={aid} AND NOT {self.root('root')}) "
@@ -671,7 +674,7 @@ class Gates:
                 f"AND retained.target={aid} AND NOT coalesce(retained.action='task.next-run.carried' AND "
                 f"(coalesce(retained.detail,'')='' OR (json_valid(retained.detail) AND "
                 f"json_type(retained.detail)='object' AND instr(retained.detail,'\\')=0 AND "
-                f"{self.strings('retained.detail')})), 0)), 0)")
+                f"{self.strings('retained.detail')})), 0)) THEN 1 ELSE 0 END")
 
 
 def materialize(conn, index, tables, inner, function, private):
@@ -714,11 +717,10 @@ def materialize(conn, index, tables, inner, function, private):
         key = f"'{prefix}:'||source.id"
         return (f"CASE WHEN {key} IN (SELECT key FROM {inner('read_index')}) AND {key} NOT IN "
                 f'(SELECT id FROM "{private("denied_reads")}") THEN 1 ELSE {fast} END')
-    # SQLite evaluates the side of an OR without a subquery first, so `fast OR function` asked Python about every
-    # row. The fast answer goes in as an argument instead: a fast yes returns before any provenance is read.
-    return {table: (predicate.replace(message, function("settled_message") +
-                                      f"(id,conversation_id,refs,in_reply_to,{settled('m', gates.message())})")
-                    .replace(attempt, function("settled_attempt") + f"(id,{settled('a', gates.attempt('source.id'))})"),
+    # CASE evaluates only the chosen branch. A fast yes skips the Python callback altogether; OR can evaluate
+    # the function first, and passing the fast answer to a function still calls Python for every history row.
+    return {table: (predicate.replace(message, f"(CASE WHEN {settled('m', gates.message())} THEN 1 ELSE {message} END)")
+                    .replace(attempt, f"(CASE WHEN {settled('a', gates.attempt('source.id'))} THEN 1 ELSE {attempt} END)"),
                     hidden)
             for table, (predicate, hidden) in tables.items()}
 
@@ -791,9 +793,6 @@ def connect(path, c, auth, who, trace=None, seconds=None):
         functions = {"message": (4, index.message), "attempt": (1, index.attempt),
                      "conversation": (1, index.conversation), "meeting_room": (1, index.meeting_room),
                      "event": (4, index.event), "tag": (2, index.tag), "blob": (1, index.blob),
-                     "settled_message": (5, lambda mid, cid, refs, reply, fast:
-                                         True if fast else index.message(mid, cid, refs, reply)),
-                     "settled_attempt": (2, lambda aid, fast: True if fast else index.attempt(aid)),
                      "task": (1, lambda tid: tid not in index.denied),
                      "content": (-1, lambda *parts: index.content(list(parts)))}
         for name, (arity, fn) in functions.items():

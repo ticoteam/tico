@@ -162,6 +162,8 @@ const disabled = option => option.evaluate(o => o.disabled);   // the option its
     if (!shots) return;
     for (const mode of ['dark', 'light']) {
       await page.evaluate(m => document.documentElement.setAttribute('data-theme', m), mode);
+      // The route's fade would otherwise be caught mid-way by the first theme's picture.
+      await page.waitForFunction(() => document.getAnimations().every(a => a.playState !== 'running' || a.effect?.getTiming().iterations === Infinity));
       await page.locator('#set-inboxes').screenshot({path: path.join(shots, `letters-${name}-${mode}.png`)});
     }
   };
