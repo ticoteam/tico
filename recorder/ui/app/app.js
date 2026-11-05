@@ -395,7 +395,7 @@
       Object.values(data.sections).flat().filter(i => i.status !== 'dismissed').map(it => {
         if (it.status === 'pushed') return `<div class="item sent">${esc(it.text)} · Sent${it.result_ref ? ` · <button class="link" data-act="open-url" data-url="${esc(a.shared_url + '/#/task/' + encodeURIComponent(it.result_ref))}">Open</button>` : ''}</div>`;
         const draft = sharedDraft(it.id), current = mergeShared(mergeShared(it, draft.inflightPatch || {}), draft.patch), detail = current.detail || {};
-        if (!draft.flight && !draft.sending && !Object.keys(draft.patch).length) draft.version = it.version;
+        if (!draft.flight && !draft.sending && !Object.keys(draft.patch).length && ![...document.querySelectorAll('[data-shared-item]')].find(n=>n.dataset.sharedItem===it.id)?.contains(document.activeElement)) draft.version = it.version;
         const fields = it.section === 'task' ? ['owner', 'due', 'body'] : it.section === 'doc' ? ['document', 'change', 'why'] : ['side', 'app', 'area'];
         const owners = a.owners.filter(o => !data.audience || data.audience.includes(o.actor));
         return `<div class="shared-item" data-shared-item="${esc(it.id)}"><label>Title<textarea data-defer data-shared-field="text" aria-label="Title">${esc(current.text)}</textarea></label>` + fields.map(key => {
@@ -443,7 +443,7 @@
       else body.detail[f.dataset.sharedField] = sharedFieldValue(f);
     }
     try {
-      if (draft.flight) { try { await draft.flight; } catch {} }
+      if (draft.flight) { try { await draft.flight; } catch {} if(draft.error) throw new Error(draft.error); }
       const reply = await invoke('shared_item', {id, action:send ? 'send' : null, body:send ? {...body,version:draft.version} : {status:'dismissed',version:draft.version}});
       if (reply.conflict) { draft.current=reply.conflict; draft.version=reply.conflict.version; draft.patch=mergeShared(body,draft.patch); throw new Error('This item changed'); }
       draft.patch = {}; draft.error = ''; draft.current=null;

@@ -2866,7 +2866,9 @@ export type ItemCreate = {
   at_ms?: number | null;
   detail?: Record<string, unknown>;
   quote?: string;
+  result_ref?: string | null;
   section: "doc" | "task" | "feature";
+  status?: "proposed" | "pushed";
   text: string;
 };
 
@@ -2874,6 +2876,7 @@ export type ItemEdit = {
   detail?: Record<string, unknown> | null;
   status?: "dismissed" | null;
   text?: string | null;
+  version?: number;
 };
 
 export type ItemOne = {
@@ -2884,6 +2887,7 @@ export type ItemPush = {
   detail?: Record<string, unknown> | null;
   force?: boolean;
   text?: string | null;
+  version?: number;
 };
 
 export type Items = {

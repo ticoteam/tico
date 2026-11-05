@@ -1111,7 +1111,7 @@ function meetPendingRender(state, rec, data) {
   panel.hidden = !pending.length;
   for (const item of pending) {
     const draft = meetPendingDraft(state, item.id);
-    if (!draft.flight && !draft.sending && !Object.keys(draft.patch).length) draft.version = item.version;
+    if (!draft.flight && !draft.sending && !Object.keys(draft.patch).length && ![...list.children].find(n => n.dataset.pending === item.id)?.contains(document.activeElement)) draft.version = item.version;
     let node = [...list.children].find(row => row.dataset.pending === item.id);
     if (!node) {
       node = document.createElement('section'); node.className = 'meet-item meet-pending'; node.dataset.pending = item.id;
@@ -1140,7 +1140,7 @@ function meetPendingRender(state, rec, data) {
         draft.sending = true; clearTimeout(draft.timer);
         node.querySelectorAll('button, input, textarea, select').forEach(field => field.disabled = true);
         try {
-          if (draft.flight) { try { await draft.flight; } catch {} }
+          if (draft.flight) { try { await draft.flight; } catch {} if (draft.error) throw new Error(draft.error); }
           // Read the fields after the queued write settles: these are the final words on screen.
           const final = {detail: {}};
           for (const field of node.querySelectorAll('[data-pending-field]')) {

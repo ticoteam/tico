@@ -24002,7 +24002,7 @@
         ]
       },
       "post": {
-        "summary": "Add a pending meeting item",
+        "summary": "Add a pending item, or upload an already sent item with status=pushed and an authorized result_ref",
         "operationId": "addMeetingItem",
         "parameters": [
           {
@@ -24071,7 +24071,7 @@
     },
     "/api/v2/meetings/{rid}/items/{iid}": {
       "post": {
-        "summary": "Edit a proposed item; detail merges keys, null or empty clears a key. Sent items refuse text and detail edits",
+        "summary": "Edit at the expected version; stale writes return 409 with the current item. Detail merges keys, null or empty clears a key. Sent items refuse text and detail edits",
         "operationId": "editMeetingItem",
         "parameters": [
           {
@@ -24149,7 +24149,7 @@
     },
     "/api/v2/meetings/{rid}/items/{iid}/push": {
       "post": {
-        "summary": "Apply final text and detail and send in one transaction; private meetings require every task reader inside the meeting audience",
+        "summary": "Apply final fields at the expected version and send in one transaction; stale sends return 409 with the current item. Private meetings require every task reader inside the meeting audience",
         "operationId": "sendMeetingItem",
         "parameters": [
           {
@@ -56612,6 +56612,27 @@
               }
             ],
             "title": "At Ms"
+          },
+          "status": {
+            "type": "string",
+            "enum": [
+              "proposed",
+              "pushed"
+            ],
+            "title": "Status",
+            "default": "proposed"
+          },
+          "result_ref": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 240
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Result Ref"
           }
         },
         "additionalProperties": false,
@@ -56624,6 +56645,12 @@
       },
       "ItemEdit": {
         "properties": {
+          "version": {
+            "type": "integer",
+            "minimum": 1.0,
+            "title": "Version",
+            "default": 1
+          },
           "text": {
             "anyOf": [
               {
@@ -56680,6 +56707,12 @@
       },
       "ItemPush": {
         "properties": {
+          "version": {
+            "type": "integer",
+            "minimum": 1.0,
+            "title": "Version",
+            "default": 1
+          },
           "force": {
             "type": "boolean",
             "title": "Force",
