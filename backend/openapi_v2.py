@@ -2574,6 +2574,10 @@ SCHEMAS['BotDreamView'] = obj({'dream': {'oneOf': [obj({
 DESCRIPTION = (
     "The stable API for building your own frontend on Tico. Everything here keeps its shape within v2: fields are added, "
     "never removed or renamed, and a breaking change is a new /api/v3. Routes not listed are internal. "
+    "Task-scoped bot turns and Make-page attempts use the method/path allowlist in backend/scoped_routes.py; "
+    "all other routes return 403, including SQL, CSV/exports, saved run history, admin and event streams. "
+    "Downloads require an in-scope source id. Allowed JSON responses project structured source references only; "
+    "free text, unknown references and task/conversation references stay unchanged. "
     "Public roadmap writes require an allowlisted Origin; reads permit server-side requests. No sign-in or idempotency key (docs/roadmaps.md). "
     "Granola connection and sync writes do not require an idempotency key, nor does POST /api/v2/inbound/tasks, whose "
     "own `key` is its idempotency. Inbox company connection actions reconcile the same short-lived code under current grant checks. "
