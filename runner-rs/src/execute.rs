@@ -3831,6 +3831,7 @@ mod tests {
     #[tokio::test]
     async fn lazy_claude_spawn_failure_after_start_acknowledgement_runs_the_fallback() {
         let _controls = RunControls;
+        hosts::TEST_STARTS.with(|starts| starts.set(0));
         let window = Arc::new(Mutex::new(StartWindow { now: 0, until: Some(180), expired: false,
             started: false, renewed_at: None, publish_repository: false }));
         let (url, seen, server) = recording_server_start_window(None, None, Some(window)).await;
@@ -3845,7 +3846,8 @@ mod tests {
         let attempt = json!({"id": "lazy-1", "job_id": "j1", "bot": "ops", "token": "synthetic-turn",
             "start_reservation_seconds": 180, "lease_seconds": 120, "conversation": {"id": "c1", "kind": "chat"},
             "message": {"id": "m1", "from_actor": "human:ana@acme.example", "body": "Next", "refs": {}},
-            "history": [], "config": {"runtime": "claude", "harness": "claude", "model": "synthetic-primary",
+            // Disable the Linux reaper so the missing executable fails at spawn, before any process is allocated.
+            "history": [], "config": {"runtime": "claude", "harness": "claude", "model": "synthetic-primary", "background_wait_s": 0,
                 "fallback": {"harness": "pi", "model": "synthetic-fallback"}}});
         tokio::time::timeout(Duration::from_secs(30), runner.clone().execute(attempt)).await.unwrap().unwrap();
         server.abort();
