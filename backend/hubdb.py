@@ -72,6 +72,7 @@ from contextlib import contextmanager
 from datetime import datetime, timedelta, timezone
 from urllib.parse import urlsplit
 from pathlib import Path
+from typing import Any
 
 from .batch_work import isolated
 from . import delivery
@@ -1090,7 +1091,7 @@ def person_sent(message):
     return sender == KEEPER and bool(refs.get("carries")) and is_human(str(refs.get("from") or ""))
 
 
-def _json(value, default=None):
+def _json(value, default=None) -> Any:
     """A stored JSON column as a value. A row a caller already decoded holds the value itself under the column's
     name (row['refs'] is the dict), so a dict or list passes through."""
     if isinstance(value, (dict, list)):

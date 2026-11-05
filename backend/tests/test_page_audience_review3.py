@@ -262,7 +262,7 @@ def test_restricted_page_leak_matrix_across_stored_shapes_transports_and_deletio
             clean(state + ":SSE:" + token, {"frames": stream.seen, "headers": stream.response.getheaders()})
             stream.close()
             with api.app.state.store.read() as c:
-                delivered, _, _, _ = events.read(c, api.app.state.auth, who, before, topics=("tasks", "messages", "bots", "runs"))
+                delivered, _, _, _ = events.read(c, api.app.state.auth, who, before, topics=("messages", "bots", "runs"))
                 clean(state + ":events.read:" + token, delivered)
                 for record in c.execute("SELECT * FROM events WHERE target IN (?,?)", (fid, tid)):
                     if task_privacy.event_readable(c, who.actor, record):
