@@ -26,8 +26,9 @@ Once an hour on weekdays, 08:00 to 18:00 in the team's time zone, the server loo
 
 A task belongs to its owner's department, one of the nine on the org chart (a group inside it counts as it). A task
 whose owner is in none, such as BotOps or the Assistant, is listed under **Company**. Each department lists at most 30
-items. An item reported once is left out for a day unless its task changed, so a case the bot was unsure of does not
-wake it every hour.
+items, and each report body is capped at 12,000 bytes. If either cap leaves items out, the report says how many are in
+the next report. Only items included in the body are left out for a day unless their task changes, so items omitted by
+either cap remain eligible for the next report.
 
 A private task, or one of a bot the Task Manager has no access to, never appears in a report, and the bot cannot read
 or write it: it meets the same privacy fence as any other bot.
