@@ -366,7 +366,7 @@ function taskLiveEdited(d, detail) {
 }
 async function taskLiveSave(d, live) {
   if (live.revoked || SESSION.out || live.identity !== sessionIdentity()) return;
-  live.draft.timer = 0;
+  clearTimeout(live.draft.timer); live.draft.timer = 0;
   return sharedDraftSave(live.draft, {
     write: patch => {
       const run = async () => {

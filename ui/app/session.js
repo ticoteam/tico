@@ -120,7 +120,7 @@ function signInAgain() {
 // The boxes worth keeping, by a key that is the same when the page draws them again, and whose they are: a box in a
 // task (its comment box, an answer) is that task's, any other the page's (and its dialog's), so text goes back only into
 // the same box of the same task or page, never into another task's.
-const sessionKey = el => el.id || el.name || el.getAttribute('aria-label') || el.placeholder || '';
+const sessionKey = el => el.id || el.name || el.getAttribute('aria-label') || el.placeholder || el.dataset.taskField || '';
 const sessionScope = el => {
   const task = el.closest('[data-task]')?.dataset.task, d = el.closest('dialog'), question = el.closest('[data-qc-key]');
   return task ? 'task:' + task + (question ? '|question:' + question.dataset.qcKey : '') : location.hash + (d ? '|' + (d.id || d.getAttribute('aria-label') || '') : '');

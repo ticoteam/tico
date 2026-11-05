@@ -93,6 +93,12 @@ const init = () => {
     await error.waitFor(); await idle();
     assert.equal(writes.at(-1).version, focusedBase);
     assert.equal(task[key], 'Newer editor ' + key);
+    if (key === 'public_title') {
+     const count = writes.length;
+     await page.waitForTimeout(800);
+     assert.equal(writes.length, count, 'a cancelled debounce cannot retry a conflict');
+     assert.equal(await error.count(), 1);
+    }
     await retry(); assert.equal(task[key], 'My ' + key);
     assert.ok(focusedBase >= base);
    }
@@ -204,7 +210,15 @@ const init = () => {
    // Sign-in recovery includes the contenteditable title, while sign-out removes local task drafts.
    offline = true;
    await fillTitle('Sign-in title to keep'); await title.evaluate(el => el.blur()); await error.waitFor(); await idle();
-   await page.evaluate(() => { SESSION.seen = true; signedOut('/auth/login'); });
+   await page.evaluate(() => {
+    for (const [key, value] of [['public_title', 'Recovered public title'], ['public_summary', 'Recovered public summary'], ['size', '5'], ['due', '2026-12-15']]) {
+      const el = taskModal().querySelector(`[data-task-field="${key}"]`);
+      el.value = value; el.dispatchEvent(new Event('input', {bubbles: true}));
+    }
+    SESSION.seen = true; signedOut('/auth/login');
+   });
+   assert.deepEqual(await page.evaluate(() => JSON.parse(sessionStorage.getItem(SESSION_RETURN)).fields.filter(f => f.base).map(f => f.key).sort()),
+     ['Public summary', 'Public title', 'Size', 'Title', 'due'].sort());
    assert.equal(await page.evaluate(() => Object.keys(localStorage).some(key => key.startsWith(TASK_EDIT_STORAGE))), false);
    assert.equal(await page.evaluate(() => JSON.parse(sessionStorage.getItem(SESSION_RETURN)).fields.find(f => f.key === 'Title').value), 'Sign-in title to keep');
    offline = false;
@@ -212,6 +226,8 @@ const init = () => {
    await page.waitForFunction(() => document.querySelector('#task-modal[open] .tmodal-title')?.textContent === 'Sign-in title to keep');
    await page.waitForFunction(() => !taskModal().taskLive.draft.flight && !Object.keys(taskModal().taskLive.draft.patch).length);
    assert.equal(task.title, 'Sign-in title to keep');
+   assert.equal(task.public_title, 'Recovered public title'); assert.equal(task.public_summary, 'Recovered public summary');
+   assert.equal(task.size, 5); assert.equal(task.due_at.slice(0, 10), '2026-12-15');
    // Ana's expired-session recovery never appears or autosaves when Ben signs into this same tab.
    offline = true;
    await fillTitle('Ana private title'); await title.evaluate(el => el.blur()); await error.waitFor(); await idle();
