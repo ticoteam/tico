@@ -1270,6 +1270,7 @@ impl Recorder {
                         }
                         "send" => self.say("Saved to Tico"),
                         "import" => {
+                            self.reset_saved();
                             self.config =
                                 settings::read(self.store.root()).unwrap_or(self.config.clone());
                             self.destination = self
@@ -1790,7 +1791,9 @@ impl Recorder {
             .any(|row| row.id == destination)
             && self.context.live_destination.is_empty()
         {
-            self.reset_saved();
+            if self.destination != destination {
+                self.reset_saved();
+            }
             self.destination = destination.into();
             self.choosing_org = false;
             self.roster_for.clear();
@@ -1876,6 +1879,9 @@ impl Recorder {
                 .iter()
                 .any(|row| row.id == destination)
         {
+            if self.destination != destination {
+                self.reset_saved();
+            }
             self.destination = destination.into();
             self.load_roster();
         }
@@ -1984,6 +1990,9 @@ impl Recorder {
             {
                 self.error = "Choose an org first".into();
                 return;
+            }
+            if self.destination != destination {
+                self.reset_saved();
             }
             self.destination = destination.into();
         }
@@ -2229,6 +2238,9 @@ impl Recorder {
         }
         if self.meeting.as_deref() == Some(id) {
             self.save_context();
+        }
+        if self.destination != destination {
+            self.reset_saved();
         }
         self.destination = destination.into();
         let (config, store, step) = (
@@ -3413,6 +3425,20 @@ mod saved_panel_tests {
         let dir = tempfile::tempdir().unwrap();
         let store = Store::open(dir.path()).unwrap();
         let record = store.create("Saved meeting").unwrap();
+        for destination in ["one", "two"] {
+            store
+                .delivery(
+                    &record.id,
+                    &store::Delivery {
+                        destination_id: destination.into(),
+                        meeting_id: format!("remote-{destination}"),
+                        status: "sent".into(),
+                        error: String::new(),
+                        receipt: json!({}),
+                    },
+                )
+                .unwrap();
+        }
         let mut app = Recorder::new(store, None, true).unwrap();
         app.config.destinations = vec!["one", "two"]
             .into_iter()
@@ -3444,6 +3470,10 @@ mod saved_panel_tests {
         for sign_out in [true, false] {
             let (_dir, mut app) = fixture();
             let reply = late_reply(&app);
+            assert_eq!(
+                app.saved_target(),
+                Some(("one".into(), "remote-one".into()))
+            );
             app.saved_items = json!({"sections":{"task":[{"text":"Cached"}]}});
             // The destination stays pinned in a live meeting even after it is disconnected.
             if sign_out {
