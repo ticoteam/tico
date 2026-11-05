@@ -62,8 +62,11 @@ def test_archived_scoped_sources_and_their_blob_aliases_stay_unreadable_until_re
     fid = published(api, attempt, task=t["id"])
     bid = blob(api, fid)
     for archived in (True, False):
-        changed = api.patch("/api/v2/files/" + fid, json={"archived": archived}, headers=headers())
-        assert changed.status_code == 200, changed.text
+        if archived:
+            changed = api.patch("/api/v2/files/" + fid, json={"archived": True}, headers=headers())
+            assert changed.status_code == 200, changed.text
+        else:
+            assert published(api, attempt, task=t["id"], data=HTML + b"<p>Restored source</p>") == fid
         for ref in (fid, bid):
             response = api.get("/api/v2/files/" + ref, headers=headers(attempt["token"]))
             assert response.status_code == (403 if archived else 200), response.text
