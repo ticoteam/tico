@@ -455,7 +455,8 @@ def src_for(app, settings, c, who, fid, version):
     if kind not in INLINE:
         return None
     message = {"refs": {"attachments": [{"file_id": fid, "version": int(version), "kind": kind}]}}
-    return for_reader(app, settings, c, who, [message])[0]["refs"]["attachments"][0].get("src")
+    items = for_reader(app, settings, c, who, [message])[0]["refs"]["attachments"]
+    return items[0].get("src") if items else None
 
 
 # What the fallback serves from the app's own address: kinds that a browser only ever shows as media.
@@ -577,7 +578,8 @@ def decorate(c, who, files, key, base, messages, full=True, hosted=None):
                 rows[fid] = c.execute("SELECT * FROM bot_files WHERE id=?", (fid,)).fetchone()
             row = rows[fid]
             hidden = bool(row) and not row["archived"] and not files.visible(c, who, row, cache)
-            if attempt_id and (hidden or (not row and turn_scope.blob_allowed(c, files.auth, who, fid) is False)):
+            if attempt_id and (hidden or row and row["archived"]
+                               or not row and turn_scope.blob_allowed(c, files.auth, who, fid) is False):
                 continue
             if a.get("kind") not in INLINE and not hidden:
                 fresh.append(a)                  # a file kind with no address here: shown as stored, when it may be seen
@@ -674,7 +676,7 @@ def token_reader(c, auth, actor, attempt_id=""):
         attempt = c.execute("SELECT * FROM attempts WHERE id=?", (attempt_id,)).fetchone()
         if not attempt or who.role == "bot" and actor != H.bot_actor(attempt["bot_id"]):
             return None
-        who = replace(who, attempt_id=attempt_id,
+        who = replace(who, attempt_id=attempt_id, runner_id=attempt["runner_id"],
                       task_actor=H.bot_actor(attempt["bot_id"]) if who.role != "bot" else "",
                       via=who.via if who.role == "bot" else
                       "assistant" if attempt["bot_id"] == auth.settings.assistant_bot else "botops")
@@ -732,7 +734,7 @@ def serve(request, store, auth, files, blobs, key, ancestors, token, full=True, 
                 filled = fill_live(text, c, who, auth, files).encode("utf-8")
     if kind in ("page", "svg") and not part:
         from .tico_storage import visual_link
-        # A page with live blocks never has a hosted copy (tico_storage.make_visual), so it is filled in below.
+        # A page with live blocks never has a hosted copy (tico_storage.make_visual).
         link = visual_link(blobs, blob["digest"], blob["size"], mime, ancestors)
         if link:
             return Response(status_code=302, headers={"Location": link, "Cache-Control": "private, no-store",
