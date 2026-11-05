@@ -21,7 +21,7 @@ Task rules, the built-in switches, schedules and run records described here are 
 | Name and one line | What the job or rule does. |
 | **WHEN … THEN …** | Its trigger and action. Multiple conditions or actions join with **AND**. |
 | Department tag | Exactly one department from the org chart's fixed list. For task rules, it controls editing permissions. |
-| Schedule | How often it checks or runs, in words. Times use Pacific time, the task roundup's included: it runs three times a day (6am, noon and 6pm company time) by default. A task rule's schedule is separate from its untouched wait. |
+| Schedule | How often it checks or runs, in words. Times use Pacific time. A task rule's schedule is separate from its untouched wait. |
 | **Last run** | When it last finished (hover for the exact time) and the result in words, such as "9 checked, 2 suggestions". A job with no recorded run says "Not run yet". |
 | **Next run** | When the job or rule runs next, from its schedule and its last run. **Off** means it is switched off. A dash means Tico cannot tell. |
 | On or off | A switch if you may change it; otherwise its saved state. Housekeeping shows **Tico needs this to run** instead. |
@@ -39,15 +39,11 @@ The list refreshes when you open the tab and at most once a minute while it stay
 |---|---|---|
 | Task rule | Members of its department, including humans and bots in nested teams; the owner or an admin for any department | On or off, **Edit**, and schedule presets |
 | **Stale ticket review**, **Nightly learnings**, **KPI stale asks**, **Ask go-ahead** | Owner or admin | On or off, schedule presets, **Run now** |
-| **Health scan** | Owner only | On or off, schedule presets, **Run now** |
 | **Task Manager report** | Owner or admin | On or off, schedule presets, **Run now** |
-| **Task roundup** | Owner or admin | On or off, schedule preset, **Run now** |
-| **Start fresh when the topic changes**, **Stalled task check** (not run) | Owner or admin | On or off |
+| **Start fresh when the topic changes** | Owner or admin | On or off |
 | Housekeeping and other fixed built-ins | No switch or schedule editor on this page | Fixed operation; housekeeping cannot be switched off |
 
 A department tag on a built-in does not grant permission to change it. Task rules have no separate view-only role within their department. People outside that department can read the list without gaining editing rights.
-
-**Health scan** finds nothing while the Health Monitor itself is off in **Settings → Health**.
 
 ## Schedules and Run now
 
@@ -55,13 +51,14 @@ Choose from the presets offered on the row:
 
 | Row | Presets |
 |---|---|
-| Task rules, **KPI stale asks**, **Health scan**, **Ask go-ahead** | Every 15 minutes, Hourly, Every 4 hours, Daily at a time |
+| Task rules, **KPI stale asks**, **Ask go-ahead** | Every 15 minutes, Hourly, Every 4 hours, Daily at a time |
 | **Task Manager report** | Hourly on weekdays 08:00 to 18:00 (the default), Hourly, Every 4 hours, Daily at a time |
 | **Stale ticket review** | Hourly, Every 4 hours, Daily at a time |
 | **Nightly learnings** | Nightly at a time; initially 03:00 |
-| **Task roundup** | Three times a day (6am, noon and 6pm company time) by default |
 
-Times use company time (Pacific), the task roundup's included. Leave the time field or press Enter to save it. These rows offer no cron expressions or custom intervals.
+Times use company time (Pacific). Leave the time field or press Enter to save it. These rows offer no cron expressions or custom intervals.
+
+Task roundup is now [Maintenance's Find stuck step](maintenance.md). Its old switch, schedule and read-only Automations mirror are retired. The latest saved switch carries over at cutover. Use `hub maintenance run --step find_stuck` to run it now; `POST /api/v2/system-routines/task_roundup/run` also runs that step and returns Maintenance's `{run, started}` response.
 
 **Run now** appears only on the scheduled built-ins in the permissions table. Switch the job on first. It runs through the same checks and caps as its scheduled run, then shows the result on the row. A job asking Decide shows **Running…** while it works. Task rules, **Start fresh when the topic changes** and **Stalled task check** have no **Run now** button.
 
@@ -96,7 +93,7 @@ Only the done-and-untouched trigger and close action are available for task rule
 
 ## Which AI answered
 
-Two jobs ask Decide, Tico's question-answering model: **Stale ticket review** and **Nightly learnings**. The **Stalled task check** row asks nothing, because it no longer runs. Decide tries the [Tico AI Gateway](ai-gateway.md) first, then your own key, then your company's AI provider. This page and the list change none of that. They only show which route answered.
+Two jobs ask Decide, Tico's question-answering model: **Stale ticket review** and **Nightly learnings**. Decide tries the [Tico AI Gateway](ai-gateway.md) first, then your own key, then your company's AI provider. This page and the list change none of that. They only show which route answered.
 
 | Pill | Meaning |
 |---|---|
@@ -121,12 +118,13 @@ or evening tick does not run. It finds nothing while the Task Manager bot is pau
 
 Built-ins appear in one flat list. This table gives their default schedules; saved choices replace the defaults on controllable rows.
 
+Check health runs as a [Maintenance](maintenance.md) step. It has no separate System routines row or timer.
+
 | Job | What it does | Default schedule |
 |---|---|---|
 | **Start assigned tasks** | Starts eligible assigned work on a free computer turn; respects task caps, usage holds, and computer capacity. | When a turn is free |
 | **Stale ticket review** (AI) | Finds open tasks that look finished or forgotten and suggests to each owner what to do. See [Stale ticket review](tasks.md#stale-ticket-review). | Hourly |
 | **KPI stale asks** | Asks a KPI's keeper for a reading when it goes out of date, and a goal's owner when a KPI goes off track. | Hourly |
-| **Health scan** | Checks Tico's health and wakes the Health Monitor only for a finding the last scan did not have. | Hourly |
 | **Task Manager report** | Looks for stalled tasks, overdue asks, review tickets without a PR, merged work whose step did not move and similar, and opens one "Task check" task per department for the [Task Manager](task-manager.md) only when there is something. Nothing to report is a quiet run: no task, no model call. | Hourly on weekdays, 08:00 to 18:00 |
 | **Books check** | Reads the [Bookkeeper](bookkeeper.md)'s Finance work queue in plain code and opens one "Books check" task for it only when something is new. Nothing new is a quiet run: no task, no model call. Opens nothing while the Bookkeeper is paused. | Hourly |
 | **Books watch** | Reads runway, unusual spend, duplicate charges, price increases and unused subscriptions in plain code and opens one "Watch" task for the [Bookkeeper](bookkeeper.md) only when something new is found. Not a switch: the Bookkeeper's pause stops it. | Daily |
@@ -138,16 +136,14 @@ Built-ins appear in one flat list. This table gives their default schedules; sav
 | **Email digest** | Emails a person once an hour the threads they follow on digest that have new messages: each title, its unread count and a link, never the messages. Nothing new is a quiet run. Each person turns theirs off under Email digests. See [Thread helper](thread-helper.md). Not a switch. | Hourly |
 | **Approval expiry** | Takes approvals and asks nobody will act on out of Needs you. | Hourly |
 | **Unanswered questions** | On weekday mornings, questions unanswered for two business days go back to their bots as lines on the bots' task roundup, never as a wake. | Hourly |
-| **Stalled task check** (AI) | Not run. Stall checks no longer wake a bot about one quiet task, so Decide reads none of them. | When it happens |
 | **Stall checks** | Every minute: allocates waiting tickets, closes timed-out checks, drops queued work its bot can no longer read, and alerts once when an Engineering task has been blocked over four hours (to its manager, or else its requester). It does not wake a bot about one stalled task: the task roundup lists those. | Every minute |
-| **Task roundup** | Each run (three times a day by default, at 6am, noon and 6pm company time) sends each bot at most one list of its tasks, with these lines in order: a follow-up time that came (listed once, then cleared), an unanswered question, an assignment not started an hour after it was given (listed once), a task to restate, a Dev ticket late at its step (on its manager's list, relisted every seven days while it stays late), an engineering exception on a manager's list, a step's backlog (on each bot it names, relisted every `every_hours` while it stays over), a task with a missed update, and a task gone quiet for a day with nothing holding it. Managers and doers sweep (a custom bot can turn it off), so they get every line; a reviewer, lead, responder or monitor gets its unanswered questions and its own follow-up times only. Only tasks the bot owns that are still live are listed. The list goes only to the bot, in its own notice room, so no person is told about a task. The roundup is the one grouped wake for a bot's tasks: a per-task wake becomes a line on this list. Tico's own notices and check-backs do not count as a missed update. Plain code: no model is called, and nothing to list is a quiet run. | Three times a day, at 6am, noon and 6pm company time |
+| **Task roundup (retired)** | Grouped task lists now run through [Maintenance Find stuck](maintenance.md), with its switch, schedule and wake limits. | Maintenance schedule |
 | **Turn fixer** | Frees turns proven dead (lease lost and process gone, or stopped before they started) with a note on the task; holds a dead turn that may have pushed, sent or paid for BotOps instead of retrying it; keeps one Health finding per busy-turns incident and hands what it cannot fix to BotOps. See [Computers](computers.md#the-turn-fixer). | Every 10 seconds |
 | **Waiting checks** | Turns a bot's plain ask to a person into a small task. It no longer sends a waiting task back to work; a waiting task that waits on nothing is listed on the task roundup after a day. | Hourly |
 | **Snooze ends** | Brings snoozed tasks back when their date comes and starts deferred runs that are due. | Every 10 seconds |
 | **Go-live expiry** | Ends a go-live waiting for a computer that never reports. | Every 10 minutes |
 | **Page monitors** | Reads each competitor page the Librarian or owner watches (at most 50 a day, the longest unchecked first) and files a market insight only when one changed. See [Market watch](market-watch.md). | Daily |
 | **Goal colours** | Works out every goal's colour again as its data ages. | Hourly |
-| **Cleanup** | Clears old events, mail, retry keys and recorder data. | Hourly |
 | **Gateway key check** | Asks the Tico AI Gateway whether this server's key still works and how much of the month's cap is used. | Hourly |
 | **Billing check** | Reads HQ's nightly billing check for the owner's Health page. | Hourly |
 | **Updates** | Asks people and bots for today's updates, one at a time. | Every 10 seconds |

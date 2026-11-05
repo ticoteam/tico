@@ -114,7 +114,8 @@ CREATE TABLE IF NOT EXISTS cloud_machines(
  starts_month INTEGER NOT NULL DEFAULT 0, last_error TEXT NOT NULL DEFAULT '',
  active_at REAL, heartbeat_at REAL, ttl_s INTEGER, next_try_at REAL, failures INTEGER NOT NULL DEFAULT 0,
  problem TEXT NOT NULL DEFAULT '', problem_at TEXT, wake_key TEXT, woke_at REAL,
- enroll_by REAL, enroll_fails INTEGER NOT NULL DEFAULT 0, changed_by TEXT, updated_at TEXT, stop_until REAL);
+ enroll_by REAL, enroll_fails INTEGER NOT NULL DEFAULT 0, changed_by TEXT, updated_at TEXT, stop_until REAL,
+ start_asked_at REAL);
 CREATE TABLE IF NOT EXISTS cloud_machine_codes(
  code_hash TEXT PRIMARY KEY, bot TEXT NOT NULL, created_at TEXT NOT NULL);
 """
@@ -310,6 +311,24 @@ def rows(c):
     return {r["bot"]: dict(r) for r in c.execute("SELECT * FROM cloud_machines")}
 
 
+def visible_rows(c):
+    """Live runner contact proves a boot finished, but cannot undo HQ's stop or deletion."""
+    from .getting_started import ONLINE_SECONDS
+    online = {r["id"] for r in c.execute(
+        "SELECT id FROM runners_with_state WHERE revoked_at IS NULL AND last_seen_at>?",
+        (H.shift(H.now(), seconds=-ONLINE_SECONDS),))}
+    return {key: {**current, **({"state": "running"}
+                              if current["state"] == "starting" and current["runner_id"] in online else {})}
+            for key, current in rows(c).items()}
+
+
+def checked_in(c, runner_id):
+    """A boot reached this server. Repair old starting rows too, without undoing a stop reservation."""
+    # Every heartbeat reaches here: one read of the small cloud_machines table (a row per cloud bot at most).
+    c.execute("UPDATE cloud_machines SET state='running',updated_at=? WHERE runner_id=? AND state='starting'",
+              (H.now(), runner_id))
+
+
 def save(c, key, **fields):
     fields["updated_at"] = H.now()
     c.execute("UPDATE cloud_machines SET " + ",".join(k + "=?" for k in fields) + " WHERE bot=?",
@@ -397,12 +416,12 @@ def cloud_runners(c, but=None):
 
 def resting(c):
     """Computer ids of cloud machines that are off on purpose: stopped when idle, or stopping, with no problem. Their
-    runners are offline by design and the machine starts when work comes, so Health does not call them offline or
-    silent. A machine with a problem (out of credit, stuck, never enrolled) is not resting, and neither is one
+    runners are offline by design, including a machine whose bot moved to another computer, so Health does not call
+    them offline or silent. A machine with a problem (out of credit, stuck, never enrolled) is not resting, and neither is one
     starting: a start that never comes up is an outage Health must still name."""
     return {r["runner_id"] for r in c.execute(
-        "SELECT runner_id FROM cloud_machines WHERE runner_id IS NOT NULL AND mode='cloud' AND problem='' "
-        "AND state IN ('stopped','stopping')")}            # the shared machine's row is in cloud mode too
+        "SELECT runner_id FROM cloud_machines WHERE runner_id IS NOT NULL AND problem='' "
+        "AND state IN ('stopped','stopping')")}
 
 
 def label_for(c, key):
@@ -506,6 +525,7 @@ def enrolled(c, execution, runner_id, key):
     if old and old != runner_id:
         c.execute("UPDATE runners SET revoked_at=? WHERE id=? AND revoked_at IS NULL", (H.now(), old))
     save(c, key, runner_id=runner_id, enroll_by=0, enroll_fails=0)
+    checked_in(c, runner_id)
     H.event(c, H.KEEPER, "cloud_machine.enrolled", key, {"runner": runner_id})
     for bot in hosted(c, key):
         bind(c, execution, bot)
@@ -762,6 +782,8 @@ def decide(current, found, at, idle_s):
     on = current["state"] in ON and current["machine_id"]
     # A machine being made that has not enrolled yet (enroll_by is its deadline; 0 once it enrolled).
     booting = bool(current["enroll_by"] and current["machine_id"] and current["state"] not in DEAD)
+    if current["next_try_at"] and at < current["next_try_at"] and not found["retry_now"]:
+        return None, None                                   # refused stops back off even after the last bot leaves
     if not found["active"]:
         # Paused, drained, archived or moved (every member, on the shared one): stopped, but never under a turn still
         # out (a drain lets it finish), nor mid-update (a cut-short update is a broken runner at the next start). Only
@@ -772,8 +794,6 @@ def decide(current, found, at, idle_s):
         if on and (found["turns"] or found["updating"]):
             return ("heartbeat" if at - (current["heartbeat_at"] or 0) >= HEARTBEAT else None), None
         return ("stop" if on else None), None
-    if current["next_try_at"] and at < current["next_try_at"] and not found["retry_now"]:
-        return None, None                                   # waiting out a refusal
     if found["frozen"]:
         return ("stop" if on else None), "out_of_credit"
     if booting and at >= current["enroll_by"]:
@@ -817,7 +837,7 @@ def reserve(c, settings, key, action, machine_id):
     if current["runner_id"] and c.execute("SELECT 1 FROM attempts WHERE runner_id=? AND state IN ('leased','running') "
                                           "LIMIT 1", (current["runner_id"],)).fetchone():
         return None
-    save(c, key, stop_until=at + STOP_HOLD)
+    save(c, key, stop_until=at + STOP_HOLD, start_asked_at=None)
     return {**current, "stop_until": at + STOP_HOLD}
 
 
@@ -956,17 +976,24 @@ class Manager:
                     continue                                # deleted here: live at HQ only until boat confirms
                 if current and (current["machine_id"] in (None, machine["id"]) or (
                         current["state"] in DEAD and machine["id"] != current["machine_id"])):
-                    gone = {"enroll_by": None} if machine["state"] == "deleted" else {}
+                    gone = {"enroll_by": None, "start_asked_at": None} if machine["state"] == "deleted" else {}
                     if machine["state"] == "failed" and (current["machine_id"], current["state"]) != (
                             machine["id"], "failed"):
                         # HQ never got it a computer: it counts like one that never enrolled, so a boat that keeps
                         # failing stops being asked (no_enroll), and the work it was woken for may wake a new one.
                         # Only HQ's list says so: a refused or unanswered create may be a passing outage.
-                        gone.update(enroll_by=None, enroll_fails=current["enroll_fails"] + 1, wake_key=None)
-                    elif machine["state"] in ON and current["machine_id"] != machine["id"]:
-                        # a create whose answer was lost: HQ made it after all, so it starts as act() would have it
-                        gone.update(active_at=at, heartbeat_at=at,
-                                    **({"problem": ""} if current["problem"].startswith("hq:") else {}))
+                        gone.update(enroll_by=None, enroll_fails=current["enroll_fails"] + 1, wake_key=None,
+                                    start_asked_at=None)
+                    elif machine["state"] in ON and (current["machine_id"] != machine["id"]
+                                                      or current["start_asked_at"] is not None):
+                        # Only an unanswered start can be a recovered resume: a stop may still list as running.
+                        # Give the start its idle window and spend a new wake, keeping the old guard if none remains.
+                        woke_for = wake_for(current, facts(c, self.settings, current, at))[0]
+                        gone.update(active_at=at, heartbeat_at=at, start_asked_at=None,
+                                    failures=0, next_try_at=None, stop_until=None,
+                                    **({"problem": "", "problem_at": None} if current["problem"].startswith("hq:") else {}))
+                        if woke_for is not None:
+                            gone.update(wake_key=woke_for, woke_at=at)
                     save(c, key, **self.described(machine), **gone)
             if learned and self.on_offered is not None and offered(c, self.settings):
                 c.execute("SAVEPOINT cloud_offered")
@@ -1032,6 +1059,11 @@ class Manager:
             with self.store.transaction() as c:
                 code = mint(c, key, self.execution.auth.owner_id(c) if key == SHARED else None)
                 awaiting(c, key, at)
+                save(c, key, start_asked_at=None)
+        elif action == "start":
+            # Persist before HQ is asked: a restart can recover the start even if its answer never arrives.
+            with self.store.transaction() as c:
+                save(c, key, start_asked_at=at)
         try:
             if action == "create":
                 machine = hq.create(key, current["size"], code, self.settings.runner_url)
@@ -1069,7 +1101,8 @@ class Manager:
             woke_for = wake_for(current, found)[0]
             fields.update(active_at=at, heartbeat_at=at, wake_key=woke_for, woke_at=at)
         with self.store.transaction() as c:
-            save(c, key, **fields, failures=0, next_try_at=None, problem="", problem_at=None, stop_until=None)
+            save(c, key, **fields, failures=0, next_try_at=None, problem="", problem_at=None, stop_until=None,
+                 start_asked_at=None)
             H.event(c, H.KEEPER, "cloud_machine." + {"create": "created", "start": "started", "stop": "stopped"}[action],
                     key, {"size": machine["size"], "machine": machine["id"]})
 
@@ -1082,6 +1115,7 @@ class Manager:
             # answers with that one (act), which is not the new machine.
             save(c, key, state="deleted", enroll_by=None, enroll_fails=fails, wake_key=None,
                  woke_at=None, active_at=None, heartbeat_at=None, failures=0, next_try_at=None, stop_until=None,
+                 start_asked_at=None,
                  **({"problem": "no_enroll", "problem_at": H.now()} if fails >= ENROLL_TRIES
                     else {"problem": "", "problem_at": None}))
             H.event(c, H.KEEPER, "cloud_machine.deleted", key, {"machine": current["machine_id"],
@@ -1112,6 +1146,8 @@ class Manager:
                 self.synced = None
             else:
                 fields["stop_until"] = None                 # HQ said it did not: its runner may take work again
+        if action == "start" and 0 < refused.status < 500:
+            fields["start_asked_at"] = None                 # a refusal says the start did not happen
         with self.store.transaction() as c:
             save(c, key, **fields)
             if refused.status == 402 and current["problem"] != "out_of_credit" or (
@@ -1189,7 +1225,8 @@ def view(c, bot, settings=None):
     if external_harness(c, bot):
         return None
     assigned = bool(c.execute("SELECT 1 FROM assignments WHERE bot=?", (bot,)).fetchone())
-    return shown(bot, row(c, bot), assigned, row(c, SHARED))
+    found = visible_rows(c)
+    return shown(bot, found.get(bot), assigned, found.get(SHARED))
 
 
 def machine_view(current):
@@ -1278,7 +1315,7 @@ def change(c, execution, who, bot, mode=None, size=None, always_on=None, placeme
 
 def shared_view(c):
     """The shared machine as Settings shows it, with the bots set to run there."""
-    return {**machine_view(row(c, SHARED)), "bots": members(c)}
+    return {**machine_view(visible_rows(c).get(SHARED)), "bots": members(c)}
 
 
 def change_shared(c, auth, who, size=None, always_on=None, pause_minutes=None):
@@ -1359,21 +1396,25 @@ def remove(store, hq, who, auth, key):
         save(c, key, runner_id=None, state="deleted", machine_size=None, started_at=None,
              stopped_at=None, cost_month_usd=0, starts_month=0, last_error="", active_at=None, heartbeat_at=None,
              ttl_s=None, next_try_at=None, failures=0, problem="", problem_at=None, wake_key=None, woke_at=None,
-             enroll_by=None, enroll_fails=0, stop_until=None, changed_by=who.actor)
+             enroll_by=None, enroll_fails=0, stop_until=None, start_asked_at=None, changed_by=who.actor)
         H.event(c, who.actor, "cloud_machine.deleted", key, {"machine": current["machine_id"]})
     return {"ok": True}
 
 
 def health(c, settings=None):
-    """Health's row, or None: some bot's machine could not be started (out of credit, or HQ refusing)."""
+    """Health's row, or None: an active bot's cloud machine has a problem, even without queued work."""
     if not offered(c, settings):
         return None
-    stuck = sorted(bot for bot, machine in homes(c).items() if machine["problem"])
+    active = {r["id"] for r in c.execute("SELECT b.id FROM bots b LEFT JOIN bot_control bc ON bc.bot=b.id "
+                                         "WHERE b.state='active' AND coalesce(bc.draining,0)=0")}
+    machines = homes(c)
+    stuck = sorted(bot for bot, machine in machines.items() if bot in active and machine["problem"])
     if not stuck:
         return None
-    names = [(H.bot(c, bot) or {}).get("slug") or bot for bot in stuck[:5]]
-    return {"status": "warn", "summary": f"{len(stuck)} bot{'s' if len(stuck) != 1 else ''} waiting on a cloud machine "
-                                         f"that did not start: {', '.join(names)}"}
+    names = [f"{(H.bot(c, bot) or {}).get('slug') or bot}: {problem_words(machines[bot]['problem'])}"
+             for bot in stuck[:5]]
+    return {"status": "warn", "summary": f"{len(stuck)} bot{'s have' if len(stuck) != 1 else ' has'} a cloud machine "
+                                         f"problem: {'; '.join(names)}"}
 
 
 # ----------------------------------------------------------------------------- routes

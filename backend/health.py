@@ -2125,18 +2125,24 @@ def view(c, who, settings, auth, github, config):
         checks.extend(billing_check.health(c, settings))
     if full and (versions := runner_versions.health_check(computers)):
         checks.append(versions)
+    from .cloud_machines import health as cloud_health
+    cloud = cloud_health(c, settings) if full else None
     silent = silent_computers(c) if waiting else []
+    waiting_status, waiting_reasons = "ok", []
     if waiting:
         names = ", ".join(w["name"] for w in waiting[:5])
         # Work piling up behind a computer that stopped checking in is an outage even while another computer is up.
         stopped = "".join(f" {x['label'] if full else 'A computer'} has not checked in for {x['minutes']} minutes "
                           f"with {_silent_words(x)}." for x in silent[:3])
-        checks.append(_check("waiting", "Bots waiting", "bad" if silent or not online else "warn",
-                             f"{_plural(len(waiting), 'bot')} cannot run because their computer is offline"
-                             + (f": {names}." if full else ".") + stopped,
-                             [_fix("Open Computers", "#/settings", "devices")] if full else []))
-    else:
-        checks.append(_check("waiting", "Bots waiting", "ok", "Every active bot has a computer that is up."))
+        waiting_status = "bad" if silent or not online else "warn"
+        waiting_reasons.append(f"{_plural(len(waiting), 'bot')} cannot run because their computer is offline"
+                               + (f": {names}." if full else ".") + stopped)
+    if cloud:
+        waiting_status = "bad" if "bad" in (waiting_status, cloud["status"]) else cloud["status"]
+        waiting_reasons.append(cloud["summary"])
+    checks.append(_check("waiting", "Bots waiting", waiting_status,
+                         " ".join(waiting_reasons) if waiting_reasons else "Every active bot has a computer that is up.",
+                         [_fix("Open Computers", "#/settings", "devices")] if full and waiting_reasons else []))
     # An offline computer (or none) is "Bots waiting"; this check is everything else, so one cause is one item.
     held = {w["bot"] for w in waiting}
     # A bot stuck in onboarding has its own check below ("Onboarding not finished"). A quarantined bot is BotOps's to

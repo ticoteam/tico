@@ -27,7 +27,7 @@ Reading:
 
 ```bash
 $HUB_DIR/scripts/mail.sh inbox --untriaged --format brief   # inbox mail with no hub/* label; the list you work
-$HUB_DIR/scripts/mail.sh inbox --untriaged --all-mailboxes --format brief  # granted mailboxes; reports only with org_read: true
+$HUB_DIR/scripts/mail.sh inbox --untriaged --all-mailboxes --format brief  # every mailbox Tico gives this run
 $HUB_DIR/scripts/mail.sh inbox --new --since 24h      # what you have not seen in the last day (marks it seen)
 $HUB_DIR/scripts/mail.sh inbox --label hub/needs-owner --format brief
 $HUB_DIR/scripts/mail.sh thread 18f2c9a3b4d5e6f7 --format brief   # the conversation, no bodies; md when drafting
@@ -63,11 +63,23 @@ $HUB_DIR/scripts/mail.sh rules explain 18f2...        # why this message got wha
 
 Rules run before any model. Marketing (unsubscribe links), notification senders, and
 `registry/mail-rules.yaml` `skip:` addresses/domains are filed and never opened by the bot.
-Each mailbox can add its own rules under that address after `common`. A message bot for a
-human reads only its assigned mailbox by default (`org_read: false`). This boundary applies to
-Gmail and mailbox tokens; [calendar Tools](#calendar) have separate access rules, except for the token limit
-on a two-user Docker runner. The owner can deliberately
-turn on `org_read: true` to include reports' mail; only then does `--all-mailboxes` include them.
+Each mailbox can add its own rules under that address after `common`.
+
+Who may use a mailbox is Tico's answer, never the run's (backend/mailbox_access.py; Settings > Mailboxes):
+- a person has Read and write on their own mailbox, and admins on a shared inbox;
+- a person's Assistant has exactly that person's access;
+- everyone else, bots included, needs a grant: Read, or Read and write (organize, draft, send). Only the mailbox's
+  person, or an admin for a shared inbox, gives or takes one; nobody passes a grant on;
+- a mailbox whose person has not joined yet is private (Awaiting person) until they join or an admin makes it a
+  shared inbox;
+- the company's What Tico may do caps every level, and an address outside the company's domains is Read only.
+The owner has no bypass, and managers get nothing automatic on their reports' mail. Every mail command asks
+`GET /api/v2/mail/access` as its own credential (a bot's turn token, a person's own Tico token); `bot.yaml` gmail
+entries only narrow that answer (`read_only: true`, and `draft`/`send` only when `can:` lists them). `org_read` no
+longer does anything: the upgrade (migration 0092) turned each `org_read: true` into Read grants on the mailboxes
+below, so nobody lost access, and a manager's view of reports' mail is now a grant their reports give. This boundary
+applies to Gmail and mailbox tokens; [calendar Tools](#calendar) have separate access rules, except for the token
+limit on a two-user Docker runner.
 The Inbox Manager starts with one disabled weekday 07:30 Routine in America/Los_Angeles; Setup
 switches it on. Change its time zone on its automation in **Automations**.
 
@@ -117,27 +129,26 @@ command twice **updates the same Gmail draft** instead of leaving two. Change a 
 new draft. The thread gets `hub/drafted`, so Ana can see it in Gmail.
 
 `--attach <path>` adds a file; repeat it for several, up to 25 MB in all (Gmail's limit, checked
-from the file sizes before anything is read). Attachments are off unless the mail policy turns them on for the
-mailbox: `mailboxes.<address>.allow_attachments: true` for one mailbox, or
-`defaults.allow_attachments: true` for every mailbox that does not set its own. A file must be inside your own folder (`bot-<slug>`, or an
-older bot's `emp-<slug>`), after following symlinks; a relative path starts there, and `..` is
-refused. Files that look like keys or passwords are refused wherever they are: `.env*`, `*.pem`,
+from the file sizes before anything is read). Attachments use the same send permissions as the
+message without files; there is no separate attachment setting. Legacy `allow_attachments` keys
+in `registry/mail-policy.yaml` are accepted but do nothing. A file must be inside your own folder
+(`bot-<slug>`, or an older bot's `emp-<slug>`), after following symlinks; a relative path starts
+there, and `..` is refused. Files that look like keys or passwords are refused wherever they are: `.env*`, `*.pem`,
 `*.key`, `id_rsa*`, `id_ed25519*`, `*.p12`, `*.pfx`, `.netrc`, `.npmrc`, `.pypirc`,
 `credentials*`, `*secret*`, `*token*`, and anything under `secrets/`, `private keys/`, `.ssh/`,
 `.aws/`, `.gnupg/` or `.config/gh/`. The type comes from the file's extension. Lint and the
 reviewer read the text, and the reviewer is told each file's name, type and size, not its
-contents. Attaching lifts nothing, and sending an attached draft always needs `--approval-issue`,
-even to a recipient who needs none without files (the sender of the thread, a forward target,
-an internal address or an allowance).
+contents. Attaching lifts nothing: the same send chain applies with or without files. If the
+plain message could send without a per-message approval, the attached message can too. An owner's
+Tico message telling the bot to send covers the files attached to that send, as does an otherwise
+valid GitHub Issue or Tico send approval that names no files.
 
-That approval must name the files. `mail draft --attach` prints a ready request (and returns it
-as `approval_request` with `--json`): recipients, subject, draft id, and each file's name, size
-and sha256, as `hub approval request --kind send --payload '...'`. The send approval's payload
-carries `draft` and `attachments: [{name, size, sha256}]`. At send time the connector hashes the
-files as they are in the Gmail draft and sends only if they are exactly the approved set for
-that draft; a changed, added, removed or swapped file needs a new approval. A GitHub Issue
-counts only when its `Send to:` line matches and it names each file and its sha256 (and no
-other hash). The owner's message telling the bot to send does not cover attachments. When the draft
+If a Tico send approval names files, that binding still applies: its payload carries `draft` and
+`attachments: [{name, size, sha256}]`. At send time the connector hashes the files as they stand
+in the Gmail draft and requires the exact approved set and draft id; changed, added, removed or
+swapped files need a new approval. `mail draft --attach --json` returns an optional
+`approval_request` payload with those fields for sends that need per-message approval under the
+usual rules. Attaching files does not make that request necessary. When the draft
 belongs to a Tico task (`--issue <task id>`, or the task the run is for), `mail draft` first attaches
 each file to it and adds its `file_id` to the request, so the approver can open the file from the
 approval card; the send ignores `file_id` and matches on name, size and sha256. The card links a
@@ -261,7 +272,7 @@ reading, drafting or sending. The equivalent shell commands are `hub calendar li
 The mail-local calendar commands have a broader registry-based grant: every bot can read or create
 an event on any address in `registry/people.yaml`; Gmail permissions, including `read_only`, do not
 change that calendar access. On a Docker runner with the two-user layout a bot gets calendar tokens only for the
-mailboxes on its mail token list (a message bot's own, and its reports' only with `org_read: true`) (see [Who can read the key](#who-can-read-the-key)). An address outside the roster needs an explicit `google-calendar`
+mailboxes on its mail token list (the ones Tico gives it, Settings > Mailboxes) (see [Who can read the key](#who-can-read-the-key)). An address outside the roster needs an explicit `google-calendar`
 Tool entry with the required verbs. The private Google service-account setup must also be working
 on that computer. These commands do not expand the MCP/API rule above:
 
@@ -441,19 +452,22 @@ its own **Mail sending** switch says (and no approval lifts it), and an automati
 each bot still needs its own switch (Settings > Bots > Edit > Mail sending; see [Turning sending on](#turning-sending-on)).
 These settings apply to everyone who acts through Tico: bots, automations, the runner's own calendar bookings, people
 and the Assistant. An admin who wants Tico to send turns Send mail on. The connector reads the boxes from Tico for each
-run: a bot's from its mail setting, everything else (`--as <owner handle>`, which the runner's mail actions and calendar
-bookings use) from the runner's own read (`GET /api/v2/connectors/mail/targets`), never from the run itself. When Tico
+run: a bot's from its mail setting, a person's from their `GET /api/v2/mail/access` answer, and the runner's connector
+job's (`--as connector`, which its sync, mail actions and calendar bookings use) from the runner's own read
+(`GET /api/v2/connectors/mail/targets`), never from the run itself. The connector reads the mailboxes its computer
+syncs and writes only the actions the server leased it, each checked against the automation owner's level. When Tico
 cannot be asked, writes are refused ("Tico couldn't check the company's mail settings; try again") and reads go on; a
 run without the runner's registration can't ask, so it only reads. Change calendar needs `calendar.events`.
 
-A box turned off takes effect on the next token: Connect Google asks Google only for what is ticked, each refresh leaves
-out a write turned off (the grant keeps it, so turning it back on needs no new sign-in), and Whole Workspace tokens are
+Organize mail, Send mail and Change calendar turned off take effect on the next token: Connect Google asks Google only
+for what is ticked, each refresh leaves out a write turned off (the grant keeps it, so turning it back on needs no new
+sign-in), and Whole Workspace tokens are
 minted read only for it (`gmail.readonly`, `calendar.readonly`). Domain-wide delegation takes only scopes authorized by
 name, so step 2 below authorizes the read-only scopes too, and Check records which ones Google accepted. A Workspace
 authorized before them keeps minting its write scopes (Tico still holds each box off) and shows **Redo step 2 to narrow
 Google access.**; redo step 2, then click Check. A box turned on that a person's grant lacks shows **Connect Google again** on their card. Both agent
-prompts say what Tico will ask Google for. Only an admin acting as themselves changes it: never a bot, BotOps or the
-Assistant.
+prompts say what Tico will ask Google for. Only an admin acting as themselves changes these settings: never a bot,
+BotOps or the Assistant.
 
 **What these settings enforce.** Where Google allows it, Tico narrows the token itself: Organize mail and Send mail both
 off gives read-only mail, and Change calendar off gives a read-only calendar. Otherwise Tico's mail tool enforces them,
@@ -498,8 +512,19 @@ With Whole Workspace set, the `connectors` job on the runner reads the mailboxes
 
 ### Which mailboxes the sync covers
 
-The `connectors` job syncs the mailboxes the message bots manage, and nothing else. It does not go through every person on the
-roster. For each message bot (the bot named as someone's `inbox_bot`), the mailbox is the address the bot declares: the
+With **Whole Workspace**, the `connectors` job also syncs every known active personal mailbox linked to a person and
+every shared inbox on the key's domain, even without a message bot. Each has one sync computer: its message bot's
+non-revoked host, else the person's Assistant's online host, else an online isolated company server (owned by a
+company owner or admin), else the person's own online computer. Shared mailboxes
+without a message-bot host use only a company server. Among equally eligible computers, the lowest runner ID wins.
+An isolated server is a Linux Docker runner that supervises its own `connectors` job. Another member's personal
+computer is never chosen just because it is online. A fallback owner is replaced when it has not contacted Tico for
+60 seconds or is revoked. If no eligible computer is online, nothing syncs and Health says the mailbox has no sync computer.
+Stopped mailboxes and mailboxes awaiting a person are excluded from this fallback. A personal Connect Google grant
+keeps its existing ownership rule. Syncing grants no bot access: the person and their Assistant can read their copies;
+other bots still need an explicit mailbox grant, even on the syncing computer.
+
+For each message bot (the bot named as someone's `inbox_bot`), the mailbox is the address the bot declares: the
 identity of its `gmail` entry in `bot.yaml`, which BotOps fills from the `Mailbox: <email>` line in the bot's instructions
 (`{{mailbox}}` in the template). Only when a bot declares none does the sync use its person's email from the roster. A person
 who left, and an archived bot, are skipped.
@@ -624,8 +649,9 @@ The key can act as any mailbox in the team, so bots must not be able to read it.
 - **Docker runner with the two-user layout** (the current `runner.compose.yaml`) with a key you made yourself: the key is in the runner's state directory,
   closed to the bots' user. The `connectors` job reads it there. A message bot's run gets, from the runner over its credential
   socket, a Gmail or Calendar access token that lasts an hour for one mailbox at a time. The mailboxes it may ask for are the
-  one the bot declares (its human's own email only if it declares none). Those of the humans below that human in the
-  team chart are added only when that mailbox's `gmail` entry sets `org_read: true`. Calendar tokens come from the same
+  ones it holds a level on in Tico (`mailbox_levels` on its turn; a message bot gets its grant when it is set as a
+  person's message bot). The server checks the level again on every mint, and a Read level gets the read-only scopes,
+  except on the computer that syncs the mailbox, whose connector holds the full scope. Calendar tokens come from the same
   list, so on this layout the mail-local calendar commands reach only those mailboxes' calendars. Any other bot, and any
   other mailbox, is refused.
   A bot is a message bot to the server when it is its person's `inbox_bot`, which is what the server checks before it names any
@@ -727,7 +753,8 @@ exactly what its bot.yaml asks.
 **Computers with no registry (Docker).** A Docker computer has no `registry/` folder, so nothing gives the mail tool a
 `mail-policy.yaml`. Its policy is built in: sending on globally, the team's own domains as internal (from the bot's mailbox
 and the team roster, never gmail.com and other public providers; `TICO_INTERNAL_DOMAINS` names them outright), the usual
-caps (20 sends a day, one outside recipient, no outside Cc, no attachments), no wait between messages to the same person
+caps (20 sends a day, one outside recipient, no outside Cc), no wait
+between messages to the same person
 (the forward address gets many messages), and an empty blocklist. `mail policy show` prints "built-in defaults". Put a
 `mail-policy.yaml` in the registry and that file is the policy instead. The message bot's template also carries
 `questions/mail-triage.json`, so the decision questions are in the bot's own repository wherever it runs.

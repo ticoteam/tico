@@ -10,6 +10,7 @@ from backend import hubdb as H
 from backend import threads as CORE
 from backend.store import encode
 from backend.tests.test_api import api, get, headers, post, setup_attempt  # noqa: F401
+from backend.tests.test_batch import approval_for_ana
 from backend.tests.hold_rows import set_holds
 
 KB = 1024
@@ -30,6 +31,69 @@ def clone(c, table, row, n, **changes):
 
 def size(value):
     return len(encode(value).encode())
+
+
+def test_folded_needs_changes_stay_under_the_live_event_budget(api):
+    store, auth, view = api.app.state.store, api.app.state.auth, api.app.state.task_view
+    _, _, attempt = setup_attempt(api, "ops")
+    approvals = [approval_for_ana(api, bot="ops", token=attempt["token"],
+                                 payload={"amount": 1200 + i, "account": "ads", "what": f"Offsite ads {i}"})
+                 for i in range(2)]
+    with store.transaction() as c:
+        parent = H.task_create(c, "human:ana", "Prepare the offsite", "x", "bot:ops")
+        waits = [parent["id"]] + [H.task_create(c, "human:ana", f"Prepare offsite part {i}", "x", "bot:ops",
+                                              parent_id=parent["id"])["id"] for i in range(249)]
+        H.task_create(c, "bot:ops", "Pick the offsite venue", "x", "human:ana", parent_id=parent["id"])
+        c.executemany("UPDATE tasks SET status='waiting', waiting_on='human:ana' WHERE id=?", [(tid,) for tid in waits])
+    folded = sorted(waits)
+    assert get(api, "needs-you")["folded_task_ids"] == get(api, "needs-you?limit=1")["folded_task_ids"] == folded
+    who = auth.authenticate({"authorization": "Bearer ana-test"})
+    with store.read() as c:
+        held, after = E.needs_baseline(c, auth, who, view), E.latest(c)
+
+    def change():
+        nonlocal after
+        base = held["version"]
+        with store.read() as c:
+            event = E.read(c, auth, who, after, topics=("needs",), task_view=view, needs_held=held)[0][-1][2]
+            after = E.latest(c)
+        assert event["base"] == base and event["version"] == held["version"]
+        assert size(event) <= 8 * KB
+        return event
+
+    # An unrelated approval leaves all 250 waits folded into one card: do not resend their UUIDs.
+    post(api, f"approvals/{approvals[0]['id']}", {"decision": "declined"})
+    event = change()
+    assert event["changed"] == [] and event["removed"] == [approvals[0]["id"]]
+    assert "folded_task_ids" not in event
+
+    # A single unfolded wait still leaves a replacement too large for a live event.
+    with store.transaction() as c:
+        c.execute("UPDATE tasks SET status='open', waiting_on=NULL WHERE id=?", (waits[-1],))
+    assert change()["folded_task_ids"] is None
+    assert get(api, "needs-you?limit=1")["folded_task_ids"] == sorted(waits[:-1])
+
+    # The stream advances its folding baseline even when it sends null.
+    post(api, f"approvals/{approvals[1]['id']}", {"decision": "declined"})
+    assert "folded_task_ids" not in change()
+
+    # The set is sent whole, so an empty one is small enough to send, however many ids left it.
+    with store.transaction() as c:
+        c.executemany("UPDATE tasks SET status='open', waiting_on=NULL WHERE id=?", [(tid,) for tid in waits])
+    assert change()["folded_task_ids"] == []
+    assert get(api, "needs-you?limit=1")["folded_task_ids"] == []
+
+    # The folded ids share one cap with the changed and removed ids: a set that fits beside them is sent, one past
+    # the cap with them uses the whole-read path.
+    for n in (E.NEEDS_CHANGES_MAX // 2, E.NEEDS_CHANGES_MAX + 1):
+        with store.transaction() as c:
+            c.executemany("UPDATE tasks SET status='open', waiting_on=NULL WHERE id=?", [(tid,) for tid in waits])
+            c.executemany("UPDATE tasks SET status='waiting', waiting_on='human:ana' WHERE id=?",
+                          [(tid,) for tid in waits[:n]])
+        event = change()
+        named = len(event["changed"] or []) + len(event["removed"] or [])
+        assert named < E.NEEDS_CHANGES_MAX // 2
+        assert event["folded_task_ids"] == (sorted(waits[:n]) if n == E.NEEDS_CHANGES_MAX // 2 else None)
 
 
 def test_payloads_stay_under_their_budgets(api):

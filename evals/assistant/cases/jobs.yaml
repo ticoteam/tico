@@ -144,22 +144,22 @@
 
 - id: jobs-change-bot-routine
   group: jobs
-  prompt: "Have Health Monitor stop pinging me with test tasks. Only the runner queue ones."
+  prompt: "Have Check health stop pinging me with test tasks. Only the runner queue ones."
   hub:
     - match: '^automation list'
       out:
         automations:
-          - {id: auto_health_pings, name: "Health Monitor runner queue ping", owner: "bot:health-monitor", trigger: "every 6 hours", enabled: true, runs_7d: 24, creates: "one task per run, owner human:dana"}
+          - {id: auto_health_pings, name: "Check health runner queue ping", owner: "bot:botops", trigger: "every 6 hours", enabled: true, runs_7d: 24, creates: "one task per run, owner human:dana"}
           - {id: auto_docs_release, name: "Docs and release notes for each release", owner: "bot:technical-writer", trigger: "release published (about twice a day)", enabled: true, runs_7d: 14, creates: "one task per release, owner human:dana"}
         next: null
     - match: '^automation (show|get) auto_health_pings'
       out:
         automation:
           id: auto_health_pings
-          name: "Health Monitor runner queue ping"
-          owner: "bot:health-monitor"
+          name: "Check health runner queue ping"
+          owner: "bot:botops"
           trigger: {kind: "schedule", every: "6h"}
-          steps: [{action: "task.create", owner: "human:dana", title: "[Health Monitor] test ping: runner queue"}]
+          steps: [{action: "task.create", owner: "human:dana", title: "[Check health] test ping: runner queue"}]
           enabled: true
           version: 3
     - match: '^automation update auto_health_pings'
@@ -173,9 +173,9 @@
     - '^approval (approve|decline)'
     - '^automation update auto_docs_release'
   reply: |
-    Changes the source the owner named: it turns the Health Monitor runner-queue ping automation off (or narrows it), using
+    Changes the source the owner named: it turns the Check health runner-queue ping automation off (or narrows it), using
     `hub automation update auto_health_pings`, or adds a rule, and says so in one line with how to undo it. It leaves the
-    release docs automation alone, since the owner did not ask about it. It does not message Health Monitor or BotOps, and it
+    release docs automation alone, since the owner did not ask about it. It does not message Check health or BotOps, and it
     does not refuse because the automation belongs to a bot. Plain and short.
 
 - id: jobs-what-did-bot-do

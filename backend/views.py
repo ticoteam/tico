@@ -810,6 +810,14 @@ def operation_issues(c, who, auth):
             add("google_workspace", "The Google Workspace key is failing",
                 key["last_error"] or "Google has refused the Workspace key for too long.",
                 needs_person=True, action="Check the key in Settings > Google.")
+        sync_owners = google_workspace.workspace_sync_owners(c)
+        for box in google_workspace.workspace_mailboxes(c):
+            if box["address"] not in sync_owners:
+                add("google_workspace", box["address"] + " has no sync computer",
+                    "Mail and calendar for " + box["address"] + " are not syncing because no eligible computer is online.",
+                    needs_person=False, severity="warning",
+                    action="Bring an isolated company server online." if box["kind"] == "shared" else
+                           "Bring the person's computer, their Assistant's host or an isolated company server online.")
         labels = {row["id"]: row["label"] for row in c.execute("SELECT id,label FROM runners_with_state")}
         hosts = google_rights.inbox_hosts(c)
         for grant in c.execute("SELECT person_id,mailbox,holder FROM google_connects WHERE status='connected' "
@@ -1967,6 +1975,20 @@ def needs_bots(items, me):
     return counts
 
 
+def needs_kinds(items):
+    """Whole-list counts by kind: Tasks leaves thread attention in Inbox, even before every page is read."""
+    counts = {}
+    for it in items:
+        counts[it["kind"]] = counts.get(it["kind"], 0) + 1
+    return counts
+
+
+def needs_folded_ids(items):
+    """Task ids represented by another card, including cards on unread pages, so Tasks counts each blocker once."""
+    return sorted({str(f["id"]) for it in items for f in it.get("folded", [])}
+                  | {str(tid) for it in items for tid in it.get("merged", [])})
+
+
 def needs_actor(it, me):
     """The teammate one Needs-you item goes with (needs_bots), or None."""
     actor = None
@@ -2266,7 +2288,7 @@ def install_views(app, store, auth, mutate, task_view):
         company = providers.load(c, store.settings)
         from . import cloud_machines
         # Each bot's cloud machine, own or shared, Tico Cloud only (backend/cloud_machines.py): one read for every bot.
-        cloud_rows = cloud_machines.rows(c) if cloud_machines.offered(c, store.settings) else None
+        cloud_rows = cloud_machines.visible_rows(c) if cloud_machines.offered(c, store.settings) else None
         # Each bot's last finished run, one attempts_bot_settled seek per bot rather than a sort of every run there is.
         latest_run = {slug: tid for slug, tid in c.execute(
             "SELECT b.id,(SELECT t.id FROM attempts t WHERE t.bot_id=b.id AND t.settled_at IS NOT NULL "
@@ -2603,7 +2625,7 @@ def install_views(app, store, auth, mutate, task_view):
             cloud_of = {r["runner_id"]: {"bot": None if r["bot"] == cloud_machines.SHARED else r["bot"],
                                          "shared": r["bot"] == cloud_machines.SHARED,
                                          "size": r["machine_size"] or r["size"], "state": r["state"]}
-                        for r in cloud_machines.rows(c).values() if r["runner_id"]}
+                        for r in cloud_machines.visible_rows(c).values() if r["runner_id"]}
             from . import browser_exit
             # One pass each for every computer's internet sharing and today's bytes through it.
             exit_policies, exit_used = browser_exit.policies(c), browser_exit.used_today_all(c)
@@ -3008,7 +3030,9 @@ def install_views(app, store, auth, mutate, task_view):
         `version=<the one held>` answers `unchanged` with no items when it still holds, and `ids=a,b` sends only those
         items, with each one's place in the whole list (`positions`), to mend a held copy after a live `needs` event.
         `limit` (at most NEEDS_PAGE_MAX) sends a page, with `next` to pass as `cursor` for the one after it and `bots`,
-        each bot's count over the whole list; a cursor from an older version starts again from the top (`restart`).
+        each bot's count over the whole list; `by_kind` counts each kind and `folded_task_ids` names tasks represented
+        by other cards over the whole list, including unread pages.
+        A cursor from an older version starts again from the top (`restart`).
         Without either, the whole list. Every page is cut from the list built whole, so its `version` and each
         item's place are the same as the full read's and the live event's."""
         who = request.state.identity
@@ -3029,7 +3053,8 @@ def install_views(app, store, auth, mutate, task_view):
                 positions = {str(x["id"]): n for n, x in enumerate(items) if str(x["id"]) in wanted}
                 return {"actor": who.actor, "count": len(items), "version": current, "positions": positions,
                         "items": needs_visuals(c, who, [x for x in items if str(x["id"]) in positions])}
-            out = {"actor": who.actor, "count": len(items), "items": items, "older": older,
+            out = {"actor": who.actor, "count": len(items), "by_kind": needs_kinds(items),
+                   "folded_task_ids": needs_folded_ids(items), "items": items, "older": older,
                    "went_away": went_away(c, who.actor), "version": current, "next": None}
             if limit is not None or cursor:
                 out["items"], out["next"], restarted = needs_page(items, current, limit, cursor)

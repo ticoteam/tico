@@ -279,6 +279,9 @@ NEVER = [(m, re.compile(p)) for m, p in (
     (None, r"/api/v2/google/workspace(/.*)?"), (None, r"/api/v2/google/oauth-client"),
     # What Tico may do in Google: Send mail lets every bot write outside, a person's own word as a bot's Mail sending is.
     (None, r"/api/v2/google/permissions"),
+    # Who can use a mailbox (Settings > Mailboxes, backend/mailboxes.py): connecting one, sharing it, each access and
+    # stopping it are the person's own tap, never a chat's.
+    (None, r"/api/v2/mailboxes(/.*)?"),
     # A computer's part of a Connect Google sign-in and its Workspace tokens: computers only, never a chat's.
     (None, r"/api/v2/connectors/mail/google/.*"), (None, r"/api/v2/connectors/mail/workspace/token"),
     ("POST", r"/api/v2/live-meetings"), ("POST", r"/api/v2/meeting-importers/[^/]+"), (None, r"/api/v2/postal/intake"),
@@ -346,6 +349,12 @@ def automation_sends_outside(store, method, path, body=None):
         row = c.execute("SELECT flow FROM automations WHERE id=?", (m.group(1),)).fetchone()
     stored = str(row["flow"] or "") if row else ""
     return _sends(stored) or _body_sends(fields)
+
+
+def automation_needs_confirm(store, method, path, body=None):
+    from . import assistant_routines
+    decision = assistant_routines.gate(store, method, canonical(path) or "", _fields(body))
+    return decision if decision is not None else automation_sends_outside(store, method, path, body)
 
 
 def settings_route_unmatched(method, path, body=None):
@@ -646,6 +655,7 @@ def require_on_task(c, auth, who, path):
 # What may be proposed at all (method, normalized path). Anything else, and above all tokens, sign-in,
 # runner enrollment, this assistant and anything that hands back a secret, can never be proposed.
 _PROPOSABLE = [(m, re.compile(p)) for m, p in (
+    ("POST", r"/api/v2/automations"), ("PATCH", r"/api/v2/automations/[^/]+"),
     ("POST", r"/api/v2/approvals/[^/]+"), ("POST", r"/api/v2/messages/[^/]+/answer"),
     ("POST", r"/api/v2/tasks"), ("POST", r"/api/v2/tasks/[^/]+"),
     ("POST", r"/api/v2/tasks/[^/]+/(comments|links|labels|run-now|ask)"),
@@ -1106,7 +1116,11 @@ def create_proposal(c, settings, who, room, proposer, summary, method, path, bod
                       "a person confirms", 422)
     if any(field in (body or {}) for field in PERSON_ONLY_FIELDS):
         raise Problem("operation", "Replacing a lost key is confirmed by a person directly, never through a proposal", 422)
-    if proposer == "assistant" and not any(m == method and p.fullmatch(path) for m, p in _PROPOSABLE):
+    from . import assistant_routines
+    routine_route = ((method == "POST" and path == assistant_routines.CREATE)
+                     or (method == "PATCH" and assistant_routines.EDIT.fullmatch(path)))
+    if proposer == "assistant" and (not any(m == method and p.fullmatch(path) for m, p in _PROPOSABLE)
+                                    or (routine_route and not assistant_routines.request_is_message(c, method, path, body))):
         # A setting the Assistant puts on a card is one catalogue entry's body, and never a person-only one.
         from . import settings_catalog
         found = settings_catalog.stored_class(c, method, path, body if isinstance(body, dict) else None)
@@ -1128,6 +1142,17 @@ def create_proposal(c, settings, who, room, proposer, summary, method, path, bod
         body = runnable(c, method, path, body)
     if routes is not None:
         refuse_unrunnable(routes, method, path, body)
+    body, routine = assistant_routines.prepare(c, settings, who, method, path, body) if proposer == "assistant" else (body, None)
+    routine_steps = {}
+    if path == BATCH_PATH and proposer == "assistant":
+        for i, step in enumerate(body["actions"]):
+            if routes is not None:
+                refuse_unrunnable(routes, step["method"], step["path"], step["body"])
+            step["body"], planned = assistant_routines.prepare(c, settings, who, step["method"], step["path"], step["body"])
+            if planned:
+                routine_steps[i] = planned
+    if routes is not None:
+        refuse_unrunnable(routes, method, path, body)
         # A bulk card's own model takes any step body: each step is checked against its own route, and one refused
         # step refuses the whole card.
         for s in body["actions"] if path == BATCH_PATH else ():
@@ -1141,6 +1166,8 @@ def create_proposal(c, settings, who, room, proposer, summary, method, path, bod
         # The same card again is the same card: a retried command never leaves two to click.
         return {"action": action_view(dict(same), c), "message_id": None, "repeated": True}
     said, diff = describe(c, method, path, body)
+    if routine:
+        said, diff = routine
     if not what and (m := re.fullmatch(r"/api/v2/bots/([^/]+)/repositories", path)) and method == "PUT":
         # What confirming does, from the change tried as this person and rolled back, not read off the request.
         from .repositories import preview_change
@@ -1149,12 +1176,14 @@ def create_proposal(c, settings, who, room, proposer, summary, method, path, bod
     if path == BATCH_PATH:
         # One line per step: what it does to which task, and the fields it changes.
         diff = groups(c, body["actions"])
-        for s in body["actions"]:
-            line, changes = describe(c, s["method"], s["path"], s["body"])
+        for i, s in enumerate(body["actions"]):
+            line, changes = routine_steps.get(i) or describe(c, s["method"], s["path"], s["body"])
             fields = changes or [{"field": k, "new": v} for k, v in s["body"].items()]
             diff.append({"field": line, "new": ", ".join(f"{d['field']}: {d['new']}" for d in fields
-                                                          if d["field"] != "version")})
-    elif not re.fullmatch(r"/api/v2/tasks/[^/]+", path):
+                                                          if d["field"] != "version"),
+                         **({"routine": True, "routine_path": s["path"],
+                             "routine_revision": fields[0].get("routine_revision")} if i in routine_steps else {})})
+    elif not routine and not re.fullmatch(r"/api/v2/tasks/[^/]+", path):
         # The card lists every field the request carries, so nothing that runs is missing from what is confirmed.
         # (A task update lists what changes: its old and new values.)
         diff = [{"field": k, "new": v} for k, v in body.items()]

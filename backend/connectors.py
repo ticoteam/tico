@@ -288,15 +288,24 @@ def _refresh_mailbox(c, address, person_id, runner_id, synced_at, watching_since
 
 
 def human_of(c, address):
-    """The person row a connector address belongs to: by roster email, else by a message bot's declared mailbox."""
+    """A connector mailbox's person; a known shared inbox has an address but no person id."""
     address = str(address or "").strip().lower()
     row = c.execute("SELECT id,email FROM humans WHERE lower(email)=?", (address,)).fetchone()
     if row:
         return row
+    from . import mailbox_access
+    mailbox = mailbox_access._row(c, address)
+    if mailbox and mailbox["status"] == "active":
+        if mailbox["person_id"]:
+            return c.execute("SELECT id,email FROM humans WHERE id=?", (mailbox["person_id"],)).fetchone()
     from .views import roster
     people = roster(c)
     found = routines.person_for_mailbox(address, routines.message_bot_mailboxes(c, people), people)
-    return c.execute("SELECT id,email FROM humans WHERE id=?", (found["id"],)).fetchone() if found else None
+    if found:
+        return c.execute("SELECT id,email FROM humans WHERE id=?", (found["id"],)).fetchone()
+    if mailbox and mailbox["status"] == "active" and mailbox["kind"] == "shared":
+        return {"id": None, "email": address}
+    return None
 
 
 def install_connectors(app, store, execution, mutate):
@@ -347,10 +356,9 @@ def install_connectors(app, store, execution, mutate):
     def targets(request: Request):
         with store.read() as c:
             runner, named, owned = reader(c, request.state.identity)
-            # The mailboxes the message bots manage, not every person on the roster: a bot's declared
-            # mailbox, else its person's email. People who left (hidden) are left out.
+            # Calendar sync follows the same ownership as mail, including known Workspace mailboxes without a bot.
             people = [{"id": box["person_id"], "email": box["address"]}
-                      for box in google_rights.visible(c, runner["id"], named, owned=owned)]
+                      for box in google_rights.visible(c, runner["id"], named, owned=owned) if box["person_id"]]
         return {"people": people, "hours": 24, "refresh_seconds": 45}
 
     @app.post("/api/v2/connectors/calendar/snapshots")
@@ -364,7 +372,7 @@ def install_connectors(app, store, execution, mutate):
                 seen.add(snapshot.email)
                 google_rights.check(c, runner["id"], named, snapshot.email, owned)
                 person = human_of(c, snapshot.email)
-                if not person:
+                if not person or not person["id"]:
                     raise Problem("not_found", "Calendar target is not on the "
                                   + store.settings.app_name + " roster", 404)
                 payload = {"events": [event.model_dump() for event in snapshot.events]}
@@ -494,19 +502,25 @@ def install_connectors(app, store, execution, mutate):
             address = routines.mailbox_of(rostered, routines.message_bot_mailboxes(c, people))
         return person, address
 
-    def calendar_allowed(c, who, address, person=None):
-        """People: the calendars whose mail they may read. Bots: the owner's and their operator's."""
-        if who.role == "owner":
-            return
-        if who.role == "human":
-            from .mail import visible_addresses
-            if address in visible_addresses(c, who):
+    def calendar_allowed(c, who, address, person=None, change=False):
+        """A calendar follows its mailbox (backend/mailbox_access.py): reading needs a level on it, changing it Read and
+        write (the company's Change calendar is checked by the caller). Either the calendar's address or its person's
+        email counts. A bot also reads, never changes, its operator's calendar, as before."""
+        from . import mailbox_access
+        email = str(person["email"] or "").strip().lower() if person else ""
+        named = list(dict.fromkeys(a for a in (address, email) if a))
+        levels = [mailbox_access.level(c, who, a) for a in named]
+        if change:
+            if "read_write" in levels:
                 return
-        elif who.role == "bot":
+            raise Problem("forbidden", "Changing that calendar needs Read and write on its mailbox", 403)
+        if any(level != "none" for level in levels):
+            return
+        if who.role == "bot":
             row = c.execute("SELECT h.email FROM bot_config b JOIN humans h ON h.id=b.owner_id WHERE b.bot=?",
                             (H.actor_id(who.actor),)).fetchone()
-            named = {store.settings.owner_email, str(row["email"] if row else "").lower()} - {""}
-            if address in named or (str(person["email"] or "").lower() if person else "") in named:
+            operator = str(row["email"] if row else "").strip().lower()
+            if operator and operator in named:
                 return
         raise Problem("forbidden", "That calendar is not yours to read or schedule on", 403)
 
@@ -538,7 +552,7 @@ def install_connectors(app, store, execution, mutate):
 
         def work(c):
             person, address = calendar_person(c, body.calendar)
-            calendar_allowed(c, who, address, person)
+            calendar_allowed(c, who, address, person, change=True)
             if not workspace.permissions(c)["change_calendar"]:
                 raise Problem("company_off", CALENDAR_OFF, 403)
             start = instant(body.start)
@@ -673,14 +687,13 @@ def install_connectors(app, store, execution, mutate):
             return {"accepted": accepted}
         return mutate(request, body, work)
 
-    def bot_mailboxes_of(c, runner_id):
-        return google_rights.bot_mailboxes(c, runner_id)
-
     @app.post("/api/v2/connectors/mail/workspace/token")
     def workspace_token(request: Request, body: WorkspaceToken):
         """A short-lived access token, for one service, for a mailbox this computer owns: the Google Workspace's, minted
-        here from the server's key. Allowed for the mailboxes it owns (the sync job) and for those its message bots read
-        on their turns (routines.token_mailboxes). Never through mutate(): tokens stay out of the idempotency store."""
+        here from the server's key. Allowed for the mailboxes it owns (the connector: its sync and the actions the server
+        leased it) and for those its turns hold a level on now (backend/mailbox_access.py: its bots', a live Assistant
+        turn's person's), checked again on every mint. A turn's mailbox held read only gets the read-only scopes. Never
+        through mutate(): tokens stay out of the idempotency store."""
         box = body.mailbox.strip().lower()
         with store.read() as c:
             runner, named = member(c, request.state.identity)
@@ -692,7 +705,11 @@ def install_connectors(app, store, execution, mutate):
                 raise Problem("not_connected", "The Google Workspace does not cover " + box, 403,
                               extra={"kind": "not_connected"})
             owned = workspace.owned_mailboxes(c, runner["id"])
-            if box not in owned and box not in bot_mailboxes_of(c, runner["id"]):
+            from . import mailbox_access
+            connector = mailbox_access.connector_for(c, runner["id"], named, owned)
+            held = ("read_write" if box in owned and mailbox_access.level(c, connector, box) != "none"
+                    else google_rights.turn_level(c, runner["id"], box, execution.auth))
+            if held == "none":
                 kind = "workspace_owned" if named else "not_this_mailbox"
                 raise Problem(kind, google_rights.MESSAGES.get(kind, "This computer does not run the message bot that "
                                                                "reads " + box).format(box=box), 403,
@@ -701,8 +718,10 @@ def install_connectors(app, store, execution, mutate):
             if row is None:
                 raise Problem("not_connected", "The Google Workspace connection is not set up", 403,
                               extra={"kind": "not_connected"})
+            scopes = None if held == "read_write" else workspace.minting_scopes(
+                body.service, dict.fromkeys(workspace.PERMISSIONS, False), row)
             try:
-                answer, failure = workspace.mint(c, box, body.service, row=row), None
+                answer, failure = workspace.mint(c, box, body.service, row=row, scopes=scopes), None
             except Problem as refused:
                 answer, failure = None, refused
         with store.transaction() as c:

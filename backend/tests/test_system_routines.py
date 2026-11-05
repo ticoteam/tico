@@ -24,19 +24,18 @@ def test_every_built_in_job_is_listed_with_its_group_word_and_control_availabili
     assert "groups" not in data, "one flat list; a group is a word search finds, not a heading"
     assert [j["key"] for j in data["jobs"]] == [job.key for job in SR.JOBS] + ["task-rule-close-after-done"]
     assert {k for k, j in jobs.items() if j["controllable"]} == {
-        "stale_review", "kpi_asks", "learnings", "health_scan", "ask_deadlines", "task_manager_report",
-        "stall_triage", "bookkeeper_check", "memory_tidy", "auto_dream",
-        "task_roundup"}
-    assert {k for k, j in jobs.items() if j["ai"]} == {"stale_review", "learnings", "stall_triage", "thread_routing", "thread_rank"}
-    # Housekeeping is always on, except the one housekeeping job a person may switch (Task roundup).
+        "stale_review", "kpi_asks", "learnings", "ask_deadlines", "task_manager_report",
+        "bookkeeper_check", "memory_tidy"}
+    assert {k for k, j in jobs.items() if j["ai"]} == {"stale_review", "learnings", "thread_routing", "thread_rank"}
+    # Housekeeping has no switch; Task roundup's switch moved to Maintenance Find stuck.
     assert all(j["needed"] == (j["group"] == "housekeeping" and not j["controllable"]) for j in jobs.values())
-    assert jobs["task_roundup"]["group"] == "housekeeping" and jobs["task_roundup"]["needed"] is False
+    assert "task_roundup" not in jobs
     assert jobs["thread_followups"]["name"] == "Earlier messages"
     assert jobs["thread_followups"]["then"] == [SR.ACTIONS["tell_earlier_messages"][0]]
     assert jobs["stale_review"]["schedule"] == "Hourly" and jobs["learnings"]["schedule"] == "Nightly at 03:00"
     for key in ("due_reminders", "ask_deadlines", "approval_expiry"):
         assert jobs[key]["group"] == "reminders"
-    for key in ("stall_checks", "snooze_ends", "cleanup", "gateway_check", "billing_check", "directory_sync"):
+    for key in ("stall_checks", "snooze_ends", "gateway_check", "billing_check", "directory_sync"):
         assert jobs[key]["group"] == "housekeeping"
 
 
@@ -45,8 +44,8 @@ def test_a_scheduler_tick_records_each_run_with_its_result_and_next_run(api):
     at = datetime.now(timezone.utc)
     Scheduler(store, api.app.state.execution).tick(at)
     jobs, _ = rows(api)
-    for key in ("ask_deadlines", "approval_expiry", "stall_checks", "health_scan", "kpi_asks",
-                "due_reminders", "snooze_ends", "cleanup"):
+    for key in ("ask_deadlines", "approval_expiry", "stall_checks", "kpi_asks",
+                "due_reminders", "snooze_ends"):
         assert jobs[key]["last"] and jobs[key]["last"]["ok"], key
         assert jobs[key]["last"]["result"], key
     nxt = H.parse_ts(jobs["ask_deadlines"]["next"])
@@ -190,8 +189,7 @@ def test_a_quiet_repeat_moves_its_row_after_a_minute_and_a_busy_run_starts_a_new
 
 
 def test_each_wrapped_block_still_reports_its_old_failure_name(api, monkeypatch):
-    from backend import (approval_expiry, ask_deadlines, billing_check, go_live, goal_asks, health_monitor,
-                         still_needed)
+    from backend import approval_expiry, ask_deadlines, billing_check, go_live, goal_asks, still_needed
     from backend import goals as G
     store = api.app.state.store
     # The pass refreshes one live goal per transaction; an empty registry has no refresh to fail.
@@ -202,14 +200,14 @@ def test_each_wrapped_block_still_reports_its_old_failure_name(api, monkeypatch)
 
     def broken(*a, **k):
         raise RuntimeError("x")
-    for module, name in ((G, "refresh"), (goal_asks, "sync"), (health_monitor, "check"), (go_live, "expire"),
+    for module, name in ((G, "refresh"), (goal_asks, "sync"), (go_live, "expire"),
                          (ask_deadlines, "sweep"), (approval_expiry, "sweep"), (still_needed, "sweep"),
                          (billing_check, "read_later")):
         monkeypatch.setattr(module, name, broken)
     from backend import gateway_connection
     monkeypatch.setattr(gateway_connection, "check_soon", broken)
     failures = Scheduler(store, api.app.state.execution).tick()["failures"]
-    for name in ("goals", "goal_asks", "health_monitor", "go_live", "ask_deadlines", "approval_expiry",
+    for name in ("goals", "goal_asks", "go_live", "ask_deadlines", "approval_expiry",
                  "still_needed", "billing_check", "gateway"):
         assert {name: "RuntimeError"} in failures, name
     jobs, _ = rows(api)

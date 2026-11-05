@@ -15,7 +15,6 @@ JOBS = {
     "repository_waits": ("open", "Finish tasks waiting on a repository or worktree."),
     "task_manager_report": ("open", "Task Manager: per department, list quiet tasks, overdue asks, review tickets without a PR and merged work whose step did not move."),
     "bookkeeper_check": ("open", "Bookkeeper: read its Finance work queue; open one Books check task only when something is new."),
-    "stall_triage": ("open", "Not run: stall checks no longer wake a bot about one quiet task, so Decide reads none."),
     "stale_review": ("after", "Suggest what to do with open tasks that look finished or forgotten."),
 }
 

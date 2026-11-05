@@ -191,7 +191,7 @@ def run_view(c, auth, who, tid):
     turns = []
     for row in c.execute(
             "SELECT a.id,a.bot_id AS bot,a.exit,a.job_id,a.state,a.created_at,a.started_at,a.finished_at,a.lease_until,"
-            "a.result,a.wake,m.conversation_id,p.wait_reason FROM attempts a JOIN jobs j ON j.id=a.job_id "
+            "a.result,a.stop_requested_at,a.wake,m.conversation_id,p.wait_reason FROM attempts a JOIN jobs j ON j.id=a.job_id "
             "JOIN messages m ON m.id=j.message_id LEFT JOIN start_places p ON p.attempt_id=a.id "
             "WHERE a.task_id=? ORDER BY a.created_at DESC LIMIT ?",
             (tid, SCAN_LIMIT)):
@@ -256,7 +256,7 @@ def run_view(c, auth, who, tid):
                         else login_waits.waiting(c, r["id"], r["bot"], who, auth) if live else None),
             "moved": login_waits.moved(c, r["id"], r["bot"], who, auth),
             # Stopped to let another turn have the shared login; its job continues next.
-            "paused": login_waits.paused(c, r["id"], r["state"], r["result"]),
+            "paused": login_waits.paused(c, r["id"], r["state"], r["result"], r["stop_requested_at"]),
             "next": next_step(r, job_tries, job_rows.get(r["job_id"]) or {"state": None}, decisions,
                               retries.get(r["job_id"], [])),
             # The job's state now and its recovery decision when that decision was about this try (job_recovery); the

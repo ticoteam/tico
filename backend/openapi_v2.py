@@ -55,7 +55,10 @@ TAGS = {
 EVENTS_DESCRIPTION = (
     "text/event-stream. Each change is `id: <change number>`, `event: <topic>` and JSON `data` with `seq`, `actor` "
     "(who made it, when the viewer may know) and `at`:\n"
-    "- `tasks`: `id` and `task` (as `GET /api/v2/tasks` shows it to the viewer), or `gone: true` for a deleted task.\n"
+    "- `tasks`: `id`, `kind` (the last change), `kinds` (all distinct change kinds for this task in the batch) and "
+    "`task` (as `GET /api/v2/tasks` shows it to the viewer), or `gone: true` for a deleted task (TaskEvent schema). "
+    "Refetch files and linked pages when `kinds` includes `files`, even if `kind` is `update`. "
+    "A `bulk: true` event without `id` means read task lists in full.\n"
     "- `messages`: `id`, `conversation_id` and `message` (as a conversation page shows it), or `deleted: true`; "
     "a chat goal set, paused, met or stopped is `goal_id` and `goal`.\n"
     "- `runs`: `run_id`, `conversation_id`, `bot`, and either `output` (one step of the run: `kind`, `payload`) or "
@@ -68,8 +71,10 @@ EVENTS_DESCRIPTION = (
     "root's readers, at most one a run step every 5 s) carries `bots`, the root's whole list as "
     "`GET /api/v2/threads/{thread_id}/bot-status` gives it; `routed` carries `message_id` and `routed`.\n"
     "- `needs`: the viewer's own Needs-you `count` and `items` (as `GET /api/v2/needs-you`), whenever anything on it may have moved. "
-    "With `needs=changes`: `count`, `version`, each bot's count (`bots`), and the ids `changed` and `removed` "
-    "since `base` (null when more than 100 moved: read the list whole); read the changed items with "
+    "With `needs=changes`: `count`, `version`, each bot's count (`bots`), counts by kind (`by_kind`), "
+    "task ids represented by other cards (`folded_task_ids`), and the ids `changed` and `removed` "
+    "since `base` (null when more than 100 moved: read the list whole). `folded_task_ids` is omitted when unchanged "
+    "(keep the held set), or null when the replacement or its difference exceeds 100 ids (read the list whole); read the changed items with "
     "`GET /api/v2/needs-you?ids=`, and the whole list (or its first pages) when the version held is not "
     "`base`. `ready` then carries `needs_version`.\n"
     "Also `event: ready` (`seq`: where the log stands), `event: cursor` (the change number to resume from, past changes "
@@ -249,7 +254,7 @@ STABLE = [
     ("/api/v2/task-types/{type_id}", "delete", "Tasks", "deleteTaskType", "Delete an unused task type (movers only)", "TaskTypeResult"),
     ("/api/v2/task-types/{type_id}/delete", "post", "Tasks", "deleteTaskTypePost", "Delete an unused type for clients using POST", "TaskTypeResult"),
     ("/api/v2/tasks", "get", "Tasks", "listTasks",
-     "Tasks the caller can see; type, step, number and updated_since filter, member=<actor> keeps the tasks that "
+     "Tasks the caller can see; q matches title words or #N; type, step, number and updated_since filter, member=<actor> keeps the tasks that "
      "person or bot is on in some role (role=<name> narrows it to one), sort=step orders a board's columns, "
      "brief=true leaves out bodies. Snoozed tasks are left out unless snoozed=only|all or asked for by ids or "
      "number. Each answer carries a `cursor`; changed_after=<cursor> with the same filters "
@@ -625,19 +630,18 @@ STABLE = [
      "A limit on the estimated spend of a group's bots together, nested groups included; null removes a field, one left out stays. Over it, none "
      "of them takes a new job (owner and bot administrators; also the lead of the group or one above "
      "it, within the parent group's limit)", "UsagePoolLimit"),
+    ("/api/v2/usage/queues/purge", "post", "Usage", "purgeAutomaticQueue",
+     "Cancel queued automatic wakes and waits for the whole team (scope company) or one group and the groups under it "
+     "(scope group:<id>). Tasks stay on their current step. Messages from people, and keeper notices of a person's own "
+     "act, stay queued. A run that has already started finishes (owner and bot administrators)", "QueuePurgeResult"),
     ("/healthz", "get", "Health", "getLiveness", "Is the server up (no sign-in)", None),
     ("/api/v2/health", "get", "Health", "getHealth", "Checks, computers and failures (bots see counts, computers and failed runs)", "Health"),
-    ("/api/v2/health-monitor", "get", "Health", "getHealthMonitor",
-     "Owners, admins and the Health Monitor: whether it is on, whether it files reports without asking, and what the "
-     "last hourly scan found", None),
-    ("/api/v2/health-monitor/turn-on", "post", "Health", "turnOnHealthMonitor",
-     "Owner only: add the Health Monitor from the catalog (or wake a paused one) and activate it", None),
-    ("/api/v2/health-monitor/turn-off", "post", "Health", "turnOffHealthMonitor", "Owner only: pause the Health Monitor", None),
-    ("/api/v2/health-monitor/findings/{key}/report", "post", "Health", "reportHealthFinding",
-     "The Health Monitor or the owner: report a finding (key or signature) as a Tico bug: one ticket per signature with "
-     "the redacted diagnostics, a message on it when it comes back, or a support approval when the team rule is off", None),
-    ("/api/v2/health-monitor/local-findings", "post", "Health", "recordLocalHealthFinding",
-     "The Health Monitor: record a process or container its watcher saw busy, as a finding it can report", None),
+    ("/api/v2/health/findings", "get", "Health", "getHealthFindings",
+     "What Check health found on this install: each open problem with its count, last seen time and Tico-bug report, "
+     "plus botops (whether BotOps is there to take findings) and reports_without_asking (the team rule)", None),
+    ("/api/v2/health/findings/{key}/report", "post", "Health", "reportHealthFinding",
+     "People and BotOps: report a finding (key or signature) as a Tico bug: one ticket per problem with the redacted diagnostics, "
+     "a message on it when it comes back, or a support approval when the team rule is off", None),
     ("/api/v2/task-manager", "get", "Health", "getTaskManager",
      "People and bots: whether the Task Manager is on, its hourly report's switch, schedule and last run, and each "
      "department's last check and open check task", None),
@@ -650,7 +654,16 @@ STABLE = [
      "The owner or an admin: switch a system routine on or off, pick its schedule preset (15m, hourly, 4h, daily, "
      "business) or its daily time", "SystemRoutineUpdate"),
     ("/api/v2/system-routines/{key}/run", "post", "Health", "runSystemRoutine",
-     "The owner or an admin: run one controlled system routine once, now; 409 while it is off or already running", None),
+     "The owner or an admin: run one controlled system routine once, now; 409 while it is off or already running. "
+     "task_roundup runs Maintenance Find stuck and returns {run, started}.", None),
+    ("/api/v2/maintenance", "get", "Health", "getMaintenance",
+     "The Maintenance run: its schedule, pause and monthly judge cap, each step with its switch, how often it runs and its cursor, the last run, the live run, the next run, and whether the viewer may change it", None),
+    ("/api/v2/maintenance", "patch", "Health", "saveMaintenance",
+     "The owner or an admin: change the schedule, the pause or the monthly cap, and each step's switch, how often it runs or its number of bots. Only what is sent changes", "MaintenanceUpdate"),
+    ("/api/v2/maintenance/runs", "get", "Health", "listMaintenanceRuns",
+     "Maintenance runs, newest first, a page at a time, each with its step rows. Pass `next` back as `before`", None),
+    ("/api/v2/maintenance/run", "post", "Health", "runMaintenance",
+     "The owner or an admin: run now, every step or only `step`, due by the same rules as a scheduled run; a run already live is returned instead of a second one", "MaintenanceRunRequest"),
     ("/api/v2/threads/{thread_id}/catch-up", "post", "Conversations", "catchUpThread",
      "What is new in a thread (scope subtree: its sub-threads too) that you may read, summarized and posted to your "
      "Assistant DM; the newest 40 messages at most. Nothing new posts nothing", "CatchUpResult"),
@@ -997,6 +1010,11 @@ SCHEMAS = {
                        "run_model": {"oneOf": [ref("TaskRunChoice"), {"type": "null"}]},
                        "comment_delivery": {"oneOf": [ref("CommentDelivery"), {"type": "null"}]}},
                        required=["task", "events", "children", "comments", "messages", "has_more"], actors=ACTORS),
+    "TaskEvent": obj({"seq": "i", "actor": "n", "at": "s", "id": "s",
+                      "kind": {"type": "string", "description": "The last change kind for this task in the batch"},
+                      "kinds": {"type": "array", "items": {"type": "string"}, "uniqueItems": True,
+                                "description": "All change kinds for this task in the batch; files invalidates files and linked pages"},
+                      "task": ref("Task"), "gone": "b"}, required=["seq", "actor", "at", "id", "kind", "kinds"]),
     "TaskReviewAskView": obj({"questions": "a", "who": "n", "by": "s"}),
     "ReviewAnswer": {"oneOf": [
         obj({"target": "o", "answers": "o", "other": "n", "dismiss": "b", "by": "s", "at": "s"}),
@@ -1041,6 +1059,10 @@ SCHEMAS = {
                    "description": "Items that left the caller's queue this week on their own: expired, withdrawn, "
                                   "answered by their Assistant, and the total"},
         count={"type": "integer", "description": "Items in the whole list, whatever page this is"},
+        by_kind={"type": "object", "additionalProperties": {"type": "integer"},
+                 "description": "Items of each kind in the whole list, including unread pages; Tasks excludes thread kinds"},
+        folded_task_ids={"type": "array", "items": {"type": "string"},
+                         "description": "Unique task ids folded or merged into other cards in the whole list, including unread pages"},
         next={"type": ["string", "null"], "description": "With limit or cursor: pass as cursor for the next page; "
                                                          "null on the last page"},
         bots={"type": "object", "additionalProperties": {"type": "integer"},
@@ -1367,6 +1389,8 @@ SCHEMAS = {
                                   "with may_edit true", "additionalProperties": True},
                         "bots": {"type": "object", "additionalProperties": ref("UsageLimitView")}}),
     "BotUsageLimit": obj({"bot": "s", "limit": ref("UsageLimitView")}),
+    "QueuePurgeResult": obj({"scope": {"type": "string", "description": "company, or group:<id>"},
+                             "cancelled": "i", "kept_people": "i", "still_running": "i"}),
     "Token": obj({"access_token": "s", "token_type": "s", "expires_in": "i", "idle_timeout": "i", "person": "s"}),
     "Revoked": obj({"revoked": "b"}),
 }
@@ -1894,7 +1918,9 @@ STABLE.extend([
      "The automations you may see, newest first, each with can_edit; paged by cursor", "AutomationList"),
     ("/api/v2/automations", "post", "Automations", "createAutomation",
      "Save a new automation as version 1; a flow that fails its checks is refused with where and why. BotOps saves "
-     "it off unless `enabled` is sent; a bot without rights to it saves a proposal (off, version 1 pending)",
+     "it off unless `enabled` is sent; a bot without rights to it saves a proposal (off, version 1 pending). "
+     "An Assistant Message routine saves off with action, message_id and needs_confirm; only its person's card "
+     "click enables it. A chooser without a mode defaults to Draft",
      "Automation"),
     ("/api/v2/automations/guide", "get", "Automations", "getAutomationGuide",
      "How BotOps builds and edits automations, with the flow format generated from the hub's code", "AutomationGuide"),
@@ -1949,7 +1975,9 @@ _RUN = obj({"id": "s", "automation_id": "s", "version": "i", "trigger_ref": "s",
                                                    "description": "Each step's status, outputs and cost; null after 30 days"}},
            required=["id", "automation_id", "version", "status", "steps"])
 SCHEMAS.update({
-    "Automation": obj({"id": "s", "name": "s", "owner_id": "s", "enabled": "b", "trigger": {"type": "object"},
+    "Automation": obj({"id": "s", "name": "s", "owner_id": "s", "enabled": "b",
+                       "action": {"type": "object", "description": "Assistant Message create: the pending Confirm card"},
+                       "message_id": "s", "needs_confirm": "b", "trigger": {"type": "object"},
                        "steps": items({"type": "object"}), "version": "i", "can_edit": "b", "can_pause": "b",
                        "destinations": {"type": ["array", "null"], "items": {"type": "object"},
                                         "description": "Named chains a filter rule's `to` runs (see the automation guide)"},
@@ -2295,7 +2323,8 @@ STABLE.extend([
     ("/api/v2/pages", "post", "Pages", "publishPage",
      "A bot publishes an .html page (raw with fields in the query, or JSON); scripts and outside loads are removed", "PagePublished"),
     ("/api/v2/pages", "get", "Pages", "listPages",
-     "Pages the caller may read: `ids` (up to 50) in that order, leaving out the unreadable; else newest first by bot or task",
+     "Pages the caller may read: `ids` (up to 50) in that order, leaving out the unreadable; else newest first by bot "
+     "or task (filed on or pinned to it)",
      "PageList"),
     ("/api/v2/pages/{fid}", "get", "Pages", "getPage", "One page and its status line; 404 when the caller may not read it",
      "PageShown"),
@@ -2306,7 +2335,7 @@ STABLE.extend([
      "Library › Files: every file the caller may see, newest activity first, filtered by kind, bot, team, task, date, "
      "pinned or archived; paged and byte-capped, no totals", "FileLibrary"),
     ("/api/v2/files/search", "get", "Files", "searchFiles",
-     "Search the files the caller may read by title and text, best first, each with an excerpt", "FileSearch"),
+     "Search the files the caller may read by title and text, filtered by kind, best first with an excerpt", "FileSearch"),
     ("/api/v2/files/{fid}", "delete", "Files", "deleteFile",
      "The owner deletes a file for good: every version's bytes leave storage; activity keeps who and when", "FileDeleted"),
 ])
@@ -2368,9 +2397,11 @@ STABLE.extend([
      'default cards become pins); a team page\'s audience sets its group\'s Read', 'Place'),
     ('/api/v2/places/{place}/order', 'post', 'Cards and pins', 'orderPlace', 'Put every pin at a place in this order', 'Place'),
     ('/api/v2/pins', 'post', 'Cards and pins', 'addPin', 'Pin page:<file id> or card:<id> at a place: a bot its own, to '
-     'its sidebar or task; a person who arranges the Dashboard or a team page there', 'Place'),
+     'its sidebar or task; any person who may read a task there, without widening page access; a person who arranges '
+     'the Dashboard or a team page there', 'Place'),
     ('/api/v2/pins/{pid}', 'patch', 'Cards and pins', 'updatePin', 'Resize or move a pin', 'Place'),
-    ('/api/v2/pins/{pid}', 'delete', 'Cards and pins', 'removePin', 'Unpin; a card pinned nowhere else goes with it', None),
+    ('/api/v2/pins/{pid}', 'delete', 'Cards and pins', 'removePin', 'Unpin; on a task, whoever pinned it, its owner or '
+     'requester, or the org owner; a card pinned nowhere else goes with it', None),
     ('/api/v2/cards', 'get', 'Cards and pins', 'listCards', 'Cards the caller made or sees pinned, with their data; '
      '`ids` reads up to 50', 'CardList'),
     ('/api/v2/cards', 'post', 'Cards and pins', 'addCard', 'A built-in card, pinned at `place` in the same write', None),
@@ -2426,11 +2457,14 @@ SCHEMAS['Card'] = obj({'id': 'n', 'template': {'enum': ['tasks_by_status', 'done
                       required=['id', 'template', 'heading', 'settings', 'hidden', 'data'])
 SCHEMAS['CardList'] = obj({'cards': items(ref('Card')), 'next': 'n'})
 SCHEMAS['Place'] = obj({'place': 's', 'kind': {'enum': ['dashboard', 'growth', 'team', 'bot', 'task', 'person']}, 'saved': 'b',
-                        'can_edit': 'b', 'month': {'type': 'string', 'description': 'growth: the month its cards read (YYYY-MM)'},
+                        'can_edit': 'b', 'can_link': {'type': 'boolean', 'description':
+                            'Task places: whether the reader may link a readable page; does not grant card or pin management'},
+                        'month': {'type': 'string', 'description': 'growth: the month its cards read (YYYY-MM)'},
                         'months': {'type': 'array', 'items': {'type': 'string'},
                                    'description': 'growth: the newest 24 months with cohort rows, oldest first'},
                         'pins': items(obj({'id': 'n', 'item': 'n', 'position': 'i', 'size': {'enum': ['small', 'medium', 'large']},
-                                           'card': ref('Card'),
+                                           'card': ref('Card'), 'can_unpin': {'type': 'boolean', 'description':
+                                               'Task pins: whether this reader may unlink it'},
                                            'page': obj({'file_id': 's', 'title': 's', 'bot': 's', 'updated_at': 's', 'archived': 'b'})},
                                           required=['id', 'item', 'position', 'size'])),
                         'audience': {'type': 'object', 'description': 'A team page: who sees it (docs/permissions.md)'},
@@ -2806,6 +2840,27 @@ SCHEMAS.update({
 })
 
 
+STABLE.extend([
+    ('/api/v2/meetings/{rid}/tasks', 'get', 'Meetings', 'listMeetingTasks',
+     'Readable tasks linked to a shared meeting; limit 20 by default, at most 50, cursor and 64 KB cap', 'MeetingTaskLinks'),
+    ('/api/v2/meetings/{rid}/tasks', 'post', 'Meetings', 'linkMeetingTasks',
+     'Link up to 20 readable tasks; sent is only for their requester; links never widen access', 'MeetingTaskLinks'),
+    ('/api/v2/meetings/{rid}/tasks/{tid}', 'delete', 'Meetings', 'removeMeetingTask',
+     'Remove a link as its creator, meeting owner, task owner or requester, or org owner', 'MeetingTaskRemoved'),
+    ('/api/v2/tasks/{tid}/meetings', 'get', 'Tasks', 'listTaskMeetings',
+     'Readable linked meetings, newest first; limit 20 by default, at most 50, cursor and 64 KB cap', 'TaskMeetings'),
+])
+SCHEMAS.update({
+    'MeetingTaskLink': obj({'task_id': 's', 'number': {'type': ['integer', 'null']}, 'title': 's',
+                            'status': 's', 'kind': {'enum': ['linked', 'sent', 'proposal']}, 'created_by': 's'}),
+    'MeetingTaskLinks': obj({'tasks': items(ref('MeetingTaskLink')), 'next_cursor': 'n'}),
+    'TaskMeeting': obj({'meeting_id': 's', 'title': 's', 'started_at': 's', 'url': 's',
+                        'kind': {'enum': ['linked', 'sent', 'proposal']}}),
+    'TaskMeetings': obj({'meetings': items(ref('TaskMeeting')), 'next_cursor': 'n'}),
+    'MeetingTaskRemoved': obj({'ok': 'b'}),
+})
+
+
 def spec(app):
     """The v2 document for this app: the stable operations of `app.openapi()`, described."""
     full = copy.deepcopy(app.openapi())
@@ -2821,6 +2876,7 @@ def spec(app):
             responses["200"] = {"description": "OK", "content": {"application/json": {"schema": ref(answer)}}}
         if path == "/api/v2/events":
             responses["200"] = {"description": EVENTS_DESCRIPTION,
+                                "x-task-event-schema": ref("TaskEvent"),
                                 "content": {"text/event-stream": {"schema": {"type": "string"}}}}
         if method == "get" and path.startswith("/api/v2/files/") and path.endswith("/versions/{number}"):
             responses["200"] = {"description": "The file's bytes (application/octet-stream, sent as an attachment)",
@@ -3103,6 +3159,47 @@ SCHEMAS.update({
     "AssistantChangeResult": obj({"id": "s", "restored": "b", "already": "b", "object": "s"}),
 })
 
+
+# Settings > Mailboxes (backend/mailboxes.py): which inboxes Tico uses and who may use each.
+TAGS["Mailboxes"] = "Which mailboxes Tico uses and who may use each: Read, or Read and write (organize, draft and send, as far as the company allows)."
+_MAILBOX_LEVEL = {"enum": ["none", "read", "read_write"]}
+_MAILBOX_REF = obj({"id": "s", "name": "s"})
+SCHEMAS.update({
+    "Mailbox": obj({"id": "s", "address": "s", "provider": "s", "kind": {"enum": ["personal", "shared"]},
+                    "person_id": "n", "person_name": "s", "connection": {"enum": ["workspace", "personal"]},
+                    "status": {"enum": ["active", "stopped"]},
+                    "state": {"enum": ["connected", "not_connected", "awaiting_person", "stopped"]},
+                    "level": _MAILBOX_LEVEL, "routines": items(_MAILBOX_REF)}),
+    "MailboxMay": obj({"read": "b", "organize": "b", "send": "b", "change_calendar": "b"}),
+    "MailboxList": obj({"admin": "b", "domain": "s", "may": ref("MailboxMay"), "mine": {"anyOf": [ref("Mailbox"), {"type": "null"}]},
+                        "shared": items(ref("Mailbox")), "mailboxes": items(ref("Mailbox"))}),
+    "MailboxResult": obj({"mailbox": ref("Mailbox")}),
+    "MailboxDetail": obj({"mailbox": ref("Mailbox"), "can_manage": "b", "can_stop": "b",
+                          "accesses": items(obj({"id": "n", "grantee_type": {"enum": ["person", "bot", "admins"]},
+                                                 "grantee_id": "s", "name": "s", "level": {"enum": ["read", "read_write"]},
+                                                 "implicit": "b"})),
+                          "routines": items(obj({"id": "s", "name": "s", "enabled": "b", "can_edit": "b"})),
+                          "may": ref("MailboxMay"),
+                          "candidates": items(obj({"type": {"enum": ["person", "bot"]}, "id": "s", "name": "s"}))}),
+})
+STABLE.extend([
+    ("/api/v2/mailboxes", "get", "Mailboxes", "listMailboxes",
+     "An admin's every mailbox (person, status, routines); for everyone their own mailbox and the ones shared with them", "MailboxList"),
+    ("/api/v2/mailboxes", "post", "Mailboxes", "connectMailbox",
+     "An admin connects a mailbox: a person's own by verified email, else a shared inbox when `shared`, else it waits for its person", "MailboxResult"),
+    ("/api/v2/mailboxes/{mid}", "get", "Mailboxes", "getMailbox",
+     "One mailbox: who can use it, its routines, and who could be added (for whoever manages it)", "MailboxDetail"),
+    ("/api/v2/mailboxes/{mid}", "delete", "Mailboxes", "stopMailbox",
+     "Stop using this mailbox in Tico (an admin, or the person whose mailbox it is)", "MailboxResult"),
+    ("/api/v2/mailboxes/{mid}/share", "post", "Mailboxes", "shareMailbox",
+     "An admin makes a mailbox that has no person a shared inbox", "MailboxDetail"),
+    ("/api/v2/mailboxes/{mid}/accesses", "post", "Mailboxes", "addMailboxAccess",
+     "Give a person or a bot Read, or Read and write (the mailbox's owner, or an admin for a shared inbox)", "MailboxDetail"),
+    ("/api/v2/mailboxes/{mid}/accesses/{access_id}", "patch", "Mailboxes", "changeMailboxAccess",
+     "Change one access between Read and Read and write", "MailboxDetail"),
+    ("/api/v2/mailboxes/{mid}/accesses/{access_id}", "delete", "Mailboxes", "removeMailboxAccess",
+     "Take one person's or bot's access away", "MailboxDetail"),
+])
 
 def generate():
     """The document for a default installation: what docs/openapi/v2.json holds."""

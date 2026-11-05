@@ -200,7 +200,7 @@ def task_goal_ended(c, goal, task_id, status, note):
         steps = H.steps_only(c, row)
         if (row["status"] in ("open", "doing") and goal["set_by"] == H.KEEPER and wanted and not steps
                 and goal["objective"] == task_goal_objective(row, wanted["objective"], steps)):
-            H.task_update(c, row["owner_id"], task_id, status="done", note=(note or "Goal met.")[:4000])
+            H.task_update(c, row["owner_id"], task_id, status="done", note=(note or "Goal met.")[:4000], strict=False)
         return
     if status in ("paused", "stopped"):
         # A harness pauses a goal that needs a person (Codex "blocked"); the runner's tries guard pauses a stuck one.

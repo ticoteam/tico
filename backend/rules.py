@@ -913,11 +913,11 @@ def _act(conn, decision, row, message=None):
 
 
 def _close(conn, tid, params, said):
-    H.task_close(conn, H.KEEPER, tid, note=said)
+    H.task_close(conn, H.KEEPER, tid, note=said, strict=False)
 
 
 def _move_step(conn, tid, params, said):
-    H.task_update(conn, H.KEEPER, tid, step=str(params["step"]), note=said)
+    H.task_update(conn, H.KEEPER, tid, step=str(params["step"]), note=said, strict=False)
 
 
 def _set_wait(conn, tid, params, said):

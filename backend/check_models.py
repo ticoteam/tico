@@ -189,8 +189,8 @@ def _default_login(c, bot, check, runner_id):
 
 def _out_of_quota(c, runner_id, runtime, settings=None):
     """Whether Health's default_login_limited marks `runner_id`'s default `runtime` login out of quota: a turn there
-    completing, or the provider's reset passing, ends it (health_monitor.out_of_quota_logins)."""
-    from .health_monitor import out_of_quota_logins
+    completing, or the provider's reset passing, ends it (maintenance_health.out_of_quota_logins)."""
+    from .maintenance_health import out_of_quota_logins
     return any(x["runner_id"] == runner_id and x["runtime"] == runtime for x in out_of_quota_logins(c, settings))
 
 
@@ -200,7 +200,7 @@ def move_on(c, settings, bot, task_id, check, runner_id):
     first in the company's check order that is not the limited model, not on another login out of quota there, and
     that this bot's computer can run, from a provider other than the work's authors' when one qualifies. It goes back to its first model once
     that model's login is not out of quota any more (of)."""
-    from .health_monitor import out_of_quota_logins
+    from .maintenance_health import out_of_quota_logins
     from .repositories import save_metadata
     from .task_relations import parent_of
     if memory_pass(c, task_id):

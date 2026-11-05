@@ -76,6 +76,18 @@ STORED = {"document": ("document", "slides", "design"), "image": ("image",), "da
           "media": ("video", "audio")}
 
 
+def kind_filter(kind):
+    if not kind:
+        return "1", []
+    if kind not in KINDS:
+        raise Problem("validation", "kind is " + ", ".join(KINDS), 422)
+    if kind == "page":
+        return "p.file_id IS NOT NULL", []
+    stored = [k for group in STORED.values() for k in group] if kind == "other" else list(STORED[kind])
+    return ("p.file_id IS NULL AND f.kind " + ("NOT IN" if kind == "other" else "IN")
+            + " (%s)" % ",".join("?" * len(stored))), stored
+
+
 def ensure(c):
     """Unversioned, like the trash: runs inside initialize's transaction at every start."""
     for statement in SCHEMA:
@@ -349,17 +361,9 @@ class Library:
         params = []
         where.append("(f.archived=1 OR p.archived=1)" if archived else "f.archived=0 AND COALESCE(p.archived,0)=0")
         if kind:
-            if kind not in KINDS:
-                raise Problem("validation", "kind is " + ", ".join(KINDS), 422)
-            if kind == "page":
-                where.append("p.file_id IS NOT NULL")
-            elif kind == "other":
-                known = [k for group in STORED.values() for k in group]
-                where.append("p.file_id IS NULL AND f.kind NOT IN (%s)" % ",".join("?" * len(known)))
-                params += known
-            else:
-                where.append("p.file_id IS NULL AND f.kind IN (%s)" % ",".join("?" * len(STORED[kind])))
-                params += list(STORED[kind])
+            sql, args = kind_filter(kind)
+            where.append(sql)
+            params += args
         if bot:
             with self.store.read() as c:
                 bot = (H.resolve_bot(c, bot) or {}).get("id", H.actor_id(bot))
@@ -401,16 +405,17 @@ class Library:
                 f["actor_name"] = known.get(f.get("actor") or "", "")
         return {"files": files, "has_more": nxt is not None, "next_cursor": nxt}
 
-    def search(self, who, q, limit=20):
+    def search(self, who, q, limit=20, *, kind=""):
         """Files `who` may read whose title or text matches, best first, each with an excerpt. Archived and deleted
         files are left out, as Docs leaves out archived docs."""
         if who.role not in ("owner", "human", "bot"):
             raise Problem("forbidden", "People and bots search files", 403)
+        kind_sql, kind_args = kind_filter(kind)
         tokens = manual.query_words(q)
         if not tokens:
             raise Problem("query", "Search needs at least one word", 422)
         with self.store.read() as c:
-            candidates = self._candidates(c, tokens)
+            candidates = self._candidates(c, tokens, kind_sql, kind_args)
             from .files import prime_visible
             cache, out = {}, []
             weights = {t: 1.0 for t in tokens}
@@ -444,12 +449,12 @@ class Library:
                                  "excerpt": excerpt(r["text"] or "", tokens), "score": round(score, 3)}
                                 for score, r in out]}
 
-    def _candidates(self, c, tokens):
+    def _candidates(self, c, tokens, kind_sql="1", kind_args=()):
         """Rows whose title or text match, best match first, at most SCAN_MAX: FTS5 when the build has it, else
         titles alone."""
         select = ("SELECT f.*,p.cadence AS page_cadence,{text} AS text FROM bot_files f "
                   "LEFT JOIN pages p ON p.file_id=f.id {join} WHERE f.state<>'deleted' AND f.archived=0 "
-                  "AND COALESCE(p.archived,0)=0 {match} LIMIT ?")
+                  "AND COALESCE(p.archived,0)=0 AND (" + kind_sql + ") {match} LIMIT ?")
         if has_fts(c):
             from .docs import Docs
             query = select.format(text="file_text.text", join="JOIN file_text_state s ON s.file_id=f.id "
@@ -459,7 +464,7 @@ class Library:
             stemmed = [manual._stem(t) for t in tokens]
             for expression in Docs.expressions(stemmed):
                 try:
-                    found = c.execute(query, (expression, SCAN_MAX)).fetchall()
+                    found = c.execute(query, (*kind_args, expression, SCAN_MAX)).fetchall()
                 except sqlite3.OperationalError:
                     continue
                 rows += [r for r in found if r["id"] not in seen]
@@ -469,7 +474,7 @@ class Library:
             return rows
         like = " AND ".join("f.title LIKE ?" for _ in tokens)
         return c.execute(select.format(text="''", join="", match="AND " + like + " ORDER BY f.last_activity_at DESC"),
-                         (*["%" + t + "%" for t in tokens], SCAN_MAX)).fetchall()
+                         (*kind_args, *["%" + t + "%" for t in tokens], SCAN_MAX)).fetchall()
 
     # ------------------------------------------------------------------ hard delete
     def delete(self, request, fid):
@@ -676,9 +681,9 @@ def install_library(app, store, auth, files):
                                cursor=cursor)
 
     @app.get("/api/v2/files/search")
-    def search(request: Request, q: str = "", limit: int = 20):
-        """Search the files the caller may read by title and text, best first, each with an excerpt."""
-        return library.search(request.state.identity, q[:500], max(1, min(limit, SEARCH_MAX)))
+    def search(request: Request, q: str = "", limit: int = 20, kind: str = ""):
+        """Search the files the caller may read by title and text, filtered by kind, best first with an excerpt."""
+        return library.search(request.state.identity, q[:500], max(1, min(limit, SEARCH_MAX)), kind=kind)
 
     @app.delete("/api/v2/files/{fid}")
     async def delete(request: Request, fid: str):

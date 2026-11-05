@@ -957,16 +957,16 @@ class WaitingWithDependency(HubCase):
         parked = H.task_update(self.conn, CMO, task['id'], status='waiting', note="Waiting on BotOps's snapshot")
         self.assertIn(f"--parent {task['id']}", parked['warnings'][0])
 
-    def test_a_bot_marks_its_task_done_with_subtasks_still_open(self):
+    def test_a_bot_marks_its_task_done_and_closes_open_subtasks(self):
         parent = H.task_create(self.conn, ANA, 'Launch the pricing page', '', CMO)
         child = H.task_create(self.conn, CMO, 'Approve the final copy', 'Say yes or change it.', ANA,
                               parent_id=parent['id'])
         done = H.task_update(self.conn, CMO, parent['id'], status='done', note='Page is live')
         self.assertEqual(done['status'], 'done')
-        self.assertEqual(H.task(self.conn, child['id'])['status'], 'open', 'the subtask stays open')
+        self.assertEqual(H.task(self.conn, child['id'])['status'], 'closed')
         said = [e['new'] for e in H._rows(self.conn.execute(
             "SELECT new FROM history_events WHERE subject_type='task' AND subject_id=? AND kind='children'", (parent['id'],)))]
-        self.assertEqual(said, ['Still open: Approve the final copy'])
+        self.assertEqual(said, ['Closed with it: Approve the final copy'])
 
     def test_invalid_dependency_is_refused(self):
         task = H.task_create(self.conn, CMO, 'Validate the release candidate', '', CMO)
