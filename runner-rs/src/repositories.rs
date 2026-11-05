@@ -1966,10 +1966,15 @@ mod tests {
         assert!(matches!(blocked, Err(Fail::Msg(m)) if m.contains("config.lock") && m.contains("Git lock")));
         assert_eq!(std::fs::read(f.base.join(".git/config")).unwrap(), original);
         std::fs::remove_file(f.base.join(".git/config.lock")).unwrap();
+        // Another runner thread can fork while a Git command holds this gate, then wait before exec.
+        let gate = crate::gitlocks::recovery_lock(&f.base.join(".git")).unwrap();
+        let child = crate::lock::inherited_files();
+        drop(gate);
         std::fs::write(f.base.join(".git/config"), "[broken\n").unwrap();
         let refused = configure_base(&f.base, &settings, &prefix, &f.env, "acme/web").await;
         assert!(matches!(&refused, Err(Fail::Msg(m)) if m.contains("repository format cannot be read safely")), "{refused:?}");
         assert_eq!(std::fs::read_to_string(f.base.join(".git/config")).unwrap(), "[broken\n");
+        drop(child);
         std::fs::write(f.base.join(".git/config"), &original).unwrap();
         assert!(configure_base(&f.base, &settings, &prefix, &f.env, "acme/web").await.is_ok());
         assert_eq!(sh(&f.base, &["show-ref"]), refs);

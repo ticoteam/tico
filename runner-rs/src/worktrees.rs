@@ -165,7 +165,7 @@ pub async fn git(path: &Path, env: &Env, args: &[&str], check: bool) -> R<Out> {
 }
 
 /// The task lock the hub CLI takes too: one worktree step at a time per task path on this computer.
-pub struct TaskLock(#[allow(dead_code)] std::fs::File);
+pub struct TaskLock(#[allow(dead_code)] crate::lock::FileLock);
 
 pub async fn locked(workspace: &Path, task: &str) -> R<TaskLock> {
     let tasks = workspace.join("tasks");
@@ -184,7 +184,7 @@ pub async fn locked(workspace: &Path, task: &str) -> R<TaskLock> {
         use std::os::fd::AsRawFd;
         // SAFETY: flock on a file this process holds open.
         let rc = unsafe { libc::flock(file.as_raw_fd(), libc::LOCK_EX) };
-        if rc == 0 { Ok(file) } else { Err(std::io::Error::last_os_error()) }
+        if rc == 0 { Ok(crate::lock::FileLock::from_locked(file)) } else { Err(std::io::Error::last_os_error()) }
     })
     .await
     .map_err(|e| WtErr::Os(e.to_string()))??;

@@ -263,8 +263,9 @@ fn write_status(directory: &Path, fields: Value) {
 fn updater_running(directory: &Path) -> Result<bool, String> {
     use std::os::unix::io::AsRawFd;
     let file = std::fs::OpenOptions::new().create(true).append(true).open(directory.join(PROCESS_LOCK)).map_err(|e| e.to_string())?;
-    // SAFETY: flock acts on this open file; closing it releases a successful probe.
+    // SAFETY: flock acts on this open file; the guard releases a successful probe even across concurrent forks.
     if unsafe { libc::flock(file.as_raw_fd(), libc::LOCK_EX | libc::LOCK_NB) } == 0 {
+        let _guard = crate::lock::FileLock::from_locked(file);
         return Ok(false);
     }
     let error = std::io::Error::last_os_error();

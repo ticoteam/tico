@@ -24,13 +24,13 @@ pub fn owned(path: &Path) -> bool {
 }
 
 /// The file is never unlinked: both engines must flock the same inode.
-pub fn recovery_lock(common: &Path) -> Option<std::fs::File> {
+pub fn recovery_lock(common: &Path) -> Option<crate::lock::FileLock> {
     if !owned(common) { return None; }
     let file = crate::regular_file::open(&common.join("tico-lock-recovery"),
         std::fs::OpenOptions::new().write(true).create(true).truncate(false).mode(0o600), crate::regular_file::SMALL).ok()?;
     let m = file.metadata().ok()?;
     if !m.is_file() || m.nlink() != 1 { return None; }
-    (unsafe { libc::flock(file.as_raw_fd(), libc::LOCK_EX | libc::LOCK_NB) } == 0).then_some(file)
+    (unsafe { libc::flock(file.as_raw_fd(), libc::LOCK_EX | libc::LOCK_NB) } == 0).then(|| crate::lock::FileLock::from_locked(file))
 }
 
 pub fn owned_roots() -> Vec<PathBuf> { OWNED.lock().unwrap().clone() }
@@ -78,17 +78,13 @@ fn metadata_roots(argv: &[String], cwd: Option<&Path>) -> Option<(Vec<PathBuf>, 
 }
 
 /// The runner and updater share this gate; ordinary Git writers use Git's own locks.
-pub struct CommandLock {
-    _file: std::fs::File,
-}
-
-pub async fn command_lock(argv: &[String], cwd: Option<&Path>, timeout_s: u64) -> Result<Option<CommandLock>, String> {
+pub async fn command_lock(argv: &[String], cwd: Option<&Path>, timeout_s: u64) -> Result<Option<crate::lock::FileLock>, String> {
     let Some((roots, _)) = metadata_roots(argv, cwd) else { return Ok(None) };
     let common = roots.last().unwrap();
     let until = std::time::Instant::now() + Duration::from_secs(timeout_s.min(10));
     loop {
         if let Some(file) = recovery_lock(common) {
-            return Ok(Some(CommandLock { _file: file }));
+            return Ok(Some(file));
         }
         if std::time::Instant::now() >= until {
             return Err("repository copy needs attention: Git work is busy or its lock cannot be checked".into());

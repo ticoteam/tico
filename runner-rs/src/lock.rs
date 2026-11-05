@@ -7,12 +7,33 @@ use std::path::Path;
 
 pub const HELD: &str = "A runner process already holds this registration";
 
-pub struct RunnerLock {
-    _file: File,
+pub struct FileLock {
+    file: File,
+    owner: libc::pid_t,
+}
+
+impl FileLock {
+    /// The caller has acquired flock on this file's open file description.
+    pub fn from_locked(file: File) -> Self {
+        // SAFETY: getpid has no preconditions.
+        Self { file, owner: unsafe { libc::getpid() } }
+    }
+}
+
+impl Drop for FileLock {
+    fn drop(&mut self) {
+        // Closing only our fd leaves the lock held by a concurrent fork until that child execs or exits.
+        // SAFETY: unlock our own open file description; an inherited guard must not unlock its parent's work.
+        unsafe {
+            if libc::getpid() == self.owner {
+                libc::flock(self.file.as_raw_fd(), libc::LOCK_UN);
+            }
+        }
+    }
 }
 
 /// Ok(lock) while held; Err(HELD) when another process (either engine) has it.
-pub fn acquire(path: &Path) -> Result<RunnerLock, String> {
+pub fn acquire(path: &Path) -> Result<FileLock, String> {
     let file = OpenOptions::new()
         .write(true)
         .create(true)
@@ -27,7 +48,7 @@ pub fn acquire(path: &Path) -> Result<RunnerLock, String> {
         }
         return Err(format!("cannot lock {}: {err}", path.display()));
     }
-    Ok(RunnerLock { _file: file })
+    Ok(FileLock::from_locked(file))
 }
 
 /// Hold inherited descriptors across the parent's lock release, without relying on fork/exec timing.

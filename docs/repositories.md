@@ -70,6 +70,8 @@ Tico never removes or moves another Git writer's lock. A lock at least 30 minute
 
 Background sync, mirror refresh and retirement serialize per repository. Operations on another repository can proceed while a large fetch is running. Acquiring a busy repository's lock waits at most one second: background maintenance defers it, and a turn or worktree preparation can use the cached copy with its age warning.
 
+The Rust runner releases its Git gate and task lock directly when the operation ends. A child started by another runner thread cannot keep that gate held while it waits to run. This applies on Mac and Docker runners with every supported Git version.
+
 On a Computer that does not run bots as a separate user, such as a Mac, a folder already at `<workspace>/repos/<owner>__<repo>` is taken over when it is a Git checkout of that repository: its `origin` is GitHub's HTTPS or SSH address for it, it belongs to the user the runner runs as, and it does not share objects with another repository or keep its work tree elsewhere. Tico adds the `tico-mirror` remote and updates the tracking refs. It leaves `origin`, branch settings, files and local work as they are. When no bot needs the repository any more, Tico stops managing the folder but never deletes it. Any other folder is left alone, and the error says why.
 
 Bots on one Computer can read each other’s base clones until per-subscription Unix users exist. Same-user computers, including Macs, also allow inspecting processes owned by that user; repository grants restrict issued tokens, not local files. Full object stores let task worktrees commit offline.

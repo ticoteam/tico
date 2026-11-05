@@ -191,6 +191,8 @@ the runner knows something will start it again and how the update restarts it th
 process itself runs as a transient `tico-update-<pid>-<random>` unit so the restart does not kill it. Each attempt gets
 a new name, so a retry cannot collide with a unit left from an earlier attempt. A lock in the runner's state folder
 keeps a second updater from running, even when the first is waiting for the checkout lock or its status is old.
+The Rust runner releases its registration lock and update-lock probes directly, so a child started by another
+thread cannot keep a finished operation's lock held while it waits to run.
 The runner fills in missing user-bus settings from `/run/user/<uid>` and passes them to the updater. If only
 `DBUS_SESSION_BUS_ADDRESS` is set, it leaves `XDG_RUNTIME_DIR` unset so systemd uses that bus address. If `systemd-run`
 fails, its error is saved as one short line in Health, the computer's update status and `update.log`. A detached
