@@ -119,8 +119,8 @@ its reason ("Auto dream: 412 memory lines changed in 23 turns since 2026-10-28")
 panel shows that reason under the status line. Its instructions say nobody is waiting: the bot applies and commits what
 it can settle, and only if it needs the requester it asks at most three business questions in one message, then makes a
 second commit when they are answered. The requester did not start the dream, so the question is what they answer, and
-it goes through the same exemption from ask ingest. **Automations › Maintenance** switches it off. Its **Run now** on the
-Dream row runs the step at once, even when it is not due; the bot rules above still apply.
+it goes through the same exemption from ask ingest. **Automations › Maintenance** switches it off. Its **Run now** starts
+the Dream step only when that step is due, as the schedule does; the bot rules above still apply.
 
 ## Learn (beta)
 
