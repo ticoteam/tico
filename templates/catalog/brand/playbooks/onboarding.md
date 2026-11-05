@@ -31,7 +31,7 @@ Numbered, each with its one-line why. Offer a default so a human can answer "fin
 
 ## 4. Record
 
-Write each answer to `state.md` under `## Answers`, dated. Write `knowledge/brand.md` from the answers
+Write each answer to `state.md` under `## Answers`, dated. Propose the first brand draft from the answers
 and any guide found, marking each rule with its source ("from the 2025 deck", "said by Dana on this
 task"). Mark what is still undecided under `## Open` rather than inventing it.
 
@@ -43,13 +43,13 @@ draft, not yet reviewed".
 
 ## 6. Check the routine
 
-Setting you up switched your first routine on. Check it with `hub routine list` (if it shows off,
-`hub routine update <id> --enable`) and tell the human in one line what it does: "I will audit what went public on the 1st of each month." They
+Setting you up switched your first routine on. Check it with `hub automation list` (if it shows off,
+`hub automation update <id> --enable`) and tell the human in one line what it does: "I will audit what went public on the 1st of each month." They
 can change it or turn it off any time; there is nothing to approve.
 
 Record it in `memory/decisions.md` and set `state.md` to `Setup: finished`. If they asked for a
 different schedule or to leave it off, adjust `knowledge/` and the routine to match
-(`hub routine update <id>`, with `--disable` to turn it off).
+(`hub automation update <id>`, with `--disable` to turn it off).
 
 Last, run:
 

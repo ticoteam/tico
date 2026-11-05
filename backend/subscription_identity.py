@@ -20,6 +20,14 @@ def identity(c, runner, profile):
     return {'id': sid, 'display_name': label}
 
 
+def display_names(c):
+    """{connection_id: display_name} for every renamed subscription in one pass (Operations shared_logins), from the
+    subscription rows Operations' profiles already read in this snapshot."""
+    from .subscriptions import subscription_meta
+    return {key: value['display_name'] for key, value in subscription_meta(c).items()
+            if key.startswith('subscription:') and value.get('display_name')}
+
+
 def usage_label(c, sid):
     if sid.startswith('subscription:'):
         runner, profile = json.loads(sid.removeprefix('subscription:'))
@@ -37,9 +45,9 @@ def install(app, store, auth, mutate):
         who = request.state.identity
         def work(c):
             auth.domain(who)
-            runner = c.execute('SELECT * FROM runners WHERE id=? AND revoked_at IS NULL', (body.runner_id,)).fetchone()
+            runner = c.execute('SELECT * FROM runners_with_state WHERE id=? AND revoked_at IS NULL', (body.runner_id,)).fetchone()
             if not runner or who.role not in ('human', 'owner') or not (
-                    auth.bot_admin(who) or runner['operator'] == H.actor_id(who.actor)):
+                    auth.bot_admin(who) or runner['owner_id'] == H.actor_id(who.actor)):
                 raise Problem('forbidden', 'Only a computer operator or administrator can rename a subscription', 403)
             if not c.execute('SELECT 1 FROM computer_profiles WHERE runner_id=? AND profile=?',
                              (body.runner_id, body.profile)).fetchone():

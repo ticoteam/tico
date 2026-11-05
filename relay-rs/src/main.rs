@@ -1,4 +1,6 @@
-//! The computer-screen relay and same-origin HTTP gateway. Permission policy and audit writes remain in Python.
+//! The computer-screen relay, browser-exit tunnels (exit.rs) and same-origin HTTP gateway. Permission policy and audit
+//! writes remain in Python.
+mod exit;
 mod gateway;
 mod tls;
 use axum::{
@@ -92,6 +94,10 @@ struct Hub {
     modes: HashMap<String, (u64, String)>,
     screens: HashMap<String, Screen>,
     reports: BTreeMap<String, Report>,
+    exits: exit::Exits,
+    /// Python sent `stop` with browser-exit usage still unacknowledged: its lease stays for heartbeats only until it
+    /// has collected that usage (or the lease lapses), so the last bytes before a stop aren't lost.
+    stopping: bool,
 }
 impl Hub {
     fn new() -> Self {
@@ -104,6 +110,8 @@ impl Hub {
             modes: HashMap::new(),
             screens: HashMap::new(),
             reports: BTreeMap::new(),
+            exits: exit::Exits::default(),
+            stopping: false,
         }
     }
     fn valid(&self, lease: &str) -> bool {
@@ -132,6 +140,7 @@ impl Hub {
         for sid in self.screens.keys().cloned().collect::<Vec<_>>() {
             self.close(&sid, close.clone());
         }
+        self.exits.close_all(close);
     }
     fn sweep(&mut self) {
         if self
@@ -141,6 +150,7 @@ impl Hub {
         {
             self.close_all(Close::new(1012, "permission lease expired"));
             self.lease = None;
+            self.stopping = false;
         }
         let stale = self
             .screens
@@ -161,6 +171,7 @@ struct App {
     http: reqwest::Client,
     proxy: reqwest::Client,
     trusted_proxies: Arc<Vec<gateway::Network>>,
+    client_ip_header: gateway::ClientIpHeader,
 }
 impl App {
     fn authorized(&self, headers: &HeaderMap) -> bool {
@@ -184,6 +195,19 @@ impl App {
             .send()
             .await
             .is_ok_and(|r| r.status().is_success())
+    }
+    /// The policy callback's answer when it allows the request (an exit link learns its runner id from it).
+    async fn policy_answer(&self, body: Value) -> Option<Value> {
+        let response = self
+            .http
+            .post(format!("{}/_tico/screen/v1/authorize", self.python))
+            .bearer_auth(self.key.as_str())
+            .json(&body)
+            .send()
+            .await
+            .ok()
+            .filter(|r| r.status().is_success())?;
+        response.json().await.ok()
     }
 }
 async fn hello(State(app): State<App>, headers: HeaderMap) -> Result<Json<Value>> {
@@ -214,10 +238,12 @@ async fn start(
         return Err(error(StatusCode::CONFLICT, "stale start challenge"));
     }
     hub.close_all(Close::new(1012, "server restarted"));
+    hub.exits.restart(Close::new(1012, "server restarted"));
     hub.modes.clear();
     hub.sequence = 0;
     hub.reply = None;
     hub.challenge = id();
+    hub.stopping = false;
     hub.lease = Some((body.lease, Instant::now()));
     Ok(Json(json!({"boot": hub.boot})))
 }
@@ -234,6 +260,8 @@ enum Action {
     Heartbeat {
         #[serde(default)]
         ack: Vec<String>,
+        #[serde(default)]
+        exit_ack: Vec<String>,
     },
     Mode {
         runner_id: String,
@@ -261,6 +289,25 @@ enum Action {
         code: u16,
         reason: String,
     },
+    /// An exit computer's sharing, bots and daily cap changed (exit.rs).
+    ExitPolicy {
+        runner_id: String,
+        policy: exit::Policy,
+    },
+    ExitGrant {
+        grant: exit::Grant,
+    },
+    /// Close one bot's tunnels and/or one exit's. With `bot_generation`, the bot's selection changed: only its
+    /// tunnels from older generations close, and older grants are refused from now on.
+    ExitClose {
+        #[serde(default)]
+        bot: Option<String>,
+        #[serde(default)]
+        exit: Option<String>,
+        #[serde(default)]
+        bot_generation: Option<u64>,
+        reason: String,
+    },
 }
 async fn command(
     State(app): State<App>,
@@ -285,21 +332,77 @@ async fn command(
         return Err(error(StatusCode::CONFLICT, "stale control sequence"));
     }
     let sequence = body.sequence;
+    if hub.stopping && !matches!(body.action, Action::Heartbeat { .. } | Action::Stop) {
+        return Err(error(StatusCode::CONFLICT, "relay control stopping"));
+    }
     let answer = match body.action {
         Action::Stop => {
+            // Closing the tunnels counts their last bytes; the lease ends once Python has collected them.
             hub.close_all(Close::new(1012, "server stopped"));
-            hub.lease = None;
-            json!({})
+            hub.stopping = !hub.exits.drained();
+            if !hub.stopping {
+                hub.lease = None;
+            }
+            json!({"exit_backlog": hub.exits.backlog()})
         }
-        Action::Heartbeat { ack } => {
-            if ack.len() > 256 {
+        Action::Heartbeat { ack, exit_ack } => {
+            if ack.len() > 256 || exit_ack.len() > exit::REPORT_BATCH {
                 return Err(error(StatusCode::BAD_REQUEST, "too many acknowledgements"));
             }
             for sid in ack {
                 hub.reports.remove(&sid);
             }
+            hub.exits.acknowledge(&exit_ack);
             hub.lease.as_mut().unwrap().1 = Instant::now();
-            json!({"reports": hub.reports.values().take(256).collect::<Vec<_>>()})
+            let usage = hub.exits.usage_batch();
+            let answer = json!({"reports": hub.reports.values().take(256).collect::<Vec<_>>(),
+                   "exit_usage": usage, "exit_backlog": hub.exits.backlog()});
+            if hub.stopping && usage.is_none() {
+                hub.stopping = false;
+                hub.lease = None;
+            }
+            answer
+        }
+        Action::ExitPolicy { runner_id, policy } => {
+            if runner_id.is_empty()
+                || runner_id.len() > 128
+                || policy.bots.len() > 1024
+                || policy.bots.iter().any(|b| b.len() > 128)
+            {
+                return Err(error(StatusCode::BAD_REQUEST, "invalid exit policy"));
+            }
+            let closed = hub
+                .exits
+                .set_policy(&runner_id, policy)
+                .map_err(|e| error(StatusCode::CONFLICT, e))?;
+            json!({"closed": closed})
+        }
+        Action::ExitGrant { grant } => {
+            if grant.policy.bots.len() > 1024 {
+                return Err(error(StatusCode::BAD_REQUEST, "invalid exit grant"));
+            }
+            exit::grant(&app, &mut hub.exits, grant)?
+        }
+        Action::ExitClose {
+            bot,
+            exit,
+            bot_generation,
+            reason,
+        } => {
+            if reason.len() > 100
+                || bot.is_none() && exit.is_none()
+                || bot_generation.is_some() && (bot.is_none() || exit.is_some())
+                || bot.as_ref().is_some_and(|b| b.len() > 128)
+            {
+                return Err(error(StatusCode::BAD_REQUEST, "invalid exit close"));
+            }
+            let closed = match (bot.as_deref(), bot_generation) {
+                (Some(bot), Some(generation)) => hub.exits.fence_bot(bot, generation, &reason),
+                _ => hub
+                    .exits
+                    .close_matching(bot.as_deref(), exit.as_deref(), &reason),
+            };
+            json!({"closed": closed})
         }
         Action::Mode {
             runner_id,
@@ -394,7 +497,7 @@ async fn command(
             let ticket = id() + &id();
             let (btx, brx) = oneshot::channel();
             let (rtx, rrx) = oneshot::channel();
-            let (cancel, cancelled) = watch::channel(None);
+            let (cancel, canceled) = watch::channel(None);
             hub.screens.insert(
                 sid.clone(),
                 Screen {
@@ -413,7 +516,7 @@ async fn command(
                     cancel,
                 },
             );
-            tokio::spawn(screen_task(app.clone(), sid, brx, rrx, cancelled));
+            tokio::spawn(screen_task(app.clone(), sid, brx, rrx, canceled));
             json!({"ticket": ticket})
         }
         Action::Activate { id: sid } => {
@@ -570,7 +673,7 @@ async fn screen_task(
     sid: String,
     mut browser_rx: oneshot::Receiver<WebSocket>,
     mut runner_rx: oneshot::Receiver<WebSocket>,
-    mut cancelled: watch::Receiver<Option<Close>>,
+    mut canceled: watch::Receiver<Option<Close>>,
 ) {
     let mut browser = None;
     let mut runner = None;
@@ -579,7 +682,7 @@ async fn screen_task(
     let mut deadline = Instant::now() + TICKET;
     let mut session_deadline = Instant::now() + SESSION;
     let outcome = loop {
-        if let Some(close) = cancelled.borrow().clone() {
+        if let Some(close) = canceled.borrow().clone() {
             break close;
         }
         if let (Some(browser_socket), Some(runner_socket)) = (&mut browser, &mut runner) {
@@ -587,13 +690,13 @@ async fn screen_task(
                 browser_socket,
                 runner_socket,
                 &mut backlog,
-                &mut cancelled,
+                &mut canceled,
                 session_deadline,
             )
             .await;
         }
         tokio::select! {
-            _ = cancelled.changed() => { if let Some(close) = cancelled.borrow().clone() { break close; } },
+            _ = canceled.changed() => { if let Some(close) = canceled.borrow().clone() { break close; } },
             _ = tokio::time::sleep_until(deadline.into()) => break Close::new(4404, if browser.is_some() { "computer did not answer" } else { "nobody opened the screen" }),
             socket = &mut browser_rx, if browser.is_none() => match socket {
                 Ok(s) => {
@@ -714,8 +817,12 @@ async fn main() -> std::result::Result<(), Box<dyn std::error::Error>> {
         key: Arc::new(key),
         python: Arc::new(python.trim_end_matches('/').into()),
         trusted_proxies: Arc::new(gateway::trusted_proxies(
-            &std::env::var("TICO_TRUSTED_PROXIES").unwrap_or_else(|_| "127.0.0.1/32,::1/128".into()),
+            &std::env::var("TICO_TRUSTED_PROXIES")
+                .unwrap_or_else(|_| "127.0.0.1/32,::1/128".into()),
         )?),
+        client_ip_header: gateway::client_ip_header(
+            &std::env::var("TICO_CLIENT_IP_HEADER").unwrap_or_default(),
+        )?,
         // The backend closes a keep-alive connection after 5 s idle (backend/server.py). Dropping ours first means no
         // request is sent on a connection the backend is closing, which would come back as a bare 502.
         proxy: tls::http_builder()
@@ -746,6 +853,15 @@ async fn main() -> std::result::Result<(), Box<dyn std::error::Error>> {
         .route("/control/v1/command", post(command))
         .route("/api/v2/runners/{rid}/screen/ws", get(browser))
         .route("/api/v2/runners/me/screen/{sid}/ws", get(runner))
+        .route("/api/v2/runners/me/browser-exit/ws", get(exit::link))
+        .route(
+            "/api/v2/runners/me/browser-exit/tunnels/{tid}/ws",
+            get(exit::client),
+        )
+        .route(
+            "/api/v2/runners/me/browser-exit/tunnels/{tid}/exit",
+            get(exit::exit_side),
+        )
         .layer(DefaultBodyLimit::max(131072))
         .with_state(app.clone());
     let listener = tokio::net::TcpListener::bind(&bind).await?;
@@ -754,11 +870,20 @@ async fn main() -> std::result::Result<(), Box<dyn std::error::Error>> {
         Err(_) => None,
     };
     println!("screen relay listening on {}", listener.local_addr()?);
+    // The public port is announced as well, so a caller that binds port 0 learns the port the relay took.
+    if let Some(public) = &public {
+        println!("screen gateway listening on {}", public.local_addr()?);
+    }
     tls::announce(|line| println!("{line}"));
     if let Some(public) = public {
         let gateway = gateway::routes(app.clone());
         tokio::spawn(async move {
-            if let Err(error) = axum::serve(public, gateway.into_make_service_with_connect_info::<std::net::SocketAddr>()).await {
+            if let Err(error) = axum::serve(
+                public,
+                gateway.into_make_service_with_connect_info::<std::net::SocketAddr>(),
+            )
+            .await
+            {
                 eprintln!("screen gateway stopped: {error}");
                 std::process::exit(1);
             }
@@ -766,12 +891,52 @@ async fn main() -> std::result::Result<(), Box<dyn std::error::Error>> {
     }
     axum::serve(listener, routes)
         .with_graceful_shutdown(async move {
-            let _ = tokio::signal::ctrl_c().await;
+            stopping().await;
             app.hub
                 .lock()
                 .unwrap()
                 .close_all(Close::new(1012, "relay stopped"));
+            // Python collects the last browser-exit usage in its next heartbeats (every 2 s) and acknowledges it in the
+            // one after; the control listener keeps serving until then, so a restart doesn't refill an exit's cap.
+            let deadline = Instant::now() + DRAIN;
+            while Instant::now() < deadline {
+                {
+                    let mut hub = app.hub.lock().unwrap();
+                    hub.sweep();
+                    if hub.lease.is_none() || hub.exits.drained() {
+                        break;
+                    }
+                }
+                tokio::time::sleep(Duration::from_millis(100)).await;
+            }
+            // Upgraded sockets are not waited for; a connection that lingers doesn't hold the stop up.
+            tokio::spawn(async {
+                tokio::time::sleep(Duration::from_secs(2)).await;
+                std::process::exit(0);
+            });
         })
         .await?;
     Ok(())
+}
+
+/// How long a stopping relay waits for Python to collect the browser-exit usage still in memory.
+const DRAIN: Duration = Duration::from_secs(6);
+
+/// Ctrl-C, or SIGTERM from a container stop.
+async fn stopping() {
+    #[cfg(unix)]
+    {
+        let Ok(mut term) =
+            tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate())
+        else {
+            let _ = tokio::signal::ctrl_c().await;
+            return;
+        };
+        tokio::select! {
+            _ = tokio::signal::ctrl_c() => {},
+            _ = term.recv() => {},
+        }
+    }
+    #[cfg(not(unix))]
+    let _ = tokio::signal::ctrl_c().await;
 }

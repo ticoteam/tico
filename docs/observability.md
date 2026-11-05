@@ -31,7 +31,7 @@ one PostHog project between several apps by filtering on the `app` property (Tic
    for the existing static-file deployment. To regenerate it: `npm ci` then
    `npm run build:observability`. Commit the generated bundle with source/dependency changes.
 4. In a staging deployment, sign in, navigate, create a test task,
-   send a test chat, and exercise a safe rejected submission. Inspect `app=tico`, environment,
+   send a test message, and exercise a safe rejected submission. Inspect `app=tico`, environment,
    outcomes and duration fields in PostHog. Inspect one controlled frontend error and API
    failure in Sentry. Confirm network payloads contain no content or raw URLs. Test logout
    and a different account; check that identities change and prior events do not follow it.
@@ -60,7 +60,7 @@ and a fixed `route` template. It never invents a team field.
 | `workflow_completed` | Its API operation returned success after the existing retry cycle |
 | `workflow_failed` | The API operation rejected or exhausted retries; no error text or request content accompanies it |
 
-Instrumented submissions: chat sends (including task/conversation and page chat), task
+Instrumented submissions: message sends (including task/thread and page thread sends), task
 creation/update, approval decisions, note saves, meeting import/edit/delete/send,
 bot definition changes, and settings transition requests. JSON and supported multipart
 submissions use the same wrapper; individual network retry attempts do not duplicate events.
@@ -117,7 +117,7 @@ If the project is shared, always filter by `app` and `environment` first. Sugges
 
 Sentry receives frontend uncaught errors/unhandled rejections, relevant API 5xx/unhandled
 exceptions, scheduler failures and runner panics (see [Server and runner errors](#server-and-runner-errors)).
-Bot chat sends also report `source=chat_send` when they cross five seconds while still pending,
+Bot message sends also report `source=chat_send` when they cross five seconds while still pending,
 then report their outcome when a slow send finishes or any send fails. The only send fields are
 `outcome` (a fixed label), `duration_ms`, `retries`, and `status` (the last HTTP status, or zero
 when no response arrived). No message text, bot name, attachment names, raw URL or error text is
@@ -228,20 +228,23 @@ the same rows to a local file that can be read without the server (below).
 | Table | What | Kept |
 | --- | --- | --- |
 | `flight_requests` | Per minute (`span` 60), per route template (`GET /api/v2/tasks`) and caller kind (`human`, `bot`, `runner`, `service`, `anonymous`): count, 5xx errors, response bytes, total, p50, p95 and max milliseconds. A caller that hangs up while its request body is read is recorded as 499 (client closed request), not as a 5xx. After two days, minutes become hours (`span` 3600). | 14 days |
-| `flight_slow` | Each request over one second: route, caller kind, actor id, milliseconds, bytes, status, SQL milliseconds, write-lock wait milliseconds and query count (at most 50 a minute). | 14 days, 5,000 rows |
+| `flight_slow` | Each request over one second: route, caller kind, actor id, milliseconds, bytes, status, SQL milliseconds, write-lock wait milliseconds, query count and its five costliest statement shapes, values folded out (at most 50 a minute). | 14 days, 5,000 rows |
 | `flight_process` | Per minute: CPU (% of one core), memory, threads, open files and sockets, event-loop lag (p95, max), SQL statements and time, write transactions with the longest lock wait and hold, `database is locked` errors, and `dropped`: samples lost because the background thread fell behind (a gap in that minute's numbers). | 14 days |
 | `flight_sql` | Per hour, per statement shape (literals folded): count, total, p95 and max milliseconds, from the statement's start through its last row fetched (rows read by iterating, `fetchone`, `fetchmany` or `fetchall`; never the caller's own work between rows); the top 100 by time, the rest as `(other)`. | 90 days |
-| `flight_db` | Hourly: file, WAL and free bytes, row counts of the growing tables and their oldest row. Table/index sizes (when SQLite has `dbstat` aggregate mode) refresh at most once per 24 hours and are reused between scans, including across restarts. | 90 days |
+| `flight_db` | Hourly: file, WAL and free bytes, row counts of the growing tables and their oldest row. Table/index sizes are estimated from sampled rows (no page is walked) and refresh at most once per 24 hours, reused between passes, including across restarts. | 90 days |
 | `flight_events` | `start`: release, commit, Python, SQLite, a hash of the installed packages and of the non-secret settings (with a short hash per setting, so two starts show which changed; no values), and `provenance`: `modified` when the code on disk differs from the hash the image build stored in `release-manifest.json` (files copied over a release image), `mismatch` when the image was not built from its release tag's commit on GitHub, otherwise `match`, `unverified` or `unknown`. `stall`: the event loop late by two seconds or more, with its class and every busy thread's stack (file, line, function; never values), at most once a minute (every stall is in the file). `long_hold`: a write transaction that held the lock five seconds or more: `route` (method and template, null for a background job), `site` (the code that held it, file, line and function), `hold_s`, `wait_s`, and `open` when it was still held at the minute's end (`site` is then where its thread is now); at most 20 a minute, also in the server log. `recorder_gap`: minutes whose rows could not be written (above). | 90 days |
 
 Times are Unix seconds. A `modified` or `mismatch` start shows as **Release image** on the Health page. The integrity of the
 database is checked by the daily verified backup (`PRAGMA integrity_check`), not here.
 
-The `flight_db` columns remain `ts`, `bytes`, `wal_bytes`, `free_bytes` and `detail_json`. Within the detail,
+The `flight_db` columns remain `ts`, `bytes`, `wal_bytes`, `free_bytes` and `detail`. Within the detail,
 `objects_at` dates the table/index sizes, while `seconds` measures the current hourly sampling pass.
 Metrics expose `db.objects_at` beside `db.objects`; these sizes can be older than the hourly `db.at`.
-Older records without `objects_at` use their snapshot timestamp. If dbstat aggregate mode is unavailable,
-object sizes are null; hourly totals and row statistics remain available. Size collection runs only in the
+Older records without `objects_at` use their snapshot timestamp. The sizes are estimates: a table is its row count
+times the average record size of 300 sampled rows (three runs of 100 spread over its rowid range), an index is its
+table's rows times its columns' average size, and a partial index counts every row, so it reads high. On the local
+test databases the 40 largest estimates were within about 20% of dbstat, except a partial index. Object sizes are
+null until the first pass; hourly totals and row statistics remain available. Size collection runs only in the
 flight recorder's background thread through autocommit reads, finished before the short snapshot write transaction.
 Opening Health or metrics reads recorded samples and does not trigger a page scan.
 
@@ -251,6 +254,7 @@ last hour under **Performance** on the Health page. `GET /api/v2/ops/timing` sti
 route since the start.
 
 With the recorder enabled, `Server-Timing` includes `sql` and `wait` durations alongside `auth` and `app`.
+Place GETs also include `prep`, `cards` and up to eight slowest `card-<template>` totals (repeated kinds summed; `card-page` for page pins, `card-hidden` for pins the caller can't read), capped at 300 added bytes.
 Slow metrics retain `sql_ms`, `wait_ms` and `queries`; rows recorded before the upgrade have null values.
 These are elapsed timings, so time waiting for CPU can also appear within SQL time. Compare the same
 window's CPU and event-loop lag before attributing the remaining request time to a lock.
@@ -258,12 +262,12 @@ window's CPU and event-loop lag before attributing the remaining request time to
 ```sql
 -- Where the last hour went, by route
 SELECT route, sum(n) AS calls, round(sum(total_ms) / 1000) AS seconds, max(p95) AS worst_p95
-FROM flight_requests WHERE ts > strftime('%s','now') - 3600 GROUP BY route ORDER BY seconds DESC LIMIT 10;
+FROM flight_requests WHERE created_at > strftime('%s','now') - 3600 GROUP BY route ORDER BY seconds DESC LIMIT 10;
 -- CPU and loop lag around an incident
-SELECT datetime(ts,'unixepoch') AS minute, cpu, lag_max, wait_max, hold_max, locked FROM flight_process
-WHERE ts > strftime('%s','now') - 3 * 3600 ORDER BY ts;
+SELECT datetime(created_at,'unixepoch') AS minute, cpu, lag_max, wait_max, hold_max, locked FROM flight_process
+WHERE created_at > strftime('%s','now') - 3 * 3600 ORDER BY created_at;
 -- Stalls and what the event loop was doing
-SELECT datetime(ts,'unixepoch'), detail_json FROM flight_events WHERE kind='stall' ORDER BY id DESC LIMIT 5;
+SELECT datetime(created_at,'unixepoch'), detail FROM flight_events WHERE kind='stall' ORDER BY id DESC LIMIT 5;
 ```
 
 Runner polls and writer admission use the same lock accounting: `wait_ms` includes the FIFO queue for
@@ -289,7 +293,8 @@ scripts/tico -e ENV server flight summary --since 2h   # a local install
 ```
 
 The summary shows server starts, stalls with their class and stacks, the slowest routes (count, total, p95, max, SQL time,
-lock wait, average and largest answer), slow requests, per-minute CPU, memory, loop lag, lock wait and hold, and drops;
+lock wait, average and largest answer), slow requests, per-minute CPU, memory, loop lag, lock wait and hold, and drops,
+and request percentiles across all routes (estimated from each route's per-minute p50, p95 and max);
 `--json` prints the same as JSON. The support bundle carries the last 24 hours of it (routes, slow requests, the latest
 stalls with stacks, hourly peaks), through the same allowlist and redactor as the rest of the bundle.
 
@@ -315,12 +320,12 @@ memory` sends SIGUSR2, which starts tracemalloc, and the next one writes the top
 | `start` | `pid`, `version`, `commit`, `python`, `sqlite`, `platform` |
 | `minute` | `ts` is the minute's start. `cpu` (% of one core), `rss` (bytes), `threads`, `fds`, `sockets`, `lag_p95`, `lag_max` (ms), `requests`, `queries`, `sql_ms`, `txns`, `wait_max`, `wait_ms` (write-lock wait, longest and total), `hold_max`, `hold_p95`, `locked` (`database is locked` errors), `dropped` (samples lost in memory), `file_dropped` (records lost to a full queue since the start), `db_failed` (table writes that could not get the lock since the start), `db_pending` (writes waiting for the next try) |
 | `routes` | `ts` (the minute), `span` (60), `routes`: list of `route` (method and template), `caller`, `n`, `errors` (5xx), `bytes`, `bytes_max` (response bytes from Content-Length; 0 for streams), `total_ms`, `p50`, `p95`, `max_ms`, `sql_ms`, `wait_ms` |
-| `slow` | A request over one second: `route`, `caller`, `actor`, `ms`, `bytes`, `status`, `sql_ms`, `wait_ms`, `queries` (its own SQL and lock wait, from the threads it ran on) |
+| `slow` | A request over one second: `route`, `caller`, `actor`, `ms`, `bytes`, `status`, `sql_ms`, `wait_ms`, `queries` (its own SQL and lock wait, from the threads it ran on), and `top`: its five costliest statement shapes as `{sql, n, ms}`, literals folded as in `sql` |
 | `stall` | `id`, `seconds` (since the loop last woke), `class`, `usage`, and `threads` (`busy`: `thread`, `loop`, `stack` innermost last; `idle`: a count) at most once a minute |
 | `stall_end` | `id` (the `stall`'s), `seconds` (between the loop's two wakes), `class`, `usage` over the whole stall |
 | `long_hold` | `route`, `site`, `hold_s`, `wait_s`, `open`: as the `long_hold` event above |
 | `drops` | `n`: records the queue had no room for |
-| `memory` | `state`: `started`, or `dumped` with `traced`, `peak` (bytes) and `top` (`where`, `bytes`, `count`) |
+| `memory` | `state`: `started_at`, or `dumped` with `traced`, `peak` (bytes) and `top` (`where`, `bytes`, `count`) |
 
 `usage` holds `window_ms`, `cpu_s`, `majflt`, `minflt`, `nivcsw`, `inblock`, `oublock`, `io_mb` (null without
 `/proc`), `rss_mb` (growth) and `lock_ms`. Readers skip unknown kinds and fields, and a line cut short by a crash.
@@ -333,7 +338,7 @@ files (`.1` to `.4`), in the server's record format (version 1): one JSON object
 seconds, milliseconds as decimals) and `kind`, here always `runner.*`: `runner.start` (version, build,
 pid), `runner.turn` (attempt, bot, runtime, outcome, `total_ms`, and `phases`: milliseconds since the turn was claimed
 for `placed`, `harness_started`, `harness_spawned`, `first_output`, `first_delta_posted`, then the hand-in's
-`model_done`, `scrubbed` (the secret scrub of the changed files), `finished`, `saved` (the result in runner.sqlite),
+`model_done`, `scrubbed` (the secret scrub of the changed files), `finished_at`, `saved` (the result in runner.sqlite),
 `flushed` (the last events sent), `complete_posted` and `done`), `runner.heartbeat` (round trips of a second or more, and every failure), `runner.git` (git commands of two
 seconds or more and every timeout, the scrub's included: verb, checkout folder name, milliseconds, exit code; never arguments) and
 `runner.process` once a minute (resident memory, CPU time, finished children's CPU, open turns, and `dropped`: records

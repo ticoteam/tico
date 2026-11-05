@@ -1,0 +1,39 @@
+{
+  "id": "22-slack-status-share",
+  "kind": "slack",
+  "questions": "slack-route",
+  "level": "low",
+  "state": {
+    "message": {
+      "channel": "C-platform",
+      "is_dm": false,
+      "from": "priya",
+      "text": "FYI the staging deploy finished at 10:42. No action needed."
+    },
+    "thread": null,
+    "previous_routing": null,
+    "roster": [
+      {
+        "bot": "engineering-lead",
+        "role": "Engineering Lead: plans and reviews engineering work"
+      },
+      {
+        "bot": "release-manager",
+        "role": "Release Manager: cuts releases and their notes"
+      },
+      {
+        "bot": "legal",
+        "role": "Legal helper: contracts, terms and policies"
+      },
+      {
+        "bot": "support",
+        "role": "Support agent: customer tickets and setup help"
+      },
+      {
+        "bot": "sales-ops",
+        "role": "Sales ops: pipeline and outreach"
+      }
+    ]
+  },
+  "note": "A status share: nothing to do, no ask."
+}

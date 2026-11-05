@@ -72,7 +72,7 @@ def roles(documents):
     out = []
     for card in documents:
         template = str(card.get("template") or "").strip()
-        if not template or card.get("kind") == "helper":
+        if not template or card.get("kind") == "helper" or card.get("retired"):
             continue
         slug = str(card.get("slug") or template).strip()
         routine = card.get("first_routine") if isinstance(card.get("first_routine"), dict) else {}

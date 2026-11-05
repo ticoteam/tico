@@ -1,0 +1,23 @@
+{
+  "id": "34-task-duplicate-close",
+  "kind": "task",
+  "questions": "stale-review",
+  "level": "low",
+  "state": {
+    "task": {
+      "title": "Add CSV export to the task board",
+      "status": "open",
+      "step": "Not started",
+      "owner": "builder-claude",
+      "created": "2026-10-02",
+      "updated": "2026-10-02",
+      "parent": null,
+      "reason": "Twin title: 'Add CSV export to the board' is open as task t-1017",
+      "comments": [
+        "Picked up from the roadmap list",
+        "Same request as t-1017"
+      ]
+    }
+  },
+  "note": "A duplicate of an open task: close."
+}

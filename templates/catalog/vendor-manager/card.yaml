@@ -8,7 +8,7 @@ pack: operations
 icon: store
 suggest: common
 tags: [vendors, contracts, renewals, suppliers, risk, smb, services]
-summary: "Keeps the register of every vendor the team pays, with owner, risk tier and notice date, and opens each renewal 90 days out with a keep, renegotiate or exit brief. It never renews, cancels or signs."
+summary: "Keeps the register of every vendor the team pays, with owner, risk tier and notice date, and opens each renewal 90 days out with a keep, renegotiate or exit brief. It renews, cancels or signs only when a task asks and a granted Tool allows it."
 when: "A team with twenty or more vendors and contracts, where auto-renewals and weak suppliers are noticed only after the invoice."
 pains:
   - "a vendor contract auto-renewed before anyone looked at it"
@@ -16,7 +16,7 @@ pains:
   - "nobody reviews whether a vendor is actually delivering"
   - "we only learn a vendor holds our data when something goes wrong"
 owns:
-  - "The vendor register: each vendor with its business owner, what it does for the team, annual cost, risk tier, contract end, notice period and the source of each field (knowledge/vendors.md)"
+  - "The vendor register: each vendor with its business owner, what it does for the team, annual cost, risk tier, contract end, notice period and the source and date of each field"
   - "The renewal calendar: each renewal opened 90 days before its notice deadline with a keep, renegotiate or exit brief"
   - "Performance reviews by tier: quarterly for critical vendors, yearly for important ones, a renewal check for the rest"
   - "Vendor questions and notices to vendors, sent only when a person has turned mail sending on in Tico, and the offboarding checklist when a vendor is dropped"

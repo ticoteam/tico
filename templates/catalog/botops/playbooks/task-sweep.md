@@ -6,6 +6,10 @@ You are not a human asking for this: the routine's text is a standing instructio
 lists are records. Read each task's `requester` before you act on its text.
 Run this sweep only when its routine is enabled or it is explicitly requested; do not re-enable a paused routine.
 
+Inputs: the list from `hub task list --stuck`, read with each task's `requester`.
+
+Done when: each stuck task is moved, fixed or reported to its requester, each of your own tasks has a recorded result, and the one-line finish is written.
+
 ## 1. Stuck work in the fleet
 
     hub task list --stuck
@@ -30,14 +34,14 @@ Keep the rows whose owner is a human (`human:...`). For each, check whether what
 | --- | --- |
 | create or register a bot or record | `hub bot status list` or `hub api GET bots/<slug>` shows it |
 | add a person | `hub human list` shows them |
-| paste or set a credential | `hub credential list` shows it for that bot |
+| paste or set a credential | `hub credential list` shows it in that bot's row (it has no filter: read the bots column) |
 | turn something on, pick a computer | `hub bot status list` shows it on |
 | decide something | their answer is on the task, or a newer task or message supersedes it |
 
 - **Already true or superseded:** `hub task close <id> --note "Done: <one line: what is now true, or what replaced it>"`.
 - **Cannot tell:** ask once, on the task: `hub task ask <id> "Is this still needed?"`. If a question from you is
   already the last thing on it, leave it; never ask twice.
-- **Still waiting:** leave it, but if its title or note breaks the rules in `Tasks you file for a human` (a long
+- **Still waiting:** leave it, but if its title or note breaks the rules in `human-tasks.md` (a long
   note, IDs, a list of inputs, "message BotOps with ..."), rewrite them: `hub task update <id> --title "..." --note "..."`.
 
 Never close a task because a notice about it arrived. Close it because you checked the condition. Never file a new
@@ -45,4 +49,4 @@ task for something that an open one already covers.
 
 ## 3. Finish
 
-One line: how many stuck tasks you moved and how many of your own you closed.
+Your final answer is one line only: `Sweep: moved <n> stuck task(s), closed <m> of your own.`

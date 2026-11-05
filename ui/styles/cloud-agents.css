@@ -1,0 +1,64 @@
+/* Cloud agents (ui/app/cloud-agents.js): the agents grid, the Request dialog, a seat's Connecting page, and the seat's
+   dashed node on the chart. Colours are the theme's tokens, so light and dark follow the page. The pulse moves opacity
+   only, and stops under reduced motion. */
+.cloud-grid{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:12px}
+.cloud-card{display:flex;flex-direction:column;gap:10px;min-height:168px;box-sizing:border-box;padding:14px;border:1px solid var(--line);border-radius:10px;background:var(--surface)}
+.cloud-card-head{display:flex;align-items:center;gap:10px;min-width:0}
+.cloud-who{display:flex;flex-direction:column;gap:2px;min-width:0}
+.cloud-who strong{font-weight:600;color:var(--ink);overflow-wrap:anywhere}
+.cloud-who span{font-size:var(--t-xs,11px)}
+.cloud-tile{width:32px;height:32px;flex:none;display:flex;align-items:center;justify-content:center;border-radius:8px;background:var(--surface2);color:var(--muted);font-size:12px;font-weight:600;letter-spacing:.02em}
+.cloud-tile-lg{width:40px;height:40px;border-radius:9px;font-size:13px}
+.cloud-tile-dashed{width:48px;height:48px;box-sizing:border-box;border:2px dashed var(--line);background:none;font-size:14px}
+.cloud-line{flex:1;margin:0;color:var(--ink);line-height:var(--lh);font-size:var(--t-sm)}
+.cloud-foot{display:flex;flex-wrap:wrap;align-items:center;justify-content:space-between;gap:8px 10px}
+.cloud-foot a{min-width:0;font-size:12px;color:var(--muted);overflow-wrap:anywhere}
+.cloud-act{flex:none;height:28px;padding:0 12px;font-size:12px}
+.cloud-other{display:flex;align-items:center;gap:10px;margin-top:12px;padding:12px 14px;border:1px dashed var(--line);border-radius:10px;flex-wrap:wrap}
+.cloud-other label{display:flex;align-items:center;gap:10px;flex:1;min-width:200px}
+.cloud-other input{flex:1;min-width:0}
+@media (max-width:600px){.cloud-grid{grid-template-columns:repeat(2,minmax(0,1fr))}.cloud-card{min-height:0}}
+
+.tmodal.cloud-open[open],.tmodal.cloud-request[open],.tmodal.cloud-seat[open]{display:flex;flex-direction:column}
+.cloud-open .bot-editor-body,.cloud-request .bot-editor-body,.cloud-seat .bot-editor-body{overflow:auto;min-height:0}
+.cloud-request-form{display:flex;flex-direction:column;min-height:0;flex:1 1 auto}
+.tmodal.cloud-open{width:min(960px,calc(100vw - 32px))}
+.cloud-open .bot-editor-body{padding-top:12px}
+
+.tmodal.cloud-request{width:min(520px,calc(100vw - 32px))}
+.cloud-request-head{align-items:center;gap:12px}
+.cloud-request-title{flex:1;min-width:0;display:flex;flex-direction:column;gap:2px}
+.cloud-request-title h2{margin:0;font-size:var(--t-lg);color:var(--ink);letter-spacing:var(--track-tight)}
+.cloud-request-title a{font-size:12px;color:var(--muted)}
+.cloud-note{display:flex;gap:12px;align-items:flex-start;margin:0;padding:12px 14px;border-radius:8px;background:var(--surface2);line-height:var(--lh);color:var(--ink)}
+.cloud-note .ldot{margin-top:3px}
+.cloud-how{margin:14px 0;padding-left:18px;color:var(--muted);line-height:1.6}
+.cloud-request label{display:flex;flex-direction:column;gap:6px}
+.cloud-request textarea{resize:none}
+
+.tmodal.cloud-seat{width:min(680px,calc(100vw - 32px))}
+.cloud-seat-page{display:flex;flex-direction:column;gap:18px}
+.cloud-seat-head{display:flex;align-items:center;gap:14px}
+.cloud-seat-title{flex:1;min-width:0;display:flex;flex-direction:column;gap:4px}
+.cloud-seat-title h2{margin:0;font-size:var(--t-lg);color:var(--ink);letter-spacing:var(--track-tight)}
+.cloud-seat-title .muted{font-size:12px}
+.cloud-connecting{display:flex;flex-direction:column;gap:16px;padding:18px 20px;border:1px solid var(--line);border-radius:12px;background:var(--surface)}
+.cloud-connecting-head{display:flex;align-items:baseline;justify-content:space-between;gap:12px;flex-wrap:wrap}
+.cloud-steps{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:8px}
+.cloud-step{display:flex;flex-direction:column;gap:8px;color:var(--ink)}
+.cloud-step i{height:4px;border-radius:2px;background:var(--line)}
+.cloud-step.done i,.cloud-step.now i{background:var(--ok)}
+.cloud-step.pending{color:var(--muted)}
+.cloud-pulse{animation:cloud-wait 1.6s ease-in-out infinite}
+@keyframes cloud-wait{0%,100%{opacity:.45}50%{opacity:1}}
+.cloud-waiting{display:flex;flex-direction:column;gap:8px}
+.cloud-waiting ul{list-style:none;margin:0;padding:0;border:1px solid var(--line);border-radius:10px;overflow:hidden}
+.cloud-waiting li{display:flex;align-items:center;gap:10px;padding:11px 14px;border-bottom:1px solid var(--line);background:var(--surface)}
+.cloud-waiting li:last-child{border-bottom:0}
+.cloud-task-dot{width:8px;height:8px;flex:none;border-radius:50%;border:1.5px solid var(--muted)}
+.cloud-label{font-size:11px;font-weight:600;letter-spacing:.06em;text-transform:uppercase;color:var(--muted)}
+
+/* The seat on the chart while its agent is requested: a dashed node with a Connecting pill (ui/app/sidebar.js). */
+#tree .pill.connecting{border:1px dashed var(--line);color:var(--muted);background:none;animation:cloud-wait 1.6s ease-in-out infinite}
+
+@media (prefers-reduced-motion:reduce){.cloud-pulse,#tree .pill.connecting{animation:none}}

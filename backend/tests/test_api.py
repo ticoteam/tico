@@ -15,6 +15,7 @@ from backend.auth import Identity
 from backend.config import Settings
 from backend.execution import AWAKE_SETTLE
 from backend.store import H, encode
+from backend import bot_settings as BS
 
 
 def api_settings(tmp_path):
@@ -26,6 +27,8 @@ def api_settings(tmp_path):
         "ana-test": Identity("human:ana", "owner", "ana@acme.example"),
         "ben-test": Identity("human:ben", "human", "ben@acme.example"),
         "cara-test": Identity("human:cara", "human", "cara@acme.example"),
+        "eve-test": Identity("human:eve", "human", "eve@acme.example"),
+        "fay-test": Identity("human:fay", "human", "fay@acme.example"),
     })
 
 
@@ -49,8 +52,8 @@ def api(tmp_path, api_database):
                 {"id": "cara", "email": "cara@acme.example"}]}),))
             for slug, config in bots.items():
                 product = slug in ("cpo", "product-design")
-                c.execute("INSERT INTO bot_config(bot,config_json,team,operator) VALUES(?,?,?,?)",
-                          (slug, encode(config), "product" if product else None, "ben" if product else "ana"))
+                c.execute('INSERT INTO bot_config(bot,team,owner_id) VALUES(?,?,?)', (slug, 'product' if product else None, 'ben' if product else 'ana'))
+                BS.write(c, slug, config)
             # The company's mail bot is Ana's alone: nobody else sees it, reads it or writes to it.
             restrict(c, "inbox", people=["ana"])
             # A company with a fleet this size is long past first run; the wizard belongs to
@@ -64,12 +67,12 @@ def api(tmp_path, api_database):
 def unrelated_task_managers(c, *slugs):
     """Keep privacy negatives outside the parties' org chains, without changing bot access grants."""
     import json
-    roster = json.loads(c.execute("SELECT value_json FROM registry_metadata WHERE key='people'").fetchone()[0])
+    roster = json.loads(c.execute("SELECT value FROM registry_metadata WHERE key='people'").fetchone()[0])
     if not any(p['id'] == 'privacy-lead' for p in roster['people']):
         roster['people'].append({'id': 'privacy-lead', 'email': 'privacy-lead@acme.example'})
     c.execute("INSERT OR IGNORE INTO humans(id,name,email) VALUES(?,?,?)",
               ('privacy-lead', 'Privacy Lead', 'privacy-lead@acme.example'))
-    c.execute("UPDATE registry_metadata SET value_json=? WHERE key='people'", (encode(roster),))
+    c.execute("UPDATE registry_metadata SET value=? WHERE key='people'", (encode(roster),))
     targets = slugs or tuple(row[0] for row in c.execute('SELECT bot FROM bot_config'))
     for slug in targets:
         c.execute("UPDATE bot_config SET reports_to='human:privacy-lead' WHERE bot=?", (slug,))
@@ -79,9 +82,11 @@ def restrict(c, bot, **audience):
     """Set a bot's access straight in the database: see, read and write all go to `audience`
     (people, teams, bots), or per level with see=, read=, write= each an audience dict."""
     from backend import bot_access as BA
+    from backend.store import H
     levels = {level: audience.pop(level) for level in BA.LEVELS if level in audience}
     every = {level: levels.get(level, audience) for level in BA.LEVELS}
-    c.execute("UPDATE bot_config SET access_json=? WHERE bot=?",
+    bot = (H.resolve_bot(c, bot) or {}).get("id", bot)              # a bot by its id or its slug
+    c.execute("UPDATE bot_config SET access=? WHERE bot=?",
               (BA.stored(BA.document({level: BA.audience(value) for level, value in every.items()})), bot))
 
 
@@ -107,9 +112,14 @@ def post(api, path, body, token="ana-test", key=None, expected=200):
     if expected == 200 and isinstance(data, dict):
         if path.startswith("chat/"):
             return data["message"]
-        if "task" in data and set(data) <= {"task", "readback"}:   # a relation write reads back what it stored
+        if "task" in data and set(data) <= {"task", "readback", "sent_as"}:   # a relation write reads back what it stored
             return data["task"]
     return data
+
+
+def hold(task, kind="blocked"):
+    """A task view's hold of one kind (docs/tasks.md, Holds), or {} when it has none."""
+    return next((h for h in task.get("holds") or () if h["kind"] == kind), {})
 
 
 def get(api, path, token="ana-test", expected=200):
@@ -165,9 +175,12 @@ def put(api, path, body, token="ana-test", expected=200):
     return r.json()
 
 
-def runner(api, operator="ana", label="Test Mac"):
+def runner(api, operator="ana", label="Test Mac", device_id=None):
     code = post(api, "enrollments", {"operator": operator})["code"]
-    return post(api, "runners/enroll", {"code": code, "label": label, "platform": "test"})
+    body = {"code": code, "label": label, "platform": "test"}
+    if device_id is not None:
+        body["device_id"] = device_id
+    return post(api, "runners/enroll", body)
 
 
 def test_the_installers_enrollment_request_needs_an_idempotency_key(api):
@@ -184,9 +197,14 @@ def assign(api, r, bot, generation=0, operator="ana-test"):
                 "expected_generation": generation}, token=operator)
 
 
-def ready(api, r, bots):
-    return post(api, "runners/heartbeat", {"version": "test", "platform": "test",
-                "readiness": {bot: True for bot in bots}}, token=r["token"])
+def ready(api, r, bots, capabilities=()):
+    # A runner reports readiness per bot id (the assignment's bot), so a slug given here is named by its id.
+    with api.app.state.store.read() as c:
+        ids = {bot: (H.resolve_bot(c, bot) or {}).get("id", bot) for bot in bots}
+    body = {"version": "test", "platform": "test", "readiness": {ids[bot]: True for bot in bots}}
+    if capabilities:
+        body["capabilities"] = list(capabilities)
+    return post(api, "runners/heartbeat", body, token=r["token"])
 
 
 def claim(api, r, bot=None, key=None):
@@ -234,7 +252,7 @@ def test_task_and_queue_commit_once_with_concurrent_retries(api):
     with ThreadPoolExecutor(max_workers=4) as pool:
         replies = list(pool.map(lambda _: post(api, "tasks", body, key="same-operation"), range(4)))
     assert len({r["id"] for r in replies}) == 1
-    assert replies[0]["requester"] == "human:ana"
+    assert replies[0]["requester_id"] == "human:ana"
     with api.app.state.store.read() as c:
         assert c.execute("SELECT count(*) FROM tasks").fetchone()[0] == 1
         assert c.execute("SELECT count(*) FROM jobs").fetchone()[0] == 1
@@ -259,7 +277,7 @@ def test_the_assistant_chats_only_in_its_own_room_and_people_still_hand_it_work(
     ben = post(api, "tasks", {"owner": "coo", "title": "Ben's review", "body": "Private context."},
                   token="ben-test")
     assert ana["conversation_id"] != ben["conversation_id"]
-    get(api, "conversations/" + ana["conversation_id"] + "/messages", "ben-test", expected=403)
+    get(api, "conversations/" + ana["conversation_id"] + "/messages", "ben-test", expected=404)   # unreadable looks missing
     post(api, "messages", {"to": "coo", "text": "Injected", "conversation_id": ana["conversation_id"]},
          token="ben-test", expected=403)
 
@@ -268,7 +286,7 @@ def test_shared_room_membership_updates_and_revokes_history_access(api):
     message = post(api, "chat/cpo", {"text": "The group can read this."})
     changed = post(api, "bots/cpo/owners", {"owners": ["cara"], "expected_revision": 1})
     assert [owner["id"] for owner in changed["owners"]] == ["cara"]
-    get(api, "conversations/" + message["conversation_id"] + "/messages", "ben-test", expected=403)
+    get(api, "conversations/" + message["conversation_id"] + "/messages", "ben-test", expected=404)
     visible = get(api, "conversations/" + message["conversation_id"] + "/messages", "cara-test")
     assert visible[0]["body"] == "The group can read this."
 
@@ -312,20 +330,20 @@ def test_turn_output_and_completion_are_durable_and_idempotent(api):
 def slept(api, r, seconds=3600, awake_since=None):
     """Age a machine's last contact the way an hour of sleep does."""
     with api.app.state.store.transaction() as c:
-        c.execute("UPDATE runners SET last_seen=?,awake_since=? WHERE id=?",
+        c.execute("UPDATE runner_states SET last_seen_at=?,awake_since=? WHERE runner_id=?",
                   (H.shift(H.now(), seconds=-seconds), awake_since, r["runner_id"]))
 
 
 def settled(api, r):
     """A machine that came back and has been reporting in ever since."""
     with api.app.state.store.transaction() as c:
-        c.execute("UPDATE runners SET awake_since=? WHERE id=?",
+        c.execute("UPDATE runner_states SET awake_since=? WHERE runner_id=?",
                   (H.shift(H.now(), seconds=-AWAKE_SETTLE - 1), r["runner_id"]))
 
 
 def awake_since(api, r):
     with api.app.state.store.read() as c:
-        return c.execute("SELECT awake_since FROM runners WHERE id=?", (r["runner_id"],)).fetchone()["awake_since"]
+        return c.execute("SELECT awake_since FROM runners_with_state WHERE id=?", (r["runner_id"],)).fetchone()["awake_since"]
 
 
 def test_approval_decision_and_consumption_have_separate_authority(api):
@@ -346,7 +364,7 @@ def test_a_files_metadata_follows_the_same_access_as_the_file(api):
     """Name, size and type without the bytes, for the viewer's thumbnails."""
     store = api.app.state.store
     with store.transaction() as c:
-        c.execute("INSERT INTO blobs(id,owner,digest,size,name,content_type,created) VALUES(?,?,?,?,?,?,?)",
+        c.execute("INSERT INTO blobs(id,owner,digest,size,name,content_type,created_at) VALUES(?,?,?,?,?,?,?)",
                   ("blob-meta-0001", "human:ana", "d" * 64, 2048, "storyboard.png", "image/png", H.now()))
     assert get(api, "files/blob-meta-0001/meta") == {"id": "blob-meta-0001", "name": "storyboard.png", "size": 2048,
                                                      "content_type": "image/png"}
@@ -354,23 +372,25 @@ def test_a_files_metadata_follows_the_same_access_as_the_file(api):
     get(api, "files/nope-nope-nope/meta", expected=404)
 
 
-def test_run_windows_include_failed_attempts_without_turns_and_hide_private_rooms(api):
+def test_run_windows_include_failed_runs_and_hide_private_rooms(api):
     machine, message, attempt = setup_attempt(api)
     with api.app.state.store.transaction() as c:
-        c.execute("UPDATE attempts SET state='expired',finished=? WHERE id=?", (H.now(), attempt["id"]))
-        c.execute("DELETE FROM turns WHERE id=?", (attempt["id"],))
+        c.execute("UPDATE attempts SET state='expired',finished_at=? WHERE id=?", (H.now(), attempt["id"]))
+        # No run record: the lease ended before one was written.
+        c.execute("UPDATE attempts SET trigger=NULL,trigger_kind=NULL,trigger_source=NULL,purpose=NULL,settled_at=NULL,"
+                  "exit=NULL,summary=NULL WHERE id=?", (attempt["id"],))
         H.status_set(c, "bot:ops", "ops", "running")
         H.status_set(c, "bot:ops", "ops", "idle")
     rows = get(api, "bots/ops/turns?since=24h")
     failed = next(row for row in rows if row["id"] == attempt["id"])
-    assert failed["record_kind"] == "attempt" and failed["exit"] == "expired"
+    assert failed["state"] == failed["exit"] == "expired"
     assert failed["failure_reason"] and "token_hash" not in failed
     assert get(api, "bots/ops/history?since=24h")
     assert get(api, "bots/ops/turns?since=not-a-window", expected=422)["error"]["code"] == "date"
     assert get(api, "bots/ops/history?since=not-a-window", expected=422)["error"]["code"] == "date"
     assert get(api, "bots/ops/turns?since=24h", token="ben-test") == []
-    run = next(r for r in api.get("/api/runs", headers=headers()).json() if r["run"] == attempt["id"])
-    assert run["record_kind"] == "attempt" and run["attempt_id"] == attempt["id"]
+    run = next(r for r in api.get("/api/runs", headers=headers()).json() if r["id"] == attempt["id"])
+    assert run["state"] == "expired" and "attempt_id" not in run
     assert api.get("/api/runs/" + attempt["id"] + "/log", headers=headers()).status_code == 200
     assert api.get("/api/runs/" + attempt["id"] + "/log", headers=headers("ben-test")).status_code == 404
     issue = next(i for i in get(api, "fleet/check")["issues"] if i["kind"] == "failing_runs")
@@ -408,3 +428,44 @@ def test_healthz_answers_while_slow_handlers_hold_every_shared_worker(api):
         assert api.get("/healthz").json()["ok"] is True
     finally:
         api.portal.call(release_all)
+
+
+def test_a_second_start_over_a_store_still_owing_the_redesign_cutover_finishes(tmp_path):
+    """The cutover runs in initialize, one write per object, after the store is ready. A store a restart finds part way
+    through it (its record says running) must finish under the next start and not wait on writes the start holds.
+    The second start runs on its own thread, so a stall fails here after a minute instead of hanging the run."""
+    import json
+    import threading
+    from backend import redesign_migration
+
+    def record_of(path):
+        with closing(sqlite3.connect(path)) as c:
+            raw = c.execute("SELECT value FROM registry_metadata WHERE key=?", (redesign_migration.CUTOVER,)).fetchone()
+        return json.loads(raw[0])
+
+    settings = api_settings(tmp_path)
+    with TestClient(create_app(settings)):
+        pass
+    assert record_of(settings.db_path)["state"] == "done"
+    with closing(sqlite3.connect(settings.db_path)) as c:
+        record = record_of(settings.db_path)
+        record["state"] = "running"
+        c.execute("UPDATE registry_metadata SET value=? WHERE key=?",
+                  (json.dumps(record, sort_keys=True), redesign_migration.CUTOVER))
+        c.commit()
+
+    outcome = []
+
+    def start_again():
+        try:
+            with TestClient(create_app(settings)):
+                pass
+            outcome.append("started")
+        except BaseException as exc:    # reported to the test thread below
+            outcome.append(exc)
+
+    worker = threading.Thread(target=start_again, daemon=True)
+    worker.start()
+    worker.join(60)
+    assert outcome == ["started"], f"the second start did not finish: {outcome!r}"
+    assert record_of(settings.db_path)["state"] == "done"

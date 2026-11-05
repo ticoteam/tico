@@ -25,5 +25,5 @@ the recognition method for each, the policy section, and open questions. Add the
 
 ## 4. Hand over
 
-If there are open questions, put them on the task for the accountant, prepared to send with Tools when a person has turned mail sending on in Tico,
+If there are open questions, put them on the task for the accountant, as a draft. It goes out only when the task asks for it, mail sending is on in Tico and a granted Tool allows it,
 with the facts and the contract clause. Mark the contract's schedule lines "estimated" until answered.

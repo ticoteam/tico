@@ -13,9 +13,9 @@ window.mountGithubConnect = async function (host) {
   if (state.connected) {
     host.innerHTML = `<p>Connected to <strong>${text(state.org)}</strong> through the app <strong>${text(state.slug)}</strong>.
       <span data-gh-install>${state.installed ? 'Installed on the organization.' : 'Not installed yet.'}</span></p>
-      ${state.administration ? '<p class="muted">BotOps can create bot repositories.</p>' : `<div data-gh-repo-fix>
-        <p><strong>BotOps can't create bot repositories.</strong> The app was set up without Administration, so every new bot waits for a person.</p>
-        <p>Fix it once: <a class="primary" role="button" data-gh-permissions target="_blank" rel="noopener">Let BotOps create repositories</a>
+      ${state.administration ? '<p class="muted">Tico can create bot repositories.</p>' : `<div data-gh-repo-fix>
+        <p><strong>Tico can't create bot repositories.</strong> The app was set up without Administration, so every new bot waits for a person.</p>
+        <p>Fix it once: <a class="primary" role="button" data-gh-permissions target="_blank" rel="noopener">Let Tico create repositories</a>
         On that page set <strong>Administration</strong> to <strong>Read and write</strong> and save, accept the new permission for ${text(state.org)} when GitHub asks, then
         <button type="button" class="ghost" data-gh-recheck>Check again</button></p>
         ${(state.waiting || []).length ? `<p class="muted">Waiting for a repository: ${(state.waiting || []).map((w, i) => `${text(w.bot)} (<a data-gh-create="${i}" target="_blank" rel="noopener">create ${text(w.repository)} yourself</a>)`).join(', ')}.</p>` : ''}
@@ -53,7 +53,7 @@ window.mountGithubConnect = async function (host) {
       <p class="muted">When GitHub asks where to install, choose <strong>All repositories</strong>. Each bot's token still covers only its own repository. For sensitive code, use a separate organization.</p>
       <label>Organization<input name="org" type="text" required maxlength="39" autocomplete="off" spellcheck="false" pattern="[A-Za-z0-9][A-Za-z0-9-]*" placeholder="your-org"></label>
       <label>App name<input name="name" type="text" maxlength="34" autocomplete="off" placeholder="Acme Tico"></label>
-      <label><input type="checkbox" name="administration" checked> Let BotOps create bot repositories (recommended; without it a person creates each new bot's repository)</label>
+      <label><input type="checkbox" name="administration" checked> Let Tico create bot repositories (recommended; without it a person creates each new bot's repository)</label>
       <button class="primary" type="submit">Connect GitHub</button>
       <p role="status" data-gh-status></p></form>`;
   host.querySelector('[data-gh-form]').onsubmit = async event => {

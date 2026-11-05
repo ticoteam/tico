@@ -23,6 +23,7 @@ import yaml
 from . import hubdb as H
 from . import people as P
 from .store import Problem
+from . import bot_settings as BS
 
 OWNER = "owner"
 ACCESS = "access"
@@ -43,7 +44,7 @@ def domains(values):
 
 
 def _load_json(c, key):
-    row = c.execute("SELECT value_json FROM registry_metadata WHERE key=?", (key,)).fetchone()
+    row = c.execute("SELECT value FROM registry_metadata WHERE key=?", (key,)).fetchone()
     try:
         value = json.loads(row[0]) if row else None
     except ValueError:
@@ -80,10 +81,18 @@ def load_owner(c, settings):
     stored = _load_json(c, OWNER)
     if stored is None:
         return {"email": str(settings.owner_email or "").strip().lower(), "revision": 0,
-                "updated": "", "updated_by": "", "source": "environment"}
+                "updated_at": "", "updated_by": "", "source": "environment"}
     return {"email": str(stored.get("email") or "").strip().lower(),
-            "revision": int(stored.get("revision") or 0), "updated": str(stored.get("updated") or ""),
+            "revision": int(stored.get("revision") or 0), "updated_at": str(stored.get("updated") or ""),
             "updated_by": str(stored.get("updated_by") or ""), "source": str(stored.get("source") or "")}
+
+
+def owner_and_admin_emails(c):
+    """The owner's address, then the Admins', as stored at database initialization (`seed`) and revised since: for code
+    with no settings at hand that must find someone who can act (an org rule hold's reviewer, backend/org_rule_check.py)."""
+    owner = (_load_json(c, OWNER) or {}).get("email")
+    stored = _load_json(c, ACCESS) or {}
+    return emails([owner, *(stored["admins"] if "admins" in stored else stored.get("bot_admins") or [])])
 
 
 def load_access(c, settings):
@@ -97,7 +106,7 @@ def load_access(c, settings):
             "admins": admins, "bot_admins": admins,
             "member_bot_limit": max(0, int(stored.get("member_bot_limit", MEMBER_BOT_LIMIT))),
             "revision": int(stored.get("revision") or 0),
-            "updated": str(stored.get("updated") or ""), "updated_by": str(stored.get("updated_by") or ""),
+            "updated_at": str(stored.get("updated") or ""), "updated_by": str(stored.get("updated_by") or ""),
             "source": str(stored.get("source") or source)}
 
 
@@ -152,8 +161,8 @@ def raise_bot_limit(c, now):
     stored = _load_json(c, ACCESS)
     before = stored.get("member_bot_limit") if stored else None
     chosen = c.execute(
-        "SELECT 1 FROM events WHERE action='access.limits_updated' AND json_extract(detail_json,'$.after')=? "
-        "AND coalesce(json_extract(detail_json,'$.before'),-1)<>? LIMIT 1", (OLD_BOT_LIMIT, OLD_BOT_LIMIT)).fetchone()
+        "SELECT 1 FROM events WHERE action='access.limits_updated' AND json_extract(detail,'$.after')=? "
+        "AND coalesce(json_extract(detail,'$.before'),-1)<>? LIMIT 1", (OLD_BOT_LIMIT, OLD_BOT_LIMIT)).fetchone()
     raised = stored is not None and before == OLD_BOT_LIMIT and not chosen
     if raised:
         _store(c, ACCESS, {**stored, "member_bot_limit": MEMBER_BOT_LIMIT})
@@ -170,13 +179,24 @@ def clear_bot_access_notice(c):
     c.execute("DELETE FROM registry_metadata WHERE key=?", (BOT_ACCESS_NOTICE,))
 
 
+def _history_entry(owner):
+    return {"email": owner["email"], "revision": owner["revision"], "updated": owner["updated_at"],
+            "updated_by": owner["updated_by"], "source": owner["source"]}
+
+
 def _store(c, key, record):
+    # These documents hold `updated`, as they always have; only what the code hands out calls it `updated_at`.
+    if "updated_at" in record:
+        record = {**{k: v for k, v in record.items() if k != "updated_at"}, "updated": record["updated_at"]}
     if key == ACCESS:
         # The Admins list is kept under both names so a rollback to the previous release still finds it.
         admins = emails(record["admins"] if "admins" in record else record.get("bot_admins"))
         record = {**record, "admins": admins, "bot_admins": admins}
-    c.execute("INSERT INTO registry_metadata VALUES(?,?) ON CONFLICT(key) DO UPDATE SET value_json=excluded.value_json",
+    c.execute("INSERT INTO registry_metadata VALUES(?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value",
               (key, json.dumps(record, sort_keys=True)))
+    if key in (ACCESS, OWNER):
+        from . import people_mirror
+        people_mirror.changed()                    # roles and sign-in lists changed (backend/people_mirror.py)
 
 
 def admitted(access, email):
@@ -200,7 +220,11 @@ def _save_roster(c, roster):
     from .report_order import roster_saved
     roster_saved(c, roster)                        # a person who joins a manager goes last among its reports
     c.execute("INSERT INTO registry_metadata VALUES('people',?) ON CONFLICT(key) DO UPDATE SET "
-              "value_json=excluded.value_json", (json.dumps(roster, sort_keys=True),))
+              "value=excluded.value", (json.dumps(roster, sort_keys=True),))
+    from .finance import actions as FA
+    FA.revalidate_org(c)                           # Finance's view grants follow the org chart at once (spec 7.5)
+    from . import people_mirror
+    people_mirror.changed()                        # the Tico account gets the sign-in list again (backend/people_mirror.py)
 
 
 save_roster = _save_roster
@@ -209,12 +233,12 @@ save_roster = _save_roster
 def _sync_human(c, row):
     teams = sorted({t for t in [row.get("team"), *(row.get("primary_for") or [])] if t})
     values = {"id": row["id"], "name": row["name"], "email": row["email"],
-              "slack_id": row.get("slack_id") or None, "teams_json": json.dumps(teams)}
+              "slack_id": row.get("slack_id") or None, "teams": json.dumps(teams)}
     if H.human(c, row["id"]) is None:
-        c.execute("INSERT INTO humans (id, name, email, slack_id, teams_json) "
-                  "VALUES (:id, :name, :email, :slack_id, :teams_json)", values)
+        c.execute("INSERT INTO humans (id, name, email, slack_id, teams) "
+                  "VALUES (:id, :name, :email, :slack_id, :teams)", values)
     else:
-        c.execute("UPDATE humans SET name=:name, email=:email, teams_json=:teams_json WHERE id=:id", values)
+        c.execute("UPDATE humans SET name=:name, email=:email, teams=:teams WHERE id=:id", values)
 
 
 def _email_taken(c, email, except_id=""):
@@ -263,6 +287,9 @@ def add_person(c, actor, roster, *, name, email, title="", team="", reports_to="
     _sync_human(c, row)
     _allow(c, email)
     H.event(c, actor, event, row["id"], {"email": email})
+    # A personal mailbox awaiting this address becomes theirs; joining never connects one (backend/mailbox_access.py).
+    from . import mailbox_access
+    mailbox_access.link_person(c, row["id"], email)
     return {**roster, "people": [*roster["people"], row]}, row
 
 
@@ -368,17 +395,20 @@ def join_on_sign_in(c, email):
 
 def assign_message_bot(c, roster, row, body):
     """Name `row`'s message bot, and the address it reads for them when that is not their own email. This is the
-    one thing that lets a bot's runs ask a Docker computer for a mail token (backend/routines.token_mailboxes), so
+    one thing that gives a bot a grant on that mailbox (backend/mailbox_access.py message_bot_changed), so
     it is an owner's or admin's word: a bot cannot claim a mailbox by describing itself in its own repository."""
-    from . import inbox_isolation, routines
+    from . import inbox_isolation, mailbox_access, routines
+    old_bot = row.get("inbox_bot") or None
+    old_address = mailbox_access.message_bot_mailbox(c, row, old_bot) if old_bot else ""
     bot = row.get("inbox_bot") if body.inbox_bot is None else P._clean(body.inbox_bot)
+    bot = (H.resolve_bot(c, bot) or {}).get("id", bot)
     if bot:
         found = H.bot(c, bot)
         if not found or found["state"] == "archived":
             raise Problem("not_found", "That bot was not found", 404)
         other = next((p for p in roster["people"] if p["id"] != row["id"] and p.get("inbox_bot") == bot), None)
         if other:
-            raise Problem("conflict", f"{bot} is already {other['name'] or other['id']}'s message bot", 409)
+            raise Problem("conflict", f"{found['slug']} is already {other['name'] or other['id']}'s message bot", 409)
         row = {**row, "inbox_bot": bot}
         placed = c.execute("SELECT runner_id FROM assignments WHERE bot=?", (bot,)).fetchone()
         if placed:
@@ -390,6 +420,8 @@ def assign_message_bot(c, roster, row, body):
         raise Problem("mailbox", "Name the message bot that reads it (inbox_bot) too", 422)
     else:
         row = {**row, "inbox_bot": None}
+    # The grant that lets the bot use the mailbox (backend/mailbox_access.py); a bot replaced loses its own.
+    mailbox_access.message_bot_changed(c, row, old_bot, old_address, row.get("inbox_bot") or None)
     return row
 
 
@@ -502,7 +534,7 @@ def save_access(c, actor, body, now, *, bot_admins=None, settings=None):
     after = {"allowed": people, "allowed_domains": found,
              "admins": before["admins"] if bot_admins is None else emails(bot_admins),
              "member_bot_limit": before["member_bot_limit"],
-             "revision": before["revision"] + 1, "updated": now, "updated_by": actor, "source": "owner"}
+             "revision": before["revision"] + 1, "updated_at": now, "updated_by": actor, "source": "owner"}
     _store(c, ACCESS, after)
     return before, after
 
@@ -523,19 +555,19 @@ def transfer(c, actor, roster, owner, target_id, *, expected_revision, previous_
         raise Problem("conflict", "That person is already the owner", 409)
     previous = P.person_by_email(owner["email"], roster)
     stored = _load_json(c, OWNER) or {}
-    history = [*(stored.get("history") or []), {k: owner[k] for k in ("email", "revision", "updated", "updated_by", "source")}]
-    after = {"email": target["email"], "revision": owner["revision"] + 1, "updated": now,
+    history = [*(stored.get("history") or []), _history_entry(owner)]
+    after = {"email": target["email"], "revision": owner["revision"] + 1, "updated_at": now,
              "updated_by": actor, "source": "transfer", "previous": owner["email"], "history": history[-OWNER_HISTORY:],
              "retired": emails(stored.get("retired"))}
     _store(c, OWNER, after)
-    # The CEO Bot chat stays with the owner seat: the new owner inherits it, and the old owner talks to their Assistant
-    # again, with their own Assistant chats (backend/assistant.py).
-    from .assistant import move_ceo_room
-    move_ceo_room(c, actor, "human:" + target["id"])
+    # The owner's earlier Strategy Bot chat, history now, stays with the owner seat: the new owner reads it under
+    # "Earlier chats" (backend/assistant.py). Everyone keeps their own Assistant.
+    from .assistant import move_strategy_room
+    move_strategy_room(c, actor, "human:" + target["id"])
     access = load_access(c, settings)
     if previous_bot_admin and owner["email"]:
         _store(c, ACCESS, {**access, "admins": emails([*access["admins"], owner["email"]]),
-                           "revision": access["revision"] + 1, "updated": now, "updated_by": actor,
+                           "revision": access["revision"] + 1, "updated_at": now, "updated_by": actor,
                            "source": "owner"})
     H.event(c, actor, "owner.transferred", target["id"],
             {"from": owner["email"], "from_person": (previous or {}).get("id", ""),
@@ -557,9 +589,54 @@ def _keep_mailbox(c, person, address):
     sign-in change is not a mail change, so the address it reads now is written down before the email moves."""
     from . import routines
     bot = person.get("inbox_bot")
-    found = c.execute("SELECT config_json FROM bot_config WHERE bot=?", (bot,)).fetchone() if bot else None
-    if found and not routines.declared_mailbox(json.loads(found["config_json"] or "{}")):
+    found = c.execute(BS.ONE_SQL, (bot,)).fetchone() if bot else None
+    if found and not routines.declared_mailbox(json.loads(found["config"] or "{}")):
         routines.set_declared_mailbox(c, bot, address)
+
+
+def _follow_address(c, pid, old, new):
+    """Meetings filed for a person by address (backend/meetings.py filed_for), a meeting delivery they asked for and a
+    Granola sync, which acts as the address it was connected with: all follow the person when the address changes."""
+    c.execute("UPDATE meetings SET owner=?, metadata=CASE WHEN lower(json_extract(metadata,'$.owner'))=? "
+              "THEN json_set(metadata,'$.owner',?) ELSE metadata END WHERE lower(owner)=?", (new, old, new, old))
+    c.execute("UPDATE meeting_deliveries SET requested_by=? WHERE lower(requested_by)=?", (new, old))
+    c.execute("UPDATE granola_connections SET email=? WHERE actor=?", (new, "human:" + pid))
+
+
+def change_email(c, actor, roster, pid, new_email, *, now, settings, via="app"):
+    """A person's sign-in address changed in place, in the caller's transaction: the roster and `humans` (same id), the
+    allow list and the Admins where the old address was on them, and what follows the address. The owner's address
+    goes through change_owner_email. Used when a verified Tico account sign-in arrives under a new address."""
+    person = P.person(pid, roster)
+    if not person:
+        raise Problem("not_found", "Person not found", 404)
+    new, old = _valid_email(new_email), person["email"]
+    if new == old:
+        return person
+    if _email_taken(c, new, pid):
+        raise Problem("conflict", new + " already belongs to someone else on the roster", 409)
+    # An address on the Admins, the owner's or the allow list is never a person's sign-in address: moving there would
+    # hand the person that role (the Admins list) or leave someone else's entry in place.
+    before = load_access(c, settings)
+    if new in before["admins"] or new in before["allowed"] or new == load_owner(c, settings)["email"]:
+        raise Problem("conflict", new + " is on the owner's, Admins or allow list, so it cannot be a sign-in address", 409)
+    if old:
+        _keep_mailbox(c, person, old)
+    row = P._person({**person, "email": new})
+    _save_roster(c, {**roster, "people": [row if p["id"] == pid else p for p in roster["people"]]})
+    _sync_human(c, row)
+    access = _load_json(c, ACCESS)
+    if access is not None and old:
+        def swap(values):
+            return emails(new if e == old else e for e in values)
+        allowed, admins = swap(before["allowed"]), swap(before["admins"])
+        if allowed != before["allowed"] or admins != before["admins"]:
+            _store(c, ACCESS, {**access, "allowed": allowed, "admins": admins,
+                               "revision": before["revision"] + 1, "updated_at": now, "updated_by": actor, "source": "sign_in"})
+    if old:
+        _follow_address(c, pid, old, new)
+    H.event(c, actor, "person.email_changed", pid, {"from": old, "to": new, "via": via})
+    return row
 
 
 def change_owner_email(c, actor, roster, owner, new_email, *, expected_revision, now, settings, via="app"):
@@ -589,8 +666,8 @@ def change_owner_email(c, actor, roster, owner, new_email, *, expected_revision,
     _save_roster(c, {**roster, "people": [row if p["id"] == person["id"] else p for p in roster["people"]]})
     _sync_human(c, row)
     stored = _load_json(c, OWNER) or {}
-    history = [*(stored.get("history") or []), {k: owner[k] for k in ("email", "revision", "updated", "updated_by", "source")}]
-    after = {"email": new, "revision": owner["revision"] + 1, "updated": now, "updated_by": actor,
+    history = [*(stored.get("history") or []), _history_entry(owner)]
+    after = {"email": new, "revision": owner["revision"] + 1, "updated_at": now, "updated_by": actor,
              "source": "email_change", "previous": old, "history": history[-OWNER_HISTORY:],
              "retired": [e for e in emails([*(stored.get("retired") or []), old]) if e != new]}
     _store(c, OWNER, after)
@@ -605,13 +682,8 @@ def change_owner_email(c, actor, roster, owner, new_email, *, expected_revision,
         allowed, admins = swap(before["allowed"]), swap(before["admins"])
         if allowed != before["allowed"] or admins != before["admins"]:
             _store(c, ACCESS, {**access, "allowed": allowed, "admins": admins,
-                               "revision": before["revision"] + 1, "updated": now, "updated_by": actor, "source": "owner"})
-    # Meetings are filed for a person by address (backend/meetings.py filed_for), and a Granola sync acts as the address
-    # it was connected with: both follow the person.
-    c.execute("UPDATE meetings SET owner=?, metadata_json=CASE WHEN lower(json_extract(metadata_json,'$.owner'))=? "
-              "THEN json_set(metadata_json,'$.owner',?) ELSE metadata_json END WHERE lower(owner)=?", (new, old, new, old))
-    c.execute("UPDATE meeting_deliveries SET requested_by=? WHERE lower(requested_by)=?", (new, old))
-    c.execute("UPDATE granola_connections SET email=? WHERE actor=?", (new, "human:" + person["id"]))
+                               "revision": before["revision"] + 1, "updated_at": now, "updated_by": actor, "source": "owner"})
+    _follow_address(c, person["id"], old, new)
     H.event(c, actor, "owner.email_changed", person["id"],
             {"from": old, "to": new, "revision": after["revision"], "via": via})
     return load_owner(c, settings)
@@ -648,7 +720,7 @@ def view(c, settings, roster, proxy_kind, owner_id):
                        "removable": left and people_remove.removable(c, p)})
     return {"owner": {**owner, "person": owner_id}, "people": people, **{
         k: access[k] for k in ("allowed", "allowed_domains", "admins", "bot_admins", "member_bot_limit", "revision",
-                               "updated", "updated_by")},
+                               "updated_at", "updated_by")},
         "company_domains": domains_,
         "company_domain_source": ("allowed" if access["allowed_domains"] else "owner" if home_domain(owner["email"], []) else
                                   "team" if domains_ else "none"),

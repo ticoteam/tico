@@ -6,13 +6,13 @@ A sample of excellent output for a fictional team. Every name in it is a stand-i
 Sample output for Acme, a fictional studio-software team. Nothing has been changed in Tico.
 First draft, not yet reviewed.
 
-**Headline: Q3 landed at 0.62 on aspirational key results. The Q4 focus: reach 40 paying studios by
+**Headline: Q3 landed at 0.65 on aspirational key results. The Q4 focus: reach 40 paying studios by
 2026-12-18 without adding support headcount.**
 
 ## Last quarter, graded (sources: `hub goal list --all`, readings to 2026-08-29)
-- KR1 Paying studios 18 to 30: reached 26, grade 0.67, aspirational.
-- KR2 Weekly active instructors 400 to 700: reached 590, grade 0.63, aspirational.
-- KR3 First reply under 4 hours: reached 5.1 hours, grade 0.4, **committed**: it missed. Support
+- KR1 Paying studios 18 to 30: reached 26, grade 0.7, aspirational.
+- KR2 Weekly active instructors 400 to 700: reached 590, grade 0.6, aspirational.
+- KR3 First reply under 4 hours, from 8 hours: reached 6.4 hours, grade 0.4, **committed**: it missed. Support
   mail volume grew 45% (weekly update 2026-08-22).
 - KR4 Launch the waitlist feature: no reading, ungraded. The goal had no measure.
 - Total 0.57 over three graded results; the launch is not counted.

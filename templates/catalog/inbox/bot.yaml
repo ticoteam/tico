@@ -20,7 +20,7 @@ outbound_send: false
 forward_to: []
 
 # The first routine is declared but not armed (`enabled: false`). The bot arms it with
-# `hub routine update <id> --enable` when Setup starts; setup-done allows normal work.
+# `hub automation update <id> --enable` when Setup starts; setup-done allows normal work.
 # `hub bot create` seeds it once; from then on Tico's row is the routine (docs/routines.md).
 # A second or third pass a day is a routine the bot adds after a week of a brief the human reads.
 routines:
@@ -35,8 +35,8 @@ routines:
 # What this bot may touch. Not listed is not allowed. `env:` names the variable a credential
 # arrives in, never the value. Store a Credential in Tico and grant it to this bot;
 # the runner delivers it during a run. Declaring access here does not create a grant. BotOps replaces {{mailbox}} from
-# the Mailbox: line in the reviewed instructions. Only the assigned mailbox is read: reading the
-# people who report to that human (`org_read: true`) is a separate decision for the owner.
+# the Mailbox: line in the reviewed instructions. Only the assigned mailbox is read, through the grant this bot gets
+# as its person's message bot (Settings > Mailboxes); another mailbox is that mailbox's person's to share.
 tools:
   - service: gmail
     identity: "{{mailbox}}"

@@ -1,13 +1,14 @@
-"""KPIs and the CEO Bot (backend/kpis.py, backend/goals.py, docs/goals-and-kpis.md): the colour
-arithmetic, a person's override, what the CEO Bot may not do without a confirm, the migration of
+"""KPIs and the Strategy Bot (backend/kpis.py, backend/goals.py, docs/goals-and-kpis.md): the colour
+arithmetic, a person's override, what the Strategy Bot may not do without a confirm, the migration of
 the old KPI rows and the automatic bot KPIs."""
 
 import sqlite3
 from datetime import datetime, timedelta, timezone
 
-from backend import botkpis, ceo_bot, hubdb, kpis as K
+from backend import botkpis, strategy_bot, hubdb, kpis as K
 from backend.store import H
 from backend.tests.test_api import api, assign, claim, get, headers, post, ready, runner  # noqa: F401
+from backend import bot_settings as BS
 
 NOW = datetime(2026, 9, 29, 12, 0, tzinfo=timezone.utc)
 
@@ -18,42 +19,41 @@ def stamp(days_ago):
 
 def reading(value, days_ago, quality="measured"):
     return {"id": f"r{days_ago}", "value": value, "period_end": stamp(days_ago), "period_start": stamp(days_ago + 7),
-            "collected_at": stamp(days_ago), "created": stamp(days_ago), "quality": quality}
+            "collected_at": stamp(days_ago), "created_at": stamp(days_ago), "quality": quality}
 
 
 ACTIVATION = {"name": "Activation", "unit": "%", "direction": "up", "cadence": "weekly"}
 CLIMB = {"kind": "improve", "baseline": 40.0, "baseline_at": stamp(60), "target": 70.0, "deadline": "2026-11-28"}
 
 
-def test_automatic_cost_uses_measured_api_cost_and_ignores_retired_cost(api):
+def test_automatic_cost_uses_measured_api_cost_only(api):
     with api.app.state.store.transaction() as c:
-        c.execute("INSERT INTO turns(id, bot, started, cost, billing) VALUES('legacy', 'ops', ?, 900, 'api')",
-                  (stamp(1),))
+        c.execute("INSERT INTO attempts(id, bot_id, created_at, billing) VALUES('unmeasured', 'ops', ?, 'api')", (stamp(1),))
         assert botkpis.value(c, "ops", "cost_7d", NOW) is None
-        c.executemany("INSERT INTO turns(id, bot, started, est_cost_usd, cost, billing) VALUES(?, 'ops', ?, ?, ?, ?)", [
-            ("measured", stamp(1), 2.5, 1000, "api"), ("subscription", stamp(1), 5, 500, "subscription")])
+        c.executemany("INSERT INTO attempts(id, bot_id, created_at, est_cost_usd, billing) VALUES(?, 'ops', ?, ?, ?)", [
+            ("measured", stamp(1), 2.5, "api"), ("subscription", stamp(1), 5, "subscription")])
         assert botkpis.value(c, "ops", "cost_7d", NOW) == 2.5
-        c.execute("UPDATE turns SET est_cost_usd=0 WHERE billing='api' AND est_cost_usd IS NOT NULL")
+        c.execute("UPDATE attempts SET est_cost_usd=0 WHERE billing='api' AND est_cost_usd IS NOT NULL")
         assert botkpis.value(c, "ops", "cost_7d", NOW) == 0
 
 
 def test_automatic_cost_distinguishes_missing_usage_from_measured_zero(api):
     with api.app.state.store.transaction() as c:
-        c.executemany("INSERT INTO turns(id, bot, started, est_cost_usd, billing, usage_reason) "
+        c.executemany("INSERT INTO attempts(id, bot_id, created_at, est_cost_usd, billing, usage_reason) "
                       "VALUES(?, 'ops', ?, 0, ?, ?)", [
             (f"{reason}-{billing}", stamp(1), billing, reason)
             for reason in ("usage_unreported", "usage_limited", "no_result")
             for billing in ("api", None)
         ])
         # A measured subscription and an API reading outside the window cannot supply a reading.
-        c.executemany("INSERT INTO turns(id, bot, started, est_cost_usd, billing) VALUES(?, 'ops', ?, ?, ?)", [
+        c.executemany("INSERT INTO attempts(id, bot_id, created_at, est_cost_usd, billing) VALUES(?, 'ops', ?, ?, ?)", [
             ("subscription", stamp(1), 50, "subscription"), ("old", stamp(8), 100, "api")])
         assert botkpis.value(c, "ops", "cost_7d", NOW) is None
         assert all(r["period_end"] != stamp(0) for r in botkpis.readings(c, "auto:ops:cost_7d", NOW))
-        c.executemany("INSERT INTO turns(id, bot, started, est_cost_usd, billing) VALUES(?, 'ops', ?, ?, ?)", [
+        c.executemany("INSERT INTO attempts(id, bot_id, created_at, est_cost_usd, billing) VALUES(?, 'ops', ?, ?, ?)", [
             ("measured", stamp(1), 2.5, "api"), ("legacy-billing", stamp(1), 1.25, None)])
         assert botkpis.value(c, "ops", "cost_7d", NOW) == 3.75
-        c.execute("UPDATE turns SET est_cost_usd=0 WHERE id IN ('measured', 'legacy-billing')")
+        c.execute("UPDATE attempts SET est_cost_usd=0 WHERE id IN ('measured', 'legacy-billing')")
         assert botkpis.value(c, "ops", "cost_7d", NOW) == 0
         assert botkpis.readings(c, "auto:ops:cost_7d", NOW)[-1]["value"] == 0
 
@@ -146,7 +146,7 @@ def test_archive_restore_preserves_kpi_history_and_marks_it_on_goals(api):
     goal, kpi = goal_with_kpi(api)
     logged = log(api, kpi["id"], 52, evidence="https://bi.example/activation", note="September", period_end=H.now())
     with api.app.state.store.transaction() as c:
-        ceo_bot.set_level(c, "human:ana", 2)                  # above Passive, a stale KPI waits in Needs you
+        strategy_bot.set_level(c, "human:ana", 2)                  # above Passive, a stale KPI waits in Needs you
     stale = post(api, "kpis", {"name": "Unreported measure", "owner": "me"})["kpi"]
     assert any(item.get("kpi_id") == stale["id"] for item in get(api, "goals/needs-you")["items"])
     post(api, f"kpis/{stale['id']}/archive", {})
@@ -155,7 +155,7 @@ def test_archive_restore_preserves_kpi_history_and_marks_it_on_goals(api):
     post(api, f"kpis/{stale['id']}/restore", {})
     original = get(api, f"kpis/{kpi['id']}")
     archived = post(api, f"kpis/{kpi['id']}/archive", {})["kpi"]
-    assert archived["archived_at"] and archived["archived_by"] == "human:ana"
+    assert archived["archived_at"] and archived["archived_by_id"] == "human:ana"
     assert all(row["id"] != kpi["id"] for row in get(api, "kpis")["kpis"])
     historical = get(api, "kpis?include_archived=true")["kpis"]
     assert next(row for row in historical if row["id"] == kpi["id"])["archived_at"]
@@ -176,39 +176,41 @@ def test_archive_restore_preserves_kpi_history_and_marks_it_on_goals(api):
         assert K.goal_views(c, [goal["id"]])[goal["id"]] == []
     with api.app.state.store.read() as c:
         actions = [r["action"] for r in c.execute(
-            "SELECT action FROM events WHERE target=? AND action LIKE 'kpi.%' ORDER BY ts", (kpi["id"],))]
+            "SELECT action FROM events WHERE target=? AND action LIKE 'kpi.%' ORDER BY created_at", (kpi["id"],))]
     assert actions[-1:] == ["kpi.archive"]
 
     restored = post(api, f"kpis/{kpi['id']}/restore", {})["kpi"]
-    assert restored["archived_at"] is None and restored["archived_by"] is None
+    assert restored["archived_at"] is None and restored["archived_by_id"] is None
     assert any(row["id"] == kpi["id"] for row in get(api, "kpis")["kpis"])
     assert any(row["id"] == kpi["id"] for row in goal_of(api, goal["id"])["kpis"])
     with api.app.state.store.read() as c:
         actions = [r["action"] for r in c.execute(
-            "SELECT action FROM events WHERE target=? AND action LIKE 'kpi.%' ORDER BY ts", (kpi["id"],))]
+            "SELECT action FROM events WHERE target=? AND action LIKE 'kpi.%' ORDER BY created_at", (kpi["id"],))]
     assert actions[-2:] == ["kpi.archive", "kpi.restore"]
 
 
-def add_ceo_bot(api):
+def add_strategy_bot(api):
     with api.app.state.store.transaction() as c:
-        c.execute("INSERT INTO bots(slug,display_name,runtime,model,effort,cwd,host,state,created) "
-                  "VALUES('goal-manager','Goal Manager','fake','','','','keeper','active',?)", (H.now(),))
-        c.execute("INSERT INTO bot_config(bot,config_json,team,operator) VALUES('goal-manager','{}',NULL,'ana')")
+        c.execute("INSERT INTO bots(id,slug,display_name,effort,state,created_at) "
+                  "VALUES('goal-manager','goal-manager','Goal Manager','','active',?)", (H.now(),))
+        c.execute("INSERT INTO bot_config(bot,team,owner_id) VALUES('goal-manager',NULL,'ana')")
+        BS.write(c, 'goal-manager', {"runtime": "fake", "host": "keeper"})
 
 
 def owners_chat(api):
-    """A CEO Bot turn in the owner's chat with it: it acts as the owner (backend/assistant.py)."""
-    add_ceo_bot(api)
+    """An Assistant turn in the owner's chat, which is their Assistant like everyone's (backend/assistant.py chat_bot):
+    it acts as the owner, with the Assistant's rights. The Strategy Bot is a helper it hands work to, never this chat."""
+    add_strategy_bot(api)
     machine = runner(api)
-    assign(api, machine, "goal-manager")
-    ready(api, machine, ["goal-manager"])
+    assign(api, machine, "coo")
+    ready(api, machine, ["coo"])
     post(api, "assistant/messages", {"text": "Archive the activation KPI, then bring it back"})
-    return claim(api, machine, "goal-manager")["token"]
+    return claim(api, machine, "coo")["token"]
 
 
 def goals_session(api):
-    """A CEO Bot turn in its goals session, woken by another bot: it acts as itself, never as the owner."""
-    add_ceo_bot(api)
+    """A Strategy Bot turn in its goals session, woken by another bot: it acts as itself, never as the owner."""
+    add_strategy_bot(api)
     machine = runner(api)
     for bot in ("ops", "goal-manager"):
         assign(api, machine, bot)
@@ -228,19 +230,18 @@ def test_only_kpi_owner_or_manager_above_can_archive_and_goal_manager_is_refused
     post(api, f"kpis/{kpi['id']}/restore", {}, token=token, expected=403)
 
 
-def test_in_the_owners_chat_the_ceo_bot_acts_as_the_owner_but_leaves_kpi_archive_and_restore_to_them(api):
+def test_in_the_owners_chat_the_assistant_acts_as_the_owner_on_the_words_that_asked(api):
+    """The owner's turn asked to archive the KPI and bring it back: its cited words admit each change as the owner. A KPI
+    change is not a proposal (`assistant/actions` refuses it), so it runs on the turn or not at all."""
     _, kpi = goal_with_kpi(api, owner="ben", token="ben-test")
     token = owners_chat(api)
     assert get(api, "me", token)["actor"] == "human:ana"
     post(api, f"kpis/{kpi['id']}/archive", {}, token="ana-test")
-    for change in ("restore", "archive"):
-        # With the Assistant's rights, not the owner's: never on its own, and not a card the owner confirms either.
-        assert post(api, f"kpis/{kpi['id']}/{change}", {}, token=token,
-                    expected=403)["error"]["code"] == "confirm_required"
-        post(api, "assistant/actions", {"summary": change.title() + " the activation KPI", "method": "POST",
-                                        "path": f"/api/v2/kpis/{kpi['id']}/{change}", "body": {}},
-             token=token, expected=422)
-        post(api, f"kpis/{kpi['id']}/{change}", {}, token="ana-test")
+    post(api, f"kpis/{kpi['id']}/restore", {}, token=token)
+    post(api, f"kpis/{kpi['id']}/archive", {}, token=token)
+    post(api, "assistant/actions", {"summary": "Archive the activation KPI", "method": "POST",
+                                    "path": f"/api/v2/kpis/{kpi['id']}/archive", "body": {}},
+         token=token, expected=422)
 
 
 
@@ -251,8 +252,8 @@ def test_the_goal_manager_reads_and_writes_facts_but_a_target_needs_the_owners_c
     log(api, kpi["id"], 45, token=token, evidence="https://analytics.example/q/12", period_end=H.now())
     assert goal_of(api, goal["id"], token)["status_source"] == "auto"
     assert post(api, "goals/refresh", {}, token=token)["checked"] >= 1
-    # ...and nothing else: not the target, the definition, a colour, a new KPI or a new link.
-    # A target is refused and becomes a proposal in the owner's Needs you (backend/ceo_acts.py `gate`); the rest are refused.
+    # ...and nothing else: not the target, the definition, a colour, a new KPI or a new link. A target is refused and
+    # becomes a proposal in the owner's Needs you (backend/strategy_acts.py `gate`); the rest are refused.
     post(api, f"goals/{goal['id']}/kpis/{kpi['id']}", {"kind": "improve", "target": 50, "deadline": "2099-01-01"},
          token=token, expected=409)
     for path, body in ((f"kpis/{kpi['id']}", {"definition": "Whatever is easiest to hit"}),
@@ -292,12 +293,12 @@ def test_the_kpis_of_the_old_tables_become_links_with_an_improvement_target():
     for i, script in enumerate(hubdb.MIGRATIONS[:hubdb.MIGRATIONS.index(hubdb.KPIS_SCHEMA)]):
         hubdb._apply(conn, script)
         conn.execute(f"PRAGMA user_version={i + 1}")
-    conn.execute("INSERT INTO goals (id, title, owner, status, status_note, status_by, created, created_by, updated) "
+    conn.execute("INSERT INTO goals (id, title, owner_id, status, status_note, status_by_id, created_at, created_by_id, updated_at) "
                  "VALUES ('g1','Grow','company','green','On track','human:ana','2026-01-01T00:00:00Z','human:ana','2026-01-01T00:00:00Z')")
-    conn.execute("INSERT INTO kpis (id, goal_id, name, unit, target, created, created_by) VALUES "
+    conn.execute("INSERT INTO kpis (id, goal_id, name, unit, target, created_at, created_by_id) VALUES "
                  "('k1','g1','Signups','signups',500,'2026-01-02T00:00:00Z','human:ana'), "
                  "('k2','g1','NPS','',NULL,'2026-01-02T00:00:00Z','human:ana')")
-    conn.execute("INSERT INTO kpi_readings (id, kpi_id, ts, value, actor, source, note, created) VALUES "
+    conn.execute("INSERT INTO kpi_readings (id, kpi_id, measured_at, value, actor_id, source, note, created_at) VALUES "
                  "('r1','k1','2026-03-01T00:00:00Z',120,'human:ana','measured','from the dashboard','2026-03-02T00:00:00Z'), "
                  "('r2','k1','2026-04-01T00:00:00Z',200,'human:ana','estimate','','2026-04-01T00:00:00Z')")
     hubdb.migrate(conn)
@@ -306,7 +307,7 @@ def test_the_kpis_of_the_old_tables_become_links_with_an_improvement_target():
     assert (links["k1"]["kind"], links["k1"]["target"], links["k1"]["goal_id"]) == ("improve", 500, "g1")
     assert (links["k2"]["kind"], links["k2"]["target"]) == ("none", None)
     kpi = dict(conn.execute("SELECT * FROM kpis WHERE id='k1'").fetchone())
-    assert (kpi["owner"], kpi["cadence"], kpi["direction"], kpi["definition_version"]) == ("company", "monthly", "up", 1)
+    assert (kpi["owner_id"], kpi["cadence"], kpi["direction"], kpi["definition_version"]) == ("company", "monthly", "up", 1)
     old = [dict(r) for r in conn.execute("SELECT * FROM kpi_readings ORDER BY id")]
     assert [(r["value"], r["period_end"], r["collected_at"], r["quality"], r["note"]) for r in old] == [
         (120, "2026-03-01T00:00:00Z", "2026-03-02T00:00:00Z", "measured", "from the dashboard"),
@@ -360,3 +361,11 @@ def test_archived_kpis_do_not_change_remaining_measure_or_owner_fallback(api):
     post(api, f"kpis/{removed['id']}/restore", {})
     assert goal_of(api, goal["id"])["status_source"] == "person"
     assert goal_of(api, goal["id"])["status"] == "yellow"
+
+
+def test_a_target_with_no_kind_has_no_label():
+    # A kpi_target proposal's payload may name only a target; its card (GET /proposals) must not fail on it.
+    kpi = {"unit": "%"}
+    assert K.target_label(kpi, {"target": 65, "deadline": "2026-12-31"}) == ""
+    assert K.target_label(kpi, {}) == "" and K.target_label(kpi, None) == ""
+    assert K.target_label(kpi, {"kind": "improve", "target": 65, "deadline": "2026-12-31"}).startswith("→ 65")

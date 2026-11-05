@@ -30,7 +30,7 @@ HARNESS_CATALOG = (
     {"id": "muse", "label": "muse", "runtime": "muse", "external": True},
 )
 HARNESS_BY_ID = {row["id"]: row for row in HARNESS_CATALOG}
-# Each CLI's short name and capabilities come from its manifest (runner/harnesses/*.toml); an external agent has
+# Each CLI's short name and capabilities come from its manifest (runner-rs/harnesses/*.toml); an external agent has
 # none, so every capability reads as unknown for it.
 HARNESS_CATALOG = tuple({**row, "name": (manifests.get(row["id"]) or {}).get("name", row["label"]),
                          "capabilities": dict(manifests.caps(row["id"]))} for row in HARNESS_CATALOG)
@@ -70,6 +70,13 @@ def runtime_of(harness):
 def harness_caps(harness, runtime=None):
     """The capabilities of `harness`, else of `runtime`'s own CLI; empty when neither has a manifest."""
     return manifests.caps(harness) or manifests.caps(runtime)
+
+
+def bot_keyed(runtime):
+    """Whether `runtime` signs each bot in with that bot's own key (`api_keys = "bot"`: pi and the Gemini CLI). A
+    provider's refusal of such a key is that bot's alone, as the runner's signin.bot_keyed decides it."""
+    return bool(runtime) and any(row["runtime"] == runtime and row["capabilities"].get("api_keys") == "bot"
+                                 for row in HARNESS_CATALOG)
 
 
 def bot_key(config, runtime=None):

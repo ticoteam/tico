@@ -1,0 +1,227 @@
+// Settings changes a page at a time (ui/app/settings-history.js), on the owner's Settings > History > Changes and on a
+// bot's History tab. A page with next_before ends in "Show older", which fetches the page after it (before=) and draws
+// its rows below the ones shown; the control goes after the last page. Undo works on a row from a later page, and the
+// list then reads its first page again. The Log (GET /api/v2/history) opens from a shared address with its filters
+// set, asks with them, pages with Show older, offers the CSV of the same filters, and writes a new filter back.
+const {chromium} = require('playwright');
+const assert = require('node:assert/strict');
+const fs = require('node:fs');
+const {html, uiFile} = require('./support/page.cjs');
+const {unrouted} = require('./support/routes.cjs');
+
+(async () => {
+  const browser = await chromium.launch({headless: true});
+  try {
+    const page = await browser.newPage({viewport: {width: 1280, height: 800}, serviceWorkers: 'block'});
+    const errors = [], calls = [], undos = [], logCalls = [], csvCalls = [];
+    let csvRows = 0;
+    page.on('pageerror', error => errors.push(error.message));
+    const at = minutes => new Date(Date.parse('2026-10-28T12:00:00Z') - minutes * 60000).toISOString();
+    // Newest first, as the server sends them. Ana renamed both bots; the owner's list holds both, the card one only.
+    const CHANGES = ['h1', 'o1', 'h2', 'h3', 'o2', 'h4', 'h5'].map((id, i) => ({
+      id, bot: id.startsWith('h') ? 'helper' : 'ops', field: 'identity',
+      before: {display_name: `Name ${i + 1}`, description: ''}, after: {display_name: `Name ${i + 2}`, description: ''},
+      actor: 'ana', via: '', transition_id: null, created_at: at(i * 10), undone_at: null, can_undo: true}));
+    // A change still in progress: the owner's first page carries it, and no later page does.
+    const PENDING = {id: 'tr1', bot: 'ops', kind: 'model', state: 'prepared', progress: {prepared: 0, total: 1},
+      checkpoints: []};
+    // Two rows a page, so the stub pages the way the server's byte cap does: a next_before on every page but the last.
+    const pageOf = (rows, before) => {
+      const start = before ? rows.findIndex(row => row.id === before) + 1 : 0;
+      const slice = rows.slice(start, start + 2);
+      return {changes: slice, next_before: start + 2 < rows.length ? slice.at(-1).id : null};
+    };
+    const bot = (name, display_name, revision) => ({name, display_name, description: '', status: 'active',
+      state: 'active', host: 'keeper', can_chat: true, can_manage: true, owner_id: 'ana',
+      my_access: {see: true, read: true, write: true}, schedules: [], revision, thread_mode: 'personal', users: [],
+      online: true, machine: null});
+    const bots = [bot('helper', 'Helper', 3), bot('ops', 'Ops', 5)];
+    await page.route('**/*', route => {
+      const request = route.request(), url = new URL(request.url()), p = url.pathname;
+      const json = body => route.fulfill({contentType: 'application/json', body: JSON.stringify(body)});
+      if (p === '/') return route.fulfill({contentType: 'text/html', body: html});
+      const ui = p.match(/\/tico\/ui\/((?:app\/|styles\/)?[^/]+\.(?:js|css))$/);
+      if (ui && fs.existsSync(uiFile(ui[1]))) {
+        return route.fulfill({contentType: ui[1].endsWith('.css') ? 'text/css' : 'application/javascript',
+          body: fs.readFileSync(uiFile(ui[1]), 'utf8')});
+      }
+      if (p === '/api/me') {
+        return json({id: 'ana', name: 'Ana', role: 'owner', email: 'ana@example.test', cloud: true, registered: true,
+          config: {version: '0.3.52', app_name: 'Tico'}});
+      }
+      if (p === '/api/employees') return json(bots);
+      if (p === '/api/humans' || p === '/api/people') return json({people: [{id: 'ana', name: 'Ana'}], teams: {}});
+      if (p === '/api/status') return json({cloud: true, active: [], queued: [], recent_runs: [], schedules: []});
+      if (p === '/api/v2/status') return json({bots: []});
+      if (p === '/api/v2/usage/limits') return json({bots: {}});
+      if (p === '/api/v2/settings/history') {
+        const bot = url.searchParams.get('bot') || '', before = url.searchParams.get('before') || '';
+        calls.push({bot, before});
+        const rows = CHANGES.filter(row => !bot || row.bot === bot);
+        // The first page left out older in-progress changes that would not fit (`transitions_truncated`).
+        return json({...pageOf(rows, before), ...(bot || before ? {transitions: []}
+          : {transitions: [PENDING], transitions_truncated: true})});
+      }
+      if (p === '/api/v2/history') {
+        const q = Object.fromEntries(url.searchParams);
+        logCalls.push(q);
+        const row = (id, minutes, result) => ({id: `decision:${id}`, at: at(minutes), kind: 'decision', actor: 'human:ana',
+          about: 'bot:ops', subject: 'Ship the Acme pricing page today?', result, link: '#/task/t1'});
+        return json(q.before ? {items: [row('m1', 30, 'Wait a week')], names: {'human:ana': 'Ana', 'bot:ops': 'Ops'}, next: null}
+          : {items: [row('m3', 5, 'Send it Monday')], names: {'human:ana': 'Ana', 'bot:ops': 'Ops'}, next: `${at(5)}|decision:m3`});
+      }
+      // The CSV: the first page names the rest in X-Next, and each page after it repeats the header row.
+      if (p === '/api/v2/history.csv') {
+        const q = Object.fromEntries(url.searchParams), head = 'time,actor,kind,subject,result,link\r\n';
+        csvCalls.push(q);
+        if (csvRows) {
+          const start = Number(q.before || 0), count = Math.min(5000, csvRows - start);
+          return route.fulfill({contentType: 'text/csv', body: head + Array.from({length: count}, (_, i) =>
+            `${at(5)},human:ana,decision,Row ${start + i + 1},Send it Monday,\r\n`).join(''),
+          headers: start + count < csvRows ? {'X-Next': String(start + count)} : {}});
+        }
+        return route.fulfill({contentType: 'text/csv', body: q.before ? `${head}${at(30)},human:ana,decision,Ship it,Wait a week,\r\n`
+          : `${head}${at(5)},human:ana,decision,Ship it,Send it Monday,\r\n`,
+        headers: q.before ? {} : {'X-Next': `${at(5)}|decision:m3`}});
+      }
+      const undo = p.match(/^\/api\/v2\/settings\/history\/([^/]+)\/undo$/);
+      if (undo && request.method() === 'POST') {
+        const row = CHANGES.find(change => change.id === undo[1]);
+        undos.push({id: undo[1], ...request.postDataJSON()});
+        Object.assign(row, {can_undo: false, undone_at: at(0)});
+        const revision = bots.find(b => b.name === row.bot).revision + 1;
+        return json({undone: true, bot: row.bot, field: row.field, revision});
+      }
+      if (p.endsWith('/watch')) return route.fulfill({contentType: 'text/event-stream', body: ': fixture\n\n'});
+      return json(unrouted(p));
+    });
+    const owner = '#set-history', card = '#bot-settings-history';
+    const changeIds = scope => page.locator(`${scope} [data-settings-undo]`)
+      .evaluateAll(els => els.map(el => el.dataset.settingsUndo));
+    const showMore = scope => page.locator(`${scope} [data-settings-older]`);
+    const waitForChanges = (scope, count) => page.waitForFunction(([sel, n]) =>
+      document.querySelectorAll(`${sel} [data-settings-undo]`).length === n, [scope, count]);
+
+    // The Log, opened from a shared address: its filters are set and asked with; the CSV is of the same rows.
+    await page.goto('https://tico-ui.test/#/settings/history?bot=ops&kind=decision');
+    await page.waitForFunction(() => document.querySelectorAll('#set-log .log-row:not(.log-head)').length === 1);
+    assert.deepEqual(logCalls.at(-1), {bot: 'ops', kind: 'decision'});
+    assert.equal(await page.locator('#log-who').inputValue(), 'bot:ops');
+    assert.equal(await page.locator('#log-kind').inputValue(), 'decision');
+    assert.equal(await page.locator('#set-log .log-row:not(.log-head) .log-result').innerText(), 'Send it Monday');
+    assert.equal(await page.locator('#set-log .log-subject a').getAttribute('href'), '#/task/t1');
+    assert.equal(await page.evaluate(() => location.hash), '#/settings/history?kind=decision&bot=ops');
+    // Export CSV keeps the same filters and the header row once.
+    const [download] = await Promise.all([page.waitForEvent('download'), page.locator('#log-csv').click()]);
+    assert.equal(download.suggestedFilename(), 'tico-history.csv');
+    assert.equal(fs.readFileSync(await download.path(), 'utf8'), 'time,actor,kind,subject,result,link\r\n'
+      + `${at(5)},human:ana,decision,Ship it,Send it Monday,\r\n${at(30)},human:ana,decision,Ship it,Wait a week,\r\n`);
+    assert.deepEqual(csvCalls, [{kind: 'decision', bot: 'ops'}, {kind: 'decision', bot: 'ops', before: `${at(5)}|decision:m3`}]);
+    // Four full server pages stop at the newest 20,000, even when the server offers another page.
+    csvRows = 25000;
+    csvCalls.length = 0;
+    const [capped] = await Promise.all([page.waitForEvent('download'), page.locator('#log-csv').click()]);
+    const cappedText = fs.readFileSync(await capped.path(), 'utf8');
+    assert.equal(cappedText.trim().split('\n').length, 20001);
+    assert.equal(cappedText.split('time,actor,kind,subject,result,link').length, 2);
+    assert.ok(cappedText.includes(',Row 1,') && cappedText.includes(',Row 20000,') && !cappedText.includes(',Row 20001,'));
+    assert.deepEqual(csvCalls, ['', '5000', '10000', '15000'].map(before =>
+      ({kind: 'decision', bot: 'ops', ...(before ? {before} : {})})));
+    await page.waitForFunction(() => [...document.querySelectorAll('.toast')].some(el =>
+      el.textContent === 'Exported the newest 20,000. Narrow the dates for more.'));
+    assert.equal(await page.locator('#log-csv').isEnabled(), true);
+    // Exactly 20,000 completes without a truncation notice.
+    await page.locator('.toast').evaluateAll(els => els.forEach(el => el.remove()));
+    csvRows = 20000;
+    csvCalls.length = 0;
+    const [complete] = await Promise.all([page.waitForEvent('download'), page.locator('#log-csv').click()]);
+    assert.equal(fs.readFileSync(await complete.path(), 'utf8').trim().split('\n').length, 20001);
+    assert.equal(csvCalls.length, 4);
+    assert.equal(await page.locator('.toast').count(), 0);
+    await page.locator('#set-log [data-log-older]').click();
+    await page.waitForFunction(() => document.querySelectorAll('#set-log .log-row:not(.log-head)').length === 2);
+    assert.deepEqual(logCalls.at(-1), {bot: 'ops', kind: 'decision', before: `${at(5)}|decision:m3`});
+    assert.equal(await page.locator('#set-log [data-log-older]').count(), 0, 'the last page ends the control');
+    // A new filter asks again and goes back in the address, so the view can be shared.
+    await page.locator('#log-kind').selectOption('');
+    await page.waitForFunction(() => location.hash === '#/settings/history?bot=ops');
+    assert.deepEqual(logCalls.at(-1), {bot: 'ops'});
+    await page.setViewportSize({width: 390, height: 844});
+    assert.equal(await page.locator('#log-csv').isVisible(), true);
+    assert.equal(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth), true);
+    await page.setViewportSize({width: 1280, height: 800});
+
+    // The owner's Changes: page one carries the change in progress; each Show older appends the next page.
+    await page.goto('https://tico-ui.test/#/settings/history');
+    assert.deepEqual(await page.evaluate(() => [100000, 250000].map(tokens => settingsValue('compact_at', tokens))), ['100k', '250k'],
+      'a Compact at change is labelled with its size, 100k included');
+    await page.locator('[data-history-view=changes]').click();
+    await page.waitForFunction(() => location.hash === '#/settings/history?view=changes');
+    await waitForChanges(owner, 2);
+    assert.deepEqual(await changeIds(owner), ['h1', 'o1']);
+    assert.deepEqual(calls.at(-1), {bot: '', before: ''});
+    assert.equal(await showMore(owner).innerText(), 'Show older');
+    assert.equal(await page.locator(`${owner} [data-transition-review]`).count(), 1);
+    await showMore(owner).click();
+    await waitForChanges(owner, 4);
+    assert.deepEqual(await changeIds(owner), ['h1', 'o1', 'h2', 'h3']);
+    assert.deepEqual(calls.at(-1), {bot: '', before: 'o1'});
+    assert.equal(await page.locator(`${owner} [data-transition-review]`).count(), 1,
+      'the change in progress is not drawn twice');
+    assert.equal(await page.locator(owner, {hasText: 'Some older in-progress changes are not listed here.'}).count(), 1,
+      'the list still says older in-progress changes are left out');
+    await showMore(owner).click();
+    await waitForChanges(owner, 6);
+    assert.deepEqual(calls.at(-1), {bot: '', before: 'h3'});
+    await showMore(owner).click();
+    await waitForChanges(owner, 7);
+    assert.deepEqual(calls.at(-1), {bot: '', before: 'h4'});
+    assert.equal(await showMore(owner).count(), 0, 'the last page ends the control');
+    // Undo on a row from a later page, then the first page again.
+    await page.locator(`${owner} [data-settings-undo=o2]`).click();
+    await page.waitForFunction(() => document.querySelectorAll('#set-history [data-settings-undo]').length === 2);
+    assert.deepEqual(undos, [{id: 'o2', expected_revision: 5}]);
+    assert.deepEqual(await changeIds(owner), ['h1', 'o1']);
+    assert.equal(await showMore(owner).count(), 1);
+
+    // A bot's card: its own changes only, paged the same way.
+    await page.goto('https://tico-ui.test/#/bot/helper/history');
+    await waitForChanges(card, 2);
+    assert.deepEqual(await changeIds(card), ['h1', 'h2']);
+    assert.deepEqual(calls.at(-1), {bot: 'helper', before: ''});
+    await showMore(card).click();
+    await waitForChanges(card, 4);
+    assert.deepEqual(await changeIds(card), ['h1', 'h2', 'h3', 'h4']);
+    assert.deepEqual(calls.at(-1), {bot: 'helper', before: 'h2'});
+    assert.equal(await showMore(card).count(), 1, 'a page after this one');
+    await showMore(card).click();
+    await waitForChanges(card, 5);
+    assert.deepEqual(await changeIds(card), ['h1', 'h2', 'h3', 'h4', 'h5']);
+    assert.deepEqual(calls.at(-1), {bot: 'helper', before: 'h4'});
+    assert.equal(await showMore(card).count(), 0, 'the last page ends the control');
+    // Undo on a row from the second page reads the card's first page again, and the control returns.
+    await page.locator(`${card} [data-settings-undo=h4]`).click();
+    await waitForChanges(card, 2);
+    assert.deepEqual(undos.at(-1), {id: 'h4', expected_revision: 3});
+    assert.deepEqual(await changeIds(card), ['h1', 'h2']);
+    assert.equal(await showMore(card).count(), 1);
+    // Phone width: the control shows and the page does not scroll sideways.
+    await page.setViewportSize({width: 390, height: 844});
+    await page.evaluate(() => setDrawer(false));
+    assert.equal(await showMore(card).isVisible(), true);
+    assert.equal(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth), true);
+    // A role lost while the owner's controls are still painted hides Changes and CSV; the old Runs link still opens Runs.
+    await page.goto('https://tico-ui.test/#/settings/history?view=changes');
+    await waitForChanges(owner, 2);
+    await page.evaluate(() => { S.me.role = 'human'; S.me.bot_admin = false; settingsShow('runs'); });
+    assert.equal(await page.locator('#set-runs').isVisible(), true);
+    await page.evaluate(() => settingsHistoryShow('changes'));
+    await page.waitForFunction(() => document.querySelectorAll('#set-log .log-row:not(.log-head)').length === 1);
+    assert.equal(await page.locator('#set-history').isVisible(), false);
+    assert.equal(await page.locator('[data-history-view=changes]').isVisible(), false);
+    assert.equal(await page.locator('#set-log').isVisible(), true);
+    assert.equal(await page.locator('#log-csv').count(), 0);
+    assert.deepEqual(errors, []);
+    console.log('PASS: settings history pages: the Log from a filtered address; Show older on the owner Changes and a bot card; Undo on appended rows');
+  } finally { await browser.close(); }
+})().catch(error => { console.error(error); process.exit(1); });

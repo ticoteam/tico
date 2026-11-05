@@ -71,15 +71,16 @@ STOP = set("a an the and or of to for in on with our we us my i me is are be it 
            "some any get have has do does work your from at by as".split())
 # setup.js ALIASES: everyday words for a role, mapped to the template that does it.
 ALIASES = {
-    "bookkeeper": "bookkeeping", "accountant": "bookkeeping", "seo": "seo-visibility", "social": "listening",
+    "seo": "seo-visibility", "social": "listening",
     "social media": "listening", "blog": "content", "writer": "content", "copywriter": "content", "sdr": "sdr-research",
     "recruiter": "recruiting", "qa": "issue-triage", "tester": "issue-triage", "reviewer": "pr-reviewer",
-    "code reviewer": "pr-reviewer", "engineer": "pr-reviewer", "support": "support", "customer support": "support",
+    "code reviewer": "pr-reviewer", "engineer": "builder", "support": "support", "customer support": "support",
     "invoices": "billing", "invoicing": "billing", "payroll": "payroll", "legal": "general-counsel",
     "lawyer": "general-counsel", "contracts": "legal-review", "hr": "people-hr", "chief of staff": "chief-of-staff",
     "pr": "pr", "press": "pr", "ads": "paid-media", "release manager": "release-notes", "docs": "docs-writer",
     "technical writer": "docs-writer", "note taker": "meeting-notes", "meeting notes": "meeting-notes",
-    "project manager": "meeting-notes", "goal manager": "goal-manager", "librarian": "librarian", "assistant": "coo",
+    "project manager": "meeting-notes", "goal manager": "goal-manager", "ceo bot": "goal-manager",
+    "librarian": "librarian", "assistant": "coo",
     "botops": "botops", "cfo": "finance-lead", "cmo": "marketing-lead", "cto": "engineering-lead",
     "cap table": "equity-manager", "equity": "equity-manager", "fundraising": "fundraising-manager",
     "month-end close": "controller", "bookings": "scheduling-bookings", "scheduling": "scheduling-bookings",
@@ -112,12 +113,16 @@ def score(role, text):
 
 
 def find_role(text):
-    """The template a slug, name or everyday word names exactly, else None."""
+    """The template a slug, name or everyday word names exactly, else None. A name is tried whole before its "bot" or
+    "agent" ending is dropped, so the built-in's old name ("ceo bot") is an alias and "Strategy Bot" finds its
+    template."""
     key = re.sub(r"^(an?|the|some|another)\s+", "", str(text).strip().lower()).strip()
-    key = re.sub(r"\s+(bot|agent)$", "", key)
+    bare = re.sub(r"\s+(bot|agent)$", "", key)
     if key in ALIASES:
         return BY_SLUG.get(ALIASES[key])
-    return BY_SLUG.get(key) or BY_NAME.get(key)
+    if bare in ALIASES:
+        return BY_SLUG.get(ALIASES[bare])
+    return BY_SLUG.get(bare) or BY_NAME.get(key) or BY_NAME.get(bare)
 
 
 def closest_role(text):
@@ -833,11 +838,11 @@ class Turn:
     """One visitor turn over a draft.
 
         turn = Turn(draft_from_page, today=dt.date.today())    # D.DraftError when the draft breaks its shape
-        turn.apply("bot_add", {"template": "bookkeeping", "reason": "Invoices eat your Fridays."})
+        turn.apply("bot_add", {"template": "billing", "reason": "Invoices eat your Fridays."})
         turn.finish()                                          # the draft to send back
 
     `keys_removed` says a key-shaped string was cut from the draft or an action's input this turn; `seeded` says the
-    empty chart was started from a company model, and `started` is BotOps's one line on which model and what it added.
+    empty chart was started from a company model, and `started_at` is BotOps's one line on which model and what it added.
     `changed` lists the parts the turn's actions changed (`touched`), in order; `market_note` is what the visitor said
     when they asked for the market to be sized again (`resize_market`), else None.
     """

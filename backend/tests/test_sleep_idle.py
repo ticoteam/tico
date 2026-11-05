@@ -2,11 +2,12 @@
 import dataclasses
 import json
 import time
+from datetime import datetime, timedelta
 
 import httpx
 import pytest
 
-from backend import botops_act, scheduler, sleep_idle
+from backend import botops_act, maintenance, releases, routines, scheduler, sleep_idle
 from backend import hubdb as H
 from backend.tests.test_api import api, assign, claim, get, post, ready, runner, setup_attempt  # noqa: F401
 
@@ -47,6 +48,7 @@ def hq(api, monkeypatch):
     monkeypatch.setattr(sleep_idle, "TRANSPORT", httpx.MockTransport(fake))
     clock = [time.time()]
     monkeypatch.setattr(sleep_idle, "now", lambda: clock[0])
+    monkeypatch.setattr(sleep_idle, "POLICY", {"at": None, "minutes": None})
     fake.clock = clock
     service(api).started = 0                 # the server has been up longer than any setting
     system_jobs(api)                         # no system job or release hour is near, whatever the hour the test runs at
@@ -54,14 +56,15 @@ def hq(api, monkeypatch):
 
 
 def system_jobs(api, **on):
-    """Every controlled system job off except the ones named (`key=(preset, "HH:MM")`), and the release hours off."""
+    """Every controlled system job off except the ones named (`key=(preset, "HH:MM")`), releases off, Maintenance paused."""
     from backend import release_flow
     from backend import system_routines as SR
     config = {key: {"on": False} for key in SR.CONTROLS}
     config.update({key: {"on": True, "preset": preset, "at": at} for key, (preset, at) in on.items()})
     with api.app.state.store.transaction() as c:
-        for key, value in ((SR.CONFIG_KEY, config), (release_flow.KEY, {"on": False})):
-            c.execute("INSERT INTO registry_metadata VALUES(?,?) ON CONFLICT(key) DO UPDATE SET value_json=excluded.value_json",
+        for key, value in ((SR.CONFIG_KEY, config), (release_flow.KEY, {"on": False}),
+                           (maintenance.REGISTRY_KEY, {"paused": True})):
+            c.execute("INSERT INTO registry_metadata VALUES(?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value",
                       (key, json.dumps(value)))
 
 
@@ -82,15 +85,24 @@ def tick(api):
 
 
 def add_routine(api, due, key="r1"):
+    """A routine of ops's (its schedule automation, on), next due at `due`."""
     with api.app.state.store.transaction() as c:
-        c.execute("INSERT INTO schedules(id,bot,cron,title,playbook,next_due) VALUES(?,?,?,?,?,?)",
-                  (key, "ops", "0 9 * * *", "Morning check", "Look around", scheduler.stamp(
-                      sleep_idle.datetime.fromtimestamp(due, sleep_idle.timezone.utc))))
+        aid = routines.create(c, H.KEEPER, "ops", {"title": "Morning check", "cron": "0 9 * * *", "timezone": "UTC",
+                                                    "text": "Look around"}, key=key)["automation"]
+        c.execute("UPDATE automations SET next_due_at=? WHERE id=?",
+                  (scheduler.stamp(sleep_idle.datetime.fromtimestamp(due, sleep_idle.timezone.utc)), aid))
 
 
-def quiet(api, hours=1):
+def quiet_routines(api):
+    """Switch off every schedule automation. Setting up a runner seeds the Librarian's built-in schedules, due at the
+    next :00 or :30, so a test that expects busy() to be "" would fail within fifteen minutes of either."""
+    with api.app.state.store.transaction() as c:
+        c.execute("UPDATE automations SET enabled=0 WHERE enabled=1 AND deleted_at IS NULL AND next_due_at IS NOT NULL")
+
+
+def quiet(api, minutes=60):
     with api.app.state.store.read() as c:
-        return service(api).quiet(c, hours, sleep_idle.now())
+        return service(api).quiet(c, minutes, sleep_idle.now())
 
 
 def test_each_thing_that_keeps_the_server_up_is_named_and_stops_the_sleep(api, hq):
@@ -105,15 +117,15 @@ def test_each_thing_that_keeps_the_server_up_is_named_and_stops_the_sleep(api, h
     add_routine(api, at + 10 * 60)
     assert quiet(api)["blocker"] == "routine_due" and quiet(api)["idle"] is False
     with api.app.state.store.transaction() as c:
-        c.execute("INSERT INTO webhook_sends(id,event_id,webhook_id,type,body,state,next_attempt,created) VALUES('wh_1','we_1','ep_1','task.done','{}','ready',?,?)", (sleep_idle.stamp(at), sleep_idle.stamp(at)))    # due now
+        c.execute("INSERT INTO webhook_sends(id,event_id,webhook_id,type,body,state,next_attempt_at,created_at) VALUES('wh_1','we_1','ep_1','task.done','{}','ready',?,?)", (sleep_idle.stamp(at), sleep_idle.stamp(at)))    # due now
     assert quiet(api)["blocker"] == "send_pending"
     r = runner(api, "ana")
     with api.app.state.store.transaction() as c:
-        c.execute("INSERT INTO runner_harness_actions(id,runner_id,harness,action,state,created,updated,requested_by) "
+        c.execute("INSERT INTO runner_harness_actions(id,runner_id,harness,action,state,created_at,updated_at,requested_by) "
                   "VALUES('a1',?,?,?,?,?,?,?)", (r["runner_id"], "claude", "update", "requested", H.now(), H.now(), "human:ana"))
     assert quiet(api)["blocker"] == "runner_job"
     with api.app.state.store.transaction() as c:
-        c.execute("INSERT INTO worktree_waits(id,task_id,owner,repo,generation,state,created,updated) VALUES(?,?,?,?,?,?,?,?)",
+        c.execute("INSERT INTO worktree_waits(id,task_id,owner,repo,generation,state,created_at,updated_at) VALUES(?,?,?,?,?,?,?,?)",
                   ("w1", "T1", "bot:ops", "acme/shop", 1, "waiting", H.now(), H.now()))
     assert quiet(api)["blocker"] == "task_session"
     assign(api, r, "ops")
@@ -132,7 +144,7 @@ def test_a_quiet_hosted_server_asks_once_with_the_next_routine_as_wake_time(api,
 
     def before_the_call():                   # the history already says why, and no write transaction is open
         with api.app.state.store.read() as c:
-            seen["event"] = c.execute("SELECT detail_json FROM events WHERE action='server.sleep'").fetchone()
+            seen["event"] = c.execute("SELECT detail FROM events WHERE action='server.sleep'").fetchone()
     hq.on_sleep = before_the_call
 
     state = turn_on(api, 2, runners=False)
@@ -235,7 +247,7 @@ def test_a_daily_system_job_sets_the_wake_time_and_an_interval_job_does_not(api,
     hq.clock[0] = noon.timestamp()
     system_jobs(api, learnings=("daily", "03:00"), kpi_asks=("15m", "09:00"))
     with api.app.state.store.transaction() as c:                         # tonight's 03:00 run already happened today
-        c.execute("INSERT INTO learning_runs(id,night,status,started) VALUES('lr1','2026-10-26','done',?)", (H.now(),))
+        c.execute("INSERT INTO learning_runs(id,night,status,started_at) VALUES('lr1','2026-10-26','done',?)", (H.now(),))
     with api.app.state.store.read() as c:
         assert sleep_idle.busy(c, hq.clock[0]) == ""                     # the 15-minute job never keeps the server up
         night = sleep_idle.wake_time(c, hq.clock[0])
@@ -244,22 +256,449 @@ def test_a_daily_system_job_sets_the_wake_time_and_an_interval_job_does_not(api,
     system_jobs(api, kpi_asks=("15m", "09:00"))                          # only the interval job left
     with api.app.state.store.read() as c:
         assert sleep_idle.wake_time(c, hq.clock[0]) is None and sleep_idle.busy(c, hq.clock[0]) == ""
-    system_jobs(api, still_wanted=("daily", "12:10"))                    # ten minutes away: it keeps the server up
+    system_jobs(api, kpi_asks=("daily", "12:10"))                    # ten minutes away: it keeps the server up
     with api.app.state.store.transaction() as c:
-        c.execute("INSERT INTO system_runs(id,job,started) VALUES('sr1','still_wanted',?)", (sleep_idle.stamp(hq.clock[0] - 3600),))
+        c.execute("INSERT INTO system_runs(id,job,started_at) VALUES('sr1','kpi_asks',?)", (sleep_idle.stamp(hq.clock[0] - 3600),))
     with api.app.state.store.read() as c:
         assert sleep_idle.busy(c, hq.clock[0]) == "routine_due"
+
+
+def maintenance_bucket(api, at, schedule=None):
+    """Resume Maintenance with a finished full run in the current bucket. No saved schedule means the hourly default."""
+    with api.app.state.store.transaction() as c:
+        maintenance.save_settings(c, H.KEEPER, schedule=schedule, paused=False)
+        start = sleep_idle.stamp(maintenance.bucket(schedule or "hourly", at).timestamp())
+        c.execute("INSERT INTO maintenance_runs(id,occurrence_key,trigger,started_at,heartbeat_at,finished_at,result) "
+                  "VALUES('mr1',?,'schedule',?,?,?,'done')", ("schedule:" + start, start, start, start))
+        c.execute("UPDATE maintenance_steps SET last_started_at=? WHERE key IN ('find_stuck','update')", (start,))
+
+
+@pytest.mark.parametrize("schedule,hour,next_hour", [(None, 12, 18), ("6h", 12, 18), ("daily", 4, 5)])
+def test_maintenance_sets_the_wake_despite_a_retired_routines_frozen_last_run(api, hq, schedule, hour, next_hour):
+    from backend import system_routines as SR
+    at = datetime(2026, 11, 4, hour, 20, tzinfo=maintenance.ZONE)
+    wake = at.replace(hour=next_hour, minute=0).timestamp()
+    hq.clock[0] = at.timestamp()
+    system_jobs(api, auto_dream=("daily", "02:00"))     # an old saved switch survives the timer's retirement
+    maintenance_bucket(api, at, schedule)
+    last = at - timedelta(days=3)
+    with api.app.state.store.transaction() as c:
+        c.execute("INSERT INTO system_runs(id,job,started_at) VALUES('retired','auto_dream',?)",
+                  (sleep_idle.stamp(last.timestamp()),))
+    with api.app.state.store.read() as c:
+        assert SR.next_due({"preset": "daily", "at": "02:00"}, last, at) == at
+        assert sleep_idle.routine_times(c, at.timestamp()) == [wake]
+        assert sleep_idle.busy(c, at.timestamp()) == ""
+    turn_on(api, 1)
+    tick(api)
+    assert hq.sleeps == [{"wake_at": sleep_idle.iso(wake), "runners": True, "reason": "idle"}]
+
+    hq.clock[0] = wake - 10 * 60                      # keep the server up for the imminent run
+    tick(api)
+    assert len(hq.sleeps) == 1 and quiet(api)["blocker"] == "routine_due"
+    hq.clock[0] = wake                               # the new bucket has not run yet: due now is not discarded
+    tick(api)
+    assert len(hq.sleeps) == 1 and quiet(api)["blocker"] == "routine_due"
+
+
+def test_catchup_steps_neither_keep_the_server_up_nor_set_an_hourly_wake(api, hq):
+    at = datetime(2026, 11, 4, 12, 20, tzinfo=maintenance.ZONE)
+    hq.clock[0] = at.timestamp()
+    maintenance_bucket(api, at)
+    with api.app.state.store.transaction() as c:
+        c.execute("UPDATE maintenance_steps SET enabled=1, frequency='run'")
+        c.execute("UPDATE maintenance_steps SET enabled=0 WHERE key IN ('find_stuck','update')")
+        c.execute("DELETE FROM maintenance_runs WHERE id='mr1'")     # even an unclaimed bucket is only catch-up work
+    with api.app.state.store.read() as c:
+        assert sleep_idle.routine_times(c, hq.clock[0]) == []
+        assert sleep_idle.busy(c, hq.clock[0]) == ""
+    turn_on(api, 1)
+    tick(api)
+    assert hq.sleeps == [{"wake_at": None, "runners": True, "reason": "idle"}]
+
+
+def test_only_enabled_time_sensitive_steps_set_the_next_maintenance_wake(api, hq):
+    at = datetime(2026, 11, 4, 12, 20, tzinfo=maintenance.ZONE)
+    maintenance_bucket(api, at)
+    with api.app.state.store.read() as c:
+        assert sleep_idle.routine_times(c, at.timestamp()) == [at.replace(hour=18, minute=0).timestamp()]
+    with api.app.state.store.transaction() as c:
+        c.execute("UPDATE maintenance_steps SET enabled=0 WHERE key='find_stuck'")
+    with api.app.state.store.read() as c:
+        wake = at.replace(hour=5, minute=0) + timedelta(days=1)
+        assert sleep_idle.routine_times(c, at.timestamp()) == [wake.timestamp()]
+    with api.app.state.store.transaction() as c:
+        c.execute("UPDATE maintenance_steps SET enabled=0 WHERE key='update'")
+    with api.app.state.store.read() as c:
+        assert sleep_idle.routine_times(c, at.timestamp()) == []
+    with api.app.state.store.transaction() as c:
+        c.execute("UPDATE maintenance_steps SET enabled=1, last_started_at=NULL WHERE key='update'")
+        c.execute("DELETE FROM maintenance_runs WHERE id='mr1'")
+    with api.app.state.store.read() as c:
+        assert sleep_idle.routine_times(c, at.timestamp()) == [at.timestamp()]
+        assert sleep_idle.busy(c, at.timestamp()) == "routine_due"
+
+
+@pytest.mark.parametrize("step,frequency,every,unit,elapsed", [
+    ("find_stuck", "custom", 6, "hours", timedelta(hours=6)),
+    ("find_stuck", "week", None, None, timedelta(days=7)),
+    ("update", "custom", 2, "days", timedelta(days=2)),
+])
+def test_a_step_cadence_waits_for_the_first_eligible_maintenance_bucket(api, hq, step, frequency, every, unit, elapsed):
+    at = datetime(2026, 11, 4, 12, 20, tzinfo=maintenance.ZONE)
+    last = at.replace(hour=10, minute=15)
+    maintenance_bucket(api, at)
+    with api.app.state.store.transaction() as c:
+        c.execute("UPDATE maintenance_steps SET enabled=0 WHERE key IN ('find_stuck','update')")
+        c.execute("UPDATE maintenance_steps SET enabled=1, frequency=?, custom_every=?, custom_unit=?, last_started_at=? "
+                  "WHERE key=?", (frequency, every, unit, maintenance._stamp(last), step))
+    wake = (last + elapsed).replace(minute=0) + timedelta(hours=1)
+    with api.app.state.store.read() as c:
+        before = c.total_changes
+        assert sleep_idle.routine_times(c, at.timestamp()) == [wake.timestamp()]
+        assert sleep_idle.busy(c, wake.timestamp() - 10 * 60) == "routine_due"
+        assert sleep_idle.busy(c, wake.timestamp()) == "routine_due"
+        assert c.total_changes == before
+
+
+def test_pausing_maintenance_removes_its_wake_and_resuming_restores_it(api, hq):
+    at = datetime(2026, 11, 4, 12, 20, tzinfo=maintenance.ZONE)
+    hq.clock[0] = at.timestamp()
+    maintenance_bucket(api, at)
+    with api.app.state.store.transaction() as c:
+        maintenance.save_settings(c, H.KEEPER, paused=True)
+    with api.app.state.store.read() as c:
+        assert sleep_idle.busy(c, hq.clock[0]) == "" and sleep_idle.wake_time(c, hq.clock[0]) is None
+    with api.app.state.store.transaction() as c:
+        maintenance.save_settings(c, H.KEEPER, paused=False)
+    with api.app.state.store.read() as c:
+        assert sleep_idle.wake_time(c, hq.clock[0]) == at.replace(hour=18, minute=0).timestamp()
+
+
+def test_a_full_run_now_claims_the_bucket_but_a_step_only_run_does_not(api, hq):
+    at = datetime(2026, 11, 4, 12, 20, tzinfo=maintenance.ZONE)
+    hq.clock[0] = at.timestamp()
+    maintenance_bucket(api, at)
+    with api.app.state.store.transaction() as c:
+        c.execute("UPDATE maintenance_runs SET trigger='run_now', result='failed', ok=0 WHERE id='mr1'")
+        c.execute("UPDATE maintenance_steps SET last_started_at=? WHERE key='find_stuck'",
+                  (maintenance._stamp(at.replace(hour=6, minute=0)),))
+    with api.app.state.store.read() as c:
+        assert sleep_idle.wake_time(c, hq.clock[0]) == at.replace(hour=13, minute=0).timestamp()
+    with api.app.state.store.transaction() as c:
+        c.execute("UPDATE maintenance_runs SET step='collect' WHERE id='mr1'")
+    with api.app.state.store.read() as c:
+        assert sleep_idle.busy(c, hq.clock[0]) == "routine_due"
+    with api.app.state.store.transaction() as c:
+        c.execute("DELETE FROM maintenance_runs WHERE id='mr1'")
+    with api.app.state.store.read() as c:
+        assert sleep_idle.busy(c, hq.clock[0]) == "routine_due"
+
+
+def test_a_stale_or_abandoned_maintenance_run_does_not_hide_the_due_bucket(api, hq):
+    at = datetime(2026, 11, 4, 12, 40, tzinfo=maintenance.ZONE)
+    hq.clock[0] = at.timestamp()
+    maintenance_bucket(api, at)
+    with api.app.state.store.transaction() as c:
+        c.execute("UPDATE maintenance_runs SET finished_at=NULL, result='' WHERE id='mr1'")
+        c.execute("UPDATE maintenance_steps SET last_started_at=NULL WHERE key='find_stuck'")
+    with api.app.state.store.read() as c:
+        assert sleep_idle.busy(c, hq.clock[0]) == "routine_due"
+        assert c.execute("SELECT finished_at, result FROM maintenance_runs WHERE id='mr1'").fetchone()[:] == (None, "")
+    with api.app.state.store.transaction() as c:
+        c.execute("UPDATE maintenance_runs SET finished_at=?, result='abandoned' WHERE id='mr1'", (sleep_idle.stamp(hq.clock[0]),))
+    with api.app.state.store.read() as c:
+        assert sleep_idle.busy(c, hq.clock[0]) == "routine_due"
+
+
+def test_a_live_maintenance_run_keeps_the_server_up_even_when_paused(api, hq):
+    at = datetime(2026, 11, 4, 12, 20, tzinfo=maintenance.ZONE)
+    hq.clock[0] = at.timestamp()
+    maintenance_bucket(api, at)
+    with api.app.state.store.transaction() as c:
+        maintenance.save_settings(c, H.KEEPER, paused=True)
+        c.execute("UPDATE maintenance_steps SET enabled=0 WHERE key IN ('find_stuck','update')")
+        c.execute("UPDATE maintenance_runs SET started_at=?, heartbeat_at=?, finished_at=NULL, result='' WHERE id='mr1'",
+                  (sleep_idle.stamp((at - timedelta(hours=1)).timestamp()), sleep_idle.stamp(hq.clock[0])))
+    turn_on(api, 1)
+    tick(api)
+    assert hq.sleeps == [] and quiet(api)["blocker"] == "routine_due"
 
 
 def test_a_send_waiting_for_a_far_retry_does_not_keep_the_server_up_but_sets_the_wake_time(api, hq):
     at = hq.clock[0]
     with api.app.state.store.transaction() as c:
-        c.execute("INSERT INTO webhook_sends(id,event_id,webhook_id,type,body,state,next_attempt,created) VALUES('wh_1','we_1','ep_1','task.done','{}','ready',?,?)", (sleep_idle.stamp(at + 10 * 3600), sleep_idle.stamp(at)))
+        c.execute("INSERT INTO webhook_sends(id,event_id,webhook_id,type,body,state,next_attempt_at,created_at) VALUES('wh_1','we_1','ep_1','task.done','{}','ready',?,?)", (sleep_idle.stamp(at + 10 * 3600), sleep_idle.stamp(at)))
     with api.app.state.store.read() as c:
         assert sleep_idle.busy(c, at) == ""
         assert sleep_idle.wake_time(c, at) == pytest.approx(at + 10 * 3600, abs=1)
     for later, state, due in ((at + 600, "ready", True), (at + 10 * 3600, "sending", True), (at - 60, "ready", True)):
         with api.app.state.store.transaction() as c:
-            c.execute("UPDATE webhook_sends SET state=?, next_attempt=?", (state, sleep_idle.stamp(later)))
+            c.execute("UPDATE webhook_sends SET state=?, next_attempt_at=?", (state, sleep_idle.stamp(later)))
         with api.app.state.store.read() as c:
             assert (sleep_idle.busy(c, at) == "send_pending") is due
+
+
+class Cell:
+    """A Tico Cloud cell's updater listener, `GET /sleep` (the idle policy) and `POST /sleep` (setup/cell_updater.py)."""
+
+    def __init__(self):
+        self.sleeps, self.answer, self.minutes, self.down = [], (202, {"state": "sleeping", "wake_at": None}), None, False
+
+    def __call__(self, request):
+        assert request.headers["authorization"] == "Bearer cell-token"
+        if self.down:
+            raise httpx.ConnectError("the listener is down", request=request)
+        assert request.url.path == "/sleep"
+        if request.method == "GET":
+            return httpx.Response(200, json={"minutes": self.minutes})
+        assert request.method == "POST"
+        self.sleeps.append(json.loads(request.content))
+        status, answer = self.answer
+        return httpx.Response(status, json=answer)
+
+
+@pytest.fixture
+def cell(hq, monkeypatch):
+    """This install is a Tico Cloud cell company: its listener answers, and HQ is not to be asked."""
+    monkeypatch.setenv("TICO_CELL", "1")
+    monkeypatch.setenv("TICO_UPDATER_URL", "http://10.0.0.1:9001")
+    monkeypatch.setenv("TICO_UPDATER_TOKEN", "cell-token")
+    fake = Cell()
+    monkeypatch.setattr(releases, "TRANSPORT", httpx.MockTransport(fake))
+    return fake
+
+
+def listener(cell, minutes):
+    """The listener's policy from now on. Its answer is kept a minute, so the next look is the first to see a change."""
+    cell.minutes = minutes
+    sleep_idle.POLICY.update(at=None)
+
+
+def test_a_cell_company_asks_its_cell_not_hq_and_sends_no_runners(api, hq, cell):
+    at = hq.clock[0]
+    wake = int(at + 3 * 3600)
+    add_routine(api, wake)
+    state = turn_on(api, 1, runners=False)
+    assert state["hosted"] and state["active"] and state["hours"] == 1
+    assert (state["minutes"], state["source"], state["managed"]) == (60, "owner", True)
+    tick(api)
+    assert cell.sleeps == [{"wake_at": sleep_idle.iso(wake), "reason": "idle"}]
+    assert hq.calls == []                    # no Gateway key, no HQ question
+    last = get(api, "sleep")["sleep"]["last_request"]
+    assert last["result"] == "requested" and last["wake_at"] == sleep_idle.iso(wake)
+
+
+def test_a_cell_wakes_for_the_daily_update_at_company_five_am(api, hq, cell):
+    at = datetime(2026, 11, 4, 4, 20, tzinfo=maintenance.ZONE)
+    hq.clock[0] = at.timestamp()
+    maintenance_bucket(api, at)
+    tick(api)
+    assert cell.sleeps == [{"wake_at": sleep_idle.iso(at.replace(hour=5, minute=0).timestamp()), "reason": "idle"}]
+    assert hq.calls == []
+    hq.clock[0] = at.replace(hour=5, minute=0).timestamp()
+    tick(api)
+    assert len(cell.sleeps) == 1 and quiet(api)["blocker"] == "routine_due"
+
+
+def test_a_cell_never_set_sleeps_after_fifteen_minutes_and_an_explicit_zero_is_off(api, hq, cell):
+    state = get(api, "sleep")["sleep"]
+    assert state["hours"] == 0 and state["active"] and state["hosted"]
+    assert (state["minutes"], state["source"]) == (15, "default")
+    service(api).started = hq.clock[0] - 10 * 60          # quiet for ten minutes: not yet
+    tick(api)
+    assert cell.sleeps == []
+    hq.clock[0] += 6 * 60
+    tick(api)
+    assert len(cell.sleeps) == 1
+
+    state = post(api, "sleep", {"runners": False})["sleep"]    # runners alone leave the default alone
+    assert (state["minutes"], state["source"]) == (15, "default")
+    state = turn_on(api, 0)                                     # the owner's explicit 0
+    assert (state["minutes"], state["source"], state["active"]) == (0, "owner", False)
+    hq.clock[0] += 3 * 3600
+    tick(api)
+    assert len(cell.sleeps) == 1
+
+
+def test_the_cells_minutes_from_its_listener_win_over_the_owners_hours(api, hq, cell):
+    turn_on(api, 2)
+    listener(cell, 5)
+    state = get(api, "sleep")["sleep"]
+    assert (state["minutes"], state["source"], state["hours"]) == (5, "cell", 2)
+    service(api).started = hq.clock[0] - 6 * 60
+    tick(api)
+    assert len(cell.sleeps) == 1
+
+
+def test_a_null_listener_policy_falls_back_to_the_owners_hours(api, hq, cell):
+    turn_on(api, 2)
+    listener(cell, None)
+    assert (get(api, "sleep")["sleep"]["minutes"], get(api, "sleep")["sleep"]["source"]) == (120, "owner")
+    service(api).started = hq.clock[0] - 119 * 60
+    tick(api)
+    assert cell.sleeps == []
+    hq.clock[0] += 2 * 60
+    tick(api)
+    assert len(cell.sleeps) == 1
+
+
+def test_a_zero_from_the_listener_means_never_sleep_whatever_the_owner_set(api, hq, cell):
+    turn_on(api, 1)
+    listener(cell, 0)
+    state = get(api, "sleep")["sleep"]
+    assert (state["minutes"], state["source"], state["active"]) == (0, "cell", False)
+    hq.clock[0] += 10 * 3600
+    tick(api)
+    assert cell.sleeps == []
+
+
+def test_a_listener_that_is_down_counts_as_no_policy(api, hq, cell):
+    cell.down = True
+    state = get(api, "sleep")["sleep"]
+    assert (state["minutes"], state["source"], state["managed"]) == (15, "default", True)
+    turn_on(api, 3)
+    state = get(api, "sleep")["sleep"]
+    assert (state["minutes"], state["source"]) == (180, "owner")
+
+
+def test_a_cell_looks_every_minute_and_any_other_install_every_five(api, hq, cell):
+    assert sleep_idle.every() == 60
+    assert sleep_idle.CELL_EVERY == 60 and sleep_idle.EVERY == 300
+
+
+def test_a_cell_sleeps_after_fifteen_minutes_and_waits_only_for_a_routine_within_fifteen(api, hq, cell):
+    base = int(hq.clock[0])
+    service(api).started = base - 16 * 60
+    add_routine(api, base + 10 * 60)                     # due in ten minutes: it keeps the cell up
+    tick(api)
+    assert cell.sleeps == [] and quiet(api, 15)["blocker"] == "routine_due"
+    with api.app.state.store.transaction() as c:         # moved to sixteen minutes: beyond the fifteen
+        c.execute("UPDATE automations SET next_due_at=?", (scheduler.stamp(
+            sleep_idle.datetime.fromtimestamp(base + 16 * 60, sleep_idle.timezone.utc)),))
+    tick(api)
+    assert cell.sleeps == [{"wake_at": sleep_idle.iso(base + 16 * 60), "reason": "idle"}]
+
+
+def test_a_cell_with_no_routine_near_sleeps_with_no_wake_time(api, hq, cell):
+    service(api).started = hq.clock[0] - 16 * 60
+    tick(api)
+    assert cell.sleeps == [{"wake_at": None, "reason": "idle"}]
+
+
+def test_the_view_gives_the_effective_minutes_their_source_and_that_a_cell_is_managed(api, hq, cell):
+    state = get(api, "sleep")["sleep"]
+    assert "hours_default" not in state
+    assert (state["minutes"], state["source"], state["managed"]) == (15, "default", True)
+    turn_on(api, 2)
+    assert (get(api, "sleep")["sleep"]["minutes"], get(api, "sleep")["sleep"]["source"]) == (120, "owner")
+    listener(cell, 30)
+    state = get(api, "sleep")["sleep"]
+    assert (state["minutes"], state["source"], state["hours"]) == (30, "cell", 2)
+
+
+def test_a_busy_cell_says_not_now_and_is_asked_again_after_fifteen_minutes(api, hq, cell):
+    turn_on(api, 1)
+    cell.answer = (409, {"error": "busy"})
+    tick(api)
+    state = get(api, "sleep")["sleep"]
+    assert len(cell.sleeps) == 1 and state["last_request"]["result"] == "busy" and state["last_error"] == ""
+    hq.clock[0] += sleep_idle.SOON - 60
+    tick(api)
+    assert len(cell.sleeps) == 1
+    hq.clock[0] += 60
+    tick(api)
+    assert len(cell.sleeps) == 2
+
+
+def test_a_failing_cell_backs_off_like_hq_and_reaches_health(api, hq, cell):
+    turn_on(api, 1)
+    cell.answer = (500, {"error": "boom"})
+    tick(api)
+    state = get(api, "sleep")["sleep"]
+    assert len(cell.sleeps) == 1 and state["last_request"]["result"] == "failed" and state["last_error"] == "updater_500"
+    with api.app.state.store.read() as c:
+        assert "failed" in sleep_idle.health(c)["summary"]
+    hq.clock[0] += 16 * 60
+    tick(api)
+    assert len(cell.sleeps) == 2             # the second failure waits twice as long
+    hq.clock[0] += 16 * 60
+    tick(api)
+    assert len(cell.sleeps) == 2
+    hq.clock[0] += 16 * 60
+    cell.answer = (202, {"state": "sleeping"})
+    tick(api)
+    assert len(cell.sleeps) == 3 and get(api, "sleep")["sleep"]["last_error"] == ""
+    with api.app.state.store.read() as c:
+        assert sleep_idle.health(c) is None
+
+
+def test_an_online_bot_computer_keeps_a_cell_company_up_until_it_goes_quiet(api, hq, cell):
+    turn_on(api, 1)
+    r = runner(api, "ana")
+    ready(api, r, [])                        # the computer reports in now
+    quiet_routines(api)
+    with api.app.state.store.read() as c:
+        assert sleep_idle.busy(c, hq.clock[0]) == "computer_online"
+    tick(api)
+    assert cell.sleeps == [] and quiet(api)["blocker"] == "computer_online"
+    with api.app.state.store.transaction() as c:
+        c.execute("UPDATE runner_states SET last_seen_at=?", (sleep_idle.stamp(time.time() - 300),))
+    tick(api)
+    assert len(cell.sleeps) == 1
+
+
+@pytest.fixture
+def managed_only(hq, monkeypatch):
+    """TICO_UPDATES=tico with no TICO_CELL: Tico updates this install from outside, but it is not a cell. Its updater
+    listener is never to be called."""
+    monkeypatch.delenv("TICO_CELL", raising=False)
+    monkeypatch.setenv("TICO_UPDATES", "tico")
+    monkeypatch.setenv("TICO_UPDATER_URL", "http://10.0.0.1:9001")
+    monkeypatch.setenv("TICO_UPDATER_TOKEN", "cell-token")
+    monkeypatch.setattr(releases, "TRANSPORT", httpx.MockTransport(lambda request: pytest.fail("the updater was called")))
+    return hq
+
+
+def test_tico_updates_alone_is_not_a_cell_so_sleep_is_off_by_default(api, hq, managed_only):
+    state = get(api, "sleep")["sleep"]
+    assert (state["minutes"], state["source"], state["managed"], state["active"]) == (0, "default", False, False)
+    assert sleep_idle.every() == sleep_idle.EVERY == 300
+    tick(api)
+    assert [call[:2] for call in hq.calls] == [("GET", "self")] and hq.sleeps == []   # only the hosted question
+
+
+def test_tico_updates_alone_asks_hq_with_runners_and_no_computer_blocker(api, hq, managed_only):
+    state = turn_on(api, 1, runners=False)
+    assert (state["minutes"], state["source"], state["managed"], state["active"]) == (60, "owner", False, True)
+    r = runner(api, "ana")
+    ready(api, r, [])                        # an online bot computer: only a cell counts it as a blocker
+    quiet_routines(api)
+    with api.app.state.store.read() as c:
+        assert sleep_idle.busy(c, hq.clock[0]) == ""
+    tick(api)
+    assert len(hq.sleeps) == 1 and hq.sleeps[0]["runners"] is False and hq.sleeps[0]["reason"] == "idle"
+    assert get(api, "sleep")["sleep"]["last_request"]["result"] == "requested"
+
+
+def test_outside_a_cell_nothing_is_defaulted_and_an_online_computer_does_not_block(api, hq):
+    state = get(api, "sleep")["sleep"]
+    assert (state["minutes"], state["source"], state["managed"]) == (0, "default", False)
+    turn_on(api, 2)
+    assert (get(api, "sleep")["sleep"]["minutes"], get(api, "sleep")["sleep"]["source"]) == (120, "owner")
+    r = runner(api, "ana")
+    ready(api, r, [])
+    quiet_routines(api)
+    with api.app.state.store.read() as c:
+        assert sleep_idle.busy(c, hq.clock[0]) == ""
+
+
+def test_an_open_live_events_stream_is_not_signed_in_activity():
+    """A tab's stream says nothing about a person being there; their own reads do."""
+    from backend.auth import Identity
+    idle = sleep_idle.SleepIdle(None, None, None)
+    person = Identity("human:ana", "human", "ana@acme.example")
+    idle.seen(person, "/api/v2/events?topics=messages&conversation=c1")
+    assert idle.ui_at == 0.0
+    idle.seen(person, "/api/v2/tasks")
+    assert idle.ui_at > 0.0

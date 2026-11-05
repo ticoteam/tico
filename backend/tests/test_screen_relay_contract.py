@@ -45,6 +45,14 @@ def relay_binary():
     return binary
 
 
+def gateway_origin(process):
+    """The public gateway's origin: the line the relay prints right after its own address, with the port it bound."""
+    line = process.stdout.readline()
+    if not line.startswith("screen gateway listening on "):
+        raise RuntimeError("Relay did not open its gateway: " + line)
+    return "http://" + line.strip().split()[-1]
+
+
 class Service:
     def __init__(self, root, binary=None):
         self.root, self.binary = root, binary
@@ -75,19 +83,23 @@ class Service:
 
     def start_rust(self):
         binary = self.binary or relay_binary()
+        # Both listeners bind port 0 and the relay reports the ports it took, so no port is picked here and released for
+        # another test to take. A restart keeps the relay's own port, the one the API was given: if another test took it
+        # once the old relay exited, the start is tried again.
         port = 0 if self.relay_url == self.origin else int(self.relay_url.rsplit(":", 1)[1])
-        if not hasattr(self, "public_origin"):
-            reserved = self.bind()
-            self.public_origin = f"http://127.0.0.1:{reserved.getsockname()[1]}"
-            reserved.close()
-        self.process = subprocess.Popen([str(binary)], stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True,
-            env={**os.environ, "TICO_SCREEN_RELAY_KEY": KEY, "TICO_SCREEN_PYTHON_URL": self.origin,
-                 "TICO_SCREEN_RELAY_BIND": f"127.0.0.1:{port}",
-                 "TICO_SCREEN_PUBLIC_BIND": self.public_origin.removeprefix("http://")})
-        line = self.process.stdout.readline()
-        if not line.startswith("screen relay listening on "):
-            raise RuntimeError("Relay did not start: " + line)
+        for attempt in range(10):
+            self.process = subprocess.Popen([str(binary)], stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True,
+                env={**os.environ, "TICO_SCREEN_RELAY_KEY": KEY, "TICO_SCREEN_PYTHON_URL": self.origin,
+                     "TICO_SCREEN_RELAY_BIND": f"127.0.0.1:{port}", "TICO_SCREEN_PUBLIC_BIND": "127.0.0.1:0"})
+            line = self.process.stdout.readline()
+            if line.startswith("screen relay listening on "):
+                break
+            self.process.wait(5)
+            if "AddrInUse" not in line or attempt == 9:
+                raise RuntimeError("Relay did not start: " + line)
+            time.sleep(.2)
         self.relay_url = "http://" + line.strip().split()[-1]
+        self.public_origin = gateway_origin(self.process)
 
     def start_http(self):
         self.server = uvicorn.Server(uvicorn.Config(self.api.app, lifespan="off", log_level="error", access_log=False))
@@ -111,7 +123,15 @@ class Service:
             self.api.__exit__(None, None, None)
         self.settings = replace(self.settings, test_identities=dict(self.settings.test_identities))
         self.api = TestClient(create_app(self.settings)).__enter__()
-        self.listener = self.bind(port)
+        # stop_http released the port: another test may take it before this bind, so the bind is tried again.
+        for attempt in range(50):
+            try:
+                self.listener = self.bind(port)
+                break
+            except OSError:
+                if attempt == 49:
+                    raise
+                time.sleep(.1)
         self.start_http()
 
     def restart_rust(self):
@@ -244,7 +264,7 @@ def test_revocation_races_disconnects_and_duplicate_safe_audit(service):
     def closes():
         with service.api.app.state.store.read() as c:
             return c.execute("SELECT count(*) FROM events WHERE action='runner.screen_close' AND target=? "
-                             "AND json_extract(detail_json,'$.session_id')=?", (rid, opened["session_id"])).fetchone()[0]
+                             "AND json_extract(detail,'$.session_id')=?", (rid, opened["session_id"])).fetchone()[0]
     service.eventually(lambda: closes() == 1)
     # Admission and revocation serialize through durable policy and the grant generation.
     with ThreadPoolExecutor(2) as pool:
@@ -282,7 +302,7 @@ def test_restart_invalidates_old_tickets_and_reconciles_audit(service):
     denied(service, opened["ws_path"])
     with service.api.app.state.store.read() as c:
         count = c.execute("SELECT count(*) FROM events WHERE action='runner.screen_close' AND target=? "
-                          "AND json_extract(detail_json,'$.session_id')=?", (r["runner_id"], opened["session_id"])).fetchone()[0]
+                          "AND json_extract(detail,'$.session_id')=?", (r["runner_id"], opened["session_id"])).fetchone()[0]
     assert count == 1
 
 
@@ -354,7 +374,7 @@ def test_private_protocol_fences_replays_stale_grants_and_lease_loss(service):
         remote._record(c, report)
         remote._record(c, report)
         assert c.execute("SELECT count(*) FROM events WHERE action='runner.screen_close' AND target=? "
-                         "AND json_extract(detail_json,'$.session_id')=?",
+                         "AND json_extract(detail,'$.session_id')=?",
                          (r["runner_id"], opened["session_id"])).fetchone()[0] == 1
     with httpx.Client(base_url=service.relay_url, timeout=3) as client:
         assert client.get("/control/v1/hello").status_code == 403

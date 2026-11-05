@@ -1,6 +1,6 @@
 // Offline regression for the sidebar around the first-run wizard. Fixtures only.
 //  - on the wizard, before setup is done, the sidebar shows Finish setup and the team, not the app's pages or
-//    "What's new · 103 updates", and the phone's bottom bar is hidden; anywhere else, and once setup is
+//    the "Updated to" version row, and the phone's bottom bar is hidden; anywhere else, and once setup is
 //    done, everything is back;
 //  - after Create, a team of "Head of …" bots, each with its harness mark and its Setup pill, shows each whole name
 //    in one color (words shared with another bot's name are not muted), and each row's tooltip has the whole name.
@@ -30,7 +30,7 @@ const groups = ['Leadership', 'Engineering', 'Finance', 'Marketing', 'Product'].
 const bot = (name, display_name, team, reports_to, extra = {}) => ({name, display_name, team, reports_to,
   org_parent: reports_to.startsWith('human:') ? 'p:' + reports_to.slice(6) : 'b:' + reports_to, status: 'planned',
   state: 'planned', onboarding_state: 'needs_setup', harness: 'claude', model: 'claude-opus-5-5', host: 'keeper',
-  can_chat: true, can_manage: true, my_access: {see: true, read: true, write: true}, users: [], operator: 'ana', revision: 1, ...extra});
+  can_chat: true, can_manage: true, my_access: {see: true, read: true, write: true}, users: [], owner_id: 'ana', revision: 1, ...extra});
 const TEAM = [
   bot('head-of-engineering', 'Head of Engineering', 'engineering', 'human:ana'),
   bot('qa-engineer', 'QA Engineer', 'engineering', 'head-of-engineering'),
@@ -128,7 +128,7 @@ async function wizard(browser, theme) {
   // Leaving setup restores the bar and makes the normal drawer reachable again.
   await phone.page.evaluate(() => { location.hash = '#/tasks'; });
   await phone.page.locator('#mobile-nav').waitFor({state: 'visible'});
-  assert.deepEqual(await shown(phone.page, '#mobile-nav > *'), ['org', 'search', 'tasks', 'updates', 'mobile-support', 'more']);
+  assert.deepEqual(await shown(phone.page, '#mobile-nav > *'), ['org', 'search', 'mobile-ask', 'tasks', 'updates', 'more']);
   await phone.page.locator('#mobile-more').click();
   await phone.page.locator('#tree').waitFor();
   assert.ok((await shown(phone.page, '#side .side-scroll > .nav-link')).includes('tasks'));
@@ -170,7 +170,9 @@ async function created(browser, theme) {
   assert.ok((await shown(page, '#side .side-scroll > .nav-link')).includes('tasks'));
   await expand(page);
   const team = await rows(page);
-  assert.equal(team.length, TEAM.length);
+  // Bookkeeper is a built-in helper, off the Team tree (it opens from Finance).
+  assert.equal(team.length, TEAM.length - 1);
+  assert.ok(!team.some(row => row.name === 'Bookkeeper'));
   readable(team, 'at desktop width');
   const heads = team.filter(row => row.name.startsWith('Head of '));
   assert.deepEqual(heads.map(row => row.name), ['Head of Engineering', 'Head of Finance', 'Head of Marketing', 'Head of Product']);
@@ -184,7 +186,7 @@ async function created(browser, theme) {
   const phone = await open(browser, {theme, phone: true, needed: false, team: true, route: '#/welcome'});
   await phone.page.locator('#onb-bots').getByText('Customer Insights Analyst').waitFor();
   assert.equal(await phone.page.locator('#mobile-nav').isVisible(), true, 'phone navigation returns after Create');
-  assert.deepEqual(await shown(phone.page, '#mobile-nav > *'), ['org', 'search', 'tasks', 'updates', 'mobile-support', 'more']);
+  assert.deepEqual(await shown(phone.page, '#mobile-nav > *'), ['org', 'search', 'mobile-ask', 'tasks', 'updates', 'more']);
   await noNotice(phone);
   await shot(phone.page, `created-phone-screen-${theme}`);
   await phone.page.locator('#mobile-more').click();

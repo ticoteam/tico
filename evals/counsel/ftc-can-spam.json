@@ -1,0 +1,47 @@
+{
+  "expected": [
+    {
+      "text": "Commercial email must include a valid physical postal address.",
+      "quote": "Your message must include your valid physical postal address.",
+      "section": "Physical address",
+      "who_hint": "marketing"
+    },
+    {
+      "text": "Give recipients a clear way to opt out of future marketing email, and honor it.",
+      "quote": "Your message must include a clear and conspicuous explanation of how the recipient can opt out of getting marketing email from you in the future.",
+      "section": "Opt-out",
+      "who_hint": "marketing"
+    },
+    {
+      "text": "The subject line must accurately reflect the message.",
+      "quote": "The subject line must accurately reflect the content of the message.",
+      "section": "Subject lines",
+      "who_hint": "marketing"
+    },
+    {
+      "text": "Disclose clearly and conspicuously that a marketing message is an advertisement.",
+      "quote": "you must disclose clearly and conspicuously that your message is an advertisement.",
+      "section": "Identify the message",
+      "who_hint": "marketing"
+    },
+    {
+      "text": "Any opt-out menu must include an option to stop all marketing messages.",
+      "quote": "you must include the option to stop all marketing messages from you.",
+      "section": "Opt-out",
+      "who_hint": "marketing"
+    },
+    {
+      "text": "From, To, Reply-To and routing information must be accurate and identify who sent the message.",
+      "quote": "must be accurate and identify the person or business who initiated the message.",
+      "section": "Header information",
+      "who_hint": "marketing"
+    }
+  ],
+  "url": "https://www.ftc.gov/business-guidance/resources/can-spam-act-compliance-guide-business",
+  "fetched_at": "2026-10-30T23:39:42Z",
+  "from": {
+    "name": "FTC CAN-SPAM Compliance Guide",
+    "kind": "government"
+  },
+  "truncated": false
+}

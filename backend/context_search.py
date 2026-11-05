@@ -8,7 +8,7 @@ from urllib.parse import quote
 
 from fastapi import Query, Request
 
-from . import documents, market, media, meetings
+from . import documents, market, media, meetings, threads
 from .store import Problem
 from . import task_privacy as privacy
 
@@ -41,7 +41,7 @@ def readable(c, who, rid):
 
 def meeting_info(row):
     meta = row["metadata"]
-    return {"id": row["id"], "title": row["title"], "created": row["created"], "started": meta.get("started"),
+    return {"id": row["id"], "title": row["title"], "created_at": row["created_at"], "started_at": meta.get("started"),
             "url": "#/meetings?meeting=" + quote(row["id"], safe=""),
             "status": meta.get("status"), "review_state": row.get("review_state", "live"), "duration_ms": meta.get("duration_ms")}
 
@@ -54,7 +54,7 @@ def transcript_text(row):
 def install_context_search(app, store, auth):
     @app.get("/api/v2/context/search")
     def search(request: Request, q: str = Query(min_length=1, max_length=500),
-               source: Literal["all", "docs", "market"] = "all",
+               source: Literal["all", "docs", "market", "threads"] = "all",
                limit: int = Query(default=20, ge=1, le=50)):
         who = request.state.identity
         auth.domain(who)
@@ -62,7 +62,17 @@ def install_context_search(app, store, auth):
         if not words:
             raise Problem("query", "Search needs at least one word", 422)
         found = []
+        index = getattr(app.state, "thread_index", None)     # the thread search index, made on first use
+        if index and source in ("all", "threads"):
+            index()
         with store.read() as c:
+            if source in ("all", "threads"):
+                # Thread messages the viewer may read: C1 for each hit, so a thread they may not read is never one.
+                v = threads.viewer(auth, who)
+                for hit in threads.search(c, v, q, limit=limit)["hits"]:
+                    found.append({"kind": "thread_message", "id": hit["message_id"], "title": hit["title"] or "",
+                                  "thread_id": hit["thread_id"], "excerpt": hit["excerpt"],
+                                  "url": "#/thread/" + quote(hit["thread_id"], safe=""), "score": len(words)})
             if source in ("all", "docs"):
                 # The company's own docs: internal ones (written or imported in Tico) and linked ones.
                 for hit in app.state.docs.find(c, q, limit):
@@ -79,18 +89,15 @@ def install_context_search(app, store, auth):
                         found.append({"kind": "linked_doc", "id": hit["id"], "title": hit["title"], "collection": "docs",
                                       "url": hit["url"], "excerpt": hit["description"], "score": hit["score"]})
             if source in ("all", "market"):
-                for row in c.execute("SELECT * FROM documents WHERE collection='market' ORDER BY id"):
-                    if not documents.visible(who, row):
-                        continue
-                    doc = json.loads(row["payload_json"])
+                for doc in market.list_pages(c):
                     if not privacy.content_readable(c, privacy.actor(who), doc):
                         continue
                     title, content = doc.get("title", ""), doc.get("content", "")
                     body = "\n".join((content, str(doc.get("search", ""))))
                     if all(word in (title + " " + body).casefold() for word in words):
-                        found.append({"kind": "document", "id": row["id"], "title": title,
-                                      "collection": row["collection"], "updated": row["updated"],
-                                      "url": doc.get("url") or "#/strategy/market?note=" + quote(row["id"], safe=""),
+                        found.append({"kind": "document", "id": doc["id"], "title": title,
+                                      "collection": doc["collection"], "updated_at": doc["fetched"],
+                                      "url": "#/strategy/market?note=" + quote(doc["id"], safe=""),
                                       "excerpt": excerpt(body, words),
                                       "score": sum(10 if w in title.casefold() else 1 for w in words)})
             if source in ("all", "market"):
@@ -119,7 +126,7 @@ def install_context_search(app, store, auth):
                     raise Problem("not_found", "Document not found", 404)
                 return {"id": row["id"], "title": row["title"], "content": row["body"], "path": row["path"],
                         "collection": "docs", "category": "Internal / " + (row["path"].rpartition("/")[0] or "Docs"),
-                        "url": "#/docs/" + quote(row["id"], safe=""), "version": row["version"], "updated": row["updated"]}
+                        "url": "#/docs/" + quote(row["id"], safe=""), "version": row["version"], "updated_at": row["updated_at"]}
             result = documents.document(c, auth, request.state.identity, id)
             if not privacy.content_readable(c, privacy.actor(request.state.identity), result):
                 raise Problem("not_found", "Document not found", 404)
@@ -139,14 +146,14 @@ def install_context_search(app, store, auth):
             raise Problem("dates", "since must be on or before until", 422)
         words, found = terms(q), []
         with store.read() as c:
-            for item in c.execute("SELECT id FROM meetings ORDER BY created DESC,id"):
+            for item in c.execute("SELECT id FROM meetings ORDER BY created_at DESC,id"):
                 try:
                     row = readable(c, who, item[0])
                 except Problem as exc:
                     if exc.status not in (403, 404):
                         raise
                     continue
-                recorded_date = str(row["metadata"].get("started") or row["created"])[:10]
+                recorded_date = str(row["metadata"].get("started") or row["created_at"])[:10]
                 if since and recorded_date < since.isoformat():
                     continue
                 if until and recorded_date > until.isoformat():

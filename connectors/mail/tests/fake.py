@@ -315,6 +315,8 @@ class _Drafts:
             if id not in self.s.drafts_by_id:
                 raise Boom(404, "notFound")
             rec = self.s.drafts_by_id[id]
+            if format == "raw":
+                return {"id": id, "message": {"id": rec["message"]["id"], "raw": rec["message"]["raw"]}}
             return {"id": id, "message": self.s.store[rec["message"]["id"]]}
         return _Req(go)
 
@@ -418,3 +420,53 @@ class FakeCalendarService:
             self.deleted.append(eventId)
             return {}
         return _Req(go)
+
+
+# ---------------------------------------------------------------- Tico's mail access answer
+
+# {slug: {mailbox: "read" | "read_write" | None}}: a test's own grants, over the defaults below (None takes one away).
+MAIL_LEVELS = {}
+# {permission: bool} the fake server answers as What Tico may do for a person's run.
+MAIL_COMPANY = {"organize_mail": True, "send_mail": True, "change_calendar": True}
+
+
+def mail_access(slug):
+    """GET /api/v2/mail/access as Tico would answer a bot whose grants match its bot.yaml (backend/mailbox_access.py
+    `manifest_level`, which the backfill uses): Read for a `read_only: true` entry, else Read and write. A handle with
+    no manifest (a person's run) holds nothing unless a test grants it in MAIL_LEVELS."""
+    from connectors.mail import access
+    held = {}
+    for e in access.entries(access._manifest(slug)):
+        addr = str(e.get("identity") or "").strip().lower()
+        if str(e.get("service", "")).lower() == "gmail" and "@" in addr:
+            held[addr] = "read" if e.get("read_only") is True else "read_write"
+    for addr, level in (MAIL_LEVELS.get(slug) or {}).items():
+        if level is None:
+            held.pop(addr, None)
+        else:
+            held[addr] = level
+    return {"principal": f"bot:{slug}",
+            "mailboxes": [{"address": a, "level": lv} for a, lv in sorted(held.items())],
+            "company": dict(MAIL_COMPANY)}
+
+
+def runner_access():
+    """GET /api/v2/connectors/mail/targets over the runner's registration: every mailbox a bot here declares, every
+    roster address, and What Tico may do as the policy seam (pl.RUNNER_GET) answers it."""
+    from connectors.mail import access, policy as pl
+    boxes = sorted(set(access.mailbox_holders(access.PROJECTS)) | set(access.roster_mailboxes()))
+    try:
+        company = (pl.RUNNER_GET("connectors/mail/targets") if pl.RUNNER_GET else {}) or {}
+    except Exception:                                   # noqa: BLE001 - a test's seam that raises: Tico said nothing
+        company = {}
+    return {"mailboxes": [{"address": a} for a in boxes], "company": company.get("company")}
+
+
+def install_mail_access():
+    """Every test asks the fake server, never a real Tico (fake is imported by every test module)."""
+    from connectors.mail import access
+    access.SERVER_ACCESS, access.RUNNER_ACCESS, access.LEASED = mail_access, runner_access, False
+    access.forget()
+
+
+install_mail_access()

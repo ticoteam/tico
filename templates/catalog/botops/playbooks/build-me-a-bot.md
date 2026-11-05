@@ -9,9 +9,22 @@ as theirs, "via BotOps". If a friendly tool refuses for permissions, retry the s
 `hub_api`. If that also refuses, say why in one line and who can change it. Never send them to
 Settings for something a command does.
 
-The job is done when **the bot is live**: built, on a computer, turned on, logged in to what it needs,
-its setup started. A test run is optional: run one when the connection is unproven and the human is
-not waiting on it. The human reads one message at the end.
+The job is done when **the bot is taken live**: built (step 2), turned on with `hub bot go-live` (step 6), and that
+answer read. A credential still missing never holds it back. A test run is optional: run one when the connection is
+unproven and the human is not waiting on it. The human reads one message at the end.
+
+Inputs: the human's chat request naming the bot and its job, with any name, template or setup answers they gave.
+
+## Checklist
+
+All of these before the job is done:
+
+- [ ] Registered and built (steps 1-2), with its slug.
+- [ ] Each credential card opened (step 3). A missing one is a follow-up, not a stop.
+- [ ] Routines set (step 5).
+- [ ] `hub bot go-live` run and its answer read (step 6).
+- [ ] Tasks you filed are closed (step 8).
+- [ ] One report sent (step 9).
 
 ## The flow
 
@@ -26,7 +39,7 @@ not waiting on it. The human reads one message at the end.
    real instructions, `hub bot check <slug>` clean, committed. Read `hub bot create`'s exit status and the
    repository state it reports before going on: a non-zero exit or a refusal is not a built bot. A
    `retryable: false` refusal (`github_permission_missing`, `repository_missing`) stops the build: ask the
-   person once for the exact fix it names and end the run (AGENT.md rule 11).
+   person once for the exact fix it names and end the run (AGENT.md rule 6).
 3. **What it needs.** If the bot talks to a tool (Jira, GitHub, a mailbox), find out what credential it
    takes and open the card for each: `playbooks/connect-a-tool.md`. Do not wait for the answer to
    finish everything else. When the human saves it you are woken. Missing optional access (cloud logs,
@@ -34,23 +47,24 @@ not waiting on it. The human reads one message at the end.
    as far as it can without it, and it is a follow-up in the report.
 4. **Who sees it.** Default is everyone. If they said otherwise, `hub bot access <slug> ...` now. Do
    not ask a question they did not raise.
-5. **Verify the live Routines.** Read them as the requester with `hub routine list --bot <slug>`.
-   Apply the requested schedule, disable unrelated template Routines, and read back each title,
-   timing, time zone and enabled state. A local `bot.yaml` edit does not prove the live schedule
-   changed. For an explicit no-schedule request, disable all Routines and pass `routines: []` to
-   Go live (`--routines-file` containing `[]` with the CLI). The file is a JSON array with one object per
-   Routine: `id`, `title`, `cron`, `timezone`, `enabled`, `on`. If Go live refuses that shape, do not guess
-   another: it is a Tico bug (AGENT.md rule 13). If verification fails, leave the bot paused and report one
-   specific blocker.
-6. **Take it live.** `hub bot go-live <slug>` (pass the verified requested Routines as `routines` with
-   `hub_bot_go_live`, or `--routines-file` with the CLI): it puts the bot on a computer (the only one, or the
-   least busy), turns it on and starts its setup with them. A bot you just built goes on your computer first,
+5. **Verify the live routines.** Step 2 seeded the template's routines into Tico as automations. Read them as
+   the requester with `hub automation list --owner bot:<slug>`, then `hub automation show <id>` for each one's
+   trigger (cron and time zone) and enabled state. Apply the requested schedule with
+   `hub automation update <id> --file <f>` (a JSON object with the fields to change; `hub automation guide` has the
+   flow format), disable unrelated template routines with `hub automation update <id> --disable`, and read back
+   each one. A local `bot.yaml` edit does not prove the live schedule changed. For an explicit no-schedule request,
+   disable every routine. If the server refuses a change for their rights, say so with who can make it
+   (`playbooks/refusals.md`), and do not route around it. If verification fails, leave the bot paused and report
+   one specific blocker.
+6. **Take it live.** `hub bot go-live <slug>` (`hub_bot_go_live` over MCP; it takes no routine list, because
+   step 5 already set them): it puts the bot on a computer (the only one, or the
+   least busy), turns it on and starts its setup with them, even while a credential is still missing. Going live never turns on a routine a person turned off (step 5), so a no-schedule request stays off. A bot you just built goes on your computer first,
    because its history is only in your workspace until that computer publishes it to GitHub; once GitHub has
    it, it can move with `hub bot place <slug> --computer <name>`. A `history_elsewhere` refusal names the
    computer to use: run go-live again with that `--computer`. On `waiting_for_repository`, remember that
    waiting for a computer to get the repository is not a failure: the bot is placed and its computer is
    fetching the repository, and Tico turns it on and starts the setup by itself once the computer has it. Say
-   so, do not call go-live again or wait for it, do not copy the repository there yourself (AGENT.md rule 12),
+   so, do not call go-live again or wait for it, do not copy the repository there yourself (AGENT.md rule 9),
    and skip step 7. A refusal is read as in step 2.
 7. **Optionally, test it once.** Give the bot one small, read-only job that proves the connection, with
    `hub task create --owner <slug> --title "..." --body "..."`, and wait for the answer. If it fails,
@@ -92,7 +106,7 @@ off) happen at once, and each can be undone from Settings > Bots history.
   The bot's own repository stays write. If a requested repository is not ticked, tick it with
   `hub_repo_update` as the requester, then verify again. A Tool declaration (`hub tool update`,
   `tools:`) describes allowed actions separately; changing it does not grant repository access.
-- "Turn off the Monday routine": `hub routine update <key> --disable --bot <bot>`.
+- "Turn off the Monday routine": find it with `hub automation list --owner bot:<bot>`, then `hub automation update <id> --disable`.
 - "Pause X": `hub bot pause <bot>`. "Why isn't X live?": `hub health check`, then fix or explain.
 - "Delete X" or "remove X": `hub bot archive <bot>`. Say that its history stays. A repository is
   separate: delete one only when asked, with `hub api DELETE github/repos/<owner>/<repo>` using the
@@ -101,7 +115,7 @@ off) happen at once, and each can be undone from Settings > Bots history.
   `hub api POST access/people/<person id> '{"inbox_bot": "<bot>", "mailbox": "<address>"}'`.
   Change the `Mailbox:` line in its `AGENT.md`
   and its `gmail` identity in `bot.yaml` to match.
-- Anything else in the app: `hub api <METHOD> <path> ['{json}']`, as them, with their rights.
+- Anything else in the app: `hub api GET <path>`, or `hub api POST <path> '{json}'` (PUT, PATCH and DELETE the same way), as them, with their rights.
 
 ## When it goes sideways
 
@@ -114,5 +128,5 @@ off) happen at once, and each can be undone from Settings > Bots history.
   members' bots. The bot starts by itself when one can.
 - **A refusal says `retryable: false`.** Stop: no retry loop, no `sleep`. If a person must act, one Needs you
   item with the exact fix, then end the run. If the command should have worked, it is a Tico bug: file it and say
-  "Blocked on a Tico bug, reported as <ticket>" (AGENT.md rules 11 to 13).
+  "Blocked on a Tico bug, reported as <ticket>" (AGENT.md rules 6 and 9).
 - **The product cannot do what they asked.** Say so in one line and `hub support file "..."`.

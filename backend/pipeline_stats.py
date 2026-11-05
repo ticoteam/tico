@@ -40,7 +40,7 @@ RESTART = re.compile(r"(?i)restart")
 
 def default_type(c):
     """The engineering board's type (Dev tickets on a factory team), else the only numbered type."""
-    row = c.execute("SELECT id FROM task_types WHERE role='engineering' ORDER BY created, id LIMIT 1").fetchone()
+    row = c.execute("SELECT id FROM task_types WHERE role='engineering' ORDER BY created_at, id LIMIT 1").fetchone()
     if not row:
         numbered = c.execute("SELECT id FROM task_types WHERE numbered=1 LIMIT 2").fetchall()
         row = numbered[0] if len(numbered) == 1 else None
@@ -69,12 +69,12 @@ def steps_report(c, typ, rows, now):
     if ids:
         listed = json.dumps(ids)
         for task_id, at in c.execute(
-                "SELECT e.task_id, max(e.ts) FROM task_events e JOIN tasks t ON t.id=e.task_id "
-                "WHERE e.task_id IN (SELECT value FROM json_each(?)) AND e.field='step' AND e.new=t.step_id "
-                "GROUP BY e.task_id", (listed,)):
+                "SELECT e.subject_id, max(e.created_at) FROM history_events e JOIN tasks t ON t.id=e.subject_id "
+                "WHERE e.subject_type='task' AND e.subject_id IN (SELECT value FROM json_each(?)) AND e.kind='step' "
+                "AND e.new=t.step_id GROUP BY e.subject_id", (listed,)):
             entered[task_id] = at
         for task_id, created in c.execute(
-                "SELECT task_id, created FROM task_links WHERE kind='pr' AND state IN ('open','draft') "
+                "SELECT task_id, created_at FROM task_links WHERE kind='pr' AND state IN ('open','draft') "
                 "AND task_id IN (SELECT value FROM json_each(?))", (listed,)):
             prs.setdefault(task_id, []).append(created)
     known = {s["id"] for s in typ["steps"]}
@@ -88,7 +88,7 @@ def steps_report(c, typ, rows, now):
             return clocks(row, now)["blocked_seconds"] / 3600
         if row.get("building_started_at"):
             return clocks(row, now)["building_seconds"] / 3600
-        return hours(entered.get(row["id"]) or row["created"], now)
+        return hours(entered.get(row["id"]) or row["created_at"], now)
 
     def one(items):
         ages = [age(r) for r in items]
@@ -96,7 +96,7 @@ def steps_report(c, typ, rows, now):
         owners, waits, on = {}, {"bot": 0, "person": 0, "external": 0, "nothing": 0}, {}
         open_prs = [at for r in items for at in prs.get(r["id"], [])]
         for r in items:
-            owners[r["owner"]] = owners.get(r["owner"], 0) + 1
+            owners[r["owner_id"]] = owners.get(r["owner_id"], 0) + 1
             target = (H.wait_detail(c, r) or {}).get("on")
             waits[waits_kind(target)] += 1
             if target:
@@ -128,12 +128,18 @@ def job_queues(c, who, bots, now=None):
     is `held`; only the rest is `queued`."""
     privacy.snapshot(c)
     actor = privacy.actor(who)
+    rows = _queue_job_rows(c, bots)
+    # One privacy prime for every queued/uncertain message (and its attempt), not message_readable per row —
+    # /api/status and Operations rebuild these counts on every poll.
+    shown = {m["id"] for m in privacy.readable_messages(c, actor, [{"id": row["id"]} for row in rows])}
+    privacy.prime_attempts(c, [row["job_attempt"] for row in rows if row["id"] in shown and row["job_attempt"]])
     memo = {}
 
-    def readable(row):
-        return privacy.message_readable(c, actor, row, current=True) and (
+    def keep(row):
+        return row["id"] in shown and (
             not row["job_attempt"] or privacy.attempt_readable(c, actor, row["job_attempt"], memo))
-    out = _split(c, bots, now, readable)
+
+    out = _tally_queues(bots, rows, now, keep)
     for q in out.values():
         del q["oldest_queued_at"], q["oldest_dead_at"]
     return out
@@ -143,36 +149,47 @@ def queue_counts(c, bots, now=None):
     """job_queues' split over every job, with the oldest queued and dead job's time (`oldest_queued_at`,
     `oldest_dead_at`). Health reads it, so the queued count it shows a bot is the one Pipeline shows an operator who may
     read all of that bot's jobs."""
-    return _split(c, bots, now, None)
+    return _tally_queues(bots, _queue_job_rows(c, bots), now, None)
 
 
-def _split(c, bots, now, readable):
+def _queue_job_rows(c, bots):
     from .execution import unfenced_sql
+    rows = []
+    for part in H.chunks(list(bots)):
+        marks = ",".join("?" * len(part))
+        rows.extend(c.execute(
+            f"SELECT m.*, j.id AS job_id, j.bot_id AS job_bot, j.state AS job_state, j.created_at AS job_created, "
+            f"j.held AS job_held, j.attempt_id AS job_attempt, {unfenced_sql()} AS free FROM jobs j "
+            "JOIN messages m ON m.id=j.message_id JOIN conversations cv ON cv.id=m.conversation_id "
+            f"WHERE j.state IN ('queued','uncertain') AND j.bot_id IN ({marks}) ORDER BY j.created_at, j.id", part))
+    return rows
+
+
+def _tally_queues(bots, rows, now, keep):
     now = now or H.now()
     out = {b: {"queued": 0, "held": 0, "dead": 0, "uncertain": 0, "oldest_queued_hours": None, "oldest_queued_at": None,
                "oldest_dead_at": None, "dead_ids": []} for b in bots}
-    for part in H.chunks(list(out)):
-        marks = ",".join("?" * len(part))
-        for row in c.execute(
-                f"SELECT m.*, j.id AS job_id, j.bot AS job_bot, j.state AS job_state, j.created AS job_created, "
-                f"j.held AS job_held, j.attempt_id AS job_attempt, {unfenced_sql()} AS free FROM jobs j "
-                "JOIN messages m ON m.id=j.message_id JOIN conversations cv ON cv.id=m.conversation_id "
-                f"WHERE j.state IN ('queued','uncertain') AND j.bot IN ({marks}) ORDER BY j.created, j.id", part):
-            if readable and not readable(row):
-                continue
-            q = out[row["job_bot"]]
-            if row["job_state"] == "uncertain":
+    stopped = {b: set() for b in bots}
+    for row in rows:
+        if keep and not keep(row):
+            continue
+        q = out[row["job_bot"]]
+        if row["job_state"] == "uncertain":
+            # Counted per stopped run: requests folded into one run share its attempt and are one run to a person.
+            key = row["job_attempt"] or row["job_id"]
+            if key not in stopped[row["job_bot"]]:
+                stopped[row["job_bot"]].add(key)
                 q["uncertain"] += 1
-            elif not row["free"]:
-                q["dead"] += 1
-                q["oldest_dead_at"] = q["oldest_dead_at"] or row["job_created"]
-                if len(q["dead_ids"]) < DEAD_IDS:
-                    q["dead_ids"].append(row["job_id"])
-            elif row["job_held"]:
-                q["held"] += 1
-            else:
-                q["queued"] += 1
-                q["oldest_queued_at"] = q["oldest_queued_at"] or row["job_created"]
+        elif not row["free"]:
+            q["dead"] += 1
+            q["oldest_dead_at"] = q["oldest_dead_at"] or row["job_created"]
+            if len(q["dead_ids"]) < DEAD_IDS:
+                q["dead_ids"].append(row["job_id"])
+        elif row["job_held"]:
+            q["held"] += 1
+        else:
+            q["queued"] += 1
+            q["oldest_queued_at"] = q["oldest_queued_at"] or row["job_created"]
     for q in out.values():
         q["oldest_queued_hours"] = hours(q["oldest_queued_at"], now)
     return out
@@ -186,11 +203,11 @@ def queues_report(c, who, bots, now):
                "oldest_queued_hours": None, "dead_ids": [], **jobs[b]} for b in bots}
     for part in H.chunks(list(out)):
         marks = ",".join("?" * len(part))
-        for row in c.execute(f"SELECT a.id, a.bot, d.stalled_at FROM attempts a LEFT JOIN attempt_diagnostics d "
-                             f"ON d.attempt_id=a.id WHERE a.state IN ('leased','running') AND a.bot IN ({marks})", part):
+        for row in c.execute(f"SELECT a.id, a.bot_id, d.stalled_at FROM attempts a LEFT JOIN attempt_diagnostics d "
+                             f"ON d.attempt_id=a.id WHERE a.state IN ('leased','running') AND a.bot_id IN ({marks})", part):
             if privacy.attempt_readable(c, actor, row["id"], memo):
-                out[row["bot"]]["running"] += 1
-                out[row["bot"]]["stalled"] += bool(row["stalled_at"])
+                out[row["bot_id"]]["running"] += 1
+                out[row["bot_id"]]["stalled"] += bool(row["stalled_at"])
     return out
 
 
@@ -217,10 +234,10 @@ def decisions_report(c, auth, who, bots, since):
     for part in H.chunks(list(out)):
         marks = ",".join("?" * len(part))
         rows = c.execute(
-            "SELECT m.*, j.id AS job_id, j.bot AS job_bot, j.state AS job_state, r.attempt_id AS decided_attempt "
+            "SELECT m.*, j.id AS job_id, j.bot_id AS job_bot, j.state AS job_state, r.attempt_id AS decided_attempt "
             "FROM job_recovery r JOIN jobs j ON j.id=r.job_id JOIN messages m ON m.id=j.message_id "
-            f"WHERE j.bot IN ({marks}) AND ((j.state='uncertain' AND r.attempt_id=j.attempt_id) OR r.created>=?) "
-            "ORDER BY r.created DESC, j.id",
+            f"WHERE j.bot_id IN ({marks}) AND ((j.state='uncertain' AND r.attempt_id=j.attempt_id) OR r.created_at>=?) "
+            "ORDER BY r.created_at DESC, j.id",
             (*part, since)).fetchall()
         kept, listed = [], {}
         for r in rows:
@@ -235,7 +252,7 @@ def decisions_report(c, auth, who, bots, since):
                 d = {**d, "note": None}
             # A decision about an earlier try is history: no state of the job's later try is put beside it.
             state = d["state"] and ("held" if d["state"] == "uncertain" else d["state"])
-            out[r["job_bot"]].append({"job": r["job_id"], "attempt": d["attempt_id"], "current": d["current"],
+            out[r["job_bot"]].append({"job": r["job_id"], "run": d["attempt_id"], "current": d["current"],
                                       "state": state, "decision": d["decision"], "by": d["by"],
                                       "by_kind": d["by_kind"], "at": d["at"], "note": d["note"],
                                       "label": decision_label(d, lambda a: owner_name(c, a))})
@@ -245,13 +262,13 @@ def decisions_report(c, auth, who, bots, since):
 def cause_of(row):
     """Why one failed, interrupted or expired attempt ended, as one of CAUSES."""
     try:
-        result = json.loads(row["result_json"] or "{}")
+        result = json.loads(row["result"] or "{}")
     except (TypeError, ValueError):
         result = {}
     result = result if isinstance(result, dict) else {}
     text = " ".join(str(v) for v in (row["end_reason"], result.get("text"), result.get("error"), result.get("reason")) if v)
     source = result.get("limit_source") if isinstance(result.get("limit_source"), dict) else {}
-    if row["stop_requested"]:
+    if row["stop_requested_at"]:
         return "stopped"
     if source.get("kind") == "capacity":
         return "capacity"
@@ -270,15 +287,15 @@ def failures_report(c, who, bots, since):
     actor = privacy.actor(who)
     memo = {}
     causes, per_bot, total, scanned, complete_after = {}, {}, 0, 0, None
-    at = "coalesce(a.finished, a.created)"
+    at = "coalesce(a.finished_at, a.created_at)"
     for part in H.chunks(list(bots)):
         marks = ",".join("?" * len(part))
         before = None
         while True:
             page = c.execute(
-                f"SELECT a.id, a.bot, a.state, a.result_json, a.stop_requested, {at} AS at, d.end_reason "
+                f"SELECT a.id, a.bot_id, a.state, a.result, a.stop_requested_at, {at} AS at, d.end_reason "
                 "FROM attempts a LEFT JOIN attempt_diagnostics d ON d.attempt_id=a.id "
-                f"WHERE a.state IN ('failed','interrupted','expired') AND a.bot IN ({marks}) AND {at}>=? "
+                f"WHERE a.state IN ('failed','interrupted','expired') AND a.bot_id IN ({marks}) AND {at}>=? "
                 + (f"AND ({at}<? OR ({at}=? AND a.id<?)) " if before else "")
                 + f"ORDER BY {at} DESC, a.id DESC LIMIT ?",
                 (*part, since, *((before[0], before[0], before[1]) if before else ()), ATTEMPT_PAGE)).fetchall()
@@ -296,8 +313,8 @@ def failures_report(c, who, bots, since):
                 seen = causes.setdefault(cause, {"n": 0, "first": row["at"], "last": row["at"]})
                 seen["n"] += 1
                 seen["first"], seen["last"] = min(seen["first"], row["at"]), max(seen["last"], row["at"])
-                per_bot.setdefault(row["bot"], {}).setdefault(cause, 0)
-                per_bot[row["bot"]][cause] += 1
+                per_bot.setdefault(row["bot_id"], {}).setdefault(cause, 0)
+                per_bot[row["bot_id"]][cause] += 1
             if stop or len(page) < ATTEMPT_PAGE:
                 break
     return {"since": since, "total": total, "truncated": complete_after is not None, "complete_after": complete_after,
@@ -328,6 +345,7 @@ def report(c, auth, who, *, type=None, owner=None, label=None, updated_since=Non
     truncated = len(rows) > TASK_CAP
     rows = rows[:TASK_CAP]
     steps, loose = steps_report(c, typ, rows, now)
+    bot = (H.resolve_bot(c, bot) or {}).get("id", bot)
     bots = readable_bots(c, auth, who, bot) if not bot or H.bot(c, bot) else []
     if bot and not bots:
         raise Problem("not_found", "Bot not found", 404)      # unknown, or not one whose runs the caller may read
@@ -341,7 +359,7 @@ def report(c, auth, who, *, type=None, owner=None, label=None, updated_since=Non
     # Only the type's manager reads its exceptions list (backend/pipeline_exceptions.py); everyone else has no key.
     exceptions = pipeline_exceptions.report(c, auth, who, typ, at=now)
     return {"now": now, "type": {"id": typ["id"], "name": typ["name"]},
-            "filters": {"owner": owner_actor, "label": label, "updated_since": changed, "snoozed": snoozed,
+            "filters": {"owner_id": owner_actor, "label": label, "updated_since": changed, "snoozed": snoozed,
                         "bot": bot, "since": window},
             "total": len(rows), "truncated": truncated, "steps": steps, **loose,
             "queues": {b: queues[b] for b in sorted(busy)}, "failures": failures,

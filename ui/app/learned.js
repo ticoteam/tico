@@ -3,15 +3,15 @@
 'use strict';
 
 // #/assistant/learned, linked from the top of your chat (ui/app/assistant-page.js). GET /v2/assistant/learned gives your
-// own layer, how you like things ranked and summarised, which only you see; and for the owner the company layer the CEO
-// Bot uses: the vision (changed on Strategy) and the company goals (changed on Goals) and what they taught it about the company. You teach it
-// in the chat; here you edit or delete what it saved (PATCH / DELETE /v2/assistant/learned/{id}). Your chat bot reads
+// own layer, how you like things ranked and summarised, which only you see; and for the owner the company layer their
+// Assistant also uses: the vision (changed on Strategy) and the company goals (changed on Goals) and what they taught
+// it about the company. You teach it in the chat; here you edit or delete what it saved (PATCH / DELETE /v2/assistant/learned/{id}). Your chat bot reads
 // all of it again before each reply, so a deleted entry is not used from the next one.
 let LEARNED_LOAD = 0;
-const learnedWhen = e => `${e.taught_in_chat ? 'Taught in chat' : 'Added by you'} · ${e.updated ? 'edited ' + ago(e.updated) : ago(e.created)}`;
+const learnedWhen = e => `${e.taught_in_chat ? 'Taught in chat' : 'Added by you'} · ${e.updated_at ? 'edited ' + ago(e.updated_at) : ago(e.created_at)}`;
 const learnedItemHTML = e => `<li class="learned-item" data-learned="${esc(e.id)}">
     <div class="learned-text">${esc(e.text)}</div>
-    <div class="learned-meta"><span class="muted" title="${esc(fmt(e.updated || e.created))}">${esc(learnedWhen(e))}</span>
+    <div class="learned-meta"><span class="muted" title="${esc(fmt(e.updated_at || e.created_at))}">${esc(learnedWhen(e))}</span>
       <button type="button" class="ghost" data-learned-edit>Edit</button>
       <button type="button" class="ghost" data-learned-delete>Delete</button></div></li>`;
 const learnedListHTML = (entries, empty) => entries.length

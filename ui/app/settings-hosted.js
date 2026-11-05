@@ -49,15 +49,16 @@ async function settingsHostedStart(button) {
     if (r.state === 'started') { await renderSettingsHosted(true); return; }
     if (r.state === 'paused') {
       say(`<span class="hosted-paused" role="alert">${esc(r.message)}</span>${r.credit_url
-        ? ` <a class="link" href="${esc(r.credit_url)}" target="_blank" rel="noopener noreferrer" data-hosted-credit>Ask for more credit</a>` : ''}`);
+        ? ` <a class="link" href="${esc(r.credit_url)}" target="_blank" rel="noopener noreferrer" data-hosted-credit>Contact support for more credit</a>` : ''}`);
     } else say(`<span class="muted" role="alert">${esc(HOSTED_START[r.state] || HOSTED_START.unreachable)}</span>`);
   } catch (e) { say(`<span class="err" role="alert">${esc(e.message)}</span>`); }
   button.disabled = false; button.textContent = 'Start';
 }
 
 // Sleep when idle (backend/sleep_idle.py): a server Tico hosts can stop itself after hours with nothing to do, and its
-// bot computers with it; Tico starts it again for the next routine or a visit. Shown only on a hosted server. Anyone
-// sees it; an owner or an admin changes it (the server says so too).
+// bot computers with it; Tico starts it again for the next routine or a visit. Shown only on a hosted server, and not
+// on a Tico Cloud cell (`managed`: Tico staff set its idle time). Anyone sees it; an owner or an admin changes it
+// (the server says so too).
 const SLEEP_BLOCKERS = {run_queued: 'a run is waiting', run_in_progress: 'a run is going', task_session: 'a task session is waiting',
   runner_job: 'a computer job is running', send_pending: 'a send is waiting', routine_due: 'a routine is due soon'};
 async function renderSettingsSleep() {
@@ -65,7 +66,7 @@ async function renderSettingsSleep() {
   if (!card || !host || formBusy(host)) return;
   let v;
   try { v = (await get('/v2/sleep')).sleep; } catch { card.hidden = true; return; }
-  card.hidden = !v?.hosted;
+  card.hidden = !v?.hosted || !!v.managed;
   if (card.hidden) return;
   const admin = settingsIsAdmin(), off = admin ? '' : ' disabled';
   const hours = [['0', 'Off'], ...Array.from({length: 24}, (_, i) => [String(i + 1), `After ${i + 1} h`])];

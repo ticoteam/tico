@@ -1,0 +1,24 @@
+{
+  "id": "15-mail-shipping-notice",
+  "kind": "mail",
+  "questions": "mail-triage",
+  "level": "low",
+  "state": {
+    "mailbox": "dana@acme.example",
+    "from": "orders@acme.example",
+    "from_name": "Quarry Office Supply",
+    "to": "dana@acme.example",
+    "date": "2026-10-27T08:30:00Z",
+    "subject": "Your order 88-3140 ships Thursday",
+    "snippet": "Your order of two monitors ships Thursday 30 October and should arrive by 4 November. Track it from the link in your account.",
+    "unsubscribe": false,
+    "list_id": null,
+    "attachments": [],
+    "is_internal": false,
+    "is_calendar_invite": false,
+    "labels": [
+      "INBOX"
+    ]
+  },
+  "note": "A pending delivery: watch, with nothing to do."
+}

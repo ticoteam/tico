@@ -8,7 +8,7 @@ pack: operations
 icon: route
 suggest: niche
 tags: [field-service, scheduling, crews, technicians, cleaning, installation, services]
-summary: "Builds tomorrow's schedule for the field crews by skill, area and job length, flags clashes and unconfirmed jobs, and has each customer's arrival notice ready to use. Requested booking changes follow the scheduling rules and Tools."
+summary: "Builds tomorrow's schedule for field crews from skills, parts, area, job length and each customer's window, lists every clash with a fix, and drafts the arrival notices. It changes no confirmed job unless the task asks and a granted Tool allows it."
 when: "A service team (cleaning, repairs, installation, inspections) with a few crews or technicians and a schedule rebuilt by hand every evening."
 pains:
   - "the schedule for tomorrow is rebuilt by hand every evening"
@@ -16,13 +16,14 @@ pains:
   - "crews criss-cross town between jobs"
   - "customers don't know when the technician will arrive"
 owns:
-  - "Tomorrow's dispatch plan: each job assigned to a crew or technician by skill, area, job length and availability, in a sensible route order"
-  - "The clash list: double bookings, jobs with no one qualified, overtime, parts or access not confirmed"
-  - "Customer arrival notices and reschedule messages, ready to use"
-  - "The job close-out check: jobs finished yesterday with no completion note, photos or sign-off"
+  - "Tomorrow's dispatch plan: each job given to a crew or technician who has the skills, parts and access it needs, in route order, inside the customer's window"
+  - "The clash list: double bookings, jobs no one qualified can do, overtime, missing parts, access not confirmed, windows the plan cannot keep, each with one or two fixes"
+  - "Customer arrival notices and reschedule messages, drafted for a person to send"
+  - "The close-out check: jobs finished yesterday with no completion note, photos or sign-off, listed by technician"
+  - "Planned job lengths from completed jobs, with the booking default kept beside them (knowledge/job-types.md)"
 never:
-  - "Move, cancel or reassign a job a customer has confirmed outside the requested work or Tools"
-  - "Send a message to a customer or a technician's personal phone outside the stated rules"
+  - "Move, cancel or reassign a job a customer has confirmed unless the task asks for it and a granted Tool allows it"
+  - "Message a customer or a technician's personal phone unless the task asks for it and a granted Tool allows it"
   - "Promise a customer an arrival window the plan cannot keep"
   - "Schedule anyone beyond their working hours or on leave"
 prerequisites:
@@ -49,7 +50,7 @@ onboarding:
 first_routine:
   title: "Tomorrow's dispatch plan"
   cadence: "Weekdays at 15:00 team time"
-  output: "reports/YYYY-MM-DD-dispatch.md: tomorrow's jobs by crew in route order with times, the clash list, jobs with no qualified person, customer arrival notices ready to use, and yesterday's jobs not closed out"
+  output: "reports/YYYY-MM-DD-dispatch.md: tomorrow's jobs by crew in route order with planned times and windows, the clash list with options, jobs with no qualified person, arrival notices drafted for sending, and yesterday's jobs not closed out"
   draft_only: true
 example_output: knowledge/examples/dispatch-plan.md
 reasoning_effort: medium

@@ -40,7 +40,7 @@ def during(run, w, team, i):
     # The ticket mid-flight: out for a check, its check still open, no run of its own going.
     for t in sorted(w.tickets(), key=lambda t: t["title"]):
         step = w.board.step(t["step"])
-        if t["id"] == run.parked or not step or not step.check or not str(t["owner"]).startswith("bot:") \
+        if t["id"] == run.parked or not step or not step.check or not str(t["owner_id"]).startswith("bot:") \
                 or busy_on(team, t["id"]) or not any(c["status"] not in ("done", "closed", "declined")
                                                       for c in w.checks(t["id"])):
             continue
@@ -55,16 +55,16 @@ def mid_flight(run):
 
 
 def owner_turns(run, tid, since, until=None):
-    owner = run.w.sql("SELECT owner FROM tasks WHERE id=?", (tid,))[0]["owner"]
+    owner = run.w.sql("SELECT owner_id FROM tasks WHERE id=?", (tid,))[0]["owner_id"]
     return [r for r in run.turns(since=since, until=until, bots={owner[4:]}) if r["task"] == tid]
 
 
 def notices(run, tid, prefix):
     """Tico's notices to the ticket's owner starting `prefix`, with whether each queued a job (woke it)."""
-    return run.w.sql("SELECT m.created, m.to_actor, EXISTS(SELECT 1 FROM jobs j WHERE j.message_id=m.id) woke "
-                     "FROM messages m JOIN tasks t ON t.id=json_extract(m.refs_json,'$.task') "
-                     "WHERE t.id=? AND m.to_actor=t.owner AND m.from_actor='keeper' AND m.body LIKE ? "
-                     "ORDER BY m.created", (tid, prefix + "%"))
+    return run.w.sql("SELECT m.created_at, m.recipient_id, EXISTS(SELECT 1 FROM jobs j WHERE j.message_id=m.id) woke "
+                     "FROM messages m JOIN tasks t ON t.id=json_extract(m.refs,'$.task') "
+                     "WHERE t.id=? AND m.recipient_id=t.owner_id AND m.sender_id='keeper' AND m.body LIKE ? "
+                     "ORDER BY m.created_at", (tid, prefix + "%"))
 
 
 def both_snoozed(run):
@@ -87,8 +87,8 @@ def verdict_while_snoozed(run):
         return False, "no ticket snoozed mid-flight"
     since, until, _ = run.snoozed[tid]
     got = [c for c in run.w.checks(tid) if c["verdict"] and any(
-        since <= run.w.H.parse_ts(e["ts"]) < until for e in run.w.sql(
-            "SELECT ts FROM task_events WHERE task_id=? AND field='status' AND new='done'", (c["id"],)))]
+        since <= run.w.H.parse_ts(e["created_at"]) < until for e in run.w.sql(
+            "SELECT created_at FROM history_events WHERE subject_type='task' AND subject_id=? AND kind='status' AND new='done'", (c["id"],)))]
     return bool(got), f"{len(got)} verdicts in the snooze"
 
 
@@ -101,10 +101,10 @@ def snooze_over_once(run):
     _, until, _ = run.snoozed[tid]
     over = notices(run, tid, "Snooze over:")
     slack = at(0, 2 * run.scenario.tick_minutes)
-    ok = len(over) == 1 and over[0]["woke"] and until <= run.w.H.parse_ts(over[0]["created"]) <= until + slack
+    ok = len(over) == 1 and over[0]["woke"] and until <= run.w.H.parse_ts(over[0]["created_at"]) <= until + slack
     ran = owner_turns(run, tid, until, until + at(2))
     early = notices(run, run.parked, "Snooze over:")
-    return ok and bool(ran) and not early, (f"{len(over)} at the date ({', '.join(o['created'][11:16] for o in over)}), "
+    return ok and bool(ran) and not early, (f"{len(over)} at the date ({', '.join(o['created_at'][11:16] for o in over)}), "
                                             f"{len(ran)} owner runs after it, {len(early)} on the unsnoozed ticket")
 
 
@@ -116,7 +116,7 @@ def unsnooze_wakes_once(run):
         return False, "the parked ticket was not unsnoozed"
     woke = notices(run, run.parked, "Unsnoozed:")
     ran = owner_turns(run, run.parked, early, until)
-    moved = run.w.sql("SELECT 1 FROM task_events WHERE task_id=? AND field='step' AND ts>=?",
+    moved = run.w.sql("SELECT 1 FROM history_events WHERE subject_type='task' AND subject_id=? AND kind='step' AND created_at>=?",
                       (run.parked, early.strftime("%Y-%m-%dT%H:%M:%S.%fZ")))
     ok = len(woke) == 1 and woke[0]["woke"] and bool(ran) and bool(moved)
     return ok, f"{len(woke)} unsnooze notices, " + \

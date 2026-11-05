@@ -29,7 +29,7 @@ def parked(c, prerequisite_owner="bot:ops"):
 
 def jobs(c, slug):
     return [dict(r) for r in c.execute(
-        "SELECT m.body, m.refs_json FROM jobs j JOIN messages m ON m.id=j.message_id WHERE j.bot=?", (slug,))]
+        "SELECT m.body, m.refs FROM jobs j JOIN messages m ON m.id=j.message_id WHERE j.bot_id=?", (slug,))]
 
 
 def test_an_active_bot_owning_the_blocker_is_accepted_and_holds_the_task_without_storing_a_person(c):
@@ -41,8 +41,7 @@ def test_an_active_bot_owning_the_blocker_is_accepted_and_holds_the_task_without
     assert after["status"] == "waiting" and after["note"] == "Needs the review of the receipt gate fix first."
     assert after["waiting_on"] is None                    # people's Needs you and needs_human are untouched
     assert H.wait_detail(c, after) == {"why": "an open blocker", "on": "bot:ops"}
-    # Held while it is open: the stranded sweep leaves it waiting, and nothing starts the builder on it.
-    H.sweep_stranded(c, at=H.shift(H.now(), hours=6))
+    # Held while it is open: nothing starts the builder on it.
     assert H.task(c, task["id"])["status"] == "waiting"
     assert jobs(c, "cpo") == []
 
@@ -57,7 +56,7 @@ def test_the_prerequisite_resolving_wakes_the_owner_once_with_the_outcome(c, out
     woke = jobs(c, "cpo")
     assert len(woke) == 1 and woke[0]["body"].startswith("Unblocked: Ship the receipt gate")
     assert words in woke[0]["body"]
-    assert json.loads(woke[0]["refs_json"])["blocker_status"] == outcome
+    assert json.loads(woke[0]["refs"])["blocker_status"] == outcome
     assert H.wait_detail(c, H.task(c, task["id"])) is None   # eligible again: nothing holds it
 
 
@@ -115,7 +114,7 @@ def test_a_bot_wait_after_a_person_wait_keeps_their_ask_open(c):
     # The screen finds that ask among the blockers the task view serves (ui/app/tasks.js taskBotWait).
     served = TR.grouped(c, [task["id"]])[task["id"]]
     assert "parent" not in served
-    assert [b["owner"] for b in served["blocks"] if b["direction"] == "in"] == ["bot:ops", "human:ana"]
+    assert [b["owner_id"] for b in served["blocks"] if b["direction"] == "in"] == ["bot:ops", "human:ana"]
     other = H.task_create(c, "human:ana", "Write the launch post", "", "bot:cpo", lint=False)
     H.task_update(c, "bot:cpo", other["id"], status="waiting", waiting_on="ana",
                   note="Approve the launch post? I'll publish it after.")
@@ -137,7 +136,7 @@ def test_api_bot_wait_mismatch_preserves_task_and_uses_generic_diagnostic(api, r
             restrict(c, "ops", see={"everyone": True}, read={"people": ["ana"]}, write={"people": ["ana"]})
         assert H.task_private_readable(c, "bot:cpo", pre)  # company visibility is only part of read access
         before = dict(H.task(c, task["id"]))
-        events = [dict(r) for r in c.execute("SELECT * FROM task_events WHERE task_id=? ORDER BY id", (task["id"],))]
+        events = [dict(r) for r in c.execute("SELECT id, subject_id AS task_id, created_at, actor_id AS actor, kind AS field, old, new, note, action_id, via FROM history_events WHERE subject_type='task' AND subject_id=? ORDER BY id", (task["id"],))]
     detail = get(api, "tasks/" + task["id"], token)["task"]
     rows = get(api, "tasks", token)["tasks"]
     listed = next(t for t in rows if t["id"] == task["id"])
@@ -157,4 +156,4 @@ def test_api_bot_wait_mismatch_preserves_task_and_uses_generic_diagnostic(api, r
         after = dict(H.task(c, task["id"]))
         assert {k: after[k] for k in ("status", "note", "waiting_on", "version")} == {
             k: before[k] for k in ("status", "note", "waiting_on", "version")}
-        assert [dict(r) for r in c.execute("SELECT * FROM task_events WHERE task_id=? ORDER BY id", (task["id"],))] == events
+        assert [dict(r) for r in c.execute("SELECT id, subject_id AS task_id, created_at, actor_id AS actor, kind AS field, old, new, note, action_id, via FROM history_events WHERE subject_type='task' AND subject_id=? ORDER BY id", (task["id"],))] == events

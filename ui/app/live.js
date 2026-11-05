@@ -9,7 +9,7 @@
 // (liveFallback); everywhere else nothing polls for what this stream carries.
 const LIVE_TOPICS = ['tasks', 'messages', 'runs', 'bots', 'needs'];
 const LIVE = {es: null, after: null, started: false, connected: false, opened: 0, tries: 0, timer: 0, restart: 0,
-              handlers: new Map(), conversations: new Map(), taskKey: ''};
+              handlers: new Map(), conversations: new Map(), threads: new Map(), taskKey: ''};
 const liveAvailable = () => typeof EventSource !== 'undefined';
 const liveConnected = () => LIVE.connected;
 // `fn(data)` for each event of `topic` (one of LIVE_TOPICS, or `reset`, `status` and `needs-list`); returns the unsubscribe.
@@ -29,7 +29,8 @@ function liveFollow(id) {
   id = String(id);
   const had = LIVE.conversations.has(id);
   LIVE.conversations.set(id, (LIVE.conversations.get(id) || 0) + 1);
-  if (!had) liveRestart();
+  // A page that is not cloud never wires the stream (liveWire), so a chat on screen starts it here.
+  if (!had) { if (LIVE.started) liveRestart(); else liveStart(); }
   let released = false;
   return () => {
     if (released) return;
@@ -39,8 +40,34 @@ function liveFollow(id) {
     else { LIVE.conversations.delete(id); liveRestart(); }
   };
 }
+// The messages of this thread and its sub-threads while it is on screen (`?thread=`, its whole subtree); returns the release.
+function liveFollowThread(id) {
+  if (!id) return () => {};
+  id = String(id);
+  const had = LIVE.threads.has(id);
+  LIVE.threads.set(id, (LIVE.threads.get(id) || 0) + 1);
+  if (!had) { if (LIVE.started) liveRestart(); else liveStart(); }
+  let released = false;
+  return () => {
+    if (released) return;
+    released = true;
+    const n = (LIVE.threads.get(id) || 1) - 1;
+    if (n > 0) LIVE.threads.set(id, n);
+    else { LIVE.threads.delete(id); liveRestart(); }
+  };
+}
+// A topic only some servers send (`threads`, once the server answers GET /v2/threads): asking an older server for it
+// would fail the whole stream (422), so it joins only when the server has shown it has it.
+function liveTopicAdd(topic) {
+  if (LIVE_TOPICS.includes(topic)) return;
+  LIVE_TOPICS.push(topic);
+  // Threads keep the sidebar live on every install, cloud or not.
+  if (LIVE.started) liveRestart(); else liveStart();
+}
 // Only where the stream cannot run: the poll it replaced. Returns the timer (0 when the stream carries it).
-const liveFallback = (fn, ms) => liveAvailable() ? 0 : setInterval(fn, ms);
+// A hidden tab does not poll: goals / task modal / Updates fell back every few seconds across background tabs
+// whenever live was down.
+const liveFallback = (fn, ms) => liveAvailable() ? 0 : setInterval(() => { if (!document.hidden) fn(); }, ms);
 // Run `fn` once after a burst: every call within `ms` of the first folds into it.
 const LIVE_SOON = new Map();
 function liveSoon(key, fn, ms = 250) {
@@ -80,9 +107,11 @@ function liveRestart() {
 // own on their page, the open task's anywhere, and none elsewhere. Every open tab was sent every task's change.
 function liveTaskScope() {
   const r = typeof S !== 'undefined' && S.route || '';
-  if (isTasksRoute(r) || r.startsWith('#/task/')) return {all: true};
+  if (isTasksRoute(r) || r.startsWith('#/task/') || r.startsWith('#/meetings')) return {all: true};
   const open = typeof TASK_CHAT !== 'undefined' && TASK_CHAT?.id ? [String(TASK_CHAT.id)] : [];
-  const party = r.startsWith('#/bot/') ? 'bot:' + decodeURIComponent(r.slice(6).split(/[/?]/)[0])
+  // A bot's route may name it by slug (a link made from a label); its actor is its id.
+  const botRef = r.startsWith('#/bot/') ? decodeURIComponent(r.slice(6).split(/[/?]/)[0]) : '';
+  const party = botRef ? 'bot:' + (botByRef(botRef)?.id || botRef)
     : r.startsWith('#/person/') ? 'human:' + decodeURIComponent(r.slice(9).split(/[/?]/)[0]) : '';
   return {task: open, party: party ? [party] : []};
 }
@@ -93,16 +122,18 @@ function liveTasksSync() {
   if (LIVE.started && LIVE.taskKey !== liveTaskKey(liveTaskScope())) liveRestart();
 }
 function liveUrl() {
-  const conversations = [...LIVE.conversations.keys()];
+  const conversations = [...LIVE.conversations.keys()], threads = [...LIVE.threads.keys()];
   const scope = liveTaskScope();
   LIVE.taskKey = liveTaskKey(scope);
   // Without a conversation on screen, no messages or runs: those are every room's, and only one is shown.
-  const topics = (conversations.length ? LIVE_TOPICS : LIVE_TOPICS.filter(t => t !== 'messages' && t !== 'runs'))
+  const topics = (conversations.length || threads.length ? LIVE_TOPICS : LIVE_TOPICS.filter(t => t !== 'messages' && t !== 'runs'))
     .filter(t => t !== 'tasks' || scope.all || scope.task.length || scope.party.length);
   // Needs you as changed ids against the list the page holds (v2NeedsChanged), not the whole list each time.
+  LIVE.urlTopics = topics;
   const q = new URLSearchParams({topics: topics.join(','), needs: 'changes'});
   if (LIVE.after != null) q.set('after', String(LIVE.after));
   if (conversations.length) q.set('conversation', conversations.join(','));
+  if (threads.length) q.set('thread', threads.join(','));
   if (!scope.all && scope.task.length) q.set('task', scope.task.join(','));
   if (!scope.all && scope.party.length) q.set('party', scope.party.join(','));
   return `${API}/v2/events?${q}`;
@@ -117,14 +148,20 @@ function liveEventsConnect() {
   if (SESSION.out) return;                                // signed out: nothing reconnects until the person signs in
   try { LIVE.es?.close(); } catch {}
   const es = LIVE.es = new EventSource(liveUrl());
+  es.topics = LIVE.urlTopics || [];
   LIVE.opened = Date.now();
   const current = () => LIVE.es === es;
   es.addEventListener('ready', ev => {
     if (!current()) return;
     const d = liveData(ev) || {};
-    if (LIVE.after == null) LIVE.after = Number(d.seq) || 0;
+    // `carried`: the topics this stream resumed without a gap, so it replays what changed in them meanwhile: those the
+    // last stream also carried, when it resumes from the last change number (`after`). The first stream carries none,
+    // and a topic newly added was not followed up to `after`.
+    const resumed = LIVE.after != null, carried = resumed ? es.topics.filter(t => LIVE.readyTopics?.includes(t)) : [];
+    LIVE.readyTopics = es.topics;
+    if (!resumed) LIVE.after = Number(d.seq) || 0;
     // The list as this stream counts from: a held copy of another version (missed while away) is read again.
-    if (d.needs_version) liveEmit('needs', {version: d.needs_version});
+    if (d.needs_version) liveEmit('needs', {version: d.needs_version, connect: true, carried});
     const was = LIVE.connected;
     LIVE.connected = true;
     if (!was) liveEmit('status', {connected: true});

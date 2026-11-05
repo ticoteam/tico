@@ -13,7 +13,10 @@
     "bot_user": {
       "display_name": "Tico",
       "always_online": false
-    }
+    },
+    "unfurl_domains": [
+      "tico.acme.example"
+    ]
   },
   "oauth_config": {
     "scopes": {
@@ -34,7 +37,9 @@
         "mpim:history",
         "mpim:read",
         "app_mentions:read",
-        "files:read"
+        "files:read",
+        "links:read",
+        "links:write"
       ]
     }
   },
@@ -43,14 +48,15 @@
     "socket_mode_enabled": true,
     "token_rotation_enabled": false,
     "interactivity": {
-      "is_enabled": false
+      "is_enabled": true
     },
     "event_subscriptions": {
       "bot_events": [
         "app_mention",
         "message.im",
         "message.channels",
-        "message.groups"
+        "message.groups",
+        "link_shared"
       ]
     }
   }

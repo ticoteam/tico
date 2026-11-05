@@ -50,6 +50,19 @@ class Primary(unittest.TestCase):
         self.assertTrue(P.may_chat("ben@acme.example", "bug-triage", self.ROSTER, EMPLOYEES))
         self.assertFalse(P.may_chat("unknown@acme.example", "bug-triage", self.ROSTER, EMPLOYEES))
 
+    def test_signed_in_count_matches_turn_level_rules_without_building_groups(self):
+        self.assertEqual(P.signed_in_count(DOC), 5)
+        mixed = {"people": [
+            {"id": "ana", "email": "ana@acme.example"},
+            {"id": "guest", "email": ""},
+            {"id": "left", "email": "left@acme.example", "hidden": True},
+            {"id": "off", "email": "off@acme.example", "sign_in": False},
+            {"id": "gone", "email": "gone@acme.example", "directory_left": True},
+            {"id": "ben", "email": "ben@acme.example"},
+        ]}
+        self.assertEqual(P.signed_in_count(mixed), 2)
+        self.assertEqual(len(P.load(mixed)["people"]), 6)
+
 
 if __name__ == "__main__":
     unittest.main(verbosity=2)

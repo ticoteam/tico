@@ -17,11 +17,11 @@ def running(api):
 
 
 def cut(api, machine, attempt, *, minutes='60', command='git push origin HEAD', approval=False,
-        end_reason=None, tool_payload=None, silent=False, **flags):
+        end_reason=None, tool_payload=None, silent=False, pause=None, **flags):
     if approval:
         with api.app.state.store.transaction() as c:
             message = c.execute('SELECT message_id FROM jobs WHERE id=?', (attempt['job_id'],)).fetchone()[0]
-            c.execute('INSERT INTO approvals(id,kind,message_id,requested_by,created,consumed_at) VALUES(?,?,?,?,?,?)',
+            c.execute('INSERT INTO approvals(id,kind,message_id,requested_by_id,created_at,consumed_at) VALUES(?,?,?,?,?,?)',
                       ('used-approval', 'publish', message, 'bot:ops', H.now(), H.now()))
     events = [
         ({'seq': 1, 'kind': 'status', 'payload': {'state': 'active', 'tool_events': False}} if silent else
@@ -31,8 +31,10 @@ def cut(api, machine, attempt, *, minutes='60', command='git push origin HEAD', 
         {'seq': 3, 'kind': 'diagnostic', 'payload': {
             'end_reason': end_reason or f'Timeout: max_run_minutes ({minutes} minutes)'}},
     ]
+    if pause:
+        events.append({'seq': 4, 'kind': 'status', 'payload': {'yielded': pause}})
     post(api, f"attempts/{attempt['id']}/events", {'events': events}, machine['token'])
-    return post(api, f"attempts/{attempt['id']}/complete", {'outcome': 'interrupted', 'last_seq': 3,
+    return post(api, f"attempts/{attempt['id']}/complete", {'outcome': 'interrupted', 'last_seq': len(events),
                 'text': 'Branch saved and pushed; review is next.', **flags}, machine['token'])
 
 
@@ -50,7 +52,7 @@ def test_first_timeout_waiting_for_live_session_has_timeout_card_then_resumes(ap
     other = claim(api, machine)
     post(api, f"attempts/{other['id']}/started", {'thread_id': 'other-session-work'}, machine['token'])
     with api.app.state.store.transaction() as c:
-        c.execute('UPDATE turns SET task_id=? WHERE id=?', (task['id'], other['id']))
+        c.execute('UPDATE attempts SET task_id=? WHERE id=?', (task['id'], other['id']))
     cut(api, machine, first)
     assert job_state(api, first['job_id']) == 'uncertain'
     review = get(api, 'bots/ops/execution-review')['jobs'][0]
@@ -78,7 +80,7 @@ def test_pushed_branch_timeout_requeues_same_job_lane_and_carries_task_handoff(a
         assert c.execute('SELECT end_reason FROM attempt_diagnostics WHERE attempt_id=?', (first['id'],)).fetchone()[0] == 'Timeout: max_run_minutes (60 minutes)'
         lines = [r[0] for r in c.execute('SELECT body FROM messages WHERE conversation_id=?', (task['conversation_id'],))]
         assert lines.count('Reached its 60-minute run limit; continuing') == 1
-        assert not c.execute("SELECT 1 FROM tasks WHERE owner='bot:botops'").fetchone()
+        assert not c.execute("SELECT 1 FROM tasks WHERE owner_id='bot:botops'").fetchone()
         before = dict(c.execute('SELECT * FROM job_recovery WHERE job_id=?', (first['job_id'],)).fetchone())
     assert sweep(api) == []
     resumed = claim(api, machine)
@@ -106,7 +108,7 @@ def test_timeout_holds_named_irreversible_action_or_consumed_approval(api, comma
     assert label in review['reason'] and review['stopped'] == 'changed'
     assert 'private-marker' not in review['reason']
     with api.app.state.store.read() as c:
-        tasks = c.execute("SELECT body FROM tasks WHERE owner='bot:botops' AND status='open'").fetchall()
+        tasks = c.execute("SELECT body FROM tasks WHERE owner_id='bot:botops' AND status='open'").fetchall()
         assert len(tasks) == 1 and label in tasks[0]['body'] and 'private-marker' not in tasks[0]['body']
     assert sweep(api) == [] and job_state(api, first['job_id']) == 'uncertain'
 
@@ -122,7 +124,7 @@ def test_second_consecutive_cut_stays_held_with_open_review_and_no_saved_decisio
     review = get(api, 'bots/ops/execution-review')['jobs'][0]
     assert why in review['reason'] and review['stopped'] == 'twice'
     with api.app.state.store.read() as c:
-        body = c.execute("SELECT body FROM tasks WHERE owner='bot:botops' AND status='open'").fetchone()[0]
+        body = c.execute("SELECT body FROM tasks WHERE owner_id='bot:botops' AND status='open'").fetchone()[0]
         assert why in body and 'recorded exec_command' not in body
         assert not c.execute('SELECT 1 FROM job_recovery WHERE job_id=? AND attempt_id=?',
                              (first['job_id'], second['id'])).fetchone()
@@ -166,9 +168,9 @@ def test_other_interruptions_do_not_get_run_budget_recovery(api, reason):
 
 def test_person_stop_overrides_a_time_limit_diagnostic(api):
     machine, _, first = running(api)
-    post(api, 'bots/ops/stop', {'attempt_id': first['id']})
+    post(api, 'bots/ops/stop', {'run_id': first['id']})
     cut(api, machine, first)
-    assert job_state(api, first['job_id']) == 'cancelled'
+    assert job_state(api, first['job_id']) == 'canceled'
 
 
 def test_unknown_fallback_effects_stay_held_even_with_a_time_limit(api):
@@ -184,6 +186,26 @@ def test_retry_flags_cannot_bypass_irreversible_action_check(api, flags):
     cut(api, machine, first, command='gh pr merge 42', **flags)
     assert job_state(api, first['job_id']) == 'uncertain'
     assert 'merge pull request' in get(api, 'bots/ops/execution-review')['jobs'][0]['reason']
+    assert sweep(api) == [] and job_state(api, first['job_id']) == 'uncertain'
+
+
+def test_saved_pause_cannot_hide_outside_actions_or_reset_consecutive_timeout_cuts(api):
+    machine, _, first = running(api)
+    pause = "Paused at the computer's drain time limit; work and session saved, queued to continue"
+    cut(api, machine, first, pause=pause, yielded=True)
+    assert job_state(api, first['job_id']) == 'queued'
+    second = next_attempt(api, machine, first)
+    assert second['recovery'] == {'resume_session': True}
+    assert 'Reached its 60-minute run limit; continuing' in second['message']['body']
+    cut(api, machine, second, command='gh pr merge 42', pause=pause, yielded=True)
+    assert job_state(api, first['job_id']) == 'uncertain'
+    review = get(api, 'bots/ops/execution-review')['jobs'][0]
+    assert review['stopped'] == 'changed' and 'merge pull request' in review['reason']
+    with api.app.state.store.read() as c:
+        assert c.execute('SELECT end_reason FROM attempt_diagnostics WHERE attempt_id=?', (second['id'],)).fetchone()[0] == pause
+        body = c.execute("SELECT body FROM tasks WHERE owner_id='bot:botops' AND status='open'").fetchone()[0]
+        assert 'cut by the run time limit twice in a row' in body
+    assert sweep(api) == [] and job_state(api, first['job_id']) == 'uncertain'
 
 
 def test_silent_harness_timeout_continues_once_under_explicit_restart_policy(api):
@@ -215,7 +237,7 @@ def test_second_cut_names_outside_effects_from_tool_or_classified_event(api, pay
     review = get(api, 'bots/ops/execution-review')['jobs'][0]
     assert review['stopped'] == 'changed' and label in review['reason']
     with api.app.state.store.read() as c:
-        body = c.execute("SELECT body FROM tasks WHERE owner='bot:botops' AND status='open'").fetchone()[0]
+        body = c.execute("SELECT body FROM tasks WHERE owner_id='bot:botops' AND status='open'").fetchone()[0]
         assert 'cut by the run time limit twice in a row' in body and f'recorded {label}' in body
         assert 'private-marker' not in body + review['reason']
         assert not c.execute('SELECT 1 FROM job_recovery WHERE job_id=? AND attempt_id=?',

@@ -2,11 +2,13 @@
 recommendation, show one card per blocker, and the list says how many items went away on their own this week."""
 
 import json
+from collections import Counter
 
 from backend import batch, views
 from backend import hubdb as H
 from backend.tests.test_api import api, get, post, setup_attempt  # noqa: F401
 from backend.tests.test_batch import approval_for_ana
+from backend.tests.test_task_privacy_reads import traced
 
 SEND = {"to": ["Jennie Ooten <jennie@acme.example>"], "cc": [], "subject": "$200 for each rental owner you introduce",
         "body_sha256": "a" * 64, "mailbox": "work"}
@@ -43,6 +45,13 @@ def test_cards_are_titled_dated_grouped_and_one_per_blocker(api):
     items = {i["id"]: i for i in page["items"]}
 
     assert items[send["id"]]["title"] == "Send: '$200 for each rental owner you introduce' to Jennie Ooten"
+    # One item shape whatever the kind (backend/needs_shape.py): what it is about and the writes that settle it.
+    common = {"id", "kind", "title", "body", "subject", "created_at", "actions"}
+    assert all(common <= set(i) and i["actions"] for i in page["items"])
+    assert (items[send["id"]]["subject"], items[send["id"]]["actions"]) == ({"type": "approval", "id": send["id"]},
+                                                                            ["decide"])
+    assert items[keys["id"]]["subject"] == {"type": "task", "id": keys["id"]} and "update" in items[keys["id"]]["actions"]
+    assert items[keys["id"]]["body"] == "Rotate them"
     assert items[merge["id"]]["title"] == "Merge: 'Referral deal for rental owners' (acme/site #12)"
     assert (items[send["id"]]["need"], items[merge["id"]]["need"], items[keys["id"]]["need"]) == ("review", "review",
                                                                                                     "connect")
@@ -52,8 +61,10 @@ def test_cards_are_titled_dated_grouped_and_one_per_blocker(api):
 
     card = items[pick["id"]]
     assert card["need"] == "decide" and card["recommend"]["do"] == "Gusto" and card["recommend"]["option"] == "Gusto"
+    assert card["actions"] == ["answer", "update"]
     assert vendor["id"] not in items and fix["id"] not in items
     assert {f["id"] for f in card["folded"]} == {vendor["id"], fix["id"]}
+    assert page["folded_task_ids"] == sorted([vendor["id"], fix["id"]])
     # The walk-through and brief say the folded waits with the card.
     assert {f["title"] for f in batch._row(card, "human:ana")["folded"]} == {"Switch the payroll vendor",
                                                                               "Give finance the payroll connector"}
@@ -97,7 +108,7 @@ def test_do_what_you_recommend_answers_and_closes_the_card(api):
     card = next(i for i in get(api, "needs-you")["items"] if i["id"] == tool["id"])
     assert card["recommend"]["do"] == "Go with Apollo" and card["need"] == "decide"
     post(api, "needs-you/recommended", {"ask": plain["id"]}, expected=409)        # no recommendation to take
-    post(api, "needs-you/recommended", {"ask": asked["id"]}, token="ben-test", expected=403)
+    post(api, "needs-you/recommended", {"ask": asked["id"]}, token="ben-test", expected=403)   # reads the task, was not asked
     post(api, "needs-you/recommended", {"ask": asked["id"]})
     with api.app.state.store.read() as c:
         said = c.execute("SELECT body FROM messages WHERE in_reply_to=? AND kind='answer'", (asked["id"],)).fetchone()
@@ -116,7 +127,7 @@ def test_do_what_you_recommend_answers_a_question_on_a_file_version(api):
     with api.app.state.store.transaction() as c:
         ask_id = c.execute("SELECT ask_message_id FROM task_file_reviews WHERE file_id=?", (made["file_id"],)).fetchone()[0]
         asked = H.message(c, ask_id)
-        c.execute("UPDATE messages SET refs_json=?, to_actor='human:ana' WHERE id=?",
+        c.execute("UPDATE messages SET refs=?, recipient_id='human:ana' WHERE id=?",
                   (json.dumps({**asked["refs"], "if_no_answer": {"do": "Approve", "kind": "reversible"}}), ask_id))
     post(api, "needs-you/recommended", {"ask": ask_id})
     assert get(api, f"tasks/{plan['id']}/answers")["answers"][0]["answers"] == {"verdict": ["Approve"]}
@@ -230,12 +241,21 @@ def test_pages_cut_the_whole_list_and_a_cursor_from_an_older_version_starts_agai
                             "due": H.shift(H.now(), days=n + 1)}, token=finance["token"])
     approval_for_ana(api, token=finance["token"])
     post(api, "tasks", {"title": "Plan the offsite", "body": "x", "owner": "human:ana"})
+    with api.app.state.store.transaction() as c:
+        wait = H.task_create(c, "human:ana", "Prepare the offsite", "x", "bot:finance")
+        H.task_create(c, "bot:finance", "Pick the offsite venue", "x", "human:ana", parent_id=wait["id"])
+        c.execute("UPDATE tasks SET status='waiting', waiting_on='human:ana' WHERE id=?", (wait["id"],))
     whole = get(api, "needs-you")
     assert whole["next"] is None and whole["count"] == len(whole["items"]) >= 6 and "bots" not in whole
+    kinds = dict(Counter(it["kind"] for it in whole["items"]))
+    assert whole["by_kind"] == kinds and kinds["approval"] == 1
+    assert whole["folded_task_ids"] == [wait["id"]]
     seen, cursor, page = [], None, None
     while True:
         page = get(api, "needs-you?limit=2" + (f"&cursor={cursor}" if cursor else ""))
         assert page["version"] == whole["version"] and page["count"] == whole["count"] and len(page["items"]) <= 2
+        assert page["by_kind"] == kinds          # approvals on unread pages count before their rows arrive
+        assert page["folded_task_ids"] == [wait["id"]]   # folding is independent of which cards this page holds
         seen += page["items"]
         cursor = page["next"]
         if not cursor:
@@ -249,3 +269,58 @@ def test_pages_cut_the_whole_list_and_a_cursor_from_an_older_version_starts_agai
     again = get(api, f"needs-you?limit=2&cursor={held}")
     assert again["restart"] is True and ids(again["items"]) == ids(get(api, "needs-you")["items"][:2])
     get(api, "needs-you?limit=2&cursor=nonsense", expected=422)
+
+
+def test_whole_list_facts_scope_inbox_and_folding_and_follow_live_changes(api):
+    from backend import events as E, threads
+    store, auth, view = api.app.state.store, api.app.state.auth, api.app.state.task_view
+    approval = approval_for_ana(api)
+    post(api, "tasks", {"title": "Review the plan", "body": "x", "owner": "human:ana",
+                        "due": H.shift(H.now(), days=1)})
+    other = post(api, "tasks", {"title": "Review Ben's plan", "body": "x", "owner": "human:ben"})
+    with store.transaction() as c:
+        wait = H.task_create(c, "human:ana", "Prepare the offsite", "x", "bot:ops")
+        card = H.task_create(c, "bot:ops", "Pick the offsite venue", "x", "human:ana", parent_id=wait["id"])
+        other_wait = H.task_create(c, "human:ben", "Prepare Ben's offsite", "x", "bot:ops")
+        H.task_create(c, "bot:ops", "Pick Ben's venue", "x", "human:ben", parent_id=other_wait["id"])
+        c.executemany("UPDATE tasks SET status='waiting', waiting_on=? WHERE id=?",
+                      [("human:ana", wait["id"]), ("human:ben", other_wait["id"])])
+        room = threads.create(c, "human:cara", title="Launch", audience="members", members=["human:ana"])
+        threads.post(c, "human:cara", room["id"], "Please check the launch plan.", to_actor="human:ana")
+    page = get(api, "needs-you?limit=1")
+    whole = get(api, "needs-you")
+    assert page["by_kind"] == dict(Counter(it["kind"] for it in whole["items"]))
+    assert page["by_kind"]["approval"] == 1 and page["by_kind"]["thread_mention"] == 1
+    assert sum(page["by_kind"].values()) == page["count"] > len(page["items"])
+    assert page["folded_task_ids"] == whole["folded_task_ids"] == [wait["id"]]
+    assert card["id"] not in {it["id"] for it in page["items"]}   # its folded task is known before the card loads
+    assert other["id"] not in {it["id"] for it in whole["items"]}
+    who = auth.authenticate({"authorization": "Bearer ana-test"})
+    with store.read() as c:
+        held, after = E.needs_baseline(c, auth, who, view), E.latest(c)
+    post(api, f"approvals/{approval['id']}", {"decision": "declined"})
+    with store.read() as c:
+        event = E.read(c, auth, who, after, topics=("needs",), task_view=view, needs_held=held)[0][-1][2]
+    assert event["by_kind"] == get(api, "needs-you?limit=1")["by_kind"]
+    assert "approval" not in event["by_kind"] and event["by_kind"]["thread_mention"] == 1
+    assert event["changed"] == [] and event["removed"] == [approval["id"]]
+    assert "folded_task_ids" not in event
+
+    for remove, folded in [(True, []), (False, [wait["id"]])]:
+        with store.read() as c:
+            after = E.latest(c)
+        post(api, f"tasks/{card['id']}/relations", {"kind": "parent", "task": wait["id"], "remove": remove})
+        with store.read() as c:
+            event = E.read(c, auth, who, after, topics=("needs",), task_view=view, needs_held=held)[0][-1][2]
+        assert event["folded_task_ids"] == get(api, "needs-you?limit=1")["folded_task_ids"] == folded
+
+
+def test_each_card_task_is_read_by_id_once_however_many_cards(api):
+    """The list reads its cards' task rows in one pass: the owner's rows are the read, and their visibility comes from
+    the same statement as the chain's rows. A second read by id of every card cost a full row each (bodies included)."""
+    for n in range(12):
+        post(api, "tasks", {"title": f"Card {n}", "body": "x" * 4000, "owner": "human:ana"})
+    page, statements = traced(api, lambda: get(api, "needs-you"))
+    assert len([i for i in page["items"] if i["kind"] == "task"]) == 12
+    by_id = [s for s in statements if "FROM tasks WHERE id IN" in s]
+    assert len(by_id) <= 1, by_id

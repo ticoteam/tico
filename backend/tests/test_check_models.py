@@ -7,6 +7,7 @@ import pytest
 from backend import check_models
 from backend.store import H, encode
 from backend.tests.test_api import api, assign, claim, get, post, runner  # noqa: F401  (api is a fixture)
+from backend import bot_settings as BS
 
 GROK = {"model": "grok-4.6", "runtime": "grok", "harness": "grok", "billing": "api"}
 
@@ -31,10 +32,10 @@ def parent_turn(api):
     """ops on Claude, working a person's task: its claimed turn."""
     company(api, "anthropic", "xai")
     with api.app.state.store.transaction() as c:
-        config = json.loads(c.execute("SELECT config_json FROM bot_config WHERE bot='ops'").fetchone()[0])
+        config = BS.read(c, 'ops')
         config.update(runtime="claude", harness="claude", model="claude-sonnet-5-5",
                       fallback={"harness": "codex", "model": "gpt-6.1-sol"})
-        c.execute("UPDATE bot_config SET config_json=? WHERE bot='ops'", (json.dumps(config),))
+        BS.write(c, 'ops', config)
     machine = runner(api)
     assign(api, machine, "ops")
     heartbeat(api, machine)
@@ -165,7 +166,7 @@ def test_a_limit_on_the_check_model_holds_the_check_alone_and_the_bot_keeps_work
     assert claim(api, machine) is None, "the check waits for Grok's reset"
     monkeypatch.setattr(H, "now", lambda: H.shift(reset, seconds=2))
     with api.app.state.store.transaction() as c:
-        c.execute("UPDATE runners SET last_seen=NULL,awake_since=NULL")   # the computer stayed in touch meanwhile
+        c.execute("UPDATE runner_states SET last_seen_at=NULL,awake_since=NULL")   # the computer stayed in touch meanwhile
     heartbeat(api, machine)
     again = claim(api, machine)
     assert again["task"]["id"] == sub["id"] and again["config"]["runtime"] == "grok"
@@ -197,7 +198,7 @@ def test_a_check_handed_to_another_bot_mid_turn_still_completes_as_the_check(api
     assert check["task"]["id"] == sub["id"]
     post(api, f"attempts/{check['id']}/started", {"thread_id": "grok-handoff"}, machine["token"])
     with api.app.state.store.transaction() as c:
-        c.execute("UPDATE tasks SET owner='bot:coo' WHERE id=?", (sub["id"],))
+        c.execute("UPDATE tasks SET owner_id='bot:coo' WHERE id=?", (sub["id"],))
     post(api, f"attempts/{check['id']}/complete", {"outcome": "failed", "last_seq": 0, "limited": True, "text": ""},
          machine["token"])
     with api.app.state.store.read() as c:
@@ -239,7 +240,7 @@ def out_of_quota(api, machine, turn, resets_at=None):
 def later(api, monkeypatch, machine, at):
     monkeypatch.setattr(H, "now", lambda: at)
     with api.app.state.store.transaction() as c:
-        c.execute("UPDATE runners SET last_seen=NULL,awake_since=NULL")   # the computer stayed in touch meanwhile
+        c.execute("UPDATE runner_states SET last_seen_at=NULL,awake_since=NULL")   # the computer stayed in touch meanwhile
     all_ready(api, machine)
 
 
@@ -262,7 +263,7 @@ def test_a_check_moves_to_its_next_model_once_its_default_login_is_out_of_quota(
     with api.app.state.store.read() as c:
         assert "the check moved to grok" in H.status(c, "ops")["focus"]
         assert c.execute("SELECT count(*) FROM events WHERE action='attempt.check_moved'").fetchone()[0] == 1
-        event = c.execute("SELECT old,new,note FROM task_events WHERE task_id=? AND field='check_model' "
+        event = c.execute("SELECT old,new,note FROM history_events WHERE subject_type='task' AND subject_id=? AND kind='check_model' "
                           "AND old IS NOT NULL", (sub["id"],)).fetchone()
         assert (event["old"], event["new"]) == ("codex:gpt-6-luna", "grok:grok-4.6"), dict(event)
     shown = get(api, "tasks/" + sub["id"])
@@ -300,7 +301,7 @@ def test_with_no_next_check_model_the_check_keeps_its_hold(api, monkeypatch):
 
 @pytest.mark.parametrize("recovery", ["completed", "reset"])
 def test_a_moved_check_goes_back_to_its_first_model_once_that_login_works(api, monkeypatch, recovery):
-    from backend.tests.test_health_monitor import turn as finished_turn
+    from backend.tests.test_maintenance_health import turn as finished_turn
     machine, sub, check = codex_check(api)
     start = H.now()
     reset = H.shift(start, hours=3) if recovery == "reset" else None
@@ -326,7 +327,7 @@ def test_a_moved_check_goes_back_to_its_first_model_once_that_login_works(api, m
 
 
 def test_a_check_on_a_subscription_profile_does_not_move(api, monkeypatch):
-    from backend.tests.test_health_monitor import turn as finished_turn
+    from backend.tests.test_maintenance_health import turn as finished_turn
     machine, sub, check = codex_check(api)
     finished_turn(api, machine["runner_id"], {"outcome": "failed", "limited": True, "limit_resets_at": None,
                                               "profile_used": None, "check": "codex"}, 10)
@@ -341,7 +342,7 @@ def test_a_check_on_a_subscription_profile_does_not_move(api, monkeypatch):
 
 def moved_to_grok(api):
     """Two limits in a row on the computer's default Codex login: the check has moved to Grok."""
-    from backend.tests.test_health_monitor import turn as finished_turn
+    from backend.tests.test_maintenance_health import turn as finished_turn
     machine, sub, check = codex_check(api)
     finished_turn(api, machine["runner_id"], {"outcome": "failed", "limited": True, "limit_resets_at": None,
                                               "profile_used": None, "check": "codex"}, 5)
@@ -352,7 +353,7 @@ def moved_to_grok(api):
 
 
 def test_a_moved_check_tries_its_first_model_again_on_another_computer(api):
-    from backend.health_monitor import out_of_quota_logins
+    from backend.maintenance_health import out_of_quota_logins
     machine, sub = moved_to_grok(api)
     # The bot moves to a computer where Codex works and Grok is signed out; the first computer's login stays out.
     other = runner(api, label="Other Mac")
@@ -375,7 +376,7 @@ def test_a_check_skips_a_next_model_its_computer_cannot_run(api):
                               "check_model": "codex", "check_role": "review",
                               "relations": [{"task": parent["id"], "kind": "parent"}]}, turn["token"])
     finish(api, machine, turn)
-    from backend.tests.test_health_monitor import turn as finished_turn
+    from backend.tests.test_maintenance_health import turn as finished_turn
     finished_turn(api, machine["runner_id"], {"outcome": "failed", "limited": True, "limit_resets_at": None,
                                               "profile_used": None, "check": "codex"}, 5)
     check = claim(api, machine)
@@ -397,12 +398,12 @@ def limited_check(api):
 
 def check_held(api, check, hours=None):
     """The Health Monitor's check_limited findings, with the check's limited turn `hours` old."""
-    from backend import health_monitor
+    from backend import maintenance_health
     store = api.app.state.store
     with store.transaction() as c:
         if hours is not None:
-            c.execute("UPDATE attempts SET finished=? WHERE id=?", (H.shift(H.now(), hours=-hours), check["id"]))
-        return [f for f in health_monitor.findings(c, store.settings) if f["check_id"] == "check_limited"]
+            c.execute("UPDATE attempts SET finished_at=? WHERE id=?", (H.shift(H.now(), hours=-hours), check["id"]))
+        return [f for f in maintenance_health.findings(c, store.settings) if f["check_id"] == "check_limited"]
 
 
 def queue_on(api, sub, sender, to="bot:ops", hours=0):
@@ -411,7 +412,7 @@ def queue_on(api, sub, sender, to="bot:ops", hours=0):
         conv = H.task(c, sub["id"])["conversation_id"]
         msg = H.say(c, sender, to, "One more thing on this review.", conversation_id=conv,
                     refs={"task": sub["id"], **({"needs_action": True} if H.is_bot(sender) else {})})
-        c.execute("UPDATE jobs SET created=? WHERE message_id=?", (H.shift(H.now(), hours=-hours), msg["id"]))
+        c.execute("UPDATE jobs SET created_at=? WHERE message_id=?", (H.shift(H.now(), hours=-hours), msg["id"]))
         return msg["id"]
 
 
@@ -423,7 +424,7 @@ def test_a_check_its_limit_held_twelve_hours_is_one_setup_finding_until_a_turn_g
     [found] = check_held(api, check, hours=13)
     with api.app.state.store.read() as c:
         name = H.bot(c, "ops")["display_name"]
-        since = c.execute("SELECT finished FROM attempts WHERE id=?", (check["id"],)).fetchone()[0]
+        since = c.execute("SELECT finished_at FROM attempts WHERE id=?", (check["id"],)).fetchone()[0]
     assert (found["key"], found["kind"]) == ("check_limited:" + sub["id"], "setup")
     assert found["detail"].startswith(f"{name}'s check on Grok Build (grok-4.6) has been held by its usage limit for "
                                       f"13 h (since {since[:16].replace('T', ' ')} UTC); Review PR 701 on Grok.")
@@ -456,8 +457,8 @@ def test_a_held_check_that_leaves_the_board_lets_its_queued_turn_go(api, monkeyp
         # The task left the board while held, or before this server started: the next tick lets the turn go.
         c.execute("UPDATE tasks SET status=? WHERE id=?", (status, sub["id"]))
         assert check["job_id"] in execution.hold_unrunnable(c)
-        assert c.execute("SELECT state FROM jobs WHERE id=?", (check["job_id"],)).fetchone()[0] == "cancelled"
-        event = c.execute("SELECT detail_json FROM events WHERE action='job.suppress' AND target=?",
+        assert c.execute("SELECT state FROM jobs WHERE id=?", (check["job_id"],)).fetchone()[0] == "canceled"
+        event = c.execute("SELECT detail FROM events WHERE action='job.suppress' AND target=?",
                           (check["job_id"],)).fetchone()
         assert json.loads(event[0])["task_id"] == sub["id"]
         assert check["job_id"] not in execution.hold_unrunnable(c), "once"
@@ -467,20 +468,20 @@ def test_a_held_check_that_leaves_the_board_lets_its_queued_turn_go(api, monkeyp
     assert claim(api, machine)["job_id"] == person, "only the person's message is handed out"
 
 
-def test_a_declined_checks_notice_is_cancelled_on_claim_without_waiting_for_the_tick(api, monkeypatch):
+def test_a_declined_checks_notice_is_canceled_on_claim_without_waiting_for_the_tick(api, monkeypatch):
     machine, sub, check = limited_check(api)
     with api.app.state.store.transaction() as c:
         c.execute("UPDATE tasks SET status='declined' WHERE id=?", (sub["id"],))
     later(api, monkeypatch, machine, H.shift(H.now(), minutes=31))
     assert claim(api, machine) is None
     with api.app.state.store.read() as c:
-        assert c.execute("SELECT state FROM jobs WHERE id=?", (check["job_id"],)).fetchone()[0] == "cancelled"
+        assert c.execute("SELECT state FROM jobs WHERE id=?", (check["job_id"],)).fetchone()[0] == "canceled"
 
 
 def test_a_held_check_handed_to_another_bot_is_its_ordinary_task_when_it_closes(api):
     machine, sub, check = limited_check(api)
     with api.app.state.store.transaction() as c:
-        c.execute("UPDATE tasks SET owner='bot:finance',status='done' WHERE id=?", (sub["id"],))
+        c.execute("UPDATE tasks SET owner_id='bot:finance',status='done' WHERE id=?", (sub["id"],))
     follow_up = queue_on(api, sub, "bot:ops", to="bot:finance")
     with api.app.state.store.transaction() as c:
         assert api.app.state.execution.hold_unrunnable(c) == []
@@ -490,7 +491,7 @@ def test_a_held_check_handed_to_another_bot_is_its_ordinary_task_when_it_closes(
 def test_a_check_model_at_capacity_is_not_its_default_login_out_of_quota(api, monkeypatch):
     # Two "at capacity" refusals on the computer's default Codex login: a busy provider, so the check waits its two
     # minutes on Codex and Health never calls that login out of quota.
-    from backend import health_monitor
+    from backend import maintenance_health
     machine, sub, check = codex_check(api)
     start = H.now()
     notice = "Selected model is at capacity. Please try a different model."
@@ -504,5 +505,5 @@ def test_a_check_model_at_capacity_is_not_its_default_login_out_of_quota(api, mo
         check = claim(api, machine)
         assert check["task"]["id"] == sub["id"] and check["config"]["runtime"] == "codex"
     with api.app.state.store.read() as c:
-        assert health_monitor.out_of_quota_logins(c, api.app.state.store.settings) == []
+        assert maintenance_health.out_of_quota_logins(c, api.app.state.store.settings) == []
         assert "temporary model capacity on a check" in H.status(c, "ops")["focus"]

@@ -25,7 +25,7 @@ def test_ensure_tunnel_creates_and_configures_ingress_to_the_server():
     assert cf.ensure_tunnel("a1", "n") == ("t2", "T2")
     cf.configure_tunnel("a1", "t2", "t.example.com")
     ing = api.calls[-1][2]["config"]["ingress"]
-    assert ing[0] == {"hostname": "t.example.com", "service": "http://server:8765"} and ing[-1]["service"] == "http_status:404"
+    assert ing[0] == {"hostname": "t.example.com", "service": "http://hold:8080"} and ing[-1]["service"] == "http_status:404"
 
 
 def test_errors_never_include_the_token():
@@ -37,10 +37,10 @@ def test_errors_never_include_the_token():
 
 def test_a_runner_hostname_gets_the_api_and_downloads_only_before_the_404():
     from setup.cloudflare import ingress_config
-    assert ingress_config("t.example.com") == {"ingress": [{"hostname": "t.example.com", "service": "http://server:8765"},
+    assert ingress_config("t.example.com") == {"ingress": [{"hostname": "t.example.com", "service": "http://hold:8080"},
                                                           {"service": "http_status:404"}]}
     ing = ingress_config("t.example.com", "t-runner.example.com")["ingress"]
-    assert ing[1] == {"hostname": "t-runner.example.com", "path": "^/(?:api/v2|download)(?:/.*)?$", "service": "http://server:8765"}
+    assert ing[1] == {"hostname": "t-runner.example.com", "path": "^/(?:api/v2|download)(?:/.*)?$", "service": "http://hold:8080"}
     assert [r.get("hostname") for r in ing] == ["t.example.com", "t-runner.example.com", None]
     api = Api({("PUT", "/accounts/a1/cfd_tunnel/t2/configurations"): {}})
     Cloudflare("tok", api).configure_tunnel("a1", "t2", "t.example.com", "t-runner.example.com")

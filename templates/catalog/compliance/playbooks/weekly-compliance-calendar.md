@@ -38,4 +38,9 @@ headline, overdue, urgent, the table, waiting for proof, unchecked places, and t
 
     hub file publish reports/YYYY-MM-DD-compliance-calendar.md
 
-A filing that now needs its owner becomes `hub task create --owner <person>` within the requested work. Commit, and `hub task update <id> --status done --note` with the overdue count first.
+A filing that now needs its owner becomes `hub task create --owner <person>`. Commit, and `hub task update <id> --status done --note` with the overdue count first.
+
+## Done when
+- Every register row has a next due date with its rule, or "date not confirmed", listed.
+- Overdue, urgent, in-window and waiting-for-proof items are each sorted, and each has an owner.
+- The calendar is published, and the task is closed with the overdue count first.

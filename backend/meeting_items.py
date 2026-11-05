@@ -17,7 +17,7 @@ from typing import Literal
 from fastapi import Request
 from pydantic import Field
 
-from . import media
+from . import media, task_references
 from . import models as M
 from . import people as P
 from .store import H, Problem
@@ -72,7 +72,7 @@ def comments(c, rid, people=None):
     """The thread on one meeting, oldest first, with the author's roster name."""
     people = people if people is not None else roster(c)
     out = []
-    for row in c.execute("SELECT * FROM meeting_comments WHERE meeting_id=? ORDER BY created, id", (rid,)):
+    for row in c.execute("SELECT * FROM meeting_comments WHERE meeting_id=? ORDER BY created_at, id", (rid,)):
         person = P.person(H.actor_id(row["author"]), people) if str(row["author"]).startswith("human:") else None
         out.append({**dict(row), "author_name": (person or {}).get("name") or row["author"]})
     return out
@@ -81,7 +81,7 @@ def comments(c, rid, people=None):
 def comment(c, record, who, body):
     """Anyone who can open the meeting can add to its thread; the recorder's own note is separate."""
     ts, cid = H.now(), H.new_id()
-    c.execute("INSERT INTO meeting_comments(id,meeting_id,author,text,at_ms,created) VALUES(?,?,?,?,?,?)",
+    c.execute("INSERT INTO meeting_comments(id,meeting_id,author,text,at_ms,created_at) VALUES(?,?,?,?,?,?)",
               (cid, record["id"], who.actor, body.text.strip(), body.at_ms, ts))
     H.event(c, who.actor, "meeting.comment_added", record["id"], {"comment": cid})
     return comments(c, record["id"])[-1]
@@ -116,7 +116,7 @@ def detail_of(section, value):
 # ----------------------------------------------------------------------------- reading
 def view(row):
     item = dict(row)
-    item["detail"] = json.loads(item.pop("detail_json") or "{}")
+    item["detail"] = json.loads(item.pop("detail") or "{}")
     return item
 
 
@@ -127,11 +127,11 @@ def one(c, rid, iid):
     return row
 
 
-def listing(c, who, rid):
+def listing(c, who, rid, auth):
     """Every item on this meeting, grouped by section, plus whether this person may push."""
     record = media.authorized(c, who, rid)
-    rows = [view(r) for r in c.execute(
-        "SELECT * FROM meeting_items WHERE meeting_id=? ORDER BY created, id", (rid,))]
+    rows = [task_references.redact(c, auth, who, view(r)) for r in c.execute(
+        "SELECT * FROM meeting_items WHERE meeting_id=? ORDER BY created_at, id", (rid,))]
     return {"id": rid, "can_push": media.may_write(who, record),
             "sections": {section: [r for r in rows if r["section"] == section] for section in SECTIONS},
             "counts": {"proposed": sum(1 for r in rows if r["status"] == "proposed" and r["section"] in PUSHABLE)}}
@@ -143,8 +143,8 @@ def add(c, record, author, body):
     section = body.section
     detail = detail_of(section, body.detail)
     ts, iid = H.now(), H.new_id()
-    c.execute("INSERT INTO meeting_items(id,meeting_id,section,text,detail_json,quote,at_ms,status,"
-              "created_by,updated_by,pushed_at,result_ref,created,updated) "
+    c.execute("INSERT INTO meeting_items(id,meeting_id,section,text,detail,quote,at_ms,status,"
+              "created_by,updated_by,pushed_at,result_ref,created_at,updated_at) "
               "VALUES(?,?,?,?,?,?,?,'proposed',?,NULL,NULL,NULL,?,?)",
               (iid, record["id"], section, body.text.strip(), json.dumps(detail, sort_keys=True),
                body.quote.strip(), body.at_ms, author, ts, ts))
@@ -158,11 +158,11 @@ def edit(c, rid, author, iid, body):
         raise Problem("validation", "Change the text, the detail, or delete the item", 422)
     if body.status == "dismissed" and row["status"] != "proposed":
         raise Problem("status", "Only a proposed item can be deleted", 409)
-    sets, args = ["updated_by=?", "updated=?"], [author, H.now()]
+    sets, args = ["updated_by=?", "updated_at=?"], [author, H.now()]
     if body.text is not None:
         sets.append("text=?"); args.append(body.text.strip())
     if body.detail is not None:
-        sets.append("detail_json=?"); args.append(json.dumps(detail_of(row["section"], body.detail), sort_keys=True))
+        sets.append("detail=?"); args.append(json.dumps(detail_of(row["section"], body.detail), sort_keys=True))
     if body.status is not None:
         sets.append("status=?"); args.append(body.status)
     c.execute(f"UPDATE meeting_items SET {','.join(sets)} WHERE id=? AND meeting_id=?", (*args, iid, rid))
@@ -174,7 +174,7 @@ def edit(c, rid, author, iid, body):
 # ----------------------------------------------------------------------------- what Push makes
 def source(settings, record, row, name):
     """The footer every pushed item carries: which meeting it came from, and the words it quotes."""
-    started = str(record["metadata"].get("started") or record["created"])[:10]
+    started = str(record["metadata"].get("started") or record["created_at"])[:10]
     lines = [f"From meeting: {record['title']}, {started} — {name}"]
     if row["quote"]:
         lines.append("> " + row["quote"].replace("\n", " "))
@@ -191,8 +191,9 @@ def owner_of(c, detail):
     owner = str(detail.get("owner") or "").strip()
     if owner.startswith("human:") and c.execute("SELECT 1 FROM humans WHERE id=?", (owner[6:],)).fetchone():
         return owner
-    if owner.startswith("bot:") and c.execute("SELECT 1 FROM bots WHERE slug=?", (owner[4:],)).fetchone():
-        return owner
+    named = H.resolve_bot(c, owner[4:]) if owner.startswith("bot:") else None
+    if named:
+        return "bot:" + named["id"]
     raise Problem("owner", "Choose an owner for this task: human:<id> or bot:<slug>", 422)
 
 
@@ -302,7 +303,7 @@ def record_push(c, who, rid, iid, ref):
     if row["status"] == "pushed":                 # a second click, or a concurrent one: one result
         return view(row)
     ts = H.now()
-    c.execute("UPDATE meeting_items SET status='pushed',result_ref=?,pushed_at=?,updated_by=?,updated=? "
+    c.execute("UPDATE meeting_items SET status='pushed',result_ref=?,pushed_at=?,updated_by=?,updated_at=? "
               "WHERE id=? AND meeting_id=?", (ref, ts, who.actor, ts, iid, rid))
     H.event(c, who.actor, "meeting.item_pushed", rid,
             {"item": iid, "section": row["section"], "result": ref})
@@ -310,16 +311,24 @@ def record_push(c, who, rid, iid, ref):
 
 
 # ----------------------------------------------------------------------------- routes
-def install_meeting_items(app, store, mutate, task_create):
+def install_meeting_items(app, store, mutate, task_create, auth):
     settings = store.settings
 
+    def item_answer(request, rid, body, work):
+        result = mutate(request, body, work,
+                        check=lambda c: media.authorized(c, request.state.identity, rid))
+        with store.read() as c:
+            return {**result, 'item': task_references.redact(c, auth, request.state.identity, result['item'])}
+
+    @app.get("/api/v2/meetings/{rid}/items")
     @app.get("/api/meetings/{rid}/items")
     def items(request: Request, rid: str):
         who = request.state.identity
         human_only(who)
         with store.read() as c:
-            return listing(c, who, rid)
+            return listing(c, who, rid, auth)
 
+    @app.get("/api/v2/meetings/{rid}/comments")
     @app.get("/api/meetings/{rid}/comments")
     def thread(request: Request, rid: str):
         who = request.state.identity
@@ -328,6 +337,7 @@ def install_meeting_items(app, store, mutate, task_create):
             media.authorized(c, who, rid)
             return {"id": rid, "comments": comments(c, rid)}
 
+    @app.post("/api/v2/meetings/{rid}/comments")
     @app.post("/api/meetings/{rid}/comments")
     def say(request: Request, rid: str, body: CommentCreate):
         who = request.state.identity
@@ -337,6 +347,7 @@ def install_meeting_items(app, store, mutate, task_create):
             return {"comment": comment(c, record, who, body)}
         return mutate(request, body, work)
 
+    @app.post("/api/v2/meetings/{rid}/items")
     @app.post("/api/meetings/{rid}/items")
     def create(request: Request, rid: str, body: ItemCreate):
         who = request.state.identity
@@ -344,8 +355,9 @@ def install_meeting_items(app, store, mutate, task_create):
         def work(c):
             record = media.authorized(c, who, rid)
             return {"item": add(c, record, who.actor, body)}
-        return mutate(request, body, work)
+        return item_answer(request, rid, body, work)
 
+    @app.post("/api/v2/meetings/{rid}/items/{iid}")
     @app.post("/api/meetings/{rid}/items/{iid}")
     def change(request: Request, rid: str, iid: str, body: ItemEdit):
         who = request.state.identity
@@ -353,8 +365,9 @@ def install_meeting_items(app, store, mutate, task_create):
         def work(c):
             media.authorized(c, who, rid)
             return {"item": edit(c, rid, who.actor, iid, body)}
-        return mutate(request, body, work)
+        return item_answer(request, rid, body, work)
 
+    @app.post("/api/v2/meetings/{rid}/items/{iid}/push")
     @app.post("/api/meetings/{rid}/items/{iid}/push")
     def push(request: Request, rid: str, iid: str, body: ItemPush):
         who = request.state.identity
@@ -363,7 +376,7 @@ def install_meeting_items(app, store, mutate, task_create):
             record, row = pushable(c, who, rid, iid)
             if row["status"] == "pushed":
                 return {"item": view(row), "pushed": False}
-            detail = json.loads(row["detail_json"] or "{}")
+            detail = json.loads(row["detail"] or "{}")
             if row["section"] == "task":
                 result = push_task(c, settings, task_create, who, record, row, detail)
             elif row["section"] == "doc":
@@ -372,6 +385,6 @@ def install_meeting_items(app, store, mutate, task_create):
                 # a close match on the board is refused; `force` is the person saying they meant it
                 result = push_feature(c, settings, task_create, who, record, row, detail, body.force)
             return {"item": record_push(c, who, rid, iid, result), "pushed": True}
-        return mutate(request, body, work)
+        return item_answer(request, rid, body, work)
 
     return {"add": add, "listing": listing}

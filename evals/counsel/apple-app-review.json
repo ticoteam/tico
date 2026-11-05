@@ -1,0 +1,41 @@
+{
+  "expected": [
+    {
+      "text": "Kids Category apps must not send personally identifiable or device information to third parties.",
+      "quote": "In addition, Kids Category apps may not send personally identifiable information or device information to third parties.",
+      "section": "Kids Category",
+      "who_hint": "engineering"
+    },
+    {
+      "text": "Kids apps must not link out or sell to kids unless behind a parental gate.",
+      "quote": "These apps must not include links out of the app, purchasing opportunities, or other distractions to kids unless reserved for a designated area behind a parental gate.",
+      "section": "Kids Category",
+      "who_hint": "product"
+    },
+    {
+      "text": "Comply with the privacy laws that apply to collecting data from children online.",
+      "quote": "You must comply with applicable privacy laws around the world relating to the collection of data from children online.",
+      "section": "Kids Category",
+      "who_hint": "legal"
+    },
+    {
+      "text": "Apps may not run unrelated background processes such as cryptocurrency mining.",
+      "quote": "may not run unrelated background processes, such as cryptocurrency mining.",
+      "section": "Performance",
+      "who_hint": "engineering"
+    },
+    {
+      "text": "Health measurement apps must disclose the data and method behind accuracy claims.",
+      "quote": "Apps must clearly disclose data and methodology to support accuracy claims relating to health measurements",
+      "section": "Health",
+      "who_hint": "product"
+    }
+  ],
+  "url": "https://developer.apple.com/app-store/review/guidelines/",
+  "fetched_at": "2026-10-30T23:39:41Z",
+  "from": {
+    "name": "Apple App Review Guidelines",
+    "kind": "vendor"
+  },
+  "truncated": true
+}

@@ -1,0 +1,14 @@
+{
+  "id": "26-listening-owner-question",
+  "kind": "listening",
+  "questions": "listening-item",
+  "level": "low",
+  "state": {
+    "source": "forum",
+    "url": "https://forum.example/t/tracking-work-with-four-people",
+    "author": "@small_agency_owner",
+    "published_at": "2026-10-26T18:20:00Z",
+    "content": "We are four people running a small agency and sprint tracking is falling apart. We tried a spreadsheet and a shared doc. What do other small teams use that does not need an admin?"
+  },
+  "note": "A team lead's own practical question: content and lead yes."
+}

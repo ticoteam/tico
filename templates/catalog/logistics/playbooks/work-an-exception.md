@@ -4,6 +4,8 @@ Triggered by a shipment entering the exceptions queue, or by a task from `suppor
 "Order 4471 hasn't arrived." Budget 10 minutes. The outcome is the facts, the carrier case, and the
 customer update ready to use.
 
+Done when: the case is a row in `knowledge/exceptions.md` with its next check date, and the customer update is on the task.
+
 ---
 
 ## 1. Get the facts
@@ -21,8 +23,8 @@ Order, carrier, tracking number, service, ship date, promised date, and the last
 ## 3. Next step with the carrier
 
 Late: note and check again tomorrow. Stuck: open a trace with the carrier. Damaged or lost: prepare a
-claim with the value (invoice), the proof of shipment and the customer's photos, before the deadline.
-Attach carrier messages to the task and send within the requested work when a person has turned mail sending on in Tico; otherwise keep drafts.
+claim with the value (invoice), the proof of shipment and the customer's photos, before the deadline (`skills/check-a-claim-before-the-deadline/SKILL.md`).
+Attach carrier messages to the task. Send only when mail sending is on in Tico, the task asks for it and a granted Tool allows it; otherwise keep the draft on the task.
 
 ## 4. The customer update
 

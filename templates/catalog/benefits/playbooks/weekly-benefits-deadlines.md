@@ -3,6 +3,9 @@
 Schedule: Tuesdays at 09:00 team time (routine `weekly-benefits-deadlines`), after setup. Budget 25 minutes. The outcome is one page for the HR owner: what closes soon, who starts
 or ends coverage, what the calendar needs next, and what was handed on. Nothing is submitted or sent.
 
+Done when every deadline in the next 60 days has a source and a named owner, the page is attached to the task, and nothing has been
+submitted or sent.
+
 ---
 
 ## 1. Read where things stand
@@ -21,8 +24,9 @@ event, event date, the window from `knowledge/eligibility.md`, what the provider
 
 ## 3. Count down
 
-For every open line: days left in its window. Seven or fewer is bold and goes to the top with the
-human who must submit it. A closed window with nothing submitted is reported plainly, with the date.
+For every open line, follow `skills/count-a-life-event-window/SKILL.md`: the close date, the rule and its page, and
+days left. Seven or fewer days left is bold and goes to the top with the human who must submit it. A closed window with
+nothing submitted is reported plainly, with the date.
 
 ## 4. Coverage starting and ending
 

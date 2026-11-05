@@ -49,7 +49,7 @@ TOP_KEYS = ("global", "sandbox_mailbox", "internal_domains", "mailboxes", "defau
             "signature_names", "scheduling")
 SCHEDULING_KEYS = ("mailbox", "employee", "booking_url", "meeting_title")
 DEFAULT_KEYS = ("max_sends_per_day", "per_recipient_cooldown_days", "max_external_recipients",
-                "allow_cc_external", "allow_attachments")
+                "allow_cc_external", "allow_attachments")  # legacy attachment key is accepted but ignored
 ALLOWANCE_KEYS = ("employee", "mailbox", "purpose", "recipients", "caps", "urls")
 RECIPIENT_KEYS = ("source", "path", "column", "require_column", "list")
 CAP_KEYS = ("per_day", "per_recipient_cooldown_days")
@@ -57,8 +57,7 @@ URL_KEYS = ("required_pattern", "forbidden")
 LIST_KEYS = ("addresses", "domains")
 
 FALLBACK_DEFAULTS = {"max_sends_per_day": 20, "per_recipient_cooldown_days": 14,
-                     "max_external_recipients": 1, "allow_cc_external": False,
-                     "allow_attachments": False}     # opt-in: a team turns attachments on in its policy file
+                     "max_external_recipients": 1, "allow_cc_external": False}
 
 # What a computer with no registry runs on: sending is on globally (each bot still needs sending on in Tico and a
 # `send` verb), the caps are the usual ones, and nothing is on the blocklist. The per-recipient wait is 0 days because the
@@ -212,7 +211,8 @@ def validate(data):
         if k in got:
             if not isinstance(got[k], bool):
                 _bad(f"defaults.{k} must be true or false")
-            d[k] = got[k]
+            if k != "allow_attachments":             # older registry files still load; files use the send chain
+                d[k] = got[k]
 
     for name in ("blocklist", "owner_handles_personally"):
         block = data.get(name) or {}
@@ -240,8 +240,7 @@ def validate(data):
         "sandbox_mailbox": str(data.get("sandbox_mailbox") or "").strip().lower(),
         "internal_domains": [str(x).strip().lower().lstrip("@")
                              for x in (data.get("internal_domains") or ["acme.example"])],
-        "mailboxes": {str(a).strip().lower(): {"paused": bool((c or {}).get("paused", False)),
-                                               "allow_attachments": (c or {}).get("allow_attachments")}
+        "mailboxes": {str(a).strip().lower(): {"paused": bool((c or {}).get("paused", False))}
                       for a, c in boxes.items()},
         "defaults": d,
         "blocklist": {k: _addrs((data.get("blocklist") or {}).get(k), f"blocklist.{k}")
@@ -363,12 +362,6 @@ def paused(pol, mailbox):
     return bool((pol["mailboxes"].get(str(mailbox).strip().lower()) or {}).get("paused"))
 
 
-def attachments_allowed(pol, mailbox=None):
-    """The mailbox's own allow_attachments when it sets one, else the default for every mailbox."""
-    own = (pol["mailboxes"].get(str(mailbox or "").strip().lower()) or {}).get("allow_attachments")
-    return pol["defaults"]["allow_attachments"] if own is None else bool(own)
-
-
 def allowance_for(pol, slug, mailbox=None):
     """The allowance for this employee on this mailbox. No mailbox: its only allowance, if one."""
     box = str(mailbox or "").strip().lower()
@@ -382,7 +375,7 @@ def allowance_for(pol, slug, mailbox=None):
 
 
 def caps_for(pol, allowance, mailbox=None):
-    """The stricter of the defaults and the allowance; attachments as the mailbox sets them."""
+    """The stricter of the defaults and the allowance."""
     d = pol["defaults"]
     per_day, cooldown = d["max_sends_per_day"], d["per_recipient_cooldown_days"]
     if allowance:
@@ -393,8 +386,7 @@ def caps_for(pol, allowance, mailbox=None):
             cooldown = max(cooldown, int(c["per_recipient_cooldown_days"]))
     return {"max_sends_per_day": per_day, "per_recipient_cooldown_days": cooldown,
             "max_external_recipients": d["max_external_recipients"],
-            "allow_cc_external": d["allow_cc_external"],
-            "allow_attachments": attachments_allowed(pol, mailbox)}
+            "allow_cc_external": d["allow_cc_external"]}
 
 
 # ---------------------------------------------------------------- the recipient table
@@ -463,9 +455,84 @@ def _default_hub_get(path):
 HUB_GET = _default_hub_get
 
 
+# One try at the org rule check: the server's longest check deadline (backend/org_rule_check.py DEADLINES, 15 s at
+# High) plus a margin for the write around it. A server that has not answered by then has let the check go.
+RULE_CHECK_TIMEOUT = 20
+
+
+class HubFailed(Exception):
+    """Tico was asked and gave no usable answer. `reason`: forbidden (the token is not this bot's), http_<status>,
+    unavailable (timed out or unreachable) or error."""
+
+    def __init__(self, reason, status=0):
+        super().__init__(reason)
+        self.reason, self.status = reason, status
+
+
+def _default_hub_post(path, body, key=None):
+    """One Tico POST, one try within RULE_CHECK_TIMEOUT, `key` its Idempotency-Key. Tests replace `HUB_POST`. None
+    means no cloud credential (outside a turn); a request Tico refused or did not answer raises HubFailed."""
+    url, token = os.environ.get("HUB_API_URL"), os.environ.get("HUB_TOKEN")
+    if not url or not token:
+        return None
+    from clients.tico import APIError, Client
+    try:
+        return Client(url, token, timeout=RULE_CHECK_TIMEOUT, retries=0).post(path, body, key=key)
+    except APIError as exc:
+        reason = "forbidden" if exc.status == 403 else f"http_{exc.status}" if exc.status else \
+            "unavailable" if exc.code == "unavailable" else "error"
+        raise HubFailed(reason, status=exc.status) from None
+    except Exception:
+        raise HubFailed("error") from None
+
+
+HUB_POST = _default_hub_post
+
+
+def rule_check(slug, to, cc, subject, body, key=None):
+    """The org rule check of a mail before it is sent (backend/org_rule_check.py, `POST /api/v2/bots/{bot}/mail-check`):
+    {"outcome": "pass" | "held" | "warn" | "unchecked" | "not_checked", ...}. None when there is no Tico to ask.
+    A check that failed (refused, timed out, a server error) lets the send go on, as every other failure of the check
+    lets an output through, but never quietly: it comes back {"outcome": "unchecked", "failed": reason}, for the send
+    to log and answer with. `key`, a UUID, is the check's id (its Idempotency-Key): a send after a failed check is
+    reported by it later (`report_misses`), and Tico counts it once, whether its route counted it already or never
+    saw it."""
+    try:
+        answer = HUB_POST(f"bots/{slug}/mail-check", {"to": list(to or []), "cc": list(cc or []),
+                                                      "subject": subject or "", "body": body or ""}, key=key)
+    except HubFailed as exc:
+        import sys
+        print(f"mail: the org rule check failed ({exc.reason}); this send goes out unchecked", file=sys.stderr)
+        return {"outcome": "unchecked", "failed": exc.reason}
+    return answer if isinstance(answer, dict) else None
+
+
+def report_misses(slug, ids):
+    """Tell Tico of sends after a failed check (`POST /api/v2/bots/{bot}/mail-check/misses`), by their checks' ids:
+    it counts each once, however often it hears of it. The ids Tico took (a 2xx), to forget; [] when it did not
+    answer or is a release without the route (404, 405), and they wait for the next time."""
+    if not ids:
+        return []
+    try:
+        answer = HUB_POST(f"bots/{slug}/mail-check/misses", {"ids": list(ids)})
+    except HubFailed:
+        return []
+    return list(ids) if isinstance(answer, dict) else []
+
+
 def _hub_row(kind, n):
     row = HUB_GET(f"{kind}/{n}")
     return row if isinstance(row, dict) and row.get("id") else None
+
+
+def _bot_names(slug):
+    """The label and the id of one bot. Tico names a bot in actor strings by its id (`bot:<id>`); a label is
+    what the caller passed. Without a Tico row only the label is known."""
+    names = {slug}
+    row = HUB_GET(f"bots/{slug}")
+    if isinstance(row, dict) and row.get("id"):
+        names.add(row["id"])
+    return names
 
 
 def _blank_approval(n):
@@ -512,45 +579,32 @@ def approval_check(number, to=(), cc=(), thread_id="", repo=HUB_REPO, slug="", a
 
     `--approval-issue` is a GitHub Issue number, a Tico `send` approval id, or the id of a
     Tico message in which the owner told this employee to send. Returns
-    {"ok", "detail", "full", "named", "issue"}. `full` is the owner's yes to this exact message:
-    it lifts the recipient caps, the cooldown, and `outbound_send: false`, and the second
-    reviewer advises instead of blocking. docs/mail-service.md, "Per-message approval".
+    {"ok", "detail", "full", "named", "issue"}, plus `owner_instruction` for a verified
+    message or Issue. `full` lifts the recipient caps, the cooldown, and `outbound_send: false`.
+    The reviewer checks that the draft stays within any owner instruction; a hash-bound Tico
+    send approval keeps the review advisory. docs/mail-service.md, "Per-message approval".
 
-    `attachments` ([{name, size, sha256}] of the files as they are in the draft) narrows it to an
-    approval of these exact files: a Tico send approval whose payload names this draft and each
-    file by name, size and sha256, or a GitHub Issue whose `Send to:` line matches and whose text
-    names each file and its sha256 and no other hash. The owner's message telling the bot to send
-    names no files, so it never approves a message with attachments.
+    Files follow the same approval rules as the text. When a Tico send approval names files,
+    `attachments` ([{name, size, sha256}] as they stand in the draft) and `draft` must match.
+    An approval that names no files, a GitHub Issue, or the owner's message telling the bot to
+    send places no extra constraint on attachments.
 
     `body` is the text the send carries. A Tico send approval is for one exact text: its
     `body_sha256` must be this body's (`body_digests`), with or without files, so a draft changed
     after the yes needs a new one. A GitHub Issue and the owner's message carry no hash.
     """
     n = str(number or "").strip()
-    if attachments:
-        if n.isdigit():
-            return _github_approval_check(n, to, cc, thread_id, repo, attachments)
-        if HUB_ID.match(n):
-            row = _hub_approval_check(n, to, cc, slug, attachments, draft, body)
-            if row:
-                return row
-        out = _blank_approval(n)
-        out["detail"] = (f"--approval-issue {number!r} is not a Tico send approval or a GitHub Issue; "
-                         "an owner's message to send does not cover attachments. A message with "
-                         "attachments needs an approval that names its files (`mail draft` prints "
-                         "the request)")
-        return out
     if n.isdigit():
         return _github_approval_check(n, to, cc, thread_id, repo)
     if HUB_ID.match(n):
-        return _hub_approval_check(n, to, cc, slug, body=body) or _hub_message_check(n, slug)
+        return _hub_approval_check(n, to, cc, slug, attachments, draft, body) or _hub_message_check(n, slug)
     out = _blank_approval(n)
     out["detail"] = (f"--approval-issue {number!r} is not an Issue number or a Tico id "
                      "(a send approval, or the owner's message telling this employee to send)")
     return out
 
 
-def _github_approval_check(n, to, cc, thread_id, repo, attachments=None):
+def _github_approval_check(n, to, cc, thread_id, repo):
     out = _blank_approval(n)
     r = RUN(["gh", "issue", "view", n, "-R", repo, "--json", "state,labels,title,body"],
             capture_output=True, text=True)
@@ -584,28 +638,18 @@ def _github_approval_check(n, to, cc, thread_id, repo, attachments=None):
     ext_to = [str(x).strip().lower() for x in to if str(x).strip()]
     ext_cc = [str(x).strip().lower() for x in cc if str(x).strip()]
     out["full"] = bool(ext_to) and _send_spec_matches(text, ext_to, ext_cc)
-    if attachments:
-        want = file_set(attachments)
-        named = set(re.findall(r"(?<![0-9a-f])[0-9a-f]{64}(?![0-9a-f])", text))
-        unnamed = [f"{name} ({digest[:12]})" for name, _, digest in sorted(want or ())
-                   if name.lower() not in text or digest not in named]
-        if not want or not out["full"] or unnamed or named != {d for _, _, d in want}:
-            out["ok"] = out["full"] = False
-            out["detail"] = (f"Issue {n} does not approve these files: it needs a `Send to:` line for "
-                             "every address and each file's name and sha256, and no other file"
-                             + (f" (missing {', '.join(unnamed)})" if unnamed else "")
-                             + ". A changed or different file needs a new approval")
-            return out
     out["detail"] = (f"Issue {n}: closed, {', '.join(APPROVAL_LABELS)}, "
                      + ("its `Send to:` line matches every address on this message, To and Cc: "
                         "per-message approval" if out["full"] else f"names {named[0]}"))
+    out["owner_instruction"] = {"source": "GitHub Issue", "id": n, "who": f"owner:{OWNER}",
+                                "text": str(data.get("title") or "") + "\n" + str(data.get("body") or "")}
     return out
 
 
 def _hub_approval_check(n, to, cc, slug, attachments=None, draft="", body=None):
     """A decided Tico `send` approval whose payload names every external address and this exact
-    text (`body_sha256`) and, for a message with files, this draft and exactly its files by name,
-    size and sha256."""
+    text (`body_sha256`). When the payload names files, it also binds the draft and exactly
+    those files by name, size and sha256."""
     row = _hub_row("approvals", n)
     if not row:
         return None
@@ -621,6 +665,19 @@ def _hub_approval_check(n, to, cc, slug, attachments=None, draft="", body=None):
         out["detail"] = f"Tico approval {n} was already spent"
         return out
     payload = row.get("payload") or {}
+    if payload.get("attachments") and attachments is not None:
+        want, got = file_set(attachments), file_set(payload.get("attachments"))
+        if str(payload.get("draft") or "") != str(draft or "") or not draft:
+            out["attachment_mismatch"] = True
+            out["detail"] = (f"Tico approval {n} is for draft {payload.get('draft') or '(none)'}, "
+                             f"not {draft or '(none)'}")
+            return out
+        if not want or got != want:
+            out["attachment_mismatch"] = True
+            out["detail"] = (f"Tico approval {n} names files "
+                             + _files_text(got) + "; the draft carries " + _files_text(want)
+                             + ". A changed or different file needs a new approval")
+            return out
     got_to, got_cc = _payload_addrs(payload.get("to")), _payload_addrs(payload.get("cc"))
     ext_to = {str(x).strip().lower() for x in to if str(x).strip()}
     ext_cc = {str(x).strip().lower() for x in cc if str(x).strip()}
@@ -640,17 +697,6 @@ def _hub_approval_check(n, to, cc, slug, attachments=None, draft="", body=None):
                          f"approved; ask for a new yes (approved body sha256 {approved[:12] or '(none)'}, "
                          f"this draft {now[:12]})")
         return out
-    if attachments:
-        want, got = file_set(attachments), file_set(payload.get("attachments"))
-        if str(payload.get("draft") or "") != str(draft or "") or not draft:
-            out["detail"] = (f"Tico approval {n} is for draft {payload.get('draft') or '(none)'}, "
-                             f"not {draft or '(none)'}")
-            return out
-        if not want or got != want:
-            out["detail"] = (f"Tico approval {n} names files "
-                             + _files_text(got) + "; the draft carries " + _files_text(want)
-                             + ". A changed or different file needs a new approval")
-            return out
     out["ok"] = out["full"] = True
     out["named"] = sorted(ext_to | ext_cc)
     who = f"bot:{slug}" if slug else "the requester"
@@ -666,7 +712,8 @@ def _files_text(files):
 
 
 def _hub_message_check(n, slug):
-    """The owner told this employee to send. That instruction is the per-message yes.
+    """The owner told this employee to send. That instruction is the per-message yes,
+    including the files attached to that send.
 
     The September 15 legal send failed because the owner's 'message the case manager' lived in
     Tico chat and `--approval-issue` only accepted a GitHub Issue. The second reviewer then
@@ -677,12 +724,12 @@ def _hub_message_check(n, slug):
     if not row:
         out["detail"] = f"Tico has no approval or message {n} this employee may read"
         return out
-    if row.get("from_actor") != f"human:{OWNER}":
-        out["detail"] = (f"Tico message {n} is from {row.get('from_actor') or 'nobody'}, "
+    if row.get("sender_id") != f"human:{OWNER}":
+        out["detail"] = (f"Tico message {n} is from {row.get('sender_id') or 'nobody'}, "
                          f"not {OWNER}")
         return out
-    if slug and row.get("to_actor") != f"bot:{slug}":
-        out["detail"] = (f"Tico message {n} was sent to {row.get('to_actor') or 'nobody'}, "
+    if slug and row.get("recipient_id") not in {f"bot:{name}" for name in _bot_names(slug)}:
+        out["detail"] = (f"Tico message {n} was sent to {row.get('recipient_id') or 'nobody'}, "
                          f"not bot:{slug}")
         return out
     if not SEND_INTENT.search(str(row.get("body") or "")):
@@ -693,6 +740,8 @@ def _hub_message_check(n, slug):
     out["detail"] = (f"Tico message {n}: {OWNER} told "
                      + (f"bot:{slug}" if slug else "this employee")
                      + " to send: per-message approval")
+    out["owner_instruction"] = {"source": "Tico message", "id": n, "who": row["sender_id"],
+                                "text": str(row.get("body") or "")}
     return out
 
 
@@ -766,9 +815,12 @@ def switch(slug, manifest=None):
     this run) sending without approval is off. `read` says Tico answered, so `onboarding` is known; a run that
     cannot read it cannot tell an onboarding bot from an Active one. `asks` / `asks_forward` are what bot.yaml
     requests, for messages."""
-    if str(slug).strip().lower() == OWNER:
-        return {"on": True, "forward_to": [], "source": "owner", "detail": "the owner", "asks": True,
-                "asks_forward": [], "read": True, "onboarding": False}
+    from . import access as _access                     # noqa: PLC0415 - avoids a cycle
+    if str(slug).strip().lower() == _access.CONNECTOR:
+        # The connector sends only what the server leased it (an automation's send, checked against its owner's
+        # level and the inbox's switch there); the company's Send mail still holds it (oauth.company_allows).
+        return {"on": True, "forward_to": [], "source": "connector", "detail": "a send Tico leased this computer",
+                "asks": True, "asks_forward": [], "read": True, "onboarding": False}
     try:
         from . import access                            # noqa: PLC0415 - avoids a cycle
         if manifest is None:
@@ -781,6 +833,8 @@ def switch(slug, manifest=None):
     row = _server_row(slug)
     out["read"] = row is not None
     out["onboarding"] = bool((row or {}).get("onboarding"))
+    # The company's Settings > Google (What Tico may do): with Send mail off no bot sends, whatever its own switch says.
+    out["company_off"] = (row or {}).get("company_send") is False
     hint = SETTING_HINT.format(slug=slug)
     if row is None or not row.get("set"):
         out["detail"] = (("no person has turned sending on for " + slug + " in Tico yet"
@@ -797,8 +851,70 @@ def switch(slug, manifest=None):
     return out
 
 
+COMPANY_FIELDS = {"organize_mail": "company_organize", "send_mail": "company_send",
+                  "change_calendar": "company_calendar"}
+UNREAD = "unread"                                       # company(): Tico could not be asked (oauth.company_allows)
+
+
+def company(slug):
+    """The company's What Tico may do for `slug`'s run, as {organize_mail, send_mail, change_calendar}, from Tico and
+    nothing the run says itself: a bot's from its mail setting (backend/mail_settings.py), the owner's (the runner's
+    own commands, a person's run) from the runner's read (runner_company). It holds everyone who acts through Tico.
+
+    None for a server that answers without the fields (an older one). UNREAD when the setting could not be read: the
+    run's writes are refused then, and its reads go on."""
+    from . import access                                # noqa: PLC0415 - avoids a cycle
+    slug = str(slug or "").strip().lower()
+    if slug == access.CONNECTOR:
+        return runner_company()
+    row = _server_row(slug)
+    if row is None:
+        if access.entries(access._manifest(slug)):
+            return UNREAD                               # a bot here whose own mail setting Tico did not answer
+        # Not a bot with a mail setting (a person's own run): What Tico may do as Tico answered about this run's access.
+        try:
+            got = access.answer(slug).get("company")
+        except Refused:
+            got = None
+        if not isinstance(got, dict):
+            return UNREAD
+        return {name: got.get(name) is not False for name in COMPANY_FIELDS}
+    return _allowed(row)
+
+
+def _allowed(row):
+    if not any(f in row for f in COMPANY_FIELDS.values()):
+        return None
+    return {name: row.get(field) is not False for name, field in COMPANY_FIELDS.items()}
+
+
+# The runner's read of What Tico may do (GET /api/v2/connectors/mail/targets over its own registration). Tests
+# replace RUNNER_GET.
+RUNNER_GET = None
+
+
+def runner_company():
+    """What Tico may do for the connector (an automation's mail action, a calendar booking): asked
+    of Tico over the runner's registration, as a bot's run asks for its own, so nothing on stdin decides it. UNREAD
+    when Tico could not be asked, a run without the registration included."""
+    try:
+        if RUNNER_GET is not None:
+            answer = RUNNER_GET("connectors/mail/targets")
+        else:
+            from . import oauth                         # noqa: PLC0415
+            answer = oauth.broker().get("connectors/mail/targets")
+    except Exception:
+        answer = None
+    if not isinstance(answer, dict):
+        return UNREAD
+    may = answer.get("company")
+    if not isinstance(may, dict):
+        return None                                     # an older server: it says nothing of What Tico may do
+    return {name: may.get(name) is not False for name in COMPANY_FIELDS}
+
+
 def outbound_send(slug, manifest=None):
-    """Whether `slug` sends without a per-message approval: the server-held switch. The owner is the human; always true."""
+    """Whether `slug` sends without a per-message approval: the server-held switch (the connector's leased sends: true)."""
     return switch(slug, manifest)["on"]
 
 
@@ -855,22 +971,7 @@ def check_draft(pol, slug, mailbox, to, cc=(), attachments=0, is_reply=False):
                    if is_reply else "the hub does not write to them."),
                 "Label the thread hub/needs-owner, put one line about it on your Issue, and "
                 "stop. Do not draft it, and do not route round it.")
-    if attachments:
-        check_attachments_allowed(pol, mailbox)
     return everyone
-
-
-def check_attachments_allowed(pol, mailbox=None):
-    """Refuses (exit 2) any attachment unless the policy opts in for this mailbox. Checked before a
-    file is read."""
-    if not attachments_allowed(pol, mailbox):
-        box = str(mailbox or "").strip().lower() or "<mailbox>"
-        raise Refused(f"attachments are not allowed on mail the hub writes from {box} "
-                      "(allow_attachments is off for it in registry/mail-policy.yaml; "
-                      "it is off unless the team turns it on).",
-                      "Draft it without --attach and put the file on the task. To change it, file a "
-                      f"task for BotOps to set mailboxes.{box}.allow_attachments: true; it is a "
-                      "registry change, not something to wait on a person for.")
 
 
 # ---------------------------------------------------------------- the send chain
@@ -896,14 +997,12 @@ def check_send(pol, slug, mailbox, to, cc=(), attachments=(), thread_id="",
     and it is looked up. `conn` is the mail database, for the caps; without it caps are skipped
     (a --dry-run with no state). `thread_senders` are the addresses that wrote into the thread this
     message answers (`inbound_senders`); with `outbound_send: true`, a reply goes to them without an approval.
-    `attachments` is [{name, size, sha256}] of the files in the draft `draft`; a bare count is
-    treated as files no approval can name. `body` is the text the message carries, which a Tico
+    `attachments` is [{name, size, sha256}] of the files in the draft `draft`, checked when
+    a Tico approval names files. `body` is the text the message carries, which a Tico
     send approval must name by its sha256.
     """
     checks = []
-    files = list(attachments) if isinstance(attachments, (list, tuple)) else []
-    attachments = len(files) if files else int(attachments or 0)
-    bound = files if attachments else None
+    files = list(attachments) if isinstance(attachments, (list, tuple)) else ([{}] if attachments else [])
 
     def ok(gate, detail=""):
         checks.append({"gate": gate, "ok": True, "detail": detail})
@@ -932,7 +1031,7 @@ def check_send(pol, slug, mailbox, to, cc=(), attachments=(), thread_id="",
             _, verbs = access.resolve(slug, box, "send", manifest)
         except Refused as e:
             return no("verb", e.msg)
-    if slug != OWNER and "send" not in (verbs or []):
+    if "send" not in (verbs or []):
         return no("verb", f"{slug} declares {', '.join(verbs or ['nothing'])} on {box}, not send")
     ok("verb", f"{slug} may send as {box}")
 
@@ -947,6 +1046,10 @@ def check_send(pol, slug, mailbox, to, cc=(), attachments=(), thread_id="",
         return no("onboarding", f"this run cannot read {slug}'s mail setting from Tico, so it cannot confirm {slug} "
                                 "has finished onboarding and sends no email, with or without an approval; "
                                 "try again once Tico answers")
+    # Like onboarding, before the approval read: no approval lifts the company's own no.
+    if sw.get("company_off"):
+        return no("company", "the company turned Send mail off in Tico (Settings > Google > What Tico may do), so "
+                             f"{slug} sends no email, with or without an approval; an admin turns it back on there")
     ok("onboarding", f"{slug} is not onboarding")
 
     ext = externals(pol, to)
@@ -954,9 +1057,11 @@ def check_send(pol, slug, mailbox, to, cc=(), attachments=(), thread_id="",
     # One read of the approval Issue for the whole chain. `full` means it names every external
     # address on this message, To and Cc: the owner's per-message yes.
     appr = (approval_check(approval, ext, ext_cc, thread_id, repo, slug=slug,
-                           attachments=bound or ([{}] if attachments else None), draft=draft,
+                           attachments=files, draft=draft,
                            body=body)
             if approval else None)
+    if appr and appr.get("attachment_mismatch"):
+        return no("approval", appr["detail"])
     full = bool(appr and appr["full"])
 
     if not sw["on"]:
@@ -1026,24 +1131,6 @@ def check_send(pol, slug, mailbox, to, cc=(), attachments=(), thread_id="",
                         "the sender of the thread being replied to go without one")
 
     caps = caps_for(pol, allowance, mailbox)
-    if attachments:
-        # A file can carry anything the bot's computer holds, and a reviewer only sees its name and
-        # size, so no standing path (an internal address, a forward target, the thread's sender or an
-        # allowance) covers it: every attached send needs the owner's per-message yes.
-        if not caps["allow_attachments"]:
-            return no("attachments", "attachments are not allowed from this mailbox (allow_attachments "
-                                     "is off for it in registry/mail-policy.yaml)")
-        seen = appr
-        if seen is not None and not seen["ok"] and not ext and not ext_cc:
-            seen = approval_check(approval, to, cc, thread_id, repo, slug=slug,   # all internal
-                                  attachments=bound or [{}], draft=draft, body=body)
-        if not (seen and seen["ok"]):
-            return no("attachments", "a message with attachments needs a Tico send approval "
-                      "naming this draft and its files (name, size and sha256), even to a recipient "
-                      "who needs none without them; request the one `mail draft` printed and pass "
-                      "its id as --approval-issue"
-                      + (f". {seen['detail']}" if seen and seen.get("detail") else ""))
-        ok("attachments", f"{attachments} file(s) approved by {seen['detail']}")
     if full:
         ok("caps", f"recipient count, external Cc and cooldown lifted for this message by "
                    f"Issue {appr['issue']}, which names every address on it")

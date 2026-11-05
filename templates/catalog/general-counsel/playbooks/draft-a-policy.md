@@ -32,3 +32,8 @@ Save `reports/policies/<name>-draft.md`, `hub file publish` it, and put it on th
 "Draft for a human, not legal advice. Adopt it here, and I will hand it to the Librarian to publish." Add it to
 `knowledge/policies.md` as "draft". When policy adoption is requested: `hub task create --owner librarian
 --title "Publish the <name> policy" --body "<path, adopted by, date>"`.
+
+## Done when
+- The draft is saved, published and on the task with the "draft for a human" line; `knowledge/policies.md` shows it as "draft".
+- Every choice the team must make is a `[DECIDE:...]` with its options, and every source is dated.
+- The draft has no clause copied from another organisation's policy.

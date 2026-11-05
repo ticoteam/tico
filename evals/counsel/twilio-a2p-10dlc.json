@@ -1,0 +1,29 @@
+{
+  "expected": [
+    {
+      "text": "Register each US 10DLC application for A2P 10DLC before sending SMS or MMS from it.",
+      "quote": "Anyone sending SMS/MMS messages over a 10DLC number from an application to the US must register for A2P 10DLC.",
+      "section": "Who needs to register",
+      "who_hint": "messaging"
+    },
+    {
+      "text": "Describe in the campaign how end users opt in, opt out, and get help.",
+      "quote": "Create a Campaign You provide information about how end users can opt-in, opt-out, and receive help.",
+      "section": "Create a Campaign",
+      "who_hint": "messaging"
+    },
+    {
+      "text": "Register the brand: tell carriers who sends these messages so they know you are a legitimate sender.",
+      "quote": "Create a Brand You provide information about who is sending these messages so that carriers know you are a legitimate sender",
+      "section": "Create a Brand",
+      "who_hint": "messaging"
+    }
+  ],
+  "url": "https://www.twilio.com/docs/messaging/compliance/a2p-10dlc",
+  "fetched_at": "2026-10-30T23:40:34Z",
+  "from": {
+    "name": "Twilio A2P 10DLC Guide",
+    "kind": "vendor"
+  },
+  "truncated": false
+}

@@ -32,17 +32,17 @@ def test_owner_put_back_requires_note_and_holds_queued_and_missing_starts_for_an
         row = H.task(c, task['id'])
         returned = H.now()
         # Both a retained notice and the idle claim's missing-job path must obey the hold.
-        H._wake(c, row, row['owner'], 'Start assigned task', {'auto_start': True})
+        H._wake(c, row, row['owner_id'], 'Start assigned task', {'auto_start': True})
     monkeypatch.setattr(H, 'now', lambda: H.shift(returned, minutes=59))
     with api.app.state.store.transaction() as c:
-        c.execute('UPDATE runners SET last_seen=?', (H.now(),))
+        c.execute('UPDATE runner_states SET last_seen_at=?', (H.now(),))
     assert take(api, machine) is None
     with api.app.state.store.transaction() as c:
-        c.execute("UPDATE jobs SET state='cancelled' WHERE state='queued'")
+        c.execute("UPDATE jobs SET state='canceled' WHERE state='queued'")
     assert take(api, machine) is None
     monkeypatch.setattr(H, 'now', lambda: H.shift(returned, minutes=60))
     with api.app.state.store.transaction() as c:
-        c.execute('UPDATE runners SET last_seen=?', (H.now(),))
+        c.execute('UPDATE runner_states SET last_seen_at=?', (H.now(),))
     assert take(api, machine)['task']['id'] == task['id']
 
 
@@ -97,7 +97,7 @@ def test_linking_a_blocker_reverses_only_an_automatic_start_before_a_finished_ru
     blocker = post(api, 'tasks', {'owner': 'ana', 'title': 'Finish prerequisite', 'body': 'Finish it.'})
     with api.app.state.store.read() as c:
         jobs = c.execute('SELECT count(*) FROM jobs').fetchone()[0]
-        turns = c.execute('SELECT count(*) FROM turns').fetchone()[0]
+        turns = c.execute('SELECT count(*) FROM attempts').fetchone()[0]
     for task in tasks:
         post(api, 'tasks/' + task['id'] + '/relations', {'kind': 'blocked_by', 'task': blocker['id']})
     rows = [get(api, 'tasks/' + t['id'])['task'] for t in tasks]
@@ -105,7 +105,7 @@ def test_linking_a_blocker_reverses_only_an_automatic_start_before_a_finished_ru
     assert rows[2]['step']['name'] == 'On Deck'
     with api.app.state.store.read() as c:
         assert c.execute('SELECT count(*) FROM jobs').fetchone()[0] == jobs
-        assert c.execute('SELECT count(*) FROM turns').fetchone()[0] == turns
+        assert c.execute('SELECT count(*) FROM attempts').fetchone()[0] == turns
         assert auto_tasks.waiting(c, H.task(c, tasks[2]['id']))
 
 
@@ -127,11 +127,11 @@ def test_done_task_question_refusal_gives_owner_command_and_nonowner_route(api):
         closed = H.task_create(c, 'human:ana', 'A closed task', 'Closed by its requester.', 'bot:finance', lint=False)
         H.task_close(c, 'human:ana', closed['id'])
         # Neither a bot off the task nor a person who may not move tasks is told to make the move just refused.
-        c.execute("INSERT INTO humans(id,name,email,teams_json) VALUES('zed','Zed','zed@acme.example','[]')")
+        c.execute("INSERT INTO humans(id,name,email,teams) VALUES('zed','Zed','zed@acme.example','[]')")
         for outsider in ('bot:ops', 'human:zed'):
             with pytest.raises(H.Refused) as refused:
                 H.task_update(c, outsider, closed['id'], status='doing', note='Reopen.')
-            assert 'ask ana to reopen it' in refused.value.detail
+            assert 'ask Ana to reopen it' in refused.value.detail
             assert '--status doing' not in refused.value.detail
 
 
@@ -144,7 +144,7 @@ def test_dev_return_prefers_on_deck_over_backlog_and_owner_can_reopen_steps_only
     task = post(api, 'tasks', {'owner': 'ops', 'title': 'Build requested feature',
                              'body': 'Build the requested feature.', 'type': typ['id'], 'step': 'On Deck'})
     with api.app.state.store.transaction() as c:
-        c.execute("UPDATE jobs SET state='cancelled'")
+        c.execute("UPDATE jobs SET state='canceled'")
     attempt = take(api, machine)
     result = update(api, task, attempt['token'], 'open', 'Defer until inputs are ready.')
     assert result['step']['name'] == 'On Deck'
@@ -171,7 +171,7 @@ def test_put_back_from_blocked_keeps_queue_destination_and_hold(api, monkeypatch
                              'body': 'Build it.', 'type': typ['id'], 'step': 'In Progress'})
     blocker = post(api, 'tasks', {'owner': 'ana', 'title': 'Supply a dependency', 'body': 'Supply it.'})
     with api.app.state.store.transaction() as c:
-        c.execute("UPDATE jobs SET state='cancelled'")
+        c.execute("UPDATE jobs SET state='canceled'")
         if release == 'manual':
             H.task_update(c, 'bot:ops', task['id'], status='waiting', note='Wait for the next work slot.')
         else:
@@ -189,7 +189,7 @@ def test_put_back_from_blocked_keeps_queue_destination_and_hold(api, monkeypatch
         if release == 'manual':
             assert result['status'] == 'open' and result['step']['name'] == 'On Deck'
         else:
-            assert result['status'] == 'waiting' and result['step']['name'] == 'Blocked'
+            assert result['status'] == 'waiting' and result['step']['name'] == 'In Progress'
             resume = H._one(c, 'SELECT name FROM task_steps WHERE id=?', (row['blocked_from_step'],))
             assert resume['name'] == 'On Deck' and row['blocked_from_status'] == 'open'
             if release == 'remove':
@@ -203,11 +203,11 @@ def test_put_back_from_blocked_keeps_queue_destination_and_hold(api, monkeypatch
     else:
         monkeypatch.setattr(H, 'now', lambda: H.shift(returned, minutes=59))
         with api.app.state.store.transaction() as c:
-            c.execute('UPDATE runners SET last_seen=?', (H.now(),))
+            c.execute('UPDATE runner_states SET last_seen_at=?', (H.now(),))
         assert take(api, machine) is None
         monkeypatch.setattr(H, 'now', lambda: H.shift(returned, minutes=60))
         with api.app.state.store.transaction() as c:
-            c.execute('UPDATE runners SET last_seen=?', (H.now(),))
+            c.execute('UPDATE runner_states SET last_seen_at=?', (H.now(),))
         assert take(api, machine)['task']['id'] == task['id']
 
 
@@ -220,15 +220,15 @@ def test_auto_start_back_off_on_engineering_board_keeps_queue_resume_without_a_t
                              'body': 'Build it.', 'type': typ['id'], 'step': 'On Deck'})
     blocker = post(api, 'tasks', {'owner': 'ana', 'title': 'Prepare the dependency', 'body': 'Prepare it.'})
     with api.app.state.store.transaction() as c:
-        c.execute("UPDATE jobs SET state='cancelled'")
+        c.execute("UPDATE jobs SET state='canceled'")
     assert take(api, machine)['task']['id'] == task['id']
     with api.app.state.store.read() as c:
-        counts = [c.execute('SELECT count(*) FROM ' + table).fetchone()[0] for table in ('jobs', 'turns')]
+        counts = [c.execute('SELECT count(*) FROM ' + table).fetchone()[0] for table in ('jobs', 'attempts')]
     post(api, 'tasks/' + task['id'] + '/relations', {'kind': 'blocked_by', 'task': blocker['id']})
     result = get(api, 'tasks/' + task['id'])['task']
-    assert result['status'] == 'waiting' and result['step']['name'] == 'Blocked'
+    assert result['status'] == 'waiting' and result['step']['name'] == 'On Deck'
     with api.app.state.store.read() as c:
         row = H.task(c, task['id'])
         resume = H._one(c, 'SELECT name FROM task_steps WHERE id=?', (row['blocked_from_step'],))
         assert resume['name'] == 'On Deck' and row['blocked_from_status'] == 'open'
-        assert [c.execute('SELECT count(*) FROM ' + table).fetchone()[0] for table in ('jobs', 'turns')] == counts
+        assert [c.execute('SELECT count(*) FROM ' + table).fetchone()[0] for table in ('jobs', 'attempts')] == counts

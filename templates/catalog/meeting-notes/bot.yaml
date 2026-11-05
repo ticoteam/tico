@@ -7,13 +7,13 @@ reads: []                        # other bot repositories this one may clone rea
 reasoning_effort: medium
 max_run_minutes: 45
 
-# Nothing addressed to anyone outside the team leaves until an owner turns this on. Until then
-# the bot puts every draft on the task and drafts until a person turns mail sending on in Tico.
+# Nothing addressed to anyone outside the team leaves: the bot puts every outside message on the task
+# as a draft for a person to send.
 outbound_send: false
 
 # The first routine is declared but not armed (`enabled: false`). It runs on Tico's
 # `meeting.ready` event: one task per imported team meeting, carrying the notes and transcript.
-# The bot arms it with `hub routine update <id> --enable` when Setup starts; setup-done allows normal work.
+# The bot arms it with `hub automation update <id> --enable` when Setup starts; setup-done allows normal work.
 # `hub bot create` seeds it once; from then on Tico's row is the routine (docs/routines.md).
 routines:
   - id: meeting-notes

@@ -17,8 +17,8 @@ const shot = async (locator, name) => { if (SHOTS) await locator.screenshot({pat
     page.on('pageerror', e => errors.push(e.message));
     const now = Date.now(), at = ms => new Date(now + ms).toISOString();
     const tool = (name, runtime) => ({name, runtime, installed: true, version: '1.0', managed: true, state: 'idle', wanted: true, pinned: false, update_available: false, detail: ''});
-    const box = {id: 'box', label: 'Team box', operator: 'ana', bots: ['writer'], platform: 'linux', version: '0.3.53',
-      last_seen: at(-3000), readiness_at: at(-60000), needed_runtimes: ['codex'], bot_runtimes: ['codex'],
+    const box = {id: 'box', label: 'Team box', owner_id: 'ana', bots: ['writer'], platform: 'linux', version: '0.3.53',
+      last_seen_at: at(-3000), readiness_at: at(-60000), needed_runtimes: ['codex'], bot_runtimes: ['codex'],
       readiness: {runtimes: {codex: {installed: true, authenticated: 'missing'}, claude: {installed: true, authenticated: 'missing'},
         grok: {installed: false}},
         harnesses: {codex: tool('Codex', 'codex'), claude: tool('Claude Code', 'claude')}},
@@ -42,7 +42,7 @@ const shot = async (locator, name) => { if (SHOTS) await locator.screenshot({pat
         if (p === '/api/v2/computers/box/logins') {
           login = {id: 'l1', kind: 'sign_in', runner_id: 'box', runtime: body.runtime, profile: body.profile || '', state: 'waiting',
             url: 'https://auth.openai.com/codex/device', code: 'ABCD-1234', lines: [], accepts_code: false, code_sent: false,
-            created: new Date().toISOString(), updated: new Date().toISOString()};
+            created_at: new Date().toISOString(), updated_at: new Date().toISOString()};
           return json(login);
         }
         return json({});
@@ -51,8 +51,8 @@ const shot = async (locator, name) => { if (SHOTS) await locator.screenshot({pat
       const config = {version: '0.1.0', app_name: 'Tico'};
       if (p === '/api/me') return json({...me, config});
       if (p === '/api/v2/config') return json(config);
-      if (p === '/api/employees') return json([{name: 'writer', display_name: 'Writer', status: 'active', operator: 'ana', can_manage: true,
-        users: [], bot_owners: [], machine: {runner_id: 'box', label: 'Team box', operator: 'ana'}}]);
+      if (p === '/api/employees') return json([{name: 'writer', display_name: 'Writer', status: 'active', owner_id: 'ana', can_manage: true,
+        users: [], bot_owners: [], machine: {runner_id: 'box', label: 'Team box', owner_id: 'ana'}}]);
       if (p === '/api/issues') return json([]);
       if (p === '/api/humans' || p === '/api/people') return json({people: [{id: 'ana', name: 'Ana'}], teams: {}});
       if (p === '/api/status') return json({cloud: true, active: [], queued: [], recent_runs: [], keeper_alive: true, health_issues: []});
@@ -104,7 +104,7 @@ const shot = async (locator, name) => { if (SHOTS) await locator.screenshot({pat
     await shot(signIn, 'add-3-sign-in');
     assert.deepEqual(writes.find(w => w.p === '/api/v2/computers/box/logins').body.profile || '', '');
     // Signed in, and the computer reports it: the line reads signed in with no restart.
-    login = {...login, state: 'signed_in', url: '', code: '', updated: new Date().toISOString()};
+    login = {...login, state: 'signed_in', url: '', code: '', updated_at: new Date().toISOString()};
     box.readiness.runtimes.codex.authenticated = 'ready';
     box.bot_connections[0].signed_in = true;
     box.readiness_at = at(60000);
@@ -122,7 +122,7 @@ const shot = async (locator, name) => { if (SHOTS) await locator.screenshot({pat
     await add.waitFor({state: 'detached'});
 
     // Offline: Add connection waits for the computer.
-    box.last_seen = at(-3 * 3600000);
+    box.last_seen_at = at(-3 * 3600000);
     await page.evaluate(() => loadSettings());
     await detail.locator('[data-computer-offline]').waitFor();
     assert.equal(await detail.locator('[data-add-connection]:enabled').count(), 0);
@@ -130,8 +130,9 @@ const shot = async (locator, name) => { if (SHOTS) await locator.screenshot({pat
     await page.keyboard.press('Escape');
     // Hosted enrollment leaves the browser with no code or installer command.
     assert.equal(await page.locator('#machine-kind option[value="hosted"]').count(), 0);
-    await page.evaluate(() => { S.config.hosted = 'invited'; document.querySelector('.machine-enroll').remove(); return loadSettings(); });
+    await page.evaluate(() => { S.config.hosted = 'invited'; document.querySelector('#machine-add-dialog').remove(); return loadSettings(); });
     await page.evaluate(() => { window.hostedOpened = []; window.open = (...args) => window.hostedOpened.push(args); });
+    await page.locator('#machine-add-open').click();
     await page.locator('#machine-kind').selectOption('hosted');
     assert.equal(await page.locator('#machine-label').isVisible(), false);
     const beforeHosted = writes.length;

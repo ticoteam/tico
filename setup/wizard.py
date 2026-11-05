@@ -624,7 +624,7 @@ def _tunnel(io: IO, args, s: Settings, deps: Deps, zone, cf: Cloudflare | None) 
         cf.configure_tunnel(z["account_id"], tid, s.domain, s.effective_runner_host(),
                             aliases=st.aliases(s.domain_aliases, s.domain), visual_origin=s.visual_origin)
         s.tunnel_token, s.tunnel_id = token, tid
-        io.say(f"  tunnel {tid} ready, routing {s.domain} to http://server:8765"
+        io.say(f"  tunnel {tid} ready, routing {s.domain} to http://{contract.TUNNEL_ORIGIN}"
                + (f", and {s.runner()} for /api/v2 and /download" if s.runner() else ""))
         return tid
     from .cloudflare import ingress_config

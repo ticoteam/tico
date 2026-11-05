@@ -22,13 +22,13 @@ const {unrouted} = require('./support/routes.cjs');
     const model = (id, harness, provider) => ({id, label: id.replace(/-/g, ' '), runtime: harness, provider,
       efforts: ['low', 'high'], default_effort: 'high', harnesses: [harness]});
     const catalog = {
-      models: [model('claude-sonnet-5-5', 'claude', 'anthropic'), model('claude-haiku-5-5', 'claude', 'anthropic'), model('gpt-6-luna', 'codex', 'openai')],
+      models: [model('claude-sonnet-5-5', 'claude', 'anthropic'), model('claude-haiku-5-5', 'claude', 'anthropic'), {...model('gpt-6-luna', 'codex', 'openai'), context_tokens: 1_050_000}],
       harnesses: [{id: 'codex', label: 'Codex (OpenAI)', runtime: 'codex'}, {id: 'claude', label: 'Claude Code (Anthropic)', runtime: 'claude'}],
       default: {runtime: 'claude', model: 'claude-sonnet-5-5'},
     };
-    const helper = {name: 'helper', display_name: 'Helper', description: '', status: 'active', operator: 'ana', repo: 'bot-helper',
+    const helper = {name: 'helper', display_name: 'Helper', description: '', status: 'active', owner_id: 'ana', repo: 'bot-helper',
       can_manage: true, users: [], bot_owners: [], revision: 4, model: 'claude-sonnet-5-5', harness: 'claude', reasoning_effort: 'high',
-      keep_tasks_going: null, task_flow: {going: 2, waiting: 5}, task_model: null, thread_mode: 'personal', bot_contact: 'open', machine: {runner_id: 'r1', label: 'Box', operator: 'ana', generation: 7}};
+      keep_tasks_going: null, task_flow: {going: 2, waiting: 5}, task_model: null, thread_mode: 'personal', bot_contact: 'open', machine: {runner_id: 'r1', label: 'Box', owner_id: 'ana', generation: 7}};
     const bots = [helper];
     const WARNING = 'This bot sends messages for you. Haiku 5.5 is a cheaper model than its own Sonnet 5.5, and may word things badly. It still saves, and its tasks run on it.';
     let calls = [];
@@ -60,6 +60,10 @@ const {unrouted} = require('./support/routes.cjs');
           helper.keep_tasks_going = body.keep_tasks_going;
           return json({bot: 'helper', keep_tasks_going: body.keep_tasks_going, revision: ++helper.revision});
         }
+        if (what === 'turns-at-once') {
+          helper.turns_at_once = body.turns_at_once;
+          return json({bot: 'helper', turns_at_once: body.turns_at_once, revision: ++helper.revision});
+        }
         if (what === 'definition') {
           Object.assign(helper, {display_name: body.display_name, description: body.description});
           return json({name: 'helper', display_name: helper.display_name, revision: ++helper.revision});
@@ -71,7 +75,7 @@ const {unrouted} = require('./support/routes.cjs');
       if (p === '/api/humans') return json({people: [{id: 'ana', name: 'Ana'}], teams: {}});
       if (p === '/api/status') return json({cloud: true, active: [], queued: [], recent_runs: []});
       if (p === '/api/v2/status') return json({bots: []});
-      if (p === '/api/v2/operations') return json({machines: [{id: 'r1', label: 'Box', operator: 'ana', bots: ['helper']}], services: []});
+      if (p === '/api/v2/operations') return json({machines: [{id: 'r1', label: 'Box', owner_id: 'ana', bots: ['helper']}], services: []});
       if (p === '/api/v2/models') return json({...catalog, enabled_providers: ['openai', 'anthropic']});
       if (p === '/api/v2/providers') return json({enabled: ['openai', 'anthropic'], default: catalog.default, revision: 1,
         providers: [{id: 'openai', label: 'OpenAI'}, {id: 'anthropic', label: 'Anthropic'}]});
@@ -105,6 +109,8 @@ const {unrouted} = require('./support/routes.cjs');
     assert.equal(await task.locator('[data-choice-harness] option:checked').innerText(), 'Same as bot', 'defaults to the same as the bot');
     assert.equal(await task.locator('[data-choice-model]').isDisabled(), true);
     await task.locator('[data-choice-harness]').selectOption('codex');
+    assert.equal(await task.locator('[data-choice-model] option[value="gpt-6-luna"]').innerText(), 'gpt 6 luna · 1.05M',
+      'the rendered task model option says its window');
     await task.locator('[data-choice-model]').selectOption('gpt-6-luna');
     await editor.locator('button[type=submit]').click();
     await page.waitForFunction(() => document.querySelector('#bot-editor [data-bot-status]')?.textContent === 'Saved');
@@ -136,7 +142,7 @@ const {unrouted} = require('./support/routes.cjs');
     assert.equal(await pickers.locator('[data-choice-effort]').isVisible(), false, 'Task effort stands in for the Effort picker');
     const effortPick = row.locator('[data-task-effort]'), contextPick = row.locator('[data-task-context]');
     assert.equal(await effortPick.inputValue(), 'high');
-    assert.deepEqual(await contextPick.locator('option').allInnerTexts(), ['Same as bot', '150k', '250k', '400k', '600k', '1M'], 'the Compact at choices');
+    assert.deepEqual(await contextPick.locator('option').allInnerTexts(), ['Same as bot', '100k', '150k', '250k', '400k', '600k', '1M'], 'the Compact at choices');
     // Same as bot for the model keeps the task effort: tasks still differ, so the mark stays on.
     calls = [];
     await pickers.locator('[data-choice-harness]').selectOption('');
@@ -187,7 +193,7 @@ const {unrouted} = require('./support/routes.cjs');
     assert.equal(await pickers.locator('[data-choice-harness] option:checked').innerText(), 'Same as bot');
     assert.deepEqual(await effortPick.locator('option').allInnerTexts(), ['Same as bot', 'low', 'high'], "the bot's own model's efforts");
     assert.equal(await mark.innerText(), 'Tasks · 600k');
-    assert.match(await mark.getAttribute('title'), /^Tasks run on the bot's model · low · 600k$/);
+    assert.match(await mark.getAttribute('title'), /^Tasks run on the bot's model · low$/, 'the run line names no compaction length');
     assert.deepEqual(await savePart(effortPick, ''), {model: null, effort: null, compact_at: 600000});
     assert.equal(await mark.evaluate(b => b.classList.contains('on')), true, 'context only still differs');
     assert.equal(await savePart(contextPick, ''), null, 'all three Same as bot');
@@ -274,6 +280,35 @@ const {unrouted} = require('./support/routes.cjs');
         assert.deepEqual(calls.map(c => c.what), ['definition', 'keep-tasks-going']);
         assert.deepEqual(calls[1].body, {keep_tasks_going: stored, expected_revision: before + 1});
         assert.equal(helper.keep_tasks_going, stored);
+        await openEditor();
+      }
+      // Turns at once saves the same way; a value out of range or not a whole number is named under its row
+      // and not sent.
+      const turns = editor.locator('[data-bot-turns-at-once]');
+      for (const [value, stored] of [['5', 5], ['', null]]) {
+        const before = helper.revision;
+        calls = [];
+        await turns.fill(value);
+        await turns.dispatchEvent('change');
+        await page.waitForTimeout(100);
+        assert.deepEqual(calls, [], 'held until Save bot');
+        await editor.locator('button[type=submit]').click();
+        await loaded(before + 2);
+        assert.deepEqual(calls.map(c => c.what), ['definition', 'turns-at-once']);
+        assert.deepEqual(calls[1].body, {turns_at_once: stored, expected_revision: before + 1});
+        assert.equal(helper.turns_at_once, stored);
+        await openEditor();
+      }
+      for (const value of ['300', '2.5']) {
+        calls = [];
+        await turns.fill(value);
+        await turns.dispatchEvent('change');
+        await editor.locator('[data-field-err]').first().waitFor();
+        await page.waitForTimeout(100);
+        assert.deepEqual(calls, [], `${value} is not posted`);
+        await turns.fill('');
+        await turns.dispatchEvent('change');
+        assert.equal(await editor.locator('[data-field-err]').count(), 0, 'the line clears once the value is valid');
         await openEditor();
       }
       assert.equal(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth), true);

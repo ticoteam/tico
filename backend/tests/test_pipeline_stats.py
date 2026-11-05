@@ -8,6 +8,7 @@ from backend import hubdb as H
 from backend import pipeline_stats
 from backend.pipeline_stats import cause_of
 from backend.tests.test_api import api, assign, claim, get, post, ready, restrict, runner  # noqa: F401  (api is a fixture)
+from backend.tests.hold_rows import set_holds
 
 
 def board(api):
@@ -42,10 +43,10 @@ def test_counts_follow_the_board_snoozed_in_closed_out_private_only_for_its_read
     child = post(api, "tasks", {"owner": "cpo", "title": "Review it", "body": "Review it.",
                                 "relations": [{"task": reviewed["id"], "kind": "parent"}]})
     with api.app.state.store.transaction() as c:
-        c.execute("UPDATE task_events SET ts=? WHERE task_id=? AND field='step'", (H.shift(H.now(), hours=-30), old["id"]))
-        c.execute("UPDATE tasks SET snoozed_until=? WHERE id=?", (H.shift(H.now(), days=3), snoozed["id"]))
+        c.execute("UPDATE history_events SET created_at=? WHERE subject_type='task' AND subject_id=? AND kind='step'", (H.shift(H.now(), hours=-30), old["id"]))
+        set_holds(c, snoozed["id"], snoozed_until=H.shift(H.now(), days=3))
         c.execute("UPDATE tasks SET status='closed', step_id=? WHERE id=?", (steps["Done"], done["id"]))
-        c.execute("INSERT INTO task_links(id,task_id,kind,url,title,state,created) VALUES(?,?,?,?,?,?,?)",
+        c.execute("INSERT INTO task_links(id,task_id,kind,url,title,state,created_at) VALUES(?,?,?,?,?,?,?)",
                   (str(uuid.uuid4()), reviewed["id"], "pr", "https://github.com/acme/app/pull/7", "PR #7", "open",
                    H.shift(H.now(), hours=-5)))
 
@@ -60,7 +61,7 @@ def test_counts_follow_the_board_snoozed_in_closed_out_private_only_for_its_read
     assert done["number"] not in review["ids"]
     # The reviewed ticket waits on its open child's owner; the private one on nothing but its own owner.
     assert review["waits_on"] == {"bot": 1, "person": 0, "external": 0, "nothing": 1}
-    assert review["waits_on_actor"] == {child["owner"]: 1}
+    assert review["waits_on_actor"] == {child["owner_id"]: 1}
     assert review["prs"]["open"] == 1 and 4.9 <= review["prs"]["oldest_hours"] <= 5.1
 
     # Cara is on none of them: the private ticket is not hers to count, or to see by number.
@@ -85,12 +86,12 @@ def test_a_queued_job_behind_an_unreviewed_interrupted_run_is_dead_not_queued(ap
     attempt = claim(api, r)
     with api.app.state.store.transaction() as c:
         # The computer restarted mid-run: the run may have acted, so its task waits for a person's review.
-        c.execute("UPDATE attempts SET state='interrupted', finished=?, result_json=? WHERE id=?",
+        c.execute("UPDATE attempts SET state='interrupted', finished_at=?, result=? WHERE id=?",
                   (H.now(), '{"text": "Runner restarted during execution"}', attempt["id"]))
         c.execute("UPDATE jobs SET state='uncertain' WHERE id=?", (attempt["job_id"],))
     post(api, f"tasks/{task['id']}/comments", {"text": "Any news?", "needs_action": True})
     with api.app.state.store.read() as c:
-        dead = [r[0] for r in c.execute("SELECT id FROM jobs WHERE bot='ops' AND state='queued'")]
+        dead = [r[0] for r in c.execute("SELECT id FROM jobs WHERE bot_id='ops' AND state='queued'")]
     assert len(dead) == 1
     assert claim(api, r) is None                      # never handed out while the interrupted run waits
 
@@ -120,13 +121,13 @@ def test_health_and_pipeline_count_a_bots_queue_the_same_way(api):
     task = post(api, "tasks", {"owner": "ops", "title": "Ship the fix", "body": "Please ship it."})
     attempt = claim(api, r)
     with api.app.state.store.transaction() as c:
-        c.execute("UPDATE attempts SET state='interrupted', finished=?, result_json=? WHERE id=?",
+        c.execute("UPDATE attempts SET state='interrupted', finished_at=?, result=? WHERE id=?",
                   (H.now(), '{"text": "Runner restarted during execution"}', attempt["id"]))
         c.execute("UPDATE jobs SET state='uncertain' WHERE id=?", (attempt["job_id"],))
     post(api, f"tasks/{task['id']}/comments", {"text": "Any news?", "needs_action": True})
     post(api, "chat/ops", {"text": "Separate question"})     # the one job that can start
     with api.app.state.store.transaction() as c:
-        c.execute("UPDATE jobs SET created=? WHERE bot='ops' AND state='queued'", (H.shift(H.now(), hours=-2),))
+        c.execute("UPDATE jobs SET created_at=? WHERE bot_id='ops' AND state='queued'", (H.shift(H.now(), hours=-2),))
     pipe = stats(api, query="bot=ops")["queues"]["ops"]
     assert pipe["queued"] == 1 and pipe["dead"] == 1
 
@@ -147,7 +148,7 @@ def test_unreadable_newer_failures_never_hide_older_readable_ones(api, monkeypat
         post(api, "tasks", {"owner": "ops", "title": f"Fix {name}", "body": "Please fix it.", "private": private})
         attempt = claim(api, r)
         with api.app.state.store.transaction() as c:
-            c.execute("UPDATE attempts SET state='failed', finished=? WHERE id=?", (H.shift(H.now(), hours=-age), attempt["id"]))
+            c.execute("UPDATE attempts SET state='failed', finished_at=? WHERE id=?", (H.shift(H.now(), hours=-age), attempt["id"]))
             c.execute("UPDATE jobs SET state='failed' WHERE id=?", (attempt["job_id"],))
         failed[name] = attempt["id"]
     monkeypatch.setattr(pipeline_stats, "ATTEMPT_PAGE", 1)     # the newest page holds only the private run
@@ -159,12 +160,12 @@ def test_unreadable_newer_failures_never_hide_older_readable_ones(api, monkeypat
     capped = stats(api)["failures"]
     assert capped["total"] == 1 and capped["truncated"] is True
     with api.app.state.store.read() as c:
-        assert capped["complete_after"] == c.execute("SELECT finished FROM attempts WHERE id=?", (failed["open"],)).fetchone()[0]
+        assert capped["complete_after"] == c.execute("SELECT finished_at FROM attempts WHERE id=?", (failed["open"],)).fetchone()[0]
 
 
 def test_failure_causes():
     row = lambda state="failed", result="{}", reason=None, stop=None: {  # noqa: E731
-        "state": state, "result_json": result, "end_reason": reason, "stop_requested": stop}
+        "state": state, "result": result, "end_reason": reason, "stop_requested_at": stop}
     assert cause_of(row(result='{"limit_source": {"runtime": "codex", "billing": true}}')) == "quota"
     assert cause_of(row(reason="Model error (429): You exceeded your current quota")) == "quota"
     assert cause_of(row(result='{"limit_source": {"runtime": "claude", "kind": "capacity"}}')) == "capacity"
@@ -190,10 +191,10 @@ def test_a_held_or_dismissed_run_lists_its_decision_beside_the_bots_queue(api):
 
     botops_decides(api, attempt["job_id"], attempt["id"], "dismiss", DEV_563_NOTE, H.now())
     [row] = stats(api)["queues"]["ops"]["decisions"]
-    assert (row["job"], row["attempt"], row["current"], row["state"], row["decision"], row["by"], row["by_kind"],
-            row["note"]) == (attempt["job_id"], attempt["id"], True, "cancelled", "dismiss", "bot:botops", "botops",
+    assert (row["job"], row["run"], row["current"], row["state"], row["decision"], row["by"], row["by_kind"],
+            row["note"]) == (attempt["job_id"], attempt["id"], True, "canceled", "dismiss", "bot:botops", "botops",
                              DEV_563_NOTE)
-    assert row["label"].startswith("Cancelled: dismissed by BotOps at ") and row["label"].endswith("Z, " + DEV_563_NOTE)
+    assert row["label"].startswith("Canceled: dismissed by BotOps at ") and row["label"].endswith("Z, " + DEV_563_NOTE)
 
     with api.app.state.store.transaction() as c:
         c.execute("UPDATE job_recovery SET decision='resume', actor='human:ana', note='Run it again after all, please.' "
@@ -213,12 +214,12 @@ def test_a_held_or_dismissed_run_lists_its_decision_beside_the_bots_queue(api):
     expire(api, again["id"])
     assert claim(api, machine) is None
     [row] = stats(api)["queues"]["ops"]["decisions"]
-    assert (row["attempt"], row["current"], row["state"]) == (attempt["id"], False, None)
+    assert (row["run"], row["current"], row["state"]) == (attempt["id"], False, None)
     assert row["label"].startswith("Resumed by ") and row["label"].endswith(", Run it again after all, please.")
 
     # Outside the window it is no longer listed; a reader who cannot read the bot never sees it.
     with api.app.state.store.transaction() as c:
-        c.execute("UPDATE job_recovery SET created=? WHERE job_id=?", (H.shift(H.now(), days=-2), attempt["job_id"]))
+        c.execute("UPDATE job_recovery SET created_at=? WHERE job_id=?", (H.shift(H.now(), days=-2), attempt["job_id"]))
     assert stats(api)["queues"].get("ops", {}).get("decisions", []) == []
 
 
@@ -241,4 +242,29 @@ def test_a_decisions_note_is_left_out_for_a_reader_who_cannot_open_the_runs_conv
     assert row["note"] == DEV_563_NOTE and row["label"].endswith(DEV_563_NOTE)
     [row] = stats(api, token="cara-test")["queues"]["ops"]["decisions"]
     assert (row["job"], row["decision"], row["by_kind"], row["note"]) == (attempt["job_id"], "dismiss", "botops", None)
-    assert row["label"].startswith("Cancelled: dismissed by BotOps at ") and row["label"].endswith("Z")
+    assert row["label"].startswith("Canceled: dismissed by BotOps at ") and row["label"].endswith("Z")
+
+
+def test_job_queues_privacy_checks_messages_in_one_batch(api, monkeypatch):
+    """/status and Operations used to call message_readable per queued job; one readable_messages pass covers them."""
+    from backend import task_privacy as privacy
+
+    board(api)
+    r = runner(api)
+    assign(api, r, "ops")
+    ready(api, r, ["ops"])
+    for i in range(8):
+        post(api, "chat/ops", {"text": f"Queue item {i}"})
+    calls = []
+    real = privacy.readable_messages
+
+    def once(c, actor, messages):
+        calls.append(len(list(messages)))
+        return real(c, actor, messages)
+
+    monkeypatch.setattr(privacy, "readable_messages", once)
+    who = api.app.state.store.settings.test_identities["ana-test"]
+    with api.app.state.store.read_transaction() as c:
+        queues = pipeline_stats.job_queues(c, who, ["ops"])
+    assert queues["ops"]["queued"] == 8
+    assert calls.count(8) == 1

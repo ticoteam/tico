@@ -3,6 +3,7 @@ runner, and puts the old image back when the new one does not turn healthy."""
 import importlib.util
 import os
 import stat
+import subprocess
 from pathlib import Path
 
 
@@ -50,6 +51,101 @@ def test_runner_mode_manages_the_runner_service_and_image(monkeypatch, tmp_path)
                                 (["up", "-d", "--no-deps", "--pull", "never", "runner"], "v0.2.0")]
     assert all(a[3] == str(tmp_path / "runner.compose.yaml") for a, _ in docker.calls if a[:2] == ["docker", "compose"])
     assert "TICO_TAG=v0.2.0" in (tmp_path / ".env").read_text()      # a later `docker compose up` stays on it
+
+
+def test_the_runner_compose_gets_the_host_memory_default_unless_env_sets_one(monkeypatch, tmp_path):
+    meminfo = tmp_path / "meminfo"
+    meminfo.write_text("MemTotal:       33554432 kB\n")                     # 32 GiB: the same default the installer gives
+    monkeypatch.setenv("TICO_RUNNER_MEMORY_RULE", str(SOURCE.parent / "runner-memory.sh"))
+    monkeypatch.setenv("TICO_UPDATER_MEMINFO", str(meminfo))
+    updater = load(monkeypatch, "runner", tmp_path)
+    seen = []
+
+    def run(argv, env=None, **kw):
+        seen.append(env.get("TICO_RUNNER_MEMORY"))
+        return type("R", (), {"returncode": 0, "stdout": "", "stderr": ""})()
+
+    monkeypatch.setattr(updater, "docker_run", run)
+    (tmp_path / ".env").write_text("TICO_URL=https://tico.example.com\n")
+    updater.compose("ps", "-q", "runner")
+    assert seen[-1] == "28g"
+    (tmp_path / ".env").write_text("TICO_URL=https://tico.example.com\nTICO_RUNNER_MEMORY=0\n")
+    updater.compose("ps", "-q", "runner")
+    assert seen[-1] is None                                                 # .env says 0: compose gets no override
+    (tmp_path / ".env").write_text("TICO_URL=https://tico.example.com\nTICO_RUNNER_MEMORY=2g\n")
+    updater.compose("ps", "-q", "runner")
+    assert seen[-1] is None
+
+
+def test_a_spaced_or_commented_setting_in_env_is_read_as_the_setting_it_is(monkeypatch, tmp_path):
+    meminfo = tmp_path / "meminfo"
+    meminfo.write_text("MemTotal:       33554432 kB\n")
+    monkeypatch.setenv("TICO_RUNNER_MEMORY_RULE", str(SOURCE.parent / "runner-memory.sh"))
+    monkeypatch.setenv("TICO_UPDATER_MEMINFO", str(meminfo))
+    updater = load(monkeypatch, "runner", tmp_path)
+    seen = []
+    monkeypatch.setattr(updater, "docker_run", lambda argv, env=None, **kw: seen.append(env.get("TICO_RUNNER_MEMORY"))
+                        or subprocess.CompletedProcess(argv, 0, "", ""))
+    (tmp_path / ".env").write_text("TICO_URL=https://tico.example.com\nTICO_RUNNER_MEMORY = 2g\n")
+    updater.compose("ps", "-q", "runner")
+    assert seen[-1] is None                                                 # `NAME = value` is a setting
+    for line in ("TICO_RUNNER_MEMORY: 0", "export TICO_RUNNER_MEMORY=0"):     # compose's other assignment forms
+        (tmp_path / ".env").write_text("TICO_URL=https://tico.example.com\n" + line + "\n")
+        updater.compose("ps", "-q", "runner")
+        assert seen[-1] is None, line
+    (tmp_path / ".env").write_text("TICO_URL=https://tico.example.com\n# TICO_RUNNER_MEMORY=2g\n")
+    updater.compose("ps", "-q", "runner")
+    assert seen[-1] == "28g"                                                # a commented line is no setting
+
+
+def fake_docker(monkeypatch, updater, limit="0"):
+    """Answers `compose ps` with one container and `docker inspect` with its memory limit; records every call."""
+    calls = []
+
+    def run(argv, env=None, **kw):
+        calls.append(argv)
+        out = "abc123\n" if "ps" in argv else limit + "\n" if "inspect" in argv else ""
+        return subprocess.CompletedProcess(argv, 0, out, "")
+
+    monkeypatch.setattr(updater, "docker_run", run)
+    return calls
+
+
+def test_a_runner_left_uncapped_by_an_older_updater_gets_the_default_live(monkeypatch, tmp_path):
+    meminfo = tmp_path / "meminfo"
+    meminfo.write_text("MemTotal:       33554432 kB\n")                     # 32 GiB: the default is 28g
+    monkeypatch.setenv("TICO_RUNNER_MEMORY_RULE", str(SOURCE.parent / "runner-memory.sh"))
+    monkeypatch.setenv("TICO_UPDATER_MEMINFO", str(meminfo))
+    updater = load(monkeypatch, "runner", tmp_path)
+    (tmp_path / ".env").write_text("TICO_URL=https://tico.example.com\n")
+    calls = fake_docker(monkeypatch, updater, limit="0")
+    updater.cap_running_runner()
+    assert ["docker", "update", "--memory", "28g", "--memory-swap", "28g", "abc123"] in calls
+
+    calls = fake_docker(monkeypatch, updater, limit="8589934592")          # someone set 8 GiB: that stays
+    updater.cap_running_runner()
+    assert not [a for a in calls if a[:2] == ["docker", "update"]]
+
+    (tmp_path / ".env").write_text("TICO_URL=https://tico.example.com\nTICO_RUNNER_MEMORY=0\n")
+    calls = fake_docker(monkeypatch, updater, limit="0")                   # .env says no limit: nothing to do
+    updater.cap_running_runner()
+    assert calls == []
+
+
+def test_a_failed_live_cap_is_logged_and_the_updater_goes_on(monkeypatch, tmp_path, capsys):
+    meminfo = tmp_path / "meminfo"
+    meminfo.write_text("MemTotal:       33554432 kB\n")
+    monkeypatch.setenv("TICO_RUNNER_MEMORY_RULE", str(SOURCE.parent / "runner-memory.sh"))
+    monkeypatch.setenv("TICO_UPDATER_MEMINFO", str(meminfo))
+    updater = load(monkeypatch, "runner", tmp_path)
+    (tmp_path / ".env").write_text("TICO_URL=https://tico.example.com\n")
+
+    def broken(argv, env=None, **kw):
+        raise subprocess.TimeoutExpired(argv, 5)
+
+    monkeypatch.setattr(updater, "docker_run", broken)
+    updater.cap_running_runner()                                            # must not raise
+    assert "could not cap the runner's memory" in capsys.readouterr().out
 
 
 def test_a_runner_that_does_not_turn_healthy_is_rolled_back(monkeypatch, tmp_path):
@@ -109,7 +205,7 @@ class Daemon:
 
     def __init__(self, module, monkeypatch, hang):
         import subprocess
-        self.module, self.hang, self.calls, self.expired = module, hang, [], subprocess.TimeoutExpired
+        self.module, self.hang, self.calls, self.expired = module, hang, [], module.Stalled
         monkeypatch.setattr(module, "docker_run", self.run)
         monkeypatch.setattr(module, "pinned_services", lambda version: [])
         monkeypatch.setattr(module, "POLL_SECONDS", 0)
@@ -143,7 +239,7 @@ class Moby:
     def __init__(self, module, monkeypatch, hang, lag=3, healthy_tags=("v0.1.0",)):
         import subprocess
         self.module, self.hang, self.lag, self.healthy_tags = module, hang, lag, healthy_tags
-        self.expired, self.calls, self.n = subprocess.TimeoutExpired, [], 0
+        self.expired, self.calls, self.n = module.Stalled, [], 0
         self.containers = {"c1": {"tag": "v0.1.0", "running": True}}   # what the update starts from
         self.pending = []      # [container id, calls until it lands]: accepted stops nobody waited for
         self.idle_recreates = 0   # answered recreates that change nothing (a daemon that has not caught up)
@@ -254,7 +350,8 @@ def test_a_switch_that_runs_over_holds_work_until_docker_confirms_the_old_versio
     docker = Moby(updater, monkeypatch, lambda argv, tag, n: "up" in argv and tag == "v0.2.0")
     updater.update("v0.2.0")
     assert updater.status["state"] == "rolled_back", updater.status
-    assert "did not finish within" in updater.status["message"] and "Docker then confirmed the runner on v0.1.0" in updater.status["message"]
+    assert "Starting the new runner exceeded 600 seconds" in updater.status["message"]
+    assert "Docker then confirmed the runner on v0.1.0" in updater.status["message"]
     assert docker.ended == [("rolled_back", [])]                     # no accepted stop left that could land
     assert [c["tag"] for c in docker.containers.values() if c["running"]] == ["v0.1.0"]
     assert {state for _, state in docker.stopped} <= {"restarting", "uncertain"}
@@ -394,7 +491,7 @@ def test_a_runner_that_cannot_be_read_is_not_updated_and_says_so(monkeypatch, tm
     docker = Daemon(updater, monkeypatch, lambda argv, tag: argv[:2] == ["docker", "inspect"])
     updater.update("v0.2.0")
     assert updater.status["state"] == "failed" and updater.status["to"] == "v0.2.0"
-    assert updater.status["message"].startswith("Not updated: could not read the running runner")
+    assert updater.status["message"] == "Not updated: Reading the running server exceeded 60 seconds."
     assert not [argv for argv, _, _ in docker.calls if "pull" in argv or "up" in argv]
 
 
@@ -409,7 +506,7 @@ def test_a_compose_call_that_runs_over_is_killed_and_cannot_finish_later(monkeyp
     (bin_dir / "docker").write_text(f"#!/bin/sh\n(sleep 0.5; touch {marker}) &\nwait\n")
     (bin_dir / "docker").chmod(0o755)
     monkeypatch.setenv("PATH", f"{bin_dir}:{os.environ['PATH']}")
-    with pytest.raises(RuntimeError, match="did not finish within"):
+    with pytest.raises(RuntimeError, match=r"A Docker call \(compose up\) exceeded 0.1 seconds"):
         updater.compose("up", "-d", "runner", timeout=0.1)
     time.sleep(0.8)
     assert not marker.exists()

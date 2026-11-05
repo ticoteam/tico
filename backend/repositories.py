@@ -14,6 +14,7 @@ from . import hubdb as H
 from . import read_cache
 from .auth import validate_identity
 from .store import Problem
+from . import bot_settings as BS
 
 SETTINGS = 'repos_new_bot_default'
 # {bot: [owner/name, ...]}: write grants an Owner or admin let start and manage workflow runs (Actions: write).
@@ -40,8 +41,36 @@ def metadata(c, key):
         return {}
 
 
+def computer_repositories(c):
+    """{runner_id: repositories status} for every computer, once per read snapshot.
+
+    Health / `/computers` (`computer_details`) and Operations used to look up
+    `computer-repositories:<id>` once per machine. Missing keys stay absent so
+    callers keep the historical default of \"unknown\".
+    """
+    values = read_cache.cache(c)
+    key = "repositories.computer_repositories"
+    if values is not None and key in values:
+        return values[key]
+    out = {}
+    prefix = "computer-repositories:"
+    # A key range, not LIKE (case-insensitive, so it cannot use the primary key): ';' sorts right after ':'.
+    for row in c.execute("SELECT key, value FROM registry_metadata WHERE key>=? AND key<?",
+                         (prefix, prefix[:-1] + ";")):
+        rid = row["key"][len(prefix):]
+        try:
+            value = json.loads(row["value"] or "{}")
+        except ValueError:
+            continue
+        if isinstance(value, dict) and "repositories" in value:
+            out[rid] = value["repositories"]
+    if values is not None:
+        values[key] = out
+    return out
+
+
 def save_metadata(c, key, value):
-    c.execute('INSERT INTO registry_metadata VALUES(?,?) ON CONFLICT(key) DO UPDATE SET value_json=excluded.value_json',
+    c.execute('INSERT INTO registry_metadata VALUES(?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value',
               (key, json.dumps(value)))
 
 
@@ -59,13 +88,13 @@ def migrate(c):
     for bot, repos in metadata(c, 'github-extra-repos').items():
         if not repos:
             continue
-        row = c.execute('SELECT config_json FROM bot_config WHERE bot=?', (bot,)).fetchone()
+        row = c.execute(BS.ONE_SQL, (bot,)).fetchone()
         if row:
             config = json.loads(row[0] or '{}')
             config['repo_access_mode'] = 'chosen'
-            c.execute('UPDATE bot_config SET config_json=? WHERE bot=?', (json.dumps(config), bot))
+            BS.write(c, bot, config)
         for repo in repos:
-            c.execute('INSERT INTO repositories(id,full_name,enabled,updated) VALUES(?,?,1,?) '
+            c.execute('INSERT INTO repositories(id,full_name,enabled,updated_at) VALUES(?,?,1,?) '
                       'ON CONFLICT(full_name) DO UPDATE SET enabled=1', (uuid.uuid4().hex, repo, H.now()))
             c.execute("INSERT INTO bot_repo_access VALUES(?,?,'write') ON CONFLICT(bot,full_name) DO UPDATE SET access='write'",
                       (bot, repo))
@@ -153,9 +182,9 @@ class Reads:
         from .shared_bots import _json, source_of
         self.c = c
         bots = list(dict.fromkeys(bots))
-        self.configs = self._rows('SELECT bot,config_json,repo FROM bot_config WHERE bot IN ({})', bots)
-        sources = {source_of(_json(row['config_json'])) for row in self.configs.values()} - {''} - set(self.configs)
-        self.configs.update(self._rows('SELECT bot,config_json,repo FROM bot_config WHERE bot IN ({})', sorted(sources)))
+        self.configs = self._rows(f'SELECT bot,{BS.CONFIG} AS config,repo FROM bot_config bc {BS.JOIN} WHERE bot IN (', bots)
+        sources = {source_of(_json(row['config'])) for row in self.configs.values()} - {''} - set(self.configs)
+        self.configs.update(self._rows(f'SELECT bot,{BS.CONFIG} AS config,repo FROM bot_config bc {BS.JOIN} WHERE bot IN (', sorted(sources)))
         self.chosen = {bot: [] for bot in bots}
         for part in H.chunks(bots):
             for r in c.execute('SELECT bot,full_name,access FROM bot_repo_access WHERE bot IN (%s) ORDER BY bot,full_name'
@@ -169,9 +198,11 @@ class Reads:
         self._enabled = self._bot_repos = self._all = None
 
     def _rows(self, sql, keys):
+        """`sql` ends where the key list goes: the marks for `keys` are added after it (no str.format, since the
+        declaration's SQL has braces of its own)."""
         out = {}
         for part in H.chunks(keys):
-            out.update((r[0], r) for r in self.c.execute(sql.format(','.join('?' * len(part))), part))
+            out.update((r[0], r) for r in self.c.execute(sql + ','.join('?' * len(part)) + ')', part))
         return out
 
     def enabled(self, name):
@@ -206,9 +237,9 @@ def access(c, bot, org, reads=None):
     row = reads.configs.get(bot)
     if not row:
         raise Problem('not_found', 'No such bot', 404)
-    config = json.loads(row['config_json'] or '{}')
+    config = json.loads(row['config'] or '{}')
     mode, all_access = config.get('repo_access_mode', 'own'), config.get('repo_all_access', 'write')
-    source = source_of(_json(row['config_json'])) or bot
+    source = source_of(_json(row['config'])) or bot
     own_row = reads.configs.get(source)
     own = repo_of(own_row['repo'] if own_row else '', org)
     chosen = [dict(r) for r in reads.chosen[bot]]
@@ -276,7 +307,7 @@ def set_access(c, bot, body, org, actor, legacy=False, team_list=False, own_clic
         if (bot_repo or existing and existing['bot_repo']) and not team_list and (name.lower() not in previous or previous[name.lower()] == 'read' and grant.access == 'write'):
             raise Problem('forbidden', 'An Owner or admin chooses bot repositories', 403)
         if legacy and team_list:
-            c.execute('INSERT INTO repositories(id,full_name,enabled,updated) VALUES(?,?,1,?) '
+            c.execute('INSERT INTO repositories(id,full_name,enabled,updated_at) VALUES(?,?,1,?) '
                       'ON CONFLICT(full_name) DO UPDATE SET enabled=1', (uuid.uuid4().hex, name, H.now()))
         elif not c.execute('SELECT 1 FROM repositories WHERE full_name=?', (name,)).fetchone():
             raise Problem('github_repo', 'Choose a repository from the team list', 422)
@@ -330,9 +361,9 @@ def set_access(c, bot, body, org, actor, legacy=False, team_list=False, own_clic
             if not flags[bot]:
                 flags.pop(bot)
             save_metadata(c, stored, flags)
-    config = json.loads(c.execute('SELECT config_json FROM bot_config WHERE bot=?', (bot,)).fetchone()[0] or '{}')
+    config = json.loads(c.execute(BS.ONE_SQL, (bot,)).fetchone()[0] or '{}')
     config.update(repo_access_mode=body.mode, repo_all_access=all_access)
-    c.execute('UPDATE bot_config SET config_json=? WHERE bot=?', (json.dumps(config), bot))
+    BS.write(c, bot, config)
     if body.chosen is not None:
         c.execute('DELETE FROM bot_repo_access WHERE bot=?', (bot,))
         c.executemany('INSERT INTO bot_repo_access VALUES(?,?,?)', [(bot, name, level) for name, level in wanted.values()])
@@ -442,7 +473,8 @@ def preview_change(c, settings, actor, bot, body):
         return None
     row = c.execute("SELECT org FROM github_app WHERE id='app'").fetchone()
     org = row['org'] if row else getattr(settings, 'github_owner', '')
-    name = (H.bot(c, bot) or {}).get('display_name') or bot
+    found = H.bot(c, bot) or {}
+    name = found.get('display_name') or found.get('slug') or bot
     try:
         return tried(c, bot, update, org, actor, name)
     except Problem:
@@ -451,7 +483,7 @@ def preview_change(c, settings, actor, bot, body):
 
 def needs_card(result):
     """Whether a change BotOps makes for a person goes on their Confirm card (`bot_set`, and the settings catalogue's
-    class for it): it gives what only their own click may (`started`), or takes something away."""
+    class for it): it gives what only their own click may (`started_at`), or takes something away."""
     return bool(result.get('workflows_started') or result.get('workflow_edits_started')
                 or result.get('product_creation_started') or result.get('stopped') or result.get('creation_stopped')
                 or result.get('workflows_stopped') or result.get('workflow_edits_stopped')
@@ -460,7 +492,7 @@ def needs_card(result):
 
 def trial(c, bot, update, org, actor, owner=False):
     """The change made as the person's own click on its card would make it (`owner`: the Owner's), then rolled back:
-    `access()` before it and what it did (`set_access` and `started`), or the refusal that click would get."""
+    `access()` before it and what it did (`set_access` and `started_at`), or the refusal that click would get."""
     c.execute('SAVEPOINT repo_preview')
     try:
         before = access(c, bot, org)
@@ -490,7 +522,8 @@ def card_words(c, settings, auth, who, bot, body):
         raise Problem('validation', 'Bot repositories takes {"mode": "own|all|chosen", ...}: ' + str(exc)[:200], 422)
     row = c.execute("SELECT org FROM github_app WHERE id='app'").fetchone()
     org = row['org'] if row else getattr(settings, 'github_owner', '')
-    name = (H.bot(c, bot) or {}).get('display_name') or bot
+    found = H.bot(c, bot) or {}
+    name = found.get('display_name') or found.get('slug') or bot
     before, result = trial(c, bot, update, org, who.actor, owner=who.role == 'owner')
     return needs_card(result), plain_change(name, before, result)
 
@@ -643,9 +676,9 @@ def _sync(service):
         c.execute('UPDATE repositories SET reachable=0')
         for repo in repos:
             name = repo['full_name']
-            c.execute('INSERT INTO repositories(id,full_name,bot_repo,default_branch,setup_command,setup_source,reachable,last_seen,updated) '
+            c.execute('INSERT INTO repositories(id,full_name,bot_repo,default_branch,setup_command,setup_source,reachable,last_seen_at,updated_at) '
                       'VALUES(?,?,?,?,?,?,1,?,?) ON CONFLICT(full_name) DO UPDATE SET bot_repo=excluded.bot_repo,'
-                      'default_branch=excluded.default_branch,reachable=1,last_seen=excluded.last_seen,updated=excluded.updated,'
+                      'default_branch=excluded.default_branch,reachable=1,last_seen_at=excluded.last_seen_at,updated_at=excluded.updated_at,'
                       "setup_command=CASE WHEN repositories.setup_source='settings' THEN repositories.setup_command ELSE excluded.setup_command END,"
                       "setup_source=CASE WHEN repositories.setup_source='settings' THEN 'settings' ELSE excluded.setup_source END",
                       (uuid.uuid4().hex, name, int(name.split('/')[1].lower().startswith('bot-') or name.lower() in own),
@@ -777,7 +810,7 @@ def daily(service):
 def runner_repos(c, runner_id, org):
     result = {}
     sizes = metadata(c, 'repositories-sizes')
-    hosted = c.execute("SELECT a.bot FROM assignments a JOIN bots b ON b.slug=a.bot WHERE a.runner_id=? AND b.state='active'",
+    hosted = c.execute("SELECT a.bot FROM assignments a JOIN bots b ON b.id=a.bot WHERE a.runner_id=? AND b.state='active'",
                        (runner_id,)).fetchall()
     reads = Reads(c, [row[0] for row in hosted])
     for row in hosted:
@@ -853,7 +886,7 @@ def install(app, store, service):
 
     def listing():
         with store.read() as c:
-            repos = [dict(r) for r in c.execute('SELECT full_name,enabled,bot_repo,default_branch,setup_command,setup_source,reachable,last_seen FROM repositories ORDER BY full_name')]
+            repos = [dict(r) for r in c.execute('SELECT full_name,enabled,bot_repo,default_branch,setup_command,setup_source,reachable,last_seen_at FROM repositories ORDER BY full_name')]
             archived = metadata(c, 'repositories-archived')
             for r in repos:
                 r['archived'] = archived.get(r['full_name'].lower())
@@ -897,7 +930,7 @@ def install(app, store, service):
                 command = (body.setup_command or '').strip() or None
                 c.execute('UPDATE repositories SET setup_command=?,setup_source=? WHERE full_name=?',
                           (command, 'settings' if command else None, name))
-            c.execute('UPDATE repositories SET updated=? WHERE full_name=?', (H.now(), name))
+            c.execute('UPDATE repositories SET updated_at=? WHERE full_name=?', (H.now(), name))
             after = dict(c.execute('SELECT * FROM repositories WHERE full_name=?', (name,)).fetchone())
             H.event(c, who.actor, 'repositories.changed', name, {'before': dict(before), 'after': after})
         return after
@@ -911,6 +944,8 @@ def install(app, store, service):
 
     @app.get('/api/v2/bots/{bot}/repositories')
     def bot_get(request: Request, bot: str):
+        with store.read() as c:
+            bot = (H.resolve_bot(c, bot) or {}).get('id', bot)
         who = botops(request, bot) or human(request)
         with store.read() as c:
             if who.role != 'bot' and not app.state.auth.bot_access(c, who, bot)['see']:
@@ -920,6 +955,8 @@ def install(app, store, service):
 
     @app.put('/api/v2/bots/{bot}/repositories')
     def bot_set(request: Request, bot: str, body: RepoAccessUpdate):
+        with store.read() as c:
+            bot = (H.resolve_bot(c, bot) or {}).get('id', bot)
         who = botops(request, bot) or human(request, True)
         if app.state.auth.system_bot(bot) and who.role != 'owner':
             raise Problem('forbidden', 'Only the Owner changes Built-in bots', 403)
@@ -952,12 +989,18 @@ def install(app, store, service):
                 return result
             c.execute('ROLLBACK TO repo_narrowing')
             c.execute('RELEASE repo_narrowing')
-            name = (H.bot(c, bot) or {}).get('display_name') or bot
+            found = H.bot(c, bot) or {}
+            name = found.get('display_name') or found.get('slug') or bot
             propose = getattr(app.state, 'botops_propose', None)
             if who.via == 'botops' and propose:
                 plain = plain_change(name, before, result)
                 return propose(c, who, 'PUT', '/api/v2/bots/' + bot + '/repositories', body.model_dump(exclude_none=True),
                                plain[:300], what=plain)
+            if gains and who.via == 'assistant':
+                # The person's Assistant cannot make this change on its words: it is their card in Settings, or one
+                # proposed (`hub assistant propose`) for them to confirm.
+                raise Problem('confirm_required', 'That lets a bot run workflows, edit workflow files or create product '
+                              'repositories: the person confirms it in Settings > Repositories', 403)
             if gains:
                 raise Problem('forbidden', 'Only an Owner or admin lets a bot run workflows, edit workflow files or '
                               'create product repositories, themselves in Settings > Repositories', 403)
