@@ -493,7 +493,7 @@ def guarded(c, auth, who, inner, function, columns=None, unseen=None):
         # with the task (and its words through the content gate), a goal's with the goal, the company's and the
         # market's by everyone, the strategy's by the owner (its draft's words may be unpublished).
         "history_events": ("CASE subject_type WHEN 'task' THEN subject_id IN (SELECT id FROM tasks) AND "
-                           + content_gate(("old", "new", "note"))
+                           + content_gate(("old", "new", "note", "data"))
                            + " WHEN 'goal' THEN subject_id IN (SELECT id FROM goals)"
                            + " WHEN 'strategy' THEN " + ("1" if owner else "0")
                            + " WHEN 'company' THEN 1 ELSE subject_type IN "

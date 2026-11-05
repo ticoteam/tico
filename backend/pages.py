@@ -28,8 +28,10 @@ SCHEMA = """
 CREATE TABLE IF NOT EXISTS pages(
  file_id TEXT PRIMARY KEY REFERENCES bot_files(id),
  cadence TEXT NOT NULL DEFAULT 'none' CHECK(cadence IN ('none','daily','weekly','monthly')),
- as_of TEXT, replaced_by_id TEXT, audience TEXT, archived INTEGER NOT NULL DEFAULT 0,
+ as_of TEXT, replaced_by_id TEXT, audience TEXT, deleted_at TEXT, archived INTEGER NOT NULL DEFAULT 0,
  created_at TEXT NOT NULL, updated_at TEXT NOT NULL);
+CREATE TABLE IF NOT EXISTS page_identities(
+ identity TEXT NOT NULL, file_id TEXT NOT NULL REFERENCES pages(file_id), PRIMARY KEY(identity,file_id));
 CREATE INDEX IF NOT EXISTS pages_replaced ON pages(replaced_by_id) WHERE replaced_by_id IS NOT NULL;
 """
 
@@ -274,7 +276,8 @@ class Pages:
             cache = {}
             found, nxt = scan(c, "SELECT f.*,p.cadence,p.as_of,p.replaced_by_id,p.audience,p.archived AS page_archived FROM pages p "
                               "JOIN bot_files f ON f.id=p.file_id", where, params, limit, cursor,
-                              lambda r: self.files.visible(c, who, r, cache))
+                              lambda r: self.files.visible(c, who, r, cache),
+                              cursor_key=visuals.key_for(self.app, self.store.settings))
             known = names.lookup(c, {"bot:" + r["bot_id"] for r in found} | self._authors(c, found))
             return {"pages": [self.view(c, who, r, self.page_of(r), cache, known) for r in found],
                     "has_more": nxt is not None, "next_cursor": nxt}

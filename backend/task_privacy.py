@@ -1017,8 +1017,16 @@ def require_batch(c, who, row):
             require_message(c, who, H.message(c, row["message_id"]))
 
 
+def page_content_readable(c, actor, payload):
+    from . import files, teammate_access
+    principals = actor if isinstance(actor, (tuple, list, set)) else [actor]
+    return all(viewer is not None and not files.page_ref_denials(c, None, viewer, payload)
+               for principal in principals if (viewer := teammate_access._viewer_for(c, principal)) is not None)
+
+
 def content_readable(c, actor, payload):
-    return (meeting_sources(c).readable(actor, meeting_sources(c).references(payload))
+    return (page_content_readable(c, actor, payload)
+            and meeting_sources(c).readable(actor, meeting_sources(c).references(payload))
             and readable(c, actor, references(c, payload)))
 
 

@@ -116,7 +116,8 @@ class ReadIndex:
         return frozenset(ids)
 
     def content(self, value):
-        return ((not self.denied or not self.denied.intersection(self.references(value)))
+        return (privacy.page_content_readable(self.c, self.principals, value)
+                and (not self.denied or not self.denied.intersection(self.references(value)))
                 and self.meetings.readable(self.principals, self.meetings.references(value)))
 
     def conversation(self, cid):

@@ -143,7 +143,7 @@ def test_deleted_page_refs_stay_scrubbed_for_everyone_and_events_stay_denied(api
     for person in ("ana", "ben", "cara"):
         who = Identity("human:" + person, "owner" if person == "ana" else "human", person + "@acme.example")
         with api.app.state.store.read() as c:
-            assert c.execute("SELECT 1 FROM pages WHERE file_id=?", (fid,)).fetchone() is None
+            assert c.execute("SELECT deleted_at FROM pages WHERE file_id=?", (fid,)).fetchone()[0]
             refs = H.message(c, comment["id"])["refs"]
             assert_placeholder(files.readable_page_refs(c, api.app.state.auth, who, refs), "A deleted page", fid)
             shown = visuals.decorate(c, who, api.app.state.files, b"test", "", [{"refs": refs}])

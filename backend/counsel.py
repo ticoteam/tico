@@ -470,11 +470,16 @@ def page_copy_readable(c, read, viewer=None, auth=None):
     row = copied["page"] if copied else F.restricted_pages(c).get(read["file_id"])
     if not row:
         return True
+    if row["state"] == "deleted":
+        return False
+    if auth is None:
+        from .auth import Auth
+        auth = Auth.read_policy(c)
     asker = teammate_access._viewer_for(c, read["requested_by"])
     principals = [asker, Identity("bot:" + SLUG, "bot"), *([viewer] if viewer else [])]
     return (all(who and F.page_audience_visible(c, auth, who, row, {}) for who in principals)
             and (not row["task_id"] or F.privacy.task_readable(c, asker, H.task(c, row["task_id"])))
-            and (auth is None or F.file_visible(c, auth, asker, row, {})))
+            and bool(asker) and F.file_visible(c, auth, asker, row, {}))
 
 
 def denied_page_copies(c, viewer, auth=None):

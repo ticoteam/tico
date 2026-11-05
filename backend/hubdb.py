@@ -7952,7 +7952,7 @@ HISTORY_SUBJECTS = ("task", "goal", "company", "strategy",
                     "market_entity", "market_edge", "market_evidence", "market_document")
 MARKET_SUBJECTS_SQL = "('market_entity','market_edge','market_evidence','market_document')"
 TASK_EVENT_COLUMNS = ("id, subject_id AS task_id, created_at, actor_id AS actor, kind AS field, old, new, note, "
-                      "action_id, via")
+                      "action_id, via, data")
 
 
 def history_event(conn, subject_type, subject_id, actor, kind, old=None, new=None, note=None, data=None, *,

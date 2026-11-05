@@ -231,6 +231,16 @@ class Auth:
         self._credential_followed = None
         self.proxy = identity_proxy.build(self.settings, store)
 
+    @classmethod
+    def read_policy(cls, c):
+        """The database's read rules for native gates without a web server or sign-in settings."""
+        from . import access, teammate_access
+        policy = cls.__new__(cls)
+        policy.bot_admins = set(access.owner_and_admin_emails(c))
+        # Native reads use the same stored built-in bot set as teammate access.
+        policy.system_bot = lambda slug: slug in teammate_access._system_bots(c)
+        return policy
+
     def sync_access(self, c):
         """Adopt the stored owner and access list. One indexed read per request keeps a transfer
         or a list change effective at once, with no restart."""

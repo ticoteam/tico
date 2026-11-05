@@ -246,18 +246,33 @@ def file_visible(c, auth, who, row, cache):
     return cards.widened(c, auth, who, row["id"], cache)
 
 
-def page_blobs(c, bid):
-    """The pages whose bytes or previews this blob holds; attachment ownership never bypasses them."""
+def page_identities(c):
+    """All page aliases, including purged versions, resolved once per read snapshot."""
     privacy.snapshot(c)
     def build():
         found = {}
-        for row in c.execute("SELECT f.*,v.blob_id,v.thumb_blob_id,v.poster_blob_id FROM bot_files f "
-                             "JOIN pages p ON p.file_id=f.id JOIN bot_file_versions v ON v.file_id=f.id"):
-            for blob in (row["blob_id"], row["thumb_blob_id"], row["poster_blob_id"]):
-                if blob:
-                    found.setdefault(blob, []).append(dict(row))
+        def add(identity, fid):
+            if identity:
+                found.setdefault(identity, set()).add(fid)
+        try:
+            for r in c.execute("SELECT file_id FROM pages"):
+                add(r[0], r[0])
+            for r in c.execute("SELECT v.* FROM bot_file_versions v JOIN pages p ON p.file_id=v.file_id"):
+                for key in ("blob_id", "poster_blob_id", "thumb_blob_id", "digest", "source_digest"):
+                    add(r[key], r["file_id"])
+            for r in c.execute("SELECT identity,file_id FROM page_identities"):
+                add(r[0], r[1])
+        except sqlite3.OperationalError as exc:
+            if "no such table" not in str(exc):
+                raise
         return found
-    return read_cache.value(c, ("page_blobs",), build, shared=True).get(bid, ())
+    return read_cache.value(c, ("page_identities",), build, shared=True)
+
+
+def page_blobs(c, bid):
+    """The pages whose bytes or previews this blob holds, including deleted provenance."""
+    return [dict(row) for fid in page_references(bid, c) if (row := c.execute(
+        "SELECT * FROM bot_files WHERE id=?", (fid,)).fetchone())]
 
 
 def page_blob_visible(c, auth, who, bid):
@@ -269,7 +284,7 @@ def page_event_readable(c, auth, who, target, detail):
     if page_ref_denials(c, auth, who, [target, data]):
         return False
     names_audience = isinstance(data, dict) and ("before" in data or "after" in data)
-    # Hard delete keeps the file tombstone and activity, while removing the page's row.
+    # Audience-change details remain restricted to managers, including on tombstones.
     row = c.execute("SELECT f.* FROM bot_files f LEFT JOIN pages p ON p.file_id=f.id "
                     "WHERE f.id=? AND (p.file_id IS NOT NULL OR ?)", (target, int(names_audience))).fetchone()
     cache = {}
@@ -290,41 +305,53 @@ def page_reference(value):
         url = urlsplit(value)
         if url.scheme in ("http", "https"):
             value = "#" + url.fragment if url.fragment else url.path
-        match = re.fullmatch(r"(?:page:|#/page/|/(?:api/(?:v2/)?)?pages/)?"
-                             r"(file-[^/?#@\s]{24})(?:@\d+)?(?:[?][^#]*)?", value)
+        match = re.fullmatch(r"(?:page:|#/page/|/(?:api/(?:v2/)?)?(?:pages|files)/)?"
+                             r"(file-[^/?#@\s]{24})(?:@\d+|/versions/\d+)?(?:[?][^#]*)?", value)
         return match[1] if match else None
     except ValueError:
         return None
 
 
-def page_references(value):
-    """Collect references with the same recognizer on every message, event and runner transport."""
+def page_references(value, c=None):
+    """Resolve file, version, blob and digest identities through one recognizer on every transport."""
     found = set()
-    if isinstance(value, str):
-        fid = page_reference(value)
-        if fid:
-            found.add(fid)
-        elif value.startswith(("{", "[")):
-            found.update(page_references(H._json(value, None)))
-    elif isinstance(value, dict):
-        for child in value.values():
-            found.update(page_references(child))
-    elif isinstance(value, (list, tuple)):
-        for child in value:
-            found.update(page_references(child))
+    aliases = page_identities(c) if c is not None else {}
+    def collect(part):
+        if isinstance(part, str):
+            fid = page_reference(part)
+            if fid:
+                found.add(fid)
+            candidate = unquote(part)
+            try:
+                url = urlsplit(candidate)
+                if url.scheme in ("http", "https"):
+                    candidate = url.path
+                candidate = re.sub(r"^/(?:api/(?:v2/)?)?files/", "", candidate)
+                candidate = re.split(r"[?@]", candidate, maxsplit=1)[0]
+                found.update(aliases.get(candidate, ()))
+            except ValueError:
+                pass
+            if part.startswith(("{", "[")):
+                collect(H._json(part, None))
+        elif isinstance(part, dict):
+            for child in part.values():
+                collect(child)
+        elif isinstance(part, (list, tuple)):
+            for child in part:
+                collect(child)
+    collect(value)
     return found
 
 
 def page_ref_denials(c, auth, who, refs):
-    ids = page_references(refs)
+    ids = page_references(refs, c)
     if not ids:
         return {}
     pages, cache = restricted_pages(c), {}
-    # Deletion removes the pages row and its audience, but leaves a file tombstone.
+    # Retained page tombstones deny every saved reference, even for managers.
     def tombstones():
         try:
-            return {r[0] for r in c.execute("SELECT id FROM bot_files WHERE state='deleted' "
-                                            "AND lower(mime) LIKE 'text/html%'")}
+            return {r[0] for r in c.execute("SELECT file_id FROM pages WHERE deleted_at IS NOT NULL")}
         except sqlite3.OperationalError as exc:
             if "no such table" not in str(exc) and "no such column" not in str(exc):
                 raise
@@ -345,9 +372,9 @@ def readable_page_refs(c, auth, who, refs):
         return original
 
     def clean(value):
-        direct = page_references(value) & denied.keys() if isinstance(value, str) else set()
+        direct = page_references(value, c) & denied.keys() if isinstance(value, str) else set()
         if isinstance(value, dict):
-            direct = {fid for v in value.values() if (fid := page_reference(v)) in denied}
+            direct = {fid for v in value.values() if isinstance(v, str) for fid in page_references(v, c) if fid in denied}
             if direct:
                 return {"removed": True, "label": denied[sorted(direct)[0]]}
             return {k: clean(v) for k, v in value.items()}
@@ -503,11 +530,12 @@ class Files:
         return fid
 
     def attach_task(self, c, who, task_id, item, digest, bot):
-        """Same task and display name means one series, even across authors."""
+        """A visible file with the same task and display name continues its series."""
         row = c.execute("SELECT f.* FROM bot_files f JOIN bot_file_versions v "
                         "ON v.file_id=f.id AND v.version=f.current_version "
                         "WHERE f.task_id=? AND f.archived=0 AND v.name=? "
-                        "ORDER BY f.last_activity_at DESC LIMIT 1", (task_id, item["name"])).fetchone()
+                        "ORDER BY f.last_activity_at DESC", (task_id, item["name"])).fetchall()
+        row = next((r for r in row if self.visible(c, who, r, {})), None)
         created = row is None
         legacy = None
         if row is None:
@@ -571,7 +599,7 @@ class Files:
         for b in c.execute("SELECT b.*,m.width,m.height,m.duration_ms,m.media_state,m.poster_blob_id,m.thumb_blob_id "
                            "FROM blobs b JOIN task_assets a ON a.blob_id=b.id LEFT JOIN blob_media m ON m.blob_id=b.id WHERE a.task_id=? "
                            "AND NOT EXISTS(SELECT 1 FROM bot_file_versions v WHERE v.blob_id=b.id)", (task_id,)):
-            if not privacy.blob_readable(c, privacy.actor(who), b["id"]):
+            if not page_blob_visible(c, self.auth, who, b["id"]) or not privacy.blob_readable(c, privacy.actor(who), b["id"]):
                 continue
             out.append({"id": b["id"], "name": b["name"], "mime": b["content_type"], "current_version": 1,
                         "archived": False, "versions": [{"n": 1, "size": b["size"], "mime": b["content_type"],

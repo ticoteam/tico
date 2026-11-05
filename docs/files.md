@@ -185,7 +185,8 @@ confirm first.
   places, and Tico file hosting. Bytes anything else still uses stay: another file, a task or thread attachment, a
   meeting's recording, market evidence, the team icon. Bytes this server wrote in the last two minutes (the same
   bytes, uploaded again) go on a later pass, within a few minutes.
-- Its search text, page settings and pins go.
+- Its search text and pins go. A page keeps a tombstone with its audience and identity provenance, so deleting it
+  never reopens copied content. Saved page references and citations show **A deleted page** for everyone.
 - One row stays, titled **Deleted file**, and its activity records who deleted it, when and how many versions,
   without the name or the content. Publishing the same path again makes a new file.
 - The backup (`TICO_BACKUP_URL`) keeps its copy: files there are only ever added. Remove them there by hand if they

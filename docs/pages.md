@@ -48,7 +48,8 @@ Narrowing access removes revoked page text from Counsel's read task, its edit hi
 output, including queued work. Counsel rechecks the asker and its run on later reads. Signed visuals also recheck
 the person and any bot acting for them; old five-field addresses expire immediately and reloading gets a new one.
 Archived bots match no audience. Messages and runner context keep only “A page you can't open” for a page outside
-the reader's audience, or “A deleted page” after deletion. Group membership changes refresh open pages;
+the reader's audience, or “A deleted page” after deletion. Deletion purges the content and keeps its audience and
+identity provenance; saved citations also show only the deleted-page placeholder. Group membership changes refresh open pages;
 deleting a group or person, or archiving a bot, removes their explicit page grants. An empty audience leaves access
 to the page's managers.
 

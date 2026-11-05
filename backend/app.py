@@ -1317,6 +1317,8 @@ def create_app(settings=None):
             if since := step_age.since_map(c, [row]).get(row["id"]):
                 value["step_since"] = since      # how long a Dev ticket has been at its working step (backend/step_age.py)
             if who is not None:
+                from .files import readable_page_refs
+                value = readable_page_refs(c, auth, who, value)
                 value = teammate_access.Known(c, who, auth).task(value)     # people the reader may not see
         return value
 
@@ -1442,6 +1444,8 @@ def create_app(settings=None):
                 value["origin_actor"] = None
             value["from_person"] = views.person_origin(c, row, visible_sql, who.actor)
             result.append(value)
+        from .files import readable_page_refs
+        result = readable_page_refs(c, auth, who, result)
         return teammate_access.Known(c, who, auth).tasks(result)       # people the reader may not see
 
     def mover(c, who):
