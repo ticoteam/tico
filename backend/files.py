@@ -306,7 +306,7 @@ def page_reference(value):
         if url.scheme in ("http", "https"):
             value = "#" + url.fragment if url.fragment else url.path
         match = re.fullmatch(r"(?:page:|#/page/|/(?:api/(?:v2/)?)?(?:pages|files)/)?"
-                             r"(file-[^/?#@\s]{24})(?:@\d+|/versions/\d+)?(?:[?][^#]*)?", value)
+                             r"(file-[^/?#@\s]{24})(?:@\d+|/(?:versions(?:/\d+)?|meta|thumb|poster|activity))?(?:[?][^#]*)?", value)
         return match[1] if match else None
     except ValueError:
         return None
@@ -327,7 +327,8 @@ def page_references(value, c=None):
                 if url.scheme in ("http", "https"):
                     candidate = url.path
                 candidate = re.sub(r"^/(?:api/(?:v2/)?)?files/", "", candidate)
-                candidate = re.split(r"[?@]", candidate, maxsplit=1)[0]
+                candidate = re.sub(r"^(?:page|file|blob):", "", candidate)
+                candidate = re.split(r"[/?@]", candidate, maxsplit=1)[0]
                 found.update(aliases.get(candidate, ()))
             except ValueError:
                 pass

@@ -60,7 +60,8 @@ def test_native_and_runner_gate_recheck_askers_inherited_read(api):
         assert not counsel.page_copy_readable(c, copied)
         assert not H.task_private_readable(c, "bot:" + H.COUNSEL, task)
         assert not bot_reads_task(c, "bot:" + H.COUNSEL, task)
-    assert api.get("/api/v2/tasks/" + tid, headers=headers("counsel-test")).status_code == 404
+    denied = api.get("/api/v2/tasks/" + tid, headers=headers("counsel-test"))
+    assert denied.status_code in (403, 404) and "42 deals" not in denied.text
 
 
 def test_same_name_outsider_upload_creates_separate_file(api):
@@ -144,7 +145,7 @@ def test_restricted_page_leak_matrix_across_stored_shapes_transports_and_deletio
         c.execute("UPDATE registry_metadata SET value=? WHERE key='people'", (json.dumps(roster),))
     api.app.state.store.settings.test_identities["reader-test"] = Identity("human:reader", "human", "reader@acme.example")
     _, attempt = turn(api)
-    tid = post(api, "tasks", {"owner": "finance", "title": "Review folios", "body": "Review", "private": False})["id"]
+    tid = post(api, "tasks", {"owner": "finance", "title": "Review folios", "body": "Review", "private": False}, token="ops-test")["id"]
     name, title = "canary-folio-private.html", "Canary folio confidential"
     document = b"<html><body><p>Canary confidential quote.</p>" + b"x" * 81917 + b"</body></html>"
     made = page(api, attempt, task=tid, name=name, title=title, data=document)

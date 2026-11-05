@@ -22,6 +22,7 @@ import csv
 import io
 import json
 import logging
+import secrets
 import sqlite3
 from html.parser import HTMLParser
 
@@ -117,23 +118,26 @@ def has_pins(c):
 
 # ---------------------------------------------------------------------------------------------- cursors and scans
 def cursor_cipher(key):
-    from cryptography.fernet import Fernet
-    return Fernet(base64.urlsafe_b64encode(hashlib.sha256(b"tico.file-cursor.v1\0" + key).digest()))
+    from cryptography.hazmat.primitives.ciphers.aead import AESGCM
+    return AESGCM(hashlib.sha256(b"tico.file-cursor.v1\0" + key).digest())
 
 
 def encode_cursor(stamp, ident, key):
-    # Fernet authenticates and encrypts the position; denied rows never appear in the token's plaintext.
-    return cursor_cipher(key).encrypt(json.dumps([stamp, ident]).encode()).decode()
+    # Only a random nonce is public: both the row identity and its timestamp are authenticated ciphertext.
+    nonce = secrets.token_bytes(12)
+    sealed = cursor_cipher(key).encrypt(nonce, json.dumps([stamp, ident]).encode(), b"file-cursor-v1")
+    return base64.urlsafe_b64encode(nonce + sealed).decode()
 
 
 def decode_cursor(cursor, key):
-    from cryptography.fernet import InvalidToken
+    from cryptography.exceptions import InvalidTag
     try:
-        stamp, ident = json.loads(cursor_cipher(key).decrypt(cursor.encode(), ttl=7 * 86400))
+        sealed = base64.urlsafe_b64decode(cursor.encode())
+        stamp, ident = json.loads(cursor_cipher(key).decrypt(sealed[:12], sealed[12:], b"file-cursor-v1"))
         if not isinstance(stamp, str) or not isinstance(ident, str) or not stamp or not ident:
             raise ValueError()
         return stamp, ident
-    except (InvalidToken, ValueError, TypeError, binascii.Error, UnicodeError) as exc:
+    except (InvalidTag, ValueError, TypeError, binascii.Error, UnicodeError) as exc:
         raise Problem("validation", "That cursor is not valid", 422) from exc
 
 
