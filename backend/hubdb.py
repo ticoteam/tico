@@ -63,6 +63,7 @@ withdrawn text in the audit trail.
 import contextvars
 import hashlib
 import json
+from typing import Any
 import logging
 import os
 import re
@@ -1091,7 +1092,7 @@ def person_sent(message):
     return sender == KEEPER and bool(refs.get("carries")) and is_human(str(refs.get("from") or ""))
 
 
-def _json(value, default=None):
+def _json(value, default=None) -> Any:
     """A stored JSON column as a value. A row a caller already decoded holds the value itself under the column's
     name (row['refs'] is the dict), so a dict or list passes through."""
     if isinstance(value, (dict, list)):
