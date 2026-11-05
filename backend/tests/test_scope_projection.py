@@ -72,6 +72,10 @@ def test_every_stored_shape_is_projected_at_every_delivery(api, assistant):
         good = dict(c.execute("SELECT * FROM bot_file_versions WHERE file_id=?", (allowed,)).fetchone())
     bid, digest = version["blob_id"], version["digest"]
     refs = all_shapes(hidden, bid, digest, "Forbidden page title", mid)
+    missing = H.new_id()
+    refs["attachments"].append({"id": missing, "title": "Missing source title"})
+    refs["files"].append(missing + "@1")
+    refs["review"]["files"].append({"file": missing, "version": 1, "title": "Missing source title"})
     append_allowed(refs, allowed, good["blob_id"], good["digest"])
     if version["source_digest"]:
         refs["versions"].append({"source_digest": version["source_digest"], "title": "Forbidden page title"})
@@ -100,6 +104,7 @@ def test_every_stored_shape_is_projected_at_every_delivery(api, assistant):
             original["make_page"] = {"task": t["id"]}
         c.execute("UPDATE messages SET refs=? WHERE id=?", (encode(original), origin["id"]))
     secrets = (hidden, hidden + "@1", bid, digest, "Forbidden page title", "forbidden-page.html", mid, "Forbidden meeting title")
+    secrets += (missing, "Missing source title")
     if version["source_digest"]:
         secrets += (version["source_digest"],)
     attempt = claim(api, machine, bot, key="all-shapes-claim")
