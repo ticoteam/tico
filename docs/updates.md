@@ -220,9 +220,10 @@ refuses the update when `server`, or `slack` when it runs, would not get that re
 release on `/healthz`; otherwise the update counts as unhealthy and is rolled back.
 
 A Docker step that runs over its time limit is named in the update status: which step ran over, and its limit in
-seconds. Before the new version is healthy, the update rolls back like any other failure. Once it is healthy, the
-update is kept. A later step that fails (old images not removed, another service not restarting) is said in the
-status, and nothing is rolled back.
+seconds. Until the new version has passed its health and version checks, any failure rolls back like any other. After
+that, a front door or tunnel that runs over its time limit is kept and named in the status, and so is a later failure
+(old images not removed, another service not restarting): nothing is rolled back for it. Any other error starting the
+front door or tunnel after that point still rolls back.
 
 `GET /api/v2/system/update` also says which release the server is `running`, the one it ran `previous`ly and a short
 `history`. The server writes these itself at startup, so they stay right after an update done outside the updater.
