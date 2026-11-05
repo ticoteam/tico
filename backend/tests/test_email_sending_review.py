@@ -310,6 +310,7 @@ def test_rehearsal_keeps_restrictions_but_discards_send_permits_and_proofs(inbox
     '<p style="content: \'We agree to pay $100000\'">Thanks.</p>',
     '<link rel="stylesheet" href="https://assets.acme.example/contract.css"><p>Thanks.</p>',
     '<!--[if mso]><p>We agree to pay $100000.</p><![endif]--><p>Thanks.</p>',
+    '<input value="We agree to pay $100000"><p>Thanks.</p>',
 ])
 @pytest.mark.parametrize("prompt_legal", [False, True])
 def test_render_dependent_body_is_previewed_but_cannot_be_classified_as_harmless(inbox, html, prompt_legal):
@@ -319,6 +320,7 @@ def test_render_dependent_body_is_previewed_but_cannot_be_classified_as_harmless
     msg.set_content(html, subtype="html")
     frozen = S.snapshot(raw(msg), BOX)
     assert not frozen["classification_complete"]
+    assert frozen["visible_bodies"][0]["text"].strip() == html
     preview = "\n".join(body["text"] for body in frozen["visible_bodies"])
     assert "Thanks." in preview
     assert "$100000" in preview or "contract.css" in preview

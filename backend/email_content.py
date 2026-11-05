@@ -13,6 +13,11 @@ from .store import Problem
 
 MAX_RAW = 24 * 1024 * 1024
 MAX_PREVIEW = 256 * 1024
+TEXT_MARKUP = frozenset("a abbr address article aside b big blockquote body br caption center cite code col colgroup "
+                        "dd del div dl dt em figcaption figure footer h1 h2 h3 h4 h5 h6 head header hr html i ins kbd "
+                        "li main mark nav ol p pre q rp rt ruby s samp section small span strong sub summary sup "
+                        "table tbody td tfoot th thead title tr tt u ul var wbr".split())
+TEXT_ATTRIBUTES = frozenset(("alt", "title", "href", "src", "value", "label", "placeholder", "aria-label"))
 
 
 def digest(value):
@@ -28,7 +33,7 @@ class VisibleHTML(HTMLParser):
         self.complete = True
 
     def handle_starttag(self, tag, attrs):
-        if tag in ("img", "svg", "video", "audio", "canvas", "object", "iframe", "style", "link") or any(name == "style" for name, _ in attrs):
+        if (tag not in TEXT_MARKUP and tag != "script") or any(name not in TEXT_ATTRIBUTES for name, _ in attrs):
             self.complete = False
         if tag == "script":
             self.ignored += 1
@@ -134,7 +139,8 @@ def snapshot(raw, mailbox):
                 html.feed(text)
                 html.close()
                 complete = complete and html.complete
-                visible.append({"type": "text/html", "text": "".join(html.text)})
+                # Unknown rendering stays inert in the preview, with no discarded body or attribute bytes.
+                visible.append({"type": "text/html", "text": "".join(html.text) if html.complete else text})
         if len(str(msg.get("subject", ""))) > 1000 or len(files) > 50 or sum(len(p["text"]) for p in visible) > MAX_PREVIEW:
             raise ValueError("The email cannot be previewed in full")
     except (ValueError, TypeError, LookupError) as exc:
