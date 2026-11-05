@@ -71,6 +71,7 @@ from datetime import datetime, timedelta, timezone
 
 from .batch_work import isolated
 from .store import H
+from . import sources as SRC
 
 WAKE = "task_roundup"
 EVENT = "task_roundup.sent"
@@ -161,6 +162,7 @@ def send(c, plan):
     return send_detail(c, plan)[0]
 
 
+@SRC.scoped("task-roundup")
 def send_detail(c, plan, skip_tasks=(), *, allowed=None):
     """send, and the ids of the tasks its shown lines named: (lines, [task ids]), or (0, []) when nothing was sent. The
     Maintenance limiter counts a delivered list once, with these ids (backend/maintenance_steps/find_stuck.py). A task in

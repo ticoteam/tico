@@ -348,6 +348,10 @@ pub struct Recorder {
     draft_status: String,
     link_tasks: Value,
     link_tasks_at: Instant,
+    link_tasks_generation: u64,
+    link_tasks_dirty: bool,
+    seen_task_links: Value,
+    link_activity: tico_recorder_native::task_links::Activity,
     chat_error: String,
     /// A question or message that failed, offered back in the input.
     chat_retry: String,
@@ -481,6 +485,10 @@ impl Recorder {
             draft_status: String::new(),
             link_tasks: Value::Null,
             link_tasks_at: Instant::now() - Duration::from_secs(60),
+            link_tasks_generation: 0,
+            link_tasks_dirty: true,
+            seen_task_links: Value::Null,
+            link_activity: Default::default(),
             chat_error: String::new(),
             chat_retry: String::new(),
             adding: None,
@@ -627,7 +635,9 @@ impl Recorder {
         }
         let record = self.store.get(id)?;
         self.context = self.store.context(id).unwrap_or_default();
+        self.link_activity = self.store.task_link_activity(id);
         self.current = Some(record);
+        self.seen_task_links = self.task_links_snapshot();
         self.link_tasks = Value::Null;
         self.link_tasks_at = Instant::now() - Duration::from_secs(60);
         self.reset_saved();
@@ -773,21 +783,26 @@ impl Recorder {
     }
     /// The open meeting refreshes often; the whole library only every few seconds.
     fn reload_open(&mut self) {
+        // Take the mark before reading: a concurrent receipt write must trigger another refresh.
+        self.seen_open = self.store.version();
         if let Some(id) = &self.meeting
             && let Ok(stored) = self.store.context(id)
-            && stored.task_link_operations != self.context.task_link_operations
+            && Self::context_links(&stored) != Self::context_links(&self.context)
         {
             // Merge background link results without losing notes or unsent edits in the window.
             self.save_context();
-            self.link_tasks_at = Instant::now() - Duration::from_secs(60);
         }
-        self.seen_open = self.store.version();
         if let Some(id) = &self.meeting {
             self.ui_version += 1;
             match self.store.get(id) {
                 Ok(record) => self.current = Some(record),
                 Err(error) => self.error = error.to_string(),
             }
+        }
+        let links = self.task_links_snapshot();
+        if links != self.seen_task_links {
+            self.seen_task_links = links;
+            self.invalidate_task_links();
         }
         self.refresh = Instant::now();
     }
@@ -1123,6 +1138,7 @@ impl Recorder {
                 if here
                     && let Ok(value) = reply.result
                     && value["scope"] == self.link_scope()
+                    && value["generation"] == self.link_tasks_generation
                 {
                     if let Some(rows) = value["linked"]["tasks"].as_array()
                         && let Some(loaded) = self.link_tasks["linked"]["tasks"].as_array_mut()
@@ -1135,18 +1151,19 @@ impl Recorder {
                 continue;
             }
             if reply.kind == "task-links" {
-                if here {
-                    self.link_tasks = reply
-                        .result
-                        .ok()
-                        .filter(|v| v["scope"] == self.link_scope())
-                        .unwrap_or(Value::Null);
+                if here
+                    && reply.result.as_ref().is_ok_and(|v| {
+                        v["scope"] == self.link_scope()
+                            && v["generation"] == self.link_tasks_generation
+                    })
+                {
+                    self.link_tasks = reply.result.unwrap()["data"].clone();
                 }
                 continue;
             }
             if reply.kind == "link" && here {
                 self.save_context();
-                self.link_tasks_at = Instant::now() - Duration::from_secs(60);
+                self.invalidate_task_links();
             }
             if ["items", "presence"].contains(&reply.kind.as_str())
                 && (!here
@@ -1413,6 +1430,15 @@ impl Recorder {
             self.reload();
         }
         self.refresh_task_links();
+        let activity = self
+            .meeting
+            .as_deref()
+            .map(|id| self.store.task_link_activity(id))
+            .unwrap_or_default();
+        if self.link_activity != activity {
+            self.link_activity = activity;
+            self.bump();
+        }
         self.sync_presence();
         self.sync_saved();
         self.watch_inputs();
@@ -3148,10 +3174,11 @@ impl Recorder {
                         .into_iter()
                         .flatten()
                         .any(|a| a["actor"] == row.0)
-                    || self.live["bots"].as_array().into_iter().flatten().any(|b| {
-                        row.0 == format!("bot:{}", b["bot"].as_str().unwrap_or_default())
-                            && b["joined_by"] == self.live["owner_actor"]
-                    })
+                    || self.live["bots"]
+                        .as_array()
+                        .into_iter()
+                        .flatten()
+                        .any(|b| row.0 == format!("bot:{}", b["bot"].as_str().unwrap_or_default()))
             });
         }
         let send_blocked = tico_recorder_native::live::item_send_blocked(&self.context);
@@ -3235,7 +3262,7 @@ impl Recorder {
                     "send_blocked": send_blocked,
                     "paused_warning": !self.context.paused_windows.is_empty() && (!item.quote.trim().is_empty() || !item.title.trim().is_empty()),
                     "can_send": can_send && !chosen.is_empty() && !item.title.trim().is_empty(),
-                    "error": error,
+                    "error": if item.kind == "link" { self.task_link_error(&item.task_id).to_owned() } else { error },
                 })
             })
             .collect();
@@ -3595,6 +3622,38 @@ fn wait_stopped(store: &Store, id: &str) -> anyhow::Result<()> {
 #[cfg(test)]
 mod saved_panel_tests {
     use super::*;
+    #[test]
+    fn private_action_recipients_include_bots_added_by_participants() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = Store::open(dir.path()).unwrap();
+        let record = store.create("Planning").unwrap();
+        let mut app = Recorder::new(store, None, true).unwrap();
+        app.open(&record.id).unwrap();
+        app.context.live_id = "live-planning".into();
+        app.live = json!({
+            "visibility": "private", "owner_actor": "human:ana",
+            "access": [{"actor": "human:ben"}],
+            "bots": [{"bot": "ops", "joined_by": "human:ben"}]
+        });
+        app.roster = [
+            ("human:ana", "Ana"),
+            ("human:ben", "Ben"),
+            ("bot:ops", "Operations"),
+            ("bot:outside", "Outside"),
+        ]
+        .into_iter()
+        .map(|(actor, name)| (actor.into(), name.into()))
+        .collect();
+        let view = app.actions_view("one");
+        let owners: Vec<_> = view["owners"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|row| row["actor"].as_str().unwrap())
+            .collect();
+        assert_eq!(owners, vec!["bot:ops", "human:ana", "human:ben"]);
+    }
+
     fn fixture() -> (tempfile::TempDir, Recorder) {
         let dir = tempfile::tempdir().unwrap();
         let store = Store::open(dir.path()).unwrap();

@@ -23,6 +23,7 @@ const AUTOMATIC_RETRIES: u32 = 2;
 pub struct Store {
     root: PathBuf,
     shared: Arc<Shared>,
+    pub(crate) link_activity: Arc<Mutex<BTreeMap<String, crate::task_links::Activity>>>,
 }
 
 /// What every copy of one opened library shares: its identity for the connection cache, and
@@ -218,6 +219,7 @@ impl Store {
     pub fn open(root: impl AsRef<Path>) -> Result<Self> {
         let store = Self {
             root: root.as_ref().to_owned(),
+            link_activity: Default::default(),
             shared: Arc::new(Shared {
                 id: NEXT_STORE.fetch_add(1, Ordering::Relaxed),
                 data: AtomicU64::new(0),

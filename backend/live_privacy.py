@@ -41,10 +41,8 @@ def member(c, actor, meeting):
         return (meeting["visibility"] == "team" or actor == meeting["owner_actor"] or bool(c.execute(
             "SELECT 1 FROM live_meeting_access WHERE meeting_id=? AND actor=?", (meeting["id"], actor)).fetchone()))
     if H.is_bot(actor):
-        # Only the connector can delegate private meeting access to a bot.
-        return bool(c.execute("SELECT 1 FROM live_meeting_bots WHERE meeting_id=? AND bot=? "
-                              "AND (?='team' OR joined_by=?)",
-                              (meeting["id"], H.actor_id(actor), meeting["visibility"], meeting["owner_actor"])).fetchone())
+        return bool(c.execute("SELECT 1 FROM live_meeting_bots WHERE meeting_id=? AND bot=?",
+                              (meeting["id"], H.actor_id(actor))).fetchone())
     return False
 
 

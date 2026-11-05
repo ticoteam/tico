@@ -29,9 +29,11 @@ from . import learnings, suggestions, updates
 from .maintenance_steps import check_health, clean_up, collect, dream, find_stuck, learn, suggest, update
 from .store import H, Problem
 from .updates import START_HOUR, ZONE
+from . import sources as SRC
 
 LOG = logging.getLogger("tico.maintenance")
 REGISTRY_KEY = "maintenance"      # registry_metadata: the run's schedule, pause and monthly cap
+STEP_SOURCES = {"find_stuck": "stuck-check", "check_health": "check-health"}   # what a step's keeper lines are
 # Find stuck gets the shared BotOps wake first; Check health keeps a refused wake for the next run.
 ORDER = ("collect", "clean_up", "find_stuck", "check_health", "learn", "suggest", "update", "dream")
 NAMES = {"collect": "Collect", "clean_up": "Clean up", "check_health": "Check health", "find_stuck": "Find stuck",
@@ -360,7 +362,7 @@ def _run_step(store, auth, run_id, key, row, window_start, now, cap, tally):
     ctx = {"run_id": run_id, "step_id": row_id, "window_start": window_start, "window_end": now, "settings": row, "now": now,
            "cap": cap, "store": store, "auth": auth}
     try:
-        with store.read() as c:
+        with SRC.writing_as(STEP_SOURCES.get(key, "maintenance")), store.read() as c:
             result = _normal(LIVE[key](c, ctx))
     except Exception as exc:
         LOG.exception("maintenance step %s failed", key)

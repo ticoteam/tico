@@ -98,7 +98,9 @@ const scenes = {
   settings: [settingsPage],
   'settings-own': [settingsPage],
   'settings-nostream': [settingsPage],
+  'settings-add': [settingsPage],
   orgs: ['library', async (page) => page.click('[data-pop="orgs"]')],
+  'orgs-add': ['settings-add', async (page) => page.click('[data-pop="orgs"]')],
   long: [open('m2')],
   'long-library': ['long'],
   sources: [async (page) => page.click('.record-pill .caret')],
@@ -299,6 +301,22 @@ if (!only.length || only.includes('checks')) {
     await page.waitForSelector('.lib-head');
     const connected = await page.evaluate(() => window.__PREVIEW__.state.desktop_orgs.filter((org) => org.connected).map((org) => org.name));
     if (connected.join() !== 'TIDY') errors.push(`signin: Allow signed in to ${connected.join() || 'nothing'}, not TIDY`);
+  });
+  // After the first org, the desktop app's other orgs stay one tap away: Settings and the org menu.
+  await check('add-org', async (page) => {
+    await go(page, 'settings-add');
+    await settingsPage(page);
+    const rows = await page.locator('.settings-group [data-act="signin-desktop"]').evaluateAll((b) => b.map((x) => x.dataset.url));
+    if (rows.join() !== 'https://tidy.tico.page') errors.push(`add-org: Settings offers ${rows.join() || 'nothing'}, not TIDY`);
+    if (!(await page.locator('.other-address [data-model="signin"]').count())) errors.push('add-org: no Other address');
+    if (await page.locator('.settings-group .btn.primary[data-act="signin"]').count()) errors.push('add-org: typed address is primary');
+    await page.click('.settings-group [data-act="signin-desktop"]');
+    await page.waitForSelector('.settings-group [data-act="sign-out"][data-id="tidy"]');
+    if (await page.locator('.settings-group [data-act="signin-desktop"]').count()) errors.push('add-org: TIDY still offered once connected');
+    await go(page, 'settings-add');
+    await page.click('[data-pop="orgs"]');
+    await page.click('#popover [data-act="signin-desktop"][data-url="https://tidy.tico.page"]');
+    await page.waitForSelector('.settings-group [data-act="sign-out"][data-id="tidy"]');
   });
   await check('signin-address', async (page) => {
     await go(page, 'signin-address');
