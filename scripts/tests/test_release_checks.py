@@ -6,6 +6,21 @@ import pytest
 from scripts import release_checks
 
 
+@pytest.fixture
+def shard_tree(tmp_path, monkeypatch):
+    """Tiny offline suites exercise discovery and estimates without importing their test modules."""
+    monkeypatch.setattr(release_checks, 'ROOT', tmp_path)
+    monkeypatch.setattr(release_checks, 'TIMINGS', tmp_path / 'test-timings.json')
+    (tmp_path / 'pytest.ini').write_text('[pytest]\npython_files = *.py\n')
+
+    def write(counts):
+        for name, count in counts.items():
+            path = tmp_path / name
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_text(''.join(f'def test_{i}(): pass\n' for i in range(count)))
+    return write
+
+
 def test_isolation_uses_the_candidate_image_only_after_successful_builds(tmp_path, monkeypatch, capsys):
     monkeypatch.setattr(release_checks, 'os', SimpleNamespace(
         environ={}, getloadavg=lambda: (0, 0, 0), cpu_count=lambda: 12))
@@ -230,37 +245,108 @@ def test_each_part_runs_only_its_own_slice_of_the_gate(tmp_path, monkeypatch):
     assert not calls   # no stack starts when the edge networks cannot be held side by side
 
 
-def test_python_shards_cover_every_collected_file_once_balanced_by_tests(monkeypatch):
-    import pytest
-    listing = '\n'.join(['a.py::t%d' % i for i in range(6)] + ['b.py::t%d' % i for i in range(3)]
-                        + ['c.py::T::t[x::y]', 'c.py::T::u', 'd.py::t', '', '12 tests collected in 0.1s'])
+def test_python_shards_cover_every_candidate_once_and_are_deterministic(shard_tree, monkeypatch):
+    # Deliberately create files out of order; neither traversal order nor previous shard calls affects the plan.
+    shard_tree({'d.py': 1, 'c.py': 2, 'b.py': 3, 'a.py': 6})
     monkeypatch.setattr(release_checks, 'subprocess', SimpleNamespace(
-        run=lambda *args, **kwargs: SimpleNamespace(returncode=0, stdout=listing, stderr='')))
+        run=lambda *args, **kwargs: pytest.fail('sharding must not launch pytest')))
     shards = [release_checks.shard_files(index, 3, {}) for index in (1, 2, 3)]
     assert sorted(sum(shards, [])) == ['a.py', 'b.py', 'c.py', 'd.py']
     assert shards == [['a.py'], ['b.py'], ['c.py', 'd.py']]
+    assert [release_checks.shard_files(i, 3, {}) for i in (3, 2, 1)] == shards[::-1]
     with pytest.raises(RuntimeError, match='cannot fill'):
         release_checks.shard_files(1, 5, {})
-    monkeypatch.setattr(release_checks, 'subprocess', SimpleNamespace(
-        run=lambda *args, **kwargs: SimpleNamespace(returncode=2, stdout='ImportError', stderr='')))
-    with pytest.raises(RuntimeError, match='collection failed'):
-        release_checks.shard_files(1, 2, {})
     for bad in ('0/4', '5/4', '1-4', ''):
         with pytest.raises(Exception):
             release_checks.parse_shard(bad)
     assert release_checks.parse_shard('3/4') == (3, 4)
 
 
-def test_python_shards_balance_by_recorded_seconds_and_still_run_unrecorded_files(tmp_path, monkeypatch):
+def test_filesystem_discovery_honors_pytest_config_and_ignores_without_imports(tmp_path, monkeypatch):
+    monkeypatch.setattr(release_checks, 'ROOT', tmp_path)
+    (tmp_path / 'pytest.ini').write_text('[pytest]\ntestpaths = cases\npython_files = check_*.py\n'
+                                        'norecursedirs = excluded\naddopts = --ignore=cases/ini\n')
+    (tmp_path / 'conftest.py').write_text("collect_ignore = ['cases/root_ignored']\n")
+    cases = tmp_path / 'cases'
+    cases.mkdir()
+    (cases / 'conftest.py').write_text("collect_ignore_glob = ['check_skip*.py']\n")
+    names = ['check_sync.py', 'check_skip_this.py', 'root_ignored/check_no.py', 'ini/check_no.py',
+             'cli/check_no.py', 'env/check_no.py', 'excluded/check_no.py', 'virtual/check_no.py',
+             'test_wrong_pattern.py']
+    for name in names:
+        path = cases / name
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text('raise AssertionError("discovery must not import tests")\ndef test_one(): pass\n')
+    (cases / 'virtual/pyvenv.cfg').touch()
+    (tmp_path / 'check_outside.py').touch()
+    assert release_checks.test_file_counts(('--ignore', 'cases/cli'), {'PYTEST_ADDOPTS': '--ignore=cases/env'}) == {
+        'cases/check_sync.py': 1}
+
+
+def test_default_discovery_keeps_dynamic_and_slow_only_files_and_excludes_release_isolation(tmp_path, monkeypatch):
+    monkeypatch.setattr(release_checks, 'ROOT', tmp_path)
+    names = ['test_dynamic.py', 'slow_test.py', '.hidden/test_no.py', 'build/test_no.py',
+             'node_modules/test_no.py', 'helper.py', release_checks.ISOLATION_FILE]
+    for name in names:
+        path = tmp_path / name
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text('# Tests may be generated at import time or selected only with -m slow.\n')
+    assert release_checks.test_file_counts(env={}) == {'slow_test.py': 1, 'test_dynamic.py': 1}
+    assert set(release_checks.test_file_counts((), {})) == {
+        'slow_test.py', 'test_dynamic.py', release_checks.ISOLATION_FILE}
+    assert release_checks.test_file_counts(('--ignore-glob=*_test.py',), {}) == {
+        release_checks.ISOLATION_FILE: 1, 'test_dynamic.py': 1}
+
+
+def test_coverage_guard_fails_on_unlisted_collection_and_allows_empty_candidates(shard_tree, monkeypatch, capsys):
+    shard_tree({'a.py': 1, 'empty.py': 0})
+    commands = []
+
+    def collect(command, **kwargs):
+        commands.append((command, kwargs))
+        return SimpleNamespace(returncode=0, stdout='a.py::Test::test[x::y]\n1 test collected\n', stderr='')
+
+    monkeypatch.setattr(release_checks, 'subprocess', SimpleNamespace(run=collect))
+    assert release_checks.main(['--check-shard-coverage', '--release']) == 0
+    assert commands[-1][0][2:] == ['pytest', '--collect-only', '-q', '-n', '0', *release_checks.RELEASE_SELECTION]
+    assert '1 additional candidates' in capsys.readouterr().out
+    assert release_checks.main(['--check-shard-coverage']) == 0
+    assert commands[-1][0][2:] == ['pytest', '--collect-only', '-q', '-n', '0']
+    with pytest.raises(RuntimeError, match='absent.*custom.py'):
+        release_checks.validate_shard_coverage({'a.py', 'custom.py'}, env={})
+    monkeypatch.setattr(release_checks, 'subprocess', SimpleNamespace(
+        run=lambda *args, **kwargs: SimpleNamespace(returncode=2, stdout='ImportError', stderr='')))
+    with pytest.raises(RuntimeError, match='collection failed'):
+        release_checks.check_shard_coverage({})
+    monkeypatch.setattr(release_checks, 'subprocess', SimpleNamespace(
+        run=lambda *args, **kwargs: SimpleNamespace(returncode=0, stdout='', stderr='')))
+    with pytest.raises(RuntimeError, match='no test files'):
+        release_checks.check_shard_coverage({})
+
+
+def test_pr_guard_reuses_the_existing_default_collection(tmp_path, monkeypatch):
+    from scripts import pr_checks
+
+    (tmp_path / 'test_listed.py').write_text('def test_one(): pass\n')
+    commands = []
+
+    def collect(command, **kwargs):
+        commands.append(command)
+        return SimpleNamespace(returncode=0, stdout='test_listed.py::test_one\ncustom.py::test_lost\n', stderr='')
+
+    monkeypatch.setattr(pr_checks, 'subprocess', SimpleNamespace(run=collect))
+    with pytest.raises(RuntimeError, match='absent.*custom.py'):
+        pr_checks.collect(root=tmp_path)
+    assert len(commands) == 1   # the plan already pays for this collection; the guard never launches another
+
+
+def test_python_shards_balance_by_recorded_seconds_and_still_run_unrecorded_files(tmp_path, monkeypatch, shard_tree):
     import json
     timings = tmp_path / 'test-timings.json'
     timings.write_text(json.dumps({'default': {'a.py': 1, 'b.py': 30, 'c.py': 10, 'gone.py': 99},
                                    'release': {'a.py': 50}}))
     monkeypatch.setattr(release_checks, 'TIMINGS', timings)
-    listing = '\n'.join(['a.py::t%d' % i for i in range(6)] + ['b.py::t%d' % i for i in range(3)]
-                        + ['c.py::t0', 'c.py::t1', 'd.py::t', '', '12 tests collected in 0.1s'])
-    monkeypatch.setattr(release_checks, 'subprocess', SimpleNamespace(
-        run=lambda *args, **kwargs: SimpleNamespace(returncode=0, stdout=listing, stderr='')))
+    shard_tree({'a.py': 6, 'b.py': 3, 'c.py': 2, 'd.py': 1})
     # By seconds, not count: a.py's 6 quick tests share a shard with d.py, which has no record and weighs its one
     # test at the recorded 41 s / 11 tests; a recorded file that is no longer collected (gone.py) is ignored.
     default = [release_checks.shard_files(index, 3, {}, selection=()) for index in (1, 2, 3)]
@@ -274,14 +360,15 @@ def test_python_shards_balance_by_recorded_seconds_and_still_run_unrecorded_file
     assert [release_checks.shard_files(index, 3, {}) for index in (1, 2, 3)] == [['a.py'], ['b.py'], ['c.py', 'd.py']]
 
 
-def test_an_unrecorded_file_weighs_its_tests_at_the_recorded_seconds_per_test(tmp_path, monkeypatch):
+def test_an_unrecorded_file_weighs_its_source_estimate_at_the_recorded_seconds_per_test(tmp_path, monkeypatch, shard_tree):
     import json
     timings = tmp_path / 'test-timings.json'
     timings.write_text(json.dumps({'default': {'a.py': 10, 'b.py': 10, 'z.py': 0.0}}))
     monkeypatch.setattr(release_checks, 'TIMINGS', timings)
-    listing = '\n'.join(['a.py::t', 'b.py::t', 'z.py::t', 'new.py::t0', 'new.py::t1', 'new.py::t2'])
-    monkeypatch.setattr(release_checks, 'subprocess', SimpleNamespace(
-        run=lambda *args, **kwargs: SimpleNamespace(returncode=0, stdout=listing, stderr='')))
+    shard_tree({'a.py': 1, 'b.py': 1, 'z.py': 1})
+    (tmp_path / 'new.py').write_text('def test_sync(): pass\nasync def test_async(): pass\n'
+                                     'class TestCases:\n    def test_method(self): pass\n')
+    assert release_checks.test_file_counts((), {})['new.py'] == 3
     # new.py's 3 tests at 20 s / 3 recorded tests weigh 20 s, the heaviest, so it goes first; at 1 s a test it would
     # go last. z.py's recorded 0.0 is a record, not a missing one.
     assert [release_checks.shard_files(index, 3, {}, selection=()) for index in (1, 2, 3)] == [
@@ -295,9 +382,7 @@ def test_recorded_timings_split_into_three_shards_within_ten_percent_of_the_mean
     recorded = json.loads(release_checks.TIMINGS.read_text())
     for kind, selection in (('default', ()), ('release', release_checks.RELEASE_SELECTION)):
         timings = recorded[kind]
-        listing = '\n'.join(f'{name}::test' for name in timings)
-        monkeypatch.setattr(release_checks, 'subprocess', SimpleNamespace(
-            run=lambda *args, **kwargs: SimpleNamespace(returncode=0, stdout=listing, stderr='')))
+        monkeypatch.setattr(release_checks, 'test_file_counts', lambda *args: dict.fromkeys(timings, 1))
         shards = [release_checks.shard_files(index, 3, {}, selection=selection) for index in (1, 2, 3)]
         assert sorted(sum(shards, [])) == sorted(timings)
         loads = [sum(timings[name] for name in shard) for shard in shards]
@@ -351,14 +436,13 @@ def test_record_shard_timings_refreshes_release_from_shard_junit_and_keeps_unrun
         release_checks.record_shard_timings(str(tmp_path / 'empty'))
 
 
-def test_shard_alone_runs_a_file_group_of_the_default_suite_pr_checks_run(monkeypatch, capsys):
-    listing = '\n'.join(['a.py::t%d' % i for i in range(4)] + ['b.py::t0', 'b.py::t1', 'c.py::t', 'd.py::t',
-                                                                 '', '8/9 tests collected (1 deselected) in 0.1s'])
+def test_shard_alone_runs_a_file_group_of_the_default_suite_pr_checks_run(monkeypatch, capsys, shard_tree):
+    shard_tree({'a.py': 4, 'b.py': 2, 'c.py': 1, 'd.py': 1})
     commands = []
 
     def run(command, **kwargs):
         commands.append(command)
-        return SimpleNamespace(returncode=0, stdout=listing, stderr='')
+        return SimpleNamespace(returncode=0)
     monkeypatch.setattr(release_checks, 'subprocess', SimpleNamespace(run=run))
     monkeypatch.setattr(release_checks, 'release', lambda args: pytest.fail('--shard alone is not the release gate'))
     monkeypatch.setattr(release_checks, 'full', lambda: pytest.fail('--shard alone runs one Python file group'))
@@ -366,8 +450,7 @@ def test_shard_alone_runs_a_file_group_of_the_default_suite_pr_checks_run(monkey
     for index in (1, 2, 3):
         commands.clear()
         assert release_checks.main(['--shard', f'{index}/3']) == 0
-        collect, test = commands
-        assert collect[collect.index('pytest') + 1:] == ['--collect-only', '-q', '-n', '0']   # pytest.ini selects
+        test, = commands   # no whole-suite collection before running the shard
         assert test[test.index('pytest') + 1:test.index('pytest') + 3] == ['-q', '-n']   # every core, not the ini cap
         assert test[test.index('pytest') + 4] == '--api-database-snapshots'   # one schema build per worker
         runs[index] = test[test.index('pytest') + 5:]   # then only files: no release marker or ignore
@@ -398,29 +481,24 @@ def test_three_default_shards_collect_exactly_the_single_default_run(monkeypatch
                                 cwd=release_checks.ROOT, env=dict(os.environ), capture_output=True, text=True)
         assert result.returncode == 0, result.stdout[-2000:] + result.stderr[-2000:]
         return result.stdout
-    listing = collect()   # the single job's collection, the same command shard_files runs for the default suite
+    listing = collect()   # the single job's collection, compared with filesystem discovery
     single = [line for line in listing.splitlines() if '::' in line and not line.startswith(' ')]
-    with monkeypatch.context() as patch:
-        patch.setattr(release_checks, 'subprocess', SimpleNamespace(
-            run=lambda *args, **kwargs: SimpleNamespace(returncode=0, stdout=listing, stderr='')))
-        shards = [release_checks.shard_files(index, 3, {}, selection=()) for index in (1, 2, 3)]
+    shards = [release_checks.shard_files(index, 3, {}, selection=()) for index in (1, 2, 3)]
     files = sum(shards, [])
-    assert len(files) == len(set(files)) == len({test.split('::', 1)[0] for test in single})
+    assert len(files) == len(set(files))
+    assert {test.split('::', 1)[0] for test in single} <= set(files)   # slow-only and empty files are allowed
     with ThreadPoolExecutor(3) as pool:
         sharded = [line for output in pool.map(lambda group: collect(*group), shards)
                    for line in output.splitlines() if '::' in line and not line.startswith(' ')]
     assert len(sharded) == len(single) and sorted(sharded) == sorted(single)
 
 
-def test_native_test_files_take_the_first_two_shards_and_the_rest_balance_over_the_other_shards(tmp_path, monkeypatch):
-    for name, text in (('n1.py', 'def test(rust_binary): ...'), ('n2.py', 'env = {"TICO_SCREEN_RELAY_BIN": x}'),
-                       ('a.py', 'def test(): ...'), ('b.py', 'def test(): ...'), ('c.py', 'def test(): ...')):
+def test_native_test_files_take_the_first_two_shards_and_the_rest_balance_over_the_other_shards(tmp_path, monkeypatch, shard_tree):
+    shard_tree({'n1.py': 1, 'n2.py': 1, 'a.py': 3, 'b.py': 2, 'c.py': 1})
+    for name, text in (('n1.py', 'def test_native(rust_binary): ...'), ('n2.py', 'env = {"TICO_SCREEN_RELAY_BIN": x}')):
         (tmp_path / name).write_text(text)
     monkeypatch.setattr(release_checks, 'ROOT', tmp_path)
     monkeypatch.setattr(release_checks, 'TIMINGS', tmp_path / 'none.json')
-    listing = '\n'.join(['n1.py::t', 'n2.py::t', 'a.py::t0', 'a.py::t1', 'a.py::t2', 'b.py::t0', 'b.py::t1', 'c.py::t'])
-    monkeypatch.setattr(release_checks, 'subprocess', SimpleNamespace(
-        run=lambda *args, **kwargs: SimpleNamespace(returncode=0, stdout=listing, stderr='')))
     shards = [release_checks.shard_files(index, 4, {}, native_first=True) for index in (1, 2, 3, 4)]
     assert shards == [['n1.py'], ['n2.py'], ['a.py'], ['b.py', 'c.py']]
     assert sorted(sum(shards, [])) == ['a.py', 'b.py', 'c.py', 'n1.py', 'n2.py']
