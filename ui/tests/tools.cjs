@@ -55,7 +55,7 @@ function apiFake() {
   fake.answer = (p, method, body, url) => {
     if (p === '/api/v2/tool-index') return {rows: structuredClone(ROWS), counts: COUNTS};
     if (p === '/api/v2/tools') return {integrations: []};
-    if (p.startsWith('/api/v2/tools/')) return {service: decodeURIComponent(p.split('/').pop()), name: 'GitHub', status: 'off'};
+    if (p.startsWith('/api/v2/tools/')) return {service: decodeURIComponent(p.split('/').pop()), title: 'GitHub', access: '', writes: 'read', owner: 'tico', declared_as: '', body: '', queries: [], learnings: [], read_only: true};
     const m = p.match(/^\/api\/v2\/api-tools\/([^/]+)(\/.*)?$/);
     if (!m) return undefined;
     if (method !== 'GET') fake.writes.push({method, path: p, body});

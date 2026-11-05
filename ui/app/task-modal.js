@@ -632,7 +632,7 @@ function reconnectCardHTML(m) {
   } else act = `<a class="button primary" href="#/settings/computers">${r.service === 'login' ? 'Sign in' : 'Open settings'}</a>`;
   return wrap(`<div class="rc-card" data-reconnect="${esc(r.key || '')}" data-status="${esc(status)}"><span class="rc-line">${esc(m.body || '')}</span>${act}</div>`);
 }
-// Reconnect Google: the person's own Connect, as Settings > Inboxes starts it (ui/google-connect.js).
+// Reconnect Google: the person's own Connect, as Tools › Settings starts it (ui/google-connect.js).
 document.addEventListener('click', async ev => {
   const button = ev.target.closest('[data-reconnect-google]');
   if (!button) return;

@@ -120,7 +120,8 @@ async function pageRdTools() {
     if (LC !== state || location.hash.split('?')[0] !== path) return;
   } else if (!LC || !document.body.contains(LC.root)) {
     $('#main').innerHTML = `<div class="lc" id="lc-root">
-      <header class="lc-ph"><nav class="tt-crumb" aria-label="Breadcrumb"><a href="${TOOLS_ROUTE}">Tools</a><span aria-hidden="true">›</span><span>Keys</span></nav>
+      <header class="lc-ph"><nav class="tt-crumb" aria-label="Breadcrumb"><a href="${TOOLS_ROUTE}">Tools</a><span aria-hidden="true">›</span></nav>
+        <h1>Keys</h1>${helpBubble('Who may use each tool, and what they may change there: read only, with approval, or freely.')}
         <span class="spacer"></span><button class="docs-ask" id="lc-ask" type="button" data-ask-open aria-label="Ask" title="Ask">${ldotHTML({state: 'still', size: 16})}<span class="docs-ask-word">Ask</span></button><span class="lc-add"></span></header>
       <div class="lc-body"><aside class="lc-list" aria-label="Tools">
           <div class="lc-filters"><input class="lc-q" type="search" placeholder="Search" aria-label="Search tools" autocomplete="off">

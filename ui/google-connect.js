@@ -1,10 +1,10 @@
-/* The Connection card of Inboxes > Settings > Email (ui/app/inboxes-email.js), from GET /v2/google. An admin picks one of two
+/* The Connection card of Tools › Settings › Email (ui/app/inboxes-email.js), from GET /v2/google. An admin picks one of two
    ways: Whole company (a service-account key connects every mailbox of the domain, docs/mail.md) or Each person signs
    in (Google sign-in for the server once, then each person connects their own mailbox). The way already set up is
    picked; with nothing set up, neither is. Each way's setup is a prompt for the person's own coding agent by default,
    or the steps by hand. Everyone else sees only Connect Google for their own mailbox (read only with Tico's shared app;
    the company's own app can also label, archive and draft), and nothing when the company's key covers it. Who can use
-   each mailbox and What Tico may do are Settings > Inboxes'. Google's sign-in opens in this tab and comes back to the
+   each mailbox and What Tico may do are Tools'. Google's sign-in opens in this tab and comes back to the
    server; the computer that syncs mail keeps the grant. No token, key or client secret stays in the browser once it
    is sent, and nothing here messages anyone. */
 'use strict';
@@ -87,7 +87,7 @@
       <div class="row"><button type="button" class="ghost" data-copy-prompt>Copy</button>${more}</div></div>`;
 
   // The Workspace prompt holds the setup command, so it lives exactly as long as the command does (only in this page).
-  // What Tico asks Google for follows What Tico may do (its card in Inboxes > Settings > Email, the company's one setting).
+  // What Tico asks Google for follows What Tico may do (its card in Tools › Settings › Email, the company's one setting).
   const MAY = [['organize_mail', 'Organize mail'], ['send_mail', 'Send mail'], ['change_calendar', 'Create and change calendar events']];
   const allows = (g, name) => g?.permissions?.[name] !== false;
   const asksFor = g => ['read mail and calendar', ...MAY.filter(([name]) => allows(g, name)).map(([, label]) => label.toLowerCase())]
@@ -323,10 +323,10 @@
   }
 
   // Everyone who isn't an admin: Connect Google for their own mailbox, never the setup; nothing when the company's
-  // key covers it (Inboxes > Settings > Email says so).
+  // key covers it (Tools › Settings › Email says so).
   function memberCard(g, personal) {
     if (g.me?.covered_by_workspace) return '';
-    const body = g.oauth?.configured ? yourAccount(g, personal) : '<p>Ask an admin to connect Google in Settings &gt; Inboxes.</p>';
+    const body = g.oauth?.configured ? yourAccount(g, personal) : '<p>Ask an admin to connect Google in Tools › Settings.</p>';
     return `<section class="google-card" data-google-card="account">${body}
       <p role="status" data-google-status></p></section>`;
   }
