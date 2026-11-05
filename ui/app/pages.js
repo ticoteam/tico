@@ -86,7 +86,9 @@ window.pageCard = function pageCard(page, {size = 'medium'} = {}) {
   el.innerHTML = pageStatusHTML(page);
   const box = document.createElement('div');
   box.className = 'pg-box';
-  const frame = pageFrame(page, src, full ? PAGE_FULL_MIN : cap, named);
+  // A page measures at least its frame, so a card's frame starts at 1px and the page says its own height; the box
+  // keeps the card's size until it does (pg-sized).
+  const frame = pageFrame(page, src, full ? PAGE_FULL_MIN : 1, named);
   frame.pageCap = full ? 0 : cap;
   box.append(frame);
   el.append(box);
@@ -112,8 +114,12 @@ window.addEventListener('message', ev => {
   if (!frame) return;
   const h = frame.pageHeight = Math.max(24, Math.min(Math.ceil(n), VISUAL_PAGE_MAX));
   if (frame.pageCap) {
-    frame.style.height = Math.min(h, frame.pageCap) + 'px';
-    frame.parentElement?.classList.toggle('pg-cut', h > frame.pageCap);
+    const box = frame.parentElement;
+    // A page sized by the screen (100vh) says next to nothing from its 1px frame: it fills the card.
+    const fills = !box.classList.contains('pg-sized') && Math.ceil(n) < 24;
+    frame.style.height = (fills ? frame.pageCap : Math.min(h, frame.pageCap)) + 'px';
+    box.classList.add('pg-sized');
+    box.classList.toggle('pg-cut', !fills && h > frame.pageCap);
   }
   else frame.style.height = Math.max(h, PAGE_FULL_MIN) + 'px';
 });
