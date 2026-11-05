@@ -303,3 +303,8 @@ def test_migration_snapshots_existing_authorizations_without_granting_new_ones()
     assert S.saved(c, "bot:new") == {}
     assert c.execute("SELECT automation_id FROM email_legacy_automations").fetchone()[0] == "existing"
     assert S.effective(c)["mode"] == "ask_first"
+    c.execute("UPDATE email_sending_policies SET settings=? WHERE scope='bot:support'", (json.dumps({"mode": "never"}),))
+    c.execute("INSERT INTO automations VALUES('new','person:ana',1,NULL)")
+    module.up(c)
+    assert S.saved(c, "bot:support")["mode"] == "never"
+    assert not c.execute("SELECT 1 FROM email_legacy_automations WHERE automation_id='new'").fetchone()

@@ -178,10 +178,9 @@ class Chain(Stage2):
         self.assertTrue(d.allowed, d)
 
     def test_an_onboarding_bot_sends_nothing_even_with_a_matching_approval(self):
-        pl.RUN = harness.gh_answer(body=f"Send to: {STRANGER}")
-        hub(owner_order())
+        hub(send_approval([STRANGER], []), owner_order())
         off = {"set": True, "outbound_send": False, "forward_to": []}
-        for approval in ("77", ORDER):                                   # a GitHub Issue, the owner's message
+        for approval in (APPROVAL, ORDER):                               # a Tico approval, the owner's message
             pl.SERVER_GET = lambda slug: dict(off, bot=slug)
             self.assertTrue(self.decide([STRANGER], approval=approval).allowed, approval)   # it lifts sending off
             pl.SERVER_GET = lambda slug: dict(off, bot=slug, onboarding=True)

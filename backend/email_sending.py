@@ -148,7 +148,7 @@ def effective(c, mailbox="", bot=""):
 def policy_view(c, mailbox="", bot=""):
     def visible(settings):
         return {key: value for key, value in settings.items() if key in DEFAULTS or key in ("legacy", "updated_at", "updated_by")}
-    legacy = c.execute("SELECT count(*) FROM email_legacy_automations l JOIN automations a "
+    legacy = 0 if bot else c.execute("SELECT count(*) FROM email_legacy_automations l JOIN automations a "
                        "ON a.id=l.automation_id AND a.owner_id=l.owner_id AND a.version=l.version "
                        "WHERE a.deleted_at IS NULL AND a.enabled=1 "
                        "AND EXISTS (SELECT 1 FROM json_tree(a.flow) WHERE key='do' AND value IN ('send_reply','forward')) "
