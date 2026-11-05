@@ -105,7 +105,10 @@ const scenarios = {
     // A refusal (this route, added last, answers before the fake): the box goes back to how it was.
     await page.route('**/api/v2/google/permissions', route => route.fulfill({status: 403, contentType: 'application/json',
       body: JSON.stringify({error: {code: 'forbidden', detail: 'Only an admin changes this', retryable: false}})}));
-    await card.locator('[data-google-may=send_mail]').check();
+    // An immediate refusal can revert the box before Playwright checks its temporary checked state.
+    const refused = page.waitForResponse(r => new URL(r.url()).pathname === '/api/v2/google/permissions' && r.request().method() === 'PUT');
+    await card.locator('[data-google-may=send_mail]').click();
+    assert.equal((await refused).status(), 403);
     await page.waitForFunction(() => {
       const el = document.querySelector('[data-google-may=send_mail]');
       return el && !el.disabled && !el.checked;
