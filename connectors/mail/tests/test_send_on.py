@@ -146,8 +146,8 @@ class Chain(Stage2):
             self.assertIn("Mail sending", d["reason"])
         self.assertFalse(pl.is_forward(self.policy(), "inbox", [ME]))
         # The owner's own per-message yes still sends that one message.
-        pl.RUN = harness.gh_answer(body=f"Send to: {AVA}")
-        self.assertTrue(self.decide([AVA], approval="77").allowed)
+        hub(owner_order())
+        self.assertTrue(self.decide([AVA], approval=ORDER).allowed)
 
     def test_a_person_turning_it_on_in_tico_covers_only_the_targets_they_approved(self):
         pl.SERVER_GET = lambda slug: {"bot": slug, "set": True, "outbound_send": True,
@@ -173,15 +173,14 @@ class Chain(Stage2):
         self.assertEqual(self.decide([STRANGER], thread_id=THREAD, thread_senders=[AVA])["gate"], "recipient")
 
     def test_an_approval_still_covers_an_address_the_rules_do_not(self):
-        pl.RUN = harness.gh_answer(body=f"Send to: {STRANGER}")
-        d = self.decide([STRANGER], approval="77")
+        hub(send_approval([STRANGER], []))
+        d = self.decide([STRANGER], approval=APPROVAL)
         self.assertTrue(d.allowed, d)
 
     def test_an_onboarding_bot_sends_nothing_even_with_a_matching_approval(self):
-        pl.RUN = harness.gh_answer(body=f"Send to: {STRANGER}")
-        hub(owner_order())
+        hub(send_approval([STRANGER], []), owner_order())
         off = {"set": True, "outbound_send": False, "forward_to": []}
-        for approval in ("77", ORDER):                                   # a GitHub Issue, the owner's message
+        for approval in (APPROVAL, ORDER):                               # a Tico approval, the owner's message
             pl.SERVER_GET = lambda slug: dict(off, bot=slug)
             self.assertTrue(self.decide([STRANGER], approval=approval).allowed, approval)   # it lifts sending off
             pl.SERVER_GET = lambda slug: dict(off, bot=slug, onboarding=True)
@@ -214,7 +213,7 @@ class Chain(Stage2):
             self.assertEqual((d.allowed, d["gate"]), (False, "onboarding"), d)
         # The connector sends what Tico leased it (the server checked the automation's owner), with no stage to read;
         # the owner's own handle is held like everyone (no bypass).
-        self.assertTrue(self.decide([STRANGER], slug=access.CONNECTOR, approval="77", verbs=["send"]).allowed)
+        self.assertTrue(self.decide(["coworker@acme.example"], slug=access.CONNECTOR, verbs=["send"]).allowed)
         self.assertFalse(self.decide([STRANGER], slug=pl.OWNER, approval="77", verbs=["send"]).allowed)
 
     def test_with_sending_off_none_of_it_applies(self):
@@ -300,12 +299,14 @@ class Chain(Stage2):
         self.assertEqual(self.decide([STRANGER], attachments=1, draft="d-1", approval=APPROVAL)["gate"], "approval")
         self.assertTrue(self.decide([STRANGER], **kw).allowed)
 
-    def test_a_github_issue_covers_attached_mail_without_naming_files(self):
+    def test_a_github_issue_never_approves_mail_with_or_without_files(self):
         pl.RUN = harness.gh_answer(body=f"Send to: {STRANGER}")
         pl.SERVER_GET = lambda slug: {"bot": slug, "set": True, "outbound_send": False, "forward_to": []}
         plain = self.decide([STRANGER], approval="77")
         attached = self.decide([STRANGER], attachments=[FILE_A], draft="d-1", approval="77")
-        self.assertTrue(plain.allowed, plain)
+        self.assertFalse(plain.allowed, plain)
+        self.assertEqual(plain["gate"], "approval")
+        self.assertIn("Tico send approval", plain["reason"])
         self.assertEqual(attached, plain)
 
     def test_legacy_attachment_keys_are_ignored_in_defaults_and_mailboxes(self):
@@ -353,9 +354,9 @@ class Chain(Stage2):
         self.assertEqual(d["gate"], "recipient", d)
         self.assertIn("the draft changed after it was approved", d["reason"])
 
-    def test_a_github_issue_or_the_owners_message_carries_no_hash_and_is_unchanged(self):
+    def test_github_issues_refuse_and_owner_messages_keep_their_scope(self):
         pl.RUN = harness.gh_answer(body=f"Send to: {STRANGER}")
-        self.assertTrue(self.decide([STRANGER], approval="77", body=BODY + "!").allowed)
+        self.assertFalse(self.decide([STRANGER], approval="77", body=BODY + "!").allowed)
         hub(owner_order())
         self.assertTrue(self.decide([STRANGER], approval=ORDER, body=BODY + "!").allowed)
 
@@ -376,15 +377,16 @@ class Cli(Stage2):
     def test_a_reply_to_the_sender_is_sent(self):
         rc, out, err = self.run_json("reply", "--as", "inbox", "--thread", THREAD, "--body-file", self.body_file(BODY),
                                      "--issue", "1", "--json")
-        self.assertEqual((rc, out.get("sent"), out.get("gate")), (0, True, None), (out, err))
-        self.assertEqual(len(self.service.sent), 1)
+        self.assertEqual((rc, out.get("queued"), out.get("gate")), (0, True, None), (out, err))
+        self.assertEqual(len(self.queue_requests), 1)
+        self.assertEqual(self.service.sent, [])
 
     def test_a_forward_to_the_owner_is_sent_and_may_quote_a_link_on_another_host(self):
         rc, p, err = self.run_json("draft", "--as", "inbox", "--to", ME, "--subject", "\U0001F514 Tico inbound: Press request",
                                    "--body-file", self.body_file(FORWARD), "--issue", "2", "--json")
         self.assertEqual(rc, 0, err)
         rc, out, _ = self.run_json("send", "--as", "inbox", "--draft", p["draft"], "--issue", "2")
-        self.assertEqual((rc, out["sent"]), (0, True), out)
+        self.assertEqual((rc, out["queued"]), (0, True), out)
 
     def test_a_text_approval_sends_its_draft_and_not_the_draft_edited_after_the_yes(self):
         rc, p, err = self.run_json("draft", "--as", "inbox", "--to", STRANGER, "--subject", "Support question",
@@ -406,7 +408,7 @@ class Cli(Stage2):
         edit(BODY.strip(), crlf=True)                                         # back as approved, with Gmail's CRLF
         rc, out, _ = self.run_json("send", "--as", "inbox", "--draft", p["draft"], "--issue", "1",
                                    "--approval-issue", APPROVAL)
-        self.assertEqual((rc, out["sent"]), (0, True), out)
+        self.assertEqual((rc, out["queued"]), (0, True), out)
 
     def test_a_reply_with_a_text_approval_sends_only_the_approved_words(self):
         # Sending is off in Tico, so the reply to the thread's sender needs the per-message yes.
@@ -419,7 +421,7 @@ class Cli(Stage2):
         self.assertIn("the draft changed after it was approved", out["reason"])
         self.assertEqual(self.service.sent, [])
         rc, out, _ = self.run_json(*args, "--body-file", self.body_file(BODY))
-        self.assertEqual((rc, out["sent"]), (0, True), out)
+        self.assertEqual((rc, out["queued"]), (0, True), out)
 
     def test_an_attached_reply_to_the_sender_sends_without_an_approval_and_is_reviewed_again(self):
         (self.root / "emp-inbox" / "answer.pdf").write_bytes(b"%PDF-1.4 the answer")
@@ -434,7 +436,7 @@ class Cli(Stage2):
             self.assertEqual(rc, 0, err)
             self.assertNotIn("send_needs_approval", p)
             rc, out, _ = self.run_json("send", "--as", "inbox", "--draft", p["draft"], "--issue", "1")
-        self.assertEqual((rc, out["sent"], out["review_reused"]), (0, True, False), out)
+        self.assertEqual((rc, out["queued"], out["review_reused"]), (0, True, False), out)
         self.assertEqual(len(seen), 2)
         self.assertTrue(all("answer.pdf" in body for body in seen), seen)
 
@@ -454,7 +456,7 @@ class Cli(Stage2):
                                            "--approval-issue", ORDER)
                 # The owner's message covers the file; the reviewer, which sees that message, still blocks
                 # anything beyond it (#2560).
-                self.assertEqual(out["sent"], ok, out)
+                self.assertEqual(out.get("queued", False), ok, out)
                 if not ok:
                     self.assertEqual(out["gate"], "review")
 
@@ -479,7 +481,7 @@ class Cli(Stage2):
         self.assertEqual(self.service.sent, [])
         rc, out, _ = self.run_json("send", "--as", "inbox", "--draft", p["draft"], "--issue", "1",
                                    "--approval-issue", APPROVAL)               # the approved draft is intact
-        self.assertEqual((rc, out["sent"]), (0, True), out)
+        self.assertEqual((rc, out["queued"]), (0, True), out)
 
     def test_a_file_changed_in_gmail_after_approval_is_refused_by_its_hash(self):
         original = b"%PDF-1.4 the answer"
@@ -511,13 +513,13 @@ class Cli(Stage2):
         request = p["approval_request"]
         self.assertEqual(request["payload"]["attachments"],
                          [dict(file_meta("answer.pdf", data), file_id="f-answer-0001")])
-        self.assertTrue(request["command"].endswith(f" --task {task}"))
+        self.assertEqual(request["command"], f"mail send --as inbox --for ana@acme.example --draft {p['draft']}")
         # The approval matches on name, size and sha256: another file_id, or none, approves the same files.
         approved = dict(request["payload"], attachments=[dict(file_meta("answer.pdf", data), file_id="f-other")])
         hub(dict(send_approval([AVA], []), payload=approved))
         rc, out, _ = self.run_json("send", "--as", "inbox", "--draft", p["draft"], "--issue", task,
                                    "--approval-issue", APPROVAL)
-        self.assertEqual((rc, out["sent"]), (0, True), out)
+        self.assertEqual((rc, out["queued"]), (0, True), out)
         # No credential or a failed upload: the draft and the request still stand, without file ids.
         cli.TASK_ATTACH = lambda *call: (_ for _ in ()).throw(RuntimeError("offline"))
         (self.root / "emp-inbox" / "answer.pdf").write_bytes(data + b" v2")
@@ -591,7 +593,7 @@ class NoRegistry(Stage2):
                                    "--attach", "answer.pdf", "--issue", "1", "--json")
         self.assertEqual(rc, 0, err)
         rc, out, _ = self.run_json("send", "--as", "inbox", "--draft", p["draft"], "--issue", "1")
-        self.assertEqual((rc, out["sent"]), (0, True), out)
+        self.assertEqual((rc, out["queued"]), (0, True), out)
 
     def test_internal_domains_come_from_the_roster_without_public_providers(self):
         pl.HUB_GET = lambda path: {"people": [{"id": "a", "email": "ana@gmail.com"}, {"id": "b", "email": "Bo@Team.example"},

@@ -268,7 +268,7 @@ class ReadOnlyRefusals(Base):
         for attempt in (lambda: g.modify("m1", add=["L1"]), lambda: g.modify("m1", remove=["INBOX"]),
                         lambda: g.create_label("hub/x"), lambda: g.create_draft("cmF3"),
                         lambda: g.update_draft("d1", "cmF3"), lambda: g.delete_draft("d1"),
-                        lambda: g.send_draft("d1")):
+                        lambda: g.send_raw("cmF3")):
             with self.assertRaises(Refused) as caught:
                 attempt()
             self.assertIn("read-only at Google", caught.exception.msg)

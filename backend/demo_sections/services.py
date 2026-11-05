@@ -13,7 +13,7 @@ import uuid
 from .. import demo_content as D
 from .. import gateway_connection, hubdb, slack_app
 from ..auth import Identity
-from ..demo_seed import RUNNER_VERSION, SEED_SHA
+from ..demo_seed import NAMESPACE, RUNNER_VERSION, SEED_SHA, fixed
 from ..inbound import save_inbox
 from ..postal_mail import arrived
 from ..store import H
@@ -137,6 +137,23 @@ def seed(b):
 def mail_access(b):
     """Seed after the company's conversations so the grant's audit ids do not shift their stable ids."""
     b.call("PUT", "postal/addresses/all/grants/bot/legal-review", {"level": "read"})
+    _email_sending(b)
+
+
+def _email_sending(b):
+    from .. import email_sending, mailbox_access
+    from connectors.mail import compose
+    b.at(hours=0.1)
+    def work(c):
+        owner = Identity(CONTENT["owner"]["id"], "owner", CONTENT["owner"]["email"])
+        mailbox_access.ensure_mailbox(c, owner.email, person_id="ana", created_by=owner.actor)
+        email_sending.update_policy(c, owner, "company", email_sending.PolicyUpdate(mode="ask_first"))
+        raw = compose.build(["customer@shop.example"], "Your replacement order", "Your replacement is ready to ship.", from_addr=owner.email)
+        email_sending.enqueue(c, b.app.state.auth, owner.actor, email_sending.Enqueue(mailbox=owner.email, raw=raw),
+                              {"legal_or_money": False, "status": "classified"})
+    # A separate namespace keeps this last approval stable when other demo sections add rows.
+    with fixed(b.clock, namespace=uuid.uuid5(NAMESPACE, "email-sending")):
+        b.write(work)
 
 
 def _inboxes(b):

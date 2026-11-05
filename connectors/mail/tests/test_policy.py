@@ -50,16 +50,20 @@ class Gates(Stage2):
         self.assertIn("Cc outside", d["reason"])
 
     def test_the_blocklist_beats_an_approval_issue(self):
-        pl.RUN = gh_answer(body="blocked@nope.example is fine by me")
+        approval = "11111111-2222-3333-4444-555555555555"
+        pl.HUB_GET = lambda path: {"id": approval, "sender_id": "human:" + pl.OWNER,
+            "recipient_id": "bot:influencer", "body": "Please send it", "sender_can_approve_send": True} if path == "messages/" + approval else None
         d = pl.check_send(self.policy(), "influencer", "ana@acme.example", ["blocked@nope.example"],
-                          root=self.root, approval="77")
+                          root=self.root, approval=approval)
         self.assertEqual(d["gate"], "blocklist")
         self.assertIn("blocked@nope.example", d["reason"])
 
     def test_owner_handles_personally_is_the_last_gate(self):
-        pl.RUN = gh_answer(body="investor@fund.example")
+        approval = "11111111-2222-3333-4444-555555555555"
+        pl.HUB_GET = lambda path: {"id": approval, "sender_id": "human:" + pl.OWNER,
+            "recipient_id": "bot:influencer", "body": "Please send it", "sender_can_approve_send": True} if path == "messages/" + approval else None
         d = pl.check_send(self.policy(), "influencer", "ana@acme.example",
-                          ["investor@fund.example"], root=self.root, approval="77")
+                          ["investor@fund.example"], root=self.root, approval=approval)
         self.assertEqual(d["gate"], "owner_handles_personally")
 
 

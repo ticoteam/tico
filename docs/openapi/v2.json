@@ -199,6 +199,10 @@
       "description": "Company letters, explicit Read grants and legal mail routing (docs/physical-mail.md)."
     },
     {
+      "name": "Email sending",
+      "description": "One sending policy and durable undo queue for bots, automations and people acting through Tico."
+    },
+    {
       "name": "Alerts",
       "description": "Personal phone verification, consent and opt-in paging, paid by the company at $1 per accepted alert."
     }
@@ -4868,6 +4872,128 @@
         },
         "tags": [
           "Bots"
+        ]
+      }
+    },
+    "/api/v2/bots/{bot}/email-sending-policy": {
+      "get": {
+        "summary": "Bot policy, optionally resolved for an inbox",
+        "operationId": "getBotEmailSendingPolicy",
+        "parameters": [
+          {
+            "name": "bot",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Bot"
+            }
+          },
+          {
+            "name": "mailbox",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "default": "",
+              "title": "Mailbox"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/EmailSendingPolicy"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "A problem: {\"error\": {\"code\", \"detail\", \"retryable\", ...}}",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "A problem: {\"error\": {\"code\", \"detail\", \"retryable\", ...}}",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        },
+        "tags": [
+          "Email sending"
+        ]
+      },
+      "put": {
+        "summary": "Set bot override (a person who manages it)",
+        "operationId": "setBotEmailSendingPolicy",
+        "parameters": [
+          {
+            "name": "bot",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Bot"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/PolicyUpdate"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/EmailSendingPolicy"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "A problem: {\"error\": {\"code\", \"detail\", \"retryable\", ...}}",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "A problem: {\"error\": {\"code\", \"detail\", \"retryable\", ...}}",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        },
+        "tags": [
+          "Email sending"
         ]
       }
     },
@@ -11618,6 +11744,733 @@
         },
         "tags": [
           "Company page"
+        ]
+      }
+    },
+    "/api/v2/email/inboxes/{mailbox}/sending-policy": {
+      "get": {
+        "summary": "Inbox policy with effective rule and inheritance",
+        "operationId": "getInboxSendingPolicy",
+        "parameters": [
+          {
+            "name": "mailbox",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Mailbox"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/EmailSendingPolicy"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "A problem: {\"error\": {\"code\", \"detail\", \"retryable\", ...}}",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "A problem: {\"error\": {\"code\", \"detail\", \"retryable\", ...}}",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        },
+        "tags": [
+          "Email sending"
+        ]
+      },
+      "put": {
+        "summary": "Set inbox policy (its person or a shared inbox admin)",
+        "operationId": "setInboxSendingPolicy",
+        "parameters": [
+          {
+            "name": "mailbox",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Mailbox"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/PolicyUpdate"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/EmailSendingPolicy"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "A problem: {\"error\": {\"code\", \"detail\", \"retryable\", ...}}",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "A problem: {\"error\": {\"code\", \"detail\", \"retryable\", ...}}",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        },
+        "tags": [
+          "Email sending"
+        ]
+      }
+    },
+    "/api/v2/email/inboxes/{mailbox}/suppressed-recipients": {
+      "get": {
+        "summary": "Inbox admin's bounce suppression list",
+        "operationId": "listEmailSuppressions",
+        "parameters": [
+          {
+            "name": "mailbox",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Mailbox"
+            }
+          },
+          {
+            "name": "cursor",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "default": "",
+              "title": "Cursor"
+            }
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "default": 50,
+              "title": "Limit"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/EmailSuppressionList"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "A problem: {\"error\": {\"code\", \"detail\", \"retryable\", ...}}",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "A problem: {\"error\": {\"code\", \"detail\", \"retryable\", ...}}",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        },
+        "tags": [
+          "Email sending"
+        ]
+      }
+    },
+    "/api/v2/email/inboxes/{mailbox}/suppressed-recipients/{address}": {
+      "delete": {
+        "summary": "Restore sending to a bounced address (inbox admin)",
+        "operationId": "removeEmailSuppression",
+        "parameters": [
+          {
+            "name": "mailbox",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Mailbox"
+            }
+          },
+          {
+            "name": "address",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Address"
+            }
+          },
+          {
+            "name": "Idempotency-Key",
+            "in": "header",
+            "required": true,
+            "schema": {
+              "type": "string"
+            },
+            "description": "1-200 characters. Reusing a key with the same body replays the first answer."
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "401": {
+            "description": "A problem: {\"error\": {\"code\", \"detail\", \"retryable\", ...}}",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "A problem: {\"error\": {\"code\", \"detail\", \"retryable\", ...}}",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        },
+        "tags": [
+          "Email sending"
+        ]
+      }
+    },
+    "/api/v2/email/sending-policy": {
+      "get": {
+        "summary": "Company sending policy",
+        "operationId": "getEmailSendingPolicy",
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/EmailSendingPolicy"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "A problem: {\"error\": {\"code\", \"detail\", \"retryable\", ...}}",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "A problem: {\"error\": {\"code\", \"detail\", \"retryable\", ...}}",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        },
+        "tags": [
+          "Email sending"
+        ]
+      },
+      "put": {
+        "summary": "Set company sending policy (an admin, acting as themselves)",
+        "operationId": "setEmailSendingPolicy",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/PolicyUpdate"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/EmailSendingPolicy"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "A problem: {\"error\": {\"code\", \"detail\", \"retryable\", ...}}",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "A problem: {\"error\": {\"code\", \"detail\", \"retryable\", ...}}",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        },
+        "tags": [
+          "Email sending"
+        ]
+      }
+    },
+    "/api/v2/email/sends": {
+      "post": {
+        "summary": "Freeze email content for approval and the undo window; identical content and recipients deduplicate",
+        "operationId": "queueEmail",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/Enqueue"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/EmailSendResult"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "A problem: {\"error\": {\"code\", \"detail\", \"retryable\", ...}}",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "A problem: {\"error\": {\"code\", \"detail\", \"retryable\", ...}}",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        },
+        "tags": [
+          "Email sending"
+        ],
+        "parameters": [
+          {
+            "name": "Idempotency-Key",
+            "in": "header",
+            "required": true,
+            "schema": {
+              "type": "string"
+            },
+            "description": "1-200 characters. Reusing a key with the same body replays the first answer."
+          }
+        ]
+      },
+      "get": {
+        "summary": "Pending sends or the inbox send audit, paged and byte capped",
+        "operationId": "listEmailSends",
+        "parameters": [
+          {
+            "name": "mailbox",
+            "in": "query",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Mailbox"
+            }
+          },
+          {
+            "name": "pending",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "boolean",
+              "default": false,
+              "title": "Pending"
+            }
+          },
+          {
+            "name": "cursor",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "default": "",
+              "title": "Cursor"
+            }
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "default": 50,
+              "title": "Limit"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/EmailSendList"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "A problem: {\"error\": {\"code\", \"detail\", \"retryable\", ...}}",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "A problem: {\"error\": {\"code\", \"detail\", \"retryable\", ...}}",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        },
+        "tags": [
+          "Email sending"
+        ]
+      }
+    },
+    "/api/v2/email/sends/{sid}": {
+      "get": {
+        "summary": "Frozen preview and audit (inbox readers, the sender or an authorized approver)",
+        "operationId": "getEmailSend",
+        "parameters": [
+          {
+            "name": "sid",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Sid"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/EmailSendDetail"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "A problem: {\"error\": {\"code\", \"detail\", \"retryable\", ...}}",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "A problem: {\"error\": {\"code\", \"detail\", \"retryable\", ...}}",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        },
+        "tags": [
+          "Email sending"
+        ]
+      }
+    },
+    "/api/v2/email/sends/{sid}/approve": {
+      "post": {
+        "summary": "Attach an existing content-bound or in-chat approval",
+        "operationId": "attachEmailApproval",
+        "parameters": [
+          {
+            "name": "sid",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Sid"
+            }
+          },
+          {
+            "name": "Idempotency-Key",
+            "in": "header",
+            "required": true,
+            "schema": {
+              "type": "string"
+            },
+            "description": "1-200 characters. Reusing a key with the same body replays the first answer."
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/SendApproval"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/EmailSendResult"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "A problem: {\"error\": {\"code\", \"detail\", \"retryable\", ...}}",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "A problem: {\"error\": {\"code\", \"detail\", \"retryable\", ...}}",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        },
+        "tags": [
+          "Email sending"
+        ]
+      }
+    },
+    "/api/v2/email/sends/{sid}/attachments/{part}": {
+      "get": {
+        "summary": "Download the exact frozen attachment (the send's readers or approvers)",
+        "operationId": "getFrozenEmailAttachment",
+        "parameters": [
+          {
+            "name": "sid",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Sid"
+            }
+          },
+          {
+            "name": "part",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "title": "Part"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "401": {
+            "description": "A problem: {\"error\": {\"code\", \"detail\", \"retryable\", ...}}",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "A problem: {\"error\": {\"code\", \"detail\", \"retryable\", ...}}",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        },
+        "tags": [
+          "Email sending"
+        ]
+      }
+    },
+    "/api/v2/email/sends/{sid}/cancel": {
+      "post": {
+        "summary": "Cancel before dispatch; delivered mail cannot be recalled",
+        "operationId": "cancelEmailSend",
+        "parameters": [
+          {
+            "name": "sid",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Sid"
+            }
+          },
+          {
+            "name": "Idempotency-Key",
+            "in": "header",
+            "required": true,
+            "schema": {
+              "type": "string"
+            },
+            "description": "1-200 characters. Reusing a key with the same body replays the first answer."
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/EmailSendResult"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "A problem: {\"error\": {\"code\", \"detail\", \"retryable\", ...}}",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "A problem: {\"error\": {\"code\", \"detail\", \"retryable\", ...}}",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        },
+        "tags": [
+          "Email sending"
         ]
       }
     },
@@ -51610,11 +52463,292 @@
         ],
         "title": "EditionBody"
       },
+      "EmailSend": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "mailbox": {
+            "type": "string"
+          },
+          "actor": {
+            "type": "string"
+          },
+          "bot": {
+            "type": "string"
+          },
+          "via": {
+            "type": "string"
+          },
+          "automation_action_id": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "calendar_action_id": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "content_sha256": {
+            "type": "string"
+          },
+          "body_sha256": {
+            "type": "string"
+          },
+          "subject": {
+            "type": "string"
+          },
+          "approval_id": {
+            "type": "string"
+          },
+          "state": {
+            "type": "string"
+          },
+          "created_at": {
+            "type": "string"
+          },
+          "send_after": {
+            "type": "string"
+          },
+          "claimed_at": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "finished_at": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "provider_message_id": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "detail": {
+            "type": "string"
+          },
+          "recipients": {
+            "type": "array",
+            "items": "s"
+          },
+          "attachments": {
+            "type": "array",
+            "items": "o"
+          },
+          "decision": {
+            "type": "object"
+          },
+          "classification": {
+            "type": "object"
+          }
+        },
+        "required": [
+          "actor",
+          "approval_id",
+          "attachments",
+          "automation_action_id",
+          "body_sha256",
+          "bot",
+          "calendar_action_id",
+          "claimed_at",
+          "classification",
+          "content_sha256",
+          "created_at",
+          "decision",
+          "detail",
+          "finished_at",
+          "id",
+          "mailbox",
+          "provider_message_id",
+          "recipients",
+          "send_after",
+          "state",
+          "subject",
+          "via"
+        ],
+        "additionalProperties": true
+      },
+      "EmailSendDetail": {
+        "type": "object",
+        "properties": {
+          "send": {
+            "$ref": "#/components/schemas/EmailSend"
+          },
+          "body": {
+            "type": "string"
+          },
+          "bodies": {
+            "type": "array",
+            "items": "o"
+          },
+          "preview_complete": {
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "bodies",
+          "body",
+          "preview_complete",
+          "send"
+        ],
+        "additionalProperties": true
+      },
+      "EmailSendList": {
+        "type": "object",
+        "properties": {
+          "sends": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/EmailSend"
+            }
+          },
+          "next_cursor": {
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "next_cursor",
+          "sends"
+        ],
+        "additionalProperties": true
+      },
+      "EmailSendResult": {
+        "type": "object",
+        "properties": {
+          "send": {
+            "$ref": "#/components/schemas/EmailSend"
+          }
+        },
+        "required": [
+          "send"
+        ],
+        "additionalProperties": true
+      },
+      "EmailSendingPolicy": {
+        "type": "object",
+        "properties": {
+          "company": {
+            "type": "object"
+          },
+          "inbox": {
+            "type": "object"
+          },
+          "bot": {
+            "type": "object"
+          },
+          "effective": {
+            "type": "object"
+          }
+        },
+        "required": [
+          "bot",
+          "company",
+          "effective",
+          "inbox"
+        ],
+        "additionalProperties": true
+      },
+      "EmailSuppressionList": {
+        "type": "object",
+        "properties": {
+          "recipients": {
+            "type": "array",
+            "items": "o"
+          },
+          "next_cursor": {
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "next_cursor",
+          "recipients"
+        ],
+        "additionalProperties": true
+      },
       "Empty": {
         "properties": {},
         "additionalProperties": false,
         "type": "object",
         "title": "Empty"
+      },
+      "Enqueue": {
+        "properties": {
+          "mailbox": {
+            "type": "string",
+            "maxLength": 320,
+            "minLength": 3,
+            "title": "Mailbox"
+          },
+          "raw": {
+            "type": "string",
+            "maxLength": 33554440,
+            "minLength": 1,
+            "title": "Raw"
+          },
+          "draft_id": {
+            "type": "string",
+            "maxLength": 200,
+            "title": "Draft Id",
+            "default": ""
+          },
+          "thread_id": {
+            "type": "string",
+            "maxLength": 200,
+            "title": "Thread Id",
+            "default": ""
+          },
+          "reply_to_id": {
+            "type": "string",
+            "maxLength": 200,
+            "title": "Reply To Id",
+            "default": ""
+          },
+          "approval_id": {
+            "type": "string",
+            "maxLength": 200,
+            "title": "Approval Id",
+            "default": ""
+          },
+          "automation_action_id": {
+            "type": "string",
+            "maxLength": 100,
+            "title": "Automation Action Id",
+            "default": ""
+          },
+          "calendar_action_id": {
+            "type": "string",
+            "maxLength": 100,
+            "title": "Calendar Action Id",
+            "default": ""
+          },
+          "operation_id": {
+            "type": "string",
+            "maxLength": 200,
+            "title": "Operation Id",
+            "default": ""
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "mailbox",
+          "raw"
+        ],
+        "title": "Enqueue"
       },
       "Estimate": {
         "allOf": [
@@ -64996,6 +66130,186 @@
         "type": "object",
         "title": "PlaceSave"
       },
+      "PolicyUpdate": {
+        "properties": {
+          "mode": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Mode"
+          },
+          "what": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "What"
+          },
+          "to": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "To"
+          },
+          "daily_cap": {
+            "anyOf": [
+              {
+                "type": "integer",
+                "maximum": 100000.0,
+                "minimum": 0.0
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Daily Cap"
+          },
+          "mailbox_daily_cap": {
+            "anyOf": [
+              {
+                "type": "integer",
+                "maximum": 100000.0,
+                "minimum": 0.0
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Mailbox Daily Cap"
+          },
+          "company_daily_cap": {
+            "anyOf": [
+              {
+                "type": "integer",
+                "maximum": 1000000.0,
+                "minimum": 0.0
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Company Daily Cap"
+          },
+          "pacing_seconds": {
+            "anyOf": [
+              {
+                "type": "integer",
+                "maximum": 3600.0,
+                "minimum": 0.0
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Pacing Seconds"
+          },
+          "undo_seconds": {
+            "anyOf": [
+              {
+                "type": "integer",
+                "maximum": 600.0,
+                "minimum": 0.0
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Undo Seconds"
+          },
+          "ask_new_address": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Ask New Address"
+          },
+          "ask_attachments": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Ask Attachments"
+          },
+          "ask_many_recipients": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Ask Many Recipients"
+          },
+          "ask_legal_money": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Ask Legal Money"
+          },
+          "who_can_ok": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Who Can Ok"
+          },
+          "approvers": {
+            "anyOf": [
+              {
+                "items": {
+                  "type": "string"
+                },
+                "type": "array",
+                "maxItems": 50
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Approvers"
+          },
+          "inherit": {
+            "type": "boolean",
+            "title": "Inherit",
+            "default": false
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "title": "PolicyUpdate"
+      },
       "PostalLegalRouting": {
         "properties": {
           "legal_bot_id": {
@@ -68821,6 +70135,22 @@
         "additionalProperties": false,
         "type": "object",
         "title": "SeatUpdate"
+      },
+      "SendApproval": {
+        "properties": {
+          "approval_id": {
+            "type": "string",
+            "maxLength": 200,
+            "minLength": 1,
+            "title": "Approval Id"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "approval_id"
+        ],
+        "title": "SendApproval"
       },
       "SentAs": {
         "type": "object",

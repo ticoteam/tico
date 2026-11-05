@@ -159,6 +159,37 @@ def approval_decide(c: sqlite3.Connection, actor: str, approval_id: str, decisio
     _H.approval_decide(c, actor, approval_id, decision)
 
 
+def queue_email(c: sqlite3.Connection, requester: str, addresses: list[str], subject: str, text: str,
+                ref: str, metadata: dict[str, str]) -> str:
+    """Freeze Finance's email through the same gate as a connector, on this install's transaction."""
+    from pathlib import Path
+    from ...auth import Auth
+    from ... import email_sending
+    from connectors.mail import compose
+    from ...store import Problem
+    sending: Any = email_sending
+    mime: Any = compose
+    if not _VAULT:
+        raise Refused("Finance's email queue is not available")
+    vault = _VAULT[0]
+    store = vault.store
+    database = next((str(row[2]) for row in c.execute("PRAGMA database_list") if row[1] == "main"), "")
+    if not database or Path(database).resolve() != Path(store.settings.db_path).resolve():
+        raise Refused("Finance's email queue belongs to another install")
+    auth: Any = vault.auth or Auth(store)
+    auth.sync_access(c)
+    try:
+        raw = str(mime.build(addresses, subject, text, from_addr=metadata["mailbox"]))
+        queued = cast(Row, sending.enqueue(c, auth, requester, sending.Enqueue(mailbox=metadata["mailbox"], raw=raw, operation_id=ref),
+                         {"legal_or_money": None, "status": "finance_preview_required"},
+                         via="finance", approval_metadata=metadata))
+        if queued["state"] == "blocked":
+            raise Refused("The email send policy refused this invoice email: " + str(queued["decision"]["reasons"]))
+    except Problem as exc:
+        raise Refused(str(exc)) from exc
+    return str(queued["approval_id"])
+
+
 def is_person(actor: str) -> bool:
     """Whether the actor is a person: only a person decides an approval."""
     return bool(_H.is_human(actor))

@@ -159,6 +159,15 @@ exports.open = async (browser, fake, google, {hash = '#/settings/inboxes', ready
       const answer = google.answer(p, request.url(), method, body);
       if (answer !== undefined) return json(answer);
     }
+    if (p === '/api/v2/org') return json({bots: [{id: 'support-bot', slug: 'support-bot', display_name: 'Support bot'}], humans: []});
+    if (p.endsWith('/sending-policy') || p.endsWith('/email-sending-policy')) {
+      if (method !== 'GET') fake.writes.push({method, path: p, body});
+      return json({company: {}, inbox: {}, bot: {}, legacy_automation_count: 0,
+        effective: {mode: 'ask_first', what: 'replies_only', to: 'anyone', daily_cap: 50, mailbox_daily_cap: 200,
+          company_daily_cap: 1000, pacing_seconds: 10, undo_seconds: 120, ask_new_address: true, ask_attachments: true,
+          ask_many_recipients: true, ask_legal_money: true, who_can_ok: 'bot_managers', approvers: [], sources: {mode: 'company'}}});
+    }
+    if (p === '/api/v2/email/sends') return json({sends: [], next_cursor: null});
     if (p === '/api/v2/mail/messages') return json({messages: structuredClone(mail[url.searchParams.get('mailbox')] || [])});
     if (method === 'GET' && p in EMPTY) return json(EMPTY[p]());
     if (p in SHELL) return json(SHELL[p]);
