@@ -30,4 +30,4 @@ Object.defineProperty(exports, 'beta', {enumerable: true, get: () => beta ||= JS
   {cwd: path.join(ui, '..')}).toString())});
 exports.html = fs.readFileSync(path.join(out || ui, 'index.html'), 'utf8');
 // A path under ui/ (what follows /tico/ui/ in a URL) to the file on disk; the bundles live in the temp folder.
-exports.uiFile = name => out && (name === 'app.bundle.js' || name === 'app.bundle.css') ? path.join(out, name) : path.join(ui, name);
+exports.uiFile = name => out && /^app\.bundle(?:\.\d+)?\.(?:js|css)$/.test(name) ? path.join(out, name) : path.join(ui, name);

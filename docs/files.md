@@ -166,8 +166,11 @@ visibility check as a list row.
 Tico indexes a version when it is published. A file from before this release is indexed in the background, a few
 hundred at a time; until then only its title is found.
 
-`GET /api/v2/files/search?q=&limit=`, `hub file search "<words>"`, file hits in the search box (⌘K), and the
+`GET /api/v2/files/search?q=&limit=&kind=`, `hub file search "<words>" [--kind page]`, file hits in the search box (⌘K), and the
 Librarian, which searches files beside the docs.
+
+`kind` accepts the Library's kinds (`page`, `document`, `image`, `data`, `media`, `other`). The task's **Link page**
+picker searches with `kind=page`.
 
 ## Deleting a file for good
 

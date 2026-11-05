@@ -22,8 +22,8 @@ def seed_turns(c, start, end, parent=None, tag="t"):
                   ("job-" + key, reply["id"], H.now(), aid))
         c.execute("INSERT INTO attempts(id,job_id,bot_id,runner_id,generation,token_hash,state,lease_until,created_at) "
                   "VALUES(?,?,'ops','rn',0,?,'completed',?,?)", (aid, "job-" + key, aid, H.now(), H.now()))
-        c.execute("INSERT INTO turns(id,bot,started_at,message_id,task_id,exit) VALUES(?,'ops',?,?,?,'ok')",
-                  (aid, H.now(), reply["id"], parent["id"]))
+        c.execute("UPDATE attempts SET trigger='message',message_id=?,task_id=?,exit='ok' WHERE id=?",
+                  (reply["id"], parent["id"], aid))
     return parent
 
 

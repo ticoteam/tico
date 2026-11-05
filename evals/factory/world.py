@@ -50,6 +50,7 @@ class World:
         self.ci_fail = ci_fail   # chance a CI run on a new head fails (a flaky or broken change)
         self.ci = {}             # pr number -> (head, when its checks finish, passed)
         self.ci_skip = 0.0       # chance a new PR's only CI check is skipped or neutral on every head (a path filter)
+        self.ci_skip_first = False   # the first new PR's only CI check is skipped too, so a run always has one
         self.tick = dt.timedelta(minutes=tick_minutes)
         self.tmp = Path(tempfile.mkdtemp(prefix="factory-sim-"))
         self.prs = {}        # pr number -> {"task": id, "head": sha, "merged": bool}
@@ -77,6 +78,7 @@ class World:
         from fastapi.testclient import TestClient
         from backend.app import create_app
         from backend.auth import Identity
+        from backend import bot_settings
         from backend.config import Settings
         from backend.scheduler import Scheduler
         from backend.store import H, encode
@@ -101,8 +103,8 @@ class World:
             c.execute("INSERT INTO registry_metadata VALUES('people',?)", (encode({"people": [
                 {"id": "ana", "email": "ana@acme.example", "primary_for": ["*"]}]}),))
             for slug, config in bots.items():
-                c.execute("INSERT INTO bot_config(bot,config,team,owner_id) VALUES(?,?,?,?)",
-                          (slug, encode(config), "engineering", "ana"))
+                c.execute("INSERT INTO bot_config(bot,team,owner_id) VALUES(?,?,?)", (slug, "engineering", "ana"))
+                bot_settings.write(c, slug, config)
             if "release-manager" in bots:   # signed in as an agent, as an external Release Manager is
                 c.execute("INSERT INTO agents(bot,harness,token_hash,created_at,created_by) "
                           "VALUES('release-manager','hermes','x-release',?,'human:ana')", (H.now(),))
@@ -395,6 +397,8 @@ class World:
         self.prs[number]["heads"] = [(self.now(), self.prs[number]["head"])]
         if self.ci_skip and self.rng.random() < self.ci_skip:
             self.prs[number]["skip_ci"] = True
+        if self.ci_skip_first and not any(p.get("skip_ci") for p in self.prs.values()):
+            self.prs[number]["skip_ci"] = True
         self.post(f"tasks/{task_id}/links", {"url": self.pr_url(number)}, token=token)
         self.hook("pull_request", self.pr_payload(number, "opened"))
         self.start_ci(number)
@@ -511,8 +515,10 @@ class World:
     # ------------------------------------------------------------------ board reads (no turn, no side effects)
     def tickets(self):
         """The Dev tickets: tasks of the Dev type, with their step names."""
-        rows = self.sql("SELECT t.id,t.title,t.owner_id,t.status,t.step_id,s.name step,t.blocked_since,t.updated_at,"
-                        "t.labels,t.created_at FROM tasks t LEFT JOIN task_steps s ON s.id=t.step_id WHERE t.type_id=?",
+        rows = self.sql("SELECT t.id,t.title,t.owner_id,t.status,t.step_id,s.name step,b.created_at blocked_since,"
+                        "t.updated_at,t.labels,t.created_at FROM tasks t LEFT JOIN task_steps s ON s.id=t.step_id "
+                        "LEFT JOIN task_holds b ON b.task_id=t.id AND b.kind='blocked' AND b.released_at IS NULL "
+                        "WHERE t.type_id=?",
                         (self.dev["id"],))
         for r in rows:
             r["labels"] = json.loads(r.pop("labels") or "[]")

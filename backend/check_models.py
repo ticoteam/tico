@@ -8,6 +8,7 @@ from . import hubdb as H
 from . import providers
 from .harnesses import runtime_of
 from .readiness import SIGNED_OUT, can_run
+from . import bot_settings as BS
 
 ROLES = ("review", "check")
 
@@ -48,10 +49,10 @@ def authors_of(c, settings, task_id):
     task = H.task(c, task_id) if task_id else None
     if not task:
         return set()
-    turns = [row["id"] for row in c.execute("SELECT id FROM turns WHERE task_id=?", (task_id,))]
+    turns = [row["id"] for row in c.execute("SELECT id FROM attempts WHERE task_id=?", (task_id,))]
     makers = {s["family"] for made in ran_on(c, turns).values() for s in made["segments"] if s["family"]}
     if H.is_bot(task["owner_id"]):
-        row = c.execute("SELECT config FROM bot_config WHERE bot=?", (H.actor_id(task["owner_id"]),)).fetchone()
+        row = c.execute(BS.ONE_SQL, (H.actor_id(task["owner_id"]),)).fetchone()
         config = follow(c, H.actor_id(task["owner_id"]), H._json(row["config"], {}) or {}) if row else {}
         makers.add(providers.author_provider(providers.bot_choice(c, settings, config)[1]))
     return makers - {""}
@@ -188,8 +189,8 @@ def _default_login(c, bot, check, runner_id):
 
 def _out_of_quota(c, runner_id, runtime, settings=None):
     """Whether Health's default_login_limited marks `runner_id`'s default `runtime` login out of quota: a turn there
-    completing, or the provider's reset passing, ends it (health_monitor.out_of_quota_logins)."""
-    from .health_monitor import out_of_quota_logins
+    completing, or the provider's reset passing, ends it (maintenance_health.out_of_quota_logins)."""
+    from .maintenance_health import out_of_quota_logins
     return any(x["runner_id"] == runner_id and x["runtime"] == runtime for x in out_of_quota_logins(c, settings))
 
 
@@ -199,7 +200,7 @@ def move_on(c, settings, bot, task_id, check, runner_id):
     first in the company's check order that is not the limited model, not on another login out of quota there, and
     that this bot's computer can run, from a provider other than the work's authors' when one qualifies. It goes back to its first model once
     that model's login is not out of quota any more (of)."""
-    from .health_monitor import out_of_quota_logins
+    from .maintenance_health import out_of_quota_logins
     from .repositories import save_metadata
     from .task_relations import parent_of
     if memory_pass(c, task_id):
@@ -314,7 +315,7 @@ def review_default(c, settings, owner, parent_id):
     parent = H.task(c, parent_id) if parent_id else None
     if not parent or not H.is_bot(owner) or parent["owner_id"] == owner:
         return None, None
-    row = c.execute("SELECT config FROM bot_config WHERE bot=?", (H.actor_id(owner),)).fetchone()
+    row = c.execute(BS.ONE_SQL, (H.actor_id(owner),)).fetchone()
     config = follow(c, H.actor_id(owner), H._json(row["config"], {}) or {}) if row else {}
     if config.get("review_model") != "check":
         return None, None

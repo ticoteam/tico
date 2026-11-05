@@ -1,7 +1,7 @@
 // A stand-in hub for the Automations page scripts (ui/tests/automations-*.cjs): every /api/v2/automations route in
 // redesign CONTRACT §2 over ui/tests/fixtures/redesign-automations.json (the Acme example), the BotOps chat,
 // and the boot stubs. Writes change the copy a page reads back and are recorded in `writes`.
-// A flow save (steps or trigger) is a new version; a viewer without edit rights gets 403; a built-in's delete gets 409.
+// A flow save (steps, trigger or destinations) is a new version; a viewer without edit rights gets 403; a built-in's delete gets 409.
 const fs = require('node:fs');
 const path = require('node:path');
 const {html, uiFile} = require('./page.cjs');
@@ -11,6 +11,73 @@ const FIXTURE = path.join(__dirname, '../fixtures/redesign-automations.json');
 
 const PHONE = {width: 390, height: 844}, DESKTOP = {width: 1440, height: 900};
 const clone = x => JSON.parse(JSON.stringify(x));
+// The hub stores a flow as json.dumps(flow, sort_keys=True) (backend/automations.py), so every object's keys come back
+// sorted, at any depth; arrays keep their order. A flow saved here, and one loaded from the fixture, see the same.
+const sortKeys = x => Array.isArray(x) ? x.map(sortKeys)
+  : x && typeof x === 'object' ? Object.fromEntries(Object.keys(x).sort().map(k => [k, sortKeys(x[k])])) : x;
+const sortFlow = a => {
+  const out = {...a};
+  for (const k of ['trigger', 'steps', 'destinations']) if (out[k] !== undefined) out[k] = sortKeys(out[k]);
+  return out;
+};
+// A version's flow: the trigger, the steps and (a board's) destinations.
+const flowOf = a => ({trigger: clone(a.trigger), steps: clone(a.steps), ...(a.destinations ? {destinations: clone(a.destinations)} : {})});
+// The hub's own refusals that a board save could trip (backend/automation_flow.py): a decide question needs
+// instructions, a choice two options, an llm step a prompt and a choose's default one of its to; steps nest in paths
+// and branches.
+function flowProblem(steps) {
+  for (const s of steps || []) {
+    if (!s || typeof s !== 'object') continue;
+    if (s.type === 'llm' && !String(s.prompt ?? '').trim()) return `${s.id}: an llm step needs a prompt`;
+    if (s.type === 'llm' && s.choose && !(s.choose.to || []).includes(s.choose.default)) return `${s.id}: choose.default is one of choose.to`;
+    if (s.type === 'decide') for (const [id, q] of Object.entries(s.questions || {})) {
+      if (q?.instructions == null || (typeof q.instructions === 'string' && !q.instructions.trim())) return `${s.id}.${id}: a question needs instructions`;
+      // clients/judge.py MAX_INSTRUCTIONS, counted in characters as Python counts them.
+      if ([...(typeof q?.instructions === 'string' ? q.instructions : JSON.stringify(q?.instructions ?? ''))].length > 8000) return `${id}: instructions over 8000 characters`;
+      if (q?.type === 'choice' && (Array.isArray(q.criteria) ? q.criteria : Object.keys(q.criteria || {})).length < 2) return `${s.id}.${id}: a choice is a criteria map of at least two options`;
+    }
+    for (const kid of [s.steps, s.then, s.else, ...(Array.isArray(s.paths) ? s.paths.map(x => x?.steps) : [])])
+      if (Array.isArray(kid)) { const bad = flowProblem(kid); if (bad) return bad; }
+  }
+  return '';
+}
+
+// The inbox templates (backend/automation_templates): the listing, and a fixed flow for each. Blank is the real one's
+// shape: no rules, no questions, Sort to Me or Archive. The others fill to one flow (their names aside): a rule, a
+// question, and an LLM that is a draft turn as a person's or a bot's owner, and Sort, every option routed, for a group.
+const TEMPLATES = [{id: 'founder', name: 'Founder', destinations: ['Me', 'Legal', 'Engineering', 'Archive']},
+  {id: 'support', name: 'Support desk', destinations: ['Support', 'Engineering', 'Archive']},
+  {id: 'sales', name: 'Sales', destinations: ['Sales', 'Archive']}, {id: 'blank', name: 'Blank', destinations: ['Me', 'Archive']}];
+function filledTemplate(tid, owner, inbox) {
+  const destinations = [{id: 'me', name: 'Me', color: 'amber', then: [{do: 'leave_for_you', args: {}}]},
+    {id: 'legal', name: 'Legal', color: 'orange', then: [{do: 'create_task', args: {title: 'Legal: {{message.subject}}', owner: 'bot:support'}}]},
+    {id: 'eng', name: 'Engineering', color: 'violet', then: [{do: 'create_task', args: {title: 'Bug: {{message.subject}}', owner: 'bot:eng-lead'}}]},
+    {id: 'archive', name: 'Archive', color: 'gray', then: [{do: 'archive', args: {}}]}];
+  const name = TEMPLATES.find(t => t.id === tid).name, trigger = {type: 'message', inbox};
+  if (tid === 'blank') {
+    const two = [destinations[0], destinations[3]];
+    return {name, owner, enabled: false, trigger, destinations: two, steps: [
+      {id: 'rules', type: 'filter', rules: []},
+      {id: 'sort', type: 'decide', level: 'high', out: 'sort', questions: {route: {type: 'choice',
+        instructions: 'Where does this message belong? Pick the one that fits best.', criteria: {me: 'The owner should see it', archive: 'Nothing is asked of anyone'}}}},
+      {id: 'route', type: 'filter', rules: [...two.map(d => ({when: [{field: 'sort.route', op: 'is', value: d.id, min: 0.5}], to: d.id, next: 'end', stop: true})),
+        {when: [], to: 'me', next: 'end', stop: true}]}]};
+  }
+  const to = destinations.map(d => d.id), [kind, id] = [owner.split(':')[0], owner.split(':').slice(1).join(':')];
+  const steps = [
+    {id: 'rules', type: 'filter', rules: [{when: [{field: 'message.subject', op: 'matches', value: 'subpoena|lawsuit'}], match: 'all',
+      then: [{do: 'label', args: {name: 'STARRED'}}], to: 'legal', next: 'end', stop: true}]},
+    {id: 'ask', type: 'decide', level: 'low', out: 'q', questions: {bug: {type: 'noul', instructions: 'Is it a bug report?'}}},
+    {id: 'route', type: 'filter', rules: [{when: [{field: 'q.bug', op: 'is', value: 'yes', min: 0.75}], to: 'eng', next: 'end', stop: true}]}];
+  if (kind === 'group') steps.push(
+    {id: 'draft', type: 'decide', level: 'high', out: 'draft', questions: {route: {type: 'choice', instructions: 'Where does this message belong?',
+      criteria: Object.fromEntries(destinations.map(d => [d.id, d.name]))}}},
+    {id: 'draft_route', type: 'filter', rules: [...to.map(d => ({when: [{field: 'draft.route', op: 'is', value: d, min: 0.5}], to: d, next: 'end', stop: true})),
+      {when: [], to: 'me', next: 'end', stop: true}]});
+  else steps.push({id: 'draft', type: 'llm', out: 'draft', as: (kind === 'person' ? 'assistant:' : 'bot:') + id,
+    prompt: 'Route this message first. When unsure, choose me.', choose: {to, default: 'me', mode: 'draft'}});
+  return {name, owner, enabled: false, trigger, steps, destinations};
+}
 
 // A bot's draft (`draft: true` in openAutomations): off, its version 1 pending until Turn on (CONTRACT §2).
 const DRAFT = {id: 'au_draft', name: 'Receipts to archive', owner_id: 'person:dana', enabled: false, builtin: false, version: 1,
@@ -21,11 +88,11 @@ const DRAFT_VERSIONS = [{n: 1, actor: 'bot:support', at: '2026-10-28T09:00:00Z',
   summary: 'Archive receipts from billing'}];
 
 // A system job's mirror (`system: true`): Tico runs it from its own code, so it reads only; the top of the org may pause it.
-const SYSTEM = {id: 'au_sys_still', name: 'Still wanted check', owner_id: 'person:dana', enabled: true, builtin: true, readonly: true,
+const SYSTEM = {id: 'au_sys_still', name: 'KPI stale asks check', owner_id: 'person:dana', enabled: true, builtin: true, readonly: true,
   kind: 'system', version: 1, schedule: 'Daily at 07:00', can_edit: false, can_pause: true,
-  description: 'Asks each owner whether tasks open for 30 days are still wanted.',
-  trigger: {type: 'event', name: 'tico.builtin.job.still_wanted'}, steps: [], controls: {on: true},
-  source: {kind: 'system_job', id: 'job:still_wanted'}};
+  description: 'Asks a KPI keeper for a reading when it goes out of date.',
+  trigger: {type: 'event', name: 'tico.builtin.job.kpi_asks'}, steps: [], controls: {on: true},
+  source: {kind: 'system_job', id: 'job:kpi_asks'}};
 const systemRuns = (now = Date.now()) => Array.from({length: 8}, (_, i) => ({id: 'sys_' + (50 - i), automation_id: SYSTEM.id,
   started_at: new Date(now - (i * 3 + 1) * 3600000).toISOString(), finished_at: new Date(now - (i * 3 + 1) * 3600000 + 4000).toISOString(),
   status: i === 2 ? 'failed' : 'ok', cost: 0, steps: [], started_by: 'Schedule', outcome: i === 2 ? 'Mail down' : 'Asked 3 owners',
@@ -64,17 +131,17 @@ async function openAutomations(browser, {viewport = PHONE, hash = '#/automations
     role: 'member', company_role: 'member', cloud: true};
   const config = {};
   const db = {
-    list: fx.automations.map(a => ({...a, can_edit: owner && a.can_edit !== false, ...(a.can_pause != null ? {can_pause: owner && a.can_pause} : {})})),
+    list: fx.automations.map(a => ({...sortFlow(a), can_edit: owner && a.can_edit !== false, ...(a.can_pause != null ? {can_pause: owner && a.can_pause} : {})})),
     versions: {}, runs: {au_inbox: inboxRuns(), ...(system ? {[SYSTEM.id]: systemRuns()} : {})}, conv: null, messages: [],
     held: {},   // id → {release, fail}: that automation's GET waits for release(), then answers (or fails)
   };
   for (const a of db.list) {
     const old = fx.versions[a.id] || [{n: a.version, actor: a.owner_id, at: '2026-10-27T15:00:00Z'}];
-    db.versions[a.id] = old.map(v => ({...v, status: v.status || 'active', flow: {trigger: clone(a.trigger), steps: clone(a.steps)}}));
+    db.versions[a.id] = old.map(v => ({...v, status: v.status || 'active', flow: flowOf(a)}));
   }
   if (proposal) {
     const a = db.list.find(x => x.id === 'au_inbox'), steps = clone(a.steps);
-    steps.find(s => s.type === 'filter')?.rules.unshift(clone(fx.proposal.rule));
+    steps.find(s => s.type === 'filter')?.rules.unshift(sortKeys(fx.proposal.rule));
     db.versions.au_inbox.push({n: a.version + 1, actor: 'bot:support', at: '2026-10-28T09:00:00Z', status: 'pending',
       summary: fx.proposal.summary, flow: {trigger: clone(a.trigger), steps}});
   }
@@ -101,7 +168,7 @@ async function openAutomations(browser, {viewport = PHONE, hash = '#/automations
   const nextN = id => Math.max(...db.versions[id].map(v => v.n)) + 1;
   const newVersion = (a, actor = 'person:' + me.id) => {
     a.version = nextN(a.id);
-    db.versions[a.id].push({n: a.version, actor, at: new Date().toISOString(), status: 'active', flow: {trigger: clone(a.trigger), steps: clone(a.steps)}});
+    db.versions[a.id].push({n: a.version, actor, at: new Date().toISOString(), status: 'active', flow: flowOf(a)});
   };
 
   const page = await browser.newPage({viewport, serviceWorkers: 'block'});
@@ -124,14 +191,28 @@ async function openAutomations(browser, {viewport = PHONE, hash = '#/automations
     if (p === '/api/v2/status') return json({bots: []});
     if (p === '/api/v2/groups') return json({groups: fx.groups});
     const body = method === 'GET' ? null : req.postDataJSON?.() ?? null;
+    let m0;
     if (method !== 'GET') writes.push({method, path: p, body});
 
     if (p === '/api/v2/automations/question-sets') return json({sets: fx.question_sets});
+    // A template fill saves nothing; like the hub it refuses an owner the viewer may not make an automation for (another
+    // person) and one that can't hear the inbox (a group on an email address).
+    if (p === '/api/v2/automations/templates') return json({templates: clone(TEMPLATES)});
+    if ((m0 = p.match(/^\/api\/v2\/automations\/templates\/([^/]+)$/))) {
+      const tid = decodeURIComponent(m0[1]), owner = url.searchParams.get('owner') || '', inbox = url.searchParams.get('inbox') || '';
+      if (!TEMPLATES.some(t => t.id === tid)) return refuse(404, 'not_found', 'No such template');
+      if (!/^(person|bot|group):./.test(owner) || !inbox) return refuse(422, 'invalid', 'owner is person:<id>, bot:<slug> or group:<id>');
+      if (owner.startsWith('person:') && owner !== 'person:' + me.id) return refuse(403, 'forbidden', `You may not make an automation for ${owner}`);
+      if (owner.startsWith('group:') && inbox.includes('@')) return refuse(403, 'forbidden', `${owner} may not read ${inbox}`);
+      return json(filledTemplate(tid, owner, inbox));
+    }
     if (p === '/api/v2/automations' && method === 'POST') {
-      // A new one (Blank): the viewer's own, version 1.
-      const a = {...clone(body), id: 'au_' + (db.list.length + 1), version: 1, can_edit: true};
+      // A new one (Blank, or New inbox's): version 1.
+      const bad = flowProblem(body.steps);
+      if (bad) return refuse(422, 'invalid_flow', bad);
+      const a = {...sortFlow(body), owner_id: body.owner, id: 'au_' + (db.list.length + 1), version: 1, can_edit: true};
       db.list.push(a);
-      db.versions[a.id] = [{n: 1, actor: 'person:' + me.id, at: new Date().toISOString(), status: 'active', flow: {trigger: clone(a.trigger), steps: clone(a.steps)}}];
+      db.versions[a.id] = [{n: 1, actor: 'person:' + me.id, at: new Date().toISOString(), status: 'active', flow: flowOf(a)}];
       return json(full(a));
     }
     if (p === '/api/v2/automations') return json({automations: db.list.map(row), next: null});
@@ -181,9 +262,12 @@ async function openAutomations(browser, {viewport = PHONE, hash = '#/automations
       }
       if (!rest && method === 'PATCH') {
         for (const k of ['enabled', 'spend_cap', 'name']) if (k in body) { if (body[k] === null) delete a[k]; else a[k] = body[k]; }
-        if (body.steps || body.trigger) {
-          if (body.steps) a.steps = body.steps;
-          if (body.trigger) a.trigger = body.trigger;
+        if (body.steps || body.trigger || body.destinations) {
+          const bad = body.steps && flowProblem(body.steps);
+          if (bad) return refuse(422, 'invalid_flow', bad);
+          if (body.steps) a.steps = sortKeys(body.steps);
+          if (body.trigger) a.trigger = sortKeys(body.trigger);
+          if (Array.isArray(body.destinations)) a.destinations = sortKeys(body.destinations);
           newVersion(a);
         }
         return json(full(a));
@@ -208,12 +292,15 @@ async function openAutomations(browser, {viewport = PHONE, hash = '#/automations
       }
       if (rest === 'versions') {
         const status = url.searchParams.get('status');
-        return json({versions: db.versions[a.id].filter(v => !status || v.status === status)});
+        // A version's flow comes back key-sorted as the hub stores it, including one a test put in the list directly.
+        return json({versions: db.versions[a.id].filter(v => !status || v.status === status).map(v => ({...v, flow: sortFlow(v.flow)}))});
       }
       if ((m = rest.match(/^versions\/(\d+)\/restore$/)) && method === 'POST') {
         const v = db.versions[a.id].find(x => x.n === +m[1]);
         if (!v) return refuse(404, 'not_found', 'No such version');
-        a.trigger = clone(v.flow.trigger); a.steps = clone(v.flow.steps);
+        const f = sortFlow(v.flow);
+        a.trigger = f.trigger; a.steps = f.steps;
+        if (f.destinations) a.destinations = f.destinations; else delete a.destinations;
         // A pending version turned on becomes the current one; an older one comes back as a new version. A draft (off,
         // no version live yet) is turned on by its first pending version.
         if (v.status === 'pending') {
@@ -243,14 +330,14 @@ async function openAutomations(browser, {viewport = PHONE, hash = '#/automations
       const a = find(body.refs?.automation);
       let reply = 'Which inbox?';
       if (a) {
-        a.steps.find(s => s.type === 'filter')?.rules.unshift(clone(fx.proposal.rule));
+        a.steps.find(s => s.type === 'filter')?.rules.unshift(sortKeys(fx.proposal.rule));
         newVersion(a);
         reply = `Saved v${a.version}: receipts are archived first.`;
       } else if (!/\?/.test(body.text)) {
         const on = /turn it on/i.test(body.text);
-        db.list.push({id: 'au_new', name: 'Sales leads', owner_id: 'person:' + me.id, enabled: on, builtin: false, version: 1, can_edit: true,
+        db.list.push(sortFlow({id: 'au_new', name: 'Sales leads', owner_id: 'person:' + me.id, enabled: on, builtin: false, version: 1, can_edit: true,
           trigger: {type: 'message', inbox: 'sales@acme.example', filters: []},
-          steps: [{id: 'f1', type: 'filter', enabled: true, rules: [{when: [{field: 'message.subject', op: 'contains', value: 'demo'}], match: 'all', then: [{do: 'label', args: {name: 'Lead'}}], stop: false}]}]});
+          steps: [{id: 'f1', type: 'filter', enabled: true, rules: [{when: [{field: 'message.subject', op: 'contains', value: 'demo'}], match: 'all', then: [{do: 'label', args: {name: 'Lead'}}], stop: false}]}]}));
         db.versions.au_new = [{n: 1, actor: 'person:' + me.id, at, status: 'active', flow: {trigger: clone(db.list.at(-1).trigger), steps: clone(db.list.at(-1).steps)}}];
         reply = `Saved Sales leads: mail to sales@acme.example about a demo gets the Lead label. It is ${on ? 'on' : 'off'}.`;
       }
@@ -272,8 +359,10 @@ async function shot(page, name) {
   const dir = process.env.TICO_UI_SHOTS;
   if (!dir) return;
   fs.mkdirSync(dir, {recursive: true});
-  await page.evaluate(() => Promise.all(document.getAnimations().map(a => a.finished.catch(() => {}))));   // the route's fade
+  // The route's fade and other one-offs; the Liquid Dot breathes forever, so an endless animation is not waited on.
+  await page.evaluate(() => Promise.all(document.getAnimations().filter(a => a.effect?.getTiming().iterations !== Infinity)
+    .map(a => a.finished.catch(() => {}))));
   await page.screenshot({path: path.join(dir, name + '.png')});
 }
 
-module.exports = {openAutomations, PHONE, DESKTOP, sideways, shot};
+module.exports = {openAutomations, filledTemplate, PHONE, DESKTOP, sideways, shot};

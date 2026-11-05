@@ -2,6 +2,7 @@
 from backend import learnings as L
 from backend.store import H
 from backend.tests.test_api import api, post, setup_attempt  # noqa: F401
+from backend import bot_settings as BS
 
 
 def test_only_a_bot_that_ran_today_gets_a_packet_and_a_new_night_closes_its_unread_one(api):
@@ -10,7 +11,8 @@ def test_only_a_bot_that_ran_today_gets_a_packet_and_a_new_night_closes_its_unre
     post(api, f"attempts/{attempt['id']}/started", {'thread_id': 'today'}, machine['token'])
     with store.transaction() as c:
         c.execute("INSERT INTO bots(id,slug,display_name,state) VALUES('grok-designer','grok-designer','Designer','active')")
-        c.execute("INSERT INTO bot_config(bot,config,owner_id) VALUES('grok-designer','{\"harness\":\"grokbot\"}','ana')")
+        c.execute("INSERT INTO bot_config(bot,owner_id) VALUES('grok-designer','ana')")
+        BS.write(c, 'grok-designer', {'harness': 'grokbot'})
         team = L.roster(c, store.settings)
         assert set(team) == {"ops"}
         item = {"key": "chat:1", "source": "chat", "author": "human:ana", "created_at": H.now(), "ref": {},

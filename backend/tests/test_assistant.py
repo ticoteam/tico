@@ -4,11 +4,14 @@ click."""
 
 import hashlib
 
+import httpx
 import pytest
 
-from backend import assistant
+from backend import assistant, support
 from backend.tests.test_api import api, as_member, assign, claim, get, headers, post, put, ready, runner  # noqa: F401
+from backend.tests.test_support import FakeHQ
 from backend.store import H
+from backend import bot_settings as BS
 
 
 def room(api, token="ana-test"):
@@ -178,7 +181,8 @@ def test_an_assistant_message_never_lends_the_persons_authority_to_botops(api):
     with api.app.state.store.transaction() as c:
         c.execute("INSERT INTO bots(id,slug,display_name,effort,state,created_at) "
                   "VALUES('botops','botops','BotOps','','active',?)", (H.now(),))
-        c.execute("INSERT INTO bot_config(bot,config,team,owner_id) VALUES('botops','{\"runtime\":\"fake\",\"host\":\"keeper\"}',NULL,'ana')")
+        c.execute("INSERT INTO bot_config(bot,team,owner_id) VALUES('botops',NULL,'ana')")
+        BS.write(c, 'botops', {"runtime": "fake", "host": "keeper"})
         H.VIA.set("assistant")
         via = H.say(c, "human:ana", "bot:botops", "Rename the Ops bot to Operations", kind="say")
         H.VIA.set("")
@@ -431,6 +435,7 @@ def test_the_person_asking_never_lends_more_than_their_own_rights(api):
 
 
 def test_asking_in_chat_never_decides_an_approval_while_the_setting_is_off(api):
+    post(api, "assistant/settings", {"decides_approvals": False}, token="ana-test")
     with api.app.state.store.transaction() as c:
         approvals = [H.approval_request(c, "bot:ops", kind, payload)["id"] for kind, payload in (
             ("send", {"to": "x@acme.example", "cc": [], "subject": "Hi", "body_sha256": "a" * 64, "mailbox": "work"}),
@@ -510,6 +515,7 @@ def decision(api, aid):
 
 def test_clear_my_queue_declines_and_answers_in_bulk_and_never_approves(api):
     q = needs_you_queue(api)
+    post(api, "assistant/settings", {"decides_approvals": False}, token="ben-test")
     r, attempt = assistant_turn(api, "ben-test", "Clear my queue, close at least 50 of these, the old stuff can go")
     token = attempt["token"]
     approve = {"decision": "approved"}
@@ -559,6 +565,7 @@ def test_clear_my_queue_declines_and_answers_in_bulk_and_never_approves(api):
 
 def test_an_approval_the_person_names_goes_on_one_card_and_runs_only_on_their_click(api):
     q = needs_you_queue(api)
+    post(api, "assistant/settings", {"decides_approvals": False}, token="ben-test")
     r, attempt = assistant_turn(api, "ben-test", "Approve the site merge and the $500 ad spend")
     token = attempt["token"]
     refused = asked(api, "approvals/" + q["merge"], {"decision": "approved"}, token, "turn", expected=403)
@@ -577,18 +584,17 @@ def test_an_approval_the_person_names_goes_on_one_card_and_runs_only_on_their_cl
     assert decision(api, q["hers"]) is None
 
 
-def test_the_assistant_decides_approvals_in_bulk_once_the_person_turns_it_on(api):
+def test_the_assistant_decides_approvals_in_bulk_on_the_persons_yes_by_default(api):
     from backend.tests.test_api import setup_attempt
     q = needs_you_queue(api)
     _, _, ops = setup_attempt(api, "ops")
     r, attempt = assistant_turn(api, "ben-test", "Approve all the old publish batches")
     token, approve = attempt["token"], {"decision": "approved"}
-    # Only Ben turns it on, signed in: not his Assistant, a bot, or the generic preference.
-    post(api, "assistant/settings", {"decides_approvals": True}, token=token, expected=403)
-    post(api, "assistant/settings", {"decides_approvals": True}, token=ops["token"], expected=403)
-    post(api, "preferences/assistant.decides_approvals", {"value": True}, token="ben-test", expected=403)
-    assert get(api, "assistant/settings", "ben-test")["active"] is False
-    assert post(api, "assistant/settings", {"decides_approvals": True}, token="ben-test")["active"] is True
+    # On with no setting of Ben's own. Only Ben changes it, signed in: not his Assistant, a bot, or the generic preference.
+    post(api, "assistant/settings", {"decides_approvals": False}, token=token, expected=403)
+    post(api, "assistant/settings", {"decides_approvals": False}, token=ops["token"], expected=403)
+    post(api, "preferences/assistant.decides_approvals", {"value": False}, token="ben-test", expected=403)
+    assert get(api, "assistant/settings", "ben-test")["active"] is True
     # Nothing is approved before the Assistant reads back the list, and only it posts one, of his approvals.
     assert asked(api, "approvals/" + q["old"][0], approve, token, "turn", expected=403)["error"]["code"] == "approve_not_asked"
     for who in (ops["token"], "ben-test"):
@@ -637,6 +643,23 @@ def test_the_assistant_decides_approvals_in_bulk_once_the_person_turns_it_on(api
     put(api, "access/rules", {"assistant_approvals": False})
     refused = asked(api, "approvals/" + q["old"][0], approve, token, "turn", expected=403)
     assert refused["error"]["code"] == "approve_setting_off" and "owner" in refused["error"]["detail"]
+
+
+def test_a_read_back_note_shows_above_the_list_and_approves_nothing_more(api):
+    q = needs_you_queue(api)
+    _, attempt = assistant_turn(api, "ben-test", "Approve the old publish batches")
+    token = attempt["token"]
+    note = "The one real decision is the merge of acme/site PR 12: it stays yours to make."
+    back = post(api, "assistant/read-back", {"approvals": q["old"], "note": note}, token=token)
+    # The note comes first; the list and the yes line are unchanged and last; only the listed ids may be approved.
+    assert back["text"].startswith(note + "\n\nI'll approve these 3 for you:\n- Approve the publish")
+    assert back["text"].endswith("Reply yes to approve exactly these; any other reply approves nothing.")
+    assert back["approves"] == q["old"]
+    # A note is one plain line: its line breaks and runs of spaces read as one space.
+    again = post(api, "assistant/read-back", {"approvals": q["old"], "note": "One real decision:\n\n  the merge."}, token=token)
+    assert again["text"].startswith("One real decision: the merge.\n\nI'll approve these 3 for you:")
+    # A note is at most 300 characters: a longer one is refused before anything is posted.
+    post(api, "assistant/read-back", {"approvals": q["old"], "note": "x" * 301}, token=token, expected=422)
 
 
 def test_words_in_a_message_or_file_never_approve_only_the_persons_own(api):
@@ -737,14 +760,14 @@ def test_words_in_a_message_or_file_never_approve_only_the_persons_own(api):
     # The amount leads, and a field padded or posing as another can't push it out: it stays quoted as itself.
     assert "(amount: “50000”; account: “card; amount: 9”; what: “Team lunch”)" in read_back(padded)["text"]
     # Every field of an email shows, the recipients in full, and any field not on the known list after them; only the
-    # hash is left out. Too many recipients to show and it stays a click, as does a report to the Tico team.
+    # hash is left out. Too many recipients to show and it stays a click.
     assert ("(to: “boss@acme.example”; cc: “leak@evil.example”; mailbox: “ceo@acme.example”; subject: “Q3 numbers”; "
             "reply_to: “x@evil.example”)") in read_back(email)["text"]
     assert "sha256" not in read_back(email)["text"]
     assert post(api, "assistant/read-back", {"approvals": [crowd]}, token=token, expected=409)["error"]["code"] == \
         "approve_too_long"
-    assert post(api, "assistant/read-back", {"approvals": [report]}, token=token, expected=403)["error"]["code"] == \
-        "approve_support"
+    # A report to the Tico team reads back like any other approval; the Assistant may approve it on a plain yes (below).
+    assert "Approve the support approval requested by" in read_back(report)["text"]
     assert "account: “card'; amount: '9'”" in read_back(quoted)["text"]
     # Nothing is cut: every file by name and size (no hash), the whole address a page goes to; anything a line can't
     # show whole, or a key that isn't a plain name, stays a click.
@@ -813,3 +836,76 @@ def test_a_question_the_old_lookups_answered_starts_a_bot_turn(api, text):
     said = say(api, text)
     assert "reply" not in said and "fast" not in said
     assert post(api, "jobs/claim", {}, token=r["token"])["attempt"] is not None
+
+
+@pytest.fixture
+def support_hq(monkeypatch):
+    """HQ's ticket routes as test_support.py fakes them: nothing reaches the network."""
+    fake = FakeHQ()
+    monkeypatch.setattr(support, "TRANSPORT", httpx.MockTransport(fake))
+    for name in ("TICO_SUPPORT", "TICO_TELEMETRY", "DO_NOT_TRACK", "TICO_HQ_URL"):
+        monkeypatch.delenv(name, raising=False)
+    monkeypatch.setenv("TICO_VERSION", "0.2.17")
+    return fake
+
+
+def report_to_the_team(api, q, text="Logs attached"):
+    """A bot's support report, drafted for Ben through his own task, as the bot would draft it."""
+    with api.app.state.store.transaction() as c:
+        task = H.approval(c, q["merge"])["task_id"]
+        return H.approval_request(c, "bot:ops", "support", {"message": text, "content_sha256":
+                                  hashlib.sha256(text.encode()).hexdigest()}, task)["id"]
+
+
+def test_the_assistant_declines_a_report_to_the_team_and_nothing_is_sent(api, support_hq):
+    q = needs_you_queue(api)
+    report = report_to_the_team(api, q)
+    r, attempt = assistant_turn(api, "ben-test", "Decline the report to the Tico team")
+    asked(api, "approvals/" + report, {"decision": "declined"}, attempt["token"], "turn")
+    assert decision(api, report) == "declined"
+    assert support_hq.seen == []
+
+
+def test_the_assistant_approves_a_report_to_the_team_only_on_the_read_back_and_a_yes(api, support_hq):
+    q = needs_you_queue(api)
+    report = report_to_the_team(api, q)
+    r, attempt = assistant_turn(api, "ben-test", "Send the logs to the Tico team")
+    approve = {"decision": "approved"}
+    # Not on its own words: the list comes first.
+    assert asked(api, "approvals/" + report, approve, attempt["token"], "turn",
+                 expected=403)["error"]["code"] == "approve_not_asked"
+    back = post(api, "assistant/read-back", {"approvals": [report]}, token=attempt["token"])
+    assert "Approve the support approval requested by" in back["text"]
+    # The read-back is the turn's reply; Ben's plain yes starts the next turn, which may approve exactly what it listed.
+    post(api, f"attempts/{attempt['id']}/started", {"thread_id": "read-back"}, token=r["token"])
+    post(api, f"attempts/{attempt['id']}/complete", {"outcome": "completed", "text": "Shall I send it?",
+                                                     "last_seq": 0}, token=r["token"])
+    assert say(api, "yes", "ben-test")
+    token = post(api, "jobs/claim", {}, token=r["token"])["attempt"]["token"]
+    asked(api, "approvals/" + report, approve, token, "turn")
+    row = get(api, "approvals/" + report, "ben-test")
+    assert row["decision"] == "approved" and row["decided_by_id"] == "human:ben" and row["decided_via"] == "assistant"
+    assert row["decided_for"]["read_back"] == back["text"] and row["decided_for"]["words"] == "yes"
+    assert support_hq.seen == []                                   # the approval sends nothing; the bot's send does
+
+
+def test_the_assistant_decides_by_default_and_an_explicit_off_or_the_team_rule_stops_it(api):
+    q = needs_you_queue(api)
+    # No setting row yet: on, and the team lets it.
+    state = get(api, "assistant/settings", "ben-test")
+    assert (state["decides_approvals"], state["team_allows"], state["active"]) == (True, True, True)
+    with api.app.state.store.read() as c:
+        assert c.execute("SELECT count(*) FROM preferences WHERE actor='human:ben' AND key=?",
+                         (assistant.DECIDES_KEY,)).fetchone()[0] == 0
+    # Ben's own off is kept until he turns it on again.
+    assert post(api, "assistant/settings", {"decides_approvals": False}, token="ben-test")["active"] is False
+    r, attempt = assistant_turn(api, "ben-test", "Approve the site merge")
+    refused = asked(api, "approvals/" + q["merge"], {"decision": "approved"}, attempt["token"], "turn", expected=403)
+    assert refused["error"]["code"] == "approve_setting_off"
+    assert post(api, "assistant/settings", {"decides_approvals": True}, token="ben-test")["active"] is True
+    # The owner's team rule stops it whatever Ben's own setting says.
+    put(api, "access/rules", {"assistant_approvals": False})
+    state = get(api, "assistant/settings", "ben-test")
+    assert (state["decides_approvals"], state["team_allows"], state["active"]) == (True, False, False)
+    refused = asked(api, "approvals/" + q["merge"], {"decision": "approved"}, attempt["token"], "turn", expected=403)
+    assert refused["error"]["code"] == "approve_setting_off" and "owner" in refused["error"]["detail"]

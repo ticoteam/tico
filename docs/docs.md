@@ -23,14 +23,12 @@ body. The page lists them grouped by folder.
 - **First visit.** While Docs holds nothing a person wrote or linked, the Librarian asks "Where are your docs?" above
   the list: links become sources at once and it reads them and builds the map of the docs. **Skip for now** is yours
   alone; **Set up with the Librarian…** in the `...` menu asks again ([librarian.md](librarian.md#first-run-setup)).
-- **Import** a file from **More** (the `…` button), then **Import a file…**: `.md`, `.markdown`, `.txt`, `.html`, `.docx`
-  or `.pdf`, up to 20 MB. It becomes a Markdown doc (headings, lists, links, bold and italic, and tables are kept; a PDF
-  gives its text, and a scan with no text is refused). The title is the first `#` heading, else the file name.
-  Each conversion gets 30 seconds and 1 GB of memory, and a server converts two files at a time. If a file goes over
-  either limit, the import stops. If two other imports are running, the import does not start. The dialog says why:
-  "That file took too long to convert. Split it into smaller files and try again.", "That file is too large to convert
-  on this server. Split it into smaller files and try again." or "Imports are busy right now. Try again in a minute."
-  A stopped or refused import saves nothing. The dialog stays open, so you can try again or choose another file.
+- Choose **Import a file…** from the `...` menu. Accepted: `.md`, `.markdown`, `.txt`, `.html`, `.htm`, `.docx` or `.pdf`, up to
+  20 MB. It becomes a Markdown doc (headings, lists, links, bold and italic, and tables are kept; a PDF gives its text, and
+  a scan with no text is refused). The title is the first `#` heading, else the file name. Conversion stops after 30
+  seconds or when it needs more than 1 GiB of memory. The file is refused, and nothing is saved. A server converts two
+  files at once. An import that starts while two are converting is refused at once: "Imports are busy right now. Try again
+  in a minute." A file that converts to over 1,000,000 characters is refused.
 - **Every change is a version.** **History** lists them (who, when, the note; "by Ops" for a bot), shows any old
   version, and **Restore** saves it as a new version. Nothing is rewritten or lost.
 - **Editing together.** Saving sends the version you opened. If someone (or a bot) saved first you get "Ben saved
@@ -130,7 +128,7 @@ All of it is in the stable v2 contract ([openapi/v2.json](openapi/v2.json), tag 
 | `GET /api/v2/docs/{id}/versions` | `{"versions": [{"version", "current", "title", "path", "actor", "actor_name", "created_at", "note", "size"}]}` |
 | `GET /api/v2/docs/{id}/versions/{n}` | `{"version": {..., "body"}}` |
 | `POST /api/v2/docs/{id}/restore` `{"version"}` | `{"doc"}`: the old version saved as a new one |
-| `POST /api/v2/docs/import` (multipart `file`, `title`?, `path`?) | `{"doc"}` |
+| `POST /api/v2/docs/import` (multipart `file`, `title`?, `path`?) | `{"doc"}`; `503 imports_busy` (retryable) while two conversions run; `422 import_failed` when the file is refused, with the reason in `detail` |
 | `GET /api/v2/docs/search?q=&limit=` | `{"results": [{"type": "internal", "id", "path", "title", "excerpt", "score"} \| {"type": "linked", "id", "title", "url", "kind", "description", "score"}]}` |
 | `GET /api/v2/linked-docs` | `{"linked": [{"id", "title", "url", "kind", "host", "description", "added_by", "added_by_name", "created_at", "updated_at"}]}` |
 | `POST /api/v2/linked-docs` `{"url", "title"?, "description"?}` | `{"linked"}`; `409 already_linked` |

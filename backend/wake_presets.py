@@ -6,7 +6,7 @@ including the former `current` setting, use Performance. New bots start as Doers
 Under a preset, two kinds of job wait at enqueue time (the `wake_preset_hold` trigger on jobs, so every
 event source is held the same way): a nonblocking notice the server marks with `refs.wake_batch`
 (BATCH_KINDS: a finished request, review comments, a failing check nobody armed a wait for) and a sweep
-(a routine's scheduled run, a stall or status check). Only the keeper writes those refs, so nobody can make
+(a routine's scheduled run, or a legacy stall or status check). Only the keeper writes those refs, so nobody can make
 an immediate wake wait by sending text that looks like one. Other news (a comment, a task's status, step or relation
 moving, any notice no rule names) starts no job at all: the rules engine writes it as a note (backend/rules.py,
 `default_note`), so nothing here holds it. A held batch never holds anything else back: a person's message starts
@@ -33,9 +33,10 @@ import os
 import statistics
 
 from . import hubdb as H
+from . import bot_settings as BS
 
 # A run's tokens: its input (uncached and cached) and output, as its usage records them.
-RUN_TOKENS = "coalesce(t.input_tokens,0)+coalesce(t.cached_tokens,0)+coalesce(t.output_tokens,0)"
+RUN_TOKENS = "coalesce(a.input_tokens,0)+coalesce(a.cached_tokens,0)+coalesce(a.output_tokens,0)"
 
 CURRENT = "current"
 TOKEN_SAVER = "token_saver"
@@ -89,8 +90,8 @@ _DUPLICATE = " OR ".join(
    WHERE m.id=NEW.message_id AND {_SAME_EVENT} AND (coalesce(cj.state,o.state) IN ('queued','leased','running','input')
    OR a.finished_at>=strftime('%Y-%m-%dT%H:%M:%fZ',m.created_at,'-{DUPLICATE_SECONDS} seconds')))""" for earlier in _EARLIER)
 HOLD_TRIGGER = f"""CREATE TRIGGER wake_preset_hold AFTER INSERT ON jobs WHEN NEW.state='queued' BEGIN
- UPDATE jobs SET wake_preset=CASE WHEN (SELECT json_extract(config,'$.wake_preset') FROM bot_config
-   WHERE bot=NEW.bot_id)='{TOKEN_SAVER}' THEN '{TOKEN_SAVER}' ELSE '{PERFORMANCE}' END WHERE id=NEW.id;
+ UPDATE jobs SET wake_preset=CASE WHEN (SELECT wake_preset FROM bot_settings
+   WHERE bot_id=NEW.bot_id)='{TOKEN_SAVER}' THEN '{TOKEN_SAVER}' ELSE '{PERFORMANCE}' END WHERE id=NEW.id;
  UPDATE jobs SET held=1,wake_class=(SELECT CASE WHEN {_BATCH_SQL} THEN json_extract(m.refs,'$.wake_batch')
    ELSE 'sweep' END FROM messages m WHERE m.id=NEW.message_id)
    WHERE id=NEW.id AND {_PRESET_SQL} AND EXISTS(SELECT 1 FROM messages m WHERE m.id=NEW.message_id
@@ -115,7 +116,6 @@ def ensure(c):
     H.add_column(c, "jobs", "hold_streak", "INTEGER NOT NULL DEFAULT 0")
     # The job whose turn carried this one's notice (a batch's newest, or its digest), for `measures`.
     H.add_column(c, "jobs", "wake_carrier", "TEXT")
-    H.add_column(c, "attempts", "wake", "TEXT")
     c.execute("CREATE INDEX IF NOT EXISTS jobs_held ON jobs(bot_id,hold_until) WHERE held=1")
     # The few held jobs still queued, in claim order: what tick reads every pass under the write lock (HELD_*_SQL).
     c.execute("CREATE INDEX IF NOT EXISTS jobs_held_queued ON jobs(created_at, id) WHERE held=1 AND state='queued'")
@@ -127,9 +127,10 @@ def ensure(c):
         c.execute("DROP TRIGGER IF EXISTS wake_preset_hold")
         c.execute(HOLD_TRIGGER)
 
-    c.execute("UPDATE bot_config SET config=json_set(config,'$.wake_preset',?),revision=revision+1 "
-              "WHERE json_extract(config,'$.wake_preset') IS NULL "
-              "OR json_extract(config,'$.wake_preset')=?", (PERFORMANCE, CURRENT))
+    c.execute("UPDATE bot_config SET revision=revision+1 WHERE bot IN (SELECT bot_id FROM bot_settings "
+              "WHERE wake_preset IS NULL OR wake_preset=?)", (CURRENT,))
+    c.execute("UPDATE bot_settings SET wake_preset=?,updated_at=? WHERE wake_preset IS NULL OR wake_preset=?",
+              (PERFORMANCE, H.now(), CURRENT))
 
 
 def values():
@@ -168,7 +169,7 @@ def effective(config):
     batch = _duration(spec["batch_seconds"])
     summary = (f"{spec['label']}: finished requests and a person's review comments wait up to {batch}"
                + (" (at most one such wake per " + batch + ")" if spec["batch_scope"] == "bot" else "")
-               + f"; an enabled routine or stall check runs at most every {_duration(spec['sweep_seconds'])}. "
+               + f"; an enabled routine runs at most every {_duration(spec['sweep_seconds'])}. "
                "People, assignments, questions, awaited results, blockers and review requests wake it at once.")
     if own and own.get("digest_hour") is not None:
         summary = (f"The rest of the news arrives once a day, at {own['digest_hour']:02d}:00 team time. "
@@ -186,7 +187,7 @@ def numbers_for(c, bot, label, cache=None):
     if cache is not None and bot in cache:
         own = cache[bot]
     else:
-        row = c.execute("SELECT config FROM bot_config WHERE bot=?", (bot,)).fetchone()
+        row = c.execute(BS.ONE_SQL, (bot,)).fetchone()
         own = profiles.numbers(H._json(row[0], {}) if row else {})
         if cache is not None:
             cache[bot] = own
@@ -318,7 +319,7 @@ def _release(c, bot, jobs):
     given (execution.HISTORY_PAGE, with room to spare for what arrives before the claim): the newest starts the turn
     and the page carries the others. Otherwise one digest in the bot's notice room names each room, how many notices
     wait there and how to read them; their own messages stay unread where they are."""
-    rooms = {(j["conversation_id"], (H._json(j["refs"], {}) or {}).get("task")) for j in jobs}
+    rooms = {(j["conversation_id"], H._task_ref((H._json(j["refs"], {}) or {}).get("task"))) for j in jobs}
     if len(rooms) == 1 and _on_one_page(c, jobs):
         *earlier, last = jobs
         c.execute("UPDATE jobs SET held=0 WHERE id=?", (last["id"],))
@@ -335,7 +336,7 @@ def _release(c, bot, jobs):
     rooms = sorted(groups.items(), key=lambda kv: place[kv[1][-1]["id"]], reverse=True)
     for conversation, held in rooms[:DIGEST_ROOMS]:
         first, newest = H.message(c, held[0]["message_id"]) or {}, H.message(c, held[-1]["message_id"]) or {}
-        task = H.task(c, (H._json(held[-1]["refs"], {}) or {}).get("task") or "")
+        task = H.task(c, H._task_ref((H._json(held[-1]["refs"], {}) or {}).get("task")) or "")
         what = classify(newest)[1] + (f" and {len(held) - 1} more" if len(held) > 1 else "")
         where = (f"a private task ({task['id']})" if task and H.task_private(c, task)
                  else f"{task['title']} ({task['id']})" if task
@@ -346,7 +347,7 @@ def _release(c, bot, jobs):
     if len(rooms) > DIGEST_ROOMS:
         lines.append(f"- and updates in {len(rooms) - DIGEST_ROOMS} more rooms; your open tasks list them")
     from . import profiles
-    row = c.execute("SELECT config FROM bot_config WHERE bot=?", (bot,)).fetchone()
+    row = c.execute(BS.ONE_SQL, (bot,)).fetchone()
     mine = profiles.name_of(H._json(row[0], {}) if row else {})
     held_by = (f"your {profiles.SPEC[mine]['label']} profile" if mine
                else f"your {LABELS.get(jobs[0]['wake_preset'], '')} wake preset")
@@ -378,7 +379,7 @@ def _on_one_page(c, jobs):
 
 def replan(c, bot):
     """A preset change: the bot's held jobs are planned again on the new values."""
-    config = c.execute("SELECT config FROM bot_config WHERE bot=?", (bot,)).fetchone()
+    config = c.execute(BS.ONE_SQL, (bot,)).fetchone()
     name = preset_of(H._json(config[0], {}) if config else {})
     c.execute("UPDATE jobs SET hold_until=NULL,wake_preset=? WHERE bot_id=? AND held=1 AND state='queued' "
               "AND coalesce(wake_class,'')<>'quota-reset' AND hold_reason IS NULL", (name, bot))
@@ -470,7 +471,7 @@ def measures(c, since, until=None, limit=20000):
     carried = {}
     for row in rows:
         if row["wake_carrier"]:
-            task = (H._json(row["refs"], {}) or {}).get("task")
+            task = H._task_ref((H._json(row["refs"], {}) or {}).get("task"))
             carried.setdefault(row["wake_carrier"], set()).update([task] if task else [])
     out = {}
     for name in CHOICES:
@@ -527,9 +528,9 @@ def _runs(c, job_ids):
     out, ids = {}, sorted(i for i in job_ids if i)
     for n in range(0, len(ids), 500):
         part = ids[n:n + 500]
-        for row in c.execute("SELECT a.job_id,min(a.created_at) AS claimed,count(t.id) AS turns,"
+        for row in c.execute("SELECT a.job_id,min(a.created_at) AS claimed,count(a.trigger) AS turns,"
                              f"coalesce(sum({RUN_TOKENS}),0) AS tokens,"
-                             "max(t.task_id) AS task FROM attempts a LEFT JOIN turns t ON t.id=a.id "
+                             "max(a.task_id) AS task FROM attempts a "
                              f"WHERE a.job_id IN ({','.join('?' * len(part))}) GROUP BY a.job_id", part):
             out[row["job_id"]] = dict(row)
     return out

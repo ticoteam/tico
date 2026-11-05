@@ -6,14 +6,14 @@ import pytest
 from backend.store import H
 from backend.tests.test_api import api, assign, claim, get, post, ready, runner  # noqa: F401
 from backend.tests.test_gateway_connection import KEY, fake_gateway, finish, handed_to, put_bot_on, save, setup
+from backend import bot_settings as BS
 
 
 def set_fallback(api, bot, fallback):
     with api.app.state.store.transaction() as c:
-        config = json.loads(c.execute("SELECT config FROM bot_config WHERE bot=?", (bot,)).fetchone()[0])
+        config = BS.read(c, bot)
         config = {k: v for k, v in config.items() if k != "fallback"}
-        c.execute("UPDATE bot_config SET config=? WHERE bot=?",
-                  (json.dumps({**config, **({"fallback": fallback} if fallback else {})}), bot))
+        BS.write(c, bot, {**config, **({'fallback': fallback} if fallback else {})})
 
 
 TICO_CHECK = {"runtime": "pi", "model": "tico-mid-1.0", "harness": "pi", "effort": "", "role": "review"}

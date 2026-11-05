@@ -26,6 +26,7 @@ from . import models as M
 from .auth import Identity
 from .blobs import register
 from .store import H, Problem, encode, repo_url
+from . import bot_home_merge
 from . import file_library
 from . import read_cache
 from . import task_privacy as privacy
@@ -190,7 +191,7 @@ def file_visible(c, auth, who, row, cache):
             if kind == "task":
                 auth.task(c, who, ident)
             elif kind == "conversation":
-                auth.conversation(c, who, ident)
+                auth.conversation(c, who, bot_home_merge.scope_home(c, ident))
             elif not auth.bot_access(c, who, row["bot_id"])["read"]:
                 raise Problem("forbidden", "private", 403)
             cache[key] = True

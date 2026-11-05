@@ -82,8 +82,8 @@ AWAITED = (
     ("milestone", "a pull request it waits for merged or a release it waits for was published (backend/milestone_waits.py)"),
     ("reconnected", "the account or credential its reconnect card waited for works again (backend/reconnects.py)"),
 )
-# Only news may wait: a comment, or a task's status, step or relation moving (run_triggers.TRIGGERS). A stall or
-# status check, a schedule, a pull request's checks and anything else keep their own rules (wake presets).
+# Only news may wait: a comment, or a task's status, step or relation moving (run_triggers.TRIGGERS). A schedule,
+# a pull request's checks and anything else keep their own rules (wake presets).
 HOLDABLE_TRIGGERS = ("comment", "status_or_relation")
 # wake_presets.classify classes that are news. An assignment, a blocker, a review request, an awaited result, a
 # question or a person's message is not, whatever its trigger says.
@@ -96,8 +96,8 @@ CAUSED_BY = "caused_by"
 NEWS_REFS = frozenset({"task", "comment", "attachments", "files", "unsolicited", "turn_id", "warnings", "via",
                        FLAG, "trigger", "trigger_source", "task_completion", CAUSED_BY, "rule", "news"})
 
-# The stall checks that only ask "has anything moved?"; same_state may hold these. A stuck run, a setup that is
-# held, a restated ask, a due date and a snooze ending are other news and keep waking.
+# Legacy stall and status checks (they only asked "has anything moved?") are what same_state holds. A stuck run, a setup that is
+# held, a due date and a snooze ending are other news and keep waking.
 SAME_STATE_WAKES = ("status_check", "stalled")
 RULES = ("own_write", "parked", "same_state")
 # Holds that leave no note: the check only asked whether anything moved (same_state), or a rule said to ignore it.

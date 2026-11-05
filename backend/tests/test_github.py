@@ -16,6 +16,7 @@ from backend.app import create_app
 from backend.auth import Identity
 from backend.config import Settings
 from backend.store import encode
+from backend import bot_settings as BS
 
 SECRET = "hook-secret"
 PR = "https://github.com/ticoteam/tico/pull/412"
@@ -33,8 +34,8 @@ def api(tmp_path):
             c.execute("INSERT INTO registry_metadata VALUES('people',?)", (encode({"people": [
                 {"id": "ana", "email": "ana@acme.example", "team": "leadership", "primary_for": ["*"]}]}),))
             for slug, config in bots.items():
-                c.execute("INSERT INTO bot_config(bot,config,team,owner_id) VALUES(?,?,?,?)",
-                          (slug, encode(config), "product" if slug == "cpo" else "marketing", "ana"))
+                c.execute('INSERT INTO bot_config(bot,team,owner_id) VALUES(?,?,?)', (slug, 'product' if slug == 'cpo' else 'marketing', 'ana'))
+                BS.write(c, slug, config)
             c.execute("INSERT INTO registry_metadata VALUES('onboarding',?)", (encode({"completed": "2026-01-01T00:00:00Z"}),))
         yield client
 
@@ -576,7 +577,6 @@ def test_wake_once_needs_the_app_and_waits_only_on_a_pr_github_reports(api):
         assert H.waiting_for(c, H.task(c, task['id'])) == 'GitHub on tico#412'
         H.task_update(c, 'bot:cpo', task['id'], status='waiting', note='Waiting on CI for tico#412')
         c.execute("UPDATE tasks SET updated_at=? WHERE id=?", (H.shift(H.now(), hours=-3), task['id']))
-        assert H.sweep_stranded(c) == []
     hook(api, 'pull_request', pr_event('closed'))             # a closed PR has nothing left to wait for
     with api.app.state.store.transaction() as c:
         assert H.waiting_for(c, H.task(c, task['id'])) is None

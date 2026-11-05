@@ -268,7 +268,9 @@ document.addEventListener('click', async ev => {
     if (n) { n.placeholder = 'What should change?'; n.focus(); }
     return;
   }
+  // Busy while the answer is on its way: nothing draws the box again meanwhile (nativeVisualRepaint skips it).
   box.querySelectorAll('button, input, textarea').forEach(x => { x.disabled = true; });
+  box.setAttribute('aria-busy', 'true');
   try {
     for (const w of qcardWrites(it, q, labels, note)) await post(w.path, w.body, newRequestId());
     QC_DRAFTS.delete(qcardDraftKey(it, q));
@@ -276,6 +278,7 @@ document.addEventListener('click', async ev => {
     void v2Refresh();
   } catch (e) {
     box.querySelectorAll('button, input, textarea').forEach(x => { x.disabled = false; });
+    box.removeAttribute('aria-busy');
     toast(e.message, true);
   }
 });

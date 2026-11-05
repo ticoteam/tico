@@ -25,7 +25,7 @@ One row per bot (`cloud_machines`): where it runs (`mode` cloud, or computer: an
 machine (`placement` shared, the default, or own), its own machine's size, Always on and Pause after, and that machine
 as HQ last described it. The shared machine is one more row, keyed SHARED, with the company's size, Always on and Pause
 after for it. A bot's placement defaults by role when its row is made (`default_placement`): `own` for a bot from a
-template in OWN_TEMPLATES (the video producer) or a Builder (display name "Builder" or "Builder (...)"), `shared`
+template in OWN_TEMPLATES (the video producer) or a Builder (the `builder` template, a copy of one, or a bot named "Builder", "Builder 2" or "Builder (...)"), `shared`
 for every other, the rest of Engineering included; a person switches it either way. Off a cloud company (cloud_access.state is None) there are no rows, the option
 is hidden and nothing here runs; on one, the same until HQ has listed its sizes (`offered`). On one, a bot with no
 computer defaults to a cloud machine (placement.auto_place; a setup that finished before HQ listed its sizes is placed
@@ -87,6 +87,7 @@ machine; a shared machine's facts are its member bots' together:
 import hashlib
 import json
 import logging
+import re
 import secrets
 import threading
 import time
@@ -99,6 +100,7 @@ from clients.gateway import user_agent
 
 from . import cloud_access, outbound_tls, releases
 from .store import H, Problem, digest
+from . import bot_settings as BS
 
 log = logging.getLogger(__name__)
 
@@ -119,12 +121,14 @@ CREATE TABLE IF NOT EXISTS cloud_machine_codes(
 MODES = ("cloud", "computer")
 PLACEMENTS = ("shared", "own")
 SHARED = "_shared"              # the shared machine's row and HQ key: no bot id has an underscore
-OWN_TEMPLATES = ("video-producer",)     # heavy work (renders, encodes) whatever department the bot is in
-OWN_TITLE = "builder"                   # a Builder ("Builder", "Builder (Claude)"): long builds, tests and toolchains
+OWN_TEMPLATES = ("video-producer", "builder")     # heavy work (renders, encodes, builds) whatever department the bot is in
+COPY_HOPS = 20                                     # how far back through copies of copies a template is looked for
+OWN_NAME = re.compile(r"builder(?: \(.*| \d+)?")  # a Builder by name: "Builder", "Builder 2", "Builder (Claude)"
 SIZES = ("small", "default", "large", "xlarge")       # the names before HQ has listed its own
 STATES = ("starting", "running", "stopping", "stopped", "deleted", "failed")
 ON = ("starting", "running")
 SIZES_KEY = "cloud-machine-sizes"
+NAME_KEY = "cloud-machine-name:"  # + machine key: the name a person gave its computer, kept when the machine is made again
 TICK = 10                       # seconds between looks
 SYNC = 60                       # seconds between HQ lists
 HEARTBEAT = 60
@@ -306,27 +310,55 @@ def rows(c):
     return {r["bot"]: dict(r) for r in c.execute("SELECT * FROM cloud_machines")}
 
 
+def visible_rows(c):
+    """Live runner contact proves a boot finished, but cannot undo HQ's stop or deletion."""
+    from .getting_started import ONLINE_SECONDS
+    online = {r["id"] for r in c.execute(
+        "SELECT id FROM runners_with_state WHERE revoked_at IS NULL AND last_seen_at>?",
+        (H.shift(H.now(), seconds=-ONLINE_SECONDS),))}
+    return {key: {**current, **({"state": "running"}
+                              if current["state"] == "starting" and current["runner_id"] in online else {})}
+            for key, current in rows(c).items()}
+
+
+def checked_in(c, runner_id):
+    """A boot reached this server. Repair old starting rows too, without undoing a stop reservation."""
+    # Every heartbeat reaches here: one read of the small cloud_machines table (a row per cloud bot at most).
+    c.execute("UPDATE cloud_machines SET state='running',updated_at=? WHERE runner_id=? AND state='starting'",
+              (H.now(), runner_id))
+
+
 def save(c, key, **fields):
     fields["updated_at"] = H.now()
     c.execute("UPDATE cloud_machines SET " + ",".join(k + "=?" for k in fields) + " WHERE bot=?",
               (*fields.values(), key))
 
 
-def default_placement(c, bot):
-    """Where a bot's cloud machine is when nobody has chosen: its own for a template in OWN_TEMPLATES or a Builder (a
-    display name of "Builder", or "Builder (...)"), the shared one for every other bot, the rest of Engineering
-    included (leads, reviewers and QA run short turns). Read once, when its row is made: renaming it later moves no
-    machine."""
-    found = c.execute("SELECT config FROM bot_config WHERE bot=?", (bot,)).fetchone()
+def _config_of(c, bot):
+    found = c.execute(BS.ONE_SQL, (bot,)).fetchone()
     try:
         config = json.loads(found["config"] or "{}") if found else {}
     except ValueError:
         config = {}
-    if isinstance(config, dict) and config.get("template") in OWN_TEMPLATES:
-        return "own"
+    return config if isinstance(config, dict) else {}
+
+
+def default_placement(c, bot):
+    """Where a bot's cloud machine is when nobody has chosen: its own for a template in OWN_TEMPLATES (the video producer,
+    the Builder), for a copy of one of those (back through `copied_from`, a copy of a copy included), or for a bot
+    named as a Builder ("Builder", "Builder 2", "Builder (...)"); the shared one for every other bot, the rest of
+    Engineering included (leads, reviewers and QA run short turns). Read once, when its row is made: renaming it later moves no machine."""
+    seen, at = set(), bot
+    while at and at not in seen and len(seen) < COPY_HOPS:     # the bot, then the bot it was copied from, and so on
+        seen.add(at)
+        config = _config_of(c, at)
+        if config.get("template") in OWN_TEMPLATES:
+            return "own"
+        source = config.get("copied_from")
+        at = source.get("bot") if isinstance(source, dict) else None
     named = c.execute("SELECT display_name FROM bots WHERE id=?", (bot,)).fetchone()
     name = ((named["display_name"] if named else "") or "").strip().lower()
-    return "own" if name == OWN_TITLE or name.startswith(OWN_TITLE + " (") else "shared"
+    return "own" if OWN_NAME.fullmatch(name) else "shared"
 
 
 def adopt(c, bot, actor=H.KEEPER):
@@ -392,10 +424,27 @@ def resting(c):
 
 
 def label_for(c, key):
+    """The name machine `key`'s computer enrolls with: the one a person gave it (`named`), else its bot's."""
+    chosen = c.execute("SELECT value FROM registry_metadata WHERE key=?", (NAME_KEY + key,)).fetchone()
+    if chosen:
+        try:
+            given = json.loads(chosen[0])
+        except (ValueError, TypeError):
+            given = None
+        if isinstance(given, str) and given:
+            return given[:100]
     if key == SHARED:
         return "Shared cloud machine"
     found = H.bot(c, key)
     return f"{(found or {}).get('display_name') or (found or {}).get('slug') or key} (cloud)"[:100]
+
+
+def named(c, runner_id, label):
+    """A person renamed computer `runner_id`: when it is a cloud machine's computer, the machine keeps that name for the
+    computer it enrolls next (a machine made again after its disk was deleted)."""
+    for found in c.execute("SELECT bot FROM cloud_machines WHERE runner_id=?", (runner_id,)).fetchall():
+        c.execute("INSERT INTO registry_metadata VALUES(?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value",
+                  (NAME_KEY + found["bot"], json.dumps(label)))
 
 
 def sizes(c):
@@ -475,6 +524,7 @@ def enrolled(c, execution, runner_id, key):
     if old and old != runner_id:
         c.execute("UPDATE runners SET revoked_at=? WHERE id=? AND revoked_at IS NULL", (H.now(), old))
     save(c, key, runner_id=runner_id, enroll_by=0, enroll_fails=0)
+    checked_in(c, runner_id)
     H.event(c, H.KEEPER, "cloud_machine.enrolled", key, {"runner": runner_id})
     for bot in hosted(c, key):
         bind(c, execution, bot)
@@ -1158,7 +1208,8 @@ def view(c, bot, settings=None):
     if external_harness(c, bot):
         return None
     assigned = bool(c.execute("SELECT 1 FROM assignments WHERE bot=?", (bot,)).fetchone())
-    return shown(bot, row(c, bot), assigned, row(c, SHARED))
+    found = visible_rows(c)
+    return shown(bot, found.get(bot), assigned, found.get(SHARED))
 
 
 def machine_view(current):
@@ -1247,7 +1298,7 @@ def change(c, execution, who, bot, mode=None, size=None, always_on=None, placeme
 
 def shared_view(c):
     """The shared machine as Settings shows it, with the bots set to run there."""
-    return {**machine_view(row(c, SHARED)), "bots": members(c)}
+    return {**machine_view(visible_rows(c).get(SHARED)), "bots": members(c)}
 
 
 def change_shared(c, auth, who, size=None, always_on=None, pause_minutes=None):

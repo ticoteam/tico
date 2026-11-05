@@ -68,6 +68,9 @@ When the server is slow or stuck, read `python -m backend.flight summary --since
 flight file, not the database.
 
 ## Conventions
+- Create persistent schema changes with `python3 scripts/new_migration.py name` (`--py` for `up(conn)`):
+  `YYYYMMDDHHMMSS_name.sql|py`, UTC. Keep existing `NNNN_` files and applied checksums unchanged. Each migration
+  stands alone and must not depend on another unmerged migration's schema; pending files run even below applied ones.
 - Keep real team names, human names, domains, buckets and credentials out of the repository. Examples use
   the fictional team Acme (`acme.example`).
 - The UI has no build step and loads nothing from the network: vendored libraries live in

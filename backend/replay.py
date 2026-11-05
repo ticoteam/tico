@@ -1,7 +1,7 @@
 """History replay: what happened between two moments, in time order, for a person to play back (`GET /api/v2/replay`).
 
 Nothing new is recorded. The items are read from the history Tico already keeps: task creation and the
-status and owner rows of a task's history (`history_events`), messages (chats and task comments), runs (`turns`), each bot's
+status and owner rows of a task's history (`history_events`), messages (chats and task comments), runs (`attempts`), each bot's
 status rows (`bot_status_history`) and goal status changes (`history_events` of goals). Each source is read by its
 time-bounded index and capped, so a long history costs what the window holds, not what the tables hold.
 Each source also stops after SCAN_MAX rows read, shown or not (rows the viewer may not read, or outside the
@@ -64,28 +64,30 @@ def clip_text(value, n=TEXT_MAX):
     return value if len(value) <= n else value[: n - 1].rstrip() + "…"
 
 
-def install(app, store, auth):
-    def members(c, who, kind, ident):
-        """The actors a scope covers, or None for everyone. A bot scope needs Read on the bot, as its pages do."""
-        if not kind:
-            return None
-        if kind == "bot":
-            auth.require_read(c, who, ident)
-            return {"bot:" + ident}
-        if kind == "person":
-            if not H.human(c, ident):
-                raise Problem("not_found", "Person not found", 404)
-            return {"human:" + ident}
-        roster = views.roster(c)
-        groups = P.group_and_below(ident, roster)
-        if not groups:
-            raise Problem("not_found", "Team not found", 404)
-        entries = views.entries(c)
-        return ({"human:" + p["id"] for p in roster.get("people") or [] if p.get("team") in groups}
-                | {"bot:" + slug for slug in entries if P.team_of(slug, entries, roster) in groups})
+def members(c, auth, who, kind, ident):
+    """The actors a scope covers, or None for everyone: a team is everyone in it and in the groups nested under it.
+    A bot scope needs Read on the bot, as its pages do. History's Log filters with the same scopes."""
+    if not kind:
+        return None
+    if kind == "bot":
+        auth.require_read(c, who, ident)
+        return {"bot:" + ident}
+    if kind == "person":
+        if not H.human(c, ident):
+            raise Problem("not_found", "Person not found", 404)
+        return {"human:" + ident}
+    roster = views.roster(c)
+    groups = P.group_and_below(ident, roster)
+    if not groups:
+        raise Problem("not_found", "Team not found", 404)
+    entries = views.entries(c)
+    return ({"human:" + p["id"] for p in roster.get("people") or [] if p.get("team") in groups}
+            | {"bot:" + slug for slug in entries if P.team_of(slug, entries, roster) in groups})
 
+
+def install(app, store, auth):
     def build(c, who, first, last, kind, ident):
-        actors = members(c, who, kind, ident)
+        actors = members(c, auth, who, kind, ident)
         reader = privacy.actor(who)
         within = (lambda *names: any(n in actors for n in names)) if actors is not None else (lambda *names: True)
         visible_sql = auth.task_sql(c, who)
@@ -209,8 +211,10 @@ def install(app, store, auth):
 
         # Runs, with the bot turns page's checks: Read on the bot, then its message, its room and its tasks.
         items = []
-        for scanned, turn in enumerate(c.execute("SELECT id,bot,started_at,finished_at,exit,summary,message_id,task_id FROM turns "
-                                                 "WHERE started_at>=? AND started_at<? ORDER BY started_at", (first, last)), 1):
+        for scanned, turn in enumerate(c.execute(
+                "SELECT id,bot_id AS bot,created_at AS started_at,settled_at AS finished_at,exit,summary,message_id,"
+                "task_id FROM attempts WHERE (job_id IS NULL OR trigger IS NOT NULL) AND created_at>=? AND created_at<? ORDER BY created_at",
+                (first, last)), 1):
             if scanned > SCAN_MAX:
                 caps.append(turn["started_at"])
                 break

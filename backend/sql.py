@@ -103,6 +103,7 @@ def teammate_masks(unseen, me, inner=None, names=None, bots=()):
         out["message_mentions"] = {"actor": masked("actor", member(said))}
     if people or groups:
         out["bot_config"] = bot_config_masks(people, bare, groups)
+        out["bot_settings"] = bot_settings_masks(people, bare, groups)
     if people:
         out["conversations"] = {"participants": (
             "CASE WHEN source.participants IS NULL OR NOT json_valid(source.participants) THEN NULL "
@@ -120,8 +121,7 @@ def teammate_masks(unseen, me, inner=None, names=None, bots=()):
 
 def bot_config_masks(people, bare, groups):
     """bot_config columns less the people (`human:<id>` in `people`, bare ids in `bare`) and groups the caller may
-    not see: ids read '', owner lists drop them, and the configuration loses a `team`, `reports_to` or `owner_id`
-    naming one."""
+    not see: ids read '' and owner lists drop them."""
     nobody = "(SELECT NULL WHERE 0)"              # an IN list that matches nothing
     actors, ids, teams = qlist(people) if people else nobody, qlist(bare) if bare else nobody, \
         qlist(groups) if groups else nobody
@@ -137,12 +137,20 @@ def bot_config_masks(people, bare, groups):
         out[column] = (f"CASE WHEN source.{column} IS NULL OR NOT json_valid(source.{column}) THEN source.{column} "
                        f"ELSE (SELECT json_group_array(value) FROM json_each(source.{column}) "
                        f"WHERE value NOT IN {ids} AND value NOT IN {actors}) END")
-    out["config"] = (
-        "CASE WHEN source.config IS NULL OR NOT json_valid(source.config) THEN source.config "
-        "ELSE json_patch(source.config, (SELECT json_group_object(key, NULL) FROM json_each(source.config) "
-        f"WHERE (key='team' AND value IN {teams}) OR (key IN ('reports_to','operator') "
-        f"AND (value IN {ids} OR value IN {actors})))) END")
     return out
+
+
+def bot_settings_masks(people, bare, groups):
+    """bot_settings less the people and groups the caller may not see: the declaration's other keys (`extra`) lose a
+    `team`, `reports_to` or `operator` naming one."""
+    nobody = "(SELECT NULL WHERE 0)"
+    actors, ids, teams = qlist(people) if people else nobody, qlist(bare) if bare else nobody, \
+        qlist(groups) if groups else nobody
+    return {"extra": (
+        "CASE WHEN source.extra IS NULL OR NOT json_valid(source.extra) THEN source.extra "
+        "ELSE json_patch(source.extra, (SELECT json_group_object(key, NULL) FROM json_each(source.extra) "
+        f"WHERE (key='team' AND value IN {teams}) OR (key IN ('reports_to','operator') "
+        f"AND (value IN {ids} OR value IN {actors})))) END")}
 
 
 def unsettled_watched(c, inner):
@@ -164,8 +172,8 @@ def live_masks(unsettled):
     return {"attempts": {"final_text": hidden("final_text"),
                          "result": f"CASE WHEN source.id NOT IN ({unsettled}) THEN source.result "
                                         "WHEN json_valid(source.result) THEN json_remove(source.result,'$.text') "
-                                        "ELSE NULL END"},
-            "turns": {"summary": hidden("summary")}}
+                                        "ELSE NULL END",
+                         "summary": hidden("summary")}}
 # Read-only views built over the caller's connection: name -> (base tables it reads, SELECT over `{table}`, the
 # caller's own filtered view of each, and `{all_table}`, its unfiltered inner view). A total adds up only rows the
 # caller may read: a bucket of one run would otherwise tell them that run exists, what it cost and whether it acted.
@@ -174,10 +182,9 @@ DERIVED = {
     # Runs per week (Monday, UTC), bot, trigger and purpose, with tokens and outcome (backend/run_triggers.py).
     # A run from before triggers were recorded reads `unknown`, and is counted, never dropped. Input is the run's
     # measured usage (every primary and fallback segment). A run from before measured usage has its one-number
-    # count in input_tokens (migration 76). An attempt that never got a
-    # turn row (one that failed or expired before it started) is counted too, as `unknown`, with no tokens or outcome;
-    # one whose turn the caller may not read is not turnless, and is not counted.
-    "run_weekly": (("turns", "attempts"), """
+    # count in input_tokens (migration 76). An attempt with no run record (a job and no `trigger`: one that failed or
+    # expired before it started) is counted too, as `unknown`, in the week it started, with no tokens or outcome.
+    "run_weekly": (("attempts",), """
         SELECT date(started_at, '-6 days', 'weekday 1') AS week, bot, coalesce(trigger_kind, 'unknown') AS trigger,
                coalesce(purpose, 'unknown') AS purpose,
                count(*) AS runs,
@@ -194,17 +201,15 @@ DERIVED = {
                round(100.0 * sum(coalesce(outcome, '') = 'no_change') / count(*), 1) AS no_change_pct,
                round(100.0 * sum(coalesce(outcome, '') = 'nothing_to_do') / count(*), 1) AS nothing_to_do_pct,
                round(100.0 * sum(outcome IS NULL) / count(*), 1) AS unknown_pct
-        FROM (SELECT started_at, bot, trigger_kind, purpose, input_tokens, cached_tokens, output_tokens,
+        FROM (SELECT CASE WHEN trigger IS NULL THEN coalesce(started_at, created_at) ELSE created_at END AS started_at,
+                     bot_id AS bot, trigger_kind, purpose, input_tokens, cached_tokens, output_tokens,
                      outcome, did_nothing, rotated
-              FROM {turns} WHERE started_at IS NOT NULL
-              UNION ALL
-              SELECT coalesce(a.started_at, a.created_at), a.bot_id, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL
-              FROM {attempts} a WHERE NOT EXISTS (SELECT 1 FROM {all_turns} t WHERE t.id = a.id))
+              FROM {attempts})
         GROUP BY 1, 2, 3, 4"""),
     # Runs per week, bot and wake rule (backend/rules.py): the rule that woke the run, with its tokens and how many did
     # nothing. A run from before rules, or whose message carried none, reads `unknown`. Same token sums as run_weekly.
-    "rule_weekly": (("turns",), """
-        SELECT date(started_at, '-6 days', 'weekday 1') AS week, bot, coalesce(rule_id, 'unknown') AS rule,
+    "rule_weekly": (("attempts",), """
+        SELECT date(created_at, '-6 days', 'weekday 1') AS week, bot_id AS bot, coalesce(rule_id, 'unknown') AS rule,
                count(*) AS runs,
                sum(coalesce(input_tokens, 0) + coalesce(cached_tokens, 0)) AS input_tokens,
                sum(coalesce(cached_tokens, 0)) AS cached_input_tokens,
@@ -212,7 +217,7 @@ DERIVED = {
                sum(coalesce(outcome, '') = 'acted') AS acted,
                sum(coalesce(did_nothing, 0) = 1) AS did_nothing,
                round(100.0 * sum(coalesce(did_nothing, 0) = 1) / count(*), 1) AS did_nothing_pct
-        FROM {turns} WHERE started_at IS NOT NULL
+        FROM {attempts} WHERE (job_id IS NULL OR trigger IS NOT NULL)
         GROUP BY 1, 2, 3"""),
 }
 # Totals over rows the reader may not read one by one, built only for the owner and a bot the owner granted them
@@ -385,17 +390,21 @@ def guarded(c, auth, who, inner, function, columns=None, unseen=None):
     person = H.actor_id(who.actor)
     # Meetings are the company's; typed notes are their owner's (backend/media.py). A private
     # meeting narrows to the people its invite or its importer names, spelled either way.
-    if owner:
-        meetings = "1"
-    elif bot or not who.email:
-        meetings = "0"
+    # A meeting saved "Participants only" (media.participants_only) is read only by the people it names, owner too.
+    audience = "coalesce(json_extract(metadata,'$.audience'),'')='participants'"
+    if bot or not who.email:
+        meetings = f"NOT ({audience})" if owner else "0"
     else:
         email = q(who.email.lower())
-        meetings = (f"lower(owner)={email} OR (json_extract(metadata,'$.kind')='meeting' AND ("
-                    "coalesce(json_extract(metadata,'$.private'),0)=0 OR EXISTS (SELECT 1 FROM "
-                    f"json_each(json_extract(metadata,'$.calendar.attendees')) WHERE lower(value)={email}) "
-                    "OR EXISTS (SELECT 1 FROM json_each(json_extract(metadata,'$.participants')) "
-                    f"WHERE lower(json_extract(value,'$.email'))={email})))")
+        named = (f"EXISTS (SELECT 1 FROM json_each(json_extract(metadata,'$.audience_emails')) "
+                 f"WHERE lower(trim(value))={email})")
+        meetings = "1" if owner else (
+            f"json_extract(metadata,'$.kind')='meeting' AND ("
+            "coalesce(json_extract(metadata,'$.private'),0)=0 OR EXISTS (SELECT 1 FROM "
+            f"json_each(json_extract(metadata,'$.calendar.attendees')) WHERE lower(value)={email}) "
+            "OR EXISTS (SELECT 1 FROM json_each(json_extract(metadata,'$.participants')) "
+            f"WHERE lower(json_extract(value,'$.email'))={email}))")
+        meetings = f"lower(owner)={email} OR (CASE WHEN {audience} THEN {named} ELSE ({meetings}) END)"
     goals = f"owner_id NOT IN {qlist(['bot:' + slug for slug in hidden])}" if hidden else "id IS NOT NULL"
     kpis = goals            # a KPI is owned like a goal: a bot's own are read by whoever may read the bot
     admin = who.role == "owner" or auth.bot_admin(who)
@@ -426,21 +435,25 @@ def guarded(c, auth, who, inner, function, columns=None, unseen=None):
         "tags": tag_gate, "task_tags": by_task,
         "task_delegations": by_task,
         "task_requesters": by_task, "task_reminders": by_task, "task_assets": by_task, "task_links": by_task, "task_roles": by_task,
+        # A task's moves to Blocked and snoozes, open and past (migration 0075), read with their task.
+        "task_holds": by_task,
         # A relation is read only when the caller may read both of its tasks.
         "task_relations": "from_task IN (SELECT id FROM tasks) AND to_task IN (SELECT id FROM tasks)",
         "message_assets": by_message,
         "approvals": ("(task_id IS NULL OR " + by_task + ") AND " + by_message + " AND (" +
-                      ("1" if owner else f"requested_by={me} OR message_id IN (SELECT id FROM messages WHERE recipient_id={me})") + ")"),
+                      ("1" if owner else f"requested_by_id={me} OR message_id IN (SELECT id FROM messages WHERE recipient_id={me})") + ")"),
         "bots": bots_visible("id"),
         "bot_status": bots_visible("bot"), "bot_status_history": bots_visible("bot"),
-        "schedules": bots_visible("bot"), "bot_config": bots_visible("bot"), "bot_control": bots_visible("bot"),
+        "schedules": bots_visible("bot"), "bot_config": bots_visible("bot"), "bot_settings": bots_visible("bot_id"),
+        "bot_control": bots_visible("bot"),
         "bot_transitions": bots_visible("bot"), "assignments": bots_visible("bot"),
         "schedule_config": by_schedule, "schedule_occurrences": f"{by_schedule} AND (task_id IS NULL OR {by_task})",
-        "turns": f"{bots_visible('bot')} AND (message_id IS NULL OR {by_message}) AND "
-                 f"(task_id IS NULL OR {by_task}) AND " + attempt_gate,
-        "deltas": "turn_id IN (SELECT id FROM turns)" + (f" AND turn_id NOT IN ({unsettled})" if unsettled else ""),
+        "deltas": "attempt_id IN (SELECT id FROM attempts)" + (f" AND attempt_id NOT IN ({unsettled})" if unsettled else ""),
         "jobs": f"{bots_visible('bot_id')} AND {by_message}",
-        "attempts": by_job + " AND " + attempt_gate, "job_recovery": by_job + " AND " + by_attempt,
+        # A run with a job is read with its job; one recorded with no lease (the demo seed, a run from before leases)
+        # with its bot and the message that started it. Either way its task, when it has one, must be readable too.
+        "attempts": (f"(CASE WHEN job_id IS NULL THEN {bots_visible('bot_id')} AND (message_id IS NULL OR {by_message}) "
+                     f"ELSE {by_job} END) AND (task_id IS NULL OR {by_task}) AND " + attempt_gate), "job_recovery": by_job + " AND " + by_attempt,
         "attempt_events": by_attempt + " AND " + content_gate(("payload",)) + (
             f" AND NOT (kind IN ('delta','message') AND attempt_id IN ({unsettled}))" if unsettled else ""),
         "attempt_inputs": by_attempt, "attempt_conversations": by_attempt,
@@ -576,7 +589,7 @@ class Gates:
 
     Where SQLite and Python could read the same JSON differently the clause declines and Python decides: a backslash
     (an escaped string), a repeated key (SQLite reads the first, Python the last), a task given as anything but one
-    string, a string that is itself JSON, a meeting reference, a moved input, and long provenance.
+    string or a list of strings, a string that is itself JSON, a meeting reference, a moved input, and long provenance.
     """
     KEYS = ("task", "task_id", "turn_id", "run", "attempt_id", "answers", "inputs")
 
@@ -597,11 +610,16 @@ class Gates:
                 f"AND substr(s.value,6) IN (SELECT id FROM {self.denied_tasks}))))")
 
     def task(self, refs, key):
-        """`refs.<key>` is absent, or one string naming a task that exists and is not denied."""
+        """`refs.<key>` is absent, one string naming a task that exists and is not denied, or a non-empty array in which
+        every element is such a string. ReadIndex.listed_tasks_known reads a list the same way: any other element, an
+        empty list, or a list naming one unknown or denied task is refused."""
         path = f"'$.{key}'"
+        listed = (f"SELECT 1 FROM json_each({refs},{path}) element WHERE element.type<>'text' OR "
+                  f"element.value NOT IN (SELECT id FROM {self.tasks}) OR element.value IN (SELECT id FROM {self.denied_tasks})")
         return (f"(json_type({refs},{path}) IS NULL OR (json_type({refs},{path})='text' AND "
                 f"json_extract({refs},{path}) IN (SELECT id FROM {self.tasks}) AND "
-                f"json_extract({refs},{path}) NOT IN (SELECT id FROM {self.denied_tasks})))")
+                f"json_extract({refs},{path}) NOT IN (SELECT id FROM {self.denied_tasks})) OR "
+                f"(json_type({refs},{path})='array' AND json_array_length({refs},{path})>0 AND NOT EXISTS ({listed})))")
 
     def refs(self, refs, top):
         """The row's own refs: an object naming no meeting, no denied string and only known readable tasks.

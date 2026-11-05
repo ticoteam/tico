@@ -11,7 +11,7 @@ import sqlite3
 
 import pytest
 
-from backend import (auto_tasks, batch_work, claim_holds, execution, gateway_connection, health, health_monitor,
+from backend import (auto_tasks, batch_work, claim_holds, execution, gateway_connection, health, maintenance_health,
                      providers, read_cache, read_deps, run_backoff, task_privacy as privacy, turn_budgets, wake_presets)
 from backend.store import H
 from backend.tests.test_api import (  # noqa: F401 (api is a fixture)
@@ -131,7 +131,7 @@ def test_a_job_whose_checks_raise_is_held_and_the_claim_hands_out_the_next_bots_
     assert raised == [bad["id"]]
     store = api.app.state.store
     with store.transaction() as c:
-        assert "claim_failed" in {f["check_id"] for f in health_monitor.findings(c, store.settings)}
+        assert "claim_failed" in {f["check_id"] for f in maintenance_health.findings(c, store.settings)}
 
     # The owner's release queues it again. It raises again, so it is held again, and its traceback is not logged twice.
     post(api, "bots/ops/release", {})
@@ -157,7 +157,7 @@ def test_the_writes_a_failing_job_made_before_its_error_are_rolled_back(api, mon
     assert turn["bot"] == "cpo"
     with api.app.state.store.read() as c:
         assert c.execute("SELECT count(*) FROM attempts WHERE bot_id='ops'").fetchone()[0] == 0
-        assert c.execute("SELECT count(*) FROM turns WHERE bot='ops'").fetchone()[0] == 0
+        assert c.execute("SELECT count(*) FROM attempts WHERE bot_id='ops'").fetchone()[0] == 0
     [bad] = jobs_of(api, "ops")
     assert (bad["state"], bad["attempt_id"], bad["held"]) == ("queued", None, 1)
     [good] = jobs_of(api, "cpo")
@@ -364,7 +364,7 @@ def test_a_bot_check_that_raises_is_logged_once_per_claim_and_named_in_health_un
     assert len(logged) == 1
     store = api.app.state.store
     with store.transaction() as c:
-        [finding] = [f for f in health_monitor.findings(c, store.settings) if f["check_id"] == "claim_check"]
+        [finding] = [f for f in maintenance_health.findings(c, store.settings) if f["check_id"] == "claim_check"]
     assert "RuntimeError" in finding["title"]
 
     # Once the back-off has passed, the check reads again: its next run starts, and the finding clears.
@@ -372,7 +372,7 @@ def test_a_bot_check_that_raises_is_logged_once_per_claim_and_named_in_health_un
     at(monkeypatch, api, H.shift(H.now(), seconds=claim_holds.CHECK_RETRY_FIRST + 1))
     assert claim(api, machine)["bot"] == "ops"
     with store.transaction() as c:
-        assert "claim_check" not in {f["check_id"] for f in health_monitor.findings(c, store.settings)}
+        assert "claim_check" not in {f["check_id"] for f in maintenance_health.findings(c, store.settings)}
 
 
 def test_a_team_budget_default_that_raises_fails_the_claim_and_holds_no_job(api, monkeypatch):
@@ -483,7 +483,7 @@ def test_a_held_run_that_starts_clears_its_hold_its_needs_you_item_and_its_healt
     assert item_status(api, job["hold_task_id"]) not in H.ACTIVE_STATUSES
     store = api.app.state.store
     with store.transaction() as c:
-        assert "claim_failed" not in {f["check_id"] for f in health_monitor.findings(c, store.settings)}
+        assert "claim_failed" not in {f["check_id"] for f in maintenance_health.findings(c, store.settings)}
 
 
 def test_a_wake_preset_release_and_replan_leave_a_claim_hold_to_its_own_wait(api, monkeypatch):
@@ -656,7 +656,7 @@ def test_a_failing_bot_check_is_not_run_again_by_polls_inside_its_back_off(api, 
     # Health reads the check too, after the claim's count: its finding names the bot all the while.
     store = api.app.state.store
     with store.transaction() as c:
-        assert "claim_check" in {f["check_id"] for f in health_monitor.findings(c, store.settings)}
+        assert "claim_check" in {f["check_id"] for f in maintenance_health.findings(c, store.settings)}
 
 
 def wake_notice(api, task_id, body):
@@ -749,7 +749,7 @@ def test_a_bot_check_that_raises_does_not_stop_another_bots_open_task_from_start
         assert claim(api, machine) is None
     assert len(calls) == seen
     with api.app.state.store.transaction() as c:
-        assert "claim_check" in {f["check_id"] for f in health_monitor.findings(c, api.app.state.store.settings)}
+        assert "claim_check" in {f["check_id"] for f in maintenance_health.findings(c, api.app.state.store.settings)}
 
 
 def open_task_only(api, machine, bots):

@@ -5,6 +5,7 @@ import json
 from backend.store import H
 from backend.tests.test_api import api, assign, claim, get, post, runner  # noqa: F401  (api is a fixture)
 from runner_support import state
+from backend import bot_settings as BS
 
 
 def tasks(api, *specs):
@@ -81,8 +82,8 @@ def test_a_private_subtask_shares_a_private_parents_session_only_when_both_have_
 
 def roots_runner(api, capabilities):
     with api.app.state.store.transaction() as c:
-        config = json.loads(c.execute("SELECT config FROM bot_config WHERE bot='ops'").fetchone()[0])
-        c.execute("UPDATE bot_config SET config=? WHERE bot='ops'", (json.dumps({**config, "session": "task"}),))
+        config = BS.read(c, 'ops')
+        BS.write(c, 'ops', {**config, 'session': 'task'})
     machine = runner(api)
     assign(api, machine, "ops")
     post(api, "runners/heartbeat", {"version": "test", "platform": "test", "readiness": {"ops": True},

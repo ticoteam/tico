@@ -116,7 +116,7 @@ def test_runs_spread_over_the_week_and_some_fall_in_the_last_hour(built):
         assert len({run["started_at"][:10] for run in calibration}) == 7
         recent = []
         for name in ("Calibration failures to technical support", "Calibration failed twice to Ben",
-                     "Firmware rings to health monitor"):
+                     "Firmware rings to BotOps"):
             runs, _ = runs_of(api, ids[name])
             recent += [run for run in runs if run["started_at"] >= LAST_HOUR]
         assert len(recent) >= 4
@@ -243,7 +243,7 @@ def test_nothing_is_dated_after_an_early_build(early):
                 count = db.execute(
                     f'SELECT count(*) FROM "{table}" WHERE typeof("{column}")=\'text\' AND "{column}" > ? '
                     f'AND "{column}" LIKE \'20__-__-__T%\'' +
-                    (" AND NOT (subject_type='task' AND kind IN ('check_back_at','check_back_explicit','check_back_imported'))" if table == "history_events" and column in ("old", "new") else ""), (cut,)).fetchone()[0]
+                    (" AND NOT (subject_type='task' AND kind IN ('check_back_at','check_back_explicit'))" if table == "history_events" and column in ("old", "new") else ""), (cut,)).fetchone()[0]
                 if count:
                     later.append((table, column, count))
     assert later == []

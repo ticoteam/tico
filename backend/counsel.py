@@ -511,7 +511,7 @@ def read_refused(store, auth, who, method, path, query):
         return READ_SCOPE
     parts = path.split("/")[3:]
     kind, ident, rest = parts[0], (parts[1] if len(parts) > 1 else ""), parts[2:]
-    if kind in ("attempts", "turns"):
+    if kind in ("attempts", "turns"):  # `turns` is an older client's path for a run
         return READ_SCOPE if ident != who.attempt_id else None
     if kind not in ("tasks", "files"):
         return None
@@ -570,7 +570,7 @@ def turn_done(c, attempt, outcome, task_id, text):
     if not row or row["owner_id"] != "bot:" + SLUG or row["status"] not in ("open", "doing"):
         return
     lines = [line.strip() for line in str(text or "").splitlines() if line.strip() and not _disclaimer(line)]
-    H.task_update(c, "bot:" + SLUG, task_id, status="done", note=(lines[-1][:500] if lines else None))
+    H.task_update(c, "bot:" + SLUG, task_id, status="done", note=(lines[-1][:500] if lines else None), strict=False)
 
 
 def check_cite(c, auth, who, blobs, cite):

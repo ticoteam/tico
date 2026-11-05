@@ -9,6 +9,7 @@ nothing changes. HQ is a fake client and the clock is a fake one."""
 import json
 import time
 from types import SimpleNamespace
+from unittest.mock import Mock
 
 import httpx
 import pytest
@@ -22,6 +23,7 @@ from backend.tests.test_model_subscriptions import OTHER, TOKEN, add, codex_file
 from backend import model_subscriptions as MS
 from backend.auth import Identity
 from backend.names import SUPPORT_ACTOR
+from backend import bot_settings as BS
 
 SIZES = [{"name": name, "cpu": cpu, "memory_gb": cpu * 2, "usd_per_hour": 0.05 * cpu, "start_usd": 0.04,
           "idle_stop_s": idle} for name, cpu, idle in (("small", 1, 600), ("default", 2, 300), ("large", 4, 180),
@@ -357,7 +359,27 @@ def test_first_work_creates_the_machine_and_its_runner_is_that_bots_only(cloud):
     computers = {m["id"]: m for m in get(cloud.api, "operations")["computers"]}
     assert computers[enrolled["runner_id"]]["cloud_machine"]["bot"] == "ops"
     shown = employee(cloud.api)["cloud_machine"]
-    assert shown["mode"] == "cloud" and shown["state"] == "starting"
+    assert shown["mode"] == "cloud" and shown["state"] == "running"
+
+
+@pytest.mark.parametrize("state", ["stopping", "stopped"])
+def test_live_runner_contact_preserves_a_cloud_machines_stop_state(cloud, state):
+    computer = enrolled(cloud)
+    with cloud.store.transaction() as c:
+        CM.save(c, "ops", state=state)
+    ready(cloud.api, computer, ["ops"])
+    assert cloud.row()["state"] == state
+    assert employee(cloud.api)["cloud_machine"]["state"] == state
+    shown = next(m for m in get(cloud.api, "operations")["computers"] if m["id"] == computer["runner_id"])
+    assert shown["cloud_machine"]["state"] == state
+
+
+def test_heartbeat_boot_repair_is_one_lookup(api):  # noqa: F811
+    with api.app.state.store.transaction() as c:
+        calls = Mock(wraps=c)
+        CM.checked_in(calls, "self-hosted-computer")
+        # Ordinary computers and machines already running are the common case: one small read on every beat.
+        calls.execute.assert_called_once()
 
 
 def test_heartbeat_then_idle_stop_at_break_even_then_wake_with_a_resize(cloud):
@@ -990,10 +1012,9 @@ def test_placement_defaults_by_role_and_a_person_switches_it(cloud):
         # finance was made from the video producer's template.
         c.execute("UPDATE registry_metadata SET value=json_set(value,'$.org_groups',json(?)) WHERE key='people'",
                   (json.dumps({"engineering": {"name": "Engineering", "parent": ""}}),))
-        c.execute("UPDATE bot_config SET config=json_set(config,'$.team','engineering') WHERE bot='ops'")
+        BS.update(c, 'ops', {'team': 'engineering'})
         c.execute("UPDATE bots SET display_name='Builder (Claude)' WHERE id='coo'")
-        c.execute("UPDATE bot_config SET config=json_set(config,'$.template','video-producer') "
-                  "WHERE bot='finance'")
+        BS.update(c, 'finance', {'template': 'video-producer'})
         for bot in ("ops", "coo", "finance"):
             assert placement.auto_place(c, execution, bot) is None
     assert [cloud.row(bot)["placement"] for bot in ("ops", "coo", "finance")] == ["shared", "own", "own"]
@@ -1016,6 +1037,38 @@ def test_only_a_builder_by_name_gets_its_own_machine_by_default(cloud):
             assert CM.default_placement(c, "ops") == want, name
 
 
+def _config(c, bot, config):
+    assert c.execute("SELECT 1 FROM bot_config WHERE bot=?", (bot,)).fetchone(), bot
+    BS.write(c, bot, config)
+
+
+def test_a_builder_template_a_copy_of_one_or_a_numbered_builder_gets_its_own_machine(cloud):
+    with cloud.store.transaction() as c:
+        c.execute("UPDATE bots SET display_name=? WHERE id='ops'", ("Ops",))
+        _config(c, "ops", {})
+        assert CM.default_placement(c, "ops") == "shared"
+        _config(c, "ops", {"template": "builder"})
+        assert CM.default_placement(c, "ops") == "own"
+        _config(c, "ops", {"template": "video-producer"})
+        assert CM.default_placement(c, "ops") == "own"
+        # A copy of a Builder is heavy whatever it is called.
+        _config(c, "coo", {"template": "builder"})
+        _config(c, "ops", {"copied_from": {"bot": "coo", "sha": "0" * 40}})
+        assert CM.default_placement(c, "ops") == "own"
+        _config(c, "coo", {"template": "pr-reviewer"})
+        assert CM.default_placement(c, "ops") == "shared"
+        # A copy of a copy follows the line back to the Builder it started from; a loop of copies ends.
+        _config(c, "finance", {"template": "builder"})
+        _config(c, "coo", {"copied_from": {"bot": "finance", "sha": "0" * 40}})
+        assert CM.default_placement(c, "ops") == "own"
+        _config(c, "coo", {"copied_from": {"bot": "ops", "sha": "0" * 40}})
+        assert CM.default_placement(c, "ops") == "shared"
+        for name, want in (("Builder 2", "own"), ("builder (Claude)", "own"), ("BUILDER", "own"),
+                           ("Builder 2 Ops", "shared"), ("Rebuilder", "shared")):
+            c.execute("UPDATE bots SET display_name=? WHERE id='ops'", (name,))
+            assert CM.default_placement(c, "ops") == want, name
+
+
 def test_one_shared_machine_wakes_for_any_member_and_hosts_them_all(cloud):
     adopt(cloud, "ops", "shared")
     adopt(cloud, "finance", "shared")
@@ -1033,9 +1086,9 @@ def test_one_shared_machine_wakes_for_any_member_and_hosts_them_all(cloud):
     assert computer["label"] == "Shared cloud machine" and computer["accepts_member_bots"] and computer["owner_id"] == "ana"
     assert placed(cloud) == {"ops": rid, "finance": rid} and rid not in offered
     assert {m["id"]: m for m in get(cloud.api, "operations")["computers"]}[rid]["cloud_machine"] == {
-        "bot": None, "shared": True, "size": "default", "state": "starting"}
+        "bot": None, "shared": True, "size": "default", "state": "running"}
     assert employee(cloud.api, "ops")["cloud_machine"] == {**employee(cloud.api, "ops")["cloud_machine"],
-                                                           "mode": "cloud", "placement": "shared", "state": "starting"}
+                                                           "mode": "cloud", "placement": "shared", "state": "running"}
     assert get(cloud.api, "cloud-machines")["shared"]["bots"] == ["finance", "ops"]
     # A bot joining while it is up is assigned there at the next look; nothing is started or made for it.
     adopt(cloud, "coo", "shared")
@@ -1307,9 +1360,9 @@ def shared_for(cloud, bot, token="ana-test"):
 def task_on(api, bot, model, harness):
     """The bot's task model: a model on `harness` (its runtime), beside its own model."""
     with api.app.state.store.transaction() as c:
-        config = json.loads(c.execute("SELECT config FROM bot_config WHERE bot=?", (bot,)).fetchone()[0])
+        config = BS.read(c, bot)
         config["task_model"] = {"model": model, "harness": harness, "runtime": harness}
-        c.execute("UPDATE bot_config SET config=? WHERE bot=?", (json.dumps(config), bot))
+        BS.write(c, bot, config)
 
 
 def given(cloud, runner_id):
@@ -1525,8 +1578,7 @@ def test_a_setup_finished_before_hq_listed_sizes_goes_on_cloud_machines_when_it_
     monkeypatch.setattr(manager, "client", fake)
     with store.transaction() as c:                              # a bootstrap bot setup left planned, with no computer
         c.execute("UPDATE bots SET state='planned' WHERE slug='coo'")
-        c.execute("UPDATE bot_config SET config=json_set(config,'$.materialize',json('true')) "
-                  "WHERE bot='coo'")
+        BS.update(c, 'coo', {'materialize': True})
         c.execute("UPDATE bots SET state='archived' WHERE slug='doc-updater'")
     manager.tick()
     with store.read() as c:

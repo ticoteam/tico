@@ -14,6 +14,7 @@ from backend import redesign_migration as M
 from backend.store import H, Store
 from backend.tests.test_api import api, api_settings, get  # noqa: F401  (api: the fixture)
 from backend import usage_limits
+from backend import bot_settings as BS
 
 ROOT = Path(__file__).resolve().parents[2]
 
@@ -36,7 +37,8 @@ def old_install(tmp_path, *, routines=True):
                         {"people": [{"id": "ana", "email": "ana@acme.example"}]})
         c.execute("INSERT OR REPLACE INTO registry_metadata VALUES('people',?)", (json.dumps({"people": [
             {"id": "ana", "email": "ana@acme.example", "primary_for": ["*"]}]}),))
-        c.execute("INSERT OR IGNORE INTO bot_config(bot, config) VALUES('coo', '{}')")
+        if c.execute("INSERT OR IGNORE INTO bot_config(bot) VALUES('coo')").rowcount:
+            BS.write(c, 'coo', {})
         if routines:
             c.execute("INSERT INTO schedules(id, bot, cron, title, playbook, next_due_at) VALUES(?,?,?,?,?,?)",
                       ("sch_notes", "coo", "0 9 * * *", "Morning notes", "Post yesterday's work.",

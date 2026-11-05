@@ -8,6 +8,7 @@ from backend import hubdb as H
 from backend import roadmaps as R
 from backend import models as M
 from backend.tests.test_tasks_board import api, get, headers, post, relate
+from backend import bot_settings as BS
 
 
 def test_engineering_children_drive_approved_roadmap_and_reopen(api):
@@ -598,6 +599,17 @@ def test_public_projection_moderation_and_no_label_enumeration(api):
     assert api.get(path, headers=ORIGIN).status_code == 404
 
 
+def test_a_public_comment_whose_task_ref_is_a_list_naming_the_task_is_shown(api):
+    task = public_setup(api)
+    public = post(api, 'tasks/' + task['id'] + '/comments', {'text': 'Team update', 'public': True})['comment']
+    with api.app.state.store.transaction() as c:
+        c.execute('UPDATE messages SET refs=? WHERE id=?',
+                  (json.dumps({'task': ['00000000-0000-4000-8000-000000000000', task['id']], 'comment': 1}), public['id']))
+    response = api.get('/public/roadmaps/roadmap/tasks/' + task['id'], headers=ORIGIN)
+    assert response.status_code == 200, response.text
+    assert [c['text'] for c in response.json()['comments']] == ['Team update']
+
+
 def test_cors_and_ip_limit_shared_across_actions_and_tokens_are_task_bound(api):
     task = public_setup(api, limit=4)
     base = '/public/roadmaps/roadmap/tasks/' + task['id']
@@ -623,7 +635,7 @@ def test_cors_and_ip_limit_shared_across_actions_and_tokens_are_task_bound(api):
     assert api.delete(base + '/requesters/' + token, headers=ORIGIN).status_code == 200
     assert api.delete(base + '/requesters/' + token, headers=ORIGIN).status_code == 404
     with api.app.state.store.transaction() as c:
-        c.execute("UPDATE bot_config SET config=json_set(config,'$.template','product-manager') WHERE bot='cpo'")
+        BS.update(c, 'cpo', {'template': 'product-manager'})
     suggested = api.post('/public/roadmaps/roadmap/suggest', json={'title': 'New idea', 'summary': 'Details'}, headers=ORIGIN)
     assert suggested.status_code == 200, suggested.text
     with api.app.state.store.read() as c:
@@ -733,7 +745,7 @@ def test_roadmap_types_go_by_role_after_their_managers_change(api):
     public_setup(api)
     with api.app.state.store.transaction() as c:
         c.execute("UPDATE task_types SET manager='ops' WHERE id IN ('product-roadmap','engineering')")
-        c.execute("UPDATE bot_config SET config=json_set(config,'$.template','product-manager') WHERE bot='cpo'")
+        BS.update(c, 'cpo', {'template': 'product-manager'})
         F.ensure(c)     # as at a restart: a manager someone chose stays
         managers = "SELECT DISTINCT manager FROM task_types WHERE id IN ('product-roadmap','engineering')"
         assert [r[0] for r in c.execute(managers)] == ['ops']
@@ -963,7 +975,7 @@ def test_a_requester_token_withdraws_after_unlabel_disable_and_delete(api):
 def test_suggestions_have_an_overall_cap_and_spam_checks(api):
     public_setup(api, limit=100)
     with api.app.state.store.transaction() as c:
-        c.execute("UPDATE bot_config SET config=json_set(config,'$.template','product-manager') WHERE bot='cpo'")
+        BS.update(c, 'cpo', {'template': 'product-manager'})
     post(api, 'roadmaps/settings', {'suggestion_limit': 2})
     assert get(api, 'roadmaps/settings')['suggestion_limit'] == 2
     suggest = lambda body: api.post('/public/roadmaps/roadmap/suggest', json=body, headers=ORIGIN)
@@ -1011,7 +1023,7 @@ def test_suggestions_go_to_the_chosen_then_automatic_bot_and_never_an_archived_o
     suggest = lambda title: api.post('/public/roadmaps/roadmap/suggest', json={'title': title}, headers=ORIGIN)
     def template(bot, name):
         with api.app.state.store.transaction() as c:
-            c.execute("UPDATE bot_config SET config=json_set(config,'$.template',?) WHERE bot=?", (name, bot))
+            BS.update(c, bot, {'template': name})
     def owner(response):
         assert response.status_code == 200, response.text
         return get(api, 'tasks/' + response.json()['id'])['task']['owner_id']
@@ -1073,8 +1085,8 @@ def test_suggestions_go_to_the_chosen_then_automatic_bot_and_never_an_archived_o
 
 def test_suggestions_receiver_order_and_states(api):
     with api.app.state.store.transaction() as c:
-        c.execute("UPDATE bot_config SET config=json_set(config,'$.template','product-manager') WHERE bot='cpo'")
-        c.execute("UPDATE bot_config SET config=json_set(config,'$.template','product-lead') WHERE bot='cmo'")
+        BS.update(c, 'cpo', {'template': 'product-manager'})
+        BS.update(c, 'cmo', {'template': 'product-lead'})
     def receiver(chosen, **states):
         with api.app.state.store.transaction() as c:
             c.execute("UPDATE bots SET state='active' WHERE slug IN ('cpo','cmo','ops')")

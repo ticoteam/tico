@@ -8,6 +8,7 @@ from unittest import mock
 import pytest
 from fastapi.testclient import TestClient
 
+from backend.tests.test_migrations import restore_config  # the column back for a rerun from before 0070
 from backend import company_file as C
 from backend import market_spend as MS
 from backend import people_remove, views
@@ -16,6 +17,7 @@ from backend.auth import Identity
 from backend.company_file import starter
 from backend.store import H, Problem, encode
 from backend.tests.test_sample_company import OWNER_EMAIL, PEOPLE, SEED, environment, machine, rows, settings_for, signed_in
+from backend import bot_settings as BS
 
 
 def company_text(reverse_builtins=False, through_new_parent=False, keep=("coo", "botops", "finance-lead", "accounts-payable")):
@@ -299,6 +301,7 @@ def an_older_releases_roster_add_retries_after_the_upgrade(api):
                   (actor, url, key, digest(encode(body)), encode({"id": ben["id"]}), H.now()))
         c.execute("DROP TABLE idempotency")
         c.execute("ALTER TABLE idempotency_legacy RENAME TO idempotency")
+        restore_config(c)
         c.execute("DELETE FROM schema_migrations WHERE version>='0050' AND version NOT LIKE 'legacy_%'")
 
     class Issuer:
@@ -330,7 +333,7 @@ def test_import_lays_out_the_chart_once_across_retry_and_runner_enrollment(envir
     assert done.json()["names"]["company_name"] == "Acme Finance"
     assert {r["slug"] for r in rows(api, "SELECT slug FROM bots")} == BUILTINS
     assert seat_lines(api) == {"Head of Finance": "human:owner", "Acme Payables": "Head of Finance"}
-    templates = rows(api, "SELECT json_extract(config,'$.template') AS template FROM bot_config")
+    templates = rows(api, f"SELECT s.template AS template FROM bot_config bc {BS.JOIN}")
     assert sum(r["template"] == "assistant" for r in templates) == 1
     assert sum(r["template"] == "botops" for r in templates) == 1
     assert "model_choices" in done.json()["company_import"]["deferred"]
@@ -378,13 +381,13 @@ def test_import_never_replaces_an_existing_paused_employee(environment):
     config = {"name": "accounts-payable", "status": "paused", "instructions": "Keep the existing employee unchanged"}
     with api.app.state.store.transaction() as c:
         H.sync_registry(c, {**SEED, "accounts-payable": config}, PEOPLE)
-        c.execute("INSERT INTO bot_config(bot,config,owner_id,repo) VALUES(?,?,?,?)",
-                  ("accounts-payable", encode(config), "owner", "emp-bookkeeping"))
-    original = rows(api, "SELECT config FROM bot_config WHERE bot='accounts-payable'")
+        c.execute('INSERT INTO bot_config(bot,owner_id,repo) VALUES(?,?,?)', ('accounts-payable', 'owner', 'emp-bookkeeping'))
+        BS.write(c, 'accounts-payable', config)
+    original = rows(api, f"SELECT {BS.CONFIG} AS config FROM bot_config bc {BS.JOIN} WHERE bot='accounts-payable'")
     body = {"company_yaml": company_text()}
     body["fingerprint"] = api.post("/api/v2/setup/company/preview", json=body, headers=signed_in()).json()["fingerprint"]
     assert api.post("/api/v2/setup/company/import", json=body, headers=signed_in()).status_code == 409
-    assert rows(api, "SELECT config FROM bot_config WHERE bot='accounts-payable'") == original
+    assert rows(api, f"SELECT {BS.CONFIG} AS config FROM bot_config bc {BS.JOIN} WHERE bot='accounts-payable'") == original
 
 
 @pytest.mark.parametrize("through_new_parent", [False, True], ids=["reverse-builtins", "new-parent-chain"])
@@ -536,9 +539,9 @@ def test_reserved_alias_cannot_replace_a_custom_named_assistant_now_or_later(env
     with api.app.state.store.transaction() as c:
         H.sync_registry(c, seed, PEOPLE)
         for slug, config in seed.items():
-            c.execute("INSERT INTO bot_config(bot,config,owner_id,repo) VALUES(?,?,?,?)",
-                      (slug, encode(config), "owner", "bot-" + slug))
-    before = rows(api, "SELECT bot,config FROM bot_config ORDER BY bot")
+            c.execute('INSERT INTO bot_config(bot,owner_id,repo) VALUES(?,?,?)', (slug, 'owner', 'bot-' + slug))
+            BS.write(c, slug, config)
+    before = rows(api, f"SELECT bot,{BS.CONFIG} AS config FROM bot_config bc {BS.JOIN} ORDER BY bot")
     draft = C.from_yaml(company_text())
     draft["bots"] = [b for b in draft["bots"] if b["template"] != "coo"]
     employee = next(b for b in draft["bots"] if b["template"] == "accounts-payable")
@@ -550,8 +553,8 @@ def test_reserved_alias_cannot_replace_a_custom_named_assistant_now_or_later(env
         assert preview.status_code == 422 and "conflicts" in preview.text
         result = api.post("/api/v2/setup/company/import", json={**body, "fingerprint": "0" * 64}, headers=signed_in())
         assert result.status_code == 422 and "conflicts" in result.text
-        assert rows(api, "SELECT bot,config FROM bot_config ORDER BY bot") == before
-    assert len(rows(api, "SELECT bot FROM bot_config WHERE json_extract(config,'$.template')='assistant'")) == 1
+        assert rows(api, f"SELECT bot,{BS.CONFIG} AS config FROM bot_config bc {BS.JOIN} ORDER BY bot") == before
+    assert len(rows(api, f"SELECT bot FROM bot_config bc {BS.JOIN} WHERE s.template='assistant'")) == 1
 
 
 def test_a_300_bot_company_file_imports_and_a_301_bot_file_is_refused_plainly(environment):
@@ -689,8 +692,8 @@ def test_a_renamed_assistants_goals_import_as_company_goals_and_an_untitled_unme
         with api.app.state.store.transaction() as c:
             H.sync_registry(c, seed, PEOPLE)
             for slug, config in seed.items():
-                c.execute("INSERT INTO bot_config(bot,config,owner_id,repo) VALUES(?,?,?,?)",
-                          (slug, encode(config), "owner", "bot-" + slug))
+                c.execute('INSERT INTO bot_config(bot,owner_id,repo) VALUES(?,?,?)', (slug, 'owner', 'bot-' + slug))
+                BS.write(c, slug, config)
         preview = api.post("/api/v2/onboarding/company/preview", json={"company_yaml": text}, headers=signed_in()).json()
         assert [(g["title"], g["owner"]) for g in preview["goals"]] == owners
         done = api.post("/api/v2/onboarding/company/import", json={"company_yaml": text, "fingerprint": preview["fingerprint"]},

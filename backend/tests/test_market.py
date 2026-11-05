@@ -9,6 +9,7 @@ from backend import market as M
 from backend.blobs import Blobs
 from backend.store import H
 from backend.tests.test_api import api, get, headers, post, runner, setup_attempt  # noqa: F401
+from backend import bot_settings as BS
 
 ROOT = Path(__file__).resolve().parents[2]
 FIXTURE_REGISTRY = Path(__file__).parent / "fixtures" / "registry"
@@ -22,10 +23,10 @@ def _seed(api, tmp_path):
             c.execute("INSERT INTO bots (id, slug, display_name, effort, state, created_at) VALUES (?,?,?,?,?,?)",
                       ("listening", "listening", "Listening", "high", "active", H.now()))
         if not c.execute("SELECT 1 FROM bot_config WHERE bot='listening'").fetchone():
-            c.execute("INSERT INTO bot_config (bot, config, team, owner_id, description, reports_to, repo) "
-                      "VALUES (?,?,?,?,?,?,?)",
-                      ("listening", '{"runtime":"grok","model":"grok-4.6","host":"keeper"}', "marketing", "ana",
-                       "Listening", "cmo", "emp-listening"))
+            c.execute("INSERT INTO bot_config (bot, team, owner_id, description, reports_to, repo) "
+                      "VALUES (?,?,?,?,?,?)",
+                      ("listening", "marketing", "ana", "Listening", "cmo", "emp-listening"))
+            BS.write(c, "listening", {"runtime": "grok", "model": "grok-4.6", "host": "keeper"})
 
 
 def _librarian(api):
@@ -33,8 +34,8 @@ def _librarian(api):
         if not H.bot(c, "librarian"):
             c.execute("INSERT INTO bots(id,slug,display_name,effort,state,created_at) "
                       "VALUES('librarian','librarian','Librarian','','active',?)", (H.now(),))
-            c.execute("INSERT INTO bot_config(bot,config,team,owner_id) VALUES('librarian',?,NULL,'ana')",
-                      ('{"runtime":"fake","host":"keeper"}',))
+            c.execute("INSERT INTO bot_config(bot,team,owner_id) VALUES('librarian',NULL,'ana')")
+            BS.write(c, 'librarian', {"runtime": "fake", "host": "keeper"})
 
 
 def test_the_librarian_gets_the_market_routines_and_the_old_market_analyst_is_retired(api):
@@ -45,8 +46,8 @@ def test_the_librarian_gets_the_market_routines_and_the_old_market_analyst_is_re
     with store.transaction() as c:
         c.execute("INSERT INTO bots(id,slug,display_name,effort,state,created_at) "
                   "VALUES('market-analyst','market-analyst','Market Analyst','','active',?)", (H.now(),))
-        c.execute("INSERT INTO bot_config(bot,config,team,owner_id) VALUES('market-analyst',?,NULL,'ana')",
-                  ('{"runtime":"fake","host":"keeper"}',))
+        c.execute("INSERT INTO bot_config(bot,team,owner_id) VALUES('market-analyst',NULL,'ana')")
+        BS.write(c, 'market-analyst', {"runtime": "fake", "host": "keeper"})
         task = H.task_create(c, "human:ana", "Check Northwind pricing", "", "bot:market-analyst", lint=False)
         M.ensure_curator(c)
         keys = {r["routine_key"]: r for r in c.execute("SELECT * FROM schedules WHERE bot='librarian'")}
@@ -326,3 +327,86 @@ def test_applying_an_insight_makes_an_entity_and_sets_its_verified_date(api, tmp
     with api.app.state.store.read() as c:
         row = c.execute("SELECT last_verified_at FROM market_entities WHERE id='company/contoso'").fetchone()
     assert row[0] == "2026-10-02"
+
+
+def _apply_insights(api, *insights):
+    with api.app.state.store.transaction() as c:
+        for insight in insights:
+            c.execute("INSERT INTO market_insights(id,reported_by,reported_at,kind) VALUES(?,'bot:ops',?,'pricing')",
+                      (insight, H.now()))
+
+
+def test_applying_a_verified_date_to_an_entity_with_none_sets_it_and_applies_the_insight(api, tmp_path):
+    _seed(api, tmp_path)
+    _apply_insights(api, "i-new", "i-check")
+    evidence = {"source_kind": "site", "source_url": "https://fabrikam.example/pricing", "quote": "Pro is $12",
+                "our_read": "A price."}
+    post(api, "market/insights/i-new/apply", {"evidence": evidence, "entity": {
+        "id": "company/fabrikam", "type": "company", "name": "Fabrikam"}})
+    with api.app.state.store.read() as c:
+        assert c.execute("SELECT last_verified_at FROM market_entities WHERE id='company/fabrikam'").fetchone()[0] is None
+    post(api, "market/insights/i-check/apply", {"evidence": evidence, "entity_id": "company/fabrikam",
+                                                "last_verified_at": "2026-11-03"})
+    with api.app.state.store.read() as c:
+        assert c.execute("SELECT last_verified_at FROM market_entities WHERE id='company/fabrikam'").fetchone()[0] == "2026-11-03"
+        assert c.execute("SELECT status FROM market_insights WHERE id='i-check'").fetchone()[0] == "applied"
+
+
+def test_a_new_entity_applied_with_a_verified_date_keeps_it(api, tmp_path):
+    _seed(api, tmp_path)
+    _apply_insights(api, "i-made")
+    evidence = {"source_kind": "site", "source_url": "https://initech.example/", "quote": "Hello", "our_read": "New."}
+    post(api, "market/insights/i-made/apply", {"evidence": evidence, "entity": {
+        "id": "company/initech", "type": "company", "name": "Initech", "last_verified_at": "2026-11-03"}})
+    with api.app.state.store.read() as c:
+        assert c.execute("SELECT last_verified_at FROM market_entities WHERE id='company/initech'").fetchone()[0] == "2026-11-03"
+
+
+def test_a_verified_date_that_is_not_yyyy_mm_dd_is_refused_and_nothing_is_written(api, tmp_path):
+    _seed(api, tmp_path)
+    _apply_insights(api, "i-bad")
+    evidence = {"source_kind": "site", "source_url": "https://acme.example/bad-date", "quote": "Q", "our_read": "R"}
+    r = api.post("/api/v2/market/insights/i-bad/apply", headers=headers(), json={
+        "evidence": evidence, "entity_id": "company/acme", "last_verified_at": "3 Nov 2026"})
+    assert r.status_code >= 400 and "YYYY-MM-DD" in r.text, r.text
+    with api.app.state.store.read() as c:
+        assert c.execute("SELECT status FROM market_insights WHERE id='i-bad'").fetchone()[0] == "new"
+        assert c.execute("SELECT COUNT(*) FROM market_evidence WHERE source_url='https://acme.example/bad-date'").fetchone()[0] == 0
+
+
+def test_a_core_company_verified_31_days_ago_is_reported_stale_by_the_sweep(api, tmp_path):
+    from datetime import date
+    _seed(api, tmp_path)
+    _librarian(api)
+    today = date(2026, 11, 4)
+    with api.app.state.store.transaction() as c:
+        c.execute("UPDATE market_entities SET tier='core', last_verified_at='2026-10-04' WHERE id='company/acme'")
+        c.execute("UPDATE market_entities SET tier='core', last_verified_at='2026-10-06' WHERE id='company/brightline'")
+        out = M.sweep(c, "bot:librarian", [{"id": "company/acme", "look_for": "pricing"},
+                                          {"id": "company/brightline", "look_for": "pricing"}], today=today)
+    assert [row["entity_id"] for row in out["listening_tasks"]] == ["company/acme"]
+
+
+def test_an_impossible_calendar_day_is_refused_on_apply_to_an_entity_or_a_new_one_with_nothing_written(api, tmp_path):
+    """2026-02-31 has the right shape but no such day: the server refuses it on both apply paths, and nothing is
+    written (the insight stays new, no evidence row, no entity, the existing date unchanged)."""
+    _seed(api, tmp_path)
+    _apply_insights(api, "i-feb", "i-feb-new")
+    with api.app.state.store.read() as c:
+        before = c.execute("SELECT last_verified_at FROM market_entities WHERE id='company/acme'").fetchone()[0]
+    evidence = {"source_kind": "site", "source_url": "https://acme.example/feb", "quote": "Q", "our_read": "R"}
+    r = api.post("/api/v2/market/insights/i-feb/apply", headers=headers(), json={
+        "evidence": evidence, "entity_id": "company/acme", "last_verified_at": "2026-02-31"})
+    assert r.status_code >= 400 and "calendar" in r.text, r.text
+    new_evidence = {"source_kind": "site", "source_url": "https://ghostco.example/", "quote": "Q", "our_read": "R"}
+    r = api.post("/api/v2/market/insights/i-feb-new/apply", headers=headers(), json={
+        "evidence": new_evidence, "entity": {"id": "company/ghostco", "type": "company", "name": "Ghostco",
+                                             "last_verified_at": "2026-02-31"}})
+    assert r.status_code >= 400 and "calendar" in r.text, r.text
+    with api.app.state.store.read() as c:
+        assert c.execute("SELECT status FROM market_insights WHERE id IN ('i-feb','i-feb-new') "
+                         "AND status<>'new'").fetchall() == []
+        assert c.execute("SELECT COUNT(*) FROM market_evidence WHERE source_url IN "
+                         "('https://acme.example/feb','https://ghostco.example/')").fetchone()[0] == 0
+        assert c.execute("SELECT COUNT(*) FROM market_entities WHERE id='company/ghostco'").fetchone()[0] == 0
+        assert c.execute("SELECT last_verified_at FROM market_entities WHERE id='company/acme'").fetchone()[0] == before

@@ -156,7 +156,7 @@ def fresh_session(c, settings, bot, conversation_id, aid, task_id=None):
     from .views import clear_chat_session
     clear_chat_session(c, settings, H.KEEPER, bot, conversation_id,
                        {"reason": AFTER_COMPACT, "attempt": aid, "task": task_id, "bot": bot})
-    c.execute("UPDATE turns SET session_kind='new', session_why=? WHERE id=?", (AFTER_COMPACT, aid))
+    c.execute("UPDATE attempts SET session_kind='new', session_why=? WHERE id=?", (AFTER_COMPACT, aid))
 
 
 def too_long(c, settings, row, conversation_id, aid):
@@ -167,7 +167,7 @@ def too_long(c, settings, row, conversation_id, aid):
     if c.execute("SELECT 1 FROM compact_first WHERE bot=? AND conversation_id=? AND taken_by=?",
                  (bot, conversation_id, aid)).fetchone():
         c.execute("DELETE FROM compact_first WHERE bot=? AND conversation_id=?", (bot, conversation_id))
-        turn = c.execute("SELECT task_id FROM turns WHERE id=?", (aid,)).fetchone()
+        turn = c.execute("SELECT task_id FROM attempts WHERE id=?", (aid,)).fetchone()
         fresh_session(c, settings, bot, conversation_id, aid, turn[0] if turn else None)
         return
     c.execute("INSERT INTO compact_first(bot,conversation_id,marked_at,taken_by) VALUES(?,?,?,NULL) "

@@ -13,7 +13,7 @@ from .live_privacy import sources as meeting_sources
 
 def _task(c, tid):
     # Authorization uses task identity and parties; display tags are unrelated to access.
-    return H._one(c, "SELECT * FROM tasks WHERE id=?", (tid,))
+    return H._one(c, f"SELECT * FROM {H.TASKS} tasks WHERE id=?", (tid,))
 
 
 def snapshot(c):
@@ -696,7 +696,7 @@ def question_party(c, who, person, parent=None, guest=None):
     Being a party gives them nothing they could not read before, beyond the parent `guest` names (guest_for)."""
     if parent and not _reads(c, person, parent, guest):
         return False
-    return not who.attempt_id or all(_reads(c, person, H._one(c, "SELECT * FROM tasks WHERE id=?", (tid,)), guest)
+    return not who.attempt_id or all(_reads(c, person, H._one(c, f"SELECT * FROM {H.TASKS} tasks WHERE id=?", (tid,)), guest)
                                      for tid in attempt_tasks(c, who.attempt_id))
 
 

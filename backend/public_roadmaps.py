@@ -109,7 +109,7 @@ def require_label(c, label):
 
 def task(c, label, tid, public=True):
     tag = require_label(c, label)
-    row = H._one(c, 'SELECT t.* FROM tasks t JOIN task_tags tt ON tt.task_id=t.id '
+    row = H._one(c, f'SELECT t.* FROM {H.TASKS} t JOIN task_tags tt ON tt.task_id=t.id '
                    'WHERE t.id=? AND tt.tag_id=?', (tid, tag['id']))
     if not row or public and (row['visibility'] != 'public' or H.task_private(c, row) or
                               H.TR.parent_of(c, tid)):
@@ -233,9 +233,9 @@ def output(c, row):
 
 def comments(c, row, limit=100, offset=0):
     rows = c.execute('SELECT id,body,sender_id,created_at FROM messages WHERE conversation_id=? '
-                     "AND json_extract(refs,'$.task')=? AND json_extract(refs,'$.comment')=1 "
+                     f"AND {H.task_ref_sql('refs')} AND json_extract(refs,'$.comment')=1 "
                      'AND public=1 AND hidden_at IS NULL AND deleted_at IS NULL ORDER BY created_at,id LIMIT ? OFFSET ?',
-                     (row['conversation_id'], row['id'], limit + 1, offset))
+                     (row['conversation_id'], row['id'], row['id'], limit + 1, offset))
     items = ({'id': r['id'], 'text': r['body'], 'author': 'Team' if H.is_human(r['sender_id']) or
                H.is_bot(r['sender_id']) else 'Visitor', 'created_at': r['created_at']} for r in rows)
     items, after = R.page(items, limit, offset, max_bytes=196608)
@@ -298,7 +298,7 @@ def install(app, store, auth, mutate):
         limit, offset = max(1, min(limit, 100)), max(0, offset)
         with store.read() as c:
             tag = require_label(c, label)
-            rows = c.execute('SELECT t.* FROM task_tags tt JOIN tasks t ON t.id=tt.task_id '
+            rows = c.execute(f'SELECT t.* FROM task_tags tt JOIN {H.TASKS} t ON t.id=tt.task_id '
                              "WHERE tt.tag_id=? AND t.visibility='public' AND t.private=0 "
                              "AND NOT EXISTS(SELECT 1 FROM task_relations r WHERE r.from_task=t.id AND r.kind='parent') "
                              'ORDER BY t.created_at,t.id LIMIT ? OFFSET ?', (tag['id'], limit + 1, offset))

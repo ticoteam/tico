@@ -5,6 +5,7 @@ import json
 
 from backend.store import H, encode
 from backend.tests.test_api import api, as_member, get, post  # noqa: F401
+from backend import bot_settings as BS
 
 
 def roster(api, people):
@@ -64,8 +65,8 @@ def test_botops_applies_a_persons_bot_change_as_that_person(api):
                  {"id": "cara", "email": "cara@acme.example", "name": "Cara", "reports_to": "ana"}])
     with api.app.state.store.transaction() as c:
         c.execute("INSERT INTO bots(id,slug,display_name,state) VALUES('botops','botops','BotOps','active')")
-        c.execute("INSERT INTO bot_config(bot,config,owner_id) VALUES('botops',?, 'ana')",
-                  (encode({"name": "botops", "runtime": "fake", "status": "active"}),))
+        c.execute("INSERT INTO bot_config(bot,owner_id) VALUES('botops','ana')")
+        BS.write(c, 'botops', {'name': 'botops', 'runtime': 'fake', 'status': 'active'})
     _, _, botops = setup_attempt(api, "botops")
     _, _, ops = setup_attempt(api, "ops")
     ask = post(api, "chat/botops", {"text": "Move ops under Ben"})
