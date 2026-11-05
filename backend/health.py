@@ -1664,8 +1664,11 @@ def _review_move(c, link, state, actors):
         return owner, f"{owner}: merge PR #{number}"
     if state["complete"] and (verdict in V.GOOD or (not F.is_check(step) and judged)):
         return owner, f"{owner}: move PR #{number} on"
-    # An open check judges the current head when it runs, including a push since it was filed.
-    opened = [t for t in children if t["status"] in H.ACTIVE_STATUSES]
+    # A bot check at this step judges the current head when it runs, including a push since it was filed.
+    assigned = {t["id"] for t in checks}
+    opened = [t for t in children if t["status"] in H.ACTIVE_STATUSES and
+              (t["id"] in assigned or not t["judged_head"] or not head or
+               any(h and head.startswith(h.lower()) for h in t["judged_head"].split(",")))]
     if opened:
         actor = ", ".join(dict.fromkeys(t["owner_id"] for t in opened[:3]))
         return actor, f"{actor}: review PR #{number}"

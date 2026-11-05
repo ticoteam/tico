@@ -166,6 +166,23 @@ def test_a_push_keeps_the_open_checks_reviewer(environment):
     assert 'review PR #206' in item['fix'] and 'no reviewer filed' not in item['fix']
 
 
+def test_an_old_head_check_from_another_step_is_not_the_current_reviewer(environment):
+    api = setup(environment)
+    task = ticket(api, step='First look')
+    child(api, task, title='First look: PR #206', status='open')
+    with api.app.state.store.transaction() as c:
+        step = c.execute("SELECT id FROM task_steps WHERE type_id=? AND name='Second look'", (task['type_id'],)).fetchone()[0]
+        c.execute('UPDATE tasks SET step_id=? WHERE id=?', (step, task['id']))
+        H._task_event(c, task['id'], H.KEEPER, 'step', task['step_id'], step, '')
+        link = next(p for p in H.task_links(c, task['id']) if p['kind'] == 'pr')
+        detail = H._json(link['detail'], {})
+        detail['head_sha'] = OLD
+        c.execute('UPDATE task_links SET detail=? WHERE id=?', (json.dumps(detail), link['id']))
+    [item] = items(api)
+    assert item['whose_move'] == 'Second look pool'
+    assert 'no reviewer filed yet' in item['fix']
+
+
 def test_a_completed_human_subtask_is_not_review_feedback(environment):
     from backend import step_flow as F, verdict_moves as V
     api = setup(environment)
