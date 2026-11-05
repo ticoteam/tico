@@ -956,6 +956,103 @@ def test_moving_to_another_computer_stops_it_and_the_machine_can_then_be_deleted
     assert cloud.tick(CM.BACKOFF) == ["create", "create"] and cloud.row()["machine_id"] == "m2"
 
 
+def test_replace_own_machine_keeps_choices_revokes_and_enrolls_a_fresh_machine_with_the_plan(cloud):
+    sid = plan_company(cloud, "ops")
+    old = own_computer(cloud, token="ben-test")
+    change_as(cloud, "ops", "ben-test", size="large", always_on=True, pause_minutes=45)
+    before = cloud.row()
+    url = "/api/v2/bots/ops/cloud-machine/replace"
+    retry = headers("ben-test")
+    cloud.hq.calls.clear()
+    replaced = cloud.api.post(url, headers=retry)
+    assert replaced.status_code == 200, replaced.text
+    current = cloud.row()
+    assert {key: current[key] for key in ("mode", "placement", "size", "always_on", "pause_minutes")} == {
+        "mode": "cloud", "placement": "own", "size": "large", "always_on": 1, "pause_minutes": 45}
+    assert (current["machine_id"], current["state"], current["runner_id"], current["changed_by"]) == (
+        before["machine_id"], "deleted", None, "human:ben")
+    with cloud.store.read() as c:
+        assert c.execute("SELECT revoked_at FROM runners WHERE id=?", (old["runner_id"],)).fetchone()["revoked_at"]
+    assert cloud.api.post(url, headers=retry).json() == replaced.json()
+    assert cloud.hq.calls == [("delete", before["machine_id"])]
+    new = enroll_made(cloud, "ops")
+    assert cloud.row()["machine_id"] != before["machine_id"]
+    assert placed(cloud)["ops"] == new["runner_id"] != old["runner_id"]
+    assert given(cloud, new["runner_id"]) == {"claude": sid}
+    sign_in_report(cloud, new, "missing")
+    assert can_run(cloud, "ops", new["runner_id"]) is True
+    # A lost response retried after the next machine starts must never delete that new machine.
+    assert cloud.api.post(url, headers=retry).json() == replaced.json()
+    assert [call for call in cloud.hq.calls if call[0] == "delete"] == [("delete", before["machine_id"])]
+
+
+def test_replace_requires_own_cloud_mode_and_permission_to_manage_the_bot(cloud):
+    url = "/api/v2/bots/ops/cloud-machine/replace"
+    computer = enrolled(cloud)
+    assert cloud.api.post(url, headers=headers("cara-test")).status_code == 403
+    post(cloud.api, "bots/ops/cloud-machine", {"placement": "shared"})
+    shared = cloud.api.post(url, headers=headers())
+    assert shared.status_code == 409 and "/api/v2/cloud-machines/shared" in shared.json()["error"]["detail"]
+    with cloud.store.transaction() as c:
+        CM.save(c, "ops", mode="computer")
+    assert cloud.api.post(url, headers=headers()).status_code == 409
+    assert cloud.api.post("/api/v2/bots/finance/cloud-machine/replace", headers=headers()).status_code == 409
+    assert not [call for call in cloud.hq.calls if call[0] == "delete"]
+    with cloud.store.read() as c:
+        assert not c.execute("SELECT revoked_at FROM runners WHERE id=?", (computer["runner_id"],)).fetchone()[0]
+
+
+@pytest.mark.parametrize("state", ["leased", "running"])
+def test_replace_waits_for_the_current_turn(cloud, state):
+    computer = enrolled(cloud)
+    ready(cloud.api, computer, ["ops"])
+    attempt = claim_on(cloud, computer, "ops")["attempt"]
+    assert attempt
+    with cloud.store.transaction() as c:
+        c.execute("UPDATE attempts SET state=? WHERE id=?", (state, attempt["id"]))
+    before = cloud.row()
+    result = cloud.api.post("/api/v2/bots/ops/cloud-machine/replace", headers=headers())
+    assert result.status_code == 409 and result.json()["error"]["detail"] == "Wait for the current turn to finish"
+    assert cloud.row() == before
+    assert not [call for call in cloud.hq.calls if call[0] == "delete"]
+
+
+def test_replace_holds_new_claims_and_failed_hq_delete_leaves_the_machine_usable(cloud, monkeypatch):
+    computer = enrolled(cloud)
+    ready(cloud.api, computer, ["ops"])
+    before = cloud.row()
+    answers = []
+
+    def refused(machine_id):
+        answers.append(claim_on(cloud, computer, "ops"))
+        cloud.manager.step(cloud.hq, "ops", cloud.at[0])  # the manager cannot start or stop a reserved machine
+        assert leased(cloud, computer["runner_id"]) == []
+        raise CM.Refused("unreachable")
+
+    monkeypatch.setattr(cloud.hq, "delete", refused)
+    url = "/api/v2/bots/ops/cloud-machine/replace"
+    retry = headers()
+    assert cloud.api.post(url, headers=retry).status_code == 502
+    assert answers[0]["attempt"] is None and "stopping" in answers[0]["paused"]
+    assert {key: cloud.row()[key] for key in before if key != "updated_at"} == {
+        key: value for key, value in before.items() if key != "updated_at"}
+    monkeypatch.setattr(cloud.hq, "delete", lambda mid: cloud.hq.calls.append(("delete", mid)))
+    assert cloud.api.post(url, headers=retry).status_code == 200
+    assert len(answers) == 1
+
+
+def test_a_bot_manager_can_replace_without_losing_the_admins_plan_placement(cloud):
+    sid = plan_company(cloud, "ops")
+    own_computer(cloud, token="ben-test")
+    with cloud.store.transaction() as c:
+        c.execute("UPDATE bot_config SET owner_id='cara' WHERE bot='ops'")
+    response = cloud.api.post("/api/v2/bots/ops/cloud-machine/replace", headers=headers("cara-test"))
+    assert response.status_code == 200, response.text
+    assert cloud.row()["changed_by"] == "human:ben"
+    new = enroll_made(cloud, "ops")
+    assert given(cloud, new["runner_id"]) == {"claude": sid}
+
+
 def test_nothing_defaults_to_a_machine_before_hq_lists_sizes(api, monkeypatch):  # noqa: F811
     store = api.app.state.store
     cloud_access.apply(store, cloud_access.parse(signals("open")))
@@ -2104,7 +2201,8 @@ def test_owners_and_admins_delete_a_broken_shared_machine_and_the_next_work_make
     assert cloud.row(CM.SHARED)["machine_id"] == machine                # HQ first: nothing changed, try again
     pending = []                                                        # HQ keeps it live until boat confirms
     cloud.hq.delete = lambda machine_id: (cloud.hq.calls.append(("delete", machine_id)), pending.append(machine_id))
-    delete = cloud.api.delete(url, headers=headers("ben-test"))
+    retry = headers("ben-test")
+    delete = cloud.api.delete(url, headers=retry)
     assert delete.status_code == 200, delete.text
     assert pending == [machine]
     shared = cloud.row(CM.SHARED)
@@ -2114,6 +2212,7 @@ def test_owners_and_admins_delete_a_broken_shared_machine_and_the_next_work_make
         assert c.execute("SELECT revoked_at FROM runners WHERE id=?", (old,)).fetchone()["revoked_at"]
     view = get(cloud.api, "cloud-machines")["shared"]
     assert view["bots"] == ["finance", "ops"] and view["state"] == "deleted" and view["runner_id"] is None
+    assert cloud.api.delete(url, headers=retry).json() == delete.json()
     assert cloud.api.delete(url, headers=headers("ben-test")).status_code == 404   # nothing left: HQ not asked
     assert pending == [machine]
     # A member's next work asks for a fresh one: HQ answers with the doomed one until boat confirms, which is no new

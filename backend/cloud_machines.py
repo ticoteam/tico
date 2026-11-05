@@ -781,6 +781,8 @@ def decide(current, found, at, idle_s):
     machine that never enrolled, made again at the next want); problem is what its bots' queued work waits on when
     nothing is done ("stuck", "no_enroll"), or None to leave the row's as it is. Pure: the clock is `at`. `found` is
     `facts`: on the shared machine every member's at once, so any want wakes it and only all idle stop it."""
+    if (current.get("stop_until") or 0) > at:
+        return None, None                                   # a stop or replacement is already at HQ
     on = current["state"] in ON and current["machine_id"]
     # A machine being made that has not enrolled yet (enroll_by is its deadline; 0 once it enrolled).
     booting = bool(current["enroll_by"] and current["machine_id"] and current["state"] not in DEAD)
@@ -1263,8 +1265,7 @@ def change(c, execution, who, bot, mode=None, size=None, always_on=None, placeme
     machine's size (applied at its next start), Always on and Pause after (`pause_minutes`, whole minutes). None leaves a
     choice as it is. Moving to another computer is Execution.assign's (which sets `computer`). Those who manage the bot only."""
     auth = execution.auth
-    if not (auth.operator(c, who, bot) or auth.bot_manager(c, who, bot)):
-        raise Problem("forbidden", "You do not manage this bot's computer", 403)
+    manage(c, auth, who, bot)
     if not offered(c, execution.store.settings):
         raise Problem("not_cloud", "Cloud machines are for Tico Cloud companies", 409)
     from .agents import external_harness
@@ -1351,20 +1352,33 @@ def change_shared(c, auth, who, size=None, always_on=None, pause_minutes=None):
     return shared_view(c)
 
 
-def removable(c, auth, who, key):
+def manage(c, auth, who, bot):
+    if not (auth.operator(c, who, bot) or auth.bot_manager(c, who, bot)):
+        raise Problem("forbidden", "You do not manage this bot's computer", 403)
+
+
+def removable(c, auth, who, key, replace=False):
     """The row of machine `key`, for deleting; Problem otherwise. A bot's own: owner, admin or the bot's manager, and
     never while the bot is set to run there. The shared one (SHARED): owners and admins, whoever runs there: it is
-    deleted to replace a broken one, and the next work of any member makes a fresh one."""
+    deleted to replace a broken one, and the next work of any member makes a fresh one. `replace` permits an own
+    machine still chosen by its bot, with the same permission as changing that bot's machine."""
     if key == SHARED:
         if not auth.bot_admin(who):
             raise Problem("forbidden", "Only owners and admins delete the shared cloud machine", 403)
+    elif replace:
+        manage(c, auth, who, key)
     elif not (auth.bot_admin(who) or auth.bot_manager(c, who, key)):
         raise Problem("forbidden", "You do not manage this bot's computer", 403)
     current = row(c, key)
+    if replace:
+        if not current or current["mode"] != "cloud":
+            raise Problem("not_cloud", "This bot is not on a cloud machine", 409)
+        if current["placement"] != "own":
+            raise Problem("shared", "Replace the shared cloud machine at DELETE /api/v2/cloud-machines/shared", 409)
     if not current or not (present(current) or current["runner_id"]):
         raise Problem("not_found", "There is no shared cloud machine" if key == SHARED
                       else "This bot has no cloud machine of its own", 404)
-    if key != SHARED and current["mode"] == "cloud" and current["placement"] == "own":
+    if not replace and key != SHARED and current["mode"] == "cloud" and current["placement"] == "own":
         raise Problem("in_use", "Move the bot to another computer or the shared cloud machine first", 409)
     return current
 
@@ -1375,35 +1389,62 @@ def present(current):
     return bool(current["machine_id"]) and current["state"] != "deleted"
 
 
-def remove(store, hq, who, auth, key):
+def remove(store, hq, who, auth, key, request, mutate, replace=False):
     """Delete machine `key` at HQ (its disk; the month's cost stays billed) and the computer it was: a bot's own once
     the bot runs elsewhere (the bot keeps where it runs now), or the shared one (its members' next work makes a new
-    one). HQ first: a failure there leaves everything as it was, to try again."""
-    with store.read() as c:
-        current = removable(c, auth, who, key)
-    if present(current):
-        if hq is None:
-            raise Problem("gateway", "Connect Tico Gateway first", 409)
-        try:
-            hq.delete(current["machine_id"])
-        except Refused as refused:
-            if refused.status != 404:
-                raise Problem("gateway", "Tico did not answer. Try again in a minute." if refused.status == 0
-                              else f"Tico refused this ({refused.code}).", 502) from None
+    one), or an own machine replaced in place. HQ first: a failure there leaves everything as it was, to try again.
+    The successful local deletion and its retry receipt commit together."""
+    token = request.headers.get("idempotency-key")
+    if not token or len(token) > 200:
+        raise Problem("idempotency_key", "Provide an Idempotency-Key of 1–200 characters", 422)
     with store.transaction() as c:
-        current = removable(c, auth, who, key)
+        replay = store.saved(c, who, request.url.path, token)
+        if not replay:
+            current = removable(c, auth, who, key, replace)
+            # The claim takes this same write lock. Hold new work before asking HQ, without holding SQLite over HTTP.
+            if c.execute("SELECT 1 FROM attempts WHERE state IN ('leased','running') AND "
+                         "(bot_id=? OR runner_id=?) LIMIT 1", (key, current["runner_id"])).fetchone():
+                raise Problem("busy", "Wait for the current turn to finish", 409)
+            if (current["stop_until"] or 0) > now():
+                raise Problem("busy", "This cloud machine is stopping. Try again shortly", 409)
+            hold = now() + STOP_HOLD
+            save(c, key, stop_until=hold)
+    if replay:
+        return mutate(request, Empty(), lambda c: {"ok": True})
+
+    def finish(c):
+        if row(c, key)["machine_id"] != current["machine_id"]:
+            raise Problem("changed", "The cloud machine changed. Try again", 409)
         if current["runner_id"]:
             c.execute("UPDATE runners SET revoked_at=? WHERE id=? AND revoked_at IS NULL", (H.now(), current["runner_id"]))
         # The machine goes; the choices stay (size, Always on, Pause after, where the bot runs): a bot's own is not made
-        # again unless someone picks it, and the shared one is made again at a member's next work (or at once if Always on). Its id
+        # again unless it is still chosen, and the shared one is made again at a member's next work (or at once if Always on). Its id
         # stays, as deleted, as never_enrolled leaves it: a create before boat confirms the delete gets this machine
         # back from HQ (idempotent on key), which `act` takes for no new one and tries again later.
         save(c, key, runner_id=None, state="deleted", machine_size=None, started_at=None,
              stopped_at=None, cost_month_usd=0, starts_month=0, last_error="", active_at=None, heartbeat_at=None,
              ttl_s=None, next_try_at=None, failures=0, problem="", problem_at=None, wake_key=None, woke_at=None,
-             enroll_by=None, enroll_fails=0, stop_until=None, start_asked_at=None, changed_by=who.actor)
+             enroll_by=None, enroll_fails=0, stop_until=None, start_asked_at=None,
+             # A manager's repair preserves an admin's placement for the new computer's first-enrollment plan rule.
+             changed_by=current["changed_by"] if replace and not auth.bot_admin(who) else who.actor)
         H.event(c, who.actor, "cloud_machine.deleted", key, {"machine": current["machine_id"]})
-    return {"ok": True}
+        return {"ok": True}
+
+    try:
+        if present(current):
+            if hq is None:
+                raise Problem("gateway", "Connect Tico Gateway first", 409)
+            try:
+                hq.delete(current["machine_id"])
+            except Refused as refused:
+                if refused.status != 404:
+                    raise Problem("gateway", "Tico did not answer. Try again in a minute." if refused.status == 0
+                                  else f"Tico refused this ({refused.code}).", 502) from None
+        return mutate(request, Empty(), finish)
+    finally:
+        with store.transaction() as c:
+            c.execute("UPDATE cloud_machines SET stop_until=? WHERE bot=? AND machine_id=? AND stop_until=?",
+                      (current["stop_until"], key, current["machine_id"], hold))
 
 
 def health(c, settings=None):
@@ -1441,6 +1482,10 @@ class SharedChange(BaseModel):
     size: str | None = Field(None, max_length=20)
     always_on: bool | None = None
     pause_minutes: int | None = None
+
+
+class Empty(BaseModel):
+    model_config = ConfigDict(extra="forbid")
 
 
 def install(app, settings, store, auth, execution, mutate):
@@ -1488,10 +1533,12 @@ def install(app, settings, store, auth, execution, mutate):
         who = request.state.identity
         auth.domain(who)
         with store.read() as c:
+            if not auth.bot_admin(who):
+                raise Problem("forbidden", "Only owners and admins delete the shared cloud machine", 403)
             if not offered(c, settings):
                 raise Problem("not_cloud", "Cloud machines are for Tico Cloud companies", 409)
             hq = service.hq(c)
-        return remove(store, hq, who, auth, SHARED)
+        return remove(store, hq, who, auth, SHARED, request, mutate)
 
     @app.post("/api/v2/bots/{bot}/cloud-machine")
     def cloud_machine_set(bot: str, request: Request, body: Change):
@@ -1511,8 +1558,24 @@ def install(app, settings, store, auth, execution, mutate):
         auth.domain(who)
         with store.read() as c:
             bot = _known(c, bot)
+            if not (auth.bot_admin(who) or auth.bot_manager(c, who, bot)):
+                raise Problem("forbidden", "You do not manage this bot's computer", 403)
             hq = service.hq(c)
-        return remove(store, hq, who, auth, bot)
+        return remove(store, hq, who, auth, bot, request, mutate)
+
+    @app.post("/api/v2/bots/{bot}/cloud-machine/replace")
+    def cloud_machine_replace(bot: str, request: Request):
+        """Replace a bot's own cloud machine and disk. Its settings stay; its next work makes a fresh machine.
+        Those who manage the bot only. Wait for its current turn to finish."""
+        who = request.state.identity
+        auth.domain(who)
+        with store.read() as c:
+            bot = _known(c, bot)
+            manage(c, auth, who, bot)
+            if not offered(c, settings):
+                raise Problem("not_cloud", "Cloud machines are for Tico Cloud companies", 409)
+            hq = service.hq(c)
+        return remove(store, hq, who, auth, bot, request, mutate, replace=True)
 
 
 def _known(c, bot):

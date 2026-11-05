@@ -78,7 +78,10 @@ function cloudMachineRowHTML(e) {
       <input type="number" min="5" max="1440" step="1" class="settings-inline-select" data-bot-cloud-pause="${esc(e.id)}" data-cloud-scope="${scope}" data-current="${m.pause_minutes}" value="${m.pause_minutes}" aria-label="Pause after, in minutes, for ${what}" ${pauseOff}>
       <span class="muted">min</span>
     </div><span></span></div>
-    <div class="sb-sub" data-bot-cloud-status>${esc(cloudMachineStatus(m))}</div>`;
+    <div class="sb-sub" data-bot-cloud-status>${esc(cloudMachineStatus(m))}</div>
+    ${scope === 'own' && settingsIsAdmin() && (m.runner_id || !['none', 'deleted'].includes(m.state)) ? `<div class="sb-row"><span></span><div>
+      <button type="button" class="ghost" data-bot-cloud-replace="${esc(e.id)}">Replace machine</button>
+    </div><span></span></div>` : ''}`;
 }
 // HQ's sizes, with their prices, once they are read; the choice in the select stays as it is.
 async function cloudMachineMount(rows, slug) {
@@ -93,4 +96,19 @@ async function cloudMachineMount(rows, slug) {
 function cloudMachineRun(slug, body, control) {
   const path = control?.dataset.cloudScope === 'shared' ? '/v2/cloud-machines/shared' : `/v2/bots/${encodeURIComponent(slug)}/cloud-machine`;
   return async rev => { await post(path, body); return rev; };
+}
+async function cloudMachineReplace(slug, button) {
+  if (!await settingsConfirm({title: 'Replace machine?', ok: 'Replace machine',
+    text: 'Deletes this machine and its disk. The next task starts a fresh one.'})) return;
+  settingsFieldClear(button);
+  button.disabled = true;
+  try {
+    await post(`/v2/bots/${encodeURIComponent(slug)}/cloud-machine/replace`, {});
+    await loadSettings();
+    const status = button.closest('[data-bot-people]')?.querySelector('[data-bot-cloud-status]');
+    const machine = S.emps.find(e => e.id === slug)?.cloud_machine;
+    if (status && machine) { status.textContent = cloudMachineStatus(machine); button.remove(); }
+    toast('Machine replaced');
+  } catch (error) { settingsFieldError(button, error.message); }
+  finally { button.disabled = false; }
 }

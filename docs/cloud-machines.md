@@ -36,6 +36,9 @@ cloud machine" under Computer).
   and members stay, and a member's next work makes a fresh one. The row keeps the old id as `deleted`: HQ keeps the
   machine live until boat confirms, and a create meanwhile answers with it, which is not taken for the new one. A bot's own machine is deleted once the bot runs
   elsewhere (`DELETE /api/v2/bots/{bot}/cloud-machine`).
+  To replace it while the bot stays on its own cloud machine, use **Replace machine** under Computer in the bot editor,
+  or `POST /api/v2/bots/{bot}/cloud-machine/replace` with an `Idempotency-Key`: it uses the same deletion, keeps size, Always on, Pause after and placement, and waits for any current turn to finish (409).
+  The next work makes a fresh machine; its first enrollment gets the company plan under the admin placement rule below.
 - Its computer is "Shared cloud machine", owned by the company owner and open to member bots: a bot that joins is
   assigned to it, one that leaves (to its own machine or a computer) is unassigned, and the machine keeps running.
   When the last bot leaves it idles to a stop like any other.
