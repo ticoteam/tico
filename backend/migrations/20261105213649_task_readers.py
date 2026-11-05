@@ -30,7 +30,7 @@ def _move(conn, table):
         return
     conn.execute(f"UPDATE {table} SET readers=json_array(guest) WHERE guest IS NOT NULL AND guest<>'' "
                  "AND (readers IS NULL OR readers IN ('', '[]'))")
-    for kind, name, sql in conn.execute("SELECT type, name, sql FROM sqlite_master WHERE tbl_name=? "
+    for kind, name, _sql in conn.execute("SELECT type, name, sql FROM sqlite_master WHERE tbl_name=? "
                                         "AND type IN ('index','trigger') AND sql LIKE '%guest%'", (table,)).fetchall():
         conn.execute(f"DROP {kind.upper()} IF EXISTS {name}")
     # DROP COLUMN parses every trigger again. On a new file an earlier migration's trigger names a table the module
