@@ -3,6 +3,7 @@
 
 Ana owns the company, Ben is an admin, Cara is a member (the base fixture).
 """
+import json
 import re
 from pathlib import Path
 from types import SimpleNamespace
@@ -208,6 +209,24 @@ def test_mailbox_routine_is_catalogued_but_not_offered_as_a_botops_card(api, bot
                                                   "value": {"enabled": False}}, ana["token"])
     assert err and "person_only" in str(refused) and routine.card in str(refused), refused
     finish(api, botops, ana)
+
+
+def test_mailbox_routine_class_does_not_override_other_automation_routes(api):
+    now = H.now()
+    with api.app.state.store.transaction() as c:
+        ids = {}
+        for name, trigger in (("mail", {"type": "message", "inbox": "ana@acme.example"}),
+                              ("event", {"type": "event", "name": "task.created"})):
+            ident = H.new_id()
+            flow = {"name": name, "owner": "person:ana", "trigger": trigger, "steps": []}
+            c.execute("INSERT INTO automations(id,name,owner_id,trigger_type,enabled,builtin,flow,version,created_at,"
+                      "created_by_id,updated_at) VALUES(?,?,?,?,1,0,?,1,?,?,?)",
+                      (ident, name, "person:ana", trigger["type"], json.dumps(flow), now, "human:ana", now))
+            ids[name] = ident
+
+        classes = {name: settings_catalog.stored_class(
+            c, "PATCH", "automations/" + ident, {"name": "renamed"})[2] for name, ident in ids.items()}
+    assert classes == {"mail": "person", "event": "direct"}
 
 
 def test_someone_without_the_rights_is_told_who_can(api, botops):

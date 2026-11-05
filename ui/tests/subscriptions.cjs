@@ -216,7 +216,7 @@ async function navigation(browser) {
     assert.equal(await page.locator('#settings-group-models').isVisible(), true, `${alias} opens AI models`);
     assert.equal(await page.evaluate(() => location.hash), '#/settings/models');
   }
-  await page.evaluate(() => settingsShow('limits'));
+  await selectSettingsGroup(page, 'limits');
   assert.equal(await page.locator('#settings-group-limits').isVisible(), true, 'Limits has its own group');
   assert.equal(await page.evaluate(() => location.hash), '#/settings/limits');
   // The settings catalogue's old link to the Models card on Computers, and the old Subscriptions address.
