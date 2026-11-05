@@ -226,10 +226,16 @@ const init = () => {
      ['Public summary', 'Public title', 'Size', 'Title', 'due'].sort());
    assert.equal(await page.evaluate(() => Object.keys(localStorage).some(key => key.startsWith(TASK_EDIT_STORAGE))), false);
    assert.equal(await page.evaluate(() => JSON.parse(sessionStorage.getItem(SESSION_RETURN)).fields.find(f => f.key === 'Title').value), 'Sign-in title to keep');
+   const recoveryBase = await page.evaluate(() => Math.min(...JSON.parse(sessionStorage.getItem(SESSION_RETURN)).fields.filter(f => f.base).map(f => f.base.version)));
    offline = false;
    await page.reload();
    await page.waitForFunction(() => document.querySelector('#task-modal[open] .tmodal-title')?.textContent === 'Sign-in title to keep');
-   await page.waitForFunction(() => !taskModal().taskLive.draft.flight && !Object.keys(taskModal().taskLive.draft.patch).length);
+   await page.waitForFunction(() => taskModal().taskLive.draft.error || (!taskModal().taskLive.draft.flight && !Object.keys(taskModal().taskLive.draft.patch).length));
+   assert.equal(writes.at(-1).version, recoveryBase);
+   if (await error.count()) {
+    assert.match(await page.evaluate(() => taskModal().taskLive.draft.error), /Task changed/);
+    await retry();
+   }
    assert.equal(task.title, 'Sign-in title to keep');
    assert.equal(task.public_title, 'Recovered public title'); assert.equal(task.public_summary, 'Recovered public summary');
    assert.equal(task.size, 5); assert.equal(task.due_at.slice(0, 10), '2026-12-15');

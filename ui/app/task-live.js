@@ -270,7 +270,11 @@ function taskLiveBind(d, task) {
   taskLivePaint(d, live);
   // Restored debounce drafts use their kept revision; failed drafts still wait for Retry.
   if (!draft.error && !draft.flight && Object.keys(draft.patch).length && !draft.timer)
-    draft.timer = setTimeout(() => taskLiveSave(d, live), 700);
+    taskLiveSchedule(d, live);
+}
+function taskLiveSchedule(d, live) {
+  clearTimeout(live.draft.timer); live.draft.timer = 0;
+  if (!live.draft.error && !SESSION.out) live.draft.timer = setTimeout(() => taskLiveSave(d, live), 700);
 }
 const taskLiveValue = (task, key) => sharedDraftValue(task, key === 'due' ? 'due_at' : key);
 function taskLiveDisplay(value, key, task) {
@@ -297,8 +301,7 @@ function taskLiveWireField(d, live, field) {
     sharedDraftPatch(draft, key, value);
     draft.dirty[key] = draft.bases[key].value;
     taskLivePersist(live);
-    clearTimeout(draft.timer);
-    if (!immediate && !draft.error && !SESSION.out) draft.timer = setTimeout(() => taskLiveSave(d, live), 700);
+    if (!immediate) taskLiveSchedule(d, live);
   };
   field.oninput = edit;
   field.onblur = () => { if (!draft.error) void taskLiveSave(d, live); taskLivePaint(d, live); };
