@@ -17,6 +17,8 @@ const rdoFoldedSave = () => { try { localStorage.setItem(RDO_FOLDED_KEY, JSON.st
 // The groups with their leads: GET /v2/groups when it has answered (a list, or {groups} from an older hub), else the
 // roster's copy, which carries no leads.
 const rdoGroups = () => RDO?.groups || S.orgGroups || [];
+// Ready once the groups' answer is in; if it failed, the sheet falls back to the roster's groups as before.
+const rdoReady = () => !!S.me && (RDO?.groups != null || !!RDO?.groupsTried);
 const rdoGroup = id => rdoGroups().find(g => g.id === id) || (S.orgGroups || []).find(g => g.id === id) || null;
 const rdoGroupName = id => id ? rdoGroup(id)?.name || id : 'No group';
 const rdoRef = n => n.kind === 'person' ? 'person:' + n.id : 'bot:' + n.id;
@@ -126,6 +128,8 @@ function rdoDraw({refit = false} = {}) {
   const cv = $('#rdo-cv'), pane = $('#rdo-pane');
   if (!cv || !pane) return;
   cv.innerHTML = rdoChartHtml();
+  // The roster has no leads: sheets need the viewer and the full groups before deciding who may move whom.
+  if (!rdoReady()) cv.querySelectorAll('[data-rdo-ref]').forEach(card => { card.disabled = true; });
   rdoFitHeight();
   if (RDO.zoom == null || (refit && !RDO.manual)) rdoFit();
   else rdoSize();
@@ -248,8 +252,9 @@ async function pageRdOrg() {
   // Once the web font is in (or given up on), fit again: names in another face measure differently.
   document.fonts?.ready.then(() => { if (seq === RDO_SEQ && $('#rdo-cv') && !RDO.manual) rdoFit(); });
   // The groups with their leads.
-  const groups = await (RDO.ready = get('/v2/groups').catch(() => null));
+  const groups = await get('/v2/groups').catch(() => null);
   if (seq !== RDO_SEQ || !$('#rdo-cv')) return;
+  RDO.groupsTried = true;
   if (groups) RDO.groups = Array.isArray(groups) ? groups : groups.groups || [];
   rdoDraw({refit: true});
 }
@@ -352,11 +357,8 @@ function rdoGroupOptions(current, allowed) {
   const shown = allowed ? out.filter(([id]) => allowed.includes(id)) : [['', 'No group'], ...out];
   return shown.map(([id, label]) => `<option value="${esc(id)}"${id === current ? ' selected' : ''}>${esc(label)}</option>`).join('');
 }
-async function rdoSheet(ref) {
-  // Cards arrive from the roster before the lead data. A sheet needs those permissions before it opens.
-  const seq = RDO_SEQ;
-  await RDO.ready;
-  if (seq !== RDO_SEQ || !$('#rdo-cv')) return;
+function rdoSheet(ref) {
+  if (!rdoReady()) return;
   const name = rdoRefName(ref), from = rdoHome(ref), led = rdoLeadOf(ref), targets = rdoMoveTargets(from);
   const may = !targets || targets.length > 0;
   const id = ref.slice(ref.indexOf(':') + 1), href = ref.startsWith('person:') ? `#/person/${encodeURIComponent(id)}` : `#/bot/${encodeURIComponent(id)}`;
