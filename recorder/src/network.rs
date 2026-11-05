@@ -1080,6 +1080,10 @@ impl Tico {
         if expected["text"].is_null() || crate::workspace::item_fields_match(&item, expected) {
             return Ok(false);
         }
+        if crate::workspace::item_fields_match(&item, row) {
+            // Create or another reader may already have saved exactly these fields.
+            return Ok(true);
+        }
         let version = expected["version"].as_u64().unwrap_or(1);
         let path = format!("/meetings/{meeting}/items");
         let server_id = row["id"]
@@ -1172,6 +1176,12 @@ impl Tico {
                 "body":payload,
                 "key":format!("recorder:{id}:{item_id}:item:{}", hash(payload)),
             });
+            store.delivery(id, delivery)?;
+        }
+        if delivery.receipt["local_fields"][item_id].is_null() {
+            // Keep the local baseline through a crash after the server commits the upload.
+            delivery.receipt["local_fields"][item_id] =
+                delivery.receipt["uploads"][item_id]["body"].clone();
             store.delivery(id, delivery)?;
         }
         let upload = &delivery.receipt["uploads"][item_id];

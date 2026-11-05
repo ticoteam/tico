@@ -3654,6 +3654,10 @@ fn recorder_save_retry_reconciles_current_fields_or_keeps_a_closed_draft() {
         }
         let (tico, seen, worker) = server(steps);
         assert!(tico.send(&store, &record.id, false).is_err());
+        assert_eq!(
+            store.get(&record.id).unwrap().deliveries[0].receipt["local_fields"]["a"]["text"],
+            "Original title"
+        );
         store
             .update_context(&record.id, |c| {
                 let item = &mut c.items[0];
