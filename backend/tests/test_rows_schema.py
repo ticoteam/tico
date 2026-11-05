@@ -18,6 +18,7 @@ TABLES = {
     rows.EmailLegacyAutomationRow: "email_legacy_automations",
     rows.EmailSendPreviewRow: "email_send_previews",
     rows.EmailSendOperationRow: "email_send_operations",
+    rows.PageIdentityRow: "page_identities",
     rows.AlertPreferenceRow: "alert_preferences",
     rows.AlertCompanySettingRow: "alert_company_settings",
     rows.PersonalAlertRow: "personal_alerts",

@@ -2342,7 +2342,7 @@ STABLE.extend([
     ("/api/v2/pages/{fid}", "get", "Pages", "getPage", "One page and its status line; 404 when the caller may not read it",
      "PageShown"),
     ("/api/v2/pages/{fid}", "patch", "Pages", "editPage",
-     "Change a page's cadence, data date or replacement, or archive or restore it (the bot, owner and bot managers)",
+     "Change a page's audience, cadence, data date or replacement, or archive or restore it (the bot, owner and bot managers)",
      "PageShown"),
     ("/api/v2/files", "get", "Files", "listFiles",
      "Library › Files: every file the caller may see, newest activity first, filtered by kind, bot, team, task, date, "
@@ -2353,7 +2353,10 @@ STABLE.extend([
      "The owner deletes a file for good: every version's bytes leave storage; activity keeps who and when", "FileDeleted"),
 ])
 SCHEMAS.update({
-    "Page": obj({"file_id": "s", "title": "s", "bot_id": "s", "bot_name": "s", "version": "i", "updated_at": "s",
+    "Page": obj({"audience": {"anyOf": [ref("AccessAudience"), {"type": "null"}],
+                             "description": "Only returned to managers on a single page read or write; null inherits where it is filed"},
+                 "restricted": {"type": "boolean", "description": "Only returned to managers, including on lists and cards"},
+                 "file_id": "s", "title": "s", "bot_id": "s", "bot_name": "s", "version": "i", "updated_at": "s",
                  "updated_by": "n", "updated_by_name": "s",
                  "cadence": {"type": "string", "enum": ["none", "daily", "weekly", "monthly"]},
                  "as_of": {"type": ["string", "null"], "description": "The date the data is from (YYYY-MM-DD)"},

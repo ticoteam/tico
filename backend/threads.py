@@ -1746,7 +1746,10 @@ def _carrier(c, thread, message, bot, reason, rule, wake="thread", body=None, wa
     elif way == "defer":
         refs["quiet"] = True
     author = message.get("sender_id") or ""
-    body = body or f"{author} in this thread: {message.get('body') or ''}"
+    from .files import page_references
+    sources = (H._json(message.get("refs"), {}) or {}).get("body_sources", [])
+    body, refs = H.sourced_text(body or f"{author} in this thread: {message.get('body') or ''}",
+                               [*sources, *({"file": fid} for fid in sorted(page_references(message, c)))], refs)
     legacy = c.execute("SELECT legacy_audience FROM messages WHERE id=?", (message["id"],)).fetchone()
     dumped, created = H._dump(refs), _now()
     c.execute("INSERT INTO messages(id,conversation_id,sender_id,recipient_id,kind,body,refs,in_reply_to,created_at,"
@@ -1761,9 +1764,10 @@ def _carrier(c, thread, message, bot, reason, rule, wake="thread", body=None, wa
 def _defer_note(c, message, bot):
     """A deferred delivery rides to the bot's next run as a quiet note, as bot_to_bot.hold leaves one."""
     try:
+        body, refs = H.sourced_text(str(message.get("body") or "")[:2000], refs={"message_id": message["id"]})
         c.execute("INSERT INTO notes(id,from_actor,to_actor,body,created_at,message_id) VALUES(?,?,?,?,?,?)",
                   (_new_id(), message.get("sender_id") or H.KEEPER, bot,
-                   str(message.get("body") or "")[:2000], _now(), message["id"]))
+                   body, _now(), refs["message_id"]))
     except Exception:  # noqa: BLE001, S110 - a bare hub database has no notes table
         pass
 

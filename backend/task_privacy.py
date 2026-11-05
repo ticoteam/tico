@@ -387,6 +387,8 @@ def message_readable(c, actor, message, current=False):
     if not threads.legacy_gate(c, actor, message):
         return False
     carried = H._json(message.get("refs"), {}) or {}
+    if not page_message_readable(c, actor, carried):
+        return False
     if isinstance(carried, dict) and carried.get("carries") and message.get("sender_id") == H.KEEPER:
         # A carrier (threads._carrier) copies the words of the message it carries: it is read as that message.
         source = H.message(c, carried["carries"], include_deleted=True)
@@ -468,10 +470,14 @@ def page(c, who, cid, *, before=None, since=None, limit=200, task_id=None, max_b
                 return False
             if not readable(c, reader, tasks):
                 return False
+            if not page_message_readable(c, reader, H._json(stored.get("refs"), {}) or {}):
+                return False
         except Problem:
             return False
         message = {key: value for key, value in stored.items() if key not in INTERNAL_MESSAGE_COLUMNS}
+        from .files import readable_page_refs
         message["refs"] = H._json(stored["refs"], {}) or {}
+        message = readable_page_refs(c, None, who, message, task_id=task_id)
         if max_bytes and len(visible) < limit:
             size += len(json.dumps(message, default=str).encode())
             if visible and size > max_bytes:
@@ -1016,8 +1022,24 @@ def require_batch(c, who, row):
             require_message(c, who, H.message(c, row["message_id"]))
 
 
+def page_message_readable(c, actor, refs):
+    """Generated file-review messages carry names in prose as well as structured refs."""
+    return isinstance(refs, dict) and page_content_readable(c, actor, [refs.get("target"), refs.get("answer"),
+                                                                    refs.get("review"), refs.get("body_sources")])
+
+
+def page_content_readable(c, actor, payload):
+    from . import files, teammate_access
+    if not files.page_references(payload, c):
+        return True
+    principals = actor if isinstance(actor, (tuple, list, set)) else [actor]
+    return all(viewer is not None and not files.page_ref_denials(c, None, viewer, payload)
+               for principal in principals if (viewer := teammate_access._viewer_for(c, principal)) is not None)
+
+
 def content_readable(c, actor, payload):
-    return (meeting_sources(c).readable(actor, meeting_sources(c).references(payload))
+    return (page_content_readable(c, actor, payload)
+            and meeting_sources(c).readable(actor, meeting_sources(c).references(payload))
             and readable(c, actor, references(c, payload)))
 
 
@@ -1459,6 +1481,12 @@ def blob_readable(c, actor, bid, seen=None, memo=None):
 
 def event_readable(c, actor, event):
     event = dict(event)
+    from . import files, teammate_access
+    principals = actor if isinstance(actor, (tuple, list, set)) else [actor]
+    for principal in principals:
+        viewer = teammate_access._viewer_for(c, principal)
+        if viewer is not None and not files.page_event_readable(c, None, viewer, event.get("target"), event.get("detail")):
+            return False
     detail = H._json(event.get("detail"), {}) or {}
     if str(event.get("action", "")).startswith("alerts.") and event["action"] != "alerts.company_cap":
         recipient = actor[0] if isinstance(actor, tuple) else getattr(actor, "actor", actor)

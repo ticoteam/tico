@@ -1388,7 +1388,10 @@ def _messages(view, rows, shared=None):
                  "message_seq": message.get("seq"), "revision": message.get("revision") or 0}
         if threads.message_readable(c, view.reader, message, thread_checked=True):
             shown = view.known.message(message)
-            if shown is not message or (isinstance(refs, dict) and refs.get("attachments")):
+            from .files import readable_page_refs
+            original_refs = refs
+            refs = readable_page_refs(c, view.auth, view.who, refs)
+            if shown is not message or refs != original_refs or (isinstance(refs, dict) and refs.get("attachments")):
                 out.append((row, {"id": subject, "conversation_id": cid, **place,
                                   "message": {**shown, "refs": refs, "thread_id": cid, "root_id": place["root_id"]}}))
             else:
@@ -1772,6 +1775,9 @@ def read_in(c, snapshot, auth, who, after, *, topics=TOPICS, conversations=(), b
     newest, first = snapshot.newest, snapshot.first
     floor = (first - 1) if first is not None else newest
     if after > newest or after < floor or newest - after > BACKLOG_MAX:
+        return [], newest, True, False
+    if c.execute("SELECT 1 FROM changes WHERE topic='tasks' AND kind='bulk' AND ref='page_access' "
+                 "AND seq>? LIMIT 1", (after,)).fetchone():
         return [], newest, True, False
     rows = snapshot.changes(who, after, limit, topics, conversations, bots, tasks, parties, threads_scope, meetings, places)
     more = len(rows) >= limit

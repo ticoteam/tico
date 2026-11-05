@@ -1320,6 +1320,8 @@ def create_app(settings=None):
             if since := step_age.since_map(c, [row]).get(row["id"]):
                 value["step_since"] = since      # how long a Dev ticket has been at its working step (backend/step_age.py)
             if who is not None:
+                from .files import readable_page_refs
+                value = readable_page_refs(c, auth, who, value)
                 value = teammate_access.Known(c, who, auth).task(value)     # people the reader may not see
         return value
 
@@ -1445,6 +1447,8 @@ def create_app(settings=None):
                 value["origin_actor"] = None
             value["from_person"] = views.person_origin(c, row, visible_sql, who.actor)
             result.append(value)
+        from .files import readable_page_refs
+        result = readable_page_refs(c, auth, who, result)
         return teammate_access.Known(c, who, auth).tasks(result)       # people the reader may not see
 
     def mover(c, who):
@@ -4202,8 +4206,11 @@ def create_app(settings=None):
                 can_comment = True
             except Problem:
                 can_comment = False
+            history = privacy.content_readable_rows(c, privacy.actor(who), H.task_history(c, tid, provenance=True))
+            for event in history:
+                event.pop("data", None)
             return {"task": task_view(row, c, visible_sql=auth.task_sql(c, who), who=who),
-                    "events": privacy.content_readable_rows(c, privacy.actor(who), H.task_history(c, tid)),
+                    "events": history,
                     "can_comment": can_comment,
                     "children": children,
                     # The task page reads as its session's chat: each bot reply carries the run behind it (`run`,
@@ -5424,8 +5431,9 @@ def create_app(settings=None):
         """What a task answer says, as the rule check reads it: each question's picks and the free text."""
         if body.dismiss:
             return ""
-        lines = [f"{q}: {', '.join(a)}" for q, a in sorted(body.answers.items()) if a]
-        return "\n".join([*lines, *([body.other] if body.other else [])])
+        with store.read() as c:
+            asked = H.answer_question(c, body.target.model_dump(exclude_none=True))
+            return H.answer_text(asked, body.answers, other=body.other)[0]
 
     @app.post("/api/v2/tasks/{tid}/answers")
     def task_answer(request: Request, tid: str, body: M.TaskAnswer):
@@ -5791,13 +5799,15 @@ def create_app(settings=None):
     @app.get("/api/v2/approvals/{aid}")
     def approval(request: Request, aid: str):
         with store.read() as c:
+            from .files import readable_page_refs
             row = auth.approval(c, request.state.identity, aid)
             privacy.require_payload(c, request.state.identity, row)
             privacy.require_message(c, request.state.identity, H.message(c, row["message_id"]))
             # Its history: asked, decided (by whom, and for whom when the person's Assistant decided), undone, withdrawn,
             # spent.
             history = [{"created_at": e["created_at"], "actor": e["actor"], "action": e["action"].removeprefix("approval."),
-                        **{k: v for k, v in (H._json(e["detail"], {}) or {}).items()
+                        **{k: v for k, v in readable_page_refs(c, auth, request.state.identity,
+                                                              H._json(e["detail"], {}) or {}).items()
                            if k in ("decision", "note", "via", "was", "kind")}}
                        for e in c.execute("SELECT created_at,actor,action,detail FROM events WHERE target=? AND action IN "
                                           "('approval.request','approval.decide','approval.undo','approval.withdraw','approval.consume') "
@@ -6797,7 +6807,8 @@ def create_app(settings=None):
                                                                    lambda t: privacy.task_readable(c, who, t))
             result["approvals"] = []
             result["notices"] = [m for m in result["messages"] if m["kind"] == "notice"]
-            return result
+            from .files import readable_page_refs
+            return readable_page_refs(c, auth, who, result)
 
     @app.get("/api/v2/answers")
     def answers(request: Request, ids: str):
@@ -6814,7 +6825,8 @@ def create_app(settings=None):
                 privacy.require_message(c, who, msg)
             answers = H.answers_to(c, mids)
             privacy.require_payload(c, who, answers)
-            return answers
+            from .files import readable_page_refs
+            return readable_page_refs(c, auth, who, answers)
 
     @app.post("/api/v2/messages/{mid}/ack")
     def acknowledge(request: Request, mid: str, body: M.Empty):
