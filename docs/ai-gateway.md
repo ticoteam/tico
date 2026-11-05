@@ -248,15 +248,30 @@ saying the Tico AI Gateway cut the reply off.
 
 ## Settings → Gateway
 
-One flat page in the owner's and admins' Settings: a line saying whether the Gateway is connected (and, for the owner
-only, this month's spend against its cap); **API keys**, a link for the owner while the Gateway is connected
-([API keys](#api-keys)); **Picks in use** (name, model, version or Auto, number of bots, price); and **Services**, with
-each service's status (Live, On request, Coming soon), price and the tools that use it. The key and the connect controls stay in
-**Settings → Models**, one link away.
+The page is one flat page for the owner and admins, top to bottom:
 
-Services today: **Decide** and **Classify** (live), **Inbox** email addresses (live) and numbers (on request), **Search** and **Fetch**
-(live), with transcription, sending email, enrichment, voice and physical mail coming soon. Bots and agents read
-the same list with the `hub_gateway_catalog` tool and search the web with `hub_gateway_search` (`hub gateway catalog [query]`,
+- A line saying whether the Gateway is connected, with this month's spend against the cap for the owner only. Under it
+  is a line such as "Decisions: Low.", which gives the level that **Decide** runs at.
+- **API keys**, a link for the owner while the Gateway is connected ([API keys](#api-keys)).
+- **Picks in use**: each pick's name, model, version or Auto, number of bots and price.
+- **Models**: one row per level, with its model, price, Fast model, Fast price and context window. Below them come a
+  **Meeting** row and the **Decide** and **Classify** rows. When every department runs the same models, the table says
+  "Same in every department" and names them.
+- **Services**: one row per service, live first, then **On request**, then **Coming soon**. Each row shows what the service
+  is for, its status, its price and the tools that use it. A line of details under the row gives the rest. For **Search**,
+  that is the price per search, the token price and the search engines.
+
+The key and the connect controls stay in **Settings → Models**, one link away.
+
+Services today, by status:
+
+- **Live**: **Decide**, **Classify**, **Inbox · Email**, **Alerts**, **Search**, **Fetch**, **Images**,
+  **Transcribe** ($0.33 per audio hour for recordings, $0.30 per audio hour for live text), and **Physical mail and registered agent**.
+- **On request**: **Inbox · Texts**.
+- **Coming soon**: **Send letters**, **Send email**, **Enrich**, **Voice**, **Object Storage**, **Accounting**, **Legal**,
+  **CRM**, **Customer Support** and **Marketing**.
+
+Bots and agents read the same list with the `hub_gateway_catalog` tool and search the web with `hub_gateway_search` (`hub gateway catalog [query]`,
 `hub gateway search QUERY`, `hub gateway fetch URL`); search is billed like Low tokens plus $0.00875 per answered search, from the same cap. `hub_gateway_fetch` reads a page or PDF by URL, billed like Low tokens plus $0.00125 per page. The
 skill is `skills/gateway/SKILL.md`.
 
@@ -344,3 +359,5 @@ Companies that are only recorded are never stopped; their use is charged to the 
 The stop sends no email by itself. The out-of-credit email is a separate feature, Credit notices.
 
 *Credit timing checked 2026-10-23: waitlist spec v3.4, Answer 14 and tests 9/11/12h; services#119 cached-balance behavior. Bot retry interval and Gateway balance refresh are separate.*
+
+*Settings → Gateway checked 2026-11-05 against v0.5.137: ui/app/settings-gateway.js, backend/gateway_page.py, and the SERVICES list in backend/gateway_tiers.py; PR 2596 (Settings > Gateway: models, and details for every service).*

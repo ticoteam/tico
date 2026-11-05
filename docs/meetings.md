@@ -204,7 +204,8 @@ format is a `422` that names the problem.
 - **A human** (the owner or anyone on the roster) imports meetings of their own with their own
   credential, from the page or with a personal token. **Connect an external agent** makes a token
   with that human's own rights; members can make one by default unless the owner switches off member tokens. The meeting is theirs: only they and the team owner edit, delete or
-  Send it.
+  Send the meeting itself. Its pending items are different: anyone who can read the meeting can edit or Dismiss
+  them, and Send them once it is shared. Bots cannot.
 - **A computer** that runs an importer (a registered runner whose owner is in
   `TICO_PROCESSING_OPERATORS`, else the owner's) files meetings for a roster human it names in
   `owner_email`. It cannot file for someone who is not on the roster.
@@ -248,6 +249,12 @@ format is a `422` that names the problem.
   `POST /api/v2/meetings/{rid}/items/{iid}/push` accepts `version` and a `result_ref` for a task you requested to record that
   existing task without creating another; repeating it keeps the same result. Pushing an already sent item
   returns its current item and `pushed: false`, including when the supplied version is stale.
+- **Saved Recorder.** The meeting's **Tasks** section lists the same pending items. Each open item has its own fields
+  (for a task: title, owner, due and details, autosaved as above), then **Dismiss** and **Send**. Send names the owner
+  when one is set, and stays off until the meeting is shared. A sent item shows **Sent**, with **Open** when it links to
+  a task, and a dismissed item leaves the list. The header names the other people who have the meeting open: "is here" for
+  one, "are here" for more. If someone else sends or dismisses an item you have unsaved edits to, your draft stays in a
+  card that says who did it, with **Copy** and **Close**. Before Save, the Recorder's **Tasks** list has an **Add** button.
 - **Comments.** Anyone who can open the meeting can add to the thread beside it.
 - **Routines.** `meeting.ready` fires when a team meeting with a transcript is first imported,
   once per meeting however often it is re-imported; a routine written `on: meeting.ready` gets one
