@@ -7,8 +7,8 @@
 
 A PR runs only the tests for what it changed, so the full suite runs here, once, right before a release. `--release`
 runs the journey's previous-release install while it builds the candidate images once. After all builds finish,
-it runs Python tests except Docker isolation (`pytest -m "slow or not slow"`) and every browser test
-(`node scripts/ui-tests.cjs --all`), alongside the Docker isolation tests
+it runs Python tests except Docker isolation (parallel, then `alone` wall-clock budget tests with no workers) and
+every browser test (`node scripts/ui-tests.cjs --all`), alongside the Docker isolation tests
 and whole-product checks against the successfully built images: docker/smoke.sh,
 docker/side-jobs-smoke.sh and `scripts/journey-test.sh --release` (install and seed the previous release, upgrade
 to the candidate, bot turns on the previous and the candidate runner, roll back a migrating update, a second updater
@@ -38,12 +38,14 @@ Run locally, it first takes one of the computer's heavy-job slots (scripts/heavy
 runs at once on a box, the others waiting their turn. Hosted CI goes straight on.
 """
 import argparse
+from collections import deque
 import ipaddress
 import json
 import os
 from pathlib import Path
 import socket
 import re
+import shlex
 import shutil
 import subprocess
 import sys
@@ -216,6 +218,48 @@ def parse_shard(text):
 
 # What the release Python step selects; the default suite (PR checks) selects with pytest.ini alone.
 RELEASE_SELECTION = ('-m', 'slow or not slow', f'--ignore={ISOLATION_FILE}')
+
+
+def python_test_commands(workers, files):
+    """Both release passes cover the same files; collection and weighting still include every test."""
+    common = [f'--ignore={ISOLATION_FILE}', '--api-database-snapshots', *files]
+    pytest = [sys.executable, '-m', 'pytest', '-q']
+    # Count-based batches can strand several expensive migration tests on one worker when a shard also has
+    # hundreds of cheap tests. Keep batches small so the other workers can share the expensive tests.
+    return [pytest + ['-n', workers, '--maxschedchunk=2', '-m', '(slow or not slow) and not alone', *common],
+            pytest + ['-n', '0', '-m', 'alone', *common]]
+
+
+def python_tests(workers, files):
+    """Run parallel then alone in one Check, preserving both summaries and the hosted gate's junit report."""
+    commands = python_test_commands(workers, files)
+    # CI supplies its report path through PYTEST_ADDOPTS. The alone pass must not overwrite the parallel cases.
+    parser = argparse.ArgumentParser(add_help=False, allow_abbrev=False)
+    parser.add_argument('--junitxml', '--junit-xml')
+    report = parser.parse_known_args(shlex.split(os.environ.get('PYTEST_ADDOPTS', '')))[0].junitxml
+    summaries = []
+    with tempfile.TemporaryDirectory(prefix='tico-alone-junit-') as directory:
+        alone_report = Path(directory) / 'alone.xml'
+        if report:
+            commands[1].append(f'--junitxml={alone_report}')
+        for label, command in zip(('Parallel Python', 'Alone Python'), commands, strict=True):
+            process = subprocess.Popen(command, cwd=ROOT, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True)
+            tail = deque(maxlen=5)
+            with process.stdout:
+                for line in process.stdout:
+                    print(line, end='', flush=True)
+                    tail.append(line.strip())
+            code = process.wait()
+            summaries.append(f'{label}: ' + ' | '.join(tail))
+            if label == 'Parallel Python' and code:
+                return code
+        if report:
+            combined = ElementTree.parse(report)
+            combined.getroot().extend(ElementTree.parse(alone_report).getroot())
+            combined.write(report, encoding='utf-8', xml_declaration=True)
+    # An empty alone pass can print enough lines to hide the parallel pass from Check's no-test-passed guard.
+    print('\n'.join(summaries), flush=True)
+    return 0 if code == 5 else code   # a shard need not contain any alone tests
 
 
 # Each test file's recorded seconds, per selection ('default' for PR checks, 'release' for the release Python step), so
@@ -395,9 +439,10 @@ def record_timings(default_report, slow_report):
 
 def record_shard_timings(report_dir):
     """Refresh the 'release' seconds in TIMINGS from the per-shard junit reports of a release validation (every `*.xml`
-    under `report_dir`, written with `-o junit_family=xunit1`). Each file's tests run in one shard, so its seconds are
-    the sum of its cases. A file that did not run keeps its recorded seconds while it still exists in the checkout;
-    the 'default' record is only pruned, since these reports are the release selection's. Browser seconds are kept."""
+    under `report_dir`, written with `-o junit_family=xunit1`). Each file's tests run in one shard; its seconds sum
+    all cases across the parallel and alone suites. A file that did not run keeps its recorded seconds while it
+    still exists in the checkout; the 'default' record is only pruned, since these reports are the release selection's.
+    Browser seconds are kept."""
     reports = sorted(Path(report_dir).rglob('*.xml'))
     if not reports:
         raise RuntimeError(f'no junit reports under {report_dir}')
@@ -524,10 +569,7 @@ def release(args):
         built = all(code == 0 for code in build_codes)
         ready.write_text('ok' if built else 'failed')
     if runs('python'):
-        # Count-based batches can strand several expensive migration tests on one worker when a shard also has
-        # hundreds of cheap tests. Keep batches small so the other workers can share the expensive tests.
-        python_cmd = [sys.executable, '-m', 'pytest', '-q', '-n', workers, '--maxschedchunk=2', '-m', 'slow or not slow',
-                      f'--ignore={ISOLATION_FILE}', '--api-database-snapshots']
+        python_cmd = [sys.executable, str(ROOT / 'scripts/release_checks.py'), '--python-tests', workers]
         name = 'all-python'
         if shard:
             files = shard_files(shard[0], shard[1], test_env, native_first=True)
@@ -587,6 +629,7 @@ def main(argv=None):
     parser.add_argument('--release', action='store_true', help='every test and the whole-product checks (the release gate)')
     parser.add_argument('--previous', help='with --release: the release the journey upgrades from (default: newest tag)')
     parser.add_argument('--part', choices=PARTS, help='with --release: run only this slice of the gate')
+    parser.add_argument('--python-tests', nargs='+', help=argparse.SUPPRESS)   # the Python Check's subprocess
     parser.add_argument('--record-timings', nargs=2, metavar=('DEFAULT_XML', 'SLOW_XML'),
                         help='rewrite scripts/test-timings.json from junit reports of the default suite and the slow tests')
     parser.add_argument('--record-shard-timings', metavar='JUNIT_DIR',
@@ -608,6 +651,8 @@ def main(argv=None):
         return record_shard_timings(args.record_shard_timings)
     if args.record_browser_timings:
         return record_browser_timings(*args.record_browser_timings)
+    if args.python_tests:
+        return python_tests(args.python_tests[0], args.python_tests[1:])
     if args.release:
         return release(args)
     return python_shard(*args.shard) if args.shard else full()
