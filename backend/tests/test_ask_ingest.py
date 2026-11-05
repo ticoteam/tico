@@ -101,7 +101,7 @@ def write_state(api):
 def assert_refused(api, response, before=None):
     assert response.status_code == 422, response.text
     error = response.json()["error"]
-    assert error["code"] == "ask_refused" and not error["retryable"]
+    assert error["code"] == "ask_refused" and not error["retryable"], response.text
     if before is not None:
         assert write_state(api) == before, "refusal rolls back every domain row and counts toward no hold"
     [item] = items(api)[-1:]
