@@ -95,7 +95,7 @@ fn shared_item(
     }
     match reply {
         Ok(value) => Ok(value),
-        Err(error) if error.contains("409") => {
+        Err(error) if error.contains("(version_conflict)") => {
             let item = data["sections"]
                 .as_object()
                 .into_iter()

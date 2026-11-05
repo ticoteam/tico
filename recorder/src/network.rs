@@ -820,7 +820,11 @@ impl Tico {
                         .context("Tico did not return an item ID")?
                         .into();
                 }
-                delivery.receipt["items"][&item.id] = json!({"id":item_id,"status":"proposed"});
+                delivery.receipt["items"][&item.id] = if item.task_id.is_empty() {
+                    json!({"id":item_id,"status":"proposed"})
+                } else {
+                    json!({"id":item_id,"status":"pushed","result_ref":item.task_id})
+                };
                 store.delivery(id, &delivery)?;
                 if push_items && item.task_id.is_empty() {
                     let reply = self.call_meeting(

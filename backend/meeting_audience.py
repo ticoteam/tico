@@ -66,8 +66,10 @@ def grant(c, task_id, participants, author):
 
 
 def record_sent_link(c, meeting_id, task_id, author):
-    """Integration hook: step (a) records the sent meeting_task_links row in this transaction."""
-    pass
+    """Record sent provenance in the same transaction when the links migration is installed."""
+    if c.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name='meeting_task_links'").fetchone():
+        c.execute("INSERT OR IGNORE INTO meeting_task_links(id,meeting_id,task_id,kind,created_by,created_at) "
+                  "VALUES(?,?,?,'sent',?,?)", (H.new_id(), meeting_id, task_id, author, H.now()))
 
 
 def saved_read_sql(actor_sql, *, human=None):
