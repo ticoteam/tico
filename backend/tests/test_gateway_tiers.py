@@ -505,3 +505,14 @@ def test_a_held_general_medium_does_not_leave_a_new_bot_without_a_model(monkeypa
     fallback = T.default_model()
     assert fallback != f"{general}-{T.FIRST_VERSION}" and T.resolve(fallback, cat) is not None
     assert T.resolve(fallback)["tier"] != general
+
+
+def test_a_held_general_high_keeps_the_general_medium_fallback_for_a_new_bot(monkeypatch):
+    """Only a held General Medium moves the fallback; a held General High keeps the company's General Medium default."""
+    doc = json.loads(json.dumps({**T.SNAPSHOT, "schema": 1}))
+    high = next(r for r in doc["models"] if r["id"] == T.tier_id(T.DEFAULT_DEPARTMENT, "high"))
+    high["versions"].append(dict(high["versions"][-1], version="2.0", id=f"{high['id']}-2.0", model="GPT-6.1 Terra"))
+    high["current"] = "2.0"
+    cat = T.validate(doc)
+    monkeypatch.setattr(T, "catalog", lambda: cat)
+    assert T.default_model(T.DEFAULT_DEPARTMENT, "high") == f"{T.tier_id(T.DEFAULT_DEPARTMENT, "medium")}-{T.FIRST_VERSION}"
