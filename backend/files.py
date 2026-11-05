@@ -321,8 +321,15 @@ def page_ref_denials(c, auth, who, refs):
         return {}
     pages, cache = restricted_pages(c), {}
     # Deletion removes the pages row and its audience, but leaves a file tombstone.
-    deleted = read_cache.value(c, ("deleted_page_refs",), lambda: {
-        r[0] for r in c.execute("SELECT id FROM bot_files WHERE state='deleted'")}, shared=True)
+    def tombstones():
+        try:
+            return {r[0] for r in c.execute("SELECT id FROM bot_files WHERE state='deleted' "
+                                            "AND lower(mime) LIKE 'text/html%'")}
+        except sqlite3.OperationalError as exc:
+            if "no such table" not in str(exc) and "no such column" not in str(exc):
+                raise
+            return set()                 # standalone hubdb and pre-files migration databases
+    deleted = read_cache.value(c, ("deleted_page_refs",), tombstones, shared=True)
     return {fid: "A deleted page" if fid in deleted else "A page you can't open" for fid in ids
             if fid in deleted or (fid in pages and not (
                 file_visible(c, auth, who, pages[fid], cache) if auth else

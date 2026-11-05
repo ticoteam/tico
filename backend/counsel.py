@@ -22,6 +22,7 @@ Librarian (templates/catalog/tico-counsel). Its tasks are private by default (ba
 owner can turn it on or off.
 """
 import hashlib
+import json
 import re
 import secrets
 import unicodedata
