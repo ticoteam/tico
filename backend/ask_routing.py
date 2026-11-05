@@ -68,7 +68,7 @@ def named_destination(c, who, body, auth, create=True):
 
 
 def require_recipient(c, who, target, refs=None, conversation_id=None, in_reply_to=None, *,
-                      kind="ask", source=None, ctx=None, body=None, auth=None, existing=False, delivered=None):
+                      kind="ask", ctx=None, body=None, auth=None, existing=False, delivered=None):
     """Every send recipient gate, used for each routing candidate and again on the actual send.
 
     Existing message repairs preserve their room's audience and meeting gates. Fresh sends also check the sender's
@@ -173,8 +173,6 @@ def require_recipient(c, who, target, refs=None, conversation_id=None, in_reply_
     Auth.require_bot_contact(c, who, to, conversation_id, H.refs_task_id(refs), kind="message")
     reach.check(c, who, to, "chat", task_id=H.refs_task_id(refs), conversation_id=conversation_id,
                 in_reply_to=body.in_reply_to, ctx=ctx)
-    if body.kind == "ask" and not can_answer(c, to, refs, conversation_id, body.in_reply_to, source, sender=who.actor):
-        raise Problem("recipient", "Recipient cannot read or answer the question", 409)
     if conversation_id:
         from . import threads
         from .auth import actor_reads_task
@@ -228,7 +226,11 @@ def resolve(c, actor, target, refs=None, conversation_id=None, in_reply_to=None,
             c.execute("SAVEPOINT ask_recipient")
             try:
                 checked = require_recipient(c, who, candidate, refs, conversation_id, in_reply_to,
-                                            source=source, ctx=ctx, body=body, auth=auth, existing=existing)
+                                            ctx=ctx, body=body, auth=auth, existing=existing)
+                # Only system routing needs someone who can answer now. A named bot keeps its held queue.
+                if not can_answer(c, checked.to, checked.refs, checked.conversation_id, checked.in_reply_to,
+                                  source, sender=who.actor):
+                    raise Problem("recipient", "Recipient cannot read or answer the question", 409)
             finally:
                 c.execute("ROLLBACK TO ask_recipient")
                 c.execute("RELEASE ask_recipient")

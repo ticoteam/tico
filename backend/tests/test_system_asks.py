@@ -307,6 +307,48 @@ def test_inactive_manager_is_skipped_up_the_chain_when_reachable(api, monkeypatc
         assert msg["recipient_id"] == "human:ben"
 
 
+@pytest.mark.parametrize("target,state,manager,recipient", [
+    pytest.param("cpo", "active", "cpo", "bot:cpo", id="explicit-active"),
+    pytest.param("cpo", "paused", "cpo", "bot:cpo", id="explicit-paused"),
+    pytest.param("keeper", "paused", "cpo", "human:ben", id="rerouted-paused-manager"),
+    pytest.param("keeper", "active", None, "human:ana", id="rerouted-no-manager"),
+])
+def test_only_system_routing_requires_an_active_recipient(api, monkeypatch, target, state, manager, recipient):
+    from backend.tests.test_api import assign, claim, ready, runner
+    monkeypatch.setenv("TICO_REACH_DEFAULT", "open")
+    token = bot_token(api)
+    computer = runner(api)
+    assign(api, computer, "cpo")
+    ready(api, computer, ["cpo"])
+    with api.app.state.store.transaction() as c:
+        c.execute("UPDATE bot_config SET reports_to=?,team=NULL WHERE bot='ops'", (manager,))
+        c.execute("UPDATE bot_config SET reports_to='human:ben' WHERE bot='cpo'")
+        if state == "paused":
+            H.status_set(c, "human:ana", "cpo", state="paused", reason="Maintenance")
+    result = hubtools.ask(Api(api, token), {"bots": [target], "text": "Should this cover the beta?", "wait_s": 0})[target]
+    with api.app.state.store.read() as c:
+        msg = H.message(c, result["message_id"])
+        assert msg["recipient_id"] == recipient and msg["kind"] == "ask"
+        jobs = c.execute("SELECT bot_id,state FROM jobs WHERE message_id=?", (msg["id"],)).fetchall()
+        assert [tuple(job) for job in jobs] == ([("cpo", "queued")] if H.is_bot(recipient) else [])
+        if target == "keeper":
+            assert msg["refs"]["rerouted_from"] == H.KEEPER and result["recipient_id"] == recipient
+        else:
+            assert "rerouted_from" not in msg["refs"]
+        if target == "cpo" and state == "paused":
+            assert result["warning"] == H.held_note(c, recipient)
+        else:
+            assert "warning" not in result
+    if target == "cpo" and state == "paused":
+        assert claim(api, computer) is None
+        post(api, "bots/cpo/status", {"state": "active"})
+    attempt = claim(api, computer)
+    if H.is_bot(recipient):
+        assert attempt["message"]["id"] == msg["id"]
+    else:
+        assert attempt is None
+
+
 @pytest.mark.parametrize("state,onboarding", [("active", "needs_setup"), ("active", "needs_onboarding"),
                                              ("quarantined", "onboarded")])
 def test_routing_and_health_skip_a_manager_whose_state_holds_the_ask_at_claim(api, monkeypatch, state, onboarding):
@@ -327,9 +369,7 @@ def test_routing_and_health_skip_a_manager_whose_state_holds_the_ask_at_claim(ap
         H.task_update(c, "bot:ops", task["id"], status="waiting")
         assert c.execute("SELECT 1 FROM jobs WHERE message_id=? AND state='queued'", (dead["id"],)).fetchone()
         assert [(r["id"], r["recipient"]) for r in health.unreadable_waits(c)] == [(task["id"], "bot:cpo")]
-        with pytest.raises(Problem) as refused:
-            ask_routing.require_recipient(c, Identity("bot:ops", "bot"), "bot:cpo")
-        assert refused.value.code == "recipient"
+        assert not ask_routing.can_answer(c, "bot:cpo", source=dead)
         second = system_task(c, "cpo")
         msg = H.task_ask(c, "bot:ops", second["id"], "Should this cover the beta?")
         assert msg["recipient_id"] == "human:ben"

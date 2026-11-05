@@ -626,6 +626,8 @@ the next manager. Synced bots qualify only with desktop delivery; their sync inb
 Each candidate must pass the same checks as a send: Nearby reach, access to the task, every source and the room,
 contact policy, Write access, onboarding limits, and a way to receive the question. If any check refuses a
 candidate, Tico tries the next manager, then the company owner.
+These active-state and answer checks apply only when Tico picks the recipient. An ask sent to a named paused bot
+is saved and queued with a warning, and runs when the bot resumes.
 Org rules check the person or bot who will receive the ask, including a comment's question with no named recipient.
 Tico records the checked route even when no rule matches, and compares it again before sending.
 If it changed, nothing is sent; send the question again to check the new route.
