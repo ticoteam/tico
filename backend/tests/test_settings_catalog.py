@@ -152,6 +152,9 @@ def test_a_confirm_setting_from_botops_is_a_card_and_nothing_changes(api, botops
 
 def test_mail_access_through_botops_waits_for_the_persons_confirmation(api, botops):
     ana = turn(api, botops, person="ana-test", text="Let Ops read our physical mail")
+    err, missing = mcp(api, "hub_settings_set", {"key": "mail.access.bot", "bot": "ops", "value": "read"},
+                       ana["token"])
+    assert err and "--id" in str(missing), missing
     err, card = mcp(api, "hub_settings_set", {"key": "mail.access.bot", "id": "all", "bot": "ops", "value": "read"},
                     ana["token"])
     assert not err and card["needs_confirm"] is True, card
