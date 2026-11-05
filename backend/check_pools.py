@@ -399,7 +399,8 @@ def ranked(c, ticket, step, slugs, limit, exclude=()):
         if slug in excluded or "bot:" + slug == ticket["owner_id"]:
             continue
         if step.get("detached"):
-            if not H.task_private_readable(c, "bot:" + slug, ticket):
+            if (not H.task_private_readable(c, "bot:" + slug, ticket)
+                    or not H.task_private(c, ticket) and H.private_tasks_default(c, "bot:" + slug)):
                 why.add("private")
                 continue
             recent = c.execute("SELECT count(*) FROM history_events WHERE kind='pr_review_filed' AND new=? "
@@ -430,7 +431,7 @@ def ranked(c, ticket, step, slugs, limit, exclude=()):
     free.sort()
     if free:
         return [slug for _, _, _, _, slug in free], ""
-    base = ("the reviewers cannot read this private task" if "private" in why
+    base = ("the task or reviewer is private, so the review cannot be shared" if "private" in why
             else "the hourly review limit is reached" if "rate" in why
             else "every reviewer in the pool is at its limit of open checks" if "busy" in why
             else "no reviewer in the pool is online" if "offline" in why else "")

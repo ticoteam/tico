@@ -143,6 +143,18 @@ def test_private_task_is_not_shared_with_pool(api):
         assert not c.execute("SELECT 1 FROM messages WHERE recipient_id LIKE 'bot:rev-%' AND body LIKE '%Private text%'").fetchone()
 
 
+def test_private_reviewer_cannot_send_a_private_verdict_to_a_public_task(api):
+    setup(api)
+    with api.app.state.store.transaction() as c:
+        for slug in ("rev-a", "rev-b"):
+            BS.update(c, slug, {"private_tasks_default": True})
+    task = task_pr(api)
+    dispatch(api)
+    assert not children(api, task)
+    with api.app.state.store.read() as c:
+        assert "private" in P.waiting(c, task["id"])[0]["reason"]
+
+
 def test_backfill_is_oldest_first_and_limited_per_reviewer_per_hour(api, monkeypatch):
     setup(api)
     monkeypatch.setattr(P, "PR_REVIEWS_PER_HOUR", 1)

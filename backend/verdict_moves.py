@@ -493,7 +493,8 @@ def merge_wake(c, row, snapshots=None):
         if not recipient:
             return False
         if recipient != row["owner_id"]:
-            H.task_create(c, H.KEEPER, f"Merge PR #{ready[0]['number']} at {ready[1][:12]}",
+            actor = row["owner_id"] if H.task_private(c, row) else H.KEEPER
+            H.task_create(c, actor, f"Merge PR #{ready[0]['number']} at {ready[1][:12]}",
                           merge_text(c, row, *ready), recipient, parent_id=row["id"],
                           wake_refs={HANDOFF: "merge", "pr_head": ready[1]})
             _merge_woken(c, row, ready[1], ready[0])
@@ -517,6 +518,8 @@ def merge_recipient(c, row, pr):
 
     def writable(actor):
         if not actor or not H.task_private_readable(c, actor, row):
+            return False
+        if actor != row["owner_id"] and not H.task_private(c, row) and H.private_tasks_default(c, actor):
             return False
         bot = H.bot(c, H.actor_id(actor))
         if not bot or bot.get("state") != "active":
