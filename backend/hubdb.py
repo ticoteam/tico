@@ -5554,12 +5554,13 @@ CHECK_MODEL_SQL = ("SELECT m.runtime,m.model,m.harness,m.effort,m.role FROM task
                    "JOIN tasks t ON t.id=m.task_id WHERE m.task_id=? AND m.created_by=? AND t.owner_id=?")
 
 
-def _subtask_result_parent(conn, row):
-    """The bot-owned parent allowed to receive this child's result, without widening its readers."""
+def _subtask_result_parent(conn, row, *, bot_only=True):
+    """The parent allowed to receive this child's result, without widening its readers."""
     parent = task(conn, TR.parent_of(conn, row["id"]) or "")
-    if not parent or not is_bot(parent["owner_id"]):
+    if not parent or bot_only and not is_bot(parent["owner_id"]):
         return None
-    if not bot_reads_task(conn, parent["owner_id"], parent) or not task_private_readable(conn, parent["owner_id"], row):
+    if ((is_bot(parent["owner_id"]) and not bot_reads_task(conn, parent["owner_id"], parent))
+            or not task_private_readable(conn, parent["owner_id"], row)):
         return None
     if task_private(conn, row) and (not task_private(conn, parent) or not all(
             task_private_readable(conn, who, row) for who in (parent["owner_id"], parent["requester_id"]) if who)

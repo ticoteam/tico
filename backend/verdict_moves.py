@@ -293,7 +293,7 @@ def replay(c, check, *, snapshots=None):
     """Consume an undelivered verdict once, through the normal head, audience and capture checks."""
     check = H.task(c, check["id"])
     if (not check or check.get("status") != "done" or (delivery(c, check) or {}).get("consumed")
-            or not H._subtask_result_parent(c, check)):
+            or not H._subtask_result_parent(c, check, bot_only=False)):
         return None
     attempt = c.execute("SELECT id FROM attempts WHERE task_id=? ORDER BY created_at DESC,id DESC LIMIT 1",
                         (check["id"],)).fetchone()

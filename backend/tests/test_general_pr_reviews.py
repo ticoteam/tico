@@ -501,9 +501,10 @@ def test_hand_filed_review_with_equal_numbers_needs_a_full_link(api):
     assert own["id"] != second["id"]
 
 
-def test_replayed_approval_keeps_the_fresh_ci_read(api, monkeypatch):
+@pytest.mark.parametrize("owner", ["bot:cpo", "human:ana"])
+def test_replayed_approval_keeps_the_fresh_ci_read(api, monkeypatch, owner):
     setup(api)
-    task = task_pr(api)
+    task = task_pr(api, owner=owner)
     dispatch(api)
     [first] = children(api, task)
     with monkeypatch.context() as patch:
@@ -516,6 +517,11 @@ def test_replayed_approval_keeps_the_fresh_ci_read(api, monkeypatch):
     assert not handoffs(api, task, "merge")
     with api.app.state.store.read() as c:
         assert V.delivery(c, H.task(c, first["id"]))["consumed"]
+    monkeypatch.setattr(review_gate, "snapshot", lambda service, prs: {
+        p["id"]: {"head_sha": HEAD, "checks": {"required": "passing"}} for p in prs})
+    P.retry_prs(api.app.state.store, service=api.app.state.github_app)
+    P.retry_prs(api.app.state.store, service=api.app.state.github_app)
+    assert len(handoffs(api, task, "merge")) == 1
 
 
 def test_fresh_failed_checks_do_not_allow_merge_from_a_green_cache(api, monkeypatch):
