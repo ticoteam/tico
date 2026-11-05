@@ -15,6 +15,7 @@ from backend.maintenance_steps import learn as step
 from backend.maintenance_steps import update as update_step
 from backend.store import H
 from backend.tests.test_api import api, assign, claim, headers, post, ready, runner  # noqa: F401
+from backend import bot_settings as BS
 from backend.tests.test_bot_contact import bot
 from backend.tests.test_mail_api import put_mail
 
@@ -536,7 +537,12 @@ def test_delivery_retry_reports_its_final_saved_count(api, monkeypatch, first_st
 
 @pytest.mark.parametrize("resend", [False, True])
 def test_redo_keeps_the_original_delivery_turn_for_feedback_and_history(api, monkeypatch, resend):
-    bot(api, "librarian", "Librarian")
+    with api.app.state.store.transaction() as c:
+        # The built-in Librarian on a computer, as in test_librarian: its Docs and Market writes are what Learn reads.
+        c.execute("INSERT INTO bots(id,slug,display_name,effort,state,created_at) "
+                  "VALUES('librarian','librarian','Librarian','','active',?)", (H.now(),))
+        c.execute("INSERT INTO bot_config(bot,team,owner_id) VALUES('librarian',NULL,'ana')")
+        BS.write(c, "librarian", {"runtime": "fake", "host": "keeper"})
     scoring(api, monkeypatch, count=2, recipients=("librarian",))
     run_step(api)
     store = api.app.state.store
