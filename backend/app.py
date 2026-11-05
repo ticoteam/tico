@@ -3113,6 +3113,10 @@ def create_app(settings=None):
         people = H.mentioned_people(c, text, row, author) if text else []
         return [a for a in (row["owner_id"], row["requester_id"], *people, *extra) if a]
 
+    def rule_comment_audience(c, who, row, text, ask=None):
+        target = [H.task_ask_route(c, who.actor, row, ask)[0]] if ask else []
+        return rule_task_audience(c, row, who.actor, text, *target)
+
     def rule_message_to(c, who, body):
         """The actor a message goes to, as `send` writes it: `to: assistant` is the person's Assistant bot."""
         if str(body.to).lower() == "assistant" and who.role in ("human", "owner") and not who.via:
@@ -3123,6 +3127,7 @@ def create_app(settings=None):
         """A message's audience as the check reads it: its target and its conversation's participants. Both are
         authorized first, as the write authorizes them: a caller who cannot name the target or read the conversation
         gets 404 here, so no check reads the participants and no hold names them."""
+        body = routed_message(c, who, body)
         out = {auth.target(c, who, rule_message_to(c, who, body))}
         if body.conversation_id:
             out |= set(auth.conversation(c, who, body.conversation_id).get("participants") or [])
@@ -3282,6 +3287,8 @@ def create_app(settings=None):
         the write, as the rule check is."""
         if body.kind != "ask":
             return None
+        with store.read() as c:
+            body = routed_message(c, who, body)
         title = body.text.strip().split("\n")[0][:300]
         tref = H._task_ref((body.refs or {}).get("task"))
         if tref and ask_ingest.gated(who, settings.assistant_bot):
@@ -5296,9 +5303,8 @@ def create_app(settings=None):
         not wait on them."""
         who = request.state.identity
         def recipients(c):
-            from . import ask_routing
             row = auth.task(c, who, auth.resolve_task(c, who, tid))
-            target, _ = ask_routing.resolve(c, who.actor, row["requester_id"], {"task": row["id"]}, row["conversation_id"])
+            target, _ = H.task_ask_route(c, who.actor, row)
             return [target]
         rc = rule_check(who, "task_ask", body.text, recipients)
         ingest = None if org_rule_check.holds(rc) or saved_retry(request, who) else task_ask_ingest(who, tid, body)
@@ -5320,8 +5326,7 @@ def create_app(settings=None):
         with store.read() as c:
             if dream.exempt(c, row):
                 return None             # the person started the dream to be asked (backend/dream.py)
-            from . import ask_routing
-            target, _ = ask_routing.resolve(c, who.actor, row["requester_id"], {"task": row["id"]}, row["conversation_id"])
+            target, _ = H.task_ask_route(c, who.actor, row)
         return ask_ingest.preflight(store, app.state.judge, who, target, row["title"], body.text,
                                     kind="task_ask")
 
@@ -5337,19 +5342,22 @@ def create_app(settings=None):
         task_id = auth.resolve_task(c, who, tid)
         row = auth.task(c, who, task_id)
         lifecycle.refuse_send(c, who, None, what="task questions")
-        rule = org_rule_check.apply(c, rc, body.text, {"task": task_id, "body": body.model_dump(mode="json", by_alias=True)})
+        route = H.task_ask_route(c, who.actor, row)
+        target, _ = route
+        rule = org_rule_check.apply(c, rc, body.text, {"task": task_id, "body": body.model_dump(mode="json", by_alias=True)},
+                                    audience_now=[target])
+        if rule and rule.get("moved"):
+            raise Problem("moved", "Who this goes to changed while it was checked; send it again", 409, retryable=True)
         if rule and rule.get("held"):
             if ingest:
                 ask_ingest.skipped(c, ingest, "held")
             return org_rule_check.answer(rule)
         body = body.model_copy(update={"text": org_rule_check.warned_text(rule, body.text)}) if rule else body
-        from . import ask_routing
-        target, _ = ask_routing.resolve(c, who.actor, row["requester_id"], {"task": task_id}, row["conversation_id"])
         gate = ask_ingest.apply(c, ingest) if ask_ingest.matches(ingest, target) else None
         if ingest and not gate:
             ask_ingest.skipped(c, ingest, "target")
         # Not parked on a question that is not sent: the task keeps its status and the bot's own note.
-        msg = H.task_ask(c, who.actor, task_id, body.text, park=not (gate and gate["acts"]))
+        msg = H.task_ask(c, who.actor, task_id, body.text, park=not (gate and gate["acts"]), route=route)
         if gate:
             ask_ingest.record(c, ingest, gate, task_id, msg["id"])
             if gate["acts"]:
@@ -5369,7 +5377,11 @@ def create_app(settings=None):
         comment_rights(c, auth, who, task_id)
         ask = check_ask(c, task_id, body.ask, auth, who)
         # The org rule check (backend/org_rule_check.py), applied before anything is written: held, nothing is.
-        rule = org_rule_check.apply(c, rc, body.text, {"task": task_id, "body": body.model_dump(mode="json", by_alias=True)})
+        audience = rule_comment_audience(c, who, row, body.text, ask) if rc is not None else None
+        rule = org_rule_check.apply(c, rc, body.text, {"task": task_id, "body": body.model_dump(mode="json", by_alias=True)},
+                                    audience_now=audience)
+        if rule and rule.get("moved"):
+            raise Problem("moved", "Who this goes to changed while it was checked; send it again", 409, retryable=True)
         if rule and rule.get("held"):
             if ingest:
                 ask_ingest.skipped(c, ingest, "held")
@@ -5502,9 +5514,9 @@ def create_app(settings=None):
         if body.delivery == "goal" and (body.attachments or body.public):
             raise Problem("delivery", "A goal is the comment's text: send it without files or as a public comment",
                           422)
-        rc = rule_check(who, "comment", body.text, lambda c: rule_task_audience(
-            c, auth.task(c, who, auth.resolve_task(c, who, tid)), who.actor, body.text,
-            *([rule_target(c, who, body.ask.who)] if body.ask and body.ask.who else [])), place=task_place(who, tid))
+        rc = rule_check(who, "comment", body.text, lambda c: rule_comment_audience(
+            c, who, auth.task(c, who, auth.resolve_task(c, who, tid)), body.text,
+            body.ask.model_dump() if body.ask else None), place=task_place(who, tid))
         ingest = None if org_rule_check.holds(rc) or saved_retry(request, who) else comment_ingest(who, tid, body)
         result = ask_ingest.judged(store, ingest, lambda: mutate(request, body, lambda c: comment_write(
             c, who, tid, body, ingest, rc, request.state.identity)))
@@ -8438,8 +8450,8 @@ def create_app(settings=None):
 
         def comment(c, bot, replay):
             body = M.TaskComment.model_validate(replay["body"])
-            return rule_task_audience(c, task_row(c, bot, replay), bot.actor, body.text,
-                                      *([rule_target(c, bot, body.ask.who)] if body.ask and body.ask.who else []))
+            return rule_comment_audience(c, bot, task_row(c, bot, replay), body.text,
+                                         body.ask.model_dump() if body.ask else None)
 
         def comment_edit(c, bot, replay):
             body = M.TaskComment.model_validate(replay["body"])
@@ -8448,7 +8460,7 @@ def create_app(settings=None):
         return {"message": message, "note": note, "task_create": task_create, "task_update": task_update,
                 "task_owner": task_update, "bulk": task_update, "comment": comment, "comment_edit": comment_edit,
                 "answer": lambda c, bot, replay: answer_audience(c, bot, replay["message"]),
-                "task_ask": lambda c, bot, replay: [task_row(c, bot, replay)["requester_id"]],
+                "task_ask": lambda c, bot, replay: [H.task_ask_route(c, bot.actor, task_row(c, bot, replay))[0]],
                 "task_answer": lambda c, bot, replay: rule_task_audience(c, task_row(c, bot, replay), bot.actor),
                 "reply": reply_audience}
 

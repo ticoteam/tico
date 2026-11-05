@@ -8,6 +8,7 @@ from backend.auth import Identity
 from backend.store import H, Problem
 from backend.tests.test_api import api, headers, post  # noqa: F401
 from backend.tests.test_ask_delivery import Api
+from backend.tests.test_org_rule_check import bodies, color_rule, hold_row, ruled, send_anyway  # noqa: F401
 from backend.tests.test_tasks_board import bot_token
 from clients import hubtools
 
@@ -54,6 +55,120 @@ def test_structured_comment_routes_the_system_requester_or_explicit_keeper(api, 
     with api.app.state.store.read() as c:
         msg, = H.open_task_asks(c, H.task(c, task["id"]))
         assert msg["recipient_id"] == "human:ben" and msg["refs"]["rerouted_from"] == H.KEEPER
+
+
+def test_held_system_task_ask_releases_to_the_recipient_its_rule_checked(ruled):
+    api, judge = ruled
+    color_rule(api, reviewer="ben", **{"with": {"people": ["ben"]}})
+    with api.app.state.store.transaction() as c:
+        task = system_task(c)
+    text = "Our favorite color is gold. Should this cover the beta?"
+    held = post(api, f"tasks/{task['id']}/ask", {"text": text}, token="ops-test")["held"]
+    assert held["outcome"] == "blocked" and bodies(api, text) == []
+    row = hold_row(api, held["id"])
+    assert json.loads(row["destinations"]) == ["human:ben"]
+    sent = send_anyway(api, held["id"])
+    msg = sent["result"]
+    assert sent["hold"]["state"] == "sent" and msg["recipient_id"] == "human:ben"
+    assert msg["refs"]["rerouted_from"] == H.KEEPER
+    assert len(bodies(api, text)) == 1 and len(judge.calls) == 1
+    post(api, f"rule-holds/{held['id']}/send", {"nonce": row["nonce"]}, token="ben-test", expected=409)
+    with api.app.state.store.transaction() as c:
+        H.answer(c, "human:ben", msg["id"], "Yes, cover it.")
+        assert H.task(c, task["id"])["status"] == "open"
+
+
+@pytest.mark.parametrize("recipient", [None, "keeper"])
+def test_system_comment_ask_matches_the_routed_recipients_rule_and_releases(ruled, recipient):
+    api, judge = ruled
+    color_rule(api, reviewer="ben", **{"with": {"people": ["ben"]}})
+    with api.app.state.store.transaction() as c:
+        task = system_task(c)
+    text = "Our favorite color is gold. Should this cover the beta?"
+    body = {"text": text, "ask": {"who": recipient, "questions": [
+        {"id": "scope", "header": "Scope", "question": "Should this cover the beta?", "options": []}]}}
+    held = post(api, f"tasks/{task['id']}/comments", body, token="ops-test")["held"]
+    assert held["outcome"] == "blocked" and bodies(api, text) == []
+    assert json.loads(hold_row(api, held["id"])["destinations"]) == ["human:ben", H.KEEPER]
+    sent = send_anyway(api, held["id"])
+    msg = sent["result"]["comment"]
+    assert sent["hold"]["state"] == "sent" and msg["recipient_id"] == "human:ben"
+    assert msg["refs"]["who"] == "human:ben" and msg["refs"]["rerouted_from"] == H.KEEPER
+    assert len(bodies(api, text)) == 1 and len(judge.calls) == 1
+
+
+@pytest.mark.parametrize("kind", ["task", "comment"])
+def test_system_ask_replay_keeps_the_hold_if_its_manager_changed(ruled, kind):
+    api, _ = ruled
+    color_rule(api, reviewer="ben", **{"with": {"people": ["ben"]}})
+    with api.app.state.store.transaction() as c:
+        task = system_task(c)
+    text = "Our favorite color is gold. Should this cover the beta?"
+    path, body = f"tasks/{task['id']}/ask", {"text": text}
+    if kind == "comment":
+        path = f"tasks/{task['id']}/comments"
+        body["ask"] = {"who": "keeper", "questions": [
+            {"id": "scope", "header": "Scope", "question": "Should this cover the beta?", "options": []}]}
+    held = post(api, path, body, token="ops-test")["held"]
+    before = hold_row(api, held["id"])
+    with api.app.state.store.transaction() as c:
+        c.execute("UPDATE bot_config SET reports_to='human:ana' WHERE bot='ops'")
+    assert send_anyway(api, held["id"], expected=409)["error"]["code"] == "changed"
+    after = hold_row(api, held["id"])
+    assert after["state"] == "held" and after["nonce"] == before["nonce"]
+    assert bodies(api, text) == []
+
+
+@pytest.mark.parametrize("kind", ["task", "comment"])
+def test_system_ask_refuses_a_hold_for_a_recipient_that_changed_during_its_check(ruled, monkeypatch, kind):
+    from backend import org_rule_check
+    api, _ = ruled
+    color_rule(api, reviewer="ben", **{"with": {"people": ["ben"]}})
+    with api.app.state.store.transaction() as c:
+        task = system_task(c)
+    real = org_rule_check.preflight
+
+    def then_move(*args, **kwargs):
+        verdict = real(*args, **kwargs)
+        with api.app.state.store.transaction() as c:
+            c.execute("UPDATE bot_config SET reports_to='human:ana' WHERE bot='ops'")
+        return verdict
+
+    monkeypatch.setattr(org_rule_check, "preflight", then_move)
+    text = "Our favorite color is gold. Should this cover the beta?"
+    path, body = f"tasks/{task['id']}/ask", {"text": text}
+    if kind == "comment":
+        path = f"tasks/{task['id']}/comments"
+        body["ask"] = {"who": "keeper", "questions": [
+            {"id": "scope", "header": "Scope", "question": "Should this cover the beta?", "options": []}]}
+    refused = post(api, path, body, token="ops-test", expected=409)
+    assert refused["error"]["code"] == "moved" and bodies(api, text) == []
+    with api.app.state.store.read() as c:
+        assert not c.execute("SELECT 1 FROM org_rule_holds WHERE author='bot:ops'").fetchone()
+
+
+def test_held_direct_ask_routes_an_older_replay_recipient_for_rules_and_ingest(ruled, monkeypatch):
+    from backend import ask_ingest
+    api, _ = ruled
+    color_rule(api, reviewer="ben", **{"with": {"people": ["ben"]}})
+    with api.app.state.store.transaction() as c:
+        system_task(c)
+    text = "Our favorite color is gold. Should this cover the beta?"
+    held = post(api, "messages", {"to": "keeper", "kind": "ask", "text": text}, token="ops-test")["held"]
+    with api.app.state.store.transaction() as c:
+        # Older holds kept the original address; all replay checks must resolve it too.
+        c.execute("UPDATE org_rule_holds SET payload=json_set(payload,'$.replay.body.to','keeper') WHERE id=?",
+                  (held["id"],))
+    seen, real = [], ask_ingest.preflight
+
+    def spy(store, judge, who, target, *args, **kwargs):
+        seen.append(target)
+        return real(store, judge, who, target, *args, **kwargs)
+
+    monkeypatch.setattr(ask_ingest, "preflight", spy)
+    sent = send_anyway(api, held["id"])
+    assert sent["hold"]["state"] == "sent" and sent["result"]["recipient_id"] == "human:ben"
+    assert seen == ["human:ben"] and len(bodies(api, text)) == 1
 
 
 @pytest.mark.parametrize("manager,recipient", [("human:ben", "human:ben"), (None, "human:ana")])

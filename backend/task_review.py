@@ -109,11 +109,12 @@ def check_ask(c, task_id, ask, auth, who, lint=True):
                 option.pop("then", None)
             if not option.get("recommended"):
                 option.pop("recommended", None)
+    row = H.task(c, task_id)
+    target, refs = H.task_ask_route(c, who.actor, row, value)
+    value = {k: v for k, v in refs.items() if k != "task"}
     if lint and who.role == "bot":
-        row = H.task(c, task_id)
-        H.require_plain_question(c, who.actor, H.task_ask_recipient(c, who.actor, row, value), ask.questions)
+        H.require_plain_question(c, who.actor, target, ask.questions)
     if ask.who:
-        target = H.task_ask_recipient(c, who.actor, H.task(c, task_id), value)
         if not H.bot(c, H.actor_id(target)) and not H.human(c, H.actor_id(target)):
             raise Problem("validation", "Question recipient not found", 422)
         if not H.task_private_readable(c, target, H.task(c, task_id)):
@@ -179,9 +180,7 @@ def edit_version(c, auth, who, task_id, fid, number, body):
             asked = H.message(c, existing)
             H._message_writer(c, who.actor, asked, H.conversation(c, asked["conversation_id"]))
             row = H.task(c, task_id)
-            from . import ask_routing
-            recipient = H.task_ask_recipient(c, who.actor, row, value, route_system=False)
-            recipient, refs = ask_routing.resolve(c, who.actor, recipient, {**asked["refs"], **value}, row["conversation_id"])
+            recipient, refs = H.task_ask_route(c, who.actor, row, {**asked["refs"], **value})
             c.execute("UPDATE messages SET refs=?,recipient_id=? WHERE id=?",
                       (encode(refs), recipient, existing))
             return version_review(c, fid, number, actor=privacy.actor(who))

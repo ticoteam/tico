@@ -5765,19 +5765,27 @@ def bot_reads_task(conn, bot, row):
     return reads(conn, bot, row)
 
 
-def task_ask_recipient(conn, actor, row, ask, *, route_system=True):
+def task_ask_route(conn, actor, row, ask=None):
+    """One destination and its refs for task questions, including the system's real recipient."""
     directing = actor == row["requester_id"] or (
         actor not in (row["owner_id"], row["requester_id"]) and task_participant(conn, actor, row))
-    target = ask.get("who") or (row["owner_id"] if directing else row["requester_id"])
+    target = row["requester_id"] if ask is None else (
+        ask.get("who") or (row["owner_id"] if directing else row["requester_id"]))
     target = resolve_actor(conn, target)
-    if route_system:
-        from . import ask_routing
-        target, _ = ask_routing.resolve(conn, actor, target, {"task": row["id"]}, row["conversation_id"])
+    from . import ask_routing
+    refs = {"task": row["id"], **(ask or {})}
+    if ask is not None:
+        refs["who"] = ask.get("who")
+    target, refs = ask_routing.resolve(conn, actor, target, refs, row["conversation_id"])
     if task_private(conn, row) and (is_human(target) or is_bot(target)):
         from .auth import actor_reads_task
         if not actor_reads_task(conn, target, row):
             refuse(conn, actor, "private", "Only someone who can read the task can receive its questions")
-    return target
+    return target, refs
+
+
+def task_ask_recipient(conn, actor, row, ask):
+    return task_ask_route(conn, actor, row, ask)[0]
 
 
 @private_task_write
@@ -5808,9 +5816,8 @@ def task_comment(conn, actor, task_id, text, wake=True, *, ask=None, extra_refs=
     if not conv:
         refuse(conn, actor, "not-found", f"task {task_id} has no conversation")
     if ask:
-        target = task_ask_recipient(conn, actor, row, ask, route_system=False)
-        refs.update(ask)
-        refs["who"] = ask.get("who")
+        target, routed = task_ask_route(conn, actor, row, ask)
+        refs.update(routed)
     if answer_to:
         # The answer goes back to the bot that asked, which may be neither the owner nor the requester.
         asker = (message(conn, answer_to) or {}).get("sender_id")
@@ -7896,7 +7903,7 @@ def wait_detail(conn, row, *, children=True):
     return None
 
 
-def task_ask(conn, actor, task_id, body, park=True):
+def task_ask(conn, actor, task_id, body, park=True, *, route=None):
     """Rule 5's one clarifying question: the owner gets one ask before an answer comes back. `park` False leaves the
     task's status as it is (a question ask ingest sends back, backend/ask_ingest.py)."""
     _writer(conn, actor, task_id=task_id)
@@ -7911,8 +7918,8 @@ def task_ask(conn, actor, task_id, body, park=True):
         if unanswered:
             refuse(conn, actor, "one-question",
                    "you already asked about this task; wait for the answer")
-    msg = say(conn, actor, row["requester_id"], body, conversation_id=row["conversation_id"],
-              kind="ask", refs={"task": task_id})
+    target, refs = route if route is not None else task_ask_route(conn, actor, row)
+    msg = say(conn, actor, target, body, conversation_id=row["conversation_id"], kind="ask", refs=refs)
     conn.execute("UPDATE tasks SET updated_at=? WHERE id=?", (now(), task_id))     # its question is part of it
     if park and row["status"] in ("open", "doing", "review"):
         task_update(conn, actor, task_id, status="waiting")
