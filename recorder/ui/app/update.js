@@ -120,7 +120,7 @@
       const note = noteLine(update.notes);
       banner.innerHTML = `<span class="update-title">${installed ? 'Update installed' : 'Update ready'}</span>`
         + (note ? `<span class="update-note" title="${esc(note)}">${esc(note)}</span>` : '')
-        + `<button type="button" class="update-restart" data-upd="restart">Restart</button>`;
+        + `<button type="button" class="btn small primary update-restart" data-upd="restart">Restart</button>`;
       banner.hidden = false;
     } else if (update?.prompt && update.movable && !promptDone) {
       banner.classList.add('update-prompt');
