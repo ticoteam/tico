@@ -5,12 +5,20 @@ import sqlite3
 from datetime import datetime, timezone
 
 import pytest
+import time_machine
 from fastapi.testclient import TestClient
 
 from backend import demo
 from backend.app import create_app
 
 NOW = datetime(2026, 11, 2, 18, 0, tzinfo=timezone.utc)
+
+
+@pytest.fixture(scope="module", autouse=True)
+def demo_clock():
+    """Builds and API reads see the same day, including clocks outside hubdb.now."""
+    with time_machine.travel(NOW, tick=False):
+        yield
 
 
 @pytest.fixture(scope="module")
