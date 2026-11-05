@@ -539,6 +539,37 @@ async fn checkout_target(base: &Path, branch: &str, default: &str, env: &Env) ->
     Ok((target, head))
 }
 
+/// A retired computer's last report is history, never proof of a checkout on this computer.
+async fn recover_retired(base: &Path, default: &str, link: &mut Map<String, Value>, task: &str, env: &Env, client: &Client) -> R<()> {
+    let Some(recovery) = link.get("recovery").and_then(Value::as_object).cloned() else { return Ok(()) };
+    if own(link, "checkout_state") != "queued" {
+        return Ok(());
+    }
+    let branch = checked_branch(&own(link, "branch")).await?;
+    let fallback = own(&recovery, "fallback_branch");
+    if branch == own(&recovery, "branch") {
+        if let Some(remote) = remote_branch(base, &branch, env).await? {
+            let published = own(&recovery, "published_head");
+            if !published.is_empty() && (!is_sha(&published) || !git(base, env, &["merge-base", "--is-ancestor", &published, &remote], false).await?.ok()) {
+                return Err(WtErr::msg("Origin no longer contains the last published head; kept local history unchanged"));
+            }
+            fast_forward(base, &branch, &remote, env).await?;
+            return Ok(());
+        }
+        client.patch(&format!("tasks/{task}/links/{}", own(link, "link_id")), &json!({"recovery_branch_missing": true})).await.map_err(|e| WtErr::msg(e.detail))?;
+        link.insert("branch".into(), json!(checked_branch(&fallback).await?));
+    } else if branch != fallback {
+        return Err(WtErr::msg("Recovery branch does not match its task link; kept unchanged"));
+    }
+    if remote_branch(base, default, env).await?.is_none() {
+        return Err(WtErr::msg("Origin has no default branch; retry once it is available"));
+    }
+    if git(base, env, &["show-ref", "--verify", &format!("refs/heads/{fallback}")], false).await?.ok() {
+        return Err(WtErr::msg("New recovery branch already exists locally; kept unchanged"));
+    }
+    Ok(())
+}
+
 /// The link's checkout record on the server: pending with setup pending until it is present and ready.
 async fn patch_checkout(client: &Client, task: &str, link: &str, checkout_state: &str, proof: (&str, &str, &str)) -> R<()> {
     let present = checkout_state == "ready";
@@ -745,10 +776,9 @@ pub async fn prepare(workspace: &Path, row: &Value, repo: &mut Map<String, Value
     link.extend(detail(row));
     link.insert("link_id".into(), row["id"].clone());
     let _lock = locked(workspace, &text_of(&row["path"])).await?;
-    let branch = checked_branch(&text_of(&row["branch"])).await?;
+    let mut branch = checked_branch(&text_of(&row["branch"])).await?;
     let path = safe_path(workspace, &text_of(&row["path"]))?;
     let name = own(repo, "full_name");
-    let c = Checkout { workspace, repo: &name, machine_git: crate::util::truthy(repo.get("machine_git")), branch: &branch, env };
     let state = Some(own(&link, "checkout_state")).filter(|s| !s.is_empty()).unwrap_or_else(|| "queued".into());
     if state == "queued" || state == "initializing" {
         if path.exists() && state == "queued" {
@@ -757,6 +787,9 @@ pub async fn prepare(workspace: &Path, row: &Value, repo: &mut Map<String, Value
         disk_floor(workspace)?;
         let (base, default) = repositories::worktree_base(workspace, repo, env).await?;
         link.insert("checkout_state".into(), json!(state));
+        recover_retired(&base, &default, &mut link, &task, env, client).await?;
+        branch = checked_branch(&own(&link, "branch")).await?;
+        let c = Checkout { workspace, repo: &name, machine_git: crate::util::truthy(repo.get("machine_git")), branch: &branch, env };
         let (head, target, base_id) = create_or_resume(&path, &c, &base, &default, &link, &task, client).await?;
         for (k, v) in [("checkout_state", "checkout_ready"), ("expected_head", head.as_str()), ("checkout_target", target.as_str()), ("expected_base", base_id.as_str())] {
             link.insert(k.into(), json!(v));
@@ -764,7 +797,9 @@ pub async fn prepare(workspace: &Path, row: &Value, repo: &mut Map<String, Value
     } else if state != "checkout_ready" && state != "setup_running" {
         return Err(WtErr::msg("Worktree is not waiting to be prepared; kept unchanged"));
     }
+    let c = Checkout { workspace, repo: &name, machine_git: crate::util::truthy(repo.get("machine_git")), branch: &branch, env };
     run_registered_setup(&path, &c, &own(repo, "setup_command"), &link, &task, client).await?;
+    repo.insert("_prepared_branch".into(), json!(branch));
     Ok((own(&link, "expected_head"), own(&link, "checkout_target"), own(&link, "expected_base")))
 }
 
@@ -1614,6 +1649,9 @@ impl Worktrees {
             match outcome {
                 Ok(state) => {
                     rows[index]["state"] = json!(state.0);
+                    if let Some(branch) = action_row.get("branch") {
+                        rows[index]["branch"] = branch.clone();
+                    }
                     if let Some(d) = state.1 {
                         rows[index]["detail_json"] = json!(d);
                     }
@@ -1712,6 +1750,10 @@ impl Worktrees {
                 Err(WtErr::Msg(_, Some(detail))) if crate::util::truthy(repo.get("machine_git")) => return Err(WtErr::msg(repositories::machine_error(&name, &detail, &Env::new()))),
                 other => other?,
             };
+            // Recovery may choose a new branch when origin no longer has the old one.
+            if let Some(branch) = base_repo.get("_prepared_branch") {
+                action_row.insert("branch".into(), branch.clone());
+            }
             // The report that follows is of the prepared worktree, not of the row read before it.
             let mut d = detail(row);
             for (k, v) in [("checkout_state", json!("ready")), ("setup_pending", json!(false)), ("expected_head", json!(head)), ("checkout_target", json!(target)), ("expected_base", json!(base))] {
@@ -2040,6 +2082,75 @@ mod tests {
         let root = std::env::temp_dir().join(format!("tico-merge-{name}-{}", uuid::Uuid::new_v4().simple()));
         std::fs::create_dir_all(&root).unwrap();
         Folder(root.canonicalize().unwrap())
+    }
+
+    fn retired_repository() -> (Folder, PathBuf, String) {
+        let folder = temp_folder("retired");
+        let base = folder.0.join("base");
+        let remote = folder.0.join("origin.git");
+        std::fs::create_dir_all(&base).unwrap();
+        sh(&base, &["init", "--initial-branch=main"]);
+        sh(&folder.0, &["init", "--bare", "--initial-branch=main", remote.to_str().unwrap()]);
+        std::fs::write(base.join("file"), "initial").unwrap();
+        sh(&base, &["add", "."]);
+        sh(&base, &["commit", "-m", "Initial"]);
+        sh(&base, &["remote", "add", "origin", remote.to_str().unwrap()]);
+        sh(&base, &["push", "origin", "main"]);
+        sh(&base, &["checkout", "-b", "tico/task"]);
+        std::fs::write(base.join("file"), "published work").unwrap();
+        sh(&base, &["commit", "-am", "Task work"]);
+        let head = sh(&base, &["rev-parse", "HEAD"]);
+        sh(&base, &["push", "origin", "tico/task"]);
+        sh(&base, &["checkout", "main"]);
+        sh(&base, &["branch", "-D", "tico/task"]);
+        (folder, base, head)
+    }
+
+    fn retired_link(head: &str) -> Map<String, Value> {
+        json!({"link_id": "link", "branch": "tico/task", "checkout_state": "queued",
+               "recovery": {"branch": "tico/task", "published_head": head, "fallback_branch": "tico/recovery"}}).as_object().unwrap().clone()
+    }
+
+    #[tokio::test]
+    async fn retired_recovery_fetches_published_history_and_never_rewinds_local_work() {
+        let (_folder, base, head) = retired_repository();
+        let client = Client::new("http://127.0.0.1:1", "fixture", 5, 0).unwrap();
+        let mut link = retired_link(&head);
+        recover_retired(&base, "main", &mut link, "task", &test_env(), &client).await.unwrap();
+        assert_eq!(checkout_target(&base, "tico/task", "main", &test_env()).await.unwrap(), ("refs/heads/tico/task".into(), head));
+        sh(&base, &["checkout", "tico/task"]);
+        std::fs::write(base.join("file"), "unpublished local work").unwrap();
+        sh(&base, &["commit", "-am", "Local work"]);
+        let local = sh(&base, &["rev-parse", "HEAD"]);
+        sh(&base, &["checkout", "main"]);
+        let err = recover_retired(&base, "main", &mut link, "task", &test_env(), &client).await.unwrap_err();
+        assert!(err.text().contains("separate history"));
+        assert_eq!(sh(&base, &["rev-parse", "tico/task"]), local);
+    }
+
+    #[tokio::test]
+    async fn retired_recovery_missing_origin_branch_uses_a_new_default_branch() {
+        let (_folder, base, head) = retired_repository();
+        sh(&base, &["branch", "tico/task", &head]);
+        sh(&base, &["push", "origin", "--delete", "tico/task"]);
+        let (url, server) = serve_rows(Arc::new(Mutex::new(json!({})))).await;
+        let client = Client::new(&url, "fixture", 5, 0).unwrap();
+        let mut link = retired_link(&head);
+        recover_retired(&base, "main", &mut link, "task", &test_env(), &client).await.unwrap();
+        assert_eq!(own(&link, "branch"), "tico/recovery");
+        assert_eq!(sh(&base, &["rev-parse", "tico/task"]), head);
+        assert_eq!(checkout_target(&base, "tico/recovery", "main", &test_env()).await.unwrap().1, sh(&base, &["rev-parse", "main"]));
+        server.abort();
+    }
+
+    #[tokio::test]
+    async fn retired_recovery_refuses_origin_history_without_the_published_head() {
+        let (_folder, base, head) = retired_repository();
+        sh(&base, &["push", "--force", "origin", "main:refs/heads/tico/task"]);
+        let client = Client::new("http://127.0.0.1:1", "fixture", 5, 0).unwrap();
+        let err = recover_retired(&base, "main", &mut retired_link(&head), "task", &test_env(), &client).await.unwrap_err();
+        assert!(err.text().contains("last published head"));
+        assert!(!sh_ok(&base, &["show-ref", "--verify", "refs/heads/tico/task"]));
     }
 
     #[tokio::test]

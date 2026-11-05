@@ -2459,6 +2459,18 @@
      "default": null,
      "title": "Trust"
     },
+    "worktree_recovery": {
+     "anyOf": [
+      {
+       "type": "boolean"
+      },
+      {
+       "type": "null"
+      }
+     ],
+     "default": null,
+     "title": "Worktree Recovery"
+    },
     "worktree_waits": {
      "anyOf": [
       {

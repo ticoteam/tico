@@ -492,10 +492,10 @@ def _bot_checks(c, settings=None):
                                 "(draining, worktree maintenance, a lapsed lease still running, interrupted work, usage "
                                 "limit, readiness, sign-in, subscription profile, check model, lane) hold none of it.",
                                 BUG_FIX["queue_idle"]))
-    from .worktrees import current_error, supported
+    from .worktrees import current_error, supported, statuses
     if supported(c):
-        for r in c.execute("SELECT t.owner_id,l.state,l.detail FROM task_links l JOIN tasks t ON t.id=l.task_id "
-                           "WHERE l.kind='worktree' AND l.state<>'removed'"):
+        for r in statuses(c, c.execute("SELECT t.owner_id,l.* FROM task_links l JOIN tasks t ON t.id=l.task_id "
+                                      "WHERE l.kind='worktree' AND l.state<>'removed'")):
             error = current_error(r["state"], json.loads(r["detail"] or "{}"))
             if error:
                 bot = H.actor_id(r["owner_id"])
@@ -504,8 +504,11 @@ def _bot_checks(c, settings=None):
                 out.append(_finding(f"worktree_error:{bot}:{digest}", "worktree_error", SETUP,
                                     f"A task worktree of {label} failed",
                                     f"{label}: {error[:400]}",
-                                    "BotOps: save any unique work in that worktree on a branch, then remove its link so "
-                                    "the computer can make it again (docs/worktrees.md)."))
+                                    (f"Run `hub task worktree add {r['repo']} --task {r['task_id']}` on the owner's current computer. "
+                                     "Unpushed work stayed on the retired computer."
+                                     if r['state'] == 'retired' else
+                                     "BotOps: save any unique work in that worktree on a branch, then remove its link so "
+                                     "the computer can make it again (docs/worktrees.md).")))
     out.extend(_quiet_work_checks(c))
     out.extend(_stop_checks(c))
     out.extend(_session_checks(c))

@@ -3871,6 +3871,9 @@ class Execution:
                     return False
             from .task_relations import for_prompt
             task = {**task, "relations": for_prompt(c, task["id"], lambda other: bool(other) and readable(other))}
+            from .worktrees import recovery_prompt
+            if recovery_notes := recovery_prompt(c, task, row['bot_id']):
+                task['worktree_recovery'] = recovery_notes
             if check:
                 task["check"] = {k: check[k] for k in ("runtime", "model", "role")}
             goal = task_goal(c, row["bot_id"], followed, task)

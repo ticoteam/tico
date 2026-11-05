@@ -222,6 +222,21 @@ async function desktop(browser) {
     return out;
   });
   assert.match(bare.text, /^unknown repo\s*·\s*tico\/t-check-misc/);
+  const retired = await page.evaluate(() => {
+    const host = document.createElement('ul');
+    host.innerHTML = taskCodeLineHTML({id: 'retired', kind: 'worktree', repo: 'acme/web', branch: 'tico/retired',
+      state: 'retired', detail: {checkout_state: 'retired', last_commit: 'abcdef0123456789', ahead: 2,
+        cleanup_gave_up: true, error: 'Left on a retired computer: 2 unpushed commits'}}, true);
+    const recovered = document.createElement('ul');
+    recovered.innerHTML = taskCodeLineHTML({kind: 'worktree', repo: 'acme/web', state: 'present',
+      detail: {retired_worktree: {ahead: 2, last_commit: 'abcdef0123456789'}}}, true);
+    return {text: host.textContent, retry: !!host.querySelector('[data-code-retry]'), recovered: recovered.textContent};
+  });
+  assert.match(retired.text, /retired computer/);
+  assert.match(retired.text, /abcdef012345/);
+  assert.match(retired.text, /↑2/);
+  assert.equal(retired.retry, false, 'a retired computer cannot retry cleanup');
+  assert.match(retired.recovered, /2 unpushed commits stayed on the retired computer/);
   // A check waiting for a free reviewer (backend/check_pools.py) shows under Code, even on a task with no links yet.
   const waiting = await page.evaluate(() => {
     const host = document.createElement('div');

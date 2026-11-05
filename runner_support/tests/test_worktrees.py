@@ -109,6 +109,92 @@ def test_add_setup_report_attach_dirty_push_remove_restore(trees):
     assert (path / 'setup-ran').exists()  # saved file, not a rerun of setup
 
 
+def retired_allocation(row, client, published=None):
+    client.post.return_value.update(
+        state='pending', recovery={'branch': row['branch'], 'published_head': published,
+                                   'fallback_branch': 'tico/12345678-recovery-unique'},
+        retired_worktree={'computer_id': 'retired', 'branch': row['branch'], 'last_commit': 'f' * 40,
+                          'ahead': 2, 'dirty_files': 1})
+
+
+def publish_task_branch(base, row):
+    git(base, 'checkout', '-b', row['branch'])
+    (base / 'file').write_text('published task work')
+    git(base, 'add', 'file')
+    git(base, '-c', 'user.name=Sam', '-c', 'user.email=sam@example.com', 'commit', '-m', 'Task work')
+    head = git(base, 'rev-parse', 'HEAD')
+    git(base, 'push', 'origin', row['branch'])
+    git(base, 'checkout', 'main')
+    git(base, 'branch', '-D', row['branch'])
+    return head
+
+
+@pytest.mark.slow
+def test_retired_worktree_add_fetches_published_task_branch_and_keeps_unpushed_facts(trees):
+    workspace, base, remote, row, client = trees
+    head = publish_task_branch(base, row)
+    retired_allocation(row, client, head)
+    result = W.command(client, 'add', 'org/product')
+    assert git(Path(result['workspace_path']), 'rev-parse', 'HEAD') == head
+    assert result['branch'] == row['branch']
+    assert result['retired_worktree']['ahead'] == 2
+    assert '2 unpushed commits stayed on the retired computer' in result['warning']
+    assert git(remote, 'rev-parse', row['branch']) == head
+
+
+@pytest.mark.slow
+def test_retired_worktree_missing_origin_branch_uses_new_branch_and_keeps_old_local_history(trees):
+    workspace, base, remote, row, client = trees
+    old = row['branch']
+    git(base, 'branch', old)
+    prior = git(base, 'rev-parse', old)
+    retired_allocation(row, client)
+    result = W.command(client, 'add', 'org/product')
+    assert result['branch'] == 'tico/12345678-recovery-unique' != old
+    assert git(Path(result['workspace_path']), 'rev-parse', 'HEAD') == git(remote, 'rev-parse', 'main')
+    assert git(base, 'rev-parse', old) == prior
+    assert 'not published' in result['warning'] and 'unpushed commits stayed' in result['warning']
+    assert any(call.args[1] == {'recovery_branch_missing': True} for call in client.patch.call_args_list)
+
+
+@pytest.mark.slow
+@pytest.mark.parametrize('separate', ['local', 'origin'])
+def test_retired_recovery_never_moves_a_branch_backwards_or_replaces_separate_history(trees, separate):
+    workspace, base, remote, row, client = trees
+    published = publish_task_branch(base, row)
+    if separate == 'local':
+        git(base, 'branch', row['branch'], published)
+        git(base, 'checkout', row['branch'])
+        (base / 'file').write_text('local work that must stay')
+        git(base, 'add', 'file')
+        git(base, '-c', 'user.name=Sam', '-c', 'user.email=sam@example.com', 'commit', '-m', 'Local work')
+        before = git(base, 'rev-parse', 'HEAD')
+        git(base, 'checkout', 'main')
+    else:
+        git(base, 'push', '--force', 'origin', 'main:refs/heads/' + row['branch'])
+        before = git(base, 'rev-parse', 'main')
+    retired_allocation(row, client, published)
+    with pytest.raises(ValueError, match='separate history|last published head'):
+        W.command(client, 'add', 'org/product')
+    assert not (workspace / row['path']).exists()
+    if separate == 'local':
+        assert git(base, 'rev-parse', row['branch']) == before
+    assert not any(call.args[1].get('recovery_branch_missing') for call in client.patch.call_args_list)
+
+
+@pytest.mark.slow
+def test_retired_recovery_does_not_treat_remote_failure_as_an_unpublished_branch(trees, monkeypatch):
+    workspace, base, remote, row, client = trees
+    retired_allocation(row, client)
+    def unavailable(*args):
+        raise ValueError('Git fetch failed; cannot determine remote branch, retry later')
+    monkeypatch.setattr(W, 'remote_branch', unavailable)
+    with pytest.raises(ValueError, match='cannot determine remote branch'):
+        W.command(client, 'add', 'org/product')
+    assert not (workspace / row['path']).exists()
+    assert not client.patch.called
+
+
 @pytest.mark.slow
 def test_failed_push_keeps_tree_and_retry_preserves_saved_branch(trees):
     workspace, base, remote, row, client = trees
