@@ -432,9 +432,9 @@ def test_taking_off_a_stale_finished_blocker_releases_nothing(api):
 
 
 def test_an_asker_withdrawing_its_own_question_through_the_resolve_route_recomputes_the_reason(api):
-    """The resolve route with no quote: the Blocked reason follows the holds, as an answer's does (dcabd507, ec01a47e)."""
+    """The resolve route with no quote: the Blocked reason follows the holds, as an answer's does."""
     with api.app.state.store.transaction() as c:
-        ana, ben = task_holds.name(c, "human:ana"), task_holds.name(c, "human:ben")
+        ben = task_holds.name(c, "human:ben")
         tid = bot_task(c, "Choose a vendor")
         question = ask(c, tid, "Vendor A or B?")
         other = ask(c, tid, "Which invoice month?", to="human:ben")     # a newer question to Ana would replace this one
