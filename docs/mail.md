@@ -30,8 +30,8 @@ from your own `software/`. The access checks, the rules, the audit log and the r
 live in the tool; a direct call skips all four and is a policy violation, not a shortcut. The
 service-account key is not in your environment, so a direct call would not work anyway.
 
-The dispatcher gives every run `HUB_BOT` (your slug) and `HUB_DIR` (the Tico clone), so
-`mail.sh` already knows who you are. `--as <slug>` is only for running it by hand.
+The dispatcher gives every run `HUB_BOT` (your slug) and `HUB_DIR` (Tico's own install, never a place
+for Git work), so `mail.sh` already knows who you are. `--as <slug>` is only for running it by hand.
 
 ## What you can do today
 

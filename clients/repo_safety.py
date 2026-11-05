@@ -1,7 +1,47 @@
 """Bot files never belong in the Tico checkout running this code."""
 from pathlib import Path
+import os
+import subprocess
 
 ROOT = Path(__file__).resolve().parents[1]
+
+
+def _git_identity(path):
+    # Git resolves .git files, commondir and linked installs; inherited turn overrides must not redirect it.
+    existing = path
+    while not existing.exists():
+        existing = existing.parent
+    if not existing.is_dir():
+        existing = existing.parent
+    env = {k: v for k, v in os.environ.items() if not k.startswith("GIT_")}
+    env.update(GIT_CONFIG_NOSYSTEM="1", GIT_CONFIG_GLOBAL=os.devnull, GIT_CONFIG_SYSTEM=os.devnull)
+    try:
+        done = subprocess.run(["git", "--no-optional-locks", "-c", "core.fsmonitor=false",
+                               "-c", "safe.directory=" + str(existing), "-C", str(existing),
+                               "rev-parse", "--path-format=absolute", "--git-dir", "--git-common-dir"],
+                              env=env, capture_output=True, text=True, stdin=subprocess.DEVNULL, timeout=10)
+    except (OSError, subprocess.SubprocessError) as exc:
+        raise ValueError(f"Cannot check repository identity: {path}") from exc
+    if done.returncode:
+        # A future clone has no repository yet. Broken Git metadata must not look like a safe clone.
+        if any((parent / ".git").exists() or (parent / ".git").is_symlink()
+               or ((parent / "HEAD").exists() and (parent / "objects").is_dir())
+               for parent in (existing, *existing.parents)):
+            raise ValueError(f"Cannot check repository identity: {path}")
+        return ()
+    names = done.stdout.splitlines()
+    if len(names) != 2 or any(not Path(name).is_absolute() for name in names):
+        raise ValueError(f"Cannot check repository identity: {path}")
+    return tuple(_resolve(Path(name)) for name in names)
+
+
+def _same_path(left, right):
+    if left == right:
+        return True
+    try:
+        return left.samefile(right)
+    except OSError:
+        return False
 
 
 def _resolve(path):
@@ -43,6 +83,10 @@ def outside_installation(path):
                 continue
     if inside:
         raise ValueError(f"Repository path is inside the Tico install: {path}")
+    installation_git = _git_identity(installation)
+    repository_git = _git_identity(resolved)
+    if any(_same_path(left, right) for left in repository_git for right in installation_git):
+        raise ValueError(f"Repository shares Git metadata with the Tico install: {path}")
     return resolved
 
 
