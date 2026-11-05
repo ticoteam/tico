@@ -8,6 +8,7 @@ import io
 import json
 import time
 from datetime import datetime, timedelta, timezone
+from pathlib import Path
 from unittest import mock
 
 import pytest
@@ -154,6 +155,57 @@ def later(minutes):
 
 
 # ---------------------------------------------------------------------------------------------- the whole loop
+def test_redesign_promo_sample_queues_danas_archive_without_a_mailbox_row():
+    from backend import automations, mailbox_access
+    from evals.redesign import seeds
+    from evals.redesign.harness import DANA_REF, Org
+
+    # The browser and this check use the same sample so it targets a message the connector can identify.
+    sample = json.loads((Path(__file__).resolve().parents[2] / "ui/tests/fixtures/redesign-automation-promo.json")
+                        .read_text())
+    with Org() as world:
+        seeds.automations(world)
+        listed = world.api("get", "/api/v2/automations")
+        assert listed.status == 200, listed.body
+        triage = next(a for a in listed.body["automations"] if a["name"] == "Inbox triage")
+        inbox = triage["trigger"]["inbox"]
+        with world.store.read() as c:
+            assert triage["owner_id"] == DANA_REF
+            assert mailbox_access.principal(c, DANA_REF) == mailbox_access.Principal("person", "dana")
+            assert c.execute("SELECT 1 FROM mailboxes WHERE address=?", (inbox,)).fetchone() is None
+            assert mailbox_access.level(c, DANA_REF, inbox) == "read_write"
+            assert automations.may_read_inbox(c, DANA_REF, inbox)
+            assert mailbox_access.action_refusal(c, DANA_REF, inbox, "archive") is None
+        reply = world.api("post", f"/api/v2/automations/{triage['id']}/run", {"input": sample})
+        assert reply.status == 200, reply.body
+        run = reply.body["run"]
+        assert run["status"] == "waiting", run
+        assert run["steps"][0]["status"] == "waiting", run
+        with world.store.read() as c:
+            action, = c.execute("SELECT mailbox, msg_id, action, state FROM automation_mail_actions WHERE run_id=?",
+                                (run["id"],)).fetchall()
+            assert dict(action) == {"mailbox": inbox, "msg_id": "promo-sample", "action": "archive", "state": "queued"}
+
+
+def test_a_sample_naming_no_mailbox_is_mail_in_the_trigger_inbox():
+    """The page's default sample has no mailbox; its archive targets the trigger's inbox, not none (refused)."""
+    from evals.redesign import seeds
+    from evals.redesign.harness import Org
+
+    with Org() as world:
+        seeds.automations(world)
+        triage = next(a for a in world.api("get", "/api/v2/automations").body["automations"]
+                      if a["name"] == "Inbox triage")
+        sample = {"message": {"from": "promo@deals.example", "subject": "Sale", "body": "50% off"}}
+        reply = world.api("post", f"/api/v2/automations/{triage['id']}/run", {"input": sample})
+        assert reply.status == 200, reply.body
+        assert reply.body["run"]["steps"][0]["status"] == "waiting", reply.body["run"]
+        with world.store.read() as c:
+            action, = c.execute("SELECT mailbox, action, state FROM automation_mail_actions WHERE run_id=?",
+                                (reply.body["run"]["id"],)).fetchall()
+        assert dict(action) == {"mailbox": triage["trigger"]["inbox"], "action": "archive", "state": "queued"}
+
+
 def test_mail_in_runs_the_automation_and_its_computer_drafts_and_replies_in_the_thread(api, computer):
     aid = automate(api, DRAFT, SEND)
     assert computer.sync() == 1
