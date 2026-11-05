@@ -225,12 +225,18 @@ pub fn pushed_commit(root: &Path, rel: &str) -> String {
     }
 }
 
+pub const MAKE_PAGE_ORIGIN: &str = ".tico-make-page-attempt";
+
 fn now() -> f64 {
     crate::util::epoch_s()
 }
 
 /// Queue what changed since the last publish; (queued, refused). `skip` names files that hold a granted secret.
 pub fn prepare(state: &State, bot: &str, attempt_id: &str, root: &Path, config: &Value, pushed: bool, skip: &[String]) -> Result<(usize, usize), String> {
+    // Even an accidental later scan keeps this directory's original provenance and never queues its output.
+    if root.join(MAKE_PAGE_ORIGIN).exists() {
+        return Ok((0, 0));
+    }
     let seen: HashSet<String> = state.with(|c| {
         c.execute_batch(TABLES)?;
         let mut q = c.prepare("SELECT rel FROM file_published WHERE bot=?1 UNION SELECT rel FROM file_refused WHERE bot=?1")?;
@@ -531,17 +537,24 @@ mod tests {
         let dir = checkout();
         let state = State::open(&dir.join("state")).unwrap();
         state.with(|c| c.execute_batch(TABLES)).unwrap();
-        std::fs::write(dir.join("reports/private.txt"), "Earlier private report").unwrap();
-        std::fs::write(dir.join("reports/page.html"), "<h1>Shared page</h1>").unwrap();
-        let (url, seen) = hub(vec![200, 200]).await;
+        let scratch = crate::sessions::MakePageScratch::new("make-1").unwrap();
+        let path = scratch.0.clone();
+        std::fs::create_dir(path.join("reports")).unwrap();
+        std::fs::write(path.join("reports/page.html"), "<h1>Private page marker</h1>").unwrap();
+        let (url, seen) = hub(vec![]).await;
         let client = Client::new(&url, "t", 5, 0).unwrap();
         let attempt = json!({"id": "make-1", "bot": "coo", "make_page": {"task": {"id": "t1"}}});
-        after_turn(&state, &client, &attempt, &dir, false, &[]).await;
+        after_turn(&state, &client, &attempt, &path, false, &[]).await;
         let queued: i64 = state.with(|c| c.query_row("SELECT count(*) FROM file_outbox", [], |r| r.get(0))).unwrap();
         assert_eq!(queued, 0);
         assert!(seen.lock().unwrap().is_empty());
+        assert_eq!(prepare(&state, "coo", "ordinary", &path, &json!({}), false, &[]).unwrap().0, 0);
+        drop(scratch);
+        assert!(!path.exists());
         after_turn(&state, &client, &json!({"id": "ordinary", "bot": "coo"}), &dir, false, &[]).await;
-        assert_eq!(seen.lock().unwrap().len(), 2);
+        let queued: i64 = state.with(|c| c.query_row("SELECT count(*) FROM file_outbox", [], |r| r.get(0))).unwrap();
+        assert_eq!(queued, 0);
+        assert!(seen.lock().unwrap().is_empty());
         std::fs::remove_dir_all(dir).ok();
     }
 

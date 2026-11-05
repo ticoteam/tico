@@ -93,6 +93,8 @@ def company_layer(c):
 
 
 def view(c, who, settings):
+    from . import turn_scope
+    turn_scope.require_private_context(c, who)
     person = _person(who, settings)
     return {"personal": entries(c, "personal", person),
             "company": company_layer(c) if company_reader(c, who, settings) else None}

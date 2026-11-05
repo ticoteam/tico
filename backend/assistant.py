@@ -1534,7 +1534,7 @@ def install(app, store, auth, mutate, onboarding):
         if gate and gate.get("held"):
             return org_rule_check.held_answer(c, who, gate, auth=auth)
         message = H.say(c, who.actor, "bot:" + bot, org_rule_check.warned_text(gate, text) if gate else text,
-                        conversation_id=room["id"], kind="say", refs=refs)
+                        conversation_id=room["id"], kind="say", refs=refs, make_page="make_page" in refs)
         if uploads is not None:
             message = app.state.uploads.attach(c, who, bot, message, uploads, titles)
         return {"message": message, **org_rule_check.answer(gate)}
@@ -1624,8 +1624,9 @@ def install(app, store, auth, mutate, onboarding):
             # Publish and pin commit together. Later unlinking or archiving keeps a successful request successful.
             made = c.execute("SELECT 1 FROM bot_files f JOIN pages p ON p.file_id=f.id "
                              "WHERE f.scope=? "
-                             "AND EXISTS (SELECT 1 FROM bot_file_versions v JOIN attempts a ON a.id=v.attempt_id "
-                             "JOIN jobs j ON j.id=a.job_id WHERE v.file_id=f.id AND j.message_id=?) LIMIT 1",
+                             "AND EXISTS (SELECT 1 FROM bot_file_activity v JOIN attempts a ON a.id=v.attempt_id "
+                             "JOIN jobs j ON j.id=a.job_id WHERE v.file_id=f.id AND j.message_id=? "
+                             "AND v.action IN ('created','modified','published')) LIMIT 1",
                              ("task:" + task["id"], row["id"])).fetchone()
             active = (row["state"] == "queued" or row["state"] in ("leased", "running")
                       and row["attempt_state"] in ("leased", "running") and str(row["lease_until"] or "") > H.now())

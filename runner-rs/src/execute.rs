@@ -5194,6 +5194,36 @@ for line in sys.stdin:
     }
 
     #[tokio::test]
+    async fn make_page_placement_discards_outputs_and_never_grants_the_shared_checkout() {
+        let (runner, dir) = runner_at("http://127.0.0.1:1", "make-page-scratch");
+        let env = crate::env::Env::new();
+        let config = json!({"session": "bot"});
+        let main = crate::sessions::local_path(&runner.config, "coo", &config);
+        std::fs::create_dir_all(&main).unwrap();
+        std::fs::write(main.join("private.txt"), "PRIVATE-SHARED-CHECKOUT").unwrap();
+        for id in ["make-first", "make-failed"] {
+            let mut attempt = json!({"id": id, "bot": "coo", "config": config,
+                "make_page": {"task": {"id": "t1"}}, "worktrees": [{"path": main.display().to_string()}]});
+            let lost = AtomicBool::new(false);
+            let mut place = runner.enter_lanes(&attempt, &lost).await.unwrap();
+            runner.place_turn(&mut place, &mut attempt, &env, &lost).await.unwrap();
+            let scratch = place.execution_path.clone();
+            assert_ne!(scratch, main);
+            assert_eq!(place.main_path, scratch);
+            assert!(!place.has_checkout() && place.private && place.add_dirs.is_empty());
+            assert!(!scratch.join("private.txt").exists());
+            std::fs::create_dir(scratch.join("reports")).unwrap();
+            std::fs::write(scratch.join("reports/page.html"), "PRIVATE-PAGE-OUTPUT").unwrap();
+            assert!(!runner.finish_place(&place, &attempt, &env, &[], false).await);
+            drop(place);
+            assert!(!scratch.exists());
+            assert!(!main.join("reports/page.html").exists());
+        }
+        assert_eq!(std::fs::read_to_string(main.join("private.txt")).unwrap(), "PRIVATE-SHARED-CHECKOUT");
+        std::fs::remove_dir_all(dir).ok();
+    }
+
+    #[tokio::test]
     async fn a_memory_pass_without_a_checkout_of_its_own_is_refused_and_an_ordinary_task_still_falls_back_to_the_bots_checkout() {
         let (url, _seen, server) = recording_server().await;
         let (runner, dir) = drain_runner_on(&url, 300).await;

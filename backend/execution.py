@@ -4046,7 +4046,7 @@ class Execution:
                             # What the person's chat bot has learned, read now: a deleted entry is gone from this turn
                             # (backend/learned.py; rendered by runner-rs/src/prompt.rs). Outside their own chat only
                             # `strategy`, the team's published strategy, which every turn carries (backend/strategy.py).
-                            "learned": learned.for_turn(c, self.store.settings, conv, row["bot_id"]),
+                            "learned": None if making_page else learned.for_turn(c, self.store.settings, conv, row["bot_id"]),
                             "task_context": task_context.for_turn(c, self.auth, acting or bot_who, task),
                             **({"make_page": make_page} if make_page else {}),
                             # Asked from the Updates chat: the recent updates that person may read and open, read now as

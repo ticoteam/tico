@@ -831,6 +831,11 @@ def create_app(settings=None):
                     who = replace(who, task_actor="bot:" + settings.assistant_bot)
                 request.state.auth_ms = (time.perf_counter() - began) * 1000
                 request.state.identity = who
+                if who.attempt_id and who.role != "runner":
+                    def scoped_read():
+                        with store.read() as c:
+                            turn_scope.require_read_route(c, who, request.method, request.url.path)
+                    await asyncio.to_thread(scoped_read)
                 app.state.sleep_idle.seen(who, request.url.path)
                 # A locked Tico Cloud company (backend/cloud_access.py): people reach only billing and the download.
                 cloud_access.gate(store, who, request.url.path)
@@ -1595,8 +1600,7 @@ def create_app(settings=None):
 
     def check_refs(c, who, refs):
         # Validate referenced objects rather than trusting an arbitrary ID in a payload.
-        if "make_page" in refs:
-            raise Problem("forbidden", "Use the task's Make page control", 403)
+        H.check_message_refs(refs)
         for kind, values in refs.items():
             if kind in ("task", "task_id"):
                 # One task id, or a list of them (bots send `task:<id>` as a list); each must be one the caller can read.

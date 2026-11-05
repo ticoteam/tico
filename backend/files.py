@@ -533,6 +533,8 @@ class Files:
 
         def work(c):
             scope, task, conversation, attempt = self.target(c, who, bot, fields)
+            if who.via == "assistant" and extra is None:
+                raise Problem("forbidden", "Make page uses the page publish API", 403)
             existing = self.find(c, bot, scope, identity)
             stored_task = existing["task_id"] if existing else None
             H._writer(c, self.actor_of(who, bot), task_id=stored_task, attempt_id=attempt)

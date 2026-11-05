@@ -1,4 +1,6 @@
 """Make page publishes only the person's request and currently shared, logged sources."""
+import json
+
 import pytest
 
 from backend import cards
@@ -148,10 +150,32 @@ def test_an_unlinked_logged_file_blocks_publish(api):
 
 def test_forged_make_page_refs_are_forbidden_on_generic_message_and_chat_routes(api):
     t = task(api, private=False)
+    room = say(api, "Hello", "ben-test")["message"]["conversation_id"]
     for refs in ({"make_page": {"task": t["id"]}}, {"assistant": True, "make_page": {"task": t["id"]}}):
         for path, body in (("messages", {"to": "assistant", "text": "Make this", "refs": refs}),
-                           ("chat/ops", {"text": "Make this", "refs": refs})):
+                           ("chat/ops", {"text": "Make this", "refs": refs}),
+                           (f"threads/{room}/messages", {"text": "Make this", "to": "bot:coo", "refs": refs})):
             post(api, path, body, "ben-test", expected=403)
+    with api.app.state.store.read() as c:
+        assert not c.execute("SELECT 1 FROM messages WHERE json_type(refs,'$.make_page') IS NOT NULL").fetchone()
+
+
+def test_identical_html_completes_each_make_page_request_without_a_new_version(api):
+    t = task(api, private=False)
+    requests = []
+    for _ in range(2):
+        machine, attempt, message = start(api, t["id"])
+        requests.append(attempt["id"])
+        made = page(api, attempt, task=t["id"])
+        assert made.status_code == 200, made.text
+        assert made.json()["page"]["version"] == 1
+        assert status(api, t["id"])["message_id"] == message["id"]
+        assert status(api, t["id"])["state"] == "made"
+        post(api, f"attempts/{attempt['id']}/complete", {"outcome": "completed", "last_seq": 0}, machine["token"])
+        assert status(api, t["id"])["state"] == "made"
+    with api.app.state.store.read() as c:
+        assert c.execute("SELECT count(*) FROM bot_file_versions").fetchone()[0] == 1
+        assert {r[0] for r in c.execute("SELECT attempt_id FROM bot_file_activity WHERE action IN ('created','published')")} == set(requests)
 
 
 def test_ordinary_assistant_turn_cannot_publish_even_with_a_supplied_attempt(api):
@@ -303,6 +327,49 @@ def test_make_page_keeps_private_chat_history_and_other_queued_work_out_of_the_t
     assert post(api, f"attempts/{attempt['id']}/inputs", {}, machine["token"])["messages"] == []
     with api.app.state.store.read() as c:
         assert c.execute("SELECT carried_by FROM tasks WHERE id=?", (other["id"],)).fetchone()[0] is None
+
+
+def test_private_messages_and_both_learned_layers_never_reach_make_page(api):
+    from backend.tests.test_learned import learn
+    from backend.tests.test_strategy_bot_chat import strategy_bot
+    from backend.tests.test_mcp import call, rpc
+    strategy_bot(api)
+    marker = "PRIVATE-ASSISTANT-LEARNING-MARKER"
+    learn(api, marker, token="ana-test")
+    learn(api, marker, layer="company", token="ana-test")
+    earlier = say(api, marker, "ana-test")["message"]
+    with api.app.state.store.transaction() as c:
+        c.execute("UPDATE jobs SET state='completed' WHERE message_id=?", (earlier["id"],))
+    t = task(api, private=False)
+    _, attempt, _ = start(api, t["id"], person="ana-test")
+    assert attempt["learned"] is None
+    assert marker not in json.dumps(attempt)
+    token, cid = attempt["token"], earlier["conversation_id"]
+    for path in (f"messages/{earlier['id']}", f"conversations/{cid}/messages", f"conversations/{cid}/snapshot",
+                 f"threads/{cid}", f"threads/{cid}/timeline", "threads/search?q=" + marker,
+                 "assistant/learned", "conversations", "inbox", "notes", "bots/coo/memory"):
+        refused = get(api, path, token, expected=404)
+        assert marker not in json.dumps(refused)
+    tools = rpc(api, "tools/list", token=token)["result"]["tools"]
+    assert {tool["name"] for tool in tools} == {
+        "hub_task_context", "hub_file_read", "hub_meeting_read", "hub_page_show", "hub_page_publish"}
+    for name, args in (("hub_conversation_show", {"id": cid}), ("hub_assistant_learned", {}),
+                       ("hub_message_list", {})):
+        error, result = call(api, name, args, token=token)
+        assert error and marker not in json.dumps(result)
+    made = page(api, attempt, task=t["id"])
+    assert made.status_code == 200, made.text
+    published = api.get("/api/v2/files/" + made.json()["page"]["file_id"], headers=headers("cara-test"))
+    assert published.status_code == 200 and marker.encode() not in published.content
+
+
+def test_make_page_cannot_bypass_page_cleaning_with_a_generic_upload(api):
+    t = task(api, private=False)
+    _, attempt, _ = start(api, t["id"])
+    result = api.post("/api/v2/files/uploads", params={"name": "raw.html", "task": t["id"]}, content=HTML,
+                      headers=headers(attempt["token"]))
+    assert result.status_code == 403, result.text
+    assert_no_page(api)
 
 
 def test_publishing_after_reading_ten_context_pages_does_not_fail_its_own_read_flush(api):

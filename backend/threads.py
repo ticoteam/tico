@@ -467,6 +467,9 @@ def denial(c, v, row):
     row = thread_row(c, row)
     if row is None:
         return _MISSING
+    from . import turn_scope
+    if not turn_scope.private_context_allowed(c, v.who):
+        return _MISSING
     if v.is_person and not v.in_good_standing(c):
         return _MISSING
     from .live_privacy import sources
@@ -742,6 +745,9 @@ def readable_before_deletion(c, v, message):
 def message_readable(c, v, message, *, thread_checked=False):
     v = viewer(None, v) if not isinstance(v, Viewer) else v
     message = dict(message)
+    from . import turn_scope
+    if not turn_scope.private_context_allowed(c, v.who, message=message.get("id")):
+        return False
     if message.get("deleted_at"):
         return False
     if not thread_checked and not thread_readable(c, v, message["conversation_id"]):
@@ -1957,6 +1963,7 @@ def post(c, principal, thread_id, body, *, kind="say", refs=None, parent_message
 
     `reach`: the post is a bot's own write through the API, so whoever it reaches must be in the bot's reach
     (backend/reach.py check_post); a run's reply to what woke it, and a held post a person sends anyway, are not."""
+    H.check_message_refs(refs)
     thread = thread_row(c, thread_id) if thread_id else start
     on_task = H.message_task_id({"refs": refs}, thread)
     with H.refusal_task(on_task):

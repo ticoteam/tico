@@ -7766,7 +7766,7 @@ AUDIENCE = {
 def kind_of(me):
     """The caller's kind from what the server says about it (`GET /me`: `kind`); for a server that does not say yet, from
     its role and actor."""
-    if me.get("kind") in KINDS:
+    if me.get("kind") in (*KINDS, "make_page"):
         return me["kind"]
     role, actor = me.get("role"), str(me.get("actor") or "")
     if role == "owner":
@@ -7786,6 +7786,9 @@ COUNSEL = "counsel"                 # its kind of caller, the role offered_to na
 COUNSEL_BOT = "tico-counsel"        # its slug (backend/hubdb.py COUNSEL)
 COUNSEL_TOOLS = frozenset({"hub_rules_list", "hub_rules_get", "hub_rules_add", "hub_file_read", "hub_task_comment",
                            "hub_task_close"})
+
+# Make page receives its task and request in the prompt; every further source passes the task scope checks.
+MAKE_PAGE_TOOLS = frozenset({"hub_task_context", "hub_file_read", "hub_meeting_read", "hub_page_show", "hub_page_publish"})
 
 
 # The tools whose route the Assistant's own turn may never make (backend/assistant.py `NEVER`): a credential, a key, a
@@ -7838,7 +7841,9 @@ def offered_to(tool_):
         kinds = tuple(k for k in kinds if k != "assistant")
     elif name in ASSISTANT_TOOLS and "assistant" not in kinds:
         kinds = (*kinds, "assistant")
-    return (*kinds, COUNSEL) if name in COUNSEL_TOOLS else kinds
+    if name in COUNSEL_TOOLS:
+        kinds = (*kinds, COUNSEL)
+    return (*kinds, "make_page") if name in MAKE_PAGE_TOOLS else kinds
 
 
 def listing(local=False, kind=None):

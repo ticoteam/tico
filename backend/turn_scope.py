@@ -355,6 +355,33 @@ def record(c, who, kind, ref):
         pending[(scoped.attempt_id, kind, ref)] = who
 
 
+def private_context_allowed(c, who, *, message=None):
+    """Make page has only its initiating message, never a person's conversations or learned layers."""
+    aid = getattr(who, "attempt_id", "")
+    if not aid:
+        return True
+    row = read_cache.one(c, "SELECT m.id,m.refs FROM attempts a JOIN jobs j ON j.id=a.job_id "
+                           "JOIN messages m ON m.id=j.message_id WHERE a.id=?", (aid,))
+    refs = H._json(row["refs"], {}) if row else {}
+    return not (isinstance(refs, dict) and "make_page" in refs) or bool(message and row["id"] == message)
+
+
+def require_private_context(c, who):
+    if not private_context_allowed(c, who):
+        raise Problem("not_found", "Context not found", 404)
+
+
+def require_read_route(c, who, method, path):
+    """Make page reads only the shared source APIs; new private read surfaces fail closed."""
+    scoped = scope(c, who)
+    if not scoped or not scoped.make_page or method not in ("GET", "HEAD"):
+        return
+    if (path == "/api/v2/me" or re.fullmatch(r"/api/v2/(?:files|pages|meetings)(?:/.*)?", path)
+            or re.fullmatch(r"/api/v2/tasks/[^/]+/context", path) or path.startswith("/api/meetings/")):
+        return
+    raise Problem("not_found", "Context not found", 404)
+
+
 def require_meeting(c, who, row, auth=None):
     if scope(c, who) is None:
         return

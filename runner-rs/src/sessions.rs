@@ -220,6 +220,9 @@ pub fn shared_lines(bot: &str, config: &Value, problem: &str) -> Vec<String> {
 /// prompt.rs hook after the opening lines: the shared-checkout lines first, the task checkout's line last. A sync
 /// problem is this turn's own; the rest stands for the thread.
 pub fn prompt_head(attempt: &Value, lines: &mut Vec<(Part, String)>) {
+    if attempt["make_page"]["task"].is_object() {
+        return;
+    }
     let config = &attempt["config"];
     let problem = text_of(&attempt["branch_sync_problem"]);
     if is_shared(config) {
@@ -1016,6 +1019,28 @@ pub struct Place {
     person: bool,
     _lane: OwnedMutexGuard<()>,
     checkout: Option<OwnedMutexGuard<()>>,
+    _scratch: Option<MakePageScratch>,
+}
+
+/// Outside every checkout and scan root; all outcomes, including a canceled future, discard the turn's files.
+pub(crate) struct MakePageScratch(pub PathBuf);
+
+impl MakePageScratch {
+    pub(crate) fn new(attempt: &str) -> Result<Self, String> {
+        let scratch = Self(std::env::temp_dir().join(format!("tico-make-page-{}", uuid::Uuid::new_v4().simple())));
+        std::fs::create_dir(&scratch.0).map_err(|e| format!("cannot create Make page scratch directory: {e}"))?;
+        std::fs::write(scratch.0.join(crate::files_publish::MAKE_PAGE_ORIGIN), attempt)
+            .map_err(|e| format!("cannot record Make page scratch origin: {e}"))?;
+        Ok(scratch)
+    }
+}
+
+impl Drop for MakePageScratch {
+    fn drop(&mut self) {
+        if let Err(e) = std::fs::remove_dir_all(&self.0) {
+            log(&format!("Tico runner: cannot remove Make page scratch directory {}: {e}", self.0.display()));
+        }
+    }
 }
 
 impl Place {
@@ -1030,27 +1055,29 @@ impl Runner {
         let bot = text_of(&attempt["bot"]);
         let lane = turn_lane(attempt);
         let app = crate::appdriver::delivery(&attempt["config"]).is_some();
-        let private = lane.starts_with(PRIVATE_LANE);
+        let make_page = attempt["make_page"]["task"].is_object();
+        let private = lane.starts_with(PRIVATE_LANE) || make_page;
         // A bot delivered through an app has no checkout: every turn runs in its empty folder, with no worktree.
-        let task = if !slug_ok(&bot) || app { String::new() } else if private { private_of(&lane) } else { task_of(&lane) };
-        if private && !app && task.is_empty() {
+        let task = if !slug_ok(&bot) || app || make_page { String::new() } else if private { private_of(&lane) } else { task_of(&lane) };
+        if private && !app && !make_page && task.is_empty() {
             return Err(format!("this private meeting's lane ({lane}) names no checkout this computer can keep for it"));
         }
         let person = crate::drive::from_person(&attempt["message"]);
         let lane_guard = hold(self.lanes.lane(&bot, &lane), lost).await?;
         // A task turn skips its refresh of the checkout while a person waits for it.
-        let checkout = if app {
+        let checkout = if app || make_page {
             None
         } else if task.is_empty() {
             Some(self.lanes.hold_checkout(&bot, person, lost).await?)
         } else {
             self.lanes.try_checkout(&bot)
         };
-        let main_path = local_path(&self.config, &bot, &attempt["config"]);
+        let scratch = if make_page { Some(MakePageScratch::new(&text_of(&attempt["id"]))?) } else { None };
+        let main_path = scratch.as_ref().map_or_else(|| local_path(&self.config, &bot, &attempt["config"]), |s| s.0.clone());
         if app {
             std::fs::create_dir_all(&main_path).map_err(|e| format!("cannot create {}: {e}", main_path.display()))?;
         }
-        Ok(Place { bot, task, execution_path: main_path.clone(), main_path, session_path: None, add_dirs: vec![], rules_digest: String::new(), private, person, _lane: lane_guard, checkout })
+        Ok(Place { bot, task, execution_path: main_path.clone(), main_path, session_path: None, add_dirs: vec![], rules_digest: String::new(), private, person, _lane: lane_guard, checkout, _scratch: scratch })
     }
 
     /// Bring the checkout up to date before the turn: a shared one is rebased (its problem goes to the prompt),
@@ -1085,6 +1112,9 @@ impl Runner {
     /// A task lane's own worktree (else the main checkout, waited for), and the task's set-up worktrees and their
     /// repos' rules. Returns the conversation key's suffix: a worktree keeps threads of its own.
     pub async fn place_turn(&self, place: &mut Place, attempt: &mut Value, env: &Env, lost: &AtomicBool) -> Result<&'static str, String> {
+        if place._scratch.is_some() {
+            return Ok("");
+        }
         let mut suffix = "";
         if !place.task.is_empty() {
             let session = path_for(&self.config.projects_dir(), &place.bot, &place.task);

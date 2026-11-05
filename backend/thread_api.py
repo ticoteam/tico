@@ -517,6 +517,7 @@ def install(app, store, auth, mutate, rule_check):
         org-rule check first, outside the write; a held one writes nothing but its hold."""
         who = request.state.identity
         # A room that moved is checked and written as its Home (bot_home_merge.named_home), named before the check.
+        H.check_message_refs(body.refs)
         thread_id = bot_home_merge.named_home(store, thread_id)
         _delivery_words(body)
         rc = check(who, thread_id, body)
