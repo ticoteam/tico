@@ -976,6 +976,8 @@ class Manager:
                     latest[machine["key"]] = machine
             for key, machine in latest.items():
                 current = mine.get(key)
+                if current and current["problem"] == "replacing" and (current["stop_until"] or 0) > now():
+                    continue                                # an HQ list cannot release a replacement's claim fence
                 if current and current["state"] == "deleted" and current["machine_id"] == machine["id"]:
                     continue                                # deleted here: live at HQ only until boat confirms
                 if current and (current["machine_id"] in (None, machine["id"]) or (

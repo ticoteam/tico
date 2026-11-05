@@ -1024,6 +1024,7 @@ def test_replace_holds_new_claims_and_failed_hq_delete_leaves_the_machine_usable
     answers = []
 
     def refused(machine_id):
+        cloud.manager.sync(cloud.hq, cloud.at[0])
         answers.append(claim_on(cloud, computer, "ops"))
         cloud.manager.step(cloud.hq, "ops", cloud.at[0])  # the manager cannot start or stop a reserved machine
         assert leased(cloud, computer["runner_id"]) == []
