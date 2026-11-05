@@ -59,6 +59,9 @@ def unchanged(request, response):
 
 
 async def compress(request, response):
+    # Projection consumes the uncompressed body in request_guard; tags must describe the projected bytes too.
+    if getattr(request.state, "scoped_response", False):
+        return response
     response = unchanged(request, response)
     # Behind Cloudflare (cf-ray) the edge compresses for the browser; doing it here too only spends this server's CPU.
     if (not isinstance(response, JSONResponse) or request.method == "HEAD" or "cf-ray" in request.headers

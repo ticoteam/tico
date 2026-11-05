@@ -5,6 +5,9 @@ Publishing can recheck that log in its own transaction, without trusting the run
 """
 from contextvars import ContextVar
 from dataclasses import dataclass, replace
+import json
+import re
+from urllib.parse import unquote
 
 from . import read_cache, task_privacy as privacy, task_rights
 from .auth import Identity
@@ -21,6 +24,7 @@ class Scope:
     tasks: frozenset[str]
     make_page: bool = False
     task: str = ""
+    who: Identity | None = None
 
 
 def scope(c, who):
@@ -39,14 +43,150 @@ def scope(c, who):
             task = target.get("task") if isinstance(target, dict) else None
             tasks = privacy.attempt_tasks(c, who.attempt_id)
             valid = isinstance(task, str) and task in tasks
-            return Scope(who.attempt_id, frozenset(tasks) if valid else frozenset(), True, task if valid else "")
+            return Scope(who.attempt_id, frozenset(tasks) if valid else frozenset(), True, task if valid else "", who)
         if who.role == "bot" or who.task_actor and who.via != "assistant":
             tasks = privacy.attempt_tasks(c, who.attempt_id)
             if tasks:
-                return Scope(who.attempt_id, frozenset(tasks))
+                return Scope(who.attempt_id, frozenset(tasks), who=who)
         return None
 
     return read_cache.value(c, ("turn_scope", who.attempt_id, who.role, who.via), build, shared=True)
+
+
+def project(c, scoped, payload, *, auth=None):
+    """Remove source references at the delivery boundary, including stored JSON and runner wire copies.
+
+    Reference discovery is independent of field names: ids in URLs, compact file@version references,
+    nested reviews and SQL JSON cells all resolve against the same snapshot. Only candidate ids are
+    looked up, in batches; ordinary prose does not cause a database query per word. Removed reference
+    objects disappear with their metadata, rather than leaving a title or a placeholder behind.
+    """
+    if scoped is None:
+        return payload
+    auth = auth or AUTH.get()
+    if auth is None or scoped.who is None:
+        raise Problem("privacy", "Source projection requires a scoped principal", 403)
+    from . import context_search
+    from .files import file_visible, prime_visible
+
+    tokens = re.compile(r"[A-Za-z0-9_-]+")
+    parsed, names = {}, set()
+
+    def strings(value):
+        if isinstance(value, str):
+            if value.lstrip()[:1] in ("{", "["):
+                try:
+                    decoded = json.loads(value)
+                except ValueError:
+                    pass
+                else:
+                    if isinstance(decoded, (dict, list)):
+                        parsed[value] = decoded
+                        strings(decoded)
+                        return
+            names.update(tokens.findall(unquote(value)))
+        elif isinstance(value, dict):
+            for key, item in value.items():
+                strings(key)
+                strings(item)
+        elif isinstance(value, (list, tuple)):
+            for item in value:
+                strings(item)
+    strings(payload)
+    denied, files, blob_rows, meeting_ids = set(), {}, {}, set()
+    # Blob digests have their own index. Version source digests may differ from stored bytes.
+    digests = {s for s in names if re.fullmatch(r"[0-9a-fA-F]{64}", s)}
+    for chunk in H.chunks(sorted(names)):
+        marks = ",".join("?" * len(chunk))
+        files.update((r["id"], r) for r in c.execute(f"SELECT * FROM bot_files WHERE id IN ({marks})", chunk))
+        blob_rows.update((r["id"], r) for r in c.execute(f"SELECT id,digest FROM blobs WHERE id IN ({marks})", chunk))
+        meeting_ids.update(r[0] for r in c.execute(f"SELECT id FROM meetings WHERE id IN ({marks})", chunk))
+    versions = []
+    for chunk in H.chunks(sorted(digests)):
+        marks = ",".join("?" * len(chunk))
+        blob_rows.update((r["id"], r) for r in c.execute(f"SELECT id,digest FROM blobs WHERE digest IN ({marks})", chunk))
+        versions.extend(c.execute(f"SELECT file_id,digest,source_digest FROM bot_file_versions "
+                                  f"WHERE digest IN ({marks}) OR source_digest IN ({marks})", (*chunk, *chunk)))
+    for chunk in H.chunks(sorted({v["file_id"] for v in versions} - files.keys())):
+        marks = ",".join("?" * len(chunk))
+        files.update((r["id"], r) for r in c.execute(f"SELECT * FROM bot_files WHERE id IN ({marks})", chunk))
+    prime_visible(c, list(files.values()))
+    visible = {fid: not row["archived"] and file_visible(c, auth, scoped.who, row, {}) for fid, row in files.items()}
+    denied.update(fid for fid, ok in visible.items() if not ok)
+    # A digest alone needs an independently readable source; another private alias cannot grant it.
+    digest_access = {}
+    for bid, row in blob_rows.items():
+        ok = blob_allowed(c, auth, scoped.who, bid) is True
+        if not ok:
+            denied.add(bid)
+        digest_access[row["digest"]] = digest_access.get(row["digest"], False) or ok
+    for row in versions:
+        for key in ("digest", "source_digest"):
+            digest = row[key]
+            if digest:
+                digest_access[digest] = digest_access.get(digest, False) or visible.get(row["file_id"], False)
+    denied.update(digest for digest, ok in digest_access.items() if not ok)
+    for mid in meeting_ids:
+        try:
+            context_search.readable(c, scoped.who, mid, auth=auth)
+        except Problem as exc:
+            if exc.status not in (403, 404):
+                raise
+            denied.add(mid)
+    # Missing structured file ids must not leave stale attachment metadata behind either.
+    denied.update(s for s in names if re.fullmatch(r"file-[0-9a-f]{24}", s) and s not in visible)
+    gone = object()
+
+    def rejected(value):
+        return isinstance(value, str) and value not in parsed and bool(denied.intersection(tokens.findall(unquote(value))))
+
+    def walk(value, parent=""):
+        if isinstance(value, str):
+            if value in parsed:
+                shown = walk(parsed[value])
+                return gone if shown is gone else json.dumps(shown, ensure_ascii=False, separators=(",", ":"))
+            return gone if rejected(value) else value
+        if isinstance(value, dict):
+            # These fields identify a reference object; its siblings describe that same source.
+            identity = {"id", "file_id", "blob_id", "page_id", "meeting_id", "file", "ref", "digest", "source_digest", "item"}
+            if any(rejected(item) for key, item in value.items() if key in identity):
+                return gone
+            if (any(rejected(item) for key, item in value.items() if key in {"page", "meeting", "url", "href", "src"})
+                    and {"title", "name", "version"}.intersection(value)):
+                return gone
+            out = {}
+            for key, item in value.items():
+                if rejected(key):
+                    continue
+                shown = walk(item, key)
+                if (shown is gone and key in {"file", "page", "meeting"}
+                        and {"title", "label", "name", "version"}.intersection(value)):
+                    return gone
+                if shown is not gone:
+                    out[key] = shown
+            return out
+        if isinstance(value, (list, tuple)):
+            out = []
+            for item in value:
+                # SQL positional rows carry metadata beside their source id.
+                if parent == "rows" and isinstance(item, (list, tuple)) and any(rejected(cell) for cell in item):
+                    continue
+                shown = walk(item, parent)
+                if shown is not gone:
+                    out.append(shown)
+            return out
+        return value
+    result = walk(payload)
+    return None if result is gone else result
+
+
+def project_attempt(c, auth, aid, payload):
+    """Runner credentials deliver inputs for a turn; the turn's effective identity fences those inputs."""
+    attempt = read_cache.one(c, "SELECT * FROM attempts WHERE id=?", (aid,))
+    if not attempt:
+        raise Problem("not_found", "Execution not found", 404)
+    who = auth.assistant_principal(c, attempt) or Identity("bot:" + attempt["bot_id"], "bot", attempt_id=aid)
+    return project(c, scope(c, who), payload, auth=auth)
 
 
 def tasks(c, auth, who, scoped):

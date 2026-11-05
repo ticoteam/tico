@@ -687,6 +687,41 @@ def create_app(settings=None):
                 "asking\u201d. Propose it with `hub assistant propose` (or POST /api/v2/assistant/actions) and the person "
                 "confirms a card in " + settings.app_name + ".")
 
+    async def project_response(request, response):
+        """The scoped delivery boundary also covers legacy routes, MCP envelopes and error bodies."""
+        from . import turn_scope
+        who = getattr(request.state, "privacy_source", None) or getattr(request.state, "identity", None)
+        if not who or not who.attempt_id:
+            return response
+
+        def current_scope():
+            with store.read() as c:
+                return turn_scope.scope(c, who)
+        scoped = await asyncio.to_thread(current_scope)
+        if scoped is None:
+            return response
+        kind = response.headers.get("content-type", "").split(";", 1)[0]
+        if kind == "text/event-stream":
+            raise Problem("forbidden", "Scoped turns do not receive live events", 403)
+        if (kind != "application/json" and not kind.endswith("+json")
+                or request.method == "HEAD" or response.status_code in (204, 304)
+                or "content-disposition" in response.headers or "x-content-sha256" in response.headers):
+            return response
+        body = getattr(response, "body", None)
+        if body is None:
+            body = b"".join([part async for part in response.body_iterator])
+
+        def work():
+            with store.read() as c:
+                return fast_json.dumps(turn_scope.project(c, turn_scope.scope(c, who), fast_json.loads(body), auth=auth))
+        projected = await asyncio.to_thread(work)
+        headers = {k: v for k, v in response.headers.items() if k not in ("content-length", "etag")}
+        answer = Response(projected, status_code=response.status_code, headers=headers, background=response.background)
+        # Preserve repeated headers such as Set-Cookie.
+        answer.raw_headers = [(k, v) for k, v in response.raw_headers if k not in (b"content-length", b"etag")]
+        answer.headers["Content-Length"] = str(len(projected))
+        return answer
+
     @app.middleware("http")
     async def request_guard(request, call_next):
         from . import turn_scope
@@ -965,6 +1000,15 @@ def create_app(settings=None):
             caller = getattr(request.state, "identity", None)
             if caller:
                 request.state.privacy_source = caller
+            if caller and caller.attempt_id:
+                def scoped_request():
+                    with store.read() as c:
+                        return turn_scope.scope(c, caller) is not None
+                request.state.scoped_response = await asyncio.to_thread(scoped_request)
+                # No attempt consumer uses SSE. The runner's work stream has a runner identity.
+                if request.state.scoped_response and (request.url.path == "/api/v2/events"
+                                                       or request.url.path.endswith("/events") and request.method == "GET"):
+                    raise Problem("forbidden", "Scoped turns do not receive live events", 403)
             if caller and request.method not in ("GET", "HEAD", "OPTIONS"):
                 # A bot caller walks its run's provenance here: in a thread, so the event loop keeps serving.
                 def guard():
@@ -1006,6 +1050,7 @@ def create_app(settings=None):
                         # act from the app would (backend/wake_rules.py ALWAYS_WAKE "person", wake presets).
                         wake_rules.CAUSE.set(lent)
             response = early or await call_next(request)
+            response = await project_response(request, response)
             if response.status_code < 400 and pending_reads:
                 turn_scope.READS.set(None)
                 await asyncio.to_thread(turn_scope.flush, store, auth, pending_reads)
@@ -1079,7 +1124,7 @@ def create_app(settings=None):
                     and not path.startswith(("/api", "/mcp")) and "authorization" not in request.headers
                     and "text/html" in request.headers.get("accept", "")):
                 return RedirectResponse(owner_link.LINK_PATH, status_code=302)
-            response = await problem_handler(request, exc)
+            response = await project_response(request, await problem_handler(request, exc))
             if exc.status == 401 and path == mcp_oauth.MCP_PATH:
                 # Where an agent with no token can sign in (backend/mcp_oauth.py, RFC 9728).
                 response.headers["WWW-Authenticate"] = mcp_oauth.challenge_header(settings)

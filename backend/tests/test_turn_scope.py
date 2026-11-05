@@ -222,6 +222,18 @@ def test_context_is_bounded_metadata_and_claims_include_it(api):
     ready(api, machine, ["ops"])
     attempt = claim(api, machine, "ops")
     assert attempt["task_context"] == result
+    # Measure the complete delivery projector on a typical full (10 + 10) context claim, on RunsOn.
+    import time
+    elapsed = []
+    for _ in range(5):
+        with api.app.state.store.read() as c:
+            who = Identity("bot:ops", "bot", attempt_id=attempt["id"])
+            started = time.perf_counter()
+            projected = turn_scope.project(c, turn_scope.scope(c, who), {"attempt": attempt}, auth=api.app.state.auth)
+            elapsed.append((time.perf_counter() - started) * 1000)
+            assert projected == {"attempt": attempt}
+    print(f"project full claim: {len(json.dumps(attempt))} bytes, 10 pages + 10 meetings, "
+          f"median {sorted(elapsed)[2]:.2f} ms, range {min(elapsed):.2f}-{max(elapsed):.2f} ms")
     with api.app.state.store.transaction() as c:
         restrict(c, "ops", people=["ana"])
     get(api, "tasks/" + t["id"] + "/context", "cara-test", expected=404)
