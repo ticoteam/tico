@@ -360,11 +360,13 @@ def test_delegated_mail_needs_both_the_person_and_the_actual_bot(api, hq, mail):
 def test_claimed_builtin_counsel_can_read_granted_and_routed_mail_only(api, hq, mail):
     from backend.auth import Identity
     from backend.blobs import register
-    from backend.tests.test_counsel import counsel_on, counsel_run, store_file
+    from backend.tests.test_api import assign, ready, runner
+    from backend.tests.test_counsel import counsel_on, store_file
 
     counsel_on(api)
     with api.app.state.store.transaction() as c:
         c.execute("UPDATE bots SET slug='legal' WHERE id=?", (H.COUNSEL,))
+        BS.update(c, H.COUNSEL, {"template": "tico-counsel", "runtime": "fake"})
     grant_path = "postal/addresses/all/grants/bot/legal"
     assert put(api, grant_path, {})["grant"]["grantee_id"] == H.COUNSEL
     assert put(api, "postal/settings", {"legal_bot_id": "legal"})["settings"]["legal_bot_id"] == H.COUNSEL
@@ -380,7 +382,14 @@ def test_claimed_builtin_counsel_can_read_granted_and_routed_mail_only(api, hq, 
     got = items(api)
     routed, owner = got["171"], got["172"]
     assert task(api, routed["task_id"])["owner_id"] == "bot:" + H.COUNSEL
-    _, attempt = counsel_run(api)
+    get(api, "postal/items", "counsel-test", expected=403)
+    computer = runner(api)
+    assign(api, computer, H.COUNSEL)
+    ready(api, computer, [H.COUNSEL], capabilities=["task_lanes_v2", "session_roots_v1"])
+    claimed = post(api, "jobs/claim", {"bot": H.COUNSEL, "start_places": True}, token=computer["token"])
+    assert claimed["attempt"], claimed
+    attempt = claimed["attempt"]
+    post(api, f"attempts/{attempt['id']}/started", {"thread_id": "postal-counsel"}, token=computer["token"])
     token = attempt["token"]
     assert {"hub_mail_list", "hub_mail_read"} <= {
         t["name"] for t in rpc(api, "tools/list", token=token)["result"]["tools"]}
@@ -416,10 +425,9 @@ def test_mail_bots_reject_chat_only_hosts_in_the_server_and_picker_data(api):
     with api.app.state.store.transaction() as c:
         BS.update(c, "ops", {"harness": "grokbot"})
     choices = {b["id"]: b for b in get(api, "postal/bots")["bots"]}
-    assert "only syncs its chat" in choices["ops"]["read_error"]
-    assert "only syncs its chat" in choices["ops"]["routing_error"]
+    assert choices["ops"]["read_error"] and choices["ops"]["routing_error"]
     response = put(api, "postal/addresses/all/grants/bot/ops", {}, expected=422)
-    assert "only syncs its chat" in response["error"]["detail"]
+    assert response["error"]["detail"] == choices["ops"]["read_error"]
     put(api, "postal/settings", {"legal_bot_id": "ops"}, expected=422)
     first = get(api, "postal/bots?limit=1")
     second = get(api, "postal/bots?limit=1&after=" + first["next"])

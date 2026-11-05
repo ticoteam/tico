@@ -767,6 +767,7 @@ def scan_granted(c, actor, blob_id):
 
 def access(c, auth, who, row):
     """A delegated read must independently qualify as both the represented person and the actual bot."""
+    auth.task_snapshot(c)
     other = getattr(who, "task_actor", "")
     if not other or other == who.actor:
         return _access(c, auth, who, row)
@@ -803,6 +804,7 @@ def _access(c, auth, who, row):
 def scan_access(c, auth, who, blob_id):
     """For the file download (media.blob_for): None when the blob is no letter's scan, else whether `who` may open it
     under `access`."""
+    auth.task_snapshot(c)
     rows = read_cache.rows(c, SCANS_SQL, (blob_id,))
     if not rows:
         return None

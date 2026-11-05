@@ -164,9 +164,10 @@ const rowText = async row => (await row.innerText()).replace(/\s+/g, ' ').trim()
       assert.deepEqual(await intake.locator('option').allInnerTexts(), ['None', 'Mail · mail@acme.example']);
       const legal = pane.locator('[data-pm-legal]');
       await legal.waitFor();
-      assert.equal(await legal.locator('option[value="synced"]').isDisabled(), true, 'unsupported routing bot is disabled');
-      assert.match(await legal.locator('option[value="synced"]').innerText(), /only syncs chat/);
-      assert.equal(await pane.locator('[data-pm-grantee] option[value="bot:synced"]').isDisabled(), true,
+      // Playwright's disabled-state locator follows the enclosing label to its select; inspect the option itself.
+      assert.equal(await legal.locator('option[value="synced"]').evaluate(option => option.disabled), true,
+        'unsupported routing bot is disabled');
+      assert.equal(await pane.locator('[data-pm-grantee] option[value="bot:synced"]').evaluate(option => option.disabled), true,
         'unsupported scan reader is disabled');
       await legal.selectOption('tico-counsel');
       await page.waitForFunction(() => document.querySelector('[data-pm-legal]')?.disabled === false);

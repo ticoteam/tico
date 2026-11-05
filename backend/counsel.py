@@ -454,7 +454,12 @@ def postal_scan(c, auth, who, ident, rest, query):
     from . import postal_mail
     file = c.execute("SELECT current_version FROM bot_files WHERE id=?", (ident,)).fetchone()
     if file:
-        number = _version(rest[1]) if rest else _version(query.get("v")) if query.get("v") else file[0]
+        if rest:
+            number = _version(rest[1])
+        elif query.get("v"):
+            number = _version(query["v"])
+        else:
+            number = file[0] if F.is_file_id(ident) else 1
         version = c.execute("SELECT blob_id FROM bot_file_versions WHERE file_id=? AND version=?",
                             (ident, number)).fetchone()
         ident = version[0] if version else ""
