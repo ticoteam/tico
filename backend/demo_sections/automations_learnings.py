@@ -132,7 +132,7 @@ CONTENT = {
              "owner": "release-notes"}}]},
     ],
     # Events the company's systems report, in any order: the seed plays them oldest first. `at` is [days ago, hours before
-    # that]. Unfinished bot work comes from the last day.
+    # that].
     "events": [
         {"at": [6, 6.0], "name": "custom.calibration.failed", "subject": "unit/U-1042", "actor": "bot:support-qa",
          "data": {"unit": "U-1042", "attempt": 1}, "close": "calibration"},
@@ -171,8 +171,9 @@ CONTENT = {
          "data": {"stars": 4, "product": "Home Pro", "text": "Good, but set-up took a while."}},
         {"at": [2, 10.0], "name": "custom.review.posted", "subject": "review/R-2230", "actor": "bot:marketplace",
          "data": {"stars": 5, "product": "Home Pro", "text": "Easy to calibrate."}},
-        {"at": [0, 16.0], "name": "custom.review.posted", "subject": "review/R-2233", "actor": "bot:marketplace",
-         "data": {"stars": 1, "product": "Storefront", "text": "Unit stopped at dusk on the second night."}},
+        {"at": [2, 16.0], "name": "custom.review.posted", "subject": "review/R-2233", "actor": "bot:marketplace",
+         "data": {"stars": 1, "product": "Storefront", "text": "Unit stopped at dusk on the second night."},
+         "close": "reviews"},
         {"at": [0, 0.9], "name": "custom.review.posted", "subject": "review/R-2240", "actor": "bot:marketplace",
          "data": {"stars": 3, "product": "Home Pro", "text": "Fine for the price."}},
         {"at": [4, 11.0], "name": "finance.card.declined", "subject": "charge/C-7781", "actor": "bot:bookkeeper",
@@ -187,7 +188,7 @@ CONTENT = {
          "data": {"version": "cloud 1.8.1"}, "close": "deploys"},
         {"at": [6, 15.0], "name": "custom.deploy.finished", "subject": "deploy/app-3.1.0", "actor": "bot:devops",
          "data": {"version": "app 3.1.0"}, "close": "deploys"},
-        {"at": [0, 15.0], "name": "custom.deploy.finished", "subject": "deploy/cloud-1.8.2", "actor": "bot:devops",
+        {"at": [0, 1.5], "name": "custom.deploy.finished", "subject": "deploy/cloud-1.8.2", "actor": "bot:devops",
          "data": {"version": "cloud 1.8.2"}},
     ],
     # Mail to Ben's inbox. Orders come from the marketplace; the rest are questions the filter drops.
