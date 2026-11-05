@@ -107,6 +107,7 @@ async function lettersOutDetail(host, id, ctx) {
   if (!ctx.live()) return;
   const [status, statusText] = lettersOutStatus(config), grants = grantData.grants || [];
   const rows = new Map((activity.items || []).map(row => [row.id, row])); let next = activity.next_before;
+  let refreshing = null, epoch = 0;
   host.innerHTML = inboxesHead(host, {name: 'Letters out', status, statusText, sub: 'Tico Gateway · At cost + 25%',
     actions: '<a class="ghost" href="#/settings/inboxes/settings/letters-out">Settings</a>'}) +
     '<div class="lo-layout"><div><div data-lo-access></div>' +
@@ -121,6 +122,25 @@ async function lettersOutDetail(host, id, ctx) {
     host.querySelector('[data-lo-more]').hidden = !next;
   };
   paint();
+  const apply = event => {
+    if (event.gone) rows.delete(event.id);
+    else if (event.letter) {
+      if (!rows.has(event.id)) { const old = [...rows]; rows.clear(); rows.set(event.id, event.letter); for (const [key, value] of old) rows.set(key, value); }
+      else rows.set(event.id, event.letter);
+    }
+  };
+  const invalidate = () => {
+    if (refreshing) return;
+    const pending = new Map(); refreshing = pending; epoch++;
+    // Hide revoked content while the one bounded invalidation read is in flight.
+    rows.clear(); next = null; paint();
+    get('/v2/letters?limit=25', {fresh: true}).then(page => {
+      if (!ctx.live()) return;
+      rows.clear(); for (const row of page.items || []) rows.set(row.id, row);
+      for (const event of pending.values()) apply(event);
+      next = page.next_before; paint();
+    }).catch(e => { if (ctx.live()) toast(e.message, true); }).finally(() => { refreshing = null; });
+  };
   host.querySelector('[data-lo-activity]').onclick = async event => {
     const button = event.target.closest('[data-lo-cancel]'); if (!button) return; button.disabled = true;
     try { const row = await post(`/v2/letters/${encodeURIComponent(button.dataset.loCancel)}/cancel`, {});
@@ -129,15 +149,18 @@ async function lettersOutDetail(host, id, ctx) {
   };
   host.querySelector('[data-lo-more]').onclick = async event => {
     const button = event.currentTarget; button.disabled = true;
-    try { const more = await get(`/v2/letters?limit=25&before=${encodeURIComponent(next)}`, {fresh: true}); if (!ctx.live()) return;
+    const started = epoch;
+    try { const more = await get(`/v2/letters?limit=25&before=${encodeURIComponent(next)}`, {fresh: true}); if (!ctx.live() || started !== epoch) return;
       for (const row of more.items || []) rows.set(row.id, row); next = more.next_before; paint(); }
     catch (e) { if (ctx.live()) toast(e.message, true); }
     finally { if (ctx.live()) button.disabled = false; }
   };
   LETTERS_OUT_LIVE = liveOn('letters', event => {
     if (!ctx.live()) { LETTERS_OUT_LIVE?.(); LETTERS_OUT_LIVE = null; return; }
-    if (event.letter) { if (!rows.has(event.id)) { const old = [...rows]; rows.clear(); rows.set(event.id, event.letter); for (const [key, value] of old) rows.set(key, value); }
-      else rows.set(event.id, event.letter); paint(); }
+    if (event.invalidate) { invalidate(); return; }
+    if (event.gone || event.letter) {
+      refreshing?.set(event.id, event); apply(event); paint();
+    }
   });
   await lettersOutAccess(host.querySelector('[data-lo-access]'), ctx, config, grants);
   if (!ctx.live()) return;
