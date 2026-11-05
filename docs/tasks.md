@@ -1266,10 +1266,12 @@ notices, notes and replies go there, and the thread it was filed from gets one q
 (`refs.task_started`), written into that thread's history only: task news reaches no person's Inbox or digest. A bot's
 say or notice in its task's thread reaches a person only when it @-mentions them. To get someone's attention on a task,
 the bot @-mentions them; otherwise the comment stays on the task, with no Inbox row, digest or push. A bot's ask in its
-task's thread goes to the person or bot it names. With no name, the owner bot's ask goes to the requester,
-and the requester's or a manager's ask goes to the owner. When the recipient is a person, that person's
-**Needs you** lists the task, with no Inbox row, digest or push unless the asking bot @-mentions them. When
-the recipient is a bot, the ask goes to that bot on the task, and no person's **Needs you** lists it. A bot's
+task's thread goes to the person or bot it names. With no name, the requester's or a manager's ask goes to the
+owner, and anyone else's ask, the owner's included, goes to the requester. A named recipient on a private task must
+be able to read it (its parties, the managers of a bot party, and its one guest), or the ask is refused. When the
+recipient is a person, that person's **Needs you** lists the task, with no Inbox row, digest or push unless the asking bot @-mentions
+them. When the recipient is a bot, the ask goes to that bot on the task and adds nothing to a person's
+**Needs you**; a task already waiting on a person stays on that person's list for its wait. A bot's
 open task filed into a thread before this moves to a thread of its own the next time a turn on it is claimed;
 its earlier messages stay in the thread, and the new thread opens with a line saying so. A person's own tasks,
 and the Assistant's (whose turns act for the person of the thread), keep their thread.
