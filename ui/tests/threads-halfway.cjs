@@ -55,7 +55,7 @@ async function open(browser, {phone = false, twin = false} = {}) {
   const page = await browser.newPage({viewport: phone ? {width: 390, height: 844} : {width: 1280, height: 800}, serviceWorkers: 'block', reducedMotion: 'reduce',
     ...(phone ? {isMobile: true, hasTouch: true} : {})});
   const seen = {errors: [], posts: [], stops: [], timelines: [], reacts: []};
-  const sse = {queue: [], seq: 0, latest: null, done: false}, state = {archived: false};
+  const sse = {queue: [], seq: 0, latest: null, done: false}, state = {archived: false, needs: []};
   page.on('pageerror', e => seen.errors.push(e.message));
   // A closed page's waiting stream ends, so node can exit.
   page.on('close', () => { sse.done = true; });
@@ -91,6 +91,7 @@ async function open(browser, {phone = false, twin = false} = {}) {
     if (p === '/api/v2/threads/dm') return json(state.archived ? {thread: null} : dmThread);
     if (p === '/api/v2/threads/t-dm-ops' && method === 'PATCH') { state.archived = true; return json({...dmThread, archived_at: at(0)}); }
     if (p === '/api/v2/threads/catch-up') return json({items: [{thread: noteThread, new_count: 1, mention: false, messages: noteMessages(), more: 0}], count: 1, next_cursor: null});
+    if (p === '/api/v2/needs-you') return json({items: state.needs, count: state.needs.length});
     if (p === '/api/v2/messages/kfar') return json({error: 'not_found'}, 404);
     if (p === '/api/v2/threads/home/' + encodeURIComponent('bot:ops') || p === '/api/v2/threads/home/bot:ops') return json({error: 'not_found'}, 404);
     const tl = p.match(/^\/api\/v2\/threads\/([^/]+)\/timeline$/);
@@ -117,7 +118,7 @@ async function open(browser, {phone = false, twin = false} = {}) {
     if (p === '/api/v2/rule-holds') return json({holds: [], next_cursor: null});
     return json(unrouted(p));
   });
-  return {page, seen, sse};
+  return {page, seen, sse, state};
 }
 async function shot(page, name) {
   if (!shots) return;
@@ -156,7 +157,7 @@ let browser = null;
 
   // ---- a shared thread, desktop
   {
-    const {page, seen, sse} = await open(browser);
+    const {page, seen, sse, state} = await open(browser);
     await page.goto('https://tico-ui.test/#/thread/t-ship');
     await row(page, 'm6').waitFor();
     assert.ok(seen.timelines.includes('1'), 'the timeline is read flat');
@@ -254,16 +255,18 @@ let browser = null;
     assert.equal(await row(page, 'live1').locator('.th-quote').getAttribute('data-th-quote'), 'm2', 'a live reply quotes what it answers');
 
     // The Ask's question, with a thread's composer on screen, is its own row above the composer, never over it.
-    await page.evaluate(() => {
-      // The scheduled peek refresh keeps only questions that are still pending.
-      S.v2 ||= {};
-      S.v2.needs = [{id: 'q1', kind: 'ask', ask: {recipient_id: 'human:ana', sender_id: 'bot:ops', body: 'Got a quick question for you'}}];
-      const el = document.getElementById('ask-peek');
-      el.querySelector('[data-peek-text]').textContent = 'Got a quick question for you';
-      el.dataset.item = 'q1'; el.classList.add('ask-on'); askPeekDock();
-    });
+    // Seed the pending question: askPeek's timer and focusout checks hide a forced ask-on with no matching item.
+    state.needs = [{id: 'q1', kind: 'ask', ask: {id: 'q1', sender_id: 'bot:ops', recipient_id: 'human:ana', body: 'Ready to ship?'}}];
+    await page.locator('.thv-composer .p-text').blur();
+    await page.evaluate(() => v2Refresh());
+    // Wait for both visible boxes and read them together; the assertion below checks their ordering.
+    const [peek, pill] = await (await page.waitForFunction(() => {
+      const els = [document.querySelector('.thv-composer .thv-peek-slot #ask-peek.ask-on'), document.querySelector('.thv-composer .thv-ask')];
+      if (els.some(el => !el?.checkVisibility())) return false;
+      const boxes = els.map(el => { const {x, y, width, height} = el.getBoundingClientRect(); return {x, y, width, height}; });
+      return boxes.every(b => b.width > 0 && b.height > 0) && boxes;
+    })).jsonValue();
     assert.equal(await page.locator('.thv-composer .thv-peek-slot #ask-peek').count(), 1);
-    const [peek, pill] = [await box(page.locator('#ask-peek')), await box(page.locator('.thv-composer .thv-ask'))];
     assert.ok(peek.y + peek.height <= pill.y + 0.5, `the peek sits above the composer: ${JSON.stringify([peek, pill])}`);
     // Away from a thread it floats by the dot again.
     await page.goto('https://tico-ui.test/#/tasks');
