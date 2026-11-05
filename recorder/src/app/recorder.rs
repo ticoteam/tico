@@ -3755,7 +3755,7 @@ mod saved_panel_tests {
         // The next Create can start a job and its reply clears sending normally.
         assert!(app.job("task", || Ok(json!({}))));
         app.sending = Some("added".into());
-        while app.busy {
+        while app.background.contains("task") {
             assert!(Instant::now() < deadline);
             app.tick();
             std::thread::sleep(Duration::from_millis(5));
