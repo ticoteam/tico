@@ -118,10 +118,9 @@ exports.open = async (browser, fake, google, {hash = '#/settings/inboxes', ready
   const page = await browser.newPage({viewport: {width, height}, serviceWorkers: 'block'});
   const seen = {errors: []};
   page.on('pageerror', error => seen.errors.push(error.message));
-  await page.addInitScript(({skip, theme}) => {
+  await page.addInitScript(skip => {
     try { if (skip) localStorage.setItem('tico.inboxes.skip', '1'); } catch { /* storage off */ }
-    if (theme) document.documentElement.setAttribute('data-theme', theme);
-  }, {skip, theme});
+  }, skip);
   await page.route('**/*', route => {
     const request = route.request(), url = new URL(request.url()), p = url.pathname, method = request.method();
     const json = (body, status = 200) => route.fulfill({status, contentType: 'application/json', body: JSON.stringify(body)});
@@ -159,6 +158,8 @@ exports.open = async (browser, fake, google, {hash = '#/settings/inboxes', ready
     return json(unrouted(p));
   });
   await page.goto(`https://tico-ui.test/${hash}`);
+  // Set once the document exists: an init script runs before <html> does.
+  if (theme) await page.evaluate(t => document.documentElement.setAttribute('data-theme', t), theme);
   if (ready) await page.locator(ready).first().waitFor();
   return {page, seen};
 };

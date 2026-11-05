@@ -45,14 +45,13 @@ function server() {
   };
 }
 
-async function open(browser, {viewport = {width: 1280, height: 860}, state = server(), hash = '#/settings/mail', theme = ''} = {}) {
+async function open(browser, {viewport = {width: 1280, height: 860}, state = server(), hash = '#/settings/mail'} = {}) {
   const page = await browser.newPage({viewport, serviceWorkers: 'block'});
   const errors = [], mailboxes = mailboxesFake({admin: state.role === 'owner'}), google = googleFake();
   page.on('pageerror', e => errors.push(e.message));
-  await page.addInitScript(theme => {
+  await page.addInitScript(() => {
     try { localStorage.setItem('tico.inboxes.skip', '1'); } catch { /* storage off */ }
-    if (theme) document.documentElement.setAttribute('data-theme', theme);
-  }, theme);
+  });
   await page.route('**/*', route => {
     const req = route.request(), url = new URL(req.url()), p = url.pathname, method = req.method();
     const json = (body, status = 200) => route.fulfill({status, contentType: 'application/json', body: JSON.stringify(body)});
