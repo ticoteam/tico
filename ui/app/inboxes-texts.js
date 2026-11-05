@@ -327,7 +327,7 @@ inboxesSetting('tico-connection', {section: 'email', order: 30,
     const d = await inInboxes(ctx).catch(e => ({error: e.message, configured: false, inboxes: []}));
     if (!ctx.live()) return;
     host.innerHTML = inboxesCard('set-inbound', 'Tico addresses', `<p id="inbound-sync" class="muted" role="status">${esc(inSyncLine(d))}</p>
-      ${ctx.admin ? `<details id="inbound-connection"><summary>Connect Inbox to Tico account/company</summary>
+      ${ctx.admin ? `<details id="inbound-connection"><summary>Join your company’s shared Inbox</summary>
       <p>Get a connection code for your company from <a href="https://app.tico.dev/inbox" target="_blank" rel="noopener noreferrer">Inbox in the customer portal</a>. The code expires after five minutes.</p>
       <form id="inbound-connection-form"><label>Connection code <input name="code" type="password" autocomplete="off" spellcheck="false" minlength="43" maxlength="43" required></label>
         <button type="submit" class="ghost">Preview company</button>
