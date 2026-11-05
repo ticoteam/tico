@@ -125,6 +125,14 @@ class CalendarRefused(RuntimeError):
     """The mail CLI refused a calendar write (exit 2) before calling the provider."""
 
 
+class CalendarInvitationPending(RuntimeError):
+    """A silent event exists, but its conference preparation queued no invitation."""
+
+    def __init__(self, event_id):
+        self.event_id = event_id
+        super().__init__("Meeting link not ready; no invitation was queued. Retry scheduling; the silent hold remains.")
+
+
 def mail_umask():
     """Where the two-user layout is on, the files the mail CLI makes in workspace/runtime/mail (mail.db and its
     -wal/-shm/-journal, audit.jsonl) are group-writable: a message bot's own `mail.sh` writes to the same
@@ -221,6 +229,13 @@ class ConnectorPublisher:
         if result.returncode == 2:
             # A refusal before any provider call (a read-only Google grant, a policy): nothing was created.
             raise CalendarRefused("Tico refused the calendar event before calling Google")
+        if result.returncode == 75:
+            try:
+                pending = json.loads(result.stdout)
+                if pending.get("kind") == "conference_pending" and pending.get("retryable") is True:
+                    raise CalendarInvitationPending(str(pending.get("event_id") or ""))
+            except (ValueError, AttributeError):
+                pass
         if result.returncode:
             raise RuntimeError("Local calendar event creation failed")
         try:
@@ -297,6 +312,8 @@ class ConnectorPublisher:
                         "meeting_url": result.get("meeting_url") or "", "error": ""}
             except CalendarRefused as exc:
                 body = {"status": "failed", "event_id": "", "meeting_url": "", "error": str(exc)}
+            except CalendarInvitationPending as exc:
+                body = {"status": "failed", "event_id": exc.event_id, "meeting_url": "", "error": str(exc)}
             except subprocess.TimeoutExpired as exc:
                 body = {"status": "unknown", "event_id": "", "meeting_url": "",
                         "error": type(exc).__name__}

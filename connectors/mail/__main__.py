@@ -2496,9 +2496,14 @@ def cmd_connector_event(args):
     event_id = hashlib.sha256(str(request["id"]).encode()).hexdigest()[:32]
     if attendees:
         pl.sending_preflight(mailbox, str(request["id"]))
-    event = ctx.calendar.create_hub_event(
-        start, end, str(request["title"]).strip(), attendees, event_id,
-        str(request.get("description") or ""), bool(request.get("add_meet", True)))
+    try:
+        event = ctx.calendar.create_hub_event(
+            start, end, str(request["title"]).strip(), attendees, event_id,
+            str(request.get("description") or ""), bool(request.get("add_meet", True)))
+    except cal.ConferencePending as exc:
+        out(args, {"ok": False, "kind": "conference_pending", "retryable": True,
+                   "event_id": event_id, "error": str(exc)}, str(exc) + "\n")
+        return 75
     meeting_url = cal._meeting_url(event)  # normalized URL only; descriptions never leave here
     provider_id = str(event.get("id") or event_id)
     invitation = None

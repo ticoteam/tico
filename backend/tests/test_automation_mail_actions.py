@@ -22,7 +22,7 @@ from connectors.mail import access, audit as audit_log, db, gmail as gm, policy 
 from connectors.mail import __main__ as cli
 from connectors.mail import actions as mail_actions, unsubscribe as unsub, oauth
 from connectors.mail.tests import fake
-from runner_support.connectors import CalendarRefused, ConnectorPublisher
+from runner_support.connectors import CalendarRefused, CalendarInvitationPending, ConnectorPublisher
 
 BOX = "ana@acme.example"
 INVOICE = {"From": "Billing <billing@vendor.example>", "To": BOX, "Subject": "Invoice 4471",
@@ -84,6 +84,8 @@ class Computer:
         rc, answer = run_cli(["connector-event", "--as", access.CONNECTOR, "--json"], json.dumps(action))
         if rc == 2:
             raise CalendarRefused("Tico refused the calendar event before calling Google")
+        if rc == 75 and answer.get("kind") == "conference_pending":
+            raise CalendarInvitationPending(answer["event_id"])
         assert rc == 0, answer
         return answer
 
@@ -908,3 +910,22 @@ def test_completed_silent_calendar_hold_does_not_revoke_its_approved_invitation(
     approve_and_dispatch(api, computer, send["id"])
     assert len(computer.gmail.sent) == 1
     assert "text/calendar" in str(computer.sent()[0])
+
+
+def test_hub_conference_preparation_failure_returns_a_retryable_non_send(api, computer):
+    from connectors.mail import calendar
+    booking = {"calendar": BOX, "title": "Planning", "start": "2099-01-01T09:00:00+00:00",
+               "end": "2099-01-01T09:30:00+00:00", "attendees": ["ben@acme.example"]}
+    queued = post(api, "calendar/appointments", booking)["action"]
+    with mock.patch.object(calendar.Calendar, "ready_conference", side_effect=calendar.ConferencePending("Meeting link pending", status=503)), \
+            mock.patch.object(pl, "queue_send") as send:
+        assert computer.worker.calendar_action_tick() == 1
+    send.assert_not_called()
+    result = get(api, "calendar/actions/" + queued["id"])["action"]
+    assert result["status"] == "failed" and "Retry scheduling" in result["error"]
+    assert result["result"]["event_id"] and all(event["sendUpdates"] == "none" for event in computer.calendar.created_events.values())
+    retried = post(api, "calendar/appointments", booking)["action"]
+    assert retried["id"] != queued["id"]
+    assert computer.worker.calendar_action_tick() == 1
+    with api.app.state.store.read() as c:
+        assert c.execute("SELECT state FROM email_sends WHERE calendar_action_id=?", (retried["id"],)).fetchone()[0] == "waiting_approval"
