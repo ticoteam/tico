@@ -156,6 +156,7 @@ the server (`backend/hubdb.py`), never here. A command is its tool's name (clien
                                            (docs/pages.md)
     hub page list [--bot X] [--task ID] [--archived]   pages you may read, newest first
     hub page show <id>                     one page's status: updated, by, version, cadence, stale or replaced
+    hub page access <id> [--audience everyone|ben,group:legal,bot:analyst]
     hub page archive <id> [--restore]      hide a page from lists and search, or bring it back
     hub card list [--place P]              what is pinned at dashboard, growth, team:<group>, bot:<slug>, task:<id>
                                            or person:me (My dashboard)
@@ -1353,7 +1354,7 @@ def parser():
     s.set_defaults(fn="thread link-slack")
 
     question = sub.add_parser("question", help="ask other bots a question and wait; answer one asked of you").add_subparsers(dest="sub")
-    s = question.add_parser("ask")
+    s = question.add_parser("ask", description="Ask a teammate. A system recipient routes to your manager or the company owner.")
     s.add_argument("words", nargs="*")
     s.add_argument("--wait", type=float, default=60)
     s.set_defaults(fn="question ask")
@@ -1481,6 +1482,7 @@ def parser():
     s.add_argument("--task", help="the task it is for; it shows at the top of that task")
     s.add_argument("--replaces", help="the id of an older page this one takes the place of")
     s.add_argument("--scope", choices=["task", "bot"])
+    s.add_argument("--audience", help="everyone, or ben,group:legal,bot:analyst")
     s.set_defaults(fn="page publish")
     s = page.add_parser("list", help="pages you may read, newest first")
     s.add_argument("--bot")
@@ -1492,6 +1494,10 @@ def parser():
     s = page.add_parser("show", help="one page's status")
     s.add_argument("id")
     s.set_defaults(fn="page show")
+    s = page.add_parser("access", help="show or change who can see a page")
+    s.add_argument("id")
+    s.add_argument("--audience", help="everyone, or ben,group:legal,bot:analyst")
+    s.set_defaults(fn="page access")
     s = page.add_parser("archive", help="hide a page from lists and search, or --restore it")
     s.add_argument("id")
     s.add_argument("--restore", action="store_true", default=None)
@@ -1759,7 +1765,7 @@ def parser():
     s.add_argument("--steps-file", dest="steps_file", help="JSON array of steps; keep ids when editing")
     s.add_argument("--delete", action="store_true", help="delete an unused type")
     s.set_defaults(fn="task types")
-    s = task.add_parser("ask")
+    s = task.add_parser("ask", description="Ask the requester. A system requester routes to your manager or the company owner.")
     s.add_argument("id")
     s.add_argument("text")
     s.set_defaults(fn="task ask")

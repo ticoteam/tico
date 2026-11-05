@@ -3,7 +3,7 @@
 //! marked `.git/tico-managed`, their state in `<state>/repositories.json` (the file the Python runner kept,
 //! read and written the same way), and the heartbeat's `repositories` rows. Task worktrees are made from the base clones.
 
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
@@ -15,6 +15,7 @@ use crate::client::Client;
 use crate::env::Env;
 use crate::gitrun::{self, Fault, Out};
 use crate::redact;
+use crate::regular_file::{self, CONTENT, SMALL};
 use crate::util::{epoch_s, iso, text_of};
 
 pub const FETCH_INTERVAL: f64 = 15.0 * 60.0;
@@ -24,6 +25,7 @@ pub const CLONE_TIMEOUT: u64 = 120;
 pub const REMOVE_AFTER: f64 = 30.0 * 86400.0;
 pub const GB: f64 = 1024.0 * 1024.0 * 1024.0;
 const ELSEWHERE: &str = "already exists and is not an empty directory.";
+const SYNC_LOCK_WAIT: std::time::Duration = std::time::Duration::from_secs(1);
 
 pub fn valid_name(name: &str) -> bool {
     static NAME: std::sync::OnceLock<Regex> = std::sync::OnceLock::new();
@@ -146,6 +148,9 @@ pub fn machine_error(name: &str, detail: &str, env: &Env) -> String {
 }
 
 fn git_error(what: &str, name: &str, done: &Out, env: &Env) -> String {
+    if done.stderr.starts_with("repository copy needs attention:") {
+        return redact::scrub_credentials(&done.stderr, &redact::env_secrets(env));
+    }
     let reason = redact::git_failure(&done.stderr, &redact::env_secrets(env), 240);
     let reason = if reason.is_empty() { format!("exit {}", done.code) } else { reason };
     format!("{what} of {name} failed: {reason}")
@@ -155,7 +160,7 @@ fn mirror_broken(stderr: &str, mirror: &Path) -> bool {
     static BROKEN: std::sync::OnceLock<Regex> = std::sync::OnceLock::new();
     let re = BROKEN.get_or_init(|| {
         Regex::new(
-            r"(?i)corrupt|bad object|missing (?:blob|tree|commit|object)|unable to read|did not send all|index-pack|unpack-objects|\.lock\b|is not a valid|not a git repository|could not (?:open|read)|permission denied|unable to create temporary",
+            r"(?i)corrupt|bad object|missing (?:blob|tree|commit|object)|unable to read|did not send all|index-pack|unpack-objects|is not a valid|not a git repository|could not (?:open|read)|permission denied|unable to create temporary",
         )
         .unwrap()
     });
@@ -168,7 +173,7 @@ pub fn wait_words(seconds: f64) -> String {
 }
 
 pub fn mirror_warning(mirror: &Path) -> String {
-    let age = std::fs::read_to_string(mirror.join("tico-fetched-at"))
+    let age = regular_file::text(mirror.join("tico-fetched-at"), SMALL)
         .ok()
         .and_then(|t| t.trim().parse::<f64>().ok())
         .map(|at| format!("{} minutes old", ((epoch_s() - at) / 60.0).max(0.0) as i64))
@@ -200,7 +205,7 @@ pub fn trusting(env: &Env, dirs: &[&Path]) -> Env {
     let path = folder.join(format!("{}.gitconfig", &gitrun::sha256_hex(lines.as_bytes())[..20]));
     if !path.exists() {
         let temp = folder.join(format!("{}.tmp", uuid::Uuid::new_v4().simple()));
-        if std::fs::write(&temp, format!("[safe]\n{lines}")).is_ok() {
+        if regular_file::write(&temp, format!("[safe]\n{lines}").as_bytes(), CONTENT, true).is_ok() {
             use std::os::unix::fs::PermissionsExt;
             let _ = std::fs::set_permissions(&temp, std::fs::Permissions::from_mode(0o644));
             let _ = std::fs::rename(&temp, &path);
@@ -249,6 +254,7 @@ fn round1(v: f64) -> f64 {
 }
 
 /// Why a step failed: a message for the row, a timeout, a full disk, or something else.
+#[derive(Debug)]
 enum Fail {
     Msg(String),
     Timeout(u64),
@@ -307,6 +313,88 @@ async fn run_as_bot(prefix: &[String], args: &[&str], env: &Env, timeout: u64) -
 }
 
 /// The runner's repositories, for the credential socket's mirror refresh.
+fn attention(reason: impl AsRef<str>) -> Fail {
+    msg(format!("repository copy needs attention: {}", reason.as_ref()))
+}
+
+/// Read refs without loading a possibly malformed config. Unknown ref backends/encodings stay intact.
+fn mirror_refs(mirror: &Path) -> Result<std::collections::BTreeMap<String, String>, Fail> {
+    let mut refs = std::collections::BTreeMap::new();
+    let oid = |s: &str| [40, 64].contains(&s.len()) && s.bytes().all(|b| b.is_ascii_hexdigit());
+    if mirror.join("reftable").exists() { return Err(attention("cannot inspect the mirror's reftable refs")); }
+    match regular_file::text(mirror.join("packed-refs"), 8 * CONTENT) {
+        Ok(text) => for line in text.lines().filter(|s| !s.starts_with(['#', '^']) && !s.is_empty()) {
+            let Some((sha, name)) = line.split_once(' ') else { return Err(attention("cannot parse packed refs")) };
+            if !oid(sha) || !name.starts_with("refs/") { return Err(attention("cannot parse packed refs")); }
+            refs.insert(name.into(), sha.into());
+        },
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => {},
+        Err(_) => return Err(attention("cannot read packed refs")),
+    }
+    let mut pending = vec![mirror.join("refs")];
+    while let Some(dir) = pending.pop() {
+        let entries = match std::fs::read_dir(&dir) {
+            Ok(e) => e,
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound && dir == mirror.join("refs") => continue,
+            Err(_) => return Err(attention("cannot inspect local refs")),
+        };
+        for entry in entries {
+            let entry = entry.map_err(|_| attention("cannot inspect local refs"))?;
+            let path = entry.path();
+            let m = path.symlink_metadata().map_err(|_| attention("cannot inspect local refs"))?;
+            if m.is_dir() { pending.push(path); continue; }
+            let name = path.strip_prefix(mirror).unwrap().to_str().ok_or_else(|| attention("cannot decode local ref"))?.to_string();
+            if name.ends_with(".lock") || name.contains(".lock.stale-") { continue; }
+            if !m.is_file() { return Err(attention("local ref is linked or unreadable")); }
+            let sha = regular_file::text(&path, SMALL).map_err(|_| attention("cannot read local ref"))?;
+            if !oid(sha.trim()) { return Err(attention(format!("cannot resolve local ref {name}"))); }
+            refs.insert(name, sha.trim().into());
+        }
+    }
+    let head = regular_file::text(mirror.join("HEAD"), SMALL).map_err(|_| attention("cannot inspect mirror HEAD"))?;
+    if !head.starts_with("ref: refs/") {
+        if !oid(head.trim()) { return Err(attention("cannot resolve mirror HEAD")); }
+        refs.insert("HEAD".into(), head.trim().into());
+    }
+    Ok(refs)
+}
+
+/// Alternates are relative to their objects directory, not to objects/info or the worktree.
+fn no_alternate_users(roots: &[PathBuf], mirror: &Path) -> Result<(), Fail> {
+    let objects = mirror.join("objects").canonicalize().map_err(|_| attention("cannot inspect mirror objects"))?;
+    let mut pending = roots.to_vec();
+    let mut seen = HashSet::new();
+    while let Some(dir) = pending.pop() {
+        if !dir.try_exists().map_err(|_| attention("cannot inspect runner repositories for alternates"))? { continue; }
+        let dir = dir.canonicalize().map_err(|_| attention("cannot inspect runner repositories for alternates"))?;
+        if !seen.insert(dir.clone()) { continue; }
+        let alternate = dir.join("objects/info/alternates");
+        let has_alternate = match alternate.symlink_metadata() {
+            Ok(_) => true,
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => false,
+            Err(_) => return Err(attention("cannot inspect repository alternates")),
+        };
+        if dir != mirror && has_alternate {
+            if is_symlink(&alternate) { return Err(attention(format!("cannot inspect alternates {}", alternate.display()))); }
+            let text = regular_file::text(&alternate, CONTENT).map_err(|_| attention("cannot read repository alternates"))?;
+            for line in text.lines().filter(|s| !s.is_empty()) {
+                if line.contains(['"', '\\']) { return Err(attention("cannot decode repository alternates")); }
+                let target = dir.join("objects").join(line).canonicalize().map_err(|_| attention("cannot resolve repository alternates"))?;
+                if target == objects { return Err(attention(format!("{} uses this mirror's objects", alternate.display()))); }
+            }
+        }
+        let entries = std::fs::read_dir(&dir).map_err(|_| attention("cannot scan runner repositories for alternates"))?;
+        let git_metadata = dir.join("HEAD").is_file() && dir.join("objects").is_dir();
+        for entry in entries {
+            let entry = entry.map_err(|_| attention("cannot scan runner repositories for alternates"))?;
+            let m = entry.file_type().map_err(|_| attention("cannot scan runner repositories for alternates"))?;
+            // Object databases hold no checkouts. Skipping them also avoids walking every loose object.
+            if m.is_dir() && !(git_metadata && entry.file_name() == "objects") { pending.push(entry.path()); }
+        }
+    }
+    Ok(())
+}
+
 pub static MIRRORS: std::sync::OnceLock<Arc<Repositories>> = std::sync::OnceLock::new();
 
 pub struct Repositories {
@@ -317,6 +405,7 @@ pub struct Repositories {
     rows: Mutex<Map<String, Value>>,
     visible: AtomicBool,
     pending: Mutex<Option<tokio::task::JoinHandle<()>>>,
+    sync_locks: Mutex<HashMap<String, Arc<tokio::sync::Mutex<()>>>>,
 }
 
 impl Repositories {
@@ -347,12 +436,20 @@ impl Repositories {
             rows: Mutex::new(rows),
             visible: AtomicBool::new(false),
             pending: Mutex::new(None),
+            sync_locks: Mutex::new(HashMap::new()),
         }
+    }
+
+    async fn sync_guard(&self, name: &str) -> Result<tokio::sync::OwnedMutexGuard<()>, String> {
+        let lock = self.sync_locks.lock().unwrap().entry(base_folder(name)).or_default().clone();
+        tokio::time::timeout(SYNC_LOCK_WAIT, lock.lock_owned()).await
+            .map_err(|_| "Repository sync is busy; retry shortly or use the cached copy".into())
     }
 
     fn path(&self, name: &str) -> Result<PathBuf, Fail> {
         let full = self.rows.lock().unwrap().get(name).map(|r| text_of(&r["full_name"])).filter(|n| !n.is_empty()).unwrap_or_else(|| name.into());
         let path = self.root.join(base_folder(&full));
+        crate::repo_safety::outside_installation(&path).map_err(msg)?;
         let parent_ok = path.parent().and_then(|p| p.canonicalize().ok()) == self.root.canonicalize().ok();
         if is_symlink(&self.root) || is_symlink(&path) || (self.root.exists() && !parent_ok) {
             return Err(msg("Repository folder points outside repos; left as it is"));
@@ -365,9 +462,13 @@ impl Repositories {
             std::fs::create_dir_all(parent)?;
         }
         let temp = self.state_file.with_extension("tmp");
-        let text = crate::util::py_dumps(&Value::Object(self.rows.lock().unwrap().clone()));
+        // Different repositories can finish together; serialize snapshots and the shared temporary file.
+        let rows = self.rows.lock().unwrap();
+        let text = crate::util::py_dumps(&Value::Object(rows.clone()));
         std::fs::write(&temp, text)?;
-        std::fs::rename(&temp, &self.state_file)
+        let result = std::fs::rename(&temp, &self.state_file);
+        drop(rows);
+        result
     }
 
     fn report_row(row: &Value) -> Value {
@@ -500,7 +601,7 @@ impl Repositories {
             if !meta.is_file() || meta.len() > 1024 {
                 continue;
             }
-            let Ok(data) = std::fs::read(&marker) else { continue };
+            let Ok(data) = regular_file::read(&marker, 1024) else { continue };
             let stored: Value = if data.is_empty() { json!({}) } else { serde_json::from_slice(&data).unwrap_or(Value::Null) };
             if !stored.is_object() {
                 continue;
@@ -525,6 +626,7 @@ impl Repositories {
             .map(|(n, _)| n.clone())
             .collect();
         for name in stale {
+            let Ok(_sync) = self.sync_guard(&name).await else { continue };
             let result: Result<(), Fail> = async {
                 let path = self.path(&name)?;
                 let row = self.row(&name);
@@ -543,12 +645,7 @@ impl Repositories {
                     }
                     std::fs::remove_dir_all(&path)?;
                 }
-                if valid_name(&name) {
-                    let mirror = self.mirror_path(&name)?;
-                    if mirror.exists() {
-                        std::fs::remove_dir_all(&mirror)?;
-                    }
-                }
+                // Mirrors may hold unpublished refs or objects used elsewhere; retirement keeps them.
                 self.update_row(&name, |r| {
                     r.insert("state".into(), json!("removed"));
                     r.insert("size_mb".into(), json!(0));
@@ -638,15 +735,71 @@ impl Repositories {
         String::new()
     }
 
-    fn discard_mirror(&self, name: &str) -> Result<(), Fail> {
+    /// A broken mirror remains a complete repository until a person reviews it.
+    async fn preserve_mirror(&self, name: &str, url: &str, prefix: &[String], env: &Env, timeout: u64) -> Result<(), Fail> {
         let mirror = self.mirror_path(name)?;
-        if mirror.exists() {
-            std::fs::remove_dir_all(mirror)?;
+        if !mirror.exists() { return Ok(()); }
+        let _guard = crate::gitlocks::recovery_lock(&mirror).ok_or_else(|| attention("mirror recovery is busy or outside the runner's private roots"))?;
+        match std::fs::read_dir(mirror.join("worktrees")) {
+            Ok(mut entries) => if entries.next().is_some() { return Err(attention("mirror has registered worktrees")); },
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => {},
+            Err(_) => return Err(attention("cannot inspect registered worktrees")),
         }
+        crate::gitlocks::check_locked(&mirror).map_err(msg)?;
+        no_alternate_users(&[self.root.parent().unwrap().to_path_buf(), self.mirrors.parent().unwrap().to_path_buf()], &mirror)?;
+        let before = mirror_refs(&mirror)?;
+        // Query outside the mirror: neither its malformed config nor its HTTP settings receive a token.
+        let remote = run(prefix, &["ls-remote", "--refs", "--", url], env, timeout).await
+            .map_err(|_| attention("could not read remote refs to prove the mirror is published"))?;
+        if !remote.ok() { return Err(attention("could not read remote refs to prove the mirror is published")); }
+        let mut published = std::collections::BTreeMap::new();
+        for line in remote.stdout.lines() {
+            let Some((sha, name)) = line.split_once('\t') else { return Err(attention("cannot parse remote refs")) };
+            published.insert(name.to_string(), sha.to_string());
+        }
+        for (name, sha) in &before {
+            if (name == "HEAD" && !published.values().any(|v| v == sha)) || (name != "HEAD" && published.get(name) != Some(sha)) {
+                return Err(attention(format!("local ref {name} is unpublished or differs from the remote")));
+            }
+        }
+        let broken_prefix = format!("{}.broken-", mirror.file_name().unwrap().to_string_lossy());
+        for entry in std::fs::read_dir(&self.mirrors)? {
+            let entry = entry?;
+            if entry.file_name().to_string_lossy().starts_with(&broken_prefix) {
+                return Err(attention(format!("previous broken mirror {} still needs review", entry.path().display())));
+            }
+        }
+        // A rebuild uses the clone's format. Keep any non-default format for manual repair.
+        let config = mirror.join("config");
+        let original = regular_file::read(&config, CONTENT).map_err(|_| attention("mirror config cannot be read; repair it manually"))?;
+        let format = repository_format(&config, env).await?;
+        if format.len() != 1 || format.get("core.repositoryformatversion").map(Vec::as_slice) != Some(&["0".to_string()][..]) {
+            return Err(attention(format!("{}: mirror format cannot be kept during rebuild; repair its config manually", mirror.display())));
+        }
+        // Ordinary Git writers bypass our gate. A readable mirror can gain users during any await,
+        // without changing its refs or config or leaving a lock, so it must stay at this path.
+        let git_dir = format!("--git-dir={}", mirror.display());
+        let mut probe_env = env.clone();
+        probe_env.insert("LC_ALL".into(), "C".into());
+        let probe = run(prefix, &[&git_dir, "rev-parse", "--is-bare-repository"], &probe_env, 10).await;
+        if !matches!(probe, Ok(ref out) if out.code == 128 && out.stderr.contains("not a git repository")) {
+            return Err(attention(format!(
+                "{}: mirror may still be in use; left in place. Check its users and repair it by hand. Inspect with: git {} fsck --full",
+                mirror.display(), crate::gitcred::shell_quote(&git_dir)
+            )));
+        }
+        if mirror_refs(&mirror)? != before || regular_file::read(&config, CONTENT)? != original {
+            return Err(attention("mirror changed during inspection"));
+        }
+        crate::gitlocks::check_locked(&mirror).map_err(msg)?;
+        let backup = mirror.with_file_name(format!("{broken_prefix}{}-{}", epoch_s() as u64, uuid::Uuid::new_v4().simple()));
+        std::fs::rename(&mirror, &backup)?;
+        crate::util::log(&format!("Preserved broken repository copy at {}", backup.display()));
         Ok(())
     }
 
     async fn update(&self, name: &str, repo: &Value, now: f64) {
+        let Ok(_sync) = self.sync_guard(name).await else { return };
         let mut token = String::new();
         let mut created = false;
         let result = self.update_inner(name, repo, now, &mut token, &mut created).await;
@@ -810,7 +963,7 @@ impl Repositories {
                 // The mirror itself can be what is broken while GitHub is fine: rebuild it once and clone again.
                 let first = git_error("Cloning the local mirror", &full, &done, &clean);
                 discard_failed_clone(&path, true).await;
-                self.discard_mirror(name)?;
+                self.preserve_mirror(name, &url, &prefix, &env, timeout).await?;
                 self.fill_mirror(name, &mirror, &prefix, &branch, &url, &full, &clean, &env, timeout, now, false).await?;
                 done = run_as_bot(&local, &clone_args, &trusted, timeout).await?;
                 if !done.ok() {
@@ -824,8 +977,6 @@ impl Repositories {
                 *created = false;
                 return Err(msg(git_error("Cloning the local mirror", &full, &done, &clean)));
             }
-        } else if !run_as_bot(&local, &["-C", &path_s, "rev-parse", "--git-dir"], &clean, 10).await?.ok() {
-            return Err(msg("Base clone is not a working Git repository; repair it without deleting local work"));
         }
         let mut settings: Vec<(String, String)> =
             vec![("remote.tico-mirror.url".into(), mirror_uri.clone()), ("remote.tico-mirror.fetch".into(), format!("+refs/heads/{branch}:refs/remotes/tico-mirror/{branch}"))];
@@ -840,17 +991,13 @@ impl Repositories {
                 (format!("branch.{branch}.merge"), format!("refs/heads/{branch}")),
             ]);
         }
-        for (key, value) in &settings {
-            if !run_as_bot(&local, &["-C", &path_s, "config", "--local", "--replace-all", key, value], &clean, 10).await?.ok() {
-                return Err(msg("Could not configure base clone mirror; check its Git config and permissions"));
-            }
-        }
+        configure_base(&path, &settings, &local, &trusted, &full).await?;
         let fetch_args_owned = [format!("+refs/heads/{branch}:refs/remotes/origin/{branch}"), format!("+refs/heads/{branch}:refs/remotes/tico-mirror/{branch}")];
         let fetch_args = ["-C", &path_s, "fetch", "--quiet", "--no-tags", "--no-write-fetch-head", "--", &mirror_uri, &fetch_args_owned[0], &fetch_args_owned[1]];
         let mut done = run_as_bot(&local, &fetch_args, &trusted, timeout).await?;
         if !done.ok() {
             let first = git_error(&format!("Git {} from the local mirror", if exists { "fetch" } else { "clone" }), &full, &done, &clean);
-            self.discard_mirror(name)?;
+            self.preserve_mirror(name, &url, &prefix, &env, timeout).await?;
             self.fill_mirror(name, &mirror, &prefix, &branch, &url, &full, &clean, &env, timeout, now, false).await?;
             done = run_as_bot(&local, &fetch_args, &trusted, timeout).await?;
             if !done.ok() {
@@ -896,6 +1043,20 @@ impl Repositories {
         now: f64,
         rebuild: bool,
     ) -> Result<(), Fail> {
+        let result = self.fill_mirror_once(mirror, base_prefix, branch, url, full, clean, env, timeout, now).await;
+        let repair = matches!(&result, Err(Fail::Msg(m)) if m.contains("Git config") || m.contains("mirror default branch") || mirror_broken(m, mirror));
+        if repair && rebuild {
+            self.preserve_mirror(name, url, base_prefix, env, timeout).await?;
+            return self.fill_mirror_once(mirror, base_prefix, branch, url, full, clean, env, timeout, now).await;
+        }
+        result
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    async fn fill_mirror_once(
+        &self, mirror: &Path, base_prefix: &[String], branch: &str, url: &str, full: &str,
+        clean: &Env, env: &Env, timeout: u64, now: f64,
+    ) -> Result<(), Fail> {
         let mut prefix = base_prefix.to_vec();
         let mirror_s = mirror.display().to_string();
         if !mirror.exists() && !run(&prefix, &["init", "--bare", "--quiet", &format!("--initial-branch={branch}"), &mirror_s], clean, 10).await?.ok() {
@@ -904,10 +1065,6 @@ impl Repositories {
         prefix.extend(mirror_config_overrides(&prefix, mirror, clean).await?);
         let refspec = format!("+refs/heads/{branch}:refs/heads/{branch}");
         let done = run(&prefix, &["-C", &mirror_s, "fetch", "--quiet", "--prune", "--no-tags", "--no-write-fetch-head", "--", url, &refspec], env, timeout).await?;
-        if !done.ok() && rebuild && mirror_broken(&done.stderr, mirror) {
-            self.discard_mirror(name)?;
-            return Box::pin(self.fill_mirror(name, mirror, base_prefix, branch, url, full, clean, env, timeout, now, false)).await;
-        }
         if !done.ok() {
             return Err(msg(git_error("Git mirror fetch", full, &done, env)));
         }
@@ -915,7 +1072,7 @@ impl Repositories {
             return Err(msg("Could not set mirror default branch"));
         }
         mirror_permissions(mirror);
-        std::fs::write(mirror.join("tico-fetched-at"), py_float(now))?;
+        regular_file::write(mirror.join("tico-fetched-at"), py_float(now).as_bytes(), SMALL, false)?;
         Ok(())
     }
 
@@ -924,6 +1081,7 @@ impl Repositories {
         if !valid_name(name) {
             return Err("Invalid mirror repository".into());
         }
+        let _sync = self.sync_guard(name).await?;
         let fail = |f: Fail| match f {
             Fail::Msg(m) => m,
             Fail::Timeout(_) => "Mirror fetch timed out".into(),
@@ -942,38 +1100,202 @@ impl Repositories {
         prefix.extend(["-c", "safe.directory", "-c", "gc.auto=0", "-c", "maintenance.auto=false", "-c", "http.followRedirects=false", "-c", "http.sslVerify=true", "-c", "protocol.allow=never", "-c", "protocol.https.allow=always", "-c", "protocol.file.allow=never"].iter().map(|s| s.to_string()));
         prefix[6] = format!("safe.directory={}", mirror.display());
         let address = address(name)?;
-        let mirror_s = mirror.display().to_string();
         let r = |f: Fail| fail(f);
-        if !mirror.exists() {
+        let mirror_s = mirror.display().to_string();
+        let head = run(&prefix, &["-C", &mirror_s, "symbolic-ref", "HEAD"], &clean, 10).await.map_err(r)?;
+        let mut branch = head.stdout.trim().strip_prefix("refs/heads/").unwrap_or_default().to_string();
+        if !head.ok() || branch.is_empty() {
             let result = run(&prefix, &["ls-remote", "--symref", "--", &address, "HEAD"], &env, 15).await.map_err(r)?;
             let found = Regex::new(r"(?m)^ref: refs/heads/(.+)\tHEAD$").unwrap().captures(&result.stdout).map(|c| c[1].to_string());
-            let Some(branch) = found.filter(|_| result.ok()) else { return Err("Could not find the default branch; check GitHub access".into()) };
-            if !run(&prefix, &["init", "--bare", "--quiet", &format!("--initial-branch={branch}"), &mirror_s], &clean, 10).await.map_err(r)?.ok() {
-                return Err("Could not create mirror; check disk space and permissions".into());
+            branch = found.filter(|_| result.ok()).ok_or("Could not find the default branch; check GitHub access")?;
+        }
+        if let Err(problem) = self.fill_mirror(name, &mirror, &prefix, &branch, &address, name, &clean, &env, 15, epoch_s(), true).await {
+            if let Fail::Msg(note) = &problem {
+                if note.starts_with("repository copy needs attention:") {
+                    self.update_row(name, |row| {
+                        row.insert("state".into(), json!("failed"));
+                        row.insert("error".into(), json!(note));
+                    });
+                    let _ = self.save();
+                    return Err(note.clone());
+                }
             }
-        }
-        let overrides = mirror_config_overrides(&prefix, &mirror, &clean).await.map_err(|f| match f {
-            Fail::Msg(m) if m.contains("includes") => "Mirror Git config includes another file".into(),
-            other => fail(other),
-        })?;
-        prefix.extend(overrides);
-        let head = run(&prefix, &["-C", &mirror_s, "symbolic-ref", "HEAD"], &clean, 10).await.map_err(r)?;
-        let branch = head.stdout.trim().to_string();
-        if !head.ok() || !branch.starts_with("refs/heads/") {
-            return Err("Mirror default branch is missing".into());
-        }
-        let short = branch.trim_start_matches("refs/heads/").to_string();
-        let spec = format!("+{branch}:{branch}");
-        let fetched = run(&prefix, &["-C", &mirror_s, "fetch", "--quiet", "--no-tags", "--no-write-fetch-head", "--", &address, &spec], &env, 15).await.is_ok_and(|o| o.ok());
-        if !fetched {
-            if run(&prefix, &["-C", &mirror_s, "show-ref", "--verify", &branch], &clean, 10).await.is_ok_and(|o| o.ok()) {
-                return Ok(json!({"cached": true, "mirror": file_uri(&mirror), "default_branch": short, "warning": mirror_warning(&mirror)}));
+            // A network failure may use the last good mirror; malformed config must never be trusted with a token.
+            if mirror_config_overrides(&prefix, &mirror, &clean).await.is_ok()
+                && run(&prefix, &["-C", &mirror_s, "show-ref", "--verify", &format!("refs/heads/{branch}")], &clean, 10).await.is_ok_and(|o| o.ok()) {
+                return Ok(json!({"cached": true, "mirror": file_uri(&mirror), "default_branch": branch, "warning": mirror_warning(&mirror)}));
             }
-            return Err("Mirror fetch failed; check repository access and network".into());
+            return Err(fail(problem));
         }
-        let _ = std::fs::write(mirror.join("tico-fetched-at"), py_float(epoch_s()));
-        mirror_permissions(&mirror);
-        Ok(json!({"refreshed": true, "mirror": file_uri(&mirror), "default_branch": short}))
+        Ok(json!({"refreshed": true, "mirror": file_uri(&mirror), "default_branch": branch}))
+    }
+}
+
+/// Parse outside the repository so a broken format cannot silently select Git's defaults.
+/// Includes are refused because another file could change the effective format during repair.
+async fn repository_format(config: &Path, env: &Env) -> Result<std::collections::BTreeMap<String, Vec<String>>, Fail> {
+    let refuse = || attention(format!("{}: repository format cannot be read safely; config left intact; repair it manually", config.display()));
+    let bytes = regular_file::read(config, CONTENT).map_err(|_| refuse())?;
+    struct Snapshot(PathBuf);
+    impl Drop for Snapshot {
+        fn drop(&mut self) { let _ = std::fs::remove_file(&self.0); }
+    }
+    let snapshot = Snapshot(std::env::temp_dir().join(format!("tico-config-read-{}", uuid::Uuid::new_v4().simple())));
+    {
+        use std::io::Write;
+        use std::os::unix::fs::OpenOptionsExt;
+        let mut file = regular_file::open(&snapshot.0, std::fs::OpenOptions::new().write(true).create_new(true).mode(0o600), CONTENT)?;
+        file.write_all(&bytes)?;
+    }
+    let parsed = run(&[], &["config", "--file", &snapshot.0.display().to_string(), "--no-includes", "--null", "--list"], env, 10).await?;
+    if !parsed.ok() { return Err(refuse()); }
+    let text = String::from_utf8(parsed.raw).map_err(|_| refuse())?;
+    let mut format = std::collections::BTreeMap::<String, Vec<String>>::new();
+    for entry in text.split('\0').filter(|s| !s.is_empty()) {
+        let (key, value) = entry.split_once('\n').unwrap_or((entry, ""));
+        let key = key.to_ascii_lowercase();
+        if key.starts_with("include.") || key.starts_with("includeif.") { return Err(refuse()); }
+        if key == "core.repositoryformatversion" || key.starts_with("extensions.") {
+            format.entry(key).or_default().push(value.to_string());
+        }
+    }
+    if !format.get("core.repositoryformatversion").and_then(|v| v.last()).is_some_and(|v| v == "0" || v == "1") {
+        return Err(refuse());
+    }
+    Ok(format)
+}
+
+/// Rebuild only a broken base's config on a same-user computer. Refs, index, stash, files and worktree
+/// registrations stay in place; an adopted base also needs a verifiable origin in its preserved config.
+async fn configure_base(
+    path: &Path, settings: &[(String, String)], local: &[String], env: &Env, full: &str,
+) -> Result<(), Fail> {
+    async fn configure(path: &Path, settings: &[(String, String)], local: &[String], env: &Env) -> Result<Out, Fail> {
+        for (key, value) in settings {
+            let done = run_as_bot(local, &["-C", &path.display().to_string(), "config", "--local", "--replace-all", key, value], env, 10).await?;
+            if !done.ok() { return Ok(done); }
+        }
+        Ok(Out::default())
+    }
+    if path.join(".git/config").symlink_metadata().is_err() {
+        return Err(attention(format!("{}: base config is missing or unreadable; repository format is unknown; repair it manually", path.display())));
+    }
+    let first = configure(path, settings, local, env).await?;
+    if first.ok() { return Ok(()); }
+    let reason = git_error("Configuring base clone mirror", full, &first, env);
+    // The scratch checkout and its parents are bot-controlled; supervisor filesystem operations cannot trust them.
+    if crate::isolation::enabled() {
+        return Err(attention(format!("{reason}; automatic base config replacement is disabled when bots run as a separate user; repair the base clone's config and permissions manually")));
+    }
+    let git = path.join(".git");
+    let config = git.join("config");
+    if !real_dir(&git) || is_symlink(&config) {
+        return Err(msg(format!("{reason}; config left intact because its Git metadata is linked")));
+    }
+    crate::gitlocks::check(&git).map_err(msg)?;
+    let old = match regular_file::read(&config, CONTENT) {
+        Ok(bytes) => Some(bytes),
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => None,
+        Err(_) => return Err(attention(format!("{reason}; config is not a readable bounded regular file; left intact"))),
+    };
+    let readable = run_as_bot(local, &["-C", &path.display().to_string(), "config", "--local", "--no-includes", "--list"], env, 10).await?;
+    // Only runner-created bases receive an origin in settings. An adopted base must retain its owner's verified origin.
+    if !settings.iter().any(|(key, _)| key == "remote.origin.url") {
+        let origin = run_as_bot(local, &["-C", &path.display().to_string(), "config", "--local", "--no-includes", "--get-all", "remote.origin.url"], env, 10).await?;
+        if old.is_none() || !readable.ok() || !origin.ok() || !github_origin(origin.stdout.trim(), full) {
+            return Err(attention(format!("{reason}; adopted base config left intact because its original GitHub origin cannot be verified and preserved; repair the config manually")));
+        }
+    }
+    // An unparseable config cannot prove that extensions or format settings are absent.
+    let format = repository_format(&config, env).await?;
+    struct Scratch(PathBuf);
+    impl Drop for Scratch {
+        fn drop(&mut self) { let _ = std::fs::remove_dir_all(&self.0); }
+    }
+    let scratch = Scratch(path.with_file_name(format!(".tico-base-repair-{}", uuid::Uuid::new_v4().simple())));
+    crate::isolation::mkdir(&scratch.0, 0o700)?;
+    let rebuilt = scratch.0.join("config");
+    let bytes = old.as_deref().ok_or_else(|| attention("base config is missing; repository format is unknown; repair it manually"))?;
+    stage_base_config(&rebuilt, bytes, settings, local, env).await?;
+    if repository_format(&rebuilt, env).await? != format {
+        return Err(attention(format!("{}: repository format changed during config repair; left intact", path.display())));
+    }
+    crate::gitlocks::check(&git).map_err(msg)?;
+    // The metadata check is only a snapshot: Git writers must share this lock through the atomic install.
+    let lock = BaseConfigLock::acquire(&config).map_err(|e| msg(format!("{reason}; could not lock base config for repair: {e}")))?;
+    lock.install(old.as_deref(), &rebuilt)
+}
+
+/// Stage the complete config without discovering a scratch repository with a different format.
+async fn stage_base_config(rebuilt: &Path, bytes: &[u8], settings: &[(String, String)], local: &[String], env: &Env) -> Result<(), Fail> {
+    regular_file::write(rebuilt, bytes, CONTENT, true)?;
+    let before = repository_format(rebuilt, env).await?;
+    for (key, value) in settings {
+        let done = run(local, &["config", "--file", &rebuilt.display().to_string(), "--replace-all", key, value], env, 10).await?;
+        if !done.ok() { return Err(msg(format!("Could not stage base config: {}", done.stderr.trim()))); }
+    }
+    if repository_format(rebuilt, env).await? != before {
+        return Err(attention("repository format changed while staging config; original left intact"));
+    }
+    Ok(())
+}
+
+struct BaseConfigLock {
+    path: PathBuf,
+    file: std::fs::File,
+    committed: bool,
+}
+
+impl BaseConfigLock {
+    fn acquire(config: &Path) -> std::io::Result<Self> {
+        use std::os::unix::fs::OpenOptionsExt;
+        let path = config.with_file_name("config.lock");
+        let file = regular_file::open(&path, std::fs::OpenOptions::new().write(true).create_new(true).mode(0o600), CONTENT)?;
+        Ok(Self { path, file, committed: false })
+    }
+
+    fn install(mut self, old: Option<&[u8]>, rebuilt: &Path) -> Result<(), Fail> {
+        use std::io::{Read, Write};
+        use std::os::unix::fs::{OpenOptionsExt, PermissionsExt};
+        let config = self.path.with_file_name("config");
+        let mut current = Vec::new();
+        let permissions = match regular_file::open(&config, std::fs::OpenOptions::new().read(true), CONTENT) {
+            Ok(mut file) => {
+                let permissions = file.metadata()?.permissions();
+                (&mut file).take(CONTENT + 1).read_to_end(&mut current)?;
+                if old != Some(current.as_slice()) {
+                    return Err(msg("Git config changed during repair; left intact for the next retry"));
+                }
+                permissions
+            }
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound && old.is_none() => std::fs::Permissions::from_mode(0o644),
+            _ => return Err(msg("Git config changed during repair; left intact for the next retry")),
+        };
+        let replacement = regular_file::read(rebuilt, CONTENT)?;
+        self.file.set_permissions(permissions.clone())?;
+        self.file.write_all(&replacement)?;
+        self.file.sync_all()?;
+        if old.is_some() {
+            let backup = config.with_file_name(format!("tico-config-backup-{}", uuid::Uuid::new_v4().simple()));
+            let mut saved = regular_file::open(&backup, std::fs::OpenOptions::new().write(true).create_new(true).mode(0o600), CONTENT)?;
+            saved.set_permissions(permissions)?;
+            saved.write_all(&current)?;
+            saved.sync_all()?;
+        }
+        // The original remains readable until Git's lock file takes its place in one rename.
+        std::fs::rename(&self.path, &config)?;
+        self.committed = true;
+        Ok(())
+    }
+}
+
+impl Drop for BaseConfigLock {
+    fn drop(&mut self) {
+        use std::os::unix::fs::MetadataExt;
+        if !self.committed && self.file.metadata().ok().zip(self.path.symlink_metadata().ok())
+            .is_some_and(|(held, current)| held.dev() == current.dev() && held.ino() == current.ino()) {
+            let _ = std::fs::remove_file(&self.path);
+        }
     }
 }
 
@@ -1048,13 +1370,14 @@ fn py_g(v: f64) -> String {
 pub async fn worktree_base(workspace: &Path, repo: &mut Map<String, Value>, env: &Env) -> Result<(PathBuf, String), String> {
     let machine_git = crate::util::truthy(repo.get("machine_git"));
     let source_env = env.clone();
-    let env = if machine_git { crate::safegit::machine_environment(env) } else { crate::safegit::environment(env) };
     let name = repo.get("full_name").map(text_of).unwrap_or_default();
     if !valid_repository(&name) || (!machine_git && !valid_name(&name)) {
         return Err("Invalid repository name".into());
     }
     let root = workspace.join("repos");
     let path = root.join(base_folder(&name));
+    crate::repo_safety::outside_installation(&path)?;
+    let env = if machine_git { crate::safegit::machine_environment(env) } else { crate::safegit::environment(env) };
     if is_symlink(&root) {
         return Err("Base clone points outside repos".into());
     }
@@ -1303,10 +1626,124 @@ pub fn was_adopted(path: &Path) -> bool {
         Ok(m) if m.is_file() && m.len() <= 1024 => {}
         _ => return false,
     }
-    std::fs::read_to_string(&marker)
+    regular_file::text(&marker, 1024)
         .ok()
         .map(|t| if t.is_empty() { json!({}) } else { serde_json::from_str::<Value>(&t).unwrap_or(Value::Null) })
         .is_some_and(|v| v["adopted"] == true)
+}
+
+/// A flattened instruction symlink contains no new work only if its index is unchanged and its bytes equal
+/// the committed link or its unchanged target. A different edit (including a staged one) is never restored.
+pub async fn repair_instruction_links(root: &Path, env: &Env) -> Option<String> {
+    let Ok(root) = root.canonicalize() else { return None };
+    let Ok(git_dir) = gitrun::git_as_bot(&root, env, &["rev-parse", "--absolute-git-dir"], 15).await else { return None };
+    let git_dir = PathBuf::from(git_dir.stdout.trim_end_matches('\n'));
+    if !git_dir.is_absolute() || !real_dir(&git_dir) { return None; }
+    let Ok(list) = gitrun::git_as_bot(&root, env, &["ls-files", "--stage", "-z", "--", "AGENTS.md", "CLAUDE.md", ":(glob)**/AGENTS.md", ":(glob)**/CLAUDE.md"], 15).await else { return None };
+    if !list.ok() { return None; }
+    for entry in list.raw.split(|b| *b == 0) {
+        let Ok(entry) = std::str::from_utf8(entry) else { continue };
+        let Some((info, name)) = entry.split_once('\t') else { continue };
+        if !info.starts_with("120000 ") || !info.ends_with(" 0") { continue; }
+        let path = root.join(name);
+        let Ok(before) = path.symlink_metadata() else { continue };
+        use std::os::unix::fs::MetadataExt;
+        if !before.is_file() || before.nlink() != 1 || path.parent().and_then(|p| p.canonicalize().ok()).as_deref() != path.parent() { continue; }
+        if !gitrun::git_as_bot(&root, env, &["diff", "--cached", "--quiet", "HEAD", "--", name], 15).await.is_ok_and(|o| o.ok()) { continue; }
+        let oid = info.split_whitespace().nth(1).unwrap_or_default();
+        let Ok(link) = gitrun::git_as_bot(&root, env, &["cat-file", "blob", oid], 15).await else { continue };
+        if !link.ok() || link.stdout.is_empty() || link.stdout.contains('\n') { continue; }
+        let Ok(target) = path.parent().unwrap().join(&link.stdout).canonicalize() else { continue };
+        let Ok(relative) = target.strip_prefix(&root) else { continue };
+        let Ok(content) = regular_file::read(&path, CONTENT) else { continue };
+        let Ok(accepted) = regular_file::read(&target, CONTENT) else { continue };
+        if content != link.raw {
+            let spec = format!("HEAD:{}", relative.display());
+            let original = gitrun::git_as_bot(&root, env, &["cat-file", "blob", &spec], 15).await;
+            if !original.is_ok_and(|o| o.ok() && o.raw == content)
+                || accepted != content
+                || !gitrun::git_as_bot(&root, env, &["diff", "--quiet", "HEAD", "--", &relative.to_string_lossy()], 15).await.is_ok_and(|o| o.ok()) { continue; }
+        }
+        // A writer that already opened the regular file keeps writing to this named backup.
+        let backup = git_dir.join("tico-instruction-backups").join(Path::new(name).parent().unwrap())
+            .join(format!("{}.tico-backup-{}-{}-sha256-{}", path.file_name().unwrap().to_string_lossy(), epoch_s() as u64, uuid::Uuid::new_v4().simple(), gitrun::sha256_hex(&accepted)));
+        if std::fs::create_dir_all(backup.parent().unwrap()).is_err()
+            || backup.parent().and_then(|p| p.canonicalize().ok()).as_deref() != backup.parent() { continue; }
+        if !path.symlink_metadata().is_ok_and(|m| m.dev() == before.dev() && m.ino() == before.ino() && m.mtime() == before.mtime() && m.mtime_nsec() == before.mtime_nsec())
+            || regular_file::read(&path, CONTENT).ok().as_ref() != Some(&content) { continue; }
+        if std::fs::rename(&path, &backup).is_err() { continue; }
+        if !backup.symlink_metadata().is_ok_and(|m| m.dev() == before.dev() && m.ino() == before.ino())
+            || std::os::unix::fs::symlink(&link.stdout, &path).is_err() {
+            let _ = std::fs::hard_link(&backup, &path);
+            continue;
+        }
+        crate::isolation::chown(&path);
+    }
+    instruction_backup_note(&root, &git_dir).await
+}
+
+async fn instruction_backup_note(root: &Path, git_dir: &Path) -> Option<String> {
+    use std::os::unix::fs::MetadataExt;
+    let saved = git_dir.join("tico-instruction-backups");
+    let mut pending = vec![saved.clone()];
+    let mut names = vec![];
+    while let Some(dir) = pending.pop() {
+        if dir.symlink_metadata().is_ok() && (!real_dir(&dir) || dir.canonicalize().ok().as_ref() != Some(&dir)) {
+            names.push(dir.strip_prefix(root).unwrap_or(&dir).display().to_string());
+            continue;
+        }
+        let entries = match std::fs::read_dir(&dir) {
+            Ok(e) => e,
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound && dir == saved => continue,
+            Err(_) => { names.push(dir.display().to_string()); continue; },
+        };
+        for entry in entries {
+            let Ok(entry) = entry else { names.push(dir.display().to_string()); continue };
+            let path = entry.path();
+            if real_dir(&path) { pending.push(path); continue; }
+            let Some(filename) = path.file_name().and_then(|n| n.to_str()) else { continue };
+            let Some((name, _)) = filename.rsplit_once(".tico-backup-") else { continue };
+            let relative = path.strip_prefix(&saved).unwrap().with_file_name(name);
+            let digest = filename.rsplit_once("-sha256-").map(|(_, hash)| hash.to_string());
+            let marked = digest.is_some();
+            let digest = if let Some(hash) = digest {
+                (hash.len() == 64 && hash.bytes().all(|c| c.is_ascii_digit() || (b'a'..=b'f').contains(&c))).then_some(hash)
+            } else { root.join(&relative).canonicalize().ok().filter(|p| p.starts_with(root))
+                .and_then(|p| regular_file::read(p, CONTENT).ok()).map(|b| gitrun::sha256_hex(&b)) };
+            let metadata = path.symlink_metadata().ok().filter(|m| m.is_file() && m.nlink() == 1);
+            let Some((m, digest)) = metadata.zip(digest) else {
+                names.push(path.strip_prefix(root).unwrap_or(&path).display().to_string());
+                continue;
+            };
+            let unchanged = || regular_file::read(&path, CONTENT).is_ok_and(|b| gitrun::sha256_hex(&b) == digest);
+            if !unchanged() {
+                names.push(path.strip_prefix(root).unwrap_or(&path).display().to_string());
+                continue;
+            }
+            // Keep every accepted backup: an open writer may still hold its inode.
+            if !path.symlink_metadata().is_ok_and(|after| after.dev() == m.dev() && after.ino() == m.ino() && after.mtime() == m.mtime() && after.mtime_nsec() == m.mtime_nsec())
+                || !unchanged() {
+                names.push(path.strip_prefix(root).unwrap_or(&path).display().to_string());
+            } else if !marked {
+                // Give a retained legacy backup a baseline only while it still equals the checkout.
+                let baseline = path.with_file_name(format!("{filename}-sha256-{digest}"));
+                if baseline.symlink_metadata().is_ok() || std::fs::rename(&path, &baseline).is_err() {
+                    names.push(path.strip_prefix(root).unwrap_or(&path).display().to_string());
+                }
+            }
+        }
+    }
+    if names.is_empty() { return None; }
+    let note = format!("repository copy needs attention: bot instruction edit to review: {}", names.iter().take(3).cloned().collect::<Vec<_>>().join(", "));
+    crate::util::log(&note);
+    Some(note)
+}
+
+pub fn changed_file_names(status: &str) -> String {
+    let names: Vec<_> = status.lines().filter_map(|s| s.get(3..)).collect();
+    let mut text = names.iter().take(3).copied().collect::<Vec<_>>().join(", ");
+    if names.len() > 3 { text.push_str(&format!(", and {} more", names.len() - 3)); }
+    redact::scrub_credentials(&text, &[]).chars().take(240).collect()
 }
 
 /// Write `.git/tico-managed` (`{"full_name": ...}` as Python writes it), never through a symlink.
@@ -1327,7 +1764,7 @@ pub fn mark_managed(path: &Path, name: Option<&str>, adopted: bool) -> Result<()
     if is_symlink(&marker) {
         return Err("Could not mark managed base clone; check permissions".into());
     }
-    std::fs::write(&marker, marker_text).map_err(|_| "Could not mark managed base clone; check permissions".to_string())?;
+    regular_file::write(&marker, marker_text.as_bytes(), 1024, false).map_err(|_| "Could not mark managed base clone; check permissions".to_string())?;
     crate::isolation::chown(&marker);
     Ok(())
 }
@@ -1364,6 +1801,449 @@ pub async fn base_kept(path: &Path) -> Result<Option<String>, String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::gitlocks::TEST_FIXTURES as FIXTURES;
+
+    struct RepoFixture { root: PathBuf, remote: PathBuf, seed: PathBuf, base: PathBuf, env: Env, _guard: tokio::sync::MutexGuard<'static, ()> }
+
+    fn sh(path: &Path, args: &[&str]) -> String {
+        let out = std::process::Command::new("git").args(["-c", "user.name=Fixture", "-c", "user.email=fixture@acme.example", "-c", "commit.gpgsign=false"])
+            .args(args).current_dir(path).env("GIT_CONFIG_GLOBAL", "/dev/null").env("GIT_CONFIG_NOSYSTEM", "1").output().unwrap();
+        assert!(out.status.success(), "{args:?}: {}", String::from_utf8_lossy(&out.stderr));
+        String::from_utf8(out.stdout).unwrap().trim().to_string()
+    }
+
+    impl RepoFixture {
+        async fn new() -> Self {
+            Self::with_base_ref_format(None).await.unwrap()
+        }
+        async fn with_base_ref_format(format: Option<&str>) -> Option<Self> {
+            let guard = FIXTURES.lock().await;
+            let root = std::env::temp_dir().join(format!("tico-repair-{}", uuid::Uuid::new_v4().simple()));
+            std::fs::create_dir(&root).unwrap();
+            let (remote, seed, base) = (root.join("remote.git"), root.join("seed"), root.join("base"));
+            if let Some(format) = format {
+                let out = std::process::Command::new("git")
+                    .args(["init", "-q", "-b", "main", &format!("--ref-format={format}"), base.to_str().unwrap()])
+                    .current_dir(&root).env("GIT_CONFIG_GLOBAL", "/dev/null").env("GIT_CONFIG_NOSYSTEM", "1").output().unwrap();
+                if !out.status.success() {
+                    let error = String::from_utf8_lossy(&out.stderr);
+                    assert!(error.contains("unknown option") || error.contains("unknown ref storage format") || error.contains("invalid value for --ref-format"), "git init failed: {error}");
+                    eprintln!("SKIP reftable fixture: this Git lacks git init --ref-format={format}: {error}");
+                    std::fs::remove_dir_all(&root).unwrap();
+                    return None;
+                }
+            }
+            sh(&root, &["init", "--bare", "-q", "-b", "main", remote.to_str().unwrap()]);
+            sh(&root, &["clone", "-q", remote.to_str().unwrap(), seed.to_str().unwrap()]);
+            std::fs::create_dir_all(seed.join("templates/employee-repo")).unwrap();
+            std::fs::write(seed.join("CLAUDE.md"), "Repository rules\n").unwrap();
+            std::fs::write(seed.join("templates/employee-repo/AGENT.md"), "Bot rules\n").unwrap();
+            for (name, target) in [("AGENTS.md", "CLAUDE.md"), ("templates/employee-repo/AGENTS.md", "AGENT.md"), ("templates/employee-repo/CLAUDE.md", "AGENT.md")] {
+                std::os::unix::fs::symlink(target, seed.join(name)).unwrap();
+            }
+            sh(&seed, &["add", "."]);
+            sh(&seed, &["commit", "-qm", "initial"]);
+            sh(&seed, &["push", "-q", "origin", "main"]);
+            if format.is_some() {
+                sh(&base, &["remote", "add", "origin", remote.to_str().unwrap()]);
+                sh(&base, &["fetch", "-q", "origin"]);
+                sh(&base, &["reset", "-q", "--hard", "origin/main"]);
+            } else {
+                sh(&root, &["clone", "-q", remote.to_str().unwrap(), base.to_str().unwrap()]);
+            }
+            let mut env = crate::safegit::clean_environment(&crate::env::process_environment());
+            env.extend([("GIT_CONFIG_COUNT".into(), "1".into()), ("GIT_CONFIG_KEY_0".into(), "protocol.file.allow".into()), ("GIT_CONFIG_VALUE_0".into(), "always".into())]);
+            crate::gitlocks::own(std::slice::from_ref(&root));
+            Some(Self { root, remote, seed, base, env, _guard: guard })
+        }
+        fn manager(&self) -> Repositories {
+            Repositories::new(&self.root.join("workspace"), &self.root.join("state"), Client::new("http://localhost", "unused", 1, 0).unwrap())
+        }
+    }
+    impl Drop for RepoFixture {
+        fn drop(&mut self) { let _ = std::fs::remove_dir_all(&self.root); }
+    }
+
+    #[tokio::test]
+    async fn repository_syncs_do_not_block_other_refreshes_and_same_repository_wait_is_bounded() {
+        let f = RepoFixture::new().await;
+        let manager = f.manager();
+        manager.rows.lock().unwrap().insert("acme/web".into(), json!({"full_name": "Acme/Web", "state": "cloned"}));
+        let guard = manager.sync_guard("acme/web").await.unwrap();
+        std::fs::create_dir_all(&manager.mirrors).unwrap();
+        std::os::unix::fs::symlink(&f.remote, manager.mirrors.join("acme__other.git")).unwrap();
+        // Reach a deterministic mirror validation error without any network access while A is syncing.
+        let other = tokio::time::timeout(SYNC_LOCK_WAIT * 3, manager.refresh_mirror("acme/other", "unused")).await.unwrap().unwrap_err();
+        assert!(other.contains("symlink"), "{other}");
+        let busy = tokio::time::timeout(SYNC_LOCK_WAIT * 3, manager.refresh_mirror("Acme/Web", "unused")).await.unwrap().unwrap_err();
+        assert!(busy.contains("sync is busy"), "{busy}");
+        tokio::time::timeout(SYNC_LOCK_WAIT * 3, manager.update("acme/web", &json!({"full_name": "Acme/Web"}), epoch_s())).await.unwrap();
+        assert_eq!(manager.row("acme/web")["state"], "cloned");
+        drop(guard);
+        assert!(manager.sync_guard("ACME/WEB").await.is_ok());
+    }
+
+    #[tokio::test]
+    async fn malformed_mirrors_and_old_ref_locks_are_reported_without_replacement() {
+        let f = RepoFixture::new().await;
+        let manager = f.manager();
+        let mirror = manager.mirror_path("acme/web").ok().unwrap();
+        std::fs::create_dir_all(mirror.parent().unwrap()).unwrap();
+        sh(&f.root, &["init", "--bare", "-q", mirror.to_str().unwrap()]);
+        let original = std::fs::read(mirror.join("config")).unwrap();
+        std::fs::write(mirror.join("config"), "[broken\n").unwrap();
+        let prefix = vec!["-c".into(), "protocol.file.allow=always".into()];
+        let lock = mirror.join("config.lock");
+        std::fs::write(&lock, "still owned").unwrap();
+        std::fs::File::open(&lock).unwrap().set_times(std::fs::FileTimes::new().set_modified(std::time::SystemTime::now() - std::time::Duration::from_secs(3600))).unwrap();
+        let filled = manager.fill_mirror("acme/web", &mirror, &prefix, "main", f.remote.to_str().unwrap(), "acme/web", &f.env, &f.env, 10, epoch_s(), true).await;
+        assert!(matches!(filled, Err(Fail::Msg(m)) if m.contains("minutes old") && m.contains("run: rm --")));
+        assert_eq!(std::fs::read_to_string(&lock).unwrap(), "still owned");
+        std::fs::remove_file(&lock).unwrap();
+        let filled = manager.fill_mirror("acme/web", &mirror, &prefix, "main", f.remote.to_str().unwrap(), "acme/web", &f.env, &f.env, 10, epoch_s(), true).await;
+        assert!(matches!(filled, Err(Fail::Msg(m)) if m.contains("repository format cannot be read safely")));
+        assert_eq!(std::fs::read_to_string(mirror.join("config")).unwrap(), "[broken\n");
+        assert_eq!(std::fs::read_dir(&manager.mirrors).unwrap().count(), 1);
+        // Once a person repairs the config, normal fetching can proceed.
+        std::fs::write(mirror.join("config"), original).unwrap();
+        assert!(manager.fill_mirror("acme/web", &mirror, &prefix, "main", f.remote.to_str().unwrap(), "acme/web", &f.env, &f.env, 10, epoch_s(), true).await.is_ok());
+        let ref_lock = mirror.join("refs/heads/main.lock");
+        std::fs::write(&ref_lock, "still owned").unwrap();
+        std::fs::File::open(&ref_lock).unwrap().set_times(std::fs::FileTimes::new().set_modified(std::time::SystemTime::now() - std::time::Duration::from_secs(3600))).unwrap();
+        let inode = std::os::unix::fs::MetadataExt::ino(&ref_lock.metadata().unwrap());
+        sh(&f.seed, &["commit", "-q", "--allow-empty", "-m", "later"]);
+        sh(&f.seed, &["push", "-q"]);
+        let failed = manager.fill_mirror("acme/web", &mirror, &prefix, "main", f.remote.to_str().unwrap(), "acme/web", &f.env, &f.env, 10, epoch_s(), true).await;
+        assert!(matches!(failed, Err(Fail::Msg(m)) if m.contains("minutes old") && m.contains(&ref_lock.display().to_string())));
+        assert_eq!(std::os::unix::fs::MetadataExt::ino(&ref_lock.metadata().unwrap()), inode);
+        assert_eq!(std::fs::read_to_string(&ref_lock).unwrap(), "still owned");
+        assert!(!mirror.join("tico-lock-backups").exists());
+    }
+
+    #[tokio::test]
+    async fn only_a_git_unreadable_default_format_mirror_is_preserved_before_rebuild() {
+        let f = RepoFixture::new().await;
+        let manager = f.manager();
+        let mirror = manager.mirror_path("acme/web").ok().unwrap();
+        std::fs::create_dir_all(&manager.mirrors).unwrap();
+        sh(&f.root, &["clone", "--bare", "-q", f.remote.to_str().unwrap(), mirror.to_str().unwrap()]);
+        let readable = manager.preserve_mirror("acme/web", f.remote.to_str().unwrap(), &[], &f.env, 10).await;
+        assert!(matches!(readable, Err(Fail::Msg(m)) if m.contains("mirror may still be in use") && m.contains(&mirror.display().to_string()) && m.contains("fsck --full")));
+        assert!(mirror.exists());
+        // Bare clone refs are packed. Removing its empty refs tree makes Git reject the repository
+        // while the published refs and default-format config remain verifiable without Git setup.
+        std::fs::remove_dir_all(mirror.join("refs")).unwrap();
+        assert!(manager.preserve_mirror("acme/web", f.remote.to_str().unwrap(), &[], &f.env, 10).await.is_ok());
+        assert!(!mirror.exists());
+        let prefix = vec!["-c".into(), "protocol.file.allow=always".into()];
+        assert!(manager.fill_mirror("acme/web", &mirror, &prefix, "main", f.remote.to_str().unwrap(), "acme/web", &f.env, &f.env, 10, epoch_s(), true).await.is_ok());
+        assert_eq!(sh(&mirror, &["rev-parse", "main"]), sh(&f.seed, &["rev-parse", "HEAD"]));
+        let again = manager.preserve_mirror("acme/web", f.remote.to_str().unwrap(), &prefix, &f.env, 10).await;
+        assert!(matches!(again, Err(Fail::Msg(m)) if m.contains("previous broken mirror")));
+    }
+
+    #[tokio::test]
+    async fn unreadable_base_format_preserves_unpushed_branches_stash_index_files_and_worktrees() {
+        let f = RepoFixture::new().await;
+        sh(&f.base, &["checkout", "-qb", "bot-work"]);
+        std::fs::write(f.base.join("feature"), "unpublished\n").unwrap();
+        sh(&f.base, &["add", "feature"]);
+        sh(&f.base, &["commit", "-qm", "bot work"]);
+        std::fs::write(f.base.join("feature"), "stash\n").unwrap();
+        sh(&f.base, &["stash", "-q"]);
+        std::fs::write(f.base.join("feature"), "staged\n").unwrap();
+        sh(&f.base, &["add", "feature"]);
+        std::fs::write(f.base.join("feature"), "unstaged\n").unwrap();
+        std::fs::write(f.base.join("untracked"), "not committed\n").unwrap();
+        let tree = f.root.join("task");
+        sh(&f.base, &["worktree", "add", "-q", "-b", "task-work", tree.to_str().unwrap(), "origin/main"]);
+        std::fs::write(tree.join("draft"), "task work\n").unwrap();
+        let refs = sh(&f.base, &["show-ref"]);
+        let index = std::fs::read(f.base.join(".git/index")).unwrap();
+        let settings = vec![("remote.origin.url".into(), f.remote.display().to_string()), ("remote.tico-mirror.url".into(), file_uri(&f.remote))];
+        let prefix = vec!["-c".into(), "protocol.file.allow=always".into()];
+        std::fs::write(f.base.join(".git/config.lock"), "recent").unwrap();
+        let original = std::fs::read(f.base.join(".git/config")).unwrap();
+        let blocked = configure_base(&f.base, &settings, &prefix, &f.env, "acme/web").await;
+        assert!(matches!(blocked, Err(Fail::Msg(m)) if m.contains("config.lock") && m.contains("Git lock")));
+        assert_eq!(std::fs::read(f.base.join(".git/config")).unwrap(), original);
+        std::fs::remove_file(f.base.join(".git/config.lock")).unwrap();
+        // Another runner thread can fork while a Git command holds this gate, then wait before exec.
+        let gate = crate::gitlocks::recovery_lock(&f.base.join(".git")).unwrap();
+        let child = crate::lock::inherited_files();
+        drop(gate);
+        std::fs::write(f.base.join(".git/config"), "[broken\n").unwrap();
+        let refused = configure_base(&f.base, &settings, &prefix, &f.env, "acme/web").await;
+        assert!(matches!(&refused, Err(Fail::Msg(m)) if m.contains("repository format cannot be read safely")), "{refused:?}");
+        assert_eq!(std::fs::read_to_string(f.base.join(".git/config")).unwrap(), "[broken\n");
+        drop(child);
+        std::fs::write(f.base.join(".git/config"), &original).unwrap();
+        assert!(configure_base(&f.base, &settings, &prefix, &f.env, "acme/web").await.is_ok());
+        assert_eq!(sh(&f.base, &["show-ref"]), refs);
+        assert_eq!(std::fs::read(f.base.join(".git/index")).unwrap(), index);
+        assert_eq!(std::fs::read_to_string(f.base.join("feature")).unwrap(), "unstaged\n");
+        assert_eq!(std::fs::read_to_string(f.base.join("untracked")).unwrap(), "not committed\n");
+        assert_eq!(std::fs::read_to_string(tree.join("draft")).unwrap(), "task work\n");
+        assert_eq!(sh(&tree, &["branch", "--show-current"]), "task-work");
+        let backups: Vec<_> = std::fs::read_dir(f.base.join(".git")).unwrap().flatten().filter(|e| e.file_name().to_string_lossy().starts_with("tico-config-backup-")).collect();
+        assert!(backups.is_empty(), "an unreadable format must never be replaced");
+    }
+
+    #[tokio::test]
+    async fn reftable_base_format_is_preserved_or_repair_is_refused() {
+        let Some(f) = RepoFixture::with_base_ref_format(Some("reftable")).await else { return };
+        sh(&f.base, &["branch", "bot-work"]);
+        std::fs::write(f.base.join("CLAUDE.md"), "stashed work\n").unwrap();
+        sh(&f.base, &["stash", "-q"]);
+        sh(&f.base, &["config", "extensions.worktreeConfig", "true"]);
+        let task = f.root.join("task");
+        sh(&f.base, &["worktree", "add", "-q", "-b", "task-work", task.to_str().unwrap()]);
+        std::fs::write(task.join("draft"), "task work\n").unwrap();
+        let refs = sh(&f.base, &["show-ref"]);
+        let config = f.base.join(".git/config");
+        let original = std::fs::read(&config).unwrap();
+        let index = std::fs::read(f.base.join(".git/index")).unwrap();
+        let settings = vec![("remote.origin.url".into(), f.remote.display().to_string()), ("remote.tico-mirror.url".into(), file_uri(&f.remote))];
+        let mut malformed = original.clone();
+        malformed.extend_from_slice(b"\n[broken\n");
+        std::fs::write(&config, &malformed).unwrap();
+        let refused = configure_base(&f.base, &settings, &[], &f.env, "acme/web").await;
+        assert!(matches!(refused, Err(Fail::Msg(m)) if m.contains("repository format cannot be read safely")));
+        assert_eq!(std::fs::read(&config).unwrap(), malformed);
+        assert!(f.base.join(".git/reftable").is_dir());
+        assert_eq!(std::fs::read(f.base.join(".git/index")).unwrap(), index);
+        assert!(!f.base.join(".git/config.lock").exists());
+        // With a verified config, stage and install through the same path used by config repair.
+        std::fs::write(&config, &original).unwrap();
+        let before = repository_format(&config, &f.env).await.ok().unwrap();
+        let staged = f.root.join("staged-config");
+        assert!(stage_base_config(&staged, &original, &settings, &[], &f.env).await.is_ok());
+        assert!(BaseConfigLock::acquire(&config).unwrap().install(Some(&original), &staged).is_ok());
+        assert_eq!(repository_format(&config, &f.env).await.ok().unwrap(), before);
+        assert_eq!(sh(&f.base, &["config", "core.repositoryformatversion"]), "1");
+        assert_eq!(sh(&f.base, &["config", "extensions.refStorage"]), "reftable");
+        assert_eq!(sh(&f.base, &["config", "extensions.worktreeConfig"]), "true");
+        assert_eq!(sh(&f.base, &["show-ref"]), refs);
+        assert_eq!(sh(&task, &["branch", "--show-current"]), "task-work");
+        assert_eq!(std::fs::read_to_string(task.join("draft")).unwrap(), "task work\n");
+    }
+
+    #[tokio::test]
+    async fn config_staging_keeps_all_extensions_and_refuses_unknown_formats() {
+        let f = RepoFixture::new().await;
+        let config = f.root.join("format-config");
+        let original = b"[core]\nrepositoryFormatVersion = 1\n[extensions]\nobjectFormat = sha256\nrefStorage = reftable\nworktreeConfig = true\npreciousObjects = true\nfutureFormat = retained\n";
+        let settings = vec![("remote.tico-mirror.url".into(), file_uri(&f.remote))];
+        assert!(stage_base_config(&config, original, &settings, &[], &f.env).await.is_ok());
+        let format = repository_format(&config, &f.env).await.ok().unwrap();
+        for (key, value) in [("core.repositoryformatversion", "1"), ("extensions.objectformat", "sha256"), ("extensions.refstorage", "reftable"),
+            ("extensions.worktreeconfig", "true"), ("extensions.preciousobjects", "true"), ("extensions.futureformat", "retained")] {
+            assert_eq!(format.get(key).unwrap(), &[value.to_string()]);
+        }
+        std::fs::remove_file(&config).unwrap();
+        let changes_format = vec![("extensions.objectFormat".into(), "sha1".into())];
+        assert!(stage_base_config(&config, original, &changes_format, &[], &f.env).await.is_err());
+        for bytes in [b"[broken\n".as_slice(), b"[core]\nrepositoryFormatVersion = 2\n", b"[core]\nrepositoryFormatVersion = 1\n[include]\npath = extra-config\n"] {
+            std::fs::write(&config, bytes).unwrap();
+            assert!(repository_format(&config, &f.env).await.is_err());
+        }
+    }
+
+    #[tokio::test]
+    async fn base_config_repair_holds_gits_lock_until_atomic_install() {
+        use std::os::unix::fs::PermissionsExt;
+        let f = RepoFixture::new().await;
+        let config = f.base.join(".git/config");
+        set_mode(&config, 0o600);
+        let original = std::fs::read(&config).unwrap();
+        let rebuilt = f.root.join("rebuilt-config");
+        let mut replacement = original.clone();
+        replacement.extend_from_slice(b"\n[repair]\n\tinstalled = true\n");
+        std::fs::write(&rebuilt, &replacement).unwrap();
+
+        // A writer starting after the metadata check must fail while repair holds config.lock.
+        let lock = BaseConfigLock::acquire(&config).unwrap();
+        let writer = run_as_bot(&[], &["-C", f.base.to_str().unwrap(), "config", "--local", "owner.edit", "concurrent"], &f.env, 10).await.ok().unwrap();
+        assert!(!writer.ok(), "a concurrent Git writer acquired repair's lock");
+        assert!(config.with_file_name("config.lock").exists());
+        assert_eq!(std::fs::read(&config).unwrap(), original);
+        assert!(lock.install(Some(&original), &rebuilt).is_ok());
+        assert_eq!(std::fs::read(&config).unwrap(), replacement);
+        assert!(!config.with_file_name("config.lock").exists());
+        assert_eq!(config.metadata().unwrap().permissions().mode() & 0o777, 0o600);
+        let backups: Vec<_> = std::fs::read_dir(config.parent().unwrap()).unwrap().flatten()
+            .filter(|e| e.file_name().to_string_lossy().starts_with("tico-config-backup-")).collect();
+        assert_eq!(backups.len(), 1);
+        assert_eq!(std::fs::read(backups[0].path()).unwrap(), original);
+        assert_eq!(backups[0].metadata().unwrap().permissions().mode() & 0o777, 0o600);
+        sh(&f.base, &["config", "--local", "owner.edit", "after repair"]);
+        assert_eq!(sh(&f.base, &["config", "--get", "repair.installed"]), "true");
+        assert_eq!(sh(&f.base, &["config", "--get", "owner.edit"]), "after repair");
+    }
+
+    #[tokio::test]
+    async fn base_config_repair_preserves_late_git_locks_and_completed_edits() {
+        let f = RepoFixture::new().await;
+        let config = f.base.join(".git/config");
+        let original = std::fs::read(&config).unwrap();
+        let rebuilt = f.root.join("rebuilt-config");
+        std::fs::write(&rebuilt, &original).unwrap();
+        let pending = config.with_file_name("config.lock");
+        std::fs::write(&pending, "writer's pending config").unwrap();
+        assert!(BaseConfigLock::acquire(&config).is_err());
+        assert_eq!(std::fs::read_to_string(&pending).unwrap(), "writer's pending config");
+        assert_eq!(std::fs::read(&config).unwrap(), original);
+        std::fs::remove_file(&pending).unwrap();
+
+        // A writer that commits before repair acquires the lock invalidates its earlier snapshot.
+        sh(&f.base, &["config", "--local", "owner.edit", "saved during repair"]);
+        let edited = std::fs::read(&config).unwrap();
+        let result = BaseConfigLock::acquire(&config).unwrap().install(Some(&original), &rebuilt);
+        assert!(matches!(result, Err(Fail::Msg(m)) if m.contains("changed during repair")));
+        assert_eq!(std::fs::read(&config).unwrap(), edited);
+        assert!(!pending.exists());
+        assert!(!std::fs::read_dir(config.parent().unwrap()).unwrap().flatten()
+            .any(|e| e.file_name().to_string_lossy().starts_with("tico-config-backup-")));
+
+        // A failed staging read releases only repair's own lock and keeps the current config.
+        std::fs::remove_file(&rebuilt).unwrap();
+        assert!(BaseConfigLock::acquire(&config).unwrap().install(Some(&edited), &rebuilt).is_err());
+        assert!(!pending.exists());
+        assert_eq!(std::fs::read(&config).unwrap(), edited);
+        sh(&f.base, &["config", "--local", "owner.edit", "writer can continue"]);
+    }
+
+    #[cfg(target_os = "linux")]
+    #[tokio::test]
+    #[ignore = "requires a disposable Linux two-user environment"]
+    async fn isolated_base_config_failure_refuses_before_creating_bot_controlled_scratch() {
+        assert_eq!(unsafe { libc::geteuid() }, 0);
+        assert_eq!(crate::isolation::identity(), Some((10003, 10002)));
+        let f = RepoFixture::new().await;
+        crate::isolation::adopt(std::slice::from_ref(&f.base));
+        let git = f.base.join(".git");
+        let original = std::fs::read(git.join("config")).unwrap();
+        // The bot owns the metadata and can make config updates fail while leaving the config readable.
+        set_mode(&git, 0o555);
+        let settings = vec![("remote.origin.url".into(), "https://github.com/acme/web.git".into())];
+        let prefix = vec!["-c".into(), "protocol.file.allow=always".into()];
+        let failed = run_as_bot(&prefix, &["-C", f.base.to_str().unwrap(), "config", "--local", "remote.origin.url", "https://github.com/acme/web.git"], &f.env, 10).await.ok().unwrap();
+        assert!(!failed.ok() && failed.stderr.contains("Permission denied"), "{}", failed.stderr);
+        let result = configure_base(&f.base, &settings, &prefix, &f.env, "acme/web").await;
+        assert!(matches!(result, Err(Fail::Msg(m)) if m.contains("repository copy needs attention") && m.contains("separate user")));
+        assert_eq!(std::fs::read(git.join("config")).unwrap(), original);
+        assert!(!std::fs::read_dir(&f.root).unwrap().flatten().any(|e| e.file_name().to_string_lossy().starts_with(".tico-base-repair-")),
+            "no scratch checkout can expose a bot-controlled config symlink to the supervisor");
+        assert!(!std::fs::read_dir(&git).unwrap().flatten().any(|e| e.file_name().to_string_lossy().starts_with("tico-config-backup-")));
+    }
+
+    #[tokio::test]
+    async fn malformed_adopted_base_config_keeps_the_original_instead_of_a_local_mirror_origin() {
+        let f = RepoFixture::new().await;
+        sh(&f.base, &["remote", "set-url", "origin", "git@github.com:acme/web.git"]);
+        mark_managed(&f.base, Some("acme/web"), true).unwrap();
+        let config = f.base.join(".git/config");
+        let mut original = std::fs::read(&config).unwrap();
+        original.extend_from_slice(b"\n[broken\n");
+        std::fs::write(&config, &original).unwrap();
+        let index = std::fs::read(f.base.join(".git/index")).unwrap();
+        let settings = vec![("remote.tico-mirror.url".into(), file_uri(&f.remote)), ("remote.tico-mirror.fetch".into(), "+refs/heads/main:refs/remotes/tico-mirror/main".into())];
+        let prefix = vec!["-c".into(), "protocol.file.allow=always".into()];
+        let result = configure_base(&f.base, &settings, &prefix, &f.env, "acme/web").await;
+        assert!(matches!(result, Err(Fail::Msg(m)) if m.contains("original GitHub origin cannot be verified and preserved")));
+        assert_eq!(std::fs::read(config).unwrap(), original);
+        assert_eq!(std::fs::read(f.base.join(".git/index")).unwrap(), index);
+        assert!(!std::fs::read_dir(f.base.join(".git")).unwrap().flatten().any(|e| e.file_name().to_string_lossy().starts_with("tico-config-backup-")));
+        assert!(!std::fs::read_dir(&f.root).unwrap().flatten().any(|e| e.file_name().to_string_lossy().starts_with(".tico-base-repair-")));
+    }
+
+    #[tokio::test]
+    async fn instruction_repair_and_backup_inspection_refuse_fifos_and_large_files() {
+        if !regular_file::in_child("repositories::tests::instruction_repair_and_backup_inspection_refuse_fifos_and_large_files").await { return; }
+        let f = RepoFixture::new().await;
+        let path = f.base.join("AGENTS.md");
+        let target = f.base.join("CLAUDE.md");
+        std::fs::remove_file(&path).unwrap();
+        std::fs::write(&path, "CLAUDE.md").unwrap();
+        std::fs::remove_file(&target).unwrap();
+        regular_file::fifo(&target);
+        assert!(repair_instruction_links(&f.base, &f.env).await.is_none());
+        assert_eq!(std::fs::read(&path).unwrap(), b"CLAUDE.md");
+        assert!(!f.base.join(".git/tico-instruction-backups").exists());
+        std::fs::remove_file(&target).unwrap();
+        std::fs::File::create(&target).unwrap().set_len(CONTENT + 1).unwrap();
+        assert!(repair_instruction_links(&f.base, &f.env).await.is_none());
+        assert!(!path.is_symlink());
+        std::fs::remove_file(&path).unwrap();
+        regular_file::fifo(&path);
+        let saved = f.base.join(".git/tico-instruction-backups");
+        std::fs::create_dir(&saved).unwrap();
+        let backup = saved.join("AGENTS.md.tico-backup-legacy");
+        std::fs::write(&backup, "Repository rules\n").unwrap();
+        assert!(instruction_backup_note(&f.base, &f.base.join(".git")).await.unwrap().contains("AGENTS.md.tico-backup-legacy"));
+        std::fs::remove_file(&backup).unwrap();
+        let backup = saved.join(format!("AGENTS.md.tico-backup-marked-sha256-{}", gitrun::sha256_hex(b"Repository rules\n")));
+        regular_file::fifo(&backup);
+        assert!(instruction_backup_note(&f.base, &f.base.join(".git")).await.unwrap().contains(backup.file_name().unwrap().to_str().unwrap()));
+        assert!(backup.exists());
+    }
+
+    #[tokio::test]
+    async fn metadata_inspection_and_managed_marker_writes_refuse_special_files() {
+        if !regular_file::in_child("repositories::tests::metadata_inspection_and_managed_marker_writes_refuse_special_files").await { return; }
+        let f = RepoFixture::new().await;
+        let marker = f.base.join(".git/tico-managed");
+        if marker.exists() { std::fs::remove_file(&marker).unwrap(); }
+        regular_file::fifo(&marker);
+        assert!(!was_adopted(&f.base));
+        assert!(mark_managed(&f.base, Some("acme/repo"), false).is_err());
+        let repos = f.manager();
+        std::fs::create_dir_all(&repos.root).unwrap();
+        std::os::unix::fs::symlink(&f.base, repos.root.join("acme__repo")).unwrap();
+        assert!(repos.markers().is_empty());
+        let alternate = f.base.join(".git/objects/info/alternates");
+        regular_file::fifo(&alternate);
+        assert!(no_alternate_users(&[f.base.clone()], &f.remote).is_err());
+        for name in ["HEAD", "packed-refs"] {
+            let path = f.remote.join(name);
+            let old = std::fs::read(&path).ok();
+            if path.exists() { std::fs::remove_file(&path).unwrap(); }
+            regular_file::fifo(&path);
+            assert!(mirror_refs(&f.remote).is_err());
+            std::fs::remove_file(&path).unwrap();
+            if let Some(old) = old { std::fs::write(&path, old).unwrap(); }
+        }
+    }
+
+    #[tokio::test]
+    async fn flattened_instruction_links_are_repaired_but_bot_edits_stay_and_are_named() {
+        let f = RepoFixture::new().await;
+        let interrupted = f.base.join(".git").join(format!("tico-instruction-link-{}", uuid::Uuid::new_v4().simple()));
+        std::os::unix::fs::symlink("CLAUDE.md", &interrupted).unwrap();
+        for (name, text) in [("AGENTS.md", "Repository rules\n"), ("templates/employee-repo/AGENTS.md", "Bot rules\n"), ("templates/employee-repo/CLAUDE.md", "Bot rules\n")] {
+            let path = f.base.join(name);
+            std::fs::remove_file(&path).unwrap();
+            std::fs::write(path, text).unwrap();
+        }
+        assert!(repair_instruction_links(&f.base, &f.env).await.is_none());
+        assert_eq!(sh(&f.base, &["status", "--porcelain"]), "");
+        assert!(crate::gitlocks::check(&f.base.join(".git")).is_ok(), "an interrupted instruction repair cannot block config recovery");
+        std::fs::remove_file(f.base.join("AGENTS.md")).unwrap();
+        std::fs::write(f.base.join("AGENTS.md"), "A bot's real instruction edit\n").unwrap();
+        // Even an exact copy is work when staged deliberately as a new regular file.
+        std::fs::remove_file(f.base.join("templates/employee-repo/CLAUDE.md")).unwrap();
+        std::fs::write(f.base.join("templates/employee-repo/CLAUDE.md"), "Bot rules\n").unwrap();
+        sh(&f.base, &["add", "templates/employee-repo/CLAUDE.md"]);
+        sh(&f.seed, &["commit", "-q", "--allow-empty", "-m", "upstream"]);
+        sh(&f.seed, &["push", "-q"]);
+        let before = sh(&f.base, &["rev-parse", "HEAD"]);
+        let (state, why) = crate::placement::fast_forward(&f.base, &f.env).await;
+        assert_eq!(state, "kept", "{why}");
+        assert!(why.contains("AGENTS.md") && why.contains("templates/employee-repo/CLAUDE.md"), "{why}");
+        assert_eq!(sh(&f.base, &["rev-parse", "HEAD"]), before);
+        assert_eq!(std::fs::read_to_string(f.base.join("AGENTS.md")).unwrap(), "A bot's real instruction edit\n");
+        assert!(!f.base.join("templates/employee-repo/CLAUDE.md").is_symlink());
+    }
 
     #[test]
     fn folders_and_addresses_follow_the_shared_naming() {
@@ -1383,6 +2263,7 @@ mod tests {
     #[tokio::test]
     async fn a_half_clone_the_bot_user_made_is_still_tico_s_and_one_by_anyone_else_is_not() {
         use std::os::unix::fs::MetadataExt;
+        let _guard = FIXTURES.lock().await;
         let tmp = std::env::temp_dir().join(format!("tico-half-clone-{}", std::process::id()));
         let path = tmp.join("half");
         std::fs::create_dir_all(&path).unwrap();
@@ -1400,4 +2281,171 @@ mod tests {
         assert!(!half_clone_of(&path, &[bot]).await);
         std::fs::remove_dir_all(&tmp).unwrap();
     }
+    #[tokio::test]
+    async fn mirror_relocation_refuses_a_git_worktree_added_during_the_remote_query() {
+        use std::os::unix::fs::PermissionsExt;
+        let f = RepoFixture::new().await;
+        let manager = f.manager();
+        let mirror = manager.mirror_path("acme/web").ok().unwrap();
+        std::fs::create_dir_all(&manager.mirrors).unwrap();
+        sh(&f.root, &["clone", "--bare", "-q", f.remote.to_str().unwrap(), mirror.to_str().unwrap()]);
+        let refs = mirror_refs(&mirror).ok().unwrap();
+        let config = std::fs::read(mirror.join("config")).unwrap();
+        let task = f.root.join("task");
+        let ssh = f.root.join("fixture-ssh");
+        let quote = |p: &Path| crate::gitcred::shell_quote(p.to_str().unwrap());
+        std::fs::write(&ssh, format!(
+            "#!/bin/sh\nset -e\ngit --git-dir={} worktree add -q --detach {} HEAD\nexec git-upload-pack {}\n",
+            quote(&mirror), quote(&task), quote(&f.remote)
+        )).unwrap();
+        std::fs::set_permissions(&ssh, std::fs::Permissions::from_mode(0o700)).unwrap();
+        let prefix = vec!["-c".into(), format!("core.sshCommand={}", quote(&ssh)), "-c".into(), "protocol.ssh.allow=always".into()];
+        let mut env = f.env.clone();
+        env.insert("GIT_SSH_VARIANT".into(), "ssh".into());
+        let result = manager.preserve_mirror("acme/web", "ssh://fixture/acme/web.git", &prefix, &env, 10).await;
+        let reason = match &result { Err(Fail::Msg(m)) => m.as_str(), _ => "unexpected mirror preservation result" };
+        assert!(matches!(&result, Err(Fail::Msg(m)) if m.contains("mirror may still be in use") && m.contains("fsck --full")), "{reason}");
+        assert_eq!(std::fs::read(mirror.join("config")).unwrap(), config);
+        assert_eq!(mirror_refs(&mirror).ok().unwrap(), refs);
+        assert_eq!(sh(&task, &["rev-parse", "HEAD"]), sh(&f.seed, &["rev-parse", "HEAD"]));
+        assert_eq!(std::fs::read_dir(&manager.mirrors).unwrap().count(), 1);
+    }
+
+    #[tokio::test]
+    async fn mirror_rebuild_refuses_registered_worktrees() {
+        let f = RepoFixture::new().await;
+        let manager = f.manager();
+        let mirror = manager.mirror_path("acme/web").ok().unwrap();
+        std::fs::create_dir_all(&manager.mirrors).unwrap();
+        sh(&f.root, &["clone", "--bare", "-q", f.remote.to_str().unwrap(), mirror.to_str().unwrap()]);
+        let task = f.root.join("task");
+        sh(&mirror, &["worktree", "add", "--detach", task.to_str().unwrap()]);
+        std::fs::write(task.join("draft"), "unpublished worktree work").unwrap();
+        std::fs::write(mirror.join("config"), "[broken\n").unwrap();
+        let result = manager.preserve_mirror("acme/web", f.remote.to_str().unwrap(), &[], &f.env, 10).await;
+        assert!(matches!(result, Err(Fail::Msg(m)) if m.contains("repository copy needs attention: mirror has registered worktrees")));
+        assert_eq!(std::fs::read_to_string(task.join("draft")).unwrap(), "unpublished worktree work");
+        assert_eq!(std::fs::read_to_string(mirror.join("config")).unwrap(), "[broken\n");
+    }
+
+    #[tokio::test]
+    async fn mirror_rebuild_refuses_a_repository_using_its_objects() {
+        let f = RepoFixture::new().await;
+        let manager = f.manager();
+        let mirror = manager.mirror_path("acme/web").ok().unwrap();
+        std::fs::create_dir_all(&manager.mirrors).unwrap();
+        sh(&f.root, &["clone", "--bare", "-q", f.remote.to_str().unwrap(), mirror.to_str().unwrap()]);
+        let dependent = manager.root.join("dependent");
+        std::fs::create_dir_all(&manager.root).unwrap();
+        sh(&f.root, &["clone", "--shared", "-q", mirror.to_str().unwrap(), dependent.to_str().unwrap()]);
+        // Exercise Git's relative alternates resolution as well as its clone-written absolute form.
+        for alternate in [mirror.join("objects").display().to_string(), "../../../../../state/mirrors/acme__web.git/objects".into()] {
+            std::fs::write(dependent.join(".git/objects/info/alternates"), alternate).unwrap();
+            let result = manager.preserve_mirror("acme/web", f.remote.to_str().unwrap(), &[], &f.env, 10).await;
+            assert!(matches!(result, Err(Fail::Msg(m)) if m.contains("uses this mirror's objects")));
+            assert!(mirror.exists());
+        }
+    }
+
+    #[tokio::test]
+    async fn mirror_rebuild_refuses_unpublished_refs_and_different_remote_shas() {
+        let f = RepoFixture::new().await;
+        let manager = f.manager();
+        let mirror = manager.mirror_path("acme/web").ok().unwrap();
+        std::fs::create_dir_all(&manager.mirrors).unwrap();
+        sh(&f.root, &["clone", "--bare", "-q", f.remote.to_str().unwrap(), mirror.to_str().unwrap()]);
+        let original = sh(&mirror, &["rev-parse", "main"]);
+        sh(&mirror, &["update-ref", "refs/heads/bot-work", &original]);
+        std::fs::write(mirror.join("config"), "[broken\n").unwrap();
+        let result = manager.preserve_mirror("acme/web", f.remote.to_str().unwrap(), &[], &f.env, 10).await;
+        let reason = match &result { Err(Fail::Msg(m)) => m.as_str(), _ => "unexpected mirror preservation result" };
+        assert!(matches!(&result, Err(Fail::Msg(m)) if m.contains("local ref refs/heads/bot-work is unpublished")), "{reason}");
+        std::fs::remove_file(mirror.join("refs/heads/bot-work")).unwrap();
+        sh(&f.seed, &["commit", "--allow-empty", "-qm", "new remote head"]);
+        sh(&f.seed, &["push", "-q"]);
+        let result = manager.preserve_mirror("acme/web", f.remote.to_str().unwrap(), &[], &f.env, 10).await;
+        let reason = match &result { Err(Fail::Msg(m)) => m.as_str(), _ => "unexpected mirror preservation result" };
+        assert!(matches!(&result, Err(Fail::Msg(m)) if m.contains("local ref refs/heads/main is unpublished or differs")), "{reason}");
+        assert_eq!(mirror_refs(&mirror).ok().unwrap()["refs/heads/main"], original);
+        assert_eq!(std::fs::read_to_string(mirror.join("config")).unwrap(), "[broken\n");
+    }
+
+    #[tokio::test]
+    async fn legacy_instruction_backups_gain_a_baseline_without_losing_open_writers() {
+        use std::io::Write;
+        let f = RepoFixture::new().await;
+        let saved = f.base.join(".git/tico-instruction-backups");
+        std::fs::create_dir_all(&saved).unwrap();
+        let legacy = saved.join("AGENTS.md.tico-backup-1");
+        std::fs::write(&legacy, "Repository rules\n").unwrap();
+        let mut writer = std::fs::OpenOptions::new().write(true).open(&legacy).unwrap();
+        assert!(repair_instruction_links(&f.base, &f.env).await.is_none());
+        let baseline = std::fs::read_dir(&saved).unwrap().next().unwrap().unwrap().path();
+        assert!(!legacy.exists() && baseline.file_name().unwrap().to_str().unwrap().contains("-sha256-"));
+        std::fs::remove_file(f.base.join("CLAUDE.md")).unwrap();
+        assert!(repair_instruction_links(&f.base, &f.env).await.is_none());
+        writer.write_all(b"late edit").unwrap();
+        drop(writer);
+        assert!(repair_instruction_links(&f.base, &f.env).await.unwrap().contains(baseline.file_name().unwrap().to_str().unwrap()));
+    }
+
+    #[tokio::test]
+    async fn accepted_instruction_backups_survive_changed_or_removed_targets_but_late_edits_are_reported() {
+        use std::io::{Seek, SeekFrom, Write};
+        let f = RepoFixture::new().await;
+        let path = f.base.join("AGENTS.md");
+        std::fs::remove_file(&path).unwrap();
+        std::fs::write(&path, "Repository rules\n").unwrap();
+        // An open descriptor retains the inode on Linux as macOS always does.
+        let mut writer = std::fs::OpenOptions::new().write(true).open(&path).unwrap();
+        assert!(repair_instruction_links(&f.base, &f.env).await.is_none());
+        let saved = f.base.join(".git/tico-instruction-backups");
+        let backup = std::fs::read_dir(&saved).unwrap().next().unwrap().unwrap().path();
+        assert!(backup.file_name().unwrap().to_str().unwrap().ends_with(&format!("-sha256-{}", gitrun::sha256_hex(b"Repository rules\n"))));
+        std::fs::write(f.base.join("CLAUDE.md"), "Updated release rules\n").unwrap();
+        sh(&f.base, &["add", "CLAUDE.md"]);
+        sh(&f.base, &["commit", "-qm", "updated release"]);
+        assert!(repair_instruction_links(&f.base, &f.env).await.is_none());
+        sh(&f.base, &["rm", "-q", "AGENTS.md", "CLAUDE.md"]);
+        sh(&f.base, &["commit", "-qm", "removed instructions"]);
+        assert!(repair_instruction_links(&f.base, &f.env).await.is_none());
+        assert!(backup.exists());
+        writer.seek(SeekFrom::Start(0)).unwrap();
+        writer.write_all(b"Late bot edit\n").unwrap();
+        writer.set_len(b"Late bot edit\n".len() as u64).unwrap();
+        drop(writer);
+        let note = repair_instruction_links(&f.base, &f.env).await.unwrap();
+        assert!(note.contains(backup.file_name().unwrap().to_str().unwrap()));
+        assert_eq!(std::fs::read_to_string(&backup).unwrap(), "Late bot edit\n");
+    }
+
+    #[tokio::test]
+    async fn differing_instruction_backups_are_kept_and_late_open_writers_are_reported() {
+        use std::io::{Seek, SeekFrom, Write};
+        let f = RepoFixture::new().await;
+        let path = f.base.join("AGENTS.md");
+        std::fs::remove_file(&path).unwrap();
+        std::fs::write(&path, "CLAUDE.md").unwrap();
+        let note = repair_instruction_links(&f.base, &f.env).await.unwrap();
+        assert!(note.contains("bot instruction edit to review") && note.contains("AGENTS.md.tico-backup-"));
+        let saved = f.base.join(".git/tico-instruction-backups");
+        let different = std::fs::read_dir(&saved).unwrap().flatten().next().unwrap().path();
+        assert_eq!(std::fs::read_to_string(&different).unwrap(), "CLAUDE.md");
+        std::fs::remove_file(&different).unwrap();
+        std::fs::remove_file(&path).unwrap();
+        std::fs::write(&path, "Repository rules\n").unwrap();
+        let mut writer = std::fs::OpenOptions::new().write(true).open(&path).unwrap();
+        assert!(repair_instruction_links(&f.base, &f.env).await.is_none());
+        let backup = std::fs::read_dir(&saved).unwrap().flatten().next().unwrap().path();
+        writer.seek(SeekFrom::Start(0)).unwrap();
+        writer.write_all(b"late bot edit\n").unwrap();
+        writer.set_len(b"late bot edit\n".len() as u64).unwrap();
+        drop(writer);
+        assert_eq!(std::fs::read_to_string(&backup).unwrap(), "late bot edit\n");
+        assert_eq!(std::fs::read_to_string(&path).unwrap(), "Repository rules\n");
+        let note = repair_instruction_links(&f.base, &f.env).await.unwrap();
+        assert!(note.contains(backup.file_name().unwrap().to_str().unwrap()));
+        assert!(backup.exists());
+    }
+
 }

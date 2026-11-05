@@ -436,9 +436,14 @@ def blob_for(c, auth, who, bid):
         raise Problem("not_found", "File not found", 404)
     from . import letters
     letter = letters.blob_access(c, auth, who, bid)
-    if letter is not None:
-        if not letter:
-            raise Problem("forbidden", "You cannot read this letter's source or proof", 403)
+    if letter is False:
+        raise Problem("forbidden", "You cannot read this letter's source or proof", 403)
+    from .files import file_visible, page_blobs
+    linked_pages = page_blobs(c, bid)
+    if linked_pages:
+        if not all(file_visible(c, auth, who, f, {}) for f in linked_pages):
+            raise Problem("not_found", "File not found", 404)
+    if letter is not None or linked_pages:
         return row
     from . import task_privacy as privacy
     if not privacy.blob_readable(c, privacy.actor(who), bid):
@@ -741,7 +746,8 @@ def install_media(app, store, auth, mutate, send_message, task_create, review_pr
                 fid, number = files.attach_task(c, who, tid, blob, digest, H.actor_id(who.actor))
                 c.execute("INSERT INTO task_assets VALUES(?,?)", (tid, blob["id"]))
                 c.execute("INSERT INTO blob_media(blob_id,poster_blob_id) VALUES(?,NULL)", (blob["id"],))
-                H._task_event(c, tid, who.actor, "file", None, blob["name"], "")
+                name, data = H.sourced_text(blob["name"], [{"file": fid, "version": number}])
+                H._task_event(c, tid, who.actor, "file", None, name, "", data=data)
                 choice["file"] = f"{fid}@{number}"
             choices.append(choice)
         from .task_review import check_ask
@@ -759,9 +765,22 @@ def install_media(app, store, auth, mutate, send_message, task_create, review_pr
         # so Replay can tell a task question from a comment ask (ask_ingest._judged_text).
         ask["task_question"] = True
         if review:
+            # A generated pick label keeps its source even after its review attachment is projected away.
+            if body.pick:
+                sources = {e["label"]: {"file": e["file"], "version": e["version"]} for e in review}
+                for question in ask["questions"]:
+                    for option in question["options"]:
+                        if option["label"] in sources:
+                            option["source"] = sources[option["label"]]
+                from .task_review import default_source
+                default_source(ask)
             ask["review"] = {"files": review, **({"pick": True} if body.pick else {})}
             ask["attachments"] = attachments
         if spend:
+            sources = [o["source"] for q in ask["questions"] for o in q["options"]
+                       if o["label"] == spend["label"] and o.get("source")]
+            if sources:
+                spend["source"] = sources
             ask["spend"] = spend
         gate = None
         if found:

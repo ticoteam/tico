@@ -2899,6 +2899,7 @@ export type Item = {
 export type ItemCreate = {
   at_ms?: number | null;
   detail?: Record<string, unknown>;
+  proposed_task_id?: string | null;
   quote?: string;
   result_ref?: string | null;
   section: "doc" | "task" | "feature";
@@ -2920,6 +2921,7 @@ export type ItemOne = {
 export type ItemPush = {
   detail?: Record<string, unknown> | null;
   force?: boolean;
+  private?: boolean;
   result_ref?: string | null;
   text?: string | null;
   version?: number;
@@ -3483,9 +3485,27 @@ export type MeetingTaskLink = {
   title: string;
 };
 
+export type MeetingTaskLinkBatch = {
+  next_cursor: string | null;
+  results: Array<{
+  status: 200 | 404;
+}>;
+  tasks: Array<MeetingTaskLink>;
+};
+
 export type MeetingTaskLinks = {
   next_cursor: string | null;
   tasks: Array<MeetingTaskLink>;
+};
+
+export type MeetingTaskProposalAccepted = {
+  item: {
+  id: string;
+  proposed_task_id: string | null;
+  result_ref: string | null;
+  status: string;
+};
+  pushed: boolean;
 };
 
 export type MeetingTaskRemoved = {
@@ -3765,12 +3785,14 @@ export type Origin = {
 export type Page = {
   archived: boolean;
   as_of: string | null;
+  audience?: AccessAudience | null;
   bot_id: string;
   bot_name: string;
   cadence: "none" | "daily" | "weekly" | "monthly";
   file_id: string;
   replaced_by_id: string | null;
   replaced_by_title?: string | null;
+  restricted?: boolean;
   src: string | null;
   stale_days: number | null;
   task_id: string | null;
@@ -3784,6 +3806,7 @@ export type Page = {
 export type PageEdit = {
   archived?: boolean | null;
   as_of?: string | null;
+  audience?: AccessAudience | null;
   cadence?: string | null;
   replaced_by?: string | null;
 };
@@ -6363,6 +6386,15 @@ export type AcceptInboundPhoneQuoteParams = {
 export type AcceptInboundPhoneQuoteBody = AcceptPhone;
 export type AcceptInboundPhoneQuoteResponse = unknown;
 
+/** POST /api/v2/meetings/{rid}/items/{iid}/link */
+export type AcceptMeetingTaskProposalParams = {
+  "Idempotency-Key": string;
+  iid: string;
+  rid: string;
+};
+export type AcceptMeetingTaskProposalBody = Empty;
+export type AcceptMeetingTaskProposalResponse = MeetingTaskProposalAccepted;
+
 /** POST /api/v2/rules/{rule_id}/accept */
 export type AcceptRuleParams = {
   "Idempotency-Key": string;
@@ -8451,7 +8483,7 @@ export type LinkMeetingTasksParams = {
   rid: string;
 };
 export type LinkMeetingTasksBody = Link;
-export type LinkMeetingTasksResponse = MeetingTaskLinks;
+export type LinkMeetingTasksResponse = MeetingTaskLinkBatch;
 
 /** GET /api/v2/automations/runs */
 export type ListAllAutomationRunsParams = {
@@ -9744,6 +9776,7 @@ export type PublishPageParams = {
 };
 export type PublishPageBody = {
   as_of?: string;
+  audience?: AccessAudience | null;
   cadence?: "none" | "daily" | "weekly" | "monthly";
   content_base64?: string;
   name?: string;
