@@ -70,6 +70,7 @@ def test_a_qa_retry_waits_without_writes_when_the_fresh_head_is_unavailable(api,
     with store.transaction() as c:
         c.execute("UPDATE task_links SET detail=? WHERE task_id=? AND kind='pr'",
                   (json.dumps({'head_sha': OLD}), task['id']))
+        before = dict(c.execute('SELECT * FROM check_waits WHERE id=?', (wait['id'],)).fetchone())
 
     def unavailable(*args, **kwargs):
         raise ConnectionError('GitHub unavailable')
@@ -82,7 +83,7 @@ def test_a_qa_retry_waits_without_writes_when_the_fresh_head_is_unavailable(api,
         patched.setattr(store, 'transaction', unexpected)
         assert P.retry(store, service=service) == []
     with store.read_transaction() as c:
-        assert P.waiting(c, task['id']) == [wait]
+        assert P.waiting(c, task['id']) == [before]
     [cid] = P.retry(store, service=service)
     assert [check['id'] for check in checks(api, task)] == [cid]
 
