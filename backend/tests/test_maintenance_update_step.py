@@ -211,8 +211,16 @@ def test_only_a_settled_turn_that_wrote_after_the_last_update_is_work(api):
 def test_a_bot_with_only_learnings_waiting_gets_one_delivery_turn_that_writes_no_update_and_is_never_asked_again(api, monkeypatch):
     store = api.app.state.store
     bot(api, "reader", "Reader")
-    monkeypatch.setattr(updates, "request_slots", lambda c, b: {"quiet_tasks": [], "learnings": ["Keep the Friday cut-off"],
-                                                                 "suggestions": []})
+    with store.transaction() as c:
+        reader = bid(c, "reader")
+        source = H.task_create(c, "human:ana", "Friday cutoff", "Keep the Friday cut-off", H.bot_actor(reader),
+                               lint=False, private=False)
+        c.execute("INSERT INTO learning_runs(id,night,status,started_at) VALUES('learn','2026-09-28','done',?)", (H.now(),))
+        c.execute("INSERT INTO learning_items(run_id,item_key,source,ref,label,text,created_at,scores) "
+                  "VALUES('learn','rule','task',?,'Friday cutoff','Keep the Friday cut-off',?,?)",
+                  (json.dumps({"task": source["id"]}), H.now(), json.dumps({reader: 0.9})))
+        c.execute("INSERT INTO learning_deliveries(run_id,recipient,item_keys,created_at) VALUES('learn',?,'[\"rule\"]',?)",
+                  (reader, H.now()))
     run_step(api)
     with store.transaction() as c:
         reader = bid(c, "reader")
