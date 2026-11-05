@@ -829,7 +829,7 @@ def connect(path, c, auth, who, trace=None, seconds=None):
                 value = {**value, "attachments": shown}
             if isinstance(value.get("files"), list):
                 value = {**value, "files": [ref for ref in value["files"] if turn_scope.file_ref_allowed(source, auth, who, ref)]}
-            return encode(value)
+            return encode(turn_scope.project(source, turn_scope.scope(source, who), value, auth=auth))
 
         functions = {"message": (4, index.message), "attempt": (1, index.attempt),
                      "scope_refs": (1, scoped_refs),

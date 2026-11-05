@@ -4003,7 +4003,7 @@ class Execution:
         runner_wire.conversation(c, conv)
         runner_wire.conversation(c, conversation)     # the claim's copy (thread_payload) was made before
         wire_task = runner_wire.task(task)
-        return {"attempt": {"chat_goal": chat_goal, "routine": routine, "id": aid, "deferred": deferred,
+        payload = {"attempt": {"chat_goal": chat_goal, "routine": routine, "id": aid, "deferred": deferred,
                             # Which waiting turn takes a shared one-turn login first (runner-rs/src/login_turns.rs).
                             "login_class": login_class(c, task, msg, routine),
                             "recovery": {"resume_session": restart_reported(c, row["attempt_id"]) or bool(cut_by_update(c, row["attempt_id"]))
@@ -4055,6 +4055,9 @@ class Execution:
                             "session_epoch": session_epoch["epoch"] if session_epoch else 0,
                             # Moved by any clear or reset of this bot: the runner starts the bot's shared thread anew.
                             "bot_session_epoch": bot_epoch[0] if bot_epoch else 0}}
+        from . import turn_scope
+        principal = acting or bot_who
+        return turn_scope.project(c, turn_scope.scope(c, principal), payload, auth=self.auth)
 
     @staticmethod
     def obsolete_notice(c, who, job_id, now):
@@ -4726,7 +4729,8 @@ class Execution:
         # `attempt_id` lets the response check read these as the bot, as for the turn itself:
         # each message was just checked readable by the bot, and a private task's message is
         # never readable by the computer's own identity.
-        return self.input_reply(c, attempt)
+        from . import turn_scope
+        return turn_scope.project_attempt(c, self.auth, aid, self.input_reply(c, attempt))
 
     def release_undelivered(self, c, aid, ids):
         """Put inputs the runner says it never gave the runtime back in the queue, before anything below
