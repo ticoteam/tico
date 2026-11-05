@@ -48080,6 +48080,10 @@
           "version": {
             "type": "string"
           },
+          "administration_url": {
+            "type": "string",
+            "description": "Signed-in humans: the Tico account portal URL, or empty for an install without a Tico account or portal company. Open externally; carries no sign-in credentials."
+          },
           "visual_origin": {
             "type": "string",
             "description": "Configured non-secret visual origin, or empty when absent or invalid; grants no native IPC permission."
