@@ -1078,6 +1078,8 @@ class Store:
         # In-process writers queue before BEGIN instead of competing in SQLite's busy-handler sleeps.
         # Reads still use independent WAL snapshots; other processes remain governed by busy_timeout.
         self.writer = WriterGate()
+        # Requests in another app must neither drain this store's runs nor consume its pending wakeup.
+        self.automation_bell = threading.Event()
         from .provenance_clock import Cache
         self.provenance_cache = Cache()
         self.roster_rows = {}       # {statement: (roster_clock count, rows)}, shared by this store's connections
@@ -2180,6 +2182,7 @@ class Store:
         c.row_cache = self.row_cache
         c.write_transaction = False
         c.after_commit = []
+        c.automation_bell = self.automation_bell
         c.provenance_changes = c.total_changes
         c.provenance_start = None
         c.settings = self.settings      # the server's own settings, for work that holds only the connection

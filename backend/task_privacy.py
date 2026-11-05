@@ -1424,6 +1424,11 @@ def _prime_blob_links(c, bids):
         read_cache.prime_rows(c, BLOB_FILES_SQL, {(bid, bid, bid): files[bid] for bid in part})
         read_cache.prime_rows(c, BLOB_MESSAGES_SQL, {(bid,): messages[bid] for bid in part})
         read_cache.prime(c, BLOB_TRASHED_SQL, {(bid,): (1,) if bid in trashed else None for bid in part})
+        from . import postal_mail
+        scans = {bid: [] for bid in part}
+        for row in c.execute(f"SELECT * FROM mail_items WHERE blob_id IN ({marks})", part):
+            scans[row["blob_id"]].append(row)
+        read_cache.prime_rows(c, postal_mail.SCANS_SQL, {(bid,): scans[bid] for bid in part})
     return parent_ids, task_ids, attempt_ids, message_rows
 
 
@@ -1432,6 +1437,14 @@ def blob_readable(c, actor, bid, seen=None, memo=None):
     `memo` is attempt_tasks' cache for one read transaction. Only linkage rows are cached
     for blobs: a cycle or depth refusal depends on this walk, not just the blob."""
     snapshot(c)
+    # A scan's explicit Read grant exempts only that principal from its private task's attachment fence.
+    # Every other principal still passes the normal provenance checks below.
+    from . import postal_mail
+    principals = actor if isinstance(actor, tuple) else (actor,)
+    principals = tuple(person for person in principals if not postal_mail.scan_granted(c, person, bid))
+    if not principals:
+        return True
+    actor = principals[0] if len(principals) == 1 else principals
     seen = set() if seen is None else seen
     if bid in seen:
         return True

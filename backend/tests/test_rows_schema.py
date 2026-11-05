@@ -13,6 +13,8 @@ from backend.store import Store
 
 TABLES = {
     rows.PageIdentityRow: "page_identities",
+    rows.PostalMailGrantRow: "postal_mail_grants",
+    rows.PostalMailSettingsRow: "postal_mail_settings",
     rows.MeetingTaskLinkRow: "meeting_task_links",
     rows.SuggestionRow: "suggestions",
     rows.TaskRow: "tasks",

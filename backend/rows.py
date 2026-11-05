@@ -17,6 +17,25 @@ class PageIdentityRow(TypedDict):
     file_id: str
 
 
+class PostalMailGrantRow(TypedDict):
+    id: str
+    address_id: str
+    grantee_type: str
+    grantee_id: str
+    level: str
+    granted_by_id: str
+    created_at: str
+    updated_at: str
+
+
+class PostalMailSettingsRow(TypedDict):
+    id: int
+    legal_bot_id: str | None
+    updated_by_id: str | None
+    created_at: str
+    updated_at: str
+
+
 class MeetingTaskLinkRow(TypedDict):
     """A meeting/task pair; its references keep their independent read checks."""
     id: str

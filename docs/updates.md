@@ -188,14 +188,31 @@ It writes four systemd **user** units under `~/.config/systemd/user` (`tico-bot.
 `tico-close-calls.service`, `tico-importers.service`; `tico-<env>-...` for a team environment), each with
 `Restart=always`, and starts them. Nothing needs root. The units set `TICO_SUPERVISED=1` and `TICO_SYSTEMD_UNIT`, which is how
 the runner knows something will start it again and how the update restarts it through `systemctl --user restart`. The update
-process itself runs as a transient `tico-update-<pid>` unit so the restart does not kill it. Linger is checked at install
-time; if it is off the command prints `loginctl enable-linger $USER`, because without it the jobs stop when the last session
+process itself runs as a transient `tico-update-<pid>-<random>` unit so the restart does not kill it. Each attempt gets
+a new name, so a retry cannot collide with a unit left from an earlier attempt. A lock in the runner's state folder
+keeps a second updater from running, even when the first is waiting for the checkout lock or its status is old.
+The runner fills in missing user-bus settings from `/run/user/<uid>` and passes them to the updater. If only
+`DBUS_SESSION_BUS_ADDRESS` is set, it leaves `XDG_RUNTIME_DIR` unset so systemd uses that bus address. If `systemd-run`
+fails, its error is saved as one short line in Health, the computer's update status and `update.log`. A detached
+process is used only for a missing command or a bus connection failure, including systemd 257's user scope bus
+errors, and only if systemd confirms the runner's `KillMode` is `process` or `none`. The installed units use systemd's
+default `control-group`; a detached updater would be killed on restart, so a launch failure is reported instead.
+An unknown stop policy also refuses that fallback.
+Linger is checked at install time; if it is off the command prints `loginctl enable-linger $USER`, because without it the jobs stop when the last session
 logs out and do not start at boot. `scripts/tico status`, `restart`, `logs` and `uninstall` work the same as on a Mac.
 
 A checkout with uncommitted changes, or on a branch other than `main`, is **refused, never touched**: nothing is
 stashed, reset or discarded. Settings > Health and Computers show "the checkout has 2 changed files" until someone commits or
 stashes them. The update process logs to `state-<runner id>/update.log`; the outcome is in `update-status.json` next
 to it. `scripts/tico update` still works by hand and still follows `main`.
+
+A launch failure waits six hours before another attempt at the same release. A newly installed runner retries a
+launch failure from an older runner build at once; if that attempt fails, the six-hour wait applies again. A dead
+updater with an old `updating` status is saved as failed and follows the same wait. A live updater keeps its lock and
+is left to finish. A newer server release gets a fresh attempt. Stopped cloud machines wake once per release, after
+their usual 0-10 minute spread; a failed attempt at that release does not spend more starts retrying while stopped.
+To recover a machine stuck on an old launcher, start it and repair the runner on that machine, or publish a newer
+release with the fix so it gets a new update wake. Pushing a fix alone does not replace an already running binary.
 
 ## The server's own updater
 

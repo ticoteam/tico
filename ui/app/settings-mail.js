@@ -15,7 +15,7 @@ const PM_ADDRESS_STATUS = {pending_1583: ['waiting', 'Waiting for Form 1583'], a
 const PM_LETTER_KINDS = {legal: 'Legal', government_tax: 'Government or tax', bill: 'Bill', check: 'Check', financial: 'Financial',
   junk: 'Junk', other: 'Other'};
 const PM_LETTER_STATUS = {new: ['waiting', 'Reading'], filed: ['ok', 'Filed'], archived: ['', 'Archived'], failed: ['fail', 'Failed']};
-const PM = {addresses: null, orders: [], prices: {}, gatewayOff: false, error: '', run: 0};
+const PM = {addresses: null, orders: [], prices: {}, gatewayOff: false, error: '', run: 0, members: []};
 
 const pmStateName = code => (PM_STATES.find(([c]) => c === code) || [code, code])[1];
 const PM_NONE = '<span class="muted pm-none">—</span>';
@@ -42,10 +42,102 @@ async function renderSettingsMail() {
         ${admin ? '<div class="row"><button class="primary" type="button" data-pm-order>Get an address</button></div>' : ''}</header>
         <div data-pm-addresses>${skelRows(2, {card: true, dot: false})}</div></section>
       <section class="card" id="settings-mail-intake"><header><h2>Bring your own</h2></header><div data-pm-intake>${skelRows(1, {card: true, dot: false})}</div></section>
+      <section class="card" id="settings-mail-access"><header><h2>Access and routing</h2></header><div data-pm-access>${skelRows(1, {card: true, dot: false})}</div></section>
       <section class="card" id="settings-mail-letters"><header><h2>Recent letters</h2></header><div data-pm-letters>${skelRows(3, {card: true, dot: false})}</div></section>`;
     el.querySelector('[data-pm-order]')?.addEventListener('click', pmOrderDialog);
   }
   await Promise.all([pmAddresses(run), pmIntake(run), pmLetters(run)]);
+  if (run === PM.run) await pmAccess(run);
+}
+
+// Read grants include private letters and their scans; routing changes only future legal mail.
+async function pmAccess(run) {
+  const host = $('#set-mail [data-pm-access]'); if (!host) return;
+  try {
+    const admin = settingsIsAdmin();
+    const loadBots = async () => {
+      const bots = []; let after = '';
+      do {
+        const page = await get('/v2/postal/bots?limit=100' + (after ? '&after=' + encodeURIComponent(after) : ''), {fresh: true});
+        bots.push(...page.bots); after = page.next;
+      } while (after);
+      return bots;
+    };
+    const [routing, bots, people] = await Promise.all([get('/v2/postal/settings', {fresh: true}),
+      admin ? loadBots() : [], admin ? get('/people') : {people: []}]);
+    if (run !== PM.run) return;
+    PM.members = [...(Array.isArray(bots) ? bots : []).filter(b => b.state === 'active').map(b =>
+      ({type: 'bot', id: b.id || b.slug, name: b.display_name || b.slug, read_error: b.read_error, routing_error: b.routing_error})),
+    ...(people.people || []).filter(p => !p.hidden).map(p => ({type: 'person', id: p.id, name: p.name || p.id}))];
+    const selected = routing.settings.legal_bot_id || '';
+    if (!admin) { host.innerHTML = `<p>Legal mail: ${esc(selected || 'Owner')}</p>`; return; }
+    const option = (id, name, chosen, error = '') => `<option value="${esc(id)}"${id === chosen ? ' selected' : ''}${error ? ' disabled' : ''}>${esc(name + (error ? ' — ' + error : ''))}</option>`;
+    const legal = PM.members.filter(p => p.type === 'bot');
+    if (selected && !legal.some(b => b.id === selected)) legal.push({id: selected, name: selected});
+    host.innerHTML = `<div class="pm-access-controls"><label>Legal mail<select data-pm-legal>
+        ${option('', 'Owner', selected)}${legal.map(b => option(b.id, b.name, selected, b.routing_error)).join('')}</select></label>
+      <p class="muted">The owner receives every legal letter.</p>
+      <h3>Who can use it</h3><label>Address<select data-pm-scope>${option('all', 'All addresses', 'all')}
+        ${(PM.addresses || []).filter(a => a.assignment_id || a.id || a.status === 'active' && a.address)
+          .map(a => option(a.assignment_id || a.id || a.address,
+            a.status === 'active' && a.address ? a.address : pmStateName(a.state), 'all')).join('')}</select></label>
+      <p class="muted">Read includes private letters and scans.</p><div data-pm-grants></div>
+      <form data-pm-grant-form><label>Person or bot<select data-pm-grantee required>
+        <option value="">Choose…</option>${PM.members.map(p => option(`${p.type}:${p.id}`, p.name, '', p.read_error)).join('')}</select></label>
+        <button type="submit">Give Read access</button></form><p class="err" data-pm-access-error role="status"></p></div>`;
+    const error = host.querySelector('[data-pm-access-error]'), scope = host.querySelector('[data-pm-scope]');
+    const legalSelect = host.querySelector('[data-pm-legal]');
+    let saved = selected;
+    legalSelect.onchange = async () => {
+      legalSelect.disabled = true; error.textContent = '';
+      try { await put('/v2/postal/settings', {legal_bot_id: legalSelect.value || null}); saved = legalSelect.value; toast('Saved'); }
+      catch (e) { legalSelect.value = saved; error.textContent = e.message; }
+      finally { legalSelect.disabled = false; }
+    };
+    let generation = 0;
+    const showGrants = async (after = '', append = false) => {
+      const current = ++generation, address = scope.value;
+      if (!append) host.querySelector('[data-pm-grants]').textContent = 'Loading…';
+      try {
+        const d = await get(`/v2/postal/addresses/${encodeURIComponent(address)}/grants?limit=50${after ? '&after=' + encodeURIComponent(after) : ''}`, {fresh: true});
+        if (run !== PM.run || generation !== current || scope.value !== address) return;
+        const list = host.querySelector('[data-pm-grants]');
+        if (!append) list.replaceChildren();
+        list.querySelector('[data-pm-more-grants]')?.remove();
+        if (!append && !d.grants.length) list.textContent = 'No grants';
+        for (const grant of d.grants) {
+          const name = PM.members.find(p => p.type === grant.grantee_type && p.id === grant.grantee_id)?.name || grant.grantee_id;
+          const row = document.createElement('div'); row.className = 'row pm-grant';
+          row.innerHTML = `<span>${esc(name)} · Read</span><button type="button" data-pm-revoke>Remove</button>`;
+          row.querySelector('button').onclick = async event => {
+            event.target.disabled = true; error.textContent = '';
+            try {
+              await writeRequest('DELETE', `/v2/postal/addresses/${encodeURIComponent(address)}/grants/${grant.grantee_type}/${encodeURIComponent(grant.grantee_id)}`);
+              await showGrants();
+            } catch (e) { error.textContent = e.message; event.target.disabled = false; }
+          };
+          list.append(row);
+        }
+        if (d.next) {
+          const more = document.createElement('button'); more.type = 'button'; more.dataset.pmMoreGrants = '';
+          more.textContent = 'More'; more.onclick = () => showGrants(d.next, true); list.append(more);
+        }
+      } catch (e) { if (generation === current) error.textContent = e.message; }
+    };
+    scope.onchange = () => { error.textContent = ''; void showGrants(); };
+    host.querySelector('form').onsubmit = async event => {
+      event.preventDefault(); const form = event.target, button = form.querySelector('button');
+      const [type, ...parts] = form.querySelector('select').value.split(':');
+      if (!parts.length) return;
+      button.disabled = true; error.textContent = '';
+      try {
+        await put(`/v2/postal/addresses/${encodeURIComponent(scope.value)}/grants/${type}/${encodeURIComponent(parts.join(':'))}`, {level: 'read'});
+        await showGrants(); form.reset();
+      } catch (e) { error.textContent = e.message; }
+      finally { button.disabled = false; }
+    };
+    await showGrants();
+  } catch (e) { if (run === PM.run) host.innerHTML = `<p class="err">${esc(e.message)}</p>`; }
 }
 
 // ---------------------------------------------------------------------------------------------------------- Addresses
