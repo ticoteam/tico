@@ -1567,22 +1567,27 @@ async fn instruction_backup_note(root: &Path, git_dir: &Path) -> Option<String> 
                 (hash.len() == 64 && hash.bytes().all(|c| c.is_ascii_digit() || (b'a'..=b'f').contains(&c))).then_some(hash)
             } else { std::fs::read(root.join(&relative)).ok().map(|b| gitrun::sha256_hex(&b)) };
             let metadata = path.symlink_metadata().ok().filter(|m| m.is_file() && m.nlink() == 1);
-            if metadata.is_none() || digest.is_none() || std::fs::read(&path).ok().map(|b| gitrun::sha256_hex(&b)) != digest {
+            let Some((m, digest)) = metadata.zip(digest) else {
                 names.push(path.strip_prefix(root).unwrap_or(&path).display().to_string());
-            } else if let Some(m) = metadata {
-                let unused = crate::gitlocks::no_open_file(&path, &m).await;
-                // A writer may have written and closed between our first read and the fd scan.
-                if !path.symlink_metadata().is_ok_and(|after| after.dev() == m.dev() && after.ino() == m.ino() && after.mtime() == m.mtime() && after.mtime_nsec() == m.mtime_nsec())
-                    || std::fs::read(&path).ok().map(|b| gitrun::sha256_hex(&b)) != digest {
+                continue;
+            };
+            let unchanged = || std::fs::read(&path).is_ok_and(|b| gitrun::sha256_hex(&b) == digest);
+            if !unchanged() {
+                names.push(path.strip_prefix(root).unwrap_or(&path).display().to_string());
+                continue;
+            }
+            let unused = crate::gitlocks::no_open_file(&path, &m).await;
+            // A writer may have written and closed between our first read and the fd scan.
+            if !path.symlink_metadata().is_ok_and(|after| after.dev() == m.dev() && after.ino() == m.ino() && after.mtime() == m.mtime() && after.mtime_nsec() == m.mtime_nsec())
+                || !unchanged() {
+                names.push(path.strip_prefix(root).unwrap_or(&path).display().to_string());
+            } else if unused {
+                let _ = std::fs::remove_file(&path);
+            } else if !marked {
+                // Give a retained legacy backup a baseline only while it still equals the checkout.
+                let baseline = path.with_file_name(format!("{filename}-sha256-{digest}"));
+                if baseline.symlink_metadata().is_ok() || std::fs::rename(&path, &baseline).is_err() {
                     names.push(path.strip_prefix(root).unwrap_or(&path).display().to_string());
-                } else if unused {
-                    let _ = std::fs::remove_file(&path);
-                } else if !marked {
-                    // Give a retained legacy backup a baseline only while it still equals the checkout.
-                    let baseline = path.with_file_name(format!("{filename}-sha256-{}", digest.unwrap()));
-                    if baseline.symlink_metadata().is_ok() || std::fs::rename(&path, &baseline).is_err() {
-                        names.push(path.strip_prefix(root).unwrap_or(&path).display().to_string());
-                    }
                 }
             }
         }
