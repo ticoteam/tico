@@ -3,7 +3,20 @@ use serde::{Deserialize, Serialize};
 use std::{
     fs,
     path::{Path, PathBuf},
+    sync::atomic::{AtomicU64, Ordering},
 };
+
+/// Settings and credentials share a generation because workers depend on both.
+static VERSION: AtomicU64 = AtomicU64::new(0);
+
+pub fn version() -> u64 {
+    VERSION.load(Ordering::SeqCst)
+}
+
+fn changed() {
+    VERSION.fetch_add(1, Ordering::SeqCst);
+    crate::store::settings_changed();
+}
 
 #[derive(Clone, Debug, Default, Serialize, Deserialize)]
 #[serde(default)]
@@ -123,6 +136,7 @@ pub fn write(root: &Path, settings: &Settings) -> Result<()> {
         fs::set_permissions(&temporary, fs::Permissions::from_mode(0o600))?;
     }
     fs::rename(temporary, root.join("settings.json"))?;
+    changed();
     Ok(())
 }
 pub fn safe_url(value: &str) -> Result<String> {
@@ -197,6 +211,7 @@ pub fn hold_secret(name: &str, value: &str) -> Result<()> {
         .lock()
         .unwrap_or_else(|error| error.into_inner())
         .insert(name.into(), value.into());
+    changed();
     Ok(())
 }
 pub fn save_secret(name: &str, value: &str) -> Result<()> {
@@ -215,6 +230,7 @@ pub fn save_secret(name: &str, value: &str) -> Result<()> {
         .lock()
         .unwrap_or_else(|error| error.into_inner())
         .insert(name.into(), value.into());
+    changed();
     Ok(())
 }
 
@@ -241,8 +257,87 @@ impl Drop for AppLock {
 }
 
 #[cfg(test)]
-mod tests {
+pub(crate) mod tests {
     use super::*;
+
+    /// A subprocess isolates the keyring backend, environment and generation from parallel tests.
+    pub(crate) fn isolated(name: &str) -> bool {
+        if std::env::var("TICO_SETTINGS_TEST_CHILD").as_deref() == Ok(name) {
+            keyring::set_default_credential_builder(keyring::mock::default_credential_builder());
+            return false;
+        }
+        let dir = tempfile::tempdir().unwrap();
+        let output = std::process::Command::new(std::env::current_exe().unwrap())
+            .args([name, "--exact", "--nocapture"])
+            .env("TICO_SETTINGS_TEST_CHILD", name)
+            .env("TICO_RECORDER_DATA_DIR", dir.path())
+            .output()
+            .unwrap();
+        assert!(
+            output.status.success(),
+            "{}\n{}",
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr)
+        );
+        true
+    }
+
+    #[test]
+    fn settings_reload_every_writer_advances_and_wakes_open_libraries() {
+        if isolated(
+            "settings::tests::settings_reload_every_writer_advances_and_wakes_open_libraries",
+        ) {
+            return;
+        }
+        let dir = tempfile::tempdir().unwrap();
+        let first = crate::store::Store::open(dir.path()).unwrap();
+        let second = crate::store::Store::open(dir.path()).unwrap();
+        let saved = Settings::default();
+        let grant = crate::signin::Grant {
+            client_id: "fixture".into(),
+            token_url: "https://acme.example/api/v2/oauth/token".into(),
+            refresh_token: "fixture-refresh".into(),
+            expires_at: i64::MAX,
+        };
+        let writers: Vec<Box<dyn Fn() -> Result<()> + '_>> = vec![
+            Box::new(|| write(dir.path(), &saved)),
+            Box::new(|| save_secret("settings-reload", "saved")),
+            Box::new(|| save_secret("settings-reload", "")),
+            Box::new(|| hold_secret("settings-reload", "held")),
+            Box::new(|| crate::signin::save("settings-reload", "access", &grant)),
+            Box::new(|| {
+                crate::signin::sign_out(&Destination {
+                    id: "personal-token".into(),
+                    ..Default::default()
+                })
+            }),
+        ];
+        for write in writers {
+            let before = version();
+            let marks = [first.changes(), second.changes()];
+            let data = first.version();
+            write().unwrap();
+            assert!(version() > before);
+            assert_eq!(first.settings_version(), version());
+            for (store, mark) in [&first, &second].into_iter().zip(marks) {
+                assert!(store.wait_changes(mark, std::time::Duration::ZERO) > mark);
+            }
+            assert_eq!(first.version(), data, "settings do not change library data");
+        }
+        assert_eq!(secret("settings-reload").unwrap(), "held");
+        assert_eq!(crate::signin::token("settings-reload").unwrap(), "access");
+        let before = version();
+        let mut invalid = saved.clone();
+        invalid.transcription_url = "http://acme.example".into();
+        assert!(write(dir.path(), &invalid).is_err());
+        assert!(write(&dir.path().join("missing"), &saved).is_err());
+        assert_eq!(
+            version(),
+            before,
+            "failed saves do not publish a generation"
+        );
+    }
+
     #[test]
     fn refusing_unsafe_destinations_and_holding_one_library_lock() {
         assert!(safe_url("http://localhost.evil.test").is_err());

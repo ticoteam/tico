@@ -88,7 +88,7 @@
       targets: targets(), live: null, live_org: '', live_state: '', live_url: '', kept_local: false,
       can_control: false, can_discard: false, discarded: false, discard_pending: false,
       place: 'On this Mac', sync_error: '', setup: [], audio: clone(audioOk),
-      actions: { mode: 'ready', can_link: true, link_scope: ['m1','team'], org: 'Tico Team', orgs, multiple: true, can_change: true, draft_status: '', items: clone(items), waiting: 3, owners },
+      actions: { mode: 'ready', can_link: true, link_scope: ['m1','team'], actor: 'human:tina', org: 'Tico Team', orgs, multiple: true, can_change: true, draft_status: '', items: clone(items), waiting: 3, owners },
       notes: { text: 'Decided: one task at a time, private, quote attached.\nFollow up on hosted pricing cap next week.', editable: true },
       people: clone(peopleLocal), chat: clone(chatEmpty),
       ...over,
@@ -172,7 +172,7 @@
     id: 'm0', title: 'Streaming rollout check-in', started_at: iso(-1), duration_ms: 34000, state: 'recording', recording_here: true,
     title_editable: true, audio: { ...clone(audioOk), pending: 1 },
     actions: {
-      mode: 'ready', org: 'Tico Team', orgs, multiple: true, can_change: true, draft_status: '', waiting: 1, owners,
+      mode: 'ready', actor: 'human:tina', org: 'Tico Team', orgs, multiple: true, can_change: true, draft_status: '', waiting: 1, owners,
       items: [
         item({ id: 'r1', title: 'Write up how live text reconnects after a drop', quote: 'What happens when the connection drops?', at_ms: 26000, owner: 'bot:head-of-engineering', owner_name: 'Head of Engineering', can_send: true }),
         item({ id: 'r2', title: 'Check the chunked pass replaces streamed words', quote: 'And the chunked pass still replaces them', at_ms: 17000 }),
@@ -204,6 +204,11 @@
     signin: () => { signedOut(); state.desktop_orgs = clone(desktopOrgs).map((org) => ({ ...org, connected: false })); },
     // First run without the desktop app: type a Tico address.
     'signin-address': () => signedOut(),
+    // One org signed in; the desktop app has one more: Connect on its row in Settings and the org menu.
+    'settings-add': () => {
+      state.settings.connections = connections.filter((c) => c.id === 'team');
+      state.desktop_orgs = clone(desktopOrgs).filter((org) => org.name !== 'Acme Lights').map((org) => ({ ...org, connected: org.name === 'Tico Team' }));
+    },
     empty: () => signedOut(),
     signing: () => { signedOut(); Object.assign(state.status, { signing_in: true, busy: true, suggested: 'hub.tico.team' }); },
     meeting: () => {},
@@ -392,10 +397,13 @@
       a.waiting = a.items.filter((i) => !i.sent).length;
     },
     // Create: the proposal becomes a private task in Tico, with its number.
-    task_picker: ({ query, offset }) => ({ tasks: offset ? [] : [
-      { id: 't42', number: 42, title: 'Review pricing', status: 'open' },
-      { id: 't43', number: 43, title: 'Test recovery', status: 'review' },
-    ].filter((t) => !query || (`#${t.number} ${t.title}`).toLowerCase().includes(query.toLowerCase())), next_offset: null }),
+    task_picker: ({ query, kind, offset }) => ({ tasks: offset ? [] : [
+      { id: 't42', number: 42, title: 'Review pricing', status: 'open', type: 'general' },
+      { id: 't43', number: 43, title: 'Test recovery', status: 'review', type: 'bug' },
+      { id: 't44', number: 44, title: 'Property manager bots: pricing page', status: 'doing', type: 'general' },
+      { id: 't45', number: 45, title: 'Fix pricing rounding', status: 'open', type: 'bug' },
+    ].filter((t) => (!kind || t.type === kind) && (!query || (/^#?\d+$/.test(query.trim()) ? String(t.number) === query.trim().replace('#', '') : query.toLowerCase().split(/\s+/).every((w) => t.title.toLowerCase().includes(w))))), next_offset: null }),
+    task_types: () => [{ id: 'general', name: 'General' }, { id: 'bug', name: 'Bug' }],
     link_selected_tasks: ({ ids }) => {
       for (const id of ids) open().actions.items.push(item({ id, task_id: id, number: id.slice(1), title: id === 't42' ? 'Review pricing' : 'Test recovery', status: 'open', kind: 'link', sent: true }));
     },
@@ -529,6 +537,15 @@
     sign_in_desktop: ({ url } = {}) => {
       if (!state.desktop_orgs.length) throw new Error('No Tico desktop app on this Mac');
       state.desktop_orgs.forEach((org) => { if (!url || org.url === url) org.connected = true; });
+      // Already signed in to some: the new org joins them.
+      if (state.settings.connections.length) {
+        for (const org of state.desktop_orgs.filter((o) => o.connected)) {
+          if (state.settings.connections.some((c) => c.url === org.url)) continue;
+          const id = orgs.find((o) => o.url === org.url)?.id || org.url;
+          state.settings.connections.push({ id, name: org.name, url: org.url, host: org.url.replace('https://', ''), default: false });
+        }
+        return;
+      }
       state.settings = clone(settings);
       state.library = { rows: [], events, calendar_stale: false, connected: true };
       Object.assign(state.status, { first_run: false, speech: { source: 'tico', stream: true, transcribe: true, tico: 'Tico Team' } });
