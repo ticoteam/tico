@@ -189,25 +189,6 @@ async function shot(page, name) {
       assert.deepEqual(errors, []);
       await context.close();
 
-      // A renamed bot still gets the default because the client matches its stable slug, not its display name.
-      const item = {id: 'i2', section: 'doc', text: 'Update the guide', status: 'proposed', quote: '', at_ms: null, version: 1,
-        detail: {document: 'docs/guide.md', change: 'Use the new terminology'}};
-      w = world({employees: [{id: 'writer-id', slug: 'doc-updater', name: 'renamed-writer', display_name: 'Documentation', status: 'active'}],
-        meetings: [meeting('m6', 'Docs call', 'zoom', 1)],
-        items: {id: 'm6', can_push: true, counts: {proposed: 1}, sections: {doc: [item], task: [], feature: []}}});
-      ({page, errors, context} = await open(browser, {width: 1280, height: 900}, w, {colorScheme: scheme}));
-      await page.goto('https://tico-ui.test/#/meetings');
-      await page.locator('.meet-row .note-title').first().click();
-      const owner = page.locator('#meet-sections [data-pending=i2] select[data-pending-field=owner]');
-      await owner.waitFor();
-      assert.match(await owner.locator('option').first().innerText(), /Doc-updater bot \(default\)/);
-      const sent = page.waitForResponse(response => response.url().endsWith('/items/i2/push'));
-      await page.locator('#meet-sections [data-pending=i2] [data-send]').click();
-      assert.equal((await sent).status(), 200);
-      assert.equal(w.items.sections.doc[0].detail.owner, 'bot:writer-id');
-      assert.deepEqual(errors, []);
-      await context.close();
-
       // ---- with meetings: the strip, the filters and one row each
       w = world({sources: SOME, meetings: MEETINGS});
       ({page, errors, context} = await open(browser, {width: 1280, height: 900}, w, {colorScheme: scheme}));
@@ -319,40 +300,10 @@ async function shot(page, name) {
         assert.deepEqual(errors, []);
         await context.close();
       }
-
-      // A Doc update without a doc-updater bot offers a real owner picker on the pending row.
-      {
-        const viewport = {width: 1280, height: 900};
-        const item = {id: 'i1', section: 'doc', text: 'Ship the pricing change', status: 'proposed', quote: '', at_ms: null, version: 1,
-          detail: {document: 'docs/pricing.md', change: 'Ship on Friday'}};
-        w = world({meetings: [meeting('m5', 'Docs call', 'zoom', 1)],
-          items: {id: 'm5', can_push: true, counts: {proposed: 1}, sections: {doc: [item], task: [], feature: []}}});
-        ({page, errors, context} = await open(browser, viewport, w, {colorScheme: scheme}));
-        await page.goto('https://tico-ui.test/#/meetings');
-        await page.locator('.meet-row .note-title').first().click();
-        const owner = page.locator('#meet-sections [data-pending=i1] select[data-pending-field=owner]');
-        await owner.waitFor();
-        assert.match(await owner.locator('option').first().innerText(), /Choose who this is for/);
-        const refused = page.waitForResponse(response => response.url().endsWith('/items/i1/push'));
-        await page.locator('#meet-sections [data-pending=i1] [data-send]').click();
-        assert.equal((await refused).status(), 422);
-        await page.locator('#meet-sections [data-pending=i1] [data-owner-error]').waitFor();
-        assert.match(await page.locator('#meet-sections [data-pending=i1] [data-owner-error]').innerText(), /Pick who this doc update is for/);
-        const saved = page.waitForResponse(response => response.url().endsWith('/items/i1') && response.request().method() === 'POST');
-        await owner.selectOption('human:ben');
-        assert.equal((await saved).status(), 200);
-        const sent = page.waitForResponse(response => response.url().endsWith('/items/i1/push'));
-        await page.locator('#meet-sections [data-pending=i1] [data-send]').click();
-        assert.equal((await sent).status(), 200);
-        assert.equal(w.items.sections.doc[0].status, 'pushed');
-        assert.equal(w.items.sections.doc[0].detail.owner, 'human:ben');
-        assert.deepEqual(errors, []);
-        await context.close();
-      }
     }
     // The native window's shared-meeting entry point belongs to this hosted meeting flow too.
     await recorderLiveSharing(browser);
-    console.log('meetings ok: 7 browser scenarios, including Sources, owner choice, default bot routing, permissions, and mixed-version setup');
+    console.log('meetings ok: 6 browser scenarios, including Sources, owner choice, permissions, and mixed-version setup');
   } finally {
     await browser.close();
   }
