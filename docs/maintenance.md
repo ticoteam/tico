@@ -23,6 +23,8 @@ In order:
 | Update | Builds the day's update queue from 05:00, skipping bots with no work unless learnings or suggestions are waiting. The server keeps sending requests and drafting people's updates after the run ends. | Once a day |
 | Dream | The auto dream: starts a dream for up to "Most bots per run" bots (three by default, 1 to 20). | Once a day |
 
+A held queued job does not hide a due follow-up from Find stuck's task list.
+
 ## How often
 
 - Every run: each run.
