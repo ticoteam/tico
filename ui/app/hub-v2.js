@@ -112,6 +112,30 @@ function v2NeedsOne(id) {
   return NEEDS_ONE.get(key).read;
 }
 const needsOneHeld = id => NEEDS_ONE.get(String(id))?.it || null;
+// A question to the person is delivered once their Needs you holds it, and read once they open its card or its task
+// (POST /v2/needs-you/seen, /v2/tasks/{id}/seen): a question withdrawn later tells its bot whether they had seen it.
+// Delivery is sent once per question per page load; one that fails is sent again with the next list.
+const ASKS_SENT = {seen: new Set(), read: new Set()};
+const askToMe = a => a?.id && actorPerson(a.recipient_id || '') === S.me?.id;
+function needsSeen(items) {
+  const ids = (items || []).map(it => it.ask).filter(a => askToMe(a) && !a.delivered_at && !ASKS_SENT.seen.has(a.id))
+    .map(a => a.id).slice(0, 200);
+  if (!ids.length) return;
+  ids.forEach(id => ASKS_SENT.seen.add(id));
+  post('/v2/needs-you/seen', {asks: ids}).catch(() => ids.forEach(id => ASKS_SENT.seen.delete(id)));
+}
+// Reads a task's open questions to the person (the server marks each open one). A card that shows one question sends
+// once per page load for that question (askId), so repaints stay quiet; opening the full task always sends, because a
+// question asked after an earlier open is read only by a request made then.
+function taskAsksRead(id, askId) {
+  const key = String(id);
+  if (!key) return;
+  if (askId) {
+    if (ASKS_SENT.read.has('ask:' + askId)) return;
+    ASKS_SENT.read.add('ask:' + askId);
+  }
+  post(`/v2/tasks/${encodeURIComponent(key)}/seen`, {}).catch(() => { if (askId) ASKS_SENT.read.delete('ask:' + askId); });
+}
 // The first list held: a page drawn before it (a task opened from a link) fills its question box then. A read that
 // fails holds no list, so the wait goes on to the next one that answers.
 let needsFirstDone = null;
@@ -120,6 +144,7 @@ const needsFirstIn = () => !needsFirstDone;
 function needsTake(needs) {
   NEEDS_ONE.clear();
   S.v2.needs = needs.items || []; S.v2.needsVersion = needs.version || null;
+  needsSeen(S.v2.needs);
   S.v2.needsCount = needs.count ?? S.v2.needs.length; S.v2.needsNext = needs.next || null; S.v2.needsBots = needs.bots || null;
   S.v2.needsByKind = needs.by_kind || null;
   S.v2.needsFoldedIds = needs.folded_task_ids || null;
@@ -149,6 +174,7 @@ function v2NeedsMore() {
       if (!r || S.v2.needsNext !== cursor) return false;        // a read or a live event moved the list meanwhile
       if (r.restart || r.version !== S.v2.needsVersion) { await v2NeedsRead(); return true; }
       S.v2.needs = [...S.v2.needs, ...(r.items || [])];
+      needsSeen(r.items);
       S.v2.needsCount = r.count ?? S.v2.needs.length; S.v2.needsNext = r.next || null; S.v2.needsBots = r.bots || null;
       S.v2.needsByKind = r.by_kind || null;
       S.v2.needsFoldedIds = r.folded_task_ids || null;
@@ -185,6 +211,7 @@ async function v2NeedsMend(d) {
   if (all ? items.length !== d.count : items.length > d.count) return whole();
   NEEDS_ONE.clear();
   S.v2.needs = items; S.v2.needsVersion = d.version; S.v2.needsCount = d.count;
+  needsSeen(items);
   S.v2.needsNext = all || items.length >= d.count ? null : needsCursor(d.version, items.length);
   if (d.bots) S.v2.needsBots = d.bots;
   S.v2.needsByKind = d.by_kind || null;
