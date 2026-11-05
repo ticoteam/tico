@@ -741,6 +741,9 @@ SCHEMAS = {
                     "created_at": "s", "in_reply_to": "n", "refs": "o"}, required=["id", "conversation_id", "sender_id", "recipient_id", "kind", "body", "created_at", "in_reply_to", "refs"],
                    sender_name={"type": "string", "description": "Display name of sender_id, when it is a person or a bot"},
                    recipient_name={"type": "string", "description": "Display name of recipient_id"},
+                   sender_can_approve_send={"type": "boolean", "description": "On GET /messages/{mid}: whether the human sender "
+                       "currently may manage the bot addressee's mail sending (Auth.bot_manager); false for bot senders "
+                       "or non-bot addressees. This checks authority only, not send intent or the draft's contents"},
                    body_raw={"type": "string", "description": "A notice Tico wrote, as stored (with actor ids); `body` shows names to people"},
                    edited_at={"type": ["string", "null"], "description": "When the author last changed a task comment's text; "
                               "null when never edited"},
