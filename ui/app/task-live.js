@@ -66,11 +66,15 @@ function taskLiveDraft(id) {
   }
   return draft;
 }
-function taskLiveClear(identity = sessionIdentity()) {
+// Expiry stops the old session's work; identity-bound storage survives until sign-in identifies its owner.
+function taskLiveSuspend() {
   for (const d of document.querySelectorAll('dialog')) if (d.taskLive) { d.taskLive.revoked = true; sharedPlaceStop(d.taskLive); }
   for (const draft of TASK_EDIT_DRAFTS.values()) { clearTimeout(draft.timer); draft.owner = null; }
   TASK_EDIT_DRAFTS.clear();
   TASK_DRAFTS.clear(); QC_DRAFTS.clear();
+}
+function taskLiveClear(identity = sessionIdentity()) {
+  taskLiveSuspend();
   try {
     for (const key of Object.keys(localStorage))
       if (identity && key.startsWith(taskLiveStoragePrefix(identity))) localStorage.removeItem(key);

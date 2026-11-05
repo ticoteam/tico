@@ -21,9 +21,12 @@ const init = () => {
    const {page, data, errors} = await open(sharedBrowser, {viewport: {width, height: 900}});
    const task = {...data.tasks[0], title: 'Review launch', body: 'Original details', links: [], children_summary: undefined};
    data.tasks[0] = task;
-   const writes = []; let hold, offline = false;
+   const writes = []; let hold, offline = false, expired = false;
    let me = {id: 'ana', name: 'Ana', role: 'owner', mover: true, cloud: true, registered: true, config: {environment_id: 'acme-org'}};
    await page.route('**/api/me', route => route.fulfill({json: me}));
+   await page.route('**/api/v2/me', route => route.fulfill(expired
+    ? {status: 401, json: {error: {code: 'identity', sign_in: '/auth/login'}}}
+    : {json: {id: me.id}}));
    await page.locator('#task-modal[open] textarea[aria-label="Message"]').waitFor();
    await page.evaluate(() => { taskLiveStop(taskModal()); taskModal().taskRail = null; S.config.environment_id = 'acme-org'; sessionReturn(); });
    await page.evaluate(init); await page.addInitScript(init);
@@ -221,7 +224,37 @@ const init = () => {
    await page.reload();
    await page.waitForFunction(() => document.querySelector('#task-modal[open] .tmodal-title')?.textContent === 'Before debounce');
    await page.waitForFunction(() => !taskModal().taskLive.draft.flight && !Object.keys(taskModal().taskLive.draft.patch).length);
-   // Sign-in recovery includes the contenteditable title, while sign-out removes local task drafts.
+   // A closed task's failed title/details survive expiry with their bases, even after another editor saves.
+   offline = true;
+   await fillTitle('Closed task title'); await title.evaluate(el => el.blur()); await error.waitFor(); await idle();
+   await page.getByRole('button', {name: 'Edit details', exact: true}).click();
+   await details.fill('Closed task details'); await details.evaluate(el => el.blur()); await idle();
+   const closedDraft = await page.evaluate(id => Object.fromEntries(['title', 'body'].map(key =>
+    [key, JSON.parse(localStorage.getItem(taskLiveStorageKey(id, key)))])), task.id);
+   await page.evaluate(() => taskModal().close());
+   await page.waitForFunction(() => !taskModal().taskLive && !TASK_MODAL_BACK);
+   offline = false; expired = true;
+   await page.evaluate(() => get('/v2/me', {fresh: true}).catch(() => {}));
+   await page.locator('#signed-out:not([hidden])').waitFor();
+   assert.deepEqual(await page.evaluate(id => Object.fromEntries(['title', 'body'].map(key =>
+    [key, JSON.parse(localStorage.getItem(taskLiveStorageKey(id, key)))])), task.id), closedDraft, 'expiry preserves closed drafts and bases');
+   task.title = 'Other title while signed out'; task.body = 'Other details while signed out'; task.version++;
+   const beforeReturn = writes.length;
+   expired = false;
+   await page.goto('https://tico-ui.test/#/tasks');
+   await page.waitForFunction(() => SESSION.identity === JSON.stringify(['acme-org', 'ana']));
+   assert.equal(await page.locator('#task-modal[open]').count(), 0, 'the closed task stays closed after sign-in');
+   await page.evaluate(async task => taskModalShow(task), task);
+   assert.equal(await title.textContent(), 'Closed task title');
+   assert.equal(await details.inputValue(), 'Closed task details');
+   assert.equal(writes.length, beforeReturn, 'failed drafts wait for Retry after reopening');
+   await retry(); await page.locator('[data-task-edit-current]:not([hidden])').waitFor();
+   assert.equal(writes.at(-1).version, Math.min(...Object.values(closedDraft).map(field => field.base.version)));
+   assert.equal(task.title, 'Other title while signed out'); assert.equal(task.body, 'Other details while signed out');
+   await retry();
+   assert.equal(task.title, 'Closed task title'); assert.equal(task.body, 'Closed task details');
+   assert.equal(await page.evaluate(() => Object.keys(localStorage).some(key => key.startsWith(TASK_EDIT_STORAGE))), false, 'saving the restored text consumes its stored drafts');
+   // Sign-in recovery also keeps the open task's contenteditable title and property fields.
    offline = true;
    await fillTitle('Sign-in title to keep'); await title.evaluate(el => el.blur()); await error.waitFor(); await idle();
    await page.evaluate(() => {
@@ -233,12 +266,13 @@ const init = () => {
    });
    assert.deepEqual(await page.evaluate(() => JSON.parse(sessionStorage.getItem(SESSION_RETURN)).fields.filter(f => f.base).map(f => f.key).sort()),
      ['Public summary', 'Public title', 'Size', 'Title', 'due'].sort());
-   assert.equal(await page.evaluate(() => Object.keys(localStorage).some(key => key.startsWith(TASK_EDIT_STORAGE))), false);
+   assert.equal(await page.evaluate(() => Object.keys(localStorage).filter(key => key.startsWith(TASK_EDIT_STORAGE)).length), 5);
    assert.equal(await page.evaluate(() => JSON.parse(sessionStorage.getItem(SESSION_RETURN)).fields.find(f => f.key === 'Title').value), 'Sign-in title to keep');
    const recoveryBase = await page.evaluate(() => Math.min(...JSON.parse(sessionStorage.getItem(SESSION_RETURN)).fields.filter(f => f.base).map(f => f.base.version)));
    offline = false;
    await page.reload();
    await page.waitForFunction(() => document.querySelector('#task-modal[open] .tmodal-title')?.textContent === 'Sign-in title to keep');
+   await error.waitFor(); await idle(); await retry();
    await page.waitForFunction(() => taskModal().taskLive.draft.error || (!taskModal().taskLive.draft.flight && !Object.keys(taskModal().taskLive.draft.patch).length));
    assert.equal(writes.at(-1).version, recoveryBase);
    if (await error.count()) {
@@ -252,15 +286,20 @@ const init = () => {
    offline = true;
    await fillTitle('Ana private title'); await title.evaluate(el => el.blur()); await error.waitFor(); await idle();
    await page.getByRole('textbox', {name: 'Message', exact: true}).fill('Ana private comment');
+   await page.evaluate(() => taskModal().close());
+   await page.waitForFunction(() => !taskModal().taskLive);
    await page.evaluate(() => { SESSION.seen = true; signedOut('/auth/login'); });
    assert.equal(await page.evaluate(() => JSON.parse(sessionStorage.getItem(SESSION_RETURN)).identity), JSON.stringify(['acme-org', 'ana']));
+   assert.equal(await page.evaluate(id => JSON.parse(localStorage.getItem(taskLiveStorageKey(id, 'title'))).value, task.id), 'Ana private title');
    const count = writes.length;
    me = {...me, id: 'ben', name: 'Ben'}; offline = false;
-   await page.reload(); await page.locator('#task-modal[open] textarea[aria-label="Message"]').waitFor(); await idle();
+   await page.reload(); await page.waitForFunction(() => SESSION.identity === JSON.stringify(['acme-org', 'ben']));
+   await page.evaluate(async task => taskModalShow(task), task); await idle();
    assert.equal(await title.textContent(), task.title);
    assert.equal(await page.getByRole('textbox', {name: 'Message', exact: true}).inputValue(), '');
    assert.equal(await page.evaluate(() => sessionStorage.getItem(SESSION_RETURN)), null);
    assert.equal(await page.evaluate(() => TASK_EDIT_DRAFTS.get(taskModal().dataset.task)?.patch.title), undefined);
+   assert.equal(await page.evaluate(() => Object.keys(localStorage).some(key => key.startsWith(TASK_EDIT_STORAGE))), false);
    assert.equal(writes.length, count, 'no text from Ana autosaves as Ben');
    // A reload as another org with the same person id also drops both recovery paths.
    offline = true;

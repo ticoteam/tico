@@ -67,7 +67,7 @@ function signedOut(to) {
   if (!login && typeof S !== 'undefined' && S.config?.demo && demoReloadOnce()) return;
   if (login && !SESSION.seen) {
     sessionKeep();
-    if (typeof taskLiveClear === 'function') taskLiveClear();
+    if (typeof taskLiveSuspend === 'function') taskLiveSuspend();
     location.assign(login + '?next=' + encodeURIComponent(sessionHere()));
     return;
   }
@@ -75,7 +75,7 @@ function signedOut(to) {
   SESSION.watch?.disconnect(); SESSION.watch = null;
   SESSION.out = true; SESSION.login = login;
   sessionKeep();
-  if (typeof taskLiveClear === 'function') taskLiveClear();
+  if (typeof taskLiveSuspend === 'function') taskLiveSuspend();
   if (typeof liveSignedOut === 'function') liveSignedOut();
   document.querySelectorAll('.toast.err').forEach(t => t.remove());
   // Focus stays where it was: someone typing goes on typing, and their text is kept either way.
