@@ -169,9 +169,10 @@ impl Tico {
         store.update_context(id, |c| {
             ensure!(!c.kept_on_mac, "This meeting stays on this Mac");
             ensure!(
-                c.live_destination == self.destination.id,
+                c.live_destination.is_empty() || c.live_destination == self.destination.id,
                 "This meeting belongs to another Tico"
             );
+            c.live_destination = self.destination.id.clone();
             ensure!(
                 c.task_link_operations.len() < MAX_ITEMS,
                 "Too many pending link actions"

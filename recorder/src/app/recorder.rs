@@ -2056,9 +2056,6 @@ impl Recorder {
             self.reload_open();
             return;
         }
-        if self.meeting.as_deref() == Some(id) {
-            self.save_context();
-        }
         let config = self.config.clone();
         let store = self.store.clone();
         let (id, destination) = (id.to_owned(), context.live_destination);

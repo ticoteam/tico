@@ -3004,3 +3004,36 @@ fn recorder_link_unlink_link_uses_fresh_actions_and_retries_the_durable_unlink()
             .is_empty()
     );
 }
+
+#[test]
+fn recorder_unlinks_a_remote_only_row_even_if_the_task_disappears() {
+    let dir = tempfile::tempdir().unwrap();
+    let store = Store::open(dir.path()).unwrap();
+    let record = transcript(&store, "Remote-only link");
+    store
+        .delivery(
+            &record.id,
+            &Delivery {
+                destination_id: "synthetic".into(),
+                meeting_id: "saved".into(),
+                status: "sent".into(),
+                error: String::new(),
+                receipt: json!({}),
+            },
+        )
+        .unwrap();
+    let (tico, seen, worker) = server(vec![Some(
+        json!({"status":404,"error":{"code":"not_found"}}),
+    )]);
+    tico.queue_unlink(&store, &record.id, "gone").unwrap();
+    worker.join().unwrap();
+    let context = store.context(&record.id).unwrap();
+    assert!(context.task_link_operations.is_empty());
+    assert_eq!(context.live_destination, "synthetic");
+    assert_eq!(context.skipped_task_links, 1);
+    assert!(
+        seen.lock().unwrap()[0]
+            .0
+            .starts_with("DELETE /api/v2/meetings/saved/tasks/gone")
+    );
+}

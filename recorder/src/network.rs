@@ -412,13 +412,18 @@ impl Tico {
         url.path_segments_mut()
             .map_err(|_| anyhow::anyhow!("Invalid Tico address"))?
             .extend(["api", "v2", "meetings", meeting, "tasks", task]);
-        response(
-            self.client
-                .delete(url)
-                .bearer_auth(&self.token)
-                .header("Idempotency-Key", key)
-                .send()?,
-        )
+        let reply = self
+            .client
+            .delete(url)
+            .bearer_auth(&self.token)
+            .header("Idempotency-Key", key)
+            .send()?;
+        if reply.status() == reqwest::StatusCode::NOT_FOUND {
+            // A queued unlink also finishes when its target disappears before the request.
+            Ok(json!({"results":[{"status":404}]}))
+        } else {
+            response(reply)
+        }
     }
     /// The events a Tico event stream (SSE) has now: `(id, type, payload)` until its first
     /// keep-alive, which follows what was already there. The stream is then closed.
