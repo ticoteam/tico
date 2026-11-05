@@ -44,6 +44,7 @@ function reposDrawList() {
   if (filter) filter.hidden = all.length <= REPOS_FILTER_AT && !q;
   list.innerHTML = rows.length ? rows.map(r => reposRowHTML(r, admin)).join('')
     : `<li class="empty">${all.length ? 'No match.' : 'No repositories.'}</li>`;
+  settingsSearchRevealRepo();
 }
 async function renderSettingsRepos(fresh) {
   const host = $('#set-repos');

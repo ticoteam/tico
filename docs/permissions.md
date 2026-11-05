@@ -293,7 +293,7 @@ An incoming webhook (a trigger) is an address outside senders post to ([Webhooks
 ## Screening
 
 Text from outside Tico can carry instructions meant for the bot that reads it (a prompt injection). Screening checks that
-text at the doors it comes in by, before a bot reads it. Change it in **Settings → System → Screening** (owner or admin).
+text at the doors it comes in by, before a bot reads it. Change it in **Settings → Company & policies → What bots may do alone → Screening** (owner or admin).
 
 | Door | What is checked | Default |
 |---|---|---|
@@ -301,6 +301,8 @@ text at the doors it comes in by, before a bot reads it. Change it in **Settings
 | Mail | An inbound message a bot reads (`hub inbound read`): the subject and body | Warn |
 | Ideas | The public roadmap's suggestion form: the title and summary | Warn |
 | Watchers | A watcher's new task, except the Support Agent's HQ tickets, which [support triage](support.md#support-triage) checks | Warn |
+| Documents | A document's text as Counsel reads it | Warn |
+| Slack | An inbound Slack message | Warn |
 
 Each door is **Off**, **Warn** or **Hold**. Mail is only ever marked, so it offers Off and Warn. For now every door
 starts at Warn, which only observes: nothing is held until you set a door to Hold. The defaults are one constant,

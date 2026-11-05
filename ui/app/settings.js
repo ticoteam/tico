@@ -106,13 +106,12 @@ const SETTINGS_PLACES = {
   general: ['you'], assistant: ['you', '#settings-assistant-pane'],
   inbox: ['connections', '#settings-mailboxes'], google: ['connections', '#settings-mailboxes'], mailboxes: ['connections', '#settings-mailboxes'],
   humans: ['people'],
-  ceo: ['automation', '#set-strategy-bot-card'], 'strategy-bot': ['automation', '#set-strategy-bot-card'],
+  ceo: ['bots', '#set-strategy-bot-card'], 'strategy-bot': ['bots', '#set-strategy-bot-card'],
   devices: ['computers'], subscriptions: ['models', '#settings-subs'],
   providers: ['models'], chat: ['models'],   // chat: the old Chat tab, then the Models card; Models is AI models' first card
   gateway: ['models', '#settings-gateway'], 'turn-levels': ['limits', '#settings-limits'],
   billing: ['limits', '#settings-billing'],
   system: ['automation'], recurring: ['automation'], rules: ['automation'], routines: ['automation'],
-  listening: ['automation'],
   tags: ['tasks', '#settings-tags'], types: ['tasks', '#settings-types'],
   mail: ['connections', '#settings-mail'], repos: ['connections', '#settings-repos'], repositories: ['connections', '#settings-repos'],
   inbound: ['connections', '#settings-inbound'], 'email-phone': ['connections', '#settings-inbound'],
@@ -129,10 +128,21 @@ let SETTINGS_DENIED = false;
 let SETTINGS_TRANSITION_TIMER = null;
 // A card a link points into (an old tab's place, or the card a link names); it scrolls there once drawn.
 let SETTINGS_REVEAL = '';
+let SETTINGS_SEARCH_HIGHLIGHT = false;
 const SETTINGS_MOVED_TO_MODELS = ['#settings-models', '#set-providers', '#set-gateway'];
 const settingsReveal = selector => {
   if (!selector || SETTINGS_REVEAL !== selector) return;
-  SETTINGS_REVEAL = ''; $(selector)?.scrollIntoView({block: 'start'});
+  SETTINGS_REVEAL = '';
+  const card = $(selector);
+  for (let parent = card?.parentElement; parent; parent = parent.parentElement) {
+    if (parent instanceof HTMLDetailsElement) parent.open = true;
+  }
+  card?.scrollIntoView({block: 'start'});
+  if (card && SETTINGS_SEARCH_HIGHLIGHT) {
+    SETTINGS_SEARCH_HIGHLIGHT = false;
+    card.classList.add('settings-search-highlight');
+    setTimeout(() => card.classList.remove('settings-search-highlight'), 1800);
+  }
 };
 // A card a link names (`#/settings/<tab>/<card>`, the settings catalogue's) on a tab that draws it later: scroll once it is there.
 const settingsRevealSoon = (selector, tries = 20) => {
@@ -239,6 +249,7 @@ function pageSettings() {
     <div id="settings-issues"></div>
     <div class="settings-layout">
     <nav class="settings-groups" id="settings-tabs" data-role="${esc(S.me?.role || '')}" data-admin="${settingsIsAdmin()}" aria-label="Settings">
+      <div class="settings-search" id="settings-search"></div>
       <select class="settings-group-pick" id="settings-group-pick" aria-label="Settings group">${groups.map(g =>
         `<option value="${g.key}">${esc(g.label)}</option>`).join('')}</select>
       <div class="settings-group-list" role="tablist" aria-orientation="vertical" aria-label="Settings groups">${groups.map(g =>
@@ -254,7 +265,9 @@ function pageSettings() {
       <div id="settings-assistant"></div>
       `)}
     ${settingsIsAdmin() ? pane('people', '<div id="settings-people"><div id="set-people">' + skelRows(3, {card: true, dot: false}) + '</div></div>') : ''}
-    ${pane('bots', `<div id="settings-bots"><section class="card settings-bots-card" id="settings-bots-card"><header><h2>Bots</h2>${settingsCanCreateBots() ? '<div class="row"><button class="primary" type="button" id="settings-add-bot" disabled>Add bot</button><button class="ghost" type="button" id="settings-add-catalog" disabled><span class="sb-wide">Add from template</span><span class="sb-narrow">From template</span></button></div>' : ''}</header><div id="set-bots">${skelRows(3, {card: true, dot: false})}</div></section></div>`)}
+    ${pane('bots', `${settingsStrategyBotShown() ? `<section class="card" id="set-strategy-bot-card"><header><h2>${esc(strategyBotName())}</h2><span class="pill">Built-in</span>
+        <div class="row"><a class="ghost" href="#/bot/goal-manager/more">Bot settings</a></div></header><div id="set-strategy-bot">${skelRows(3, {card: true, dot: false})}</div></section>` : ''}
+      <div id="settings-bots"><section class="card settings-bots-card" id="settings-bots-card"><header><h2>Bots</h2>${settingsCanCreateBots() ? '<div class="row"><button class="primary" type="button" id="settings-add-bot" disabled>Add bot</button><button class="ghost" type="button" id="settings-add-catalog" disabled><span class="sb-wide">Add from template</span><span class="sb-narrow">From template</span></button></div>' : ''}</header><div id="set-bots">${skelRows(3, {card: true, dot: false})}</div></section></div>`)}
     ${pane('models', `<div id="settings-models"><section class="card" id="settings-subs"><header><h2>Subscriptions</h2><button class="primary settings-head-act" type="button" id="subs-add" hidden>Add subscription</button></header><div id="set-subs">${skelRows(2, {card: true, dot: false})}</div></section>
       <section class="card" id="settings-gateway-card"><header><h2>Tico Gateway</h2></header><div id="set-gateway-card">${skelRows(1, {card: true, dot: false})}</div></section>
       ${settingsIsAdmin() ? '<div id="settings-gateway"><div id="set-gateway-page"></div></div>' : ''}
@@ -270,12 +283,11 @@ function pageSettings() {
       <section class="card" id="settings-limits"><header><h2>Company turn levels</h2></header><div id="set-turn-levels"></div></section>
       <div id="settings-billing"><section class="card"><header><h2>Billing</h2></header><div id="set-billing">${skelRows(3, {card: true, dot: false})}</div></section></div>`) : ''}
     ${pane('automation', `
+      <section class="card" id="set-automations-card"><header><h2>Automations</h2></header>
+        <p class="settings-card-line"><a href="#/automations">Bot routines, and the rules that wake a bot when something happens.</a></p></section>
       <section class="card" id="set-system-card"><header><h2>What Tico runs on its own</h2></header><div id="set-system-routines">${skelRows(3, {card: true, dot: false})}</div></section>
       <section class="card" id="set-release-card" hidden><header><h2>Releases</h2></header><div id="set-release"></div></section>
       <section class="card" id="set-task-manager-card" hidden><header><h2>Task Manager</h2><span class="pill">Built-in</span></header><div id="set-task-manager"></div></section>
-      ${settingsStrategyBotShown() ? `<section class="card" id="set-strategy-bot-card"><header><h2>${esc(strategyBotName())}</h2><span class="pill">Built-in</span>
-        <div class="row"><a class="ghost" href="#/bot/goal-manager/more">Bot settings</a></div></header><div id="set-strategy-bot">${skelRows(3, {card: true, dot: false})}</div></section>` : ''}
-      ${settingsIsAdmin() ? '<section class="card" id="set-screening-card" hidden><header><h2>Screening</h2></header><div id="set-screening"></div></section>' : ''}
     `)}
     ${pane('tasks', `<div id="settings-tasks">
       <section class="card" id="set-ask-filter-card"><header><h2>What bots may put on you</h2></header><div id="set-ask-filter"></div></section>
@@ -304,6 +316,7 @@ function pageSettings() {
         </div>` : ''}
         <p class="settings-cell-note" id="settings-visuals">${settingsVisualsLine()}</p></section>
       <section class="card" id="settings-policies"><header><h2>Team policies</h2></header><div id="set-policies">${skelRows(3, {card: true, dot: false})}</div></section>
+      <section class="card" id="set-screening-card" hidden><header><h2>Screening</h2></header><div id="set-screening"></div></section>
       <section class="card" id="settings-company"><header><h2>Tico company</h2></header><div id="set-company"></div></section>
       ${S.me?.role === 'owner' ? `<section class="card" id="settings-storage"><header><h2>Storage</h2></header><div id="set-storage">${skelRows(3, {card: true, dot: false})}</div></section>
       <section class="card" id="settings-privacy"><header><h2>Privacy</h2></header><div id="set-privacy">${skelRows(3, {card: true, dot: false})}</div></section>` : ''}`) : ''}
@@ -324,6 +337,7 @@ function pageSettings() {
   $('#settings-app-log')?.addEventListener('click', () => nativeHandler('showLog')?.postMessage(null));
   pageSettingsThemeBind();
   settingsTeamIconBind();
+  settingsSearchMount();
   settingsCardsWatch();   // ui/app/settings-cards.js: each card's first line and Ask BotOps
   $('#settings-history-view')?.addEventListener('click', event => {
     const button = event.target.closest('[data-history-view]');
@@ -421,16 +435,17 @@ function settingsShow(tab, {group: picked = false} = {}) {
   }
   settingsMachinesWatch();
   if (settingsMachinesVisible() && SETTINGS_DATA.loaded) void settingsMachinesRefresh();
+  if (on('bots')) load(renderSettingsStrategyBot());
   if (on('limits')) load(SETTINGS_DATA.loaded && renderSettingsSpendLimits(), renderTeamBudgets(), SETTINGS_DATA.loaded && renderSettingsTurnLevels(), $('#settings-billing') && renderSettingsBilling());
   if (on('automation')) {
-    load(renderSystemRoutines(), renderReleaseCard(), renderTaskManagerCard(), renderScreeningCard(), renderSettingsStrategyBot());
+    load(renderSystemRoutines(), renderReleaseCard(), renderTaskManagerCard());
   }
   if (on('tasks')) load(roadmapSettingsMount(), askFilterSettingsLoad());
   if (on('connections')) load(!formBusy($('#set-mailboxes')) && renderSettingsMailboxes(), !formBusy($('#settings-repos')) && renderSettingsRepos(), inboundMount(), !formBusy($('#settings-mail')) && renderSettingsMail(), !formBusy($('#settings-webhooks')) && renderSettingsWebhooks());
   if (on('policies')) {
     const privacy = $('#settings-privacy'), storage = $('#settings-storage'), company = $('#settings-company');
     load(privacy && owner && renderSettingsPrivacy(), storage && owner && renderSettingsStorage(), company && settingsIsAdmin() && renderSettingsCompany(),
-      $('#settings-policies') && renderSettingsPolicies());
+      $('#settings-policies') && renderSettingsPolicies(), $('#set-screening') && renderScreeningCard());
   }
   if (on('health')) load(window.hlMount?.(), settingsHistoryShow());
   const reveal = SETTINGS_REVEAL;

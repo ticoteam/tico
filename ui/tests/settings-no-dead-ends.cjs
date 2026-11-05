@@ -5,8 +5,8 @@
 //    between them go there;
 //  - while a tab is shown the address bar names it (#/settings/<tab>), so it can be copied or shared: opening an address
 //    shows its tab's own, picking another tab follows without a history step, a reload reopens it, and a redraw
-//    (route() called again, as a status change does) keeps Settings and the tab; the old Rules and Routines
-//    addresses open System;
+//    (route() called again, as a status change does) keeps Settings and the tab; old Rules and Routines addresses open
+//    Automations with a note that their retired filters did not carry over;
 //  - Mailboxes: the old Google and Inbox addresses (Google's sign-in returns to #/settings/inbox) open it, and one
 //    mailbox's page has its own address (#/settings/mailboxes/<id>) that a redraw keeps and the tab leaves;
 //  - a first visit opens General; a tab this person can't see opens General with "That page is for admins", and an
@@ -64,6 +64,9 @@ async function open(browser, {role = 'owner', hash = '#/settings'} = {}) {
     if (p === '/api/status') return json({cloud: true, active: [], queued: [], recent_runs: [], keeper_alive: true, health_issues: []});
     if (p === '/api/v2/status') return json({bots: [{bot: 'ops', state: 'idle'}]});
     if (p === '/api/v2/billing') return json({state: 'no_gateway'});
+    if (p === '/api/v2/settings/catalog') return json({settings: [{key: 'team.rules.admin_sql', name: 'Admins see SQL',
+      where: 'Settings > Company & policies > Team policies', class: 'confirm', who: 'owner', target: '',
+      card: '#/settings/policies/settings-policies', words: 'team rule', parts: []}]});
     if (p === '/api/v2/mailboxes') return json({admin, domain: 'acme.example', may: MAY, mine: null, shared: [], mailboxes: [MAILBOX]});
     if (p === '/api/v2/mailboxes/mb1') return json({mailbox: MAILBOX, can_manage: true, can_stop: true, may: MAY, routines: [],
       candidates: [], accesses: [{id: null, grantee_type: 'admins', grantee_id: '', name: 'Admins', level: 'read_write', implicit: true}]});
@@ -141,11 +144,16 @@ const address = page => page.evaluate(() => location.hash);
       assert.equal(await address(page), '#/settings/models', 'the old Models card on Computers opens Models');
       await go(page, '#/settings/computers');
       assert.equal(await address(page), '#/settings/computers');
-      // The old Rules and Routines addresses open System, and a redraw keeps Settings and the tab.
-      for (const old of ['#/settings/rules', '#/settings/rules?task=t1', '#/settings/routines', '#/settings/recurring']) {
-        await go(page, old);
-        assert.equal(await address(page), '#/settings/automation', old);
+      // Rules and Routines open Automations without carrying their retired filters. Recurring stays in Settings.
+      for (const old of ['#/settings/rules', '#/settings/rules?task=t1', '#/settings/routines', '#/settings/routines?bot=b1']) {
+        await page.evaluate(h => { location.hash = h; }, old);
+        await page.waitForFunction(() => S.route === '#/automations' && location.hash === '#/automations');
+        await page.locator('.settings-legacy-filter-note').waitFor();
+        assert.equal((await page.locator('.settings-legacy-filter-note').innerText()).trim(),
+          'The filter from the old Rules link did not carry over. Search or pick below.');
       }
+      await go(page, '#/settings/recurring');
+      assert.equal(await address(page), '#/settings/automation');
       await page.evaluate(() => route());
       assert.deepEqual(await page.evaluate(() => [S.route, SETTINGS_TAB, location.hash]), ['#/settings', 'automation', '#/settings/automation']);
       // Leaving Settings and coming back by Back reopens the tab the address names.
@@ -155,6 +163,24 @@ const address = page => page.evaluate(() => location.hash);
       await page.waitForFunction(() => S.route === '#/updates');
       await page.goBack();
       await page.waitForFunction(() => S.route === SETTINGS && SETTINGS_TAB === 'health' && location.hash === '#/settings/health');
+      assert.deepEqual(errors, []);
+      await context.close();
+    }
+    {
+      // Search reads the shared catalogue and opens the current group and card from its result.
+      const {page, context, errors} = await open(browser);
+      await page.locator('[data-settings-search-open]').click();
+      await page.locator('#settings-search-input').fill('SQL');
+      const result = page.locator('[data-settings-search-result]');
+      await result.waitFor();
+      assert.match(await result.innerText(), /Admins see SQL[\s\S]*Company & policies/);
+      await result.click();
+      await page.waitForFunction(() => SETTINGS_TAB === 'policies' && location.hash === '#/settings/policies');
+      assert.equal(await page.locator('#settings-policies').evaluate(el => el.classList.contains('settings-search-highlight')), true);
+      await page.locator('[data-settings-search-open]').click();
+      await page.locator('#settings-search-input').fill('no-such-setting');
+      await page.getByText(/No setting matches/).waitFor();
+      assert.equal(await page.locator('[data-settings-search-ask]').innerText(), 'Ask BotOps');
       assert.deepEqual(errors, []);
       await context.close();
     }

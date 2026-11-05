@@ -14,6 +14,24 @@
 .settings-group-divider{border:0;border-top:1px solid var(--line);margin:6px 0}
 .settings-group-pick{display:none}
 .settings-group-line{margin:0 0 12px;color:var(--muted)}
+.settings-search{margin-bottom:8px}
+.settings-search-open{display:flex;align-items:center;gap:7px;width:100%;padding:7px 10px;border:1px solid var(--line);border-radius:6px;background:var(--surface);color:var(--muted);text-align:left;font:inherit;cursor:pointer}
+.settings-search-panel{padding:8px 0}
+.settings-search-row{display:flex;gap:6px;align-items:center}
+.settings-search-row input{min-width:0;flex:1}
+.settings-search-results{display:flex;flex-direction:column;gap:4px;max-height:55vh;overflow:auto;margin-top:8px}
+.settings-search-result{display:flex;flex-direction:column;gap:3px;padding:8px 10px;border-radius:6px;color:var(--ink);text-decoration:none}
+.settings-search-result:hover,.settings-search-result:focus{background:var(--surface2)}
+.settings-search-result span,.settings-search-result small{color:var(--muted)}
+.settings-search-result.is-disabled{color:var(--muted)}
+.settings-search-go{align-self:flex-start;font-size:var(--t-sm)}
+.settings-search-ask{align-self:flex-start}
+.settings-searching .settings-group-list,.settings-searching .settings-group-pick{display:none}
+.settings-layout.settings-searching{grid-template-columns:minmax(0,1fr)}
+.settings-layout.settings-searching .settings-groups{position:static;width:100%;max-width:640px}
+.settings-layout.settings-searching .settings-panes{display:none}
+.settings-search-highlight{outline:2px solid var(--focus);outline-offset:3px}
+.settings-legacy-filter-note{margin:0 0 12px;color:var(--muted)}
 /* A card's first line: what it controls, in plain words. */
 .settings-card-line{margin:0 0 12px;color:var(--muted)}
 /* Ask BotOps: a small link at the end of each card's heading row. */
@@ -25,6 +43,8 @@ section.card>header>.settings-ask{margin-left:auto;font-size:var(--t-sm)}
   .settings-groups{position:static}
   .settings-group-list{display:none}
   .settings-group-pick{display:block;width:100%;min-height:40px}
+  .settings-search-open{min-height:40px}
+  .settings-searching .settings-group-pick{display:none}
 }
 .settings-pane[hidden]{display:none}
 .settings-table{width:100%;border-collapse:collapse;font-size:var(--t-base)}

@@ -18,10 +18,10 @@ const SETTINGS_CARDS = [
   ['#set-people .people-join', 'adding people', 'How people join this team: add them by email, or keep the list in step with your company directory.'],
   ['#set-people .people-list-card:not(#setup-people)', 'People', 'Everyone on the team, the role each has, and whether they can sign in.'],
   ['#setup-people', 'the people from setup', 'People named while this team was set up who are not on the team yet. Add the ones who should be.'],
-  ['#set-strategy-bot-card', 'the Strategy bot', 'How much the Strategy bot does on its own, and what it has done lately, with Undo.'],
+  ['#set-strategy-bot-card', 'Strategy Bot', 'Whether your Strategy Bot runs regular checks, and how much it does on its own.'],
   ['#settings-subs', 'Subscriptions', 'The AI subscriptions your computers use to run bots.'],
   ['#settings-gateway-card', 'Tico Gateway', 'How this team connects to Tico Gateway for its AI models.'],
-  ['#set-screening-card', 'Screening', 'How Tico checks incoming content before bots use it.'],
+  ['#set-screening-card', 'Screening', 'Checks text from outside Tico for instructions aimed at a bot, before the bot reads it. Warn marks it; Hold keeps it for a person.'],
   ['#settings-bots-card', 'Bots', 'Every bot on the team: who owns it, what it may reach, its model and its spend limit. Add, edit or archive bots here.'],
   ['#settings-defaults', 'the company models', 'The AI providers and models bots use, the company default model, and what bots fall back to.'],
   ['#set-gateway-page > .card:nth-of-type(1)', 'Tico AI Gateway', 'Whether this team is connected to Tico AI Gateway, and how much it decides for you.'],
@@ -34,15 +34,14 @@ const SETTINGS_CARDS = [
   ['#settings-turn-budgets', 'the run budget', 'When a bot starts more runs in an hour or a day than this, Tico holds it as a likely runaway loop. Its queued work waits until someone releases it or raises the budget. A person\'s own message still goes through.'],
   ['#settings-limits', 'the company turn levels', 'Both levels count bot turns running at the same time, per signed-in person. At the warning level Health shows it; at the stop level no new bot turn starts, and new work waits until running turns finish.'],
   ['#settings-billing > .card', 'Billing', 'Your Tico balance and credits. Tico models stop when the balance reaches $0.00.'],
-  ['#set-routines-card', 'Bot routines', ''],
-  ['#set-rules-card', 'Rules', ''],
+  ['#set-automations-card', 'Automations', ''],
   ['#set-system-card', 'What Tico runs on its own', 'Jobs built into Tico, such as due reminders and stale ticket review, and your departments’ task rules. Each shows when it runs and when it last ran.'],
   ['#set-release-card', 'Releases', 'The daily times the Release Manager ships what waits at Pending Release. Release now ships it sooner, for those allowed.'],
   ['#set-task-manager-card', 'the Task Manager', 'Checks each department’s tasks hourly on weekdays, 08:00 to 18:00, and files one check task listing what is quiet, overdue or stuck. Only the owner pauses it.'],
   ['#settings-listening > .card', 'Listening', ''],
   ['#set-ask-filter-card', 'What bots may put on me', 'What bots may put on your plate, how many open items you take before that tightens, and your chores budget.'],
   ['#set-task-settings-card', 'Task settings', ''],
-  ['#settings-types > .card', 'Task types', 'The kinds of task this team uses and the steps each one moves through.'],
+  ['#settings-types > .card', 'Task types', 'What Tico does to tasks on its own is on the Automations page.', '#/automations'],
   ['#settings-roadmaps', 'the public roadmap', 'Which tags show on the public roadmap, the websites that show it, and who gets visitors\' suggestions.'],
   ['#settings-tags-card', 'Task tags', 'The tags on tasks: rename, recolour or remove them.'],
   ['#set-repos', 'Repositories', 'The code repositories bots may work in, and what each bot may do there.'],
@@ -75,13 +74,18 @@ function settingsAskDraft(card) {
 
 function settingsCardsDecorate(root = $('.settings-panes')) {
   if (!root) return;
-  for (const [sel, , line] of SETTINGS_CARDS) for (const card of root.querySelectorAll(sel)) {
+  for (const [sel, , line, href] of SETTINGS_CARDS) for (const card of root.querySelectorAll(sel)) {
     const head = card.querySelector(':scope > header');
     let first = card.querySelector(':scope > .settings-card-line');
     if (!first && line) {
       first = document.createElement('p');
       first.className = 'settings-card-line';
-      first.textContent = line;
+      if (href) {
+        const link = document.createElement('a');
+        link.href = href;
+        link.textContent = line;
+        first.append(link);
+      } else first.textContent = line;
       if (head) head.after(first); else card.prepend(first);
     }
     card.dataset.settingsCard = '';

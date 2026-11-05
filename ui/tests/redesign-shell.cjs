@@ -235,13 +235,17 @@ const noSideScroll = page => page.evaluate(() => document.documentElement.scroll
       assert.equal(await page.locator('#settings-redesign, #redesign-switch').count(), 0, tag + ': no design switch');
       assert.equal(await page.locator('[data-settings-tab="listening"], [data-settings-tab="rules"], [data-settings-tab="recurring"]').count(), 0, tag + ': Listening and Rules left Settings');
       await shot(page, 'desktop-settings');
-      for (const old of ['#/settings/rules', '#/settings/routines', '#/settings/recurring']) {
+      for (const old of ['#/settings/rules', '#/settings/routines']) {
         await page.evaluate(h => { location.hash = h; }, old);
-        assert.ok(await hashSoon(page, '#/settings/system'), `${tag}: ${old} lands on System`);
+        assert.ok(await hashSoon(page, '#/automations'), `${tag}: ${old} opens Automations`);
+        assert.match(await page.locator('.settings-legacy-filter-note').innerText(), /filter from the old Rules link did not carry over/);
       }
-      assert.equal(await page.locator('[data-settings-tab="automation"][aria-selected="true"], [data-settings-tab="automation"].cur, [data-settings-tab="automation"][aria-current]').count(), 1, tag + ': System is the tab shown');
-      assert.equal(await page.locator('#settings-system #set-rules-card, #settings-system [data-bot-routines]').count(), 0, tag + ': no wake rules or bot routines');
-      await shot(page, 'desktop-settings-system');
+      await page.evaluate(() => { location.hash = '#/settings/recurring'; });
+      assert.ok(await hashSoon(page, '#/settings/automation'), `${tag}: Recurring remains in Settings`);
+      assert.equal(await page.locator('[data-settings-tab="automation"][aria-selected="true"]').count(), 1, tag + ': Automation is the group shown');
+      assert.equal(await page.locator('#set-automations-card h2').innerText(), 'Automations');
+      assert.match(await page.locator('#set-automations-card').innerText(), /Bot routines, and the rules that wake a bot when something happens/);
+      await shot(page, 'desktop-settings-automation');
       assert.deepEqual(errors, [], tag + ': no page errors');
       await page.close();
     }

@@ -41,7 +41,7 @@ def _card(tab, card=""):
 
 GENERAL, PEOPLE, COMPUTERS, BOTS = "Settings > Company & policies", "Settings > People", "Settings > Computers", "Settings > Bots"
 RULES, HOOKS, TASKS, REPOS = "Settings > Automation", "Settings > Connections > Webhooks", "Settings > Tasks", "Settings > Connections > Repositories"
-INBOUND, STRATEGY = "Settings > Connections > Email & Phone", "Settings > Automation > Strategy bot"
+INBOUND, STRATEGY = "Settings > Connections > Email & Phone", "Settings > Bots > Strategy Bot"
 MAIL = "Settings > Connections > Mail"
 MODELS = "Settings > AI models"
 
@@ -267,6 +267,11 @@ ENTRIES = TEAM_RULES + [
     # only), is the person's own click: from BotOps, a Confirm card (backend/repositories.py bot_set).
     S("bot.repositories", "Bot repositories", REPOS, "admin", "direct", "PUT", "bots/{bot}/repositories",
       value="json", card=_card("repos", "set-repos"), words="run edit workflows actions ci product",
+      parts=(("Create bot repositories", "Private bot repositories in the connected organization"),
+             ("Create product repositories", "Private repositories with any other name; the bot gets write to each"),
+             ("Repository access", "Own repo only, All ticked repos or Chosen repos"),
+             ("Run workflows", "Start, rerun and cancel workflow runs (GitHub Actions: write)"),
+             ("Edit workflow files", "Create and change files in .github/workflows (GitHub Workflows: write)")),
       confirm_when=(("chosen.run_workflows", (True,)), ("chosen.edit_workflows", (True,)),
                     ("all_repos.run_workflows", (True,)), ("all_repos.edit_workflows", (True,)),
                     ("create_product_repositories", (True,))),
@@ -275,9 +280,9 @@ ENTRIES = TEAM_RULES + [
           "workflows starts CI, which uses the repository's secrets"),
     # Strategy bot
     S("strategy.checks", "Strategy bot regular checks", STRATEGY, "owner", "confirm", "POST",
-      "strategy-bot/checks", "on", card=_card("system", "set-strategy-bot-card")),
+      "strategy-bot/checks", "on", card=_card("bots", "set-strategy-bot-card")),
     S("strategy.level", "How much the Strategy bot does", STRATEGY, "owner", "confirm", "POST",
-      "strategy-bot/level", "level", "int", _card("system", "set-strategy-bot-card")),
+      "strategy-bot/level", "level", "int", _card("bots", "set-strategy-bot-card")),
     # Repositories
     S("repo.enabled", "Repository on", REPOS, "admin", "direct", "PUT", "repositories/{id}", "enabled",
       card=_card("repos", "set-repos")),
@@ -302,12 +307,12 @@ ENTRIES = TEAM_RULES + [
       "text", _card("system", "set-release-card"), "release-schedule#bot"),
     S("release.writer", "Release notes writer", RULES + " > Releases", "admin", "direct", "PATCH",
       "release-schedule", "writer", "text", _card("system", "set-release-card"), "release-schedule#writer"),
-    *[S("screening." + source, "Screening: " + name, RULES + " > Screening", "admin", "direct", "PUT", "screening",
-        source, "choice:off|warn" + ("" if source == "mail" else "|hold"), _card("system", "set-screening-card"),
+    *[S("screening." + source, "Screening: " + name, GENERAL + " > What bots may do alone > Screening", "admin", "direct", "PUT", "screening",
+        source, "choice:off|warn" + ("" if source == "mail" else "|hold"), _card("policies", "set-screening-card"),
         "screening#modes." + source, words="prompt injection screening")
-      for source, name in (("webhook", "Webhooks"), ("mail", "Mail"), ("idea", "Ideas"), ("watcher", "Watchers"), ("document", "Documents"))],
-    *[S("screening." + layer, "Screening: " + name, RULES + " > Screening", "admin", "direct", "PUT", "screening",
-        layer, card=_card("system", "set-screening-card"), read="screening#layers." + layer,
+      for source, name in (("webhook", "Webhooks"), ("mail", "Mail"), ("idea", "Ideas"), ("watcher", "Watchers"), ("document", "Documents"), ("slack", "Slack"))],
+    *[S("screening." + layer, "Screening: " + name, GENERAL + " > What bots may do alone > Screening", "admin", "direct", "PUT", "screening",
+        layer, card=_card("policies", "set-screening-card"), read="screening#layers." + layer,
         words="prompt injection screening detector")
       for layer, name in (("patterns", "Patterns"), ("model", "Decision model"))],
     S("task_manager.on", "Task Manager", RULES + " > Task Manager", "owner", "direct", "POST", "task-manager/turn-on",
@@ -341,10 +346,10 @@ ENTRIES = TEAM_RULES + [
     S("webhooks.outgoing", "Outgoing webhook", HOOKS + " > Outgoing", "creator", "confirm", "POST", "webhooks/{id}/update",
       value="json", card=_card("webhooks", "outgoing")),
     # Listening
-    S("listening.destination", "Listening destination", "Settings > Listening", "owner", "confirm", "PUT",
-      "listening/destinations/{id}", value="json", card=_card("listening")),
-    S("listening.destination.remove", "Remove a listening destination", "Settings > Listening", "owner", "confirm",
-      "POST", "listening/destinations/{id}/remove", value="json", card=_card("listening")),
+    S("listening.destination", "Listening destination", "Strategy > Market > Listening", "owner", "confirm", "PUT",
+      "listening/destinations/{id}", value="json", card="#/strategy/market/listening"),
+    S("listening.destination.remove", "Remove a listening destination", "Strategy > Market > Listening", "owner", "confirm",
+      "POST", "listening/destinations/{id}/remove", value="json", card="#/strategy/market/listening"),
     # Tasks
     S("tasks.type", "Task type", TASKS + " > Task types", "mover", "direct", "POST", "task-types/{id}", value="json",
       card=_card("tasks", "settings-types"), words="steps pipeline"),

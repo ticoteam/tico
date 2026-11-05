@@ -366,6 +366,8 @@ async function peopleFromSetup(el) {
 // the same access view People reads. Each control saves when it changes; a refusal stays in red under it.
 async function renderSettingsPolicies() {
   const el = $('#set-policies'); if (!el || formBusy(el)) return;
+  const screening = $('#set-screening-card');
+  if (screening && el.contains(screening)) $('#settings-policies').after(screening);
   let view;
   try { view = await get('/v2/access'); }
   catch (error) { el.innerHTML = `<div class="empty">Couldn't load the policies: ${esc(error.message || 'try again')}</div>`; return; }
@@ -384,6 +386,8 @@ async function renderSettingsPolicies() {
       ...(heading === 'Who may see and store what' ? [limit] : [])];
     return rows.length ? `<div class="policy-group"><h3>${esc(heading)}</h3>${rows.join('')}</div>` : '';
   }).join('') + (owner ? '' : settingsWhoCanHTML('the team policies'));
+  const firstGroup = el.querySelector('.policy-group');
+  if (screening && firstGroup) firstGroup.after(screening);
   const find = control => control.id ? $(`#${CSS.escape(control.id)}`)
     : control.dataset.policy ? $(`#set-policies [data-policy="${CSS.escape(control.dataset.policy)}"]`)
     : control.dataset.ruleCount ? $(`#set-policies [data-rule-count="${CSS.escape(control.dataset.ruleCount)}"]`)

@@ -1,5 +1,5 @@
-// Settings > System > Screening (ui/app/settings-release.js, backend/screening.py): an owner or admin sees a switch per
-// detector (Patterns, Model) and one row per door (Webhooks, Mail, Ideas, Watchers) with a mode, mail offering Off and
+// Settings > Company & policies > Screening (ui/app/settings-release.js, backend/screening.py): an owner or admin sees a switch per
+// detector (Patterns, Model) and one row per door (Webhooks, Mail, Ideas, Watchers, Documents, Slack) with a mode, mail offering Off and
 // Warn only; a change is one PUT; Run test
 // shows passed/total and each sample; Recent lists holds and warnings with a Task link. A member never sees the card.
 // Fits a phone with no sideways scroll. Fixtures only. TICO_SHOTS=<dir> also saves desktop and phone screenshots.
@@ -10,9 +10,10 @@ const path = require('node:path');
 const {html, uiFile, harnesses} = require('./support/page.cjs');
 const {unrouted} = require('./support/routes.cjs');
 
-const SOURCES = [{id: 'webhook', name: 'Webhooks'}, {id: 'mail', name: 'Mail'}, {id: 'idea', name: 'Ideas'}, {id: 'watcher', name: 'Watchers'}];
+const SOURCES = [{id: 'webhook', name: 'Webhooks'}, {id: 'mail', name: 'Mail'}, {id: 'idea', name: 'Ideas'}, {id: 'watcher', name: 'Watchers'},
+  {id: 'document', name: 'Documents'}, {id: 'slack', name: 'Slack'}];
 const before = new Date(Date.now() - 20 * 60000).toISOString();
-const view = () => ({modes: {webhook: 'hold', mail: 'warn', idea: 'hold', watcher: 'hold'}, layers: {patterns: true, model: true},
+const view = () => ({modes: {webhook: 'hold', mail: 'warn', idea: 'hold', watcher: 'hold', document: 'warn', slack: 'warn'}, layers: {patterns: true, model: true},
   sources: SOURCES, model: true,
   recent: [{action: 'held', source: 'webhook', score: 0.97, kind: 'ignore_previous_instructions', at: before, task: 't-held'},
     {action: 'warned', source: 'mail', score: null, kind: 'reveal_system_prompt', at: before, task: null}]});
@@ -57,8 +58,11 @@ async function open(browser, role, viewport) {
   });
   await page.goto('https://tico-ui.test/#/settings');
   await page.locator('#settings-tabs').waitFor();
-  const tab = page.locator('[data-settings-tab="automation"]');
-  await tab.click();
+  if (role !== 'member') {
+    const tab = page.locator('[data-settings-tab="policies"]');
+    if (await page.locator('#settings-group-pick').isVisible()) await page.locator('#settings-group-pick').selectOption('policies');
+    else await tab.click();
+  }
   return {page, errors, writes};
 }
 
@@ -69,10 +73,16 @@ async function open(browser, role, viewport) {
     for (const [role, viewport] of [['owner', {width: 1440, height: 900}], ['admin', {width: 390, height: 844}]]) {
       const {page, errors, writes} = await open(browser, role, viewport);
       const card = page.locator('#set-screening-card');
-      await card.locator('[data-screening-mode="webhook"]').waitFor();
       assert.equal((await card.locator('h2').innerText()).trim(), 'Screening');
+      assert.equal((await card.locator(':scope > .settings-card-line').innerText()).trim(),
+        'Checks text from outside Tico for instructions aimed at a bot, before the bot reads it. Warn marks it; Hold keeps it for a person.');
+      await card.locator('details').waitFor({state: 'attached'});
+      assert.equal(await card.locator('details').count(), 1);
+      await card.locator('details > summary').click();
+      assert.match(await card.locator('details > p').first().innerText(), /Every door starts at Warn/);
+      await card.locator('[data-screening-mode="webhook"]').waitFor();
       const names = await card.locator('.sb-row > span:first-child').allInnerTexts();
-      assert.deepEqual(names.map(n => n.trim()), ['Patterns', 'Model', 'Webhooks', 'Mail', 'Ideas', 'Watchers', 'Test']);
+      assert.deepEqual(names.map(n => n.trim()), ['Patterns', 'Model', 'Webhooks', 'Mail', 'Ideas', 'Watchers', 'Documents', 'Slack', 'Test']);
       const patterns = card.locator('[data-screening-layer="patterns"]');
       assert.equal(await patterns.isChecked(), true);
       assert.equal(await card.locator('[data-screening-layer="model"]').isChecked(), true);

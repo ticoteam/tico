@@ -1,4 +1,4 @@
-/* ui/app/settings-release.js — Settings > System: the Releases, Task Manager and Screening cards, and the board's Release now
+/* ui/app/settings-release.js — Settings > Automation and Company & policies: release, task and screening cards, and Release now
    Classic script: its globals are shared with the other files under ui/app/, loaded in the order index.html lists them. */
 'use strict';
 
@@ -201,14 +201,16 @@ function screeningHTML(v) {
   const layers = v.layers || {patterns: true, model: true};
   const layer = (id, name, extra = '') => `<div class="sb-row"><span>${name}</span><div class="rel-line"><label class="sysr-switch">${
     peopleSwitch(`data-screening-layer="${id}"`, layers[id], false, name)}<span>${layers[id] ? 'On' : 'Off'}</span></label>${extra}</div><span></span></div>`;
-  return `<div class="sb-rows rel-rows">
+  return `<details class="settings-details"><summary>Details</summary>
+  <p class="settings-cell-note">Every door starts at Warn, so nothing is held yet. Mail only offers Off and Warn. Hold comes only from the decision model's score, since the pattern check only warns.</p>
+  <div class="sb-rows rel-rows">
     ${layer('patterns', 'Patterns')}
     ${layer('model', 'Model', layers.model && !v.model ? '<span class="muted">Decide is off</span>' : '')}
     ${v.sources.map(s => `<div class="sb-row"><span>${esc(s.name)}</span>${pick(s)}<span></span></div>`).join('')}
     <div class="sb-row"><span>Test</span><div class="rel-line"><button type="button" class="ghost" data-screening-test>Run test</button></div><span></span></div>
   </div><p class="settings-cell-note" role="status" data-screening-status></p>
   <div data-screening-results>${screeningTestHTML(SCREENING_TEST)}</div>
-  <h3>Recent</h3>${screeningRecentHTML(v.recent)}`;
+  <h3>Recent</h3>${screeningRecentHTML(v.recent)}</details>`;
 }
 function screeningStatus(text, failed) {
   const box = $('#set-screening [data-screening-status]');
@@ -217,8 +219,10 @@ function screeningStatus(text, failed) {
 function screeningPaint() {
   const el = $('#set-screening'), card = $('#set-screening-card'); if (!el || !SCREENING_VIEW) return;
   if (formBusy(el)) return;
+  const detailsOpen = !!el.querySelector('.settings-details')?.open;
   card.hidden = false;
   el.innerHTML = screeningHTML(SCREENING_VIEW);
+  if (detailsOpen) el.querySelector('.settings-details').open = true;
   el.onchange = async ev => {
     const t = ev.target.closest('[data-screening-mode], [data-screening-layer]'); if (!t) return;
     const body = t.dataset.screeningLayer ? {[t.dataset.screeningLayer]: t.checked} : {[t.dataset.screeningMode]: t.value};
