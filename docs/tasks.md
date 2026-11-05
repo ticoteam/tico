@@ -973,8 +973,11 @@ hold. When the check works again, the ticket returns to its step.
 
 When a task is Blocked by waits Tico tracks, its reason names the open hold or holds and updates when
 they change. A question to a person belongs to the task that asked it: ending a parent task does not
-withdraw a question on an open child. When a question is withdrawn, its asker is told why. Clearing
-the last tracked hold reopens a bot-owned task; an engineering ticket returns to the step it left.
+withdraw a question on an open child. When a question is withdrawn, its asker is told why. The notice also
+says whether the person saw it. It reads `Withdrawn after Ana saw it: <why>` when Ana opened the question's
+card or its task, or when the "who needs me" skill presented that task to her. Otherwise it reads
+`Withdrawn before Ana saw it: <why>`. A question that only appeared in Needs you does not count as seen.
+Clearing the last tracked hold reopens a bot-owned task; an engineering ticket returns to the step it left.
 An owner-written Blocked reason remains manual.
 
 A task filed to DevOps or a person about a blocker can name it: `--blocker <repo> <status> <endpoint>`,
