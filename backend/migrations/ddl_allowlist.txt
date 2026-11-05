@@ -42,7 +42,6 @@ backend/learned.py:2
 backend/lenses.py:2
 backend/lifecycle.py:7
 backend/listening.py:1
-backend/mail_settings.py:1
 backend/market.py:2
 backend/market_briefing.py:2
 backend/market_watch.py:3
@@ -52,7 +51,7 @@ backend/memory_tidy_cards.py:6
 backend/message_links.py:10
 backend/milestone_waits.py:4
 backend/model_subscriptions.py:7
-backend/org_rule_check.py:5
+backend/org_rule_check.py:3
 backend/org_rules.py:7
 backend/org_turns.py:1
 backend/owner_link.py:1

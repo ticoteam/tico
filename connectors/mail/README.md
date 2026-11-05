@@ -4,9 +4,8 @@ The company's one mail tool. Employees use it through `scripts/mail.sh`; the emp
 guide is `docs/mail.md`. The plan and the reasoning are `docs/mail-service.md`.
 
 Stages 1 and 2 are built. Stage 1 reads and files mail: auth, `doctor`, reading, labels, the
-rules engine, the database, the audit log. Stage 2 writes it: the policy file, the lint, the
-second-model reviewer, `draft`, `send`, `reply`, `sent-log`, `slots`, `schedule` and
-`doctor --e2e`. Everything except `doctor --e2e` and the Gmail calls themselves is exercised
+rules engine, the database, the audit log. Stage 2 writes it: the lint, `draft`, `send`, `reply`,
+`sent-log`, `slots`, `schedule` and `doctor --e2e`. Every send goes to Tico's send queue, which decides it. Everything except `doctor --e2e` and the Gmail calls themselves is exercised
 offline by the tests.
 
 ## Layout
@@ -20,9 +19,8 @@ connectors/mail/
   calendar.py       thin Calendar client + the pure free/busy and slot maths
   db.py             SQLite at <projects>/runtime/mail/mail.db, WAL
   access.py         employee -> mailboxes -> verbs, from employee.yaml. Refusals are exit 2.
-  policy.py         registry/mail-policy.yaml: the send chain, the caps, the approval Issue
-  lint.py           the deterministic rules, L001..L071. Pure.
-  review.py         the second model (Grok Build, xAI, or none). Never raises.
+  policy.py         the one send door (POST /api/v2/email/sends) and what a run reads from Tico around it
+  lint.py           the deterministic rules, L010..L071. Pure. Tico runs the same lint on every send.
   compose.py        MIME building and the two idempotency keys. Pure.
   rules.py          the deterministic inbox rules engine
   labels.py         the hub/* label set
@@ -34,9 +32,8 @@ connectors/mail/
 Everything except `auth.py`, the client half of `gmail.py` and the client half of `calendar.py`
 is pure: the normalizer, the rules engine, access resolution, the lint, the slot maths, the
 message builder and the renderers take dicts and return dicts. That is why the tests need no
-network, no key and no Google libraries. `policy.py` shells out to `gh` for one thing only, the
-approval Issue, through a `RUN` seam the tests replace; `review.py` shells out to the reviewer
-through the same kind of seam.
+network, no key and no Google libraries. `policy.py` talks to Tico through the `HUB_GET`, `HUB_POST`,
+`SERVER_GET` and `RUNNER_GET` seams the tests replace.
 
 Google's client libraries are imported lazily inside `auth.py`, so `import connectors.mail`
 works on a bare Python. `doctor` reports them missing rather than crashing.
@@ -100,9 +97,8 @@ same listing fields before any thread is opened:
 
 ```text
 <projects>/runtime/mail/mail.db        seen, watermarks, rule_hits, audit,
-                                       drafts, sends, reviews, messages, sync_state
+                                       drafts, sends, queued_drafts, messages, sync_state
 <projects>/runtime/mail/audit.jsonl    the same audit lines, append-only
-<projects>/runtime/mail/review/        scratch directories the Grok Build reviewer runs in
 <projects>/runtime/mail/venv           the Python environment
 <projects>/secrets/google-sa.json      the service-account key, mode 600, never in git
 ```
@@ -118,16 +114,12 @@ row and updates that Gmail draft instead of leaving a second one. `sends` is key
 sha256("send", employee, issue, draft id) and the row is written **before** the API call, so a
 crash between the call and the answer cannot become a second email; a call that never happened
 deletes its own claim, so a retry is still allowed. `sends` is also where `sent-log --reconcile`
-puts the owner's own sends, as employee `human`, which is how the owner's sends count towards a bot's
-per-recipient cooldown. `reviews` holds every verdict; a send re-uses one only while it is under
-24 hours old and the send carries no approval, and never for a draft with attachments, which is
-reviewed again as it stands.
-Attachments use the same send and approval rules as mail without files, including an owner's
-Tico message telling the bot to send. When a Tico send approval names files, `send` hashes the
-draft's parts from Gmail and `policy.approval_check` matches the exact set by name, size and
-sha256, and the draft id. A send approval naming no files places no extra constraint on them.
-`mail draft --attach --json` includes an optional approval request payload for sends that need one
-under the usual rules. Files must come from the bot's own folder, exclude secrets and total at most 25 MB.
+puts the owner's own sends, as employee `human`. `queued_drafts` maps a Gmail draft to the Tico send
+it became, so the connector deletes the draft once the send goes out.
+Attachments go into the frozen message Tico queues, so Tico's decision and any approval cover the exact
+files. `mail draft --attach --json` includes an approval summary payload (name, size and sha256 per
+file, and the file id on the task when the upload worked). Files must come from the bot's own folder,
+exclude secrets and total at most 25 MB.
 `mail discard` deletes a Gmail draft only when its `drafts` row names the same employee and
 mailbox and no `sends` row has sent it, then drops the row.
 
@@ -153,8 +145,8 @@ resource shape the real client uses (`users().messages().list/get/modify`, `labe
 `threads()`, `history().list`, `drafts().create/update/get/delete/send`), including a tiny query matcher for
 `in:inbox`, `in:sent`, `label:`, `-label:`, `from:`, `subject:` and `after:`, plus a
 `FakeCalendarService` for `calendarList`, `freebusy` and `events`. `tests/harness.py` builds a
-whole temp world - manifests, a creator table, a policy file - for the stage-2 tests, and sets
-`MAIL_REVIEWER=none` so nothing calls a model.
+whole temp world - manifests, a creator table, a fake Tico send queue - for the stage-2 tests, and
+sets `MAIL_DECISIONS=none` so nothing calls a model.
 
 `tests/fixtures/*.json` are raw Gmail messages with the rule outcome each one
 should get; they are used by `test_rules.py` and by the CLI:
@@ -192,116 +184,42 @@ would still read. Only id, thread, sender, subject, labels and rule outcomes are
 message, so a 2000-message window stays small. `--format json` carries the same data
 structured, including every bucketed message.
 
-## registry/mail-policy.yaml
+## Sending
 
-The schema is documented at the top of the file itself; this is the shape and where each part
-bites. `policy.validate()` rejects an unknown key rather than ignoring it, because a typo in a
-cap must not silently become "no cap".
+The CLI decides no send. `send`, `reply` and `schedule` freeze the draft as raw MIME and post it to
+`POST /api/v2/email/sends` (`policy.queue_send`, backend/email_sending.py); Tico answers with the send's
+`state` and its decision's reasons:
 
-```yaml
-global: { send_enabled: true }              # the kill switch: false means everything is a draft
-sandbox_mailbox: hub-test@acme.example          # the only mailbox doctor --e2e will touch
-internal_domains: [acme.example]                # internal recipients need no allowance; lint allows links on these hosts
-forbidden_phrases: []                           # lint L001: house-style phrases no message may contain
-signature_names: []                             # lint L055: names a signature may carry (default: the mailbox's own name)
-scheduling:                                     # the one mailbox that may use the standing scheduling permission
-  mailbox: ana@acme.example
-  employee: inbox
-  booking_url: ''                               # optional link offered when neither time works
-  meeting_title: Meeting                        # the calendar event title
-mailboxes:
-  ana@acme.example: { paused: false }         # per-mailbox pause; legacy allow_attachments is accepted but ignored
-defaults:                                   # the stricter of these and an allowance wins
-  max_sends_per_day: 20
-  per_recipient_cooldown_days: 14
-  max_external_recipients: 1
-  allow_cc_external: false
-  allow_attachments: false                  # legacy key, accepted but ignored; attachments use the normal send chain
-blocklist: { addresses: [], domains: [] }                  # never written to, in any verb
-owner_handles_personally: { addresses: [], domains: [] }   # forces hub/needs-owner
-allowances:
-  - employee: influencer
-    mailbox: ana@acme.example
-    purpose: "one paragraph; the reviewer is shown it"
-    recipients:
-      source: csv                           # csv or list
-      path: emp-influencer/data/creators.csv        # relative to <projects>/
-      column: email
-      require_column: { fit: keep }         # "keep" and "keep: reason" match, "skip" does not
-    caps: { per_day: 10, per_recipient_cooldown_days: 365 }
-    urls:
-      required_pattern: '^https://acme\.example/guide\?utm_source=...$'
-      forbidden: [calendly.com, acme.example/demo, go.acme.example]
-```
+| state | what it means | what the CLI reports |
+| ----- | ------------- | -------------------- |
+| `pending` | accepted; the undo window runs, then the connector dispatches it | `queued: true`, `send_after` |
+| `waiting_approval` | Ask first, or a rule that asks: a person approves it in Tico | `queued: true`, `approval_id` |
+| `blocked` | Never, a blocked or suppressed recipient, owner-handles-personally, the lint, the reviewer, the org rule check | `downgraded: "draft"`, `reason` = Tico's `detail` |
 
-The send chain, in order: `global.send_enabled`, then the mailbox pause, then the employee
-declaring the `send` verb on this mailbox, then sending turned on for the bot in Tico,
-then the recipient being internal, one of the forward targets approved in Tico, the sender of the thread being replied
-to, covered by an allowance, or named by `--approval-issue N` (the first three need no approval once sending is on),
-then the caps, then the blocklist, then owner-handles-personally. Every one of those failing is
-a **downgrade to a draft with a reason**, exit 0. Only a broken policy file is an error, exit 1. With no
-`registry/mail-policy.yaml` (a Docker computer) `policy.builtin()` is the policy: sending on, the team's domains internal,
-the usual caps, an empty blocklist.
+Tico decides there, and only there: the company, inbox and bot sending policy (**On their own**, **Ask
+first**, **Never**; set in Tico, Settings > Bots > the bot > Email sending, or the company or inbox
+sending policy), blocked recipients, owner-handles-personally, outside Cc and many-outside-recipient
+asks, the lint and the second reviewer on a bot's own writing, the org rule check, bounce suppression and
+approvals. `--approval <id>` on `send`, `reply` and `schedule` passes the id of the person's Tico approval
+or message the send relies on; Tico checks it. A blocked send is a downgrade, exit 0, and the Gmail draft
+stays. The one check the CLI keeps is access: a bot whose `bot.yaml` grants no `send` verb on the mailbox
+gets a draft and `gate: "verb"`.
 
-Sending on and the forward targets come from the Tico server (`GET /api/v2/bots/<slug>/mail-settings`,
-backend/mail_settings.py), which only a person who manages the bot sets (`hub bot mail`, or Settings > Bots > Mail
-sending). `outbound_send` and `forward_to` in bot.yaml are a request with no effect of their own: with no server value
-every outside send needs an approval. The same read says whether the bot is still onboarding: an onboarding bot sends
-no email, approval or not, and neither does a run that cannot read the setting at all (no credential, no Tico reachable,
-a bad answer), since it cannot confirm the bot is past onboarding. `policy.switch()` reads it once per check; tests
-replace `policy.SERVER_GET`.
-
-`check_draft` is the short version - blocklist, owner-handles-personally, attachments - and that
-one refuses with exit 2, because a draft nobody may write is a mistake to fix rather than
-something to leave lying about.
-
-An approval Issue is checked with `gh issue view N -R ticoteam/tico --json
-state,labels,title,body`: it has to be **closed**, carry `owner:ana` and `type:decision`, and
-name the recipient address or the thread id in its title or body.
+`policy show --as <slug>` prints the effective sending policy as Tico answers it
+(`GET /api/v2/bots/<slug>/email-sending-policy`). `doctor --e2e` runs only against the mailbox named in
+`TICO_MAIL_SANDBOX`.
 
 ## The lint
 
-`lint.py`'s docstring is the rule table: L001 forbidden phrases, L010-L012 URLs, L020
-placeholders, L030 secret shapes, L040 and L041 internal leakage, L050-L056 structure,
+`lint.py`'s docstring is the rule table: L010-L011 URLs, L020
+placeholders, L030 secret shapes, L040 and L041 internal leakage, L050-L055 structure,
 L060-L067 scheduling, L070 and L071 replies. Ids are stable, because playbooks and Issues quote
 them. Everything is an error except L041 (something that looks like a hub Issue number, which is
 often a real invoice number in a customer's own sentence).
 
-Two rules are narrower than they look, on purpose. L012 (the employee's required CTA) fires only
-when the body has a link at all, because the "reply to a no" script carries none. L060 (at least
-two times) fires only without `--slot`, because a confirmation names exactly one time and that
-is the point.
-
-## The reviewer
-
-`MAIL_REVIEWER` picks the backend; the default is `grok:grok-4.6`.
-
-| value            | what it does |
-| ---------------- | ------------ |
-| `grok:<model>`   | `grok -p '<prompt>' --output-format json -m <model> --max-turns 1 --disable-web-search --permission-mode plan`, run in a scratch directory under `runtime/mail/review/`. Grok Build is a coding agent, so the flags plus a one-line preamble (`GROK_PREAMBLE`: answer from this message alone, no tools, no narration) hold it to one answer and no side effects; without the preamble it spends its turn saying what it is about to do and gets canceled. The owner's xAI subscription, no key to manage. About ten seconds. |
-| `xai:<model>`    | `https://api.x.ai/v1/chat/completions` with `XAI_API_KEY`, stdlib urllib. |
-| `none`           | returns ok without a model. What the tests use, and the escape hatch if both backends are down and the owner wants drafts anyway. |
-
-It is shown: the incoming thread (truncated), the draft, the employee's Role paragraph from its
-`AGENT.md` **plus its standing allowance's `purpose:`**, the "What we are not" and "Locked pitch"
-sections of `docs/company.md`, and the list of rules the lint already checked. The allowance
-purpose matters: without it a standing, approved offer reads as a fresh commitment and every
-cold message fails. That is why the influencer allowance's `purpose:` spells the offer out.
-
-When policy verifies an owner's Tico message or approval Issue for this send, the reviewer also
-gets its text (up to 8,000 characters), verified author and source, and the actual To/Cc addresses.
-That instruction permits the recipient, subject, content and tone the owner chose, including a
-test or work outside the employee's purpose. The reviewer still blocks added claims, commitments,
-recipients or attachments the instruction does not authorize. Draft and thread text cannot supply
-approval. Review audit rows record the approval's source and id and, on success, `approved with
-owner instruction`. The review always runs; there is no owner-dictated shortcut. A stored verdict
-with an owner instruction is never reused for a send without that approval.
-
-The verdict must be JSON `{ok, problems, claims_not_in_thread, commitments, tone}`. It is parsed
-leniently - the first balanced `{...}` anywhere in the answer - and any commitment or unsupported
-claim forces `ok: false` whatever the model said about itself. Timeout 90 seconds. Unreachable is
-not the same as bad: `draft` proceeds with `review: "unavailable"` on the record, `send`
-downgrades to a draft.
+One rule is narrower than it looks, on purpose. L060 (at least two times) fires only without
+`--slot`, because a confirmation names exactly one time and that is the point. `mail draft` runs the
+lint so the bot sees its findings at once; Tico runs it again on the frozen message.
 
 ## Decisions
 
@@ -312,7 +230,8 @@ nothing. Two uses, both reading a shared question set from the hub's `questions/
 | where | set | what happens |
 | ----- | --- | ------------ |
 | `inbox --decisions` | `mail-triage` | every listed message is judged from the brief fields (sender, subject, snippet, headers; never the body), eight calls in flight; each gets `judgment` in the JSON and a `decision:` line in the brief listing with a one-word suggestion (`archive`, `needs-owner`, `route`, `reply`, `read`) computed from the set's thresholds by `suggest()`: money and legal protect first at low thresholds, filings need high confidence, and under threshold it is `read`. Nothing is labelled. Successful answers are cached for seven days by exact listing state and question set; `cached` in the decision model summary counts calls avoided. A message whose call failed carries `{"error": ...}` and the pass goes on. |
-| `draft` | `mail-draft-gate` | six nouls over the draft and the thread (money, a date, a confirmed time, an unsupported claim, a legal position, tone), run after the lint and before the reviewer. Advisory: `gate` on the payload and a `gate:` line, one `gate` audit line, the draft still written and the reviewer still deciding. Unreachable is `gate: unavailable`, not a refusal. |
+| `draft` | `mail-draft-gate` | six nouls over the draft and the thread (money, a date, a confirmed time, an unsupported claim, a legal position, tone), run after the lint. Advisory: `gate` on the payload and a `gate:` line, one `gate` audit line, the draft still written and Tico still deciding the send. Unreachable is `gate: unavailable`, not a refusal. |
+| `scheduling` | `scheduling-review` | before an offer or a booking: is the thread one the standing scheduling permission covers, and does the attendee accept the exact time. Fails closed: no model or a doubtful answer schedules nothing. |
 | `rules run`, `explain`, `backtest`, `test` | any set a `decision` condition names | before the rules run, every message is judged with each set the loaded rules name (`judge_sets`) and carries `judgments[set]`; the `decision` condition (`rules.py`; `judge` is the old spelling) then reads it: `{set, question, is?, min?, max?}`. No judge available: `run` and `explain` skip those rules and say so (`judge-skipped` in the audit); `backtest` refuses, because "never fires" would be a lie. Fixtures carry `judgments` so `rules test` stays offline. |
 
 Which engine: inside a bot turn, the hub (`HUB_API_URL` and `HUB_TOKEN`, which the runner sets;
@@ -323,16 +242,10 @@ a fake through `judge.ENGINE`).
 
 ## Ideas for stage 3
 
-- **Attachments, properly.** Today the policy just refuses them. The honest version reads the
-  file from the S3 bucket by URI, checks type and size, and never touches the local disk.
 - **A per-thread cap.** The influencer proposal asked for `max_per_thread: 1` (one cold message,
-  no follow-ups). The schema has no field for it yet, so it lives in the playbook instead.
+  no follow-ups). Tico's sending policy has no field for it yet, so it lives in the playbook instead.
 - **Bounces and replies.** A bounce should mark the row in `sends` and take the address out of
   the eligible table; a reply should close the loop that `mail reply` opened.
-- **The Mail tab in the hub app.** `sends`, `drafts` and `reviews` are already the right shape:
-  what went out today, what is waiting, what the reviewer refused and why.
-- **A nightly reconcile.** `sent-log --reconcile` exists; a launchd entry would keep the
-  cooldowns honest without anyone remembering to run it.
 - **Rule proposals from the bots.** `rules test` already runs fixtures, so an inbox bot could
   open a PR with a rule and the fixture that proves it.
 
@@ -354,12 +267,11 @@ From `docs/mail-service.md`, "What the owner does":
        https://www.googleapis.com/auth/gmail.modify
        https://www.googleapis.com/auth/calendar
 
-   Google has no scope that allows drafts but forbids sending. That is why the send gate is
-   `policy.py` and not Google's.
+   Google has no scope that allows drafts but forbids sending. That is why Tico's send queue is
+   the send gate and not Google's.
 4. **Mailboxes.** `legal@acme.example` must be a real user mailbox, not a group or an alias:
-   delegation can only impersonate a user. Create `hub-test@acme.example`: it is
-   `sandbox_mailbox` in `registry/mail-policy.yaml`, and the only mailbox `doctor --e2e` will
-   send from.
+   delegation can only impersonate a user. Create `hub-test@acme.example` and name it in
+   `TICO_MAIL_SANDBOX`: it is the only mailbox `doctor --e2e` will send from.
 5. Run `scripts/mail.sh doctor`. It checks the key, the delegation, impersonation for every
    mailbox any employee declares, the hub labels, and calendar access, and prints the exact fix
    for anything that fails.

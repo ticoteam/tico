@@ -95,7 +95,7 @@ def write_state(api):
     with api.app.state.store.read() as c:
         return {table: [tuple(row) for row in c.execute(f"SELECT * FROM {table} ORDER BY rowid")]
                 for table in ("tasks", "messages", "jobs", "task_holds", "history_events", "idempotency",
-                              "refusals", "quarantine_holds", "org_rule_holds", "org_rule_misses")}
+                              "refusals", "quarantine_holds", "org_rule_holds")}
 
 
 def assert_refused(api, response, before=None):

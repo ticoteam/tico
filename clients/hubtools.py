@@ -4039,19 +4039,13 @@ def email_cancel(api, args):
     return api.post(f"email/sends/{quote(str(args['id']), safe='')}/cancel", {}, key=_key(args))
 
 
-@tool("hub_bot_mail", "Show, or set, whether a bot sends mail without a per-message approval and its forward targets. "
-      "Only a person who manages the bot sets it, as themselves; a bot, BotOps included, is refused. `outbound_send` and "
-      "`forward_to` in bot.yaml are only a request: this setting decides (docs/mail.md, \"Turning sending on\").",
-      {"slug": _s("The bot"), "outbound_send": {"type": "boolean", "description": "Send without approval: on or off"},
-       "forward_to": _s("Comma list of forward addresses; an empty string clears the list"),
-       "from_request": {"type": "boolean", "description": "Take what the bot's bot.yaml asks, as its computer reported it"}},
+@tool("hub_bot_mail", "Show, or set, whether a bot sends mail on its own (its sending policy is On their own) or asks "
+      "first. Only a person who manages the bot sets it, as themselves; a bot, BotOps included, is refused. The full "
+      "policy is hub_email_policy.",
+      {"slug": _s("The bot"), "outbound_send": {"type": "boolean", "description": "On their own: on or off"}},
       required=("slug",), writes=True)
 def bot_mail(api, args):
     body = {k: args[k] for k in ("outbound_send",) if args.get(k) is not None}
-    if args.get("forward_to") is not None:
-        body["forward_to"] = [a.strip() for a in str(args["forward_to"]).replace(";", ",").split(",") if a.strip()]
-    if args.get("from_request"):
-        body["from_request"] = True
     if not body:
         return api.get(f"bots/{args['slug']}/mail-settings")
     return api.post(f"bots/{args['slug']}/mail-settings", body, key=_key(args))

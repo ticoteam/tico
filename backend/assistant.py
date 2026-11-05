@@ -103,9 +103,9 @@ def write_allowed(method, path, settings=None, body=b"", actor="", owns=None, di
     # Reversible Gmail labels; the route checks the person's mailbox level and the company organize switch.
     if path == "/api/v2/mail/messages/organize":
         return True
-    # The mail tool's org rule check before a send, and its report of checks Tico never answered, change nothing: a
-    # person's own mail is never checked (backend/org_rule_check.py), and the send itself meets its own checks.
-    if re.fullmatch(r"/api/v2/bots/[^/]+/mail-check(/misses)?", path):
+    # An org rule check of a draft changes nothing: a person's own mail is never checked (backend/org_rule_check.py),
+    # and the send itself meets every check in the send queue.
+    if re.fullmatch(r"/api/v2/bots/[^/]+/mail-check", path):
         return True
     try:
         fields = json.loads(body or b"{}")

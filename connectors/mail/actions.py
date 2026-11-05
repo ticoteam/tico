@@ -1,8 +1,8 @@
 """Mail actions an automation queued in Tico, carried out on the computer that reads the mailbox.
 
 The runner (runner_support/connectors.py) claims them from the hub and runs `mail.sh mail-action` with one action on stdin.
-The hub decided them, its send switch included, so like the owner's own commands they pass no bot policy, lint or
-reviewer. Each is safe to run again after a lost answer or a lost lease:
+The hub decided them, its sending policy included, so like the owner's own commands they pass no lint or reviewer
+here. Each is safe to run again after a lost answer or a lost lease:
   archive, label, leave       Gmail label changes, the same the second time
   draft                       kept in `drafts` under a key made from the action id: a retry finds it
   send, forward               freeze a draft in the server queue; repeating the action returns the same queue row
@@ -135,13 +135,14 @@ def _unsubscribe(ctx, mid):
 
 def _keep_reason(ctx, original):
     """Why the owner keeps this mail (no unsubscribe), or '' when it may be unsubscribed from. With no internal domains
-    known on this computer (a Docker install with no registry), nothing can be told apart from a coworker: refused."""
+    known on this computer (Ctx.internal_domains, policy.team_domains), nothing can be told apart from a coworker: refused."""
     sender = original["from"]
-    if not ctx.policy.get("internal_domains"):
+    internal = ctx.internal_domains
+    if not internal:
         return "internal domains unknown on this computer"
     if "STARRED" in original["labels"]:
         return "the message is starred"
-    if in_domain(sender, ctx.policy["internal_domains"]) or sender == ctx.mailbox:
+    if in_domain(sender, internal) or sender == ctx.mailbox:
         return "the mail is internal"
     if sender in {a.lower() for a in access.roster_mailboxes()}:
         return "the sender is on the people roster"
