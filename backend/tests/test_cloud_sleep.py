@@ -76,8 +76,9 @@ def test_a_sleeping_bots_hold_does_not_hide_its_signed_out_check(cloud, company_
             c.execute("UPDATE jobs SET created_at=? WHERE bot_id='ops' AND state='queued'",
                       (H.shift(H.now(), hours=-4),))
             org_turns.save(c, org_turns.LEVELS, {'warning_per_person': 1, 'stop_per_person': 1})
-            c.executemany("INSERT INTO attempts(id,bot_id,state,created_at) VALUES(?,'cpo','running',?)",
-                          [(f'company-turn-{i}', H.now()) for i in range(org_turns.levels(c)['stop'])])
+            c.executemany("INSERT INTO attempts(id,bot_id,lane,state,created_at) VALUES(?,'cpo',?,'running',?)",
+                          [(f'company-turn-{i}', f'task:company-turn-{i}', H.now())
+                           for i in range(org_turns.levels(c)['stop'])])
             assert org_turns.admission(c)['at_stop']
     else:
         parent = waiting_task(cloud)
