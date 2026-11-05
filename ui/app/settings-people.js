@@ -223,12 +223,14 @@ async function renderSettingsPeople() {
       settingsFieldClear(supportSwitch);
       supportSwitch.disabled = true;
       try {
-        const answer = await put('/v2/cloud-machines/support', {on});
+        // Each press is a new choice; only this write's automatic retries share its key.
+        const answer = await put('/v2/cloud-machines/support', {on}, newRequestId());
         cloudSupportSet(answer);
         supportSwitch.checked = answer?.on === true;
         toast('Saved');
       } catch (error) {
         const current = await cloudSupportRead({fresh: true});
+        if (error.signature) pendingWrites.delete(error.signature);
         supportSwitch.checked = current?.on === true;
         supportSwitch.indeterminate = !current;
         settingsFieldError(supportSwitch, current ? error.message : `${error.message} Could not read the switch. Open Settings again to retry.`);

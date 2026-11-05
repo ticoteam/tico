@@ -25,7 +25,8 @@ const CONFIG = {environment_id: 'acme', company_name: 'Acme', app_name: 'Acme Hu
     let me = {id: 'ana', name: 'Ana Rivera', role: 'owner', cloud: true, email: 'ana@acme.example', config: CONFIG};
     let support = {available: true, on: true, machines}, failPut = false, failGet = false;
     let rules = {};
-    const reads = [], writes = [];
+    const reads = [], writes = [], writeKeys = [], changes = [];
+    const receipts = new Map();
     await context.route('**/*', async route => {
       const request = route.request(), p = new URL(request.url()).pathname, method = request.method();
       const json = (body, status = 200) => route.fulfill({status, contentType: 'application/json', body: JSON.stringify(body)});
@@ -39,10 +40,21 @@ const CONFIG = {environment_id: 'acme', company_name: 'Acme', app_name: 'Acme Hu
       }
       if (p === '/api/v2/cloud-machines/support' && method === 'PUT') {
         const body = request.postDataJSON(); writes.push(body);
+        const key = request.headers()['idempotency-key']; writeKeys.push(key);
+        assert.ok(key, 'every toggle has an idempotency key');
+        if (receipts.has(key)) {
+          if (failPut === 'lost') return route.abort('failed');
+          return receipts.get(key) ? json(receipts.get(key))
+            : json({error: {code: 'hq_unconfirmed', detail: 'Read the switch again.'}}, 409);
+        }
+        receipts.set(key, null);
         if (failPut === true) return json({error: {code: 'hq_unreachable', detail: "Didn't reach Tico HQ. Try again."}}, 502);
+        changes.push(body.on);
         support = {...support, on: body.on, machines: machines.map(m => ({...m, helper: m.helper === 'none' ? 'none' : body.on ? 'on' : 'off'}))};
         // HQ saved it, but core never received its answer.
         if (failPut === 'applied') return json({error: {code: 'hq_unreachable', detail: "Didn't reach Tico HQ. Try again."}}, 502);
+        receipts.set(key, structuredClone(support));
+        if (failPut === 'lost') return route.abort('failed');
         return json(support);
       }
       if (p === '/api/me') return json(me);
@@ -116,6 +128,31 @@ const CONFIG = {environment_id: 'acme', company_name: 'Acme', app_name: 'Acme Hu
     assert.equal(await toggle.isDisabled(), false);
     writes.length = 0;
     failPut = false;
+
+    // A saved disable with all its answers lost recovers by GET. Later enable/disable choices must reach HQ.
+    const firstKey = writeKeys.length, firstChange = changes.length;
+    failPut = 'lost';
+    await toggle.click();
+    await page.locator('#set-people [data-field-err]').waitFor();
+    assert.equal(await toggle.isChecked(), false, 'the recovery GET sees the saved disable');
+    const retries = writeKeys.slice(firstKey);
+    assert.equal(retries.length, 3);
+    assert.equal(new Set(retries).size, 1, 'automatic retries keep the same key');
+    assert.equal(await page.evaluate(() => pendingWrites.has('PUT /v2/cloud-machines/support\n{"on":false}')), false,
+      'recovery forgets the unconfirmed write');
+    failPut = false;
+    await toggle.click();
+    await page.waitForFunction(() => document.querySelector('#people-cloud-support')?.disabled === false);
+    await toggle.click();
+    await page.waitForFunction(() => document.querySelector('#people-cloud-support')?.disabled === false);
+    assert.deepEqual(changes.slice(firstChange), [false, true, false], 'every explicit choice reaches HQ');
+    assert.equal(new Set(writeKeys.slice(firstKey)).size, 3, 'each explicit toggle gets a fresh key');
+    assert.equal(support.on, false);
+    assert.equal(await toggle.isChecked(), false);
+    // Leave the owner enabled for the entry-refresh checks below.
+    await toggle.click();
+    await page.waitForFunction(() => document.querySelector('#people-cloud-support')?.disabled === false);
+    writes.length = 0;
     const afterFailures = reads.length;
     // Another rule's save redraws the page from what HQ last answered, without reading it again.
     const redrawn = page.waitForResponse(response => response.url().endsWith('/api/v2/access') && response.request().method() === 'GET');
