@@ -288,15 +288,24 @@ def _refresh_mailbox(c, address, person_id, runner_id, synced_at, watching_since
 
 
 def human_of(c, address):
-    """The person row a connector address belongs to: by roster email, else by a message bot's declared mailbox."""
+    """A connector mailbox's person; a known shared inbox has an address but no person id."""
     address = str(address or "").strip().lower()
     row = c.execute("SELECT id,email FROM humans WHERE lower(email)=?", (address,)).fetchone()
     if row:
         return row
+    from . import mailbox_access
+    mailbox = mailbox_access._row(c, address)
+    if mailbox and mailbox["status"] == "active":
+        if mailbox["person_id"]:
+            return c.execute("SELECT id,email FROM humans WHERE id=?", (mailbox["person_id"],)).fetchone()
     from .views import roster
     people = roster(c)
     found = routines.person_for_mailbox(address, routines.message_bot_mailboxes(c, people), people)
-    return c.execute("SELECT id,email FROM humans WHERE id=?", (found["id"],)).fetchone() if found else None
+    if found:
+        return c.execute("SELECT id,email FROM humans WHERE id=?", (found["id"],)).fetchone()
+    if mailbox and mailbox["status"] == "active" and mailbox["kind"] == "shared":
+        return {"id": None, "email": address}
+    return None
 
 
 def install_connectors(app, store, execution, mutate):
@@ -347,10 +356,9 @@ def install_connectors(app, store, execution, mutate):
     def targets(request: Request):
         with store.read() as c:
             runner, named, owned = reader(c, request.state.identity)
-            # The mailboxes the message bots manage, not every person on the roster: a bot's declared
-            # mailbox, else its person's email. People who left (hidden) are left out.
+            # Calendar sync follows the same ownership as mail, including known Workspace mailboxes without a bot.
             people = [{"id": box["person_id"], "email": box["address"]}
-                      for box in google_rights.visible(c, runner["id"], named, owned=owned)]
+                      for box in google_rights.visible(c, runner["id"], named, owned=owned) if box["person_id"]]
         return {"people": people, "hours": 24, "refresh_seconds": 45}
 
     @app.post("/api/v2/connectors/calendar/snapshots")
@@ -364,7 +372,7 @@ def install_connectors(app, store, execution, mutate):
                 seen.add(snapshot.email)
                 google_rights.check(c, runner["id"], named, snapshot.email, owned)
                 person = human_of(c, snapshot.email)
-                if not person:
+                if not person or not person["id"]:
                     raise Problem("not_found", "Calendar target is not on the "
                                   + store.settings.app_name + " roster", 404)
                 payload = {"events": [event.model_dump() for event in snapshot.events]}
@@ -697,7 +705,10 @@ def install_connectors(app, store, execution, mutate):
                 raise Problem("not_connected", "The Google Workspace does not cover " + box, 403,
                               extra={"kind": "not_connected"})
             owned = workspace.owned_mailboxes(c, runner["id"])
-            held = "read_write" if box in owned else google_rights.turn_level(c, runner["id"], box, execution.auth)
+            from . import mailbox_access
+            connector = mailbox_access.connector_for(c, runner["id"], named, owned)
+            held = ("read_write" if box in owned and mailbox_access.level(c, connector, box) != "none"
+                    else google_rights.turn_level(c, runner["id"], box, execution.auth))
             if held == "none":
                 kind = "workspace_owned" if named else "not_this_mailbox"
                 raise Problem(kind, google_rights.MESSAGES.get(kind, "This computer does not run the message bot that "
