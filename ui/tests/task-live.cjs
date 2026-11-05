@@ -8,7 +8,7 @@ const gate = () => { let resolve; const promise = new Promise(r => { resolve = r
  const pages = [];
  try {
   for (const width of [390, 1440]) {
-   let readHold, readStarted, task, events = [], sessions = new Map(), writes = [], hold, fail = false, inflight = 0, max = 0;
+   let readHold, readStarted, task, events = [], sessions = new Map(), writes = [], hold, fail = false, deny = false, inflight = 0, max = 0;
    const viewers = [], viewerErrors = [];
    const emit = async data => {
     for (const page of viewers) if (!page.isClosed()) await page.evaluate(data => {
@@ -42,6 +42,7 @@ const gate = () => { let resolve; const promise = new Promise(r => { resolve = r
      if (viewer === 'ana' && hold) { const wait = hold; hold = null; await wait.promise; }
      if (viewer === 'ana') inflight--;
      if (fail && viewer === 'ana') { fail = false; return route.fulfill({status: 500, json: {error: 'Offline'}}); }
+     if (deny && viewer === 'ana') { deny = false; return route.fulfill({status: 403, json: {error: 'Write refused'}}); }
      if (patch.version !== task.version) return route.fulfill({status: 409, json: {error: {code: 'version_conflict', detail: 'Task changed'}}});
      Object.assign(task, patch, {version: task.version + 1});
      for (const field of Object.keys(patch).filter(k => k !== 'version')) events.push({field, actor: 'human:' + viewer, created_at: new Date().toISOString()});
@@ -84,6 +85,15 @@ const gate = () => { let resolve; const promise = new Promise(r => { resolve = r
    assert.deepEqual(Object.keys(writes.filter(w => w.viewer === 'ana').at(-1).patch).sort(), ['title', 'version']);
    await a.getByText('You edited · just now', {exact: true}).waitFor();
    assert.equal(listReads, 0, 'autosave and task invalidations never reread the task list');
+   deny = true;
+   await fillTitle('Keep this refused draft'); await title.evaluate(el => el.blur());
+   await a.locator('[data-task-edit-error]:not([hidden])').waitFor();
+   await a.waitForFunction(() => !taskModal().taskLive.reading);
+   assert.equal(await a.locator('#task-modal').evaluate(d => d.open), true, 'a refused write does not revoke read access');
+   assert.equal(await title.textContent(), 'Keep this refused draft');
+   await a.locator('[data-task-edit-retry]').click();
+   await a.waitForFunction(() => !taskModal().taskLive.draft.error && !taskModal().taskLive.draft.flight);
+   assert.equal(task.title, 'Keep this refused draft');
    // A slow successful save coalesces the later title, still sharing the dialog's property queue.
    const slow = gate(); hold = slow;
    await fillTitle('Slow title');

@@ -184,7 +184,6 @@ async function taskLiveSave(d, live) {
       return d.saveQueue = (d.saveQueue || Promise.resolve()).then(run, run);
     },
     current: async error => {
-      if ([403, 404].includes(error.status)) { taskLiveGone(d, live); return null; }
       if (error.status !== 409) return null;
       try { return (await get('/v2/tasks/' + encodeURIComponent(live.id), {fresh: true})).task; }
       catch (failed) { if ([403, 404].includes(failed.status)) taskLiveGone(d, live); return null; }
