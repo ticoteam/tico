@@ -240,8 +240,9 @@ class Alerts:
                                  "phone_in_use", "invalid_phone", "unverified_phone", "not_found", "consent_required",
                                  "call_consent_required", "opt_out_unconfigured", "out_of_credit", "too_many_alerts",
                                  "cap_reached", "rate_limited", "provider_error", "unconfigured"}
+                        status = response.status_code if code in known else 502
                         code = code if code in known else "gateway_unavailable"
-                        raise Problem(code, "Paging: " + code.replace("_", " "), response.status_code)
+                        raise Problem(code, "Paging: " + code.replace("_", " "), status)
                     if not isinstance(data, dict):
                         raise ValueError()
                     return data

@@ -21,12 +21,15 @@ class HQ:
         self.calls, self.accepted = [], []
         self.stopped, self.timeout, self.down, self.old = False, False, False, False
         self.provider_error = False
+        self.refused_key = False
 
     def __call__(self, req):
         path = req.url.path
         data = json.loads(req.content) if req.content else {}
         person = data.get("person_ref") or req.url.params.get("person_ref")
         self.calls.append((req.method, path, data))
+        if self.refused_key:
+            return httpx.Response(401, json={"error": "revoked_key"})
         if self.down:
             return httpx.Response(503, json={"error": "unconfigured"})
         if path.endswith("/phones") and req.method == "GET":
@@ -327,3 +330,10 @@ def test_an_unverified_number_does_not_reserve_someone_elses_phone(api, hq):
     connect(api, PHONE, "ben-test")
     assert get(api, "alerts/me", "ben-test")["status"] == "verified"
     assert get(api, "alerts/me")["status"] == "code_sent"
+
+
+def test_a_refused_gateway_key_does_not_sign_the_person_out_of_tico(api, hq):
+    hq.refused_key = True
+    result = post(api, "alerts/me/phone", {"phone": PHONE, "sms_consent": True}, expected=502)
+    assert result["error"]["code"] == "gateway_unavailable"
+    assert get(api, "me")["actor"] == "human:ana"
