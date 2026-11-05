@@ -9,13 +9,13 @@ import sqlite3
 from datetime import datetime, timedelta, timezone
 
 import pytest
+import time_machine
 from fastapi.testclient import TestClient
 
 from backend import demo
 from backend.app import create_app
 from backend.bookkeeper import VIEW_TITLE
 from backend.demo_sections.finance import BOOKKEEPER, CONTENT as C
-from backend.finance import context as finance_context
 
 MOMENTS = {
     "early-month": datetime(2026, 11, 2, 18, 30, tzinfo=timezone.utc),
@@ -26,11 +26,9 @@ MOMENTS = {
 @pytest.fixture(scope="module", params=list(MOMENTS), ids=list(MOMENTS))
 def book(request, tmp_path_factory):
     now = MOMENTS[request.param]
-    settings = demo.build(tmp_path_factory.mktemp("demo-finance"), now=now)
-    patch = pytest.MonkeyPatch()
-    patch.setattr(finance_context, "now", lambda: now.strftime("%Y-%m-%dT%H:%M:%S.%fZ"))
-    yield settings, now
-    patch.undo()
+    with time_machine.travel(now, tick=False):
+        settings = demo.build(tmp_path_factory.mktemp("demo-finance"), now=now)
+        yield settings, now
 
 
 def signed_in(settings):

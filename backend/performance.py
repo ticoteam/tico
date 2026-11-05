@@ -192,15 +192,15 @@ LOAD_FRESH_S = 120
 MEM_HOLD_AT, MEM_HOLD_CLEAR = 85.0, 80.0     # new starts wait at this memory, and start again below the lower one
 
 
-def load_status(c, runner_id, now=None):
+def load_status(c, runner_id, now=None, *, include_memory=True):
     """Numbers only, readable by every company bot. Six consecutive readings span five full minutes.
 
     A missing minute, a calm reading, a stale sample or diagnostics being off clears the current flag.
     """
-    return load_statuses(c, [runner_id], now)[runner_id]
+    return load_statuses(c, [runner_id], now, include_memory=include_memory)[runner_id]
 
 
-def load_statuses(c, runner_ids, now=None):
+def load_statuses(c, runner_ids, now=None, *, include_memory=True):
     """`load_status` for many computers: one read of their modes, one of their newest readings."""
     now = int(time.time() if now is None else now)
     ids = sorted(set(runner_ids))
@@ -214,7 +214,7 @@ def load_statuses(c, runner_ids, now=None):
     if on_ids:
         points = _newest_samples(c, on_ids, now - 48 * 3600)
         for rid in on_ids:
-            out[rid] = _load_from(points[rid], now)
+            out[rid] = _load_from(points[rid], now, include_memory=include_memory)
     return out
 
 
@@ -231,7 +231,7 @@ def _newest_samples(c, runner_ids, since):
     return out
 
 
-def _load_from(points, now):
+def _load_from(points, now, *, include_memory=True):
     if not points:
         return {"latest_sample": None, "overloaded": False}
     p = points[0]
@@ -241,7 +241,7 @@ def _load_from(points, now):
               "mem_used": p["mem_used"], "mem_total": p["mem_total"],
               "swap_used": p["swap_used"], "swap_total": p["swap_total"],
               "running_turns": p["running_turns"], "stale": not fresh}
-    loaded = lambda x: (x["cpu_pct"] or 0) > 90 or (_pct(x["mem_used"], x["mem_total"]) or 0) > 90
+    loaded = lambda x: (x["cpu_pct"] or 0) > 90 or (include_memory and (_pct(x["mem_used"], x["mem_total"]) or 0) > 90)
     overloaded = (fresh and len(points) == 6
                   and all(points[i]["created_at"] - points[i+1]["created_at"] == 60 for i in range(5))
                   and points[0]["sampled_at"] - points[-1]["sampled_at"] >= 300

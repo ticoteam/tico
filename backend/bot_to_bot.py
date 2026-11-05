@@ -100,10 +100,11 @@ def continue_backlog(conn, bot, skip=()):
     marked carried; at most one such notice waits at a time. `skip`: notes that wait for a run in their own thread
     (threads.wake_note_threads), which another run here would not carry."""
     from . import hubdb as H
+    from . import task_quarantine
     skip = list(skip)
     other = f"AND n.id NOT IN ({','.join('?' * len(skip))}) " if skip else ""
     left = conn.execute(f"SELECT 1 FROM notes n WHERE n.to_actor=? AND n.message_id IS NOT NULL {other}AND "
-                        f"{H.NOTE_WAITING_SQL} LIMIT 1", ("bot:" + bot, *skip)).fetchone()
+                        f"{H.NOTE_WAITING_SQL} AND {task_quarantine.notes_free_sql()} LIMIT 1", ("bot:" + bot, *skip)).fetchone()
     if not left:
         return None
     pending = conn.execute("SELECT 1 FROM jobs j JOIN message_refs m ON m.id=j.message_id WHERE j.bot_id=? "

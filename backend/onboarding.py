@@ -308,6 +308,9 @@ def config_view(c, settings, who=None):
     record = load(c)
     value = {**settings.environment(), **display_names(settings, record)}
     value["onboarding_needed"] = needed(c, who, record)
+    if who is not None and who.role in ("owner", "human"):
+        from . import company_server
+        value["administration_url"] = company_server.administration_url(c, settings)
     chosen = providers.load(c, settings)
     value["providers_configured"] = providers.configured(chosen)
     # The model a computer's sign-in is for; empty until a provider is chosen, so no sign-in is asked before then. A

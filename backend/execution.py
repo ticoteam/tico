@@ -13,7 +13,7 @@ from clients import gateway, sessions
 
 from . import auto_tasks, start_places, org_turns, app_delivery, check_models, learned, rooms, rules as wake_rule_engine, updates_chat, gateway_connection, inbox_isolation, login_holds, models_preset, providers, quiet_work, routines, run_triggers, runner_versions, screen, task_models, usage_limits, wake_presets, wake_rules
 from . import task_privacy as privacy
-from . import browser_exit, claim_holds, claim_loads, cloud_access, cloud_machines, model_subscriptions, quarantine_stops, reconnects, run_backoff, runner_states, runner_wire, runs, thread_bot_digest, turn_budgets
+from . import browser_exit, claim_holds, claim_loads, cloud_access, cloud_machines, model_subscriptions, quarantine_stops, reconnects, run_backoff, runner_states, runner_wire, runs, task_quarantine, thread_bot_digest, turn_budgets
 from .auth import Identity
 from .batch_work import isolated, report, shared_check, shared_scope, storage_error
 from .harnesses import bot_keyed, reports_tool_calls
@@ -2085,12 +2085,12 @@ def unfenced_sql():
     bot continue, and a person's chat outside any task stays claimable so an interrupted routine cannot silence its
     owner."""
     task_sql = queued_task_sql()
-    return (f"(({H.person_sent_sql()} AND cv.kind='chat' AND {task_sql} IS NULL) "
+    return (f"(({task_quarantine.free_sql(task_sql)}) AND (({H.person_sent_sql()} AND cv.kind='chat' AND {task_sql} IS NULL) "
             "OR NOT EXISTS(SELECT 1 FROM jobs u JOIN messages um ON um.id=u.message_id "
             "JOIN conversations uc ON uc.id=um.conversation_id WHERE u.bot_id=j.bot_id AND u.state='uncertain' "
             f"AND (({task_sql} IS NOT NULL AND "
             + H.MESSAGE_TASK_SQL.replace("m.", "um.").replace("cv.", "uc.") + f"={task_sql}) "
-            f"OR ({task_sql} IS NULL AND cv.kind='chat' AND um.conversation_id=m.conversation_id))))")
+            f"OR ({task_sql} IS NULL AND cv.kind='chat' AND um.conversation_id=m.conversation_id)))))")
 
 
 def scoped_sql():
@@ -2361,7 +2361,8 @@ CLAIM_CONFIG_SQL = (f"SELECT {BS.CONFIG} AS config,{DRAINING_SQL.replace('a.bot'
 def queued_jobs_sql(bots=None):
     """A bot's queued jobs in the order its claim takes them, each with whether the interrupted-work fence and a claim
     scope let it through. With `bots`, the same rows for all of them at once (prime_claimables)."""
-    return (f"SELECT j.*,m.sender_id,{H.person_sent_sql()} person_sent,{unfenced_sql()} free,{scoped_sql()} in_scope FROM jobs j "
+    return (f"SELECT j.*,m.sender_id,{H.person_sent_sql()} person_sent,{unfenced_sql()} free,{scoped_sql()} in_scope,"
+            f"{task_quarantine.free_sql(queued_task_sql())} quarantine_free FROM jobs j "
             "JOIN messages m ON m.id=j.message_id JOIN conversations cv ON cv.id=m.conversation_id "
             f"WHERE j.bot_id{'=?' if bots is None else ' IN (' + ','.join('?' * len(bots)) + ')'} "
             "AND j.state='queued' AND j.held=0 "
@@ -2466,7 +2467,7 @@ def bot_claimable(c, settings, runner_id, bot, default=None, oldest=False, with_
         if not job["in_scope"]:
             why = "scoped"
         elif not job["free"]:
-            why = "uncertain"
+            why = "uncertain" if job["quarantine_free"] else "task_quarantine"
         elif not private_lanes_on(runner) and private_job(c, job):
             why = "private_update"
         else:
@@ -2524,7 +2525,7 @@ def queued_reasons(c, settings, runner_id, bot, default=None, *, oldest=False, s
         if not job["in_scope"]:
             why = "scoped"
         elif not job["free"]:
-            why = "uncertain"
+            why = "uncertain" if job["quarantine_free"] else "task_quarantine"
         elif not private_lanes_on(runner) and private_job(c, job):
             why = "private_update"
         else:
@@ -3393,9 +3394,12 @@ class Execution:
 
     def held_starts(self, c, runner_id):
         """(people_only, answer) for a computer that holds new starts: overloaded, not reporting, memory high, or with turns already waiting
-        to start there. Only a person's own message is handed out then (start_places.from_person); with none queued,
-        `answer` is the claim's answer at once. Capacity still applies to that message."""
-        if not start_places.computer_hold(c, runner_id) and not start_places.ready_waiting(c, runner_id):
+        to start there. A person's own message passes CPU overload and stale reports; only Linux memory holds it;
+        with none eligible, `answer` is the claim's answer at once. Capacity still applies to that message."""
+        hold = start_places.computer_hold(c, runner_id)
+        if hold and (person_hold := start_places.computer_hold(c, runner_id, person=True)):
+            return False, {"attempt": None, "waiting": person_hold[1]}
+        if not hold and not start_places.ready_waiting(c, runner_id):
             return False, None
         return True, (None if start_places.person_queued(c, runner_id) else self.held_answer(c, runner_id))
 
@@ -4108,7 +4112,7 @@ class Execution:
             raise Problem("stale_lease", "Task access expired; stop this attempt", 409)
         if (row["state"] in ("leased", "running") and row["lease_until"] > H.now()
                 and row["assigned_runner"] == who.runner_id and row["assigned_generation"] == row["generation"]
-                and H.bot(c, row["bot_id"])["state"] == "quarantined"):
+                and (H.bot(c, row["bot_id"])["state"] == "quarantined" or task_quarantine.for_attempt(c, row))):
             # A quarantine stops this turn the way a person's Stop does, rather than refusing its runner as if the
             # computer were lost (Dev 573): the renewal answers stop, and the turn ends with the quarantine's reason.
             row = quarantine_stops.stop(c, row)
@@ -4437,7 +4441,7 @@ class Execution:
             return {"reserved": False, "stop": True}
         if body.waiting:
             return {"reserved": False, **({"stop": True} if row["stop_requested_at"] else {})}
-        return start_places.reserve(c, row, self.store.settings)
+        return start_places.reserve(c, row, self.store.settings, harness_allocated=body.harness_allocated)
 
     def started(self, c, who, aid, body):
         row = self.attempt(c, who, aid)
@@ -4446,7 +4450,7 @@ class Execution:
         # Older workers did not negotiate a short start; their in-flight delivery lease stays valid.
         if start_places.is_waiting(c, aid) and finished_before_start(c, row):
             raise Problem("start_wait", "Task finished while this turn was waiting", 409)
-        reserved = start_places.reserve(c, row, self.store.settings) if start_places.managed(c, aid) else {"reserved": not row["stop_requested_at"]}
+        reserved = start_places.reserve(c, row, self.store.settings, harness_allocated=body.harness_allocated) if start_places.managed(c, aid) else {"reserved": not row["stop_requested_at"]}
         if not reserved["reserved"]:
             raise Problem("start_wait", reserved.get("waiting", "Start reservation expired or stopped"), 409)
         c.execute("UPDATE attempts SET state='running',started_at=? WHERE id=?", (H.now(), aid))
@@ -4626,6 +4630,7 @@ class Execution:
                              "AND (j.held=0 OR (j.hold_reason=? AND j.hold_until<=?)) "
                              # A bot limited to one task takes nothing else into a running turn either.
                              f"AND {scoped_sql()} "
+                             f"AND {task_quarantine.free_sql(queued_task_sql())} "
                              # A redirect replaces the turn being stopped, so it starts the next one instead.
                              "AND j.redirect=0 AND (m.conversation_id=("
                              "SELECT active_message.conversation_id FROM attempts active_attempt "
