@@ -287,8 +287,8 @@ async function inboxesSettingsPage(el, section, ctx) {
 // A card in Inboxes > Settings, or on an inbox's page.
 const inboxesCard = (id, title, body, action = '') =>
   `<section class="card ib-card"${id ? ` id="${esc(id)}"` : ''}><header><h2>${esc(title)}</h2>${action}</header>${body}</section>`;
-const inboxesSoon = (id, title, line = '') =>
-  inboxesCard(id, title, `<p class="muted" data-ib-soon>${esc(line || 'Coming soon.')}</p>`, '<span class="pill">Coming soon</span>');
+// A placeholder: the card's title and its Coming soon pill, nothing under them.
+const inboxesSoon = (id, title) => inboxesCard(id, title, '', '<span class="pill" data-ib-soon>Coming soon</span>');
 
 // ---------------------------------------------------------------------------------------------------------- One inbox
 async function inboxesDetail(el, kind, id, ctx) {
