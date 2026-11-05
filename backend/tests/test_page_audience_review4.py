@@ -10,12 +10,14 @@ from backend.store import H
 from backend.tests.test_api import api, get, headers, post  # noqa: F401
 from backend.tests.test_file_reviews import ask as review_ask, answer as review_answer
 from backend.tests.test_files import turn
+from backend.tests.test_org_rules import org
 from backend.tests.test_page_audience import edit
 from backend.tests.test_pages import HTML, page
 from backend.tests.test_task_review import ask
 
 
 def public_page(api):
+    org(api)
     _, attempt = turn(api)
     tid = post(api, "tasks", {"owner": "ops", "title": "Review drafts", "body": "Review", "private": False})["id"]
     made = page(api, attempt, task=tid, title="Confidential draft")

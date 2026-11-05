@@ -412,13 +412,18 @@ def readable_page_refs(c, auth, who, refs, *, task_id=None):
     original = refs
     refs = H._json(refs, {}) if isinstance(refs, str) else refs
     denied = page_ref_denials(c, auth, who, refs)
+    def removed_page(value):
+        if isinstance(value, dict):
+            return (value.get("removed") is True and value.get("label") in
+                    ("A page you can't open", "A deleted page") or any(removed_page(v) for v in value.values()))
+        return isinstance(value, list) and any(removed_page(v) for v in value)
     def legacy_labels(value):
         if isinstance(value, dict):
             return (isinstance(value.get("answers"), dict) or
                     any(not option.get("source") and not option.get("file") for option in value.get("options") or []
                         if isinstance(option, dict)) or any(legacy_labels(v) for v in value.values()))
         return isinstance(value, list) and any(legacy_labels(v) for v in value)
-    if not denied and not legacy_labels(refs):
+    if not denied and not legacy_labels(refs) and not removed_page(refs):
         return original
     def hidden_titles(tid):
         if not isinstance(tid, str) or not tid:
@@ -429,7 +434,7 @@ def readable_page_refs(c, auth, who, refs, *, task_id=None):
         return read_cache.value(c, ("hidden_page_titles", who.actor, tid, auth is not None), build)
 
     def rejected(value):
-        return bool(page_references(value, c) & denied.keys())
+        return removed_page(value) or bool(page_references(value, c) & denied.keys())
 
     def clean(value, parent="", tid=task_id):
         direct = page_references(value, c) & denied.keys() if isinstance(value, str) else set()

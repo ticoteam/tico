@@ -474,7 +474,8 @@ def page(c, who, cid, *, before=None, since=None, limit=200, task_id=None, max_b
             return False
         message = {key: value for key, value in stored.items() if key not in INTERNAL_MESSAGE_COLUMNS}
         from .files import readable_page_refs
-        message["refs"] = readable_page_refs(c, None, who, H._json(stored["refs"], {}) or {}, task_id=task_id)
+        message["refs"] = H._json(stored["refs"], {}) or {}
+        message = readable_page_refs(c, None, who, message, task_id=task_id)
         if max_bytes and len(visible) < limit:
             size += len(json.dumps(message, default=str).encode())
             if visible and size > max_bytes:

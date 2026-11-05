@@ -144,11 +144,8 @@ def test_restricted_page_leak_matrix_across_stored_shapes_transports_and_deletio
 
     org(api)
     counsel_on(api)
-    with api.app.state.store.transaction() as c:
-        c.execute("INSERT INTO humans(id,name,email) VALUES('reader','Reader','reader@acme.example')")
-        roster = json.loads(c.execute("SELECT value FROM registry_metadata WHERE key='people'").fetchone()[0])
-        roster["people"].append({"id": "reader", "email": "reader@acme.example"})
-        c.execute("UPDATE registry_metadata SET value=? WHERE key='people'", (json.dumps(roster),))
+    reader = post(api, "access/people", {"name": "Reader", "email": "reader@acme.example"})
+    assert reader["person"] == "reader"
     api.app.state.store.settings.test_identities["reader-test"] = Identity("human:reader", "human", "reader@acme.example")
     _, attempt = turn(api)
     tid = post(api, "tasks", {"owner": "finance", "title": "Review folios", "body": "Review", "private": False}, token="ops-test")["id"]
