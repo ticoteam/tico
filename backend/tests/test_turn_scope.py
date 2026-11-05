@@ -152,8 +152,9 @@ def test_attached_bot_reads_its_private_saved_meeting_only_outside_task_turns(ap
     get(api, "meetings/transcript?id=" + mid, unscoped["token"], expected=404)
     with api.app.state.store.transaction() as c:
         c.execute("UPDATE live_meeting_bots SET joined_by='human:ana' WHERE meeting_id=?", (live,))
-    _, attempt = task_turn(api)
-    get(api, "meetings/transcript?id=" + mid, attempt["token"], expected=404)
+    t = task(api, owner="bot:ops", private=False)
+    carry(api, unscoped, t["id"])
+    get(api, "meetings/transcript?id=" + mid, unscoped["token"], expected=404)
 
 
 def test_make_scope_guards_legacy_routes_logs_reads_and_rechecks_revocation(api, monkeypatch):
@@ -244,3 +245,44 @@ def test_only_a_filed_page_on_the_exact_single_task_accepts_cross_bot_versions(a
     with api.app.state.store.read() as c:
         versions = c.execute("SELECT version,actor,attempt_id FROM bot_file_versions WHERE file_id=? ORDER BY version", (fid,)).fetchall()
         assert [tuple(v) for v in versions] == [(1, "bot:cpo", publisher["id"]), (2, "bot:ops", attempt["id"])]
+
+
+def test_make_page_file_reads_log_file_identity_and_obey_the_ten_item_list(api):
+    t = task(api, private=False)
+    seeded = {seed_page(api, "cpo", task=t["id"]) for _ in range(12)}
+    _, publisher = turn(api, "cpo")
+    fid = published(api, publisher, task=t["id"])
+    shown = {r["id"] for r in get(api, "tasks/" + t["id"] + "/context")["pages"]}
+    outside = next(iter(seeded - shown))
+    _, attempt = assistant_turn(api, "ana-test")
+    make_scope(api, attempt, t["id"])
+    token = attempt["token"]
+    get(api, "pages/" + outside, token, expected=404)
+    get(api, "files/" + outside + "/versions", token, expected=404)
+    for target in (fid, blob(api, fid)):
+        response = api.get("/api/v2/files/" + target, headers=headers(token))
+        assert response.status_code == 200, response.text
+    with api.app.state.store.read() as c:
+        assert [tuple(r) for r in c.execute("SELECT kind,ref FROM attempt_reads WHERE attempt_id=?", (attempt["id"],))] == [
+            ("file", fid)]
+
+
+def test_notes_read_pages_through_notes_without_repeating_them_at_transcript_offsets(api):
+    mid = record(api, {"private": False, "notes": "First decision. Second decision."})
+    first = get(api, f"meetings/transcript?id={mid}&notes=true&limit=16")
+    rest = get(api, f"meetings/transcript?id={mid}&notes=true&offset={first['next_offset']}")
+    assert first["text"] + rest["text"] == "First decision. Second decision."
+    assert "notes" not in rest
+    transcript = get(api, f"meetings/transcript?id={mid}&offset=1")
+    assert "notes" not in transcript and "decision" not in transcript["text"]
+
+
+def test_scoped_sql_cannot_name_or_count_a_page_the_file_hook_refuses(api):
+    t, attempt = task_turn(api)
+    # The same bot owns both pages, so SQL's ordinary bot ownership filter admits both candidates.
+    fid = published(api, attempt, task=t["id"], name="project.html")
+    hidden = seed_page(api, "ops", title="Private bot-wide title")
+    answer = post(api, "sql", {"sql": "SELECT id,title FROM bot_files ORDER BY id"}, attempt["token"])
+    assert answer["rows"] == [[fid, "project.html"]]
+    counted = post(api, "sql", {"sql": f"SELECT count(*) FROM bot_files WHERE id='{hidden}'"}, attempt["token"])
+    assert counted["rows"] == [[0]]

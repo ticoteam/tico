@@ -566,6 +566,10 @@ def guarded(c, auth, who, inner, function, columns=None, unseen=None):
     rules["task_file_reviews"] = "file_id IN (SELECT id FROM bot_files) OR file_id IN (SELECT id FROM blobs)"
     rules["bot_file_activity"] += " AND (task_id IS NULL OR " + by_task + ") AND (attempt_id IS NULL OR " + by_attempt + ")"
     rules["bot_file_versions"] += " AND (attempt_id IS NULL OR " + by_attempt + ")"
+    from . import turn_scope
+    if turn_scope.scope(c, who) is not None:
+        for table, check in (("meetings", "scope_meeting"), ("bot_files", "scope_file"), ("blobs", "scope_blob")):
+            rules[table] = "(" + rules[table] + ") AND " + function(check) + "(id)"
     hidden = {table: set(HIDDEN.get(table, ())) for table in rules}
     if bot:
         hidden["humans"].add("email")
@@ -787,8 +791,28 @@ def connect(path, c, auth, who, trace=None, seconds=None):
                     return conn.execute(statement, args)
                 finally:
                     trusted[0] = False
-        index = ReadIndex(Source(), who, rooms=True)
+        source = Source()
+        index = ReadIndex(source, who, rooms=True)
+        from . import turn_scope
+        from .files import file_visible
+        from .context_search import readable as meeting_readable
+
+        def scoped_file(fid):
+            row = source.execute("SELECT * FROM bot_files WHERE id=?", (fid,)).fetchone()
+            return bool(row and file_visible(source, auth, who, row, {}))
+
+        def scoped_meeting(rid):
+            try:
+                meeting_readable(source, who, rid, auth=auth)
+                return True
+            except Problem as exc:
+                if exc.status not in (403, 404):
+                    raise
+                return False
+
         functions = {"message": (4, index.message), "attempt": (1, index.attempt),
+                     "scope_file": (1, scoped_file), "scope_meeting": (1, scoped_meeting),
+                     "scope_blob": (1, lambda bid: turn_scope.blob_allowed(source, auth, who, bid)),
                      "conversation": (1, index.conversation), "meeting_room": (1, index.meeting_room),
                      "event": (4, index.event), "tag": (2, index.tag), "blob": (1, index.blob),
                      "settled_message": (5, lambda mid, cid, refs, reply, fast:

@@ -188,6 +188,8 @@ def blob_allowed(c, auth, who, bid):
     carried = tasks(c, auth, who, scoped)
     if not carried:
         return False
+    if not all(privacy.blob_readable(c, reader.actor, bid) for task in carried for reader in readers(c, auth, task)):
+        return False
     from .files import file_visible
     for row in c.execute("SELECT DISTINCT f.* FROM bot_file_versions v JOIN bot_files f ON f.id=v.file_id "
                          "WHERE v.blob_id=? OR v.poster_blob_id=? OR v.thumb_blob_id=?", (bid, bid, bid)):
