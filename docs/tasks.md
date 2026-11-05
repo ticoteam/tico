@@ -460,9 +460,9 @@ Trees with unpushed work stay and show the reason. Keep the task at its real ste
 
 ## What bots may put on you
 
-Bots can file a person more than they can decide. The ask filter judges each bot item before it lands on a person's
+Bots can file a person more than they can decide. Tico checks each bot ask before it lands on a person's
 Needs you: a task filed for them, a question to them (on a task or not) and a bot task set waiting on them. People's
-own writes (also through their Assistant), required approvals and Tico's own items are never filtered; they still
+own writes (also through their Assistant), required approvals and Tico's own items skip this check; they still
 count toward how full the plate is. When your Tico has a [decision model](how-it-works.md), one call per item asks
 the `person-ask-ingest` question set (`questions/person-ask-ingest.json`): is it clear, what kind of ask it is, which
 of your lines it meets, whether it repeats one of your open items, how urgent it is and whether the bot recommends
@@ -475,36 +475,33 @@ decides from the answers, your settings and your open items (snoozed ones left o
 | The item | What happens |
 | --- | --- |
 | Repeats one of your open items | Joins it: the bot keeps its own, and your answer there goes back to it once. |
-| A progress note | FYI: stays with the bot; no wait is set. |
-| A hands-only chore (grant access, merge, add a key) | **Hands needed**, its own group, up to its own budget (5). |
-| Work the bot could do itself, or unclear | Sent back to the bot. |
+| A progress note | Refused: post it as an update instead. |
+| A hands-only chore (grant access, merge, add a key) | Uses the main budget and appears as an ordinary Needs you item. |
+| Work the bot could do itself, or unclear | Refused, with the reason and what to fix. |
 | Anything else, with B open items as your budget (10) | Under B: reaches you. B to 3B: also meets one of your lines. 3B to 10B: also meets one of your lines and recommends something. 10B or more: only something that can't wait at all. |
 
 Something urgent (an outage, a security exposure, money being lost) always reaches you, unless it is only a progress
-note: that is FYI however urgent, and a repeat still joins your open item. Sent back is never a
-refusal: the write succeeds and stays with the bot, and its reply says why and what to do, naming the bot's manager.
-A question sent back from a bot's own task leaves that task's status and note as they were; the reason is a quiet
-comment on it.
-Anything the filter can't judge (no model, the spend or daily cap, an error, no answer in 10 seconds, an answer under
-its threshold) reaches you as before. Each call is a `judge.call` row that never holds the item's text, and Decide's
-readout counts the outcomes and what people let through.
+note: that is refused however urgent, and a repeat still joins your open item. A refusal fails the bot's write with
+`422 ask_refused`: the error gives the reason and a plain fix, including the bot's manager where relevant. No task,
+wait, question or message is created. An existing task keeps its owner, status and note. A refusal counts toward no
+quarantine and creates no org-rule hold. A bulk handoff reports each refused item under skipped and continues with
+the rest.
+Anything Tico can't judge (no model, the spend or daily cap, an error, no answer in 10 seconds, an answer under
+its threshold) reaches you as before. Each call is a `judge.call` row that never holds the item's text. Each judged
+item, including a refusal, has an `ask_ingest_items` audit row; a refusal's ref is empty because nothing was created.
+Decide's readout counts those outcomes and reconciles their calls.
 
-**Settings → Tasks → What bots may put on you** sets Off or On, the budget, the chores budget and up to
-ten lines of what you want to be asked about; an owner or admin sets the team default everyone starts from, and
-**Use the team default** goes back to it. A change applies to the next item; nothing already on a plate moves. It
-ships as **On**. **Filtered for you**, a folded line at the foot of Needs you, lists what was kept off today, and
-**Let it through** puts an item on your plate in one click and tells the bot once. A Rehearsal saved before this
-change reads as On. **Replay a day** on the settings card judges one past day's bot
-items with your settings and your plate as it was then, so you can see what On would have done before you turn it
-on; nothing moves. A replay counts no chores already waiting (none were grouped before the filter), so it never shows
-"chores full". A bot handing its own task to you (one or many) is judged like a task filed for you, and each item is
-judged against your plate as it was just before it. An owner or admin replaying someone else's day sees only the
-titles they may read.
+**Settings → Tasks → What bots may put on you** sets Off or On, the budget and up to ten lines of what you want to be
+asked about; an owner or admin sets the team default everyone starts from, and **Use the team default** goes back to
+it. A change applies to the next item; nothing already on a plate moves. It ships as **On**. Off makes no check. A
+stored Rehearsal reads as On. An old stored `chores_budget` is ignored.
+**Replay a day** judges one past day's existing bot items with your settings and your plate as it was then; nothing
+moves. Refused writes have no saved item text to replay. Older items kept with a bot before refusals were introduced
+can still be replayed. An owner or admin replaying someone else's day sees only the titles they may read.
 
 API: `GET`/`PUT`/`DELETE /api/v2/ask-ingest/settings` (`mode` is `off` or `on`; a `rehearsal` sent is saved as `on`),
-`GET /api/v2/ask-ingest/filtered?hours=24`,
-`POST /api/v2/ask-ingest/items/{id}/let-through`, `POST /api/v2/ask-ingest/replay` (`person`, `date`, `offset`, a page
-of up to 25; the person, or an owner or admin).
+`POST /api/v2/ask-ingest/replay` (`person`, `date`, `offset`, a page of up to 25; the person, or an owner or admin).
+The old kept-items list and let-through endpoints are retired.
 
 ## Picking work back up
 

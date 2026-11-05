@@ -9783,7 +9783,7 @@
             }
           },
           "422": {
-            "description": "A problem: {\"error\": {\"code\", \"detail\", \"retryable\", ...}}",
+            "description": "ask_refused: a bot ask fails the person's asking criteria; detail gives the reason and fix. Nothing is created or changed; no quarantine or org-rule hold. Progress notes should be posted as updates.",
             "content": {
               "application/json": {
                 "schema": {
@@ -27442,7 +27442,7 @@
             }
           },
           "422": {
-            "description": "A problem: {\"error\": {\"code\", \"detail\", \"retryable\", ...}}",
+            "description": "ask_refused: a bot ask fails the person's asking criteria; detail gives the reason and fix. Nothing is created or changed; no quarantine or org-rule hold. Progress notes should be posted as updates.",
             "content": {
               "application/json": {
                 "schema": {
@@ -38040,7 +38040,7 @@
             }
           },
           "422": {
-            "description": "A problem: {\"error\": {\"code\", \"detail\", \"retryable\", ...}}",
+            "description": "ask_refused: a bot ask fails the person's asking criteria; detail gives the reason and fix. Nothing is created or changed; no quarantine or org-rule hold. Progress notes should be posted as updates.",
             "content": {
               "application/json": {
                 "schema": {
@@ -38271,7 +38271,7 @@
             }
           },
           "422": {
-            "description": "A problem: {\"error\": {\"code\", \"detail\", \"retryable\", ...}}",
+            "description": "ask_refused: a bot ask fails the person's asking criteria; detail gives the reason and fix. Nothing is created or changed; no quarantine or org-rule hold. Progress notes should be posted as updates.",
             "content": {
               "application/json": {
                 "schema": {
@@ -38584,7 +38584,7 @@
             }
           },
           "422": {
-            "description": "A problem: {\"error\": {\"code\", \"detail\", \"retryable\", ...}}",
+            "description": "ask_refused: a bot ask fails the person's asking criteria; detail gives the reason and fix. Nothing is created or changed; no quarantine or org-rule hold. Progress notes should be posted as updates.",
             "content": {
               "application/json": {
                 "schema": {
