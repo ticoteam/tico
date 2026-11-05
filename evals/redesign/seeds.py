@@ -166,13 +166,13 @@ PAGE_HTML = ('<!doctype html><html><head><title>{title}</title></head><body styl
 
 @seed("pages")
 def pages(world):
-    """The Engineering Lead's pages and files, published during one turn on Dana's task "Q3 launch": an older weekly
+    """The Engineering Lead's pages and files: an older weekly
     page filed on the task and a bot-wide weekly page that replaced it (data from Oct 27), a launch plan filed on the
     task, and a signup funnel CSV bot-wide, so Library › Files has pages, data and a search hit inside a CSV. A page
     filed on the task is pinned to its top; the replaced one is left out there. The bot is named "Engineering Lead",
     so the status lines name it, not its slug."""
     from backend import bot_settings
-    from .harness import DANA
+    from .harness import DANA, LEAD
     # Written as the harness writes the bots' other fields: the definition route refuses the reports_to it set by hand.
     with world.store.transaction() as c:
         c.execute("UPDATE bots SET display_name='Engineering Lead' WHERE slug='engineering-lead'")
@@ -182,17 +182,18 @@ def pages(world):
     task = (made.get("task") or made)["id"]
 
     def act(token, attempt):
-        def page(name, title, text, bar, **fields):
+        def page(name, title, text, bar, credential=token, **fields):
             body = {"name": name, "title": title, "text": PAGE_HTML.format(title=title, text=text, bar=bar), **fields}
-            return _ok(world.api("post", "/api/v2/pages", body, who=token), name)["page"]["file_id"]
+            return _ok(world.api("post", "/api/v2/pages", body, who=credential), name)["page"]["file_id"]
         old = page("weekly-old.html", "Engineering weekly (old)", "Last month's numbers.", 90, task=task,
                    cadence="weekly")
-        page("weekly.html", "Engineering weekly", "Shipped 14 changes; review time fell to 6 hours.", 240,
+        # A task-scoped turn cannot receive bot-wide source metadata; these publications use the standing bot.
+        page("weekly.html", "Engineering weekly", "Shipped 14 changes; review time fell to 6 hours.", 240, credential=LEAD,
              scope="bot", cadence="weekly", as_of="2026-10-27", replaces=old)
         page("launch.html", "Launch plan", "Beta on Nov 3, general release on Nov 17.", 160, task=task)
         _ok(world.api("post", "/api/v2/files/uploads", {
             "name": "funnel.csv", "title": "Signup funnel", "scope": "bot",
-            "text": "stage,visitors\nlanding,1200\nsignup,310\nactivated,140\n"}, who=token), "funnel.csv")
+            "text": "stage,visitors\nlanding,1200\nsignup,310\nactivated,140\n"}, who=LEAD), "funnel.csv")
     if world.turn("engineering-lead", act=act) is None:
         raise RuntimeError("the Engineering Lead's turn did not run")
 
