@@ -342,12 +342,16 @@ def _recover_retired(base, default, link, task, env, client):
 
 
 def _recovery_warning(link):
-    old = link.get('retired_worktree') or _detail(link).get('retired_worktree') or {}
+    history = link.get('retired_worktrees') or _detail(link).get('retired_worktrees')
+    if not history:
+        history = [link.get('retired_worktree') or _detail(link).get('retired_worktree') or {}]
     notes = [link.get('recovery_note') or _detail(link).get('recovery_note') or '']
-    if old.get('ahead'):
-        notes.append(f"{old['ahead']} unpushed commits stayed on the retired computer ({old.get('computer_id')}); last head {old.get('last_commit') or 'unknown'}.")
-    if old.get('dirty_files'):
-        notes.append(f"{old['dirty_files']} changed files stayed on the retired computer.")
+    for old in history:
+        notes.append(old.get('recovery_note') or '')
+        if old.get('ahead'):
+            notes.append(f"{old['ahead']} unpushed commits stayed on the retired computer ({old.get('computer_id')}); last head {old.get('last_commit') or 'unknown'}.")
+        if old.get('dirty_files'):
+            notes.append(f"{old['dirty_files']} changed files stayed on the retired computer ({old.get('computer_id')}).")
     return ' '.join(note for note in notes if note)
 
 

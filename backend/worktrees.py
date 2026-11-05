@@ -666,7 +666,11 @@ def heartbeat(c, who, reports, capable, default_org="", live_tasks=None):
             detail['restore_on_reopen'] = True
         action = ('remove' if (closed and (finished or detail.get('delete_requested')) or released) and row['state'] != 'removed'
                   else 'prepare' if not closed and preparable(c, row, detail)
-                  else 'restore' if not closed and restore_requested(row, detail) and not detail.get('recovery') else None)
+                  else 'restore' if not closed and restore_requested(row, detail)
+                  and (row['state'] == 'removed' or not detail.get('recovery')) else None)
+        if action == 'restore' and row['state'] == 'removed':
+            # Cleanup on this computer restores local history; the earlier remote recovery is over.
+            detail.pop('recovery', None)
         if detail.get('delete_requested') and row['state'] == 'removed':
             c.execute('DELETE FROM task_links WHERE id=?', (row['id'],))
             continue
@@ -789,7 +793,7 @@ def provision(c, who, task, repo, path=None, branch=None, default_org='', brief=
                     'checkout_state': detail.get('checkout_state'), 'setup_pending': detail.get('setup_pending', False),
                     'expected_head': detail.get('expected_head'), 'checkout_target': detail.get('checkout_target'),
                     'expected_base': detail.get('expected_base'),
-                    **{k: detail[k] for k in ('recovery', 'retired_worktree', 'recovery_note') if k in detail}}
+                    **{k: detail[k] for k in ('recovery', 'retired_worktree', 'retired_worktrees', 'recovery_note') if k in detail}}
     # A new or restored tree only for work a coding step can run on now; an existing one is still answered above.
     if why := start_refusal(c, task):
         raise Problem('worktree_start', why, 409)
@@ -823,15 +827,25 @@ def provision(c, who, task, repo, path=None, branch=None, default_org='', brief=
                 raise Problem('computer_update', 'Update this computer to bring back work from a retired computer', 409)
             if attaching:
                 raise Problem('worktree_path', 'Use add to bring back work from a retired computer', 409)
-            old = {k: detail[k] for k in ('last_commit', 'pushed', 'ahead', 'behind', 'dirty_files', 'current_branch') if k in detail}
+            old = {k: detail[k] for k in ('last_commit', 'pushed', 'ahead', 'behind', 'dirty_files', 'current_branch', 'recovery_note') if k in detail}
             old.update(computer_id=existing['computer_id'], branch=existing['branch'], path=existing['path'])
+            # A later checkout cannot account for work left on an earlier computer.
+            history = detail.get('retired_worktrees') or ([detail['retired_worktree']] if detail.get('retired_worktree') else [])
+            history = [*history, old]
+            previous = detail.get('recovery') or {}
+            # A fallback starts another branch; its origin need not contain the abandoned branch's heads.
+            heads = {h for tree in history if tree.get('branch') == existing['branch']
+                     for h in H.worktree_heads(tree)}
+            if previous.get('branch') == existing['branch']:
+                heads.update(previous.get('published_heads') or [previous.get('published_head')])
+            heads = sorted(h for h in heads if isinstance(h, str) and re.fullmatch(r'(?:[0-9a-f]{40}|[0-9a-f]{64})', h))
             head = detail.get('pushed') or (detail.get('last_commit') if detail.get('ahead') == 0 else None)
             if not isinstance(head, str) or not re.fullmatch(r'(?:[0-9a-f]{40}|[0-9a-f]{64})', head):
-                head = None
+                head = heads[-1] if heads else None
             detail['retired_worktree'] = old
+            detail['retired_worktrees'] = history
             detail['recovery'] = {'branch': existing['branch'], 'published_head': head,
-                                  'published_heads': [h for h in H.worktree_heads(detail)
-                                                      if re.fullmatch(r'(?:[0-9a-f]{40}|[0-9a-f]{64})', h)],
+                                  'published_heads': heads,
                                   'fallback_branch': f'tico/{short}-recovery-{uuid.uuid4().hex[:12]}'}
             # The old report belongs to that computer. New reports describe only the replacement checkout.
             for key in ('last_commit', 'pushed', 'ahead', 'behind', 'dirty_files', 'current_branch',
@@ -860,7 +874,7 @@ def provision(c, who, task, repo, path=None, branch=None, default_org='', brief=
                 'checkout_state': 'attached_pending' if attaching else 'queued',
                 'setup_pending': not attaching, 'expected_head': None, 'checkout_target': None,
                 'expected_base': None,
-                **{k: detail[k] for k in ('recovery', 'retired_worktree', 'recovery_note') if k in detail}}
+                **{k: detail[k] for k in ('recovery', 'retired_worktree', 'retired_worktrees', 'recovery_note') if k in detail}}
     slug = re.sub('[^a-z0-9]+', '-', task['title'].lower()).strip('-')[:50] or 'task'
     branch = branch or (None if attaching else f'tico/{short}-{slug}{suffix}')
     if branch is not None and (not re.fullmatch(r'[A-Za-z0-9_./-]+', branch) or branch.startswith('-') or '..' in branch or '@{' in branch or branch.endswith(('/', '.', '.lock')) or '//' in branch):

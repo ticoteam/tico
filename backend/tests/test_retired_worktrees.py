@@ -6,14 +6,14 @@ import pytest
 
 from backend import hubdb as H, worktrees as W, worktree_waits as waits
 from backend.tests.test_github_app import api, gh, auth  # noqa: F401
-from backend.tests.test_worktrees import prepared, post  # noqa: F401
+from backend.tests.test_worktrees import prepared, post, mark_ready  # noqa: F401
 from backend.tests.test_repositories import put
 
 READY = {'schema_version': 1, 'bots': {}, 'worktrees': True, 'worktree_waits': True, 'worktree_recovery': True}
 
 
-def leave_on_old_computer(api, tid, *, revoked=True):
-    link = post(api, f'tasks/{tid}/worktrees', {'repo': 'Acme/product'}, 'bot-test').json()
+def leave_on_old_computer(api, tid, *, revoked=True, token='bot-test'):
+    link = post(api, f'tasks/{tid}/worktrees', {'repo': 'Acme/product'}, token).json()
     with api.app_state.store.transaction() as c:
         if revoked:
             # Copy the registered computer, keeping the current bot and its test tokens on r1.
@@ -31,6 +31,16 @@ def leave_on_old_computer(api, tid, *, revoked=True):
         c.execute("UPDATE runner_states SET readiness=? WHERE runner_id='r1'",
                   (json.dumps(READY),))
     return link
+
+
+def replace_current_computer(api):
+    with api.app_state.store.transaction() as c:
+        old = dict(c.execute("SELECT * FROM runners WHERE id='r1'").fetchone())
+        old.update(id='r2', token_hash='r2-token')
+        c.execute(f"INSERT INTO runners({','.join(old)}) VALUES({','.join('?' * len(old))})", tuple(old.values()))
+        c.execute("UPDATE runner_states SET readiness=? WHERE runner_id='r2'", (json.dumps(READY),))
+        c.execute("UPDATE runners SET revoked_at=? WHERE id='r1'", (H.now(),))
+        c.execute("UPDATE assignments SET runner_id='r2' WHERE bot='cmo'")
 
 
 @pytest.mark.parametrize('revoked', [True, False], ids=['revoked', 'deleted'])
@@ -164,6 +174,100 @@ def test_a_recovered_tree_released_on_the_current_computer_reuses_local_history(
     assert reused.status_code == 200, reused.text
     assert reused.json()['branch'] == moved['branch'] and 'recovery' not in reused.json()
     assert reused.json()['retired_worktree']['ahead'] == 2
+
+
+@pytest.mark.parametrize('token', ['bot-test', 'owner-test'], ids=['bot', 'human'])
+def test_recovered_tree_restores_after_cleanup_when_its_task_reopens(prepared, token):
+    api, tid, _ = prepared
+    old = leave_on_old_computer(api, tid, token=token)
+    moved = post(api, f'tasks/{tid}/worktrees', {'repo': 'Acme/product'}, token)
+    assert moved.status_code == 200, moved.text
+    beat = {'version': '0.3.21', 'platform': 'linux', 'readiness': READY, 'worktrees': []}
+    # A queued recovery must still wait for a capable computer, including a person's request.
+    downgraded = post(api, 'runners/heartbeat', {**beat, 'readiness': {**READY, 'worktree_recovery': False}}, 'runner-test')
+    assert downgraded.status_code == 200, downgraded.text
+    assert downgraded.json()['worktree_actions'] == []
+    assert mark_ready(api, tid, old['link_id']).status_code == 200
+    with api.app_state.store.transaction() as c:
+        c.execute("UPDATE tasks SET status='closed' WHERE id=?", (tid,))
+    cleanup = post(api, 'runners/heartbeat', beat, 'runner-test')
+    assert cleanup.status_code == 200, cleanup.text
+    assert [a['action'] for a in cleanup.json()['worktree_actions']] == ['remove']
+    beat['worktrees'] = [{'link_id': old['link_id'], 'state': 'removed'}]
+    removed = post(api, 'runners/heartbeat', beat, 'runner-test')
+    assert removed.status_code == 200, removed.text
+    assert removed.json()['worktree_actions'] == []
+    with api.app_state.store.transaction() as c:
+        c.execute("UPDATE tasks SET status='doing' WHERE id=?", (tid,))
+    restored = post(api, 'runners/heartbeat', beat, 'runner-test')
+    assert restored.status_code == 200, restored.text
+    actions = restored.json()['worktree_actions']
+    assert len(actions) == 1 and actions[0]['action'] == 'restore'
+    assert actions[0]['link_id'] == old['link_id'] and actions[0]['branch'] == old['branch']
+    with api.app_state.store.read() as c:
+        detail = json.loads(c.execute('SELECT detail FROM task_links WHERE id=?', (old['link_id'],)).fetchone()[0])
+        assert 'recovery' not in detail
+        assert detail['retired_worktrees'][0]['ahead'] == 2
+    assert mark_ready(api, tid, old['link_id']).status_code == 200
+    ready = post(api, 'runners/heartbeat', {**beat, 'worktrees': []}, 'runner-test')
+    assert ready.status_code == 200, ready.text
+    assert ready.json()['worktree_actions'] == []
+
+
+@pytest.mark.parametrize('reported', [False, True], ids=['before-report', 'after-report'])
+def test_second_retirement_keeps_earlier_facts_and_all_published_heads(prepared, reported):
+    api, tid, _ = prepared
+    old = leave_on_old_computer(api, tid)
+    moved = post(api, f'tasks/{tid}/worktrees', {'repo': 'Acme/product'}, 'bot-test')
+    assert moved.status_code == 200, moved.text
+    first = moved.json()['retired_worktree']
+    if reported:
+        assert mark_ready(api, tid, old['link_id']).status_code == 200
+        beat = {'version': '0.3.21', 'platform': 'linux', 'readiness': READY,
+                'worktrees': [{'link_id': old['link_id'], 'state': 'present', 'checkout_state': 'ready',
+                               'branch': old['branch'], 'last_commit': 'd' * 40, 'ahead': 0, 'dirty_files': 3}]}
+        response = post(api, 'runners/heartbeat', beat, 'runner-test')
+        assert response.status_code == 200, response.text
+        with api.app_state.store.transaction() as c:
+            detail = json.loads(c.execute('SELECT detail FROM task_links WHERE id=?', (old['link_id'],)).fetchone()[0])
+            detail['pushed'] = 'e' * 40
+            c.execute('UPDATE task_links SET detail=? WHERE id=?', (json.dumps(detail), old['link_id']))
+    replace_current_computer(api)
+    response = post(api, f'tasks/{tid}/worktrees', {'repo': 'Acme/product'})
+    assert response.status_code == 200, response.text
+    recovered = response.json()
+    assert recovered['link_id'] == old['link_id'] and recovered['branch'] == old['branch']
+    assert recovered['retired_worktrees'][0] == first
+    assert len(recovered['retired_worktrees']) == 2
+    assert recovered['retired_worktrees'][0]['ahead'] == 2 and recovered['retired_worktrees'][0]['dirty_files'] == 1
+    assert recovered['retired_worktree']['computer_id'] == 'r1'
+    assert recovered['retired_worktree'].get('dirty_files') == (3 if reported else None)
+    heads = {'a' * 40, 'd' * 40, 'e' * 40} if reported else {'a' * 40}
+    assert set(recovered['recovery']['published_heads']) == heads
+    assert recovered['recovery']['published_head'] in heads
+    # A repeated request returns the same history rather than adding another retirement.
+    assert post(api, f'tasks/{tid}/worktrees', {'repo': 'Acme/product'}).json() == recovered
+
+
+def test_second_retirement_keeps_warnings_without_requiring_heads_from_an_abandoned_branch(prepared):
+    api, tid, _ = prepared
+    old = leave_on_old_computer(api, tid)
+    moved = post(api, f'tasks/{tid}/worktrees', {'repo': 'Acme/product'}, 'bot-test')
+    assert moved.status_code == 200, moved.text
+    fallback = api.patch(f'/api/v2/tasks/{tid}/links/{old["link_id"]}',
+                         json={'recovery_branch_missing': True},
+                         headers={**auth('runner-test'), 'Idempotency-Key': uuid.uuid4().hex})
+    assert fallback.status_code == 200, fallback.text
+    branch = fallback.json()['branch']
+    replace_current_computer(api)
+    response = post(api, f'tasks/{tid}/worktrees', {'repo': 'Acme/product'})
+    assert response.status_code == 200, response.text
+    recovered = response.json()
+    assert recovered['branch'] == branch != old['branch']
+    assert recovered['retired_worktrees'][0]['ahead'] == 2
+    assert recovered['retired_worktrees'][0]['branch'] == old['branch']
+    assert recovered['recovery']['published_heads'] == []
+    assert recovered['recovery']['published_head'] is None
 
 
 def test_idle_recovery_rechecks_the_task_owner_and_current_computer(prepared):

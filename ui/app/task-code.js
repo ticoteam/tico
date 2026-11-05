@@ -112,9 +112,9 @@ function taskCodeLineHTML(l, mover, siblings = []) {
       : ['missing', 'removed', 'unknown', 'pending'].includes(l.state) || error
         ? ` <span class="code-state${error ? ' err' : ''}">${esc(['missing', 'removed', 'unknown', 'pending'].includes(l.state) ? l.state : 'error')}</span>` : '';
     const title = [repo, l.branch, l.path].filter(Boolean).join(' · ');
-    const old = wtDetail.retired_worktree || {};
-    const left = [old.ahead ? `${old.ahead} unpushed commits stayed on the retired computer (head ${old.last_commit || 'unknown'}).` : '',
-      old.dirty_files ? `${old.dirty_files} changed files stayed there.` : '', wtDetail.recovery_note || ''].filter(Boolean).join(' ');
+    const history = wtDetail.retired_worktrees || [wtDetail.retired_worktree || {}];
+    const left = [...history.flatMap(old => [old.ahead ? `${old.ahead} unpushed commits stayed on the retired computer (head ${old.last_commit || 'unknown'}).` : '',
+      old.dirty_files ? `${old.dirty_files} changed files stayed there.` : '', old.recovery_note || '']), wtDetail.recovery_note || ''].filter(Boolean).join(' ');
     const explanation = [error, left].filter(Boolean).map(text => `<div class="props-msg code-error">${esc(text)}</div>`).join('');
     const inner = bits.join('<span class="code-dot">·</span>');
     return `<li class="code-line wt${l.state === 'removed' ? ' gone' : ''}" data-code-link="${esc(l.id || '')}">${url

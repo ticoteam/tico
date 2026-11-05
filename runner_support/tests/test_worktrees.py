@@ -117,6 +117,21 @@ def retired_allocation(row, client, published=None):
                           'ahead': 2, 'dirty_files': 1})
 
 
+@pytest.mark.parametrize('wire', [False, True], ids=['add-response', 'runner-record'])
+def test_recovery_warning_keeps_facts_from_each_retired_computer(wire):
+    first = {'computer_id': 'first', 'last_commit': 'a' * 40, 'ahead': 2, 'dirty_files': 1}
+    latest = {'computer_id': 'second', 'last_commit': 'b' * 40, 'ahead': 4, 'dirty_files': 3}
+    detail = {'retired_worktree': latest, 'retired_worktrees': [first, latest]}
+    link = {'detail_json': json.dumps(detail)} if wire else detail
+    warning = W._recovery_warning(link)
+    assert '2 unpushed commits' in warning and '4 unpushed commits' in warning
+    assert '1 changed files' in warning and '3 changed files' in warning
+    assert 'a' * 40 in warning and 'b' * 40 in warning
+    assert '(first)' in warning and '(second)' in warning
+    assert warning.count('4 unpushed commits') == 1
+    assert '2 unpushed commits' in W._recovery_warning({'retired_worktree': first})
+
+
 def publish_task_branch(base, row):
     git(base, 'checkout', '-b', row['branch'])
     (base / 'file').write_text('published task work')
