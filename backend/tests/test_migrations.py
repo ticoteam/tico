@@ -217,8 +217,10 @@ def test_deletion_fence_age_migration_stands_alone_and_does_not_reset_an_age():
 def test_meeting_links_upgrade_a_database_at_main_newest(tmp_path, monkeypatch):
     known = migrations.files()
     # Freeze the upgrade's starting point so later migrations do not move this regression's baseline.
-    main = [m for m in known if m.version <= '0093_withdraw_still_wanted' and not m.version.endswith('_meeting_task_links')]
-    assert main[-1].version == '0093_withdraw_still_wanted'
+    # The module code reads tasks.readers, so its migration comes along.
+    main = [m for m in known if m.version <= '0093_withdraw_still_wanted' and not m.version.endswith('_meeting_task_links')
+            or m.version.endswith('_task_readers')]
+    assert main[-2].version == '0093_withdraw_still_wanted'
     path = tmp_path / 'main.sqlite'
     with monkeypatch.context() as patch:
         patch.setattr(migrations, 'files', lambda directory=None: main)

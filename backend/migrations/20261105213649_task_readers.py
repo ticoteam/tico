@@ -5,6 +5,7 @@ SQLite drops a column only when no index or trigger names it: the four covering 
 in its place, and the triggers that name `guest` (events.py, row_clock.py) are dropped here and made again with
 `readers` at the next start.
 """
+import re
 
 INDEXES = (
     ("tasks_private_status", "tasks(id, requester_id, owner_id, readers, private, status, waiting_on) WHERE private IS NOT 0"),
@@ -45,6 +46,8 @@ def _move(conn, table):
 def up(conn):
     _move(conn, "tasks")
     _move(conn, "task_trash")
-    if {"private", "readers"} <= _columns(conn, "tasks"):
-        for name, spec in INDEXES:
+    have = _columns(conn, "tasks")
+    for name, spec in INDEXES:
+        # On a new file some of these columns come later, from the module code, which makes the same index then.
+        if set(re.findall(r"\w+", spec[len("tasks("):spec.index(")")])) <= have:
             conn.execute(f"CREATE INDEX IF NOT EXISTS {name} ON {spec}")
