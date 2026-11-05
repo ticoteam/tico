@@ -519,7 +519,7 @@ def test_counsel_attaches_no_file_and_is_given_no_visual_address(api, monkeypatc
         assert visuals.token_reader(c, api.app.state.auth, "bot:ops") is not None
 
 
-def test_counsel_lists_a_cite_as_the_person_who_asked_would_see_it(api):
+def test_counsel_cites_require_both_asker_access_and_current_turn_scope(api):
     org(api)
     counsel_on(api)
     file_id, version = store_file(api, CONTRACT)
@@ -536,10 +536,15 @@ def test_counsel_lists_a_cite_as_the_person_who_asked_would_see_it(api):
         attempt = next_counsel_run(api, r)
         listed = api.get("/api/v2/rules", headers=headers(attempt["token"]))
         assert listed.status_code == 200, listed.text
+        if token == "ana-test":
+            assert file_id not in listed.text
+            assert all("cite" not in item for item in listed.json()["rules"])
         shown[token] = [item.get("cite") for item in listed.json()["rules"]]
         finish(api, r, attempt, text="Rule cited.")
     assert shown["cara-test"] == [{"hidden": True}] and CONSENT not in json.dumps(shown["cara-test"])
-    assert shown["ana-test"][0]["quote"] == CONSENT
+    # A question run has no document-read grant, even when its requester can read that source.
+    assert shown["ana-test"] == [None]
+    assert get(api, "rules")["rules"][0]["cite"]["quote"] == CONSENT
 
 
 def test_counsel_cannot_cite_a_file_nobody_asked_it_to_read(api):
