@@ -1639,9 +1639,10 @@ def test_deletion_waits_for_an_inflight_manager_action_and_its_completion_write(
             release.set()
         look.result(timeout=10)
         response = removal.result(timeout=10)
-    if action == "stop" and refused and CM.stopped_unknown(refused):
-        assert response.status_code == 409 and paused == []    # the unanswered stop's existing reservation also holds
+    if kind == "unused" and action == "stop" and refused and CM.stopped_unknown(refused):
+        assert response.status_code == 409 and paused == []    # ordinary deletion still honors the stop reservation
     else:
+        # Explicit recovery waits for the in-flight request, then proceeds despite an unanswered stop's hold.
         assert response.status_code == 200, response.text
         assert paused == ["replacing"]
         assert cloud.row(target.key)["state"] == "deleted" and cloud.row(target.key)["runner_id"] is None
