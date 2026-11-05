@@ -1,5 +1,7 @@
 // Tico addresses and Texts in (ui/app/inboxes-texts.js) in Settings > Inboxes: external text cannot execute, an inbox's
-// recent messages ask for that inbox only, Reveal code, joining a Tico company account with a code (explicit consent,
+// recent messages ask for that inbox only, Reveal code, a released address listed as Not in use with its messages,
+// Inboxes > Messages (every inbox or the ones picked, kept through a redraw, by channel, sender, words, code and spam,
+// a page at a time, with each message's channel and inbox), joining a Tico company account with a code (explicit consent,
 // a changed code drops the shown company, a lost confirmation retries the same submission), asking for a number and
 // accepting or cancelling a quote through Tico's own confirm (never a page dialog), who reads an inbox, a member's
 // read-only view, and desktop and phone fit.
@@ -24,6 +26,7 @@ const go = (page, hash) => page.evaluate(h => { location.hash = h; }, hash);
     const calls = [], mailboxes = mailboxesFake(), google = googleFake();
     const inbox = {inbox_id: 'ibx_a', kind: 'email', name: 'Account logins', address: 'agent-acme-login@tico.team', state: 'active', created_by: 'human:ana',
       used_for: '', period_end: null, cancel_pending: 0, audience: 'company', group_id: null};
+    const released = {...inbox, inbox_id: 'ibx_old', name: 'Old logins', address: 'agent-acme-old@tico.team', state: 'released'};
     const evil = '<img src=x onerror="window.INBOUND_PWNED=1">';
     let preview = evil, connectionFailures = 1, releaseConnection, connectionStarted;
     const connectionGate = new Promise(resolve => { releaseConnection = resolve; });
@@ -51,9 +54,17 @@ const go = (page, hash) => page.evaluate(h => { location.hash = h; }, hash);
           return json(result);
         }
         if (p.endsWith('/audience')) { Object.assign(inbox, {audience: body.audience, group_id: body.group_id || null}); return json(inbox); }
-        if (p.endsWith('/inboxes')) return json({inboxes: [inbox], configured: true, last_synced_at: 1800000000, error: '', gaps: []});
-        if (p.endsWith('/messages')) return json({messages: [{seq: 1, message_id: 'ses:test:ibx_a', inbox_id: 'ibx_a', kind: 'email', received_at: 1800000000,
-          from: 'Login service', subject: 'Sign in', preview, has_code: true}], next: null, cursor: 1});
+        if (p.endsWith('/inboxes')) return json({inboxes: [inbox, released], configured: true, last_synced_at: 1800000000, error: '', gaps: []});
+        if (p.endsWith('/messages')) {
+          // Every inbox's read has an older page; one naming inboxes has only theirs.
+          const ids = (url.searchParams.get('inbox_ids') || '').split(',').filter(Boolean);
+          if (url.searchParams.get('before')) return json({messages: [{seq: 0, message_id: 'ses:test:older', inbox_id: 'ibx_old', kind: 'email',
+            received_at: 1600000000, from: 'Older service', subject: 'Older page', preview: '', has_code: false}], next: null, cursor: 0});
+          const all = [{seq: 2, message_id: 'ses:test:ibx_a', inbox_id: 'ibx_a', kind: 'email', received_at: 1800000000, from: 'Login service', subject: 'Sign in', preview, has_code: true},
+            {seq: 1, message_id: 'ses:test:ibx_old', inbox_id: 'ibx_old', kind: 'email', received_at: 1700000000, from: 'Old service', subject: 'Old sign in',
+              preview: 'Kept after release', has_code: false}];
+          return json({messages: all.filter(m => !ids.length || ids.includes(m.inbox_id)), next: ids.length ? null : 1, cursor: 2});
+        }
         if (p.endsWith('/code')) return json({code: '123456', untrusted: true});
         if (p.includes('/messages/')) return json({message_id: 'ses:test:ibx_a', text: 'Your code is 123456. ' + evil, next_offset: null, untrusted: true});
         if (p.endsWith('/phone-requests')) {
@@ -107,6 +118,65 @@ const go = (page, hash) => page.evaluate(h => { location.hash = h; }, hash);
     await page.locator('[data-inbound-code]').click();
     await page.locator('.inbound-dialog pre').filter({hasText: '123456'}).waitFor();
     await page.locator('.inbound-dialog [data-close]').click();
+
+    // A released address stays listed as Not in use, and its page keeps the messages it received.
+    await go(page, '#/settings/inboxes');
+    const old = page.locator('[data-ib-row="tico:ibx_old"]');
+    await old.waitFor();
+    assert.equal(await old.locator('[data-ib-status]').innerText(), 'Not in use');
+    await old.locator('.ib-name a').click();
+    await page.locator('#inbound-messages', {hasText: 'Old sign in'}).waitFor();
+    assert.equal(await page.locator('#inbox-head [data-ib-status]').innerText(), 'Not in use');
+    assert.equal(await page.locator('[data-inbound-release]').count(), 0, 'a released address is not released again');
+    assert.ok(calls.some(c => c.p.endsWith('/messages') && new URLSearchParams(c.query).get('inbox_ids') === 'ibx_old'));
+
+    // Messages: every inbox, or the ones picked, by channel, sender, words, code and spam, a page at a time.
+    await go(page, '#/settings/inboxes');
+    await page.locator('[data-ib-view-link="messages"]').waitFor();
+    const mark = calls.length;
+    const latest = () => calls.slice(mark).filter(c => c.p.endsWith('/messages') && c.method === 'GET').map(c => new URLSearchParams(c.query)).at(-1);
+    await page.locator('[data-ib-view-link="messages"]').click();
+    const messages = page.locator('#inbox-messages'), all = page.locator('#inbound-filter[data-in-all]');
+    await messages.locator('[data-in-message="ses:test:ibx_old"]').waitFor();
+    assert.equal(await page.evaluate(() => location.hash), '#/settings/inboxes/messages');
+    assert.equal(latest().get('inbox_ids'), null, 'no inbox picked reads every inbox');
+    assert.match(await messages.locator('[data-in-message="ses:test:ibx_a"]').innerText(), /EMAIL\s+agent-acme-login@tico\.team\s+Account logins/);
+    assert.deepEqual(await all.locator('select[name=inboxes] option').evaluateAll(os => os.map(o => o.value)), ['ibx_a', 'ibx_old'], 'released inboxes can be picked');
+    await all.locator('select[name=inboxes]').selectOption(['ibx_a', 'ibx_old']);
+    await all.locator('select[name=kind]').selectOption('sms');
+    await all.locator('input[name=sender]').fill('Login service');
+    await all.locator('input[name=q]').fill('Sign');
+    await all.locator('input[name=has_code]').check();
+    await all.locator('input[name=spam]').check();
+    await all.locator('button[type=submit]').click();
+    await page.waitForFunction(() => !GET_INFLIGHT.size);
+    assert.deepEqual(Object.fromEntries(latest()), {limit: '50', inbox_ids: 'ibx_a,ibx_old', kind: 'sms', q: 'Sign', from: 'Login service', has_code: 'true', spam: 'true'});
+    await page.evaluate(() => renderSettingsInboxes());
+    await page.waitForFunction(() => !GET_INFLIGHT.size);
+    assert.deepEqual(await all.locator('select[name=inboxes]').evaluate(s => [...s.selectedOptions].map(o => o.value)), ['ibx_a', 'ibx_old'], 'a redraw keeps the inboxes picked');
+    assert.equal(latest().get('inbox_ids'), 'ibx_a,ibx_old');
+    await all.locator('select[name=inboxes]').selectOption([]);
+    await all.locator('select[name=kind]').selectOption('');
+    await all.locator('input[name=sender]').fill('');
+    await all.locator('input[name=q]').fill('');
+    await all.locator('input[name=has_code]').uncheck();
+    await all.locator('input[name=spam]').uncheck();
+    await all.locator('button[type=submit]').click();
+    await page.locator('#inbound-older:not([hidden])').click();
+    await messages.locator('[data-in-message="ses:test:older"]').waitFor();
+    assert.equal(latest().get('before'), '1', 'Older asks for the page after the one shown');
+    assert.equal(latest().get('inbox_ids'), null);
+    await page.locator('#inbound-newest').click();
+    await messages.locator('[data-in-message="ses:test:ibx_a"] [data-inbound-code]').click();
+    await page.locator('.inbound-dialog pre').filter({hasText: '123456'}).waitFor();
+    await page.locator('.inbound-dialog [data-close]').click();
+    for (const width of [1440, 390]) {
+      await page.setViewportSize({width, height: 1000});
+      await settled(page);
+      assert.ok(await fits(page), 'Messages fits ' + width);
+      await shot(page, `inbound-messages-${width}.png`);
+    }
+    await page.setViewportSize({width: 1440, height: 1000});
 
     // Joining a Tico company account: consent first, a changed code drops the company, a lost answer retries the same operation.
     await go(page, '#/settings/inboxes/settings/email');

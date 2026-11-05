@@ -41,7 +41,7 @@ function inStatus(i, d) {
   if (!d.configured) return ['attention', 'Not connected'];
   if (i.state === 'active') return d.error ? ['attention', 'Sync failed'] : ['ok', i.cancel_pending ? 'Renewal off' : 'Connected'];
   if (i.state === 'error') return ['attention', 'Sync failed'];
-  if (['off', 'paused', 'released'].includes(i.state)) return ['off', i.state === 'released' ? 'Released' : 'Not in use'];
+  if (['off', 'paused', 'released'].includes(i.state)) return ['off', 'Not in use'];
   return ['pending', 'Pending'];
 }
 function inSyncLine(d) {
@@ -57,9 +57,10 @@ function inRequestStatus(r) {
       : r.state === 'requested' ? 'Awaiting quote' : r.state.charAt(0).toUpperCase() + r.state.slice(1)};
 }
 
+// A released address stays listed as Not in use: its page keeps the messages it received.
 async function inRows(ctx, kind) {
   const [d, latest] = await Promise.all([inInboxes(ctx), inLatest(ctx)]);
-  const rows = d.inboxes.filter(i => i.kind === kind && i.state !== 'released').map(i => {
+  const rows = d.inboxes.filter(i => i.kind === kind).map(i => {
     const [status, statusText] = inStatus(i, d);
     return {id: i.inbox_id, name: i.name || i.address, sub: i.name ? i.address : '', status, statusText,
       latest: latest[i.inbox_id] || null, usedBy: {people: 1, bots: 0, names: [inReaders(i)]}, search: i.used_for || ''};
@@ -143,44 +144,88 @@ function inDraw(host, i, d, ctx) {
       <div class="ib-field"><span class="ib-field-label">Used for</span><div data-in-used-for>${i.used_for ? esc(i.used_for) : '<span class="muted">—</span>'}</div></div></section>
     <section class="card" id="inbox-automations"><header><h2>Automations</h2>${inboxesAutomationsLink(i.address)}</header><div data-in-autos>${skelRows(1, {dot: false})}</div></section>
     <section class="card" id="inbox-recent"><header><h2>Recent</h2></header>
-      <form id="inbound-filter" class="inbound-filters">
-        <label>From <input name="sender" maxlength="200"></label><label>Search messages <input name="q" type="search" maxlength="200"></label>
-        <label><input name="has_code" type="checkbox"> Has a code</label><label><input name="spam" type="checkbox"> Include spam</label>
-        <button class="ghost" type="submit">Filter</button></form>
-      <div class="inbound-scroll"><table class="inbound-table"><thead><tr><th>Received</th><th>From</th><th>Message</th><th>Code</th></tr></thead><tbody id="inbound-messages"></tbody></table></div>
-      <div class="row"><button type="button" class="ghost" id="inbound-newest">Newest</button><button type="button" class="ghost" id="inbound-older" hidden>Older messages</button></div>
-      <p id="inbound-status" class="muted" role="status"></p></section>`;
+      <form id="inbound-filter" class="inbound-filters">${IN_FILTERS}</form>
+      ${inTable(false)}</section>`;
   host._in = {inbox: i, before: 0, next: null};
   void inboxesAutomations(ctx, i.address).then(html => { const s = host.querySelector('[data-in-autos]'); if (s && ctx.live()) s.innerHTML = html; });
   inBind(host, ctx);
+  inPoll(host, ctx);
+}
+const inFail = (host, error) => { const s = host.querySelector('#inbound-status'); if (s) s.textContent = error.message; };
+
+// The filters and the table an inbox's page and Messages share; Messages adds which inboxes and the channel.
+const IN_FILTERS = `<label>From <input name="sender" maxlength="200"></label><label>Search messages <input name="q" type="search" maxlength="200"></label>
+  <label><input name="has_code" type="checkbox"> Has a code</label><label><input name="spam" type="checkbox"> Include spam</label>
+  <button class="ghost" type="submit">Filter</button>`;
+const inTable = all => `<div class="inbound-scroll"><table class="inbound-table"><thead><tr><th>Received</th>${all ? '<th>Channel</th><th>To</th>' : ''}<th>From</th><th>Message</th><th>Code</th></tr></thead>
+  <tbody id="inbound-messages"></tbody></table></div>
+  <div class="row"><button type="button" class="ghost" id="inbound-newest">Newest</button><button type="button" class="ghost" id="inbound-older" hidden>Older messages</button></div>
+  <p id="inbound-status" class="muted" role="status"></p>`;
+
+// Reads now, then again every 15 seconds while the page is open and showing the newest messages.
+function inPoll(host, ctx) {
   const active = () => ctx.live() && host.isConnected && !host.closest('.settings-pane')?.hidden;
   void inMessages(host).catch(e => inFail(host, e));
-  // New messages show while the page is open, as they did on the old table.
   INBOUND_TIMER = setInterval(() => {
     if (!active()) { clearInterval(INBOUND_TIMER); return; }
     if (document.hidden || formBusy(host.querySelector('#inbound-filter')) || host._in.before) return;
     void inMessages(host).catch(e => inFail(host, e));
   }, 15000);
 }
-const inFail = (host, error) => { const s = host.querySelector('#inbound-status'); if (s) s.textContent = error.message; };
 
+// One inbox's messages on its page; on Messages (st.inbox null), the inboxes picked, or every inbox when none is.
 async function inMessages(host) {
   const st = host._in, form = host.querySelector('#inbound-filter'); if (!form) return;
-  const params = new URLSearchParams({limit: '50', inbox_ids: st.inbox.inbox_id});
-  if (form.elements.q.value) params.set('q', form.elements.q.value);
-  if (form.elements.sender.value) params.set('from', form.elements.sender.value);
-  for (const name of ['has_code', 'spam']) if (form.elements[name].checked) params.set(name, 'true');
+  const f = form.elements, all = !st.inbox;
+  const ids = all ? [...f.inboxes.selectedOptions].map(o => o.value) : [st.inbox.inbox_id];
+  const params = new URLSearchParams({limit: '50'});
+  if (ids.length) params.set('inbox_ids', ids.join(','));
+  if (all && f.kind.value) params.set('kind', f.kind.value);
+  if (f.q.value) params.set('q', f.q.value);
+  if (f.sender.value) params.set('from', f.sender.value);
+  for (const name of ['has_code', 'spam']) if (f[name].checked) params.set(name, 'true');
   if (st.before) params.set('before', String(st.before));
+  const read = st.reads = (st.reads || 0) + 1;   // only the newest read draws: a slow older answer never replaces it
   const data = await get('/v2/inbound/messages?' + params, {fresh: true});
-  if (host._in !== st || !host.isConnected) return;
+  if (host._in !== st || st.reads !== read || !host.isConnected) return;
   st.next = data.next;
   host.querySelector('#inbound-older').hidden = !st.next;
-  host.querySelector('#inbound-messages').innerHTML = data.messages.length ? data.messages.map(m => `<tr>
-      <td>${esc(new Date(m.received_at * 1000).toLocaleString())}</td><td>${esc(m.from)}</td>
+  const to = m => { const i = st.inboxes?.find(x => x.inbox_id === m.inbox_id);
+    return `<td>${esc(String(m.kind || '').toUpperCase())}</td><td>${esc(i?.address || m.inbox_id)}${i?.name ? `<br><span class="muted">${esc(i.name)}</span>` : ''}</td>`; };
+  host.querySelector('#inbound-messages').innerHTML = data.messages.length ? data.messages.map(m => `<tr data-in-message="${esc(m.message_id)}">
+      <td>${esc(new Date(m.received_at * 1000).toLocaleString())}</td>${all ? to(m) : ''}<td>${esc(m.from)}</td>
       <td><button class="linkish" data-inbound-read="${esc(m.message_id)}">${esc(m.subject || m.preview || (m.retention_removed ? 'Removed by retention' : 'View message'))}</button>${
         m.subject ? `<p>${esc(m.preview)}</p>` : ''}${m.spam ? '<span class="muted">Spam</span>' : ''}${m.truncated ? '<span class="muted"> · Truncated</span>' : ''}</td>
       <td>${m.has_code ? `<button class="linkish" data-inbound-code="${esc(m.message_id)}">Reveal code</button>` : '—'}</td></tr>`).join('')
-    : '<tr><td colspan="4">No messages match these filters.</td></tr>';
+    : `<tr><td colspan="${all ? 6 : 4}">No messages match these filters.</td></tr>`;
+}
+
+// ---------------------------------------------------------------------------------------------------------- Messages
+// Every Tico address's and number's messages in one table, or only the inboxes picked; released ones are listed too,
+// since their messages stay. Built once a visit: a redraw refreshes the inbox choices and keeps what was picked.
+inboxesView('messages', {label: 'Messages', order: 10, render: (host, ctx) => inAllDraw(host, ctx)});
+
+async function inAllDraw(host, ctx) {
+  clearInterval(INBOUND_TIMER);
+  const d = await inInboxes(ctx);
+  if (!ctx.live() || !host.isConnected) return;
+  if (!host.querySelector('#inbound-filter[data-in-all]')) {
+    host.innerHTML = `<section class="card" id="inbox-messages"><header><h2>Messages</h2></header>
+      <form id="inbound-filter" class="inbound-filters" data-in-all>
+        <label>Inboxes <select name="inboxes" multiple size="3" aria-describedby="inbound-scope-note"></select></label>
+        <label>Channel <select name="kind"><option value="">All channels</option><option value="email">Email</option><option value="sms">SMS</option></select></label>
+        ${IN_FILTERS}</form>
+      <p id="inbound-scope-note" class="muted">No inbox selected means all inboxes. Select several to see them together.</p>
+      ${inTable(true)}</section>`;
+    host._in = {inbox: null, inboxes: [], before: 0, next: null};
+  }
+  const select = host.querySelector('#inbound-filter').elements.inboxes;
+  const picked = new Set([...select.selectedOptions].map(o => o.value));
+  select.innerHTML = d.inboxes.map(i => `<option value="${esc(i.inbox_id)}"${picked.has(i.inbox_id) ? ' selected' : ''}>${
+    esc(i.name || i.address)}${i.name ? ' · ' + esc(i.address) : ''}${i.state === 'released' ? ' · Not in use' : ''}</option>`).join('');
+  host._in.inboxes = d.inboxes;
+  inBind(host, ctx);
+  inPoll(host, ctx);
 }
 
 function inBind(host, first) {
