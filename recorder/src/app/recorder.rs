@@ -3087,6 +3087,7 @@ impl Recorder {
                     "owner_name": owner_name,
                     "sent": !item.task_id.is_empty(),
                     "sent_to": item.sent_to,
+                    "closed_draft": item.closed_draft,
                     "task_id": item.task_id,
                     "task_url": item.task_url,
                     "sending": self.sending.as_deref() == Some(item.id.as_str()),

@@ -901,6 +901,9 @@ SCHEMAS = {
     "Me": obj({"actor": "s", "role": "s", "email": "s", "slug": {"type": "string", "description": "A bot caller: its slug (a label; the actor holds its id)."}}, required=["actor", "role", "email"]),
     "Config": obj({"company_name": "s", "app_name": "s", "assistant_name": "s", "assistant_bot": "s",
                    "public_url": "s", "owner_email": "s", "version": "s",
+                   "administration_url": {"type": "string", "description": "Signed-in humans: the Tico account portal "
+                                          "URL, or empty for an install without a Tico account or portal company. "
+                                          "Open externally; carries no sign-in credentials."},
                    "visual_origin": {"type": "string", "description": "Configured non-secret visual origin, or empty "
                                      "when absent or invalid; grants no native IPC permission."},
                    "visuals": {"type": "string", "enum": ["full", "hosted", "media"],
@@ -3169,11 +3172,11 @@ SCHEMAS.update({
 STABLE.extend([
     ("/api/v2/meetings/{rid}/items", "get", "Meetings", "listMeetingItems",
      "Pending and sent items grouped by section; can_send for every reader of a live meeting, audience for a private meeting. Task references are redacted per viewer", None),
-    ("/api/v2/meetings/{rid}/items", "post", "Meetings", "addMeetingItem", "Add a pending item, or upload an already sent item with status=pushed and an authorized result_ref", None),
+    ("/api/v2/meetings/{rid}/items", "post", "Meetings", "addMeetingItem", "Add a pending item, or upload an already sent item with status=pushed and a result_ref for a task you requested", None),
     ("/api/v2/meetings/{rid}/items/{iid}", "post", "Meetings", "editMeetingItem",
      "Edit at the expected version; stale writes return 409 with the current item. Detail merges keys, null or empty clears a key. Sent items refuse text and detail edits", None),
     ("/api/v2/meetings/{rid}/items/{iid}/push", "post", "Meetings", "sendMeetingItem",
-     "Apply final fields at the expected version and send in one transaction, or reconcile an already created task with an authorized result_ref. An already sent item returns its existing task with pushed=false even at a stale version; other stale sends return 409 with the current item. Private meetings require every new task reader inside the meeting audience", None),
+     "Apply final fields at the expected version and send in one transaction, or reconcile an already created task you requested with result_ref. An already sent item returns its existing task with pushed=false even at a stale version; other stale sends return 409 with the current item. Private meetings require every new task reader inside the meeting audience", None),
     ("/api/v2/presence", "get", "Live events", "getPresence", "Current actors aggregated across unexpired sessions at an authorized place", None),
     ("/api/v2/presence", "post", "Live events", "heartbeatPresence", "Heartbeat one session every 15 seconds, or leave with gone=true; sessions expire after 30 seconds", None),
 ])

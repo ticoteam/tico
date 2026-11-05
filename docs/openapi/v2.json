@@ -24498,7 +24498,7 @@
         ]
       },
       "post": {
-        "summary": "Add a pending item, or upload an already sent item with status=pushed and an authorized result_ref",
+        "summary": "Add a pending item, or upload an already sent item with status=pushed and a result_ref for a task you requested",
         "operationId": "addMeetingItem",
         "parameters": [
           {
@@ -24645,7 +24645,7 @@
     },
     "/api/v2/meetings/{rid}/items/{iid}/push": {
       "post": {
-        "summary": "Apply final fields at the expected version and send in one transaction, or reconcile an already created task with an authorized result_ref. An already sent item returns its existing task with pushed=false even at a stale version; other stale sends return 409 with the current item. Private meetings require every new task reader inside the meeting audience",
+        "summary": "Apply final fields at the expected version and send in one transaction, or reconcile an already created task you requested with result_ref. An already sent item returns its existing task with pushed=false even at a stale version; other stale sends return 409 with the current item. Private meetings require every new task reader inside the meeting audience",
         "operationId": "sendMeetingItem",
         "parameters": [
           {
@@ -48301,6 +48301,10 @@
           },
           "version": {
             "type": "string"
+          },
+          "administration_url": {
+            "type": "string",
+            "description": "Signed-in humans: the Tico account portal URL, or empty for an install without a Tico account or portal company. Open externally; carries no sign-in credentials."
           },
           "visual_origin": {
             "type": "string",

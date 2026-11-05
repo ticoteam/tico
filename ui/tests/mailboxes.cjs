@@ -105,7 +105,8 @@ const scenarios = {
     // A refusal (this route, added last, answers before the fake): the box goes back to how it was.
     await page.route('**/api/v2/google/permissions', route => route.fulfill({status: 403, contentType: 'application/json',
       body: JSON.stringify({error: {code: 'forbidden', detail: 'Only an admin changes this', retryable: false}})}));
-    await card.locator('[data-google-may=send_mail]').check();
+    // click, not check(): the refusal can put the box back before check() confirms it, which is what this asserts.
+    await card.locator('[data-google-may=send_mail]').click();
     await page.waitForFunction(() => {
       const el = document.querySelector('[data-google-may=send_mail]');
       return el && !el.disabled && !el.checked;

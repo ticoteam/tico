@@ -236,11 +236,12 @@ format is a `422` that names the problem.
   The web and saved Recorder views refetch on authorized `meeting_items` events, and close on `gone`.
   `GET /api/v2/presence?place=meeting:<id>` lists current people; each window heartbeats its own `session_id`
   every 15 seconds and leaves with `gone: true`. Sessions expire after 30 seconds; Maintenance deletes expired sessions in bounded batches, and deleting
-  a meeting removes its sessions. Participant grants end with access to the source meeting; task parties and guests
+  a meeting removes its sessions. Participant grants end only when no remaining source meeting permits access; task parties and guests
   retain their independent task access. Tasks created in Recorder before Save are uploaded as sent items.
-  If Save partly succeeds, Create uses any known server item and adopts its existing task if another editor
-  already sent it. Retrying Save recovers without creating another task.
-  `POST /api/v2/meetings/{rid}/items/{iid}/push` accepts `version` and an authorized `result_ref` to record that
+  If Save partly succeeds, Create replays any uncertain item upload with its original request and key, then
+  uses the server item and adopts its existing task if another editor already sent it. Local edits stay in
+  the closed card with **Copy** and **Close**. Retrying Save recovers without creating another task.
+  `POST /api/v2/meetings/{rid}/items/{iid}/push` accepts `version` and a `result_ref` for a task you requested to record that
   existing task without creating another; repeating it keeps the same result. Pushing an already sent item
   returns its current item and `pushed: false`, including when the supplied version is stale.
 - **Comments.** Anyone who can open the meeting can add to the thread beside it.

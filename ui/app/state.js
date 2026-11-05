@@ -167,6 +167,7 @@ function applyConfig(config) {
   if (S.config.demo && S.config.demo_public) $('#demo-banner').innerHTML = '<strong>Read only demo</strong>';
   renderOnboardingNav();
   renderNewVersion();
+  renderAdministration();
   if (typeof nativeOrgSync === 'function') nativeOrgSync();
   window.renderChangelogNotice?.();
   noticeUpdatedServer();
