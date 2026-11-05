@@ -638,15 +638,17 @@ class Gates:
         Only the message being read (`top`) may name ancestors, a bounded few, and a run, which must itself pass."""
         once = {key: (f"(instr({refs},'\"{key}\"')=0 OR "
                       f"instr(substr({refs},instr({refs},'\"{key}\"')+1),'\"{key}\"')=0)") for key in self.KEYS}
-        checks = (f"json_valid({refs}) AND json_type({refs})='object' AND instr({refs},'\\')=0 "
+        checks = (f"json_type({refs})='object' AND instr({refs},'\\')=0 "
                   f"AND instr({refs},'live_meeting')=0 AND {once['task']} AND {once['task_id']} "
                   f"AND {self.task(refs, 'task')} AND {self.task(refs, 'task_id')} AND {self.strings(refs)}")
-        # CASE's WHEN short-circuits the checks. Plain refs need no JSON walk, absent keys need no duplicate-key
-        # scan, and a failed root stops before probing its run, inputs and retained events.
+        # Sibling WHENs short-circuit validation before inherited checks without nesting another CASE around
+        # the run and its roots. Plain refs need no JSON walk; malformed or undecided refs keep Python's gate.
         plain = f"WHEN {refs} IN (SELECT id FROM {self.plain_refs}) THEN 1 " if cached else ""
+        checked = (f"CASE WHEN coalesce({refs},'') IN ('','{{}}') THEN 1 {plain}"
+                   f"WHEN NOT json_valid({refs}) THEN 0 WHEN NOT coalesce({checks},0) THEN 0 ")
         if not top:
-            return (f"(CASE WHEN coalesce({refs},'') IN ('','{{}}') THEN 1 {plain}WHEN {checks} "
-                    f"AND instr({refs},'\"answers\"')=0 AND instr({refs},'\"inputs\"')=0 THEN 1 ELSE 0 END)")
+            return (f"{checked}WHEN instr({refs},'\"answers\"')=0 AND instr({refs},'\"inputs\"')=0 "
+                    "THEN 1 ELSE 0 END")
         turn, run_id = f"json_extract({refs},'$.turn_id')", f"json_extract({refs},'$.run.attempt_id')"
         # With no inherited keys there is no run or ancestor array to parse or check for duplicates. A root's
         # run is not inherited at all, so only the top message needs these checks.
@@ -659,14 +661,13 @@ class Gates:
                       f"THEN json_type({refs},'$.turn_id')='text' AND {self.attempt(turn)} "
                       f"WHEN json_type({refs},'$.run.attempt_id') IS NOT NULL "
                       f"THEN json_type({refs},'$.run.attempt_id')='text' AND {self.attempt(run_id)} ELSE 1 END")
-        return (f"(CASE WHEN coalesce({refs},'') IN ('','{{}}') THEN 1 {plain}"
-                f"WHEN {checks} AND (CASE WHEN {direct} THEN 1 WHEN {inherited} THEN 1 ELSE 0 END) "
-                "THEN 1 ELSE 0 END)")
+        return f"{checked}WHEN {direct} THEN 1 WHEN {inherited} THEN 1 ELSE 0 END"
 
     def root(self, alias):
         """A message settled by its own row: no parent, answers or inputs, and (unread here) no run."""
-        return (f"CASE WHEN coalesce({alias}.in_reply_to,'')='' AND {alias}.conversation_id NOT IN "
-                f"(SELECT id FROM {self.rooms}) AND {self.refs(alias + '.refs', top=False)} THEN 1 ELSE 0 END")
+        # Preserve CASE's false result for NULL comparisons under the negated root checks in message/attempt.
+        return (f"(coalesce({alias}.in_reply_to,'')='' AND coalesce({alias}.conversation_id NOT IN "
+                f"(SELECT id FROM {self.rooms}),0) AND {self.refs(alias + '.refs', top=False)})")
 
     def message(self, alias="source"):
         """ReadIndex.message: the row, its run, and each message it replies to, answers or took in as input."""
@@ -674,16 +675,16 @@ class Gates:
         ancestors = (f"SELECT {alias}.in_reply_to AS id UNION ALL "
                      f"SELECT value FROM json_each({refs},'$.answers') WHERE type='text' UNION ALL "
                      f"SELECT value FROM json_each({refs},'$.inputs') WHERE type='text'")
-        return (f"CASE WHEN {alias}.conversation_id NOT IN (SELECT id FROM {self.rooms}) AND {self.refs(refs, top=True)} "
+        return (f"{alias}.conversation_id NOT IN (SELECT id FROM {self.rooms}) AND {self.refs(refs, top=True)} "
                 f"AND (coalesce({alias}.in_reply_to,'')='' AND coalesce(instr({refs},'\"answers\"'),0)=0 "
                 f"AND coalesce(instr({refs},'\"inputs\"'),0)=0 OR NOT EXISTS (SELECT 1 FROM ({ancestors}) ancestor JOIN {self.messages} parent "
-                f"ON parent.id=ancestor.id WHERE parent.id<>{alias}.id AND NOT {self.root('parent')})) THEN 1 ELSE 0 END")
+                f"ON parent.id=ancestor.id WHERE parent.id<>{alias}.id AND NOT {self.root('parent')}))")
 
     def attempt(self, aid):
         """ReadIndex.attempt: its message and inputs are settled by their own rows, it carries no denied task and its
         retained run events name none."""
         jobs, attempts, inputs, events = (self.inner(t) for t in ("jobs", "attempts", "attempt_inputs", "events"))
-        return (f"CASE WHEN EXISTS (SELECT 1 FROM {attempts} run JOIN {jobs} job ON job.id=run.job_id "
+        return (f"EXISTS (SELECT 1 FROM {attempts} run JOIN {jobs} job ON job.id=run.job_id "
                 f"JOIN {self.messages} root ON root.id=job.message_id WHERE run.id={aid} AND {self.root('root')}) "
                 f"AND NOT EXISTS (SELECT 1 FROM {inputs} input JOIN {self.messages} root ON root.id=input.message_id "
                 f"WHERE input.attempt_id={aid} AND NOT {self.root('root')}) "
@@ -692,7 +693,7 @@ class Gates:
                 f"AND retained.target={aid} AND NOT coalesce(retained.action='task.next-run.carried' AND "
                 f"(coalesce(retained.detail,'')='' OR (json_valid(retained.detail) AND "
                 f"json_type(retained.detail)='object' AND instr(retained.detail,'\\')=0 AND "
-                f"{self.strings('retained.detail')})), 0)) THEN 1 ELSE 0 END")
+                f"{self.strings('retained.detail')})), 0))")
 
 
 def materialize(conn, index, tables, inner, function, private):
@@ -746,15 +747,15 @@ def materialize(conn, index, tables, inner, function, private):
     page_gate = (f"(CASE WHEN coalesce(refs,'') IN ('','{{}}') THEN 1 WHEN json_valid(refs) "
                  f"AND json_type(refs)='object' AND instr(refs,'\\')=0 AND {no_page} THEN 1 ELSE {page} END)")
 
-    def settled(prefix, fast):
+    def settled(prefix):
         """A settled row that touched no denied task is read at once; any other row keeps the gate and its walk."""
         key = f"'{prefix}:'||source.id"
-        return (f"CASE WHEN {key} IN (SELECT key FROM {inner('read_index')}) AND {key} NOT IN "
-                f'(SELECT id FROM "{private("denied_reads")}") THEN 1 ELSE {fast} END')
+        return (f"{key} IN (SELECT key FROM {inner('read_index')}) AND {key} NOT IN "
+                f'(SELECT id FROM "{private("denied_reads")}")')
     # CASE evaluates only the chosen branch. A fast yes skips the Python callback altogether; OR can evaluate
     # the function first, and passing the fast answer to a function still calls Python for every history row.
-    return {table: (predicate.replace(message, f"(CASE WHEN {settled('m', gates.message())} THEN 1 ELSE {message} END)")
-                    .replace(attempt, f"(CASE WHEN {settled('a', gates.attempt('source.id'))} THEN 1 ELSE {attempt} END)")
+    return {table: (predicate.replace(message, f"(CASE WHEN {settled('m')} THEN 1 WHEN {gates.message()} THEN 1 ELSE {message} END)")
+                    .replace(attempt, f"(CASE WHEN {settled('a')} THEN 1 WHEN {gates.attempt('source.id')} THEN 1 ELSE {attempt} END)")
                     .replace(page, page_gate),
                     hidden)
             for table, (predicate, hidden) in tables.items()}

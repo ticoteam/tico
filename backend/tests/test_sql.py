@@ -435,6 +435,31 @@ def test_fast_sql_gates_skip_python_callbacks_and_keep_the_privacy_fallback(api,
         assert callbacks == [fallback]
 
 
+def test_every_guarded_view_prepares_for_each_caller(api, world):
+    """A deep message predicate must not break unrelated SQL reads while building the request's views."""
+    from dataclasses import replace
+    from backend import sql as S
+    from backend.auth import Identity
+
+    store, auth = api.app.state.store, api.app.state.auth
+    callers = [Identity('human:ana', 'owner'), Identity('human:ben', 'human'),
+               Identity('bot:ops', 'bot', attempt_id=world['attempt']['id']),
+               replace(Identity('human:ana', 'owner'), task_actor='bot:ops')]
+    for who in callers:
+        statements = []
+        with store.read() as c:
+            conn = S.connect(store.settings.db_path, c, auth, who, trace=statements.append)
+            try:
+                views = [match[1] for statement in statements
+                         if (match := re.match(r'CREATE TEMP VIEW "(\w+)" AS', statement))
+                         and not match[1].startswith(conn.private_prefix)]
+                assert {'messages', 'attempts', 'jobs'} <= set(views)
+                for view in views:
+                    conn.execute(f'SELECT * FROM "{view}" LIMIT 0').fetchall()
+            finally:
+                conn.close()
+
+
 def test_page_message_gate_skips_plain_refs_and_keeps_review_permissions(api, world, monkeypatch):
     from backend import sql as S
     from backend.tests.test_page_audience import edit
