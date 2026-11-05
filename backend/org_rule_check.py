@@ -77,6 +77,7 @@ from . import team_rules
 from . import threads as T
 from .call_slots import NEUTRAL, Calls
 from .store import H, Problem
+from . import sources as SRC
 
 LOG = logging.getLogger("tico.org_rule_check")
 QUESTION_SET = "rule-check"
@@ -403,6 +404,7 @@ def _place_now(c, place, author, recipients):
     return place or None
 
 
+@SRC.scoped("rule-check")
 def check_as(store, primary, principal, sender, via, operation, output, recipients=(), *, context=None, obj="",
              draft=False, skip=(), place=None, attempt_id="", origin=None):
     """Check one output held as `principal` (a person or a bot). `sender` is who made it and `via` the route
@@ -531,6 +533,7 @@ def refused(problem):
     return {"refused": problem}
 
 
+@SRC.scoped("rule-check")
 def outside_edition(store, primary, output, to=""):
     """A Company page edition against the rules whose Who is Outside editions. Not `preflight`: that one skips a person's
     writes and fails open, and an edition goes outside the company whoever wrote it. Here anything short of the judge
@@ -656,6 +659,7 @@ def _repeats(c, author, rule_id):
                      (author, "org_rule:" + rule_id, _day())).fetchone()[0]
 
 
+@SRC.scoped("rule-check")
 def _tell_bot(c, author, text):
     """A note on the bot's next run, as the keeper (a plain row: a paused bot's note waits, nothing is refused)."""
     if not H.is_bot(author):
@@ -673,6 +677,7 @@ def _author_name(c, author):
     return (H.bot(c, H.actor_id(author)) or {}).get("display_name") or H.actor_id(author)
 
 
+@SRC.scoped("rule-check")
 def _review_task(c, hold_id, author, rule, reviewer):
     """The review task for a hold (or its appeal). Its title is the plain REVIEW_TITLE, which is also its thread's row in
     the sidebar, so it names no one and no rule: the hold's text is in the body's Hold line, opened from there."""
@@ -1173,6 +1178,7 @@ def holds_for_task(c, who, task_id, cursor=None, limit=HOLD_LIST_MAX, auth=None)
     return holds_listed(c, who, task_id=task_id, cursor=cursor, limit=limit, auth=auth)
 
 
+@SRC.scoped("rule-check")
 def _finish_task(c, hold):
     """The review task closes once none of its holds waits."""
     tid = hold["task_id"]
