@@ -72,6 +72,7 @@ The operation groups below are generated from the committed spec's tags. After r
 | Company page | The public page for the company's updates: its audiences, the editions each one reads, the stats the page shows, the readers who sign in to it, and the logo ([guide](company-page.md)). |
 | Mailboxes | Which mailboxes Tico uses and who may use each: Read, or Read and write (organize, draft and send, as far as the company allows). |
 | Physical mail | Company letters, explicit Read grants and legal mail routing ([guide](physical-mail.md)). |
+| Email sending | One sending policy and durable undo queue for bots, automations and people acting through Tico. |
 <!-- api-tags:end -->
 
 Internal developer tutorials: [Listening](listening.md#save-decide-and-resolve) and [Needs you batches](needs-you-batches.md).

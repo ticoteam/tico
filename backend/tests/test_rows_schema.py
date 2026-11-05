@@ -12,6 +12,12 @@ from backend.config import Settings
 from backend.store import Store
 
 TABLES = {
+    rows.EmailSendingPolicyRow: "email_sending_policies",
+    rows.EmailSendRow: "email_sends",
+    rows.EmailSuppressedRecipientRow: "email_suppressed_recipients",
+    rows.EmailLegacyAutomationRow: "email_legacy_automations",
+    rows.EmailSendPreviewRow: "email_send_previews",
+    rows.EmailSendOperationRow: "email_send_operations",
     rows.PostalMailGrantRow: "postal_mail_grants",
     rows.PostalMailSettingsRow: "postal_mail_settings",
     rows.MeetingTaskLinkRow: "meeting_task_links",

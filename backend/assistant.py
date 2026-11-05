@@ -287,6 +287,8 @@ NEVER = [(m, re.compile(p)) for m, p in (
     (None, r"/api/v2/mailboxes(/.*)?"),
     (None, r"/api/v2/postal/addresses/[^/]+/grants/(bot|person)/[^/]+"),
     ("PUT", r"/api/v2/postal/settings"),
+    # Dispatch leases and permits belong to the authenticated computer, never a chat.
+    (None, r"/api/v2/connectors/email(/.*)?"),
     # A computer's part of a Connect Google sign-in and its Workspace tokens: computers only, never a chat's.
     (None, r"/api/v2/connectors/mail/google/.*"), (None, r"/api/v2/connectors/mail/workspace/token"),
     ("POST", r"/api/v2/live-meetings"), ("POST", r"/api/v2/meeting-importers/[^/]+"), (None, r"/api/v2/postal/intake"),

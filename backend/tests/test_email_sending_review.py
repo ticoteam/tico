@@ -2,6 +2,8 @@
 
 import base64
 import json
+import sqlite3
+from contextlib import closing
 from email.message import EmailMessage
 from unittest import mock
 
@@ -283,3 +285,21 @@ def test_sent_or_unknown_delivery_remains_deduplicated_for_a_new_operation(inbox
     with inbox.app.state.store.transaction() as c:
         c.execute("UPDATE email_sends SET state='unknown',raw='' WHERE id=?", (first["id"],))
     assert queue(inbox, operation_id="new-intent")["id"] == first["id"]
+
+
+def test_rehearsal_keeps_restrictions_but_discards_send_permits_and_proofs(inbox, tmp_path):
+    from backend import devcopy
+    policy(inbox, mode="ask_first")
+    pending = queue(inbox, operation_id="rehearsal-source")
+    assert inbox.get("/api/v2/email/sends/" + pending["id"], headers=headers()).status_code == 200
+    with inbox.app.state.store.transaction() as c:
+        c.execute("INSERT INTO email_suppressed_recipients VALUES(?,?,?,?)", (BOX, CONTACT, "unsubscribe", H.now()))
+        c.execute("INSERT INTO email_legacy_automations VALUES('source-authorization','ana',1)")
+    dest = tmp_path / "rehearsal" / "hub.sqlite"
+    _, unclassified = devcopy.build(inbox.app.state.store.settings.db_path, dest)
+    assert not unclassified
+    with closing(sqlite3.connect(dest)) as c:
+        for table in ("email_sends", "email_send_operations", "email_send_previews", "email_legacy_automations"):
+            assert c.execute("SELECT count(*) FROM " + table).fetchone()[0] == 0
+        assert c.execute("SELECT scope FROM email_sending_policies").fetchall() == [("company",)]
+        assert c.execute("SELECT mailbox,address FROM email_suppressed_recipients").fetchall() == [(BOX, CONTACT)]
