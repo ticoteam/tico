@@ -319,41 +319,58 @@ impl Tico {
         queue.corrections(&transaction, &record)?;
         transaction.commit()?;
         if live {
-            let mut query=db.prepare("SELECT seq,payload_json FROM live_outbox WHERE recording_id=? AND destination_id=? AND acknowledged=0 ORDER BY seq")?;
-            let pending = query
-                .query_map([id, &self.destination.id], |row| {
-                    Ok((row.get::<_, i64>(0)?, row.get::<_, String>(1)?))
-                })?
-                .collect::<std::result::Result<Vec<_>, _>>()?;
-            drop(query);
-            for batch in pending.chunks(100) {
-                let chunks = batch
-                    .iter()
-                    .map(|(_, text)| serde_json::from_str::<Value>(text))
+            let mut repaired = false;
+            'delivery: loop {
+                let mut query=db.prepare("SELECT seq,payload_json FROM live_outbox WHERE recording_id=? AND destination_id=? AND acknowledged=0 ORDER BY seq")?;
+                let pending = query
+                    .query_map([id, &self.destination.id], |row| {
+                        Ok((row.get::<_, i64>(0)?, row.get::<_, String>(1)?))
+                    })?
                     .collect::<std::result::Result<Vec<_>, _>>()?;
-                let payload = json!({"chunks":chunks});
-                let reply = match self.call(
-                    &format!("{prefix}/chunks"),
-                    Some(&payload),
-                    &format!("recorder:{id}:live:{}", hash(&payload)),
-                ) {
-                    Ok(reply) => reply,
-                    // Paused (or ended) on Tico: nothing new goes until it is resumed.
-                    Err(error) if format!("{error:#}").contains("HTTP 409 (meeting_state)") => {
-                        note_state(store, id, &self.call(&prefix, None, "")?)?;
-                        return Ok(());
+                drop(query);
+                for batch in pending.chunks(100) {
+                    let chunks = batch
+                        .iter()
+                        .map(|(_, text)| serde_json::from_str::<Value>(text))
+                        .collect::<std::result::Result<Vec<_>, _>>()?;
+                    let payload = json!({"chunks":chunks});
+                    let reply = match self.call(
+                        &format!("{prefix}/chunks"),
+                        Some(&payload),
+                        &format!("recorder:{id}:live:{}", hash(&payload)),
+                    ) {
+                        Ok(reply) => reply,
+                        // Paused (or ended) on Tico: nothing new goes until it is resumed.
+                        Err(error) if format!("{error:#}").contains("HTTP 409 (meeting_state)") => {
+                            note_state(store, id, &self.call(&prefix, None, "")?)?;
+                            return Ok(());
+                        }
+                        // Old queues and uncertain replies can predate the current time frontier.
+                        // Read back once after any validation refusal and durably repair pending
+                        // times before retrying. A transport failure then retries the repaired row.
+                        Err(error) if !repaired && format!("{error:#}").contains("HTTP 422") => {
+                            let view = self.call(&prefix, None, "")?;
+                            note_state(store, id, &view)?;
+                            repair_pending(&mut db, id, &self.destination.id, &view)?;
+                            if view["state"] != "live" {
+                                return Ok(());
+                            }
+                            repaired = true;
+                            continue 'delivery;
+                        }
+                        Err(error) => return Err(error),
+                    };
+                    ensure!(
+                        batch.iter().all(|(seq, _)| reply["accepted"]
+                            .as_array()
+                            .is_some_and(|rows| rows.contains(&json!(seq)))),
+                        "Tico did not acknowledge every transcript turn"
+                    );
+                    for (seq, _) in batch {
+                        db.execute("UPDATE live_outbox SET acknowledged=1 WHERE recording_id=? AND destination_id=? AND seq=?",rusqlite::params![id,self.destination.id,seq])?;
                     }
-                    Err(error) => return Err(error),
-                };
-                ensure!(
-                    batch.iter().all(|(seq, _)| reply["accepted"]
-                        .as_array()
-                        .is_some_and(|rows| rows.contains(&json!(seq)))),
-                    "Tico did not acknowledge every transcript turn"
-                );
-                for (seq, _) in batch {
-                    db.execute("UPDATE live_outbox SET acknowledged=1 WHERE recording_id=? AND destination_id=? AND seq=?",rusqlite::params![id,self.destination.id,seq])?;
                 }
+                break;
             }
         }
         // Corrections follow the turns they correct, in revision order.
@@ -382,13 +399,9 @@ impl Tico {
                 &format!("recorder:{id}:live:{seq}:r{revision}:{}", hash(&payload)),
             ) {
                 Ok(_) => 1,
-                // Tico refuses empty text, so a streamed turn the transcript has no words for
-                // keeps its streamed text there.
-                Err(error)
-                    if payload["text"] == "" && format!("{error:#}").contains("HTTP 422") =>
-                {
-                    2
-                }
+                // A validation refusal is terminal for this revision; keep Tico's text and
+                // let later turns/revisions proceed, including on older servers refusing clears.
+                Err(error) if format!("{error:#}").contains("HTTP 422") => 2,
                 Err(error) => return Err(error),
             };
             db.execute(
@@ -639,6 +652,44 @@ impl Tico {
         )?;
         Ok(())
     }
+}
+
+/// Reconcile a refused batch with the server before retrying its remaining turns. Accepted
+/// sequences may include a reply lost in transit; they must never be rewritten or renumbered.
+fn repair_pending(
+    db: &mut crate::store::Db,
+    id: &str,
+    destination: &str,
+    view: &Value,
+) -> Result<()> {
+    let accepted = view["seq"]
+        .as_i64()
+        .context("Tico did not report its transcript sequence")?;
+    let mut start = view["chunks"]
+        .as_array()
+        .context("Tico did not report its transcript turns")?
+        .iter()
+        .filter_map(|row| row["start_ms"].as_u64())
+        .max()
+        .unwrap_or(0);
+    let tx = db.transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)?;
+    tx.execute("UPDATE live_outbox SET acknowledged=1 WHERE recording_id=? AND destination_id=? AND seq<=?", rusqlite::params![id, destination, accepted])?;
+    let mut query = tx.prepare("SELECT seq,payload_json FROM live_outbox WHERE recording_id=? AND destination_id=? AND acknowledged=0 ORDER BY seq")?;
+    let pending = query
+        .query_map([id, destination], |row| {
+            Ok((row.get::<_, i64>(0)?, row.get::<_, String>(1)?))
+        })?
+        .collect::<std::result::Result<Vec<_>, _>>()?;
+    drop(query);
+    for (seq, text) in pending {
+        let mut payload: Value = serde_json::from_str(&text)?;
+        start = start.max(payload["start_ms"].as_u64().unwrap_or(0));
+        payload["start_ms"] = json!(start);
+        payload["end_ms"] = json!(start.max(payload["end_ms"].as_u64().unwrap_or(0)));
+        tx.execute("UPDATE live_outbox SET payload_json=? WHERE recording_id=? AND destination_id=? AND seq=?", rusqlite::params![payload.to_string(), id, destination, seq])?;
+    }
+    tx.commit()?;
+    Ok(())
 }
 
 /// Saves the meeting's state as Tico reports it, so new text stops while it is paused and
@@ -1121,6 +1172,11 @@ impl<'a> Queue<'a> {
                 .and_then(|v| v["start_ms"].as_u64())
                 .unwrap_or(0)
         });
+        let mut start: u64 = transaction.query_row(
+            "SELECT COALESCE(MAX(json_extract(payload_json,'$.start_ms')),0) FROM live_outbox WHERE recording_id=? AND destination_id=? AND seq<=?",
+            rusqlite::params![self.id, self.destination, previous],
+            |row| row.get(0),
+        )?;
         for (old, _) in &rows {
             for table in ["live_outbox", "live_spans"] {
                 transaction.execute(&format!("UPDATE {table} SET seq=-seq WHERE recording_id=? AND destination_id=? AND seq=?"), rusqlite::params![self.id, self.destination, old])?;
@@ -1130,6 +1186,11 @@ impl<'a> Queue<'a> {
             let seq = previous + index as i64 + 1;
             let mut payload: Value = serde_json::from_str(text)?;
             payload["seq"] = json!(seq);
+            // Timeout can release a slow transcription after later speech was acknowledged.
+            // Clamp only delivery times; spans and the local transcript keep capture times.
+            start = start.max(payload["start_ms"].as_u64().unwrap_or(0));
+            payload["start_ms"] = json!(start);
+            payload["end_ms"] = json!(start.max(payload["end_ms"].as_u64().unwrap_or(0)));
             transaction.execute("UPDATE live_outbox SET seq=?,payload_json=? WHERE recording_id=? AND destination_id=? AND seq=?", rusqlite::params![seq, serde_json::to_string(&payload)?, self.id, self.destination, -old])?;
             transaction.execute(
                 "UPDATE live_spans SET seq=? WHERE recording_id=? AND destination_id=? AND seq=?",

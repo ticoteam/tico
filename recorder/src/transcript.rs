@@ -351,7 +351,7 @@ pub(crate) fn recording_ms(record: &Recording) -> Option<u64> {
     )
 }
 
-/// Both sharing channels stop at the first microphone word still waiting for a reference.
+/// Both sharing channels stop at unfinished audio or a microphone word awaiting a reference.
 /// Compute this before the snapshot hides pending mic words.
 pub fn delivery_frontier(record: &Recording, streamed: &BTreeMap<String, Vec<Word>>) -> u64 {
     let them = reference_words(record, streamed);
@@ -370,6 +370,17 @@ pub fn delivery_frontier(record: &Recording, streamed: &BTreeMap<String, Vec<Wor
         .map(|c| c.words.first().map_or(c.start_ms, |w| w.start_ms));
     let held = pending_stream
         .chain(pending_chunks)
+        .chain(
+            record
+                .chunks
+                .iter()
+                .filter(|c| !["done", "silence", "failed"].contains(&c.status.as_str()))
+                .filter(|c| {
+                    recording_ms(record)
+                        .is_none_or(|now| now < c.start_ms.saturating_add(REFERENCE_WAIT_MS))
+                })
+                .map(|c| c.start_ms),
+        )
         .min()
         .unwrap_or(u64::MAX);
     if record.state != "recording" || !record.meeting_audio {
@@ -434,14 +445,7 @@ pub fn ready_microphone(record: &Recording, words: &[Word], them: &[Word]) -> Ve
 /// Filter streamed mic speech against both reference paths. The meeting stream may reconnect
 /// while a finished batch already supplies the words that must keep speaker bleed local.
 pub fn live_microphone(record: &Recording, me: &[Word], streamed_them: &[Word]) -> Vec<Word> {
-    let reference: Vec<Word> = record
-        .chunks
-        .iter()
-        .filter(|c| c.channel == "them")
-        .flat_map(|c| c.words.iter())
-        .chain(streamed_them.iter())
-        .cloned()
-        .collect();
+    let reference = meeting_reference(record, streamed_them.iter());
     without_echo(&ready_microphone(record, me, &reference), &reference)
 }
 
@@ -531,12 +535,20 @@ pub fn echo_snapshot(record: &Recording, streamed: &BTreeMap<String, Vec<Word>>)
 }
 
 fn reference_words(record: &Recording, streamed: &BTreeMap<String, Vec<Word>>) -> Vec<Word> {
+    meeting_reference(record, streamed.get("them").into_iter().flatten())
+}
+
+/// A finished batch replaces the stream for its entire range, including recognized silence.
+fn meeting_reference<'a>(
+    record: &'a Recording,
+    streamed: impl Iterator<Item = &'a Word>,
+) -> Vec<Word> {
     record
         .chunks
         .iter()
-        .filter(|c| c.channel == "them")
+        .filter(|c| c.channel == "them" && ["done", "silence"].contains(&c.status.as_str()))
         .flat_map(|c| c.words.iter())
-        .chain(streamed.get("them").into_iter().flatten())
+        .chain(streamed.filter(|w| !covered(record, "them", w.start_ms)))
         .cloned()
         .collect()
 }
@@ -612,7 +624,9 @@ pub fn live_turns(
         partials
             .iter()
             .filter(|p| p.channel == "them")
-            .flat_map(|p| p.words.clone()),
+            .flat_map(|p| p.words.iter())
+            .filter(|w| !covered(record, "them", w.start_ms))
+            .cloned(),
     );
     let mut tails: Vec<_> = partials
         .iter()
@@ -1318,6 +1332,23 @@ mod tests {
             },
         ];
         assert!(live_microphone(&record, &mic, &[]).is_empty());
+        let streamed = record.chunks[0].words.clone();
+        // A batch supersedes the same stream range instead of doubling every reference token.
+        assert!(live_microphone(&record, &mic, &streamed).is_empty());
+        let live = BTreeMap::from([("them".into(), streamed), ("me".into(), mic.clone())]);
+        assert!(live_lines(&record, &live).iter().all(|line| !line.me));
+        let mut finished = record.clone();
+        finished.chunks.push(chunk(
+            "m",
+            "me",
+            0,
+            &[
+                (1020, "Ship", ""),
+                (1320, "this", ""),
+                (1620, "tomorrow", ""),
+            ],
+        ));
+        assert!(echo_snapshot(&finished, &live).chunks[1].words.is_empty());
     }
     #[test]
     fn echoed_run_keeps_the_reply_and_short_genuine_shared_words() {

@@ -4591,3 +4591,265 @@ fn finished_microphone_reference_timeout_shares_without_any_meeting_chunks() {
     assert_eq!(calls[0].1["chunks"][0]["text"], "My genuine reply");
     assert_eq!(calls[0].1["chunks"][0]["start_ms"], 1000);
 }
+
+fn stopped_pending_chunk(
+    store: &Store,
+    pending_channel: crate::audio::Channel,
+) -> (String, crate::store::Chunk) {
+    use crate::audio::Channel;
+    let record = live_recording(store, "Stop with unfinished audio");
+    let id = &record.id;
+    store
+        .mutate(id, |r| {
+            r.meeting_audio = true;
+            Ok(())
+        })
+        .unwrap();
+    store
+        .save_audio(id, pending_channel, 0, 5000, &[0.2; 1600], 16000)
+        .unwrap();
+    let pending = store.claim_transcription().unwrap().unwrap();
+    let other = if pending_channel == Channel::Microphone {
+        Channel::Meeting
+    } else {
+        Channel::Microphone
+    };
+    store
+        .save_audio(id, other, 0, 5000, &[0.2; 1600], 16000)
+        .unwrap();
+    let ready = store.claim_transcription().unwrap().unwrap();
+    store
+        .transcription_words(
+            &ready,
+            "Later",
+            vec![word(1500, 1900, "Later", "")],
+            "",
+            json!({}),
+        )
+        .unwrap();
+    store.state(id, "stopped").unwrap();
+    (record.id, pending)
+}
+
+#[test]
+fn stop_holds_both_channels_behind_unfinished_chunks_until_completion_failure_or_timeout() {
+    use crate::audio::Channel;
+    for channel in [Channel::Microphone, Channel::Meeting] {
+        for release in ["completion", "failure", "timeout"] {
+            let dir = tempfile::tempdir().unwrap();
+            let store = Store::open(dir.path()).unwrap();
+            let (id, pending) = stopped_pending_chunk(&store, channel);
+            let (tico, seen, worker) = server(vec![]);
+            tico.push_live(&store, &id).unwrap();
+            worker.join().unwrap();
+            assert!(seen.lock().unwrap().is_empty(), "{channel:?}: {release}");
+            match release {
+                "completion" => store
+                    .transcription_words(
+                        &pending,
+                        "Earlier",
+                        vec![word(1000, 1200, "Earlier", "")],
+                        "",
+                        json!({}),
+                    )
+                    .unwrap(),
+                "failure" => {
+                    store.db().unwrap().execute("UPDATE chunks SET document=json_set(document,'$.status','failed') WHERE id=?", [&pending.id]).unwrap();
+                }
+                _ => {
+                    store
+                        .mutate(&id, |r| {
+                            r.started_at =
+                                (chrono::Utc::now() - chrono::Duration::seconds(10)).to_rfc3339();
+                            Ok(())
+                        })
+                        .unwrap();
+                }
+            }
+            let (tico, seen, worker) = server(vec![Some(json!({"accepted":[1,2]}))]);
+            tico.push_live(&store, &id).unwrap();
+            worker.join().unwrap();
+            let calls = seen.lock().unwrap();
+            let sent = calls[0].1["chunks"].as_array().unwrap();
+            assert_eq!(
+                sent[0]["start_ms"],
+                if release == "completion" { 1000 } else { 1500 }
+            );
+            if release == "completion" {
+                assert_eq!(sent[1]["start_ms"], 1500);
+            }
+            if release == "timeout" {
+                drop(calls);
+                store
+                    .transcription_words(
+                        &pending,
+                        "Earlier",
+                        vec![word(1000, 1200, "Earlier", "")],
+                        "",
+                        json!({}),
+                    )
+                    .unwrap();
+                let (tico, seen, worker) = server(vec![Some(json!({"accepted":[2]}))]);
+                tico.push_live(&store, &id).unwrap();
+                worker.join().unwrap();
+                assert_eq!(seen.lock().unwrap()[0].1["chunks"][0]["start_ms"], 1500);
+                assert!(
+                    store
+                        .get(&id)
+                        .unwrap()
+                        .chunks
+                        .iter()
+                        .flat_map(|c| &c.words)
+                        .any(|w| w.start_ms == 1000)
+                );
+            }
+        }
+    }
+}
+
+#[test]
+fn any_chunk_422_reconciles_the_outbox_and_later_speech_still_delivers() {
+    for code in ["sequence_order", "validation", "request_failed"] {
+        let dir = tempfile::tempdir().unwrap();
+        let store = Store::open(dir.path()).unwrap();
+        let record = live_recording(&store, "Refused outbox");
+        streamed(&store, &record.id, "me", 1000, "Late words", "");
+        let (tico, seen, worker) = server(vec![
+            Some(json!({"status":422,"error":{"code":code}})),
+            Some(json!({"state":"live","seq":0,"chunks":[]})),
+            Some(json!({"accepted":[1]})),
+            Some(json!({"accepted":[2]})),
+        ]);
+        tico.push_live(&store, &record.id).unwrap();
+        streamed(&store, &record.id, "me", 3000, "Later words", "");
+        tico.push_live(&store, &record.id).unwrap();
+        worker.join().unwrap();
+        let calls = seen.lock().unwrap();
+        assert_eq!(calls[2].1["chunks"][0]["start_ms"], 1000);
+        assert_eq!(calls[3].1["chunks"][0]["text"], "Later words");
+        let pending: i64 = store
+            .db()
+            .unwrap()
+            .query_row(
+                "SELECT COUNT(*) FROM live_outbox WHERE acknowledged=0",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(pending, 0, "{code}");
+    }
+}
+
+/// Owns only the Python process this test starts, including when an assertion fails.
+struct BackendBridge(std::process::Child);
+impl Drop for BackendBridge {
+    fn drop(&mut self) {
+        let _ = self.0.kill();
+        let _ = self.0.wait();
+    }
+}
+fn backend_bridge() -> (Tico, BackendBridge) {
+    use std::io::BufRead;
+    let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .parent()
+        .unwrap();
+    let child = std::process::Command::new("python3")
+        .args(["-u", "recorder/tests/live_backend.py"])
+        .current_dir(root)
+        .stdout(std::process::Stdio::piped())
+        .spawn()
+        .unwrap();
+    let mut bridge = BackendBridge(child);
+    let mut url = String::new();
+    std::io::BufReader::new(bridge.0.stdout.take().unwrap())
+        .read_line(&mut url)
+        .unwrap();
+    let tico = Tico::new(
+        Destination {
+            id: "synthetic".into(),
+            name: "Fixture".into(),
+            base_url: url.trim().into(),
+            actor: "human:test".into(),
+        },
+        "synthetic-token".into(),
+    )
+    .unwrap();
+    (tico, bridge)
+}
+
+#[test]
+#[ignore = "requires Python backend dependencies; run on RunsOn with --ignored"]
+fn stopped_late_chunks_and_legacy_422_recover_against_real_backend() {
+    for release in ["completion", "timeout", "legacy"] {
+        let dir = tempfile::tempdir().unwrap();
+        let store = Store::open(dir.path()).unwrap();
+        let (id, pending) = stopped_pending_chunk(&store, crate::audio::Channel::Microphone);
+        let (tico, _bridge) = backend_bridge();
+        let path = "/api/v2/live-meetings/live-fixture";
+        tico.push_live(&store, &id).unwrap();
+        assert_eq!(tico.call(path, None, "").unwrap()["seq"], 0);
+        if release != "completion" {
+            store
+                .mutate(&id, |r| {
+                    r.started_at =
+                        (chrono::Utc::now() - chrono::Duration::seconds(10)).to_rfc3339();
+                    Ok(())
+                })
+                .unwrap();
+            tico.push_live(&store, &id).unwrap();
+        }
+        store
+            .transcription_words(
+                &pending,
+                "Earlier",
+                vec![word(1000, 1200, "Earlier", "")],
+                "",
+                json!({}),
+            )
+            .unwrap();
+        if release == "legacy" {
+            // An old persisted outbox can still contain the reviewer's invalid sequence.
+            store.db().unwrap().execute(
+                "INSERT INTO live_outbox(recording_id,destination_id,seq,chunk_id,payload_json) VALUES(?,?,?,?,?)",
+                rusqlite::params![id,"synthetic",2,pending.id,json!({"seq":2,"speaker":"Me","start_ms":1000,"end_ms":1200,"text":"Earlier"}).to_string()],
+            ).unwrap();
+        }
+        tico.push_live(&store, &id).unwrap();
+        finished_chunk(
+            &store,
+            &id,
+            6000,
+            7000,
+            vec![word(6200, 6500, "Afterwards", "")],
+        );
+        tico.push_live(&store, &id).unwrap();
+        let view = tico.call(path, None, "").unwrap();
+        let chunks = view["chunks"].as_array().unwrap();
+        assert_eq!(
+            chunks
+                .iter()
+                .map(|c| c["text"].as_str().unwrap())
+                .collect::<Vec<_>>(),
+            if release == "completion" {
+                vec!["Earlier", "Later", "Afterwards"]
+            } else {
+                vec!["Later", "Earlier", "Afterwards"]
+            }
+        );
+        assert!(
+            chunks
+                .windows(2)
+                .all(|p| p[0]["start_ms"].as_u64() <= p[1]["start_ms"].as_u64())
+        );
+        let pending: i64 = store
+            .db()
+            .unwrap()
+            .query_row(
+                "SELECT COUNT(*) FROM live_outbox WHERE acknowledged=0",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(pending, 0, "{release}");
+    }
+}

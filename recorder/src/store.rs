@@ -312,10 +312,13 @@ fn read_record(db: &Connection, id: &str, reserve: bool) -> Result<Recording> {
         end = end.max(word.end_ms);
         ends.push(end);
     }
-    let mut identities: Vec<_> = live
-        .iter()
-        .map(|w| (w.speaker.clone(), w.speaker.clone()))
-        .collect();
+    value.register_speakers(
+        live.iter()
+            .map(|w| (w.speaker.clone(), w.speaker.clone()))
+            .collect(),
+    );
+    let mut identities = Vec::new();
+    let mut aliases = Vec::new();
     for chunk in value.chunks.iter().filter(|c| c.channel == "them") {
         if chunk.words.is_empty() {
             identities.push((
@@ -351,9 +354,14 @@ fn read_record(db: &Connection, id: &str, reserve: bool) -> Result<Recording> {
                 .get(&id)
                 .and_then(|v| v.iter().max_by_key(|(_, weight)| *weight))
                 .map_or_else(|| word.speaker.clone(), |(speaker, _)| speaker.clone());
+            // The diarizer identity spans chunks; keep its link when the stream disappears.
+            if !word.speaker.is_empty() && word.speaker != preferred {
+                aliases.push((word.speaker.clone(), preferred.clone()));
+            }
             identities.push((id, preferred));
         }
     }
+    value.register_speakers(aliases);
     value.register_speakers(identities);
     if value.speaker_labels != before {
         db.execute("UPDATE recordings SET document=json_set(document,'$.speaker_labels',json(?)) WHERE id=?",
@@ -1498,6 +1506,50 @@ mod tests {
         let id = format!("chunk:{}:turn:service-7", claimed.id);
         assert_eq!(batch.speaker_labels[&id], "Speaker 1");
         assert_eq!(crate::transcript::lines(&batch)[0].speaker, "Speaker 1");
+        assert_eq!(batch.speaker_labels["Speaker 1"], "Speaker 1");
+        // Reopening without a stream must retain the global diarizer-to-stream alias.
+        let store = Store::open(dir.path()).unwrap();
+        store
+            .db()
+            .unwrap()
+            .execute("DELETE FROM live_words WHERE recording_id=?", [&record.id])
+            .unwrap();
+        store
+            .save_audio(
+                &record.id,
+                Channel::Meeting,
+                3000,
+                5000,
+                &[0.2; 1600],
+                16000,
+            )
+            .unwrap();
+        let claimed = store.claim_transcription().unwrap().unwrap();
+        store
+            .transcription_words(
+                &claimed,
+                "Again",
+                vec![Word {
+                    start_ms: 3200,
+                    end_ms: 3500,
+                    text: "Again".into(),
+                    speaker: "Speaker 1".into(),
+                    turn: "service-9".into(),
+                }],
+                "",
+                serde_json::json!({}),
+            )
+            .unwrap();
+        let later = store.get(&record.id).unwrap();
+        assert_eq!(
+            later.speaker_labels[&format!("chunk:{}:turn:service-9", claimed.id)],
+            "Speaker 1"
+        );
+        assert!(
+            crate::transcript::lines(&later)
+                .iter()
+                .all(|line| line.speaker == "Speaker 1")
+        );
     }
     #[test]
     fn diarization_without_service_turn_ids_cannot_renumber_visible_words() {

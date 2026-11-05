@@ -183,7 +183,10 @@ the native engines with a fixed 16 kHz client format. The shared transcript filt
 matching runs of at least three words, with punctuation, hyphen, number and small spelling tolerance.
 Unmatched words, isolated acknowledgements and names stay. Live mic text waits for the reference
 for at most eight seconds; terminal failure, mic-only capture and Stop also release it. Both
-sharing channels wait at one frontier and retain their actual word timestamps.
+sharing channels wait at one frontier, including behind unfinished chunks after Stop. Completion,
+terminal failure or the eight-second bound releases those chunks. Late shared turns use the last
+shared start time when needed; local word timestamps stay intact. Finished batch references replace
+streamed references in covered ranges, and stream-to-batch voice aliases keep one displayed label.
 Finished service turns are also linked during capture by the existing WeSpeaker path, with an
 in-memory bounded print cache; full diarization after Stop still refines the final labels. Speech defaults to English (Settings › Language;
 empty guesses per chunk, which turned short "mm-hmm"s into Japanese and Chinese).
