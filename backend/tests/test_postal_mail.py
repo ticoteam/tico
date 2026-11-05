@@ -384,7 +384,9 @@ def test_claimed_builtin_counsel_can_read_granted_and_routed_mail_only(api, hq, 
     assert task(api, routed["task_id"])["owner_id"] == "bot:" + H.COUNSEL
     get(api, "postal/items", "counsel-test", expected=403)
     computer = runner(api)
-    assign(api, computer, H.COUNSEL)
+    with api.app.state.store.read() as c:
+        assignment = c.execute("SELECT generation FROM assignments WHERE bot=?", (H.COUNSEL,)).fetchone()
+    assign(api, computer, H.COUNSEL, generation=assignment[0] if assignment else 0)
     ready(api, computer, [H.COUNSEL], capabilities=["task_lanes_v2", "session_roots_v1"])
     claimed = post(api, "jobs/claim", {"bot": H.COUNSEL, "start_places": True}, token=computer["token"])
     assert claimed["attempt"], claimed
