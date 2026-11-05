@@ -66,11 +66,6 @@ const gate = () => { let resolve; const promise = new Promise(r => { resolve = r
    await fillTitle('Final title');
    await title.evaluate(el => { const selection = getSelection(); selection.setBaseAndExtent(el.firstChild, 2, el.firstChild, 7); });
    const caret = () => title.evaluate(el => [document.activeElement === el, getSelection().anchorOffset, getSelection().focusOffset]);
-   if (process.env.TICO_TASK_DEBUG) console.log('Task details state', await b.evaluate(() => {
-    const d = taskModal(), body = d.querySelector('[data-task-edit-body]');
-    return {route:S.route, me:S.me, open:d.open, classes:d.className, rights:taskPropRights(d.liveTask), html:body?.outerHTML,
-     ancestors:body ? [body, body.parentElement, body.parentElement.parentElement, body.parentElement.parentElement.parentElement].map(el => ({tag:el.tagName,cls:el.className,hidden:el.hidden,open:el.open,display:getComputedStyle(el).display,rect:el.getBoundingClientRect().toJSON()})) : []};
-   }));
    await b.getByRole('button', {name: 'Edit details', exact: true}).click();
    await b.getByRole('textbox', {name: 'Details', exact: true}).fill('Sam changed only details');
    await b.locator('[data-task-more]').click(); await b.keyboard.press('Escape');

@@ -46,7 +46,7 @@ function taskLiveFocusRestore(d) {
     window.getSelection().setBaseAndExtent(...point(focus.text[0]), ...point(focus.text[1]));
   }
 }
-function taskLiveHTML(t, original, waitText) {
+function taskEditBodyHTML(t, original, waitText) {
   const may = taskPropRights(t).edit;
   const preview = `<div class="tdesc md" data-task-body-preview>${original ? safeMd(original) : '<p class="muted">No details.</p>'}</div>`;
   const body = `<section data-task-edit-body>${may ? '<button type="button" class="linkish" data-task-body-edit aria-label="Edit details">Edit</button><textarea data-task-field="body" aria-label="Details" hidden></textarea>' : ''}${preview}</section>`;

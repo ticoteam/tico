@@ -292,10 +292,6 @@ const AMBER = png(160, 90, (x, y) => [220, 110 + (y >> 1), 40 + (x >> 2)]);
     assert.equal((await m1.locator('.tc-file[data-tf-jump="f-cut"]').textContent()).replace(/\s+/g, ' ').trim(), 'VIDEOcut.mp4 v2');
     assert.equal(await m1.locator('video, .tf-media').count(), 0, 'no big media in a comment');
     // the linked images in the details show inline, lazily, and open full size
-    if (process.env.TICO_TASK_DEBUG) console.log('Task media state', await modal.evaluate(d => {
-      const body=d.querySelector('[data-task-edit-body]');
-      return {open:d.open,cls:d.className,body:body?.outerHTML,scroll:d.scrollTop,ancestors:body ? [body,body.parentElement,body.parentElement.parentElement].map(el=>({tag:el.tagName,cls:el.className,hidden:el.hidden,open:el.open,display:getComputedStyle(el).display,rect:el.getBoundingClientRect().toJSON()})):[]};
-    }));
     await modal.locator('.tdesc img[src="https://img.example.com/ref.png"].ready').waitFor();
     assert.equal(await modal.locator('.tdesc > p > img').getAttribute('loading'), 'lazy');
     await modal.locator('.tdesc .inline-thumb.ready').waitFor();
