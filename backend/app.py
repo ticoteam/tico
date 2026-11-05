@@ -688,6 +688,15 @@ def create_app(settings=None):
         answer.headers["Content-Length"] = str(len(projected))
         return answer
 
+    def scoped_route_template(request):
+        # Match the same first handler the router will dispatch, before any scoped handler can run.
+        from starlette.routing import Match
+        for route in app.router.routes:
+            matched, _ = route.matches(request.scope)
+            if matched == Match.FULL:
+                return getattr(route, "path", None)
+        return None
+
     @app.middleware("http")
     async def request_guard(request, call_next):
         from . import turn_scope
@@ -715,7 +724,8 @@ def create_app(settings=None):
                     def scoped_bearer_route():
                         from .scoped_routes import require_route
                         with store.read() as c:
-                            require_route(c, auth, bearer_identity, request.method, request.url.path, dict(request.query_params))
+                            require_route(c, auth, bearer_identity, request.method, request.url.path,
+                                          dict(request.query_params), scoped_route_template(request))
                     await asyncio.to_thread(scoped_bearer_route)
             if request.url.path.startswith('/public/roadmaps/'):
                 from .public_roadmaps import guard as public_roadmap_guard
@@ -815,7 +825,8 @@ def create_app(settings=None):
                     def scoped_route():
                         from .scoped_routes import require_route
                         with store.read() as c:
-                            require_route(c, auth, who, request.method, request.url.path, dict(request.query_params))
+                            require_route(c, auth, who, request.method, request.url.path,
+                                          dict(request.query_params), scoped_route_template(request))
                     await asyncio.to_thread(scoped_route)
                 app.state.sleep_idle.seen(who, request.url.path)
                 # A locked Tico Cloud company (backend/cloud_access.py): people reach only billing and the download.

@@ -131,7 +131,7 @@ def test_scoped_routes_deny_sql_csv_history_downloads_and_new_surfaces(api, make
     _, attempt = scoped(api, data, make)
     token = attempt["token"]
     for path in ("history.csv?kind=decision", "history?kind=decision", "events", "admin",
-                 "live-meetings/missing/events", "runners/me/events", "not-yet-reviewed"):
+                 "live-meetings/missing/events", "runners/me/events", "not-yet-reviewed", "threads/search", "threads/rail"):
         get(api, path, token, expected=403)
     post(api, "sql", {"sql": "SELECT hex(detail) FROM events"}, token, expected=403)
     for path in ("/healthz", "/download/missing", "/index.html"):
