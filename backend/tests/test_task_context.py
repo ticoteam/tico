@@ -53,9 +53,9 @@ def test_context_is_bounded_metadata_newest_first_and_claims_include_it(api):
     assert len(result['pages']) == len(result['meetings']) == 10
     assert [r['id'] for r in result['pages']] == page_ids[:1:-1]
     assert [r['id'] for r in result['meetings']] == [f'meeting-{i:02}' for i in range(11, 1, -1)]
-    assert all(len(r['title']) == 200 and not r['limited'] for rows in result.values() for r in rows)
-    assert all(set(r) == {'id', 'title', 'version', 'updated_at', 'limited'} for r in result['pages'])
-    assert all(set(r) == {'id', 'title', 'date', 'limited'} for r in result['meetings'])
+    assert all(len(r['title']) == 200 for rows in result.values() for r in rows)
+    assert all(set(r) == {'id', 'title', 'version', 'updated_at'} for r in result['pages'])
+    assert all(set(r) == {'id', 'title', 'date'} for r in result['meetings'])
     assert 'Never include' not in json.dumps(result)
     assert len(json.dumps(result).encode()) < 24000
     machine = runner(api)
@@ -100,10 +100,9 @@ def test_bot_uses_own_page_rights_during_task_work_without_task_reader_intersect
     before = get(api, 'tasks/' + t['id'] + '/context', token)
     shown = {p['id']: p for p in before['pages']}
     assert set(shown) == {filed, limited, personal, shared_home, linked, pinned, private_page}
-    assert {fid for fid, p in shown.items() if p['limited']} == {limited, personal, private_page}
     pin(api, private_task['id'], pinned)
     private_context = get(api, 'tasks/' + private_task['id'] + '/context', token)
-    assert not next(p for p in private_context['pages'] if p['id'] == pinned)['limited']
+    assert pinned in {p['id'] for p in private_context['pages']}
     # A task reader cannot read this source, but the bot can; the task does not change either grant.
     get(api, 'pages/' + limited, 'cara-test', expected=404)
     get(api, 'pages/' + limited, token)
@@ -127,7 +126,7 @@ def test_bot_uses_own_page_rights_during_task_work_without_task_reader_intersect
     with api.app.state.store.transaction() as c:
         restrict(c, 'ops', people=['ana'])
     restricted_home = get(api, 'tasks/' + t['id'] + '/context', token)
-    assert next(p for p in restricted_home['pages'] if p['id'] == shared_home)['limited']
+    assert shared_home in {p['id'] for p in restricted_home['pages']}
 
 
 def test_attached_bot_reads_saved_meeting_in_every_turn_and_loses_revoked_grant(api):
@@ -143,7 +142,6 @@ def test_attached_bot_reads_saved_meeting_in_every_turn_and_loses_revoked_grant(
     assert [m['id'] for m in get(api, 'meetings/search', token)['results']] == [mid]
     context = get(api, 'tasks/' + t['id'] + '/context', token)
     assert [m['id'] for m in context['meetings']] == [mid]
-    assert context['meetings'][0]['limited']
     with api.app.state.store.transaction() as c:
         message = H.task_comment(c, 'human:ana', t['id'], 'Review this task', wake=False)
         c.execute('INSERT INTO attempt_inputs(attempt_id,message_id) VALUES(?,?)', (attempt['id'], message['id']))
@@ -162,7 +160,7 @@ def test_attached_bot_reads_saved_meeting_in_every_turn_and_loses_revoked_grant(
     get(api, 'meetings/transcript?id=' + mid, token, expected=404)
     with api.app.state.store.transaction() as c:
         meetings.snapshot({**original, 'audience': 'participants', 'audience_emails': ['ana@acme.example']}, conn=c)
-    assert get(api, 'tasks/' + t['id'] + '/context', token)['meetings'][0]['limited']
+    assert [m['id'] for m in get(api, 'tasks/' + t['id'] + '/context', token)['meetings']] == [mid]
     get(api, 'meetings/transcript?id=' + mid, token)
     with api.app.state.store.transaction() as c:
         c.execute('DELETE FROM live_meeting_bots WHERE meeting_id=?', (live,))

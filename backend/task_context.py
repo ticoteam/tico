@@ -1,41 +1,11 @@
 """Small, content-free context lists, rebuilt with current rights for each task read and claim."""
 from fastapi import Request
 
-from . import context_search, media, teammate_access, threads
+from . import context_search
 from .files import file_visible
-from .store import H, Problem
+from .store import Problem
 
 MAX_ITEMS = 10
-
-
-def page_limited(c, row):
-    """The page's own audience and filing settings, independent of the task receiving its reference."""
-    if row["audience"] is not None:
-        return True
-    if row["task_id"] and H.task_private(c, H.task(c, row["task_id"])):
-        return True
-    kind, _, ident = row["scope"].partition(":")
-    if kind == "task":
-        return H.task_private(c, H.task(c, ident))
-    if kind == "conversation":
-        conversation = H.conversation(c, ident)
-        if not conversation:
-            return True
-        room = threads.root_of(c, conversation)
-        audience = threads.audience_of(room)
-        if audience == "company":
-            return False
-        if audience == "task":
-            return H.task_private(c, H.task(c, room.get("task_id")))
-        if audience == "home":
-            owner = threads.home_owner(room)
-            return not owner or not teammate_access.document(c, owner)["read"]["everyone"]
-        if audience == "meeting":
-            meeting = c.execute("SELECT visibility FROM live_meetings WHERE id=?",
-                                ((room.get("room_key") or "").removeprefix("live-meeting:"),)).fetchone()
-            return not meeting or meeting[0] != "team"
-        return True
-    return not teammate_access.document(c, "bot:" + row["bot_id"])["read"]["everyone"]
 
 
 def listing(c, auth, who, tid):
@@ -49,7 +19,7 @@ def listing(c, auth, who, tid):
                          "ORDER BY context_updated_at DESC,f.id DESC", (task["id"], "task:" + task["id"], "task:" + task["id"])):
         if file_visible(c, auth, who, row, cache):
             pages.append({"id": row["id"], "title": row["title"][:200], "version": row["current_version"],
-                          "updated_at": row["context_updated_at"], "limited": page_limited(c, row)})
+                          "updated_at": row["context_updated_at"]})
             if len(pages) == MAX_ITEMS:
                 break
     for item in c.execute("SELECT m.id FROM meeting_task_links l JOIN meetings m ON m.id=l.meeting_id "
@@ -63,8 +33,7 @@ def listing(c, auth, who, tid):
                 raise
             continue
         linked.append({"id": row["id"], "title": row["title"][:200],
-                       "date": str(row["metadata"].get("started") or row["created_at"])[:40],
-                       "limited": media.effective_audience(row["metadata"]) != "team"})
+                       "date": str(row["metadata"].get("started") or row["created_at"])[:40]})
         if len(linked) == MAX_ITEMS:
             break
     return {"pages": pages, "meetings": linked}

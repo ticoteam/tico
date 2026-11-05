@@ -5455,13 +5455,11 @@ export type TaskContext = {
 export type TaskContextMeeting = {
   date: string;
   id: string;
-  limited: boolean;
   title: string;
 };
 
 export type TaskContextPage = {
   id: string;
-  limited: boolean;
   title: string;
   updated_at: string;
   version: number;

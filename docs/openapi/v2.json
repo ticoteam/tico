@@ -73895,15 +73895,11 @@
           },
           "date": {
             "type": "string"
-          },
-          "limited": {
-            "type": "boolean"
           }
         },
         "required": [
           "date",
           "id",
-          "limited",
           "title"
         ],
         "additionalProperties": true
@@ -73922,14 +73918,10 @@
           },
           "updated_at": {
             "type": "string"
-          },
-          "limited": {
-            "type": "boolean"
           }
         },
         "required": [
           "id",
-          "limited",
           "title",
           "updated_at",
           "version"

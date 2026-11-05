@@ -49,20 +49,15 @@ fn task_context(context: &Value) -> String {
                           ("meetings", "Task meetings (`hub meeting read <id>`; `--notes` for notes):")] {
         let Some(rows) = context[key].as_array().filter(|r| !r.is_empty()) else { continue };
         let mut block = format!("{header}\n");
-        let warning = if rows.iter().take(10).any(|row| row["limited"].as_bool() == Some(true)) {
-            "Limited items: don't copy their content into this task or other shared places.\n"
-        } else { "" };
-        block.push_str(warning);
         let line_budget = (748 - block.chars().count()) / rows.len().min(10);
         for row in rows.iter().take(10) {
             let id = s(&row["id"]);
             let date: String = s(&row[if key == "pages" { "updated_at" } else { "date" }]).chars().take(10).collect();
             let version = if key == "pages" { format!(" v{}", row["version"].as_u64().unwrap_or(0)) } else { String::new() };
-            let limited = if row["limited"].as_bool() == Some(true) { " (limited)" } else { "" };
-            let fixed = format!("{id}{version} {date} {limited}").chars().count() + 1;
+            let fixed = format!("{id}{version} {date} ").chars().count() + 1;
             let title: String = s(&row["title"]).chars().map(|c| if c.is_control() { ' ' } else { c })
                 .take(32.min(line_budget.saturating_sub(fixed))).collect();
-            let line = format!("{id}{version} {date} {title}{limited}\n");
+            let line = format!("{id}{version} {date} {title}\n");
             if block.chars().count() + line.chars().count() > 748 { break; }
             block.push_str(&line);
         }
@@ -461,16 +456,14 @@ mod tests {
     fn task_context_is_bounded_metadata_for_twenty_sources() {
         let pages: Vec<Value> = (0..12).map(|i| json!({"id": format!("file-{i:024}"),
             "title": "Long title 🦀".repeat(40), "version": 123, "updated_at": "2026-11-04T10:00:00Z",
-            "limited": i % 2 == 0, "content": "SECRET PAGE CONTENT"})).collect();
+            "content": "SECRET PAGE CONTENT"})).collect();
         let meetings: Vec<Value> = (0..12).map(|i| json!({"id": format!("20261104-120000-{i:04}"),
             "title": "Planning\nmeeting".repeat(40), "date": "2026-11-04T10:00:00Z",
-            "limited": true, "transcript": "SECRET TRANSCRIPT", "notes": "SECRET NOTES"})).collect();
+            "transcript": "SECRET TRANSCRIPT", "notes": "SECRET NOTES"})).collect();
         let sources = json!({"pages": pages, "meetings": meetings});
         let block = task_context(&sources);
         assert!(block.chars().count() <= 1500, "{}", block.chars().count());
-        assert_eq!(block.lines().count(), 25);
-        assert_eq!(block.matches("(limited)").count(), 15);
-        assert_eq!(block.matches("Limited items:").count(), 2);
+        assert_eq!(block.lines().count(), 23);
         assert!(block.contains("hub file read <id>") && block.contains("hub meeting read <id>"));
         assert!(!block.contains("SECRET"));
         let built = prompt(&json!({"id": "a", "bot": "ops", "task_context": sources}), &Names::from_config(None), None, false);

@@ -136,17 +136,16 @@
       }
     },
     "TaskContextPage": {
-      "type": "object", "additionalProperties": false, "required": ["id", "title", "version", "updated_at", "limited"],
+      "type": "object", "additionalProperties": false, "required": ["id", "title", "version", "updated_at"],
       "properties": {
         "id": {"type": "string"}, "title": {"type": "string", "maxLength": 200},
-        "version": {"type": "integer"}, "updated_at": {"type": "string"}, "limited": {"type": "boolean"}
+        "version": {"type": "integer"}, "updated_at": {"type": "string"}
       }
     },
     "TaskContextMeeting": {
-      "type": "object", "additionalProperties": false, "required": ["id", "title", "date", "limited"],
+      "type": "object", "additionalProperties": false, "required": ["id", "title", "date"],
       "properties": {
-        "id": {"type": "string"}, "title": {"type": "string", "maxLength": 200}, "date": {"type": "string"},
-        "limited": {"type": "boolean"}
+        "id": {"type": "string"}, "title": {"type": "string", "maxLength": 200}, "date": {"type": "string"}
       }
     },
     "StartPlaceAnswer": {

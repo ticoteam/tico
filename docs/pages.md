@@ -31,10 +31,7 @@ metadata list. It includes only sources the caller may read. A bot uses its own 
 whether or not it is working on a task. The task supplies references; the bot pulls content with `hub file read ID`
 and `hub meeting read ID` (`--notes` for saved meeting notes).
 
-An item with an audience narrower than Team has `limited: true`: a restricted meeting, a narrowed page audience,
-or a private filing scope. The prompt marks it **(limited)**. Limited items: don't copy their content into this task
-or other shared places. The flag describes the source's own settings. Each read checks current access; a task link
-or pin grants no additional access.
+Each read checks current access; a task link or pin grants no additional access.
 
 **What a page may hold.** One `.html` file, up to 10 MB. It runs no script and loads nothing from elsewhere. Tico
 removes scripts and outside addresses when the page is published, and the answer lists what it removed
