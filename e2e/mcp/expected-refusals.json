@@ -8,7 +8,7 @@
  "hub_api": "404 http_error",
  "hub_approval_approve": "404 not_found",
  "hub_approval_decline": "404 not_found",
- "hub_approval_request": "422 lint",
+ "hub_approval_request": "422 email_send",
  "hub_approval_show": "404 not_found",
  "hub_assistant_change_restore": "404 not_found",
  "hub_assistant_withdraw": "404 not_found",
