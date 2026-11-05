@@ -5,23 +5,34 @@ use std::os::unix::fs::MetadataExt;
 /// Resolve existing ancestors too, so a not-yet-created checkout has the same boundary as an existing one.
 fn resolve(path: &Path) -> Result<PathBuf, std::io::Error> {
     let absolute = if path.is_absolute() { path.to_path_buf() } else { std::env::current_dir()?.join(path) };
-    if let Ok(real) = absolute.canonicalize() {
-        return Ok(real);
+    match absolute.canonicalize() {
+        Ok(real) => return Ok(real),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+        Err(error) => return Err(error),
     }
     let mut parent = absolute.as_path();
     let mut tail = Vec::new();
-    while std::fs::symlink_metadata(parent).is_err() {
+    loop {
+        match std::fs::symlink_metadata(parent) {
+            Ok(_) => break,
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+            Err(error) => return Err(error),
+        }
         let name = parent.components().next_back().ok_or_else(|| std::io::Error::other("missing path"))?;
         tail.push(name);
         parent = parent.parent().ok_or_else(|| std::io::Error::other("missing parent"))?;
     }
-    let mut real = parent.canonicalize()?;
+    // An unresolved '..' can hide a later link into the install; do not append it unchecked.
+    if tail.contains(&Component::ParentDir) {
+        return Err(std::io::Error::other("unresolved parent component"));
+    }
+    let mut real = if std::fs::symlink_metadata(parent)?.file_type().is_symlink() {
+        resolve(&parent.parent().ok_or_else(|| std::io::Error::other("missing parent"))?.join(std::fs::read_link(parent)?))?
+    } else {
+        parent.canonicalize()?
+    };
     for part in tail.into_iter().rev() {
-        match part {
-            Component::ParentDir => { real.pop(); }
-            Component::CurDir => {}
-            _ => real.push(part),
-        }
+        real.push(part);
     }
     Ok(real)
 }
@@ -55,12 +66,18 @@ mod tests {
         let dir = dir.canonicalize().unwrap();
         let install = dir.join("install");
         std::fs::create_dir_all(install.join("templates")).unwrap();
+        std::fs::create_dir_all(dir.join("ws/existing")).unwrap();
+        symlink(install.join("templates"), dir.join("ws/link")).unwrap();
         symlink(&install, dir.join("bot-ops")).unwrap();
         symlink(&dir, dir.join("ancestor")).unwrap();
         for path in [install.clone(), install.join("templates"), dir.join("bot-ops"),
-                     dir.join("ancestor/install/templates"), dir.join("bot-ops/new/../checkout")] {
+                     dir.join("ancestor/install/templates"), dir.join("bot-ops/new/../checkout"),
+                     dir.join("ws/link/new"), dir.join("ws/missing/../link/new"),
+                     dir.join("ws/missing/deep/../../link/new"), dir.join("ws/existing/../link/new")] {
             assert!(outside(&path, &install).unwrap_err().contains(&path.display().to_string()));
         }
+        assert!(!dir.join("ws/missing").exists());
+        assert_eq!(outside(&dir.join("ws/safe/new"), &install).unwrap(), dir.join("ws/safe/new"));
         assert_eq!(outside(&dir.join("install-other/new"), &install).unwrap(), dir.join("install-other/new"));
         let other_case = dir.join("INSTALL");
         if other_case.exists() {

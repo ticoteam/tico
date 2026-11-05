@@ -4,11 +4,32 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 
 
+def _resolve(path):
+    path = Path(path).expanduser().absolute()
+    try:
+        return path.resolve(strict=True)
+    except FileNotFoundError:
+        tail = []
+        parent = path
+        while True:
+            try:
+                parent.lstat()
+                break
+            except FileNotFoundError:
+                tail.append(parent.name)
+                parent = parent.parent
+        # An unresolved '..' can hide a later link into the install; do not append it unchecked.
+        if ".." in tail:
+            raise ValueError(f"Cannot check repository path: {path}")
+        real = _resolve(parent.parent / parent.readlink()) if parent.is_symlink() else parent.resolve(strict=True)
+        return real.joinpath(*reversed(tail))
+
+
 def outside_installation(path):
     try:
-        resolved = Path(path).expanduser().resolve()
-        installation = ROOT.resolve()
-    except (OSError, RuntimeError) as exc:
+        resolved = _resolve(path)
+        installation = _resolve(ROOT)
+    except (OSError, RuntimeError, ValueError) as exc:
         raise ValueError(f"Cannot check repository path: {path}") from exc
     inside = resolved.is_relative_to(installation)
     # Path.resolve on a case-insensitive Mac volume can keep the caller's spelling.
@@ -27,9 +48,11 @@ def outside_installation(path):
 
 def contained_file(root, path):
     """Check both the destination and its parents, including a dangling link's target."""
-    root, path = Path(root).resolve(), Path(path)
+    # These checks prevent accidents, not a hostile bot with full access to the install.
+    root, path = _resolve(root), Path(path)
     resolved = outside_installation(path)
-    if not resolved.is_relative_to(root) or not path.parent.resolve().is_relative_to(root):
+    parent = _resolve(path.parent)
+    if not resolved.is_relative_to(root) or not parent.is_relative_to(root):
         raise ValueError(f"File path is outside the bot repo: {path}")
     # Replacing this entry must not traverse the final link, even when that link stays in the repo.
-    return path.parent.resolve() / path.name
+    return parent / path.name

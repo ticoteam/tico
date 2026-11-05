@@ -67,9 +67,11 @@ If copying the mirror into the workspace fails, or the mirror itself cannot be f
 On a Computer that does not run bots as a separate user, such as a Mac, a folder already at `<workspace>/repos/<owner>__<repo>` is taken over when it is a Git checkout of that repository: its `origin` is GitHub's HTTPS or SSH address for it, it belongs to the user the runner runs as, and it does not share objects with another repository or keep its work tree elsewhere. Tico adds the `tico-mirror` remote and updates the tracking refs. It leaves `origin`, branch settings, files and local work as they are. When no bot needs the repository any more, Tico stops managing the folder but never deletes it. Any other folder is left alone, and the error says why.
 
 A bot's repo, shared or named checkout, and managed base must stay outside the Tico installation running the
-Computer. Tico follows links in the path before checking this, including linked parent folders. A refused path
+Computer. Tico follows links in the path before checking this, including linked parent folders. If a missing
+folder leaves a `..` part unresolved, Tico refuses the path rather than risk hiding a later link. A refused path
 is named in the error. Template refresh also refuses destination links outside the bot's repo and writes new
-files by rename inside a checked folder.
+files by rename inside a checked folder. These checks prevent mistakes; a bot with full local access can still
+write the install directly.
 
 Bots on one Computer can read each other’s base clones until per-subscription Unix users exist. Same-user computers, including Macs, also allow inspecting processes owned by that user; repository grants restrict issued tokens, not local files. Full object stores let task worktrees commit offline.
 

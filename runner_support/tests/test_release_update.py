@@ -184,7 +184,7 @@ def flatten(checkout, name="AGENTS.md"):
 
 @pytest.mark.slow
 @pytest.mark.parametrize("symlinks", ["true", "false"])
-def test_only_exact_copies_of_link_targets_are_restored_under_the_update_lock(link_repos, symlinks, capsys):
+def test_only_exact_copies_of_link_targets_are_restored_under_the_update_lock(link_repos, symlinks, capsys, monkeypatch):
     _, checkout, state = link_repos
     sh(checkout, "git", "config", "core.symlinks", symlinks)
     names = ["AGENTS.md", "templates/employee-repo/AGENTS.md", "templates/employee-repo/CLAUDE.md"]
@@ -193,20 +193,112 @@ def test_only_exact_copies_of_link_targets_are_restored_under_the_update_lock(li
     before = {name: (checkout / name).read_bytes() for name in names}
     assert checkout_links.inspect(checkout)["only_flattened"]
 
-    def locked_run(args, **kw):
-        if "checkout" in args and "--" in args:
-            with ru.lock_path(checkout).open("a") as handle:
-                with pytest.raises(BlockingIOError):
-                    fcntl.flock(handle, fcntl.LOCK_EX | fcntl.LOCK_NB)
-        return subprocess.run(args, **kw)
+    symlink = checkout_links.os.symlink
+    swapped = []
 
-    result, _ = run_apply(checkout, state, "0.4.0", run=locked_run)
+    def locked_symlink(source, destination):
+        with ru.lock_path(checkout).open("a") as handle:
+            with pytest.raises(BlockingIOError):
+                fcntl.flock(handle, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        swapped.append(destination.relative_to(checkout).as_posix())
+        return symlink(source, destination)
+
+    monkeypatch.setattr(checkout_links.os, "symlink", locked_symlink)
+    result, _ = run_apply(checkout, state, "0.4.0")
     assert result["state"] == "healthy" and ru.checkout_release(checkout) == "0.4.0"
     assert result["note"] == ru.read_status(state)["note"] == "restored 3 flattened links"
     assert "restored 3 flattened links" in capsys.readouterr().out
     assert all((checkout / name).is_symlink() and (checkout / name).read_bytes() == before[name] for name in names)
     assert not sh(checkout, "git", "status", "--porcelain", "--untracked-files=no")
     assert sh(checkout, "git", "config", "core.symlinks") == symlinks
+    assert swapped == names
+    assert not list(checkout.rglob(".*.tico-link-*"))
+
+
+@pytest.mark.slow
+@pytest.mark.parametrize("point,action", [
+    ("inspected", "edit"), ("inspected", "stage"), ("inspected", "edit and stage"),
+    ("renamed", "edit"), ("renamed", "stage"), ("renamed", "replace"),
+    ("linked", "edit"), ("linked", "stage"), ("linked", "replace"),
+    ("index", "edit"), ("index", "stage"),
+])
+def test_link_repair_keeps_edits_and_staging_at_each_swap_step(link_repos, monkeypatch, point, action):
+    _, checkout, state = link_repos
+    names = ["AGENTS.md", "templates/employee-repo/CLAUDE.md"]
+    for name in names:
+        flatten(checkout, name)
+    path = checkout / names[-1]
+    original = path.read_bytes()
+    inode = path.stat().st_ino
+    before = head(checkout)
+    edited, staged = b"new local rules\n", b"staged local rules\n"
+    oid = subprocess.run(["git", "-C", str(checkout), "hash-object", "-w", "--stdin"],
+                         input=staged, capture_output=True, check=True).stdout.decode().strip()
+    fired = False
+    index = b""
+    inspect, set_aside, symlink = checkout_links._inspect, checkout_links._set_aside, checkout_links.os.symlink
+
+    def cached():
+        return subprocess.run(["git", "-C", str(checkout), "diff", "--cached", "--binary"],
+                              capture_output=True, check=True).stdout
+
+    with path.open("r+b", buffering=0) as editor:
+        def inject(step):
+            nonlocal fired, index
+            if step != point or fired:
+                return
+            fired = True
+            if "edit" in action:
+                editor.seek(0)
+                editor.write(edited)
+                editor.truncate()
+            if action == "replace":
+                path.unlink(missing_ok=True)
+                path.write_bytes(edited)
+            if action == "stage":
+                # Stage the regular file even while its worktree name is absent or now a symlink.
+                sh(checkout, "git", "update-index", "--cacheinfo", f"100644,{oid},{names[-1]}")
+            elif action == "edit and stage":
+                sh(checkout, "git", "add", names[-1])
+            index = cached()
+
+        def inspected(*args):
+            found = inspect(*args)
+            inject("inspected")
+            return found
+
+        def renamed(destination):
+            backup = set_aside(destination)
+            if destination == path:
+                inject("renamed")
+            return backup
+
+        def linked(source, destination):
+            symlink(source, destination)
+            if destination == path:
+                inject("linked")
+
+        def run(args, **kw):
+            if "--cached" in args and path.is_symlink():
+                inject("index")
+            return subprocess.run(args, **kw)
+
+        monkeypatch.setattr(checkout_links, "_inspect", inspected)
+        monkeypatch.setattr(checkout_links, "_set_aside", renamed)
+        monkeypatch.setattr(checkout_links.os, "symlink", linked)
+        result, calls = run_apply(checkout, state, "0.4.0", run=run)
+
+    assert fired and result["state"] == "blocked" and calls.restarts == 0
+    assert "note" not in result and head(checkout) == before and cached() == index
+    assert not path.is_symlink() and path.stat().st_ino == inode
+    assert path.read_bytes() == (edited if "edit" in action else original)
+    assert not (checkout / names[0]).is_symlink()
+    assert (checkout / names[0]).read_bytes() == (checkout / "CLAUDE.md").read_bytes()
+    backups = list(checkout.rglob(".*.tico-link-*"))
+    if action == "replace":
+        assert len(backups) == 1 and backups[0].read_bytes() == edited
+    else:
+        assert backups == []
 
 
 @pytest.mark.slow

@@ -6,19 +6,24 @@ import os
 from pathlib import Path
 import posixpath
 import subprocess
+import tempfile
 
 
-def inspect(root, run=subprocess.run):
-    """Read only. A failed check never permits a repair; names come from NUL-delimited Git output."""
+def _git(root, run, *args):
+    done = run(["git", "-C", str(root), *args], capture_output=True, timeout=30,
+               stdin=subprocess.DEVNULL, env={**os.environ, "GIT_TERMINAL_PROMPT": "0"})
+    if done.returncode:
+        raise ValueError("Could not check checkout links")
+    return done.stdout
+
+
+def _inspect(root, run):
     result = {"flattened": [], "only_flattened": False}
+    repairs = []
     root = Path(root).resolve()
 
     def git(*args):
-        done = run(["git", "-C", str(root), *args], capture_output=True, timeout=30,
-                   stdin=subprocess.DEVNULL, env={**os.environ, "GIT_TERMINAL_PROMPT": "0"})
-        if done.returncode:
-            raise ValueError("Could not check checkout links")
-        return done.stdout
+        return _git(root, run, *args)
 
     try:
         entries = git("status", "--porcelain=v1", "-z", "--untracked-files=no").split(b"\0")
@@ -31,7 +36,7 @@ def inspect(root, run=subprocess.run):
             if b"R" in xy or b"C" in xy:
                 dirty.add(os.fsdecode(entries.pop(0)))
         if not dirty:
-            return result
+            return result, repairs
         tree = {}
         for entry in git("ls-tree", "-r", "-z", "HEAD").split(b"\0"):
             if entry:
@@ -57,27 +62,77 @@ def inspect(root, run=subprocess.run):
             content = git("cat-file", "blob", target_oid)
             if path.read_bytes() == content == source.read_bytes():
                 result["flattened"].append(name)
+                repairs.append((name, link, content))
         # Check the index separately too: a conflict, staged edit or staged mode change blocks every repair.
         result["only_flattened"] = (not staged and dirty == set(result["flattened"])
                                     and not git("diff", "--cached", "--name-only", "-z", "HEAD"))
     except (OSError, ValueError, subprocess.SubprocessError):
         result["only_flattened"] = False
-    return result
+    return result, repairs
+
+
+def inspect(root, run=subprocess.run):
+    """Read only. A failed check never permits a repair; names come from NUL-delimited Git output."""
+    return _inspect(root, run)[0]
+
+
+def _set_aside(path):
+    with tempfile.NamedTemporaryFile(prefix=f".{path.name}.tico-link-", dir=path.parent, delete=False) as handle:
+        saved = Path(handle.name)
+    try:
+        os.replace(path, saved)
+    except OSError:
+        saved.unlink()
+        raise
+    return saved
+
+
+def _put_back(path, saved, link):
+    # Keep an editor's replacement too; only our unchanged link can be discarded on rollback.
+    try:
+        displaced = _set_aside(path)
+    except FileNotFoundError:
+        displaced = None
+    try:
+        os.link(saved, path, follow_symlinks=False)
+        saved.unlink()
+    finally:
+        if displaced is not None and displaced.is_symlink() and os.readlink(displaced) == link:
+            displaced.unlink()
 
 
 def restore(root, run=subprocess.run):
-    """Caller holds tico-update.lock. Restore the whole matching set, or leave every path alone."""
-    found = inspect(root, run)
+    """Caller holds tico-update.lock. Keep each original inode until the swapped set passes its checks."""
+    root = Path(root).resolve()
+    found, repairs = _inspect(root, run)
     found["restored"] = []
+    saved = []
     if found["only_flattened"]:
         try:
-            done = run(["git", "-C", str(root), "-c", "core.symlinks=true", "checkout", "--quiet", "HEAD", "--",
-                        *(":(literal)" + name for name in found["flattened"])], capture_output=True,
-                       timeout=30, stdin=subprocess.DEVNULL)
-        except (OSError, subprocess.SubprocessError):
+            for name, link, content in repairs:
+                path = root / name
+                backup = _set_aside(path)
+                saved.append((path, backup, link, content))
+                os.symlink(link, path)
+            # Git never writes the worktree or index here. Check staging after the swap, then the saved bytes,
+            # including writes through a handle opened before the rename.
+            if _git(root, run, "diff", "--cached", "--name-only", "-z", "HEAD"):
+                raise ValueError("The index changed during link repair")
+            for path, backup, link, content in saved:
+                if (backup.is_symlink() or backup.read_bytes() != content
+                        or not path.is_symlink() or os.readlink(path) != link):
+                    raise ValueError("The file changed during link repair")
+        except (OSError, ValueError, subprocess.SubprocessError):
+            found["only_flattened"] = False
+            for path, backup, link, _ in reversed(saved):
+                try:
+                    _put_back(path, backup, link)
+                except OSError:
+                    pass  # A failed rollback keeps the saved file, never deletes its bytes.
             return found
-        if not done.returncode:
-            found["restored"] = found["flattened"]
+        for _, backup, _, _ in saved:
+            backup.unlink()
+        found["restored"] = found["flattened"]
     return found
 
 
@@ -88,7 +143,9 @@ def note(found):
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--root", required=True)
-    parser.add_argument("--repair", action="store_true")
+    mode = parser.add_mutually_exclusive_group()
+    mode.add_argument("--repair", action="store_true")
+    mode.add_argument("--repair-locked", action="store_true", help="repair while the caller holds tico-update.lock")
     args = parser.parse_args()
     if args.repair:
         from .release_update import lock_path
@@ -98,6 +155,8 @@ def main():
         with path.open("a") as handle:
             fcntl.flock(handle, fcntl.LOCK_EX)
             found = restore(args.root)
+    elif args.repair_locked:
+        found = restore(args.root)
     else:
         found = inspect(args.root)
     print(json.dumps({**found, "note": note(found)}))
