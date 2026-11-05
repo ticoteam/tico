@@ -139,6 +139,28 @@ def test_classifier_sees_html_as_well_as_plain_text_and_never_truncates_to_a_no(
         ask.assert_not_called()
 
 
+def test_nested_email_attachment_headers_and_mime_charset_are_bound_to_the_proof():
+    inner = EmailMessage()
+    inner["Subject"] = "Approved attachment"
+    inner.set_content("The same body")
+    outer = EmailMessage()
+    outer["From"], outer["To"], outer["Subject"] = BOX, CONTACT, "Attached message"
+    outer.set_content("Please read.")
+    outer.add_attachment(inner)
+    first = S.snapshot(raw(outer), BOX)
+    inner.replace_header("Subject", "Changed attachment")
+    changed = S.snapshot(raw(outer), BOX)
+    assert first["attachments"][0]["sha256"] != changed["attachments"][0]["sha256"]
+    assert first["content_sha256"] != changed["content_sha256"]
+    assert b"Approved attachment" in S.attachment(first["raw"], first["attachments"][0]["part"])
+    html = EmailMessage()
+    html["From"], html["To"], html["Subject"] = BOX, CONTACT, "HTML"
+    html.set_content("<p>caf\u00e9</p>", subtype="html", charset="utf-8")
+    before = S.snapshot(raw(html), BOX)
+    html.set_param("charset", "iso-8859-1")
+    assert before["content_sha256"] != S.snapshot(raw(html), BOX)["content_sha256"]
+
+
 def test_mime_reply_headers_enforce_loop_and_duplicate_guards_without_caller_metadata(inbox):
     autonomous(inbox, ask_new_address=True)
     with inbox.app.state.store.transaction() as c:

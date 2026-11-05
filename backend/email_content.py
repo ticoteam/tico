@@ -67,9 +67,24 @@ def body_parts(msg):
     return body_parts(children[0]) if children else []
 
 
+def file_parts(msg):
+    leaves = [p for p in msg.walk() if not p.is_multipart()]
+    nested = [p for p in msg.walk() if p.is_multipart() and p.get_content_type() == "message/rfc822"]
+    return leaves + nested
+
+
+def part_bytes(part):
+    if part.get_content_type() == "message/rfc822" and part.is_multipart():
+        return b"\n".join(message.as_bytes(policy=policy.SMTP) for message in part.get_payload())
+    return part.get_payload(decode=True) or b""
+
+
 def snapshot(raw, mailbox):
     try:
         msg = parsed(raw)
+        for key in ("from", "sender", "reply-to", "to", "cc", "bcc", "subject", "in-reply-to", "references"):
+            if len(msg.get_all(key, [])) > 1:
+                raise ValueError("Ambiguous repeated header")
         to = sorted({a.lower() for _, a in getaddresses(msg.get_all("to", []) + msg.get_all("cc", [])
                                                       + msg.get_all("bcc", [])) if a})
         sender = [a.lower() for _, a in getaddresses(msg.get_all("from", []))]
@@ -77,9 +92,15 @@ def snapshot(raw, mailbox):
         if not to or len(to) > 100 or sender != [mailbox] or any(not ADDRESS.fullmatch(a) for a in to):
             raise ValueError("Invalid envelope")
         bodies, files, texts, visible, complete = body_parts(msg), [], [], [], True
-        leaves = [p for p in msg.walk() if not p.is_multipart()]
+        leaves = file_parts(msg)
+        attached_children = {id(child) for parent in leaves if parent.is_multipart() for child in list(parent.walk())[1:]}
         for index, part in enumerate(leaves):
-            payload = part.get_payload(decode=True) or b""
+            if id(part) in attached_children:
+                continue
+            for key in ("content-type", "content-disposition", "content-transfer-encoding", "content-id"):
+                if len(part.get_all(key, [])) > 1:
+                    raise ValueError("Ambiguous MIME header")
+            payload = part_bytes(part)
             if not any(part is body for body in bodies):
                 name = str(part.get_filename() or f"part-{index + 1}" + (mimetypes.guess_extension(part.get_content_type()) or ".bin"))[:255]
                 files.append({"name": name, "sha256": digest(payload), "size": len(payload),
@@ -103,8 +124,9 @@ def snapshot(raw, mailbox):
         raise Problem("email", "Invalid email: From must match the inbox, with 1–100 valid recipients, at most 50 files "
                       "and at most 256 KiB of visible text", 422) from exc
     body = "\n".join(texts) if texts else "\n".join(p["text"] for p in visible)
-    parts = [{"type": p.get_content_type(), "name": p.get_filename(), "content_id": p.get("Content-ID"),
-              "disposition": p.get_content_disposition(), "sha256": digest(p.get_payload(decode=True) or b"")}
+    parts = [{"type": p.get_content_type(), "parameters": sorted((k, str(v)) for k, v in p.get_params()[1:] if k != "boundary") if p.get_params() else [],
+              "name": p.get_filename(), "content_id": p.get("Content-ID"), "content_location": p.get("Content-Location"),
+              "disposition": p.get_content_disposition(), "sha256": digest(part_bytes(p))}
              for p in leaves]
     material_headers = {key: str(msg.get(key) or "") for key in ("from", "sender", "reply-to", "in-reply-to", "references")}
     groups = {key: sorted(a.lower() for _, a in getaddresses(msg.get_all(key, [])) if a) for key in ("to", "cc", "bcc")}
@@ -116,7 +138,7 @@ def snapshot(raw, mailbox):
 
 
 def attachment(raw, index):
-    leaves = [p for p in parsed(raw).walk() if not p.is_multipart()]
+    leaves = file_parts(parsed(raw))
     if not 0 <= index < len(leaves):
         raise Problem("not_found", "File not found", 404)
-    return leaves[index].get_payload(decode=True) or b""
+    return part_bytes(leaves[index])
