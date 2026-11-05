@@ -310,6 +310,24 @@ def rows(c):
     return {r["bot"]: dict(r) for r in c.execute("SELECT * FROM cloud_machines")}
 
 
+def visible_rows(c):
+    """Live runner contact proves a boot finished, but cannot undo HQ's stop or deletion."""
+    from .getting_started import ONLINE_SECONDS
+    online = {r["id"] for r in c.execute(
+        "SELECT id FROM runners_with_state WHERE revoked_at IS NULL AND last_seen_at>?",
+        (H.shift(H.now(), seconds=-ONLINE_SECONDS),))}
+    return {key: {**current, **({"state": "running"}
+                              if current["state"] == "starting" and current["runner_id"] in online else {})}
+            for key, current in rows(c).items()}
+
+
+def checked_in(c, runner_id):
+    """A boot reached this server. Repair old starting rows too, without undoing a stop reservation."""
+    # Every heartbeat reaches here: one read of the small cloud_machines table (a row per cloud bot at most).
+    c.execute("UPDATE cloud_machines SET state='running',updated_at=? WHERE runner_id=? AND state='starting'",
+              (H.now(), runner_id))
+
+
 def save(c, key, **fields):
     fields["updated_at"] = H.now()
     c.execute("UPDATE cloud_machines SET " + ",".join(k + "=?" for k in fields) + " WHERE bot=?",
@@ -506,6 +524,7 @@ def enrolled(c, execution, runner_id, key):
     if old and old != runner_id:
         c.execute("UPDATE runners SET revoked_at=? WHERE id=? AND revoked_at IS NULL", (H.now(), old))
     save(c, key, runner_id=runner_id, enroll_by=0, enroll_fails=0)
+    checked_in(c, runner_id)
     H.event(c, H.KEEPER, "cloud_machine.enrolled", key, {"runner": runner_id})
     for bot in hosted(c, key):
         bind(c, execution, bot)
@@ -1189,7 +1208,8 @@ def view(c, bot, settings=None):
     if external_harness(c, bot):
         return None
     assigned = bool(c.execute("SELECT 1 FROM assignments WHERE bot=?", (bot,)).fetchone())
-    return shown(bot, row(c, bot), assigned, row(c, SHARED))
+    found = visible_rows(c)
+    return shown(bot, found.get(bot), assigned, found.get(SHARED))
 
 
 def machine_view(current):
@@ -1278,7 +1298,7 @@ def change(c, execution, who, bot, mode=None, size=None, always_on=None, placeme
 
 def shared_view(c):
     """The shared machine as Settings shows it, with the bots set to run there."""
-    return {**machine_view(row(c, SHARED)), "bots": members(c)}
+    return {**machine_view(visible_rows(c).get(SHARED)), "bots": members(c)}
 
 
 def change_shared(c, auth, who, size=None, always_on=None, pause_minutes=None):

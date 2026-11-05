@@ -353,7 +353,8 @@ class Builder:
         self.write(work)
 
         def move(c):
-            for key, title, body, owner, requester, status, created, changed, note, parent in D.TASKS:
+            # Creation lists parents first. Apply descendant states before a parent's finish closes open subtasks.
+            for key, title, body, owner, requester, status, created, changed, note, parent in reversed(D.TASKS):
                 tid = self.tasks[key]
                 if status == "open":
                     continue

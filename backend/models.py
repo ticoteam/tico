@@ -1002,6 +1002,7 @@ class Enrollment(Contract):
     code: str = Field(min_length=32, max_length=200)
     label: str = Field(min_length=1, max_length=100)
     platform: str = Field(default="", max_length=100)
+    device_id: str | None = Field(default=None, pattern=r"^[0-9a-f]{64}$")
 
 
 class SlashCommand(Contract):
@@ -1434,6 +1435,7 @@ class Heartbeat(Contract):
     repositories: list[RepositoryStatus] | None = None
     version: str = Field(max_length=100)
     platform: str = Field(max_length=100)
+    device_id: str | None = Field(default=None, pattern=r"^[0-9a-f]{64}$")
     capacity: int = Field(default=4, ge=1, le=256)
     # The assignment_* values name the retired temporary assignments (#420); an older runner still sends them.
     capabilities: list[Literal[
@@ -3137,3 +3139,22 @@ class GrowthSettingsUpdate(Contract):
     unit: str | None = Field(default=None, min_length=1, max_length=40)
     revenue_month: float | None = Field(default=None, ge=0)
     margin_pct: float | None = Field(default=None, ge=0, le=100)
+
+
+# Settings > Mailboxes (backend/mailboxes.py): connect a mailbox, and who can use it.
+MailboxLevel = Literal["read", "read_write"]
+
+
+class MailboxCreate(Contract):
+    address: Annotated[str, Field(min_length=3, max_length=254)]
+    shared: StrictBool = False
+
+
+class MailboxAccessCreate(Contract):
+    grantee_type: Literal["person", "bot"]
+    grantee_id: ID
+    level: MailboxLevel
+
+
+class MailboxAccessUpdate(Contract):
+    level: MailboxLevel

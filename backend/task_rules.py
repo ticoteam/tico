@@ -185,7 +185,7 @@ def safe(c, task):
 
 def close(c, task, rule):
     # Only the status event carries the history note. task_close also records step consistency.
-    H.task_close(c, H.KEEPER, task["id"], quiet=True)
+    H.task_close(c, H.KEEPER, task["id"], quiet=True, strict=False)
     note = f"Closed by rule '{rule['name']}'"
     c.execute("UPDATE history_events SET note=? WHERE subject_type='task' AND subject_id=? AND kind='status' "
               "AND new='closed' AND rowid=(SELECT max(rowid) FROM history_events WHERE subject_type='task' "

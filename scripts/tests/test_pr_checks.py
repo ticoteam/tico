@@ -107,6 +107,62 @@ def test_plan_keeps_full_collection_on_main_and_conftest_and_never_runs_bare_pyt
         checks.run(target, "python-1")
 
 
+def test_contract_inputs_run_even_without_a_static_dependency_and_deletions_run_too(tmp_path):
+    # A new tool, response field or command reference can change the contract without a Python import edge.
+    graph = SimpleNamespace(files=[], unparsed=set(), affected=lambda *args: set())
+    for name in ("backend/routes/tasks.py", "clients/hubtools.py", "clients/hubcli.py", "templates/bot/role.md",
+                 "skills/sample/SKILL.md", "backend/company_file/roles.json", "e2e/goldens/events.json",
+                 "roles/ops.md", "company/about.md", "companies/acme.yaml"):
+        source(tmp_path, name, "")
+        graph.files.append(name)
+        assert checks.selection([name], root=tmp_path, graph=graph, core=[])["contracts"], name
+    # Removing a template must still catch refusal entries that have become stale.
+    (tmp_path / "templates/bot/role.md").unlink()
+    assert checks.selection(["templates/bot/role.md"], root=tmp_path)["contracts"]
+    source(tmp_path, "ui/app/unrelated.js", "")
+    graph.files.append("ui/app/unrelated.js")
+    assert not checks.selection(["ui/app/unrelated.js"], root=tmp_path, graph=graph, core=[])["contracts"]
+    assert not checks.selection(["README.md"], root=tmp_path)["contracts"]
+    assert checks.selection([], root=tmp_path)["contracts"]
+    assert checks.selection(["README.md"], event="push", root=tmp_path)["contracts"]
+
+
+def test_contract_job_survives_default_deselection_and_runs_slow_tests_in_parallel(tmp_path, monkeypatch):
+    # Default collection has one fast MCP test and no CLI/golden tests. The contracts job must bypass that filter.
+    picked = {"python": list(checks.CONTRACT_TESTS), "browser": [], "caddy": True, "conformance": False,
+              "rust": [], "contracts": True}
+    monkeypatch.setattr(checks, "selection", lambda *a, **kw: dict(picked))
+    monkeypatch.setattr(checks, "guard_changelog", lambda base: None)
+    monkeypatch.setattr(checks, "changed_files", lambda *a, **kw: [])
+    monkeypatch.setattr(checks, "collect", lambda: Counter({checks.CONTRACT_TESTS[0]: 1}))
+    target = tmp_path / "plan.json"
+    plan = checks.prepare("pull_request", "base", target)
+    jobs = plan["matrix"]["include"]
+    assert plan["python"] == [checks.CONTRACT_TESTS[0]]
+    assert jobs == [{"suite": "python-1", "files": [checks.CONTRACT_TESTS[0]]},
+                    {"suite": "contracts", "files": list(checks.CONTRACT_TESTS)}]
+    # Even a plan with no default tests must retain the contracts job.
+    monkeypatch.setattr(checks, "collect", Counter)
+    assert checks.prepare("pull_request", "base", target)["matrix"]["include"] == [jobs[1]]
+    for name in checks.CONTRACT_TESTS:
+        source(tmp_path, name, "")
+    monkeypatch.setattr(checks, "ROOT", tmp_path)
+    calls = []
+    monkeypatch.setattr(checks.subprocess, "run",
+                        lambda command, **kw: calls.append(command) or SimpleNamespace(returncode=1))
+    assert checks.run(target, "contracts") == 1  # A red contract fails the matrix and the required timings gate.
+    assert calls == [[sys.executable, "-m", "pytest", "-q", "-n", str(checks.WORKERS),
+                      "-o", "junit_family=xunit1", "--junitxml=ci-results/contracts.xml", "-m", "slow",
+                      *checks.CONTRACT_TESTS]]
+    monkeypatch.setattr(checks.subprocess, "run", lambda *a, **kw: SimpleNamespace(returncode=0))
+    report = tmp_path / "ci-results/contracts.xml"
+    report.write_text("<testsuite><testcase><skipped/></testcase></testsuite>")
+    with pytest.raises(RuntimeError, match="skip every test"):
+        checks.run(target, "contracts")
+    report.write_text("<testsuite><testcase/></testsuite>")
+    assert checks.run(target, "contracts") == 0
+
+
 def test_rust_crates_run_cargo_test_when_their_inputs_change_and_a_red_crate_fails_the_job(tmp_path, monkeypatch, mapped):
     for changed, crates in ((["runner-rs/src/state.rs"], ["runner-rs"]), (["relay-rs/src/gateway.rs"], ["relay-rs"]),
                             (["runner_support/redact.py"], ["runner-rs"]), (["runner-rs/Cargo.lock", "relay-rs/Cargo.lock"],
