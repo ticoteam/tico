@@ -210,7 +210,9 @@ impl RecordingHandle {
         // Live text streams when Settings allow it; the key is read on the stream's own thread.
         let plan = settings::read(store.root())
             .ok()
-            .and_then(|config| stream::Plan::from_settings(&config));
+            .and_then(|config| stream::Plan::from_settings(&config))
+            // Keep a settings-watching worker even while live text is off or not connected.
+            .or_else(|| stream::Plan::from_settings(&settings::Settings::default()));
         Self::with_plan(store, id, plan, true, move |inputs| {
             setup_inputs(
                 inputs,

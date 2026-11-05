@@ -88,7 +88,7 @@
       targets: targets(), live: null, live_org: '', live_state: '', live_url: '', kept_local: false,
       can_control: false, can_discard: false, discarded: false, discard_pending: false,
       place: 'On this Mac', sync_error: '', setup: [], audio: clone(audioOk),
-      actions: { mode: 'ready', can_link: true, link_scope: ['m1','team'], org: 'Tico Team', orgs, multiple: true, can_change: true, draft_status: '', items: clone(items), waiting: 3, owners },
+      actions: { mode: 'ready', can_link: true, link_scope: ['m1','team'], actor: 'human:tina', org: 'Tico Team', orgs, multiple: true, can_change: true, draft_status: '', items: clone(items), waiting: 3, owners },
       notes: { text: 'Decided: one task at a time, private, quote attached.\nFollow up on hosted pricing cap next week.', editable: true },
       people: clone(peopleLocal), chat: clone(chatEmpty),
       ...over,
@@ -127,7 +127,7 @@
     suggested: '', recording: null, meeting: null, sending: null,
     // Speech through the signed-in Tico; `none` before sign-in without keys of your own.
     speech: { source: 'tico', stream: true, transcribe: true, tico: 'Tico Team' },
-    update: { state: 'none', version: '', notes: '', blocked: '' },
+    update: { state: 'none', version: '', notes: '', blocked: '', error: '', progress: null, current: '0.5.143', location: '', movable: false },
   };
   const state = {
     status, library: { rows: libraryRows, events, calendar_stale: false, connected: true }, desktop_orgs: [],
@@ -172,7 +172,7 @@
     id: 'm0', title: 'Streaming rollout check-in', started_at: iso(-1), duration_ms: 34000, state: 'recording', recording_here: true,
     title_editable: true, audio: { ...clone(audioOk), pending: 1 },
     actions: {
-      mode: 'ready', org: 'Tico Team', orgs, multiple: true, can_change: true, draft_status: '', waiting: 1, owners,
+      mode: 'ready', actor: 'human:tina', org: 'Tico Team', orgs, multiple: true, can_change: true, draft_status: '', waiting: 1, owners,
       items: [
         item({ id: 'r1', title: 'Write up how live text reconnects after a drop', quote: 'What happens when the connection drops?', at_ms: 26000, owner: 'bot:head-of-engineering', owner_name: 'Head of Engineering', can_send: true }),
         item({ id: 'r2', title: 'Check the chunked pass replaces streamed words', quote: 'And the chunked pass still replaces them', at_ms: 17000 }),
@@ -305,7 +305,9 @@
       scenes.recording();
       state.status.update = { state: 'ready', version: '0.6.0', notes: 'Live text through your Tico.', blocked: 'After this recording' };
     },
-    'update-error': () => { state.status.update = { state: 'error', version: '0.6.0', notes: '', blocked: '' }; },
+    'update-error': () => { Object.assign(state.status.update, { state: 'error', version: '0.6.0', error: "Couldn't check for updates" }); },
+    // Opened from Downloads: macOS runs a read-only copy, so the app offers Move to Applications.
+    'update-move': () => { Object.assign(state.status.update, { location: "Can't update from here", movable: true }); },
     // Long names and titles everywhere they show.
     long: () => {
       scenes.live();
@@ -397,10 +399,13 @@
       a.waiting = a.items.filter((i) => !i.sent).length;
     },
     // Create: the proposal becomes a private task in Tico, with its number.
-    task_picker: ({ query, offset }) => ({ tasks: offset ? [] : [
-      { id: 't42', number: 42, title: 'Review pricing', status: 'open' },
-      { id: 't43', number: 43, title: 'Test recovery', status: 'review' },
-    ].filter((t) => !query || (`#${t.number} ${t.title}`).toLowerCase().includes(query.toLowerCase())), next_offset: null }),
+    task_picker: ({ query, kind, offset }) => ({ tasks: offset ? [] : [
+      { id: 't42', number: 42, title: 'Review pricing', status: 'open', type: 'general' },
+      { id: 't43', number: 43, title: 'Test recovery', status: 'review', type: 'bug' },
+      { id: 't44', number: 44, title: 'Property manager bots: pricing page', status: 'doing', type: 'general' },
+      { id: 't45', number: 45, title: 'Fix pricing rounding', status: 'open', type: 'bug' },
+    ].filter((t) => (!kind || t.type === kind) && (!query || (/^#?\d+$/.test(query.trim()) ? String(t.number) === query.trim().replace('#', '') : query.toLowerCase().split(/\s+/).every((w) => t.title.toLowerCase().includes(w))))), next_offset: null }),
+    task_types: () => [{ id: 'general', name: 'General' }, { id: 'bug', name: 'Bug' }],
     link_selected_tasks: ({ ids }) => {
       for (const id of ids) open().actions.items.push(item({ id, task_id: id, number: id.slice(1), title: id === 't42' ? 'Review pricing' : 'Test recovery', status: 'open', kind: 'link', sent: true }));
     },
@@ -524,6 +529,23 @@
     },
     make_default: ({ id }) => { state.settings.connections.forEach((c) => (c.default = c.id === id)); },
     set_audio: ({ microphone, meeting: on }) => Object.assign(state.settings, { microphone, meeting_audio: on }),
+    // Check for updates: Checking…, then Downloading, then Update ready (or Up to date with ?latest).
+    update_check: () => {
+      const u = state.status.update;
+      const latest = new URLSearchParams(location.search).has('latest');
+      Object.assign(u, { state: 'checking', error: '' });
+      setTimeout(() => {
+        if (latest) { u.state = 'current'; return; }
+        Object.assign(u, { state: 'downloading', version: '0.5.150', progress: 40 });
+        setTimeout(() => Object.assign(u, { state: 'ready', progress: null }), 400);
+      }, 400);
+    },
+    // A newer copy is already in Applications with ?newer; otherwise the move succeeds.
+    move_to_applications: ({ how }) => {
+      window.moves = [...(window.moves || []), how];
+      if (how === 'copy' && new URLSearchParams(location.search).has('newer')) return { ask: '0.5.150' };
+      return {};
+    },
     dismiss_error: () => { state.status.error = ''; },
     dismiss_notice: () => { state.status.notice = ''; },
     dismiss_connect: () => { state.status.connect = null; },

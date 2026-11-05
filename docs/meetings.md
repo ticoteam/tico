@@ -229,9 +229,13 @@ format is a `422` that names the problem.
   asking again for the same bot returns the same task.
 - **Pending tasks.** Beside each meeting are three lists: **Doc updates**, **Tasks** and **Feature
   requests**. A human adds items (with the quote and time they came from if they like) and the
-  readers edit, Send or Dismiss them once the meeting is shared. Send creates ordinary Tico tasks, never a card in another tool: a
-  task item becomes a task for its named owner; a doc update becomes a task for `doc-updater`; a
-  feature request becomes a task for whoever is primary for the product group. Product area, app and label
+  meeting's readers edit, Send or Dismiss them once the meeting is shared. Send creates ordinary Tico tasks, never a card in another tool: a
+  task item becomes a task for its named owner; a doc update becomes a task for the owner it names,
+  or for `doc-updater` when it names none and you can send work to that bot; a feature request
+  becomes a task for whoever is primary for the product group. If a doc update has no owner and
+  `doc-updater` is absent or the sender cannot write to it, or a chosen bot is not writable, Send
+  asks for an owner and leaves the item proposed so it can be edited and sent again. Product area,
+  app and label
   are optional: use your team's names or leave them blank. Existing B/F and CA/PA codes still work.
   A near-identical open task returns a link only if the sender can read it.
   Every sent task ends with a footer naming the meeting and quoting the line. Participants-only meetings send
