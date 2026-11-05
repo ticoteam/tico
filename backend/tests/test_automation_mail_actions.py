@@ -295,7 +295,9 @@ def test_a_lost_claim_and_a_lost_result_never_send_twice(api, computer):
         report = {"ok": True, "send_queue_id": first["send_queue_id"]}
         url = f"automations/mail-actions/{third['id']}/result"
         assert post(api, url, report, computer.token)["state"] == "waiting_send"
-    approve_and_dispatch(api, computer, first["send_queue_id"])
+    # The approval follows both lease retries in time; the undo window never moves backward.
+    with later(15):
+        approve_and_dispatch(api, computer, first["send_queue_id"])
     assert len(computer.gmail.sent) == 1
     assert last_run(api, aid)["status"] == "ok"
 
