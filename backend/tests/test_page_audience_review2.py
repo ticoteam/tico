@@ -163,7 +163,7 @@ def test_assistant_page_links_use_the_shared_recognizer_on_all_transports(api):
     with api.app.state.store.transaction() as c:
         before = events.latest(c)
         c.execute("UPDATE messages SET body='Review this page now',revision=revision+1 WHERE id=?", (message["id"],))
-    shared = {}
+    shared = events.Hydrated()
     for actor in ("cara", "ben", "cara"):
         viewer = Identity("human:" + actor, "human", actor + "@acme.example")
         with api.app.state.store.read() as c:
