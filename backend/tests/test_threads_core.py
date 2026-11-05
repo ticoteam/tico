@@ -7,17 +7,35 @@ The migration's reader sets are pinned by test_threads_migration_e2e.py (goldens
 """
 
 import pytest
+import time_machine
 
 from backend.tests.slug_ids import bot_ids_are_their_slugs  # noqa: F401  (each bot's id is its slug)
 from backend import org_rule_check, threads
 from backend.store import H, Problem
-from backend.tests.test_threads_migration_e2e import build, close, identities, open_store
+from backend.tests.demo_template import copy_demo
+from backend.tests.test_threads_migration_e2e import NOW, build, close, identities, open_store
 from clients import sessions
 
 
+@pytest.fixture(scope="module", autouse=True)
+def demo_clock():
+    """Builds and reads see the same day, including clocks outside hubdb.now."""
+    with time_machine.travel(NOW, tick=False):
+        yield
+
+
+@pytest.fixture(scope="module")
+def demo_template(tmp_path_factory, demo_clock):
+    """Each worker seeds once; tests only open private copies of this directory."""
+    # The function-scoped bot_ids_are_their_slugs fixture has not run during module setup.
+    with pytest.MonkeyPatch.context() as monkeypatch:
+        monkeypatch.setattr(H, "new_bot_id", lambda slug: slug)
+        return build("demo", tmp_path_factory.mktemp("threads-demo-template"))
+
+
 @pytest.fixture
-def world(tmp_path):
-    settings = build("demo", tmp_path)
+def world(tmp_path, demo_template):
+    settings = copy_demo(demo_template, tmp_path / "demo")
     store, auth = open_store(settings)
     with store.transaction() as c:
         auth.sync_access(c)
