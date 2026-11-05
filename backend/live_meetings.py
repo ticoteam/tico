@@ -1419,6 +1419,8 @@ def install_live_meetings(app, store, auth, write):
                                           "AND status IN ('pending','claimed')", (rid, bot["bot"])).fetchall():
                         _finish_pass(c, rid, turn, "meeting_access_revoked")
                 c.execute("DELETE FROM live_meeting_bots WHERE meeting_id=? AND joined_by<>?", (rid, row["owner_actor"]))
+            from . import meeting_audience
+            meeting_audience.revoke_live(c, rid)
             if added or removed or visibility != row["visibility"]:
                 _event(c, rid, "meeting.access", {"visibility": visibility, "added": added, "removed": removed,
                                                    "changed_by": who.actor})
@@ -1672,7 +1674,15 @@ def install_live_meetings(app, store, auth, write):
             if not chunks:
                 raise Problem("transcript", "A live meeting needs transcript text before finalization", 409)
             duration_ms = max(chunk["end_ms"] for chunk in chunks)
-            body_import = MeetingImport(title=row["title"], started_at=row["started_at"],
+            participants = []
+            if row["visibility"] != "team":
+                for member in c.execute("SELECT actor FROM live_meeting_access WHERE meeting_id=? UNION "
+                                        "SELECT actor FROM live_meeting_humans WHERE meeting_id=?",
+                                        (rid, rid)):
+                    person = H.human(c, H.actor_id(member[0])) if H.is_human(member[0]) else None
+                    if person and person.get("email"):
+                        participants.append(person["email"])
+            body_import = MeetingImport(participants=participants, title=row["title"], started_at=row["started_at"],
                                         duration_seconds=duration_ms / 1000, source="tico-live", external_id=rid,
                                         transcript=[{"speaker": chunk["speaker"], "start_ms": chunk["start_ms"],
                                                      "end_ms": chunk["end_ms"], "text": chunk["text"]}
@@ -1703,6 +1713,9 @@ def install_live_meetings(app, store, auth, write):
                 c.execute("UPDATE live_meetings SET state='ended',ended_at=?,updated_at=? WHERE id=?",
                           (H.now(), H.now(), rid))
                 _end_open_turns(c, rid)
+            c.execute("UPDATE live_meetings SET discarded_at=? WHERE id=?", (H.now(), rid))
+            from . import meeting_audience
+            meeting_audience.revoke_live(c, rid)
             for table in ("live_meeting_chunk_versions", "live_meeting_chunks", "live_meeting_chat_routes",
                           "live_meeting_chat", "live_meeting_windows", "live_meeting_events"):
                 c.execute(f"DELETE FROM {table} WHERE meeting_id=?", (rid,))

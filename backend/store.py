@@ -419,7 +419,8 @@ def refused(c, identity, exc, savepoint="domain_write"):
     # Preserve refusal auditing, but never a partial domain operation.
     token = H.PRIVATE_WRITE.set(getattr(exc, 'private', False))
     try:
-        H.refuse(c, identity.actor, exc.rule, exc.detail, exc.severity, task=getattr(exc, 'task', None))
+        H.refuse(c, identity.actor, exc.rule, exc.detail, exc.severity, task=getattr(exc, 'task', None),
+                 scope=getattr(exc, 'scope', None))
     except H.Refused:
         pass
     finally:
@@ -2376,6 +2377,9 @@ class Store:
                 for task_id in task_ids:
                     replay_auth.task(c, replay_principal, task_id)
                 privacy.require_payload(c, replay_principal, result)
+                if '/meetings/' in operation or operation.endswith('/meetings'):
+                    from .meeting_items import redact
+                    result = redact(c, replay_principal, replay_auth, result)
                 return result
             # Who made the changes this write logs (backend/events.py).
             from . import events as changes

@@ -8,6 +8,7 @@ import time
 from datetime import datetime, timedelta, timezone
 
 import pytest
+import time_machine
 from fastapi.testclient import TestClient
 
 from backend import demo
@@ -21,6 +22,13 @@ NEXT_YEAR = datetime(2027, 11, 2, 18, 30, tzinfo=timezone.utc)
 FIXED_SECTIONS = ("serve", "sell", "know", "how", "not")
 
 
+@pytest.fixture(scope="module", autouse=True)
+def demo_clock():
+    """Builds and API reads see the same day, including clocks outside hubdb.now."""
+    with time_machine.travel(NOW, tick=False):
+        yield
+
+
 @pytest.fixture(scope="module")
 def built(tmp_path_factory):
     return demo.build(tmp_path_factory.mktemp("demo-strategy"), now=NOW)
@@ -28,7 +36,8 @@ def built(tmp_path_factory):
 
 @pytest.fixture(scope="module")
 def built_next_year(tmp_path_factory):
-    return demo.build(tmp_path_factory.mktemp("demo-strategy-2027"), now=NEXT_YEAR)
+    with time_machine.travel(NEXT_YEAR, tick=False):
+        return demo.build(tmp_path_factory.mktemp("demo-strategy-2027"), now=NEXT_YEAR)
 
 
 def signed_in(settings):
@@ -194,7 +203,7 @@ def test_the_brand_book_is_published_by_the_owner(built):
 
 
 def test_a_build_in_another_year_dates_the_market_and_its_sources_to_that_year(built_next_year):
-    with signed_in(built_next_year) as api:
+    with time_machine.travel(NEXT_YEAR, tick=False), signed_in(built_next_year) as api:
         spend = api.get("/api/v2/market/spend").json()
         insights = api.get("/api/v2/market/insights").json()["insights"]
     assert spend["year"] == spend["definition"]["year"] == 2027
