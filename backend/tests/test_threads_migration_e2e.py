@@ -35,6 +35,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 import pytest
+import time_machine
 from fastapi.testclient import TestClient
 
 from backend.tests.slug_ids import bot_ids_are_their_slugs  # noqa: F401  (each bot's id is its slug)
@@ -50,6 +51,13 @@ WORLDS = ("demo", "devcopy")
 AGENT = "standing"          # the harness label of a bot's standing credential; Auth.conversation only checks it is set
 
 
+@pytest.fixture(scope="module", autouse=True)
+def demo_clock():
+    """The demo's readers and the dev copy's retention window use the build's day."""
+    with time_machine.travel(NOW, tick=False):
+        yield
+
+
 # ----------------------------------------------------------------------------- the worlds
 def build(world, directory):
     """The demo world, or a dev copy of it made the way a dev server gets its data. The copy keeps the demo's company
@@ -58,8 +66,7 @@ def build(world, directory):
     if world == "demo":
         return settings
     dest = directory / "devcopy" / "hub.sqlite"
-    # devcopy cuts history back from the real clock, while the demo's history is dated from NOW: a 30-day window
-    # would drop every message. Ten years keeps all of it, so the copy's messages are the ones the golden pins.
+    # Keep the demo's whole history, including its older weeks, so the copy's messages are the ones the golden pins.
     devcopy.build(settings.db_path, dest, days=3650)
     return dataclasses.replace(settings, db_path=dest, registry_dir=dest.parent / "registry",
                                blob_dir=dest.parent / "blobs", demo=False, demo_public=False,
