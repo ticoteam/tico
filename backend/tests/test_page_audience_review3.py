@@ -212,7 +212,7 @@ def test_restricted_page_leak_matrix_across_stored_shapes_transports_and_deletio
     warmup = post(api, "jobs/claim", {"bot": "finance", "start_places": True}, token=machine["token"], key="matrix-assignment")["attempt"]
     if warmup:
         post(api, f"attempts/{warmup['id']}/complete", {"outcome": "completed", "text": "Ready to review", "last_seq": 0}, token=machine["token"])
-    post(api, f"tasks/{tid}/comments", {"text": "Start the review", "wake": True})
+    post(api, f"tasks/{tid}/comments", {"text": "Start the review", "delivery": "steer"})
     failures = []
     claimed_ids = []
     if disabled_guard == "scrubber":
@@ -305,13 +305,13 @@ def test_restricted_page_leak_matrix_across_stored_shapes_transports_and_deletio
         claimed_ids.append(aid)
         post(api, f"attempts/{aid}/started", {"thread_id": "matrix-" + state}, token=machine["token"])
         steer = post(api, f"tasks/{tid}/comments", {"text": "Check remaining attachments",
-             "attachments": [(ordinary if deleted else fid) + "@1"], "wake": True})["comment"]["id"]
+             "attachments": [(ordinary if deleted else fid) + "@1"], "delivery": "steer"})["comment"]["id"]
         inputs = api.post(f"/api/v2/attempts/{aid}/inputs", json={}, headers=headers(machine["token"]))
         response(state + ":attempt inputs", inputs)
         assert inputs.status_code == 200 and steer in [m["id"] for m in inputs.json()["messages"]], inputs.text
         post(api, f"attempts/{aid}/complete", {"outcome": "completed", "text": "Checked", "last_seq": 0}, token=machine["token"])
         if not deleted:
-            post(api, f"tasks/{tid}/comments", {"text": "Continue review after deletion", "wake": True})
+            post(api, f"tasks/{tid}/comments", {"text": "Continue review after deletion", "delivery": "steer"})
     if disabled_guard:
         assert any(isinstance(found, list) and set(found) & set(secrets) for _, found, *rest in failures), \
             "The matrix did not detect removal of " + disabled_guard
