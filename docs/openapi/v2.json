@@ -25067,6 +25067,86 @@
         ]
       }
     },
+    "/api/v2/meetings/{rid}/items/{iid}/link": {
+      "post": {
+        "summary": "Accept a readable task proposal without creating a task; the meeting must be shared",
+        "operationId": "acceptMeetingTaskProposal",
+        "parameters": [
+          {
+            "name": "rid",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Rid"
+            }
+          },
+          {
+            "name": "iid",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Iid"
+            }
+          },
+          {
+            "name": "Idempotency-Key",
+            "in": "header",
+            "required": true,
+            "schema": {
+              "type": "string"
+            },
+            "description": "1-200 characters. Reusing a key with the same body replays the first answer."
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/Empty"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MeetingTaskProposalAccepted"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "A problem: {\"error\": {\"code\", \"detail\", \"retryable\", ...}}",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "A problem: {\"error\": {\"code\", \"detail\", \"retryable\", ...}}",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        },
+        "tags": [
+          "Meetings"
+        ]
+      }
+    },
     "/api/v2/meetings/{rid}/items/{iid}/push": {
       "post": {
         "summary": "Apply final fields at the expected version and send in one transaction, or reconcile an already created task you requested with result_ref. An already sent item returns its existing task with pushed=false even at a stale version; other stale sends return 409 with the current item. Private meetings require every new task reader inside the meeting audience",
@@ -25225,7 +25305,7 @@
         ]
       },
       "post": {
-        "summary": "Link up to 20 readable tasks; sent is only for their requester; links never widen access",
+        "summary": "Link up to 20 readable tasks; sent is only for their requester. Results match input order; 404 skips an unavailable task without its data",
         "operationId": "linkMeetingTasks",
         "parameters": [
           {
@@ -25263,7 +25343,7 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/MeetingTaskLinks"
+                  "$ref": "#/components/schemas/MeetingTaskLinkBatch"
                 }
               }
             }
@@ -58352,6 +58432,19 @@
             ],
             "title": "At Ms"
           },
+          "proposed_task_id": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 200,
+                "minLength": 1
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Proposed Task Id"
+          },
           "status": {
             "type": "string",
             "enum": [
@@ -58494,6 +58587,11 @@
               }
             ],
             "title": "Result Ref"
+          },
+          "private": {
+            "type": "boolean",
+            "title": "Private",
+            "default": false
           }
         },
         "additionalProperties": false,
@@ -60925,6 +61023,47 @@
         ],
         "additionalProperties": true
       },
+      "MeetingTaskLinkBatch": {
+        "type": "object",
+        "properties": {
+          "tasks": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/MeetingTaskLink"
+            }
+          },
+          "next_cursor": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "results": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "status": {
+                  "enum": [
+                    200,
+                    404
+                  ]
+                }
+              },
+              "required": [
+                "status"
+              ],
+              "additionalProperties": true
+            }
+          }
+        },
+        "required": [
+          "next_cursor",
+          "results",
+          "tasks"
+        ],
+        "additionalProperties": true
+      },
       "MeetingTaskLinks": {
         "type": "object",
         "properties": {
@@ -60944,6 +61083,49 @@
         "required": [
           "next_cursor",
           "tasks"
+        ],
+        "additionalProperties": true
+      },
+      "MeetingTaskProposalAccepted": {
+        "type": "object",
+        "properties": {
+          "item": {
+            "type": "object",
+            "properties": {
+              "id": {
+                "type": "string"
+              },
+              "proposed_task_id": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "result_ref": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "status": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "id",
+              "proposed_task_id",
+              "result_ref",
+              "status"
+            ],
+            "additionalProperties": true
+          },
+          "pushed": {
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "item",
+          "pushed"
         ],
         "additionalProperties": true
       },
