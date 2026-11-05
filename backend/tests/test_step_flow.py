@@ -122,7 +122,7 @@ def test_fixes_source_blocks_the_failed_head_until_a_new_commit(api, reviews, fe
         c.execute("UPDATE task_links SET state='open',checks='passing',mergeable='clean',detail=? WHERE id=?",
                   (json.dumps({'head_sha': HEAD}), link['id']))
 
-    for name, head in feedback:
+    for n, (name, head) in enumerate(feedback):
         with store.transaction() as c:
             H.task_update(c, 'bot:cpo', task['id'], step=name)
         review = check(api, task, title=f'{name}: PR #412')
