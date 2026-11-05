@@ -17,6 +17,14 @@ from pathlib import Path
 CLIENT_VERSION = "0.2.1"
 
 
+def gmail_read_timeout(method, path, default):
+    """A live Gmail page may mint, list, then fetch five batches of metadata, each with its own timeout."""
+    route = path.split("?", 1)[0]
+    if method == "GET" and re.fullmatch(r"/api/v2/mail/(?:messages(?:/[^/]+)?|threads/[^/]+)", route):
+        return max(default, 90)
+    return default
+
+
 def inbound_wait_timeout(method, path, body, default, *, query=None):
     """A valid Inbox wait gets its server deadline plus ten seconds (up to 130).
 
@@ -111,6 +119,7 @@ class Client:
             headers["Content-Length"] = str(data.size)
         path = path.replace("#", "%23")     # a task number ("tasks/#18945") is in the path, not a fragment
         timeout = inbound_wait_timeout(method, path, body, self.timeout)
+        timeout = gmail_read_timeout(method, path, timeout)
         if method == "POST" and path in SLOW_POSTS:
             timeout = max(timeout, SLOW_WAIT)
         if hasattr(data, "read"):
