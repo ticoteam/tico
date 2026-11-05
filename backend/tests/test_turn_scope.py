@@ -236,6 +236,7 @@ def test_only_a_filed_page_on_the_exact_single_task_accepts_cross_bot_versions(a
     assert (current["file_id"], current["bot_id"], current["updated_by"], current["version"]) == (fid, "cpo", "bot:ops", 2)
     stale = page(api, attempt, task=t["id"], page=fid, base_version=1, data=HTML + b"<p>Lost update</p>")
     assert stale.status_code == 409, stale.text
+    assert page(api, attempt, task=t["id"], page=fid, base_version="²").status_code == 422
     pinned = published(api, publisher, name="pinned.html", botwide=True)
     post(api, "pins", {"place": "dashboard", "item": "page:" + pinned})
     post(api, "pins", {"place": "task:" + t["id"], "item": "page:" + pinned})

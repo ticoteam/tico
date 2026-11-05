@@ -234,9 +234,14 @@ class Pages:
         if version_page:
             if replaces:
                 raise Problem("validation", "A page version cannot replace another page", 422)
-            if isinstance(base, bool) or not str(base or "").isdigit() or int(base) < 1:
-                raise Problem("validation", "base_version is the page version you read", 422)
-            base = int(base)
+            try:
+                if isinstance(base, bool) or not str(base or "").isdecimal():
+                    raise ValueError
+                base = int(base)
+                if base < 1:
+                    raise ValueError
+            except (TypeError, ValueError) as exc:
+                raise Problem("validation", "base_version is the page version you read", 422) from exc
         elif base is not None:
             raise Problem("validation", "base_version requires page", 422)
         cleaned, unembedded = visuals.clean(data, "page", base=False)
