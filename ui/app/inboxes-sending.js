@@ -15,7 +15,7 @@ const ibSendAudit = send => `<li><strong>${esc(send.subject || '(No subject)')}<
 
 function ibSendForm(document, company = false, disabled = false) {
   const e = document.effective, stored = company ? document.company : document.inbox;
-  const select = (key, label, items) => ibSendField(label, `<select name="${key}">${ibSendOptions(items, e[key])}</select>`);
+  const select = (key, label, items) => ibSendField(label, `<select name="${key}">${ibSendOptions(items, stored[key] ?? e[key])}</select>`);
   return `<form class="ib-send-form" data-send-form><fieldset${disabled ? ' disabled' : ''}>
     ${ibSendField(company ? 'Bots send' : 'Sends', `<select name="mode">${ibSendOptions(company ? IB_SEND_MODES : [['', 'Use company default'], ...IB_SEND_MODES], stored.mode || (company ? e.mode : ''))}</select>`)}
     ${select('what', 'What', [['replies_only', 'Replies only'], ['replies_and_new', 'Replies and new messages']])}
@@ -28,8 +28,10 @@ function ibSendForm(document, company = false, disabled = false) {
       ['ask_attachments', 'Attachments'], ['ask_many_recipients', 'More than 10 recipients']].map(([key, label]) =>
       `<label><input type="checkbox" name="${key}"${e[key] ? ' checked' : ''}>${esc(label)}</label>`).join('')}</div></div>
     ${select('who_can_ok', 'Who can OK', [['bot_managers', 'Bot managers'], ['inbox_admins', 'Inbox admins'], ['named_people', 'Named people']])}
-    ${ibSendField('People', `<input name="approvers" value="${esc((e.approvers || []).join(', '))}" placeholder="Person IDs, separated by commas">`)}
+    ${ibSendField('People', `<input name="approvers" value="${esc((stored.approvers || e.approvers || []).join(', '))}" placeholder="Person IDs, separated by commas">`)}
     <div class="ib-send-effective">${esc(ibSendEffective(e))}</div>
+    ${(e.recipient_rules || []).length ? `<div class="ib-send-effective">${esc(e.recipient_rules.map(rule => `${({internal: 'Inside the company', known_addresses: 'Known addresses'})[rule.value]} · ${IB_SEND_SOURCES[rule.source]}`).join(' + '))}</div>` : ''}
+    ${(e.approval_rules || []).length > 1 ? `<div class="ib-send-effective">${esc(e.approval_rules.map(rule => `${({bot_managers: 'Bot managers', inbox_admins: 'Inbox admins', named_people: 'Named people'})[rule.value]} · ${IB_SEND_SOURCES[rule.source]}`).join(' + '))}</div>` : ''}
     ${document.legacy_automation_count ? `<p class="muted"><a href="#/automations">${Number(document.legacy_automation_count)} automations</a> · On their own · kept from before</p>` : ''}
     ${disabled ? '' : '<div class="ib-actions"><button class="primary" type="submit">Save</button>' + (company ? '' : '<button type="button" class="ghost" data-send-inherit>Use company default</button>') + '</div>'}
     <p class="err" data-send-error role="alert"></p></fieldset></form>`;
