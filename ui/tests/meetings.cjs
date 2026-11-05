@@ -77,7 +77,7 @@ const world = (extra = {}) => ({role: 'owner', sources: NONE, meetings: [], impo
 async function shot(page, name) {
   if (!process.env.TICO_MEETINGS_SCREENSHOTS) return;
   fs.mkdirSync(process.env.TICO_MEETINGS_SCREENSHOTS, {recursive: true});
-  await page.screenshot({path: path.join(process.env.TICO_MEETINGS_SCREENSHOTS, name + '.png'), fullPage: true});
+  await page.screenshot({path: path.join(process.env.TICO_MEETINGS_SCREENSHOTS, name + '.png'), fullPage: true, animations: 'disabled'});
 }
 
 (async () => {
