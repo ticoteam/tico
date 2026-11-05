@@ -31,7 +31,7 @@ def run(c, ctx):
         items = suggestions.fetch(store, destination)
         if items is None:
             return _result("skipped", "Privacy consent is off")
-    except Exception as exc:
+    except Exception as exc:  # noqa: BLE001 - any Gateway failure is this step's failure, not the run's
         return _result("failed", str(exc) if isinstance(exc, suggestions.GatewayError) else "Gateway connection failed")
     with store.transaction() as tx:
         # Consent may have changed while HQ answered.
@@ -44,7 +44,7 @@ def run(c, ctx):
                    (suggestions.LAST_FETCH, now))
     try:
         reported = suggestions.report(store)
-    except Exception as exc:
+    except Exception as exc:  # noqa: BLE001 - delivered suggestions stay delivered; reports retry next run
         reason = str(exc) if isinstance(exc, suggestions.GatewayError) else "Gateway connection failed"
         return _result("failed", reason, len(items), found, {"delivered": delivered, "reported": 0})
     return _result("ran", "Suggestions kept for the next Update", len(items), found,
