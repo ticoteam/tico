@@ -424,6 +424,10 @@ def test_task_attachment_projections_omit_rejected_files_blobs_and_covers(api):
     assert legacy["id"] in own["cover"]["url"]
     assert [r["id"] for r in get(api, f'tasks/{t["id"]}/files', token)["files"]] == [legacy["id"]]
     assert post(api, "sql", {"sql": "SELECT task_id,blob_id FROM task_assets"}, token)["rows"] == [[t["id"], legacy["id"]]]
+    comments = get(api, f'tasks/{other["id"]}/comments', token)["comments"]
+    assert next(row for row in comments if row["id"] == comment["id"])["refs"]["files"] == [legacy["id"] + "@1"]
+    refs = post(api, "sql", {"sql": "SELECT refs FROM messages WHERE id=?", "params": [comment["id"]]}, token)["rows"]
+    assert json.loads(refs[0][0])["files"] == [legacy["id"] + "@1"]
 
 
 def test_claim_replay_rebuilds_context_after_meeting_and_page_access_narrow(api):

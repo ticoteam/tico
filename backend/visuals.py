@@ -562,6 +562,8 @@ def decorate(c, who, files, key, base, messages, full=True, hosted=None):
     from .counsel import is_counsel
     plain = is_counsel(who)
     for message in messages:
+        if not message or not message.get("refs"):
+            continue
         items = ((message or {}).get("refs") or {}).get("attachments") or []
         if not attempt_id and not any(isinstance(a, dict) and a.get("file_id") for a in items):
             continue
