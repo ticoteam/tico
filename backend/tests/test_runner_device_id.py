@@ -41,7 +41,7 @@ def test_upgrade_keeps_existing_computers_unknown_and_reboots_without_changes(tm
     with sqlite3.connect(path) as c:
         c.execute("DROP INDEX runners_device_id")
         c.execute("ALTER TABLE runners DROP COLUMN device_id")
-        c.execute("DELETE FROM schema_migrations WHERE version='0094_runner_device_id'")
+        c.execute("DELETE FROM schema_migrations WHERE version='0097_runner_device_id'")
         c.execute("INSERT INTO humans(id,name) VALUES('h1','Ana')")
         c.execute("INSERT INTO runners(id,label,owner_id,token_hash,created_at,platform) "
                   "VALUES('r1','Acme Mac','h1','hash-1','2026-01-01T00:00:00Z','darwin')")
