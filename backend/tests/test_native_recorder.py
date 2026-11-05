@@ -294,7 +294,7 @@ def test_recorder_rows_link_both_ways_resume_batches_and_reconcile_save(api, tmp
         assert out['synthetic'] and out['local']['kept_on_mac'] and not out['local']['items']
         assert [len(ids) for ids, _ in batches] == [20, 20, 20, 5]
         assert batches[1] == batches[2]
-        linked = get(api, f"meetings/{out['meeting']}/tasks")['tasks']
+        linked = get(api, f"meetings/{out['meeting']}/tasks?limit=50")['tasks']
         assert {row['task_id'] for row in linked} == {*targets, out['created']}
         for target in (targets[0], targets[-1], out['created']):
             assert get(api, f'tasks/{target}/meetings')['meetings'][0]['meeting_id'] == out['meeting']
