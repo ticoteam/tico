@@ -1976,6 +1976,9 @@ mod tests {
         std::fs::create_dir_all(folder.0.join("tasks/task/product")).unwrap();
         manager.clone().sync(Arc::new(IdleHost), vec![]).await;
         assert_eq!(manager.latest()[0]["error"], json!("Could not find it: Tracked path is not a Git worktree; left as it is"));
+        std::fs::write(folder.0.join("tasks/task/product/.git"), "gitdir: /nonexistent/worktree\n").unwrap();
+        manager.clone().sync(Arc::new(IdleHost), vec![]).await;
+        assert!(manager.latest()[0]["error"].as_str().unwrap().starts_with("Could not read its remote: Git config failed"));
         server.abort();
     }
 

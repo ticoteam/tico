@@ -226,9 +226,31 @@ An unknown stop policy also refuses that fallback.
 Linger is checked at install time; if it is off the command prints `loginctl enable-linger $USER`, because without it the jobs stop when the last session
 logs out and do not start at boot. `scripts/tico status`, `restart`, `logs` and `uninstall` work the same as on a Mac.
 
-A checkout with uncommitted changes, or on a branch other than `main`, is refused: nothing is
+A checkout with uncommitted changes, or on a person's development branch, is refused: nothing is
 stashed, reset or discarded. Settings > Health and Computers name the changed files until someone
 commits or stashes them.
+
+If a bot left the install on `tico/<8-character hex id>-<slug>` or `tico-session/<task>`, a release
+update can move it back onto a release. After draining work, under `tico-update.lock`, it checks that tracked
+files and the index are clean and that no merge, rebase, cherry-pick, revert or bisect is in progress. Local
+files that would be overwritten still block the update. It saves the current commit at
+`refs/tico/recovered/<UTC timestamp>-<branch>`, keeps the original branch ref, then does the normal detached
+release update and health check. Rollback still returns to the previous checkout. The recovery ref stays
+after success or rollback; `git show <ref>` reads the saved commit. The update log and `update-status.json`
+record “moved the install off bot branch … (kept at …)”. Health and BotOps name the branch and say whether
+it will be recovered on the next update or what blocks it. An older updater still needs a person to switch
+the install to `main` once before it can receive this fix.
+
+`HUB_DIR` names Tico's own install, where its helper scripts live. It must never be used for bot Git work.
+Bots use their own repositories and task checkouts, including when working on Tico itself. The repo guard
+also refuses outside paths whose resolved Git directory or common directory is shared with the install,
+including linked worktrees and `.git` pointers. For paths inside a repo, it finds and trusts only that
+repo's root for the Git check. This lets the supervisor check bot-owned folders such as `playbooks/`
+and `.state/`. Paths with no Git repo above them, and worktrees whose Git directory is gone, keep
+their usual worktree status or Git error. Any other failed check of the install or bot repo, including
+bad config, access errors and timeouts, refuses the path and says the repo could not be checked.
+Only matching Git metadata is reported as shared with the install. This guard checks destinations
+Tico selects; it does not isolate a bot's shell or user account.
 
 There is one repair for Tico's own links: if every tracked change is a link from HEAD replaced by a regular file
 with exactly its target's HEAD bytes, the updater restores those links under `tico-update.lock` and continues.
