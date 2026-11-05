@@ -245,13 +245,14 @@ def test_a_daily_system_job_sets_the_wake_time_and_an_interval_job_does_not(api,
     zone = SR.zone()
     noon = datetime(2026, 10, 26, 12, 0, tzinfo=zone)                    # Monday noon, company time
     hq.clock[0] = noon.timestamp()
-    system_jobs(api, learnings=("daily", "03:00"), kpi_asks=("15m", "09:00"))
-    with api.app.state.store.transaction() as c:                         # tonight's 03:00 run already happened today
-        c.execute("INSERT INTO learning_runs(id,night,status,started_at) VALUES('lr1','2026-10-26','done',?)", (H.now(),))
+    system_jobs(api, memory_tidy=("daily", "03:30"), kpi_asks=("15m", "09:00"))
+    with api.app.state.store.transaction() as c:                         # today's 03:30 run already happened
+        c.execute("INSERT INTO system_runs(id,job,started_at) VALUES('tidy','memory_tidy',?)",
+                  (sleep_idle.stamp(noon.timestamp() - 8.5 * 3600),))
     with api.app.state.store.read() as c:
         assert sleep_idle.busy(c, hq.clock[0]) == ""                     # the 15-minute job never keeps the server up
         night = sleep_idle.wake_time(c, hq.clock[0])
-    assert night == datetime(2026, 10, 27, 3, 0, tzinfo=zone).timestamp()
+    assert night == datetime(2026, 10, 27, 3, 30, tzinfo=zone).timestamp()
 
     system_jobs(api, kpi_asks=("15m", "09:00"))                          # only the interval job left
     with api.app.state.store.read() as c:

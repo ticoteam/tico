@@ -108,8 +108,8 @@ with the reason attached; it never silently drops the work.
   the bot is replying to (a reply, to that one person, nobody added; an outside Cc makes it something else).
   Any other external recipient needs one of: a standing allowance in the policy file (Influencer: recipient must be
   in its creator table, 10 per day, never the same address twice) or `--approval-issue`, which is a closed
-  `owner:ana` `type:decision` GitHub Issue, a decided Tico `send` approval, or Ana's Tico message telling this bot
-  to send. With the switch off, none of this applies and a send is a draft.
+  `owner:ana` `type:decision` GitHub Issue, a decided Tico `send` approval, or a Tico message from a person who manages
+  this bot telling it to send. With the switch off, a send needs a full per-message approval.
 - With no registry (a Docker computer has no `registry/mail-policy.yaml`) the policy is built in: sending is on
   globally, internal domains are the ones the bot's mailbox and the team roster use (public providers such as
   gmail.com never count), the caps are 20 sends a day, one external recipient and no external Cc. The blocklist is empty.
@@ -145,15 +145,23 @@ Cc: partner@lawfirm.example; associate@lawfirm.example
 
 When `--approval-issue` is a full yes — a closed `owner:ana` `type:decision` GitHub Issue with a
 matching block, a decided Tico `send` approval whose payload names every external address
-and this exact text (its `body_sha256`), or a Tico message in which Ana told this bot to send — that message may carry more
-than one external recipient and external Cc, the cooldown does not apply to it, lint L056
+and this exact text (its `body_sha256`), or a Tico message in which a person who manages this bot told it to send —
+that message may carry more than one external recipient and external Cc, the cooldown does not apply to it, lint L056
 does not apply to it, and the switch being off is lifted for that
 message only. The bot still has to declare `send` on the mailbox, the daily cap and
 the blocklist still apply, and `mail draft` accepts the same `--approval-issue` so the
 draft can be written with the external Cc in the first place. Everything else about the
 bot stays draft-only.
 
-The second reviewer sees the verified owner's message or approval Issue as permission for what
+A Tico message's sender must currently be allowed to change that bot's mail sending: the company owner, an admin,
+a bot owner or a person above the bot on the org chart (`Auth.bot_manager`). Built-in bots, including Counsel, are
+the company owner's alone. `GET /api/v2/messages/{id}` answers `sender_can_approve_send` after checking the caller may
+read the message. Merely holding Write access to chat with the bot does not qualify, and a bot sender never does.
+The connector uses this server answer even on a computer with no local owner configuration. On an older server
+that omits the field, it falls back to `TICO_OWNER_HANDLE` or the owner resolved from local email/registry settings.
+GitHub Issues still require the configured `owner:<handle>` and `type:decision` labels.
+
+The second reviewer sees the verified person's message or approval Issue as permission for what
 it explicitly covers, and still blocks additions beyond it. The review audit records the
 instruction's source and id. A hash-bound Tico `send` approval keeps the review advisory, with
 its verdict still recorded and shown.

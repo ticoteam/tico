@@ -46,6 +46,7 @@ def test_isolation_uses_the_candidate_image_only_after_successful_builds(tmp_pat
         isolation_file = 'runner_support/tests/test_isolation_docker.py'
         assert f'--ignore={isolation_file}' in python_command
         assert python_command[python_command.index('-n') + 1] == workers
+        assert '--maxschedchunk=2' in python_command
         assert calls['all-browser'][1].get('TICO_UI_JOBS') == browser_jobs
         builds = {'build-server', 'build-runner', 'build-updater'}
         assert builds <= calls['all-python'][2] and builds <= calls['all-browser'][2]
@@ -124,6 +125,7 @@ def test_each_part_runs_only_its_own_slice_of_the_gate(tmp_path, monkeypatch):
         if part == 'python':   # alone on its VM, the Python slice uses every core
             command = calls[next(iter(expected))]
             assert command[command.index('-n') + 1] == '4'
+            assert '--maxschedchunk=2' in command
             assert ('group2of4.py' in command) == bool(shard)
         if shard and part == 'browser':   # only its own scripts, not --all
             assert calls['browser-1-of-2'][2:] == ['page1of2']

@@ -7,9 +7,7 @@ team, Ben is an admin, Cara a member (backend/tests/test_api.py). Synthetic fixt
 import json
 import time
 from datetime import datetime, timedelta, timezone
-from types import SimpleNamespace
 
-from backend import learnings as L
 from backend import stale_review
 from backend import system_routines as SR
 from backend import team_rules
@@ -18,7 +16,7 @@ from backend.store import H
 from backend.tests.test_api import api, get, post, put  # noqa: F401  (fixture)
 from backend.tests.test_stale_review import FakeDecide
 
-TIMED = {"stale_review", "kpi_asks", "learnings", "ask_deadlines", "task_manager_report",
+TIMED = {"stale_review", "kpi_asks", "ask_deadlines", "task_manager_report",
          "bookkeeper_check", "memory_tidy"}   # the jobs with a schedule preset
 
 
@@ -37,16 +35,15 @@ def test_admin_sees_a_switch_and_a_schedule_on_the_timed_jobs_and_housekeeping_h
         if job["needed"]:
             assert not job["switch"] and not job["presets"] and not job["can_change"], key
     assert jobs["stale_review"]["schedule"] == "Hourly" and "still_wanted" not in jobs
-    assert jobs["learnings"]["on"] is True and jobs["learnings"]["schedule"] == "Nightly at 03:00"
+    assert "learnings" not in jobs
 
 
 def test_ai_jobs_are_never_offered_every_15_minutes_and_the_server_refuses_it(api):
     jobs = rows(api)
-    for key in ("stale_review", "learnings"):
-        assert "15m" not in [p["key"] for p in jobs[key]["presets"]], key
+    assert "15m" not in [p["key"] for p in jobs["stale_review"]["presets"]]
     assert [p["key"] for p in jobs["kpi_asks"]["presets"]] == ["15m", "hourly", "4h", "daily"]
     put(api, "system-routines/stale_review", {"preset": "15m"}, expected=422)
-    put(api, "system-routines/learnings", {"preset": "hourly"}, expected=422)
+    put(api, "system-routines/learnings", {"preset": "hourly"}, expected=404)
     put(api, "system-routines/kpi_asks", {"preset": "daily", "at": "25:00"}, expected=422)
     put(api, "system-routines/cleanup", {"on": False}, expected=404)        # housekeeping has no controls
 
@@ -200,35 +197,12 @@ def test_the_retired_roundup_control_redirects_run_now_to_find_stuck_and_keeps_i
         assert c.execute("SELECT count(*) FROM system_runs WHERE job='task_roundup'").fetchone()[0] == 0
 
 
-def test_nightly_learnings_has_an_off_switch_on_by_default_and_off_means_no_run_that_night(api, monkeypatch):
-    store = api.app.state.store
-    started = []
-    monkeypatch.setattr(L, "start", lambda store, run_id: started.append(run_id))
-    night = datetime(2026, 10, 22, 3, 30, tzinfo=SR.zone())
-    server = SimpleNamespace(settings=SimpleNamespace(rehearsal=False, test_identities=None),
-                             read=store.read, transaction=store.transaction)
-    assert rows(api)["learnings"]["on"] is True
-    put(api, "system-routines/learnings", {"on": False}, token="ben-test")
-    assert L.nightly(server, night) is None and started == []
-    post(api, "learnings/run", {}, token="ben-test", expected=409)        # the Learnings API's run obeys the switch too
-    with store.read() as c:
-        assert c.execute("SELECT count(*) FROM learning_runs").fetchone()[0] == 0
-    put(api, "system-routines/learnings", {"on": True, "at": "04:00"}, token="ben-test")
-    assert L.nightly(server, night) is None, "before its chosen time"
-    assert L.nightly(server, night + timedelta(minutes=31)) and len(started) == 1
-    assert rows(api)["learnings"]["schedule"] == "Nightly at 04:00"
-    with store.transaction() as c:
-        c.execute("DELETE FROM learning_runs")                         # the route claims the real clock's night
-    post(api, "learnings/run", {}, token="ben-test")                     # an admin starts it, as in Settings > Routines
-    assert len(started) == 2
-    following = H.parse_ts(rows(api)["learnings"]["next"])
-    assert following > datetime.now(timezone.utc) + timedelta(minutes=1), "tonight has run: the next is tomorrow's"
-    noon = datetime(2026, 1, 15, 12, 0, tzinfo=SR.zone())          # a night no other line claims
-    with store.transaction() as c:
-        c.execute("INSERT INTO learning_runs(id,night,status,started_at) VALUES('u',?,'unconfigured',?)",
-                  (L.night_of(noon), H.now()))
-        assert SR.next_night(c, {"at": "04:00"}, noon) == noon.replace(hour=4) + timedelta(days=1), \
-            "an unconfigured night is not tried again before tomorrow"
+def test_learnings_control_is_retired_and_only_maintenance_changes_its_switch(api):
+    assert "learnings" not in rows(api)
+    put(api, "system-routines/learnings", {"on": True}, token="ben-test", expected=404)
+    put(api, "system-routines/learnings", {"at": "04:00"}, expected=404)
+    steps = {row["key"]: row for row in get(api, "maintenance")["steps"]}
+    assert steps["learn"]["enabled"] is False and steps["learn"]["old_timer"] is False
 
 
 def test_run_now_on_stale_review_makes_at_most_30_decide_calls_and_the_row_shows_the_result(api, monkeypatch):

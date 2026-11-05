@@ -127,6 +127,15 @@ class OwnerInstruction(Stage2):
         self.assertTrue(out["sent"], out)
         self.assertEqual(instruction_in(self.prompts[-1]), INSTRUCTION)
 
+    def test_a_server_authorized_senders_instruction_reaches_the_reviewer_without_a_local_owner(self):
+        draft = self.draft()
+        self.order(sender_id="human:ana", sender_can_approve_send=True)
+        with mock.patch.object(pl, "OWNER", "owner"):
+            out = self.send(draft["draft"], "--approval-issue", ORDER)
+        self.assertTrue(out["sent"], out)
+        self.assertEqual(instruction_in(self.prompts[-1]), INSTRUCTION)
+        self.assertIn(f"verified: human:ana, in Tico message; approval {ORDER}", self.prompts[-1])
+
     def test_a_verified_issue_reaches_the_backend_with_its_original_text(self):
         title = "Owner's Mailbox Test"
         body = f"Send to: {AVA}\nSubject: Mailbox test\nBody:\n{GOOD_BODY}"

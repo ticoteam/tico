@@ -1233,6 +1233,7 @@ RUNS_FROM = {"routine": "Automations", "wake_rule": "rules.py, read from its Wha
              "health_monitor": "its bot; shown read-only"}
 GONE_JOBS = {"job:routine_timer": "Bot routine timer: the automations tick runs schedules now",
              "job:task_roundup": "Task roundup: scheduled lists moved to Maintenance Find stuck",
+             "job:learnings": "Nightly learnings: Learn runs in Maintenance now",
              "job:propose_demotions": "Suggest quieter rules: rule suggestions went with the rules editor",
              "job:health_scan": "Health scan: Check health runs in Maintenance now"}
 
