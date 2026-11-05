@@ -129,10 +129,29 @@ def test_a_doc_update_on_a_team_with_no_doc_bot_is_left_for_a_person_to_choose(a
     # A named owner the roster does not have is refused again, and nothing is created for it.
     change(api, rid, iid, {"detail": {**detail, "owner": "human:nobody"}})
     push(api, rid, iid, expected=422)
+    change(api, rid, iid, {"detail": {**detail, "owner": H.KEEPER}})
+    push(api, rid, iid, expected=422)
     change(api, rid, iid, {"detail": {**detail, "owner": "human:ben"}})
     pushed = push(api, rid, iid)
     task = get(api, "tasks/" + pushed["item"]["result_ref"])["task"]
     assert task["owner_id"] == "human:ben" and "Document: docs/pricing.md" in task["body"]
+
+
+def test_a_doc_update_cannot_be_assigned_to_a_bot_the_sender_cannot_write(api):
+    bot(api, "docs-worker")
+    canonical = bot_id(api, "docs-worker")
+    with api.app.state.store.transaction() as c:
+        restrict(c, canonical, see={"everyone": True}, read={"everyone": True}, write={"people": ["ana"]})
+        before = c.execute("SELECT count(*) FROM tasks").fetchone()[0]
+    rid = record(api, {"title": "Docs call"}, token="cara-test")
+    iid = add(api, rid, {"section": "doc", "text": "Correct the guide",
+                         "detail": {"owner": "bot:docs-worker"}}, token="cara-test")["item"]["id"]
+    refused = push(api, rid, iid, token="cara-test", expected=403)
+    assert refused["error"]["code"] == "forbidden"
+    assert "Unknown recipient" not in refused["error"]["detail"]
+    assert items(api, rid, token="cara-test")["sections"]["doc"][0]["status"] == "proposed"
+    with api.app.state.store.read() as c:
+        assert c.execute("SELECT count(*) FROM tasks").fetchone()[0] == before
 
 
 def test_a_doc_update_goes_to_the_doc_bot_unless_the_push_names_someone_else(api):
