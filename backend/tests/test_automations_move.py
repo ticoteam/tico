@@ -13,6 +13,8 @@ import pytest
 from backend import redesign_migration as M
 from backend.store import H, Store
 from backend.tests.test_api import api, api_settings, get  # noqa: F401  (api: the fixture)
+from backend import usage_limits
+from backend import bot_settings as BS
 
 ROOT = Path(__file__).resolve().parents[2]
 
@@ -35,17 +37,17 @@ def old_install(tmp_path, *, routines=True):
                         {"people": [{"id": "ana", "email": "ana@acme.example"}]})
         c.execute("INSERT OR REPLACE INTO registry_metadata VALUES('people',?)", (json.dumps({"people": [
             {"id": "ana", "email": "ana@acme.example", "primary_for": ["*"]}]}),))
-        c.execute("INSERT OR IGNORE INTO bot_config(bot, config_json) VALUES('coo', '{}')")
+        if c.execute("INSERT OR IGNORE INTO bot_config(bot) VALUES('coo')").rowcount:
+            BS.write(c, 'coo', {})
         if routines:
-            c.execute("INSERT INTO schedules(id, bot, cron, title, playbook, next_due) VALUES(?,?,?,?,?,?)",
+            c.execute("INSERT INTO schedules(id, bot, cron, title, playbook, next_due_at) VALUES(?,?,?,?,?,?)",
                       ("sch_notes", "coo", "0 9 * * *", "Morning notes", "Post yesterday's work.",
                        "2026-11-02T09:00:00Z"))
-            c.execute("INSERT INTO rules(id, scope_kind, scope_id, event, then_outcome, created_by, created, updated) "
+            c.execute("INSERT INTO rules(id, scope_kind, scope_id, event, then_outcome, created_by, created_at, updated_at) "
                       "VALUES('rule_comment','bot','coo','comment','wake','human:ana','2026-10-01','2026-10-01')")
-            c.execute("INSERT INTO usage_limits(bot, hourly_usd) VALUES('coo', 0.35)")
+            usage_limits.save_own(c, "coo", {"hourly_usd": 0.35}, None)
         c.execute("DELETE FROM registry_metadata WHERE key=?", (M.CUTOVER,))
         c.execute("DELETE FROM redesign_migrated")
-        c.execute("DELETE FROM redesign_migrations")
     close(store)
     return settings
 
@@ -107,11 +109,11 @@ def test_an_old_install_moves_once_on_its_first_start_with_no_setting(tmp_path):
     [routine] = read(store, "SELECT * FROM redesign_migrated WHERE kind='routine'")
     assert routine["outcome"] == "converted" and routine["automation"]
     [flow] = read(store, "SELECT * FROM automations WHERE id=?", (routine["automation"],))
-    assert flow["next_due"] == "2026-11-02T09:00:00Z"        # the routine's own next run, once, from one system
+    assert flow["next_due_at"] == "2026-11-02T09:00:00Z"        # the routine's own next run, once, from one system
     assert read(store, "SELECT deleted_at FROM schedules WHERE id='sch_notes'")[0]["deleted_at"]
     assert not read(store, "SELECT 1 FROM rules WHERE id='rule_comment'")
-    assert read(store, "SELECT per_30m_usd, hourly_usd FROM usage_limits WHERE bot='coo'") == [
-        {"per_30m_usd": 0.2, "hourly_usd": None}]
+    with store.read() as c:
+        assert (usage_limits.own(c, "coo")["per_30m_usd"], usage_limits.own(c, "coo")["hourly_usd"]) == (0.2, None)
     with store.read() as c:
         record = M.state(c)
     assert record["state"] == "done" and record["told"]
@@ -160,9 +162,9 @@ def test_pending_reads_a_database_an_older_release_wrote(tmp_path):
     """Plain SQL over the tables as they were: no automations table, no cutover columns."""
     path = tmp_path / "old.db"
     c = sqlite3.connect(path)
-    c.executescript("CREATE TABLE registry_metadata(key TEXT PRIMARY KEY, value_json TEXT);"
+    c.executescript("CREATE TABLE registry_metadata(key TEXT PRIMARY KEY, value TEXT);"
                     "CREATE TABLE schedules(id TEXT PRIMARY KEY, bot TEXT, cron TEXT, title TEXT, playbook TEXT, "
-                    "last_fired TEXT, next_due TEXT);"
+                    "last_fired_at TEXT, next_due_at TEXT);"
                     "INSERT INTO schedules(id, bot) VALUES('s1', 'coo'), ('s2', 'coo');")
     c.commit()
     c.close()
@@ -228,7 +230,7 @@ def test_a_paused_bots_routine_keeps_its_switch_and_runs_again_when_the_bot_is_b
     runs = "SELECT 1 FROM automation_runs WHERE automation_id=?"
     automations.tick(store, at=datetime(2026, 11, 2, 9, 1, tzinfo=timezone.utc))      # due while the bot is paused
     assert not read(store, runs, (aid,))
-    assert read(store, "SELECT next_due FROM automations WHERE id=?", (aid,))[0]["next_due"] > "2026-11-02T09:01"
+    assert read(store, "SELECT next_due_at FROM automations WHERE id=?", (aid,))[0]["next_due_at"] > "2026-11-02T09:01"
     with store.transaction() as c:
         c.execute("UPDATE bots SET state='active' WHERE slug='coo'")
     automations.tick(store, at=datetime(2026, 11, 3, 9, 1, tzinfo=timezone.utc))      # back: the next one runs

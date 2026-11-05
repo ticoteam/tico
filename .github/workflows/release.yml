@@ -1,13 +1,19 @@
 # A pushed version tag becomes a GitHub release: the one-line installers (install.sh and the Windows install-wsl.ps1 with this tag baked in, the compose bundle, SHA256SUMS), and the Rust runner for Mac and Linux checkouts (tico-runner-<os>-<arch>.gz, tico-runner-SHA256SUMS).
-# Nothing is built here: the runner binaries and the three images are the ones the tag's Release validation run built
-# and tested (ci.yml). This workflow publishes those binaries and points the version tags at those image digests, after
-# checking each image says it is this version. The server release never waits for desktop builds.
+# The Linux binaries and the three images are the ones the tag's Release validation run built and tested (ci.yml). This
+# workflow publishes those binaries and points the version tags at those image digests, after checking each image says
+# it is this version. The server release never waits for Mac or desktop builds.
+# The Mac runner and relay (no gate part runs on a Mac) are carried forward from the previous release when their sources
+# did not change, and published with it. When they did change they are built here, after the publication, and added to
+# the published release with the checksum files rewritten after them; until then a Mac checkout's update waits
+# (runner_support/release_update.py) instead of failing.
 # The desktop app follows: built only when the shell changed since the previous release, otherwise the previous release's
 # desktop files and updater manifest are carried forward. Either way they are added to the published release afterwards,
 # and a desktop failure leaves the server release in place. Tico Recorder (recorder.yml) follows the same way, with
 # its own updater manifest (recorder-latest.json). See docs/releasing.md.
 # Linux jobs run on RunsOn in Tico's own AWS account, on-demand rather than Spot: an interruption must never leave
-# a release half-published. macOS builds stay on GitHub-hosted runners.
+# a release half-published. The three jobs between the tag and the published release (validated, runner-changes, release) run on
+# GitHub-hosted Ubuntu, which starts faster and is never interrupted either. macOS builds stay on GitHub-hosted runners.
+# Optional build fan-out starts after publication so it cannot compete for job slots with the core release.
 name: Release
 
 on:
@@ -35,7 +41,9 @@ jobs:
   # run built. A manual rebuild may reuse an already published release; an unpublished tag still needs its validation.
   # The job always runs (never skipped), because a skipped job would also skip every job after it.
   validated:
-    runs-on: runs-on=${{ github.run_id }}/runner=2cpu-linux-x64/spot=false
+    # GitHub-hosted (free for this public repo, never interrupted): starts in seconds where a RunsOn VM boots for ~25 s,
+    # and these two jobs are on the path from the tag to the published release.
+    runs-on: ubuntu-24.04
     permissions:
       actions: read   # lists Release validation runs
       contents: read  # verifies an existing release before allowing a manual rebuild
@@ -87,10 +95,68 @@ jobs:
           echo "run=$run" >> "$GITHUB_OUTPUT"
           echo "Release validation run $run passed for $GITHUB_SHA as $GITHUB_REF_NAME."
 
-  release:
+  # Do the Mac binaries need building? Only when what the runner or relay is built from changed since the previous
+  # release, or that release lacks them; otherwise release carries them forward. A manual rebuild of a published
+  # release builds them only if it lacks them. Always runs (a dry run too): release needs it.
+  runner-changes:
     needs: validated
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: read
+    outputs:
+      build: ${{ steps.diff.outputs.build }}
+      previous: ${{ steps.diff.outputs.previous }}
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          ref: ${{ needs.validated.outputs.sha }}
+          fetch-depth: 0
+          persist-credentials: false
+      - id: diff
+        env:
+          GH_TOKEN: ${{ github.token }}
+          SHA: ${{ needs.validated.outputs.sha }}
+          VERSION: ${{ needs.validated.outputs.version }}
+          PUBLISHED: ${{ needs.validated.outputs.published }}
+        run: |
+          # The four Mac binaries are on the release and its checksum files list them: macos-assets uploads the
+          # checksum files last, so one it did not finish counts as missing (a Mac checkout downloads only what they list).
+          has_mac() {
+            local names name platform sums
+            names="$(gh release view "$1" -R "$GITHUB_REPOSITORY" --json assets -q '.assets[].name' 2>/dev/null)" || return 1
+            sums="$(mktemp -d)"
+            bash scripts/ci/retry.sh --clear "$sums" --permanent 'HTTP (404|410)|no assets match|release not found' -- gh release download "$1" -R "$GITHUB_REPOSITORY" -D "$sums" -p tico-runner-SHA256SUMS -p tico-screen-relay-SHA256SUMS || return 1
+            for platform in macos-arm64 macos-x86_64; do
+              for name in tico-runner tico-screen-relay; do
+                grep -qx "$name-$platform.gz" <<<"$names" || return 1
+                grep -Eq "^[0-9a-f]{64} [ *]$name-$platform\.gz$" "$sums/$name-SHA256SUMS" || return 1
+              done
+            done
+          }
+          if [ "$PUBLISHED" = true ]; then
+            build=true
+            if has_mac "$VERSION"; then build=false; fi
+            echo "build=$build" >> "$GITHUB_OUTPUT"
+            echo "Mac binaries for the published $VERSION: build=$build"
+            exit 0
+          fi
+          previous="$(git tag -l 'v[0-9]*' --sort=-v:refname | grep -vx "$VERSION" \
+            | while read -r tag; do git merge-base --is-ancestor "$tag" "$SHA" && { echo "$tag"; break; }; done)"
+          echo "previous=$previous" >> "$GITHUB_OUTPUT"
+          build=true
+          # runner-rs/harnesses is part of the runner's source fingerprint (runner-rs/build.rs). A change to the macos job
+          # alone (say, its Rust toolchain) does not rebuild: it takes effect with the next runner or relay change.
+          if [ -n "$previous" ] && git diff --quiet "$previous" "$SHA" -- runner-rs relay-rs \
+             && has_mac "$previous"; then
+            build=false
+          fi
+          echo "build=$build" >> "$GITHUB_OUTPUT"
+          echo "Mac binaries: build=$build (previous release $previous)"
+
+  release:
+    needs: [validated, runner-changes]
     if: needs.validated.outputs.published != 'true'
-    runs-on: runs-on=${{ github.run_id }}/runner=2cpu-linux-x64/spot=false
+    runs-on: ubuntu-24.04
     permissions:
       actions: read     # downloads the validation run's binaries and image digests
       contents: write   # creates the GitHub release
@@ -107,15 +173,30 @@ jobs:
           persist-credentials: false
       - name: Download the validated runner binaries and image digests
         run: |
-          gh run download "$RUN" -R "$GITHUB_REPOSITORY" -p 'runner-*' -D "$RUNNER_TEMP/runner"
-          gh run download "$RUN" -R "$GITHUB_REPOSITORY" -p 'image-*' -D "$RUNNER_TEMP/images"
+          bash scripts/ci/retry.sh --clear "$RUNNER_TEMP/runner" -- gh run download "$RUN" -R "$GITHUB_REPOSITORY" -p 'runner-linux-*' -D "$RUNNER_TEMP/runner"
+          bash scripts/ci/retry.sh --clear "$RUNNER_TEMP/images" -- gh run download "$RUN" -R "$GITHUB_REPOSITORY" -p 'image-*' -D "$RUNNER_TEMP/images"
           mkdir -p dist/runner
           find "$RUNNER_TEMP/runner" -name '*.gz' -exec mv {} dist/runner/ \;
-          for platform in macos-arm64 macos-x86_64 linux-x86_64 linux-arm64; do
+          for platform in linux-x86_64 linux-arm64; do
             for name in tico-runner tico-screen-relay; do
               test -s "dist/runner/$name-$platform.gz" || { echo "::error::Run $RUN has no $name-$platform.gz"; exit 1; }
             done
           done
+      # Same runner and relay sources as the previous release: its Mac binaries are this release's (a Mac checkout
+      # checks a binary's --build-id, the source fingerprint, not the release it was first built for).
+      - name: Carry the previous release's Mac binaries forward
+        if: needs.runner-changes.outputs.build != 'true'
+        env:
+          PREVIOUS: ${{ needs.runner-changes.outputs.previous }}
+        run: |
+          bash scripts/ci/retry.sh -- gh release download "$PREVIOUS" -R "$GITHUB_REPOSITORY" -D dist/runner --clobber \
+            -p 'tico-runner-macos-*.gz' -p 'tico-screen-relay-macos-*.gz'
+          for platform in macos-arm64 macos-x86_64; do
+            for name in tico-runner tico-screen-relay; do
+              test -s "dist/runner/$name-$platform.gz" || { echo "::error::$PREVIOUS has no $name-$platform.gz"; exit 1; }
+            done
+          done
+          echo "Mac binaries carried forward from $PREVIOUS"
       - name: Checksum the runner binaries
         run: |
           (cd dist/runner && sha256sum tico-runner-*.gz > tico-runner-SHA256SUMS)
@@ -137,8 +218,9 @@ jobs:
       # (v1.2.0-rc1) never moves latest; a dry run only prints the manifests it would push.
       - name: Point the version tags at the validated images
         run: |
-          for image in tico tico-runner tico-updater; do
-            sources=()
+          # The three images at once, each in its own subshell; any failure fails the step.
+          point() {
+            local image=$1 sources=() platform digest built tags flags attempt
             for platform in amd64 arm64; do
               digest="$(cat "$RUNNER_TEMP/images/image-$image-$platform/$image-$platform")"
               [[ "$digest" =~ ^sha256:[0-9a-f]{64}$ ]] || { echo "::error::bad $image-$platform digest"; exit 1; }
@@ -153,11 +235,16 @@ jobs:
             [ "$DRY_RUN" = true ] && flags+=(--dry-run)
             # The registry sometimes drops the manifest upload; retry instead of failing the release.
             for attempt in 1 2 3 4; do
-              timeout 120 docker buildx imagetools create "${flags[@]}" "${tags[@]}" "${sources[@]}" && continue 2
-              echo "imagetools create failed (attempt $attempt); retrying"; sleep $((attempt * 5))
+              timeout 120 docker buildx imagetools create "${flags[@]}" "${tags[@]}" "${sources[@]}" && return 0
+              echo "$image: imagetools create failed (attempt $attempt); retrying"; sleep $((attempt * 5))
             done
-            exit 1
-          done
+            return 1
+          }
+          pids=()
+          for image in tico tico-runner tico-updater; do (point "$image") & pids+=($!); done
+          failed=0
+          for pid in "${pids[@]}"; do wait "$pid" || failed=1; done
+          exit $failed
       - name: Publish the release
         run: |
           files=(dist/install/install.sh dist/install/install-wsl.ps1 "dist/install/tico-bundle-$VERSION.tar.gz" dist/install/SHA256SUMS
@@ -173,10 +260,102 @@ jobs:
           case "$VERSION" in *-*) flags+=(--prerelease) ;; esac
           gh release create "$VERSION" "${files[@]}" --title "$VERSION" --notes "" --verify-tag "${flags[@]}"
 
+  # The Mac runner and relay, built from the tag when runner-changes says so, after the publication. A GitHub-hosted
+  # macOS runner can take 5-15 minutes to start; nothing waits for it but macos-assets.
+  macos:
+    needs: [validated, runner-changes, release]
+    if: >-
+      ${{ !cancelled() && needs.validated.result == 'success' && needs.runner-changes.result == 'success'
+      && (needs.release.result == 'success' || needs.release.result == 'skipped')
+      && needs.validated.outputs.dry_run != 'true' && needs.runner-changes.outputs.build == 'true' }}
+    strategy:
+      matrix:
+        include:
+          - {name: macos-arm64, target: aarch64-apple-darwin}
+          - {name: macos-x86_64, target: x86_64-apple-darwin}
+    runs-on: macos-latest
+    timeout-minutes: 30
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          ref: ${{ needs.validated.outputs.sha }}
+          persist-credentials: false
+      - name: Install Rust
+        env:
+          TARGET: ${{ matrix.target }}
+        run: rustup toolchain install 1.92 --profile minimal --target "$TARGET" && rustup default 1.92
+      - name: Build tico-runner and tico-screen-relay
+        env:
+          TARGET: ${{ matrix.target }}
+          NAME: ${{ matrix.name }}
+          TICO_VERSION: ${{ needs.validated.outputs.version }}
+        run: |
+          # Two crates with their own target directories, built side by side; both must succeed.
+          (cd runner-rs && cargo build --release --locked --target "$TARGET") & runner=$!
+          (cd relay-rs && cargo build --release --locked --target "$TARGET") & relay=$!
+          status=0
+          wait "$runner" || { echo "::error::tico-runner did not build"; status=1; }
+          wait "$relay" || { echo "::error::tico-screen-relay did not build"; status=1; }
+          [ "$status" = 0 ] || exit 1
+          mkdir -p dist
+          gzip -9 -c "runner-rs/target/$TARGET/release/tico-runner" > "dist/tico-runner-$NAME.gz"
+          gzip -9 -c "relay-rs/target/$TARGET/release/tico-screen-relay" > "dist/tico-screen-relay-$NAME.gz"
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: macos-runner-${{ matrix.name }}
+          path: dist/*.gz
+          retention-days: 30
+          if-no-files-found: error
+
+  # Adds the new Mac binaries to the published release, then rewrites both checksum files with their lines: a Mac
+  # checkout downloads only a binary its release's checksum file lists, so it never fetches one that is not there yet.
+  macos-assets:
+    needs: [validated, release, macos]
+    if: >-
+      ${{ !cancelled() && needs.validated.result == 'success' && needs.macos.result == 'success'
+      && (needs.release.result == 'success' || needs.release.result == 'skipped') }}
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: write   # uploads the Mac binaries to the published release
+    env:
+      GH_TOKEN: ${{ github.token }}
+      VERSION: ${{ needs.validated.outputs.version }}
+    steps:
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          pattern: macos-runner-*
+          path: dist/mac
+          merge-multiple: true
+      - name: Add the Mac binaries and their checksums to the release
+        run: |
+          # No checkout in this job, so the retry is inline (scripts/ci/retry.sh's schedule): 8 attempts, 30s to 120s apart.
+          for attempt in 1 2 3 4 5 6 7 8; do
+            rm -rf dist/sums && mkdir -p dist/sums
+            gh release download "$VERSION" -R "$GITHUB_REPOSITORY" -D dist/sums -p tico-runner-SHA256SUMS -p tico-screen-relay-SHA256SUMS && break
+            [ "$attempt" -lt 8 ] || { echo "::error::gh release download failed on all 8 attempts"; exit 1; }
+            wait_s=$((attempt * 30)); [ "$wait_s" -gt 120 ] && wait_s=120
+            echo "::warning::download attempt $attempt/8 failed; retrying in ${wait_s}s"
+            sleep "$wait_s"
+          done
+          for name in tico-runner tico-screen-relay; do
+            for platform in macos-arm64 macos-x86_64; do
+              test -s "dist/mac/$name-$platform.gz" || { echo "::error::no $name-$platform.gz was built"; exit 1; }
+            done
+            { grep -v -- '-macos-' "dist/sums/$name-SHA256SUMS" || true; (cd dist/mac && sha256sum "$name"-macos-*.gz); } > "dist/$name-SHA256SUMS"
+          done
+          cat dist/*-SHA256SUMS
+          gh release upload "$VERSION" -R "$GITHUB_REPOSITORY" dist/mac/*.gz --clobber
+          gh release upload "$VERSION" -R "$GITHUB_REPOSITORY" dist/tico-runner-SHA256SUMS dist/tico-screen-relay-SHA256SUMS --clobber
+
   # Does this tag need new desktop apps? Only when what the shell is built from changed since the previous release.
   desktop-changes:
-    needs: validated
-    if: needs.validated.outputs.dry_run != 'true'
+    needs: [validated, release]
+    if: >-
+      ${{ !cancelled() && needs.validated.result == 'success'
+      && (needs.release.result == 'success' || needs.release.result == 'skipped')
+      && needs.validated.outputs.dry_run != 'true' }}
     runs-on: runs-on=${{ github.run_id }}/runner=2cpu-linux-x64/spot=false
     permissions:
       contents: read
@@ -208,7 +387,9 @@ jobs:
 
   desktop:
     needs: desktop-changes
-    if: needs.desktop-changes.outputs.build == 'true'
+    if: >-
+      ${{ !cancelled() && needs.desktop-changes.result == 'success'
+      && needs.desktop-changes.outputs.build == 'true' }}
     uses: ./.github/workflows/app.yml
     # inherit + id-token as main's app.yml expects (it declares no secrets and asks for id-token). Narrowing these
     # needs app.yml and company-app.yml to declare them first: the follow-up hardening batch, not this one.
@@ -258,7 +439,7 @@ jobs:
           PREVIOUS: ${{ needs.desktop-changes.outputs.previous }}
         run: |
           mkdir -p dist/desktop
-          gh release download "$PREVIOUS" --dir dist/desktop --pattern '*.dmg' --pattern '*.app.tar.gz' --pattern '*.app.tar.gz.sig' \
+          bash scripts/ci/retry.sh -- gh release download "$PREVIOUS" --dir dist/desktop --clobber --pattern '*.dmg' --pattern '*.app.tar.gz' --pattern '*.app.tar.gz.sig' \
             --pattern '*-setup.exe' --pattern '*-setup.exe.sig' --pattern '*.AppImage' --pattern '*.AppImage.sig' --pattern '*.deb' --pattern latest.json
           # Tico-Recorder's files match the patterns above. They belong to recorder-assets, and a copy here could
           # overwrite a newer recorder build of this tag.
@@ -275,8 +456,11 @@ jobs:
   # previous release, otherwise its files are carried forward. Its own jobs, so a failure here never touches the
   # desktop or server release.
   recorder-changes:
-    needs: validated
-    if: needs.validated.outputs.dry_run != 'true'
+    needs: [validated, release]
+    if: >-
+      ${{ !cancelled() && needs.validated.result == 'success'
+      && (needs.release.result == 'success' || needs.release.result == 'skipped')
+      && needs.validated.outputs.dry_run != 'true' }}
     runs-on: runs-on=${{ github.run_id }}/runner=2cpu-linux-x64/spot=false
     permissions:
       contents: read
@@ -307,7 +491,9 @@ jobs:
 
   recorder:
     needs: recorder-changes
-    if: needs.recorder-changes.outputs.build == 'true'
+    if: >-
+      ${{ !cancelled() && needs.recorder-changes.result == 'success'
+      && needs.recorder-changes.outputs.build == 'true' }}
     uses: ./.github/workflows/recorder.yml
     secrets: inherit   # recorder.yml reads the desktop app's signing secrets (see the desktop job)
     permissions:
@@ -351,7 +537,7 @@ jobs:
           PREVIOUS: ${{ needs.recorder-changes.outputs.previous }}
         run: |
           mkdir -p dist/recorder
-          gh release download "$PREVIOUS" --dir dist/recorder --pattern 'Tico-Recorder*' \
+          bash scripts/ci/retry.sh -- gh release download "$PREVIOUS" --dir dist/recorder --clobber --pattern 'Tico-Recorder*' \
             --pattern recorder-latest.json
           sed -i "s#/releases/download/$PREVIOUS/#/releases/download/$GITHUB_REF_NAME/#g" dist/recorder/recorder-latest.json
       - name: Add the recorder files to the release
@@ -363,7 +549,9 @@ jobs:
 
   company-matrix:
     needs: desktop-changes
-    if: needs.desktop-changes.outputs.build == 'true'
+    if: >-
+      ${{ !cancelled() && needs.desktop-changes.result == 'success'
+      && needs.desktop-changes.outputs.build == 'true' }}
     runs-on: runs-on=${{ github.run_id }}/runner=2cpu-linux-x64/spot=false
     permissions:
       contents: read
@@ -384,7 +572,9 @@ jobs:
   # keeps its current latest.json, so installed company apps stay on their version.
   companies:
     needs: company-matrix
-    if: needs.company-matrix.outputs.enabled == 'true'
+    if: >-
+      ${{ !cancelled() && needs.company-matrix.result == 'success'
+      && needs.company-matrix.outputs.enabled == 'true' }}
     strategy:
       fail-fast: false
       matrix: ${{ fromJSON(needs.company-matrix.outputs.matrix) }}

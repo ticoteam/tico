@@ -96,13 +96,18 @@ def access(c):
     return found["access"] if found else None
 
 
-def frozen(c):
-    """Whether new turns that would spend usage wait: out of credit, or locked."""
-    return access(c) in ("frozen", "locked")
+_UNREAD = object()
 
 
-def locked(c):
-    return access(c) == "locked"
+def frozen(c, value=_UNREAD):
+    """Whether new turns that would spend usage wait: out of credit, or locked. `value`: access(c), when read already."""
+    value = access(c) if value is _UNREAD else value
+    return value in ("frozen", "locked")
+
+
+def locked(c, value=_UNREAD):
+    value = access(c) if value is _UNREAD else value
+    return value == "locked"
 
 
 def routines_paused(c):
@@ -141,7 +146,7 @@ def apply(store, cloud):
             c.execute("DELETE FROM registry_metadata WHERE key=?", (KEY,))
         else:
             c.execute("INSERT INTO registry_metadata VALUES(?,?) ON CONFLICT(key) DO UPDATE SET "
-                      "value_json=excluded.value_json", (KEY, json.dumps({**cloud, "checked": H.now()})))
+                      "value=excluded.value", (KEY, json.dumps({**cloud, "checked": H.now()})))
         was, now = (before or {}).get("access"), (cloud or {}).get("access")
         if was != now:
             H.event(c, H.KEEPER, "cloud.access", "company",

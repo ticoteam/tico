@@ -1,0 +1,3209 @@
+{
+  "api_fields": {
+    "at": "created_at",
+    "attempt": "run",
+    "attempt_id": "run_id",
+    "from_actor_name": "sender_name",
+    "last_sync": "last_synced_at",
+    "operator_name": "owner_name",
+    "since": "changed_at",
+    "source_actor_name": "sender_name",
+    "to_actor_name": "recipient_name",
+    "ts": "created_at",
+    "why_by": "why_by_id"
+  },
+  "api_fields_removed": {
+    "blocked_from_status": "holds",
+    "blocked_from_step": "holds",
+    "blocked_gate": "holds",
+    "blocked_kind": "holds",
+    "blocked_reason": "holds",
+    "blocked_since": "holds",
+    "snoozed_by": "holds",
+    "snoozed_note": "holds",
+    "snoozed_until": "holds"
+  },
+  "api_kept": [
+    "actor",
+    "bot",
+    "last_run",
+    "next",
+    "queued",
+    "state",
+    "status_by",
+    "updated_by"
+  ],
+  "applied_waves": [
+    "1",
+    "2",
+    "2s",
+    "2b",
+    "3",
+    "4",
+    "5"
+  ],
+  "columns": {
+    "acceptance_json": "acceptance",
+    "access_json": "access",
+    "account_ids_json": "account_ids",
+    "accounts_json": "accounts",
+    "actions_json": "actions",
+    "after_json": "after",
+    "alerts_json": "alerts",
+    "args_json": "args",
+    "attachments_json": "attachments",
+    "attendees_json": "attendees",
+    "audience_json": "audience",
+    "balances_json": "balances",
+    "before_json": "before",
+    "blocked_gate_json": "blocked_gate",
+    "body_json": "body",
+    "bot_owners_json": "bot_owners",
+    "bots_json": "bots",
+    "broken_json": "broken",
+    "can_json": "can",
+    "capabilities_json": "capabilities",
+    "category_locks_json": "category_locks",
+    "cc_json": "cc",
+    "chain_json": "chain",
+    "changes_json": "changes",
+    "channels_json": "channels",
+    "checkout_json": "checkout",
+    "checkpoint_json": "checkpoint",
+    "cite_json": "cite",
+    "cleared_json": "cleared",
+    "code_expires": "code_expires_at",
+    "config_json": "config",
+    "counted_json": "counted",
+    "created": "created_at",
+    "criteria_json": "criteria",
+    "decided_for_json": "decided_for",
+    "definition_json": "definition",
+    "definition_updated": "definition_updated_at",
+    "destinations_json": "destinations",
+    "detail_json": "detail",
+    "diff_json": "diff",
+    "edits_json": "edits",
+    "emails_json": "emails",
+    "end_json": "at_end",
+    "entry_json": "entry",
+    "event_ids_json": "event_ids",
+    "events_json": "events",
+    "examples_json": "examples",
+    "expires": "expires_at",
+    "files_json": "files",
+    "filter_json": "filter",
+    "finished": "finished_at",
+    "first_seen": "first_seen_at",
+    "first_started": "first_started_at",
+    "fix_json": "fix",
+    "flow_json": "flow",
+    "forward_to_json": "forward_to",
+    "found_json": "found",
+    "full_detail_json": "full_detail",
+    "gaps_json": "gaps",
+    "headers_json": "headers",
+    "inputs_json": "inputs",
+    "inventory_json": "inventory",
+    "item_keys_json": "item_keys",
+    "items_json": "items",
+    "labels_json": "labels",
+    "last_checked": "last_checked_at",
+    "last_failed": "last_failed_at",
+    "last_fired": "last_fired_at",
+    "last_routed": "last_routed_at",
+    "last_seen": "last_seen_at",
+    "last_success": "last_succeeded_at",
+    "last_sync": "last_synced_at",
+    "last_used": "last_used_at",
+    "last_verified": "last_verified_at",
+    "last_woke": "last_woke_at",
+    "later_json": "later",
+    "lines_json": "lines",
+    "members_json": "members",
+    "merchant_locks_json": "merchant_locks",
+    "messages_json": "messages",
+    "metadata_json": "metadata",
+    "model_json": "model",
+    "next_attempt": "next_attempt_at",
+    "next_check": "next_check_at",
+    "next_try": "next_try_at",
+    "outcome_json": "outcome",
+    "owner_ids_json": "owner_ids",
+    "params_json": "params",
+    "participants_json": "participants",
+    "payload_json": "payload",
+    "pnl_json": "pnl",
+    "procs_json": "procs",
+    "purpose_json": "purpose",
+    "raw_json": "raw",
+    "readers_json": "readers",
+    "readiness_json": "readiness",
+    "reasons_json": "reasons",
+    "redirect_uris_json": "redirect_uris",
+    "ref_json": "ref",
+    "refresh_expires": "refresh_expires_at",
+    "refs_json": "refs",
+    "report_json": "report",
+    "response_json": "response",
+    "responses_json": "responses",
+    "restart_requested": "restart_requested_at",
+    "restated_json": "restated",
+    "result_json": "result",
+    "resume_json": "resume",
+    "routing_json": "routing",
+    "rows_json": "rows",
+    "rule_hits_json": "rule_hits",
+    "rule_ids_json": "rule_ids",
+    "rule_results_json": "rule_results",
+    "runtimes_json": "runtimes",
+    "schedule_json": "schedule",
+    "scores_json": "scores",
+    "senders_json": "senders",
+    "sent_json": "sent",
+    "settings_json": "settings",
+    "slides_json": "slides",
+    "snapshot_json": "snapshot",
+    "source_json": "source",
+    "sources_json": "sources",
+    "start_json": "at_start",
+    "started": "started_at",
+    "state_json": "saved_state",
+    "stop_requested": "stop_requested_at",
+    "tabs_json": "tabs",
+    "tags_json": "tags",
+    "target_json": "target",
+    "teams_json": "teams",
+    "to_json": "to_addresses",
+    "trace_json": "trace",
+    "tried_json": "tried",
+    "triggers_json": "triggers",
+    "turns_json": "turns",
+    "undo_json": "undo",
+    "updated": "updated_at",
+    "value_json": "value",
+    "verdict_json": "verdict",
+    "wake_json": "wake",
+    "when_json": "condition",
+    "who_json": "who",
+    "widgets_json": "widgets",
+    "with_json": "with_scope"
+  },
+  "commands": [
+    {
+      "fixable": true,
+      "new": [
+        "message",
+        "send"
+      ],
+      "old": [
+        "say"
+      ]
+    },
+    {
+      "fixable": false,
+      "new": [
+        "message",
+        "send"
+      ],
+      "old": [
+        "notice"
+      ]
+    },
+    {
+      "fixable": true,
+      "new": [
+        "message",
+        "list"
+      ],
+      "old": [
+        "inbox"
+      ]
+    },
+    {
+      "fixable": true,
+      "new": [
+        "message",
+        "mark-read"
+      ],
+      "old": [
+        "ack"
+      ]
+    },
+    {
+      "fixable": true,
+      "new": [
+        "conversation",
+        "show"
+      ],
+      "old": [
+        "history"
+      ]
+    },
+    {
+      "fixable": true,
+      "new": [
+        "question",
+        "ask"
+      ],
+      "old": [
+        "ask"
+      ]
+    },
+    {
+      "fixable": true,
+      "new": [
+        "question",
+        "answer"
+      ],
+      "old": [
+        "answer"
+      ]
+    },
+    {
+      "fixable": true,
+      "new": [
+        "note",
+        "list"
+      ],
+      "old": [
+        "notes"
+      ]
+    },
+    {
+      "fixable": true,
+      "new": [
+        "note",
+        "delete"
+      ],
+      "old": [
+        "unnote"
+      ]
+    },
+    {
+      "fixable": false,
+      "new": [
+        "task",
+        "list"
+      ],
+      "old": [
+        "board"
+      ]
+    },
+    {
+      "fixable": false,
+      "new": [
+        "task",
+        "list"
+      ],
+      "old": [
+        "task",
+        "stuck"
+      ]
+    },
+    {
+      "fixable": true,
+      "new": [
+        "goal",
+        "list"
+      ],
+      "old": [
+        "goals"
+      ]
+    },
+    {
+      "fixable": false,
+      "new": [
+        "goal",
+        "status"
+      ],
+      "old": [
+        "goal",
+        "auto"
+      ]
+    },
+    {
+      "fixable": true,
+      "new": [
+        "goal",
+        "checkin-list"
+      ],
+      "old": [
+        "goal",
+        "checkins"
+      ]
+    },
+    {
+      "fixable": true,
+      "new": [
+        "goal",
+        "checkin-list"
+      ],
+      "old": [
+        "goal",
+        "checkin",
+        "list"
+      ]
+    },
+    {
+      "fixable": true,
+      "new": [
+        "kpi",
+        "create"
+      ],
+      "old": [
+        "kpi",
+        "add"
+      ]
+    },
+    {
+      "fixable": true,
+      "new": [
+        "kpi",
+        "show"
+      ],
+      "old": [
+        "kpi",
+        "readings"
+      ]
+    },
+    {
+      "fixable": false,
+      "new": [
+        "doc",
+        "search"
+      ],
+      "old": [
+        "context",
+        "search"
+      ]
+    },
+    {
+      "fixable": true,
+      "new": [
+        "doc",
+        "read"
+      ],
+      "old": [
+        "context",
+        "show"
+      ]
+    },
+    {
+      "fixable": true,
+      "new": [
+        "doc",
+        "link-list"
+      ],
+      "old": [
+        "docs",
+        "links"
+      ]
+    },
+    {
+      "fixable": true,
+      "new": [
+        "doc"
+      ],
+      "old": [
+        "docs"
+      ]
+    },
+    {
+      "fixable": true,
+      "new": [
+        "file",
+        "link"
+      ],
+      "old": [
+        "files",
+        "add-link"
+      ]
+    },
+    {
+      "fixable": true,
+      "new": [
+        "file"
+      ],
+      "old": [
+        "files"
+      ]
+    },
+    {
+      "fixable": true,
+      "new": [
+        "meeting",
+        "read"
+      ],
+      "old": [
+        "meetings",
+        "transcript"
+      ]
+    },
+    {
+      "fixable": true,
+      "new": [
+        "meeting"
+      ],
+      "old": [
+        "meetings"
+      ]
+    },
+    {
+      "fixable": true,
+      "new": [
+        "listening",
+        "decide"
+      ],
+      "old": [
+        "listen",
+        "judge"
+      ]
+    },
+    {
+      "fixable": true,
+      "new": [
+        "listening"
+      ],
+      "old": [
+        "listen"
+      ]
+    },
+    {
+      "fixable": true,
+      "new": [
+        "listening",
+        "item"
+      ],
+      "old": [
+        "intake"
+      ]
+    },
+    {
+      "fixable": true,
+      "new": [
+        "tool"
+      ],
+      "old": [
+        "tools"
+      ]
+    },
+    {
+      "fixable": true,
+      "new": [
+        "tool",
+        "list"
+      ],
+      "old": [
+        "integrations"
+      ]
+    },
+    {
+      "fixable": true,
+      "new": [
+        "tool",
+        "show"
+      ],
+      "old": [
+        "integration"
+      ]
+    },
+    {
+      "fixable": true,
+      "new": [
+        "tool",
+        "query-search"
+      ],
+      "old": [
+        "queries"
+      ]
+    },
+    {
+      "fixable": true,
+      "new": [
+        "tool",
+        "learn"
+      ],
+      "old": [
+        "learn"
+      ]
+    },
+    {
+      "fixable": true,
+      "new": [
+        "bot",
+        "status"
+      ],
+      "old": [
+        "status"
+      ]
+    },
+    {
+      "fixable": true,
+      "new": [
+        "bot",
+        "recent"
+      ],
+      "old": [
+        "recent"
+      ]
+    },
+    {
+      "fixable": true,
+      "new": [
+        "run",
+        "list"
+      ],
+      "old": [
+        "turns"
+      ]
+    },
+    {
+      "fixable": true,
+      "new": [
+        "team",
+        "show"
+      ],
+      "old": [
+        "org"
+      ]
+    },
+    {
+      "fixable": true,
+      "new": [
+        "health",
+        "check"
+      ],
+      "old": [
+        "fleet"
+      ]
+    },
+    {
+      "fixable": true,
+      "new": [
+        "health",
+        "check"
+      ],
+      "old": [
+        "fleet-check"
+      ]
+    },
+    {
+      "fixable": true,
+      "new": [
+        "computer",
+        "list"
+      ],
+      "old": [
+        "computers"
+      ]
+    },
+    {
+      "fixable": true,
+      "new": [
+        "template",
+        "list"
+      ],
+      "old": [
+        "catalog"
+      ]
+    },
+    {
+      "fixable": false,
+      "new": [
+        "bot",
+        "create"
+      ],
+      "old": [
+        "bot",
+        "register"
+      ]
+    },
+    {
+      "fixable": true,
+      "new": [
+        "bot",
+        "update"
+      ],
+      "old": [
+        "bot",
+        "set"
+      ]
+    },
+    {
+      "fixable": true,
+      "new": [
+        "bot",
+        "setup-done"
+      ],
+      "old": [
+        "bot",
+        "onboarded"
+      ]
+    },
+    {
+      "fixable": true,
+      "new": [
+        "bot",
+        "repo-create"
+      ],
+      "old": [
+        "github",
+        "create-bot-repo"
+      ]
+    },
+    {
+      "fixable": true,
+      "new": [
+        "human"
+      ],
+      "old": [
+        "people"
+      ]
+    },
+    {
+      "fixable": true,
+      "new": [
+        "human"
+      ],
+      "old": [
+        "person"
+      ]
+    },
+    {
+      "fixable": true,
+      "new": [
+        "update",
+        "create"
+      ],
+      "old": [
+        "update",
+        "post"
+      ]
+    },
+    {
+      "fixable": true,
+      "new": [
+        "update",
+        "mark-read"
+      ],
+      "old": [
+        "update",
+        "read"
+      ]
+    },
+    {
+      "fixable": true,
+      "new": [
+        "update",
+        "list"
+      ],
+      "old": [
+        "updates"
+      ]
+    },
+    {
+      "fixable": true,
+      "new": [
+        "needs-you"
+      ],
+      "old": [
+        "batch"
+      ]
+    },
+    {
+      "fixable": true,
+      "new": [
+        "brief"
+      ],
+      "old": [
+        "live",
+        "brief"
+      ]
+    },
+    {
+      "fixable": true,
+      "new": [
+        "mcp",
+        "stats"
+      ],
+      "old": [
+        "live",
+        "stats"
+      ]
+    },
+    {
+      "fixable": true,
+      "new": [
+        "calendar",
+        "list"
+      ],
+      "old": [
+        "calendar",
+        "upcoming"
+      ]
+    },
+    {
+      "fixable": true,
+      "new": [
+        "decision",
+        "ask"
+      ],
+      "old": [
+        "decisions"
+      ]
+    },
+    {
+      "fixable": true,
+      "new": [
+        "decision",
+        "ask"
+      ],
+      "old": [
+        "judge"
+      ]
+    },
+    {
+      "fixable": false,
+      "new": [
+        "strategy",
+        "show",
+        "--section",
+        "how"
+      ],
+      "old": [
+        "gtm",
+        "show"
+      ]
+    },
+    {
+      "fixable": false,
+      "new": [
+        "strategy",
+        "show",
+        "--section",
+        "how"
+      ],
+      "old": [
+        "gtm",
+        "summary"
+      ]
+    },
+    {
+      "fixable": true,
+      "new": [
+        "growth",
+        "source",
+        "list"
+      ],
+      "old": [
+        "gtm",
+        "sources"
+      ]
+    }
+  ],
+  "commands_exempt": [
+    [
+      "notice",
+      "list"
+    ],
+    [
+      "org",
+      "order"
+    ],
+    [
+      "org",
+      "reports-to"
+    ]
+  ],
+  "commands_removed": [
+    {
+      "new": [
+        "automation"
+      ],
+      "old": [
+        "routine"
+      ]
+    }
+  ],
+  "source": "scripts/cleanup/renames.yaml",
+  "table_columns": {
+    "acceptance_json": {
+      "kept_in": [],
+      "renames": {
+        "acceptance": [
+          "tasks"
+        ]
+      }
+    },
+    "access_json": {
+      "kept_in": [],
+      "renames": {
+        "access": [
+          "bot_config"
+        ]
+      }
+    },
+    "account_ids_json": {
+      "kept_in": [],
+      "renames": {
+        "account_ids": [
+          "fin_view_grants"
+        ]
+      }
+    },
+    "accounts_json": {
+      "kept_in": [],
+      "renames": {
+        "accounts": [
+          "fin_close_snapshots"
+        ]
+      }
+    },
+    "actions_json": {
+      "kept_in": [],
+      "renames": {
+        "actions": [
+          "task_rules"
+        ]
+      }
+    },
+    "actor": {
+      "kept_in": [
+        "audit_log",
+        "automation_versions",
+        "bot_file_activity",
+        "bot_file_versions",
+        "bot_memory_seen",
+        "changes",
+        "company_events",
+        "credential_uses",
+        "doc_versions",
+        "events",
+        "file_deletions",
+        "fin_actions",
+        "flight_slow",
+        "goal_events",
+        "granola_connections",
+        "idempotency",
+        "idempotency_messages",
+        "invite_sends",
+        "job_recovery",
+        "kpi_definitions",
+        "learnings",
+        "live_meeting_access",
+        "live_meeting_chat",
+        "live_meeting_humans",
+        "market_events",
+        "preferences",
+        "refusals",
+        "screening_pending",
+        "seat_requests",
+        "settings_changes",
+        "slack_events",
+        "strategy_actions",
+        "strategy_events",
+        "support_tickets",
+        "task_events",
+        "task_requesters",
+        "task_roles",
+        "update_archive_overrides",
+        "update_reads",
+        "webhook_events"
+      ],
+      "renames": {
+        "actor_id": [
+          "kpi_readings"
+        ]
+      }
+    },
+    "after_json": {
+      "kept_in": [],
+      "renames": {
+        "after": [
+          "audit_log",
+          "settings_changes"
+        ]
+      }
+    },
+    "alerts_json": {
+      "kept_in": [],
+      "renames": {
+        "alerts": [
+          "batches"
+        ]
+      }
+    },
+    "answered_by": {
+      "kept_in": [],
+      "renames": {
+        "answered_by_id": [
+          "messages"
+        ]
+      }
+    },
+    "archived_by": {
+      "kept_in": [],
+      "renames": {
+        "archived_by_id": [
+          "kpis"
+        ]
+      }
+    },
+    "args_json": {
+      "kept_in": [],
+      "renames": {
+        "args": [
+          "automation_mail_actions"
+        ]
+      }
+    },
+    "at": {
+      "kept_in": [],
+      "renames": {
+        "accepted_at": [
+          "redesign_migration_accepts"
+        ],
+        "created_at": [
+          "audit_log",
+          "automation_effects",
+          "automation_holds",
+          "automation_turn_answers",
+          "automation_versions",
+          "changes",
+          "google_signin_refusals",
+          "market_turn_sources",
+          "strategy_events",
+          "webhook_attempts"
+        ],
+        "daily_at": [
+          "task_rules"
+        ],
+        "migrated_at": [
+          "redesign_migrated"
+        ],
+        "ran_at": [
+          "rule_task_runs"
+        ],
+        "reached_at": [
+          "milestones"
+        ],
+        "read_at": [
+          "mail_reads"
+        ],
+        "satisfied_at": [
+          "rule_due_status"
+        ],
+        "used_at": [
+          "credential_uses"
+        ]
+      }
+    },
+    "attachments_json": {
+      "kept_in": [],
+      "renames": {
+        "attachments": [
+          "mail_messages",
+          "meeting_deliveries"
+        ]
+      }
+    },
+    "attendees_json": {
+      "kept_in": [],
+      "renames": {
+        "attendees": [
+          "calendar_actions"
+        ]
+      }
+    },
+    "audience_json": {
+      "kept_in": [],
+      "renames": {
+        "audience": [
+          "pin_places"
+        ]
+      }
+    },
+    "balances_json": {
+      "kept_in": [],
+      "renames": {
+        "balances": [
+          "fin_close_snapshots"
+        ]
+      }
+    },
+    "before_json": {
+      "kept_in": [],
+      "renames": {
+        "before": [
+          "audit_log",
+          "rule_suggestions",
+          "settings_changes"
+        ]
+      }
+    },
+    "blocked_gate_json": {
+      "kept_in": [],
+      "renames": {
+        "blocked_gate": [
+          "tasks"
+        ]
+      }
+    },
+    "body_json": {
+      "kept_in": [],
+      "renames": {
+        "body": [
+          "assistant_actions",
+          "brand_drafts",
+          "brand_versions",
+          "editions",
+          "gtm_drafts",
+          "gtm_versions"
+        ]
+      }
+    },
+    "bot": {
+      "kept_in": [
+        "agent_pairings",
+        "agents",
+        "assignments",
+        "attempt_captures",
+        "bot_agent_instructions",
+        "bot_browser_exits",
+        "bot_budget",
+        "bot_config",
+        "bot_control",
+        "bot_mail_settings",
+        "bot_memory_documents",
+        "bot_memory_oversized",
+        "bot_memory_seen",
+        "bot_memory_updates",
+        "bot_repo_access",
+        "bot_session_epochs",
+        "bot_sessions",
+        "bot_status",
+        "bot_status_history",
+        "bot_task_tabs",
+        "bot_tool_requests",
+        "bot_transitions",
+        "browser_exit_usage",
+        "changes",
+        "chat_goals",
+        "cloud_machine_codes",
+        "cloud_machines",
+        "compact_first",
+        "credential_imports",
+        "credential_requests",
+        "credential_uses",
+        "deferrals",
+        "feed_cursors",
+        "feed_deliveries",
+        "live_meeting_bots",
+        "live_meeting_turns",
+        "mail_agent_instructions",
+        "memory_tidy_cards",
+        "perf_usage",
+        "run_backoff",
+        "schedules",
+        "screening_pending",
+        "settings_changes",
+        "slack_posts",
+        "slack_threads",
+        "task_reconnects",
+        "turns",
+        "update_queue",
+        "update_settings",
+        "updates",
+        "usage_alerts",
+        "usage_limits",
+        "watcher_items",
+        "watcher_pending",
+        "watcher_refs",
+        "watcher_runs",
+        "watcher_triage"
+      ],
+      "renames": {
+        "bot_id": [
+          "attempts",
+          "bot_files",
+          "jobs"
+        ]
+      }
+    },
+    "bot_owners_json": {
+      "kept_in": [],
+      "renames": {
+        "bot_owners": [
+          "bot_config"
+        ]
+      }
+    },
+    "bots_json": {
+      "kept_in": [],
+      "renames": {
+        "bots": [
+          "browser_exits",
+          "perf_overloads"
+        ]
+      }
+    },
+    "broken_json": {
+      "kept_in": [],
+      "renames": {
+        "broken": [
+          "org_rule_verdicts"
+        ]
+      }
+    },
+    "can_json": {
+      "kept_in": [],
+      "renames": {
+        "can": [
+          "google_connects"
+        ]
+      }
+    },
+    "cancelled_at": {
+      "kept_in": [],
+      "renames": {
+        "canceled_at": [
+          "notes"
+        ]
+      }
+    },
+    "cancelled_by": {
+      "kept_in": [],
+      "renames": {
+        "canceled_by": [
+          "notes"
+        ]
+      }
+    },
+    "capabilities_json": {
+      "kept_in": [],
+      "renames": {
+        "capabilities": [
+          "runners"
+        ]
+      }
+    },
+    "category_locks_json": {
+      "kept_in": [],
+      "renames": {
+        "category_locks": [
+          "fin_cards"
+        ]
+      }
+    },
+    "cc_json": {
+      "kept_in": [],
+      "renames": {
+        "cc": [
+          "mail_messages"
+        ]
+      }
+    },
+    "chain_json": {
+      "kept_in": [],
+      "renames": {
+        "chain": [
+          "automation_runs"
+        ]
+      }
+    },
+    "changed": {
+      "kept_in": [],
+      "renames": {
+        "changed_at": [
+          "market_watches",
+          "task_manager_reports",
+          "tico_storage"
+        ]
+      }
+    },
+    "changes_json": {
+      "kept_in": [],
+      "renames": {
+        "changes": [
+          "ceo_actions",
+          "strategy_actions"
+        ]
+      }
+    },
+    "channels_json": {
+      "kept_in": [],
+      "renames": {
+        "channels": [
+          "slack_digests"
+        ]
+      }
+    },
+    "checked": {
+      "kept_in": [],
+      "renames": {
+        "checked_at": [
+          "market_watches",
+          "support_tickets",
+          "task_manager_reports",
+          "tico_storage"
+        ]
+      }
+    },
+    "checkout_json": {
+      "kept_in": [],
+      "renames": {
+        "checkout": [
+          "runners"
+        ]
+      }
+    },
+    "checkpoint_by": {
+      "kept_in": [],
+      "renames": {
+        "checkpoint_by_id": [
+          "tasks"
+        ]
+      }
+    },
+    "checkpoint_json": {
+      "kept_in": [],
+      "renames": {
+        "checkpoint": [
+          "bot_transition_checkpoints"
+        ]
+      }
+    },
+    "cite_json": {
+      "kept_in": [],
+      "renames": {
+        "cite": [
+          "org_rules"
+        ]
+      }
+    },
+    "cleared": {
+      "kept_in": [],
+      "renames": {
+        "cleared_at": [
+          "automation_guard_holds"
+        ]
+      }
+    },
+    "cleared_json": {
+      "kept_in": [],
+      "renames": {
+        "cleared": [
+          "fin_reconciliations"
+        ]
+      }
+    },
+    "closed_by": {
+      "kept_in": [
+        "fin_periods",
+        "seats"
+      ],
+      "renames": {
+        "closed_by_id": [
+          "tasks"
+        ]
+      }
+    },
+    "code_expires": {
+      "kept_in": [],
+      "renames": {
+        "code_expires_at": [
+          "oauth_grants"
+        ]
+      }
+    },
+    "committed": {
+      "kept_in": [],
+      "renames": {
+        "committed_at": [
+          "bot_memory_updates"
+        ]
+      }
+    },
+    "config_json": {
+      "kept_in": [],
+      "renames": {
+        "config": [
+          "bot_config"
+        ]
+      }
+    },
+    "counted_json": {
+      "kept_in": [],
+      "renames": {
+        "counted": [
+          "fin_payments",
+          "fin_transfers"
+        ]
+      }
+    },
+    "created": {
+      "kept_in": [],
+      "renames": {
+        "created_at": [
+          "agent_pairings",
+          "agents",
+          "approvals",
+          "ask_ingest_items",
+          "assistant_actions",
+          "attempt_capture_drops",
+          "attempt_captures",
+          "attempt_events",
+          "attempts",
+          "automation_mail_actions",
+          "automations",
+          "batches",
+          "blobs",
+          "bot_file_activity",
+          "bot_file_versions",
+          "bot_tool_requests",
+          "bot_transitions",
+          "bots",
+          "calendar_actions",
+          "cards",
+          "ceo_actions",
+          "ceo_merges",
+          "check_head_provenance",
+          "check_waits",
+          "cloud_machine_codes",
+          "company_storage",
+          "computer_keys",
+          "conversations",
+          "credential_grants",
+          "credential_imports",
+          "credential_requests",
+          "credentials",
+          "deferrals",
+          "directory_credentials",
+          "doc_versions",
+          "docs",
+          "external_snapshots",
+          "file_deletions",
+          "github_app",
+          "github_app_states",
+          "github_product_repo_operations",
+          "goal_asks",
+          "goal_kpis",
+          "goals",
+          "google_connects",
+          "health_reports",
+          "human_tokens",
+          "idempotency",
+          "import_refs",
+          "invite_sends",
+          "job_recovery",
+          "jobs",
+          "kpi_readings",
+          "kpis",
+          "learned_entries",
+          "learning_deliveries",
+          "learning_items",
+          "learnings",
+          "lens_runs",
+          "linked_docs",
+          "live_meeting_chat",
+          "live_meeting_chunk_versions",
+          "live_meeting_chunks",
+          "live_meeting_events",
+          "live_meeting_turns",
+          "live_meetings",
+          "market_briefings",
+          "market_edges",
+          "market_entities",
+          "market_figures",
+          "market_sizes",
+          "market_sources",
+          "market_watches",
+          "meeting_comments",
+          "meeting_items",
+          "meeting_versions",
+          "meetings",
+          "memory_tidy_cards",
+          "memory_tidy_keeps",
+          "messages",
+          "model_logins",
+          "model_subscriptions",
+          "notes",
+          "oauth_clients",
+          "oauth_grants",
+          "oidc_sessions",
+          "org_rule_holds",
+          "org_rule_misses",
+          "org_rule_verdicts",
+          "org_turn_waits",
+          "owner_links",
+          "pages",
+          "pins",
+          "recording_source_refs",
+          "redesign_migrations",
+          "rule_reads",
+          "rule_suggestions",
+          "rules",
+          "runner_harness_actions",
+          "runners",
+          "screening_pending",
+          "screening_verdicts",
+          "seat_requests",
+          "seats",
+          "service_jobs",
+          "service_key_tasks",
+          "service_keys",
+          "settings_changes",
+          "slack_channels",
+          "slack_credentials",
+          "slack_digests",
+          "slack_posts",
+          "slack_threads",
+          "stale_suggestions",
+          "strategy_actions",
+          "strategy_bets",
+          "strategy_merges",
+          "support_tickets",
+          "tags",
+          "task_check_models",
+          "task_links",
+          "task_milestone_waits",
+          "task_reconnects",
+          "task_relations",
+          "task_reminders",
+          "task_requesters",
+          "task_roles",
+          "task_rules",
+          "task_types",
+          "tasks",
+          "trigger_relays",
+          "updates",
+          "watcher_items",
+          "watcher_pending",
+          "watcher_triage",
+          "webhook_events",
+          "webhook_sends",
+          "webhooks",
+          "worktree_waits"
+        ]
+      }
+    },
+    "created_by": {
+      "kept_in": [
+        "agents",
+        "bot_config",
+        "company_storage",
+        "computer_keys",
+        "credentials",
+        "fin_accounts",
+        "fin_actions",
+        "fin_allocations",
+        "fin_attachments",
+        "fin_bill_lines",
+        "fin_bills",
+        "fin_books",
+        "fin_budget_versions",
+        "fin_budgets",
+        "fin_card_auths",
+        "fin_card_saves",
+        "fin_cards",
+        "fin_close_snapshots",
+        "fin_connections",
+        "fin_contacts",
+        "fin_credit_refunds",
+        "fin_dimensions",
+        "fin_entries",
+        "fin_estimate_lines",
+        "fin_events",
+        "fin_external_refs",
+        "fin_feed_txns",
+        "fin_holds",
+        "fin_inbox",
+        "fin_invoice_lines",
+        "fin_invoices",
+        "fin_line_tags",
+        "fin_lines",
+        "fin_money_accounts",
+        "fin_outbox",
+        "fin_payments",
+        "fin_periods",
+        "fin_po_lines",
+        "fin_private_lines",
+        "fin_projections",
+        "fin_raw_imports",
+        "fin_recipients",
+        "fin_reconciliations",
+        "fin_restatements",
+        "fin_rights",
+        "fin_rule_runs",
+        "fin_rules",
+        "fin_settings",
+        "fin_settlements",
+        "fin_statements",
+        "fin_tax_jurisdictions",
+        "fin_transfers",
+        "fin_usage_snapshots",
+        "fin_view_defaults",
+        "fin_view_grants",
+        "human_tokens",
+        "inbound_inboxes",
+        "learned_entries",
+        "lens_runs",
+        "market_briefings",
+        "market_edges",
+        "market_entities",
+        "market_figures",
+        "market_sizes",
+        "market_sources",
+        "market_watches",
+        "meeting_items",
+        "rule_due_dates",
+        "rule_sources",
+        "rules",
+        "seats",
+        "service_keys",
+        "task_check_models",
+        "task_milestone_waits",
+        "task_relations",
+        "task_rules",
+        "trigger_relays",
+        "triggers",
+        "webhooks"
+      ],
+      "renames": {
+        "created_by_id": [
+          "automations",
+          "docs",
+          "goal_kpis",
+          "goals",
+          "kpis"
+        ]
+      }
+    },
+    "criteria_json": {
+      "kept_in": [],
+      "renames": {
+        "criteria": [
+          "ask_ingest_settings"
+        ]
+      }
+    },
+    "decided": {
+      "kept_in": [],
+      "renames": {
+        "decided_at": [
+          "memory_tidy_cards",
+          "rule_suggestions"
+        ]
+      }
+    },
+    "decided_by": {
+      "kept_in": [
+        "agent_pairings",
+        "goal_proposals",
+        "memory_tidy_cards",
+        "org_rule_holds",
+        "org_rules",
+        "rule_suggestions"
+      ],
+      "renames": {
+        "decided_by_id": [
+          "approvals"
+        ]
+      }
+    },
+    "decided_for_json": {
+      "kept_in": [],
+      "renames": {
+        "decided_for": [
+          "approvals"
+        ]
+      }
+    },
+    "definition_json": {
+      "kept_in": [],
+      "renames": {
+        "definition": [
+          "schedules"
+        ]
+      }
+    },
+    "definition_updated": {
+      "kept_in": [],
+      "renames": {
+        "definition_updated_at": [
+          "bot_config"
+        ]
+      }
+    },
+    "deleted": {
+      "kept_in": [],
+      "renames": {
+        "deleted_at": [
+          "slack_events"
+        ]
+      }
+    },
+    "delivered": {
+      "kept_in": [],
+      "renames": {
+        "delivered_at": [
+          "feed_deliveries"
+        ]
+      }
+    },
+    "dept": {
+      "kept_in": [],
+      "renames": {
+        "department": [
+          "task_manager_reports",
+          "task_manager_seen"
+        ]
+      }
+    },
+    "destinations_json": {
+      "kept_in": [],
+      "renames": {
+        "destinations": [
+          "org_rule_holds"
+        ]
+      }
+    },
+    "detail_json": {
+      "kept_in": [],
+      "renames": {
+        "detail": [
+          "bot_file_activity",
+          "edition_checks",
+          "events",
+          "flight_db",
+          "flight_events",
+          "learning_runs",
+          "meeting_items",
+          "refusals",
+          "service_health",
+          "task_links",
+          "watcher_triage"
+        ]
+      }
+    },
+    "diff_json": {
+      "kept_in": [],
+      "renames": {
+        "diff": [
+          "assistant_actions"
+        ]
+      }
+    },
+    "due": {
+      "kept_in": [],
+      "renames": {
+        "due_at": [
+          "deferrals",
+          "task_reminders",
+          "tasks"
+        ]
+      }
+    },
+    "edited": {
+      "kept_in": [],
+      "renames": {
+        "edited_at": [
+          "slack_events"
+        ]
+      }
+    },
+    "edits_json": {
+      "kept_in": [],
+      "renames": {
+        "edits": [
+          "memory_tidy_cards"
+        ]
+      }
+    },
+    "emails_json": {
+      "kept_in": [],
+      "renames": {
+        "emails": [
+          "fin_contacts"
+        ]
+      }
+    },
+    "end_json": {
+      "kept_in": [],
+      "renames": {
+        "at_end": [
+          "attempt_load_snapshots"
+        ]
+      }
+    },
+    "ended": {
+      "kept_in": [
+        "task_reconnects"
+      ],
+      "renames": {
+        "ended_at": [
+          "perf_overloads"
+        ]
+      }
+    },
+    "entry_json": {
+      "kept_in": [],
+      "renames": {
+        "entry": [
+          "bot_tool_requests"
+        ]
+      }
+    },
+    "event_ids_json": {
+      "kept_in": [],
+      "renames": {
+        "event_ids": [
+          "slack_digests"
+        ]
+      }
+    },
+    "events_json": {
+      "kept_in": [],
+      "renames": {
+        "events": [
+          "webhooks"
+        ]
+      }
+    },
+    "examples_json": {
+      "kept_in": [],
+      "renames": {
+        "examples": [
+          "fin_rules",
+          "invariant_state"
+        ]
+      }
+    },
+    "expires": {
+      "kept_in": [],
+      "renames": {
+        "expires_at": [
+          "enrollments",
+          "memory_tidy_cards",
+          "redesign_migrations",
+          "task_delegations",
+          "tico_storage"
+        ]
+      }
+    },
+    "fetched": {
+      "kept_in": [],
+      "renames": {
+        "fetched_at": [
+          "feed_sources",
+          "feed_updates"
+        ]
+      }
+    },
+    "files_json": {
+      "kept_in": [],
+      "renames": {
+        "files": [
+          "bot_memory_updates"
+        ]
+      }
+    },
+    "filter_json": {
+      "kept_in": [],
+      "renames": {
+        "filter": [
+          "webhooks"
+        ]
+      }
+    },
+    "finished": {
+      "kept_in": [],
+      "renames": {
+        "finished_at": [
+          "attempts",
+          "automation_runs",
+          "calendar_actions",
+          "learning_runs",
+          "lens_runs",
+          "live_meeting_chat_routes",
+          "live_meeting_windows",
+          "redesign_migrations",
+          "storage_moves",
+          "system_runs",
+          "turns",
+          "watcher_runs",
+          "worktree_waits"
+        ]
+      }
+    },
+    "first_due": {
+      "kept_in": [],
+      "renames": {
+        "first_due_on": [
+          "rule_due_dates"
+        ]
+      }
+    },
+    "first_seen": {
+      "kept_in": [],
+      "renames": {
+        "first_seen_at": [
+          "health_findings"
+        ]
+      }
+    },
+    "first_started": {
+      "kept_in": [],
+      "renames": {
+        "first_started_at": [
+          "system_runs"
+        ]
+      }
+    },
+    "fix_json": {
+      "kept_in": [],
+      "renames": {
+        "fix": [
+          "task_reconnects"
+        ]
+      }
+    },
+    "flow_json": {
+      "kept_in": [],
+      "renames": {
+        "flow": [
+          "automation_versions",
+          "automations",
+          "task_steps"
+        ]
+      }
+    },
+    "forward_to_json": {
+      "kept_in": [],
+      "renames": {
+        "forward_to": [
+          "bot_mail_settings"
+        ]
+      }
+    },
+    "found_json": {
+      "kept_in": [],
+      "renames": {
+        "found": [
+          "watcher_pending"
+        ]
+      }
+    },
+    "from_actor": {
+      "kept_in": [
+        "notes"
+      ],
+      "renames": {
+        "sender_id": [
+          "messages"
+        ]
+      }
+    },
+    "full_detail_json": {
+      "kept_in": [],
+      "renames": {
+        "full_detail": [
+          "fin_private_lines"
+        ]
+      }
+    },
+    "gaps_json": {
+      "kept_in": [],
+      "renames": {
+        "gaps": [
+          "inbound_sync"
+        ]
+      }
+    },
+    "grp": {
+      "kept_in": [],
+      "renames": {
+        "group_id": [
+          "automations"
+        ]
+      }
+    },
+    "headers_json": {
+      "kept_in": [],
+      "renames": {
+        "headers": [
+          "trigger_bodies",
+          "webhooks"
+        ]
+      }
+    },
+    "imported": {
+      "kept_in": [],
+      "renames": {
+        "imported_at": [
+          "archives"
+        ]
+      }
+    },
+    "indexed": {
+      "kept_in": [],
+      "renames": {
+        "indexed_at": [
+          "file_text_state"
+        ]
+      }
+    },
+    "inputs_json": {
+      "kept_in": [],
+      "renames": {
+        "inputs": [
+          "fin_rule_runs",
+          "updates"
+        ]
+      }
+    },
+    "inventory_json": {
+      "kept_in": [],
+      "renames": {
+        "inventory": [
+          "doc_source_jobs"
+        ]
+      }
+    },
+    "item_keys_json": {
+      "kept_in": [],
+      "renames": {
+        "item_keys": [
+          "learning_deliveries"
+        ]
+      }
+    },
+    "items_json": {
+      "kept_in": [],
+      "renames": {
+        "items": [
+          "batches"
+        ]
+      }
+    },
+    "labels_json": {
+      "kept_in": [],
+      "renames": {
+        "labels": [
+          "mail_messages",
+          "tasks"
+        ]
+      }
+    },
+    "last": {
+      "kept_in": [],
+      "renames": {
+        "last_seen_at": [
+          "perf_overloads"
+        ]
+      }
+    },
+    "last_checked": {
+      "kept_in": [],
+      "renames": {
+        "last_checked_at": [
+          "doc_sources"
+        ]
+      }
+    },
+    "last_failed": {
+      "kept_in": [],
+      "renames": {
+        "last_failed_at": [
+          "run_backoff"
+        ]
+      }
+    },
+    "last_fired": {
+      "kept_in": [],
+      "renames": {
+        "last_fired_at": [
+          "schedules"
+        ]
+      }
+    },
+    "last_read_by": {
+      "kept_in": [],
+      "renames": {
+        "last_read_by_id": [
+          "goals"
+        ]
+      }
+    },
+    "last_routed": {
+      "kept_in": [],
+      "renames": {
+        "last_routed_at": [
+          "slack_threads"
+        ]
+      }
+    },
+    "last_run": {
+      "kept_in": [],
+      "renames": {
+        "last_run_at": [
+          "slack_reads"
+        ]
+      }
+    },
+    "last_seen": {
+      "kept_in": [],
+      "renames": {
+        "last_seen_at": [
+          "agents",
+          "health_findings",
+          "oidc_sessions",
+          "repositories",
+          "runners"
+        ]
+      }
+    },
+    "last_success": {
+      "kept_in": [],
+      "renames": {
+        "last_succeeded_at": [
+          "service_health"
+        ]
+      }
+    },
+    "last_sync": {
+      "kept_in": [],
+      "renames": {
+        "last_synced_at": [
+          "inbound_sync"
+        ]
+      }
+    },
+    "last_used": {
+      "kept_in": [],
+      "renames": {
+        "last_used_at": [
+          "human_tokens",
+          "service_keys"
+        ]
+      }
+    },
+    "last_verified": {
+      "kept_in": [],
+      "renames": {
+        "last_verified_at": [
+          "market_entities"
+        ]
+      }
+    },
+    "last_woke": {
+      "kept_in": [],
+      "renames": {
+        "last_woke_at": [
+          "health_findings"
+        ]
+      }
+    },
+    "later_json": {
+      "kept_in": [],
+      "renames": {
+        "later": [
+          "screening_pending",
+          "watcher_pending"
+        ]
+      }
+    },
+    "lines_json": {
+      "kept_in": [],
+      "renames": {
+        "lines": [
+          "model_logins"
+        ]
+      }
+    },
+    "logged": {
+      "kept_in": [],
+      "renames": {
+        "logged_at": [
+          "credential_uses"
+        ]
+      }
+    },
+    "made_by": {
+      "kept_in": [
+        "pins"
+      ],
+      "renames": {
+        "made_by_id": [
+          "cards"
+        ]
+      }
+    },
+    "marked": {
+      "kept_in": [],
+      "renames": {
+        "marked_at": [
+          "compact_first"
+        ]
+      }
+    },
+    "members_json": {
+      "kept_in": [],
+      "renames": {
+        "members": [
+          "fin_view_grants"
+        ]
+      }
+    },
+    "merchant_locks_json": {
+      "kept_in": [],
+      "renames": {
+        "merchant_locks": [
+          "fin_cards"
+        ]
+      }
+    },
+    "messages_json": {
+      "kept_in": [],
+      "renames": {
+        "messages": [
+          "support_tickets"
+        ]
+      }
+    },
+    "metadata_json": {
+      "kept_in": [],
+      "renames": {
+        "metadata": [
+          "granola_connections",
+          "meeting_versions",
+          "meetings",
+          "tags"
+        ]
+      }
+    },
+    "model_json": {
+      "kept_in": [],
+      "renames": {
+        "model": [
+          "attempts"
+        ]
+      }
+    },
+    "next": {
+      "kept_in": [],
+      "renames": {
+        "next_walk_at": [
+          "feed_walks"
+        ]
+      }
+    },
+    "next_attempt": {
+      "kept_in": [],
+      "renames": {
+        "next_attempt_at": [
+          "slack_posts",
+          "webhook_sends"
+        ]
+      }
+    },
+    "next_check": {
+      "kept_in": [],
+      "renames": {
+        "next_check_at": [
+          "doc_sources"
+        ]
+      }
+    },
+    "next_due": {
+      "kept_in": [],
+      "renames": {
+        "next_due_at": [
+          "automations",
+          "bot_status",
+          "schedules"
+        ]
+      }
+    },
+    "next_try": {
+      "kept_in": [],
+      "renames": {
+        "next_try_at": [
+          "cloud_machines",
+          "doc_source_jobs",
+          "mail_items"
+        ]
+      }
+    },
+    "nudged": {
+      "kept_in": [],
+      "renames": {
+        "nudged_at": [
+          "runner_versions"
+        ]
+      }
+    },
+    "operator": {
+      "kept_in": [],
+      "renames": {
+        "owner_id": [
+          "bot_config",
+          "enrollments",
+          "runners"
+        ]
+      }
+    },
+    "outcome_json": {
+      "kept_in": [],
+      "renames": {
+        "outcome": [
+          "fin_rule_runs",
+          "fin_rules"
+        ]
+      }
+    },
+    "owner": {
+      "kept_in": [
+        "archives",
+        "assistant_actions",
+        "blobs",
+        "connector_snapshots",
+        "fin_budgets",
+        "fin_rules",
+        "goal_asks",
+        "meetings",
+        "rule_due_dates",
+        "stale_suggestions",
+        "tags",
+        "task_reconnects",
+        "task_trash",
+        "worktree_waits"
+      ],
+      "renames": {
+        "owner_id": [
+          "automations",
+          "goals",
+          "kpis",
+          "tasks"
+        ]
+      }
+    },
+    "owner_actor": {
+      "kept_in": [
+        "live_meetings"
+      ],
+      "renames": {
+        "owner_id": [
+          "conversations"
+        ]
+      }
+    },
+    "owner_ids_json": {
+      "kept_in": [],
+      "renames": {
+        "owner_ids": [
+          "bot_config"
+        ]
+      }
+    },
+    "params_json": {
+      "kept_in": [],
+      "renames": {
+        "params": [
+          "rules"
+        ]
+      }
+    },
+    "participants_json": {
+      "kept_in": [],
+      "renames": {
+        "participants": [
+          "conversations"
+        ]
+      }
+    },
+    "payload_json": {
+      "kept_in": [],
+      "renames": {
+        "payload": [
+          "approvals",
+          "archives",
+          "attempt_events",
+          "connector_snapshots",
+          "fin_actions",
+          "fin_events",
+          "fin_inbox",
+          "fin_outbox",
+          "goal_proposals",
+          "live_meeting_events",
+          "org_rule_holds",
+          "service_jobs"
+        ]
+      }
+    },
+    "pnl_json": {
+      "kept_in": [],
+      "renames": {
+        "pnl": [
+          "fin_close_snapshots"
+        ]
+      }
+    },
+    "processed": {
+      "kept_in": [],
+      "renames": {
+        "processed_at": [
+          "slack_events"
+        ]
+      }
+    },
+    "procs_json": {
+      "kept_in": [],
+      "renames": {
+        "procs": [
+          "perf_overloads"
+        ]
+      }
+    },
+    "published": {
+      "kept_in": [],
+      "renames": {
+        "published_at": [
+          "feed_updates",
+          "strategy_versions"
+        ]
+      }
+    },
+    "purpose_json": {
+      "kept_in": [],
+      "renames": {
+        "purpose": [
+          "fin_payments"
+        ]
+      }
+    },
+    "queued": {
+      "kept_in": [],
+      "renames": {
+        "queued_at": [
+          "blob_purges"
+        ]
+      }
+    },
+    "raw_json": {
+      "kept_in": [],
+      "renames": {
+        "raw": [
+          "fin_feed_txns",
+          "mail_items"
+        ]
+      }
+    },
+    "readers_json": {
+      "kept_in": [],
+      "renames": {
+        "readers": [
+          "slack_channels"
+        ]
+      }
+    },
+    "readiness_json": {
+      "kept_in": [],
+      "renames": {
+        "readiness": [
+          "runners"
+        ]
+      }
+    },
+    "reasons_json": {
+      "kept_in": [],
+      "renames": {
+        "reasons": [
+          "fin_card_auths"
+        ]
+      }
+    },
+    "received": {
+      "kept_in": [],
+      "renames": {
+        "received_at": [
+          "slack_events"
+        ]
+      }
+    },
+    "redirect_uris_json": {
+      "kept_in": [],
+      "renames": {
+        "redirect_uris": [
+          "oauth_clients"
+        ]
+      }
+    },
+    "ref_json": {
+      "kept_in": [],
+      "renames": {
+        "ref": [
+          "learning_items"
+        ]
+      }
+    },
+    "refresh_expires": {
+      "kept_in": [],
+      "renames": {
+        "refresh_expires_at": [
+          "oauth_grants"
+        ]
+      }
+    },
+    "refs_json": {
+      "kept_in": [],
+      "renames": {
+        "refs": [
+          "messages"
+        ]
+      }
+    },
+    "replaced_by": {
+      "kept_in": [],
+      "renames": {
+        "replaced_by_id": [
+          "pages"
+        ]
+      }
+    },
+    "report_json": {
+      "kept_in": [],
+      "renames": {
+        "report": [
+          "batches"
+        ]
+      }
+    },
+    "reported": {
+      "kept_in": [],
+      "renames": {
+        "reported_at": [
+          "bot_memory_updates",
+          "runner_versions"
+        ]
+      }
+    },
+    "requested_by": {
+      "kept_in": [
+        "bot_tool_requests",
+        "bot_transitions",
+        "calendar_actions",
+        "meeting_deliveries",
+        "memory_tidy_keeps",
+        "model_logins",
+        "rule_reads",
+        "runner_harness_actions",
+        "service_jobs",
+        "task_delegations",
+        "webhooks"
+      ],
+      "renames": {
+        "requested_by_id": [
+          "approvals"
+        ]
+      }
+    },
+    "requester": {
+      "kept_in": [
+        "credential_imports",
+        "credential_requests",
+        "task_trash"
+      ],
+      "renames": {
+        "requester_id": [
+          "tasks"
+        ]
+      }
+    },
+    "response_json": {
+      "kept_in": [],
+      "renames": {
+        "response": [
+          "github_product_repo_operations",
+          "github_review_operations",
+          "idempotency"
+        ]
+      }
+    },
+    "responses_json": {
+      "kept_in": [],
+      "renames": {
+        "responses": [
+          "batches"
+        ]
+      }
+    },
+    "restart_requested": {
+      "kept_in": [],
+      "renames": {
+        "restart_requested_at": [
+          "runners"
+        ]
+      }
+    },
+    "restated_json": {
+      "kept_in": [],
+      "renames": {
+        "restated": [
+          "fin_close_snapshots"
+        ]
+      }
+    },
+    "result_json": {
+      "kept_in": [],
+      "renames": {
+        "result": [
+          "assistant_actions",
+          "attempts",
+          "automation_effects",
+          "automation_mail_actions",
+          "calendar_actions",
+          "fin_actions",
+          "goal_proposals",
+          "redesign_migrations",
+          "service_jobs"
+        ]
+      }
+    },
+    "resume_json": {
+      "kept_in": [],
+      "renames": {
+        "resume": [
+          "tasks"
+        ]
+      }
+    },
+    "retired": {
+      "kept_in": [],
+      "renames": {
+        "retired_at": [
+          "company_storage"
+        ]
+      }
+    },
+    "revoked": {
+      "kept_in": [],
+      "renames": {
+        "revoked_at": [
+          "credential_grants"
+        ]
+      }
+    },
+    "routing_json": {
+      "kept_in": [],
+      "renames": {
+        "routing": [
+          "slack_events"
+        ]
+      }
+    },
+    "rows_json": {
+      "kept_in": [],
+      "renames": {
+        "rows": [
+          "fin_usage_snapshots",
+          "task_trash"
+        ]
+      }
+    },
+    "rule_hits_json": {
+      "kept_in": [],
+      "renames": {
+        "rule_hits": [
+          "mail_messages"
+        ]
+      }
+    },
+    "rule_ids_json": {
+      "kept_in": [],
+      "renames": {
+        "rule_ids": [
+          "org_rule_holds"
+        ]
+      }
+    },
+    "rule_results_json": {
+      "kept_in": [],
+      "renames": {
+        "rule_results": [
+          "fin_actions"
+        ]
+      }
+    },
+    "runtimes_json": {
+      "kept_in": [],
+      "renames": {
+        "runtimes": [
+          "computer_profiles"
+        ]
+      }
+    },
+    "saved": {
+      "kept_in": [],
+      "renames": {
+        "saved_at": [
+          "pin_places"
+        ]
+      }
+    },
+    "schedule_json": {
+      "kept_in": [],
+      "renames": {
+        "schedule": [
+          "fin_bills"
+        ]
+      }
+    },
+    "scores_json": {
+      "kept_in": [],
+      "renames": {
+        "scores": [
+          "learning_items",
+          "listen_judgments"
+        ]
+      }
+    },
+    "seen": {
+      "kept_in": [],
+      "renames": {
+        "seen_at": [
+          "bookkeeper_seen",
+          "bot_memory_seen",
+          "google_mail_holders",
+          "task_manager_seen"
+        ]
+      }
+    },
+    "senders_json": {
+      "kept_in": [],
+      "renames": {
+        "senders": [
+          "mail_intake"
+        ]
+      }
+    },
+    "sent_json": {
+      "kept_in": [],
+      "renames": {
+        "sent": [
+          "support_tickets"
+        ]
+      }
+    },
+    "settings_json": {
+      "kept_in": [],
+      "renames": {
+        "settings": [
+          "cards",
+          "fin_connections"
+        ]
+      }
+    },
+    "settled": {
+      "kept_in": [],
+      "renames": {
+        "settled_at": [
+          "deferrals"
+        ]
+      }
+    },
+    "since": {
+      "kept_in": [],
+      "renames": {
+        "changed_at": [
+          "bot_status"
+        ],
+        "cursor_at": [
+          "feed_cursors"
+        ],
+        "held_at": [
+          "automation_guard_holds"
+        ],
+        "started_at": [
+          "bot_status_history"
+        ],
+        "started_firing_at": [
+          "invariant_state"
+        ],
+        "valid_from_on": [
+          "market_edges"
+        ]
+      }
+    },
+    "slides_json": {
+      "kept_in": [],
+      "renames": {
+        "slides": [
+          "updates"
+        ]
+      }
+    },
+    "snapshot_json": {
+      "kept_in": [],
+      "renames": {
+        "snapshot": [
+          "redesign_migrations"
+        ]
+      }
+    },
+    "snoozed_by": {
+      "kept_in": [],
+      "renames": {
+        "snoozed_by_id": [
+          "tasks"
+        ]
+      }
+    },
+    "source_actor": {
+      "kept_in": [],
+      "renames": {
+        "sender_id": [
+          "goal_checkins"
+        ]
+      }
+    },
+    "source_json": {
+      "kept_in": [],
+      "renames": {
+        "source": [
+          "updates"
+        ]
+      }
+    },
+    "sources_json": {
+      "kept_in": [],
+      "renames": {
+        "sources": [
+          "growth_cohorts"
+        ]
+      }
+    },
+    "start_json": {
+      "kept_in": [],
+      "renames": {
+        "at_start": [
+          "attempt_load_snapshots"
+        ]
+      }
+    },
+    "started": {
+      "kept_in": [],
+      "renames": {
+        "started_at": [
+          "attempts",
+          "automation_runs",
+          "calendar_actions",
+          "feed_walks",
+          "google_connects",
+          "learning_runs",
+          "live_meeting_chat_routes",
+          "live_meeting_windows",
+          "memory_tidy_cards",
+          "perf_overloads",
+          "storage_moves",
+          "system_runs",
+          "turns",
+          "watcher_runs"
+        ]
+      }
+    },
+    "state": {
+      "kept_in": [
+        "agent_pairings",
+        "attempts",
+        "automation_mail_actions",
+        "batches",
+        "bills_inbound",
+        "bot_files",
+        "bot_status",
+        "bot_status_history",
+        "bot_tool_requests",
+        "bot_transition_checkpoints",
+        "bot_transitions",
+        "bots",
+        "check_waits",
+        "cloud_machines",
+        "computer_keys",
+        "credential_imports",
+        "inbound_inboxes",
+        "invite_sends",
+        "jobs",
+        "live_meetings",
+        "mail_items",
+        "model_logins",
+        "oauth_grants",
+        "org_rule_holds",
+        "runner_harness_actions",
+        "seat_requests",
+        "service_jobs",
+        "slack_events",
+        "slack_posts",
+        "storage_moves",
+        "strategy_actions",
+        "strategy_merges",
+        "task_links",
+        "tico_storage",
+        "update_archive_overrides",
+        "update_queue",
+        "webhook_sends",
+        "worktree_waits"
+      ],
+      "renames": {
+        "saved_state": [
+          "automation_runs"
+        ]
+      }
+    },
+    "state_json": {
+      "kept_in": [],
+      "renames": {
+        "saved_state": [
+          "automation_runs"
+        ]
+      }
+    },
+    "status_by": {
+      "kept_in": [
+        "goal_events"
+      ],
+      "renames": {
+        "status_by_id": [
+          "goals"
+        ]
+      }
+    },
+    "stop_requested": {
+      "kept_in": [],
+      "renames": {
+        "stop_requested_at": [
+          "attempts"
+        ]
+      }
+    },
+    "tabs_json": {
+      "kept_in": [],
+      "renames": {
+        "tabs": [
+          "bot_task_tabs"
+        ]
+      }
+    },
+    "tags_json": {
+      "kept_in": [],
+      "renames": {
+        "tags": [
+          "fin_bill_lines",
+          "fin_estimate_lines",
+          "fin_invoice_lines",
+          "fin_payments",
+          "fin_po_lines"
+        ]
+      }
+    },
+    "target_json": {
+      "kept_in": [],
+      "renames": {
+        "target": [
+          "bot_transitions"
+        ]
+      }
+    },
+    "teams_json": {
+      "kept_in": [],
+      "renames": {
+        "teams": [
+          "humans"
+        ]
+      }
+    },
+    "to_actor": {
+      "kept_in": [
+        "notes"
+      ],
+      "renames": {
+        "recipient_id": [
+          "messages"
+        ]
+      }
+    },
+    "to_json": {
+      "kept_in": [],
+      "renames": {
+        "to_addresses": [
+          "mail_messages"
+        ]
+      }
+    },
+    "trace_json": {
+      "kept_in": [],
+      "renames": {
+        "trace": [
+          "live_meeting_chat_routes",
+          "live_meeting_windows"
+        ]
+      }
+    },
+    "tried_json": {
+      "kept_in": [],
+      "renames": {
+        "tried": [
+          "fin_inbox"
+        ]
+      }
+    },
+    "triggers_json": {
+      "kept_in": [],
+      "renames": {
+        "triggers": [
+          "task_rules"
+        ]
+      }
+    },
+    "ts": {
+      "kept_in": [
+        "slack_events"
+      ],
+      "renames": {
+        "created_at": [
+          "company_events",
+          "deltas",
+          "events",
+          "flight_db",
+          "flight_events",
+          "flight_process",
+          "flight_requests",
+          "flight_slow",
+          "flight_sql",
+          "goal_checkins",
+          "goal_events",
+          "kpi_definitions",
+          "market_events",
+          "perf_points",
+          "perf_usage",
+          "refusals",
+          "runner_load_samples",
+          "support_access_log",
+          "task_events"
+        ],
+        "measured_at": [
+          "kpi_readings"
+        ]
+      }
+    },
+    "turns_json": {
+      "kept_in": [],
+      "renames": {
+        "turns": [
+          "recording_transcripts"
+        ]
+      }
+    },
+    "undo_json": {
+      "kept_in": [],
+      "renames": {
+        "undo": [
+          "ceo_actions",
+          "strategy_actions"
+        ]
+      }
+    },
+    "until": {
+      "kept_in": [],
+      "renames": {
+        "ended_at": [
+          "bot_status_history"
+        ],
+        "valid_until_on": [
+          "market_edges"
+        ]
+      }
+    },
+    "updated": {
+      "kept_in": [],
+      "renames": {
+        "updated_at": [
+          "ask_ingest_settings",
+          "assignments",
+          "automation_inboxes",
+          "automations",
+          "bot_agent_instructions",
+          "bot_mail_settings",
+          "bot_memory_documents",
+          "bot_session_epochs",
+          "bot_sessions",
+          "bot_task_tabs",
+          "bot_transitions",
+          "calendar_actions",
+          "cards",
+          "check_waits",
+          "cloud_machines",
+          "company_profile",
+          "computer_profiles",
+          "computer_subscriptions",
+          "connector_snapshots",
+          "credential_imports",
+          "credential_requests",
+          "credentials",
+          "docs",
+          "github_product_repo_operations",
+          "goal_kpis",
+          "goals",
+          "google_connects",
+          "invite_sends",
+          "kpis",
+          "learned_entries",
+          "linked_docs",
+          "listening_destinations",
+          "live_meetings",
+          "mail_agent_instructions",
+          "mail_messages",
+          "market_briefings",
+          "market_edges",
+          "market_entities",
+          "market_sizes",
+          "meeting_brain",
+          "meeting_importers",
+          "meeting_items",
+          "meetings",
+          "model_logins",
+          "model_subscriptions",
+          "pages",
+          "preferences",
+          "rate_limits",
+          "repositories",
+          "rules",
+          "runner_harness_actions",
+          "runner_harness_choices",
+          "seats",
+          "service_jobs",
+          "session_epochs",
+          "slack_channels",
+          "slack_events",
+          "slack_posts",
+          "strategy_bets",
+          "strategy_versions",
+          "subscription_assignments",
+          "tags",
+          "task_caps",
+          "task_links",
+          "task_rules",
+          "task_types",
+          "tasks",
+          "updates",
+          "usage_limits",
+          "usage_pools",
+          "webhooks",
+          "worktree_waits"
+        ]
+      }
+    },
+    "updated_by": {
+      "kept_in": [
+        "ask_ingest_settings",
+        "assignments",
+        "automation_inboxes",
+        "bot_mail_settings",
+        "bot_task_tabs",
+        "brand_drafts",
+        "company_profile",
+        "credentials",
+        "fin_settings",
+        "growth_cohorts",
+        "gtm_drafts",
+        "learned_entries",
+        "listening_destinations",
+        "meeting_importers",
+        "meeting_items",
+        "runner_harness_choices",
+        "seats",
+        "slack_channels",
+        "strategy_bets",
+        "strategy_versions",
+        "subscription_assignments",
+        "task_caps",
+        "usage_limits",
+        "usage_pools"
+      ],
+      "renames": {
+        "updated_by_id": [
+          "cards",
+          "docs",
+          "goal_kpis"
+        ]
+      }
+    },
+    "value_json": {
+      "kept_in": [],
+      "renames": {
+        "value": [
+          "fin_settings",
+          "preferences",
+          "registry_metadata"
+        ]
+      }
+    },
+    "verdict_json": {
+      "kept_in": [],
+      "renames": {
+        "verdict": [
+          "org_rule_holds"
+        ]
+      }
+    },
+    "wake_json": {
+      "kept_in": [],
+      "renames": {
+        "wake": [
+          "attempts"
+        ]
+      }
+    },
+    "when_json": {
+      "kept_in": [],
+      "renames": {
+        "condition": [
+          "fin_rules",
+          "rules"
+        ]
+      }
+    },
+    "who_json": {
+      "kept_in": [],
+      "renames": {
+        "who": [
+          "org_rules"
+        ]
+      }
+    },
+    "why_by": {
+      "kept_in": [],
+      "renames": {
+        "why_by_id": [
+          "goals"
+        ]
+      }
+    },
+    "widgets_json": {
+      "kept_in": [],
+      "renames": {
+        "widgets": [
+          "bot_task_tabs"
+        ]
+      }
+    },
+    "with_json": {
+      "kept_in": [],
+      "renames": {
+        "with_scope": [
+          "org_rules"
+        ]
+      }
+    }
+  }
+}

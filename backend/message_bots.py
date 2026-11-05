@@ -4,7 +4,8 @@ The Inbox Manager template only writes `Mailbox: <email>` into the bot's instruc
 computer for a token is the roster: the person's `inbox_bot` names the bot, and the bot's `gmail` tool names the
 address (routines.token_mailboxes). `link` writes both wherever a message bot is made (Settings' add from template,
 the team builder, BotOps registering one for the person who asked), and `backfill` does it once at start for the
-bots made before that, when there is no doubt whose they are.
+bots made before that, when there is no doubt whose they are. Either gives the bot a grant on the mailbox
+(backend/mailbox_access.py), so only for a mailbox the asker may grant: their own email, or any for an owner or admin.
 
 Where the mailbox is written varies: a `Mailbox:` line, the `gmail` tool in the stored config, the same tool as the
 bot's computer reports it from bot.yaml (BotOps writes it there), or plain words in the instructions ("for my mailbox
@@ -19,6 +20,7 @@ from . import access as Access
 from . import bot_access as BA
 from . import routines
 from .store import H, P, Problem, readiness_document
+from . import bot_settings as BS
 
 TEMPLATES = frozenset({"inbox"})
 LINE = re.compile(r"^Mailbox:[ \t]*(\S+@\S+)[ \t]*$", re.M)
@@ -46,9 +48,9 @@ def mailbox_in_words(text):
 
 def reported_mailbox(c, bot):
     """The identity of the `gmail` tool the bot's computer reports from its bot.yaml, or empty."""
-    row = c.execute("SELECT r.readiness_json FROM assignments a JOIN runners r ON r.id=a.runner_id WHERE a.bot=?",
+    row = c.execute("SELECT r.readiness FROM assignments a JOIN runners_with_state r ON r.id=a.runner_id WHERE a.bot=?",
                     (bot,)).fetchone()
-    report = ((readiness_document(row["readiness_json"]) if row else {}).get("bots") or {}).get(bot)
+    report = ((readiness_document(row["readiness"]) if row else {}).get("bots") or {}).get(bot)
     return routines.declared_mailbox({"tools": (report or {}).get("tools") or []}) if isinstance(report, dict) else ""
 
 
@@ -63,11 +65,11 @@ def mailbox_of(c, bot, config, instructions=None):
 def owner_of(c, bot, roster, requester=None):
     """The roster person the bot belongs to: the one who asked for it, else who made it, else its only owner, else
     its operator. None when that person is not on the roster."""
-    row = c.execute("SELECT created_by,operator,bot_owners_json FROM bot_config WHERE bot=?", (bot,)).fetchone()
-    owners = BA.owner_ids(row["bot_owners_json"]) if row else []
+    row = c.execute("SELECT created_by,owner_id,bot_owners FROM bot_config WHERE bot=?", (bot,)).fetchone()
+    owners = BA.owner_ids(row["bot_owners"]) if row else []
     made = H.actor_id(row["created_by"]) if row and str(row["created_by"] or "").startswith("human:") else ""
     for who in (H.actor_id(requester) if str(requester or "").startswith("human:") else "", made,
-                owners[0] if len(owners) == 1 else "", str(row["operator"] or "") if row else ""):
+                owners[0] if len(owners) == 1 else "", str(row["owner_id"] or "") if row else ""):
         person = P.person(who, roster) if who else None
         if person and not person.get("hidden"):
             return person
@@ -75,9 +77,9 @@ def owner_of(c, bot, roster, requester=None):
 
 
 def _config(c, bot):
-    row = c.execute("SELECT config_json FROM bot_config WHERE bot=?", (bot,)).fetchone()
+    row = c.execute(BS.ONE_SQL, (bot,)).fetchone()
     try:
-        return json.loads(row["config_json"] or "{}") if row else {}
+        return json.loads(row["config"] or "{}") if row else {}
     except ValueError:
         return {}
 
@@ -105,6 +107,21 @@ def _link(c, actor, roster, bot, person, mailbox):
     return person["id"]
 
 
+def may_link(c, actor, person, mailbox):
+    """Linking gives the bot a grant on `mailbox` (backend/mailbox_access.py message_bot_changed), so only whoever may
+    give one: an owner or admin, or the person themselves for their own email. A member who makes a bot naming someone
+    else's mailbox, or a shared inbox, gets no link; an admin links it in People or Mailboxes."""
+    who = str(actor or "")
+    if not who.startswith("human:"):
+        return False
+    pid = H.actor_id(who)
+    if pid == person["id"] and str(mailbox or "").strip().lower() == str(person.get("email") or "").strip().lower():
+        return True
+    human = H.human(c, pid)
+    email = str((human or {}).get("email") or "").strip().lower()
+    return bool(email) and email in set(Access.owner_and_admin_emails(c))
+
+
 def link(c, actor, bot, requester=None, instructions=None):
     """A message bot was just made for a person: link it. The person is whoever's roster email is the mailbox the bot
     reads, else the requester (who asked for it), else its owner. The mailbox is where `mailbox_of` finds one, else the
@@ -118,6 +135,8 @@ def link(c, actor, bot, requester=None, instructions=None):
     if not person:
         return None
     mailbox = declared or str(person.get("email") or "").strip().lower()
+    if not may_link(c, actor, person, mailbox):
+        return None
     return _link(c, actor, roster, bot, person, mailbox)
 
 
@@ -130,11 +149,11 @@ def backfill(c, actor="keeper"):
     roster = _roster(c)
     people = [p for p in roster["people"] if not p.get("hidden")]
     taken = {p.get("inbox_bot") for p in roster["people"] if p.get("inbox_bot")}
-    found = c.execute("SELECT value_json FROM registry_metadata WHERE key=?", (DONE,)).fetchone()
+    found = c.execute("SELECT value FROM registry_metadata WHERE key=?", (DONE,)).fetchone()
     done = set(json.loads(found[0])) if found else set()
     wanted = []
-    for row in c.execute("SELECT b.slug FROM bots b WHERE b.state<>'archived' ORDER BY b.slug"):
-        bot = row["slug"]
+    for row in c.execute("SELECT b.id FROM bots b WHERE b.state<>'archived' ORDER BY b.slug"):
+        bot = row["id"]
         config = _config(c, bot)
         if bot in taken or bot in done or not is_message_bot(config):
             continue
@@ -143,7 +162,10 @@ def backfill(c, actor="keeper"):
             continue
         person = (P.person_by_email(mailbox, roster) or owner_of(c, bot, roster)
                   or (people[0] if len(people) == 1 else None))
-        if person and not person.get("inbox_bot"):
+        # Only when whoever made the bot may give that grant (their own mailbox; any, for an admin).
+        maker = owner_of(c, bot, roster)
+        if (person and not person.get("inbox_bot") and maker
+                and may_link(c, H.human_actor(maker["id"]), person, mailbox)):
             wanted.append((bot, person, mailbox))
     claimed = [p["id"] for _, p, _ in wanted]
     linked = []
@@ -154,6 +176,6 @@ def backfill(c, actor="keeper"):
             linked.append(bot)
             roster = _roster(c)
     if linked:
-        c.execute("INSERT INTO registry_metadata VALUES(?,?) ON CONFLICT(key) DO UPDATE SET value_json=excluded.value_json",
+        c.execute("INSERT INTO registry_metadata VALUES(?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value",
                   (DONE, json.dumps(sorted(done | set(linked)))))
     return linked

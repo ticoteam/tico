@@ -2,6 +2,7 @@
 
 from backend.tests.test_api import api, assign, runner  # noqa: F401
 from backend import subscriptions
+from backend import bot_settings as BS
 
 
 def test_connections_by_runner_matches_per_computer(api):
@@ -27,8 +28,8 @@ def test_connections_by_runner_follows_an_unplaced_original_and_lists_a_revoked_
     with api.app.state.store.transaction() as c:
         # cpo is a branch of ops, which runs on codex and sits on no computer.
         for bot, config in (("ops", {"runtime": "codex", "harness": "codex"}), ("cpo", {"shared_from": "ops"})):
-            c.execute("INSERT INTO bot_config(bot,config_json,operator) VALUES(?,?,'ana') "
-                      "ON CONFLICT(bot) DO UPDATE SET config_json=excluded.config_json", (bot, json.dumps(config)))
+            c.execute("INSERT INTO bot_config(bot,owner_id) VALUES(?,'ana') ON CONFLICT(bot) DO NOTHING", (bot,))
+            BS.write(c, bot, config)
         c.execute("UPDATE runners SET revoked_at=? WHERE id=?", ("2026-01-01T00:00:00Z", gone["runner_id"]))
     settings = api.app.state.store.settings
     with api.app.state.store.read() as c:

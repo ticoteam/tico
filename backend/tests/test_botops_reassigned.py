@@ -28,7 +28,7 @@ def test_a_bot_reassigning_a_persons_task_to_botops_lends_only_its_own_rights(ap
     assert tried.json()["needs_confirm"] is True
     assert get(api, "bots/ops/repositories", "ana-test") == before
     with api.app.state.store.read() as c:
-        assert H.task(c, task["id"])["requester"] == "human:ana"
+        assert H.task(c, task["id"])["requester_id"] == "human:ana"
         card = c.execute("SELECT owner FROM assistant_actions WHERE id=?", (tried.json()["action"]["id"],)).fetchone()
         assert card["owner"] == "human:ana"
     # Citing the task as a follow-through lends nothing either.
@@ -60,7 +60,7 @@ def test_botops_moving_a_persons_task_to_itself_with_lent_rights_lends_nothing_l
     first = claim(api, botops, "botops")
     _reassign(api, other["id"], first["token"])
     with api.app.state.store.read() as c:
-        moved = c.execute("SELECT actor FROM task_events WHERE task_id=? AND field='owner' ORDER BY ts DESC LIMIT 1",
+        moved = c.execute("SELECT actor_id AS actor FROM history_events WHERE subject_type='task' AND subject_id=? AND kind='owner' ORDER BY created_at DESC LIMIT 1",
                           (other["id"],)).fetchone()
         assert moved["actor"] == "human:ana"         # made with her rights, through BotOps
     finish(api, botops, first)

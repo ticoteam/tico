@@ -1,5 +1,6 @@
-// Offline browser regression: the "New version" notice in the sidebar appears only when the server
-// says a newer release exists, offers "Update now" to the owner alone, and dismissal is remembered.
+// Offline browser regression: the sidebar's version row offers a newer release only when the server says one exists,
+// offers "Update now" to the owner alone, and dismissal is remembered. It is one row: "Update to" while a release is
+// on offer, else "Updated to" while changes are unread (ui/changelog.js), and nothing when neither applies.
 const {chromium} = require('playwright');
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
@@ -15,7 +16,7 @@ const UPDATE = {current: '0.1.0', latest: '0.2.0', available: true, url: 'https:
 (async () => {
   const browser = await chromium.launch({headless: true, channel: process.env.TICO_BROWSER_CHANNEL === undefined ? 'chrome' : process.env.TICO_BROWSER_CHANNEL || undefined});
   try {
-    const visit = async ({role = 'owner', update = UPDATE, updater = null, context} = {}) => {
+    const visit = async ({role = 'owner', update = UPDATE, updater = null, changelog = null, context} = {}) => {
       const ctx = context || await browser.newContext({viewport: {width: 1440, height: 900}, serviceWorkers: 'block'});
       const page = await ctx.newPage();
       const errors = [], posts = [];
@@ -29,9 +30,11 @@ const UPDATE = {current: '0.1.0', latest: '0.2.0', available: true, url: 'https:
           return route.fulfill({contentType: ui[1].endsWith('.css') ? 'text/css' : 'application/javascript', body: fs.readFileSync(uiFile(ui[1]), 'utf8')});
         if (p.endsWith('.js')) return route.fulfill({contentType: 'application/javascript', body: ''});
         if (p === '/') return route.fulfill({contentType: 'text/html', body: html});
-        const config = {version: update ? update.current : '0.1.0', update, app_name: 'Tico'};
+        const config = {version: update ? update.current : '0.1.0', update, app_name: 'Tico', ...(changelog ? {changelog} : {})};
         if (p === '/api/me') return json({id: 'ana', role, name: 'Ana', email: 'ana@acme.example', cloud: true, registered: true, config});
         if (p === '/api/v2/config') return json({...config, version: served || (polls > 1 ? '0.2.0' : '0.1.0')});
+        // What's new opens on a click from the row; its list is not under test here (changelog.cjs has it).
+        if (p === '/api/v2/changelog') return json({entries: [], unread_count: changelog?.unread_count || 0, next_offset: null, can_add: false, can_review: false, drafts: [], current_version: config.version});
         if (p === '/api/v2/system/update' && req.method() === 'POST') {
           posts.push(req.postDataJSON());
           return updater === 'manual'
@@ -87,7 +90,7 @@ const UPDATE = {current: '0.1.0', latest: '0.2.0', available: true, url: 'https:
     // The owner sees it, and a dismissal survives a reload but not a newer version.
     v = await visit({});
     const notice = v.page.locator('#new-version');
-    assert.equal((await notice.innerText()).trim(), 'New version v0.2.0');
+    assert.equal((await notice.innerText()).trim(), 'Update to v0.2.0');
     await notice.click();
     assert.equal(await v.page.locator('#nv-update').isVisible(), true, 'owner sees Update now');
     if (shots) { await v.page.waitForFunction(settled, null, {timeout: t(5000)}); const box = await v.page.locator('aside').first().boundingBox(); await v.page.screenshot({path: path.join(shots, 'new-version-notice.png'), clip: {x: 0, y: Math.max(0, box.y + box.height - 330), width: box.width, height: 330}}); }
@@ -140,6 +143,7 @@ const UPDATE = {current: '0.1.0', latest: '0.2.0', available: true, url: 'https:
     await v.page.locator('#new-version').click();
     await v.page.locator('#nv-update').click();
     await v.page.locator('#nv-copy').waitFor();
+    assert.equal((await v.page.locator('#new-version').innerText()).trim(), 'Update to v0.2.0', 'a refused start hands the row back from Updating');
     assert.deepEqual(v.posts, [{version: '0.2.0'}]);
     assert.match(await v.page.locator('.nv-cmd code').innerText(), /^docker compose pull && docker compose up -d$/);
     await v.ctx.close();
@@ -148,10 +152,62 @@ const UPDATE = {current: '0.1.0', latest: '0.2.0', available: true, url: 'https:
     v = await visit({});
     await v.page.locator('#new-version').click();
     await v.page.locator('#nv-update').click();
+    assert.equal((await v.page.locator('#new-version').innerText()).trim(), 'Updating…', 'the row says so while the update runs');
     await v.page.locator('#nv-out .nv-status').filter({hasText: 'Updating'}).waitFor();
     await v.page.waitForEvent('framenavigated', {timeout: t(15000)});
     for (const x of [v]) assert.deepEqual(x.errors, []);
     await v.ctx.close();
-    console.log('PASS: New version notice hidden unless available, changelog link for everyone, Update now for the owner only (progress, reload, manual command), dismissal per version.');
+
+    // One version row. An update on offer (or running) is the row, and its pop-up links What's new so unread changes
+    // stay reachable; unread changes alone read "Updated to" and open What's new; a dismissed update hands the row back
+    // to them; nothing unread and no update means no row. On a phone the More drawer shows the same one row.
+    const versionRows = page => page.locator('.side-footer > .new-version:not([hidden]) > #new-version, .side-footer > #changelog-notice:not([hidden])')
+      .allInnerTexts().then(texts => texts.map(text => text.replace(/\s+/g, ' ').trim()));
+    v = await visit({changelog: {unread_count: 2}});
+    assert.deepEqual(await versionRows(v.page), ['Update to v0.2.0'], 'an update on offer takes the one row, unread changes wait');
+    await v.page.locator('#new-version').click();
+    assert.equal(await v.page.locator('#nv-whatsnew').getAttribute('href'), '#/changelog', 'the pop-up links What\'s new');
+    await v.page.locator('#nv-whatsnew').click();
+    await v.page.waitForFunction(() => location.hash === '#/changelog');
+    assert.equal(await v.page.locator('#new-version-pop').isHidden(), true, 'the link closes the pop-up');
+    await v.page.locator('.release-page h1').waitFor();
+    assert.equal(await v.page.locator('.release-page h1').innerText(), 'Changelog');
+    await v.ctx.close();
+
+    v = await visit({update: {...UPDATE, scheduled: '0.2.0', available: false}, changelog: {unread_count: 2}});
+    assert.deepEqual(await versionRows(v.page), ['Update to v0.2.0'], 'a release Tico support scheduled takes the row too');
+    await v.ctx.close();
+
+    v = await visit({update: {...UPDATE, available: false}, changelog: {unread_count: 2}});
+    assert.deepEqual(await versionRows(v.page), ['Updated to v0.1.0'], 'unread changes alone: one row, no count');
+    await v.page.locator('#changelog-notice').click();
+    await v.page.waitForFunction(() => location.hash === '#/changelog');
+    await v.page.locator('.release-page h1').waitFor();
+    await v.ctx.close();
+
+    v = await visit({changelog: {unread_count: 2}});
+    await v.page.locator('#new-version').click();
+    await v.page.locator('#nv-dismiss').click();
+    assert.deepEqual(await versionRows(v.page), ['Updated to v0.1.0'], 'a dismissed update hands the row back to unread changes');
+    await v.ctx.close();
+
+    v = await visit({changelog: {unread_count: 0}});
+    await v.page.locator('#new-version').click();
+    await v.page.locator('#nv-dismiss').click();
+    assert.deepEqual(await versionRows(v.page), [], 'dismissed with nothing unread: no row');
+    await v.ctx.close();
+
+    v = await visit({update: {...UPDATE, available: false}, changelog: {unread_count: 0}});
+    assert.deepEqual(await versionRows(v.page), [], 'up to date with nothing unread: no row');
+    await v.ctx.close();
+
+    v = await visit({update: {...UPDATE, available: false}, changelog: {unread_count: 2}});
+    await v.page.setViewportSize({width: 390, height: 844});
+    await v.page.locator('#mobile-more').click();
+    await v.page.locator('#side .side-footer').waitFor({state: 'attached'});
+    assert.deepEqual(await versionRows(v.page), ['Updated to v0.1.0'], 'the More drawer shows the same one row');
+    assert.deepEqual(v.errors, []);
+    await v.ctx.close();
+    console.log('PASS: New version notice hidden unless available, changelog link for everyone, Update now for the owner only (progress, reload, manual command), dismissal per version; one version row (Update to, Updating, Updated to, What\'s new in the pop-up, the phone drawer).');
   } finally { await browser.close(); }
 })().catch(error => { console.error(error); process.exitCode = 1; });

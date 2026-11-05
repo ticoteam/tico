@@ -80,13 +80,13 @@ def import_text_archives(store, runtime):
 
 def install_archives(app, store):
     def authorized(who, row):
-        return who.role == "owner" or who.role == "human" and row["owner"] == who.actor
+        return who.role == "owner" or who.role == "human" and row["owner_id"] == who.actor
 
     @app.get("/api/v2/archives")
     def listing(request: Request):
         who = request.state.identity
         with store.read() as c:
-            return {"archives": [dict(row) for row in c.execute("SELECT source,digest,imported,owner,kind FROM archives ORDER BY imported,source")
+            return {"archives": [dict(row) for row in c.execute("SELECT source,digest,imported_at,owner,kind FROM archives ORDER BY imported_at,source")
                                  if authorized(who, row)]}
 
     @app.get("/api/v2/archive")
@@ -95,5 +95,5 @@ def install_archives(app, store):
             row = c.execute("SELECT * FROM archives WHERE source=?", (source,)).fetchone()
             if not row or not authorized(request.state.identity, row):
                 raise Problem("not_found", "Archive not found or unavailable to this account", 404)
-            return {**{k: row[k] for k in ("source", "digest", "imported", "owner", "kind")},
-                    "content": json.loads(row["payload_json"])}
+            return {**{k: row[k] for k in ("source", "digest", "imported_at", "owner", "kind")},
+                    "content": json.loads(row["payload"])}

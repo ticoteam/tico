@@ -10,6 +10,7 @@ pub struct VisualOrigin {
 }
 
 impl VisualOrigin {
+    #[cfg(test)]
     pub fn new(hub: &Url, raw: &str) -> Option<Self> {
         Self::with_files(hub, raw, "")
     }
@@ -23,6 +24,11 @@ impl VisualOrigin {
             return None;
         }
         Some(Self { hub: hub.clone(), origin, files })
+    }
+
+    /// Whether this allowance belongs to the page on `hub`.
+    pub fn serves(&self, hub: Option<&Url>) -> bool {
+        hub == Some(&self.hub)
     }
 
     pub fn permits(&self, hub: Option<&Url>, url: &Url) -> bool {

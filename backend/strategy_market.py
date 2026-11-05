@@ -3,25 +3,20 @@ in one click each. They are the market graph's own rows (backend/market.py, back
 
 - a segment the team plays in (**Us**) is `company/self` `operates_in` it, and one it means to enter next (**Next**)
   is `next: true` on the segment's properties, as the company file's import writes them (backend/company_import.py).
-  Several of each. They mirror the Growth segments (backend/growth.py): Us is a segment `serving`, Next one `next`.
-  `set_status` is the one write that keeps both in step, for the Growth routes and for a click here. A write
-  straight to the graph (the market routes, an import) moves the Growth row too (`follow_graph`): Us makes it
-  serving, Next next, and losing both drops a serving or next one. Only people set these: a bot is refused here;
-- merging one segment into another moves its Growth row there (`follow_merge`);
-- removing a segment retires it and clears its Next (its Growth row, if any, is dropped); its sub-segments move up
-  to its parent;
+  Several of each. Only people set these: a bot is refused here;
+- merging a segment into another moves its Next mark there, unless the other is Us already (`follow_merge`);
+- removing a segment retires it and clears its Next; its sub-segments move up to its parent;
 - a competitor is a company or product with a current `competes_with` edge to `company/self`, either way round.
   Removing one ends those edges (the company stays in the graph); adding one by name or site finds the company the
   graph already has, or makes it, and adds the edge.
 
 An edge ends the day before (`until` is the last day it holds, and today it should already be gone), and a new one
 starts today, so a competitor removed and added again is a new edge beside the ended one. Each write cites one
-evidence row: the owner's say-so on this page (or on the Growth page). Only the owner and the Librarian write here
-(`market.require_writer`); the Growth routes check their own rule.
+evidence row: the owner's say-so on this page. Only the owner and the Librarian write here
+(`market.require_writer`).
 """
-import contextvars
 import re
-from datetime import datetime, timedelta, timezone
+from datetime import date, timedelta
 from typing import Literal
 
 from fastapi import Request
@@ -34,39 +29,35 @@ from . import models as M
 from .store import Problem
 
 EVIDENCE = "strategy.page"
-GROWTH_EVIDENCE = "growth.segments"
-STATUSES = ("serving", "testing", "next", "dropped")
 COMPETITORS_MAX = 40
-# Set while `mirror` writes the graph, so `follow_graph` leaves the Growth row to `set_status`.
-_MIRRORING = contextvars.ContextVar("strategy_market_mirroring", default=False)
 SITE = re.compile(r"^(https?://)?([a-z0-9-]+(\.[a-z0-9-]+)+)(:\d+)?(/\S*)?$", re.I)
 
 
-def _evidence(c, actor, growth=False):
+def _evidence(c, actor):
     row, _events = MK.create_evidence(
-        c, actor, evidence_key=MK.evidence_id(GROWTH_EVIDENCE if growth else EVIDENCE), source_kind="other",
-        our_read="Set on the Growth page." if growth else "Set by the owner on the Strategy page.")
+        c, actor, evidence_key=MK.evidence_id(EVIDENCE), source_kind="other",
+        our_read="Set by the owner on the Strategy page.")
     return [row["id"]]
 
 
 def _days():
-    today = datetime.now(timezone.utc).date()            # the market's days are UTC (market_spend._today)
+    today = date.fromisoformat(H.now()[:10])             # the hub clock (UTC): a demo build dates its rows by its own now
     return today.isoformat(), (today - timedelta(days=1)).isoformat()
 
 
 def _current(c, where, args):
     today, _ = _days()
     return H._rows(c.execute(
-        "SELECT * FROM market_edges WHERE (since IS NULL OR substr(since,1,10)<=?) AND (until IS NULL OR "
-        f"substr(until,1,10)>=?) AND ({where})", (today, today, *args)))
+        "SELECT * FROM market_edges WHERE (valid_from_on IS NULL OR substr(valid_from_on,1,10)<=?) AND (valid_until_on IS NULL OR "
+        f"substr(valid_until_on,1,10)>=?) AND ({where})", (today, today, *args)))
 
 
 def _end(c, actor, edge, ev):
     """The edge holds no longer: its last day was yesterday. One that started today starts yesterday too."""
     _, yesterday = _days()
-    since = edge["since"] if edge["since"] and str(edge["since"])[:10] <= yesterday else None
+    since = edge["valid_from_on"] if edge["valid_from_on"] and str(edge["valid_from_on"])[:10] <= yesterday else None
     MK.update_edge(c, actor, edge["id"], until=yesterday, evidence_ids=ev,
-                   **({"since": yesterday} if edge["since"] and not since else {}))
+                   **({"since": yesterday} if edge["valid_from_on"] and not since else {}))
 
 
 def _own(c, actor, name, ev):
@@ -83,23 +74,15 @@ def _segment(c, segment_id):
     return row
 
 
-def mirror(c, actor, segment_id, status, company="", growth=False):
-    """Where we play as a Growth status says: `serving` is Us, `next` is Next, anything else (or None) neither. Only
-    what differs is written."""
-    token = _MIRRORING.set(True)
-    try:
-        _mirror(c, actor, segment_id, status, company, growth)
-    finally:
-        _MIRRORING.reset(token)
-
-
-def _mirror(c, actor, segment_id, status, company, growth):
+def mirror(c, actor, segment_id, status, company=""):
+    """Where we play as `status` says: `serving` is Us, `next` is Next, anything else (or None) neither. Only what
+    differs is written."""
     seg = _segment(c, segment_id)
     ev = None
 
     def proof():
         nonlocal ev
-        ev = ev or _evidence(c, actor, growth)
+        ev = ev or _evidence(c, actor)
         return ev
     edges = _current(c, "rel='operates_in' AND src=? AND dst=?", (MK.OWN_COMPANY_ID, segment_id))
     if status == "serving" and not edges:
@@ -116,119 +99,23 @@ def _mirror(c, actor, segment_id, status, company, growth):
                          evidence_ids=proof())
 
 
-def placed(c, segment_id):
-    """What Where we play says of the segment: `serving` (Us), `next`, or None."""
-    if _current(c, "rel='operates_in' AND src=? AND dst=?", (MK.OWN_COMPANY_ID, segment_id)):
-        return "serving"
-    row = MK.entity(c, segment_id)
-    return "next" if row and row["properties"].get("next") else None
-
-
-def growth_row(c, segment_id):
-    return H._one(c, "SELECT * FROM growth_segments WHERE segment_id=?", (segment_id,))
-
-
-def set_status(c, actor, segment_id, status, company="", growth=False, create=True):
-    """The segment's Growth status and its mirror in the market graph, in one write. Without a Growth row one is made
-    (`create`), else only the graph moves. Answers the Growth row or None."""
-    if status not in STATUSES:
-        raise Problem("validation", f"status is {'|'.join(STATUSES)}", 422)
-    mirror(c, actor, segment_id, status, company, growth)
-    return _put(c, actor, segment_id, status, create)
-
-
-def follow_graph(c, actor, segment_id):
-    """After a write straight to the graph (backend/market.py) touched a segment's Us edge or Next flag: its Growth
-    row follows. Us is serving and Next next (a row is made if none); neither drops a serving or next row and leaves
-    a testing or dropped one."""
-    if _MIRRORING.get():
-        return
-    seg = MK.entity(c, segment_id)
-    if not seg or seg["type"] != "segment":
-        return
-    now = placed(c, segment_id) if seg["status"] == "active" else None
-    row = growth_row(c, segment_id)
-    if now:
-        _put(c, actor, segment_id, now, True)
-    elif row and row["status"] in ("serving", "next"):
-        _put(c, actor, segment_id, "dropped", False)
+def target(c, actor, segment_id, to, company=""):
+    """Mark a segment Us (`ours`), Next (`next`) or neither (`none`), leaving the others as they are. Answers
+    {id, ours, next}."""
+    _segment(c, segment_id)
+    mirror(c, actor, segment_id, {"ours": "serving", "next": "next"}.get(to), company)
+    return {"id": segment_id, "ours": to == "ours", "next": to == "next"}
 
 
 def follow_merge(c, actor, segment_id, into_id):
-    """Segment `segment_id` was merged into `into_id` (backend/market.py merge_entities): its Growth row becomes the
-    other's, or folds into the one it has, which takes the stronger status (serving, next, testing, dropped) and any
-    field it lacks; channels, ideas and cohorts follow (two cohorts for one channel and month add up into one). Then
-    the graph and the row agree on that status."""
-    from . import growth as G
-    old, row = growth_row(c, segment_id), growth_row(c, into_id)
-    if old and not row:
-        c.execute("UPDATE growth_segments SET segment_id=?, updated_at=?, updated_by=? WHERE id=?",
-                  (into_id, H.now(), actor, old["id"]))
-        H.event(c, actor, "growth.segment.update", old["id"], {"segment_id": into_id, "merged_from": segment_id})
-    elif old:
-        fill = {k: old[k] for k in ("motion", "who_buys", "deal_size", "why", "owner_ref") if old[k] and not row[k]}
-        if fill:
-            c.execute(f"UPDATE growth_segments SET {', '.join(k + '=?' for k in fill)} WHERE id=?",
-                      (*fill.values(), row["id"]))
-        for table, key in (("growth_channel_segments", "channel_id"), ("growth_idea_segments", "task_id")):
-            c.execute(f"INSERT OR IGNORE INTO {table} ({key}, segment_row_id) SELECT {key}, ? FROM {table} "
-                      "WHERE segment_row_id=?", (row["id"], old["id"]))
-            c.execute(f"DELETE FROM {table} WHERE segment_row_id=?", (old["id"],))
-        for cohort in H._rows(c.execute("SELECT * FROM growth_cohorts WHERE segment_id=?", (old["id"],))):
-            same = H._one(c, "SELECT * FROM growth_cohorts WHERE coalesce(channel_id,'')=coalesce(?,'') AND month=? "
-                             "AND segment_id=?", (cohort["channel_id"], cohort["month"], row["id"]))
-            if not same:
-                c.execute("UPDATE growth_cohorts SET segment_id=? WHERE id=?", (row["id"], cohort["id"]))
-                continue
-            both = [{**r, "channel": r["channel_id"] or ""} for r in (same, cohort)]
-            # Defaults fill a missing revenue or margin on one side; both missing stays missing (still the default).
-            total = G.aggregate(both, G.settings(c))
-            for k in ("revenue_month", "margin_pct"):
-                if same[k] is None and cohort[k] is None:
-                    total[k] = None
-            sources = {**MK.loads(cohort["sources_json"], {}), **MK.loads(same["sources_json"], {})}
-            keys = ("spend", "bot_cost", "new_customers", "kept_d30", "kept_d90", "kept_d180", "revenue_month",
-                    "margin_pct", "quality")
-            c.execute(f"UPDATE growth_cohorts SET {', '.join(k + '=?' for k in keys)}, sources_json=?, updated_by=?, "
-                      "updated_at=? WHERE id=?", (*(total[k] for k in keys), MK.dumps(sources), actor, H.now(), same["id"]))
-            c.execute("DELETE FROM growth_cohorts WHERE id=?", (cohort["id"],))
-        c.execute("DELETE FROM growth_segments WHERE id=?", (old["id"],))
-        H.event(c, actor, "growth.segment.merge", row["id"], {"segment_id": into_id, "merged": old["id"]})
-    rank = ("serving", "next", "testing", "dropped")
-    found = [x for x in ((old or {}).get("status"), (row or {}).get("status"), placed(c, into_id)) if x]
-    if found:
-        set_status(c, actor, into_id, min(found, key=rank.index))
-
-
-def _put(c, actor, segment_id, status, create):
-    row = growth_row(c, segment_id)
-    now = H.now()
-    if row and row["status"] != status:
-        c.execute("UPDATE growth_segments SET status=?, updated_at=?, updated_by=? WHERE id=?",
-                  (status, now, actor, row["id"]))
-        H.event(c, actor, "growth.segment.update", row["id"], {"segment_id": segment_id, "status": status})
-    elif not row and create:
-        rid = H.new_id()
-        c.execute("INSERT INTO growth_segments (id, segment_id, status, created_at, updated_at, updated_by) "
-                  "VALUES (?,?,?,?,?,?)", (rid, segment_id, status, now, now, actor))
-        H.event(c, actor, "growth.segment.create", rid, {"segment_id": segment_id, "status": status})
-    return growth_row(c, segment_id)
-
-
-def target(c, actor, segment_id, to, company=""):
-    """Mark a segment Us (`ours`), Next (`next`) or neither (`none`), leaving the others as they are. The segment's
-    Growth row follows: serving, next, or for neither dropped (a testing one stays testing; none is made). Answers
-    {id, ours, next}."""
-    _segment(c, segment_id)
-    row = growth_row(c, segment_id)
-    status = {"ours": "serving", "next": "next"}.get(to)
-    if status is None and row:
-        status = "testing" if row["status"] == "testing" else "dropped"
-    if status:
-        set_status(c, actor, segment_id, status, company)
-    else:
-        mirror(c, actor, segment_id, None, company)
-    return {"id": segment_id, "ours": to == "ours", "next": to == "next"}
+    """Segment `segment_id` was merged into `into_id` (backend/market.py merge_entities). Its Us edge moved there with
+    the graph's other edges; its Next mark moves too, unless the one it merged into is Us already (Us ranks higher)."""
+    seg = MK.entity(c, segment_id)
+    if not seg or not seg["properties"].get("next"):
+        return
+    if _current(c, "rel='operates_in' AND src=? AND dst=?", (MK.OWN_COMPANY_ID, into_id)):
+        return
+    mirror(c, actor, into_id, "next")
 
 
 def remove_segment(c, actor, segment_id):
@@ -252,8 +139,6 @@ def remove_segment(c, actor, segment_id):
         MK.update_entity(c, actor, segment_id, properties={k: v for k, v in props.items() if k != "next"},
                          evidence_ids=ev)
     MK.retire_entity(c, actor, segment_id)
-    if growth_row(c, segment_id):
-        _put(c, actor, segment_id, "dropped", False)
     return {"id": segment_id, "removed": True}
 
 

@@ -1,7 +1,7 @@
 """Internal transfers (spec §5, §9): a payment_create with method "internal" moves money between two of the company's own
 bank accounts through Mercury's transfer endpoint (backend/finance/transfers.py). Covers the payment gates (over $1,000
 asks the owner; the new-recipient rule never applies), approval, posting that nets to zero on P&L and settles the
-transfer, a leg that comes back cancelled, an unknown or refused result never sent again, replay, and validation. The
+transfer, a leg that comes back canceled, an unknown or refused result never sent again, replay, and validation. The
 fake Mercury stands in for the bank; synthetic fixtures."""
 import pytest
 
@@ -86,9 +86,9 @@ def _queued_by_ben(store, src, dst, amount=10_000):
         return str(made.result["transfer_id"])
 
 
-def _assert_cancelled_unsent(store, fake):
+def _assert_canceled_unsent(store, fake):
     assert fake.sent("create_transfer") == []
-    assert _rows(store, "SELECT status FROM fin_transfers")[0][0] == "cancelled"
+    assert _rows(store, "SELECT status FROM fin_transfers")[0][0] == "canceled"
     assert _rows(store, "SELECT status FROM fin_outbox WHERE op='transfer_create'")[0][0] == "failed"
     assert _rows(store, "SELECT count(*) FROM tasks WHERE title LIKE 'Transfer of%was not sent'")[0][0] == 1
 
@@ -174,7 +174,7 @@ def test_legs_already_posted_when_the_transfer_is_recorded_settle_it_at_once(boo
                         "AND to_feed_id IS NOT NULL")[0][0] == 1
 
 
-def test_a_leg_that_comes_back_cancelled_sends_its_transfer_back_to_waiting(books):
+def test_a_leg_that_comes_back_canceled_sends_its_transfer_back_to_waiting(books):
     fake = FakeMercury()
     src, dst = _two(books, fake)
     with books.transaction() as c:
@@ -239,6 +239,27 @@ def test_a_replayed_transfer_is_the_same_transfer_and_goes_to_mercury_once(books
     assert len(fake.sent("create_transfer")) == 1
 
 
+def test_a_transfer_is_claimed_in_a_fully_synced_commit_before_mercury_is_called(books, monkeypatch):
+    from backend.finance import sync
+    fake = FakeMercury()
+    src, dst = _two(books, fake)
+    with books.transaction() as c:
+        made = act(c, OWNER, "payment_create", _payload(src, dst, 10_000), key="move-durable")
+    assert made.status == "committed", made
+    seen = []
+    claim = sync.SK.outbox_claim
+
+    def watched(c, outbox_id, now):
+        seen.append(c.execute("PRAGMA synchronous").fetchone()[0])     # inside the claim's own transaction
+        return claim(c, outbox_id, now)
+
+    monkeypatch.setattr(sync.SK, "outbox_claim", watched)
+    sync_once(books, fake)
+    assert seen and set(seen) == {2}                    # FULL: the claim is on disk before the call goes out
+    assert len(fake.sent("create_transfer")) == 1
+    assert books.pool and all(p.execute("PRAGMA synchronous").fetchone()[0] != 2 for p in books.pool)  # back at the default
+
+
 def test_an_internal_transfer_needs_two_of_the_companys_bank_accounts_and_money_above_zero(books):
     fake = FakeMercury()
     src, dst = _two(books, fake)
@@ -262,7 +283,7 @@ def test_migration_73_adds_fin_transfers_to_an_install_made_before_it_and_runnin
         assert found[0] == 1
 
 
-# fin_transfers as migration 73 first wrote it: before the columns added since, and the posted and cancelled statuses
+# fin_transfers as migration 73 first wrote it: before the columns added since, and the posted and canceled statuses
 FIRST_FIN_TRANSFERS = """CREATE TABLE IF NOT EXISTS fin_transfers (
   id TEXT PRIMARY KEY, book_id TEXT NOT NULL REFERENCES fin_books(id), action_id TEXT NOT NULL,
   from_money_account_id TEXT NOT NULL REFERENCES fin_money_accounts(id),
@@ -282,7 +303,7 @@ def test_migration_73_adds_every_fin_transfers_column_added_since_it_was_first_w
         schema.gaps_books(c)
         schema.gaps_books(c)
         have = {str(r[1]) for r in c.execute("PRAGMA table_info(fin_transfers)").fetchall()}
-    assert {"from_feed_id", "to_feed_id", "settled_at", "submitted_at", "counted_json", "provider_credit_txn_id",
+    assert {"from_feed_id", "to_feed_id", "settled_at", "submitted_at", "counted", "provider_credit_txn_id",
             "find_after"} <= have, have
 
 
@@ -302,9 +323,9 @@ def _reserved(books, rule_id: str) -> tuple[int, int]:
                                "WHERE rule_id=?", (rule_id,)).fetchone())
 
 
-def test_a_transfer_cancelled_after_a_429_gives_back_the_limit_its_claim_reserved(books):
+def test_a_transfer_canceled_after_a_429_gives_back_the_limit_its_claim_reserved(books):
     """Mercury answered 429 after the send claim reserved a monthly limit, so the transfer stays queued to go again.
-    Cancelling it takes the limit back: the counter holds only what went."""
+    Canceling it takes the limit back: the counter holds only what went."""
     fake = FakeMercury()
     src, dst = _two(books, fake)
     with books.transaction() as c:
@@ -317,7 +338,7 @@ def test_a_transfer_cancelled_after_a_429_gives_back_the_limit_its_claim_reserve
         tid = str(c.execute("SELECT id FROM fin_transfers").fetchone()[0])
         assert act(c, OWNER, "payment_cancel", {"transfer_id": tid}).status == "committed"
     assert _reserved(books, rule_id) == (0, 0)
-    assert tuple(_rows(books, "SELECT status, counted_json FROM fin_transfers")[0]) == ("cancelled", "[]")
+    assert tuple(_rows(books, "SELECT status, counted FROM fin_transfers")[0]) == ("canceled", "[]")
 
 
 def test_a_transfer_a_later_rule_refuses_after_a_429_gives_back_the_limit_its_claim_reserved(books):
@@ -340,7 +361,7 @@ def test_a_transfer_a_later_rule_refuses_after_a_429_gives_back_the_limit_its_cl
     sync_once(books, fake, LATEST)
     assert len(fake.sent("create_transfer")) == 1
     assert _reserved(books, rule_id) == (0, 0)
-    assert tuple(_rows(books, "SELECT status, counted_json FROM fin_transfers")[0]) == ("cancelled", "[]")
+    assert tuple(_rows(books, "SELECT status, counted FROM fin_transfers")[0]) == ("canceled", "[]")
 
 
 def test_an_unknown_transfers_out_leg_past_five_thousand_transactions_is_found_by_a_later_poll(books):
@@ -403,14 +424,14 @@ def test_a_rule_on_accounts_matches_a_transfer_by_its_two_ledger_accounts(books)
         assert c.execute("SELECT count(*) FROM fin_transfers").fetchone()[0] == 0
 
 
-def test_a_queued_transfer_whose_payer_lost_the_right_is_cancelled_and_nothing_is_sent(books):
+def test_a_queued_transfer_whose_payer_lost_the_right_is_canceled_and_nothing_is_sent(books):
     fake = FakeMercury()
     src, dst = _two(books, fake)
     _queued_by_ben(books, src, dst)
     with books.transaction() as c:
         act(c, OWNER, "right_revoke", {"teammate": "human:ben", "right": "finance.pay"})
     sync_once(books, fake)
-    _assert_cancelled_unsent(books, fake)
+    _assert_canceled_unsent(books, fake)
 
 
 def test_a_deny_rule_added_after_a_transfer_is_queued_cancels_it_before_it_goes(books):
@@ -424,7 +445,7 @@ def test_a_deny_rule_added_after_a_transfer_is_queued_cancels_it_before_it_goes(
             "examples": [{"input": {"kind": "payment_create", "method": "internal"}, "expect": "deny"}]})
         assert made.status == "committed", made
     sync_once(books, fake)
-    _assert_cancelled_unsent(books, fake)
+    _assert_canceled_unsent(books, fake)
 
 
 def test_an_approval_rule_added_after_queueing_holds_the_transfer_and_asks_once(books):
@@ -453,13 +474,13 @@ def test_payments_switched_off_for_the_bank_after_queueing_cancel_the_transfer(b
     src, dst = _two(books, fake)
     _queued_by_ben(books, src, dst)
     with books.transaction() as c:
-        c.execute("UPDATE fin_connections SET settings_json=json_set(settings_json, '$.payments_enabled', "
+        c.execute("UPDATE fin_connections SET settings=json_set(settings, '$.payments_enabled', "
                   "json('false'))")
     sync_once(books, fake)
-    _assert_cancelled_unsent(books, fake)
+    _assert_canceled_unsent(books, fake)
 
 
-def test_a_queued_transfer_is_cancelled_before_its_call_is_claimed_and_then_cannot_be_cancelled_again(books):
+def test_a_queued_transfer_is_canceled_before_its_call_is_claimed_and_then_cannot_be_canceled_again(books):
     fake = FakeMercury()
     src, dst = _two(books, fake)
     with books.transaction() as c:
@@ -471,11 +492,11 @@ def test_a_queued_transfer_is_cancelled_before_its_call_is_claimed_and_then_cann
     sync_once(books, fake)
     sync_once(books, fake, LATER)
     assert fake.sent("create_transfer") == []
-    assert _rows(books, "SELECT status FROM fin_transfers")[0][0] == "cancelled"
+    assert _rows(books, "SELECT status FROM fin_transfers")[0][0] == "canceled"
     assert _rows(books, "SELECT status FROM fin_outbox WHERE op='transfer_create'")[0][0] == "failed"
 
 
-def test_a_transfer_already_sent_or_whose_call_is_claimed_cannot_be_cancelled(books):
+def test_a_transfer_already_sent_or_whose_call_is_claimed_cannot_be_canceled(books):
     fake = FakeMercury()
     src, dst = _two(books, fake)
     with books.transaction() as c:
@@ -486,7 +507,7 @@ def test_a_transfer_already_sent_or_whose_call_is_claimed_cannot_be_cancelled(bo
         assert sent.code == "conflict" and "Mercury" in sent.reason, sent
     with books.transaction() as c:
         claimed_id = str(act(c, OWNER, "payment_create", _payload(src, dst, 20_000)).result["transfer_id"])
-        c.execute("UPDATE fin_outbox SET claimed_at=? WHERE op='transfer_create' AND payload_json LIKE ?",
+        c.execute("UPDATE fin_outbox SET claimed_at=? WHERE op='transfer_create' AND payload LIKE ?",
                   (AT, f"%{claimed_id}%"))
         held = act(c, OWNER, "payment_cancel", {"transfer_id": claimed_id})
         assert held.code == "conflict" and "Mercury" in held.reason, held
@@ -540,7 +561,7 @@ def _assert_private_to_owner(store, title):
 
 def test_a_limit_added_after_transfers_were_queued_is_reserved_at_send_once(books):
     """Two $100 moves are queued; a $100 a day limit is added before they go. The first fits and reserves the counter
-    at its send claim; the second is over it and is cancelled, never sent."""
+    at its send claim; the second is over it and is canceled, never sent."""
     fake = FakeMercury()
     src, dst = _two(books, fake)
     with books.transaction() as c:
@@ -557,7 +578,7 @@ def test_a_limit_added_after_transfers_were_queued_is_reserved_at_send_once(book
     with books.read() as c:
         assert tuple(c.execute("SELECT sum(amount), sum(count) FROM fin_rule_counters WHERE rule_id=?",
                                (rule_id,)).fetchone()) == (10_000, 1)
-        assert sorted(r[0] for r in c.execute("SELECT status FROM fin_transfers")) == ["cancelled", "submitted"]
+        assert sorted(r[0] for r in c.execute("SELECT status FROM fin_transfers")) == ["canceled", "submitted"]
 
 
 def test_a_refused_transfer_gives_back_the_limit_it_reserved(books):
@@ -595,10 +616,10 @@ def test_a_deny_on_the_owner_rule_added_after_someone_else_queued_a_transfer_can
             "examples": [{"input": {"kind": "payment_create", "actor.owner": False}, "expect": "deny"}]})
         assert made.status == "committed", made
     sync_once(books, fake)
-    _assert_cancelled_unsent(books, fake)
+    _assert_canceled_unsent(books, fake)
 
 
-def test_a_cancelled_transfer_notice_is_private_to_the_one_who_must_act(books):
+def test_a_canceled_transfer_notice_is_private_to_the_one_who_must_act(books):
     """Ben's payment right is revoked after he queued a $100 move: the cancellation's Needs-you names the amount, so
     it is private to the owner, and a teammate outside Finance cannot read it."""
     fake = FakeMercury()
@@ -607,7 +628,7 @@ def test_a_cancelled_transfer_notice_is_private_to_the_one_who_must_act(books):
     with books.transaction() as c:
         act(c, OWNER, "right_revoke", {"teammate": "human:ben", "right": "finance.pay"})
     sync_once(books, fake)
-    _assert_cancelled_unsent(books, fake)
+    _assert_canceled_unsent(books, fake)
     _assert_private_to_owner(books, "Transfer of 100.00 was not sent%")
 
 
@@ -733,4 +754,4 @@ def test_the_transfers_read_lists_moves_between_accounts_the_viewer_sees_both_of
                                      "whose": "company", "account_ids": [src_ledger]})
         assert FR.transfers(c, "human:cara")["transfers"] == []
         act(c, "human:ben", "payment_cancel", {"transfer_id": tid})
-        assert FR.transfers(c, "human:ben")["transfers"][0]["status"] == "cancelled"
+        assert FR.transfers(c, "human:ben")["transfers"][0]["status"] == "canceled"

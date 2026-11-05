@@ -2,19 +2,13 @@
 
 Every change writes one row with who made it, the object it changed (`<kind>:<id>`, e.g. `task_cap:<id>`,
 `automation:<id>`) and the whole object before and after (null when created or deleted), in the same transaction as
-the change, so a change without its row cannot exist. Rows are never edited or pruned.
+the change, so a change without its row cannot exist. Rows are never edited or pruned: the table is migration 0001 and
+its append-only triggers are migration 0010 (backend/migrations).
 """
 import json
 
 from .store import H, encode
 
-SCHEMA = """
-CREATE TABLE IF NOT EXISTS audit_log(
- id TEXT PRIMARY KEY, at TEXT NOT NULL, actor TEXT NOT NULL, object TEXT NOT NULL,
- before_json TEXT, after_json TEXT, via TEXT);
-CREATE INDEX IF NOT EXISTS audit_log_object ON audit_log(object, at);
-CREATE INDEX IF NOT EXISTS audit_log_at ON audit_log(at);
-"""
 LIMIT = 50
 LIST_BYTES = 262_144                     # as the automations list: a page stays under 256 KB
 
@@ -29,9 +23,9 @@ def write(c, actor, obj, before, after, via=None):
 
 
 def _row(r):
-    return {"id": r["id"], "at": r["at"], "actor": r["actor"], "object": r["object"], "via": r["via"],
-            "before": None if r["before_json"] is None else json.loads(r["before_json"]),
-            "after": None if r["after_json"] is None else json.loads(r["after_json"])}
+    return {"id": r["id"], "created_at": r["created_at"], "actor": r["actor"], "object": r["object"], "via": r["via"],
+            "before": None if r["before"] is None else json.loads(r["before"]),
+            "after": None if r["after"] is None else json.loads(r["after"])}
 
 
 def rows(c, obj=None, actor=None, limit=LIMIT, before=None):
@@ -44,10 +38,10 @@ def rows(c, obj=None, actor=None, limit=LIMIT, before=None):
             args.append(value)
     if before:
         at, _, row_id = before.partition("|")
-        sql += " AND (at<? OR (at=? AND id<?))"
+        sql += " AND (created_at<? OR (created_at=? AND id<?))"
         args += [at, at, row_id]
     limit = max(1, min(int(limit or LIMIT), 200))
-    found = [_row(r) for r in c.execute(sql + " ORDER BY at DESC, id DESC LIMIT ?", (*args, limit + 1))]
+    found = [_row(r) for r in c.execute(sql + " ORDER BY created_at DESC, id DESC LIMIT ?", (*args, limit + 1))]
     shown, used = [], 256
     for row in found[:limit]:
         size = len(json.dumps(row, default=str).encode()) + 1
@@ -56,7 +50,7 @@ def rows(c, obj=None, actor=None, limit=LIMIT, before=None):
         used += size
         shown.append(row)
     last = shown[-1] if len(shown) < len(found) else None
-    return {"rows": shown, "next": last and last["at"] + "|" + last["id"]}
+    return {"rows": shown, "next": last and last["created_at"] + "|" + last["id"]}
 
 
 def install(app, store, auth):

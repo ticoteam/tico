@@ -25,7 +25,7 @@ and the decision model deciding who a DM or a mention is for. The code is
 | A guest, a deactivated account, a sender whose verified email is not on `registry/people.yaml` or not admitted by `registry/hub-access.yaml` | Refused silently: no reply, the reason on the event. |
 
 A DM is a front door to whichever bot the message is for, never a human's private Tico
-room (`docs/conversation.md`); those rooms are untouched. The human's profile in Tico
+thread (`docs/threads.md`); those threads are untouched. The human's profile in Tico
 (`#/person/<id>/slack`) shows those DMs, including their replies. A bot that messages a
 human in Tico (Legal saying something to Thomaz) is posted through the same Tico Slack
 app into their DM, so it shows up there too.
@@ -85,7 +85,7 @@ there and it goes to the assistant the same way. Each call's cost is written dow
 its retries and the final failure lose none and add none; each `judge.call` the gateway audits repeats the message's
 `cost_usd` for reading.
 
-Every score and answer is stored: on the event (`slack_events.routing_json`) and on the message
+Every score and answer is stored: on the event (`slack_events.routing`) and on the message
 (`refs.routing`), where the conversation view shows it as a chip (`routed by decisions to Legal 92%`).
 A misroute is fixed by a better description in the bot's registry entry, not by a rule.
 
@@ -105,8 +105,9 @@ Stored answer for one routed message, as the message's `refs.routing` carries it
 ## Identity and what the bot sees
 
 The Tico message is written through `hubdb.say` as the verified human (`human:<id>`), never as
-Tico, into a `direct` conversation between that human and the bot, mapped to the Slack thread
-in `slack_threads`. The guardrails in `docs/how-it-works.md` apply unchanged: an active bot only,
+Tico, into a DM between that human and the bot, mapped to the Slack thread in `slack_threads`.
+Linking a channel to a Tico thread both ways is separate ([Slack](slack.md#link-a-channel-to-a-thread)).
+The guardrails in `docs/how-it-works.md` apply unchanged: an active bot only,
 except that a person's message, a new thread or a reply in one, to a paused or quarantined bot is kept and runs when the
 bot is back (the gateway tells the person in the thread that it waits and when the bot is back); the cap on bot-to-bot traffic, the unsolicited cap, the lint, the escape rule (a message that
 names a `secrets/` path is refused and recorded as such).
@@ -118,7 +119,7 @@ polls for, so the ask closes.
 The bot's run gets the text, and in the message's `refs.slack` the channel or DM name, the
 thread permalink, the sender's email, the last twelve exchanges of the thread and a note that
 its reply is posted back to Slack for it and that it must not post to Slack itself for that
-conversation. It gets no other channel and no private room history. A
+conversation. It gets no other channel and no other thread's history. A
 message routed to several bots opens or continues one conversation per bot, all mapped to the
 same thread; each reply lands in the thread under its own name.
 
@@ -200,6 +201,33 @@ record is `uncertain` and waits for a human.
 Thread replies are solicited: turning bot posting off for a channel does not stop them, and they
 grant no bot any posting right there; `connectors/slack.py` and its gates are unchanged.
 
+## Link previews
+
+A link to a task pasted in Slack gets a preview under the message, the way Slack's own links do:
+the task's number and title linked to the pasted URL, the start of its description, its column (or
+status), owner and due date, and an open button. The links that get one, on the server's own host
+and any in `TICO_SLACK_UNFURL_HOSTS`:
+
+- `/task/<id>` and `/ticket/<number>`, each optionally with a readable slug after it
+  (`/ticket/42/fix-the-login-page`) and optionally under `/open/`; the slug is never read, so a
+  renamed task keeps its old links;
+- `/#/task/<id>`, the web app's task page.
+
+The host must be in the app's `unfurl_domains` (the manifest Settings > Slack hands out lists them).
+Slack sends `link_shared` over the same socket; the gateway answers with `chat.unfurl` at once and
+stores nothing. A preview is shown only when the person who pasted the link passes the same sender
+checks as a message (workspace member, not a guest, admitted, on the roster) and may read the task,
+and only for a task that is not private: nothing of a private task goes to Slack. A channel shared
+outside the workspace gets none, and so does a channel whose info Slack will not give Tico (a private
+channel it is not in) and a link still in the composer, whose channel is not known yet. A DM gets one
+either way: the sender is verified there. Everyone in the conversation then sees the preview; each one is
+recorded as a `slack.unfurl` event with the task and the person.
+
+The button opens `TICO_SLACK_OPEN_URL` (`{id}` is the task id; default the task in the web app) and
+reads `TICO_SLACK_OPEN_LABEL` (default "Open in Tico"), so a team with its own desktop client can
+open the task there. Slack does not take every URL scheme on a button; when it refuses the blocks,
+the preview is sent again with the same link as text.
+
 ## Tables
 
 | Table | One row per | States |
@@ -210,7 +238,7 @@ grant no bot any posting right there; `connectors/slack.py` and its gates are un
 | `slack_reads` | channel and reader: the cursor (`last_ts`, `last_run`, `digests`) | |
 | `slack_digests` | digest written: the reader, its conversation and message, the channels, the event ids it covered | |
 
-All five are readable with `hub sql` (`docs/hub-sql.md`).
+Only `slack_posts` is in `hub sql`'s safe-column list (`backend/sql.py`, `docs/hub-sql.md`); the other Slack tables are not readable there.
 
 ## Running it
 
@@ -221,6 +249,7 @@ Settings: `TICO_SLACK_GATEWAY_ENABLED` (the kill switch), `SLACK_TEAM_ID`
 must name), `TICO_SLACK_SECRET_ARN` (the JSON credential `{"bot_token","app_token","team_id","app_id"}`;
 `SLACK_BOT_TOKEN`/`SLACK_APP_TOKEN` in the environment or `/etc/tico/slack` also work), and the
 three thresholds above, `TICO_SLACK_DIGEST_MINUTES` and `TICO_SLACK_DIGEST_CAP` (Channels,
+above), and `TICO_SLACK_UNFURL_HOSTS`, `TICO_SLACK_OPEN_LABEL` and `TICO_SLACK_OPEN_URL` (Link previews,
 above). Only the gateway process reads it; the API never holds a Slack token. Change them in `.env` and run `docker compose up -d`, which restarts only the gateway.
 
 Start-up verifies `auth.test` (the workspace) and `bots.info` (the app) and refuses to run on a
@@ -231,14 +260,15 @@ only that verification and prints it. A post that was mid-flight at the last sto
 Kill switch: `TICO_SLACK_GATEWAY_ENABLED=0` (through `configure`) stops ingress, egress and
 the readers' pass; the tables stay for audit. `TICO_SLACK_DIGEST_MINUTES=0` pauses only the
 readers' pass. Rollback beyond that is removing the `app_mention`, `message.im`,
-`message.channels` and `message.groups` subscriptions from the app manifest; nothing in
+`message.channels`, `message.groups` and `link_shared` subscriptions from the app manifest; nothing in
 Tico needs undoing.
 
 ## Installing or reinstalling the app
 
 `connectors/slack-app-manifest.yaml` is the app: the scopes `connectors/slack.py` uses, plus
-`app_mentions:read` and `chat:write.customize`, Socket Mode on, and the `app_mention`,
-`message.im`, `message.channels` and `message.groups` events. When the installed app lacks any of these (the gateway log says which):
+`app_mentions:read`, `chat:write.customize`, `links:read` and `links:write`, Socket Mode and
+interactivity on, the `app_mention`, `message.im`, `message.channels`, `message.groups` and
+`link_shared` events, and the link-preview hosts in `unfurl_domains`. When the installed app lacks any of these (the gateway log says which):
 
 1. On <https://api.slack.com/apps>, open the Tico app, **App Manifest**, paste the manifest over
    the old one, save.
@@ -255,15 +285,15 @@ Tico needs undoing.
 Read the queue with `hub sql` or SQLite against the live database, read-only:
 
 ```sql
-SELECT event_id, channel, thread_ts, state, reason, processed
-FROM slack_events WHERE state NOT IN ('routed', 'recorded', 'denied') ORDER BY received;
+SELECT event_id, channel, thread_ts, state, reason, processed_at
+FROM slack_events WHERE state NOT IN ('routed', 'recorded', 'denied') ORDER BY received_at;
 
-SELECT message_id, bot, channel, thread_ts, state, attempts, next_attempt, slack_ts, error
-FROM slack_posts WHERE state NOT IN ('sent') ORDER BY created;
+SELECT message_id, bot, channel, thread_ts, state, attempts, next_attempt_at, slack_ts, error
+FROM slack_posts WHERE state NOT IN ('sent') ORDER BY created_at;
 
 -- what each reader has seen of each channel, and the last digest it got
-SELECT r.channel, r.reader, r.last_ts, r.last_run, r.digests,
-       (SELECT COUNT(*) FROM slack_events e WHERE e.channel=r.channel AND e.ts>r.last_ts AND e.deleted IS NULL) AS unread
+SELECT r.channel, r.reader, r.last_ts, r.last_run_at, r.digests,
+       (SELECT COUNT(*) FROM slack_events e WHERE e.channel=r.channel AND e.ts>r.last_ts AND e.deleted_at IS NULL) AS unread
 FROM slack_reads r ORDER BY r.reader, r.channel;
 ```
 

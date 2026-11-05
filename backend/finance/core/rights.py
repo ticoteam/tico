@@ -9,8 +9,9 @@ BOOK, AP, AR, PAY, CARDS, BUDGETS, RULES, ADMIN = (
 RIGHTS = (BOOK, AP, AR, PAY, CARDS, BUDGETS, RULES, ADMIN)
 # System work posts usage and keeps budgets current; it never grants, pays or changes access.
 SYSTEM_RIGHTS = frozenset({BOOK, BUDGETS})
-# What a default Bookkeeper is set up with (spec §7.4).
-BOOKKEEPER = (BOOK, AP, AR, PAY, CARDS)
+# What a default Bookkeeper is set up with (spec §7.4). Rules is the right to propose a posting rule; a person still
+# approves each one (bots always need approval).
+BOOKKEEPER = (BOOK, AP, AR, PAY, CARDS, RULES)
 
 
 def has(org: Org, actor: str, right: str, held: Collection[str]) -> bool:

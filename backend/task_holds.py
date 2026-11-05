@@ -12,8 +12,12 @@ of them changes (`refresh`):
 - an owner's own hold (a move to Blocked with a reason) is kept as written, and Engineering's gate, check and
   worktree holds keep their own reconciliation (backend/task_blocked.py).
 
-The stranded sweep (hubdb.sweep_stranded) counts from `holds_cleared_at` (when the last hold cleared) or
-`blocked_since` (when a wait on nothing began), never from a note: a note cannot keep a task waiting on nothing.
+A task waiting on nothing is measured from the blocked hold's `cleared_at` (when the last hold cleared) or its
+`created_at` (when a wait on nothing began), never from a note: a note cannot keep a task waiting on nothing.
+
+A task's own holds, its move to Blocked and its snooze, are rows of `task_holds` (migration 0075), one open row of each
+kind; `put`, `change` and `release` below write them, and a task row read through hubdb.TASKS carries the open ones'
+fields under the names the code always read (`FIELDS`).
 """
 
 NOTHING = "Nothing tracked to wait on"
@@ -65,19 +69,19 @@ def holds(conn, row):
     out = []
     asks = H._rows(conn.execute(
         "SELECT m.* FROM messages m JOIN conversations cv ON cv.id=m.conversation_id "
-        f"WHERE m.from_actor=? AND m.kind='ask' AND m.superseded_at IS NULL AND {H.MESSAGE_TASK_SQL}=? "
-        "ORDER BY m.created", (row["owner"], row["id"])))
+        f"WHERE m.sender_id=? AND m.kind='ask' AND m.superseded_at IS NULL AND {H.MESSAGE_TASK_SQL}=? "
+        "ORDER BY m.created_at", (row["owner_id"], row["id"])))
     if asks:
         answered = H.answers_to(conn, [a["id"] for a in asks])
-        out += [{"kind": "ask", "on": a["to_actor"], "what": _line(a["body"]) if _shared(conn, row, a) else "a question"}
+        out += [{"kind": "ask", "on": a["recipient_id"], "what": _line(a["body"]) if _shared(conn, row, a) else "a question"}
                 for a in asks if a["id"] not in answered]
     engineering = review_gate.engineering(conn, row)
     check = None
     for child in H._rows(conn.execute(
-            f"SELECT id,owner,title FROM tasks WHERE id IN ({TR.CHILD_IDS}) "
-            "AND status NOT IN ('done','closed','declined') ORDER BY created,id", (row["id"],))):
+            f"SELECT id,owner_id,title FROM tasks WHERE id IN ({TR.CHILD_IDS}) "
+            "AND status NOT IN ('done','closed','declined') ORDER BY created_at,id", (row["id"],))):
         # A pipeline check is work at the current step, not a hold, unless the check itself is blocked (wait_detail).
-        if engineering and H.is_bot(child["owner"]) and profiles.is_review_task(conn, child, parent_id=row["id"]):
+        if engineering and H.is_bot(child["owner_id"]) and profiles.is_review_task(conn, child, parent_id=row["id"]):
             if check is None:
                 from .check_blocked import detail as check_detail
                 check = check_detail(conn, row) or False
@@ -88,7 +92,7 @@ def holds(conn, row):
     own = {r[0] for r in conn.execute(TR.CHILD_IDS, (row["id"],))}
     out += [_task_hold(conn, row, "blocker", b)
             for b in TR.live_blockers(conn, row["id"], H.ACTIVE_STATUSES) if b["id"] not in own]
-    for a in H._rows(conn.execute("SELECT * FROM approvals WHERE task_id=? AND decision IS NULL ORDER BY created",
+    for a in H._rows(conn.execute("SELECT * FROM approvals WHERE task_id=? AND decision IS NULL ORDER BY created_at",
                                   (row["id"],))):
         H.approval_wait(conn, a)
         out.append({"kind": "approval", "on": a.get("decision_owner"), "what": f"a {a.get('kind') or 'yes'} approval"})
@@ -111,7 +115,7 @@ def _task_hold(conn, row, kind, other):
     from . import hubdb as H
     if H.task_private(conn, other):
         return {"kind": "private", "on": None, "what": "a private task"}
-    return {"kind": kind, "on": other["owner"], "what": _line(other["title"])}
+    return {"kind": kind, "on": other["owner_id"], "what": _line(other["title"])}
 
 
 def words(conn, found):
@@ -157,8 +161,7 @@ def refresh(conn, task_id, cleared=None, at=None):
     if found:
         text = words(conn, found)
         if (row.get("blocked_reason"), row.get("blocked_kind")) != (text, "dependency") or row.get("holds_cleared_at"):
-            conn.execute("UPDATE tasks SET blocked_reason=?,blocked_kind='dependency',holds_cleared_at=NULL WHERE id=?",
-                         (text[:1000], task_id))
+            change(conn, task_id, "blocked", reason=text[:1000], cause="dependency", cleared_at=None)
             task_blocked.bump(conn, row)
         return "held"
     if cleared and review_gate.engineering(conn, row) and row.get("blocked_kind") == "dependency":
@@ -166,7 +169,7 @@ def refresh(conn, task_id, cleared=None, at=None):
         task_blocked.reconcile(conn, task_id)
         if H.task(conn, task_id)["status"] != "waiting":
             return "resumed"
-    if cleared and H.is_bot(row["owner"]):
+    if cleared and H.is_bot(row["owner_id"]):
         # A reconnect wake owed on it goes now, with what cleared, as its one wake (backend/reconnects.py).
         from . import reconnects
         if reconnects.deliver(conn, task_id, why="holds", cleared=cleared):
@@ -182,9 +185,8 @@ def refresh(conn, task_id, cleared=None, at=None):
     if cleared or row.get("blocked_kind") != "stranded" or (row.get("blocked_reason") or "").startswith("Waiting on"):
         # Keep "Nothing left to wait on: ..." when a later note recomputes it: it still says what cleared.
         if cleared or not (row.get("blocked_reason") or "").startswith(LEFT):
-            conn.execute("UPDATE tasks SET blocked_reason=?,blocked_kind='stranded',"
-                         "holds_cleared_at=coalesce(?,holds_cleared_at) WHERE id=?",
-                         (text[:1000], at if cleared else None, task_id))
+            change(conn, task_id, "blocked", reason=text[:1000], cause="stranded",
+                   cleared_at=at if cleared else row.get("holds_cleared_at"))
             task_blocked.bump(conn, row)
     return "nothing"
 
@@ -232,26 +234,26 @@ def withdrawn(conn, task_id, ask_ids, why, *, by=None, told=True):
     if not row:
         return
     marks = ",".join("?" * len(ask_ids))
-    asks = H._rows(conn.execute(f"SELECT id, from_actor, to_actor, body, read_at FROM messages "
-                                f"WHERE id IN ({marks}) ORDER BY created", list(ask_ids)))
+    asks = H._rows(conn.execute(f"SELECT id, sender_id, recipient_id, body, read_at FROM messages "
+                                f"WHERE id IN ({marks}) ORDER BY created_at", list(ask_ids)))
     why = str(why or "it was withdrawn")
     day_ago = H.shift(H.now(), hours=-24)
     noticed = set()
     for ask in asks:
-        person = name(conn, ask["to_actor"])
+        person = name(conn, ask["recipient_id"])
         status = f"Withdrawn {'after' if ask.get('read_at') else 'before'} {person} saw it: {why}"
-        conn.execute("UPDATE messages SET refs_json=json_set(coalesce(refs_json,'{}'),'$.withdrawn',?) WHERE id=?",
+        conn.execute("UPDATE messages SET refs=json_set(coalesce(refs,'{}'),'$.withdrawn',?) WHERE id=?",
                      (status, ask["id"]))
-        asker = ask["from_actor"]
-        if (not told or asker == by or not H.is_bot(asker) or (asker, ask["to_actor"]) in noticed
+        asker = ask["sender_id"]
+        if (not told or asker == by or not H.is_bot(asker) or (asker, ask["recipient_id"]) in noticed
                 or not H.bot_reads_task(conn, asker, row)):
             continue
-        noticed.add((asker, ask["to_actor"]))
+        noticed.add((asker, ask["recipient_id"]))
         # The same question withdrawn again and again is a re-ask loop: the notice says so (to watch, not a block).
         again = conn.execute(
             "SELECT count(*) FROM messages m JOIN conversations cv ON cv.id=m.conversation_id WHERE m.kind='ask' "
-            f"AND m.from_actor=? AND m.to_actor=? AND m.superseded_at>=? AND {H.MESSAGE_TASK_SQL}=?",
-            (asker, ask["to_actor"], day_ago, task_id)).fetchone()[0]
+            f"AND m.sender_id=? AND m.recipient_id=? AND m.superseded_at>=? AND {H.MESSAGE_TASK_SQL}=?",
+            (asker, ask["recipient_id"], day_ago, task_id)).fetchone()[0]
         loop = (f"\nThis is the {_nth(again)} question from you to {person} on this task withdrawn in 24 hours."
                 if again >= 3 else "")
         H._wake(conn, row, asker, f"Your question to {person} was withdrawn: {row['title']}\n{status}.\n"
@@ -259,8 +261,8 @@ def withdrawn(conn, task_id, ask_ids, why, *, by=None, told=True):
                 refs={"news": "ask_withdrawn", "ask": ask["id"]}, source=ask["id"])
     if asks:
         # Its owner asking again or ending it knows already: only the words follow.
-        refresh(conn, task_id, None if by == row["owner"] else
-                f"Your question to {name(conn, asks[0]['to_actor'])} was withdrawn ({why})")
+        refresh(conn, task_id, None if by == row["owner_id"] else
+                f"Your question to {name(conn, asks[0]['recipient_id'])} was withdrawn ({why})")
 
 
 def _nth(n):
@@ -279,8 +281,8 @@ def backfill(conn, at=None):
         return None
     at = at or H.now()
     fixed, opened = 0, {}
-    for row in H._rows(conn.execute("SELECT * FROM tasks WHERE status='waiting' AND blocked_since IS NOT NULL "
-                                    "ORDER BY created, id")):
+    for row in H._rows(conn.execute(f"SELECT * FROM {H.TASKS} tasks WHERE status='waiting' AND blocked_since IS NOT NULL "
+                                    "ORDER BY created_at, id")):
         if not _applies(conn, row):
             continue
         if holds(conn, row):
@@ -291,7 +293,7 @@ def backfill(conn, at=None):
             if H.task(conn, row["id"])["status"] != "waiting":
                 fixed += 1
                 continue
-        active = H.is_bot(row["owner"]) and (H.bot(conn, row["owner"]) or {}).get("state") == "active"
+        active = H.is_bot(row["owner_id"]) and (H.bot(conn, row["owner_id"]) or {}).get("state") == "active"
         if active and not H.not_yet_due(row, at):
             note = ("Back to open: nothing Tico tracks was holding it (no open question, child task, blocker, "
                     "approval or person to wait on). Continue it, ask, or finish it.")
@@ -299,7 +301,7 @@ def backfill(conn, at=None):
             conn.execute("UPDATE tasks SET note=? WHERE id=?", (note, row["id"]))
             task_blocked.bump(conn, row)
             H._task_event(conn, row["id"], H.KEEPER, "note", row.get("note"), note, "")
-            opened.setdefault(row["owner"], []).append(row)
+            opened.setdefault(row["owner_id"], []).append(row)
         else:
             refresh(conn, row["id"], at=at)
             fixed += 1
@@ -313,3 +315,112 @@ def backfill(conn, at=None):
     result = {"fixed": fixed, "opened": sum(len(r) for r in opened.values()), "woken": len(opened)}
     H.event(conn, H.KEEPER, BACKFILL, "", result)
     return result
+
+
+# The holds a task's API view lists (docs/tasks.md, Holds): one per kind, from the task's open task_holds rows. A
+# blocked hold is Tico's or an owner's move to Blocked (`blocked_*`), a snoozed one a snooze (`snoozed_*`); the waits a hold is
+# made of (`waiting_on`, `worktree_waits`, `check_waits`, `milestone_waits`, `deferred`) keep their own fields.
+HOLD_KINDS = ("blocked", "snoozed")
+
+
+def marks(conn, rows):
+    """Who set each held task's hold and when a snooze began, for `public`: two reads for a whole page, none when
+    no row is snoozed or blocked by hand."""
+    from . import hubdb as H
+    snoozed = [r["id"] for r in rows if r.get("snoozed_until")]
+    manual = [r["id"] for r in rows if r.get("blocked_since") and r.get("blocked_kind") == "manual"]
+    found = {}
+    for chunk in (snoozed[i:i + 500] for i in range(0, len(snoozed), 500)):
+        for e in conn.execute(
+                f"SELECT subject_id AS task_id,max(created_at) created_at FROM history_events WHERE subject_type='task' "
+                f"AND kind='snoozed_until' AND new IS NOT NULL "
+                f"AND subject_id IN ({','.join('?' * len(chunk))}) GROUP BY subject_id", chunk):
+            found.setdefault(e["task_id"], {})["snoozed_since"] = e["created_at"]
+    for chunk in (manual[i:i + 500] for i in range(0, len(manual), 500)):
+        # An owner's hold is the latest move a person or bot made into it: the move to Blocked, or a step move that
+        # declared the hold over one Tico found (task_blocked.transition).
+        for e in conn.execute(
+                f"SELECT subject_id AS task_id,actor_id AS actor,max(created_at) created_at FROM history_events "
+                f"WHERE subject_type='task' AND kind IN ('status','step') AND actor_id<>? "
+                f"AND subject_id IN ({','.join('?' * len(chunk))}) GROUP BY subject_id", (H.KEEPER, *chunk)):
+            found.setdefault(e["task_id"], {})["blocked_by"] = e["actor"]
+    return found
+
+
+def public(row, mark=None):
+    """The task's holds as API v2 shows them: `[{kind, reason, since, until, by}]`, kind unique, `until` null when
+    open-ended, `by` the actor who set it; a blocked hold says its `cause` (manual, dependency, stranded, gate, check,
+    worktree). `mark` is this task's entry from `marks`."""
+    from . import hubdb as H
+    mark = mark or {}
+    found = []
+    if row.get("blocked_since"):
+        cause = row.get("blocked_kind")
+        found.append({"kind": "blocked", "reason": row.get("blocked_reason"), "since": row["blocked_since"],
+                      "until": None, "by": mark.get("blocked_by") if cause == "manual" else H.KEEPER,
+                      "cause": cause})
+    if row.get("snoozed_until"):
+        found.append({"kind": "snoozed", "reason": row.get("snoozed_note"), "since": mark.get("snoozed_since"),
+                      "until": row["snoozed_until"], "by": row.get("snoozed_by_id")})
+    return found
+
+
+# ----------------------------------------------------------------------------- the rows (migration 0075)
+# A task's open hold of each kind is one task_holds row. Code reads a task with its holds' fields under the names
+# below (hubdb.TASKS): a hold's column -> the field a task row carries.
+FIELDS = {
+    "blocked": {"blocked_since": "created_at", "blocked_reason": "reason", "blocked_kind": "cause",
+                "blocked_from_step": "from_step_id", "blocked_from_status": "from_status", "blocked_gate": "gate",
+                "holds_cleared_at": "cleared_at"},
+    "snoozed": {"snoozed_until": "until_at", "snoozed_by_id": "by_id", "snoozed_note": "reason"},
+}
+COLUMNS = ("cause", "reason", "by_id", "until_at", "from_step_id", "from_status", "gate", "cleared_at")
+SHOWN = ("created_at", *COLUMNS)
+
+
+def open_hold(conn, task_id, kind):
+    """The task's open hold of `kind` ('blocked' or 'snoozed'), or None."""
+    row = conn.execute(f"SELECT {', '.join(SHOWN)} FROM task_holds WHERE task_id=? AND kind=? AND released_at IS NULL",
+                       (task_id, kind)).fetchone()
+    return dict(zip(SHOWN, row, strict=True)) if row is not None else None
+
+
+def put(conn, task_id, kind, at, **fields):
+    """Open a hold of `kind` on the task from `at`. A task has one open hold of each kind (task_holds_open): one already
+    open takes `at` and these fields instead, as writing the old columns again did."""
+    unknown = set(fields) - set(COLUMNS)
+    if unknown:
+        raise ValueError(f"task_holds has no {sorted(unknown)}")
+    names = ["task_id", "kind", "created_at", *fields]
+    conn.execute(f"INSERT INTO task_holds({','.join(names)}) VALUES({','.join('?' * len(names))}) "
+                 "ON CONFLICT(task_id, kind) WHERE released_at IS NULL DO UPDATE SET "
+                 + ",".join(f"{name}=excluded.{name}" for name in names[2:]),
+                 (task_id, kind, at, *fields.values()))
+
+
+def change(conn, task_id, kind, **fields):
+    """Set fields of the task's open hold of `kind`; nothing when it has none."""
+    unknown = set(fields) - set(COLUMNS)
+    if unknown:
+        raise ValueError(f"task_holds has no {sorted(unknown)}")
+    if fields:
+        conn.execute(f"UPDATE task_holds SET {','.join(f'{name}=?' for name in fields)} "
+                     "WHERE task_id=? AND kind=? AND released_at IS NULL", (*fields.values(), task_id, kind))
+
+
+def release(conn, task_id, kind, at):
+    """End the task's open hold of `kind`: it stays as history with `released_at`."""
+    conn.execute("UPDATE task_holds SET released_at=? WHERE task_id=? AND kind=? AND released_at IS NULL",
+                 (at, task_id, kind))
+
+
+def with_holds(conn, row):
+    """`row` with its open holds' fields (FIELDS), read when it came from a plain `SELECT * FROM tasks`."""
+    if row is None or "blocked_since" in row or not row.get("id"):
+        return row
+    out = {**row, **{field: None for names in FIELDS.values() for field in names}}
+    for kind, *values in conn.execute(f"SELECT kind, {', '.join(SHOWN)} FROM task_holds "
+                                      "WHERE task_id=? AND released_at IS NULL", (row["id"],)):
+        hold = dict(zip(SHOWN, values, strict=True))
+        out.update({field: hold[column] for field, column in FIELDS[kind].items()})
+    return out

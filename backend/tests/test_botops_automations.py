@@ -27,7 +27,7 @@ def test_a_person_asks_and_botops_saves_off_unless_asked_on(api, botops):
     attempt = turn(api, botops, person="cara-test", text="Archive receipts from my inbox")
     err, made = mcp(api, "hub_automation_create", flow(), attempt["token"])
     assert not err, made
-    assert made["enabled"] is False and made["can_edit"] is True and made["owner"] == "person:cara"
+    assert made["enabled"] is False and made["can_edit"] is True and made["owner_id"] == "person:cara"
     assert [(v["n"], v["status"]) for v in get(api, f"automations/{made['id']}/versions", "cara-test")["versions"]] == [
         (1, "active")]
     rows = audit_rows(api, made["id"])

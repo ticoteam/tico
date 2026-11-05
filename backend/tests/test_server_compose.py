@@ -98,6 +98,18 @@ def test_the_server_and_the_slack_gateway_get_the_hosted_mark_as_set_in_env():
         assert "TICO_HOSTED" in services[name]["environment"], name
         assert services[name]["environment"]["TICO_HOSTED"] is None, f"{name} takes it from .env as set, no default"
 
+
+def test_the_server_and_the_slack_gateway_both_get_the_link_preview_settings():
+    # The server builds the Slack manifest (GET /api/v2/slack/manifest) from TICO_SLACK_UNFURL_HOSTS, and the gateway
+    # posts the previews, so both need the same three settings passed through.
+    import yaml
+    services = yaml.safe_load((ROOT / "compose.yaml").read_text())["services"]
+    keys = {"TICO_SLACK_UNFURL_HOSTS", "TICO_SLACK_OPEN_LABEL", "TICO_SLACK_OPEN_URL"}
+    for name in ("server", "slack"):
+        assert keys <= set(services[name]["environment"]), name
+        assert all(services[name]["environment"][key] is None for key in keys), name
+
+
 def test_the_server_and_the_slack_gateway_get_the_decision_model_keys_but_not_other_services_secrets():
     import yaml
     services = yaml.safe_load((ROOT / "compose.yaml").read_text())["services"]
@@ -125,7 +137,10 @@ def test_front_doors_have_fixed_edge_addresses_the_server_trusts_and_nothing_wid
     assert "edge" in services["server"]["networks"] and "default" in services["server"]["networks"]
     # Only the server and the tunnel's hold draw from the dynamic range; everything else on the edge network is fixed.
     edge = {name for name, service in services.items() if "edge" in service.get("networks", ())}
-    assert edge == {"server", "caddy", "cloudflared", "hold"} and services["hold"]["networks"] == ["edge"]
+    assert edge == {"server", "caddy", "cloudflared", "hold", "livekit"} and services["hold"]["networks"] == ["edge"]
+    # The media server joins edge so Caddy and the tunnel can reach it, at a fixed address the server never trusts.
+    livekit = ip_address(default(services["livekit"]["networks"]["edge"]["ipv4_address"]))
+    assert livekit in subnet and livekit not in dynamic
     trusted = services["server"]["environment"]["TICO_TRUSTED_PROXIES"]
     resolved = re.sub(r"\$\{\w+:-([^}$]*)\}", r"\1", trusted[len("${TICO_TRUSTED_PROXIES:-"):-1])
     assert resolved.split(",") == ["127.0.0.1/32", "::1/128", f"{doors['caddy']}/32", f"{doors['cloudflared']}/32", str(dynamic)]
@@ -176,6 +191,7 @@ def test_a_runner_sharing_the_host_yields_cpu_and_memory_to_the_server_and_its_f
         assert server[name]["cpu_shares"] >= 4 * runner["cpu_shares"]
         assert server[name].get("oom_score_adj", 0) >= 0     # a negative score is refused by rootless Docker
     assert runner["oom_score_adj"] > 0
+    assert runner["mem_limit"] == runner["memswap_limit"] == "${TICO_RUNNER_MEMORY:-0}"   # the cap, with no swap beyond it
 
 
 def hold_caddyfile(services, **env):

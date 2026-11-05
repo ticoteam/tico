@@ -10,7 +10,7 @@ Nothing has been sent, assigned or changed.
 notice window opened on 2026-09-25 and needs your decision.**
 
 ## Needs a human now
-- **Office insurance renewal.** Notice window for cancelling opens 2026-09-25 and closes 2026-10-25
+- **Office insurance renewal.** Notice window for canceling opens 2026-09-25 and closes 2026-10-25
   (policy summary, read 2026-09-27). I have not asked for quotes. Decide whether to shop it; owner Ben Okafor.
 
 ## Checklist (do-confirm, 7 items)

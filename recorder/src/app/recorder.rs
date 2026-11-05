@@ -12,8 +12,9 @@ use tico_recorder_native::{
     assist,
     audio::Channel,
     capture,
+    desktop::{self, DesktopOrg},
     engine::RecordingHandle,
-    live::LiveSync,
+    live::{self, LiveSync},
     network::{self, Tico, Transcriber},
     notices,
     settings::{self, AppLock, Settings},
@@ -158,14 +159,40 @@ pub fn sent_to(deliveries: &[store::Delivery], destination: &str) -> bool {
 }
 /// The Tico address in a `tico-recorder://connect?server=…` link.
 pub fn connect_address(link: &str) -> Option<String> {
+    link_address(link, "connect")
+}
+/// The Tico address in a `tico-recorder://<action>?server=…` link: `connect` (Tico's Connect recorder button) or
+/// `open` (Record in the Tico desktop app, which opens the Recorder on that org and starts nothing).
+pub fn link_address(link: &str, action: &str) -> Option<String> {
     let url = reqwest::Url::parse(link).ok()?;
-    if url.scheme() != "tico-recorder" || url.host_str() != Some("connect") {
+    if url.scheme() != "tico-recorder" || url.host_str() != Some(action) {
         return None;
     }
     let server = url.query_pairs().find(|(key, _)| key == "server")?.1;
     settings::safe_url(&server).ok()
 }
-/// The server the Tico desktop app on this Mac uses, to fill in the sign-in address.
+/// The sign-in address to suggest for a first connection: the org open in the Tico desktop app on this Mac, or,
+/// when that app keeps no orgs.json (an older or single-server build), the server in its server.txt.
+pub fn suggested_address(
+    orgs: Option<&[DesktopOrg]>,
+    server_txt: impl FnOnce() -> String,
+) -> String {
+    let bare = |url: &str| {
+        url.trim()
+            .trim_start_matches("https://")
+            .trim_end_matches('/')
+            .to_owned()
+    };
+    match orgs {
+        Some(orgs) => orgs
+            .iter()
+            .find(|org| org.active)
+            .map(|org| bare(&org.url))
+            .unwrap_or_default(),
+        None => bare(&server_txt()),
+    }
+}
+/// The server.txt of the Tico desktop app on this Mac, from before it kept a list of orgs.
 fn tico_desktop_server() -> String {
     let Some(home) = std::env::var_os("HOME") else {
         return String::new();
@@ -173,13 +200,42 @@ fn tico_desktop_server() -> String {
     std::fs::read_to_string(
         std::path::Path::new(&home).join("Library/Application Support/team.tico.app/server.txt"),
     )
-    .map(|text| {
-        text.trim()
-            .trim_start_matches("https://")
-            .trim_end_matches('/')
-            .to_owned()
-    })
     .unwrap_or_default()
+}
+/// Signs in to the Tico at `address` (`signin::sign_in_through`) and saves the connection; answers its name.
+/// Signing in again to the same Tico renews that connection in place, keeping its id and position; a new one goes
+/// last, so the first connection is the default.
+fn sign_in_saving(
+    root: &std::path::Path,
+    address: &str,
+    open: impl FnOnce(&str) -> bool,
+) -> anyhow::Result<String> {
+    let (mut destination, access, grant) =
+        signin::sign_in_through(address, open, signin::open_browser)?;
+    let mut config = settings::read(root)?;
+    let existing = config
+        .destinations
+        .iter_mut()
+        .find(|row| row.base_url == destination.base_url);
+    if let Some(row) = &existing {
+        destination.id = row.id.clone();
+    }
+    signin::save(&destination.id, &access, &grant)?;
+    let name = destination.name.clone();
+    match existing {
+        Some(row) => *row = destination,
+        None => config.destinations.push(destination),
+    }
+    settings::write(root, &config)?;
+    Ok(name)
+}
+/// "Signed in to A", "Signed in to A and B", "Signed in to A, B and C".
+pub fn signed_in_message(names: &[String]) -> String {
+    match names {
+        [] => String::new(),
+        [one] => format!("Signed in to {one}"),
+        [rest @ .., last] => format!("Signed in to {} and {last}", rest.join(", ")),
+    }
 }
 /// A library row's status, only when it says something the date doesn't. Tones are
 /// `red`, `amber`, `muted` and `accent`.
@@ -203,7 +259,7 @@ pub fn record_status(record: &Summary) -> Option<(String, &'static str)> {
     {
         ("Send failed".into(), "amber")
     } else if record.live_state == "live" {
-        ("Live in Tico".into(), "accent")
+        ("Live".into(), "live")
     } else {
         return None;
     };
@@ -243,6 +299,7 @@ pub struct SettingsForm {
 }
 
 pub struct Recorder {
+    pub screen: super::screen::ScreenShare,
     pub store: Store,
     _lock: Option<AppLock>,
     transcriber: Transcriber,
@@ -254,6 +311,7 @@ pub struct Recorder {
     pub meeting: Option<String>,
     pub context: Context,
     active: Option<(String, RecordingHandle)>,
+    deleting: Option<std::thread::JoinHandle<()>>,
     /// Recordings made in this session; only these are drafted automatically.
     recorded_here: BTreeSet<String>,
     refresh: Instant,
@@ -278,6 +336,8 @@ pub struct Recorder {
     pub adding: Option<String>,
     pub destination: String,
     tico_url: String,
+    /// The Tico desktop app's orgs (its orgs.json), read again when that file changes. None in the demo library.
+    pub desktop: desktop::Watch,
     signing_in: bool,
     /// A Tico address from a Connect recorder link, waiting for the person to confirm.
     pub connect: Option<String>,
@@ -290,7 +350,7 @@ pub struct Recorder {
     asking_for: Option<String>,
     pub demo: bool,
     /// The action item being sent to Tico right now.
-    sending: Option<String>,
+    pub(super) sending: Option<String>,
     /// People and bots chosen in People, shown at once and added in Tico in the background.
     adding_people: Vec<Adding>,
     /// Why Tico refused the last people or bots added; shown in People.
@@ -298,7 +358,7 @@ pub struct Recorder {
     /// The meeting being sent and the step it is on, written by the send job as it goes.
     send_step: Arc<Mutex<Option<(String, String)>>>,
     /// The action item whose send failed, and why.
-    item_error: Option<(String, String)>,
+    pub(super) item_error: Option<(String, String)>,
     /// Who the last action item went to, offered first for the next one.
     last_owner: String,
     /// Choosing the Tico that action items go to.
@@ -348,13 +408,15 @@ impl Recorder {
         } else {
             Some(LiveSync::start(store.clone()))
         };
-        // Suggest the Tico desktop app's server only for a first connection.
-        let tico_url = if config.destinations.is_empty() {
-            tico_desktop_server()
+        let mut desktop = desktop::Watch::new(if demo { None } else { desktop::path() });
+        // Suggest the Tico desktop app's open org only for a first connection.
+        let tico_url = if config.destinations.is_empty() && !demo {
+            suggested_address(desktop.orgs(), tico_desktop_server)
         } else {
             String::new()
         };
         let mut app = Self {
+            screen: Default::default(),
             store,
             _lock: lock,
             transcriber,
@@ -371,6 +433,7 @@ impl Recorder {
             meeting: None,
             context: Context::default(),
             active: None,
+            deleting: None,
             recorded_here: BTreeSet::new(),
             refresh: Instant::now(),
             refresh_library: Instant::now(),
@@ -390,6 +453,7 @@ impl Recorder {
             chat_retry: String::new(),
             adding: None,
             tico_url,
+            desktop,
             signing_in: false,
             connect: None,
             microphones: vec![],
@@ -453,8 +517,9 @@ impl Recorder {
         let tx = self.tx.clone();
         let store = self.store.clone();
         let background = BACKGROUND.contains(&kind);
+        let deleting = kind == "delete";
         let kind = kind.to_string();
-        std::thread::spawn(move || {
+        let worker = std::thread::spawn(move || {
             if background {
                 tico_recorder_native::qos::utility();
             }
@@ -467,6 +532,9 @@ impl Recorder {
             // Wakes the tick thread to handle the reply now.
             store.poke();
         });
+        if deleting {
+            self.deleting = Some(worker);
+        }
         true
     }
     pub fn report(&mut self, result: anyhow::Result<()>) {
@@ -602,16 +670,26 @@ impl Recorder {
     }
     /// Stops the recording in progress; the audio worker flushes and finishes in the background.
     pub fn stop(&mut self) {
+        if let Some((id, _)) = &self.active {
+            self.screen.stop_meeting(id);
+        }
         if let Some((_, handle)) = &self.active {
             handle.stop();
         }
     }
     /// Used on quit: stop and wait for the final audio to be saved.
     pub fn shutdown(&mut self) {
+        self.screen.stop_and_wait();
         if let Some((_, handle)) = self.active.take() {
             let _ = handle.finish();
         }
+        self.join_delete();
         self.save_context();
+    }
+    fn join_delete(&mut self) {
+        if let Some(worker) = self.deleting.take() {
+            let _ = worker.join();
+        }
     }
     #[cfg(test)]
     pub fn mark_sending(&mut self, item: Option<&str>, meeting_step: Option<&str>) {
@@ -819,6 +897,9 @@ impl Recorder {
     /// drafts. Runs on its own timer whether or not the window is visible.
     pub fn tick(&mut self) {
         while let Ok(reply) = self.rx.try_recv() {
+            if reply.kind == "delete" {
+                self.join_delete();
+            }
             if reply.kind != "live" {
                 self.bump();
             }
@@ -828,6 +909,10 @@ impl Recorder {
             let here = reply.meeting == self.meeting;
             if reply.kind == "signin" {
                 self.signing_in = false;
+                // Signing in to several orgs keeps the ones that worked when a later one fails.
+                self.config = settings::read(self.store.root()).unwrap_or(self.config.clone());
+                self.keep_destination();
+                self.services_at = None;
             }
             if reply.kind == "send" {
                 *self
@@ -955,10 +1040,6 @@ impl Recorder {
                             self.microphones = serde_json::from_value(value).unwrap_or_default()
                         }
                         "signin" => {
-                            self.config =
-                                settings::read(self.store.root()).unwrap_or(self.config.clone());
-                            self.keep_destination();
-                            self.services_at = None;
                             self.tico_url.clear();
                             self.say(value["message"].as_str().unwrap_or_default());
                         }
@@ -981,6 +1062,11 @@ impl Recorder {
                         "live" => {
                             // Polled every few seconds; the window hears about it only on change.
                             if self.live != value["view"] {
+                                if value["view"]["state"] != "live" {
+                                    if let Some(id) = &self.meeting {
+                                        self.screen.stop_meeting(id);
+                                    }
+                                }
                                 self.live = value["view"].clone();
                                 self.bump();
                             }
@@ -1004,7 +1090,7 @@ impl Recorder {
                         "roster" => {
                             self.roster = serde_json::from_value(value).unwrap_or_default();
                         }
-                        "send" => self.say("Sent to Tico"),
+                        "send" => self.say("Saved to Tico"),
                         "import" => {
                             self.config =
                                 settings::read(self.store.root()).unwrap_or(self.config.clone());
@@ -1034,7 +1120,8 @@ impl Recorder {
             .as_ref()
             .is_some_and(|(_, handle)| handle.is_finished())
         {
-            if let Some((_, handle)) = self.active.take() {
+            if let Some((id, handle)) = self.active.take() {
+                self.screen.stop_meeting(&id);
                 let result = handle.finish();
                 self.report(result);
             }
@@ -1170,8 +1257,12 @@ impl Recorder {
     }
     /// Why an app update waits right now: a recording runs, or a live meeting is connected.
     pub fn update_hold(&self) -> Option<&'static str> {
-        if self.active.is_some() {
+        if self.deleting.is_some() {
+            Some("After deletion finishes")
+        } else if self.active.is_some() {
             Some("After this recording")
+        } else if self.screen.view()["active"] == true {
+            Some("After screen sharing stops")
         } else if self
             .records
             .iter()
@@ -1212,7 +1303,7 @@ impl Recorder {
     /// in `levels`.
     fn outside_state(&self) -> String {
         use std::fmt::Write;
-        let mut out = String::new();
+        let mut out = self.screen.view().to_string();
         if let Some((id, handle)) = &self.active {
             let status = handle.status();
             let _ = write!(out, "{id}|{}|{}|", status.phase, status.error);
@@ -1300,7 +1391,42 @@ impl Recorder {
         self.report(result);
         self.reload();
     }
+    pub fn control_live(&mut self, action: &str) {
+        if action != "resume" {
+            if let Some(id) = &self.meeting {
+                self.screen.stop_meeting(id);
+            }
+        }
+        let Ok(record) = self.open_record() else {
+            return;
+        };
+        let at_ms = self
+            .active
+            .as_ref()
+            .filter(|(id, _)| id == &record.id)
+            .map(|(_, handle)| handle.status().elapsed_ms)
+            .unwrap_or_else(|| tico_recorder_native::live::capture_time(&record));
+        let action = action.to_owned();
+        self.network_job("control", move |tico, store, id| {
+            tico.control_live(&store, &id, &action, at_ms)?;
+            Ok(json!({}))
+        });
+    }
+    /// A person's edit of a line already shared live, or its removal when `text` is None. It only
+    /// changes the meeting the window has open, and only when that is the meeting named.
+    pub fn edit_shared_line(&mut self, id: &str, seq: i64, text: Option<&str>) {
+        let result = if self.meeting.as_deref() == Some(id) {
+            live::edit_shared(&self.store, id, seq, text)
+        } else {
+            Err(anyhow::anyhow!("That meeting is no longer open"))
+        };
+        self.report(result);
+        self.reload();
+    }
     pub fn finish_live(&mut self) {
+        if let Some(id) = &self.meeting {
+            self.screen.stop_meeting(id);
+        }
         if self.context.live_id.is_empty() {
             return;
         }
@@ -1398,6 +1524,29 @@ impl Recorder {
     }
     /// Sends one action item to `owner` as a private Tico task with its quote and the meeting link.
     pub fn send_item(&mut self, item_id: &str, owner: &str) {
+        self.send_item_confirmed(item_id, owner, false);
+    }
+    pub fn send_item_confirmed(&mut self, item_id: &str, owner: &str, paused_confirmed: bool) {
+        // Check durable state as well as the displayed snapshot; sync may have changed it.
+        if let Some(id) = &self.meeting {
+            match self.store.context(id) {
+                Ok(context) => {
+                    let reason = tico_recorder_native::live::item_send_blocked(&context)
+                        .map(str::to_owned)
+                        .or_else(|| (!paused_confirmed && !context.paused_windows.is_empty()
+                            && context.items.iter().any(|i| i.id == item_id && (!i.quote.trim().is_empty() || !i.title.trim().is_empty())))
+                            .then(|| "This task may quote paused speech. Review its title and quote, then choose Create anyway".into()));
+                    if let Some(reason) = reason {
+                        self.item_error = Some((item_id.to_owned(), reason));
+                        return;
+                    }
+                }
+                Err(error) => {
+                    self.item_error = Some((item_id.to_owned(), error.to_string()));
+                    return;
+                }
+            }
+        }
         if self.updating {
             self.error = UPDATING.into();
             return;
@@ -1440,8 +1589,15 @@ impl Recorder {
         let (config, store, destination) = (self.config.clone(), self.store.clone(), self.router());
         let (item_id, owner) = (item_id.to_owned(), owner.to_owned());
         self.job_for("task", Some(id.clone()), move || {
-            Tico::saved(&config, &destination)?
-                .send_task(&store, &id, &item_id, &owner, &name, private)?;
+            Tico::saved(&config, &destination)?.send_task_confirmed(
+                &store,
+                &id,
+                &item_id,
+                &owner,
+                &name,
+                private,
+                paused_confirmed,
+            )?;
             Ok(json!({"message":format!("Sent to {name}")}))
         });
     }
@@ -1632,6 +1788,87 @@ impl Recorder {
             }
         }
     }
+    /// Share live, from the sheet: nothing reaches Tico before this. Opens the meeting in
+    /// `destination` for its whole org (`team`) or only the people and bots chosen, then adds them.
+    pub fn share_live(&mut self, destination: &str, team: bool, actors: Vec<String>) {
+        let Some(meeting) = self.meeting.clone() else {
+            return;
+        };
+        if self.context.live_id.is_empty() {
+            if !self
+                .config
+                .destinations
+                .iter()
+                .any(|row| row.id == destination)
+            {
+                self.error = "Choose an org first".into();
+                return;
+            }
+            self.destination = destination.into();
+        }
+        if team && self.screen.active_for(&meeting) {
+            self.error = "Stop screen sharing before making this meeting public".into();
+            return;
+        }
+        if !self.shareable() {
+            return;
+        }
+        let actors: Vec<String> = actors
+            .into_iter()
+            .filter(|actor| actor.starts_with("bot:") || actor.starts_with("human:"))
+            .filter(|actor| {
+                !self
+                    .adding_people
+                    .iter()
+                    .any(|row| row.meeting == meeting && &row.actor == actor)
+            })
+            .collect();
+        let humans: Vec<String> = actors
+            .iter()
+            .filter(|a| a.starts_with("human:"))
+            .cloned()
+            .collect();
+        let slugs: Vec<String> = actors
+            .iter()
+            .filter_map(|a| a.strip_prefix("bot:").map(str::to_owned))
+            .collect();
+        let started = self.network_job("access", move |tico, store, id| {
+            let live_id = tico.ensure_live(&store, &id, team)?;
+            let body = json!({"add":humans,"remove":[],"visibility":if team { "team" } else { "private" }});
+            let view = tico.call(
+                &format!("/api/v2/live-meetings/{live_id}/access"),
+                Some(&body),
+                &format!("recorder:{id}:access:{}", uuid::Uuid::new_v4()),
+            )?;
+            if !slugs.is_empty() {
+                tico.call(
+                    &format!("/api/v2/live-meetings/{live_id}/bots"),
+                    Some(&json!({"bots":slugs})),
+                    &format!("recorder:{id}:attach:{}", slugs.join(",")),
+                )?;
+            }
+            Ok(json!({"message":"Shared live","view":view}))
+        });
+        if !started {
+            return;
+        }
+        self.people_error.clear();
+        for actor in actors {
+            let name = self
+                .roster
+                .iter()
+                .find(|row| row.0 == actor)
+                .map_or(actor.as_str(), |row| row.1.as_str())
+                .to_owned();
+            self.adding_people.push(Adding {
+                meeting: meeting.clone(),
+                actor,
+                name,
+                step: AddStep::Sending,
+                added: None,
+            });
+        }
+    }
     /// Someone not in Tico: the name stays with the transcript only.
     pub fn add_participant(&mut self, name: &str) {
         let name: String = name.trim().chars().take(100).collect();
@@ -1648,6 +1885,15 @@ impl Recorder {
     }
     /// Everyone in the Tico (`team`) or only the people and bots added (private).
     pub fn set_team(&mut self, team: bool) {
+        if team
+            && self
+                .meeting
+                .as_ref()
+                .is_some_and(|id| self.screen.active_for(id))
+        {
+            self.error = "Stop screen sharing before making this meeting public".into();
+            return;
+        }
         if self.shareable() {
             let _ = self.access_job(Some(team), vec![], vec![]);
         }
@@ -1667,7 +1913,13 @@ impl Recorder {
     /// Where this recording can be sent: a meeting already open in one Tico, with its people and
     /// bots, goes only there.
     pub fn send_targets(&self, id: &str, deliveries: &[store::Delivery]) -> Vec<Value> {
-        let live = self.store.context(id).unwrap_or_default().live_destination;
+        let context = self.store.context(id).unwrap_or_default();
+        // Kept on this computer after a live share: it is a meeting recorded here again.
+        let live = if context.live_removed {
+            String::new()
+        } else {
+            context.live_destination
+        };
         self.targets(&live, deliveries)
     }
     /// `send_targets` for a meeting whose live connection is already known, without a read.
@@ -1684,13 +1936,100 @@ impl Recorder {
     /// Send does every step in one go: it stops this recording, waits for its last words,
     /// finishes a live meeting in Tico, then files it. Only what no step can fix stops it here.
     pub fn send_meeting(&mut self, id: &str, destination: &str) {
+        self.send_meeting_confirmed(id, destination, false);
+    }
+    pub fn send_meeting_confirmed(&mut self, id: &str, destination: &str, paused_confirmed: bool) {
+        self.send_meeting_to(id, destination, paused_confirmed, "");
+    }
+    /// The Finish sheet's Save: `destination` is an org, or `local` to keep it on this computer
+    /// only (a live share then ends and what was said leaves Tico). `audience` is `team` or
+    /// `participants`. The title is saved first.
+    pub fn save(
+        &mut self,
+        id: &str,
+        destination: &str,
+        audience: &str,
+        title: &str,
+        paused_confirmed: bool,
+    ) {
+        let title: String = title.trim().chars().take(200).collect();
+        // A live-shared meeting is already in Tico; Save sends the new title there too.
+        if let Ok(record) = self.store.get(id)
+            && !title.is_empty()
+            && title != record.title
+            && record.deliveries.iter().all(|row| row.status != "sent")
+        {
+            let result = self.store.mutate(id, |r| {
+                r.title = title;
+                Ok(())
+            });
+            self.report(result);
+            self.reload();
+        }
+        if destination == "local" {
+            self.keep_local(id);
+            return;
+        }
+        if !["team", "participants"].contains(&audience) {
+            self.error = "Choose who can see it".into();
+            return;
+        }
+        self.send_meeting_to(id, destination, paused_confirmed, audience);
+    }
+    /// Stops the recording and keeps it on this computer; a live share ends and leaves Tico.
+    pub fn keep_local(&mut self, id: &str) {
+        self.screen.stop_meeting(id);
+        if self.active.as_ref().is_some_and(|(active, _)| active == id) {
+            self.stop();
+        }
+        let context = self.store.context(id).unwrap_or_default();
+        if context.live_id.is_empty() || context.live_removed {
+            return;
+        }
+        if self.meeting.as_deref() == Some(id) {
+            self.save_context();
+        }
+        let config = self.config.clone();
+        let store = self.store.clone();
+        let (id, destination) = (id.to_owned(), context.live_destination);
+        self.job_for("keep", Some(id.clone()), move || {
+            wait_stopped(&store, &id)?;
+            Tico::saved(&config, &destination)?.keep_local(&store, &id)?;
+            Ok(json!({"message":"Kept on this Mac"}))
+        });
+    }
+    fn send_meeting_to(
+        &mut self,
+        id: &str,
+        destination: &str,
+        paused_confirmed: bool,
+        audience: &str,
+    ) {
         if self.updating {
             self.error = UPDATING.into();
             return;
         }
+        self.screen.stop_meeting(id);
         let Ok(record) = self.store.get(id) else {
             return;
         };
+        if let Ok(context) = self.store.context(id) {
+            if context.live_discarded && !context.live_removed {
+                self.error =
+                    "This meeting was discarded; its recording stays on this computer".into();
+                return;
+            }
+            if context.live_state == "paused" {
+                self.error = "Resume sharing before Finish or Send".into();
+                return;
+            }
+            if !paused_confirmed && tico_recorder_native::live::paused_review_required(&context) {
+                self.error =
+                    "A kept task may quote paused speech. Review it, then choose Save anyway."
+                        .into();
+                return;
+            }
+        }
         let recording_here = self.active.as_ref().is_some_and(|(active, _)| active == id);
         if !recording_here && let Some(error) = self.send_blocked(&record) {
             self.error = error;
@@ -1727,6 +2066,7 @@ impl Recorder {
             "Sending…"
         });
         let id = record.id.clone();
+        let audience = audience.to_owned();
         self.job("send", move || {
             let deadline = Instant::now() + SEND_WAIT;
             loop {
@@ -1749,14 +2089,21 @@ impl Recorder {
                 say(label);
                 std::thread::sleep(Duration::from_millis(250));
             }
-            network::ready(&store.get(&id)?)?;
+            let record = store.get(&id)?;
+            network::ready(&record)?;
+            anyhow::ensure!(
+                paused_confirmed
+                    || !tico_recorder_native::live::paused_review_required(&store.context(&id)?),
+                "A kept task may quote paused speech. Review it, then choose Save anyway."
+            );
             let tico = Tico::saved(&config, &destination)?;
-            if !store.context(&id)?.live_id.is_empty() {
+            let context = store.context(&id)?;
+            if !context.live_id.is_empty() && !context.live_removed {
                 say("Finishing…");
                 tico.finish_live(&store, &id)?;
             }
             say("Sending…");
-            tico.send(&store, &id, false)?;
+            tico.send_to(&store, &id, false, &audience)?;
             Ok(json!({}))
         });
     }
@@ -1780,6 +2127,52 @@ impl Recorder {
     }
     /// Removes the recording's audio and transcript from this Mac. The window asks first.
     pub fn delete(&mut self, id: &str) {
+        if self.busy {
+            return;
+        }
+        self.screen.stop_meeting(id);
+        let context = self.store.context(id).unwrap_or_default();
+        let filed = self.store.get(id).is_ok_and(|record| {
+            record
+                .deliveries
+                .iter()
+                .any(tico_recorder_native::live::saved_in_tico)
+        });
+        let discard_live = !context.live_id.is_empty() && !context.live_removed && !filed;
+        let recording_here = self.active.as_ref().is_some_and(|(active, _)| active == id);
+        if discard_live || recording_here {
+            let capture = if recording_here {
+                self.active.take().map(|(_, handle)| {
+                    handle.stop();
+                    handle
+                })
+            } else {
+                None
+            };
+            let config = self.config.clone();
+            let store = self.store.clone();
+            let (job_id, destination) = (id.to_owned(), context.live_destination);
+            self.job_for("delete", Some(id.to_owned()), move || {
+                if let Some(handle) = capture {
+                    // Join even during startup, when the saved state can still be "stopped".
+                    // Failed capture still needs deleting after its final error writes.
+                    let _ = handle.finish();
+                } else {
+                    wait_stopped(&store, &job_id)?;
+                }
+                if discard_live {
+                    Tico::saved(&config, &destination)?.keep_local(&store, &job_id)?;
+                }
+                store.delete(&job_id)?;
+                Ok(json!({"message":"Deleted"}))
+            });
+            if self.meeting.as_deref() == Some(id) {
+                self.meeting = None;
+                self.current = None;
+                self.context = Context::default();
+            }
+            return;
+        }
         let result = self.store.delete(id);
         let deleted = result.is_ok();
         self.report(result);
@@ -1830,6 +2223,7 @@ impl Recorder {
         }
     }
     pub fn sign_out(&mut self, id: &str) {
+        self.screen.stop_destination(id);
         let Some(destination) = self
             .config
             .destinations
@@ -1861,24 +2255,81 @@ impl Recorder {
         self.signing_in = true;
         self.connect = None;
         self.job("signin", move || {
-            let (mut destination, access, grant) = signin::sign_in(&address, signin::open_browser)?;
-            let mut config = settings::read(&root)?;
-            // Signing in again to the same Tico renews that connection in place, keeping its id and position.
-            let existing = config
-                .destinations
-                .iter_mut()
-                .find(|row| row.base_url == destination.base_url);
-            if let Some(row) = &existing {
-                destination.id = row.id.clone();
+            let name = sign_in_saving(&root, &address, |url| {
+                signin::open_browser(url);
+                false
+            })?;
+            Ok(json!({"message": signed_in_message(&[name])}))
+        });
+    }
+    /// The Tico desktop app's orgs, each with whether the Recorder is signed in to it.
+    pub fn desktop_orgs(&mut self) -> Vec<Value> {
+        let destinations = &self.config.destinations;
+        self.desktop
+            .orgs()
+            .unwrap_or_default()
+            .iter()
+            .map(|org| {
+                json!({"name":org.name,"url":org.url,"email":org.email,"active":org.active,
+                    "connected":destinations.iter().any(|row| desktop::matches(&org.url, row))})
+            })
+            .collect()
+    }
+    /// Signs in to every Tico desktop org the Recorder has none for, one at a time, the one open there first (so it
+    /// is the default when the Recorder had none). Each approval page opens in the desktop app on that org, which
+    /// already has its sign-in, so the person only chooses Allow; the browser shows it when the desktop app can't.
+    /// A failure goes on to the next org, except a timeout: nobody is there to choose Allow.
+    /// With `url`, only that org: Allow on its row.
+    pub fn sign_in_desktop(&mut self, url: Option<&str>) {
+        if self.busy {
+            return;
+        }
+        let mut orgs = desktop::to_sign_in(
+            self.desktop.orgs().unwrap_or_default(),
+            &self.config.destinations,
+        );
+        if let Some(url) = url {
+            orgs.retain(|org| org.url == url);
+        }
+        if orgs.is_empty() {
+            return;
+        }
+        let root = self.store.root().to_path_buf();
+        self.signing_in = true;
+        self.connect = None;
+        self.job("signin", move || {
+            let (mut signed, mut failed) = (vec![], vec![]);
+            for org in orgs {
+                let opened = sign_in_saving(&root, &org.url, |authorize| {
+                    if desktop::approval_link(&org.url, authorize)
+                        .is_some_and(|link| desktop::open_in_app(&link))
+                    {
+                        return true;
+                    }
+                    signin::open_browser(authorize);
+                    false
+                });
+                match opened {
+                    Ok(name) => signed.push(name),
+                    Err(error) => {
+                        let timed_out = error.to_string() == signin::TIMED_OUT;
+                        failed.push(format!("{}: {error:#}", org.name));
+                        if timed_out {
+                            break;
+                        }
+                    }
+                }
             }
-            signin::save(&destination.id, &access, &grant)?;
-            let name = destination.name.clone();
-            match existing {
-                Some(row) => *row = destination,
-                None => config.destinations.push(destination),
-            }
-            settings::write(&root, &config)?;
-            Ok(json!({"message": format!("Signed in to {name}")}))
+            anyhow::ensure!(
+                failed.is_empty(),
+                "{}{}",
+                match signed_in_message(&signed) {
+                    message if message.is_empty() => message,
+                    message => format!("{message}. "),
+                },
+                failed.join(". ")
+            );
+            Ok(json!({"message": signed_in_message(&signed)}))
         });
     }
     /// Saves the form over the saved settings, so connection changes made meanwhile are kept.
@@ -1948,8 +2399,30 @@ impl Recorder {
             Ok(json!({"message":format!("Imported {count} recordings")}))
         });
     }
-    /// A link macOS delivered to the app.
+    /// A link macOS delivered to the app: `connect` asks to sign in to that Tico; `open` (Record in the Tico desktop
+    /// app) chooses that Tico for what comes next when the Recorder is signed in to it, and asks to sign in when not.
+    /// Neither starts a recording.
     pub fn link(&mut self, link: &str) {
+        if let Some(address) = link_address(link, "open") {
+            let connected = self
+                .config
+                .destinations
+                .iter()
+                .find(|row| desktop::matches(&address, row))
+                .map(|row| row.id.clone());
+            match connected {
+                Some(id) => {
+                    if self.context.live_destination.is_empty() {
+                        self.destination = id;
+                        self.choosing_org = false;
+                        self.roster_for.clear();
+                    }
+                }
+                None if !self.signing_in => self.connect = Some(address),
+                None => {}
+            }
+            return;
+        }
         match connect_address(link) {
             Some(address) => self.connect = Some(address),
             None => self.error = "That link is not a Tico Recorder connect link".into(),
@@ -1964,13 +2437,22 @@ impl Recorder {
         self.connect = None;
     }
     pub fn dismiss_error(&mut self) {
+        self.screen.dismiss();
         self.error.clear();
     }
     /// Opens a Tico page (a sent task) in the browser. Only addresses of a connected Tico.
     pub fn open_url(&mut self, url: &str) {
-        let allowed = self.config.destinations.iter().any(|row| {
-            settings::safe_url(&row.base_url).is_ok_and(|base| url.starts_with(&format!("{base}/")))
-        });
+        let known_item = self
+            .context
+            .items
+            .iter()
+            .any(|item| !item.task_url.is_empty() && item.task_url == url)
+            && settings::safe_url(url.split('#').next().unwrap_or("")).is_ok();
+        let allowed = known_item
+            || self.config.destinations.iter().any(|row| {
+                settings::safe_url(&row.base_url)
+                    .is_ok_and(|base| url.starts_with(&format!("{base}/")))
+            });
         if allowed {
             signin::open_browser(url);
         }
@@ -1981,7 +2463,8 @@ impl Recorder {
     /// Everything the window shows. Parts the window already has (by hash) come back as null.
     pub fn view(&mut self, have: &Have) -> Value {
         self.viewed = self.ui_version;
-        let mut out = json!({"status": self.status_view(), "live": self.live_view()});
+        let mut out = json!({"status": self.status_view(), "live": self.live_view(),
+            "desktop_orgs": self.desktop_orgs()});
         let parts: [(&str, &str, Value); 4] = [
             ("library", &have.library, self.library_view()),
             ("settings", &have.settings, self.settings_view()),
@@ -2043,6 +2526,7 @@ impl Recorder {
             String::new()
         };
         json!({
+            "screen": self.screen.view(),
             "busy": self.busy,
             "demo": self.demo,
             "error": self.error,
@@ -2076,6 +2560,16 @@ impl Recorder {
                 } else {
                     Some(("Tico sync needs attention".into(), "amber"))
                 };
+                let context = self.store.context(&record.id).unwrap_or_default();
+                // Kept on this Mac: its row says so; only a Tico that has not ended it yet is news.
+                let status = if context.live_discarded { (context.live_state != "ended").then(|| ("Ending in Tico".into(), "amber")) } else { status };
+                // The org it lives in: where it was saved, else where it is shared live.
+                let saved = record.deliveries.iter().find(|row| !row.meeting_id.is_empty() && row.status != "partial");
+                let home = saved.map(|row| row.destination_id.clone()).or_else(|| {
+                    (!context.live_removed && !context.live_destination.is_empty()).then(|| context.live_destination.clone())
+                });
+                let org = home.and_then(|id| self.config.destinations.iter().find(|row| row.id == id))
+                    .map(|row| json!({"id":row.id,"name":row.name,"url":row.base_url}));
                 let sent = self.sent_everywhere(&record.deliveries);
                 json!({
                     "id": record.id,
@@ -2083,11 +2577,15 @@ impl Recorder {
                     "started_at": record.started_at,
                     "duration_ms": record.duration_ms,
                     "recording": recording,
+                    "paused_warning": !context.paused_windows.is_empty(),
                     "status": status.map(|(label, tone)| json!({"label":label,"tone":tone})),
                     "sync_error": sync_error,
                     "sent": sent,
-                    "can_send": !self.config.destinations.is_empty() && !sent && !recording && record.chunks > 0 && !self.busy,
-                    "targets": self.targets(&record.live_destination, &record.deliveries),
+                    "can_send": (!context.live_discarded || context.live_removed) && !self.config.destinations.is_empty() && !sent && !recording && record.chunks > 0 && !self.busy,
+                    "local": org.is_none(),
+                    "org": org,
+                    "live_org": (!context.live_removed).then_some(&context.live_destination).filter(|id| !id.is_empty()),
+                    "targets": self.targets(if context.live_removed { "" } else { &record.live_destination }, &record.deliveries),
                 })
             })
             .collect();
@@ -2122,7 +2620,7 @@ impl Recorder {
                     .trim_start_matches("https://")
                     .trim_end_matches('/');
                 json!({"id":row.id,"name":row.name,"host":if host == row.name { "" } else { host },
-                    "default":index == 0})
+                    "url":row.base_url,"default":index == 0})
             })
             .collect();
         json!({
@@ -2168,6 +2666,9 @@ impl Recorder {
         };
         let recording = record.state == "recording"
             || self.active.as_ref().is_some_and(|(id, _)| id == &record.id);
+        if let Some(view) = self.shared_transcript(record, recording) {
+            return view;
+        }
         if recording {
             // While recording: finished chunks, streamed final words, then the words still
             // being spoken, which the window shows softer and updates in place.
@@ -2189,6 +2690,11 @@ impl Recorder {
             self.blocks = (current, transcript_blocks(record));
         }
         json!({"id": record.id, "blocks": self.blocks.1})
+    }
+    /// A meeting shared live shows the lines Tico holds, one per line, so an edit or removal names
+    /// the line Tico changes. Speech not sent yet follows without controls. None if not shared.
+    fn shared_transcript(&self, record: &Recording, recording: bool) -> Option<Value> {
+        live::shared_transcript(&self.store, record, recording)
     }
     /// Keep the destination pinned to this live meeting, even if the default Tico changes.
     fn live_url(&self) -> Option<String> {
@@ -2231,7 +2737,9 @@ impl Recorder {
             .chunks
             .iter()
             .any(|chunk| !chunk.text.trim().is_empty());
-        let blocked = if recording_here {
+        let blocked = if self.context.live_state == "paused" {
+            Some("Resume sharing before Finish or Send".into())
+        } else if recording_here {
             None
         } else {
             self.send_blocked(&record)
@@ -2239,6 +2747,9 @@ impl Recorder {
         let sync_error = self.sync_error(&record.id);
         json!({
             "id": record.id,
+            "link_ready": !self.context.live_id.is_empty() || !record.deliveries.is_empty(),
+            "can_share_screen": record.deliveries.is_empty() && !self.context.live_discarded && !self.context.locally_paused
+                && (self.context.live_id.is_empty() || self.context.live_state == "live"),
             "title": record.title,
             "started_at": record.started_at,
             "duration_ms": record.chunks.iter().map(|chunk| chunk.end_ms).max().unwrap_or(0),
@@ -2248,14 +2759,24 @@ impl Recorder {
             "sent": self.sent_everywhere(&record.deliveries),
             "connected": !self.config.destinations.is_empty(),
             "send_blocked": if self.busy { None } else { blocked },
-            "targets": self.targets(&self.context.live_destination, &record.deliveries),
+            "targets": self.targets(if self.context.live_removed { "" } else { &self.context.live_destination }, &record.deliveries),
+            // The Finish sheet: the org it was shared live to (its default), and how.
+            "live_org": if live && !self.context.live_removed { Some(router.clone()) } else { None },
+            "team": team,
+            "kept_local": self.context.live_removed,
             "live": if live { Some(match (ended, team) {
                 (true, _) => "Ended in Tico",
                 (false, true) => "Team can join",
                 (false, false) => "Private in Tico",
             }) } else { None },
             "live_url": self.live_url(),
-            "can_finish": live && record.state != "recording" && record.deliveries.is_empty()
+            "paused_warning": !self.context.paused_windows.is_empty(),
+            "live_state": self.context.live_state,
+            "can_control": live && !ended && !self.context.live_discarded,
+            "can_discard": live && !ended && record.state != "recording" && record.deliveries.is_empty(),
+            "discarded": self.context.live_discarded,
+            "discard_pending": self.context.live_discarded && !ended,
+            "can_finish": live && self.context.live_state != "paused" && !self.context.live_discarded && record.state != "recording" && record.deliveries.is_empty()
                 && (!ended || has_text),
             "place": if live { format!("Shared live · {org}") } else { "Private · on this Mac".into() },
             "sync_error": if sync_error.is_empty() { String::new() } else {
@@ -2292,7 +2813,8 @@ impl Recorder {
         // Bots first: most action items go to one.
         let mut owners = self.roster.clone();
         owners.sort_by_key(|row| !row.0.starts_with("bot:"));
-        let can_send = mode == "ready" && self.sending.is_none();
+        let send_blocked = tico_recorder_native::live::item_send_blocked(&self.context);
+        let can_send = mode == "ready" && self.sending.is_none() && send_blocked.is_none();
         let items = &self.context.items;
         let order = items
             .iter()
@@ -2319,14 +2841,19 @@ impl Recorder {
                 json!({
                     "id": item.id,
                     "title": item.title,
+                    "kind": item.kind,
+                    "document": item.document,
                     "quote": item.quote,
                     "at_ms": item.at_ms,
                     "owner": chosen,
                     "owner_name": owner_name,
                     "sent": !item.task_id.is_empty(),
                     "sent_to": item.sent_to,
+                    "task_id": item.task_id,
                     "task_url": item.task_url,
                     "sending": self.sending.as_deref() == Some(item.id.as_str()),
+                    "send_blocked": send_blocked,
+                    "paused_warning": !self.context.paused_windows.is_empty() && (!item.quote.trim().is_empty() || !item.title.trim().is_empty()),
                     "can_send": can_send && !chosen.is_empty() && !item.title.trim().is_empty(),
                     "error": error,
                 })
@@ -2460,7 +2987,7 @@ impl Recorder {
             } else {
                 self.actor_name(actor)
             };
-            let at = message["created"].as_str().unwrap_or("");
+            let at = message["created_at"].as_str().unwrap_or("");
             rows.push((
                 millis(at),
                 rows.len(),
@@ -2600,6 +3127,7 @@ impl Drop for Recorder {
         if let Some((_, handle)) = self.active.take() {
             let _ = handle.finish();
         }
+        self.join_delete();
     }
 }
 
@@ -2658,5 +3186,18 @@ pub fn seed_demo(store: &Store) -> anyhow::Result<()> {
         row.warning = "No signal was captured. Silent audio cannot produce a transcript.".into();
         Ok(())
     })?;
+    Ok(())
+}
+
+/// Waits for a recording that was just stopped to close, so it can be ended or deleted.
+fn wait_stopped(store: &Store, id: &str) -> anyhow::Result<()> {
+    let deadline = Instant::now() + SEND_WAIT;
+    while store.get(id)?.state == "recording" {
+        anyhow::ensure!(
+            Instant::now() < deadline,
+            "The recording is still stopping. Try again."
+        );
+        std::thread::sleep(Duration::from_millis(250));
+    }
     Ok(())
 }

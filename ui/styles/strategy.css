@@ -93,7 +93,7 @@
 .strat-ed:hover{border-color:var(--line)}
 .strat-ed:focus{border-color:var(--focus);background:var(--bg);outline:var(--focus-halo);outline-offset:0}
 .strat-ed::placeholder{color:var(--muted)}
-.strat-big{margin:0;font-size:var(--t-xl);font-weight:600;line-height:var(--lh-tight);letter-spacing:var(--track-snug);overflow-wrap:anywhere}
+.strat-big{margin:0;font-size:var(--t-lg);font-weight:500;line-height:var(--lh-read);overflow-wrap:anywhere}
 .strat-memo section.card.strat-top{padding:16px 18px}
 /* × to remove: on hover or focus with a mouse, always on a touch screen. */
 .strat-x{display:grid;place-items:center;flex:none;width:22px;height:22px;min-height:0;padding:0;border:0;border-radius:50%;background:transparent;color:var(--muted);cursor:pointer;opacity:0;transition:opacity var(--dur-fast) var(--ease)}
@@ -215,7 +215,6 @@ button.strat-pill:hover{filter:brightness(1.1)}
   .strat-wrong-fields select[name="kpi_id"]{flex-basis:100%}
   .strat-wrong-by{max-width:none}
   .strat-ed,.strat-addrow input{font-size:16px}
-  .strat-big{font-size:var(--t-lg)}
   .strat-memo section.card.strat-card{padding:12px}
   .strat-map{aspect-ratio:1.4/1}
   .strat-addrow input{height:40px}

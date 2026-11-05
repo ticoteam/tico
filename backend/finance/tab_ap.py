@@ -9,6 +9,7 @@ from collections.abc import Iterable, Sequence
 from datetime import date
 from typing import Any, cast
 
+from . import delivery
 from .context import Ctx, load
 from .core import ap as AP
 from .core import dates
@@ -29,7 +30,6 @@ NESTED_MOST = 50            # settlements and attachments one document response 
 SIDES = {"bill": ("payables", R.AP), "invoice": ("receivables", R.AR)}
 CONTACT_OF = {"bill": "vendor", "invoice": "customer"}
 CHART_MOST = 2000
-CONTROL_SUBTYPES = ("payable", "receivable")
 CHART_FOR = {"bill": ("expense", "asset"), "invoice": ("income",)}
 
 
@@ -103,7 +103,7 @@ def payment_of(pay: Any) -> Row | None:
 def ask_ended(r: Any) -> Row | None:
     """How a bill's scheduled payment ended before any payment existed (its approval denied, expired or withdrawn,
     or the ask refused), in payment_of's shape with no id."""
-    end = SK.loads(r["schedule_json"]).get("ended")
+    end = SK.loads(r["schedule"]).get("ended")
     if not isinstance(end, dict):
         return None
     e = cast(dict[str, Any], end)
@@ -135,7 +135,7 @@ def doc_row(kind: str, r: Any, today: date, attached: int = 0, pay: Any = None) 
 def doc_lines(ctx: Ctx, lines: Sequence[Any]) -> Row:
     """A list row's line summary: the line its lines go to (`split` when several) and the team they share."""
     accounts = list(dict.fromkeys(str(x["account_id"] or "") for x in lines))
-    teams = {str(SK.loads(x["tags_json"]).get("team") or "") for x in lines}
+    teams = {str(SK.loads(x["tags"]).get("team") or "") for x in lines}
     return {"account": account_ref(ctx, accounts[0]) if len(accounts) == 1 else None, "split": len(accounts) > 1,
             "team": next(iter(teams)) or None if len(teams) == 1 else None}
 
@@ -227,6 +227,8 @@ def documents(c: sqlite3.Connection, viewer: str, kind: str, *, status: str | No
             if aging is not None and row["aging"] != aging or late and row["aging"] in (None, "current"):
                 continue
             row.update(doc_lines(ctx, found[str(r["id"])]))
+            if kind == "invoice":                       # the emails still waiting on a delivery report, with their text
+                row["emails"] = delivery.pending(c, str(r["id"]))
             if row["status"] == "paid":
                 row.update(paid_of_doc(c, kind, str(r["id"])))
             out.append(row)
@@ -263,7 +265,7 @@ def document(c: sqlite3.Connection, viewer: str, kind: str, doc_id: str, at: str
     pay = SK.last_payments(c, [f"bill:{doc_id}"]).get(f"bill:{doc_id}") if kind == "bill" else None
     out = doc_row(kind, r, dates.day(ctx.today), attached, pay)
     out["lines"] = [{"id": str(x["id"]), "account": account_ref(ctx, x["account_id"]), "amount": int(x["amount"]),
-                     "description": str(x["description"]), "tags": SK.loads(x["tags_json"]),
+                     "description": str(x["description"]), "tags": SK.loads(x["tags"]),
                      **({"taxable": bool(x["taxable"])} if kind == "invoice" else {})}
                     for x in found[doc_id]]
     out["settlements"] = [{"id": str(s["id"]), "from_kind": str(s["from_kind"]), "from_id": str(s["from_id"]) or None,
@@ -278,7 +280,7 @@ def document(c: sqlite3.Connection, viewer: str, kind: str, doc_id: str, at: str
     out["actions"] = _approvals(c, kind, doc_id)
     out["terms_days"] = r["terms_days"]
     if kind == "bill":
-        out["schedule"] = SK.loads(r["schedule_json"]) or None
+        out["schedule"] = SK.loads(r["schedule"]) or None
     out["view_version"] = view.version
     return out
 
@@ -312,7 +314,7 @@ def invoice(c: sqlite3.Connection, viewer: str, invoice_id: str, at: str | None 
 def contact_row(ctx: Ctx, r: Any, admin: bool, owed: Row | None = None) -> Row:
     """A contact. The tax id never shows; its last 4 only to a finance admin."""
     return {"id": str(r["id"]), "name": str(r["name"]), "kind": str(r["kind"]),
-            "emails": SK.loads_list(r["emails_json"]),
+            "emails": SK.loads_list(r["emails"]),
             "default_account": account_ref(ctx, r["default_account_id"]), "is_1099": bool(r["is_1099"]),
             "has_tax_id": bool(r["tax_id_ref"]), "tax_id_last4": r["tax_id_last4"] if admin else None,
             "recipient_id": r["payment_ref"], "active": bool(r["active"]), "owed": owed or {},
@@ -342,7 +344,7 @@ def contacts(c: sqlite3.Connection, viewer: str, *, kind: str | None = None, q: 
     if not kinds:
         raise denied("contacts are not in your view")
     vendors, customers = sees_side(ctx, view, "bill"), sees_side(ctx, view, "invoice")
-    admin = R.is_admin(ctx.org, viewer, ctx.rights(viewer))
+    admin = view.everything  # the tax id's last 4 go to whoever sees everything, not to finance admins
     most = page_size(limit)
     marks = decode_cursor(cursor)
     after = (marks[0], marks[1]) if len(marks) == 2 else None
@@ -369,9 +371,12 @@ def bills_email(c: sqlite3.Connection) -> str | None:
 def chart(c: sqlite3.Connection, viewer: str, *, for_: str | None = None, at: str | None = None) -> Row:
     """The active lines the viewer may post to, for the bill, invoice and journal forms: every line in their view,
     for teammates who write to the books (finance.book, ap or ar). `for_` bill keeps expense and asset lines, invoice
-    income lines (never accounts payable or receivable, which only documents move); journal keeps every line.
+    income lines; both leave out what a document's line can't post to (documents.document_line_refused): accounts payable
+    or receivable, which only documents move, a line with lines under it, and money the bank feed or usage moves. Journal
+    keeps every line.
     `company_wide` says whether a line takes untagged amounts from this viewer; when it does not, `attributable` lists
     the team and teammate tags they may use on it (the same rule a write checks)."""
+    from .documents import document_line_refused     # local: documents imports this module's helpers
     from .handlers import may_write
     ctx = load(c, at)
     view = ctx.view(viewer)
@@ -381,11 +386,13 @@ def chart(c: sqlite3.Connection, viewer: str, *, for_: str | None = None, at: st
     if for_ is not None and for_ not in (*CHART_FOR, "journal"):
         raise invalid("for is bill|invoice|journal")
     types = CHART_FOR.get(for_ or "journal")
+    parents = {a.parent_id for a in ctx.accounts.values() if a.active and a.parent_id}
+    money = {str(m["account_id"]) for m in SK.money_accounts(c, ctx.book.id)}
     out: list[Row] = []
     for a in sorted(ctx.accounts.values(), key=lambda x: (x.code, x.id)):
         if not a.active or not (view.everything or view.sees_account(a)):
             continue
-        if types is not None and (a.type not in types or a.subtype in CONTROL_SUBTYPES):
+        if types is not None and (a.type not in types or document_line_refused(a, parents, money)):
             continue
         wide = may_write(ctx, viewer, a.id, {})
         row: Row = {"id": a.id, "number": a.code, "name": a.name, "type": a.type, "subtype": a.subtype,

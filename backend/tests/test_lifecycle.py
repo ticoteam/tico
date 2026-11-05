@@ -24,7 +24,7 @@ def meeting(api, aid, rid):
         automations.on_event(c, "meeting.ready", rid, {"id": rid, "title": "Planning"}, "keeper")
     api.app.state.store.automations.drain()
     with api.app.state.store.read() as c:
-        return c.execute("SELECT count(*) FROM tasks WHERE owner='bot:ops' AND title='Meeting debrief'").fetchone()[0]
+        return c.execute("SELECT count(*) FROM tasks WHERE owner_id='bot:ops' AND title='Meeting debrief'").fetchone()[0]
 
 
 def onboarding(api, *slugs, manager="human:ben"):
@@ -44,8 +44,8 @@ def test_a_recruiting_seat_holds_no_work_which_stays_with_its_manager(api):
                        headers=headers())
     assert refused.status_code >= 400 and "still being recruited" in refused.text and "coo" in refused.text, refused.text
     with api.app.state.store.read() as c:
-        assert not c.execute("SELECT 1 FROM tasks WHERE owner LIKE 'seat:%'").fetchone()
-        assert not c.execute("SELECT 1 FROM jobs WHERE bot LIKE 'seat:%'").fetchone()
+        assert not c.execute("SELECT 1 FROM tasks WHERE owner_id LIKE 'seat:%'").fetchone()
+        assert not c.execute("SELECT 1 FROM jobs WHERE bot_id LIKE 'seat:%'").fetchone()
 
     # A person places a seat under themselves or below them; the owner anywhere.
     as_member(api, "ben@acme.example")
@@ -123,7 +123,10 @@ def test_a_person_above_marks_onboarding_complete_and_its_automation_turns_start
 def test_any_number_onboard_at_once_and_an_upgrade_maps_set_up_to_onboarding(api):
     onboarding(api, "ops", "finance", "cpo")
     with api.app.state.store.transaction() as c:
-        c.execute("UPDATE bot_config SET onboarding_state='needs_onboarding' WHERE bot='cpo'")   # an older release's word
+        # A row an older release wrote, before bot_config.onboarding_state had its CHECK: readers still park it.
+        c.execute("PRAGMA ignore_check_constraints=ON")
+        c.execute("UPDATE bot_config SET onboarding_state='needs_onboarding' WHERE bot='cpo'")
+        c.execute("PRAGMA ignore_check_constraints=OFF")
         c.execute("UPDATE bot_config SET onboarding_state='onboarded' WHERE bot='coo'")
         c.execute("UPDATE bots SET state='planned' WHERE slug='doc-updater'")
     stages = {b["slug"]: (b["stage"], b["state"]) for b in get(api, "bots")}
@@ -144,7 +147,7 @@ def test_an_onboarding_bot_leaves_no_note_answer_or_word_on_a_task_kept_from_bef
     post(api, "task-questions", question, token=ops)
     onboarding(api, "ops", manager="coo")
     with api.app.state.store.read() as c:
-        before = c.execute("SELECT count(*) FROM messages WHERE from_actor='bot:ops'").fetchone()[0]
+        before = c.execute("SELECT count(*) FROM messages WHERE sender_id='bot:ops'").fetchone()[0]
 
     # A quiet note goes to its manager only; an Active bot still leaves one for the same peer.
     assert api.post("/api/v2/notes", json={"to": "coo", "text": "Read the runbook."}, headers=headers(ops)).status_code == 200
@@ -169,7 +172,7 @@ def test_an_onboarding_bot_leaves_no_note_answer_or_word_on_a_task_kept_from_bef
         said = api.post("/api/v2/" + path, json=body, headers=headers(ops))
         assert said.status_code == 409 and "still onboarding" in said.text, (path, said.text)
     with api.app.state.store.read() as c:
-        assert c.execute("SELECT count(*) FROM messages WHERE from_actor='bot:ops'").fetchone()[0] == before
+        assert c.execute("SELECT count(*) FROM messages WHERE sender_id='bot:ops'").fetchone()[0] == before
 
 
 

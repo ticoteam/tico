@@ -38,10 +38,10 @@ def test_a_bot_hands_botops_the_persons_own_request_and_botops_acts_as_them(api,
     _identity_route(api)
     task, attempt = _hand_off(api, botops, "turn")
     with api.app.state.store.read() as c:
-        carried = c.execute("SELECT detail_json FROM events WHERE action='botops.request_carried' AND target=?",
+        carried = c.execute("SELECT detail FROM events WHERE action='botops.request_carried' AND target=?",
                             (task["id"],)).fetchone()
-        assert H._json(carried["detail_json"], {})["lends"] is True
-        quoted = c.execute("SELECT body FROM messages WHERE to_actor='bot:botops' AND body LIKE '%in their words%'"
+        assert H._json(carried["detail"], {})["lends"] is True
+        quoted = c.execute("SELECT body FROM messages WHERE recipient_id='bot:botops' AND body LIKE '%in their words%'"
                            ).fetchone()
         assert "> Give yourself read access" in quoted["body"]
     assert get(api, "qa-handoff-identity", attempt["token"]) == {"actor": "human:ana", "role": "owner"}
@@ -52,12 +52,12 @@ def test_a_bot_hands_botops_the_persons_own_request_and_botops_acts_as_them(api,
         H.task_update(c, "bot:ops", task["id"], status="open", note="one more thing")
     assert get(api, "qa-handoff-identity", attempt["token"]) == {"actor": "bot:ops", "role": "bot"}
     with api.app.state.store.transaction() as c:
-        c.execute("DELETE FROM task_events WHERE task_id=? AND field='status'", (task["id"],))
+        c.execute("DELETE FROM history_events WHERE subject_type='task' AND subject_id=? AND kind='status'", (task["id"],))
 
     # Once the message is more than a week old it lends nothing: BotOps has only Ops' rights again.
     with api.app.state.store.transaction() as c:
-        c.execute("UPDATE messages SET created=? WHERE id=?",
-                  (H.shift(H.now(), days=-8), H._json(carried["detail_json"], {})["message_id"]))
+        c.execute("UPDATE messages SET created_at=? WHERE id=?",
+                  (H.shift(H.now(), days=-8), H._json(carried["detail"], {})["message_id"]))
     assert get(api, "qa-handoff-identity", attempt["token"]) == {"actor": "bot:ops", "role": "bot"}
 
 
@@ -76,9 +76,9 @@ def test_a_hand_off_that_lends_nothing_puts_a_confirm_card_to_the_person(api, bo
         assert dict(row) == {"owner": "human:ana", "method": "PUT", "path": "/api/v2/bots/ops/repositories",
                              "proposer": "botops"}
         # Nothing changed and no free-text task was filed for her: the card is in her chat with BotOps.
-        assert not c.execute("SELECT 1 FROM tasks WHERE owner='human:ana' AND requester='bot:botops'").fetchone()
+        assert not c.execute("SELECT 1 FROM tasks WHERE owner_id='human:ana' AND requester_id='bot:botops'").fetchone()
         said = H.message(c, card["message_id"])
-        assert said["to_actor"] == "human:ana" and said["from_actor"] == "bot:botops"
+        assert said["recipient_id"] == "human:ana" and said["sender_id"] == "bot:botops"
 
 
 def test_a_hand_off_to_add_an_mcp_server_with_a_placeholder_header_is_the_persons_confirm_card(api, botops):
@@ -140,9 +140,9 @@ def test_a_task_botops_files_with_lent_rights_lends_nothing_later(api, botops):
                  token=attempt["token"])
     said = post(api, f"tasks/{task['id']}/comments", {"text": "Filed the follow-up"}, token=attempt["token"])
     with api.app.state.store.read() as c:
-        assert H.task(c, filed["id"])["requester"] == "human:ana"
-        comment = c.execute("SELECT from_actor FROM messages WHERE id=?", ((said.get("comment") or said)["id"],)).fetchone()
-        assert comment["from_actor"] == "bot:botops"
+        assert H.task(c, filed["id"])["requester_id"] == "human:ana"
+        comment = c.execute("SELECT sender_id FROM messages WHERE id=?", ((said.get("comment") or said)["id"],)).fetchone()
+        assert comment["sender_id"] == "bot:botops"
     finish(api, botops, attempt)
     later = claim(api, botops, "botops")
     with api.app.state.store.read() as c:

@@ -12,6 +12,7 @@ from backend import flight, worktrees
 from backend.scheduler import Scheduler
 from backend.store import H, encode
 from backend.tests.test_api import api, assign, headers, ready, runner  # noqa: F401
+from backend.enqueue import enqueue_stored
 
 
 def fleet(api, attempts=100, trees=50):
@@ -25,26 +26,27 @@ def fleet(api, attempts=100, trees=50):
         generation = c.execute("SELECT generation FROM assignments WHERE bot='ops'").fetchone()[0]
         for i in range(attempts + trees):
             tid, cid, mid = f"task-{i}", f"room-{i}", f"message-{i}"
-            c.execute("INSERT INTO conversations(id,kind,participants_json,created,task_id) VALUES(?,'task',?,?,?)",
+            c.execute("INSERT INTO conversations(id,kind,participants,created_at,task_id) VALUES(?,'task',?,?,?)",
                       (cid, encode(["human:ana", "bot:ops"]), now, tid))
-            c.execute("INSERT INTO tasks(id,title,body,requester,owner,status,conversation_id,created,updated) "
+            c.execute("INSERT INTO tasks(id,title,body,requester_id,owner_id,status,conversation_id,created_at,updated_at) "
                       "VALUES(?,?,'Synthetic workload','human:ana','bot:ops','doing',?,?,?)",
                       (tid, tid, cid, now, now))
             if i < attempts:
-                c.execute("INSERT INTO messages(id,conversation_id,from_actor,to_actor,kind,body,created,refs_json) "
+                c.execute("INSERT INTO messages(id,conversation_id,sender_id,recipient_id,kind,body,created_at,refs) "
                           "VALUES(?,?,'human:ana','bot:ops','say','Synthetic work',?,?)",
                           (mid, cid, now, encode({"task": tid})))
-                c.execute("INSERT INTO attempts(id,job_id,bot,runner_id,generation,token_hash,state,lease_until,created,lane) "
+                enqueue_stored(c, mid)
+                c.execute("INSERT INTO attempts(id,job_id,bot_id,runner_id,generation,token_hash,state,lease_until,created_at,lane) "
                           "VALUES(?,?,'ops',?,?,?,'running',?,?,?)",
                           (f"attempt-{i}", mid, computer["runner_id"], generation, f"synthetic-{i}", until, now, "task:" + tid))
                 c.execute("UPDATE jobs SET state='running',attempt_id=? WHERE id=?", (f"attempt-{i}", mid))
             else:
                 detail = {"owner": "bot:ops", "checkout_state": "ready", "setup_pending": False,
                           "expected_head": "a" * 40, "checkout_target": "refs/heads/main", "expected_base": "b" * 64}
-                c.execute("INSERT INTO task_links(id,task_id,kind,url,state,added_by,created,computer_id,path,detail_json) "
+                c.execute("INSERT INTO task_links(id,task_id,kind,url,state,added_by,created_at,computer_id,path,detail) "
                           "VALUES(?,?,'worktree',?,'present','bot:ops',?,?,?,?)",
                           (f"tree-{i}", tid, f"worktree:tree-{i}", now, computer["runner_id"], f"tasks/{tid}/Acme__product", encode(detail)))
-                c.execute("INSERT INTO task_links(id,task_id,kind,url,state,added_by,created) "
+                c.execute("INSERT INTO task_links(id,task_id,kind,url,state,added_by,created_at) "
                           "VALUES(?,?,'pr',?,'merged','bot:ops',?)",
                           (f"pr-{i}", tid, f"https://github.com/Acme/product/pull/{i}", now))
     return computer
@@ -60,7 +62,7 @@ def test_fresh_renew_reads_through_a_write_and_rechecks_stop_lease_and_assignmen
     with store.transaction() as c:
         until = H.shift(now, seconds=store.settings.lease_seconds - 17)
         c.execute("UPDATE attempts SET lease_until=? WHERE id='attempt-0'", (until,))
-    post(api, "bots/ops/stop", {"attempt_id": "attempt-0"})
+    post(api, "bots/ops/stop", {"run_id": "attempt-0"})
     with store.read() as c:
         until = c.execute("SELECT lease_until FROM attempts WHERE id='attempt-0'").fetchone()[0]
     holder = sqlite3.connect(store.settings.db_path, isolation_level=None)
@@ -86,7 +88,7 @@ def test_fresh_renew_reads_through_a_write_and_rechecks_stop_lease_and_assignmen
     # Even a legacy attempt with a long lease must persist life before the five-minute stall threshold.
     with store.transaction() as c:
         c.execute("DELETE FROM attempt_diagnostics WHERE attempt_id='attempt-0'")
-        c.execute("UPDATE attempts SET created=?,lease_until=? WHERE id='attempt-0'",
+        c.execute("UPDATE attempts SET created_at=?,lease_until=? WHERE id='attempt-0'",
                   (H.shift(now, seconds=-61), H.shift(now, hours=1)))
     renewed = post(api, "attempts/attempt-0/renew", {}, computer["token"])
     assert renewed["lease_seconds"] == store.settings.lease_seconds
@@ -128,7 +130,7 @@ def test_heartbeat_prepares_provenance_outside_write_and_discards_a_stale_snapsh
     assert "tree-4" not in {a["link_id"] for a in result["worktree_actions"]}
     monkeypatch.setattr(worktrees, "live_turn_cache", prepare)
     with store.transaction() as c:
-        c.execute("UPDATE tasks SET owner='bot:finance' WHERE id='task-4'")
+        c.execute("UPDATE tasks SET owner_id='bot:finance' WHERE id='task-4'")
     result = post(api, "runners/heartbeat", body, computer["token"])
     assert "tree-4" in {a["link_id"] for a in result["worktree_actions"]}
 
@@ -177,7 +179,7 @@ def test_idle_inputs_and_task_read_do_not_wait_on_unrelated_writers(api):
             release.set()
         background.result()
     with store.transaction() as c:
-        c.execute("UPDATE tasks SET private=1,owner='bot:finance',requester='human:ben' WHERE id='task-0'")
+        c.execute("UPDATE tasks SET private=1,owner_id='bot:finance',requester_id='human:ben' WHERE id='task-0'")
     assert api.post('/api/v2/attempts/attempt-0/inputs', json={},
                     headers=headers(computer['token'])).status_code == 409
 
@@ -197,7 +199,7 @@ def test_shared_provenance_rechecks_permissions_and_never_publishes_rolled_back_
         assert task_privacy.attempt_readable(c, 'bot:ops', 'attempt-0')
     count = len(builds)
     with store.transaction() as c:
-        c.execute("UPDATE tasks SET private=1,owner='bot:finance',requester='human:ben' WHERE id='task-0'")
+        c.execute("UPDATE tasks SET private=1,owner_id='bot:finance',requester_id='human:ben' WHERE id='task-0'")
     with store.read_transaction() as c:
         assert not task_privacy.attempt_readable(c, 'bot:ops', 'attempt-0')
     assert len(builds) == count       # Only neutral provenance survives; permission never does.
@@ -205,11 +207,11 @@ def test_shared_provenance_rechecks_permissions_and_never_publishes_rolled_back_
     # value that rollback can reuse for entirely different source rows.
     with store.read() as c:
         c.execute('BEGIN IMMEDIATE')
-        c.execute("UPDATE messages SET refs_json=? WHERE id='message-0'", (encode({'task': 'task-1'}),))
+        c.execute("UPDATE messages SET refs=? WHERE id='message-0'", (encode({'task': 'task-1'}),))
         assert task_privacy.attempt_tasks(c, 'attempt-0') == {'task-1'}
         c.rollback()
     with store.transaction() as c:
-        c.execute("UPDATE messages SET refs_json=? WHERE id='message-0'", (encode({'task': 'task-2'}),))
+        c.execute("UPDATE messages SET refs=? WHERE id='message-0'", (encode({'task': 'task-2'}),))
     with store.read_transaction() as c:
         assert task_privacy.attempt_tasks(c, 'attempt-0') == {'task-2'}
 
@@ -222,18 +224,19 @@ def test_claim_cleans_a_bounded_page_of_obsolete_notices(api):
     with store.transaction() as c:
         c.execute("UPDATE tasks SET status='done'")
         for i in range(20):
-            c.execute("INSERT INTO messages(id,conversation_id,from_actor,to_actor,kind,body,created,refs_json) "
+            c.execute("INSERT INTO messages(id,conversation_id,sender_id,recipient_id,kind,body,created_at,refs) "
                       "VALUES(?,?,?,'bot:ops','notice','Synthetic finished task',?,?)",
                       (f'obsolete-{i}', f'room-{i}', H.KEEPER, H.now(), encode({'task': f'task-{i}'})))
+            enqueue_stored(c, f'obsolete-{i}')
     assert post(api, 'jobs/claim', {}, computer['token'])['attempt'] is None
     with store.read() as c:
-        assert c.execute("SELECT count(*) FROM jobs WHERE state='cancelled'").fetchone()[0] == execution.CLAIM_MAINTENANCE
+        assert c.execute("SELECT count(*) FROM jobs WHERE state='canceled'").fetchone()[0] == execution.CLAIM_MAINTENANCE
         assert c.execute("SELECT count(*) FROM jobs WHERE state='queued'").fetchone()[0] == 20 - execution.CLAIM_MAINTENANCE
 
 
 def test_health_flags_runner_p95_and_clears_after_the_window(api):
     import sqlite3
-    from backend import health, health_monitor
+    from backend import health, maintenance_health
     with sqlite3.connect(":memory:") as empty:
         assert health.runner_route_latency(empty) is None
     store = api.app.state.store
@@ -246,7 +249,7 @@ def test_health_flags_runner_p95_and_clears_after_the_window(api):
     with store.transaction() as c:
         flight.write(c, rec.take(now // 60 * 60))
         assert "renew" in health.runner_route_latency(c, now)["summary"]
-        assert any(row["key"] == "runner_route_latency" for row in health_monitor._server_checks(c))
+        assert any(row["key"] == "runner_route_latency" for row in maintenance_health._server_checks(c))
         assert health.runner_route_latency(c, now + 16 * 60) is None
 
 

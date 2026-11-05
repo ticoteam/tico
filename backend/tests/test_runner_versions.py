@@ -64,7 +64,7 @@ def test_heartbeat_stores_release_and_commit_and_nudges_the_owner_once_per_serve
     def notices():
         with api.app.state.store.read() as c:
             return [row["body"] for row in c.execute(
-                "SELECT body FROM messages WHERE to_actor='human:ben' AND kind='notice' ORDER BY created")]
+                "SELECT body FROM messages WHERE recipient_id='human:ben' AND kind='notice' ORDER BY created_at")]
 
     report(api, r, "0.3.0", commit=commit)
     machine = next(m for m in get(api, "operations", token="ben-test")["computers"] if m["id"] == r["runner_id"])
@@ -90,7 +90,7 @@ def test_heartbeat_stores_release_and_commit_and_nudges_the_owner_once_per_serve
 def ben_notices(api):
     with api.app.state.store.read() as c:
         return [row["body"] for row in c.execute(
-            "SELECT body FROM messages WHERE to_actor='human:ben' AND kind='notice' ORDER BY created")]
+            "SELECT body FROM messages WHERE recipient_id='human:ben' AND kind='notice' ORDER BY created_at")]
 
 
 def behind_for_two_hours(api, r):
@@ -128,7 +128,7 @@ def test_a_pinned_computer_shows_outdated_but_its_owner_is_not_nudged(api):
 def test_queued_work_says_it_waits_for_the_computer_to_update_only_once_the_computer_stops_taking_work(api):
     """A computer due an update keeps claiming for 20 minutes, then takes no new work until its running turns end.
     Chat and task said only "Queued" for that hold; now they say why, and only while it lasts."""
-    from backend import health, health_monitor
+    from backend import health, maintenance_health
     from backend.store import H
     r = runner(api, label="Team box")
     assign(api, r, "ops")
@@ -160,10 +160,10 @@ def test_queued_work_says_it_waits_for_the_computer_to_update_only_once_the_comp
     assert shown() == held
     # Health names the hold and how long it has run; it is still not a queue_idle Tico bug (PR 623).
     with store.transaction() as c:
-        c.execute("UPDATE jobs SET created=? WHERE bot='ops'", (H.shift(H.now(), minutes=-30),))
+        c.execute("UPDATE jobs SET created_at=? WHERE bot_id='ops'", (H.shift(H.now(), minutes=-30),))
         online = {x["id"] for x in health._online_runners(c)}
         assert {row["reason"] for row in health._waiting(c, online)[2]} == {"updating"}
-        found = {f["check_id"]: f for f in health_monitor.findings(c, store.settings)}
+        found = {f["check_id"]: f for f in maintenance_health.findings(c, store.settings)}
     assert "queue_idle" not in found
     assert "UTC (1 min), waiting to update." in found["runner_outdated"]["detail"]
     update("updating")                                                  # the hold goes on into the update itself

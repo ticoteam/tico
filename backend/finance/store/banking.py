@@ -7,6 +7,7 @@ from datetime import date, timedelta
 from collections.abc import Iterable, Mapping, Sequence
 from typing import Any, cast
 
+from ..core.feeds import GONE
 from .ledger import new_id
 
 TABLES = frozenset({"fin_connections", "fin_money_accounts", "fin_feed_txns", "fin_statements", "fin_reconciliations",
@@ -57,6 +58,11 @@ def update(c: sqlite3.Connection, table: str, row_id: str, fields: Mapping[str, 
     return c.execute(sql, [*(fields[k] for k in cols), row_id, *args]).rowcount
 
 
+def set_auth_commitment(c: sqlite3.Connection, hold_id: str, commitment_id: str) -> int:
+    """The commitment of the card authorizations a hold was taken for, moved with the hold's (a bill claims both)."""
+    return c.execute("UPDATE fin_card_auths SET commitment_id=? WHERE hold_id=?", (commitment_id, hold_id)).rowcount
+
+
 def get(c: sqlite3.Connection, table: str, row_id: str) -> Any:
     assert table in TABLES
     return c.execute(f"SELECT * FROM {table} WHERE id=?", (row_id,)).fetchone()
@@ -98,7 +104,7 @@ def money_posted(c: sqlite3.Connection, money_id: str) -> int:
 
 def live_payments(c: sqlite3.Connection, book_id: str) -> list[Any]:
     """Payments still on their way out (what a viewer's due-out totals are summed from, after their view)."""
-    return c.execute("SELECT id, money_account_id, account_id, tags_json, amount, obligation FROM fin_payments "
+    return c.execute("SELECT id, money_account_id, account_id, tags, amount, obligation FROM fin_payments "
                      f"WHERE book_id=? AND status IN ({_marks(LIVE_PAYMENT)})", (book_id, *LIVE_PAYMENT)).fetchall()
 
 
@@ -110,6 +116,12 @@ def set_provider_users(c: sqlite3.Connection, connection_id: str, users: Sequenc
         c.execute("INSERT OR REPLACE INTO fin_provider_users(connection_id, provider_user_id, name, email, role, "
                   "updated_at) VALUES(?,?,?,?,?,?)", (connection_id, str(u.get("id") or ""), str(u.get("name") or ""),
                                                       str(u.get("email") or ""), str(u.get("role") or ""), at))
+
+
+def provider_users_on(c: sqlite3.Connection, connection_id: str) -> list[Any]:
+    """The users of one connection, as its provider last listed them (set_provider_users)."""
+    return c.execute("SELECT * FROM fin_provider_users WHERE connection_id=? AND provider_user_id<>'' "
+                     "ORDER BY provider_user_id", (connection_id,)).fetchall()
 
 
 def provider_users(c: sqlite3.Connection) -> list[Any]:
@@ -153,6 +165,16 @@ def feed_counts(c: sqlite3.Connection) -> dict[str, dict[str, int]]:
 
 
 # ------------------------------------------------------------------------------------------------ feed rows
+def known_txns(c: sqlite3.Connection, connection_id: str, provider_ids: Sequence[str]) -> int:
+    """How many of these provider transactions the connection already took in (a backfill page's end check)."""
+    ids = sorted(set(provider_ids))
+    if not ids:
+        return 0
+    return int(c.execute(f"SELECT count(DISTINCT f.provider_id) FROM fin_feed_txns f JOIN fin_money_accounts m ON "
+                         f"m.id=f.money_account_id WHERE m.connection_id=? AND f.provider_id IN ({_marks(ids)})",
+                         (connection_id, *ids)).fetchone()[0])
+
+
 def feed_row(c: sqlite3.Connection, money_account_id: str, provider_id: str) -> Any:
     return c.execute("SELECT * FROM fin_feed_txns WHERE money_account_id=? AND provider_id=?",
                      (money_account_id, provider_id)).fetchone()
@@ -173,7 +195,8 @@ def feed_by_request(c: sqlite3.Connection, request_id: str) -> Any:
 def feed_page(c: sqlite3.Connection, *, before: tuple[str, str] | None, most: int, money_account_ids: Sequence[str],
               status: str = "", start: str = "", end: str = "", q: str = "", card_ids: Sequence[str] | None = None,
               entry_ids: Sequence[str] | None = None) -> list[Any]:
-    """Feed rows newest first, keyset-paged on (txn_date, id), on these money accounts (or cards, or entries)."""
+    """Feed rows newest first, keyset-paged on (txn_date, id), on these money accounts (or cards, or entries). Rows the
+    bank failed, canceled or returned show only as status "failed"; "ignored" is a person's ignore."""
     where: list[str] = ["1=1"]
     args: list[object] = []
     scopes: list[str] = []
@@ -189,11 +212,18 @@ def feed_page(c: sqlite3.Connection, *, before: tuple[str, str] | None, most: in
     if not scopes:
         return []
     where.append("(" + " OR ".join(scopes) + ")")
+    gone = f"(status='ignored' AND provider_status IN ({_marks(GONE)}))"
     if status == "pending":
         where.append("pending=1")
-    elif status:
-        where.append("status=?")
-        args.append(status)
+    elif status == "failed":
+        where.append(gone)
+        args += list(GONE)
+    else:
+        if status:
+            where.append("status=?")
+            args.append(status)
+        where.append(f"NOT {gone}")
+        args += list(GONE)
     if start:
         where.append("txn_date>=?")
         args.append(start)
@@ -232,29 +262,45 @@ def transfer_candidates(c: sqlite3.Connection, money_account_ids: Sequence[str],
                      ).fetchall()
 
 
+def waiting_credits(c: sqlite3.Connection, money_account_id: str) -> list[Any]:
+    """Settled, unposted money-in rows on this money account with no card or request: a card payment's side, maybe."""
+    return c.execute("SELECT * FROM fin_feed_txns WHERE money_account_id=? AND status='new' AND entry_id IS NULL AND "
+                     "pending=0 AND amount>0 AND card_id IS NULL AND (request_id IS NULL OR request_id='') AND "
+                     "reconciliation_id IS NULL ORDER BY txn_date, id", (money_account_id,)).fetchall()
+
+
 def rows_of_entry(c: sqlite3.Connection, entry_id: str) -> list[Any]:
     return c.execute("SELECT * FROM fin_feed_txns WHERE entry_id=? ORDER BY id", (entry_id,)).fetchall()
 
 
 def feed_window(c: sqlite3.Connection, money_account_id: str, through: str) -> list[Any]:
     """Settled rows on or before `through` that are in the books (posted or matched to an entry) and that no done
-    reconciliation cleared yet. A `new` row is not in the books, so it can't be cleared: it stays outstanding."""
+    reconciliation cleared yet. A `new` row is not in the books, so it can't be cleared: it stays outstanding. A covered
+    row (spec §4.1) is history the raw totals carry, so it counts without an entry."""
     return c.execute("SELECT * FROM fin_feed_txns WHERE money_account_id=? AND txn_date<=? AND pending=0 AND "
-                     "status NOT IN ('ignored','new') AND entry_id IS NOT NULL AND reconciliation_id IS NULL "
-                     "ORDER BY txn_date, id",
+                     "status NOT IN ('ignored','new') AND (entry_id IS NOT NULL OR status='covered') AND "
+                     "reconciliation_id IS NULL ORDER BY txn_date, id",
                      (money_account_id, through)).fetchall()
+
+
+def open_feed_rows(c: sqlite3.Connection, book_id: str) -> list[Any]:
+    """A book's settled rows that no entry holds (new or covered): what a raw-totals month can cover or uncover."""
+    return c.execute("SELECT f.* FROM fin_feed_txns f JOIN fin_money_accounts m ON m.id=f.money_account_id WHERE "
+                     "m.book_id=? AND f.status IN ('new','covered') AND f.pending=0 AND f.entry_id IS NULL "
+                     "ORDER BY f.txn_date, f.id", (book_id,)).fetchall()
 
 
 def row_effects(c: sqlite3.Connection, book_id: str, money_account_id: str, gl_account_id: str,
                 through: str) -> list[Any]:
     """This money account's rows no done reconciliation cleared, each with what its entries moved on the account's GL
-    line: `through`, every entry ever posted for it (originals, their reversals, replacements, a shared transfer)
-    dated through that day; `live`, its current posted entry, whatever its date. A Stripe row in a day's summary shares
+    line: `through`, every entry ever posted for it (originals, their reversals, replacements, a shared transfer, and
+    the entry the row took for a payment marked paid from the account, expected_match) dated through that day; `live`,
+    its current posted entry, whatever its date. A Stripe row in a day's summary shares
     its entry with the day's other rows, so it counts its own amount (its net) rather than the whole entry's line. A row
     that left its summary keeps that summary's amount through the days before the summary was reversed (`summary_entry`),
     since the closed period it was booked in still holds it."""
-    summary = "json_extract(f.raw_json, '$.summary')=1"
-    left = "json_extract(f.raw_json, '$.summary_entry')"
+    summary = "json_extract(f.raw, '$.summary')=1"
+    left = "json_extract(f.raw, '$.summary_entry')"
     left_share = (f"CASE WHEN {left} IS NOT NULL AND EXISTS (SELECT 1 FROM fin_entries e WHERE e.id={left} AND "
                   f"e.entry_date<=:through) AND NOT EXISTS (SELECT 1 FROM fin_entries r WHERE r.reverses_id={left} AND "
                   "r.status='posted' AND r.entry_date<=:through) THEN f.amount ELSE 0 END")
@@ -262,9 +308,10 @@ def row_effects(c: sqlite3.Connection, book_id: str, money_account_id: str, gl_a
         f"SELECT f.id, (CASE WHEN {summary} THEN CASE WHEN EXISTS (SELECT 1 FROM fin_entries e WHERE e.id=f.entry_id "
         "AND e.status='posted' AND e.entry_date<=:through) THEN f.amount ELSE 0 END ELSE "
         "COALESCE((SELECT SUM(l.amount) FROM fin_entries e JOIN fin_lines l ON l.entry_id=e.id AND "
-        "l.account_id=:gl WHERE e.book_id=:book AND e.source IN ('bank','card') AND e.entry_date<=:through AND "
-        "(e.source_id=f.id OR substr(e.source_id, 1, length(f.id) + 1)=f.id || ':' OR (e.source_id LIKE 'transfer:%' "
-        "AND instr(e.source_id, f.id)>0))), 0) END) + "
+        "l.account_id=:gl WHERE e.book_id=:book AND e.entry_date<=:through AND (e.id=f.entry_id OR "
+        "e.reverses_id=f.entry_id OR (e.source IN ('bank','card') AND (e.source_id=f.id OR "
+        "substr(e.source_id, 1, length(f.id) + 1)=f.id || ':' OR (e.source_id LIKE 'transfer:%' "
+        "AND instr(e.source_id, f.id)>0))))), 0) END) + "
         f"{left_share} AS through_amount, "
         f"CASE WHEN {summary} THEN CASE WHEN EXISTS (SELECT 1 FROM fin_entries e WHERE e.id=f.entry_id "
         "AND e.status='posted') THEN f.amount ELSE 0 END ELSE "
@@ -274,13 +321,37 @@ def row_effects(c: sqlite3.Connection, book_id: str, money_account_id: str, gl_a
         {"gl": gl_account_id, "book": book_id, "through": through, "money": money_account_id}).fetchall()
 
 
-def settled_total(c: sqlite3.Connection, money_account_id: str) -> tuple[int, str]:
-    """What the provider's current balance holds of this account's feed: the total of its settled rows (a cancelled,
-    failed, blocked or reversed one moved nothing) and the earliest such row's day ("" with none)."""
-    row = c.execute("SELECT COALESCE(SUM(amount), 0), COALESCE(MIN(txn_date), '') FROM fin_feed_txns WHERE "
-                    "money_account_id=? AND pending=0 AND COALESCE(provider_status, '') NOT IN "
-                    "('cancelled','failed','blocked','reversed')", (money_account_id,)).fetchone()
+def holding(kind: str) -> str:
+    """The rows a provider's balance holds, as SQL. A Stripe balance holds every balance transaction, pending ones too.
+    A bank or card balance holds the settled rows that moved: a pending hold, or a row a provider canceled, failed,
+    blocked or reversed, moved nothing. provider_status is Mercury's own word for the row, so it keeps Mercury's
+    spelling."""
+    if kind == "stripe":
+        return "1=1"
+    return "pending=0 AND COALESCE(provider_status, '') NOT IN ('cancelled','failed','blocked','reversed')"
+
+
+def settled_total(c: sqlite3.Connection, money_account_id: str, kind: str = "") -> tuple[int, str]:
+    """What the provider's current balance holds of this account's feed (holding): the total of those rows, and the
+    earliest one's day ("" with none)."""
+    row = c.execute(f"SELECT COALESCE(SUM(amount), 0), COALESCE(MIN(txn_date), '') FROM fin_feed_txns WHERE "
+                    f"money_account_id=? AND {holding(kind)}", (money_account_id,)).fetchone()
     return int(row[0]), str(row[1])
+
+
+def uncovered_total(c: sqlite3.Connection, money_account_id: str, kind: str = "") -> int:
+    """The total of the rows the balance holds that the books carry (spec §4.1): the rows whose effect they hold, or will
+    once they post. Covered history and a row a person ignored (it never posts) are left out: the opening carries them."""
+    row = c.execute(f"SELECT COALESCE(SUM(amount), 0) FROM fin_feed_txns WHERE money_account_id=? AND "
+                    f"{holding(kind)} AND status NOT IN ('covered','ignored')", (money_account_id,)).fetchone()
+    return int(row[0])
+
+
+def money_on_line(c: sqlite3.Connection, book_id: str, account_id: str) -> str:
+    """The lowest-id money account on one GL line ("" with none): the one that counts the line's raw-totals movement."""
+    row = c.execute("SELECT MIN(id) FROM fin_money_accounts WHERE book_id=? AND account_id=?",
+                    (book_id, account_id)).fetchone()
+    return str(row[0] or "")
 
 
 def opening_entry(c: sqlite3.Connection, book_id: str, money_account_id: str) -> Any:
@@ -407,6 +478,14 @@ def cards_on_budgets(c: sqlite3.Connection, budget_ids: Sequence[str]) -> list[A
                      list(budget_ids)).fetchall()
 
 
+def budgets_with_cards(c: sqlite3.Connection, budget_ids: Sequence[str]) -> set[str]:
+    """The budgets a card that isn't canceled draws on: enforced by that card's limit (spec §8.2)."""
+    if not budget_ids:
+        return set()
+    return {str(r[0]) for r in c.execute(f"SELECT DISTINCT budget_id FROM fin_cards WHERE budget_id IN "
+                                         f"({_marks(budget_ids)}) AND status<>'canceled'", list(budget_ids))}
+
+
 def budget_frozen_cards(c: sqlite3.Connection, budget_ids: Sequence[str] | None) -> list[Any]:
     """Cards a budget's cutoff froze and no person has claimed since, on these budgets (every budget when None)."""
     if budget_ids is not None and not budget_ids:
@@ -450,6 +529,12 @@ def cards_unsynced(c: sqlite3.Connection, most: int) -> list[Any]:
 # ------------------------------------------------------------------------------------------------ recipients, payments
 def recipient_current(c: sqlite3.Connection, recipient_id: str) -> Any:
     return c.execute("SELECT * FROM fin_recipients WHERE id=?", (recipient_id,)).fetchone()
+
+
+def recipient_replacing(c: sqlite3.Connection, recipient_id: str) -> Any:
+    """The newest version that replaced this recipient's (its details changed), if any."""
+    return c.execute("SELECT * FROM fin_recipients WHERE replaces_id=? ORDER BY version DESC LIMIT 1",
+                     (recipient_id,)).fetchone()
 
 
 def recipients(c: sqlite3.Connection, most: int) -> list[Any]:
@@ -587,9 +672,17 @@ def payment_debit(c: sqlite3.Connection, money_account_id: str, request_id: str)
 
 
 def payments_unlinked(c: sqlite3.Connection, money_account_id: str, amount: int) -> list[Any]:
-    """Live payments from this account for this amount whose Mercury request is not known yet (a lost send answer)."""
-    return c.execute("SELECT * FROM fin_payments WHERE money_account_id=? AND amount=? AND COALESCE(provider_request_id, '')='' "
-                     "AND status IN ('unknown','sending') ORDER BY created_at", (money_account_id, amount)).fetchall()
+    """Live payments from this account for this amount whose Mercury request is not known yet: a lost send answer, or
+    a transaction found with no request id (payments.found), whose bank row is then tied to it by its key."""
+    return c.execute("SELECT * FROM fin_payments WHERE money_account_id=? AND amount=? "
+                     "AND COALESCE(provider_request_id, '')='' AND status IN ('unknown','sending','submitted') "
+                     "ORDER BY created_at", (money_account_id, amount)).fetchall()
+
+
+def payments_canceled(c: sqlite3.Connection, money_account_id: str, amount: int) -> list[Any]:
+    """Canceled payments from this account for this amount: a bank debit that carries one's key was sent after all."""
+    return c.execute("SELECT * FROM fin_payments WHERE money_account_id=? AND amount=? AND status='canceled' "
+                     "ORDER BY created_at", (money_account_id, amount)).fetchall()
 
 
 def unknown_transfers(c: sqlite3.Connection, connection_id: str) -> list[Any]:
@@ -656,7 +749,7 @@ def transfers(c: sqlite3.Connection, money_account_ids: Sequence[str], *, before
 def inbox_add(c: sqlite3.Connection, *, connection_id: str | None, provider: str, event_id: str,
               payload: Mapping[str, object], at: str) -> bool:
     """Keep a received event once: False when the same provider event was kept before (a replay)."""
-    return c.execute("INSERT OR IGNORE INTO fin_inbox(id, connection_id, provider, provider_event_id, payload_json, "
+    return c.execute("INSERT OR IGNORE INTO fin_inbox(id, connection_id, provider, provider_event_id, payload, "
                      "status, created_at, created_by) VALUES(?,?,?,?,?,'new',?,'system:finance')",
                      (new_id(), connection_id, provider, event_id, dump(payload), at)).rowcount == 1
 
@@ -667,7 +760,7 @@ def inbox_waiting(c: sqlite3.Connection, most: int, connection_id: str | None = 
     has not tried yet; due now when `at` is given."""
     where, args = ["status='new'"], list[object]()
     if connection_id:
-        where.append("(connection_id=? OR (connection_id IS NULL AND NOT EXISTS (SELECT 1 FROM json_each(tried_json) "
+        where.append("(connection_id=? OR (connection_id IS NULL AND NOT EXISTS (SELECT 1 FROM json_each(tried) "
                      "WHERE value=?)))")
         args += [connection_id, connection_id]
     if at:
@@ -679,7 +772,7 @@ def inbox_waiting(c: sqlite3.Connection, most: int, connection_id: str | None = 
 
 def inbox_later(c: sqlite3.Connection, inbox_id: str, *, attempts: int, next_try_at: str | None,
                 tried: Sequence[str]) -> None:
-    c.execute("UPDATE fin_inbox SET attempts=?, next_try_at=?, tried_json=? WHERE id=?",
+    c.execute("UPDATE fin_inbox SET attempts=?, next_try_at=?, tried=? WHERE id=?",
               (attempts, next_try_at, dump(list(tried)), inbox_id))
 
 
@@ -694,45 +787,107 @@ def outbox_add(c: sqlite3.Connection, *, connection_id: str | None, action_id: s
     if row is not None:
         return str(row[0])
     return insert(c, "fin_outbox", {"connection_id": connection_id, "action_id": action_id, "op": op,
-                                    "payload_json": dump(payload), "idempotency_key": key, "attempts": 0,
+                                    "payload": dump(payload), "idempotency_key": key, "attempts": 0,
                                     "status": "pending", "created_at": at, "created_by": by, "updated_at": at})
+
+
+# A record's update waits behind an older update of the same record that is still pending (out at the provider, or to be
+# tried again): the updates of one record reach the provider in the order they were made, so a retry never sends a
+# change back over a later one.
+RECORD_UPDATE_OPS = ("item.update", "location.update")
+IN_ORDER = ("NOT (op IN ('item.update','location.update') AND EXISTS (SELECT 1 FROM fin_outbox o WHERE "
+            "o.status='pending' AND o.op=fin_outbox.op AND o.rowid<fin_outbox.rowid AND "
+            "json_extract(o.payload, '$.local_id')=json_extract(fin_outbox.payload, '$.local_id')))")
 
 
 def outbox_due(c: sqlite3.Connection, at: str, most: int, connection_id: str | None = None) -> list[Any]:
     """Unclaimed writes due now (with `connection_id`, that connection's only), oldest first."""
     scope = " AND connection_id=?" if connection_id else ""
     return c.execute("SELECT * FROM fin_outbox WHERE status='pending' AND claimed_at IS NULL AND (next_try_at IS NULL "
-                     f"OR next_try_at<=?){scope} ORDER BY created_at LIMIT ?",
+                     f"OR next_try_at<=?) AND {IN_ORDER}{scope} ORDER BY created_at LIMIT ?",
                      (at, *([connection_id] if connection_id else []), most)).fetchall()
+
+
+def record_write_open(c: sqlite3.Connection, op: str, local_id: str) -> bool:
+    """Whether a shared record's write is still to reach the provider or may have reached it: held, or unknown. The
+    write names its record by the local id in its payload."""
+    for row in c.execute("SELECT payload FROM fin_outbox WHERE op=? AND "
+                         "NOT (status='sent' OR (status='failed' AND unknown=0)) AND instr(payload, ?) > 0",
+                         (op, local_id)):
+        if loads(row[0]).get("local_id") == local_id:
+            return True
+    return False
+
+
+def record_write_pending(c: sqlite3.Connection, op: str, local_id: str) -> Any:
+    """The newest write of this op for a shared record that is still pending (waiting, claimed, or to be tried again),
+    or None. A change made to the record joins that write while it still waits to be claimed."""
+    for row in c.execute("SELECT * FROM fin_outbox WHERE op=? AND status='pending' AND instr(payload, ?) > 0 "
+                         "ORDER BY rowid DESC", (op, local_id)):
+        if loads(row["payload"]).get("local_id") == local_id:
+            return row
+    return None
+
+
+def outbox_amend(c: sqlite3.Connection, outbox_id: str, payload: Mapping[str, object], at: str) -> bool:
+    """Replace a write's payload while it has never been attempted and waits to be claimed, so a change that joins it goes
+    out with it. False (and nothing changed) once it is claimed, attempted, sent, or refused: a write the provider may
+    have received keeps its content under its idempotency key, and a later change queues a write of its own behind it."""
+    return c.execute("UPDATE fin_outbox SET payload=?, updated_at=? WHERE id=? AND status='pending' AND "
+                     "claimed_at IS NULL AND attempts=0", (dump(payload), at, outbox_id)).rowcount == 1
+
+
+def outbox_repoint(c: sqlite3.Connection, local_id: str, record_id: str) -> None:
+    """Name a record by the row it is an alias of in every write not yet sent, so a write queued under the alias sends
+    what a write queued under the row would."""
+    for row in c.execute("SELECT id, payload FROM fin_outbox WHERE status!='sent' AND instr(payload, ?) > 0",
+                         (local_id,)).fetchall():
+        body = loads(row[1])
+        fixed = _named(body, local_id, record_id)
+        if fixed != body:
+            c.execute("UPDATE fin_outbox SET payload=? WHERE id=?", (dump(fixed), row[0]))
+
+
+def _named(value: Any, old: str, new: str) -> Any:
+    """The value with each string equal to `old` replaced by `new`, in any nested object or list."""
+    if isinstance(value, str):
+        return new if value == old else value
+    if isinstance(value, dict):
+        return {k: _named(v, old, new) for k, v in cast(dict[str, Any], value).items()}
+    if isinstance(value, list):
+        return [_named(v, old, new) for v in cast(list[Any], value)]
+    return value
 
 
 def outbox_claim(c: sqlite3.Connection, outbox_id: str, at: str) -> bool:
     """Take one write for one call: only one worker wins it. A card's writes go one at a time across workers: a write
-    for a card whose other write is at Mercury right now waits until that one is recorded."""
+    for a card whose other write is at Mercury right now waits until that one is recorded. A record's update is taken
+    only once the older updates of its record are recorded (IN_ORDER)."""
     return c.execute(
         "UPDATE fin_outbox SET claimed_at=?, updated_at=? WHERE id=? AND status='pending' AND claimed_at IS NULL AND "
-        "(json_extract(payload_json, '$.card_id') IS NULL OR NOT EXISTS (SELECT 1 FROM fin_outbox o WHERE "
+        f"{IN_ORDER} AND (json_extract(payload, '$.card_id') IS NULL OR NOT EXISTS "
+        "(SELECT 1 FROM fin_outbox o WHERE "
         "o.status='pending' AND o.claimed_at IS NOT NULL AND o.id<>fin_outbox.id AND "
-        "json_extract(o.payload_json, '$.card_id')=json_extract(fin_outbox.payload_json, '$.card_id')))",
+        "json_extract(o.payload, '$.card_id')=json_extract(fin_outbox.payload, '$.card_id')))",
         (at, at, outbox_id)).rowcount == 1
 
 
 def card_sync_waiting(c: sqlite3.Connection, card_id: str) -> bool:
     """A card_sync for this card not yet claimed: it will read the card's latest state when sent."""
     return c.execute("SELECT 1 FROM fin_outbox WHERE op='card_sync' AND status='pending' AND claimed_at IS NULL AND "
-                     "json_extract(payload_json, '$.card_id')=? LIMIT 1", (card_id,)).fetchone() is not None
+                     "json_extract(payload, '$.card_id')=? LIMIT 1", (card_id,)).fetchone() is not None
 
 
 def card_create_claimed(c: sqlite3.Connection, card_id: str) -> bool:
     """This card's creation is at Mercury right now (claimed, not recorded)."""
     return c.execute("SELECT 1 FROM fin_outbox WHERE op='card_create' AND status='pending' AND claimed_at IS NOT NULL "
-                     "AND json_extract(payload_json, '$.card_id')=? LIMIT 1", (card_id,)).fetchone() is not None
+                     "AND json_extract(payload, '$.card_id')=? LIMIT 1", (card_id,)).fetchone() is not None
 
 
 def card_create_waiting(c: sqlite3.Connection, card_id: str) -> bool:
     """This card's creation is still owed (queued or at Mercury now)."""
     return c.execute("SELECT 1 FROM fin_outbox WHERE op='card_create' AND status='pending' AND "
-                     "json_extract(payload_json, '$.card_id')=? LIMIT 1", (card_id,)).fetchone() is not None
+                     "json_extract(payload, '$.card_id')=? LIMIT 1", (card_id,)).fetchone() is not None
 
 
 def cards_uncertain(c: sqlite3.Connection, connection_id: str, looked_before: str) -> list[Any]:
@@ -745,8 +900,8 @@ def cards_uncertain(c: sqlite3.Connection, connection_id: str, looked_before: st
 
 def card_create_payload(c: sqlite3.Connection, card_id: str) -> dict[str, Any]:
     """What this card's creation asked Mercury for (its user and nickname)."""
-    row = c.execute("SELECT payload_json FROM fin_outbox WHERE op='card_create' AND "
-                    "json_extract(payload_json, '$.card_id')=? ORDER BY created_at DESC LIMIT 1", (card_id,)).fetchone()
+    row = c.execute("SELECT payload FROM fin_outbox WHERE op='card_create' AND "
+                    "json_extract(payload, '$.card_id')=? ORDER BY created_at DESC LIMIT 1", (card_id,)).fetchone()
     return loads(row[0]) if row is not None else {}
 
 
@@ -803,7 +958,7 @@ def uncount(c: sqlite3.Connection, rule_id: str, period_key: str, subject: str, 
 
 def rule_run(c: sqlite3.Connection, *, rule_id: str, action_id: str | None, subject: str,
              inputs: Mapping[str, object], outcome: Mapping[str, object], by: str, at: str) -> None:
-    c.execute("INSERT INTO fin_rule_runs(id, rule_id, action_id, subject, inputs_json, outcome_json, created_at, "
+    c.execute("INSERT INTO fin_rule_runs(id, rule_id, action_id, subject, inputs, outcome, created_at, "
               "created_by) VALUES(?,?,?,?,?,?,?,?)",
               (new_id(), rule_id, action_id, subject, dump(inputs), dump(outcome), at, by))
 
@@ -850,12 +1005,23 @@ def document_counts(c: sqlite3.Connection, book_id: str) -> dict[str, int]:
 
 
 def lines_page(c: sqlite3.Connection, book_id: str, *, account_ids: Sequence[str], before: tuple[str, str] | None,
-               most: int, start: str = "", end: str = "", q: str = "", sources: Sequence[str] = ()) -> list[Any]:
-    """Posted lines newest first, keyset-paged on (entry_date, line id), with their entry's memo and source."""
-    if not account_ids:
+               most: int, start: str = "", end: str = "", q: str = "", sources: Sequence[str] = (),
+               balance_only_ids: Sequence[str] = ()) -> list[Any]:
+    """Posted lines newest first, keyset-paged on (entry_date, line id), with their entry's memo and source. Lines on
+    `balance_only_ids` count only when their entry has no income or expense line, on any account."""
+    if not account_ids and not balance_only_ids:
         return []
-    where = ["l.book_id=?", f"l.account_id IN ({_marks(account_ids)})"]
-    args: list[object] = [book_id, *account_ids]
+    picks: list[str] = []
+    args: list[object] = [book_id]
+    if account_ids:
+        picks.append(f"l.account_id IN ({_marks(account_ids)})")
+        args += list(account_ids)
+    if balance_only_ids:
+        picks.append(f"(l.account_id IN ({_marks(balance_only_ids)}) AND NOT EXISTS (SELECT 1 FROM fin_lines x "
+                     "JOIN fin_accounts a ON a.id=x.account_id WHERE x.entry_id=l.entry_id "
+                     "AND a.type IN ('income', 'expense')))")
+        args += list(balance_only_ids)
+    where = ["l.book_id=?", f"({' OR '.join(picks)})"]
     if sources:
         where.append(f"e.source IN ({_marks(sources)})")
         args += list(sources)
@@ -880,7 +1046,7 @@ def lines_page(c: sqlite3.Connection, book_id: str, *, account_ids: Sequence[str
 def seed_rule(c: sqlite3.Connection, *, rule_id: str, name: str, words: str, when: Mapping[str, object],
               outcome: Mapping[str, object], examples: Sequence[Mapping[str, object]], by: str, at: str) -> bool:
     """A default gate rule, once: a rule with this id that exists (even disabled or edited) is left alone."""
-    return c.execute("INSERT OR IGNORE INTO fin_rules(id, kind, name, words, when_json, outcome_json, examples_json, "
+    return c.execute("INSERT OR IGNORE INTO fin_rules(id, kind, name, words, condition, outcome, examples, "
                      "owner, active, created_at, created_by) VALUES(?, 'gate', ?, ?, ?, ?, ?, ?, 1, ?, ?)",
                      (rule_id, name, words, dump(when), dump(outcome), dump(list(examples)), by, at, by)).rowcount == 1
 
@@ -904,34 +1070,29 @@ def recipient_paid(c: sqlite3.Connection, recipient_id: str) -> bool:
 
 
 # ------------------------------------------------------------------------------------------------ Stripe
-def feed_total(c: sqlite3.Connection, money_account_id: str) -> int:
-    """What a money account's feed rows add up to: a Stripe balance's nets, every row taken in so far."""
-    row = c.execute("SELECT COALESCE(SUM(amount), 0) FROM fin_feed_txns WHERE money_account_id=?",
-                    (money_account_id,)).fetchone()
-    return int(row[0])
 
 
 def stripe_source(c: sqlite3.Connection, money_account_id: str, kinds: Sequence[str], link: str) -> Any:
     """The Stripe row of these kinds whose link is this id (a sale, or a payout), the first one taken in."""
     return c.execute(f"SELECT * FROM fin_feed_txns WHERE money_account_id=? AND kind IN ({_marks(kinds)}) AND "
-                     "json_extract(raw_json, '$.link')=? ORDER BY txn_date, id LIMIT 1",
+                     "json_extract(raw, '$.link')=? ORDER BY txn_date, id LIMIT 1",
                      (money_account_id, *kinds, link)).fetchone()
 
 
 def stripe_refunded(c: sqlite3.Connection, money_account_id: str, kinds: Sequence[str], link: str) -> int:
     """What the posted refunds, disputes and returned refunds of one charge add up to so far (a refund is positive)."""
-    return int(c.execute(f"SELECT COALESCE(SUM(-json_extract(raw_json, '$.amount')), 0) FROM fin_feed_txns WHERE "
-                         f"money_account_id=? AND kind IN ({_marks(kinds)}) AND json_extract(raw_json, '$.link')=? AND "
+    return int(c.execute(f"SELECT COALESCE(SUM(-json_extract(raw, '$.amount')), 0) FROM fin_feed_txns WHERE "
+                         f"money_account_id=? AND kind IN ({_marks(kinds)}) AND json_extract(raw, '$.link')=? AND "
                          "status='posted' AND entry_id IS NOT NULL",
                          (money_account_id, *kinds, link)).fetchone()[0])
 
 
 def stripe_given(c: sqlite3.Connection, money_account_id: str, kinds: Sequence[str], link: str) -> dict[str, int]:
     """What the posted refunds, disputes and returned refunds of one charge gave back to each settlement (settlement id
-    to cents; a restore is negative). Each refund keeps its shares in raw_json.gave."""
-    rows = c.execute("SELECT j.key, COALESCE(SUM(j.value), 0) FROM fin_feed_txns f, json_each(f.raw_json, '$.gave') j "
+    to cents; a restore is negative). Each refund keeps its shares in raw.gave."""
+    rows = c.execute("SELECT j.key, COALESCE(SUM(j.value), 0) FROM fin_feed_txns f, json_each(f.raw, '$.gave') j "
                      f"WHERE f.money_account_id=? AND f.kind IN ({_marks(kinds)}) AND "
-                     "json_extract(f.raw_json, '$.link')=? AND f.status='posted' AND f.entry_id IS NOT NULL "
+                     "json_extract(f.raw, '$.link')=? AND f.status='posted' AND f.entry_id IS NOT NULL "
                      "GROUP BY j.key", (money_account_id, *kinds, link)).fetchall()
     return {str(key): int(total) for key, total in rows}
 
@@ -939,7 +1100,7 @@ def stripe_given(c: sqlite3.Connection, money_account_id: str, kinds: Sequence[s
 def stripe_restored(c: sqlite3.Connection, money_account_id: str, kinds: Sequence[str], source: str) -> bool:
     """Whether a posted restore (a refund failure, or a dispute won back) already names this Stripe source id."""
     return c.execute(f"SELECT 1 FROM fin_feed_txns WHERE money_account_id=? AND kind IN ({_marks(kinds)}) AND "
-                     "json_extract(raw_json, '$.source')=? AND json_extract(raw_json, '$.amount')>0 AND "
+                     "json_extract(raw, '$.source')=? AND json_extract(raw, '$.amount')>0 AND "
                      "status='posted' AND entry_id IS NOT NULL LIMIT 1", (money_account_id, *kinds, source)).fetchone() \
         is not None
 
@@ -947,15 +1108,28 @@ def stripe_restored(c: sqlite3.Connection, money_account_id: str, kinds: Sequenc
 def stripe_reversal(c: sqlite3.Connection, money_account_id: str, kinds: Sequence[str], source: str) -> Any:
     """The posted money-out row (a refund or a dispute) that a refund failure names by its Stripe source id, or None."""
     return c.execute(f"SELECT * FROM fin_feed_txns WHERE money_account_id=? AND kind IN ({_marks(kinds)}) AND "
-                     "json_extract(raw_json, '$.source')=? AND json_extract(raw_json, '$.amount')<0 AND "
-                     "status='posted' AND entry_id IS NOT NULL ORDER BY json_extract(raw_json, '$.created') LIMIT 1",
+                     "json_extract(raw, '$.source')=? AND json_extract(raw, '$.amount')<0 AND "
+                     "status='posted' AND entry_id IS NOT NULL ORDER BY json_extract(raw, '$.created') LIMIT 1",
                      (money_account_id, *kinds, source)).fetchone()
+
+
+def refund_candidates(c: sqlite3.Connection, money_account_id: str, start: str, end: str) -> list[Any]:
+    """Posted money-out rows on this money account dated in a window: a refund's possible originals, newest first."""
+    return c.execute("SELECT * FROM fin_feed_txns WHERE money_account_id=? AND amount<0 AND txn_date BETWEEN ? AND ? AND "
+                     "status='posted' AND entry_id IS NOT NULL AND pending=0 ORDER BY txn_date DESC, id DESC",
+                     (money_account_id, start, end)).fetchall()
+
+
+def refunds_of(c: sqlite3.Connection, original_id: str) -> list[Any]:
+    """The posted money-in rows that refund this money-out row (fin_feed_txns.refund_of)."""
+    return c.execute("SELECT * FROM fin_feed_txns WHERE refund_of=? AND status='posted' AND entry_id IS NOT NULL "
+                     "ORDER BY txn_date, id", (original_id,)).fetchall()
 
 
 def stripe_summary_rows(c: sqlite3.Connection, money_account_id: str) -> list[Any]:
     """Stripe rows marked for their day's summary entry that have not posted yet."""
     return c.execute("SELECT * FROM fin_feed_txns WHERE money_account_id=? AND status='new' AND entry_id IS NULL AND "
-                     "json_extract(raw_json, '$.summary')=1 ORDER BY txn_date, id", (money_account_id,)).fetchall()
+                     "json_extract(raw, '$.summary')=1 ORDER BY txn_date, id", (money_account_id,)).fetchall()
 
 
 def stripe_waiting(c: sqlite3.Connection, money_account_id: str, kinds: Sequence[str], most: int) -> list[Any]:
@@ -987,7 +1161,7 @@ def stripe_transit(c: sqlite3.Connection, book_id: str, *, start: str, end: str,
         "WHERE m.book_id=? AND m.kind='stripe' AND f.kind='payout' AND f.status='posted' AND "
         "f.txn_date BETWEEN ? AND ? AND (? IS NULL OR f.amount=?) AND NOT EXISTS (SELECT 1 FROM fin_feed_txns g "
         "WHERE g.money_account_id=f.money_account_id AND g.kind IN ('payout_failure', 'payout_cancel') AND "
-        "json_extract(g.raw_json, '$.link')=json_extract(f.raw_json, '$.link')) AND NOT EXISTS (SELECT 1 FROM "
+        "json_extract(g.raw, '$.link')=json_extract(f.raw, '$.link')) AND NOT EXISTS (SELECT 1 FROM "
         f"fin_entries e WHERE e.book_id=m.book_id AND {_CLEARED}) ORDER BY f.txn_date, f.id LIMIT ?",
         (book_id, start, end, amount, amount, most)).fetchall()
 

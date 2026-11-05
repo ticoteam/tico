@@ -12,6 +12,7 @@ import pytest
 
 from backend import update_feeds as F
 from backend.tests.test_api import api, assign, get, headers, post, ready, runner  # noqa: F401
+from backend import bot_settings as BS
 
 SNAPSHOT = "a" * 40
 
@@ -81,9 +82,8 @@ def bot_row(api, slug="ops"):
 def subscribe(api, categories, slug="ops", template="pr-reviewer"):
     if template is not None:
         with api.app.state.store.transaction() as c:
-            config = json.loads(c.execute("SELECT config_json FROM bot_config WHERE bot=?", (slug,)).fetchone()[0])
-            c.execute("UPDATE bot_config SET config_json=? WHERE bot=?",
-                      (json.dumps({**config, "template": template}), slug))
+            config = BS.read(c, slug)
+            BS.write(c, slug, {**config, 'template': template})
     return post(api, f"bots/{slug}/definition", {"update_subscriptions": categories,
                                                  "expected_revision": bot_row(api, slug)["revision"]})
 
@@ -98,12 +98,12 @@ def poll(api, times=1):
 
 def notes(api, slug="ops"):
     with api.app.state.store.read() as c:
-        return [dict(r) for r in c.execute("SELECT * FROM notes WHERE to_actor=? ORDER BY created,id", ("bot:" + slug,))]
+        return [dict(r) for r in c.execute("SELECT * FROM notes WHERE to_actor=? ORDER BY created_at,id", ("bot:" + slug,))]
 
 
 def jobs(api, slug="ops"):
     with api.app.state.store.read() as c:
-        return c.execute("SELECT count(*) FROM jobs WHERE bot=?", (slug,)).fetchone()[0]
+        return c.execute("SELECT count(*) FROM jobs WHERE bot_id=?", (slug,)).fetchone()[0]
 
 
 def ids(rows):
@@ -111,7 +111,7 @@ def ids(rows):
 
 
 def waiting(api, slug="ops"):
-    return [n for n in notes(api, slug) if not n["cancelled_at"]]
+    return [n for n in notes(api, slug) if not n["canceled_at"]]
 
 
 
@@ -119,7 +119,7 @@ def snapshot(api, slug="ops"):
     """The bot's definition and access as stored: config and bot rows, Instructions, repositories, credential grants."""
     with api.app.state.store.read() as c:
         return [[tuple(r) for r in c.execute(sql, args)] for sql, args in (
-            ("SELECT * FROM bot_config WHERE bot=?", (slug,)), ("SELECT * FROM bots WHERE slug=?", (slug,)),
+            (BS.ROW_SQL + " WHERE bc.bot=?", (slug,)), ("SELECT * FROM bots WHERE slug=?", (slug,)),
             ("SELECT * FROM bot_agent_instructions WHERE bot=?", (slug,)),
             ("SELECT * FROM bot_repo_access WHERE bot=? ORDER BY full_name", (slug,)),
             ("SELECT * FROM credential_grants ORDER BY id", ()))]

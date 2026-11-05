@@ -31,14 +31,17 @@ it, and you close the task. Sign in to each model subscription you chose (a Chat
 API key. One signed-in model is enough for the first result; Health lists the others until you sign in. You need no GitHub account or outside Tool. [Demo mode](docs/demo.md) does not run bots.
 
 1. In **Finish setup**, choose an AI provider, name your team and pick **Marketing** with **Content Marketer** (`content`) checked.
-   Assistant, BotOps, Librarian and Strategy Bot are the four built-in bots.
+   With no provider yet, write one bet and one line under **What we won't do**; any short sentence works.
+   Seven built-in bots are created: Assistant, BotOps, Librarian, Strategy Bot, Task Manager, Bookkeeper and Counsel.
 2. Use **Add computer** to join this computer, run the command shown, then **Create my team**.
 3. Open **Settings > Computers** and **Sign in** beside Codex or Claude Code; finish the provider's browser flow.
    Other harnesses and API credentials are covered in [Harnesses](docs/harnesses.md). Choose the bot's model in **Settings > Bots**.
 4. Before any real work, open **Settings > Health**: **Models** should read "Codex is signed in." (or Claude Code). If not, follow
    [first-result recovery](docs/install.md#first-result-recovery). With no spending limit set there is no cap; a limit pauses new
    work and lets a run in progress finish ([Usage](docs/usage.md)).
-5. Open Content Marketer and press **Set up**. Use the [sample answers](docs/install.md#sample-answers-for-content-marketer)
+5. On the team chart, open each seat and press **Hire** on its template, in any order. A seat hired before its manager
+   reports to the nearest hired manager above it until that manager is hired, then moves under it. On Content Marketer's
+   page, press **Start onboarding**. Use the [sample answers](docs/install.md#sample-answers-for-content-marketer)
    to give it readers, publishing plans, topics, voice examples and privacy rules; review its first draft in chat.
 6. On **Tasks > New task**, assign it the short draft from [Your first result](docs/install.md#your-first-result). The bot marks
    it Done with the draft file on the task. Read the draft, then close the task yourself: the requester closes it, not the bot.
@@ -113,7 +116,7 @@ is one team; several can run side by side on one Mac.
 For the shortest trial, use Docker above. For a native development setup, follow [Environments](docs/environments.md)
 and [register a Mac computer](docs/install.md#mac). Open the app, complete **Finish setup**, join the
 computer and sign in to your model provider. All four built-in repositories are created automatically. Each other role waits as a Recruiting seat; a bot is created only
-when you recruit one, and it is parked in **Needs setup** until you open it and press **Set up**; then follow [Your first result](docs/install.md#your-first-result).
+when you recruit one, and it is parked in **Needs setup** until you open it and press **Start onboarding**; then follow [Your first result](docs/install.md#your-first-result).
 Bots can allow [branches](docs/creating-bots.md#branches): personal tasks and chats on your computer, following the original's instructions and repository. Independent copies keep using `hub bot copy`.
 
 See [Setup reference](docs/onboarding.md) for the wizard's saved fields and [Creating bots](docs/creating-bots.md) for custom bots.
@@ -233,7 +236,7 @@ named team must also carry a permanent id, or the process refuses to start.
 | `TICO_DECISIONS_DAILY_CALLS_OWNER`, `TICO_DECISIONS_DAILY_CALLS_HUMAN`, `TICO_DECISIONS_DAILY_CALLS_BOT` | How many calls to the server's own models one actor may make in a UTC day, by role (defaults 20000, 5000, 5000; `0` refuses every call). Decisions (`POST /api/v2/decisions`, listening and live-meeting routing, and Slack routing, counted against the sender) share one count; market asks (`POST /api/v2/market/ask`) are counted apart under the same caps. Over the cap is a 429 | `1000` |
 | `TICO_GATEWAY_KEY` or `TICO_GATEWAY_SECRET_ARN`, and `TICO_GATEWAY_URL` | The Tico AI Gateway key behind `hub_decision_ask` / `POST /api/v2/decisions` and the Slack gateway: Decide asks the Gateway first, as Tico Decide 1.0, in one try of at most 8 seconds. The URL defaults to Tico HQ's (`<TICO_HQ_URL>/v1/gateway/decisions`). When the Gateway is not set up, is down or refuses the key, the server asks the next provider below; all of them together answer within 25 seconds | |
 | `TICO_TYPESAFE_SECRET_ARN` or `TYPESAFE_API_KEY` | Optional: your own key for TypeSafe's Jev, asked after the Gateway, behind `hub_decision_ask` / `POST /api/v2/decisions` and the Slack gateway (`skills/decisions/SKILL.md`, `questions/README.md`), which is also what checks a message bot's mail for spam and injection. Not set by default and not needed. Without it, or when it fails, the server asks the team's own model provider, using `ANTHROPIC_API_KEY`, `OPENAI_API_KEY`, `GEMINI_API_KEY`, `XAI_API_KEY` or `OPENROUTER_API_KEY` from `.env` (`compose.yaml` hands these to the server); with none of them the route answers 503. The `judge.call` audit events and `TYPESAFE_*` names are unchanged | |
-| `TICO_UPDATE_CHECK`, `TICO_RELEASES_URL`, `TICO_VERSION`, `TICO_UPDATER_URL`, `TICO_UPDATER_TOKEN` | The "New version" notice and owner-only "Update now"; `TICO_UPDATE_CHECK=off` disables it. See [docs/releasing.md](docs/releasing.md) | |
+| `TICO_UPDATE_CHECK`, `TICO_RELEASES_URL`, `TICO_VERSION`, `TICO_UPDATER_URL`, `TICO_UPDATER_TOKEN` | The sidebar's "Update to" row and owner-only "Update now"; `TICO_UPDATE_CHECK=off` disables it. See [docs/releasing.md](docs/releasing.md) | |
 | `TICO_TELEMETRY`, `DO_NOT_TRACK`, `TICO_TELEMETRY_DEBUG`, `TICO_HQ_URL` | The anonymous usage count: `TICO_TELEMETRY=off` or `DO_NOT_TRACK=1` (or Settings > General) turns it off, `TICO_TELEMETRY_DEBUG=1` prints what would be sent and sends nothing. See [PRIVACY.md](PRIVACY.md) | |
 | `TICO_HQ_STAFF_READ_KEY` | For the Tico team's own server only: Tico HQ's read-only staff key. With it, the server reads HQ's nightly billing check every hour and the owner's Health page shows each billing mismatch (the company's install id and the difference in dollars), and a check that missed a night or cannot be read, in red. Read-only; unset, nothing is sent | |
 | `TICO_RELEASE`, `TICO_OBSERVABILITY_*`, `TICO_POSTHOG_*`, `TICO_SENTRY_*` | Optional release id and telemetry. Empty disables all of it | |
@@ -255,7 +258,7 @@ server's variable file; real hostnames, buckets, ARNs and humans live outside th
 |---|---|
 | `backend/` | The server: API, authorization, write layer, scheduler, backups, settings admin (FastAPI, SQLite) |
 | `runner-rs/` | The local runner (`tico-runner`): enrollment, readiness, leases, runs, subscription profiles, updates, and one host per model CLI in `runner-rs/src/hosts/` |
-| `runner/` | The runner's Python helpers: the `python -m runner run` shim, the connectors, Close transcript and meeting import jobs, catalog set-up and the update process |
+| `runner_support/` | The runner's Python helpers: the `python -m runner_support run` shim, the connectors, Close transcript and meeting import jobs, catalog set-up and the update process |
 | `clients/` | What bots and owners call: the `hub` CLI, the HTTP client, preflight, routine validation, team documents, and `environments.py` |
 | `ui/`, `app/` | The web interface and its browser tests; the Tauri desktop shell (Rust) |
 | `setup/` | `tico setup`, the guided Docker install of the server and of Linux runners |
@@ -319,7 +322,7 @@ Browser checks need `npm ci` and a Playwright browser (`npx playwright install c
 dependency: `marked` and the icon font are vendored in `ui/vendor/` with their licenses.
 
 The live checkout on an owner's Mac is what the runner executes: the launchd jobs run
-`python -m runner` with that directory as the working directory, and the bot job execs the Rust runner built
+`python -m runner_support` with that directory as the working directory, and the bot job execs the Rust runner built
 from that tree (rebuilt on restart when `runner-rs/` changed). A pull without a restart leaves the old code
 running (`scripts/tico status` says so explicitly). Do development in a git worktree, never in the live checkout, and use
 `scripts/tico update`, which pulls and restarts after waiting for runs in flight.

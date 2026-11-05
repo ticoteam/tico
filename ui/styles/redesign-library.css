@@ -97,3 +97,29 @@ a.lc-who-row:hover{background:var(--surface2)}
   .lc-cred{grid-template-areas:"i n p" ". u u" ". a a"}
   .lc-acts{gap:16px;padding-top:2px}
 }
+
+/* Library › Connections (ui/app/connections.js): one dense row per connection; a phone stacks each row. */
+#main.cn-layout{max-width:none;padding:0}
+.cn-list{list-style:none;margin:0;padding:0 20px 24px}
+.cn-row{display:grid;grid-template-columns:18px minmax(0,2fr) 84px 72px minmax(0,1.3fr) minmax(0,1fr) 80px;align-items:center;gap:10px;
+  min-height:40px;padding:6px 8px;border-bottom:1px solid var(--line)}
+.cn-row .nav-icon{font-size:17px;width:18px;height:18px;color:var(--muted)}
+.cn-name{display:flex;flex-direction:column;min-width:0}
+.cn-name>*{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.cn-name strong{font-weight:500}
+.cn-name .muted,.cn-scope{font-size:var(--t-sm)}
+.cn-status{display:inline-flex;align-items:center;gap:6px;font-size:var(--t-sm)}
+.cn-dot{width:8px;height:8px;border-radius:50%;background:var(--idle)}
+.cn-ok .cn-dot{background:var(--ok)}.cn-wait .cn-dot{background:var(--wait)}.cn-fail .cn-dot{background:var(--fail)}
+.cn-readers{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:var(--t-sm)}
+.cn-bots{display:flex;align-items:center;gap:3px;min-width:0;font-size:var(--t-sm)}
+.cn-go{text-align:right;font-size:var(--t-sm)}
+.cn-none{padding:14px 8px}
+.cn-more{padding:0 28px 24px}
+@media (max-width:760px){
+  .cn-list{padding:0 16px 24px}
+  .cn-row{grid-template-columns:18px minmax(0,1fr) auto;grid-template-areas:"i n s" ". r g" ". b b";row-gap:4px;padding:10px 0}
+  .cn-row .nav-icon{grid-area:i}.cn-name{grid-area:n}.cn-status{grid-area:s}.cn-readers{grid-area:r}.cn-go{grid-area:g}
+  .cn-bots{grid-area:b}.cn-bots:empty{display:none}.cn-scope{display:none}
+  .cn .lc-ph{padding:8px 16px}
+}

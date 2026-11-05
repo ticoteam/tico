@@ -80,7 +80,7 @@ The change email names that next 00:05 UTC run. The final stop email names the a
 
 Stops retain the servers’ data. With positive grace in **Enforce** mode, the current owner gets the grace-start email,
 a 24-hour reminder where applicable, and the stopped/data-kept email.
-The owner’s account page shows one **Needs you: add credit** card with the UTC stop time and **Ask for more credit** direction.
+The owner’s account page shows one **Needs you: add credit** card with the UTC stop time and a **Contact support for more credit** link.
 Every real stop-time move sends one **Stop time changed** email and updates that same card.
 Earlier and later moves both count, whether or not the prior reminder was sent.
 If the new stop is more than 24 hours away at the change, one reminder follows at the new stop minus 24 hours.
@@ -137,7 +137,7 @@ Changing this warning threshold does not change the minimum balance that pauses 
 
 **Paused: out of credit** shows separate reported stop times for the Gateway key, Tico server, and bot computer.
 **Not reported yet** means a service time is unavailable.
-For a zero-grace waitlist pause, the owner receives one run-out email saying the data is safe, with an **Ask for more credit** link.
+For a zero-grace waitlist pause, the owner receives one run-out email saying the data is safe, with a **Contact support for more credit** link.
 These credit notices create no card inside the customer’s Tico. Their account page stays available while the servers are stopped.
 
 Both pages show the same rounded-up-cent **Add at least $X to restart your servers** quote while credit is short.

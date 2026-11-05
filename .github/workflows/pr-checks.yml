@@ -1,4 +1,5 @@
-# Read-only PR checks. Main keeps the full default suite; Release validation is independent.
+# Read-only PR checks, including slow MCP/CLI/golden contracts on affected changes in a parallel contracts job.
+# Main keeps the full default suite and contracts; Release validation is independent.
 # Jobs run on RunsOn spot VMs in Tico's own AWS account. Fork PRs stay on GitHub-hosted runners so outside code
 # never runs on our machines.
 name: PR checks
@@ -40,13 +41,16 @@ jobs:
         timeout-minutes: 11
         run: bash scripts/ci_install.sh python
       - name: Restore measured timings from the latest successful full main run
+        # Optional: missing/expired artifacts stop immediately; transient errors get only 90s of retry backoff.
+        timeout-minutes: 2
+        continue-on-error: true
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
           mkdir -p previous-timings
           run=$(gh run list --workflow pr-checks.yml --branch main --event push --status success --limit 1 --json databaseId --jq '.[0].databaseId // empty') || run=''
           if [ -n "$run" ]; then
-            gh run download "$run" --name pr-python-timings --dir previous-timings || echo "No measured timings yet; use collected counts this run"
+            bash scripts/ci/retry.sh --max-attempts 3 --clear previous-timings --permanent 'HTTP (404|410)|no (valid )?artifacts? (match|found)' -- gh run download "$run" --name pr-python-timings --dir previous-timings || echo "No measured timings yet; use collected counts this run"
           fi
       - name: Select affected tests and size measured Python and browser groups
         id: plan
@@ -127,7 +131,7 @@ jobs:
           SUITE: ${{ matrix.suite }}
           TICO_PYTHON: ${{ runner.temp }}/venv/bin/python
         run: PATH="$RUNNER_TEMP/venv/bin:$PATH" "$RUNNER_TEMP/venv/bin/python" scripts/pr_checks.py run "$SUITE"
-      - if: always() && (startsWith(matrix.suite, 'python-') || startsWith(matrix.suite, 'browser-'))
+      - if: always() && (startsWith(matrix.suite, 'python-') || startsWith(matrix.suite, 'browser-') || matrix.suite == 'contracts')
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: results-${{ matrix.suite }}
@@ -137,7 +141,7 @@ jobs:
 
   static:
     # Every PR: pinned ruff against its baseline (no new findings or suppressions), pyright on the boundary modules,
-    # the UI's generated API types and the runner wire contract. Seconds each; tools are pinned in the scripts.
+    # migration names, the UI's generated API types and the runner wire contract. Seconds each; tools are pinned.
     name: static checks
     runs-on: ${{ (github.event_name != 'pull_request' || !github.event.pull_request.head.repo.fork) && format('runs-on={0}/runner=2cpu-linux-x64/extras=s3-cache', github.run_id) || 'ubuntu-24.04' }}
     timeout-minutes: 12
@@ -146,6 +150,15 @@ jobs:
         with:
           persist-credentials: false
           fetch-depth: 0
+      - name: New migrations have unique UTC timestamps
+        if: github.event_name == 'pull_request'
+        env:
+          BASE_BRANCH: ${{ github.base_ref }}
+          PR_HEAD: ${{ github.event.pull_request.head.sha }}
+        run: |
+          # Checkout has full history; refresh the base tip because the PR event's base SHA can be stale.
+          git fetch --no-tags origin "+refs/heads/$BASE_BRANCH:refs/remotes/origin/$BASE_BRANCH"
+          python3 scripts/check_migration_order.py --base "refs/remotes/origin/$BASE_BRANCH" --head "$PR_HEAD" --base-name "$BASE_BRANCH"
       - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6
         with:
           python-version: '3.15'
@@ -301,13 +314,15 @@ jobs:
 
   timings:
     name: PR job timings
-    # Failed runs keep their timing receipt, but a cancelled run (a superseded pull request push) ends here: a final
+    # Failed runs keep their timing receipt, but a canceled run (a superseded pull request push) ends here: a final
     # job queued after the cancellation can wait for a runner that never comes, holding the newer head's run pending
     # in the same concurrency group.
     if: ${{ !cancelled() }}
     needs: [plan, tests, caddy-linux, static, rust-lint, recorder-changes, recorder]
     runs-on: ${{ (github.event_name != 'pull_request' || !github.event.pull_request.head.repo.fork) && format('runs-on={0}/runner=2cpu-linux-x64/extras=s3-cache', github.run_id) || 'ubuntu-24.04' }}
-    timeout-minutes: 3
+    # Four minutes: checkout and the artifact download run before the receipt, which is capped at one minute below,
+    # and the gate after it must still run. A hang in the receipt canceled the whole job at three minutes on #2487.
+    timeout-minutes: 4
     steps:
       - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
         with:
@@ -318,7 +333,10 @@ jobs:
           pattern: results-*
           path: ci-results
           merge-multiple: true
+      # Cosmetic: a GitHub API error or hang here leaves the receipt incomplete and never fails or cancels the gate.
       - name: Per-job timings linked from the PR check
+        continue-on-error: true
+        timeout-minutes: 1
         env:
           GH_TOKEN: ${{ github.token }}
         run: |

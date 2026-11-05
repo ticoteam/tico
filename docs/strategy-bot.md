@@ -61,12 +61,16 @@ Over the API, `GET /api/v2/strategy-bot` shows `name`, `regular_checks`, `level`
 The [Strategy](strategy.md) page is the Strategy Bot's first job. At every level it **proposes**; you write the draft and
 the bets, and you publish:
 
-- **Drafting.** A task "Draft the strategy", or you asking in your chat, runs its `draft-the-strategy` playbook. It reads
+- **Drafting.** A task "Draft the strategy", or you asking in your DM, runs its `draft-the-strategy` playbook. It reads
   the market pages, the setup answers, the goals and KPIs, and puts **claims** to you to keep, edit or strike ("Your
   site implies you compete on price; that rules out white-glove service"), at most eight. It proposes three to five
-  bets, each with why, what it rules out and what would prove it wrong, and the four sections, and never invents a
+  bets, each with why, what it rules out and what would prove it wrong, and the seven sections, and never invents a
   number. The result is one `strategy_draft` proposal in your **Needs you**; confirming writes it into your draft.
   This is the same at every level.
+- **Keeping proof current.** *How we know they want it* is evidence: Growth numbers and KPIs, what customers told
+  your support and sales bots, team meetings, Listening. Its `keep-proof-current` playbook gathers that, writes each
+  line with its source and period, and proposes it as one `strategy_draft`. It never invents a number. The Monday note
+  says so in one line when the section is empty or unchanged for more than 30 days.
 - **Publishing is yours.** The Strategy Bot ends a drafting run by asking you to confirm and publish from the Strategy page.
   It cannot publish, and it cannot write the draft: the server refuses every bot.
 - **When a bet may be wrong.** When a bet's wrong-if trips (a KPI crosses its threshold, a cited market entity
@@ -99,8 +103,8 @@ chose a level, since it starts here, unless a person already started or paused t
   your Strategy Bot what this company is for". Writing the vision on the [Strategy](strategy.md) page closes it.
 - **Proposes a Why for each goal that has none and is not tied to a bet**, as one **Needs you** item for each person who decides them, never one
   per goal. You accept, edit or replace each on its goal.
-- **Sends a Monday note** in the owner's chat: a short weekly goals review with a line on the strategy (or that none is
-  published), how many goals still have no bet and no Why, and each active bet with no KPI-backed goal or gray health.
+- **Sends a Monday note** in the owner's DM: a short weekly goals review with a line on the strategy (or that none is
+  published, or that *How we know they want it* is empty or more than 30 days old), how many goals still have no bet and no Why, and each active bet with no KPI-backed goal or gray health.
   A person who pauses it stays paused.
 - **Asks a goal's owner what is happening** when a goal is red or stalled, as a **Needs you** item for that owner. The
   ask closes by itself when the cause clears.
@@ -127,30 +131,30 @@ the rest wait for the next day. The server refuses a sixth.
 
 ## Asking it through your Assistant
 
-Nobody chats with the Strategy Bot directly, the owner included: everyone's one chat is their
+Nobody messages the Strategy Bot directly, the owner included: everyone's one DM is their
 [Assistant](assistant.md#helpers-through-the-assistant). Ask it for strategy advice or a goal change and it files the
 Strategy Bot a task citing your words. The Strategy Bot works that task in its own turn with its own rights, so a change
 that stays yours (below) comes back to you as a proposal or a Confirm card. Bots still message it, in its goals
 session.
 
-Before this change the owner chatted with the Strategy Bot itself. That chat stays yours as read-only history under
-**Earlier chats** on your Assistant page, and Confirm cards still waiting there moved to your Assistant chat once. If you
-hand ownership to someone else (Settings > People), that earlier chat goes with the owner seat to the new owner, and the
+Before this change the owner messaged the Strategy Bot itself. That DM stays yours as read-only history under
+**Earlier chats** on your Assistant page, and Confirm cards still waiting there moved to your Assistant DM once. If you
+hand ownership to someone else (Settings > People), that earlier DM goes with the owner seat to the new owner, and the
 cards waiting on you are withdrawn.
 
 ## What it has learned
 
-For the owner, your Assistant keeps two layers, both on **What it has learned** at the top of your chat (`#/assistant/learned`):
+For the owner, your Assistant keeps two layers, both on **What it has learned** at the top of your DM (`#/assistant/learned`):
 
 - **About you**: how you like things ranked and summarised: your [Assistant's](assistant.md#what-it-has-learned)
   private layer. It stays yours if you hand ownership on.
 - **About the company**: the vision (changed on Strategy) and the company goals (changed on Goals), and what you taught it about the
   company ("launches matter more than hiring news for us"). Only you, the owner, read and change it, and only your
-  own Assistant uses it, in your chat: other people's Assistants never see it, administrators cannot add to it, and the
+  own Assistant uses it, in your DM: other people's Assistants never see it, administrators cannot add to it, and the
   Strategy Bot's goals session is not handed it. It stays with the owner seat: a new owner gets it, and you no longer see it.
 
-Teach it in your Assistant chat; it saves one short line in the right layer and says which. Edit or delete lines on the page
-(only your click does). Every turn in your chat reads both layers fresh, so a deleted line is not used from the next
+Teach it in your Assistant DM; it saves one short line in the right layer and says which. Edit or delete lines on the page
+(only your click does). Every turn in your DM reads both layers fresh, so a deleted line is not used from the next
 reply on.
 
 ## What stays yours

@@ -32,6 +32,13 @@ pub fn stateless(config: &Value) -> bool {
     crate::util::truthy(config.get("stateless"))
 }
 
+/// Whether this turn is a nightly memory tidy pass (`memory_pass` in its config, set by backend/check_models.py apply).
+/// It reads its memory like any turn, but commits and pushes none of it: what it changed in its checkout is discarded
+/// once the turn ends (sessions::discard_pass), so no commit of its own reaches the bot's main branch.
+pub fn memory_pass(config: &Value) -> bool {
+    crate::util::truthy(config.get("memory_pass"))
+}
+
 /// How a turn's session began.
 #[derive(Clone, Debug, PartialEq)]
 pub struct Session {
@@ -201,6 +208,12 @@ mod tests {
         assert!(n.contains("Read the task before acting") && !n.contains("memory") && !n.contains("state.md"), "{n}");
         assert!(stateless(&json!({"stateless": true})));
         assert!(!stateless(&json!({"stateless": false})) && !stateless(&json!({"harness": "claude"})));
+    }
+
+    #[test]
+    fn only_a_memory_pass_turn_is_marked_as_one() {
+        assert!(memory_pass(&json!({"memory_pass": true})));
+        assert!(!memory_pass(&json!({"memory_pass": false})) && !memory_pass(&json!({"harness": "claude"})));
     }
 
     #[test]

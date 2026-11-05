@@ -15,4 +15,4 @@ def test_fleet_snapshot_reads_no_assignment_per_bot(api):
     fleet, statements = traced(api, lambda: get(api, "tico/fleet", attempt["token"]))
     assert next(bot for bot in fleet["bots"] if bot["slug"] == "coo")["online"]
     # machine() for each shown bot reads the primed row, not its own assignment SELECT.
-    assert not [s for s in statements if "JOIN runners r ON r.id=a.runner_id WHERE a.bot=" in s]
+    assert not [s for s in statements if "JOIN runners r ON r.id=a.runner_id WHERE a.bot_id=" in s]
