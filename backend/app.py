@@ -708,7 +708,8 @@ def create_app(settings=None):
                     bearer_identity = await asyncio.get_running_loop().run_in_executor(
                         AUTH_POOL, auth.authenticate, request.headers, request.url.path, request.method)
                 except Problem:
-                    pass  # Public routes keep their own credentials; protected routes authenticate below.
+                    # Public routes keep their own credentials; protected routes authenticate below.
+                    bearer_identity = None
                 if bearer_identity and bearer_identity.attempt_id and bearer_identity.role != "runner":
                     request.state.identity = bearer_identity
                     def scoped_bearer_route():

@@ -104,12 +104,12 @@ def project(c, scoped, payload, *, auth=None):
         marks = ','.join('?' * len(chunk))
         files.update((r['id'], r) for r in c.execute(f"SELECT * FROM bot_files WHERE id IN ({marks})", chunk))
     prime_visible(c, list(files.values()))
-    visible = {fid: not row['archived'] and checking(fid, lambda: file_visible(c, auth, scoped.who, row, {}))
+    visible = {fid: not row['archived'] and checking(fid, lambda row=row: file_visible(c, auth, scoped.who, row, {}))
                for fid, row in files.items()}
     denied = {fid for fid, ok in visible.items() if not ok}
     digest_access = {}
     for bid, row in blobs.items():
-        ok = checking(bid, lambda: turn_scope.blob_allowed(c, auth, scoped.who, bid)) is True
+        ok = checking(bid, lambda bid=bid: turn_scope.blob_allowed(c, auth, scoped.who, bid)) is True
         if not ok:
             denied.add(bid)
         digest_access[row['digest']] = digest_access.get(row['digest'], False) or ok
@@ -122,7 +122,7 @@ def project(c, scoped, payload, *, auth=None):
     meetings.update(mid for mid in live.values() if mid)
     for mid in meetings:
         try:
-            checking(mid, lambda: context_search.readable(c, scoped.who, mid, auth=auth))
+            checking(mid, lambda mid=mid: context_search.readable(c, scoped.who, mid, auth=auth))
         except Problem as exc:
             if exc.status not in (403, 404):
                 raise
