@@ -174,7 +174,7 @@ def test_restricted_page_leak_matrix_across_stored_shapes_transports_and_deletio
     read_version = get(api, "tasks/" + read_task, token="reader-test")["task"]["version"]
     post(api, "tasks/" + read_task, {"version": read_version, "private": False}, token="reader-test")
     assert "Canary confidential quote." in json.dumps(get(api, "tasks/" + read_task, token="cara-test"))
-    pick = review_ask(api, "ops-test", [{"file": fid}], on="reader", parent=tid, private=False, pick=True)
+    pick = review_ask(api, "ops-test", [{"file": fid}, {"file": ordinary}], on="reader", parent=tid, private=False, pick=True)
     picked_label = pick["question"]["refs"]["questions"][0]["options"][0]["label"]
     picked_answer = review_answer(api, pick, [picked_label], token="reader-test")
     sibling_ask = ask("reader")

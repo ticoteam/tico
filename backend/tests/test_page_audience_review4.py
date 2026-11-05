@@ -52,7 +52,8 @@ def test_sibling_file_review_options_and_copied_answers_are_scrubbed(api):
 
 def test_real_pick_labels_and_generated_answer_bodies_retain_sources(api):
     tid, _, fid = public_page(api)
-    made = review_ask(api, "ops-test", [{"file": fid}], on="ben", parent=tid, private=False, pick=True)
+    ordinary = post(api, f"tasks/{tid}/files", {"name": "public.txt", "text": "Public choice"})["file_id"]
+    made = review_ask(api, "ops-test", [{"file": fid}, {"file": ordinary}], on="ben", parent=tid, private=False, pick=True)
     option = made["question"]["refs"]["questions"][0]["options"][0]
     assert option["source"] == {"file": fid, "version": 1}
     answered = review_answer(api, made, [option["label"]], token="ben-test")
