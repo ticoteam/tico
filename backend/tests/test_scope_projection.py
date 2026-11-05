@@ -11,8 +11,8 @@ from backend.tests.test_file_reviews import ask, answer
 from backend.tests.test_files import turn
 from backend.tests.test_meeting_items import record
 from backend.tests.test_meeting_task_links import link, task
-from backend.tests.test_turn_scope import blob, make_scope, published, task_turn
 from backend.tests.test_pages import HTML
+from backend.tests.test_turn_scope import blob, make_scope, published, task_turn
 
 
 def no_sources(value, secrets):
@@ -21,18 +21,19 @@ def no_sources(value, secrets):
         assert secret not in wire, (secret, wire[:4000])
 
 
-def sources(api):
+def sources(api, title="Restricted source"):
     machine = runner(api)
     assign(api, machine, "ops")
     ready(api, machine, ["ops"])
     t = post(api, "tasks", {"owner": "ops", "title": "Review source context", "body": "Review the sources.", "private": False})
     publisher = claim(api, machine, "ops", key="source-publish")
-    hidden = published(api, publisher, task=t["id"], name="restricted.html", title="Restricted source",
-                       data=HTML + b"<p>Restricted source content</p>")
+    hidden = published(api, publisher, task=t["id"], name="restricted.html", title=title,
+                       data=HTML + b"<p>Restricted unique bytes</p>")
     allowed = published(api, publisher, task=t["id"], name="allowed.html", title="Allowed source")
     made = ask(api, publisher["token"], [{"file": hidden}, {"file": allowed}], pick=True,
                parent=t["id"], private=False)
-    answered = answer(api, made, ["Restricted source"])
+    label = made["question"]["refs"]["questions"][0]["options"][0]["label"]
+    answered = answer(api, made, [label])
     meeting = record(api, {"private": False, "title": "Restricted meeting"})
     link(api, meeting, [t["id"]])
     good_meeting = record(api, {"private": False, "title": "Allowed meeting"})
@@ -40,15 +41,15 @@ def sources(api):
     bid = blob(api, hidden)
     with api.app.state.store.read() as c:
         version = dict(c.execute("SELECT * FROM bot_file_versions WHERE file_id=?", (hidden,)).fetchone())
-    return dict(task=t, machine=machine, publisher=publisher, hidden=hidden, allowed=allowed, made=made, answered=answered, meeting=meeting,
+    return dict(task=t, source_title=title, source_label=label, machine=machine, publisher=publisher, hidden=hidden, allowed=allowed, made=made, answered=answered, meeting=meeting,
                 good_meeting=good_meeting, bid=bid, version=version)
 
 
 def narrow(api, data):
     from backend import meetings
-    private = task(api, owner="human:ben", requester="human:ben", private=True)
+    archived = api.patch("/api/v2/files/" + data["hidden"], json={"archived": True}, headers=headers())
+    assert archived.status_code == 200, archived.text
     with api.app.state.store.transaction() as c:
-        c.execute("INSERT INTO task_assets(task_id,blob_id) VALUES(?,?)", (private["id"], data["bid"]))
         row = meetings.get(data["meeting"], c)
         meetings.snapshot({**row["metadata"], "private": True, "audience": "participants"}, conn=c)
 
@@ -56,7 +57,7 @@ def narrow(api, data):
 def secrets(data):
     v = data["version"]
     return tuple(x for x in (data["hidden"], data["bid"], v["digest"], v["source_digest"],
-                            "Restricted source", "restricted.html", data["meeting"], "Restricted meeting") if x)
+                            data["source_title"], data["source_label"], "restricted.html", data["meeting"], "Restricted meeting") if x)
 
 
 def scoped(api, data, make):
@@ -82,6 +83,12 @@ def test_real_write_leak_sweep(api, make):
     option = data["made"]["question"]["refs"]["questions"][0]["options"][0]
     assert option["source"]["file"] == data["hidden"]
     assert data["answered"]["answer"]["label_sources"]["decision"]["Restricted source"]["file"] == data["hidden"]
+    if not make:
+        assert data["hidden"] in json.dumps(attempt["task_context"])
+        post(api, f'attempts/{attempt["id"]}/started', {"thread_id": "scope-inputs"}, token=machine["token"])
+        steering = post(api, f"tasks/{tid}/comments", {"text": "Read these source versions", "delivery": "steer",
+            "attachments": [data["hidden"] + "@1", data["allowed"] + "@1"]})["comment"]
+        assert data["hidden"] in json.dumps(steering["refs"])
     narrow(api, data)
     paths = [f"tasks/{tid}/context", "pages/" + data["allowed"], "meetings/transcript?id=" + data["good_meeting"]]
     if not make:
@@ -108,11 +115,11 @@ def test_real_write_leak_sweep(api, make):
     if not make:
         replay = claim(api, machine, "ops", key="real-write-claim")
         no_sources(replay, secrets(data))
-        post(api, f'attempts/{attempt["id"]}/started', {"thread_id": "scope-inputs"}, token=machine["token"])
-        # The normal task comment API queues a steering input for the active turn.
-        post(api, f"tasks/{tid}/comments", {"text": "Read the review on the task"})
         for key in ("real-input", "real-input", "real-input-fresh"):
-            no_sources(post(api, f'attempts/{attempt["id"]}/inputs', {}, machine["token"], key=key), secrets(data))
+            delivered = post(api, f'attempts/{attempt["id"]}/inputs', {}, machine["token"], key=key)
+            assert steering["id"] in [m["id"] for m in delivered["messages"]]
+            assert data["allowed"] in json.dumps(delivered)
+            no_sources(delivered, secrets(data))
 
 
 @pytest.mark.parametrize("make", [False, True], ids=["task-bot", "make-page"])
@@ -188,8 +195,34 @@ def test_sweep_detects_disabling_either_boundary(api, monkeypatch):
         patch.setattr(turn_scope, "project", lambda c, scoped, payload, **kw: payload)
         with pytest.raises(AssertionError):
             no_sources(get(api, path, attempt["token"]), secrets(data))
+    _, make = scoped(api, data, True)
     with monkeypatch.context() as patch:
         patch.setattr(scoped_routes, "require_route", lambda *a: None)
-        # The same sweep's deny assertion fails when the allowlist is bypassed.
+        # Make's owner identity otherwise reaches CSV bytes outside the JSON projector.
         with pytest.raises(AssertionError):
-            get(api, "history.csv?kind=decision", attempt["token"], expected=403)
+            get(api, "history.csv?kind=decision", make["token"], expected=403)
+
+
+def test_transformed_review_labels_keep_provenance(api):
+    data = sources(api, title="Restricted-source.html")
+    assert data["source_label"] == "Restricted source"
+    _, attempt = scoped(api, data, False)
+    narrow(api, data)
+    for mid in (data["made"]["question"]["id"], data["answered"]["comment"]["id"]):
+        no_sources(get(api, "messages/" + mid, attempt["token"]), secrets(data))
+
+
+def test_legacy_fallback_keeps_unrelated_labels_and_opaque_text(api):
+    data = sources(api)
+    _, attempt = scoped(api, data, False)
+    other = post(api, "tasks", {"owner": "ops", "title": "Choose a label", "body": "Choose a label", "private": False})
+    post(api, f'tasks/{other["id"]}/comments', {"text": "Choose a label", "ask": {
+        "who": "ben", "questions": [{"id": "label", "header": "Label", "question": "Which label?", "options": [
+            {"label": "Restricted source", "then": "Use this label"}, {"label": "Keep", "then": "Keep this label"}]}]}})
+    text = '{"digest":"example"} ' + data["hidden"]
+    comment = post(api, f'tasks/{data["task"]["id"]}/comments', {"text": text})["comment"]
+    narrow(api, data)
+    shown = get(api, "tasks", attempt["token"])
+    row = next(t for t in shown["tasks"] if t["id"] == other["id"])
+    assert row["ask"]["refs"]["questions"][0]["options"][0]["label"] == "Restricted source"
+    assert get(api, "messages/" + comment["id"], attempt["token"])["body"] == text

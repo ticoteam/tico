@@ -40,6 +40,8 @@ def project(c, scoped, payload, *, auth=None):
         if isinstance(value, dict):
             if "owner_id" in value and "title" in value and isinstance(value.get("id"), str):
                 task_ids.add(value["id"])
+            if isinstance(value.get("task"), str):
+                task_ids.add(value["task"])
             if isinstance(value.get("task_id"), str):
                 task_ids.add(value["task_id"])
                 if value.get("field") == "file" and isinstance(value.get("id"), str):
@@ -71,13 +73,13 @@ def project(c, scoped, payload, *, auth=None):
     legacy_sources = []
     for chunk in H.chunks(sorted(task_ids)):
         marks = ','.join('?' * len(chunk))
-        legacy_sources.extend(c.execute(f"SELECT id,title FROM bot_files WHERE task_id IN ({marks}) OR scope IN ({marks})",
+        legacy_sources.extend(c.execute(f"SELECT id,title,task_id,scope FROM bot_files WHERE task_id IN ({marks}) OR scope IN ({marks})",
                                          (*chunk, *("task:" + tid for tid in chunk))))
-        legacy_sources.extend(c.execute(f"SELECT f.id,v.name AS title FROM bot_files f JOIN bot_file_versions v ON v.file_id=f.id "
+        legacy_sources.extend(c.execute(f"SELECT f.id,v.name AS title,f.task_id,f.scope FROM bot_files f JOIN bot_file_versions v ON v.file_id=f.id "
                                          f"WHERE f.task_id IN ({marks})", chunk))
-        legacy_sources.extend(c.execute(f"SELECT b.id,b.name AS title FROM blobs b JOIN task_assets a ON a.blob_id=b.id "
+        legacy_sources.extend(c.execute(f"SELECT b.id,b.name AS title,a.task_id,'' AS scope FROM blobs b JOIN task_assets a ON a.blob_id=b.id "
                                          f"WHERE a.task_id IN ({marks})", chunk))
-        legacy_sources.extend(c.execute(f"SELECT m.id,m.title FROM meetings m JOIN meeting_task_links l ON l.meeting_id=m.id "
+        legacy_sources.extend(c.execute(f"SELECT m.id,m.title,l.task_id,'' AS scope FROM meetings m JOIN meeting_task_links l ON l.meeting_id=m.id "
                                          f"WHERE l.task_id IN ({marks})", chunk))
     delivered_names = set(names)
     names.update(row['id'] for row in legacy_sources)
@@ -137,7 +139,35 @@ def project(c, scoped, payload, *, auth=None):
             if exc.status not in (403, 404):
                 raise
             denied.add(rid)
-    legacy_titles = {r['title'] for r in legacy_sources if r['id'] in denied and r['title']}
+    titles_by_task, titles_by_source = {}, {}
+    for row in legacy_sources:
+        if row['id'] not in denied or not row['title']:
+            continue
+        titles_by_source.setdefault(row['id'], set()).add(row['title'])
+        for tid in (row['task_id'], row['scope'][5:] if row['scope'].startswith('task:') else None):
+            if tid:
+                titles_by_task.setdefault(tid, set()).add(row['title'])
+
+    for fid, row in files.items():
+        if fid in denied and row['title']:
+            titles_by_source.setdefault(fid, set()).add(row['title'])
+
+    def task_titles(ids):
+        return set().union(*(titles_by_task.get(tid, set()) for tid in ids))
+
+    def attached_titles(value, parent=''):
+        found = set()
+        if isinstance(value, dict):
+            for key, item in value.items():
+                if key in REF_FIELDS or key == 'id' and parent in SOURCE_LISTS:
+                    found.update(titles_by_source.get(reference(item), set()))
+                found.update(attached_titles(item, key))
+        elif isinstance(value, list):
+            for item in value:
+                if parent in SOURCE_LISTS and isinstance(item, str):
+                    found.update(titles_by_source.get(reference(item), set()))
+                found.update(attached_titles(item, parent))
+        return found
     gone = object()
 
     def rejected(value):
@@ -152,8 +182,21 @@ def project(c, scoped, payload, *, auth=None):
             return any(has_denied(item) for key, item in value.items() if key in REF_FIELDS or key == 'id')
         return False
 
-    def walk(value, parent=''):
+    def walk(value, parent='', legacy_titles=None):
+        legacy_titles = task_titles(scoped.tasks) if legacy_titles is None else legacy_titles
         if isinstance(value, dict):
+            # A same-spelled label on another task has no relationship to this task's rejected source.
+            refs = value.get('refs') if isinstance(value.get('refs'), dict) else {}
+            tid = refs.get('task') or value.get('task_id')
+            if 'owner_id' in value and 'title' in value:
+                tid = value.get('id')
+            if isinstance(value.get('task'), dict):
+                tid = value['task'].get('id')
+            if isinstance(tid, str):
+                legacy_titles = task_titles((tid,))
+            if refs or isinstance(value.get('answers'), dict):
+                legacy_titles = legacy_titles | attached_titles(refs or value)
+
             if value.get('field') == 'file' and (has_denied(event_sources.get(value.get('id'))) or
                     value.get('id') not in event_sources and any(value.get(k) in legacy_titles for k in ('old', 'new'))):
                 return gone
@@ -169,7 +212,7 @@ def project(c, scoped, payload, *, auth=None):
             for key, item in value.items():
                 if key == 'refs_json':
                     continue
-                shown = walk(item, key)
+                shown = walk(item, key, legacy_titles)
                 if shown is not gone:
                     out[key] = shown
             # The answer map holds selected labels as strings, with their provenance next to the map.
@@ -203,7 +246,7 @@ def project(c, scoped, payload, *, auth=None):
             for item in value:
                 if parent in SOURCE_LISTS and isinstance(item, str) and rejected(item):
                     continue
-                shown = walk(item, parent)
+                shown = walk(item, parent, legacy_titles)
                 if shown is not gone:
                     out.append(shown)
             return out
