@@ -2,10 +2,8 @@
 Connect mailbox (a person's address is theirs, any other is a shared inbox or waits for its person); Make shared inbox;
 who can use one mailbox (Read / Read and write), granted and revoked by its owner, or an admin for a shared inbox, and
 nobody else; Stop using in Tico. Every write is a person acting as themselves: the Assistant, a bot and a task actor are
-refused, and the Assistant's turn never admits these routes (backend/assistant.py NEVER).
-
-The `mailboxes` and `mailbox_accesses` tables are made here, as the contract stub backend/mailbox_access.py expects,
-until track A's migration 0082_mailboxes.py lands (then the `tables` fixture's DDL goes)."""
+refused, and the Assistant's turn never admits these routes (backend/assistant.py NEVER). The rule and the events of
+grant, revoke, share and stop are backend/mailbox_access.py's; these routes write no second copy."""
 import pytest
 
 from backend import mailboxes, openapi_v2
@@ -15,21 +13,8 @@ from backend.tests.test_api import api, get, headers, post  # noqa: F401  (the a
 from backend.store import Problem
 from backend.tests.test_openapi_v2 import conforms
 
-DDL = (
-    "CREATE TABLE IF NOT EXISTS mailboxes(id TEXT PRIMARY KEY, address TEXT NOT NULL UNIQUE, provider TEXT NOT NULL, "
-    "person_id TEXT, kind TEXT NOT NULL, connection TEXT NOT NULL, status TEXT NOT NULL, shared_by TEXT, shared_at TEXT, "
-    "created_by TEXT, created_at TEXT NOT NULL, updated_at TEXT NOT NULL)",
-    "CREATE TABLE IF NOT EXISTS mailbox_accesses(id TEXT PRIMARY KEY, mailbox_id TEXT NOT NULL, grantee_type TEXT NOT "
-    "NULL, grantee_id TEXT NOT NULL, level TEXT NOT NULL, granted_by TEXT, created_at TEXT NOT NULL, updated_at TEXT NOT "
-    "NULL, UNIQUE(mailbox_id, grantee_type, grantee_id))",
-)
-
-
 @pytest.fixture
 def mb(api):
-    with api.app.state.store.transaction() as c:
-        for statement in DDL:
-            c.execute(statement)
     ids = api.app.state.store.settings.test_identities
     ids["ana-assistant"] = Identity("human:ana", "owner", "ana@acme.example", via="assistant")
     ids["cara-assistant"] = Identity("human:cara", "human", "cara@acme.example", via="assistant")
@@ -126,8 +111,8 @@ def test_the_owner_or_an_admin_on_a_shared_inbox_grants_changes_and_revokes_and_
     assert [(a["grantee_type"], a["name"], a["implicit"]) for a in bot["accesses"]] == [
         ("admins", "Admins", True), ("bot", "ops", False)]
     grant(mb, support, "cara", token="cara-test", expected=403)
-    assert (events(mb, "mailbox.access.grant"), events(mb, "mailbox.access.change"),
-            events(mb, "mailbox.access.revoke")) == (2, 1, 1)
+    # One event per change, mailbox_access's own: two grants and a level change, one revoke.
+    assert (events(mb, "mailbox.access_granted"), events(mb, "mailbox.access_revoked")) == (3, 1)
 
 
 def test_nobody_acting_for_a_person_changes_who_can_use_a_mailbox(mb):
@@ -167,7 +152,7 @@ def test_one_mailbox_reads_only_for_who_can_use_it_and_admins_and_lists_its_rout
     assert mine["can_manage"] is True and mine["can_stop"] is True
     assert any(x["type"] == "person" and x["id"] == "ben" for x in mine["candidates"])
     assert not any(x["type"] == "person" and x["id"] == "ana" for x in mine["candidates"])
-    assert any(x["type"] == "bot" and x["id"] == "ops" for x in mine["candidates"])
+    assert any(x["type"] == "bot" and x["name"] == "ops" for x in mine["candidates"])   # by its id
     assert [m["routines"] for m in get(mb, "mailboxes")["mailboxes"] if m["id"] == ana] == [[{"id": aid, "name": "Triage"}]]
     # Cara has no access to Ana's: it isn't there for her.
     get(mb, f"mailboxes/{ana}", "cara-test", expected=404)
@@ -193,7 +178,7 @@ def test_make_shared_and_stop(mb):
     r = call(mb, "DELETE", f"mailboxes/{cara}", "cara-test")
     assert r.status_code == 200 and r.json()["mailbox"]["status"] == "stopped" and r.json()["mailbox"]["state"] == "stopped"
     assert get(mb, "mailboxes", "cara-test")["mine"] is None
-    assert events(mb, "mailbox.stop") == 2 and events(mb, "mailbox.share") == 1
+    assert events(mb, "mailbox.stopped") == 2 and events(mb, "mailbox.shared") == 1
 
 
 def test_the_declared_answers_match_the_live_ones(mb):

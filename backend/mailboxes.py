@@ -3,8 +3,9 @@
 GET /api/v2/mailboxes is the page: for an admin every mailbox with its person, status and routines; for everyone their
 own mailbox and the ones shared with them. One mailbox's page lists who can use it (Read / Read and write) and its
 routines (message automations whose trigger inbox is this address; they are switched on and off with the automation
-routes). Who may grant, revoke, share and stop is backend/mailbox_access.py's rule; this module only reads and calls it.
-Every write is a person acting as themselves: never a bot, BotOps or the Assistant (backend/assistant.py NEVER)."""
+routes). Who holds what, and who may grant, revoke, share and stop, is backend/mailbox_access.py's rule, which also
+writes those changes' events; this module reads it and calls it. Every write is a person acting as themselves: never a
+bot, BotOps or the Assistant (backend/assistant.py NEVER)."""
 import json
 import re
 
@@ -43,6 +44,18 @@ def _box(c, mid):
     return dict(row)
 
 
+def _manages(c, who, box):
+    """Whether `who` may change who uses `box`: MA's own check (its person for a personal mailbox, an admin for a shared
+    inbox; nobody while it awaits its person or once it is stopped), asked without raising."""
+    if box["status"] != "active":
+        return False
+    try:
+        MA._manager(c, who, box, "change who uses this mailbox")
+    except Problem:
+        return False
+    return True
+
+
 def _routines(c):
     """{address: [{id, name, enabled, flow}]}: the live message automations, by the inbox their trigger hears."""
     out = {}
@@ -78,6 +91,13 @@ class _Reader:
         from .views import roster
         self.c, self.who, self.roster = c, who, roster(c)
         self.live, self.routines = _live_mailboxes(c), _routines(c)
+        self.facts, self.principal = MA._Facts(c), MA.principal(c, who)
+
+    def level(self, box):
+        """What the viewer holds on `box` (MA.level, with the roster and admins read once for the page)."""
+        if self.principal.kind == "none":
+            return "none"
+        return MA._level(self.facts, self.principal, box["address"], box)
 
     def person_name(self, pid):
         found = P.person(pid, self.roster) if pid else None
@@ -89,7 +109,7 @@ class _Reader:
                 "person_id": box["person_id"], "person_name": self.person_name(box["person_id"]),
                 "connection": "workspace" if covers(self.c, box["address"]) else "personal", "status": box["status"],
                 "state": _state(self.c, box, self.live),
-                "level": MA._level_of(self.c, self.who, box),
+                "level": self.level(box),
                 "routines": [{"id": r["id"], "name": r["name"]} for r in self.routines.get(box["address"], [])]}
 
 
@@ -114,7 +134,7 @@ def listing(c, who):
                 None)
     out["mine"] = read.row(mine) if mine else None
     out["shared"] = [read.row(b) for b in boxes if b is not mine and b["status"] == "active"
-                     and MA._level_of(c, who, b) != "none"]
+                     and read.level(b) != "none"]
     out["mailboxes"] = [read.row(b) for b in boxes] if admin else []
     return out
 
@@ -123,7 +143,7 @@ def _candidates(read, box, taken):
     """Who may be given access: people on the roster and active bots, less the owner and anyone with a row."""
     people = [{"type": "person", "id": p["id"], "name": p.get("name") or p["id"]}
               for p in (read.roster or {}).get("people") or [] if not p.get("hidden")]
-    bots = [{"type": "bot", "id": b["slug"], "name": b.get("display_name") or b["slug"]}
+    bots = [{"type": "bot", "id": b["id"], "name": b.get("display_name") or b["slug"]}
             for b in H.bots(read.c, state="active")]
     return [x for x in people + bots if (x["type"], x["id"]) not in taken
             and not (x["type"] == "person" and x["id"] == box["person_id"])]
@@ -132,8 +152,8 @@ def _candidates(read, box, taken):
 def detail(c, who, mid):
     box = _box(c, mid)
     read = _Reader(c, who)
-    lvl = MA._level_of(c, who, box)
-    manages = MA.may_manage(c, who, box)
+    lvl = read.level(box)
+    manages = _manages(c, who, box)
     if lvl == "none" and not manages and not _admin(c, who):
         raise Problem("not_found", "No such mailbox", 404)
     acting_for = bool(who.via or who.task_actor)   # the Assistant reads it as the person, with no controls
@@ -145,7 +165,7 @@ def detail(c, who, mid):
     elif box["kind"] == "shared":
         accesses.append({"id": None, "grantee_type": "admins", "grantee_id": "", "name": "Admins",
                          "level": "read_write", "implicit": True})
-    bot_names = {b["slug"]: b.get("display_name") or b["slug"] for b in H.bots(c)}
+    bot_names = {b["id"]: b.get("display_name") or b["slug"] for b in H.bots(c)}
     taken = set()
     for row in c.execute("SELECT * FROM mailbox_accesses WHERE mailbox_id=? ORDER BY created_at", (box["id"],)):
         taken.add((row["grantee_type"], row["grantee_id"]))
@@ -223,8 +243,7 @@ def install(app, store):
         who = request.state.identity
         _person(who)
         with store.transaction() as c:
-            MA.make_shared(c, who, mid)
-            H.event(c, who.actor, "mailbox.share", mid, {})
+            MA.make_shared(c, who, mid)   # writes mailbox.shared
         with store.read() as c:
             return detail(c, who, mid)
 
@@ -236,23 +255,23 @@ def install(app, store):
         _person(who)
         with store.transaction() as c:
             box = _box(c, mid)
-            if not MA.may_manage(c, who, box):   # refused before anything is looked up for them
-                raise Problem("forbidden", "Only the mailbox's owner, or an admin for a shared inbox, changes who can "
-                              "use it", 403)
+            MA._manager(c, who, box, "change who uses this mailbox")   # refused before anything is looked up
+            grantee = body.grantee_id.strip()
             if body.grantee_type == "person":
-                if not P.person(body.grantee_id, roster(c)):
+                grantee = H.actor_id(grantee)
+                if not P.person(grantee, roster(c)):
                     raise Problem("not_found", "No such person", 404)
-                if body.grantee_id == box["person_id"]:
+                if grantee == box["person_id"]:
                     raise Problem("conflict", "That person's own mailbox: they already have Read and write", 409)
-            elif not c.execute("SELECT 1 FROM bots WHERE slug=? AND state='active'", (body.grantee_id,)).fetchone():
-                raise Problem("not_found", "No such bot", 404)
+            else:
+                bot = H.resolve_bot(c, grantee)
+                if not bot or bot["state"] == "archived":
+                    raise Problem("not_found", "No such bot", 404)
+                grantee = bot["id"]
             if c.execute("SELECT 1 FROM mailbox_accesses WHERE mailbox_id=? AND grantee_type=? AND grantee_id=?",
-                         (box["id"], body.grantee_type, body.grantee_id)).fetchone():
+                         (box["id"], body.grantee_type, grantee)).fetchone():
                 raise Problem("conflict", "They already have access: change their level instead", 409)
-            aid = MA.grant(c, who, box["id"], body.grantee_type, body.grantee_id, body.level)
-            H.event(c, who.actor, "mailbox.access.grant", box["id"],
-                    {"access_id": aid, "grantee_type": body.grantee_type, "grantee_id": body.grantee_id,
-                     "level": body.level})
+            MA.grant(c, who, box["id"], body.grantee_type, grantee, body.level)   # writes mailbox.access_granted
         with store.read() as c:
             return detail(c, who, mid)
 
@@ -266,8 +285,7 @@ def install(app, store):
             row = c.execute("SELECT * FROM mailbox_accesses WHERE id=? AND mailbox_id=?", (access_id, box["id"])).fetchone()
             if not row:
                 raise Problem("not_found", "No such access", 404)
-            MA.grant(c, who, box["id"], row["grantee_type"], row["grantee_id"], body.level)
-            H.event(c, who.actor, "mailbox.access.change", box["id"], {"access_id": access_id, "level": body.level})
+            MA.grant(c, who, box["id"], row["grantee_type"], row["grantee_id"], body.level)   # mailbox.access_granted
         with store.read() as c:
             return detail(c, who, mid)
 
@@ -278,8 +296,7 @@ def install(app, store):
         _person(who)
         with store.transaction() as c:
             box = _box(c, mid)
-            MA.revoke(c, who, box["id"], access_id)
-            H.event(c, who.actor, "mailbox.access.revoke", box["id"], {"access_id": access_id})
+            MA.revoke(c, who, box["id"], access_id)   # writes mailbox.access_revoked
         with store.read() as c:
             return detail(c, who, mid)
 
@@ -289,7 +306,6 @@ def install(app, store):
         who = request.state.identity
         _person(who)
         with store.transaction() as c:
-            MA.stop(c, who, mid)
-            H.event(c, who.actor, "mailbox.stop", mid, {})
+            MA.stop(c, who, mid)   # writes mailbox.stopped
         with store.read() as c:
             return {"mailbox": _Reader(c, who).row(_box(c, mid))}
