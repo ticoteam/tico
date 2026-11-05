@@ -111,6 +111,7 @@ let browser = null;
     assert.match(await line(page, 'n1').innerText(), /^Health check\s+New task: Health: Watchers\./);
     const tall = await page.locator('.thv-list .src-line').evaluateAll(els => els.filter(el => el.getBoundingClientRect().height > 30).map(el => el.textContent.slice(0, 40)));
     assert.deepEqual(tall, [], 'every gray line is one line');
+    assert.match(await line(page, 'n1').getAttribute('title'), /\n\nNew task: Health: Watchers\./, 'the hover has the whole of a long line');
     // The group's row lines up with the lines around it.
     const pad = el => el.evaluate(e => getComputedStyle(e).paddingLeft);
     assert.equal(await pad(group.locator('> summary')), await pad(line(page, 'k4')));
