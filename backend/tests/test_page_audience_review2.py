@@ -45,12 +45,18 @@ def test_counsel_edit_then_narrow_scrubs_history_comments_results_and_sse(api):
         c.execute("UPDATE tasks SET checkpoint=?,resume=? WHERE id=?", (original, json.dumps({"text": original}), tid))
         c.execute("UPDATE attempts SET result=?,final_text=?,summary=? WHERE id=?",
                   (json.dumps({"text": original, "outcome": "completed"}), original, original, aid))
+        receipt = c.execute("SELECT key FROM idempotency WHERE operation='/api/v2/jobs/claim' "
+                            "AND json_extract(response,'$.attempt.id')=?", (aid,)).fetchone()[0]
+        c.execute("UPDATE idempotency SET response=json_set(response,'$.attempt.deferred',?,'$.attempt.task.resume_json',?) "
+                  "WHERE operation='/api/v2/jobs/claim' AND key=?", (original, json.dumps({"text": original}), receipt))
         before = events.latest(c)
     edit(api, fid, {"people": ["cara"]})
     result = get(api, "tasks/" + tid, token="cara-test")
     assert result["task"]["body"] == counsel.REMOVED_PAGE
     assert result["events"] and "42 deals" not in json.dumps(result)
     replay = post(api, "tasks/" + tid, changed, token="cara-test", key="edit-page-copy")
+    assert "42 deals" not in json.dumps(replay)
+    replay = post(api, "jobs/claim", {"bot": None, "start_places": True}, token=machine["token"], key=receipt)
     assert "42 deals" not in json.dumps(replay)
     with api.app.state.store.read() as c:
         delivered, cursor, reset, _ = events.read(c, api.app.state.auth,

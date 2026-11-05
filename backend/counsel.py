@@ -534,7 +534,11 @@ def scrub_page_task(c, tid):
     ids = {tid, *(mid for (mid,) in messages), *(a["id"] for a in attempts)}
     def clean(value):
         if isinstance(value, dict):
-            return {k: (REMOVED_PAGE if k in {"title", "body", "text", "note", "summary", "checkpoint", "old", "new"}
+            value = {**value, **({"deferred": ""} if "deferred" in value else {}),
+                     **({"notes": []} if "notes" in value else {}),
+                     **({"resume_json": None} if "resume_json" in value else {}),
+                     **({"acceptance_json": "[]"} if "acceptance_json" in value else {})}
+            return {k: (REMOVED_PAGE if k in {"title", "body", "text", "note", "summary", "checkpoint", "resume", "old", "new"}
                         and isinstance(v, str) else clean(v)) for k, v in value.items()}
         return [clean(v) for v in value] if isinstance(value, list) else value
     for row in list(c.execute("SELECT actor,operation,key,response FROM idempotency WHERE binding IS NULL")):
