@@ -10,6 +10,7 @@ import json
 
 import pytest
 
+from backend import bot_settings as BS
 from backend import hubdb as H
 from backend.finance import actions as FA
 from backend.finance import delivery
@@ -30,8 +31,7 @@ LATER = "2026-10-16T13:00:00.000000Z"
 
 def _mailbox(c, can=("read", "send"), box=BOX) -> None:
     tools = [{"service": "gmail", "identity": box, "can": list(can)}]
-    c.execute("UPDATE bot_config SET config=? WHERE bot='bookkeeper'",
-              (json.dumps({"team": "eng", "tools": tools}),))
+    BS.write(c, "bookkeeper", {"team": "eng", "tools": tools})
 
 
 def _customer(c, emails=(EMAIL,)) -> str:

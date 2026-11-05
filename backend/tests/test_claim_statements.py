@@ -2,6 +2,7 @@
 work for (execution.candidate, claim_loads.read). Measured on the store's connections, as the claim makes them."""
 import contextlib
 
+from backend import bot_settings as BS
 from backend.store import H
 from backend.tests.test_api import api  # noqa: F401  (the fixture)
 from backend.tests.test_api import assign, headers, post, ready, runner
@@ -18,8 +19,8 @@ def seed(api, prefix, count):
         H.sync_registry(c, {s: {"name": s, "runtime": "fake", "status": "active"} for s in slugs},
                         {"people": [{"id": p, "email": p + "@acme.example"} for p in ("ana", "ben")]})
         for s in slugs:
-            c.execute("INSERT INTO bot_config(bot,config,owner_id) VALUES(?,?,'ana')",
-                      (s, '{"name": "%s", "runtime": "fake"}' % s))
+            c.execute("INSERT INTO bot_config(bot,owner_id) VALUES(?,'ana')", (s,))
+            BS.write(c, s, {"name": s, "runtime": "fake"})
     machine = runner(api, label=f"Statements {prefix}")
     for s in slugs:
         assign(api, machine, s)

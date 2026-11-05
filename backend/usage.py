@@ -15,14 +15,15 @@ from fastapi import Request
 
 from . import bot_access as A
 from . import models as M
-from . import providers, usage_limits, views
+from . import providers, queue_purge, usage_limits, views
 from .store import H, P, Problem
 from .usage_records import RUNS
 from .subscription_identity import usage_label
 
+# A subscription run is its computer's subscription; a run with no lease (from before leases) names only its profile.
 DIMENSIONS = {"harness": "coalesce(t.harness, '')", "model": "coalesce(t.model, '')",
               "effort": "coalesce(t.effort, '')", "subscription": "CASE WHEN t.billing='subscription' AND coalesce(t.profile, '') != '' "
-              "THEN coalesce((SELECT 'subscription:' || json_array(a.runner_id, t.profile) FROM attempts a WHERE a.id=t.id), "
+              "THEN coalesce((SELECT 'subscription:' || json_array(a.runner_id, t.profile) FROM attempts a WHERE a.id=t.id AND a.runner_id IS NOT NULL), "
               "'legacy-profile:' || t.profile) ELSE '' END"}
 # A run's task by its title, so a routine's runs add up under one row; a private task is named only as one, a task the
 # reader cannot open now (moved to a bot whose activity they may not read) only as that, and a run with no task (a chat,
@@ -43,7 +44,7 @@ TOP_TASKS = 25
 LOW = ("coalesce(t.est_cost_low, lower(coalesce(t.model, '')) IN ("
        + ",".join(f"'{model}'" for model in sorted(providers.LONG_PROMPT)) + "))")
 
-# Sums over `turns` shared by every grouping. A run with no token counts (a runtime that reports none,
+# Sums over the runs (usage_records.RUNS) shared by every grouping. A run with no token counts (a runtime that reports none,
 # or one from before usage) still counts as a run.
 SUMS = f"""count(DISTINCT t.id) AS runs,
   sum(coalesce(t.input_tokens, 0)) AS input_tokens,
@@ -331,6 +332,23 @@ def install(app, store, auth, mutate, settings):
     def set_group_pool(request: Request, group: str, body: M.UsageLimit):
         """A limit on the spend of a group's bots together, nested groups included: over it, none of them takes a new job."""
         return set_pool(request, "group:" + group, body)
+
+    @app.post("/api/v2/usage/queues/purge")
+    def purge_queue(request: Request, body: M.QueuePurge):
+        """Cancel queued automatic wakes and waits for the team or one group. Tasks stay. Messages from people stay
+        queued. A run that has already started finishes."""
+        who = request.state.identity
+        auth.domain(who)
+
+        def work(c):
+            if not auth.bot_admin(who):
+                raise Problem("forbidden", "Only the owner and administrators clear the automatic queue", 403)
+            scope = (body.scope or usage_limits.COMPANY).strip()
+            bots = queue_purge.bots_for(c, scope)
+            result = queue_purge.apply(c, bots)
+            H.event(c, who.actor, "usage.queue-purged", scope, result)
+            return {"scope": scope, **result}
+        return mutate(request, body, work)
 
     @app.put("/api/v2/usage/limits/{bot}")
     def set_limit(request: Request, bot: str, body: M.UsageLimit):

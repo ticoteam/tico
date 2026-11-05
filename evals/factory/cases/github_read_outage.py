@@ -28,7 +28,7 @@ def during(run, w, team, i):
     w.github_fault = FAULTS[int(since / at(1))] if at(0) <= since < at(OUTAGE_HOURS) else None
     if w.github_fault and run.child is None:
         # A person files a task under the first ticket the outage holds: a question for them to answer.
-        held = w.sql("SELECT id FROM tasks WHERE type_id=? AND EXISTS (SELECT 1 FROM task_events e WHERE e.task_id=tasks.id AND e.field='move_retry') ORDER BY created_at, id LIMIT 1",
+        held = w.sql("SELECT id FROM tasks WHERE type_id=? AND EXISTS (SELECT 1 FROM history_events e WHERE e.subject_type='task' AND e.subject_id=tasks.id AND e.kind='move_retry') ORDER BY created_at, id LIMIT 1",
                      (w.dev["id"],))
         if held:
             child = w.post("tasks", {"owner": "ana", "title": "Confirm the wording with support",
@@ -44,7 +44,7 @@ def during(run, w, team, i):
 def _outage_refusals(run):
     """{ticket id: (first refusal ts, the step it was going to)} for review moves refused while GitHub was unreadable."""
     out = {}
-    for e in run.w.sql("SELECT task_id, new, created_at FROM task_events WHERE field='move_retry' ORDER BY created_at, rowid"):
+    for e in run.w.sql("SELECT subject_id AS task_id, new, created_at FROM history_events WHERE subject_type='task' AND kind='move_retry' ORDER BY created_at, rowid"):
         detail = json.loads(e["new"] or "{}")
         if detail.get("outage") and e["task_id"] not in out:
             out[e["task_id"]] = (e["created_at"], detail.get("step"))
@@ -76,8 +76,8 @@ def moved_once_github_reads(run):
         clears = RECOVERED
         if run.child and run.child[0] == task_id:
             clears = max(clears, run.child[2] or run.end)
-        moved = w.sql("SELECT e.created_at FROM task_events e JOIN task_steps s ON s.id=e.new WHERE e.task_id=? "
-                      "AND e.field='step' AND e.created_at>? AND s.name<>? ORDER BY e.created_at, e.rowid LIMIT 1",
+        moved = w.sql("SELECT e.created_at FROM history_events e JOIN task_steps s ON s.id=e.new WHERE e.subject_type='task' AND e.subject_id=? "
+                      "AND e.kind='step' AND e.created_at>? AND s.name<>? ORDER BY e.created_at, e.rowid LIMIT 1",
                       (task_id, first, hold))
         when = w.H.parse_ts(moved[0]["created_at"]) if moved else None
         if not when or when > clears + slack:
@@ -97,7 +97,7 @@ def told_once_per_move(run):
     gates = [(n["task"], n["gate"]) for n in notices if n["gate"]]
     bad += [f"{w.title(t)} refusal told {gates.count((t, g))}x" for t, g in sorted(set(gates)) if gates.count((t, g)) > 1]
     for n in (n for n in notices if n["moved"]):
-        real = w.sql("SELECT 1 FROM task_events e JOIN task_steps s ON s.id=e.new WHERE e.task_id=? AND e.field='step' "
+        real = w.sql("SELECT 1 FROM history_events e JOIN task_steps s ON s.id=e.new WHERE e.subject_type='task' AND e.subject_id=? AND e.kind='step' "
                      "AND e.created_at=? AND s.name<>?", (n["task"], n["created_at"], hold))
         if not real:
             bad.append(f"{w.title(n['task'])} told of a move at {n['created_at'][11:16]} that was not made")

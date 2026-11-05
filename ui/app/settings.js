@@ -81,6 +81,9 @@ const SETTINGS_TAB_KEY = 'tico.settings.tab';
 let SETTINGS_TAB = (() => { try { return sessionStorage.getItem(SETTINGS_TAB_KEY) || 'you'; } catch { return 'you'; } })();
 // The address the shown group writes (settingsAddress) so it can be copied, bookmarked or shared; route() reads it as Settings.
 let SETTINGS_ADDRESS = '';
+// The newer mailbox page remains a part of Connections; retain its direct address and selected mailbox.
+let MAILBOX_OPEN = '';
+let SETTINGS_MAILBOX_ROUTE = false;
 // The groups, in the list's order (settings stage 2, spec Appendix C): You is personal and sits above a divider, then
 // the company's ten. `shown` is who sees the group; its address is #/settings/<key>.
 const SETTINGS_GROUPS = [
@@ -114,6 +117,7 @@ const SETTINGS_PLACES = {
   mail: ['connections', '#settings-mail'], repos: ['connections', '#settings-repos'], repositories: ['connections', '#settings-repos'],
   inbound: ['connections', '#settings-inbound'], 'email-phone': ['connections', '#settings-inbound'],
   'company-inbox': ['connections', '#settings-inbound'],
+  mailboxes: ['connections', '#settings-mailboxes'],
   webhooks: ['connections', '#settings-webhooks'], triggers: ['connections', '#settings-webhooks'],
   team: ['policies', '#settings-team'], company: ['policies', '#settings-company'],
   privacy: ['policies', '#settings-privacy'], storage: ['policies', '#settings-storage'],
@@ -126,7 +130,7 @@ let SETTINGS_DENIED = false;
 let SETTINGS_TRANSITION_TIMER = null;
 // A card a link points into (an old tab's place, or the card a link names); it scrolls there once drawn.
 let SETTINGS_REVEAL = '';
-const SETTINGS_MOVED_TO_MODELS = ['#settings-models', '#set-providers', '#set-gateway'];
+const SETTINGS_MOVED_TO_MODELS = ['#settings-models', '#set-providers', '#set-gateway', '#set-turn-levels'];
 const settingsReveal = selector => {
   if (!selector || SETTINGS_REVEAL !== selector) return;
   SETTINGS_REVEAL = ''; $(selector)?.scrollIntoView({block: 'start'});
@@ -281,6 +285,7 @@ function pageSettings() {
       <section class="card" id="settings-tags-card"><header><h2>Task tags</h2></header><div id="settings-tags"></div></section>
     </div>`)}
     ${pane('connections', `<div id="settings-repos"><section class="card repos-card" id="set-repos">${skelRows(3, {card: true, dot: false})}</section></div>
+      <div id="settings-mailboxes"><div id="set-mailboxes"></div></div>
       <div id="settings-inbound"><section class="card" id="set-inbound"></section></div>
       <div id="settings-webhooks"><section class="card"><header><h2>Webhooks</h2><div class="theme-seg" id="settings-webhooks-view" role="radiogroup" aria-label="Webhooks">${WH_TABS.map(([k, wide, narrow]) =>
         `<button type="button" role="radio" data-wh-tab="${k}" aria-checked="${k === WH.tab}">${narrow ? `<span class="sb-wide">${wide}</span><span class="sb-narrow">${narrow}</span>` : wide}</button>`).join('')}</div></header>
@@ -298,7 +303,8 @@ function pageSettings() {
             <p id="settings-team-icon-status" class="settings-cell-note" role="status"></p>
           </div>
         </div>` : ''}
-        <p class="settings-cell-note" id="settings-visuals">${settingsVisualsLine()}</p></section>
+        <p class="settings-cell-note" id="settings-visuals">${settingsVisualsLine()}</p>
+        ${S.me?.role === 'owner' ? '<div id="settings-bot-reports"></div>' : ''}</section>
       <section class="card" id="settings-policies"><header><h2>Team policies</h2></header><div id="set-policies">${skelRows(3, {card: true, dot: false})}</div></section>
       <section class="card" id="settings-company"><header><h2>Tico company</h2></header><div id="set-company"></div></section>
       ${S.me?.role === 'owner' ? `<section class="card" id="settings-storage"><header><h2>Storage</h2></header><div id="set-storage">${skelRows(3, {card: true, dot: false})}</div></section>
@@ -327,9 +333,9 @@ function pageSettings() {
   // A group picked in the list (desktop) or the picker (phone) opens at its top: no old card to scroll to.
   $('#settings-tabs').onclick = event => {
     const button = event.target.closest('[data-settings-tab]');
-    if (button) { SETTINGS_REVEAL = ''; settingsShow(button.dataset.settingsTab, {group: true}); }
+    if (button) { SETTINGS_REVEAL = ''; MAILBOX_OPEN = ''; SETTINGS_MAILBOX_ROUTE = false; settingsShow(button.dataset.settingsTab, {group: true}); }
   };
-  $('#settings-group-pick').onchange = event => { SETTINGS_REVEAL = ''; settingsShow(event.target.value, {group: true}); };
+  $('#settings-group-pick').onchange = event => { SETTINGS_REVEAL = ''; MAILBOX_OPEN = ''; SETTINGS_MAILBOX_ROUTE = false; settingsShow(event.target.value, {group: true}); };
   settingsShow(SETTINGS_TAB);
   loadSettings();
 }
@@ -367,6 +373,8 @@ function settingsPlace(name) {
   return {group, reveal};
 }
 function settingsShow(tab, {group: picked = false} = {}) {
+  if (tab === 'mailboxes') SETTINGS_MAILBOX_ROUTE = true;
+  else if (picked) { SETTINGS_MAILBOX_ROUTE = false; MAILBOX_OPEN = ''; }
   if (SETTINGS_REVEAL === '#settings-models') SETTINGS_REVEAL = '#settings-defaults';
   if (SETTINGS_REVEAL === '#set-turn-levels') SETTINGS_REVEAL = '#settings-limits';
   if (tab === 'credentials' || tab === 'cloud') { location.hash = INTEGRATIONS; return; }
@@ -421,21 +429,27 @@ function settingsShow(tab, {group: picked = false} = {}) {
     load(renderSystemRoutines(), renderReleaseCard(), renderTaskManagerCard(), renderScreeningCard(), renderSettingsStrategyBot());
   }
   if (on('tasks')) load(roadmapSettingsMount(), askFilterSettingsLoad());
-  if (on('connections')) load(!formBusy($('#settings-repos')) && renderSettingsRepos(), inboundMount(), !formBusy($('#settings-mail')) && renderSettingsMail(), !formBusy($('#settings-webhooks')) && renderSettingsWebhooks());
+  if (on('connections')) load(!formBusy($('#settings-repos')) && renderSettingsRepos(), renderSettingsMailboxes(), inboundMount(), !formBusy($('#settings-mail')) && renderSettingsMail(), !formBusy($('#settings-webhooks')) && renderSettingsWebhooks());
   if (on('policies')) {
     const privacy = $('#settings-privacy'), storage = $('#settings-storage'), company = $('#settings-company');
     load(privacy && owner && renderSettingsPrivacy(), storage && owner && renderSettingsStorage(), company && settingsIsAdmin() && renderSettingsCompany(),
-      $('#settings-policies') && renderSettingsPolicies());
+      $('#settings-policies') && renderSettingsPolicies(), owner && renderSettingsBotReports());
   }
   if (on('health')) load(window.hlMount?.(), settingsHistoryShow());
   const reveal = SETTINGS_REVEAL;
   if (reveal) void Promise.allSettled(loads).then(() => settingsRevealSoon(reveal));
 }
-// While Settings is the page, the address bar names the tab shown: #/settings/<tab>. It replaces the entry: no
-// hashchange, no new history step.
+// While Settings is the page, the address bar names the tab shown: #/settings/<tab>, with History's view and filters.
+// It replaces the entry: no hashchange, no new history step.
 function settingsAddress() {
   if (S.route !== SETTINGS) return;
-  SETTINGS_ADDRESS = `${SETTINGS}/${SETTINGS_TAB}`;
+  if (SETTINGS_MAILBOX_ROUTE) {
+    SETTINGS_ADDRESS = `${SETTINGS}/mailboxes${MAILBOX_OPEN ? '/' + MAILBOX_OPEN : ''}`;
+    if (location.hash !== SETTINGS_ADDRESS) history.replaceState(history.state, '', SETTINGS_ADDRESS);
+    return;
+  }
+  SETTINGS_ADDRESS = `${SETTINGS}/${SETTINGS_TAB}${SETTINGS_TAB === 'history' ? settingsHistoryQuery() : ''}${
+    SETTINGS_TAB === 'mailboxes' && MAILBOX_OPEN ? '/' + MAILBOX_OPEN : ''}`;
   if (location.hash !== SETTINGS_ADDRESS) history.replaceState(history.state, '', SETTINGS_ADDRESS);
 }
 // On a phone the tabs are one row that scrolls sideways (styles/settings.css); bring the current one into view.
@@ -509,6 +523,23 @@ async function renderSettingsAssistantApprovals() {
     catch (e) { toast(e.message, true); }
     void renderSettingsAssistantApprovals();
   });
+}
+// Settings > General > Team: whether a bot's report to the Tico team goes without a card (team rule bot_reports_direct,
+// backend/support.py send_by_rule). Owner only. Off, every bot report waits for a person's yes in Needs you.
+async function renderSettingsBotReports() {
+  const host = $('#settings-bot-reports');
+  if (!host || formBusy(host)) return;
+  let rules;
+  try { rules = (await get('/v2/access')).rules || {}; }
+  catch (e) { if (host.isConnected) host.innerHTML = `<div class="empty">${esc(e.message)}</div>`; return; }
+  if (!host.isConnected) return;
+  host.innerHTML = `<label class="people-line"><input type="checkbox" role="switch" class="people-switch" id="bot-reports-direct"${rules.bot_reports_direct !== false ? ' checked' : ''} aria-label="Bots send reports to the Tico team without asking">
+    <span>Bots send reports to the Tico team without asking</span></label>`;
+  host.querySelector('#bot-reports-direct').onchange = async ev => {
+    const box = ev.target;
+    try { await put('/v2/access/rules', {bot_reports_direct: box.checked}); toast('Saved'); void renderSettingsBotReports(); }
+    catch (e) { box.checked = !box.checked; settingsFieldError(box, e.message); }
+  };
 }
 // Settings > General > Privacy: the one switch for the anonymous usage count, and a new random install ID (PRIVACY.md).
 async function renderSettingsPrivacy() {
@@ -627,7 +658,6 @@ function renderSettingsIssues() {
   el.querySelectorAll('[data-execution-review]').forEach(button => {
     button.onclick = () => executionReview(button.dataset.executionReview);
   });
-  bindRunnerRestart(el);
 }
 // The stopped-run card is the decision only (Chris, Oct 22: "remove 80%, give me clear action items"): one line
 // on what stopped, one recommendation with its button first, the rest under Details. `stopped` comes from

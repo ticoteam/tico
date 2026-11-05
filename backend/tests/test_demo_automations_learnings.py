@@ -6,7 +6,7 @@ from datetime import datetime, timedelta, timezone
 import pytest
 from fastapi.testclient import TestClient
 
-from backend import demo
+from backend import demo, demo_content as D
 from backend.app import create_app
 from backend.demo_sections.schedules import SETTLE
 from backend.scheduler import next_due
@@ -84,7 +84,7 @@ def test_last_night_shows_the_routed_correction_with_its_source(built):
         last = nights[0]
         assert last["night"] == "2026-09-25" and last["updates"] == 1
         detail = api.get(f"/api/v2/learnings/{last['id']}").json()
-        [bot] = detail["sections"]["bots"]
+        bot = next(row for row in detail["sections"]["bots"] if row["id"] == "technical-support")
         assert bot["id"] == "technical-support" and "1 task" in bot["saw"]
         [entry] = bot["entries"]
         assert "flat surface" in entry["title"]
@@ -98,7 +98,8 @@ def test_the_night_before_saves_a_smaller_change(built):
     with signed_in(settings) as api:
         night = next(n for n in api.get("/api/v2/learnings").json()["nights"] if n["night"] == "2026-09-23")
         assert night["updates"] == 1
-        [bot] = api.get(f"/api/v2/learnings/{night['id']}").json()["sections"]["bots"]
+        bot = next(row for row in api.get(f"/api/v2/learnings/{night['id']}").json()["sections"]["bots"]
+                   if row["id"] == "technical-support")
         [entry] = bot["entries"]
         assert "hold the phone still" in entry["title"].lower()
         [source] = [s for s in entry["sources"] if "hold the phone still" in s["quote"].lower()]
@@ -116,7 +117,7 @@ def test_runs_spread_over_the_week_and_some_fall_in_the_last_hour(built):
         assert len({run["started_at"][:10] for run in calibration}) == 7
         recent = []
         for name in ("Calibration failures to technical support", "Calibration failed twice to Ben",
-                     "Firmware rings to health monitor"):
+                     "Firmware rings to BotOps"):
             runs, _ = runs_of(api, ids[name])
             recent += [run for run in runs if run["started_at"] >= LAST_HOUR]
         assert len(recent) >= 4
@@ -211,6 +212,16 @@ def test_the_packet_runs_leave_technical_support_its_focus(built):
         assert status["technical-support"]["focus"] == "Calibration callbacks"
 
 
+def test_learning_deliveries_leave_later_assignments_unstarted(built):
+    _, settings = built
+    expected = {title: status for key, title, _body, _owner, _requester, status, *_rest in D.TASKS
+                if key in ("support-week-review", "esc-repeat")}
+    with sqlite3.connect(settings.db_path) as db:
+        rows = db.execute("SELECT title,status,updated_at FROM tasks WHERE title IN (?,?)", tuple(expected)).fetchall()
+    assert {title: status for title, status, _updated in rows} == expected
+    assert all(at_time(updated) > NOW - timedelta(days=1) for _title, _status, updated in rows)
+
+
 def test_two_bots_hear_each_tico_release_after_the_first(built):
     directory, settings = built
     with sqlite3.connect(settings.db_path) as db:
@@ -243,7 +254,7 @@ def test_nothing_is_dated_after_an_early_build(early):
                 count = db.execute(
                     f'SELECT count(*) FROM "{table}" WHERE typeof("{column}")=\'text\' AND "{column}" > ? '
                     f'AND "{column}" LIKE \'20__-__-__T%\'' +
-                    (" AND field NOT IN ('check_back_at','check_back_explicit','check_back_imported')" if table == "task_events" and column in ("old", "new") else ""), (cut,)).fetchone()[0]
+                    (" AND NOT (subject_type='task' AND kind IN ('check_back_at','check_back_explicit'))" if table == "history_events" and column in ("old", "new") else ""), (cut,)).fetchone()[0]
                 if count:
                     later.append((table, column, count))
     assert later == []

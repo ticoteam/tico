@@ -76,9 +76,6 @@ async function open(browser, hub, who, {phone = false, hash = '', timezone = ''}
       if (sw) sw.register = async () => { console.warn('Service Worker registration blocked by the test harness'); };
     } catch {}
   });
-  await context.addInitScript(() => {
-    try { localStorage.setItem('tico.needsYou', JSON.stringify({snoozedUntil: Date.now() + 864e5})); } catch {}
-  });
   const page = watch(await context.newPage());
   await page.goto(hub.url + '/' + (hash ? '#' + hash.replace(/^#/, '') : ''));
   await page.waitForFunction(() => {

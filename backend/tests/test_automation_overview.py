@@ -97,17 +97,17 @@ def test_stats_count_runs_and_failures_per_bucket(api):
 
 
 def test_system_job_runs_show_under_their_built_in(api):
-    flow = {"name": "Still wanted", "owner": "person:ana", "builtin": True, "readonly": True, "enabled": True,
-            "trigger": {"type": "event", "name": "tico.builtin.job.still_wanted"}, "steps": [],
-            "controls": {"on": True}, "source": {"kind": "system_job", "id": "job:still_wanted"}}
+    flow = {"name": "KPI stale asks", "owner": "person:ana", "builtin": True, "readonly": True, "enabled": True,
+            "trigger": {"type": "event", "name": "tico.builtin.job.kpi_asks"}, "steps": [],
+            "controls": {"on": True}, "source": {"kind": "system_job", "id": "job:kpi_asks"}}
     with api.app.state.store.transaction() as c:
         c.execute("INSERT INTO automations(id,name,owner_id,trigger_type,enabled,builtin,flow,version,created_at,"
-                  "created_by_id,updated_at) VALUES('auto_sys','Still wanted','person:ana','event',1,1,?,1,?,?,?)",
+                  "created_by_id,updated_at) VALUES('auto_sys','KPI stale asks','person:ana','event',1,1,?,1,?,?,?)",
                   (json.dumps(flow), H.now(), "human:ana", H.now()))
         for i, ok in enumerate((1, 0)):
             at = H.shift(H.now(), minutes=-(i + 1))
             c.execute("INSERT INTO system_runs(id,job,started_at,finished_at,ok,result,runs) VALUES(?,?,?,?,?,?,1)",
-                      (f"sr{i}", "still_wanted", at, at, ok, "Asked 2" if ok else "Mail down"))
+                      (f"sr{i}", "kpi_asks", at, at, ok, "Asked 2" if ok else "Mail down"))
     runs = get(api, "automations/runs?range=1h&trigger=system")["runs"]
     assert [(r["id"], r["status"], r["outcome"]) for r in runs] == [("sys_sr0", "ok", "Asked 2"),
                                                                     ("sys_sr1", "failed", "Mail down")]

@@ -635,6 +635,11 @@ pub fn executable_for(runtime: &str) -> String {
     manifests().values().find(|m| m.host == runtime).map(|m| m.executable.clone()).unwrap_or_else(|| runtime.to_string())
 }
 
+/// The program of every harness manifest: the model CLIs that run turns on a computer (idle-load sampling leaves them out).
+pub fn turn_executables() -> Vec<String> {
+    manifests().values().map(|m| m.executable.clone()).collect()
+}
+
 /// The login command (argv after the executable) and whether it needs a terminal, per host (login.py COMMANDS).
 /// The manifest's `[env]` for a host: set on its logins and version probes (e.g. MUSE_NO_AUTO_UPDATE).
 pub fn env_for(runtime: &str) -> Vec<(String, String)> {

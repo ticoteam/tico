@@ -1,6 +1,8 @@
 """A computer's and a bot's "Turns at once": the claim holds new turns at the limit, and says so."""
 from backend.store import H
-from backend.tests.test_api import api, as_member, claim, get, post  # noqa: F401  (api is a fixture)
+from backend.tests.test_api import api, as_member, claim, get, post, put, runner  # noqa: F401  (api is a fixture)
+from backend.tests.test_assistant import assistant_turn
+from backend.tests.test_settings_assistant import mcp
 from backend.tests.test_task_lanes import new_task, task_bot
 
 NEW_RUNNER = ["task_lanes_v2", "turns_at_once_v1"]
@@ -27,8 +29,9 @@ def test_a_lowered_computer_limit_holds_new_turns_at_once_and_clearing_it_restor
     for title in ("first", "second", "third"):
         new_task(api, title)
     assert claim(api, machine) and claim(api, machine)
-    assert set_computer(api, machine, 2)["turn_limit"] == 2
-    # The server holds the third turn at once: the runner has not heard of the lower limit yet.
+    assert set_computer(api, machine, 1)["turn_limit"] == 1
+    # The server holds the third turn at once: twice the lowered limit (2) is already claimed, and the runner
+    # has not heard of the lower limit yet.
     assert claim(api, machine) is None
     assert set_computer(api, machine, None)["turn_limit"] == 4
     assert claim(api, machine)["bot"] == "ops"
@@ -37,21 +40,23 @@ def test_a_lowered_computer_limit_holds_new_turns_at_once_and_clearing_it_restor
 def test_a_raised_computer_limit_admits_more_turns_on_a_runner_that_takes_it(api):
     machine = task_bot(api, lanes=True, capacity=2)
     heartbeat(api, machine, 2, NEW_RUNNER)
-    for title in ("first", "second", "third", "fourth"):
+    for title in ("first", "second", "third", "fourth", "fifth", "sixth"):
         new_task(api, title)
     assert set_computer(api, machine, 3)["turn_limit"] == 3
     # The runner learns the limit in its heartbeat reply, which is what it gates its own starts on.
     assert heartbeat(api, machine, 2, NEW_RUNNER)["turns_at_once"] == 3
-    assert [claim(api, machine) is not None for _ in range(3)] == [True, True, True]
+    # Twice the raised limit (6) may be claimed; the seventh waits.
+    assert [claim(api, machine) is not None for _ in range(6)] == [True] * 6
     assert claim(api, machine) is None
 
 
 def test_a_runner_that_cannot_take_a_raised_limit_runs_at_the_capacity_it_reports(api):
     machine = task_bot(api, lanes=True, capacity=2)
-    for title in ("first", "second", "third"):
+    for title in ("first", "second", "third", "fourth", "fifth"):
         new_task(api, title)
     assert set_computer(api, machine, 5)["turn_limit"] == 2
-    assert claim(api, machine) and claim(api, machine)
+    # Twice the reported capacity (2) may be claimed; the fifth waits.
+    assert all(claim(api, machine) for _ in range(4))
     assert claim(api, machine) is None
 
 
@@ -155,3 +160,18 @@ def test_omitting_the_turns_at_once_field_is_refused_and_an_explicit_null_clears
     assert get(api, "bots/ops")["turns_at_once"] == 1
     assert set_computer(api, machine, None)["turn_limit"] == 4
     assert set_bot(api, None)["turns_at_once"] is None
+
+
+def test_with_assistant_acts_without_asking_off_a_computer_limit_is_a_confirm_card_the_person_taps(api):
+    rid = runner(api, label="Test Mac")["runner_id"]
+    put(api, "access/rules", {"assistant_direct": False})
+    r, attempt = assistant_turn(api, "ana-test", "Let Test Mac run 3 turns at once")
+    err, card = mcp(api, "hub_settings_set", {"key": "computer.turns_at_once", "value": {"turns_at_once": 3},
+                                              "computer": rid, "on_behalf_of": "turn"}, attempt["token"])
+    assert not err and card["needs_confirm"] is True, card
+    with api.app.state.store.read() as c:
+        assert c.execute("SELECT turns_at_once FROM runners WHERE id=?", (rid,)).fetchone()[0] is None
+    done = post(api, f"assistant/actions/{card['action']['id']}/confirm", {}, token="ana-test")["action"]
+    assert done["status"] == "done", done
+    with api.app.state.store.read() as c:
+        assert c.execute("SELECT turns_at_once FROM runners WHERE id=?", (rid,)).fetchone()[0] == 3

@@ -15,6 +15,7 @@ from backend.credentials import Vault
 from backend.finance import actions as FA
 from backend.store import Store
 from backend.tests.test_api import api_settings
+from backend import bot_settings as BS
 
 AT = "2026-10-15T12:00:00.000000Z"
 OWNER = "human:ana"
@@ -39,8 +40,8 @@ def _seed(c: sqlite3.Connection) -> None:
     c.execute("INSERT OR REPLACE INTO registry_metadata(key, value) VALUES('people', ?)",
               (json.dumps({"people": PEOPLE, "org_groups": GROUPS, "default_user": "ana"}),))
     for slug, (team, boss) in BOTS.items():
-        c.execute("INSERT OR REPLACE INTO bot_config(bot, config, team, owner_id, reports_to) VALUES(?,?,?,?,?)",
-                  (slug, json.dumps({"team": team}), team, "human:ana", boss))
+        c.execute('INSERT OR REPLACE INTO bot_config(bot,team,owner_id,reports_to) VALUES(?,?,?,?)', (slug, team, 'human:ana', boss))
+        BS.write(c, slug, {'team': team})
 
 
 @pytest.fixture(scope="session")
