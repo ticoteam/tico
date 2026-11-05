@@ -70,8 +70,9 @@ async function pmAccess(run) {
         ${option('', 'Owner', selected)}${legal.map(b => option(b.id, b.name, selected)).join('')}</select></label>
       <p class="muted">The owner receives every legal letter.</p>
       <h3>Who can use it</h3><label>Address<select data-pm-scope>${option('all', 'All addresses', 'all')}
-        ${(PM.addresses || []).map(a => option(a.assignment_id || a.id || a.address,
-          a.address || pmStateName(a.state), 'all')).join('')}</select></label>
+        ${(PM.addresses || []).filter(a => a.assignment_id || a.id || a.status === 'active' && a.address)
+          .map(a => option(a.assignment_id || a.id || a.address,
+            a.status === 'active' && a.address ? a.address : pmStateName(a.state), 'all')).join('')}</select></label>
       <p class="muted">Read includes private letters and scans.</p><div data-pm-grants></div>
       <form data-pm-grant-form><label>Person or bot<select data-pm-grantee required>
         <option value="">Choose…</option>${PM.members.map(p => option(`${p.type}:${p.id}`, p.name, '')).join('')}</select></label>
