@@ -3865,6 +3865,9 @@ def task_private_readable(conn, actor, row):
     inherited = private_subjects(conn, actor)
     if any(row[k] in inherited for k in ("owner_id", "requester_id")):
         return True
+    from .meeting_audience import participant_tasks
+    if row['id'] in participant_tasks(conn, actor):
+        return True
     if "guest" not in row:
         row = _one(conn, "SELECT guest FROM tasks WHERE id=?", (row["id"],)) or {}
     return bool(row.get("guest")) and actor == row["guest"]

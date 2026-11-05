@@ -747,7 +747,7 @@ class Auth:
         return False
 
     def task_sql(self, c, who, delegations="task_delegations", unreadable=None):
-        """Company tasks respect bot activity controls; private tasks admit parties, their managers and a guest.
+        """Company tasks respect bot activity controls; private tasks also admit checked meeting participants.
 
         Type-wide work, task ancestry and delegation never widen private visibility.
         `delegations` stays accepted for compatibility with the guarded SQL caller.
@@ -761,14 +761,17 @@ class Auth:
         inherited_private = A.qlist(sorted(private_subjects(c, who.actor)))
         parties = A.qlist(sorted(subjects(c, who.actor)))
         me = A.q(who.actor)
+        from .meeting_audience import participant_access_sql
+        participant = participant_access_sql(c, me)
         # A private task's guest (hubdb.task_reach) reads it as its two parties do.
         audience = (f"(owner_id IN {inherited_private} OR requester_id IN {inherited_private} "
-                    f"OR (coalesce(private,1)<>0 AND guest={me}) "
+                    f"OR (coalesce(private,1)<>0 AND (guest={me} OR ({participant}))) "
                     f"OR (coalesce(private,1)=0 AND (owner_id IN {parties} OR requester_id IN {parties} OR ({clear}))))")
         if who.task_actor:
             actor = A.q(who.task_actor)
             carried = A.qlist(sorted(private_subjects(c, who.task_actor)))
-            audience += f" AND (coalesce(private,1)=0 OR owner_id IN {carried} OR requester_id IN {carried} OR guest={actor})"
+            audience += (f" AND (coalesce(private,1)=0 OR owner_id IN {carried} OR requester_id IN {carried} "
+                         f"OR guest={actor} OR ({participant_access_sql(c, actor)}))")
         return audience
 
     def operator(self, c, who, bot):

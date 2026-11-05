@@ -1238,6 +1238,25 @@ fn meeting_notices_are_read_from_new_events_only() {
     tico.read_notices("live-events", 42).unwrap();
 }
 
+#[test]
+fn shared_items_refetch_on_the_first_invalidation() {
+    let (tico, _, worker) = server(vec![Some(json!({"sse": concat!(
+        "event: ready\ndata: {\"seq\":41}\n\n",
+        "id: 42\nevent: meeting_items\ndata: {\"meeting_id\":\"m1\",\"kind\":\"items\"}\n\n",
+        "id: 43\nevent: presence\ndata: {\"place\":\"meeting:m1\"}\n\n",
+        ": keepalive\n\n",
+    )}))]);
+    let found = tico
+        .events_until_change(
+            "/api/v2/events?topics=meeting_items,presence&meeting=m1&place=meeting:m1",
+        )
+        .unwrap();
+    worker.join().unwrap();
+    assert_eq!(found.len(), 2);
+    assert_eq!(found[1].0, 42);
+    assert_eq!(found[1].1, "meeting_items");
+}
+
 /// Edits and removals of lines already shared live (synthetic replay, no bots): an edit during the
 /// meeting, an edit after Stop, a removal, a lost reply retried, a finished chunk that arrives after
 /// the edit, then Send. Each change is one revision, the person's text wins, and Send files it.
@@ -2252,6 +2271,73 @@ fn task_links_keep_old_server_compatibility_and_transient_errors_never_send() {
 }
 
 #[test]
+fn saved_pending_item_uses_atomic_push_and_live_send_names_its_source() {
+    for saved in [false, true] {
+        let dir = tempfile::tempdir().unwrap();
+        let store = Store::open(dir.path()).unwrap();
+        let record = transcript(&store, "Shared items");
+        let (tico, seen, worker) = server(vec![
+            Some(json!({"actor":"human:test","name":"Test"})),
+            Some(json!({"state":"ended"})),
+            Some(json!({"url":"https://acme.example"})),
+            Some(if saved {
+                json!({"item":{"result_ref":"task-fixture"}})
+            } else {
+                json!({"task":{"id":"task-fixture"}})
+            }),
+        ]);
+        store
+            .update_context(&record.id, |context| {
+                context.live_id = "live-fixture".into();
+                context.live_destination = tico.destination.id.clone();
+                context.live_state = "ended".into();
+                context.items.push(crate::workspace::Item {
+                    id: "item-fixture".into(),
+                    kind: "task".into(),
+                    title: "Final words".into(),
+                    ..Default::default()
+                });
+                Ok(())
+            })
+            .unwrap();
+        if saved {
+            store
+                .delivery(
+                    &record.id,
+                    &crate::store::Delivery {
+                        destination_id: tico.destination.id.clone(),
+                        meeting_id: "saved-fixture".into(),
+                        status: "sent".into(),
+                        receipt: json!({"items":{"item-fixture":{"id":"server-item"}}}),
+                        error: String::new(),
+                    },
+                )
+                .unwrap();
+        }
+        tico.send_task(&store, &record.id, "item-fixture", "human:ben", "Ben", true)
+            .unwrap();
+        worker.join().unwrap();
+        let requests = seen.lock().unwrap();
+        let sent = requests.iter().find(|r| r.0.starts_with("POST ")).unwrap();
+        if saved {
+            assert!(
+                sent.0
+                    .starts_with("POST /api/v2/meetings/saved-fixture/items/server-item/push ")
+            );
+            assert_eq!(sent.1["text"], "Final words");
+            assert_eq!(sent.1["detail"]["owner"], "human:ben");
+        } else {
+            assert!(sent.0.starts_with("POST /api/v2/tasks "));
+            assert_eq!(sent.1["live_meeting_id"], "live-fixture");
+        }
+        assert_eq!(
+            requests.iter().filter(|r| r.0.starts_with("POST ")).count(),
+            1
+        );
+    }
+}
+
+#[test]
 fn a_save_is_filed_for_who_was_chosen_and_an_older_tico_refuses_participants_only() {
     let directory = tempfile::tempdir().unwrap();
     let store = Store::open(directory.path()).unwrap();
@@ -2539,4 +2625,338 @@ fn a_retry_names_the_audience_and_a_narrowing_tico_refuses_is_shown_as_said() {
         json!({"action":"approve","private":false,"audience":"team"})
     );
     assert!(calls[1].2.contains("refile"));
+}
+
+#[test]
+fn a_task_created_before_save_is_uploaded_as_a_sent_meeting_item() {
+    let dir = tempfile::tempdir().unwrap();
+    let store = Store::open(dir.path()).unwrap();
+    let record = transcript(&store, "Sent before Save");
+    store
+        .update_context(&record.id, |context| {
+            context.items.push(crate::workspace::Item {
+                id: "sent-item".into(),
+                title: "Send the proposal".into(),
+                task_id: "created-task".into(),
+                kind: "task".into(),
+                ..Default::default()
+            });
+            Ok(())
+        })
+        .unwrap();
+    let (tico, seen, worker) = server(vec![
+        Some(json!({"actor":"human:test"})),
+        Some(json!({"id":"saved-meeting"})),
+        Some(json!({"sections":{"task":[]}})),
+        Some(json!({"item":{"id":"sent-row","status":"pushed","result_ref":"created-task"}})),
+    ]);
+    tico.send(&store, &record.id, false).unwrap();
+    worker.join().unwrap();
+    let calls = seen.lock().unwrap();
+    assert_eq!(calls[3].1["status"], "pushed");
+    assert_eq!(calls[3].1["result_ref"], "created-task");
+    assert!(!calls.iter().any(|r| r.0.contains("/push")));
+}
+
+#[test]
+fn partial_save_create_adopts_another_readers_task_and_save_recovers() {
+    for lost_reply in [false, true] {
+        let dir = tempfile::tempdir().unwrap();
+        let store = Store::open(dir.path()).unwrap();
+        let record = transcript(&store, "Partial Save");
+        store
+            .update_context(&record.id, |context| {
+                for id in ["a", "b"] {
+                    context.items.push(crate::workspace::Item {
+                        id: id.into(),
+                        title: format!("Task {id}"),
+                        kind: "task".into(),
+                        owner: "human:test".into(),
+                        ..Default::default()
+                    });
+                }
+                Ok(())
+            })
+            .unwrap();
+        let who = json!({"actor":"human:test","name":"Test"});
+        let a = json!({"id":"server-a","version":1,"status":"proposed"});
+        // Another reader Sends A after the partial Save, before Recorder's Create.
+        let sent_a = json!({"id":"server-a","version":2,"status":"pushed","result_ref":"task-a"});
+        let b = json!({"id":"server-b","version":1,"status":"proposed"});
+        let adopted = json!({"item":sent_a,"pushed":false});
+        let mut steps = vec![
+            Some(who.clone()),
+            Some(json!({"id":"saved-meeting"})),
+            Some(json!({"sections":{"task":[]}})),
+            Some(json!({"item":a})),
+            Some(json!({"status":503,"error":{"code":"unavailable"}})),
+            Some(who.clone()),
+            Some(json!({"url":"https://acme.example"})),
+            if lost_reply {
+                None
+            } else {
+                Some(adopted.clone())
+            },
+        ];
+        if lost_reply {
+            steps.extend([Some(who.clone()), Some(adopted)]);
+        }
+        steps.extend([
+            Some(who.clone()), Some(json!({"sections":{"task":[sent_a]}})), Some(json!({"item":b})),
+            Some(who), Some(json!({"people":[{"id":"test","name":"Test"}]})),
+            Some(json!({"sections":{"task":[sent_a,b]}})),
+            Some(json!({"item":{"id":"server-b","version":2,"status":"pushed","result_ref":"task-b"}})),
+        ]);
+        let (tico, seen, worker) = server(steps);
+        assert!(tico.send(&store, &record.id, false).is_err());
+        assert_eq!(
+            store.get(&record.id).unwrap().deliveries[0].status,
+            "failed"
+        );
+        let created = tico.send_task(&store, &record.id, "a", "human:test", "Test", true);
+        if lost_reply {
+            assert!(created.is_err());
+            tico.send_task(&store, &record.id, "a", "human:test", "Test", true)
+                .unwrap();
+        } else {
+            created.unwrap();
+        }
+        assert_eq!(
+            store.context(&record.id).unwrap().items[0].task_id,
+            "task-a"
+        );
+        tico.send(&store, &record.id, false).unwrap();
+        let delivery = &store.get(&record.id).unwrap().deliveries[0];
+        assert_eq!(delivery.status, "sent");
+        assert_eq!(delivery.receipt["items"]["a"]["status"], "pushed");
+        assert_eq!(delivery.receipt["items"]["a"]["result_ref"], "task-a");
+        assert_eq!(delivery.receipt["items"]["a"]["version"], 2);
+        tico.send(&store, &record.id, true).unwrap();
+        worker.join().unwrap();
+        let calls = seen.lock().unwrap();
+        let pushes: Vec<_> = calls
+            .iter()
+            .filter(|r| {
+                r.0.starts_with("POST /api/v2/meetings/saved-meeting/items/server-a/push ")
+            })
+            .collect();
+        assert_eq!(pushes.len(), if lost_reply { 2 } else { 1 });
+        assert_eq!(
+            pushes[0].1,
+            json!({"version":1,"text":"Task a","detail":{"owner":"human:test"}})
+        );
+        if lost_reply {
+            assert_eq!(pushes[0].2, pushes[1].2);
+        }
+        assert!(!calls.iter().any(|r| r.0.starts_with("POST /api/v2/tasks ")));
+        assert_eq!(
+            calls
+                .iter()
+                .filter(|r| r
+                    .0
+                    .starts_with("POST /api/v2/meetings/saved-meeting/items ")
+                    && r.1["text"] == "Task a")
+                .count(),
+            1
+        );
+    }
+}
+
+#[test]
+fn create_uses_a_known_server_item_in_every_delivery_state() {
+    for status in ["pending", "failed", "sent"] {
+        let dir = tempfile::tempdir().unwrap();
+        let store = Store::open(dir.path()).unwrap();
+        let record = transcript(&store, "Known server item");
+        store
+            .update_context(&record.id, |context| {
+                context.items.push(crate::workspace::Item {
+                    id: "a".into(),
+                    title: "Task a".into(),
+                    kind: "task".into(),
+                    ..Default::default()
+                });
+                Ok(())
+            })
+            .unwrap();
+        store
+            .delivery(
+                &record.id,
+                &crate::store::Delivery {
+                    destination_id: "synthetic".into(),
+                    meeting_id: "saved-meeting".into(),
+                    status: status.into(),
+                    error: String::new(),
+                    receipt: json!({"items":{"a":{"id":"server-a","version":1}}}),
+                },
+            )
+            .unwrap();
+        let (tico, seen, worker) = server(vec![
+            Some(json!({"actor":"human:test"})),
+            Some(json!({"url":"https://acme.example"})),
+            Some(
+                json!({"item":{"id":"server-a","version":2,"result_ref":"existing-task"},"pushed":false}),
+            ),
+        ]);
+        tico.send_task(&store, &record.id, "a", "human:test", "Test", true)
+            .unwrap();
+        worker.join().unwrap();
+        assert_eq!(
+            store.context(&record.id).unwrap().items[0].task_id,
+            "existing-task"
+        );
+        let calls = seen.lock().unwrap();
+        assert!(
+            calls[2]
+                .0
+                .starts_with("POST /api/v2/meetings/saved-meeting/items/server-a/push ")
+        );
+        assert!(!calls.iter().any(|r| r.0.starts_with("POST /api/v2/tasks ")));
+    }
+}
+
+#[test]
+fn create_replays_uncertain_item_upload_before_adopting_another_readers_task() {
+    for in_flight in [false, true] {
+        let dir = tempfile::tempdir().unwrap();
+        let store = Store::open(dir.path()).unwrap();
+        let record = transcript(&store, "Uncertain upload");
+        store
+            .update_context(&record.id, |context| {
+                context.items.push(crate::workspace::Item {
+                    id: "a".into(),
+                    title: "Server title".into(),
+                    kind: "task".into(),
+                    owner: "human:test".into(),
+                    ..Default::default()
+                });
+                Ok(())
+            })
+            .unwrap();
+        let who = json!({"actor":"human:test","name":"Test"});
+        // Save commits A, loses its response, then another reader Sends the original A.
+        let sent = json!({"id":"server-a","section":"task","version":2,"status":"pushed",
+            "text":"Server title","detail":{"owner":"human:test"},
+            "result_ref":"one-task","updated_by":"human:ben"});
+        let (release, held) = std::sync::mpsc::channel();
+        let (tico, seen, worker) = server_gated(
+            vec![
+                Some(who.clone()),
+                Some(json!({"id":"saved-meeting"})),
+                Some(json!({"sections":{"task":[]}})),
+                None,
+                Some(who.clone()),
+                Some(json!({"item":sent})),
+                Some(json!({"url":"https://acme.example"})),
+                Some(json!({"item":sent,"pushed":false})),
+                Some(who),
+                Some(json!({"sections":{"task":[sent]}})),
+            ],
+            in_flight.then_some((3, held)),
+        );
+        std::thread::scope(|scope| {
+            let saving = scope.spawn(|| tico.send(&store, &record.id, false));
+            let deadline = std::time::Instant::now() + Duration::from_secs(4);
+            while seen.lock().unwrap().len() < 4 {
+                assert!(
+                    std::time::Instant::now() < deadline,
+                    "Save did not upload A"
+                );
+                std::thread::sleep(Duration::from_millis(5));
+            }
+            store
+                .update_context(&record.id, |context| {
+                    context.items[0].title = "My unsaved title".into();
+                    Ok(())
+                })
+                .unwrap();
+            if !in_flight {
+                assert!(saving.join().unwrap().is_err());
+            }
+            let creating =
+                scope.spawn(|| tico.send_task(&store, &record.id, "a", "human:test", "Test", true));
+            if in_flight {
+                release.send(()).unwrap();
+            }
+            creating.join().unwrap().unwrap();
+        });
+        let context = store.context(&record.id).unwrap();
+        assert_eq!(context.items[0].task_id, "one-task");
+        let closed = context.items[0].closed_draft.as_ref().unwrap();
+        assert_eq!(closed["text"], "My unsaved title");
+        assert_eq!(closed["item"]["updated_by"], "human:ben");
+        tico.send(&store, &record.id, false).unwrap();
+        worker.join().unwrap();
+        assert_eq!(store.get(&record.id).unwrap().deliveries[0].status, "sent");
+        let calls = seen.lock().unwrap();
+        let uploads: Vec<_> = calls
+            .iter()
+            .filter(|r| {
+                r.0.starts_with("POST /api/v2/meetings/saved-meeting/items ")
+            })
+            .collect();
+        assert_eq!(uploads.len(), 2);
+        assert_eq!(uploads[0].1, uploads[1].1);
+        assert_eq!(uploads[0].2, uploads[1].2);
+        assert_eq!(uploads[1].1["text"], "Server title");
+        assert!(
+            calls[7]
+                .0
+                .starts_with("POST /api/v2/meetings/saved-meeting/items/server-a/push ")
+        );
+        assert_eq!(calls[7].1["text"], "My unsaved title");
+        assert!(!calls.iter().any(|r| r.0.starts_with("POST /api/v2/tasks ")));
+    }
+}
+
+#[test]
+fn create_stops_if_replaying_the_uncertain_upload_fails() {
+    let dir = tempfile::tempdir().unwrap();
+    let store = Store::open(dir.path()).unwrap();
+    let record = transcript(&store, "Still uncertain");
+    store
+        .update_context(&record.id, |context| {
+            context.items.push(crate::workspace::Item {
+                id: "a".into(),
+                title: "Local title".into(),
+                ..Default::default()
+            });
+            Ok(())
+        })
+        .unwrap();
+    let payload = json!({"section":"task","text":"Original title"});
+    store
+        .delivery(
+            &record.id,
+            &Delivery {
+                destination_id: "synthetic".into(),
+                meeting_id: "saved-meeting".into(),
+                status: "failed".into(),
+                error: String::new(),
+                receipt: json!({"uploads":{"a":{"body":payload,"key":"original-upload-key"}}}),
+            },
+        )
+        .unwrap();
+    let (tico, seen, worker) = server(vec![
+        Some(json!({"actor":"human:test"})),
+        Some(json!({"status":503,"error":{"code":"unavailable"}})),
+    ]);
+    assert!(
+        tico.send_task(&store, &record.id, "a", "human:test", "Test", true)
+            .is_err()
+    );
+    worker.join().unwrap();
+    let calls = seen.lock().unwrap();
+    assert_eq!(calls.len(), 2);
+    assert_eq!(calls[1].1, payload);
+    assert_eq!(calls[1].2, "original-upload-key");
+    assert!(
+        store.context(&record.id).unwrap().items[0]
+            .task_id
+            .is_empty()
+    );
+    assert_eq!(
+        store.get(&record.id).unwrap().deliveries[0].receipt["uploads"]["a"]["key"],
+        "original-upload-key"
+    );
 }

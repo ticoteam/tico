@@ -410,6 +410,13 @@ impl Tico {
     /// The events a Tico event stream (SSE) has now: `(id, type, payload)` until its first
     /// keep-alive, which follows what was already there. The stream is then closed.
     pub fn events(&self, path: &str) -> Result<Vec<(u64, String, Value)>> {
+        self.read_events(path, false)
+    }
+    /// A shared panel refetches as soon as an invalidation arrives, without waiting for a quiet stream.
+    pub fn events_until_change(&self, path: &str) -> Result<Vec<(u64, String, Value)>> {
+        self.read_events(path, true)
+    }
+    fn read_events(&self, path: &str, until_change: bool) -> Result<Vec<(u64, String, Value)>> {
         ensure!(
             path.starts_with('/') && !path.starts_with("//"),
             "Invalid Tico endpoint"
@@ -443,6 +450,13 @@ impl Tico {
                 if !kind.is_empty() {
                     let payload = serde_json::from_str(&data).unwrap_or(Value::Null);
                     out.push((id, std::mem::take(&mut kind), payload));
+                    if until_change
+                        && out.last().is_some_and(|(_, kind, _)| {
+                            !matches!(kind.as_str(), "ready" | "cursor")
+                        })
+                    {
+                        break;
+                    }
                 }
                 data.clear();
                 continue;
@@ -581,6 +595,7 @@ impl Tico {
         push_items: bool,
         audience: &str,
     ) -> Result<String> {
+        let _guard = store.live_lock();
         ensure!(
             ["", "team", "participants"].contains(&audience),
             "Unknown audience"
@@ -598,15 +613,15 @@ impl Tico {
             "Finish the connected live meeting first"
         );
         // Items already sent to a bot are tasks; the rest go along as the meeting's proposed items.
-        let selected: Vec<_> = context
-            .items
-            .iter()
-            .filter(|item| item.task_id.is_empty())
-            .collect();
-        if push_items && selected.iter().any(|item| item.kind == "task") {
+        let selected: Vec<_> = context.items.iter().collect();
+        if push_items
+            && selected
+                .iter()
+                .any(|item| item.kind == "task" && item.task_id.is_empty())
+        {
             let roster = self.roster()?;
             for item in &selected {
-                if item.kind == "task" {
+                if item.kind == "task" && item.task_id.is_empty() {
                     ensure!(
                         roster.iter().any(|entry| entry.0 == item.owner),
                         "Choose a verified owner for: {}",
@@ -770,12 +785,19 @@ impl Tico {
                     json!({"owner":item.owner})
                 };
                 let at_ms = (!item.quote.is_empty()).then_some(item.at_ms);
-                let payload = json!({"section":section,"text":item.title,"quote":item.quote,"at_ms":at_ms,"detail":detail});
+                let mut payload = json!({"section":section,"text":item.title,"quote":item.quote,"at_ms":at_ms,"detail":detail});
+                if !item.task_id.is_empty() {
+                    payload["status"] = json!("pushed");
+                    payload["result_ref"] = json!(item.task_id);
+                }
                 let mut item_id = delivery.receipt["items"][&item.id]["id"]
                     .as_str()
                     .unwrap_or("")
                     .to_owned();
-                if item_id.is_empty() {
+                let mut item_version = delivery.receipt["items"][&item.id]["version"]
+                    .as_u64()
+                    .unwrap_or(1);
+                if item_id.is_empty() && delivery.receipt["uploads"][&item.id].is_null() {
                     if let Some(existing) = listing["sections"][section]
                         .as_array()
                         .into_iter()
@@ -789,25 +811,57 @@ impl Tico {
                         })
                     {
                         item_id = existing["id"].as_str().unwrap_or("").into();
+                        item_version = existing["version"].as_u64().unwrap_or(1);
                     }
                 }
                 if item_id.is_empty() {
-                    let reply = self.call_meeting(
-                        &path,
-                        Some(&payload),
-                        &format!("recorder:{id}:{}:item:{}", item.id, hash(&payload)),
-                    )?;
+                    let reply = self.upload_item(store, id, &mut delivery, &item.id, &payload)?;
+                    item_version = reply["item"]["version"].as_u64().unwrap_or(1);
                     item_id = reply["item"]["id"]
                         .as_str()
                         .context("Tico did not return an item ID")?
                         .into();
+                } else if !item.task_id.is_empty() {
+                    // A task can be created after only part of Save reached Tico. Reconcile
+                    // its existing row before marking the delivery sent, including after a lost reply.
+                    let current = listing["sections"][section]
+                        .as_array()
+                        .into_iter()
+                        .flatten()
+                        .find(|row| row["id"] == item_id);
+                    if let Some(row) = current {
+                        item_version = row["version"].as_u64().unwrap_or(item_version);
+                    }
+                    if !current.is_some_and(|row| {
+                        row["status"] == "pushed" && row["result_ref"] == item.task_id
+                    }) {
+                        let reconcile = json!({"version":item_version,"result_ref":item.task_id});
+                        let reply = self.call_meeting(
+                            &format!("{path}/{item_id}/push"),
+                            Some(&reconcile),
+                            &format!(
+                                "recorder:{id}:{}:reconcile:{item_id}:{}",
+                                item.id,
+                                hash(&reconcile)
+                            ),
+                        )?;
+                        ensure!(
+                            reply["item"]["result_ref"] == item.task_id,
+                            "Tico did not return the created task reference"
+                        );
+                        item_version = reply["item"]["version"].as_u64().unwrap_or(item_version);
+                    }
                 }
-                delivery.receipt["items"][&item.id] = json!({"id":item_id,"status":"proposed"});
+                delivery.receipt["items"][&item.id] = if item.task_id.is_empty() {
+                    json!({"id":item_id,"status":"proposed","version":item_version})
+                } else {
+                    json!({"id":item_id,"status":"pushed","result_ref":item.task_id,"version":item_version})
+                };
                 store.delivery(id, &delivery)?;
-                if push_items {
+                if push_items && item.task_id.is_empty() {
                     let reply = self.call_meeting(
                         &format!("{path}/{item_id}/push"),
-                        Some(&json!({})),
+                        Some(&json!({"version":item_version})),
                         &format!("recorder:{id}:{}:push:{item_id}", item.id),
                     )?;
                     ensure!(
@@ -829,6 +883,41 @@ impl Tico {
             store.delivery(id, &delivery)?;
         }
         result
+    }
+
+    fn upload_item(
+        &self,
+        store: &Store,
+        id: &str,
+        delivery: &mut Delivery,
+        item_id: &str,
+        payload: &Value,
+    ) -> Result<Value> {
+        // Persist the exact request before sending: a lost reply must replay this upload.
+        if delivery.receipt["uploads"][item_id].is_null() {
+            delivery.receipt["uploads"][item_id] = json!({
+                "body":payload,
+                "key":format!("recorder:{id}:{item_id}:item:{}", hash(payload)),
+            });
+            store.delivery(id, delivery)?;
+        }
+        let upload = &delivery.receipt["uploads"][item_id];
+        let reply = self.call_meeting(
+            &format!("/meetings/{}/items", delivery.meeting_id),
+            Some(&upload["body"]),
+            upload["key"].as_str().context("Missing item upload key")?,
+        )?;
+        ensure!(
+            reply["item"]["id"].as_str().is_some(),
+            "Tico did not return an item ID"
+        );
+        delivery.receipt["items"][item_id] = reply["item"].clone();
+        delivery.receipt["uploads"]
+            .as_object_mut()
+            .unwrap()
+            .remove(item_id);
+        store.delivery(id, delivery)?;
+        Ok(reply)
     }
 }
 impl Tico {
@@ -903,14 +992,23 @@ impl Tico {
             owner.starts_with("bot:") || owner.starts_with("human:"),
             "Choose an owner"
         );
+        let mut filed = record
+            .deliveries
+            .iter()
+            .find(|entry| {
+                entry.destination_id == self.destination.id && !entry.meeting_id.is_empty()
+            })
+            .cloned();
+        if let Some(entry) = filed.as_mut()
+            && !entry.receipt["uploads"][item_id].is_null()
+        {
+            self.upload_item(store, id, entry, item_id, &Value::Null)?;
+        }
         let base = self.task_browser_url()?;
-        let filed = record.deliveries.iter().find(|entry| {
-            entry.destination_id == self.destination.id && !entry.meeting_id.is_empty()
-        });
         let link = if base.is_empty() {
             String::new()
         } else {
-            match (filed, context.live_id.is_empty()) {
+            match (filed.as_ref(), context.live_id.is_empty()) {
                 (Some(entry), _) => format!("{base}/#/meetings?meeting={}", entry.meeting_id),
                 (None, false) => format!("{base}/#/meetings/live/{}", context.live_id),
                 (None, true) => String::new(),
@@ -920,13 +1018,38 @@ impl Tico {
             .as_str()
             .or(who["email"].as_str())
             .unwrap_or("me");
-        let body = json!({"title":item.title.chars().take(300).collect::<String>(),
+        let mut body = json!({"title":item.title.chars().take(300).collect::<String>(),
             "body":crate::assist::task_body(&record, &item, sender, &link),"owner":owner,"private":private});
-        let reply = self.call(
-            "/api/v2/tasks",
-            Some(&body),
-            &format!("recorder:{id}:task:{item_id}:{}", hash(&body)),
-        )?;
+        if !context.live_id.is_empty() {
+            body["live_meeting_id"] = json!(context.live_id);
+        }
+        let (reply, adopted) = if let Some(entry) = filed
+            .as_ref()
+            .filter(|entry| entry.receipt["items"][item_id]["id"].as_str().is_some())
+        {
+            let server_item = entry.receipt["items"][item_id]["id"]
+                .as_str()
+                .context("This item is not saved on the meeting")?;
+            let result = self.call(
+                &format!(
+                    "/api/v2/meetings/{}/items/{server_item}/push",
+                    entry.meeting_id
+                ),
+                Some(&json!({"version":entry.receipt["items"][item_id]["version"].as_u64().unwrap_or(1),"text":item.title,"detail":{"owner":owner}})),
+                &format!("recorder:{id}:push:{server_item}:{}", hash(&body)),
+            )?;
+            let adopted = (result["pushed"] == false).then(|| result["item"].clone());
+            (json!({"task":{"id":result["item"]["result_ref"]}}), adopted)
+        } else {
+            (
+                self.call(
+                    "/api/v2/tasks",
+                    Some(&body),
+                    &format!("recorder:{id}:task:{item_id}:{}", hash(&body)),
+                )?,
+                None,
+            )
+        };
         let task = reply["task"]["id"]
             .as_str()
             .context("Tico did not return the new task")?
@@ -934,6 +1057,12 @@ impl Tico {
         store.update_context(id, |current| {
             current.live_destination = self.destination.id.clone();
             if let Some(item) = current.items.iter_mut().find(|item| item.id == item_id) {
+                if let Some(server) = adopted
+                    && (server["text"] != item.title || server["detail"]["owner"] != owner)
+                {
+                    item.closed_draft =
+                        Some(json!({"item":server,"text":item.title,"detail":{"owner":owner}}));
+                }
                 item.task_url = if base.is_empty() {
                     String::new()
                 } else {
@@ -945,16 +1074,6 @@ impl Tico {
             }
             Ok(())
         })?;
-        // Sent with the meeting earlier as a proposed item: the task replaces it there.
-        if let Some(entry) = filed
-            && let Some(filed_item) = entry.receipt["items"][item_id]["id"].as_str()
-        {
-            let _ = self.call_meeting(
-                &format!("/meetings/{}/items/{filed_item}", entry.meeting_id),
-                Some(&json!({"status":"dismissed"})),
-                &format!("recorder:{id}:dismiss:{filed_item}"),
-            );
-        }
         Ok(())
     }
 }
