@@ -7,10 +7,28 @@ const http = require('node:http');
 const {html, uiFile} = require('./support/page.cjs');
 const {unrouted} = require('./support/routes.cjs');
 const {assistantView} = require('./support/assistant-chat.cjs');
+const {t} = require('./support/load.cjs');
 const engines = (process.env.TICO_UI_ENGINES || 'chromium,webkit').split(',');
 
-async function scenario(browser, mode, edit, editedBefore = false) {
-  const page = await browser.newPage({viewport: {width: 1200, height: 800}, serviceWorkers: 'block'});
+// Playwright's defaults do not bound evaluate promises or browser/server cleanup. Keep the deadline in Node (scaled by
+// the runner's TICO_UI_SLOWDOWN like other waits) and report the step before a stalled cleanup can hide the failure.
+function steps(context) {
+  return async (label, run, ms = t(30000)) => {
+    let timer;
+    try {
+      return await Promise.race([Promise.resolve().then(run), new Promise((_, reject) => {
+        timer = setTimeout(() => reject(new assert.AssertionError({message: `${context}: ${label} exceeded ${ms}ms`})), ms);
+      })]);
+    } catch (error) {
+      console.error(`${context}: ${label}: ${error.message}`);
+      throw error;
+    } finally { clearTimeout(timer); }
+  };
+}
+
+async function scenario(browser, engine, mode, edit, editedBefore = false) {
+  const step = steps(`${engine}, ${mode}, ${editedBefore ? 'edited restored draft' : edit ? 'later edits' : 'sign-in return'}`);
+  const page = await step('create page', () => browser.newPage({viewport: {width: 1200, height: 800}, serviceWorkers: 'block'}));
   const errors = [], posts = [], delivered = [];
   const reads = new Set(), readWaiters = new Set();
   let navigating = false;
@@ -80,53 +98,51 @@ async function scenario(browser, mode, edit, editedBefore = false) {
       return json(unrouted(p));
     })().catch(error => { serverErrors.push(error.message); if (!response.headersSent) response.writeHead(500); response.end(); });
   });
-  await new Promise((resolve, reject) => { server.once('error', reject); server.listen(0, '127.0.0.1', resolve); });
-  const origin = 'http://127.0.0.1:' + server.address().port;
   const box = page.locator('#chat-composer textarea'), send = page.locator('#chat-composer .p-send');
-  const stored = () => page.evaluate(() => ({draft: chatDrafts().coo, otherDraft: chatDrafts().other,
-    fields: JSON.parse(sessionStorage.getItem(SESSION_RETURN) || 'null')?.fields || []}));
-  const frames = () => page.evaluate(() => new Promise(done => requestAnimationFrame(() => requestAnimationFrame(done))));
-  const readsSettled = async () => {
-    const deadline = Date.now() + 30000;
-    do {
-      // A send schedules a snapshot read after a short burst; it can start after current reads finish.
-      await page.waitForFunction(() => !LIVE_SOON.size);
-      if (reads.size) await new Promise((resolve, reject) => {
-        const done = () => { clearTimeout(timer); readWaiters.delete(done); resolve(); };
-        const timer = setTimeout(() => { readWaiters.delete(done); reject(new Error('Fixture reads did not settle')); }, Math.max(1, deadline - Date.now()));
-        readWaiters.add(done);
-      });
-      await frames();
-      assert.ok(Date.now() < deadline, 'fixture reads settle before navigation');
-    } while (reads.size || await page.evaluate(() => LIVE_SOON.size > 0));
-  };
+  const stored = () => step('read saved drafts and return snapshot', () => page.evaluate(() => ({draft: chatDrafts().coo, otherDraft: chatDrafts().other,
+    fields: JSON.parse(sessionStorage.getItem(SESSION_RETURN) || 'null')?.fields || []})));
+  const frames = label => step(label, () => page.evaluate(() => new Promise(done => requestAnimationFrame(() => requestAnimationFrame(done)))));
+  const readsSettled = label => step(label, async () => {
+    let done;
+    try {
+      do {
+        // A send schedules a snapshot read after a short burst; it can start after current reads finish.
+        await page.waitForFunction(() => !LIVE_SOON.size);
+        if (reads.size) await new Promise(resolve => { done = resolve; readWaiters.add(done); });
+        readWaiters.delete(done);
+        await page.evaluate(() => new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve))));
+      } while (reads.size || await page.evaluate(() => LIVE_SOON.size > 0));
+    } finally { readWaiters.delete(done); }
+  });
   // A loaded conversation can precede its stream subscription. Navigating again while WebKit is
   // still opening that connection reports a canceled request as an access-control page error.
-  const ready = () => page.waitForFunction(() => {
+  const ready = label => step(label, () => page.waitForFunction(() => {
     if (!SESSION.seen || !(typeof V2C !== 'undefined' && V2C?.loaded)
       || !liveConnected() || LIVE.es?.readyState !== EventSource.OPEN) return false;
     const subscribed = new URL(LIVE.es.url), expected = new URL(liveUrl(), location.href);
     // The ready event advances the cursor; only a change of subscription requires a new connection.
     subscribed.searchParams.delete('after'); expected.searchParams.delete('after');
     return subscribed.href === expected.href;
-  });
-  const idle = () => page.waitForFunction(() => !ASSISTANT_PILL.sending && !document.querySelector('#chat-composer .p-send').disabled);
+  }));
+  const idle = label => step(label, () => page.waitForFunction(() => !ASSISTANT_PILL.sending && !document.querySelector('#chat-composer .p-send').disabled));
   const text = '  Keep this draft through sign-in  ';
   try {
-    await page.goto(origin + '/#/assistant');
-    await ready();
-    await box.fill(text);
-    await page.evaluate(() => localStorage.setItem(CHAT_DRAFTS, JSON.stringify({...chatDrafts(), other: 'Another bot draft'})));
+    await step('start fixture server', () => new Promise((resolve, reject) => { server.once('error', reject); server.listen(0, '127.0.0.1', resolve); }));
+    const origin = 'http://127.0.0.1:' + server.address().port;
+    await step('open Assistant', () => page.goto(origin + '/#/assistant'));
+    await ready('initial conversation and event subscription ready');
+    await step('type initial draft', () => box.fill(text));
+    await step('save other chat draft', () => page.evaluate(() => localStorage.setItem(CHAT_DRAFTS, JSON.stringify({...chatDrafts(), other: 'Another bot draft'}))));
     if (mode !== 'unsent') {
-      await send.click();
-      await idle();
+      await step('send with expired sign-in', () => send.click());
+      await idle('rejected send finishes');
     } else {
       expired = true;
-      await page.evaluate(() => get('/v2/me').catch(() => {}));
+      await step('expire sign-in without sending', () => page.evaluate(() => get('/v2/me').catch(() => {})));
     }
-    await page.locator('#signed-out:not([hidden])').waitFor();
-    assert.equal(await box.inputValue(), text, 'sign-out keeps the unsent text');
-    await page.evaluate(text => {
+    await step('signed-out banner appears', () => page.locator('#signed-out:not([hidden])').waitFor());
+    assert.equal(await step('read signed-out draft', () => box.inputValue()), text, 'sign-out keeps the unsent text');
+    await step('seed older return snapshot', () => page.evaluate(text => {
       const kept = JSON.parse(sessionStorage.getItem(SESSION_RETURN));
       // A snapshot saved by an older page can still contain the chat draft. New pages keep only the
       // per-bot copy, but a confirmed send must consume the older saved copy and its live watcher too.
@@ -134,57 +150,57 @@ async function scenario(browser, mode, edit, editedBefore = false) {
       kept.fields.push({scope: sessionScope(input), key: sessionKey(input), value: text});
       kept.fields.push({scope: 'task:other', key: 'Message', value: 'Another task draft'});
       sessionSave(kept);
-    }, text);
-    await readsSettled();
-    await page.click('#signed-out button');
-    await page.waitForURL('**/auth/login**');
+    }, text));
+    await readsSettled('fixture reads settle before sign-in');
+    await step('open sign-in page', () => page.click('#signed-out button'));
+    await step('arrive at sign-in page', () => page.waitForURL('**/auth/login**'));
     expired = false;
-    await page.click('#return');
-    await page.waitForURL(origin + '/#/assistant');
-    await ready();
-    await readsSettled();
-    assert.equal(await box.inputValue(), text, 'return restores the draft');
+    await step('return from sign-in', () => page.click('#return'));
+    await step('arrive back at Assistant', () => page.waitForURL(origin + '/#/assistant'));
+    await ready('returned conversation and event subscription ready');
+    await readsSettled('fixture reads settle after sign-in');
+    assert.equal(await step('read restored draft', () => box.inputValue()), text, 'return restores the draft');
     assert.ok((await stored()).fields.some(f => f.value === text), 'the return snapshot still holds a copy beside the restored local draft');
 
     if (mode !== 'unsent') {
       const sentText = editedBefore ? 'Edited after sign-in, before sending' : text.trim();
-      if (editedBefore) await box.fill(sentText);
+      if (editedBefore) await step('edit restored draft', () => box.fill(sentText));
       if (edit) hold = new Promise(done => release = done);
-      await send.click();
-      await page.waitForFunction(() => ASSISTANT_PILL.sending || document.querySelector('#chat-composer .p-send').disabled || !document.querySelector('#chat-composer textarea').value);
+      await step('resend restored draft', () => send.click());
+      await step('resend starts or clears composer', () => page.waitForFunction(() => ASSISTANT_PILL.sending || document.querySelector('#chat-composer .p-send').disabled || !document.querySelector('#chat-composer textarea').value));
       const next = 'Next draft typed while the resend is out\nA second line\nA third line';
       if (edit) {
-        await box.fill(next);
+        await step('type later draft while resend is held', () => box.fill(next));
         release(); hold = null;
       }
-      await idle();
-      await frames(); // let the sign-in return watcher respond to the send's DOM changes
-      assert.equal(await box.inputValue(), edit ? next : '', 'confirmed text never comes back; later edits stay');
-      if (edit) assert.ok(await box.evaluate(el => el.clientHeight >= el.scrollHeight - 2), 'later multiline edits keep the composer expanded');
+      await idle('confirmed resend finishes');
+      await frames('return watcher paints after resend');
+      assert.equal(await step('read composer after resend', () => box.inputValue()), edit ? next : '', 'confirmed text never comes back; later edits stay');
+      if (edit) assert.ok(await step('measure later multiline draft', () => box.evaluate(el => el.clientHeight >= el.scrollHeight - 2)), 'later multiline edits keep the composer expanded');
       const saved = await stored();
       assert.equal(saved.draft, edit ? next : undefined, 'the persistent draft agrees with the composer');
       assert.ok(!saved.fields.some(f => f.value === text), 'the saved sign-in snapshot consumed the composer draft, including its pre-edit copy');
       assert.equal(delivered.length, 1, 'one successful delivery');
       assert.equal(delivered[0].body, sentText, 'the edited text is the text sent');
       if (!edit) {
-        await page.waitForFunction(() => getComputedStyle(document.querySelector('#chat-composer .p-send')).opacity === '0.45');   // after its fade
-        assert.equal(await send.evaluate(button => getComputedStyle(button).opacity), '0.45', 'the empty composer dims Send');
-        await box.press('Enter');
-        await send.evaluate(button => button.click());
-        await frames();
+        await step('empty Send finishes fading', () => page.waitForFunction(() => getComputedStyle(document.querySelector('#chat-composer .p-send')).opacity === '0.45'));
+        assert.equal(await step('read empty Send opacity', () => send.evaluate(button => getComputedStyle(button).opacity)), '0.45', 'the empty composer dims Send');
+        await step('press Enter on empty composer', () => box.press('Enter'));
+        await step('click empty Send', () => send.evaluate(button => button.click()));
+        await frames('empty composer actions paint');
       }
       assert.equal(posts.length, 2, 'the interrupted attempt and explicit resend are the only POSTs');
-      await readsSettled();
-      await page.reload();
-      await ready();
-      await frames();
-      assert.equal(await box.inputValue(), edit ? next : '', 'a later reload cannot revive confirmed text');
+      await readsSettled('fixture reads settle before confirmed-send reload');
+      await step('reload after confirmed resend', () => page.reload());
+      await ready('reloaded conversation and event subscription ready');
+      await frames('reloaded composer paints');
+      assert.equal(await step('read reloaded composer', () => box.inputValue()), edit ? next : '', 'a later reload cannot revive confirmed text');
       assert.equal(posts.length, 2, 'reload sends nothing');
     } else {
-      await readsSettled();
-      await page.reload();
-      await ready();
-      assert.equal(await box.inputValue(), text, 'an existing draft never sent survives return and another reload');
+      await readsSettled('fixture reads settle before unsent-draft reload');
+      await step('reload unsent draft', () => page.reload());
+      await ready('unsent conversation and event subscription ready after reload');
+      assert.equal(await step('read reloaded unsent draft', () => box.inputValue()), text, 'an existing draft never sent survives return and another reload');
       assert.equal(posts.length, 0, 'an unsent draft makes no POST');
     }
     const final = await stored();
@@ -196,23 +212,26 @@ async function scenario(browser, mode, edit, editedBefore = false) {
     console.log('ok -', mode, editedBefore ? 'edited restored draft' : edit ? 'preserves later edits' : 'sign-in return');
   } finally {
     release?.();
-    try { await page.close(); } finally {
-      server.closeAllConnections();
-      await new Promise(resolve => server.close(resolve));
+    try { await step('close page', () => page.close(), t(10000)); } finally {
+      await step('close fixture server', () => new Promise((resolve, reject) => {
+        server.close(error => error && error.code !== 'ERR_SERVER_NOT_RUNNING' ? reject(error) : resolve());
+        server.closeAllConnections();
+      }), t(10000));
     }
   }
 }
 
 (async () => {
   for (const engine of engines) {
-    const browser = await ({chromium, webkit}[engine]).launch({headless: true,
-      ...(engine === 'chromium' ? {channel: process.env.TICO_BROWSER_CHANNEL === undefined ? 'chrome' : process.env.TICO_BROWSER_CHANNEL || undefined} : {})});
+    const step = steps(engine);
+    const browser = await step('launch browser', () => ({chromium, webkit}[engine]).launch({headless: true,
+      ...(engine === 'chromium' ? {channel: process.env.TICO_BROWSER_CHANNEL === undefined ? 'chrome' : process.env.TICO_BROWSER_CHANNEL || undefined} : {})}));
     try {
-      await scenario(browser, '401', false, true);
-      await scenario(browser, '401', false);
-      await scenario(browser, '401', true);
-      await scenario(browser, 'unsent', false);
+      await scenario(browser, engine, '401', false, true);
+      await scenario(browser, engine, '401', false);
+      await scenario(browser, engine, '401', true);
+      await scenario(browser, engine, 'unsent', false);
       console.log('ok - chat send sign-in:', engine);
-    } finally { await browser.close(); }
+    } finally { await step('close browser', () => browser.close(), t(10000)); }
   }
 })().catch(error => { console.error(error); process.exit(1); });
