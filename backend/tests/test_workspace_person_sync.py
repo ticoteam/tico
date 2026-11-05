@@ -7,6 +7,7 @@ from backend.store import H, encode, readiness_document
 from backend.tests.test_api import api, as_member, get, post, ready, runner, setup_attempt  # noqa: F401
 from backend.tests.test_assistant import assistant_turn
 from backend.tests.test_connectors import mail_message
+from backend.tests.test_gmail_live import gmail_http  # noqa: F401
 from backend.tests.test_google_workspace import personal
 from backend.tests.test_google_workspace_authz import (  # noqa: F401
     BOX, PERSONAL, health, place, publish, revoke, token, workspace_key,
@@ -271,7 +272,8 @@ def test_sync_does_not_give_a_colocated_bot_mail_api_cli_or_token_access(api, kn
     token(api, turn, PERSONAL, expected=403)
 
 
-def test_the_owners_assistant_and_mail_page_read_synced_mail_without_a_message_bot(api, workspace_key, monkeypatch):
+def test_the_owners_assistant_and_mail_page_read_live_mail_without_a_message_bot(
+        api, workspace_key, gmail_http, monkeypatch):
     from connectors.mail import access
     seed_org(api)
     with api.app.state.store.transaction() as c:
@@ -285,12 +287,15 @@ def test_the_owners_assistant_and_mail_page_read_synced_mail_without_a_message_b
     assert addresses(api, machine) == {BOX}
     post(api, "connectors/mail/messages", {"mailbox": BOX, "messages": [mail_message()],
                                           "synced_at": H.now()}, machine["token"])
+    with api.app.state.store.read() as c:
+        synced = c.execute("SELECT msg_id,body FROM mail_messages WHERE mailbox=?", (BOX,)).fetchone()
+        assert synced["msg_id"] == "m-plain" and synced["body"] == "How does pricing work?"
     for credential in ("ana-test", attempt["token"]):
         boxes = get(api, "mail/mailboxes", credential)["mailboxes"]
         box = next(b for b in boxes if b["address"] == BOX)
         assert box["message_count"] == 1 and box["agent_bot"] is None
-        assert get(api, "mail/messages?mailbox=" + BOX, credential)["messages"][0]["msg_id"] == "m-plain"
-        assert get(api, "mail/messages/m-plain?mailbox=" + BOX, credential)["body"] == "How does pricing work?"
+        assert get(api, "mail/messages?mailbox=" + BOX, credential)["messages"][0]["msg_id"] == "m2"
+        assert get(api, "mail/messages/m1?mailbox=" + BOX, credential)["body"] == "Live contract body."
     answer = get(api, "mail/access?mailbox=" + BOX, attempt["token"])
     assert answer["principal"] == "person:ana" and answer["level"] == "read_write"
     monkeypatch.setattr(access, "SERVER_ACCESS", lambda slug: answer)

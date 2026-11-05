@@ -4,9 +4,21 @@
 
 In the web app, each connected mailbox and Slack channel is listed in the Team sidebar under the bot that covers it:
 an Inbox Manager's under **Message bots**, a team bot's under that bot. Open one to see that bot's instructions and routines on the
-left and example messages on the right. Email threads are synced copies; the mail tool still
+left and example messages on the right. Whole Workspace email threads are read live from Gmail; the mail tool still
 handles Gmail actions. A messaging icon beside a human in the team chart opens their message bot.
 The old `#/mail` route remains available for existing deep links.
+
+## Reading mail
+
+`hub email mailboxes` lists the person's readable mailboxes, including shared ones. With Whole Workspace connected,
+`hub email inbox <address>`, `hub email search <address> "<Gmail query>"`, `hub email thread <address> <thread-id>` and
+`hub email message <address> <message-id>` read live from Gmail without saving mail. The person's Assistant has the
+same mailbox access. Output is Markdown by default; add `--json` for the API response. Lists accept `--limit` (up to
+50) and `--cursor` with the previous `next_cursor`. Inbox accepts `--q` to search within INBOX. `hub mail` is postal mail.
+
+The mail API requires a mailbox for live lists; it does not combine Workspace inboxes. Personal Connect Google grants
+and legacy connections keep their existing stored reads; live reading needs Whole Workspace. Existing mail sync and
+stored copies are unchanged by live reads. Opening a message or thread checks access and records `mail.read`.
 
 Mail is one shared tool, `$HUB_DIR/scripts/mail.sh`. One Google service account acts as every
 mailbox; who may act as which one comes from the `tools:` block in your `bot.yaml`
