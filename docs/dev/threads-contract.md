@@ -714,7 +714,7 @@ with no display name.
 | `GET /api/v2/threads/{id}/bot-status` | `thread_bot_status.status(c, viewer, root)` → `{"bots": [...]}` (§4.10) |
 | `GET /api/v2/threads/{id}/timeline?cursor=&limit=&flat=` | `threads.timeline(c, viewer, thread_id, cursor=None, limit=50, max_bytes=..., flat=False)` → `{"thread", "breadcrumb", "messages": [...], "next_cursor", "bot_status", "read_marks"}` (`bot_status` on the first page; `flat` and its `read_marks`: §4.9; every message has `reply_to` and `routed`); `next_cursor` and `limit` count the thread's own messages; each is followed by its sub-thread's rows in tree order (§5). Each message carries `depth` (its thread's depth in the tree: 0 in a root, 1 in a sub-thread), and a parent carries `"sub_thread": {"id", "title", "count", "last_seq", "last_read_seq", "unread", "more"}` (`count` and `unread` only of messages the viewer reads; `more` is how many are collapsed) |
 | `POST /api/v2/threads/{id}/read {seq}` | `threads.mark_read` |
-| `POST /api/v2/threads/{id}/read-all` | `threads.mark_all_read` |
+| `POST /api/v2/threads/{id}/read-all {ago_ms}` (body optional) | `threads.mark_all_read(c, v, thread_id, ago_ms=None)`: `ago_ms` (0 to 600000, else 422) reads only what was written that long before; 0 or no body reads everything up to now |
 | `GET /api/v2/threads/search?q=` | T2 (FTS5), filtered by `threads.readable` per message |
 | `POST /api/v2/threads {title, audience, audience_group_id, members, parent_message_id, body}` | `threads.create` (+ `threads.post` when `body`) |
 | `POST /api/v2/threads/{id}/messages {text, kind, to, refs, parent_message_id, in_reply_to}` | `threads.post` (`in_reply_to`: §4.9) |

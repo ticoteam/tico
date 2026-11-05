@@ -118,8 +118,26 @@ sub-thread under it.
 Anyone who reads a thread can pin it for themselves. A manager can pin a thread for everyone who reads it, except a DM
 with one teammate, a Home, a task's thread or a meeting's; anyone can still unpin it for themselves. Pinned threads lead
 the thread list. Catch up shows every thread with new messages for you, ones that mention you first, each with its new
-messages. A group DM and every other new thread need a name; only a DM with one teammate may go unnamed. Details:
-[threads contract §10.1](dev/threads-contract.md).
+messages. A group DM and every other new thread need a name; only a DM with one teammate may go unnamed.
+
+A card has **Later**, **Mute** and **Mark read**, and a reply box if you can post in its thread. Type a reply and a
+**Send** button appears. Send posts the reply, and the sent message stays on the card. The card stays until you choose
+**Mark read**, **Mute** or **Later**. While a reply is sending, its box and **Send** are disabled, even if you close and
+reopen Catch up. What you type stays in the box as you move between cards; closing Catch up clears it.
+
+**Mark read**, **Mute** and **Later** each move the card on and show **Undo** in place of the progress bar for 5
+seconds. **Mute** also sets the thread's follow level to muted. To bring the card back where it was, click **Undo**, or
+press Ctrl+Z (Cmd+Z on a Mac) when you are not typing.
+
+**Later** sends nothing, so the thread stays unread, and the card returns the next time you open Catch up. **Mark read**
+and **Mute** take effect at the first of these:
+
+- 5 seconds after the click,
+- choosing **Later**, **Mute** or **Mark read** on another card,
+- closing Catch up, or
+- leaving the page.
+
+A message that arrives while Undo shows stays unread. Details: [threads contract §10.1](dev/threads-contract.md).
 
 ## Editing and deleting
 
