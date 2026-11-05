@@ -219,6 +219,9 @@ MODEL_BY_ID = _ById((row["id"], row) for row in MODEL_CATALOG)
 #              claude-haiku-5-5 read 2026-10-17: the rate for prompts up to 100,000 tokens (LONG_PROMPT below).
 #   OpenAI     developers.openai.com/api/docs/pricing (standard, short context)
 #              gpt-6.1-terra read 2026-11-03 (standard, short context; its model page gives the same rates)
+#              gpt-6.1-terra at 272,000 or more prompt tokens: Tico's approved long-prompt rate (LONG_PROMPT below).
+#              OpenRouter's public list (read 2026-11-05) gives openai/gpt-6.1-terra an override at min_prompt_tokens
+#              272000 of $2.00 in / $0.10 cached / $7.50 out per 1M. A citation only: it changes no rate here.
 #   Google     ai.google.dev/gemini-api/docs/pricing (paid standard; $0.75/$3.75 until 2026-12-31, doubling from 2027-01-01)
 #   xAI        docs.x.ai/developers/models (prompts under 200k)
 #   pi models  OpenRouter's public model list, openrouter.ai/api/v1/models (what the pi runtime is billed)
