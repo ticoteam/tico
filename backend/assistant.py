@@ -1146,6 +1146,16 @@ def action_text(c, row, text, refs=None):
     return H.sourced_text(text, sources, refs)
 
 
+def action_result(c, row, result):
+    """Errors and per-step outcomes can repeat the request's text too."""
+    if isinstance(result, dict):
+        return action_text(c, row, None, {key: value if key in H.SOURCED_TEXT_SOURCES else action_result(c, row, value)
+                                         for key, value in result.items()})[1]
+    if isinstance(result, list):
+        return [action_result(c, row, value) for value in result]
+    return result
+
+
 def create_proposal(c, settings, who, room, proposer, summary, method, path, body, asked=None, what=None, routes=None,
                     shown=None):
     """One pending action for `who` to confirm, and its card in `room`, written by the bot that proposed it.
@@ -1381,7 +1391,7 @@ def availability(c, settings, who):
 OLD_REPO_SUMMARY = re.compile(r"Set .+'s repository access to (own|all|chosen)\b")
 
 
-def action_view(row, c=None):
+def action_view(row, c):
     result = json.loads(row["result"]) if row.get("result") else None
     view = {"id": row["id"], "owner": row["owner"], "conversation_id": row["conversation_id"],
             "summary": row["summary"], "method": row["method"], "path": row["path"],
@@ -1390,12 +1400,12 @@ def action_view(row, c=None):
             "created_at": row["created_at"], "decided_at": row.get("decided_at"),
             "description": row.get("description") or "", "diff": json.loads(row.get("diff") or "[]"),
             "result": result}
-    if c is not None and view["proposer"] == "assistant" and view["conversation_id"]:
+    if view["proposer"] == "assistant" and view["conversation_id"]:
         # A card the Strategy Bot put in the owner's earlier chat with it says it is the Strategy Bot's, by its name.
         if (H.conversation(c, view["conversation_id"]) or {}).get("room_key") == rooms.STRATEGY_ROOM:
             view["by_name"] = strategy_bot.name(c)
     m = re.fullmatch(r"/api/v2/bots/([^/]+)/repositories", view["path"] or "")
-    if m and c is not None:
+    if m:
         # Read again from what the stored request sends (never a guess at what it would do today), and its old line,
         # which reads the mode word as English, only under the card's Details.
         if not view["description"] or re.match(r"(GET|POST|PUT|PATCH|DELETE) /", view["description"]):
@@ -1403,17 +1413,17 @@ def action_view(row, c=None):
             view["description"] = plain_request((H.resolve_bot(c, m.group(1)) or {}).get("display_name") or m.group(1), view["body"])
         if OLD_REPO_SUMMARY.match(view["summary"] or ""):
             view["original_summary"], view["summary"] = view["summary"], ""
-    if c is not None:
-        from . import turn_scope
-        from .files import readable_page_refs
-        _, view["refs"] = action_text(c, row, None)
-        # Legacy cards recover sources from their stored request; each diff line carries its own prose.
-        view["diff"] = [H.sourced_text(None, view["refs"].get("body_sources", []), line)[1]
-                        for line in view["diff"]]
-        who, auth = turn_scope.WHO.get(), turn_scope.AUTH.get()
-        view = turn_scope.project(c, turn_scope.scope(c), view, auth=auth)
-        if who is not None:
-            view = readable_page_refs(c, auth, who, view)
+    from . import turn_scope
+    from .files import readable_page_refs
+    _, view["refs"] = action_text(c, row, None)
+    # Legacy cards recover sources from their stored request; each diff line carries its own prose.
+    view["diff"] = [H.sourced_text(None, view["refs"].get("body_sources", []), line)[1]
+                    for line in view["diff"]]
+    view["result"] = action_result(c, row, result)
+    who, auth = turn_scope.WHO.get(), turn_scope.AUTH.get()
+    view = turn_scope.project(c, turn_scope.scope(c), view, auth=auth)
+    if who is not None:
+        view = readable_page_refs(c, auth, who, view)
     return view
 
 
@@ -1824,6 +1834,7 @@ def install(app, store, auth, mutate, onboarding):
 
     def settle(aid, who, status, result, note):
         with store.transaction() as c:
+            result = action_result(c, load(c, who, aid), result)
             c.execute("UPDATE assistant_actions SET status=?, decided_at=?, result=?, confirm_hash=NULL WHERE id=?",
                       (status, H.now(), json.dumps(result), aid))
             row = load(c, who, aid)

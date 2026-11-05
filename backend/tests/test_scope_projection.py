@@ -1126,6 +1126,12 @@ def test_assistant_action_review_filename_clears_on_every_return(api, monkeypatc
     assert filename in made['action']['description']
     assert filename in get(api, 'assistant/actions/' + aid, human)['action']['description']
     assert filename in json.dumps(get(api, 'assistant/proposals', human))
+    batch = None
+    if not legacy and revocation == 'archive':
+        batch = {'summary': request['summary'], 'path': assistant.BATCH_PATH,
+                 'body': {'actions': [{'path': request['path'], 'body': request['body']}]}}
+        card = post(api, 'assistant/actions', batch, human)['action']
+        assert filename in json.dumps(card['diff'])
     with api.app.state.store.transaction() as c:
         row = dict(c.execute('SELECT * FROM assistant_actions WHERE id=?', (aid,)).fetchone())
         assert fid in row['refs']
@@ -1145,7 +1151,7 @@ def test_assistant_action_review_filename_clears_on_every_return(api, monkeypatc
             no_sources(get(api, path, human), (filename,))
     token = attempt['token']
     get(api, 'files/' + fid, token, expected=403)
-    no_sources(get(api, 'messages/' + qid, token), (filename,))
+    no_sources(get(api, 'messages/' + qid, token, expected=200 if revocation == 'archive' else 404), (filename,))
     proposed = {**request, 'for': 'human:' + person}
 
     def check(key):
@@ -1164,6 +1170,16 @@ def test_assistant_action_review_filename_clears_on_every_return(api, monkeypatc
             patch.setattr(H, 'SOURCED_TEXT_FIELDS', tuple(key for key in H.SOURCED_TEXT_FIELDS if key != field))
             with pytest.raises(AssertionError):
                 check('assistant-review-without-' + field)
+    if batch:
+        def check_batch(key):
+            repeated = post(api, 'assistant/actions', {**batch, 'for': 'human:' + person}, token, key=key)
+            assert repeated['repeated'] and repeated['action']['id'] == card['id']
+            no_sources(repeated, (filename,))
+        check_batch('assistant-batch-source')
+        with monkeypatch.context() as patch:
+            patch.setattr(H, 'SOURCED_TEXT_FIELDS', tuple(key for key in H.SOURCED_TEXT_FIELDS if key != 'field'))
+            with pytest.raises(AssertionError):
+                check_batch('assistant-batch-without-field')
     # The legacy recovery is independently necessary; it cannot infer provenance from display text.
     with api.app.state.store.transaction() as c:
         c.execute('UPDATE assistant_actions SET refs=NULL WHERE id=?', (aid,))
