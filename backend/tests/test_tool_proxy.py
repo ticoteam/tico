@@ -1,10 +1,13 @@
 """The Tools proxy (backend/tool_proxy.py): a proxied tool's key never leaves the server, a token works only for its
 tool and its live run, and the caller's level picks the key and the methods. The vendor is a local fake (MockTransport)."""
 import base64
+import ipaddress
 import json
 
 import httpx
+import pytest
 
+from backend import egress
 from backend.store import H
 from backend.tests.test_api import api, assign, claim, expire, get, post, ready, runner  # noqa: F401
 from backend.tests.test_credentials import setup
@@ -12,6 +15,16 @@ from backend.tests.test_credentials import setup
 FULL = "close-synthetic-full-key-4815162342"
 READ = "close-synthetic-read-key-2718281828"
 COMPUTER = "acme-synthetic-computer-key-1123581321"
+
+
+ANSWERS = {}
+
+
+@pytest.fixture(autouse=True)
+def lookups(monkeypatch):
+    """Name lookups answer from ANSWERS (a public address by default): no real DNS in tests."""
+    ANSWERS.clear()
+    monkeypatch.setattr(egress, "resolve", lambda host: [ipaddress.ip_address(ANSWERS.get(host, "93.184.215.14"))])
 
 
 class Vendor:
@@ -94,7 +107,9 @@ def test_a_proxied_key_never_reaches_the_run_and_is_scrubbed_from_answers_and_re
     sent = vendor.seen[-1]
     # basic_user: the key as the Basic user; the caller's token, cookies and forwarding headers never go on.
     assert sent.headers["authorization"] == "Basic " + base64.b64encode(f"{FULL}:".encode()).decode()
-    assert str(sent.url) == "https://api.close.example/api/v1/lead/?query=secret-search&_limit=5"
+    # Sent to the address the name was checked at, with Host and SNI still the name.
+    assert str(sent.url) == "https://93.184.215.14/api/v1/lead/?query=secret-search&_limit=5"
+    assert sent.headers["host"] == "api.close.example" and sent.extensions["sni_hostname"] == "api.close.example"
     assert item["value"] not in str(sent.headers)
     # The vendor echoed the key in a header and its body: neither reaches the caller.
     assert FULL not in r.text and FULL not in str(r.headers) and "[key]" in r.text
@@ -195,3 +210,24 @@ def test_header_query_and_twilio_style_schemes_rewrite_only_the_token(api):
     assert tool_proxy.logged_path("v1/x", "api_key=tpx1.abc.def&b=2") == "/v1/x?api_key=&b="
     scrub = tool_proxy.Scrubber(["secret-key"])
     assert scrub.feed(b"a secr") + scrub.feed(b"et-key b") + scrub.end() == b"a [key] b"
+
+
+def test_a_name_that_resolves_to_a_private_address_is_refused_and_nothing_is_sent(api):
+    setup(api)
+    tool(api)
+    give(api, key(api, "close-crm", FULL), "bot:ops")
+    vendor = Vendor()
+    api.app.state.tool_proxy_transport = httpx.MockTransport(vendor)
+    _, attempt = run(api)
+    token = handed(api, attempt)["value"]
+    for answer in ("127.0.0.1", "169.254.169.254", "10.0.0.5", "::1"):
+        ANSWERS["api.close.example"] = answer
+        r = call(api, "GET", "api/v1/me/", token)
+        assert r.status_code == 403 and r.json()["error"]["code"] == "tool_address", answer
+        assert "Change it on Tools > Close CRM" in r.json()["error"]["detail"]
+    assert vendor.seen == []
+    with api.app.state.store.read() as c:
+        assert [r["result"] for r in c.execute("SELECT result FROM tool_calls")] == ["refused"] * 4
+    # A local name is refused by its spelling, before any lookup.
+    from backend import tool_proxy
+    assert "Change it on Tools > Meta" in tool_proxy.address_problem("https://metadata.internal/", "Meta")

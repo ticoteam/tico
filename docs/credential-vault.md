@@ -41,7 +41,9 @@ key; with no read key it may only make GET, HEAD and OPTIONS calls), sends the c
 the key out of the answer and logs one row (path and query keys, never values or bodies) on the tool's Activity. A token
 is signed by the server, names one tool and one bot, and works only while the run it was made for is leased or running
 (a watcher's while its bot is assigned to that computer, for at most 12 hours); taking the level away stops the next
-call. **Computer** is the older way, and what every tool stored before Tools had: the value goes to the run's
+call. The proxy sends only to a public https address: it resolves the tool's name at each call, refuses it when any
+address it resolves to is not public (a cell's metadata service, this machine, a private network), and connects to the
+address it checked, keeping the name for Host and TLS (backend/egress.py). **Computer** is the older way, and what every tool stored before Tools had: the value goes to the run's
 environment as above, so whoever controls that computer can read it. Tools lists those under Needs you with
 "Move to proxy".
 

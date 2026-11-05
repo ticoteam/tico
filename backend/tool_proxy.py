@@ -22,7 +22,6 @@ import asyncio
 import base64
 import hashlib
 import hmac
-import ipaddress
 import json
 import re
 import sqlite3
@@ -33,7 +32,7 @@ import httpx
 from fastapi import Request
 from fastapi.responses import JSONResponse, StreamingResponse
 
-from . import outbound_tls
+from . import egress, outbound_tls
 from .auth import Identity, validate_identity
 from .store import H, Problem
 
@@ -45,6 +44,7 @@ METHODS = ['GET', 'HEAD', 'OPTIONS', 'POST', 'PUT', 'PATCH', 'DELETE']
 MAX_BODY = 25 * 1024 * 1024
 TTL = 12 * 3600                 # a watcher's or an agent's token; a run's lasts exactly as long as its attempt
 TIMEOUT = httpx.Timeout(120.0, connect=10.0, pool=10.0)
+RESOLVE_BUDGET = 10.0
 # Never forwarded either way: hop-by-hop headers, the caller's own sign-in, and what a proxy in front of Tico added.
 HOP = frozenset(('connection', 'keep-alive', 'proxy-authenticate', 'proxy-authorization', 'te', 'trailer', 'trailers',
                  'transfer-encoding', 'upgrade', 'host', 'content-length'))
@@ -181,19 +181,27 @@ def logged_path(rest, query):
 
 
 def address_problem(base_url, name):
-    """Why a tool's address cannot be called through the proxy, or ''."""
+    """Why a tool's address cannot be called through the proxy, by its spelling alone (no lookup), or ''."""
     if not base_url:
         return f'{name} has no API address. Set its address on Tools > {name}.'
-    parts = urlsplit(base_url)
-    if parts.scheme != 'https' or not parts.hostname or parts.username or parts.password:
-        return f"{name}'s API address must be an https:// address. Change it on Tools > {name}."
     try:
-        ip = ipaddress.ip_address(parts.hostname)
-    except ValueError:
-        return ''
-    if not ip.is_global:
-        return f"{name}'s API address is a private address. Change it on Tools > {name}."
+        egress.check(base_url)
+    except egress.Blocked as exc:
+        return f'{name}\'s API address is refused: {exc.reason}. Change it on Tools > {name}.'
     return ''
+
+
+def pinned(url, name):
+    """(url to connect to, Host, SNI name) for `url`: the name resolved now, refused (egress.Blocked, its reason naming
+    the setting) unless every address it resolves to is public, and pinned to the address checked so a second lookup
+    (DNS rebinding) cannot send the call elsewhere. Blocking: run it off the event loop."""
+    parts = egress.check(url)
+    try:
+        address = egress.address_for(parts, budget=RESOLVE_BUDGET)
+    except egress.Blocked as exc:
+        raise egress.Blocked(f'{name}\'s API address is refused: {exc.reason}. Change it on Tools > {name}.') from None
+    host = parts.hostname + (f':{parts.port}' if parts.port else '')
+    return httpx.URL(url).copy_with(host=address), host, parts.hostname
 
 
 def secrets_of(key, username):
@@ -362,13 +370,18 @@ def install(app, store):
         if urlsplit(url).hostname != urlsplit(tool['base_url']).hostname:
             await log(None, 'refused', 'Address left the tool host')
             return refused(404, 'not_found', 'Not found')
+        try:
+            target, host, sni = await loop().run_in_executor(None, pinned, url, tool['name'] or tool_id)
+        except egress.Blocked as exc:
+            await log(None, 'refused', exc.reason)
+            return refused(403, 'tool_address', exc.reason)
         client = httpx.AsyncClient(transport=getattr(app.state, 'tool_proxy_transport', None), timeout=TIMEOUT,
                                    follow_redirects=False, trust_env=False,
                                    verify=outbound_tls.context(trust_env=False))
         try:
             upstream = await client.send(client.build_request(
-                method, url, headers=outgoing_headers(request, tool, credential, key, ready['where']),
-                content=b''.join(chunks)), stream=True)
+                method, target, headers=[('Host', host), *outgoing_headers(request, tool, credential, key, ready['where'])],
+                content=b''.join(chunks), extensions={'sni_hostname': sni}), stream=True)
         except httpx.HTTPError as exc:
             await client.aclose()
             detail = scrub_text(f'{type(exc).__name__}: {exc}', secrets)[:200]
