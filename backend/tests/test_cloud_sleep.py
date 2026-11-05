@@ -88,7 +88,8 @@ def test_a_young_claimable_job_is_not_aged_by_an_old_task_wait(cloud, readiness)
     waiting_task(cloud)
     message = work(cloud)
     if readiness:
-        document = '{}' if readiness == 'readiness_unknown' else '{"bots":{"ops":{"ready":false}}}'
+        document = ('{}' if readiness == 'readiness_unknown' else
+                    '{"schema_version":1,"bots":{"ops":{"ready":false}}}')
         with cloud.store.transaction() as c:
             c.execute('UPDATE runner_states SET readiness=? WHERE runner_id=?', (document, computer['runner_id']))
         with cloud.store.read() as c:
