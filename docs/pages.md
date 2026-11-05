@@ -119,3 +119,19 @@ totals, so a count never says what a reader cannot see.
 
 **Who acts.** A bot publishes during its turn. People archive and restore. BotOps archives for a person with that
 person's rights, and asks before a hard delete, which only the owner may do.
+
+## Make page
+
+On a task, the Tico dot box takes a description and **Make page**. Your Assistant reads only the task's shared
+context list, writes one HTML page, and files and pins it on that task. You appear as the author; the Assistant
+keeps the page and its version retains the attempt that published it. No scripts run.
+
+The card says **Making page…** until the page is pinned. A turn that ends without a pin says **Not made · Open chat**.
+The card survives reopening the task. A task with 60 pins returns **This task has 60 pins**; unlink a page to make room.
+Publication checks the initiating request and every logged file or meeting read again. Removing a source from the
+context or making a meeting Participants only refuses publication with 403. A link never widens a source's access.
+
+`POST /api/v2/tasks/{id}/make-page {text}` sends your own Assistant message with the server's `refs.make_page` mark;
+other message routes refuse that mark with 403. `GET` on the same route returns your latest request's status
+(`making`, `made`, or `failed`), or null. These controls are for the person acting as themselves. The Assistant uses
+the existing `hub page publish FILE --task ID` / `hub_page_publish` tool, without `--source`.

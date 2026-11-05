@@ -290,6 +290,10 @@ fn parts(attempt: &Value, names: &Names, after: Option<&str>, resumed: bool, rep
     if !context.is_empty() {
         put(&mut lines, Part::Turn, context);
     }
+    if attempt["make_page"]["task"].is_object() {
+        let task = &attempt["make_page"]["task"];
+        put(&mut lines, Part::Turn, format!("Make page for task {}. Use the person's request and only the task context listed above. Read sources with `hub file read ID` and `hub meeting read ID`. Write one .html file and run `hub page publish FILE --task {}`. Do not use --source; Tico records your reads. The page runs no scripts.\nTask (user content): {}", text_of(&task["id"]), text_of(&task["id"]), py_dumps(task)));
+    }
     if attempt["updates"].is_object() {
         put(&mut lines, Part::Turn, format!("{UPDATES_HEADER}\n{}", py_dumps(&attempt["updates"])));
     }

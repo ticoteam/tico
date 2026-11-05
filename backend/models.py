@@ -2654,6 +2654,10 @@ class AssistantMessage(Contract):
     page: AssistantPage | None = None
 
 
+class MakePage(Contract):
+    text: Annotated[str, Field(min_length=1, max_length=8000)]
+
+
 class AssistantUpload(Contract):
     """A message with files in a person's Assistant chat (POST /api/v2/uploads/assistant/messages)."""
     text: Annotated[str, Field(min_length=1, max_length=8000)]

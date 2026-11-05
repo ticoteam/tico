@@ -77,6 +77,9 @@ def write_allowed(method, path, settings=None, body=b"", actor="", owns=None, di
         return True
     if method != "POST":
         return False
+    if path == "/api/v2/pages":
+        # The file writer checks the initiating Make page message and the complete source log.
+        return True
     # Saving what the person taught it (backend/learned.py checks the layer: theirs, or the company's for the owner).
     if path in ("/api/v2/updates/read", "/api/v2/changelog/read", "/api/notes", "/api/v2/assistant/actions",
                 "/api/v2/assistant/read-back", "/api/v2/assistant/learned", "/api/v2/goals/read-back"):
@@ -637,6 +640,31 @@ def instruction(c, who, ref):
     if str(msg["created_at"]) < H.shift(H.now(), seconds=-INSTRUCTION_TTL_S):
         refuse(f"That message is more than {INSTRUCTION_TTL_S // 60} minutes old; ask the person again")
     return {"for": who.actor, "cited": msg["id"], "run": "asked"}
+
+
+def make_page_task(c, auth, who, task):
+    """A live Assistant attempt may publish only for its person's initiating Make page request."""
+    from . import turn_scope
+    attempt = c.execute("SELECT * FROM attempts WHERE id=?", (who.attempt_id,)).fetchone()
+    principal = auth.assistant_principal(c, attempt) if attempt else None
+    row = c.execute("SELECT m.* FROM attempts a JOIN jobs j ON j.id=a.job_id "
+                    "JOIN messages m ON m.id=j.message_id WHERE a.id=?", (who.attempt_id,)).fetchone()
+    message = H.message(c, row["id"]) if row else None
+    room = H.conversation(c, message["conversation_id"]) if message else None
+    target = (message.get("refs") or {}).get("make_page") if message else None
+    if (who.via != "assistant" or not principal or principal.actor != who.actor
+            or principal.task_actor != who.task_actor or not message or message.get("deleted_at")
+            or message["kind"] != "say" or message["sender_id"] != who.actor
+            or message["recipient_id"] != who.task_actor or edited(c, message)
+            or (message.get("refs") or {}).get("via") or not room or room.get("closed_at")
+            or not isinstance(target, dict) or target.get("task") != task or not task):
+        raise Problem("forbidden", "Publish from the person's own Make page request", 403)
+    auth.task(c, who, task)
+    scoped = turn_scope.scope(c, who)
+    if not scoped or not scoped.make_page or scoped.task != task or not scoped.tasks:
+        raise Problem("forbidden", "Publish on the Make page request's task", 403)
+    turn_scope.recheck_reads(c, auth, who)
+    return message
 
 
 def require_on_task(c, auth, who, path):
@@ -1535,6 +1563,11 @@ def install(app, store, auth, mutate, onboarding):
         if "bot:" + bot != replay.get("to"):
             raise Problem("changed", "Your " + settings.assistant_name + " changed since the message was held; send it "
                           "again", 409)
+        target = (replay.get("refs") or {}).get("make_page")
+        if target:
+            from .pages import Pages
+            task = auth.task(c, who, target["task"])
+            Pages.require_pin_space(c, task["id"])
         return assistant_say(c, who, bot, chat_room(c, settings, who), replay["text"], replay.get("refs") or {},
                              org_rule_check.decided(gate), replay.get("uploads"), replay.get("titles") or [])
 
@@ -1550,6 +1583,55 @@ def install(app, store, auth, mutate, onboarding):
             raise Problem("assistant_off", "The " + info["name"] + " is off", 409)
         rc = await asyncio.to_thread(assistant_checks, who, info["bot"], body.text)
         return await asyncio.to_thread(post_message_sync, request, body, who, None, rc)
+
+    @app.post("/api/v2/tasks/{tid}/make-page")
+    async def make_page(request: Request, tid: str, body: M.MakePage):
+        from .pages import Pages
+        who = own(request)
+        text = body.text.strip()
+        if not text:
+            raise Problem("validation", "Say what page to make", 422)
+        def admit():
+            with store.read() as c:
+                task = auth.task(c, who, auth.resolve_task(c, who, tid))
+                Pages.require_pin_space(c, task["id"])
+                return task["id"], chat_bot_for(c, who)
+        task, bot = await asyncio.to_thread(admit)
+        rc = await asyncio.to_thread(assistant_checks, who, bot, text)
+        def work(c):
+            auth.task(c, who, task)
+            Pages.require_pin_space(c, task)
+            bot = chat_bot_for(c, who)
+            return assistant_say(c, who, bot, chat_room(c, settings, who), text,
+                                 {"assistant": True, "make_page": {"task": task}, "delivery": "queue"}, rc)
+        return await asyncio.to_thread(mutate, request, body, work)
+
+    @app.get("/api/v2/tasks/{tid}/make-page")
+    def make_page_status(request: Request, tid: str):
+        """Only the requester's latest Make page request, including after a reconnect or another chat turn."""
+        who = own(request)
+        with store.read_transaction() as c:
+            task = auth.task(c, who, auth.resolve_task(c, who, tid))
+            room = find_room(c, who.actor)
+            row = c.execute("SELECT m.id,m.conversation_id,j.state,a.state AS attempt_state,a.lease_until "
+                            "FROM messages m LEFT JOIN jobs j ON j.message_id=m.id "
+                            "LEFT JOIN attempts a ON a.id=j.attempt_id WHERE m.conversation_id=? "
+                            "AND m.sender_id=? AND m.deleted_at IS NULL AND json_extract(m.refs,'$.assistant')=1 "
+                            "AND json_extract(m.refs,'$.make_page.task')=? ORDER BY m.rowid DESC LIMIT 1",
+                            ((room or {}).get("id"), who.actor, task["id"])).fetchone()
+            if not row:
+                return {"make_page": None}
+            page = c.execute("SELECT f.* FROM bot_files f JOIN pages p ON p.file_id=f.id "
+                             "JOIN pins pin ON pin.item='page:' || f.id AND pin.place=? "
+                             "WHERE f.scope=? AND p.archived=0 AND f.archived=0 AND f.state<>'deleted' "
+                             "AND EXISTS (SELECT 1 FROM bot_file_versions v JOIN attempts a ON a.id=v.attempt_id "
+                             "JOIN jobs j ON j.id=a.job_id WHERE v.file_id=f.id AND j.message_id=?) LIMIT 1",
+                             ("task:" + task["id"], "task:" + task["id"], row["id"])).fetchone()
+            made = bool(page and app.state.files.visible(c, who, page, {}))
+            active = (row["state"] == "queued" or row["state"] in ("leased", "running")
+                      and row["attempt_state"] in ("leased", "running") and str(row["lease_until"] or "") > H.now())
+            return {"make_page": {"message_id": row["id"], "conversation_id": row["conversation_id"],
+                                  "state": "made" if made else "making" if active else "failed"}}
 
     # Files and pictures in a person's own Assistant chat (the Ask panel, the Assistant page), stored on the message like
     # any bot chat's, in their room's conversation.

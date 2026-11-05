@@ -17,6 +17,7 @@ import secrets
 import tempfile
 from collections import namedtuple
 from contextlib import ExitStack
+from dataclasses import replace
 from urllib.parse import quote, urlsplit
 
 from fastapi import Request
@@ -222,6 +223,8 @@ class Files:
 
     def writer_bot(self, c, who, given=""):
         """The bot a write is for: the authenticated bot, or the bot a runner ran a turn for."""
+        if who.via == "assistant" and who.task_actor and who.attempt_id:
+            return H.actor_id(who.task_actor)
         if who.role == "bot":
             return H.actor_id(who.actor)
         if who.role == "runner":
@@ -250,7 +253,21 @@ class Files:
     def target(self, c, who, bot, fields):
         """(scope, task id, conversation id, attempt id) for a write. Never chosen by a parameter alone:
         a task must be one this bot may see, and bot-wide is refused from inside a chat."""
-        attempt = who.attempt_id if who.role == "bot" and not who.agent else str(fields.get("attempt") or "")
+        attempt = (who.attempt_id if who.via == "assistant" or who.role == "bot" and not who.agent
+                   else str(fields.get("attempt") or ""))
+        from . import turn_scope
+        scoped = turn_scope.scope(c, replace(who, attempt_id=attempt))
+        if scoped and scoped.make_page and who.via != "assistant":
+            raise Problem("forbidden", "Make page publishes as the person who asked", 403)
+        if who.via == "assistant":
+            from . import assistant
+            task = str(fields.get("task") or "").strip()
+            message = assistant.make_page_task(c, self.auth, who, task)
+            if fields.get("scope") not in (None, "", "task") or fields.get("source"):
+                raise Problem("forbidden", "Make page publishes only on its task, without source", 403)
+            if privacy.private_meetings(c, privacy.meeting_sources(c).attempt(attempt)):
+                raise Problem("privacy", "Participants-only sources cannot be published on a task", 403)
+            return "task:" + task, task, message["conversation_id"], attempt
         conversation, turn_task = self.turn_context(c, who, bot, attempt)
         task = str(fields.get("task") or "").strip()
         wanted = str(fields.get("scope") or "").strip()
@@ -464,6 +481,8 @@ class Files:
         size = data.size if staged else len(data)
         with self.store.read() as c:
             bot = self.writer_bot(c, who, str(fields.get("bot") or ""))
+            if who.via == "assistant":
+                self.target(c, who, bot, fields)
         source = str(fields.get("source") or "")
         relative = str(fields.get("path") or "").replace("\\", "/").strip("/")
         if relative and (".." in relative.split("/") or relative.startswith("/")):
@@ -504,6 +523,8 @@ class Files:
             return previous
 
         def current_page_access(c):
+            if who.via == "assistant":
+                self.target(c, who, bot, fields)
             if version_page:
                 scope, task, _, attempt = self.target(c, who, bot, fields)
                 page_target(c, scope, task, attempt)

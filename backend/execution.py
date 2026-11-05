@@ -3983,7 +3983,10 @@ class Execution:
         subscriptions = model_subscriptions.hand_out(c, aid, subscribed)
         parked = c.execute("SELECT onboarding_state FROM bot_config WHERE bot=?", (row["bot_id"],)).fetchone()
         from .chat_goals import current
-        from . import task_context, worktrees
+        from . import task_context, turn_scope, worktrees
+        scoped = turn_scope.scope(c, acting or bot_who)
+        make_page = ({"task": runner_wire.task(self.auth.task(c, acting or bot_who, scoped.task))}
+                     if scoped and scoped.make_page and scoped.task else None)
         # A runner from before task goals would treat a task room's goal as running without ever setting it.
         chat_goal = current(c, conv["id"]) if not (conv.get("kind") == "task" and not task_goals_on(runner)) else None
         if chat_goal and chat_goal["bot"] != row["bot_id"]:
@@ -4036,6 +4039,7 @@ class Execution:
                             # `strategy`, the team's published strategy, which every turn carries (backend/strategy.py).
                             "learned": learned.for_turn(c, self.store.settings, conv, row["bot_id"]),
                             "task_context": task_context.for_turn(c, self.auth, acting or bot_who, task),
+                            **({"make_page": make_page} if make_page else {}),
                             # Asked from the Updates chat: the recent updates that person may read and open, read now as
                             # them (backend/updates_chat.py). None for every other turn.
                             "updates": updates_chat.for_turn(c, self.auth, self.store.settings, conv, row["bot_id"], msg, aid),
