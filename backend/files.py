@@ -1058,12 +1058,14 @@ class Files:
         """The bytes of one version through Tico, never a storage address."""
         with self.store.read() as c:
             row = c.execute("SELECT * FROM bot_files WHERE id=?", (fid,)).fetchone()
-            if not row:
+            if not row or not page_audience_visible(c, self.auth, who, row, {}):
                 raise Problem("not_found", "File not found", 404)
             # Adopted legacy blob IDs keep their original bytes at an unversioned URL.
             number = (row["current_version"] if is_file_id(fid) else 1) if version is None else version
             v = c.execute("SELECT v.*,b.digest AS blob_digest,b.content_type FROM bot_file_versions v "
                           "JOIN blobs b ON b.id=v.blob_id WHERE v.file_id=? AND v.version=?", (fid, number)).fetchone()
+            if v and not page_blob_visible(c, self.auth, who, v["blob_id"]):
+                raise Problem("not_found", "File not found", 404)
             from . import postal_mail
             scan = postal_mail.scan_access(c, self.auth, who, v["blob_id"]) if v else None
             if scan is not None:

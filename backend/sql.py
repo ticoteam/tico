@@ -749,7 +749,7 @@ def connect(path, c, auth, who, trace=None, seconds=None):
         columns = schema_columns(conn, path)
         unseen = TA.hidden(conn, who, "see", ("human", "group"), auth)
         tables = guarded(conn, auth, who, inner, function, columns, unseen=unseen)
-        source_tables = set(tables) | {"pages", "page_identities", "rule_reads", "pins", "pin_places", "teammate_accesses", "task_trash_assets", "home_merges", "home_merge_messages",
+        source_tables = set(tables) | {"pages", "page_identities", "mail_items", "postal_mail_grants", "rule_reads", "pins", "pin_places", "teammate_accesses", "task_trash_assets", "home_merges", "home_merge_messages",
                                        "blob_media", "live_meetings", "live_meeting_access", "live_meeting_bots",
                                        "live_meeting_turns"}
         class Source:

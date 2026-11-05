@@ -341,3 +341,19 @@ def test_pre_tombstone_deleted_html_never_reopens_saved_copies_or_citations(api)
         for viewer in (Identity("human:cara", "human"), Identity("human:ana", "owner")):
             assert org_rules._cite(c, api.app.state.auth, viewer, cite) == {"removed": True, "label": "A deleted page"}
             assert files.readable_page_refs(c, api.app.state.auth, viewer, cite) == {"removed": True, "label": "A deleted page"}
+
+
+def test_postal_scan_read_override_never_widens_a_page_audience(api, monkeypatch):
+    from backend import postal_mail
+    org(api)
+    _, attempt = turn(api)
+    tid = post(api, "tasks", {"owner": "ops", "title": "Shared scan", "body": "Review", "private": False})["id"]
+    fid = page(api, attempt, task=tid, title="Audience secret").json()["page"]["file_id"]
+    edit(api, fid, {"people": ["ben"]})
+    monkeypatch.setattr(postal_mail, "scan_access", lambda *args: True)
+    for token in ("cara-test", "finance-test"):
+        for suffix in ("", "?v=1", "/versions/1", "/meta"):
+            response = api.get("/api/v2/files/" + fid + suffix, headers=headers(token))
+            assert response.status_code == 404, response.text
+            assert fid not in response.text and "Audience secret" not in response.text
+    assert api.get("/api/v2/files/" + fid, headers=headers("ben-test")).status_code == 200
