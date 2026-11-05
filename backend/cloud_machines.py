@@ -419,9 +419,10 @@ def resting(c):
     runners are offline by design, including a machine whose bot moved to another computer, so Health does not call
     them offline or silent. A machine with a problem (out of credit, stuck, never enrolled) is not resting, and neither is one
     starting: a start that never comes up is an outage Health must still name."""
-    return {r["runner_id"] for r in c.execute(
+    from .read_cache import value
+    return value(c, "cloud_machines.resting", lambda: {r["runner_id"] for r in c.execute(
         "SELECT runner_id FROM cloud_machines WHERE runner_id IS NOT NULL AND problem='' "
-        "AND state IN ('stopped','stopping')")}
+        "AND state IN ('stopped','stopping')")}, shared=True)
 
 
 def label_for(c, key):
@@ -761,6 +762,7 @@ def bot_want(c, settings, bot, runner_id, at):
     newest = c.execute("SELECT id,created_at FROM jobs WHERE bot_id=? AND state='queued' AND held=0 "
                        "ORDER BY created_at DESC,id DESC LIMIT 1", (bot,)).fetchone()
     if newest and runner_id:
+        # Performance holds belong to start admission, not this wake: only a running machine can refresh its samples.
         why, _, _, job = bot_claimable(c, settings, runner_id, bot, with_job=True)
         if (why is None and job) or why in STALE:
             return True, "job:" + newest["id"], (2, newest["created_at"]), epoch(newest["created_at"]) or 0
@@ -1173,6 +1175,7 @@ class Manager:
 # ----------------------------------------------------------------------------- what people see
 PROBLEMS = {"out_of_credit": "Out of credit", "stuck": "Started, but its work did not run there",
             "no_enroll": "Made, but it never connected to this server"}
+ASLEEP = "asleep; starts when work can run"
 
 
 def problem_words(problem):
@@ -1201,11 +1204,13 @@ def waiting(c, bot):
         return "its cloud machine started, but this did not run there"
     if machine["problem"] == "no_enroll":
         return "its cloud machine never connected to this server"
+    if machine["state"] in GOING:
+        return "its cloud machine is " + ASLEEP
     return "starting its cloud machine"
 
 
 def homes(c):
-    """{bot: {runner_id, problem}} for every cloud-mode bot: its machine's computer and what keeps it from starting."""
+    """Each cloud-mode bot's machine state, computer and what keeps it from starting."""
     found = rows(c)
     shared = found.get(SHARED)
     out = {}
@@ -1213,7 +1218,7 @@ def homes(c):
         if bot == SHARED or current["mode"] != "cloud":
             continue
         machine = (shared if current["placement"] == "shared" else current) or current
-        out[bot] = {"runner_id": machine["runner_id"], "problem": machine["problem"]}
+        out[bot] = {key: machine[key] for key in ("runner_id", "problem", "state")}
     return out
 
 

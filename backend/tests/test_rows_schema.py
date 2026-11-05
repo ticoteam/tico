@@ -12,6 +12,9 @@ from backend.config import Settings
 from backend.store import Store
 
 TABLES = {
+    rows.AlertPreferenceRow: "alert_preferences",
+    rows.AlertCompanySettingRow: "alert_company_settings",
+    rows.PersonalAlertRow: "personal_alerts",
     rows.PostalMailGrantRow: "postal_mail_grants",
     rows.PostalMailSettingsRow: "postal_mail_settings",
     rows.MeetingTaskLinkRow: "meeting_task_links",

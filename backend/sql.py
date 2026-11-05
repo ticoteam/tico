@@ -417,6 +417,11 @@ def guarded(c, auth, who, inner, function, columns=None, unseen=None):
     else:
         events = (f"actor={me} OR target IN (SELECT id FROM tasks) OR target IN (SELECT id FROM conversations) "
                   "OR target IN (SELECT id FROM bots) OR target IN (SELECT 'bot:'||id FROM bots)")
+    # Personal alert activity belongs to its recipient, including in the owner's company audit. An accepted
+    # non-test alert also needs its task's current permission, for both the person and any delegated principal.
+    events = (f"({events}) AND (action NOT LIKE 'alerts.%' OR action='alerts.company_cap' OR actor={me}) "
+              "AND (action<>'alerts.accepted' OR json_extract(detail,'$.kind')='test' OR "
+              "json_extract(detail,'$.task_id') IN (SELECT id FROM tasks))")
     # Imported drafts do not enter company search, exports or the audit feed.
     meetings = f"({meetings}) AND review_state='live'"
     events = (f"({events}) AND target NOT IN (SELECT id FROM {inner('meetings')} "
