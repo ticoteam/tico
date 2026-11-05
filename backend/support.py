@@ -48,6 +48,9 @@ CREATE TABLE IF NOT EXISTS support_tickets(
  hq_id TEXT NOT NULL, hq_secret TEXT NOT NULL, messages TEXT NOT NULL DEFAULT '[]',
  seen_id INTEGER NOT NULL DEFAULT 0, checked_at TEXT, request_key TEXT);
 CREATE INDEX IF NOT EXISTS support_tickets_actor ON support_tickets(actor, created_at);
+CREATE TABLE IF NOT EXISTS support_file_attempts(
+ actor TEXT NOT NULL, request_key TEXT NOT NULL, created_at TEXT NOT NULL,
+ ticket_id TEXT, PRIMARY KEY(request_key));
 """
 MAX_MESSAGE = 4000
 PER_DAY = 10                 # new tickets one person may file in a day; HQ limits the address as well
@@ -395,26 +398,41 @@ class Support:
             raise Problem("diagnostics_stale", "This preview expired. Refresh diagnostics and review again.", 409)
         return bundle
 
-    def file(self, who, body, key="", on_filed=None, source=""):
-        """Send the ticket to HQ, then keep HQ's id and secret. Nothing is kept when HQ refuses or cannot be reached.
+    def file(self, who, body, key="", on_filed=None, source="", durable_attempt=False):
+        """Send the ticket to HQ, then keep HQ's id and secret. A durable attempt is retained when HQ's answer is
+        ambiguous, so a retry cannot create another ticket; explicit refusal releases the reservation.
         `on_filed(c, ticket_id)` runs in the transaction that keeps it (an approval spent with it). `source` is who
         filed it, as HQ's queue sorts tickets (one of SOURCES; the body's own when not given)."""
+        if durable_attempt and not key:
+            raise ValueError("a durable support attempt requires a request key")
         message, email = clean_message(body.message), clean_email(body.email)
         with self.store.read() as c:
             if key:
-                again = c.execute("SELECT * FROM support_tickets WHERE actor=? AND request_key=?",
+                again = c.execute("SELECT * FROM support_tickets WHERE actor=? AND request_key=? ORDER BY created_at,id LIMIT 1",
                                   (who.actor, key)).fetchone()
+                if not again and durable_attempt:
+                    # Health signatures belong to this install, even if its default person changes.
+                    again = c.execute("SELECT * FROM support_tickets WHERE request_key=? ORDER BY created_at,id LIMIT 1",
+                                      (key,)).fetchone()
                 # A key the person sent before it was kept as `idem:<key>`: a retry across the upgrade finds the ticket
                 # its first send made, not a second one. A bare key that starts like a server key is never matched.
                 if not again and key.startswith("idem:") and key[5:] and not key[5:].startswith(RESERVED_KEYS):
-                    again = c.execute("SELECT * FROM support_tickets WHERE actor=? AND request_key=?",
+                    again = c.execute("SELECT * FROM support_tickets WHERE actor=? AND request_key=? ORDER BY created_at,id LIMIT 1",
                                       (who.actor, key[5:])).fetchone()
                 if again:
                     return view(again)
+                if durable_attempt:
+                    attempt = c.execute("SELECT ticket_id FROM support_file_attempts WHERE request_key=?", (key,)).fetchone()
+                    if attempt:
+                        ticket = c.execute("SELECT * FROM support_tickets WHERE id=?", (attempt["ticket_id"],)).fetchone() \
+                            if attempt["ticket_id"] else None
+                        if ticket:
+                            return view(ticket)
+                        raise Problem("support_pending", "This report's filing attempt is already recorded.", 409)
             since = H.shift(H.now(), hours=-24)
             recent = c.execute("SELECT count(*) FROM support_tickets WHERE actor=? AND created_at>?",
                                (who.actor, since)).fetchone()[0]
-        if recent >= PER_DAY:
+        if recent >= PER_DAY and not durable_attempt:
             raise Problem("support_busy", "That is enough requests for today. Try again tomorrow.", 429)
         # The secret HQ answers with is sealed with the vault's key: make sure it opens (or, on a fresh install, make
         # it, as the first saved credential would) before anything goes to HQ, so no ticket is made that this server
@@ -438,6 +456,19 @@ class Support:
             payload["diagnostics"] = self.attachment(who, body.diagnostics)
         if body.kind != "support":
             payload["kind"] = sent["kind"] = body.kind
+        if durable_attempt:
+            # A response can be lost after HQ accepts a ticket. Keep the unique attempt before sending so a
+            # restart or competing report cannot create another ticket for this install and signature.
+            with self.store.transaction() as c:
+                inserted = c.execute("INSERT OR IGNORE INTO support_file_attempts(actor,request_key,created_at) VALUES(?,?,?)",
+                                     (who.actor, key, H.now())).rowcount
+                if not inserted:
+                    attempt = c.execute("SELECT ticket_id FROM support_file_attempts WHERE request_key=?", (key,)).fetchone()
+                    ticket = c.execute("SELECT * FROM support_tickets WHERE id=?", (attempt["ticket_id"],)).fetchone() \
+                        if attempt and attempt["ticket_id"] else None
+                    if ticket:
+                        return view(ticket)
+                    raise Problem("support_pending", "This report's filing attempt is already recorded.", 409)
         answer = _ask_hq("POST", "/v1/support", body=payload)
         if answer.status_code == 422 and _refused_field(answer) == "fields":
             # An HQ from before source refuses it as an unknown field: the ticket goes again without it, keeping the
@@ -455,8 +486,17 @@ class Support:
                 payload["message"] = named
             answer = _ask_hq("POST", "/v1/support", body=payload)
         if answer.status_code == 422 and "diagnostics" in payload:
+            if durable_attempt:
+                with self.store.transaction() as c:
+                    c.execute("DELETE FROM support_file_attempts WHERE request_key=? AND ticket_id IS NULL", (key,))
             raise Problem("diagnostics_rejected", "Support could not accept this attachment. Review it or remove diagnostics to send just the message.", 422)
-        made = _answer(answer, (201, 200))
+        try:
+            made = _answer(answer, (201, 200))
+        except Problem:
+            if durable_attempt and answer.status_code < 500:
+                with self.store.transaction() as c:
+                    c.execute("DELETE FROM support_file_attempts WHERE request_key=? AND ticket_id IS NULL", (key,))
+            raise
         if "diagnostics" in payload:
             sent["diagnostics"] = len(diagnostics.canonical(payload["diagnostics"]).encode())
         hq_id, hq_secret = str(made.get("ticket_id") or ""), str(made.get("secret") or "")
@@ -470,6 +510,8 @@ class Support:
                       "request_key) VALUES(?,?,?,?,?,?,?,?,?,?)",
                       (ticket_id, who.actor, H.now(), "open", message, email, encode(kept), hq_id,
                        self.vault.cipher.seal(c, _context(ticket_id), hq_secret), key or None))
+            if durable_attempt:
+                c.execute("UPDATE support_file_attempts SET ticket_id=? WHERE request_key=?", (ticket_id, key))
             H.event(c, who.actor, "support.filed", ticket_id, {"email": bool(email), "ids": bool({k: v for k, v in sent.items() if k != "diagnostics"}),
                                                               "diagnostics": "diagnostics" in sent})
             if on_filed:

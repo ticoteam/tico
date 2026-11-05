@@ -6,6 +6,8 @@ import json
 import logging
 import re
 import secrets
+import threading
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
 import httpx
@@ -13,6 +15,7 @@ import pytest
 
 from backend import support
 from backend.auth import Identity
+from backend.store import Store
 from backend.tests.test_onboarding import as_person, environment, signed_in  # noqa: F401
 from backend import bot_settings as BS
 
@@ -23,6 +26,7 @@ class FakeHQ:
 
     def __init__(self):
         self.tickets, self.seen, self.down, self.status_override = {}, [], False, None
+        self.after_accept_status = None
         self.read_status = None      # answers every ticket read with this status (429: HQ asking us to slow down)
         self.fields = None           # an older HQ: refuses a ticket carrying a field beyond these
         self.refuse_field = None     # refuses every ticket, naming this field as the wrong one
@@ -42,6 +46,8 @@ class FakeHQ:
                 return httpx.Response(422, json={"error": "invalid", "field": "fields"})
             tid = self.new_ticket_id()
             self.tickets[tid] = {"secret": self.new_secret(), "status": "open", "input": body, "messages": []}
+            if self.after_accept_status:
+                return httpx.Response(self.after_accept_status, json={"error": "accepted, response lost"})
             return httpx.Response(201, json={"ticket_id": tid, "secret": self.tickets[tid]["secret"], "status": "open"})
         parts = path.strip("/").split("/")
         ticket = self.tickets.get(parts[2]) if len(parts) > 2 else None
@@ -1249,3 +1255,73 @@ def test_a_request_a_person_sent_under_approval_before_the_upgrade_is_back_in_th
     with api.app.state.store.read() as c:                       # the bot's approval, whose id its send-at-once draft did not echo
         bot_approval = c.execute("SELECT id FROM approvals WHERE requested_by_id='bot:coo' AND kind='support'").fetchone()[0]
     assert keys[filed["ticket"]["id"]] == "approval:" + bot_approval
+
+
+def _health_report_sender(api):
+    with api.app.state.store.read() as c:
+        return api.app.state.auth.owner_identity(c)
+
+
+def test_a_health_filing_attempt_survives_a_fresh_store_after_an_accepted_5xx(environment, hq):
+    api = environment()
+    who = _health_report_sender(api)
+    hq.after_accept_status = 500
+    with pytest.raises(support.Problem):
+        api.app.state.support.file(who, support.SupportTicket(message="A monitor finding", include_ids=False),
+                                   "health:hm-test", source="health_monitor", durable_attempt=True)
+    assert len(hq.tickets) == len(hq.seen) == 1
+    hq.after_accept_status = None
+    restarted_store = Store(api.app.state.store.settings)
+    restarted_support = support.Support(restarted_store, api.app.state.support.settings,
+                                        api.app.state.support.census, api.app.state.support.vault)
+    with pytest.raises(support.Problem) as pending:
+        other_owner = Identity(actor="human:riley", role=who.role)
+        restarted_support.file(other_owner, support.SupportTicket(message="A monitor finding", include_ids=False),
+                               "health:hm-test", source="health_monitor", durable_attempt=True)
+    assert pending.value.code == "support_pending"
+    assert len(hq.tickets) == len(hq.seen) == 1
+
+
+def test_a_health_filing_attempt_survives_a_local_ticket_write_failure(environment, hq, monkeypatch):
+    api = environment()
+    who = _health_report_sender(api)
+    original = support.H.event
+
+    def fail_after_hq(c, actor, kind, target, data=None):
+        if kind == "support.filed":
+            raise RuntimeError("synthetic local write failure")
+        return original(c, actor, kind, target, data)
+
+    monkeypatch.setattr(support.H, "event", staticmethod(fail_after_hq))
+    with pytest.raises(RuntimeError, match="synthetic local write failure"):
+        api.app.state.support.file(who, support.SupportTicket(message="A monitor finding", include_ids=False),
+                                   "health:hm-local", source="health_monitor", durable_attempt=True)
+    monkeypatch.setattr(support.H, "event", staticmethod(original))
+    assert len(hq.tickets) == len(hq.seen) == 1
+    with pytest.raises(support.Problem) as pending:
+        api.app.state.support.file(who, support.SupportTicket(message="A monitor finding", include_ids=False),
+                                   "health:hm-local", source="health_monitor", durable_attempt=True)
+    assert pending.value.code == "support_pending"
+    assert len(hq.tickets) == len(hq.seen) == 1
+
+
+def test_two_health_filing_calls_reserve_one_hq_post(environment, hq):
+    api = environment()
+    who = _health_report_sender(api)
+    support_client = api.app.state.support
+    body = support.SupportTicket(message="A monitor finding", include_ids=False)
+    start = threading.Barrier(2)
+
+    def send():
+        start.wait()
+        try:
+            return support_client.file(who, body, "health:hm-race", source="health_monitor", durable_attempt=True)
+        except support.Problem as exc:
+            return exc.code
+
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        results = list(pool.map(lambda _: send(), range(2)))
+    tickets = [result["id"] for result in results if isinstance(result, dict)]
+    assert tickets and len(set(tickets)) == 1
+    assert all(isinstance(result, dict) or result == "support_pending" for result in results)
+    assert len(hq.tickets) == len(hq.seen) == 1

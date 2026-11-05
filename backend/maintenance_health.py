@@ -787,6 +787,16 @@ def report(c_factory, support, auth, settings, who, key):
                 asked = c.execute("SELECT decision FROM approvals WHERE id=?", (filed["approval_id"],)).fetchone()
                 if not asked or (asked["decision"] and asked["decision"] != "approved"):
                     cleared = filed["approval_id"]   # declined, withdrawn or gone: the signature can be reported again
+        # The support ticket is the durable source of truth when keeping health_reports failed after HQ accepted it.
+        reconciled_ticket = None
+        if not cleared and (not filed or not filed["ticket_id"]):
+            kept = c.execute("SELECT id FROM support_tickets WHERE request_key=? ORDER BY created_at,id LIMIT 1",
+                             ("health:" + row["signature"],)).fetchone()
+            if kept:
+                reconciled_ticket = kept["id"]
+                filed = {"signature": row["signature"], "ticket_id": kept["id"],
+                         "approval_id": filed["approval_id"] if filed else None,
+                         "reported_occurrences": filed["reported_occurrences"] if filed else row["occurrences"]}
         today = _reports_today(c)
     if cleared:
         with store.transaction() as c:
@@ -794,19 +804,27 @@ def report(c_factory, support, auth, settings, who, key):
                       (row["signature"], cleared))
         filed = None
     if filed and filed["ticket_id"]:
+        if reconciled_ticket:
+            with store.transaction() as c:
+                c.execute("INSERT INTO health_reports(signature,ticket_id,created_at,reported_occurrences,reported_at) "
+                          "VALUES(?,?,?,?,?) ON CONFLICT(signature) DO UPDATE SET ticket_id=excluded.ticket_id",
+                          (row["signature"], reconciled_ticket, H.now(), filed["reported_occurrences"], H.now()))
         if row["occurrences"] <= filed["reported_occurrences"]:
             return {"signature": row["signature"], "ticket": filed["ticket_id"], "again": True}
         # HQ hears it with the ticket's own secret, whoever filed it: the owner, or the person who approved it
         # (Support.file_approved). The person's chat does not list such a ticket (support.OWN): this line is the team's.
         with store.read() as c:
             kept_ticket = c.execute("SELECT * FROM support_tickets WHERE id=?", (filed["ticket_id"],)).fetchone()
-        if kept_ticket:
-            support.note(kept_ticket, f"[Health Monitor] Seen again ({row['occurrences']} times), last at "
-                                      f"{row['last_seen_at'][:16]} UTC. Signature {row['signature']}.")
         with store.transaction() as c:
-            c.execute("UPDATE health_reports SET reported_occurrences=?, reported_at=? WHERE signature=?",
-                      (row["occurrences"], H.now(), row["signature"]))
-            H.event(c, who.actor, "health_monitor.reported_again", row["signature"], {"ticket": filed["ticket_id"]})
+            changed = c.execute("UPDATE health_reports SET reported_occurrences=?, reported_at=? WHERE signature=? "
+                                "AND reported_occurrences<?",
+                                (row["occurrences"], H.now(), row["signature"], row["occurrences"])).rowcount
+        if changed:
+            if kept_ticket:
+                support.note(kept_ticket, f"[Health Monitor] Seen again ({row['occurrences']} times), last at "
+                                          f"{row['last_seen_at'][:16]} UTC. Signature {row['signature']}.")
+            with store.transaction() as c:
+                H.event(c, who.actor, "health_monitor.reported_again", row["signature"], {"ticket": filed["ticket_id"]})
         return {"signature": row["signature"], "ticket": filed["ticket_id"], "comment": True}
     if filed and filed["approval_id"]:
         return {"signature": row["signature"], "approval": filed["approval_id"], "again": True}
@@ -826,8 +844,13 @@ def report(c_factory, support, auth, settings, who, key):
     from .support import SupportTicket
     bundle = diagnostics.build(store, settings, auth, owner, support.census)
     attachment = support.previews.keep(owner.actor, bundle)
-    ticket = support.file(owner, SupportTicket(message=message, include_ids=True, diagnostics=attachment),
-                          "health:" + row["signature"], source="health_monitor")
+    try:
+        ticket = support.file(owner, SupportTicket(message=message, include_ids=True, diagnostics=attachment),
+                              "health:" + row["signature"], source="health_monitor", durable_attempt=True)
+    except Problem as exc:
+        if getattr(exc, "code", "") == "support_pending":
+            return {"signature": row["signature"], "pending": True, "again": True}
+        raise
     now = H.now()
     with store.transaction() as c:
         c.execute("INSERT INTO health_reports(signature,ticket_id,created_at,reported_occurrences,reported_at) VALUES(?,?,?,?,?) "
@@ -839,9 +862,13 @@ def report(c_factory, support, auth, settings, who, key):
 
 def _reports_today(c):
     """New tickets sent in the last day, including approvals requested on an earlier day. Repeat comments do not count."""
-    return c.execute("SELECT count(*) FROM health_reports h LEFT JOIN support_tickets t ON t.id=h.ticket_id "
-                     "WHERE h.ticket_id IS NOT NULL AND coalesce(t.created_at,h.created_at)>?",
-                     (H.shift(H.now(), hours=-24),)).fetchone()[0]
+    since = H.shift(H.now(), hours=-24)
+    return c.execute("SELECT count(*) FROM ("
+                     "SELECT h.signature FROM health_reports h LEFT JOIN support_tickets t ON t.id=h.ticket_id "
+                     "WHERE h.ticket_id IS NOT NULL AND coalesce(t.created_at,h.created_at)>? "
+                     "UNION SELECT substr(request_key,8) FROM support_file_attempts "
+                     "WHERE request_key LIKE 'health:%' AND created_at>? )",
+                     (since, since)).fetchone()[0]
 
 
 
