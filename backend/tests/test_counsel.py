@@ -536,6 +536,9 @@ def test_counsel_cites_require_both_asker_access_and_current_turn_scope(api):
         attempt = next_counsel_run(api, r)
         listed = api.get("/api/v2/rules", headers=headers(attempt["token"]))
         assert listed.status_code == 200, listed.text
+        if token == "ana-test":
+            assert file_id not in listed.text
+            assert all("cite" not in item for item in listed.json()["rules"])
         shown[token] = [item.get("cite") for item in listed.json()["rules"]]
         finish(api, r, attempt, text="Rule cited.")
     assert shown["cara-test"] == [{"hidden": True}] and CONSENT not in json.dumps(shown["cara-test"])

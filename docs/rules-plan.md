@@ -522,6 +522,7 @@ government rules with citations into the same Suggested tab. Tico works fully wi
   - A failed re-read never retires.
 - **Cites:** a fetched link's cite points at a Files version that a later page change doesn't alter.
 - **Visibility:** someone without file access sees the sentence but not the quote, in the list, CLI and MCP.
+  A task-scoped bot turn also needs the cited file in its current scope. A later Counsel question does not inherit a previous document-read grant; the requester's file access alone does not grant the turn that citation.
 - **Routines with a due date:**
   - One task per (routine, due_on) across repeated or concurrent ticks.
   - Catch-up after a missed day.
