@@ -16,6 +16,7 @@ from backend.tests.test_meeting_task_links import link, task
 from backend.tests.test_pages import HTML
 from backend.tests.test_postal_mail import (deliver, drain, hq, items, letter, mail, service)  # noqa: F401
 from backend.tests.test_turn_scope import blob, make_scope, published, task_turn
+from backend.tests.test_letters import hq as outgoing_hq  # noqa: F401
 
 
 def no_sources(value, secrets):
@@ -868,3 +869,132 @@ def test_plain_answer_previews_keep_the_message_body_provenance(api):
                  'tasks/' + data['made']['task']['id'],
                  'tasks/' + data['made']['task']['id'] + '/comments'):
         no_sources(get(api, path, token), secrets(data))
+
+
+def publication_collision(api, kind):
+    machine, publisher = turn(api)
+    body = ({'url': 'https://acme.example/roadmap'} if kind == 'links' else
+            {'name': 'roadmap.md', 'text': '# Caller supplied bytes'}) | {'scope': 'bot'}
+    hidden = post(api, 'files/' + kind, {**body, 'title': 'Restricted roadmap name'}, publisher['token'])['file']
+    post(api, f'attempts/{publisher["id"]}/started', {'thread_id': 'publication-source'}, machine['token'])
+    post(api, f'attempts/{publisher["id"]}/complete', {'outcome': 'completed', 'last_seq': 0}, machine['token'])
+    task = post(api, 'tasks', {'owner': 'ops', 'title': 'Prepare a public plan', 'body': 'Write the plan.', 'private': False})
+    attempt = claim(api, machine, 'ops', key='publication-task')
+    assert attempt['task']['id'] == task['id']
+    no_sources(get(api, 'bots/ops/files', attempt['token']), (hidden['id'], hidden['title']))
+    return body, hidden, task, attempt
+
+
+@pytest.mark.parametrize('kind', ['links', 'uploads'])
+def test_publication_matches_only_readable_files_and_keeps_hidden_series(api, monkeypatch, kind):
+    from backend.files import Files
+    body, hidden, task, attempt = publication_collision(api, kind)
+    token, path = attempt['token'], 'files/' + kind
+    shown = post(api, path, body, token, key='publication-collision')
+    assert shown['created'] and shown['file']['id'] != hidden['id']
+    no_sources(shown, (hidden['id'], hidden['title']))
+    assert post(api, path, body, token, key='publication-collision') == shown
+    again = post(api, path, body, token)
+    assert not again['created'] and again['file']['id'] == shown['file']['id']
+    with api.app.state.store.read() as c:
+        original = c.execute('SELECT * FROM bot_files WHERE id=?', (hidden['id'],)).fetchone()
+        assert original['title'] == hidden['title'] and original['task_id'] is None
+        assert original['current_version'] == (1 if kind == 'uploads' else 0)
+    # The matcher must protect the write itself, independently of response projection.
+    with monkeypatch.context() as patch:
+        find = Files.find
+        patch.setattr(Files, 'find', lambda self, c, bot, scope, identity, **kw:
+                      find(self, c, bot, scope, identity))
+        with pytest.raises(AssertionError):
+            result = post(api, path, body, token)
+            assert result['created'] and result['file']['id'] != hidden['id']
+
+
+def test_reference_objects_are_projected_under_any_response_key(api, monkeypatch):
+    from backend import scope_projection
+    _, hidden, task, attempt = publication_collision(api, 'links')
+    private = post(api, 'tasks', {'owner': 'human:ben', 'title': 'Restricted task title',
+                                  'body': 'Private task body', 'private': True}, 'ben-test')
+    private_message = post(api, 'tasks/' + private['id'] + '/comments', {'text': 'Private message body'},
+                           'ben-test')['comment']
+    comment = post(api, 'tasks/' + task['id'] + '/comments', {'text': 'Ordinary task comment'})['comment']
+    fields = {key: 'Restricted copied text' for key in H.SOURCED_TEXT_FIELDS}
+    opaque = {'id': 'unknown-source', 'text': 'Keep literal ' + hidden['id'],
+              'other': json.dumps({'file': hidden['id']})}
+    with api.app.state.store.transaction() as c:
+        refs = H.message(c, comment['id'])['refs']
+        refs.update({'file': {'id': hidden['id'], **fields}, 'page': {'id': hidden['id'], **fields},
+                     'arbitrary': [{'nested': {'id': hidden['id'], **fields}},
+                                   {'id': private['id'], 'title': private['title']},
+                                   {'id': private_message['id'], 'text': private_message['body']}],
+                     'unrelated': opaque})
+        c.execute('UPDATE messages SET refs=? WHERE id=?', (H._dump(refs), comment['id']))
+    def check():
+        shown = get(api, 'messages/' + comment['id'], attempt['token'])
+        assert shown['refs']['unrelated'] == opaque
+        no_sources({k: v for k, v in shown['refs'].items() if k != 'unrelated'},
+                   ('Restricted copied text', private['title'], private_message['body']))
+    check()
+    with monkeypatch.context() as patch:
+        patch.setattr(scope_projection, 'object_refs', lambda value:
+                      ((key, item) for key, item in value.items() if key in scope_projection.REF_FIELDS))
+        with pytest.raises(AssertionError):
+            check()
+
+
+def test_sourced_text_provenance_covers_sibling_and_nested_fields(api, monkeypatch):
+    _, hidden, task, attempt = publication_collision(api, 'links')
+    comment = post(api, 'tasks/' + task['id'] + '/comments', {'text': 'Ordinary task comment'})['comment']
+    text, provenance = H.sourced_text('Restricted generated prose', [{'file': hidden['id']}])
+    copied = {key: text for key in H.SOURCED_TEXT_FIELDS}
+    with api.app.state.store.transaction() as c:
+        refs = H.message(c, comment['id'])['refs']
+        refs.update({'beside': {**copied, **provenance},
+                     'carried': {**copied, 'refs': provenance},
+                     'nested': {'refs': {**provenance, 'answer': copied}},
+                     'sources_beside_other': {'other': text, 'sources': [{'file': hidden['id']}]}})
+        c.execute('UPDATE messages SET refs=? WHERE id=?', (H._dump(refs), comment['id']))
+    def check():
+        no_sources(get(api, 'messages/' + comment['id'], attempt['token']), (text,))
+    check()
+    with monkeypatch.context() as patch:
+        patch.setattr(H, 'SOURCED_TEXT_FIELDS', tuple(key for key in H.SOURCED_TEXT_FIELDS if key != 'other'))
+        with pytest.raises(AssertionError):
+            check()
+
+
+def test_quoted_answers_clear_other_on_answer_and_message_paths(api, monkeypatch):
+    t, attempt = task_turn(api)
+    hidden = published(api, attempt, task=t['id'], name='draft.html', title='Confidential draft')
+    allowed = published(api, attempt, task=t['id'], name='public.html', title='Public draft')
+    made = ask(api, attempt['token'], [{'file': hidden}, {'file': allowed}], pick=True, parent=t['id'], private=False)
+    tid, qid = made['task']['id'], made['question']['id']
+    resolved = post(api, f'tasks/{tid}/comments/{qid}/resolve', {'quote': 'Confidential draft'})
+    mid = resolved['answer']['id']
+    assert get(api, 'messages/' + mid)['refs']['answer']['other'] == 'Confidential draft'
+    archived = api.patch('/api/v2/files/' + hidden, json={'archived': True}, headers=headers())
+    assert archived.status_code == 200, archived.text
+    get(api, 'files/' + hidden, attempt['token'], expected=403)
+    for path in ('tasks/' + tid + '/answers', 'messages/' + mid, 'tasks/' + tid + '/comments'):
+        no_sources(get(api, path, attempt['token']), ('Confidential draft',))
+        # Each response path must independently detect a missing covered field.
+        with monkeypatch.context() as patch:
+            patch.setattr(H, 'SOURCED_TEXT_FIELDS', tuple(key for key in H.SOURCED_TEXT_FIELDS if key != 'other'))
+            with pytest.raises(AssertionError):
+                no_sources(get(api, path, attempt['token']), ('Confidential draft',))
+
+
+def test_letter_blob_metadata_checks_scope_before_letter_access(api, outgoing_hq, monkeypatch):
+    from backend.tests.test_letters import grant, quote, send
+    grant(api, 'ops')
+    row = send(api, quote(api))
+    with api.app.state.store.read() as c:
+        bid = c.execute('SELECT source_blob_id FROM letters WHERE id=?', (row['id'],)).fetchone()[0]
+    _, attempt = task_turn(api)
+    path = 'files/' + bid + '/meta'
+    assert get(api, path)['size'] > 0
+    get(api, path, attempt['token'], expected=404)
+    with monkeypatch.context() as patch:
+        patch.setattr(turn_scope, 'blob_allowed', lambda *a: True)
+        with pytest.raises(AssertionError):
+            get(api, path, attempt['token'], expected=404)

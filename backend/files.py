@@ -522,7 +522,7 @@ def readable_page_refs(c, auth, who, refs, *, task_id=None):
             if (rejected(value.get("body_sources")) or rejected(carried.get("body_sources")) or
                     answer.get("answers") != shown_answer.get("answers") or
                     answer.get("not") != shown_answer.get("not")):
-                for key in ("body", "text", "note", "old", "new", "title", "name", "recommend", "other"):
+                for key in H.SOURCED_TEXT_FIELDS:
                     if key in shown:
                         shown[key] = "A page you can't open"
             return shown
@@ -653,9 +653,15 @@ class Files:
         raise Problem("validation", "Say which task this is for (task) or publish it bot-wide (scope=bot)", 422)
 
     # ------------------------------------------------------------------ writes
-    def find(self, c, bot, scope, identity):
-        return c.execute("SELECT * FROM bot_files WHERE bot_id=? AND scope=? AND identity=?",
-                         (bot, scope, identity)).fetchone()
+    def find(self, c, bot, scope, identity, *, who=None):
+        if who is None:
+            return c.execute("SELECT * FROM bot_files WHERE bot_id=? AND scope=? AND identity=?",
+                             (bot, scope, identity)).fetchone()
+        prefix = identity + ":file:"
+        rows = c.execute("SELECT * FROM bot_files WHERE bot_id=? AND scope=? "
+                         "AND (identity=? OR substr(identity,1,?)=?) ORDER BY first_activity_at,id",
+                         (bot, scope, identity, len(prefix), prefix))
+        return next((row for row in rows if self.visible(c, who, row, {})), None)
 
     def activity(self, c, fid, actor, action, *, attempt="", task=None, version=None, digest=None, detail=None, now=None):
         c.execute("INSERT INTO bot_file_activity(file_id,actor,action,attempt_id,task_id,version,digest,created_at,detail) "
@@ -665,24 +671,27 @@ class Files:
             c.execute("UPDATE tasks SET updated_at=? WHERE id=?", (now or H.now(), task))
 
     def open_row(self, c, *, bot, scope, identity, title, kind, mime, locator, url=None, provider=None,
-                 task, conversation, now, fid=None):
-        row = self.find(c, bot, scope, identity)
+                 task, conversation, now, fid=None, who=None):
+        row = self.find(c, bot, scope, identity, who=who)
         if row:
             return row, False
         fid = fid or new_id()
+        # An unreadable series keeps its identity and contents; the caller starts a separate series.
+        if self.find(c, bot, scope, identity):
+            identity += ":file:" + fid
         c.execute("INSERT INTO bot_files(id,bot_id,scope,identity,title,kind,mime,locator,url,provider,current_version,state,"
                   "task_id,conversation_id,first_activity_at,last_activity_at) VALUES(?,?,?,?,?,?,?,?,?,?,0,'ready',?,?,?,?)",
                   (fid, bot, scope, identity, title[:300], kind, mime, locator, url, provider, task, conversation, now, now))
         return c.execute("SELECT * FROM bot_files WHERE id=?", (fid,)).fetchone(), True
 
     def add_version(self, c, *, bot, actor, scope, task, conversation, attempt, identity, title, name, mime, blob_id,
-                    digest, size, source_digest=None, commit="", repo_path="", explicit_title=False, fid=None):
+                    digest, size, source_digest=None, commit="", repo_path="", explicit_title=False, fid=None, who=None):
         """One publish of bytes already in the blob store: a new file, a new version, or a no-op touch. `fid` names a new
         file's id (for a caller that writes the file's id somewhere before the file exists)."""
         now = H.now()
         row, created = self.open_row(c, bot=bot, scope=scope, identity=identity, title=title or name,
                                      kind=BF.kind_of(name), mime=mime, locator="tico_blob", task=task,
-                                     conversation=conversation, now=now, fid=fid)
+                                     conversation=conversation, now=now, fid=fid, who=who)
         last = c.execute("SELECT * FROM bot_file_versions WHERE file_id=? AND version=?",
                          (row["id"], row["current_version"])).fetchone()
         changed = created or last is None or (source_digest or digest) != (last["source_digest"] or last["digest"])
@@ -886,7 +895,7 @@ class Files:
 
         def work(c):
             scope, task, conversation, attempt = self.target(c, who, bot, fields)
-            existing = self.find(c, bot, scope, identity)
+            existing = self.find(c, bot, scope, identity, who=who)
             stored_task = existing["task_id"] if existing else None
             H._writer(c, self.actor_of(who, bot), task_id=stored_task, attempt_id=attempt)
             with H.refusal_task(task or stored_task):
@@ -904,7 +913,7 @@ class Files:
             if failed:
                 row, created = self.open_row(c, bot=bot, scope=scope, identity=identity,
                                              title=str(fields.get("title") or name), kind=BF.kind_of(name), mime=mime,
-                                             locator="tico_blob", task=task, conversation=conversation, now=H.now())
+                                             locator="tico_blob", task=task, conversation=conversation, now=H.now(), who=who)
                 c.execute("UPDATE bot_files SET state='not_synced' WHERE id=?", (row["id"],))
                 return {"file": self.brief(c, row), "created": created, "synced": False}
             item = register(c, Identity("bot:" + bot, "bot"), digest, size, name, mime)
@@ -913,7 +922,7 @@ class Files:
                 identity=file_identity, title=str(fields.get("title") or ""), name=name, mime=mime, blob_id=item["id"],
                 digest=digest, size=size, source_digest=str(fields.get("etag") or "") or None,
                 commit=str(fields.get("commit") or "")[:64] if re.fullmatch(r"[0-9a-f]{7,64}", str(fields.get("commit") or "")) else "",
-                repo_path=relative, explicit_title=bool(fields.get("title")))
+                repo_path=relative, explicit_title=bool(fields.get("title")), who=who)
             H.event(c, actor, "file.publish", row["id"], {"bot": bot, "version": row["current_version"], "size": size})
             if changed:
                 # Video and audio have no text to search; their bytes are never read back here.
@@ -984,7 +993,9 @@ class Files:
         if isinstance(result, dict) and "_refusal" in result:
             refusal = result["_refusal"]
             raise Problem(refusal["code"], refusal["detail"], refusal["status"])
-        return result
+        from . import turn_scope
+        with self.store.read() as c:
+            return turn_scope.project(c, turn_scope.scope(c, who), result, auth=self.auth)
 
     def link(self, request, body):
         who = request.state.identity
@@ -1022,7 +1033,7 @@ class Files:
             H._writer(c, actor, task_id=task, attempt_id=attempt)
             row, created = self.open_row(c, bot=bot, scope=scope, identity=identity,
                                          title=body.title or url, kind=kind, mime="", locator="remote_link", url=url,
-                                         provider=provider, task=task, conversation=conversation, now=now)
+                                         provider=provider, task=task, conversation=conversation, now=now, who=who)
             H._writer(c, actor, task_id=row["task_id"], attempt_id=attempt)
             fields = {"last_activity_at": now, "url": url, "state": "ready"}
             if body.title:

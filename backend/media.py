@@ -439,6 +439,10 @@ def blob_for(c, auth, who, bid):
     row = c.execute("SELECT * FROM blobs WHERE id=?", (bid,)).fetchone()
     if not row:
         raise Problem("not_found", "File not found", 404)
+    from .turn_scope import blob_allowed
+    scoped = blob_allowed(c, auth, who, bid)
+    if scoped is False:
+        raise Problem("not_found", "File not found", 404)
     from . import letters
     letter = letters.blob_access(c, auth, who, bid)
     if letter is False:
@@ -452,10 +456,6 @@ def blob_for(c, auth, who, bid):
         return row
     from . import task_privacy as privacy
     if not privacy.blob_readable(c, privacy.actor(who), bid):
-        raise Problem("not_found", "File not found", 404)
-    from .turn_scope import blob_allowed
-    scoped = blob_allowed(c, auth, who, bid)
-    if scoped is False:
         raise Problem("not_found", "File not found", 404)
     # Scoped containment and scan grants are independent ceilings on a download.
     from . import postal_mail

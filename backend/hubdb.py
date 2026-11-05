@@ -1109,11 +1109,16 @@ def _dump(value):
     return json.dumps(value, sort_keys=True, default=str) if value is not None else None
 
 
+SOURCED_TEXT_FIELDS = ("title", "name", "filename", "label", "text", "body", "other", "summary", "preview",
+                       "note", "old", "new", "recommend", "question")
+
+
 def sourced_text(text, sources=(), refs=None):
     """Pair generated text with the identities it copies, for message refs or event/history data.
 
     Keep the pair together when forwarding text to another store: its readers use readable_page_refs before
-    projecting away metadata. Existing refs survive, and repeated copies keep only one of each source.
+    projecting away metadata. SOURCED_TEXT_FIELDS names the copied prose covered by this provenance wherever the
+    pair is carried. Existing refs survive, and repeated copies keep only one of each source.
     """
     refs = dict(refs or {})
     kept = list(refs.get("body_sources") or [])
