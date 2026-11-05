@@ -233,7 +233,9 @@ def test_mail_in_runs_the_automation_and_its_computer_drafts_and_replies_in_the_
     assert computer.sent() == []
     assert len(computer.drafts()) == 2
     approve_and_dispatch(api, computer)
-    draft, = computer.drafts()
+    # Raw MIME delivery preserves source drafts so a concurrent user edit is never deleted.
+    assert len(computer.drafts()) == 2
+    draft = next(d for d in computer.drafts() if "checking with finance" in fake.base64.urlsafe_b64decode(d["payload"]["body"]["data"] + "==").decode())
     sent, = computer.sent()
     for msg, text in ((draft, "checking with finance"), (sent, "pay this week")):
         assert msg["threadId"] == "t1" and header(msg, "In-Reply-To") == "<inv-4471@vendor.example>"
@@ -310,13 +312,14 @@ def test_a_send_whose_answer_was_lost_inside_the_cli_is_not_sent_again(api, comp
     computer.worker.mail_action_tick()
     with api.app.state.store.read() as c:
         queued = c.execute("SELECT id,approval_id FROM email_sends ORDER BY rowid DESC LIMIT 1").fetchone()
+    assert api.get("/api/v2/email/sends/" + queued["id"], headers=headers()).status_code == 200
     post(api, "approvals/" + queued["approval_id"], {"decision": "approved"})
     assert computer.worker.email_send_tick() == 0
-    real = gm.Gmail.send_draft
-    def sent_then_crash(self, draft_id):
-        real(self, draft_id)
+    real = gm.Gmail.send_raw
+    def sent_then_crash(self, raw, thread_id=""):
+        real(self, raw, thread_id)
         raise gm.Failure("connection reset after the send", status=503)
-    with later(3), mock.patch.object(gm.Gmail, "send_draft", sent_then_crash):
+    with later(3), mock.patch.object(gm.Gmail, "send_raw", sent_then_crash):
         count = computer.worker.email_send_tick()
         with api.app.state.store.read() as c:
             state = c.execute("SELECT state,decision,detail,send_after FROM email_sends WHERE id=?", (queued["id"],)).fetchone()

@@ -448,7 +448,7 @@ def decision(c, auth, row, *, dispatch=False):
             blocked.append("automation_revoked")
     if row["calendar_action_id"]:
         action = c.execute("SELECT * FROM calendar_actions WHERE id=?", (row["calendar_action_id"],)).fetchone()
-        if not action or action["requested_by"] != row["actor"] or action["status"] not in ("claimed", "done"):
+        if not action or action["requested_by"] != row["actor"] or action["status"] not in ("running", "done"):
             blocked.append("calendar_revoked")
     if c.execute("SELECT 1 FROM email_suppressed_recipients WHERE mailbox=? AND address IN ("
                  + ",".join("?" for _ in recipients) + ") LIMIT 1", (row["mailbox"], *recipients)).fetchone():
@@ -471,7 +471,7 @@ def decision(c, auth, row, *, dispatch=False):
     for reason in registry_restrictions(c, auth, row, approval_ok, dispatch=dispatch):
         (reasons if reason in ("registry_recipient_cap", "registry_cooldown") else blocked).append(reason)
     if reasons and not approval_ok:
-        return {"outcome": "blocked" if blocked else "ask", "reasons": blocked or reasons,
+        return {"outcome": "blocked" if blocked else "ask", "reasons": blocked + reasons,
                 "policy": policy, "approval_id": row["approval_id"], "approved": False, "legacy": grandfathered}
     if dispatch:
         day = H.now()[:10]
@@ -719,7 +719,7 @@ def install(app, store, auth, mutate):
     def calendar_actor(c, who, mailbox, action_id):
         runner = reader(c, who, mailbox)
         action = c.execute("SELECT * FROM calendar_actions WHERE id=?", (action_id,)).fetchone()
-        if not action or action["runner_id"] != runner["id"] or action["status"] != "claimed" or action["calendar_email"] != mailbox:
+        if not action or action["runner_id"] != runner["id"] or action["status"] != "running" or action["calendar_email"] != mailbox:
             raise Problem("forbidden", "No calendar action leased to this computer", 403)
         return action["requested_by"]
 
@@ -790,11 +790,12 @@ def install(app, store, auth, mutate):
         return row
 
     @app.get("/api/v2/email/sends/{sid}")
-    def send_detail(request: Request, sid: str):
+    def send_detail(request: Request, sid: str, response: Response):
+        response.headers["Cache-Control"] = "no-store"
         with store.transaction(durable=True) as c:
             row = preview_row(c, request, sid)
             snap = snapshot(row["raw"], row["mailbox"]) if row["raw"] else None
-            if snap:
+            if snap and request.state.identity.role in ("owner", "human") and not request.state.identity.via and not request.state.identity.task_actor:
                 c.execute("INSERT INTO email_send_previews VALUES(?,?,?,?) ON CONFLICT(send_id,actor) DO UPDATE SET "
                           "shown_at=CASE WHEN content_sha256=excluded.content_sha256 THEN shown_at ELSE excluded.shown_at END,"
                           "content_sha256=excluded.content_sha256",

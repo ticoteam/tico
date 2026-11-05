@@ -82,7 +82,7 @@ def perform(ctx, action):
     from . import policy
     from . import oauth
     oauth.company_allows(ctx.gmail.company, "send", ctx.mailbox, "send mail")
-    queued = policy.queue_send(ctx.mailbox, raw, thread, original["id"], automation_action_id=aid, draft_id=draft_id)
+    queued = policy.queue_send(ctx.mailbox, raw, thread, original["id"] if thread else "", automation_action_id=aid, draft_id=draft_id)
     return {"ok": queued["state"] in ("pending", "waiting_approval", "sent"), "retry": False,
             "detail": queued["state"], "send_queue_id": queued["id"], "draft": draft_id, "thread": thread}
 
