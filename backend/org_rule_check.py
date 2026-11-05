@@ -1170,6 +1170,7 @@ def _finish_task(c, hold):
 
 
 def _decide(c, who, hold, state, event=""):
+    H._writer(c, who.actor, task_id=hold["task_id"])
     c.execute("UPDATE org_rule_holds SET state=?, decided_at=?, decided_by=?, nonce=? WHERE id=? AND state='held'",
               (state, H.now(), who.actor, "used:" + secrets.token_hex(8), hold["id"]))
     from . import audit_log
@@ -1393,6 +1394,7 @@ def appeal(c, who, hold_id, why):
         raise Problem("not_found", "There is no hold " + hold_id, 404)
     if hold["state"] != "held":
         raise Problem("conflict", "This hold is already decided", 409)
+    H._writer(c, who.actor, task_id=hold["task_id"])
     why = str(why or "").strip()[:2000]
     task_id = hold["task_id"]
     if not hold["reviewer"]:

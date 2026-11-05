@@ -107,7 +107,7 @@ def _set_roles(conn, actor, task_id, roles, mover, note, checked):
     if not row:
         H.refuse(conn, actor, "not-found", f"no task {task_id}")
     if not checked:
-        H._writer(conn, actor)
+        H._writer(conn, actor, task_id=task_id)
         H._task_private_writer(conn, actor, row)
         TR._mine(conn, actor, row, TR._mover(conn, actor, mover))
     have = roles_of(conn, task_id)

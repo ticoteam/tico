@@ -18,7 +18,7 @@ let AU = null;
 // Leaving keeps the list, its teams and its counts for the next visit (S.lastRead), which draws them at once.
 function automationsStop() {
   if (!AU) return;
-  if (AU.list && !AU.listError) S.lastRead.automations = {list: AU.list, groups: AU.groups, stats: AU.stats, range: AU.range};
+  if (AU.list && !AU.listError) S.lastRead.automations = {list: AU.list, groups: AU.groups, stats: AU.stats, range: AU.range, maint: AU.maint};
   AU = null;
 }
 
@@ -33,6 +33,7 @@ const auHref = (id, view) => AUTOMATIONS + (id ? '/' + encodeURIComponent(id) : 
 // The hub writes people as person:<id> (CONTRACT); older rows say human:<id>.
 const auPersonId = a => /^(person|human):/.test(String(a || '')) ? String(a).split(':').slice(1).join(':') : '';
 function auActorName(a) {
+  if (a === AU_MAINT_OWNER) return 'Tico';
   const pid = auPersonId(a);
   if (pid) return pid === S.me?.id ? (S.me?.name || personDisplay(pid)) : personDisplay(pid);
   if (String(a || '').startsWith('group:')) return auGroupName(a);
@@ -122,10 +123,10 @@ async function pageAutomations() {
   if (!AU || !document.body.contains(AU.root)) {
     automationsStop();
     AU = {list: null, groups: [], sets: null, cur: null, id: '', view: 'flow', ed: null, runs: null, menu: null, root: null,
-          ...auOverviewState()};
+          maint: null, maintError: '', mtGen: 0, mtRuns: null, mtOpen: new Set(), ...auOverviewState()};
     const kept = S.lastRead.automations;
     if (kept) {
-      Object.assign(AU, {list: kept.list, groups: kept.groups}, kept.range === AU.range ? {stats: kept.stats} : {});
+      Object.assign(AU, {list: kept.list, groups: kept.groups, maint: kept.maint || null}, kept.range === AU.range ? {stats: kept.stats} : {});
       // Read again behind the kept copy; only an answer that differs draws the list again.
       const state = AU;
       void auLoadList(state).then(() => {
@@ -146,8 +147,13 @@ async function pageAutomations() {
   if (AU !== state) return;
   // The page opens on the list; an automation opens from its row.
   if (id !== state.id) {
-    state.id = id; state.ed = null; state.runs = null; state.cur = null; state.lastRun = undefined;
-    if (id) {
+    state.id = id; state.ed = null; state.runs = null; state.cur = null; state.lastRun = undefined; state.mtRuns = null;
+    // Maintenance is its own screen (automations-maintenance.js), read from /v2/maintenance, not an automation.
+    if (id === AU_MAINT) {
+      auDrawHead(); auDrawPane();
+      await auMaintLoad(state);
+      if (AU !== state || state.id !== id) return;
+    } else if (id) {
       auDrawHead(); auDrawPane();
       // A slow answer for an automation left behind must not land on the one now open.
       let cur;
@@ -161,6 +167,7 @@ async function pageAutomations() {
   auDrawHead(); auDrawPane(); auDrawSide();
   if (id) auFacetsDraw(); else auOverviewShow(state);
   if (state.view === 'runs' && state.cur && !state.runs) void auRunsLoad(state);
+  if (state.view === 'runs' && id === AU_MAINT) void auMaintRunsLoad(state);   // each visit: a run may have ended since
 }
 // GET answers the automation itself; a wrapped {automation} is read the same.
 const auNormal = x => { const a = x?.automation || x || {}; a.steps ||= []; a.trigger ||= {}; return a; };
@@ -190,6 +197,7 @@ function auShell() {
   };
   root.querySelector('.au-scrim').onclick = () => auEdClose();
   root.addEventListener('change', auOnSwitch);
+  root.addEventListener('change', auMaintChange);
   root.addEventListener('click', auOnClick);
   root.addEventListener('keydown', e => {
     if (e.key === 'Escape') { if (!root.querySelector('.au-newm').hidden) auNewMenu(false); else if (AU.menu) auMenuClose(); else if (AU.ed) auEdClose(); return; }
@@ -234,16 +242,25 @@ async function auAllAutomations() {
   return out;
 }
 async function auLoadList(state) {
-  const [list, groups] = await Promise.all([
+  // Maintenance is read alongside: its row leads the list (automations-maintenance.js); an older hub has none.
+  const gen = state.mtGen;
+  const [found, groups, maint] = await Promise.all([
     auAllAutomations().catch(e => ({error: e})),
     get('/v2/groups').catch(() => ({groups: []})),
+    get('/v2/maintenance').catch(() => null),
   ]);
+  const m = state.mtGen === gen ? maint : state.maint;
+  const list = found.error ? found : auMaintList(found, m);
   // A read that lands after the page was left is kept for the next visit when nothing is kept yet.
   if (AU !== state) {
-    if (!list.error && !S.lastRead.automations) S.lastRead.automations = {list, groups: Array.isArray(groups) ? groups : groups.groups || []};
+    if (!list.error && !S.lastRead.automations) S.lastRead.automations = {list, groups: Array.isArray(groups) ? groups : groups.groups || [], maint: auMaintOk(m) ? m : null};
     return;
   }
   state.groups = Array.isArray(groups) ? groups : groups.groups || [];
+  if (auMaintOk(m)) {
+    state.maint = m;
+    if (m.live_run_id && !state.mtFollow) auMaintFollow(state);
+  }
   if (list.error) { state.list = []; state.listError = list.error.message; return; }
   state.listError = '';
   state.list = list;
@@ -288,6 +305,7 @@ function auDrawHead() {
   const hd = AU.root.querySelector('.au-hd'), a = AU.cur;
   AU.root.querySelector('.au-crumb').innerHTML = AU.id ? `<a class="au-up" href="${AUTOMATIONS}"><span class="nav-icon" aria-hidden="true">chevron_left</span>Automations</a>` : '';
   if (!AU.id) { hd.innerHTML = ''; return; }
+  if (AU.id === AU_MAINT) { auMaintHead(hd); return; }
   const row = a && (AU.list || []).find(x => x.id === a.id);
   const name = a?.name || row?.name || '';
   const seg = ['flow', 'runs'].map(v => `<a role="tab" href="${auHref(AU.id, v)}" aria-selected="${AU.view === v}">${v === 'flow' ? 'Flow' : 'Runs'}</a>`).join('');
@@ -310,6 +328,7 @@ function auDrawHead() {
 function auDrawPane() {
   const pane = AU.root.querySelector('.au-pane');
   if (!AU.id) { pane.innerHTML = ''; return; }
+  if (AU.id === AU_MAINT) { auMaintPane(pane); return; }
   if (!AU.cur) { pane.innerHTML = '<p class="muted au-pad">Loading…</p>'; return; }
   const top = pane.scrollTop;
   if (AU.view === 'runs') auRunsDraw(pane); else pane.innerHTML = auFlowHTML(AU.cur);
@@ -378,6 +397,7 @@ function auOnClick(e) {
   if (!t.closest('.au-newbox') && !AU.root.querySelector('.au-newm').hidden) auNewMenu(false);
   if (AU.menu && !t.closest('.au-menu') && !t.closest('[data-add],[data-more]')) auMenuClose();
   if (auOverviewClick(t)) return;
+  if (auMaintClick(t)) return;
   let m;
   if ((m = t.closest('.au-menu [data-ty]'))) { auInsert(m.dataset.ty); return; }
   if ((m = t.closest('.au-menu [data-mi]'))) { auMoreAct(m.dataset.mi); return; }

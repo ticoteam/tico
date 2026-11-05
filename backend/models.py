@@ -2090,6 +2090,11 @@ class UsageCount(Contract):
     enabled: bool
 
 
+class SuggestionSettings(Contract):
+    share_stats_for_suggestions: StrictBool | None = None
+    report_suggestion_outcomes: StrictBool | None = None
+
+
 class StrategyBotChecks(Contract):
     on: bool
 

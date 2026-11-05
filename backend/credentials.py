@@ -276,12 +276,16 @@ class CredentialCipher:
             c.execute('INSERT INTO credential_keys VALUES(?,?,?)', ('v1', LOCAL, check))
         return key
 
-    def kms_key(self, c, row):
+    def kms_client(self):
         if self.kms is None:
             import boto3
             from botocore.config import Config
             # Called inside write transactions: fail in seconds, not botocore's 60 s timeouts and retries.
             self.kms = boto3.client('kms', config=Config(connect_timeout=3, read_timeout=5, retries={'max_attempts': 2}))
+        return self.kms
+
+    def kms_key(self, c, row):
+        self.kms_client()
         if row and row['kms_key'] == LOCAL:
             # Credentials saved before a KMS key was set: wrap the same key with KMS, so nothing is re-encrypted.
             key = self.local_key(c, row)
@@ -315,6 +319,26 @@ class CredentialCipher:
             raise
         except Exception:
             raise Problem('vault_unavailable', 'Credential encryption is temporarily unavailable', 503) from None
+
+    def prepare(self, store):
+        """Load an existing key before a write; KMS unwrap/rewrap I/O stays outside the store's writer."""
+        while self.cached is None:
+            with store.read_transaction() as c:
+                row = c.execute("SELECT * FROM credential_keys WHERE id='v1'").fetchone()
+                if not row:
+                    return
+                if not self.key_id or row['kms_key'] != LOCAL:
+                    self.key(c)
+                    return
+                key = self.local_key(c, row)
+            wrapped = self.kms_client().encrypt(KeyId=self.key_id, Plaintext=key,
+                                                EncryptionContext=CONTEXT)['CiphertextBlob']
+            with store.transaction() as c:
+                changed = c.execute("UPDATE credential_keys SET kms_key=?,wrapped_key=? "
+                                    "WHERE id='v1' AND kms_key=? AND wrapped_key=?",
+                                    (self.key_id, wrapped, row['kms_key'], row['wrapped_key'])).rowcount
+            if changed:
+                self.cached = key
 
     def warm(self, store):
         """Unwrap a stored KMS key once at start, outside any transaction, so the first write that needs it does not

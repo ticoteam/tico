@@ -18,6 +18,28 @@ row. A card with an open blocker says **Blocked by** it across its top; click th
 card and its blockers. The faces over the board filter by owner; **Q** shows only yours, **X** clears.
 When a Dev ticket's bot owner or a bot assigned the optional `builder` task role is quarantined, its card, column and ticket page show
 when the builder resumes in UTC, or that a person must clear it. The notice clears when the quarantine lifts.
+When repeated refusals all come from one task, only that bot's work on the task is held. A quiet task note explains
+the hold and its cooldown; the bot continues its other tasks. A person who manages the bot can clear the hold with
+quarantine clear, and the task keeps its existing status and other holds.
+The held task does not consume the bot's optional limit on tasks in progress.
+Every task change by that bot, including an external agent's snoozes, relations and waits, respects the hold.
+Its task-scoped validation refusals count against that task throughout the write, including after rollback.
+Posts in the task's native thread and file uploads, imports and links also respect the task hold; publishing
+files from a held attempt stays refused even when the bot is active. Updating an existing file checks its stored
+task too, even if the request omits the task.
+Messages, replies, acknowledgements and reactions check both the message's stored task reference and its thread's
+own task; naming a different task cannot bypass either hold. The bot can still read feedback on the held task;
+these reads record no refusal. Thread changes and read marks, task-linked pages,
+file reviews, and pins or cards on the task also respect the hold. Approval requests, replacement of an existing
+request and consumption of an approved request check the approval's task before changing it. A status update that
+keeps its stored task checks that task; the bot may still switch its status to unrelated work.
+Withdrawing or appealing a rule hold also checks its stored review task. Pinning a page checks the page's own task
+as well as the task it is pinned to.
+Another run of the bot cannot change the held task either. Notes copied from messages on a held task or chat
+stay pending and unread until release; their task references use the same whitespace and list normalization
+as claims. Other tasks' runs carry only notes from sources that are free.
+The cooldown still releases a hold if its bot has been archived or its release notice cannot be sent.
+Each release runs independently, so a failed release does not hold up other cooldowns or scheduled work.
 Your selection is remembered, shared links carry it, and new
 tasks start with that type. Clearing filters keeps the selected type. Older combined views and
 deleted types fall back to General.
@@ -999,9 +1021,10 @@ including with `--all`/`all`, and support `number` lookup.
 `GET /api/v2/pipeline` (`hub pipeline`, `hub_pipeline`) is a board's numbers in one read, counted over the same
 tickets the board shows the caller: per working step the count, how many are snoozed, the oldest and median time
 since tickets entered the step, owners, whom they wait on (a bot, a person, something external or nothing) and their
-open pull requests. It also gives each bot the caller may read its running, queued, held, `dead` and uncertain jobs
+open pull requests. It also gives each bot the caller may read its running, queued, held, `quarantine_held`, `dead` and uncertain jobs
 (a dead job is queued behind an interrupted run nobody has reviewed, so it never runs until that run is resumed or
-dismissed; a bot's page and Health's queue line count its work the same way, and Health names each part) and failed runs since `since` by cause (quota, capacity, restart, timeout, crash, stopped); past
+dismissed; `quarantine_held` jobs resume after the refusal cooldown or quarantine clear; a bot's page and Health's
+queue line count its work the same way, and Health names each part) and failed runs since `since` by cause (quota, capacity, restart, timeout, crash, stopped); past
 5000 readable failures it stops, sets `truncated` and says in `complete_after` from when the counts are whole. Filters:
 `type` (default the engineering board), `owner`, `label`, `updated_since`, `snoozed=all|hide|only` (default all),
 `bot`, and `since` up to 7 days. Each bot also lists, in `decisions`, its stopped runs with a resume or dismiss

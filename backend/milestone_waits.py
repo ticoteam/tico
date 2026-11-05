@@ -131,6 +131,7 @@ def add(c, actor, task_row, spec, release_repo="", resolve_task=None, note=None)
     already happened. `note` goes in the owner's wake when it fires; a repeat with a note replaces the stored one."""
     from .task_snooze import clean_note
     H = _H()
+    H._writer(c, actor, task_id=task_row["id"])
     ensure(c)
     kind, target, label, url = parse(c, actor, spec, release_repo, resolve_task)
     note = clean_note(c, actor, note)
@@ -162,6 +163,7 @@ def add(c, actor, task_row, spec, release_repo="", resolve_task=None, note=None)
 def remove(c, actor, task_row, spec, release_repo="", resolve_task=None):
     """Take a wait off, read from the same spec that added it. Returns its label."""
     H = _H()
+    H._writer(c, actor, task_id=task_row["id"])
     ensure(c)
     kind, target, label, _ = parse(c, actor, spec, release_repo, resolve_task)
     if not c.execute("DELETE FROM task_milestone_waits WHERE task_id=? AND kind=? AND target=?",
