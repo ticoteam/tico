@@ -58,6 +58,7 @@ def make_scope(api, attempt, tid):
 
 
 def test_archived_scoped_sources_and_their_blob_aliases_stay_unreadable_until_restored(api):
+    from backend.tests.test_org_rules import as_bot
     t, attempt = task_turn(api)
     fid = published(api, attempt, task=t["id"])
     bid = blob(api, fid)
@@ -66,9 +67,9 @@ def test_archived_scoped_sources_and_their_blob_aliases_stay_unreadable_until_re
             changed = api.patch("/api/v2/files/" + fid, json={"archived": True}, headers=headers())
             assert changed.status_code == 200, changed.text
         else:
-            restored = api.patch("/api/v2/files/" + fid, json={"archived": False}, headers=headers())
-            assert restored.status_code == 200, restored.text
-            assert published(api, attempt, task=t["id"], data=HTML + b"<p>Restored source</p>") == fid
+            # Scoped publication cannot reuse a source it cannot read; the independent publisher restores it.
+            as_bot(api, "ops", "source-restorer")
+            assert published(api, {"token": "source-restorer"}, task=t["id"], data=HTML + b"<p>Restored source</p>") == fid
         for ref in (fid, bid):
             response = api.get("/api/v2/files/" + ref, headers=headers(attempt["token"]))
             assert response.status_code == (403 if archived else 200), response.text
