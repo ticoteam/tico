@@ -455,7 +455,7 @@ def page_copies(c):
     }, shared=True)
 
 
-def page_copy_readable(c, read, viewer=None):
+def page_copy_readable(c, read, viewer=None, auth=None):
     """A copied page remains the asker's and the run's read, never a lasting grant from the task."""
     from . import teammate_access
     row = F.restricted_pages(c).get(read["file_id"])
@@ -463,14 +463,15 @@ def page_copy_readable(c, read, viewer=None):
         return True
     asker = teammate_access._viewer_for(c, read["requested_by"])
     principals = [asker, Identity("bot:" + SLUG, "bot"), *([viewer] if viewer else [])]
-    return all(who and F.page_audience_visible(c, None, who, row, {}) for who in principals)
+    return (all(who and F.page_audience_visible(c, auth, who, row, {}) for who in principals)
+            and (auth is None or F.file_visible(c, auth, asker, row, {})))
 
 
-def denied_page_copies(c, viewer):
+def denied_page_copies(c, viewer, auth=None):
     from . import read_cache
-    return read_cache.value(c, ("denied_page_copies", viewer.actor, getattr(viewer, "task_actor", "")), lambda: {
+    return read_cache.value(c, ("denied_page_copies", viewer.actor, getattr(viewer, "task_actor", ""), auth is not None), lambda: {
         tid for tid, read in page_copies(c).items()
-        if read["body"] != REMOVED_PAGE and not page_copy_readable(c, read, viewer)
+        if read["body"] != REMOVED_PAGE and not page_copy_readable(c, read, viewer, auth)
     }, shared=True)
 
 
@@ -479,7 +480,7 @@ def revoke_page_copies(c, auth, fid=None):
     for tid, read in list(page_copies(c).items()):
         if fid and read["file_id"] != fid:
             continue
-        if read["body"] != REMOVED_PAGE and not page_copy_readable(c, read):
+        if read["body"] != REMOVED_PAGE and not page_copy_readable(c, read, auth=auth):
             c.execute("UPDATE tasks SET body=?,updated_at=? WHERE id=?", (REMOVED_PAGE, H.now(), tid))
 
 

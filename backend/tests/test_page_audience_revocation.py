@@ -10,7 +10,9 @@ from backend.tests.slug_ids import bot_ids_are_their_slugs  # noqa: F401
 from backend.tests.test_api import api, get, headers, post  # noqa: F401
 from backend.tests.test_counsel import counsel_on, counsel_run, source, store_file
 from backend.tests.test_groups import send
-from backend.tests.test_org_rules import org
+from backend.tests.test_org_rules import as_bot, org
+from backend.tests.test_files import turn
+from backend.tests.test_pages import page
 from backend.tests.test_page_audience import edit, promoted, read
 
 
@@ -23,7 +25,7 @@ def test_counsel_copy_revoked_after_ask(api, running, removed):
     edit(api, fid, {"people": ["cara"], "bots": [H.COUNSEL]})
     task = post(api, "rules/read", {"file_id": fid, "source_id": source(api)}, token="cara-test")["task_id"]
     before = get(api, "tasks/" + task, token="cara-test")
-    assert "42 deals" in before["body"]
+    assert "42 deals" in before["task"]["body"]
     attempt = counsel_run(api)[1] if running else None
     edit(api, fid, {"people": [] if removed == "asker" else ["cara"],
                     "bots": [] if removed == "counsel" else [H.COUNSEL]})
@@ -46,10 +48,10 @@ def test_counsel_copy_is_rechecked_when_group_membership_changes(api):
     task = post(api, "rules/read", {"file_id": fid, "source_id": source(api)}, token="cara-test")["task_id"]
     # Simulate an independent roster writer: the read gate must not rely on set_audience scrubbing alone.
     with api.app.state.store.transaction() as c:
-        from backend import access, views
+        from backend import views
         roster = views.roster(c)
         roster["people"] = [dict(p, team="") if p["id"] == "cara" else p for p in roster["people"]]
-        access.save_roster(c, roster)
+        c.execute("UPDATE registry_metadata SET value=? WHERE key='people'", (json.dumps(roster),))
     with api.app.state.store.read() as c:
         assert not H.task_private_readable(c, "human:cara", H.task(c, task))
     assert api.get("/api/v2/tasks/" + task, headers=headers("cara-test")).status_code == 404
@@ -97,9 +99,10 @@ def test_deleted_group_cannot_regain_grants_when_legal_is_recreated(api):
 
 
 def test_page_refs_are_redacted_on_sql_timeline_and_undecorated_events(api):
-    fid, _ = promoted(api)
     task = post(api, "tasks", {"owner": "ops", "title": "Read the attached plan", "body": "Review", "private": False})
     tid = task["id"]
+    _, attempt = turn(api)
+    fid = page(api, attempt, task=tid, title="Audience secret").json()["page"]["file_id"]
     comment = post(api, f"tasks/{tid}/comments", {"text": "Review this", "attachments": [f"{fid}@1"]}, token="ben-test")["comment"]
     mid, cid = comment["id"], comment["conversation_id"]
     # A page ref outside attachments must use the same gate as the attachment object.
@@ -111,19 +114,21 @@ def test_page_refs_are_redacted_on_sql_timeline_and_undecorated_events(api):
     with api.app.state.store.transaction() as c:
         before = events.latest(c)
         c.execute("UPDATE messages SET body='Review this now',revision=revision+1 WHERE id=?", (mid,))
-    who = Identity("human:cara", "human", "cara@acme.example")
-    with api.app.state.store.read() as c:
-        timeline = threads.timeline(c, threads.Viewer(api.app.state.auth, who), cid)
-    with api.app.state.store.read() as c:
-        delivered, _, reset, _ = events.read(c, api.app.state.auth, who, before, topics=("messages",), visuals=None)
-    assert not reset and delivered
-    raw = post(api, "sql", {"sql": f"SELECT refs FROM messages WHERE id='{mid}'"}, token="cara-test")["rows"]
-    assert raw
-    for value in (timeline, delivered, raw, get(api, "messages/" + mid, token="cara-test")):
-        text = json.dumps(value)
-        assert "A page you can't open" in text, text
-        for secret in (fid, "Audience secret", "weekly.html", '"size"'):
-            assert secret not in text, (secret, text)
+    as_bot(api, "finance", "finance-test")
+    for who, token in ((Identity("human:cara", "human", "cara@acme.example"), "cara-test"),
+                       (Identity("bot:finance", "bot", agent="test"), "finance-test")):
+        with api.app.state.store.read() as c:
+            timeline = threads.timeline(c, threads.Viewer(api.app.state.auth, who), cid)
+        with api.app.state.store.read() as c:
+            delivered, _, reset, _ = events.read(c, api.app.state.auth, who, before, topics=("messages",), visuals=None)
+        assert not reset and delivered
+        raw = post(api, "sql", {"sql": f"SELECT refs FROM messages WHERE id='{mid}'"}, token=token)["rows"]
+        assert raw
+        for value in (timeline, delivered, raw, get(api, "messages/" + mid, token=token)):
+            text = json.dumps(value)
+            assert "A page you can't open" in text, text
+            for secret in (fid, "Audience secret", "weekly.html", '"size"'):
+                assert secret not in text, (secret, text)
     assert fid in json.dumps(get(api, "messages/" + mid, token="ben-test"))
 
 
@@ -148,9 +153,17 @@ def test_sql_ordinary_files_do_not_add_per_file_audience_queries(api):
     for start, size in ((0, 3), (3, 30)):
         for n in range(start, size):
             store_file(api, "Acme report", title=f"Report {n}")
+        who = Identity("human:ben", "human", "ben@acme.example")
+        # Warm shared roster/schema inputs equally; the measured connection still has its own fresh snapshot.
+        with store.read() as c:
+            warm = S.connect(store.settings.db_path, c, auth, who)
+        try:
+            S.run(warm, "SELECT id FROM bot_files", [], 100, 5)
+        finally:
+            warm.close()
         statements = []
         with store.read() as c:
-            conn = S.connect(store.settings.db_path, c, auth, Identity("human:ben", "human", "ben@acme.example"), trace=statements.append)
+            conn = S.connect(store.settings.db_path, c, auth, who, trace=statements.append)
         try:
             rows = S.run(conn, "SELECT id FROM bot_files", [], 100, 5)["rows"]
             assert len(rows) == size

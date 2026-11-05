@@ -137,11 +137,6 @@ def prime_visible(c, rows):
     H.prime_tasks(c, {row["task_id"] for row in rows if row["task_id"]}
                   | {row["scope"][5:] for row in rows if row["scope"].startswith("task:")})
     H.prime_conversations(c, {row["scope"][13:] for row in rows if row["scope"].startswith("conversation:")})
-    audiences = {row["id"]: None for row in rows}
-    for part in H.chunks(sorted(audiences)):
-        for page in c.execute("SELECT file_id,audience FROM pages WHERE file_id IN (%s)" % ",".join("?" * len(part)), part):
-            audiences[page["file_id"]] = page
-    read_cache.prime(c, PAGE_AUDIENCE_SQL, {(fid,): page for fid, page in audiences.items()})
     versions = {row["id"]: [] for row in rows}
     for part in H.chunks(sorted(versions)):
         for v in c.execute("SELECT file_id,blob_id,attempt_id FROM bot_file_versions WHERE file_id IN (%s)"
@@ -152,7 +147,7 @@ def prime_visible(c, rows):
     privacy.prime_attempts(c, {v["attempt_id"] for found in versions.values() for v in found})
 
 
-def asked_to_read(c, who, file_id, version=None, cache=None):
+def asked_to_read(c, who, file_id, version=None, cache=None, auth=None):
     """Whether this call is Counsel's run on a document's read (backend/counsel.py `run_read`: the `rule_reads` row of
     the read task it runs on) and names that read's file, and with `version` that read's version. That run reads the
     file, whichever bot's or task's it is: the person had to be able to read it when they asked. No other Counsel run,
@@ -170,10 +165,7 @@ def asked_to_read(c, who, file_id, version=None, cache=None):
     if not read or read["file_id"] != file_id or (version is not None and int(version) != read["version"]):
         return False
     from . import counsel
-    return counsel.page_copy_readable(c, read, who)
-
-
-PAGE_AUDIENCE_SQL = "SELECT audience FROM pages WHERE file_id=?"
+    return counsel.page_copy_readable(c, read, who, auth)
 
 
 def restricted_pages(c):
@@ -184,7 +176,7 @@ def restricted_pages(c):
             return {r["id"]: dict(r) for r in c.execute(
                 "SELECT f.*,p.audience FROM pages p JOIN bot_files f ON f.id=p.file_id WHERE p.audience IS NOT NULL")}
         except sqlite3.OperationalError as exc:
-            if "no such table" not in str(exc):
+            if "no such table" not in str(exc) and "no such column: p.audience" not in str(exc):
                 raise
             return {}                     # standalone hubdb and pre-pages migration databases
     return read_cache.value(c, ("restricted_pages",), build, shared=True)
@@ -221,7 +213,7 @@ def file_visible(c, auth, who, row, cache):
         return False
     if not page_audience_visible(c, auth, who, row, cache):
         return False
-    if asked_to_read(c, who, row["id"], cache=cache):
+    if asked_to_read(c, who, row["id"], cache=cache, auth=auth):
         return True
     if row["task_id"] and not privacy.task_readable(c, who, H.task(c, row["task_id"])):
         return False
@@ -279,6 +271,8 @@ def page_event_readable(c, auth, who, target, detail):
     row = c.execute("SELECT f.* FROM bot_files f LEFT JOIN pages p ON p.file_id=f.id "
                     "WHERE f.id=? AND (p.file_id IS NOT NULL OR ?)", (target, int(names_audience))).fetchone()
     cache = {}
+    if row and not (file_visible(c, auth, who, row, cache) if auth else page_audience_visible(c, auth, who, row, cache)):
+        return False
     candidates = page_references(data) | ({target} if isinstance(target, str) else set())
     for fid in candidates:
         page = restricted_pages(c).get(fid)

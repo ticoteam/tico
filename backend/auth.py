@@ -770,7 +770,7 @@ class Auth:
             carried = A.qlist(sorted(private_subjects(c, who.task_actor)))
             audience += f" AND (coalesce(private,1)=0 OR owner_id IN {carried} OR requester_id IN {carried} OR guest={actor})"
         from . import counsel
-        denied = counsel.denied_page_copies(c, who)
+        denied = counsel.denied_page_copies(c, who, self)
         if denied:
             audience += " AND id NOT IN " + A.qlist(sorted(denied))
         return audience
@@ -974,6 +974,10 @@ class Auth:
             row = H.task(c, row["id"])
         self.domain(who)
         if not row:
+            raise Problem("not_found", "Task not found", 404)
+        from . import counsel
+        copied = counsel.page_copies(c).get(row["id"])
+        if copied and copied["body"] != counsel.REMOVED_PAGE and not counsel.page_copy_readable(c, copied, who, self):
             raise Problem("not_found", "Task not found", 404)
         if who.role not in ("owner", "human", "bot") or not H.task_private_readable(c, who.actor, row):
             raise Problem("not_found", "Task not found", 404)
