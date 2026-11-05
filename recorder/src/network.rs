@@ -243,8 +243,8 @@ impl Transcriber {
             .unwrap_or_else(|error| error.into_inner())
             .clone()
     }
-    /// Workers wake when the library changes (a saved chunk, a retry, `Store::poke` after
-    /// Settings change) instead of polling. Settings are read when there is audio to send.
+    /// Workers wake when the library changes or settings/credentials are saved instead of
+    /// polling. Settings are read when there is audio to send.
     pub fn start(store: Store) -> Self {
         let stop = Arc::new(AtomicBool::new(false));
         let status = Arc::new(Mutex::new(String::new()));

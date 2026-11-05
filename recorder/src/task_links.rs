@@ -238,13 +238,26 @@ impl Tico {
             "",
         )
     }
-    pub fn search_tasks(&self, query: &str, offset: usize) -> Result<Value> {
+    /// Tasks whose title has every word typed, or the one numbered "#42" (or "42"), optionally of one type.
+    pub fn search_tasks(&self, query: &str, kind: &str, offset: usize) -> Result<Value> {
+        let query = query.trim();
+        let query = if !query.is_empty()
+            && query.len() <= 10
+            && query.bytes().all(|b| b.is_ascii_digit())
+        {
+            format!("#{query}")
+        } else {
+            query.to_owned()
+        };
         let mut url = reqwest::Url::parse("https://localhost/")?;
         url.query_pairs_mut()
-            .append_pair("q", query)
+            .append_pair("q", &query)
             .append_pair("limit", "30")
             .append_pair("brief", "true")
             .append_pair("offset", &offset.to_string());
+        if !kind.is_empty() {
+            url.query_pairs_mut().append_pair("type", kind);
+        }
         let reply = self.call(
             &format!("/api/v2/tasks?{}", url.query().unwrap_or("")),
             None,
@@ -252,6 +265,20 @@ impl Tico {
         )?;
         let tasks = tasks(&reply)?;
         Ok(json!({"tasks":tasks,"next_offset":reply["next_offset"]}))
+    }
+
+    /// The org's task types for the picker's filter: id and name only.
+    pub fn task_types(&self) -> Result<Value> {
+        let reply = self.call("/api/v2/task-types", None, "")?;
+        let types: Vec<Value> = reply["types"]
+            .as_array()
+            .into_iter()
+            .flatten()
+            .filter_map(|row| {
+                Some(json!({"id": row["id"].as_str()?, "name": row["name"].as_str()?}))
+            })
+            .collect();
+        Ok(json!(types))
     }
 
     /// Recheck all ids in one bounded read. A missing or no longer readable task disappears.

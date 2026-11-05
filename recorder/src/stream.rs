@@ -57,8 +57,10 @@ pub struct Plan {
     pub url: String,
     pub model: String,
     pub language: String,
-    /// None reads the key from the keychain when a stream starts.
+    /// None reads the saved key for every connection.
     pub key: Option<String>,
+    /// Plans made from Settings follow later saves; caller-supplied plans keep their endpoint.
+    pub follow_settings: bool,
     /// Streams through this Tico's relay with the person's sign-in instead of a key ("Your
     /// Tico"); its token is read again for every connection, since it renews hourly.
     pub tico: Option<Destination>,
@@ -104,6 +106,7 @@ impl Plan {
             },
             language: config.transcription_language.trim().into(),
             key: None,
+            follow_settings: true,
             // The Tico says whether it streams; nothing to add here when it does not.
             required: config.streaming == Some(true) && tico.is_none(),
             tico,
@@ -275,6 +278,7 @@ impl Streams {
             dropped: dropped.clone(),
             reconnects: 0,
             voices: BTreeMap::new(),
+            settings_version: self.plan.follow_settings.then(settings::version),
         };
         let spawned = thread::Builder::new()
             .name(format!("tico-stream-{channel}"))
@@ -302,6 +306,8 @@ enum End {
     Finished,
     /// The connection failed; reconnect.
     Lost(String),
+    /// Saved settings or credentials changed; reopen with the current plan.
+    Reload,
 }
 
 struct Worker {
@@ -314,6 +320,7 @@ struct Worker {
     dropped: Arc<AtomicU64>,
     reconnects: u32,
     voices: BTreeMap<String, String>,
+    settings_version: Option<u64>,
 }
 
 impl Worker {
@@ -337,36 +344,59 @@ impl Worker {
     }
     fn run(mut self) {
         crate::qos::utility();
-        if let Some(destination) = self.plan.tico.clone() {
-            // A Tico that can't stream leaves live text off; chunks are transcribed all the same.
-            match speech::current(&destination) {
-                Ok(services) if services.stream => {}
-                Ok(_) => return self.set("off", ""),
-                Err(error) => {
-                    return self.set(
-                        "off",
-                        &format!("{:#}", speech::plain(error, "show live text")),
-                    );
-                }
-            }
-        }
-        let key = match (&self.plan.key, &self.plan.tico) {
-            (Some(key), _) => key.clone(),
-            (None, Some(_)) => String::new(),
-            (None, None) => settings::secret(KEY_NAME).unwrap_or_default(),
-        };
-        if key.is_empty() && self.plan.tico.is_none() {
-            let error = if self.plan.required {
-                "Add an xAI key in Settings to see live text"
-            } else {
-                ""
-            };
-            self.set("off", error);
-            return;
-        }
         let mut wait = self.plan.retry;
         let mut failures = 0;
         loop {
+            if self.settings_version.is_some() {
+                let version = settings::version();
+                let plan = settings::read(self.store.root())
+                    .ok()
+                    .and_then(|config| Plan::from_settings(&config));
+                self.settings_version = Some(version);
+                let Some(plan) = plan else {
+                    self.set("off", "");
+                    if !self.idle(Duration::from_secs(120)) {
+                        break;
+                    }
+                    continue;
+                };
+                self.plan = plan;
+            }
+            if let Some(destination) = &self.plan.tico {
+                // Recheck services after a settings change as well as on reconnect.
+                let error = match speech::current(destination) {
+                    Ok(services) if services.stream => None,
+                    Ok(_) => Some(String::new()),
+                    Err(error) => Some(format!("{:#}", speech::plain(error, "show live text"))),
+                };
+                if let Some(error) = error {
+                    self.set("off", &error);
+                    if !self.idle(speech::FRESH) {
+                        break;
+                    }
+                    continue;
+                }
+            }
+            // Read credentials for every connection; an own-key stream can be repaired in Settings.
+            let key = match (&self.plan.key, &self.plan.tico) {
+                (Some(key), _) => Ok(key.clone()),
+                (None, Some(destination)) => crate::signin::token(&destination.id),
+                (None, None) => settings::secret(KEY_NAME),
+            };
+            if key.as_ref().is_ok_and(String::is_empty) && self.plan.tico.is_none() {
+                self.set(
+                    "off",
+                    if self.plan.required {
+                        "Add an xAI key in Settings to see live text"
+                    } else {
+                        ""
+                    },
+                );
+                if !self.idle(Duration::from_secs(120)) {
+                    break;
+                }
+                continue;
+            }
             self.set(
                 if self.reconnects == 0 {
                     "connecting"
@@ -376,11 +406,6 @@ impl Worker {
                 "",
             );
             let opened = Instant::now();
-            // Through a Tico the person's token is read for each connection; it renews hourly.
-            let key = match (&self.plan.tico, key.is_empty()) {
-                (Some(destination), true) => crate::signin::token(&destination.id),
-                _ => Ok(key.clone()),
-            };
             let end = match key.and_then(|key| self.open(&key)) {
                 Ok(socket) => {
                     self.set("live", "");
@@ -390,6 +415,9 @@ impl Worker {
             };
             match end {
                 End::Finished => break,
+                End::Reload => {
+                    wait = self.plan.retry;
+                }
                 End::Lost(error) => {
                     if opened.elapsed() > Duration::from_secs(30) {
                         wait = self.plan.retry;
@@ -420,19 +448,23 @@ impl Worker {
         let until = Instant::now() + wait;
         loop {
             let left = until.saturating_duration_since(Instant::now());
-            if left.is_zero() {
+            if left.is_zero() || self.settings_changed() {
                 return true;
             }
-            match self.receiver.recv_timeout(left) {
+            match self.receiver.recv_timeout(left.min(POLL)) {
                 Ok(block) => {
                     let samples = block.pcm.len() as u64;
                     self.queued.fetch_sub(samples, Ordering::AcqRel);
                     self.dropped.fetch_add(samples, Ordering::Relaxed);
                 }
-                Err(mpsc::RecvTimeoutError::Timeout) => return true,
+                Err(mpsc::RecvTimeoutError::Timeout) => {}
                 Err(mpsc::RecvTimeoutError::Disconnected) => return false,
             }
         }
+    }
+    fn settings_changed(&self) -> bool {
+        self.settings_version
+            .is_some_and(|seen| seen != settings::version())
     }
     /// Connects and waits for the service to accept audio. Capture keeps queueing meanwhile.
     fn open(&self, key: &str) -> Result<Socket> {
@@ -509,6 +541,10 @@ impl Worker {
         let mut frame: Vec<u8> = Vec::with_capacity(FRAME_BYTES * 2);
         let mut closing: Option<Instant> = None;
         loop {
+            if closing.is_none() && self.settings_changed() {
+                let _ = socket.close(None);
+                return End::Reload;
+            }
             if closing.is_none() {
                 loop {
                     match self.next() {
