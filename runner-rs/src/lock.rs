@@ -43,6 +43,7 @@ mod tests {
     use super::*;
     use std::io::{BufRead, BufReader, Write};
     use std::process::{Command, Stdio};
+    use std::os::unix::net::UnixStream;
 
     const PY_TRY: &str = "import fcntl,sys\nf=open(sys.argv[1],'w')\ntry:\n fcntl.flock(f,fcntl.LOCK_EX|fcntl.LOCK_NB)\n print('got')\nexcept BlockingIOError:\n print('held')\n";
     const PY_HOLD: &str = "import fcntl,sys\nf=open(sys.argv[1],'w')\nfcntl.flock(f,fcntl.LOCK_EX|fcntl.LOCK_NB)\nprint('holding',flush=True)\nsys.stdin.read()\n";
@@ -53,27 +54,27 @@ mod tests {
         std::fs::create_dir_all(&dir).unwrap();
         let path = dir.join("runner.lock");
         let held = acquire(&path).unwrap();
-        let mut barrier = [0; 2];
-        assert_eq!(unsafe { libc::pipe(barrier.as_mut_ptr()) }, 0);
+        let (reader, writer) = UnixStream::pair().unwrap();
+        let (input, output) = (reader.as_raw_fd(), writer.as_raw_fd());
         // Keep the fork's inherited descriptor open deterministically. The child uses only async-signal-safe
         // syscalls before _exit, so other test threads and their runtime locks cannot affect its shutdown.
         let pid = unsafe {
             let pid = libc::fork();
             if pid == 0 {
-                libc::close(barrier[1]);
+                libc::close(output);
                 let mut byte = 0u8;
-                while libc::read(barrier[0], (&mut byte as *mut u8).cast(), 1) < 0 {}
+                while libc::read(input, (&mut byte as *mut u8).cast(), 1) < 0 {}
                 libc::_exit(0);
             }
             pid
         };
         assert!(pid > 0);
-        unsafe { libc::close(barrier[0]); }
+        drop(reader);
         assert!(acquire(&path).is_err());
         drop(held);
         let next = acquire(&path);
         // EOF releases only this test's child, after the next acquisition observed its inherited descriptor.
-        unsafe { libc::close(barrier[1]); }
+        drop(writer);
         let mut status = 0;
         let waited = loop {
             let result = unsafe { libc::waitpid(pid, &mut status, 0) };
