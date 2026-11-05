@@ -398,6 +398,43 @@ def test_history_lookups_keep_legacy_visibility_without_scanning_messages(api, w
         assert checked in ([], ['message-public'])
 
 
+def test_fast_sql_gates_skip_python_callbacks_and_keep_the_privacy_fallback(api, world, monkeypatch):
+    from backend import sql as S
+
+    store, room = api.app.state.store, world['coo_task']['conversation_id']
+    with store.transaction() as c:
+        messages = [H.say(c, 'human:ben', 'human:ana', 'Synthetic history', conversation_id=room, refs=refs)['id']
+                    for refs in (None, {}, {'task': world['coo_task']['id']})]
+        fallback = H.say(c, 'human:ben', 'human:ana', 'Synthetic escaped refs', conversation_id=room,
+                         refs={'task': world['coo_task']['id'], 'note': 'say "hi"'})['id']
+        c.execute('UPDATE messages SET conversation_id=? WHERE id=(SELECT j.message_id FROM jobs j '
+                  'JOIN attempts a ON a.job_id=j.id WHERE a.id=?)', (room, world['attempt']['id']))
+        # Exercise the SQL gates even when the stored provenance index has not caught up yet.
+        c.execute('DELETE FROM read_index')
+
+    callbacks, create_function = [], S.ReadConnection.create_function
+
+    def register(conn, name, arity, fn, **kwargs):
+        kind = name.split('_privacy_')[-1]
+        if kind in ('message', 'attempt', 'settled_message', 'settled_attempt'):
+            def counted(*args):
+                callbacks.append(args[0])
+                return fn(*args)
+            return create_function(conn, name, arity, counted, **kwargs)
+        return create_function(conn, name, arity, fn, **kwargs)
+
+    monkeypatch.setattr(S.ReadConnection, 'create_function', register)
+    for token in (world['attempt']['token'], 'ben-test'):
+        callbacks.clear()
+        assert query(api, 'SELECT count(*) FROM messages WHERE id IN (?,?,?)', token,
+                     params=messages)['rows'] == [[3]]
+        assert query(api, 'SELECT id FROM attempts WHERE id=?', token,
+                     params=[world['attempt']['id']])['rows'] == [[world['attempt']['id']]]
+        assert callbacks == []
+        assert query(api, 'SELECT id FROM messages WHERE id=?', token, params=[fallback])['rows'] == [[fallback]]
+        assert callbacks == [fallback]
+
+
 def test_direct_messages_reuse_room_checks_and_match_recursive_privacy(api, world, monkeypatch):
     from collections import Counter
     from backend.auth import Identity
