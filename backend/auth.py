@@ -139,11 +139,13 @@ def bot_identity(c, actor, *, attempt_id=""):
     if not record or record["state"] != "active" or not config:
         raise Problem("identity", "This bot is no longer available", 403)
     external = agents.external_harness(c, bot)
-    if external:
-        credential = agents.row(c, bot)
-        if not credential or credential["revoked_at"] or credential["harness"] != external:
+    credential = agents.row(c, bot)
+    active_agent = credential is not None and not credential["revoked_at"]
+    # Authentication still marks an active agent credential external while its configured harness changes.
+    if external or active_agent:
+        if not active_agent or not credential["harness"] or (external and credential["harness"] != external):
             raise Problem("identity", "This external bot has no current credential", 403)
-        return Identity(actor, "bot", agent=external)
+        return Identity(actor, "bot", agent=credential["harness"])
     attempt = read_cache.one(c, "SELECT runner_id FROM attempts WHERE id=? AND bot_id=?", (attempt_id, bot)) if attempt_id else None
     if attempt_id and not attempt:
         raise Problem("identity", "This bot's source execution is no longer available", 403)
