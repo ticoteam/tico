@@ -182,12 +182,17 @@ asking for each message, to three kinds of recipient:**
    `forward_to:` in the bot's `bot.yaml` is a request and still needs an approval for each message.
 
 Everyone else needs one of: an allowance in `registry/mail-policy.yaml` that lists the recipient (Influencer's creator
-table is one), or `--approval-issue N` where N is a **closed** task in Tico with `owner:ana` and `type:decision`
-whose title or body names that address or the thread. A Tico `send` approval (`hub approval request --kind send`) is
+table is one), or `--approval-issue N` where N is a **closed** GitHub Issue with `owner:ana` and `type:decision`
+whose title or body names that address or the thread. The id of a Tico message telling this bot to send also counts
+when its human sender may manage this bot's mail sending: Tico checks that authority, rather than the computer's
+local owner settings. The company owner, admins, bot owners and people above the bot on the org chart qualify;
+built-in bots such as Counsel require the company owner. Ordinary chat access and bot senders never qualify.
+The message is passed to the reviewer as the person's instruction. See docs/mail-service.md, "Per-message approval".
+A Tico `send` approval (`hub approval request --kind send`) is
 for one exact text: put the `body_sha256` that `mail draft --json` returns in its payload. At send time the connector
 hashes the draft's text as it stands in Gmail (line ends and the space around the whole text don't count) and refuses a
 draft whose text differs, with "the draft changed after it was approved; ask for a new yes". A changed draft needs a
-new approval. With sending off in Tico a send is always a draft. The
+new approval. With sending off in Tico a send needs a full per-message approval. The
 daily cap, the wait between messages to one person, the blocklist and the people the owner handles personally apply
 to every send, the three kinds above included. `mail policy show` says which of these you have, which forward targets
 Tico holds, what bot.yaml asks, and which policy it is reading.
