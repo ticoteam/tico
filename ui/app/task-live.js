@@ -53,7 +53,7 @@ function taskLiveFocusRestore(d) {
 function taskEditBodyHTML(t, original, waitText) {
   const may = taskPropRights(t).edit;
   const preview = `<div class="tdesc md" data-task-body-preview>${original ? safeMd(original) : '<p class="muted">No details.</p>'}</div>`;
-  const body = `<section data-task-edit-body>${may ? '<button type="button" class="linkish" data-task-body-edit aria-label="Edit details">Edit</button><textarea data-task-field="body" aria-label="Details" hidden></textarea>' : ''}${preview}</section>`;
+  const body = `<section data-task-edit-body>${may ? '<button type="button" class="linkish" data-task-body-edit aria-label="Edit details">Edit</button>' : ''}${preview}</section>`;
   return original && waitText ? `<details class="task-orig"><summary>Original request</summary>${body}</details>` : body;
 }
 function taskLiveBind(d, task) {
@@ -67,7 +67,7 @@ function taskLiveBind(d, task) {
   // These nodes move into each redraw. No focused editor is destroyed and recreated by an invalidation or save.
   for (const selector of ['.tmodal-title', '[data-task-edit-body]']) {
     const slot = $(selector, d), kept = live.nodes[selector];
-    if (slot && kept && slot !== kept && !!slot.querySelector('textarea') === !!kept.querySelector('textarea')) {
+    if (slot && kept && slot !== kept && !!slot.querySelector('[data-task-body-edit]') === !!kept.querySelector('[data-task-body-edit]')) {
       const fold = slot.closest('details.task-orig'), prior = kept.closest('details.task-orig');
       if (fold && prior) fold.open = prior.open;
       slot.replaceWith(kept);
@@ -86,10 +86,10 @@ function taskLiveBind(d, task) {
   title.onclick = () => { if (may) { titleMode(true); title.focus(); } };
   if (may) { title.dataset.taskField = 'title'; title.setAttribute('aria-label', 'Title'); }
   else { delete title.dataset.taskField; title.removeAttribute('role'); title.removeAttribute('aria-label'); }
-  const details = $('[data-task-field="body"]', d), edit = $('[data-task-body-edit]', d);
+  let details = $('[data-task-field="body"]', d);
+  const edit = $('[data-task-body-edit]', d);
   if (details) details.disabled = !may;
-  if (edit) { edit.hidden = !may; edit.onclick = () => { details.hidden = false; $('[data-task-body-preview]', d).hidden = true; details.focus(); }; }
-  for (const field of d.querySelectorAll('[data-task-field]')) {
+  const wireField = field => {
     field.oninput = () => {
       sharedDraftPatch(draft, field.dataset.taskField, field.tagName === 'TEXTAREA' ? field.value : field.textContent);
       clearTimeout(draft.timer);
@@ -100,6 +100,19 @@ function taskLiveBind(d, task) {
       if (event.key !== 'Enter') return;
       event.preventDefault(); event.stopPropagation();
       if (live.titleEditing) field.blur(); else titleMode(true);
+    };
+  };
+  d.querySelectorAll('[data-task-field]').forEach(wireField);
+  if (edit) {
+    edit.hidden = !may;
+    edit.onclick = () => {
+      if (!may) return;
+      if (!details) {
+        details = document.createElement('textarea'); details.dataset.taskField = 'body'; details.setAttribute('aria-label', 'Details');
+        edit.after(details); wireField(details);
+      }
+      $('[data-task-body-preview]', d).hidden = true;
+      taskLivePaint(d, live); details.focus();
     };
   }
   $('[data-task-edit-retry]', d).onclick = () => taskLiveSave(d, live);
