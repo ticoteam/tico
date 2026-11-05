@@ -5,17 +5,19 @@ function taskLiveStop(d) {
   const live = d.taskLive;
   if (!live) return;
   sharedPlaceStop(live);
-  clearTimeout(live.draft.timer);
+  clearTimeout(live.draft.timer); live.draft.timer = 0;
   // A blur starts the last save before a dialog leaves. Keep a failed draft for reopening this task.
   if (!live.draft.error) void taskLiveSave(d, live);
-  if (!live.draft.flight && !Object.keys(live.draft.patch).length) TASK_EDIT_DRAFTS.delete(live.id);
+  taskLivePersist(live);
+  if (live.draft.owner === live.owner && !live.draft.flight && !Object.keys(live.draft.patch).length) TASK_EDIT_DRAFTS.delete(live.id);
   d.taskLive = null;
 }
 function taskLiveGone(d, live) {
   if (d.taskLive !== live) return;
   live.revoked = true;
-  clearTimeout(live.draft.timer);
+  clearTimeout(live.draft.timer); live.draft.timer = 0;
   TASK_EDIT_DRAFTS.delete(live.id); TASK_DRAFTS.delete(live.id);
+  taskLiveForget(live.id);
   sharedPlaceStop(live);
   d.close(); d.innerHTML = '';
   if (TASKS_ST?.tasks.some(task => String(task.id) === live.id)) {
@@ -24,6 +26,112 @@ function taskLiveGone(d, live) {
   }
 }
 const TASK_EDIT_DRAFTS = new Map();
+const TASK_EDIT_STORAGE = 'tico.task-edit.';
+const taskLiveStorageKey = (id, field) => TASK_EDIT_STORAGE + [S.me?.id || '', id, field].map(encodeURIComponent).join('.');
+function taskLiveForget(id) {
+  try { for (const key of ['title', 'body']) localStorage.removeItem(taskLiveStorageKey(id, key)); } catch {}
+}
+function taskLivePersist(live) {
+  const draft = live.draft;
+  if (live.revoked || SESSION.out || draft.owner !== live.owner) return;
+  const patch = {...draft.inflightPatch, ...draft.patch};
+  try {
+    for (const key of ['title', 'body']) {
+      const storage = taskLiveStorageKey(live.id, key);
+      if (key in patch) localStorage.setItem(storage, JSON.stringify({value: patch[key], base: draft.bases[key], error: draft.error}));
+      else localStorage.removeItem(storage);
+    }
+  } catch {}
+}
+function taskLiveDraft(id) {
+  const draft = sharedDraft(); draft.bases = {};
+  for (const key of ['title', 'body']) {
+    try {
+      const kept = JSON.parse(localStorage.getItem(taskLiveStorageKey(id, key)) || 'null');
+      if (typeof kept?.value !== 'string' || typeof kept.base?.value !== 'string' || !Number.isFinite(kept.base?.version)) continue;
+      draft.patch[key] = kept.value; draft.dirty[key] = kept.base.value; draft.bases[key] = kept.base;
+      draft.error = typeof kept.error === 'string' ? kept.error : '';
+    } catch {}
+  }
+  return draft;
+}
+function taskLiveClear() {
+  for (const d of document.querySelectorAll('dialog')) if (d.taskLive) { d.taskLive.revoked = true; sharedPlaceStop(d.taskLive); }
+  for (const draft of TASK_EDIT_DRAFTS.values()) { clearTimeout(draft.timer); draft.owner = null; }
+  TASK_EDIT_DRAFTS.clear();
+  try {
+    for (const key of Object.keys(localStorage)) if (key.startsWith(TASK_EDIT_STORAGE)) localStorage.removeItem(key);
+  } catch {}
+}
+window.addEventListener('beforeunload', event => {
+  if (SESSION.out || ![...TASK_EDIT_DRAFTS.values()].some(draft => draft.flight || draft.error)) return;
+  event.preventDefault(); event.returnValue = '';
+});
+document.addEventListener('click', event => {
+  const link = event.target.closest?.('a[href]');
+  if (link && /\/(?:logout|cdn-cgi\/access\/logout)(?:[?#]|$)/.test(link.getAttribute('href'))) taskLiveClear();
+}, true);
+// Capture immediately before replacing HTML: async reads must not snapshot text before the person finishes typing.
+function taskFormKey(el, root) {
+  const path = [];
+  for (let node = el; node && node !== root; node = node.parentElement) {
+    const attr = ['id', 'data-task-field', 'name', 'aria-label', ...node.getAttributeNames().filter(k => k.startsWith('data-') && !['data-busy', 'data-loaded'].includes(k))]
+      .find(key => node.hasAttribute(key));
+    path.unshift(node.tagName.toLowerCase() + (attr ? `[${attr}="${CSS.escape(node.getAttribute(attr))}"]`
+      : `:nth-of-type(${[...node.parentElement.children].filter(n => n.tagName === node.tagName).indexOf(node) + 1})`));
+  }
+  return path.join(' > ');
+}
+function taskFormCapture(root) {
+  const fields = [...root.querySelectorAll('input, textarea, select, [contenteditable]')].map(el => {
+    const text = el.hasAttribute('contenteditable'), focused = el === document.activeElement;
+    const selection = window.getSelection();
+    const offset = (node, at) => { const range = document.createRange(); range.selectNodeContents(el); range.setEnd(node, at); return range.toString().length; };
+    const modified = text || el.tagName === 'SELECT' || (['checkbox', 'radio'].includes(el.type)
+      ? el.checked !== el.defaultChecked : el.value !== el.defaultValue);
+    return {modified, key: taskFormKey(el, root), el, taskField: el.hasAttribute('data-task-field'), value: text ? el.textContent : el.value,
+      checked: el.checked, focused, caret: typeof el.selectionStart === 'number' ? [el.selectionStart, el.selectionEnd, el.selectionDirection] : null,
+      text: text && focused && selection.rangeCount && el.contains(selection.anchorNode) && el.contains(selection.focusNode)
+        ? [offset(selection.anchorNode, selection.anchorOffset), offset(selection.focusNode, selection.focusOffset)] : null};
+  });
+  const folds = [...root.querySelectorAll('form[hidden], form:not([hidden]), details')]
+    .map(el => ({key: taskFormKey(el, root), hidden: el.hidden, open: el.open}));
+  return {fields, folds};
+}
+function taskFormAdopt(root, kept) {
+  // URL inputs expose no selection API, and file inputs cannot be assigned a value. Their native state stays on
+  // the input itself; move it into the new form before binding that form's handlers.
+  for (const field of kept.fields) {
+    if (!field.el.matches('input[type="url"], input[type="file"]') || root.contains(field.el)) continue;
+    root.querySelector(field.key)?.replaceWith(field.el);
+  }
+}
+function taskFormRestore(root, kept) {
+  for (const fold of kept.folds) {
+    const el = root.querySelector(fold.key); if (!el) continue;
+    el.hidden = fold.hidden; if (el.tagName === 'DETAILS') el.open = fold.open;
+  }
+  for (const field of kept.fields) {
+    const el = root.contains(field.el) ? field.el : root.querySelector(field.key); if (!el) continue;
+    // Versioned editors are painted from their field drafts; clean, unfocused fields adopt the server's value.
+    if (!field.taskField && (field.modified || field.focused) && el.type !== 'file') {
+      if (el.hasAttribute('contenteditable')) el.textContent = field.value;
+      else el.value = field.value;
+      if (typeof field.checked === 'boolean') el.checked = field.checked;
+    }
+    if (!field.focused) continue;
+    el.focus({preventScroll: true});
+    if (field.caret) el.setSelectionRange(...field.caret);
+    if (field.text) {
+      const point = offset => {
+        const walk = document.createTreeWalker(el, NodeFilter.SHOW_TEXT); let node;
+        while ((node = walk.nextNode())) { if (offset <= node.length) return [node, offset]; offset -= node.length; }
+        return [el, el.childNodes.length];
+      };
+      window.getSelection().setBaseAndExtent(...point(field.text[0]), ...point(field.text[1]));
+    }
+  }
+}
 function taskLiveFocusKeep(d) {
   const live = d.taskLive, field = document.activeElement;
   if (!live || !d.contains(field) || !field.matches('[data-task-field]')) return;
@@ -59,11 +167,11 @@ function taskEditBodyHTML(t, original, waitText) {
 function taskLiveBind(d, task) {
   const id = String(task.id);
   if (d.taskLive?.id !== id) taskLiveStop(d);
-  const live = d.taskLive ||= {id, draft: TASK_EDIT_DRAFTS.get(id) || sharedDraft(), nodes: {}};
+  const live = d.taskLive ||= {id, owner: newRequestId(), draft: TASK_EDIT_DRAFTS.get(id) || taskLiveDraft(id), nodes: {}, fields: {}};
   const draft = live.draft;
+  draft.owner = live.owner;
   TASK_EDIT_DRAFTS.set(id, draft);
   if (!draft.base || Number(task.version) >= Number(draft.base.version)) draft.base = task;
-  if (!draft.flight && !Object.keys(draft.dirty).length) draft.version = draft.base.version;
   // These nodes move into each redraw. No focused editor is destroyed and recreated by an invalidation or save.
   for (const selector of ['.tmodal-title', '[data-task-edit-body]']) {
     const slot = $(selector, d), kept = live.nodes[selector];
@@ -90,11 +198,20 @@ function taskLiveBind(d, task) {
     title.oninput = title.onblur = title.onkeydown = null;
   }
   let details = $('[data-task-field="body"]', d);
+  if (!details && may && 'body' in draft.dirty) {
+    details = document.createElement('textarea'); details.dataset.taskField = 'body'; details.setAttribute('aria-label', 'Details');
+    $('[data-task-body-edit]', d)?.after(details);
+    const preview = $('[data-task-body-preview]', d); if (preview) preview.hidden = true;
+  }
   const edit = $('[data-task-body-edit]', d);
   if (details) details.disabled = !may;
   const wireField = field => {
     field.oninput = () => {
-      sharedDraftPatch(draft, field.dataset.taskField, field.tagName === 'TEXTAREA' ? field.value : field.textContent);
+      const key = field.dataset.taskField;
+      if (!(key in draft.dirty)) draft.bases[key] = {...live.fields[key]};
+      sharedDraftPatch(draft, key, field.tagName === 'TEXTAREA' ? field.value : field.textContent);
+      draft.dirty[key] = draft.bases[key].value;
+      taskLivePersist(live);
       clearTimeout(draft.timer);
       if (!draft.error) draft.timer = setTimeout(() => taskLiveSave(d, live), 700);
     };
@@ -120,13 +237,17 @@ function taskLiveBind(d, task) {
   }
   $('[data-task-edit-retry]', d).onclick = () => taskLiveSave(d, live);
   taskLivePaint(d, live);
+  // Restored debounce drafts use their kept revision; failed drafts still wait for Retry.
+  if (!draft.error && !draft.flight && Object.keys(draft.patch).length && !draft.timer)
+    draft.timer = setTimeout(() => taskLiveSave(d, live), 700);
 }
 function taskLivePaint(d, live) {
   if (d.taskLive !== live) return;
   const draft = live.draft, shown = {...draft.base, ...draft.inflightPatch, ...draft.patch};
   for (const field of d.querySelectorAll('[data-task-field], .tmodal-title')) {
-    const value = shown[field.dataset.taskField || 'title'] || '';
+    const key = field.dataset.taskField || 'title', value = shown[key] || '';
     if ((field === document.activeElement || field === live.focus?.field) && !draft.current) continue;
+    live.fields[key] = key in draft.dirty ? {...draft.bases[key]} : {value: sharedDraftValue(draft.base, key), version: draft.base.version};
     if (field.tagName === 'TEXTAREA') {
       if (field.value === value) continue;
       const selection = field === document.activeElement ? [field.selectionStart, field.selectionEnd, field.selectionDirection] : null;
@@ -183,13 +304,21 @@ function taskLiveEdited(d, detail) {
 }
 async function taskLiveSave(d, live) {
   if (live.revoked) return;
+  live.draft.timer = 0;
   return sharedDraftSave(live.draft, {
-    write: (patch, version) => {
+    write: patch => {
       const run = async () => {
         if (live.revoked) throw new Error('Access lost');
+        // Every field carries the revision its displayed text came from. Mixing revisions takes the oldest,
+        // so a focused stale field always reaches the ordinary 409 path before it can overwrite another edit.
+        const version = Math.min(...Object.keys(patch).map(key => live.draft.bases[key].version));
         const reply = await post('/v2/tasks/' + encodeURIComponent(live.id), {...patch, version});
         if (!reply.task) throw new Error('Not saved');
         if (live.revoked) return reply.task;
+        for (const key of Object.keys(patch)) {
+          const base = live.draft.bases[key] = {value: sharedDraftValue(reply.task, key), version: reply.task.version};
+          if (d.taskLive?.draft === live.draft) d.taskLive.fields[key] = {...base};
+        }
         if (d.taskLive === live && Number(reply.task.version) >= Number(d.liveTask?.version || 0)) d.liveTask = reply.task;
         // Text edits update the held list directly, with no whole-list read.
         if (TASKS_ST?.tasks.some(task => String(task.id) === live.id)) {
@@ -201,13 +330,21 @@ async function taskLiveSave(d, live) {
     },
     current: async error => {
       if (error.status !== 409) return null;
-      try { return (await get('/v2/tasks/' + encodeURIComponent(live.id), {fresh: true})).task; }
+      try {
+        const current = (await get('/v2/tasks/' + encodeURIComponent(live.id), {fresh: true})).task;
+        if (current) for (const key of Object.keys(live.draft.dirty))
+          live.draft.bases[key] = {value: sharedDraftValue(current, key), version: current.version};
+        return current;
+      }
       catch (failed) { if ([403, 404].includes(failed.status)) taskLiveGone(d, live); return null; }
     },
     settled: () => {
-      if (d.taskLive !== live && TASK_EDIT_DRAFTS.get(live.id) === live.draft && !live.draft.error && !Object.keys(live.draft.patch).length) TASK_EDIT_DRAFTS.delete(live.id);
-      taskLivePaint(d, live);
-      return taskLiveRead(d, live);
+      if (live.draft.owner === live.owner && d.taskLive !== live && TASK_EDIT_DRAFTS.get(live.id) === live.draft && !live.draft.error && !Object.keys(live.draft.patch).length) TASK_EDIT_DRAFTS.delete(live.id);
+      // Reopening transfers ownership. The old response may settle the shared save, but cannot evict that view.
+      const active = d.taskLive?.draft === live.draft ? d.taskLive : live;
+      taskLivePersist(active);
+      taskLivePaint(d, active);
+      return taskLiveRead(d, active);
     }
   });
 }

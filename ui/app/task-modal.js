@@ -96,7 +96,7 @@ function taskModalRunsKeep(d, keep) {
 async function taskModalShow(task, d = taskModal(), opts = {}) {
   TASK_MODAL_LOAD++;
   if (!d) d = taskModal();
-  const peek = !!d.dataset.peek;
+  const peek = !!d.dataset.peek, sameTask = d.open && String(d.dataset.task) === String(task.id);
   // A fresh open starts with no file open, whether or not the last close's event has run yet.
   if (!d.open || String(d.dataset.task) !== String(task.id)) {
     taskLiveStop(d);
@@ -125,7 +125,6 @@ async function taskModalShow(task, d = taskModal(), opts = {}) {
   // never draw an older copy of the task over the newer one a save returned
   else if (d.liveTask && Number(task.version) < Number(d.liveTask.version)) task = d.liveTask;
   const seq = d.drawSeq = (d.drawSeq || 0) + 1;
-  const typing = d.contains(document.activeElement) && document.activeElement.matches('.task-chat textarea');
   if (peek && TASKS_ST && TASKS_ST.peek !== 't' + task.id && tasksById(TASKS_ST).has(String(task.id))) {
     taskPeekOpen(TASKS_ST, 't' + task.id, {via: 'link'}); return;   // a parent or subtask opened from the peek: the list follows it
   }
@@ -143,10 +142,11 @@ async function taskModalShow(task, d = taskModal(), opts = {}) {
   opening.pending = false;
   taskModalRunsKeep(d, kept);
   taskLiveFocusKeep(d);
+  const keptForm = sameTask ? taskFormCapture(d) : {fields: [], folds: []};
   d.innerHTML = hubModalHTML(task, taskItem(task), {peek, thread: d.classList.contains('thread')});
-  adopt();
+  adopt(); taskFormAdopt(d, keptForm);
   taskModalBind(d, task);
-  taskPropFocus(d); taskLiveFocusRestore(d);
+  taskPropFocus(d); taskLiveFocusRestore(d); taskFormRestore(d, keptForm);
   if (!d.open) {
     // The peek sits beside the list: opening it leaves the focus on the row, so ↑/↓ keep moving through the list.
     const was = document.activeElement;
@@ -182,18 +182,18 @@ async function taskModalShow(task, d = taskModal(), opts = {}) {
   askDraftCapture(d);
   taskModalRunsKeep(d, kept);
   taskLiveFocusKeep(d);
+  const fullForm = taskFormCapture(d);
   d.innerHTML = hubModalHTML(full, taskItem(full), {peek, thread: d.classList.contains('thread')});
-  adopt();
+  adopt(); taskFormAdopt(d, fullForm);
   taskModalBind(d, full, true);
   if (keep) $(keep, d)?.focus({preventScroll: true});
-  taskPropFocus(d); d.focusProp = ''; taskLiveFocusRestore(d);
+  taskPropFocus(d); d.focusProp = ''; taskLiveFocusRestore(d); taskFormRestore(d, fullForm);
   taskLiveEdited(d, detail); taskLiveStart(d); d.scrollTop = scroll;
   void taskRailLoad(d, full, detail);
   if (kept && TASK_CHAT === kept && d.contains(kept.host)) taskCommentsRender(kept, detail);
   else void taskChatLoad(task.id, d, detail);
   void tfLoad(d, task.id);
   void taskRunsLoad(d, task.id);
-  if (typing) { const box = $('.task-chat textarea', d); box?.focus(); box?.setSelectionRange(box.value.length, box.value.length); }
 }
 // A task's own thread: the full modal showing only its header and its conversation, so what is typed there is plainly
 // said in the task (POST /v2/tasks/{id}/comments), never in the bot's main chat. Back returns to the chat.

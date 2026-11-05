@@ -189,6 +189,7 @@ function taskSubtasksHTML(t, kids, open, adding, owner, refused = '') {
 function taskRailPaint(d, t) {
   const rail = $('[data-task-rail]', d); if (!rail) return;
   const st = d.taskRail ||= {open: new Set()};
+  const keptForm = taskFormCapture(rail);
   const kids = st.kids || [];
   const old = $('[data-sub-add]', rail);
   if (old) st.owner = old.elements.owner.value;
@@ -203,6 +204,7 @@ function taskRailPaint(d, t) {
   if (form && typed) form.elements.title.value = typed;
   // st.focus holds through the modal's redraws after adding one, until the tree is in (taskRailLoad).
   if (form && (focused || st.focus)) form.elements[focused || 'title'].focus();
+  taskFormRestore(rail, keptForm);
 }
 async function taskRailLoad(d, t, detail) {
   const id = String(t.id);

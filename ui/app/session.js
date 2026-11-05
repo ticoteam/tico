@@ -61,12 +61,14 @@ function signedOut(to) {
   if (!login && typeof S !== 'undefined' && S.config?.demo && demoReloadOnce()) return;
   if (login && !SESSION.seen) {
     sessionKeep();
+    if (typeof taskLiveClear === 'function') taskLiveClear();
     location.assign(login + '?next=' + encodeURIComponent(sessionHere()));
     return;
   }
   if (SESSION.out) return;
   SESSION.out = true; SESSION.login = login;
   sessionKeep();
+  if (typeof taskLiveClear === 'function') taskLiveClear();
   if (typeof liveSignedOut === 'function') liveSignedOut();
   document.querySelectorAll('.toast.err').forEach(t => t.remove());
   // Focus stays where it was: someone typing goes on typing, and their text is kept either way.
@@ -124,7 +126,8 @@ const chatBox = el => {
   let pills; try { pills = PILLS; } catch { return false; }
   return [...pills].some(P => P.mode === 'chat' && P.slug && P.el?.contains(el));
 };
-const sessionBoxes = () => [...document.querySelectorAll('textarea, input[type="text"]')]
+const sessionBoxValue = el => el.hasAttribute('contenteditable') ? el.textContent : el.value;
+const sessionBoxes = () => [...document.querySelectorAll('textarea, input[type="text"], [contenteditable][data-task-field]')]
   .filter(el => !el.readOnly && !el.disabled && !/search|filter/i.test(sessionKey(el)) && !chatBox(el));
 const sessionSave = kept => {
   try {
@@ -159,7 +162,9 @@ function sessionKeep() {
     for (const [id, value] of TASK_DRAFTS) if (value.trim()) fields.set(`task:${id}\nMessage`, {scope: 'task:' + id, key: 'Message', value});
   for (const el of sessionBoxes()) {
     const key = sessionKey(el), scope = sessionScope(el);
-    if (key && el.value.trim()) fields.set(scope + '\n' + key, {scope, key, value: el.value});
+    const value = sessionBoxValue(el), live = el.closest('dialog')?.taskLive, field = el.dataset.taskField;
+    const base = field && live ? live.draft.bases[field] || live.fields[field] : undefined;
+    if (key && value.trim()) fields.set(scope + '\n' + key, {scope, key, value, ...(base ? {base} : {})});
   }
   // The task open in full, to open again on return (sessionResume).
   const d = document.getElementById('task-modal');
@@ -183,10 +188,16 @@ function sessionKeep() {
   const fill = () => {
     let put = false;
     for (const el of sessionBoxes()) {
-      if (el.value) continue;
+      const field = el.dataset.taskField, live = el.closest('dialog')?.taskLive;
+      if (sessionBoxValue(el) && !field) continue;
       const key = sessionKey(el), scope = sessionScope(el), i = kept.fields.findIndex(f => f.key === key && f.scope === scope);
-      if (i < 0) continue;
-      el.value = kept.fields[i].value; el.dispatchEvent(new Event('input', {bubbles: true}));
+      if (i < 0 || (field && !live)) continue;
+      const saved = kept.fields[i];
+      if (!field || !(field in live.draft.dirty)) {
+        if (field && saved.base && Number.isFinite(saved.base.version) && typeof saved.base.value === 'string') live.fields[field] = saved.base;
+        if (el.hasAttribute('contenteditable')) el.textContent = saved.value; else el.value = saved.value;
+        el.dispatchEvent(new Event('input', {bubbles: true}));
+      }
       kept.fields.splice(i, 1); put = true;
     }
     if (put) sessionSave(kept);
