@@ -105,6 +105,7 @@ pub fn safe_path(workspace: &Path, relative: &str) -> Result<PathBuf, String> {
         return Err("Use a worktree inside the team workspace".into());
     }
     let resolved = resolve(&path);
+    crate::repo_safety::outside_installation(&resolved)?;
     let normal: PathBuf = path.components().filter(|c| !matches!(c, std::path::Component::CurDir)).collect();
     if resolved != normal {
         return Err("Worktree path must not contain symlinks".into());

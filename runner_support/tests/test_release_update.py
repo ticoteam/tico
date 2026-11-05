@@ -7,6 +7,7 @@ import time
 import pytest
 
 from runner_support import release_update as ru
+from runner_support import checkout_links
 
 
 def test_a_second_updater_exits_before_drain_or_checkout_work_and_leaves_status_alone(tmp_path, monkeypatch):
@@ -155,6 +156,98 @@ def test_a_renamed_file_is_named_with_both_paths(repos):
     sh(checkout, "git", "mv", "app.py", "renamed.py")
     result, _ = run_apply(checkout, state)
     assert result["state"] == "blocked" and "app.py -> renamed.py" in result["error"]
+
+
+@pytest.fixture
+def link_repos(repos):
+    public, checkout, state = repos
+    commit(public, "CLAUDE.md", "# Rules\n\nKeep work.\n")
+    (public / "AGENTS.md").symlink_to("CLAUDE.md")
+    commit(public, "templates/employee-repo/AGENT.md", "# Bot rules\n")
+    for name in ("AGENTS.md", "CLAUDE.md"):
+        (public / "templates/employee-repo" / name).symlink_to("AGENT.md")
+    commit(public, "note.txt", "before")
+    sh(public, "git", "tag", "v0.3.0")
+    sh(checkout, "git", "fetch", "-q", "origin", "tag", "v0.3.0")
+    sh(checkout, "git", "reset", "-q", "--hard", "v0.3.0")
+    commit(public, "app.py", "new release")
+    sh(public, "git", "tag", "v0.4.0")
+    return public, checkout, state
+
+
+def flatten(checkout, name="AGENTS.md"):
+    path = checkout / name
+    content = path.read_bytes()
+    path.unlink()
+    path.write_bytes(content)
+
+
+@pytest.mark.slow
+@pytest.mark.parametrize("symlinks", ["true", "false"])
+def test_only_exact_copies_of_link_targets_are_restored_under_the_update_lock(link_repos, symlinks, capsys):
+    _, checkout, state = link_repos
+    sh(checkout, "git", "config", "core.symlinks", symlinks)
+    names = ["AGENTS.md", "templates/employee-repo/AGENTS.md", "templates/employee-repo/CLAUDE.md"]
+    for name in names:
+        flatten(checkout, name)
+    before = {name: (checkout / name).read_bytes() for name in names}
+    assert checkout_links.inspect(checkout)["only_flattened"]
+
+    def locked_run(args, **kw):
+        if "checkout" in args and "--" in args:
+            with ru.lock_path(checkout).open("a") as handle:
+                with pytest.raises(BlockingIOError):
+                    fcntl.flock(handle, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        return subprocess.run(args, **kw)
+
+    result, _ = run_apply(checkout, state, "0.4.0", run=locked_run)
+    assert result["state"] == "healthy" and ru.checkout_release(checkout) == "0.4.0"
+    assert result["note"] == ru.read_status(state)["note"] == "restored 3 flattened links"
+    assert "restored 3 flattened links" in capsys.readouterr().out
+    assert all((checkout / name).is_symlink() and (checkout / name).read_bytes() == before[name] for name in names)
+    assert not sh(checkout, "git", "status", "--porcelain", "--untracked-files=no")
+    assert sh(checkout, "git", "config", "core.symlinks") == symlinks
+
+
+@pytest.mark.slow
+@pytest.mark.parametrize("change", ["link text", "target", "staged link", "staged other", "partial", "other edit"])
+def test_any_other_change_blocks_every_link_repair(link_repos, change):
+    _, checkout, state = link_repos
+    flatten(checkout)
+    if change == "link text":
+        (checkout / "AGENTS.md").write_text("my own rules\n")
+    elif change == "target":
+        (checkout / "CLAUDE.md").write_text("changed target\n")
+    elif change == "staged link":
+        sh(checkout, "git", "add", "AGENTS.md")
+    elif change == "staged other":
+        (checkout / "note.txt").write_text("staged")
+        sh(checkout, "git", "add", "note.txt")
+    elif change == "partial":
+        flatten(checkout, "templates/employee-repo/AGENTS.md")
+        (checkout / "templates/employee-repo/AGENTS.md").write_text("different")
+    else:
+        (checkout / "note.txt").write_text("unfinished")
+    before = head(checkout)
+    index = sh(checkout, "git", "diff", "--cached", "--raw")
+    contents = (checkout / "AGENTS.md").read_bytes()
+    result, calls = run_apply(checkout, state, "0.4.0")
+    assert result["state"] == "blocked" and "commit or stash" in result["error"]
+    assert calls.restarts == 0 and head(checkout) == before
+    assert not (checkout / "AGENTS.md").is_symlink() and (checkout / "AGENTS.md").read_bytes() == contents
+    assert sh(checkout, "git", "diff", "--cached", "--raw") == index
+    if change in ("staged other", "partial", "other edit"):
+        assert "AGENTS.md (flattened link)" in result["error"]
+
+
+@pytest.mark.slow
+def test_a_target_hidden_from_git_status_still_blocks_repair(link_repos):
+    _, checkout, state = link_repos
+    flatten(checkout)
+    sh(checkout, "git", "update-index", "--assume-unchanged", "CLAUDE.md")
+    (checkout / "CLAUDE.md").write_text("changed target")
+    result, _ = run_apply(checkout, state, "0.4.0")
+    assert result["state"] == "blocked" and not (checkout / "AGENTS.md").is_symlink()
 
 
 @pytest.mark.slow

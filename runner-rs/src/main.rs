@@ -86,6 +86,7 @@ mod readiness_extra;
 mod redact;
 mod relays;
 mod repositories;
+mod repo_safety;
 mod worktrees;
 mod run_diagnostics;
 mod runner;

@@ -604,6 +604,9 @@ pub async fn remove_private(main: &Path, path: &Path, name: &str, turn: &Env) ->
 
 /// Rebase the shared checkout onto its upstream before the turn, or say why not (service.py sync_shared).
 pub async fn sync_shared(path: &Path, turn: &Env) -> String {
+    if let Err(problem) = crate::repo_safety::outside_installation(path) {
+        return problem;
+    }
     if !path.join(".git").exists() {
         return "the checkout is missing".into();
     }
@@ -741,6 +744,9 @@ pub async fn catch_up(path: &Path, turn: &Env) -> String {
 
 /// Clone the original with the person's git access when there is no GitHub App link (service.py clone_shared).
 pub async fn clone_shared(path: &Path, config: &Value, turn: &Env) -> String {
+    if let Err(problem) = crate::repo_safety::outside_installation(path) {
+        return problem;
+    }
     if path.exists() && (!path.is_dir() || std::fs::read_dir(path).map(|mut d| d.next().is_some()).unwrap_or(true)) {
         return format!("{} already exists here and is not an empty folder; left as it is", path.file_name().unwrap_or_default().to_string_lossy());
     }
@@ -1047,6 +1053,9 @@ impl Runner {
             self.lanes.try_checkout(&bot)
         };
         let main_path = local_path(&self.config, &bot, &attempt["config"]);
+        if !app {
+            crate::repo_safety::outside_installation(&main_path)?;
+        }
         if app {
             std::fs::create_dir_all(&main_path).map_err(|e| format!("cannot create {}: {e}", main_path.display()))?;
         }
@@ -1330,6 +1339,9 @@ impl Runner {
                 continue; // a file still waiting to upload is read from the worktree, so the worktree waits for it
             }
             let main = local_path(&self.config, &bot, &configs[&bot]);
+            if crate::repo_safety::outside_installation(&main).is_err() {
+                continue;
+            }
             let _git = self.lanes.git_lock(&main).lock_owned().await;
             if task.starts_with(PRIVATE) {
                 if remove_private(&main, path, &task, &crate::env::process_environment()).await {

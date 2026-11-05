@@ -9,6 +9,7 @@ import shutil
 import subprocess
 import time
 from clients import git_repository
+from clients.repo_safety import outside_installation
 
 from . import git_credentials, isolation, safe_git
 
@@ -68,6 +69,7 @@ def worktree_base(workspace, repo, env):
         raise ValueError('Invalid repository name')
     root = Path(workspace) / 'repos'
     path = root / base_folder(name)
+    outside_installation(path)
     if root.is_symlink() or path.is_symlink() or path.resolve().parent != root.resolve():
         raise ValueError('Base clone points outside repos')
     isolation.mkdir(root, mode=0o755)

@@ -7,11 +7,14 @@ import functools
 import subprocess
 import tempfile
 import unittest
+from unittest.mock import patch
 from pathlib import Path
 
 import yaml
+import pytest
 
 from clients import catalog
+from clients import manifest, repo_safety
 from clients.routines import validate_schedules
 
 CARD = """template: assistant
@@ -113,6 +116,16 @@ class Materialize(unittest.TestCase):
         self.assertIn("already exists", str(caught.exception))
         self.assertIn("A turn happened here.", (path / "state.md").read_text())
 
+    def test_a_workspace_ancestor_cannot_point_into_the_install(self):
+        install = Path(self.tmp.name) / "install"
+        install.mkdir()
+        self.workspace.parent.mkdir(parents=True)
+        self.workspace.symlink_to(install, target_is_directory=True)
+        with patch.object(repo_safety, "ROOT", install):
+            with self.assertRaisesRegex(ValueError, "inside the Tico install"):
+                self.make()
+        self.assertEqual(list(install.iterdir()), [])
+
     def test_a_bot_given_another_bots_old_slug_is_built_in_the_folder_the_server_recorded(self):
         # A renamed bot still works in bot-coo; the new bot named coo was given bot-coo-<part of its id>.
         first = self.make()
@@ -140,6 +153,51 @@ class Refresh(unittest.TestCase):
 
     def refresh(self):
         return catalog.refresh("assistant", self.path, NAMES, directory=self.catalog)
+
+    @pytest.mark.slow
+    def test_a_bot_root_or_named_folder_cannot_resolve_into_the_install(self):
+        alias = self.path.parent / "bot-alias"
+        alias.symlink_to(self.path, target_is_directory=True)
+        with patch.object(repo_safety, "ROOT", self.path):
+            for path in (self.path, alias):
+                with self.assertRaisesRegex(ValueError, "inside the Tico install"):
+                    catalog.refresh("assistant", path, NAMES, directory=self.catalog)
+            with self.assertRaisesRegex(ValueError, "inside the Tico install"):
+                manifest.folder_dir(alias.parent, alias.name)
+
+    @pytest.mark.slow
+    def test_a_refresh_refuses_an_outside_file_directory_or_stamp_link_before_any_write(self):
+        outside = Path(self.tmp.name) / "outside"
+        outside.mkdir()
+        (outside / "fleet.md").write_text("Keep me.\n")
+        (self.template / "AGENT.md").write_text("Updated instructions.\n")
+        before = (self.path / "AGENT.md").read_text()
+        for rel, destination in (("playbooks/fleet.md", outside / "fleet.md"),
+                                 (catalog.STAMP, outside / "new-stamp"), ("playbooks", outside)):
+            path = self.path / rel
+            backup = path.with_name(path.name + ".saved")
+            path.rename(backup)
+            path.symlink_to(destination)
+            with self.assertRaisesRegex(ValueError, "outside the bot repo"):
+                self.refresh()
+            self.assertEqual((self.path / "AGENT.md").read_text(), before)
+            self.assertEqual((outside / "fleet.md").read_text(), "Keep me.\n")
+            self.assertFalse((outside / "new-stamp").exists())
+            path.unlink()
+            backup.rename(path)
+
+    @pytest.mark.slow
+    def test_refresh_replaces_an_inside_file_link_without_writing_its_target(self):
+        kept = self.path / "knowledge/kept.md"
+        kept.write_text("Keep my notes.\n")
+        path = self.path / "playbooks/fleet.md"
+        path.unlink()
+        path.symlink_to("../knowledge/kept.md")
+        (self.template / "playbooks/fleet.md").write_text("New fleet rules.\n")
+        self.assertEqual(self.refresh(), ["playbooks/fleet.md"])
+        self.assertFalse(path.is_symlink())
+        self.assertEqual(path.read_text(), "New fleet rules.\n")
+        self.assertEqual(kept.read_text(), "Keep my notes.\n")
 
     def test_a_changed_template_file_wins_and_the_rest_stays_the_bots(self):
         (self.path / "playbooks" / "fleet.md").write_text("Improved by the bot.\n")

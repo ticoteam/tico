@@ -353,6 +353,7 @@ impl Repositories {
     fn path(&self, name: &str) -> Result<PathBuf, Fail> {
         let full = self.rows.lock().unwrap().get(name).map(|r| text_of(&r["full_name"])).filter(|n| !n.is_empty()).unwrap_or_else(|| name.into());
         let path = self.root.join(base_folder(&full));
+        crate::repo_safety::outside_installation(&path).map_err(msg)?;
         let parent_ok = path.parent().and_then(|p| p.canonicalize().ok()) == self.root.canonicalize().ok();
         if is_symlink(&self.root) || is_symlink(&path) || (self.root.exists() && !parent_ok) {
             return Err(msg("Repository folder points outside repos; left as it is"));
@@ -1055,6 +1056,7 @@ pub async fn worktree_base(workspace: &Path, repo: &mut Map<String, Value>, env:
     }
     let root = workspace.join("repos");
     let path = root.join(base_folder(&name));
+    crate::repo_safety::outside_installation(&path)?;
     if is_symlink(&root) {
         return Err("Base clone points outside repos".into());
     }

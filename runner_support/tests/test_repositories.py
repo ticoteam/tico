@@ -7,6 +7,19 @@ from unittest import mock
 import pytest
 
 
+def test_a_workspace_ancestor_cannot_put_a_base_clone_inside_the_install(tmp_path, monkeypatch):
+    from clients import repo_safety
+    from runner_support import repositories
+    install = tmp_path / 'install'
+    install.mkdir()
+    workspace = tmp_path / 'workspace'
+    workspace.symlink_to(install, target_is_directory=True)
+    monkeypatch.setattr(repo_safety, 'ROOT', install)
+    with pytest.raises(ValueError, match='inside the Tico install'):
+        repositories.worktree_base(workspace, {'full_name': 'acme/product'}, {})
+    assert list(install.iterdir()) == []
+
+
 def test_isolated_state_exposes_only_mirrors(tmp_path, monkeypatch):
     import os
     from runner_support.state import State

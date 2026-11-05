@@ -6,6 +6,10 @@ Run now are part of Maintenance; the separate Health scan system routine is remo
 
 Settings > Health lists what it found.
 
+For a runner update blocked by changed files, Health and BotOps say when only flattened Tico links remain.
+The runner checks their bytes and targets: these links are repaired on the next update, with no decision about
+local work. Other changes still need a commit or stash. See [Updates](updates.md#a-mac-or-linux-checkout).
+
 Settings > Health also lists checks that belong to one feature, documented on that feature's page: public roadmap
 suggestions with no receiving bot are in [Public roadmaps](roadmaps.md), and the Tico AI Gateway key (near or at its
 monthly cap, not recognised, or not ready) is in [Tico AI Gateway](ai-gateway.md#what-the-card-says).

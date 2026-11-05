@@ -18,6 +18,8 @@ import sys
 import time
 from pathlib import Path
 
+from . import checkout_links
+
 ROOT = Path(__file__).resolve().parents[1]
 SEMVER = re.compile(r"^(\d+)\.(\d+)\.(\d+)(?:-([0-9A-Za-z.-]+))?$")
 STATUS_FILE = "update-status.json"
@@ -317,17 +319,18 @@ def apply(root, version, directory, *, run=subprocess.run, lock_wait=LOCK_WAIT_S
                     said = True
                 time.sleep(1)
         try:
-            result = update(root, version, directory, run=run, clock=clock, **kw)
+            result = update(root, version, directory, run=run, clock=clock, repair_links=True, **kw)
         finally:
             fcntl.flock(handle, fcntl.LOCK_UN)
     if said and result["state"] == "waiting":     # not left saying "updating" while nothing is under way
-        write_status(directory, state="waiting", target=target, error="", at=clock())
+        write_status(directory, state="waiting", target=target, error="", at=clock(),
+                     **({"note": result["note"]} if result.get("note") else {}))
     return result
 
 
 def update(root, version, directory, *, run=subprocess.run, install=pip_install, prepare=prepare_binary,
            restart=None, healthy=None, busy=None, clock=time.time, helpers=None, started="", listed=None,
-           which=shutil.which):
+           which=shutil.which, repair_links=False):
     """Move the checkout to release `version`, get its Rust runner ready (`prepare`), and bring the runner back on
     it; undo that if either fails or the runner does not come back. Once it is healthy, `helpers` restarts the helper jobs so they run the new code too (a rollback
     needs nothing: a helper that saw the new revision exits again when the old one returns).
@@ -337,6 +340,7 @@ def update(root, version, directory, *, run=subprocess.run, install=pip_install,
     Returns the status written: healthy, waiting, blocked, failed or rolled_back."""
     tag = "v" + version.lstrip("v")
     version = tag[1:]
+    repair_note = ""
 
     def say(state, error="", **extra):
         # A blocked checkout's message holds file names, which may look like a disk error (test_enospc.py).
@@ -347,8 +351,9 @@ def update(root, version, directory, *, run=subprocess.run, install=pip_install,
                 disk["disk_free"] = shutil.disk_usage(directory).free
             except OSError:
                 pass
-        write_status(directory, state=state, target=version, error=error[:300], at=clock(), **disk, **extra)
-        return {"state": state, "target": version, "error": error}
+        notes = {"note": repair_note} if repair_note else {}
+        write_status(directory, state=state, target=version, error=error[:300], at=clock(), **notes, **disk, **extra)
+        return {"state": state, "target": version, "error": error, **notes}
 
     def g(*args, timeout=60):
         return git(root, *args, run=run, timeout=timeout)
@@ -360,10 +365,22 @@ def update(root, version, directory, *, run=subprocess.run, install=pip_install,
     if branch not in ("main", "HEAD"):        # HEAD: detached, which is where a release update leaves it
         return say("blocked", f"the checkout is on branch {branch}; switch it to main to follow releases")
     dirty = [line for line in g("status", "--porcelain", "--untracked-files=no").stdout.splitlines() if line]
+    flattened = []
+    if dirty:
+        found = checkout_links.restore(root, run) if repair_links else checkout_links.inspect(root, run)
+        flattened = found["flattened"]
+        repair_note = checkout_links.note(found)
+        if repair_note:
+            print(f"Tico update: {repair_note}: {', '.join(found['restored'])}", flush=True)
+            say("updating")
+            dirty = [line for line in g("status", "--porcelain", "--untracked-files=no").stdout.splitlines() if line]
     if dirty:
         # "XY path" lines: the status letters and the space come off; a rename keeps its "old -> new" as it is.
-        named = ", ".join(line[3:] for line in dirty[:3])
+        named = ", ".join(line[3:] + (" (flattened link)" if line[3:] in flattened else "") for line in dirty[:3])
         more = f", and {len(dirty) - 3} more" if len(dirty) > 3 else ""
+        omitted = [name for name in flattened if name not in {line[3:] for line in dirty[:3]}]
+        if omitted:
+            more += "; flattened links: " + ", ".join(omitted[:3])
         # The names go last: say() cuts the error at 300 characters, and the instruction must survive that.
         return say("blocked", f"the checkout has {len(dirty)} changed file{'s' if len(dirty) != 1 else ''}; "
                               f"commit or stash them and the runner updates itself: {named}{more}")
@@ -375,7 +392,7 @@ def update(root, version, directory, *, run=subprocess.run, install=pip_install,
     if not target:
         return say("failed", f"release {tag} does not name a commit")
     if busy and busy():
-        return {"state": "waiting", "target": version, "error": ""}
+        return say("waiting")
     if target == old and started in ("", target):
         return say("healthy")
     if target != old:

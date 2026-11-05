@@ -20,6 +20,7 @@ import weakref
 
 from clients.tico import APIError
 from clients import git_repository
+from clients.repo_safety import outside_installation
 from . import git_credentials, isolation, repositories, safe_git
 
 
@@ -32,6 +33,7 @@ def safe_path(workspace, relative):
     if raw.is_absolute() or '..' in raw.parts or not raw.parts or path.is_symlink():
         raise ValueError('Use a worktree inside the team workspace')
     resolved = path.resolve()
+    outside_installation(resolved)
     if resolved != path:
         raise ValueError("Worktree path must not contain symlinks")
     try:

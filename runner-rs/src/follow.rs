@@ -140,16 +140,61 @@ async fn runner_code_changed(root: &Path, old: &str, new: &str) -> bool {
     }
 }
 
+/// Share the byte-for-byte link check with the release updater. A missing helper never permits a repair.
+async fn checkout_links(root: &Path) -> Value {
+    let mut cmd = tokio::process::Command::new(crate::env::python());
+    cmd.args(["-m", "runner_support.checkout_links", "--root"]).arg(root).current_dir(crate::env::root())
+        .stdin(Stdio::null()).stdout(Stdio::piped()).stderr(Stdio::null()).kill_on_drop(true);
+    match tokio::time::timeout(Duration::from_secs(60), cmd.output()).await {
+        Ok(Ok(out)) if out.status.success() => serde_json::from_slice(&out.stdout).unwrap_or(Value::Null),
+        _ => Value::Null,
+    }
+}
+
+fn flattened_note(found: &Value) -> String {
+    let names: Vec<_> = found["flattened"].as_array().into_iter().flatten().filter_map(Value::as_str).collect();
+    if found["only_flattened"] == true {
+        format!("only flattened Tico links: {}; repaired automatically on the next update", names.join(", "))
+    } else if !names.is_empty() {
+        format!("flattened links: {}", names.join(", "))
+    } else {
+        String::new()
+    }
+}
+
 /// Fast-forward the checkout to origin/main when that is safe (service.py self_update): (restart, note), restart
 /// when HEAD is now newer than what this process runs, the note saying why nothing was done.
 async fn self_update(root: &Path, running: &str) -> (bool, String) {
     let out = |r: Option<(i32, String)>| r.map(|(_, o)| o).unwrap_or_default();
+    let common = out(git_in(root, &["rev-parse", "--git-common-dir"], 30).await);
+    if common.is_empty() {
+        return (false, "cannot find the checkout update lock".into());
+    }
+    let _lock = match crate::lock::acquire(&root.join(common).join("tico-update.lock")) {
+        Ok(lock) => lock,
+        Err(_) => return (false, "waiting for the checkout update lock".into()),
+    };
     let branch = out(git_in(root, &["rev-parse", "--abbrev-ref", "HEAD"], 30).await);
     if branch != "main" {
         return (false, format!("checkout is on {}, not main", if branch.is_empty() { "an unknown branch" } else { &branch }));
     }
+    let mut repair_note = String::new();
     if !out(git_in(root, &["status", "--porcelain", "--untracked-files=no"], 30).await).is_empty() {
-        return (false, "checkout has uncommitted changes".into());
+        let found = checkout_links(root).await;
+        if found["only_flattened"] == true {
+            let paths: Vec<_> = found["flattened"].as_array().into_iter().flatten().filter_map(Value::as_str)
+                .map(|p| format!(":(literal){p}")).collect();
+            let mut args = vec!["-c", "core.symlinks=true", "checkout", "--quiet", "HEAD", "--"];
+            args.extend(paths.iter().map(String::as_str));
+            if !paths.is_empty() && git_in(root, &args, 30).await.is_some_and(|(c, _)| c == 0) {
+                repair_note = format!("restored {} flattened links", paths.len());
+                log(&format!("Tico update: {repair_note}"));
+            }
+        }
+        if !out(git_in(root, &["status", "--porcelain", "--untracked-files=no"], 30).await).is_empty() {
+            let note = flattened_note(&found);
+            return (false, format!("checkout has uncommitted changes{}", if note.is_empty() { note } else { format!("; {note}") }));
+        }
     }
     let old = out(git_in(root, &["rev-parse", "HEAD"], 30).await);
     if git_in(root, &["fetch", "--quiet", "origin", "main"], 60).await.is_none_or(|(c, _)| c != 0) {
@@ -166,7 +211,7 @@ async fn self_update(root: &Path, running: &str) -> (bool, String) {
     if head != old {
         log(&format!("Tico runner: updated its checkout {}..{}; restarting when no turn is running", &old[..old.len().min(7)], &head[..head.len().min(7)]));
     }
-    (!running.is_empty() && !head.is_empty() && head != running, String::new())
+    (!running.is_empty() && !head.is_empty() && head != running, repair_note)
 }
 
 fn checkout_commit(root: &Path) -> String {
@@ -537,8 +582,18 @@ impl Follower {
                 Some(("failed".into(), error.into()))
             }
             s @ ("failed" | "rolled_back" | "blocked") if age < RETRY_AFTER_S => {
-                let error = text_of(&status["error"]);
-                (!self.space_freed(&status, &error)).then(|| (s.into(), disk_error_message(&error)))
+                let mut error = text_of(&status["error"]);
+                if s == "blocked" && error.starts_with("the checkout has ") {
+                    let found = checkout_links(&self.root).await;
+                    let note = flattened_note(&found);
+                    if found["only_flattened"] == true {
+                        error = note;
+                    } else if !note.is_empty() && !error.contains("flattened link") {
+                        error = format!("{error}; {note}");
+                    }
+                }
+                // Checkout file names are not disk errors.
+                (!self.space_freed(&status, &error)).then(|| (s.into(), if s == "blocked" { error } else { disk_error_message(&error) }))
             }
             _ => None,
         }
@@ -871,6 +926,9 @@ impl Follower {
             return Moved::Not(self.inner.lock().unwrap().update_note.clone());
         }
         let (restart, note) = self_update(&self.root, running).await;
+        if note.starts_with("restored ") {
+            write_status(&self.directory, json!({"state": "healthy", "target": "main", "error": "", "note": note, "at": epoch_s()}));
+        }
         let head = if restart { checkout_commit(&self.root) } else { String::new() };
         if !restart || head.is_empty() {
             return Moved::Not(note);
@@ -1315,6 +1373,8 @@ mod tests {
         };
         std::fs::create_dir_all(origin.join("runner_support")).unwrap();
         std::fs::write(origin.join("runner_support/a.py"), "1").unwrap();
+        std::fs::write(origin.join("CLAUDE.md"), "# Rules\n").unwrap();
+        std::os::unix::fs::symlink("CLAUDE.md", origin.join("AGENTS.md")).unwrap();
         sh(&origin, &["init", "-q"]);
         sh(&origin, &["add", "."]);
         sh(&origin, &["commit", "-qm", "one"]);
@@ -1324,11 +1384,37 @@ mod tests {
         assert_eq!((stands["ahead"].as_u64(), stands["behind"].as_u64()), (Some(0), Some(0)));
         assert!(stands["checked_at"].as_str().unwrap().ends_with('Z'));
 
+        // The same check serves release Health and the main follower, including core.symlinks=false clones.
+        for symlinks in ["true", "false"] {
+            sh(&here, &["config", "core.symlinks", symlinks]);
+            std::fs::remove_file(here.join("AGENTS.md")).unwrap();
+            std::fs::write(here.join("AGENTS.md"), "# Rules\n").unwrap();
+            let found = checkout_links(&here).await;
+            assert_eq!(found["only_flattened"], true);
+            assert!(flattened_note(&found).contains("repaired automatically on the next update"));
+            let (restart, note) = self_update(&here, &first).await;
+            assert!(!restart);
+            assert_eq!(note, "restored 1 flattened links");
+            assert!(here.join("AGENTS.md").is_symlink());
+        }
+
+        std::fs::remove_file(here.join("AGENTS.md")).unwrap();
+        std::fs::write(here.join("AGENTS.md"), "# Rules\n").unwrap();
+        std::fs::write(here.join("CLAUDE.md"), "local work\n").unwrap();
+        assert_ne!(checkout_links(&here).await["only_flattened"], true);
+        assert_eq!(self_update(&here, &first).await.1, "checkout has uncommitted changes");
+        assert!(!here.join("AGENTS.md").is_symlink());
+        sh(&here, &["-c", "core.symlinks=true", "checkout", "HEAD", "--", "CLAUDE.md", "AGENTS.md"]);
+
+        // A matching copy is repaired before the follower fast-forwards to the next commit.
+        std::fs::remove_file(here.join("AGENTS.md")).unwrap();
+        std::fs::write(here.join("AGENTS.md"), "# Rules\n").unwrap();
+
         std::fs::write(origin.join("README.md"), "docs").unwrap();
         sh(&origin, &["add", "."]);
         sh(&origin, &["commit", "-qm", "docs"]);
         assert_eq!(checkout_status(&here, &first).await.unwrap()["behind"], 1);
-        assert_eq!(self_update(&here, &first).await, (true, String::new()));
+        assert_eq!(self_update(&here, &first).await, (true, "restored 1 flattened links".into()));
         let head = checkout_commit(&here);
         assert!(!runner_code_changed(&here, &first, &head).await);
         std::fs::write(origin.join("runner_support/a.py"), "2").unwrap();

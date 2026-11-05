@@ -201,10 +201,23 @@ An unknown stop policy also refuses that fallback.
 Linger is checked at install time; if it is off the command prints `loginctl enable-linger $USER`, because without it the jobs stop when the last session
 logs out and do not start at boot. `scripts/tico status`, `restart`, `logs` and `uninstall` work the same as on a Mac.
 
-A checkout with uncommitted changes, or on a branch other than `main`, is **refused, never touched**: nothing is
-stashed, reset or discarded. Settings > Health and Computers show "the checkout has 2 changed files" until someone commits or
-stashes them. The update process logs to `state-<runner id>/update.log`; the outcome is in `update-status.json` next
-to it. `scripts/tico update` still works by hand and still follows `main`.
+A checkout with uncommitted changes, or on a branch other than `main`, refuses the update. Settings > Health and
+Computers show "the checkout has 2 changed files" until someone commits or stashes them.
+
+There is one repair for Tico's own links: if every tracked change is a link from HEAD replaced by a regular file
+with exactly its target's HEAD bytes, the updater restores those links under `tico-update.lock` and continues.
+The target must still be unchanged, and nothing may be staged. A different file, different bytes, changed target,
+or any staged change blocks the whole repair. The blocked message marks any matching flattened links by name.
+Health and BotOps say when only flattened Tico links remain: they are repaired on the next update and need no
+decision about local work. The same check applies on Mac and Linux, including `core.symlinks=false`; the repair
+uses real links without changing that Git setting.
+
+The update process logs to `state-<runner id>/update.log`; the outcome is in `update-status.json` next to it.
+A repair records "restored N flattened links" in both. No other local work is stashed, reset or discarded.
+Bot repositories and shared or named checkouts must resolve outside the active Tico install, including through
+linked parents. Template refresh also refuses file or folder links that lead outside the bot's repo; it writes
+through a new file and rename in a checked folder.
+`scripts/tico update` still works by hand and still follows `main`.
 
 A launch failure waits six hours before another attempt at the same release. A newly installed runner retries a
 launch failure from an older runner build at once; if that attempt fails, the six-hour wait applies again. A dead
