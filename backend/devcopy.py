@@ -37,6 +37,8 @@ from .hubdb import now, shift
 
 # Emptied, never pruned: one surviving row is one thing the copy could do.
 EMPTY = (
+    # Provider jobs and send grants never become actionable in a rehearsal copy.
+    "letter_proofs", "letters", "letter_outbox_grants",
     # Maintenance's working state: its listings, its handoffs, and the Idempotency-Key receipts of its runs
     "maintenance_listings", "maintenance_handoffs", "maintenance_requests",
     # queued work
@@ -128,6 +130,7 @@ HISTORY = {"attempts": "created_at", "jobs": "created_at", "messages": "created_
            "maintenance_run_steps": "started_at", "maintenance_runs": "started_at"}
 # Kept whole, except rows whose parent went (a pruned attempt's events). Tokens on runners are replaced.
 KEEP = frozenset((
+    "letter_outboxes", "letter_bot_settings",
     "maintenance_steps",   # each step's switch, "How often" and cursor: a copy keeps the team's settings
     "agents", "approvals", "archives", "assistant_actions", "attempt_conversations", "attempt_events", "attempt_load_snapshots",
     "attempt_inputs", "backup_verified_blobs", "batches", "blob_locations", "blob_media", "blobs",

@@ -208,14 +208,14 @@ def _letters_out(b):
     def keep(c):
         ident, now = H.new_id(), H.now()
         blob = blobs.register(c, owner, digest, len(proof), "letter-proof.pdf", "application/pdf")
-        c.execute("UPDATE letter_outboxes SET return_address=?,availability='ready',checked_at=? WHERE id='company'",
-                  (letters.dump(address), now))
+        c.execute("UPDATE letter_outboxes SET return_address=?,availability='ready',checked_at=?,created_at=?,updated_at=? WHERE id='company'",
+                  (letters.dump(address), now, now, now))
         c.execute("INSERT INTO letters(id,outbox_id,requested_by,recipient,recipient_hash,return_address,mail_class,"
             "color,duplex,source_blob_id,proof_blob_id,page_count,quote_id,quote_expires_at,approval_hash,total_micros,"
             "hq_letter_id,status,submitted_at,created_at,updated_at) VALUES(?,'company',?,?,?,?,'first_class',0,0,?,?,1,"
-            "'lq_demo','2099-01-01T00:00:00Z',?,1500000,'lt_demo','mailed',?,?,?)",
+            "'lq_demo',?,?,1500000,'lt_demo','mailed',?,?,?)",
             (ident, owner.actor, letters.dump(recipient), hashlib.sha256(letters.dump(recipient).encode()).hexdigest(),
-             letters.dump(address), blob["id"], blob["id"], digest, now, now, now))
+             letters.dump(address), blob["id"], blob["id"], now, digest, now, now, now))
         c.execute("INSERT INTO letter_proofs VALUES(?,?,?,?)", (ident, blob["id"], digest, now))
     b.write(keep)
 
