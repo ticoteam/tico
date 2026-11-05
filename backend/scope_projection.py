@@ -14,7 +14,8 @@ REF_FIELDS = frozenset({"file", "file_id", "page", "page_id", "blob_id", "meetin
                         "task", "task_id", "message", "message_id", "comment", "comment_id",
                         "digest", "source_digest", "sha256", "content_sha256", "body_sha256",
                         "ref", "item", "url", "file_url", "href", "src", "path"})
-SOURCE_LISTS = frozenset({"files", "attachments", "pages", "page_files", "meetings", "reviewed", "citations", "body_sources", "sources"})
+SOURCE_LISTS = frozenset({"files", "attachments", "pages", "page_files", "meetings", "reviewed", "citations",
+                          *H.SOURCED_TEXT_SOURCES})
 SOURCE_ID = re.compile(r"(?:file-[0-9a-f]{24}|[0-9a-f]{64}|[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}|"
                        r"(?:file|page|task|message|meeting):[A-Za-z0-9_-]+)(?:@[0-9]+)?")
 
@@ -302,25 +303,9 @@ def project(c, scoped, payload, *, auth=None):
                             labels = labels if isinstance(labels, dict) else {}
                             out[key][qid] = [label for label in picks if not (
                                 has_denied(labels.get(label)) or label not in labels and label in legacy_titles)]
-            # Generated prose is removed only on its stored provenance or a rejected legacy answer label.
+            H.clear_sourced_text(value, out, has_denied, hidden=bool(direct_denied))
             refs = value.get('refs') if isinstance(value.get('refs'), dict) else {}
             shown_refs = out.get('refs') if isinstance(out.get('refs'), dict) else {}
-            answer = refs.get('answer') if isinstance(refs.get('answer'), dict) else {}
-            shown_answer = shown_refs.get('answer') if isinstance(shown_refs.get('answer'), dict) else {}
-            hidden_body = (bool(direct_denied) or any(has_denied(container.get(key)) for container in (value, refs)
-                               for key in ('body_sources', 'sources')) or has_denied(answer.get('target')) or
-                           answer.get('answers') != shown_answer.get('answers') or
-                           answer.get('not') != shown_answer.get('not'))
-            if hidden_body:
-                for container in (out, out.get('answer'), shown_answer):
-                    if isinstance(container, dict):
-                        for key in H.SOURCED_TEXT_FIELDS:
-                            if key in container:
-                                container[key] = ''
-                # Generated asks keep their wording in both the message body and the structured question.
-                for container in (out.get('refs'), out.get('ask')):
-                    if isinstance(container, dict) and isinstance(container.get('questions'), list):
-                        container['questions'] = [{**q, 'question': ''} for q in container['questions']]
             if 'refs_json' in value:
                 # Keep the original bytes when the named wire copy does not change.
                 if shown_refs == refs:
