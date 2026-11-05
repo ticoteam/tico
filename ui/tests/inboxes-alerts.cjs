@@ -50,7 +50,7 @@ const {unrouted} = require('./support/routes.cjs');
       if (path.endsWith('/watch')) return route.fulfill({contentType: 'text/event-stream', body: ': fixture\n\n'});
       return json(unrouted(path));
     });
-    await page.goto('https://tico-ui.test/#/help');
+    await page.goto('https://tico-ui.test/#/settings/company-inbox');
     await page.waitForFunction(() => typeof inboxesAlerts === 'function' && S.me?.id);
     const draw = admin => page.evaluate(async admin => {
       let host = document.querySelector('#alerts-test-host');
