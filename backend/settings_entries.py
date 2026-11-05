@@ -46,15 +46,13 @@ _RULE_NAMES = {
     "bot_reports_direct": ("Bots send reports to the Tico team without asking", "confirm", ""),
     "stale_review": ("Review stale tasks", "direct", ""),
     "topic_fresh": ("Keep topics fresh", "direct", ""),
-    "stall_triage": ("Stalled task check", "direct", ""),
     "org_rule_checks": ("Check bot outputs against rules", "direct", ""),
 }
 _RULE_WHERE = {"health_monitor_reports": ("Settings > Health > Health monitor", _card("health")),
                "bot_reports_direct": (GENERAL + " > Team", _card("general", "settings-team")),
                "stale_review": (RULES + " > What Tico runs on its own", _card("system", "set-system-card")),
-               "topic_fresh": (RULES + " > What Tico runs on its own", _card("system", "set-system-card")),
-               "stall_triage": (RULES + " > What Tico runs on its own", _card("system", "set-system-card"))}
-_ADMIN_RULES = ("stale_review", "topic_fresh", "stall_triage", "org_rule_checks")
+               "topic_fresh": (RULES + " > What Tico runs on its own", _card("system", "set-system-card"))}
+_ADMIN_RULES = ("stale_review", "topic_fresh", "org_rule_checks")
 
 TEAM_RULES = [
     S("team.rules." + key, name, _RULE_WHERE.get(key, (PEOPLE + " > Team rules",))[0],
@@ -152,6 +150,8 @@ ENTRIES = TEAM_RULES + [
       "enabled", card=_card("devices")),
     S("computer.member_bots", "Takes member bots", COMPUTERS, "admin", "confirm", "POST",
       "computers/{computer}/member-bots", "accepts", card=_card("devices")),
+    S("computer.label", "Rename a computer", COMPUTERS, "admin", "direct", "POST", "computers/{computer}/label", "label", "text",
+      card=_card("devices"), words="name computer"),
     S("computer.turns_at_once", "Turns at once", COMPUTERS, "admin", "direct", "POST",
       "computers/{computer}/turns-at-once", value="json", card=_card("devices")),
     S("computer.browser_exit", "Share internet with bots", COMPUTERS, "operator", "person", "POST",
@@ -366,12 +366,14 @@ ENTRIES = TEAM_RULES + [
       value="json", card="#/usage", read="usage/limits#default", words="usd dollars spend " + _USD),
     S("pool.limit.usd", "Pool spend limit", "Usage > Pools", "admin", "confirm", "PUT", "usage/pools/{id}",
       value="json", card="#/usage", words="usd dollars spend group " + _USD),
+    S("team.queue.purge", "Clear automatic queue", "Usage > Clear automatic queue", "admin", "confirm", "POST",
+      "usage/queues/purge", value="json", card="#/usage",
+      words="queue purge clear automatic wakes waits backlog"),
 ]
 
 # Confirm entries whose route BotOps can't yet put on a Confirm card (backend/assistant.py valid_operation): a person
-# changes them in Settings until it can, rather than BotOps changing them at once. None now: each has a card, or is a
-# person's because it shows a secret once (the wake URL, a new outgoing webhook).
-NO_CARD_YET = ()
+# changes them in Settings until it can, rather than BotOps changing them at once.
+NO_CARD_YET = ("team.queue.purge",)
 _NO_CARD_WHY = " needs a person's yes, and BotOps can't ask for it on a Confirm card yet"
 ENTRIES = [(replace(e, when_held="person", why=e.name + " that sends outside" + _NO_CARD_WHY) if e.confirm_when else
             replace(e, kind="person", why=e.name + _NO_CARD_WHY)) if e.key in NO_CARD_YET else e for e in ENTRIES]

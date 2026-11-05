@@ -34,6 +34,14 @@ pub struct Org {
     pub email: String,
     #[serde(default)]
     pub added_at: String,
+    /// Added through Tico sign-in and not opened yet: its first page is the hub's own sign-in (`/auth/login`), which
+    /// the session copied into its store carries straight through. Cleared once that page opens.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub sign_in: bool,
+    /// Where its page last was in the web app (the hub's address and a route, `windows::place_of`), so its next page,
+    /// after this run too, opens there. None opens it on its usual first page.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub last_url: Option<String>,
 }
 
 impl Org {
@@ -75,12 +83,12 @@ impl Default for Document {
 impl Document {
     /// A list of one org for `hub`, on WebKit's default store.
     pub fn with_one(hub: &Url) -> Document {
-        let org = new_org(hub, None, &HashSet::new());
+        let org = new_org(hub, None, false, &HashSet::new());
         Document { version: VERSION, active: Some(org.id.clone()), orgs: vec![org] }
     }
 }
 
-fn new_org(hub: &Url, store: Option<Uuid>, taken: &HashSet<String>) -> Org {
+fn new_org(hub: &Url, store: Option<Uuid>, sign_in: bool, taken: &HashSet<String>) -> Org {
     Org {
         id: new_id(taken),
         url: hub.to_string(),
@@ -88,6 +96,8 @@ fn new_org(hub: &Url, store: Option<Uuid>, taken: &HashSet<String>) -> Org {
         name: String::new(),
         email: String::new(),
         added_at: now(),
+        sign_in,
+        last_url: None,
     }
 }
 
@@ -244,26 +254,26 @@ impl Orgs {
     /// Adds an org for `hub`, on a store of its own, and makes it the open one. Nothing changes if the file cannot
     /// be written, so the caller can show the error. Only a list that is kept can add.
     pub fn add(&mut self, hub: &Url) -> Result<Org, String> {
-        match self.add_all(&[(hub.clone(), Uuid::new_v4())])?.pop() {
+        match self.add_all(&[(hub.clone(), Uuid::new_v4(), false)])?.pop() {
             Some(org) => Ok(org),
             None => self.find_hub(hub).cloned().ok_or_else(|| SAVE_FAILED.to_string()),
         }
     }
 
-    /// Adds an org for each `(server, store)`, on the store given (Tico sign-in puts the session in it first), in one
-    /// write, and makes the first one added the open one. A server whose origin is already an org (or earlier in
+    /// Adds an org for each `(server, store, sign_in)`, on the store given (Tico sign-in puts the session in it first),
+    /// in one write, and makes the first one added the open one. A server whose origin is already an org (or earlier in
     /// `hubs`) is left out. Returns the orgs added; nothing changes if none is, or if the file cannot be written.
-    pub fn add_all(&mut self, hubs: &[(Url, Uuid)]) -> Result<Vec<Org>, String> {
+    pub fn add_all(&mut self, hubs: &[(Url, Uuid, bool)]) -> Result<Vec<Org>, String> {
         if !self.is_multi() {
             return Err(SAVE_FAILED.to_string());
         }
         let (mut next, mut issued, mut added) = (self.doc.clone(), self.issued.clone(), Vec::new());
         let mut origins: HashSet<String> = self.doc.orgs.iter().filter_map(Org::hub).map(|hub| hub.origin().ascii_serialization()).collect();
-        for (hub, store) in hubs {
+        for (hub, store, sign_in) in hubs {
             if !origins.insert(hub.origin().ascii_serialization()) {
                 continue;
             }
-            let org = new_org(hub, Some(*store), &issued);
+            let org = new_org(hub, Some(*store), *sign_in, &issued);
             issued.insert(org.id.clone());
             next.orgs.push(org.clone());
             added.push(org);
@@ -282,6 +292,32 @@ impl Orgs {
             return;
         }
         self.doc.active = Some(id.to_string());
+        let _ = self.write_to(&self.doc);
+    }
+
+    /// Whether the org's next page opens on the hub's sign-in, clearing it: only its first page after Tico sign-in
+    /// does. Cleared even if the file cannot be written, so it opens there at most once this run.
+    pub fn take_sign_in(&mut self, id: &str) -> bool {
+        let Some(org) = self.doc.orgs.iter_mut().find(|org| org.id == id && org.sign_in) else { return false };
+        org.sign_in = false;
+        let _ = self.write_to(&self.doc);
+        true
+    }
+
+    /// The org's next page opens on the hub's sign-in: Tico sign-in renewed its session.
+    pub fn mark_sign_in(&mut self, id: &str) {
+        let Some(org) = self.doc.orgs.iter_mut().find(|org| org.id == id && !org.sign_in) else { return };
+        org.sign_in = true;
+        let _ = self.write_to(&self.doc);
+    }
+
+    /// Keeps where the org's page last was in the web app (None: its usual first page). Written only when it changed.
+    pub fn set_last_url(&mut self, id: &str, place: Option<String>) {
+        let Some(org) = self.doc.orgs.iter_mut().find(|org| org.id == id) else { return };
+        if org.last_url == place {
+            return;
+        }
+        org.last_url = place;
         let _ = self.write_to(&self.doc);
     }
 
@@ -341,6 +377,8 @@ mod tests {
             name: format!("Org {id}"),
             email: format!("{id}@acme.example"),
             added_at: "2026-11-03T18:00:00Z".into(),
+            sign_in: false,
+            last_url: None,
         }
     }
 
@@ -370,6 +408,32 @@ mod tests {
         };
         let text = serde_json::to_string(&doc).unwrap();
         assert_eq!(parse(&text), Some(doc));
+    }
+
+    #[test]
+    fn an_orgs_last_place_is_saved_read_back_and_goes_with_the_org() {
+        let path = folder("last-place");
+        let doc = Document {
+            version: VERSION,
+            active: Some("o_aaaaaaaa".into()),
+            orgs: vec![sample("o_aaaaaaaa", "https://acme.example.com"), sample("o_bbbbbbbb", "https://tidy.example.com")],
+        };
+        let mut orgs = Orgs::new(doc, Some(path.clone()));
+        orgs.set_last_url("o_bbbbbbbb", Some("https://tidy.example.com/#/threads/t_1".into()));
+        let saved = std::fs::read_to_string(&path).unwrap();
+        let read = parse(&saved).unwrap();
+        assert_eq!(read.orgs[1].last_url.as_deref(), Some("https://tidy.example.com/#/threads/t_1"));
+        assert_eq!(read.orgs[0].last_url, None);
+        assert_eq!(saved.matches("last_url").count(), 1, "an org with no last place writes no field");
+        // A list written before the field existed still reads, with no last place.
+        let older = r#"{"version": 1, "active": "o_aaaaaaaa", "orgs": [{"id": "o_aaaaaaaa", "url": "https://acme.example.com/"}]}"#;
+        assert_eq!(parse(older).unwrap().orgs[0].last_url, None);
+        // Removing the org drops its last place with it.
+        orgs.remove("o_bbbbbbbb");
+        assert!(!std::fs::read_to_string(&path).unwrap().contains("tidy.example.com"));
+        orgs.set_last_url("o_bbbbbbbb", Some("https://tidy.example.com/#/x".into()));
+        assert!(orgs.get("o_bbbbbbbb").is_none(), "a removed org gets no place back");
+        let _ = std::fs::remove_dir_all(path.parent().unwrap());
     }
 
     #[test]
@@ -484,12 +548,37 @@ mod tests {
     }
 
     #[test]
+    fn a_tico_sign_in_org_opens_on_the_hub_sign_in_once_even_after_a_restart() {
+        let path = folder("sign-in-flag");
+        let mut orgs = Orgs::new(Document::default(), Some(path.clone()));
+        let by_address = orgs.add(&hub("https://kept.example.com")).unwrap();
+        assert!(!by_address.sign_in);
+        let added = orgs.add_all(&[(hub("https://acme.example.com"), Uuid::new_v4(), true)]).unwrap();
+        assert!(added[0].sign_in);
+        let text = std::fs::read_to_string(&path).unwrap();
+        assert_eq!(text.matches("\"sign_in\"").count(), 1, "only the flagged org writes it: {text}");
+        // A restart before the first open keeps the flag.
+        let mut reread = Orgs::new(parse(&text).unwrap(), Some(path.clone()));
+        assert!(!reread.take_sign_in(&by_address.id));
+        assert!(reread.take_sign_in(&added[0].id));
+        assert!(!reread.take_sign_in(&added[0].id), "only the first page");
+        assert!(!std::fs::read_to_string(&path).unwrap().contains("sign_in"));
+        // A renewed session flags an org already added, once more.
+        reread.mark_sign_in(&by_address.id);
+        assert!(std::fs::read_to_string(&path).unwrap().contains("sign_in"));
+        assert!(reread.take_sign_in(&by_address.id) && !reread.take_sign_in(&by_address.id));
+        // Files written before the flag existed read as not flagged.
+        assert!(!parse(r#"{"version":1,"orgs":[{"id":"o_0000000a","url":"https://acme.example.com/"}]}"#).unwrap().orgs[0].sign_in);
+        let _ = std::fs::remove_dir_all(path.parent().unwrap());
+    }
+
+    #[test]
     fn signed_in_picks_are_added_together_on_their_given_stores_and_the_first_opens() {
         let path = folder("add-all");
         let mut orgs = Orgs::new(Document::default(), Some(path.clone()));
         let kept = orgs.add(&hub("https://kept.example.com")).unwrap();
         let (a, b) = (Uuid::new_v4(), Uuid::new_v4());
-        let added = orgs.add_all(&[(hub("https://acme.example.com"), a), (hub("https://tidy.example.com"), b)]).unwrap();
+        let added = orgs.add_all(&[(hub("https://acme.example.com"), a, false), (hub("https://tidy.example.com"), b, false)]).unwrap();
         assert_eq!(added.iter().map(|org| org.store_id().unwrap()).collect::<Vec<_>>(), [a, b]);
         assert_ne!(added[0].id, added[1].id);
         assert!(added.iter().all(|org| org.id != kept.id));
@@ -500,12 +589,12 @@ mod tests {
         assert!(orgs.add_all(&[]).unwrap().is_empty());
         // A server that became an org meanwhile (added by address) is left out, and so is a repeat within the picks.
         let (c, d, e) = (Uuid::new_v4(), Uuid::new_v4(), Uuid::new_v4());
-        let late = orgs.add_all(&[(hub("https://acme.example.com/other/"), c), (hub("https://new.example.com"), d),
-                                  (hub("https://NEW.example.com/x/"), e)]).unwrap();
+        let late = orgs.add_all(&[(hub("https://acme.example.com/other/"), c, false), (hub("https://new.example.com"), d, false),
+                                  (hub("https://NEW.example.com/x/"), e, false)]).unwrap();
         assert_eq!(late.len(), 1);
         assert_eq!((late[0].store_id(), late[0].hub().unwrap().host_str()), (Some(d), Some("new.example.com")));
         assert_eq!(orgs.orgs().len(), 4);
-        assert!(orgs.add_all(&[(hub("https://tidy.example.com"), c)]).unwrap().is_empty(), "nothing new, nothing written");
+        assert!(orgs.add_all(&[(hub("https://tidy.example.com"), c, false)]).unwrap().is_empty(), "nothing new, nothing written");
         assert_eq!(orgs.active().map(|org| org.id.clone()), Some(late[0].id.clone()));
         assert_eq!(orgs.add(&hub("https://kept.example.com/")).unwrap().id, kept.id, "adding a known server gives that org");
         let _ = std::fs::remove_dir_all(path.parent().unwrap());

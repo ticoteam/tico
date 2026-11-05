@@ -22,10 +22,6 @@ def notices(c):
 
 
 def managers(c):
-    from backend.health_monitor import SLUG
-    c.execute("INSERT INTO bots(id,slug,display_name,state) VALUES(?,?,?,'active')", (SLUG, SLUG, 'Health'))
-    c.execute("INSERT INTO bot_config(bot,owner_id) VALUES(?,'ana')", (SLUG,))
-    BS.write(c, SLUG, {"runtime": "fake"})
     c.execute("UPDATE task_types SET manager='coo',role='engineering' WHERE id='general'")
 
 
@@ -37,9 +33,10 @@ def test_source_start_and_end_are_once_across_repeated_observations_and_restarts
             source_outages.observe(c, 'private-login-name', 'Claude subscription quota', waiting=count,
                                    until='2026-10-27T07:00:00.000000Z')
         rows = notices(c)
-        assert len(rows) == 2 and {r['recipient_id'] for r in rows} == {'bot:coo', 'bot:health-monitor'}
+        assert len(rows) == 1 and {r['recipient_id'] for r in rows} == {'bot:coo'}
         assert not any('private-login-name' in r['body'] or 'private-login-name' in r['refs'] for r in rows)
-        assert not c.execute("SELECT 1 FROM jobs WHERE message_id IN (?,?)", tuple(r['id'] for r in rows)).fetchone()
+        ids = [r['id'] for r in rows]
+        assert not c.execute(f"SELECT 1 FROM jobs WHERE message_id IN ({','.join('?' * len(ids))})", ids).fetchone()
         assert not c.execute("SELECT 1 FROM tasks").fetchone()
     # No process-local latch: a fresh transaction observes the saved episode.
     with api.app.state.store.transaction() as c:
@@ -47,10 +44,10 @@ def test_source_start_and_end_are_once_across_repeated_observations_and_restarts
                                until='2026-10-27T07:00:00.000000Z')
         source_outages.observe(c, 'private-login-name', 'Claude subscription quota', active=False)
         source_outages.observe(c, 'private-login-name', 'Claude subscription quota', active=False)
-        assert len(notices(c)) == 4
-        assert all('available again' in r['body'] for r in notices(c)[2:])
+        assert len(notices(c)) == 2
+        assert all('available again' in r['body'] for r in notices(c)[1:])
         source_outages.observe(c, 'another-login', 'Claude subscription quota', waiting=1)
-        assert len(notices(c)) == 6
+        assert len(notices(c)) == 3
 
 
 def test_a_six_hour_hold_does_not_lease_again_or_hold_another_subscription(api, monkeypatch):
@@ -84,7 +81,7 @@ def test_a_six_hour_hold_does_not_lease_again_or_hold_another_subscription(api, 
             assert c.execute('SELECT count(*) FROM attempts WHERE job_id=?', (first['job_id'],)).fetchone()[0] == 1
             assert not c.execute("SELECT 1 FROM jobs WHERE state='uncertain'").fetchone()
             assert not c.execute("SELECT 1 FROM bots WHERE state='quarantined'").fetchone()
-            assert not c.execute("SELECT 1 FROM tasks WHERE blocked_since IS NOT NULL").fetchone()
+            assert not c.execute("SELECT 1 FROM task_holds WHERE kind='blocked' AND released_at IS NULL").fetchone()
     at(monkeypatch, '2026-10-27T07:01:00.000000Z', api)
     ready(api, machine, ['ops', 'finance'])
     resumed = claim(api, machine)
@@ -92,7 +89,7 @@ def test_a_six_hour_hold_does_not_lease_again_or_hold_another_subscription(api, 
     done(api, machine, resumed)
     with api.app.state.store.transaction() as c:
         source_outages.sync(c, api.app.state.store.settings)
-        assert len(notices(c)) == 4
+        assert len(notices(c)) == 2                  # one start and one end notice, each to the engineering managers
         assert c.execute('SELECT count(*) FROM tasks').fetchone()[0] == 2
 
 
@@ -531,15 +528,15 @@ def test_github_retry_disappearing_never_claims_access_recovered(api, monkeypatc
     with api.app.state.store.transaction() as c:
         # The remembered move is gone: whether expired, canceled or closed, that proves no successful read.
         source_outages.sync(c, api.app.state.store.settings)
-        assert len(notices(c)) == 2
+        assert len(notices(c)) == 1                  # the start notice only: one to the engineering managers
         prs = [{'id': 'pr', 'repo': 'acme/project'}]
         source_outages.github_read(c, prs, {'pr': {'error': True, 'why': 'GitHub answered 403'}})
-        assert len(notices(c)) == 2
+        assert len(notices(c)) == 1
         source_outages.github_read(c, prs, {'pr': {'head_sha': 'a' * 40, 'checks': {}}})
         source_outages.github_read(c, prs, {'pr': {'head_sha': 'a' * 40, 'checks': {}}})
         source_outages.sync(c, api.app.state.store.settings)
-        assert len(notices(c)) == 4
-        assert all('available again' in row['body'] for row in notices(c)[2:])
+        assert len(notices(c)) == 2
+        assert all('available again' in row['body'] for row in notices(c)[1:])
 
 
 def test_a_pending_completion_batch_counts_past_its_bounded_identity_window(api):

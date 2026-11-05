@@ -15,7 +15,7 @@ What it makes:
 - the incoming trigger the webhook routine listens for; its secret is kept to post to the old address after the cutover
 - custom wake rules: two on Builder (Claude) (wake, note), one on Builder (OpenAI) (batch)
 - each bot's profile, as the release before's start set it (the Librarian's Custom rows join the wake rules)
-- a task rule; the system jobs' controls (Stale ticket review off and hourly; Still wanted? daily at 10:00)
+- a task rule; the system jobs' controls (Stale ticket review off and hourly)
 - two inboxes, Dana's and Priya's, each read by its own Inbox Manager bot (the roster's inbox_bot and mailbox)
 - listening destinations: market (the Librarian) and leads (the Engineering Lead)
 - hourly spend limits 3.00, 5.00 and 0.25; team turn budgets below the guard (120 an hour, 1,000 a day) and one bot
@@ -57,8 +57,7 @@ WAKE_RULES = {
 }
 TASK_RULE = {"name": "Close 48h after done", "department": "engineering",
              "triggers": [{"key": "done_untouched", "hours": 48}], "actions": ["close"], "preset": "hourly"}
-SYSTEM_JOBS = {"stale_review": {"on": False, "preset": "hourly"},           # PLAN §8: keeps Off + hourly
-               "still_wanted": {"on": True, "preset": "daily", "migrated_at": "10:00"}}   # a control a built-in keeps
+SYSTEM_JOBS = {"stale_review": {"on": False, "preset": "hourly"}}           # PLAN §8: keeps Off + hourly
 BUILTIN_JOBS = ("assigned_tasks", "assignment_recovery")   # "Start assigned tasks", "Recover unstarted assignments"
 # person -> (their Inbox Manager bot, the mailbox it reads)
 INBOXES = {DANA_ID: (INBOX_DANA, "dana@acme.example"), PRIYA_ID: (INBOX_PRIYA, "priya@acme.example")}

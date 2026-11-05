@@ -16,6 +16,7 @@
   "error": "ErrorEnvelope",
   "gated": {
     "x-note": "Request fields, values and endpoints a runner sends only after the server says it takes them (or drops on a 422 that names them). The check allows them in the new-runner/old-server direction. Key: '<endpoint>.request<path>' as the check prints it; value: how the runner gates it.",
+    "heartbeat.request.device_id": "runner-rs/src/lanes.rs refused_field drops it on an older server's 422 for ten minutes; computers without a device identity are never auto-retired",
     "heartbeat.request.capabilities[]=\"private_lanes_v1\"": "runner-rs lanes::refused_field drops it on the 422 that refuses it and sends it again ten minutes later",
     "heartbeat.request.capabilities[]=\"model_subscriptions_v1\"": "runner-rs/src/lanes.rs refused_field: an older server's 422 on capabilities drops the newest one for ten minutes",
     "heartbeat.request.capabilities[]=\"browser_exit_v1\"": "runner-rs/src/lanes.rs refused_field: an older server's 422 on capabilities drops the newest one for ten minutes",
@@ -104,6 +105,7 @@
         "computer_logins_v1": {"type": "boolean"},
         "onboarding": {"type": "string"},
         "mailboxes": {"type": "array", "items": {"type": "string"}},
+        "mailbox_levels": {"type": "object", "x-note": "Each of `mailboxes` with this bot's level on it, read or read_write (backend/mailbox_access.py levels_for). An older server omits it; a runner that ignores it mints full scope for `mailboxes` as before.", "additionalProperties": {"type": "string", "enum": ["read", "read_write"]}},
         "next_run": {"type": "array", "items": {"type": "object", "additionalProperties": true}},
         "notes": {"type": "array", "items": {"type": "object", "additionalProperties": true}},
         "deferred": {"type": "string", "x-note": "The prompt's block on what was deferred to this turn: its count line (\"Deferred since your last turn: 2 comments, 1 task\"), then the deferred comments and messages themselves, one a line, a bounded page; empty when nothing; an older server omits it."},

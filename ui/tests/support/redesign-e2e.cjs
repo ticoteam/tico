@@ -16,11 +16,6 @@ const launch = () => chromium.launch({headless: true,
 async function open(browser, hub, who, {phone = false, hash = '', time = null, timezone = ''} = {}) {
   const page = await pageAs(browser, hub, who, {phone, timezone});
   if (time) await page.clock.install({time});
-  // The simulated runner reports version "test", which the hub calls out of date: that card is the harness's, not
-  // the journey's, so it stays snoozed and the screenshots show the page.
-  await page.context().addInitScript(() => {
-    try { localStorage.setItem('tico.needsYou', JSON.stringify({snoozedUntil: Date.now() + 864e5})); } catch {}
-  });
   await page.reload();
   page.errors = [];
   page.on('pageerror', e => page.errors.push(e.message));

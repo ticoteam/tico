@@ -107,6 +107,13 @@ a.th-status-act:hover{text-decoration:none}
 .th-update:hover{text-decoration:none;border-color:var(--g4)}
 .th-update-k{color:var(--muted);font-size:var(--t-xs);font-weight:600;letter-spacing:var(--track-caps);text-transform:uppercase}
 
+/* a daily update request and the bot's turn that writes it: one quiet line, their messages under it while it is open */
+.th-upd{display:flex;align-items:center;gap:var(--s2);padding:4px 6px}
+.th-upd::before{content:"";width:18px;height:1px;background:var(--line)}
+.th-upd-btn{padding:2px 0;border:0;background:none;color:var(--muted);font:inherit;font-size:var(--t-sm);text-align:left;cursor:pointer}
+.th-upd-btn:hover{color:var(--ink)}
+.th-upd-btn:focus-visible{outline:var(--focus-ring);outline-offset:var(--focus-offset)}
+
 /* sending, held, failed */
 .th-pending .th-body{color:var(--muted)}
 .th-state{color:var(--muted);font-size:var(--t-xs)}
@@ -214,8 +221,10 @@ a.th-status-act:hover{text-decoration:none}
 
 /* Thread settings: one flat list, a label on the left and its control on the right, thin lines between */
 .ths-dialog.dash-dialog{width:min(520px,calc(100vw - 32px))}
-.ths-dialog>form{flex:1;min-height:0}
-.ths.dash-form{flex:1;min-height:0;gap:0;padding:4px 16px}
+/* Auto bases, as settings.css's model-login: in WebKit 26 (the macOS app, Safari 26) a 0 basis on the dialog's form left the
+   content-sized dialog 0px tall, so only the dimmed screen showed. The body grows the same way. */
+.ths-dialog>form{flex:1 1 auto;min-height:0}
+.ths.dash-form{flex:1 1 auto;min-height:0;gap:0;padding:4px 16px}
 .ths .ths-row{display:flex;flex-direction:row;align-items:center;gap:16px;min-height:52px;padding:10px 0;border:0;border-top:1px solid var(--line);color:var(--ink);font-size:var(--t-base)}
 .ths .ths-row:first-child{border-top:0}
 .ths .ths-row[hidden],.ths .tcn-host:not(:has(.tcn-sec:not([hidden]))){display:none}
@@ -246,9 +255,10 @@ button.ths-link:hover .ths-val{color:var(--ink)}
   /* no room beside the title and actions, so the audience takes a line of its own under them */
   .thv-titleline{flex-wrap:wrap}
   .thv-aud{order:1;flex:0 0 100%;font-size:var(--t-xs)}
-  .th-msg,.th-status,.th-fold{padding-left:4px;padding-right:4px}
-  /* a finger's room: the quote, the reactions, Stop and Fix, the × on a reply */
+  .th-msg,.th-status,.th-fold,.th-upd{padding-left:4px;padding-right:4px}
+  /* a finger's room: the quote, the reactions, Stop and Fix, the × on a reply, an update line */
   .th-quote{min-height:44px}
+  .th-upd-btn{min-height:44px;display:inline-flex;align-items:center}
   .th-react{height:36px;padding:0 10px}
   .th-status-act{min-height:44px;display:inline-flex;align-items:center}
   .thv-replying-x{width:44px;height:44px}

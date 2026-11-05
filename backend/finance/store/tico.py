@@ -240,8 +240,8 @@ def run_holds_settled(c: sqlite3.Connection, month: str, through: str, page: int
     last = ""
     while True:
         rows = c.execute(
-            "SELECT id, source_id FROM (SELECT h.id, h.source_id, coalesce((SELECT max(t.finished_at) FROM attempts a "
-            "JOIN turns t ON t.id = a.id WHERE a.job_id = substr(h.source_id, 5)), h.settled_at) AS finished_at "
+            "SELECT id, source_id FROM (SELECT h.id, h.source_id, coalesce((SELECT max(a.settled_at) FROM attempts a "
+            "WHERE a.job_id = substr(h.source_id, 5)), h.settled_at) AS finished_at "
             "FROM fin_holds h WHERE h.source='run' AND h.status='settled' AND h.entry_id IS NULL AND h.id>?) "
             "WHERE substr(finished_at, 1, 7)=? AND finished_at<=? ORDER BY id LIMIT ?", (last, month, through, page)).fetchall()
         out += [(str(r[0]), str(r[1])) for r in rows]
@@ -478,6 +478,8 @@ ORG_TRIGGERS = (
 
 
 def watch_org(c: sqlite3.Connection) -> None:
-    """Make the org-chart triggers that move the view version. Idempotent."""
+    """Make the org-chart triggers that move the view version, and the version's row: a trigger's UPDATE moves nothing
+    while the row is absent, and view_version reads an absent row as 0, so the row starts at 0. Idempotent."""
+    c.execute("INSERT OR IGNORE INTO fin_view_versions(id, version, reason, updated_at) VALUES(1, 0, '', ?)", (now(),))
     for name, when, why in ORG_TRIGGERS:
         c.execute(f"CREATE TRIGGER IF NOT EXISTS {name} {when} BEGIN {_BUMP.format(why=why)}; END")

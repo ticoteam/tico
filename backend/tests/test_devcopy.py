@@ -29,6 +29,12 @@ def source_db(tmp_path):
         c.execute("INSERT INTO runners(id,label,owner_id,token_hash,created_at) VALUES('r1','mac','morgan','rh',?)", (now,))
         c.execute("INSERT INTO enrollments(code_hash,owner_id,expires_at) VALUES('ch','morgan',?)", (now,))
         c.execute("INSERT INTO conversations(id) VALUES('cv')")
+        c.execute("INSERT INTO tasks(id,title,requester_id,owner_id,status) "
+                  "VALUES('linked-task','Review the plan','human:morgan','human:morgan','open')")
+        c.execute("INSERT INTO meetings(id,title,owner,metadata,created_at,updated_at) "
+                  "VALUES('linked-meeting','Plan review','morgan@acme.example','{}',?,?)", (now, now))
+        c.execute("INSERT INTO meeting_task_links VALUES('meeting-link','linked-meeting','linked-task',"
+                  "'linked','human:morgan',?)", (now,))
         for mid, at in (("old", OLD), ("new", now), ("ran", now), ("ran-long-ago", OLD)):
             c.execute("INSERT INTO messages(id,conversation_id,sender_id,recipient_id,kind,body,created_at) "
                       "VALUES(?,'cv','human:morgan','bot:sales','ask',?,?)", (mid, "Request " + mid, at))
@@ -42,6 +48,9 @@ def source_db(tmp_path):
             c.execute("INSERT INTO attempt_events(attempt_id,seq,kind,payload,created_at) VALUES(?,1,'text','{}',?)",
                       (aid, at))
             c.execute("INSERT INTO attempt_inputs(attempt_id,message_id) VALUES(?,?)", (aid, job))
+        # A run recorded with no lease (migration 0072): history, kept in the window, with no token to revoke.
+        c.execute("INSERT INTO attempts(id,bot_id,created_at,settled_at,trigger) VALUES('recorded','sales',?,?,'message')",
+                  (now, now))
         c.execute("INSERT INTO human_tokens(id,human,label,token_hash,created_at,created_by) VALUES('t1','morgan','cli','th',?,'morgan')", (now,))
         c.execute("INSERT INTO credentials(id,name,kind,created_at,updated_at,updated_by) VALUES('k1','gh','token',?,?,'morgan')",
                   (now, now))
@@ -72,13 +81,15 @@ def test_a_dev_copy_keeps_history_empties_what_acts_and_refuses_runners(tmp_path
             assert c.execute(f"SELECT count(*) FROM {table}").fetchone()[0] == 0, table
         assert c.execute("SELECT id FROM messages ORDER BY id").fetchall() == [("new",), ("ran",)]
         # The finished run stays, with its steps and inputs, and no way back in.
-        assert c.execute("SELECT id,token_hash,lease_until=finished_at FROM attempts").fetchall() == [
-            ("done", "devcopy-revoked:done", 1)]
+        assert c.execute("SELECT id,token_hash,lease_until=finished_at FROM attempts ORDER BY id").fetchall() == [
+            ("done", "devcopy-revoked:done", 1), ("recorded", None, None)]
         assert c.execute("SELECT id,state FROM jobs").fetchall() == [("ran", "completed")]
         assert c.execute("SELECT attempt_id FROM attempt_events").fetchall() == [("done",)]
         assert c.execute("SELECT attempt_id FROM attempt_inputs").fetchall() == [("done",)]
         assert c.execute("SELECT token_hash,revoked_at IS NOT NULL FROM runners").fetchall() == [("devcopy-revoked:r1", 1)]
         assert c.execute("PRAGMA foreign_key_check").fetchall() == []
+        assert c.execute("SELECT meeting_id,task_id FROM meeting_task_links").fetchall() == [
+            ('linked-meeting', 'linked-task')]
         assert c.execute("SELECT count(*) FROM sqlite_master WHERE name='message_links_insert'").fetchone()[0] == 1
     env = dict(line.split("=", 1) for line in (dest.parent / "server.env").read_text().splitlines()
                if "=" in line and not line.startswith("#"))
@@ -281,3 +292,36 @@ def test_a_copy_of_a_database_from_before_the_history_move_keeps_its_change_logs
             "task-1", None, None)
         assert c.execute("SELECT id FROM history_events WHERE subject_type='goal'").fetchall() == [("g1",)]
         assert not {"task_events", "goal_events"} & {r[0] for r in c.execute("SELECT name FROM sqlite_master")}
+
+
+def test_a_lease_less_run_is_kept_only_once_settled(tmp_path):
+    """A run with no job (a chat run, or a turn migration 0072 made into an attempts row) has no lease: it is open until
+    settled_at. A copy keeps the settled ones and removes the open ones, as it removes a job-backed attempt still running."""
+    source = source_db(tmp_path)
+    now = H.now()
+    with closing(sqlite3.connect(source)) as c:
+        c.execute("INSERT INTO attempts(id,bot_id,created_at,settled_at) VALUES('chat-done','sales',?,?)", (now, now))
+        c.execute("INSERT INTO attempts(id,bot_id,created_at) VALUES('chat-open','sales',?)", (now,))
+        c.commit()
+    dest = tmp_path / "copy" / "hub.sqlite"
+    removed, loose = devcopy.build(source, dest, days=30)
+    assert loose == []
+    with closing(sqlite3.connect(dest)) as c:
+        assert {row[0] for row in c.execute("SELECT id FROM attempts")} == {"done", "chat-done", "recorded"}
+    assert removed["attempts"] == 3                                    # the running job, the old one and chat-open
+
+
+def test_a_copy_keeps_no_turn_whose_attempt_the_cut_removed(tmp_path):
+    """A copy from before migration 0072 keeps turns whole. A turn whose attempts row the cut removed goes with it, so
+    migration 0072 does not bring the pruned run back as a lease-less one."""
+    source = source_db(tmp_path)
+    with closing(sqlite3.connect(source)) as c:
+        c.execute("CREATE TABLE turns (id TEXT PRIMARY KEY, bot TEXT, started_at TEXT)")
+        c.executemany("INSERT INTO turns VALUES(?,?,?)", [("done", "sales", H.now()), ("gone", "sales", OLD)])
+        c.commit()
+    dest = tmp_path / "copy" / "hub.sqlite"
+    removed, loose = devcopy.build(source, dest, days=30)
+    assert loose == []
+    with closing(sqlite3.connect(dest)) as c:
+        assert c.execute("SELECT id FROM turns").fetchall() == [("done",)]
+    assert removed["turns"] == 1

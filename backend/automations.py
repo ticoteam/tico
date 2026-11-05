@@ -35,6 +35,7 @@ The run state keeps every step's outputs for 30 days; after that `prune` keeps t
 import asyncio
 import contextlib
 import contextvars
+import hashlib
 import json
 import logging
 import threading
@@ -111,6 +112,9 @@ MAX_CHAIN = 3            # automations started by automations: at most this deep
 # run one level deep across these events. A saved one that runs TASK_PAUSE_RUNS times in an hour is paused.
 TASK_TRIGGER_EVENTS = ("task.created", "task.step_changed", "task.done", "task.declined", "task.closed")
 TASK_PAUSE_RUNS = 50
+MAX_IN_FLIGHT = 10       # runs one automation has going at once, turns included; the rest queue
+TURN_SLOT_MINUTES = 30   # a turn holds its slot until it reports, up to this long: one that never reports frees it
+MAIL_LOOKBACK_HOURS = 24  # a mailbox's first sync acts on mail this recent; its watch then never moves
 RUN_GUARD_MINUTES = 10                  # the window a flood is counted in
 RUN_GUARD_BURST = 500                   # runs in RUN_GUARD_MINUTES, any refs: a flood, held; also the held runs kept
 RUN_GUARD_SPAN = 20                     # the minutes a sustained loop is watched over
@@ -125,7 +129,10 @@ RUN_BYTES = 524_288
 VALUES_BYTES = 60_000    # what a judge call is shown of a run's values
 MAIL_LEASE_MINUTES = 5   # a claimed mail action not reported by then goes back to the queue
 MAIL_TRIES = 3           # claims a mail action gets before it fails
-BOTOPS = "bot:botops"            # builds automations for whoever asks it, with that asker's rights (backend/botops_act.py)
+# Mail actions safe to carry out again on any computer (Gmail label changes): an expired lease another computer held
+# goes back to the queue for these. The rest may already have run there (a sent draft, a sent unsubscribe request).
+REPEATABLE_MAIL = ("archive", "label", "leave")
+BOTOPS ="bot:botops"            # builds automations for whoever asks it, with that asker's rights (backend/botops_act.py)
 VERSIONED = ("trigger", "steps", "batch", "destinations")   # what the automation does; a change here is a new version
 # The automations a write in this context comes from: their own actions never start them again.
 CHAIN = contextvars.ContextVar("automation_chain", default=())
@@ -761,16 +768,10 @@ def owner_person(c, owner):
 
 
 def owner_mailboxes(c, owner):
-    """The mailboxes the owner's person reads: their message bot's declared mailbox and their own email."""
-    from . import routines
-    person = owner_person(c, owner)
-    if not person:
-        return []
-    roster = routines._roster(c)
-    found = P.person(person, roster) or {}
-    boxes = [b["address"] for b in routines.message_bot_mailboxes(c, roster) if b["person_id"] == person]
-    email = str(found.get("email") or "").strip().lower()
-    return list(dict.fromkeys(boxes + ([email] if "@" in email else [])))
+    """The mailboxes the owner holds a level on (backend/mailbox_access.py): a person's, or a bot's own grants. A
+    group owns none."""
+    from . import mailbox_access
+    return [box["address"] for box in mailbox_access.mailboxes_for(c, F.owner_ref(owner))]
 
 
 def _channel_readable(c, owner, name, settings):
@@ -785,12 +786,13 @@ def _channel_readable(c, owner, name, settings):
 
 
 def may_read_inbox(c, owner, inbox, *, sender=None, settings=None):
-    """Whether an automation of `owner` may hear `inbox`: an email address only when the owner is that mailbox's
-    person (or a bot that person operates), `slack:dm` only the owner's own direct messages (`sender`, when a message
+    """Whether an automation of `owner` may hear `inbox`: an email address the owner holds a level on
+    (backend/mailbox_access.py: a person's own mailbox, a shared inbox they hold, a grant; a bot only by its grant), `slack:dm` only the owner's own direct messages (`sender`, when a message
     is in hand), `slack:#<channel>` a channel the owner reads."""
     inbox = str(inbox or "").strip().lower()
     if "@" in inbox:
-        return inbox in owner_mailboxes(c, owner)
+        from . import mailbox_access
+        return mailbox_access.level(c, F.owner_ref(owner), inbox) != "none"
     if inbox == "slack:dm":
         person = owner_person(c, owner)
         return bool(person) and (sender is None or F.owner_ref(sender) == "person:" + person)
@@ -996,9 +998,6 @@ def _hold_told(c, row, rule, counted, held):
         task = H.task_create(c, H.KEEPER, f"Automation {flow['name']} on hold"[:300], words, "human:" + person,
                              lint=False, deduplicate=False, wake_refs=refs)
         c.execute("UPDATE automation_guard_holds SET task_id=? WHERE automation_id=?", (task["id"], row["id"]))
-    from . import health_monitor
-    if health_monitor.active(c):   # the optional Health Monitor, when it is on
-        H.notice(c, H.KEEPER, "bot:" + health_monitor.SLUG, words, refs=refs)
 
 
 def _unhold(c, aid, actor, how, via=None):
@@ -1021,7 +1020,7 @@ def _unhold(c, aid, actor, how, via=None):
     c.execute("UPDATE automation_guard_holds SET cleared_at=? WHERE automation_id=?", (now, aid))
     task = H.task(c, hold["task_id"]) if hold["task_id"] else None
     if task and task["status"] not in ("closed", "done", "declined"):
-        H.task_close(c, H.KEEPER, task["id"], note="Released." if how == "release" else "Dropped.", quiet=True)
+        H.task_close(c, H.KEEPER, task["id"], note="Released." if how == "release" else "Dropped.", quiet=True, strict=False)
     before = {"hold": {"rule": hold["rule"], "held_at": hold["held_at"], "dropped": hold["dropped"]}}
     H.event(c, actor, "automation.hold_" + ("released" if how == "release" else "dropped"), aid,
             {"runs": n, "rule": hold["rule"], "dropped": hold["dropped"]})
@@ -1082,6 +1081,16 @@ def _no_input(c, row, settings, at, zone):
         return None
 
 
+def _stored_ref(ref):
+    """A run's trigger ref as the table keeps it, for both the insert and the dedupe lookup. A ref over 200 characters
+    (a long mailbox leaves no room for its message id) keeps its first 183 and the first 16 hex of its sha256, so two
+    refs that share a long prefix stay distinct and each finds its own run."""
+    text = str(ref or "")
+    if len(text) <= 200:
+        return text
+    return text[:183] + ":" + hashlib.sha256(text.encode("utf-8")).hexdigest()[:16]
+
+
 def queue(c, row, payload, ref="", *, manual=False, chain=()):
     """A queued run of this automation's current version, or None: an automation with a `find` runs one at a time (an
     occurrence while one is unfinished is passed over, counted as dropped), a schedule absorbs an occurrence
@@ -1095,15 +1104,17 @@ def queue(c, row, payload, ref="", *, manual=False, chain=()):
         return None
     if not manual and _absorbed(c, row):
         return None
-    if str(ref).startswith("due:") and c.execute(
+    stored = _stored_ref(ref)
+    if stored.startswith("due:") and c.execute(
             "SELECT 1 FROM automation_runs WHERE automation_id=? AND trigger_ref=? AND status!='failed' LIMIT 1",
-            (row["id"], str(ref)[:200])).fetchone():
+            (row["id"], stored)).fetchone():
         # One due day, one run: a repeated or concurrent pass for the same day starts nothing new.
         return None
-    if str(ref).startswith("slack:") and c.execute(
+    if stored.startswith(("slack:", "mail:")) and c.execute(
             "SELECT 1 FROM automation_runs WHERE automation_id=? AND trigger_ref=? LIMIT 1",
-            (row["id"], str(ref)[:200])).fetchone():
-        # One Slack message, one run: a channel message offered once may come back as an `@Tico` event.
+            (row["id"], stored)).fetchone():
+        # One Slack or mail message, one run: a message offered again (its mail row swept, or a label change exported
+        # it again) starts nothing new. The run stays after its message's row goes (automation_runs_trigger).
         return None
     if not manual and _task_pause(c, row, payload, ref):
         return None
@@ -1123,7 +1134,7 @@ def queue(c, row, payload, ref="", *, manual=False, chain=()):
         rid = "run_" + H.new_id()
         state = E.start(payload, manual=manual)
         c.execute("INSERT INTO automation_runs(id,automation_id,version,trigger_ref,started_at,status,saved_state,chain) "
-                  "VALUES(?,?,?,?,?,?,?,?)", (rid, row["id"], row["version"], str(ref or "")[:200], H.now(),
+                  "VALUES(?,?,?,?,?,?,?,?)", (rid, row["id"], row["version"], stored, H.now(),
                                               "held" if on_hold else "queued", json.dumps(state, default=str),
                                               json.dumps(list(chain))))
         _count(c, row["id"], "runs")
@@ -1356,9 +1367,30 @@ def _calendar_invite(attachments):
     return False
 
 
-def on_mail(c, mailbox, message):
+def mail_watch(c, mailbox, synced_at):
+    """Where a mailbox's watch starts, as an ISO time: its message automations act on the mail received from there on,
+    once each. The first batch a mailbox sends sets it, a day before that sync (MAIL_LOOKBACK_HOURS), so the last day's
+    mail is news when a mailbox is connected. It never moves after that: a gap (an outage, a quiet weekend) leaves the
+    mail that arrived in it news, and the per-automation cap (MAX_IN_FLIGHT) paces the backlog. A mailbox from before
+    the watch was kept has none, so its first sync after the upgrade sets it the same way. The caller stores the result
+    on the mailbox's row (connectors `_refresh_mailbox`), which keeps the first one stored."""
+    row = c.execute("SELECT watching_since_at FROM mail_mailboxes WHERE address=?", (mailbox,)).fetchone()
+    if row and row["watching_since_at"]:
+        return row["watching_since_at"]
+    # In UTC: an offset in the sync's stamp is an instant, and H.shift would keep its local clock.
+    at = H.parse_ts(synced_at)
+    at = (at.replace(tzinfo=timezone.utc) if at.tzinfo is None else at).astimezone(timezone.utc)
+    return (at - timedelta(hours=MAIL_LOOKBACK_HOURS)).strftime("%Y-%m-%dT%H:%M:%S.%fZ")
+
+
+def on_mail(c, mailbox, message, watch=None):
     """A new message in a person's mailbox (the mail connector's copy), for the automations of that mailbox's
-    person: whose it is is checked again now, since a person may have lost it since the save."""
+    person: whose it is is checked again now, since a person may have lost it since the save. `watch` (`mail_watch`):
+    a message received before the mailbox's watch began is old mail the sync brought back, and no automation hears it.
+    A message with no received time (0) is heard as it always was."""
+    epoch = int(getattr(message, "epoch", 0) or 0)
+    if watch and 0 < epoch < H.parse_ts(watch).timestamp():
+        return []
     raw = list(getattr(message, "attachments", None) or [])
     attachments = [a.get("name") if isinstance(a, dict) else str(a) for a in raw]
     sender = str(message.from_addr or "").lower()
@@ -1438,7 +1470,7 @@ def turn_done(c, attempt, outcome, text):
         return
     # A turn the run started is its task's; a notice (wake_bot, note) is its message.
     ref = H._task_ref(refs.get("task")) if refs.get("automation_step") else msg["id"]
-    priced = c.execute("SELECT est_cost_usd FROM turns WHERE id=?", (attempt["id"],)).fetchone()
+    priced = c.execute("SELECT est_cost_usd FROM attempts WHERE id=?", (attempt["id"],)).fetchone()
     cost, ok = float((priced and priced[0]) or 0), outcome == "completed"
     if run["status"] == "running" or (run["status"] == "skipped" and run["claimed_at"]):
         # Still being worked (a run dropped mid-step is too, until its step is saved): the save takes the answer.
@@ -1447,6 +1479,7 @@ def turn_done(c, attempt, outcome, text):
         return
     state = json.loads(run["saved_state"]) if run["saved_state"] else None
     c.execute("DELETE FROM automation_holds WHERE ref=?", (ref,))
+    _ring(c)   # the slot the turn held is free: a queued run of its automation may start now
     if state is None:
         c.execute("UPDATE automation_runs SET cost=round(cost+?,6) WHERE id=?", (cost, rid))
         return
@@ -1531,8 +1564,8 @@ def _spent(c, aid, rid):
 
 def _usual_cost(c, bot):
     """What a turn of `bot` usually costs: its last TURN_COST_SAMPLE priced turns' average, else TURN_COST."""
-    rows = [r[0] for r in c.execute("SELECT est_cost_usd FROM turns WHERE bot=? AND est_cost_usd IS NOT NULL "
-                                    "ORDER BY started_at DESC LIMIT ?", (bot, TURN_COST_SAMPLE))]
+    rows = [r[0] for r in c.execute("SELECT est_cost_usd FROM attempts WHERE bot_id=? AND est_cost_usd IS NOT NULL "
+                                    "ORDER BY created_at DESC LIMIT ?", (bot, TURN_COST_SAMPLE))]
     return round(sum(rows) / len(rows), 6) if rows else TURN_COST
 
 
@@ -2010,6 +2043,17 @@ class HubServices:
         self._write(work)
 
 
+# An automation's slots taken: its runs in flight (running, or waiting on a turn or a mail computer, not a batch time)
+# plus the turn holds still inside their slot window whose run is not already counted. Served by automation_runs_active
+# (migration 0080) and automation_holds_of, so it reads only this automation's rows. Counted once per automation per
+# claim pass (Hub.claim), not once per queued candidate.
+OCCUPIED = ("SELECT (SELECT count(*) FROM automation_runs f WHERE f.automation_id=:aid "
+            "AND f.status IN ('running','waiting') AND f.wake_at IS NULL) "
+            "+ (SELECT count(*) FROM automation_holds h WHERE h.automation_id=:aid AND h.created_at>:cutoff "
+            "AND h.run_id NOT IN (SELECT f.id FROM automation_runs f WHERE f.automation_id=:aid "
+            "AND f.status IN ('running','waiting') AND f.wake_at IS NULL))")
+
+
 class Hub:
     """What draining needs: the store, the settings and the app's judge."""
 
@@ -2024,13 +2068,30 @@ class Hub:
         return self._app()
 
     def claim(self):
+        # An automation's runs in flight (running, or waiting on a turn or a mail computer, not a batch time) are
+        # capped: a backlog of triggers (a first mail sync) starts MAX_IN_FLIGHT at a time, and the rest wait queued
+        # until one of them finishes or its turns answer. A run that ended with a turn still going (its last step is
+        # an llm step, which does not wait) keeps its slot through that turn's hold, which lapses after
+        # TURN_SLOT_MINUTES so a turn that never reports cannot block the automation.
+        cutoff = H.shift(H.now(), minutes=-TURN_SLOT_MINUTES)
         with self.store.transaction() as c:
-            row = c.execute("SELECT id FROM automation_runs WHERE status='queued' ORDER BY started_at LIMIT 1").fetchone()
-            if not row:
+            occupied = {}                     # automation id -> slots taken, counted once for this pass
+            pick = None
+            queued = c.execute("SELECT id, automation_id FROM automation_runs WHERE status='queued' "
+                               "ORDER BY started_at")
+            for r in queued:
+                aid = r["automation_id"]
+                if aid not in occupied:
+                    occupied[aid] = c.execute(OCCUPIED, {"aid": aid, "cutoff": cutoff}).fetchone()[0]
+                if occupied[aid] < MAX_IN_FLIGHT:
+                    pick = r["id"]
+                    break
+            queued.close()                    # the write below must not run under a read still open on the table
+            if pick is None:
                 return None
             c.execute("UPDATE automation_runs SET status='running',claimed_at=? WHERE id=? AND status='queued'",
-                      (H.now(), row["id"]))
-            return row["id"]
+                      (H.now(), pick))
+            return pick
 
     def drain(self, limit=200):
         """Run queued runs until none is left (or `limit`, so one request never drains forever)."""
@@ -2085,8 +2146,8 @@ class Hub:
                                      min(waits) if waits and status == "waiting" else None, rid))
             if status == "failed":
                 _due_failed(c, rid, _run_error(state))
-            if status == "queued":
-                _ring(c)
+            if status not in ("waiting", "held"):
+                _ring(c)   # queued again, or done: a run of this automation that the cap held back can start now
 
 
 # ---------------------------------------------------------------------------------------------------- mail actions
@@ -2565,6 +2626,15 @@ def run_view(run, detail=True):
     return out
 
 
+def _sample_in_trigger_inbox(trigger, given):
+    """A sample message for a mail trigger that names no mailbox is mail in the trigger's inbox, as real mail is:
+    its mail actions then target (and are checked against) that mailbox instead of none."""
+    message, inbox = (given or {}).get("message"), str(trigger.get("inbox") or "").strip().lower()
+    if trigger.get("type") != "message" or "@" not in inbox or not isinstance(message, dict) or message.get("mailbox"):
+        return given or {}
+    return {**given, "message": {**message, "mailbox": inbox}}
+
+
 def _input_readable(c, owner, given):
     """A manual run's input names only what the owner may read: a task it may not see, or mail in someone else's
     mailbox, is refused before any run is queued."""
@@ -2677,6 +2747,10 @@ def install(app, store, auth, mutate):
         def work(c):
             auth.domain(who)
             fields = {k: v for k, v in body.model_dump().items() if v is not None}
+            from . import assistant_routines
+            chat_draft = who.via == "assistant" and not who.confirmed and assistant_routines.message(fields)
+            if chat_draft:
+                fields = {**assistant_routines.defaults(fields), "enabled": False}
             if _by_botops(who) and "enabled" not in body.model_fields_set:
                 fields["enabled"] = False   # what BotOps builds waits for a Turn on, unless the request said on
             flow = _checked(c, fields, store.settings)
@@ -2688,7 +2762,13 @@ def install(app, store, auth, mutate):
                     blocked and may_change(c, who, flow)):
                 return _bot_draft(c, who, flow)
             _require(c, who, flow, "make an automation for " + flow["owner"])
-            return view(c, _save(c, who.actor, "auto_" + H.new_id(), flow, None, via=_via(who)), who, detail=True)
+            assistant_routines.check_confirmed(c, request, None, flow)
+            row = _save(c, who.actor, "auto_" + H.new_id(), flow, None, via=_via(who))
+            result = view(c, row, who, detail=True)
+            if chat_draft:
+                result.update(assistant_routines.propose_saved(c, store.settings, who, row, app.routes))
+                result["needs_confirm"] = True
+            return result
         return mutate(request, body, work)
 
     AO.install(app, store, auth)   # /runs and /stats, before /{aid} reads them as ids
@@ -2733,6 +2813,8 @@ def install(app, store, auth, mutate):
                             access=any(merged.get(k) != before.get(k)
                                        for k in ("trigger", "steps", "owner", "destinations")),
                             saved=before, aid=aid)
+            from . import assistant_routines
+            assistant_routines.check_confirmed(c, request, row, flow)
             if before.get("readonly"):
                 # Tico's own rules, shown read-only: the top of the org may pause or resume it, and nothing else.
                 if who.role != "owner" or set(changes) - {"enabled"}:
@@ -2818,12 +2900,13 @@ def install(app, store, auth, mutate):
             if not _approved(c, row) and (blocked := _stamp_blocked(c, auth, who, flow)):
                 raise Problem("forbidden", f"Only whoever may change {blocked}'s model may run a routine that sets it "
                               "before it is turned on", 403)
-            _input_readable(c, flow["owner"], body.input)
-            if body.input and not F.all_hold(flow["trigger"].get("filters") or [], body.input):
+            given = _sample_in_trigger_inbox(flow["trigger"], body.input)
+            _input_readable(c, flow["owner"], given)
+            if given and not F.all_hold(flow["trigger"].get("filters") or [], given):
                 # A sample the trigger's filters drop is dropped as the trigger would drop it: counted, no run row.
                 _count(c, aid, "dropped")
                 return {"run": None, "dropped": True}
-            start = dict(body.input)
+            start = dict(given)
             if not start and flow["trigger"].get("type") == "due":
                 # A due routine run by hand with no sample starts as its scheduler would for its next due day.
                 day = _next_due_day(row, flow["trigger"], datetime.now(timezone.utc)) or D.first_due(flow["trigger"])
@@ -2983,12 +3066,13 @@ def install(app, store, auth, mutate):
 
     # The computer that reads a mailbox carries out the mail actions queued for it (runner_support/connectors.py).
     def mail_computer(c, who, mailbox):
-        """Only the computer that reads this mailbox claims and reports its actions: by the check mail publishing uses
-        (backend/connectors.py `publisher`), and, once the mailbox has been published, only the runner that did."""
+        """Only the computer that may act for this mailbox claims and reports its actions (google_rights.refusal: the
+        computer hosting a Google Workspace mailbox's message bot, the one holding a person's grant, else a publisher),
+        and, once the mailbox has been published, only the runner that did."""
+        from . import google_rights
         from .connectors import human_of
-        runner = app.state.execution.runner(c, who)
-        if not runner or runner["owner_id"] not in (store.settings.processing_operators or (auth.owner_id(c),)):
-            raise Problem("forbidden", "This machine is not assigned the private app-connector capability", 403)
+        runner = google_rights.runner_of(app.state.execution, c, who)
+        google_rights.check(c, runner["id"], google_rights.publishes(store, app.state.execution, c, runner), mailbox)
         box = c.execute("SELECT runner_id FROM mail_mailboxes WHERE address=?", (mailbox,)).fetchone()
         if not box:   # not published yet: no computer has shown it reads this mailbox
             raise Problem("forbidden", "No computer has published this mailbox yet", 403)
@@ -3012,6 +3096,12 @@ def install(app, store, auth, mutate):
                 if row["attempts"] >= MAIL_TRIES:
                     _mail_report(c, row, "failed", {**json.loads(row["result"] or "{}"), "ok": False,
                                                     "detail": f"no result after {MAIL_TRIES} tries"})
+                elif row["claimed_by"] != runner["id"] and row["action"] not in REPEATABLE_MAIL:
+                    # Another computer's lease ran out: its attempt may already have run on the mailbox (a draft made,
+                    # a request sent), and the dedup it keeps is on that computer. Such an action is not run again here.
+                    _mail_report(c, row, "failed", {**json.loads(row["result"] or "{}"), "ok": False,
+                                                    "detail": "the lease ran out on another computer, which may already "
+                                                              "have carried it out; not run again"})
                 else:
                     state = _requeue(c, row)
                     c.execute("UPDATE automation_mail_actions SET state=? WHERE id=?", (state, row["id"]))
@@ -3028,10 +3118,18 @@ def install(app, store, auth, mutate):
                     break                  # the rest stay queued for the next claim
                 spent += size
                 rows.append(dict(r))
-            sending = A.send_on(c, mailbox)
-            out = []
+            # The company's What Tico may do (Settings > Google) covers automations too: with Send mail off a send is
+            # claimed as a draft, as with the inbox's own switch off. The connector checks each write itself, from
+            # GET /connectors/mail/targets (connectors/mail/policy.py runner_company), not from the action.
+            from .google_workspace import permissions
+            sending = A.send_on(c, mailbox) and permissions(c)["send_mail"]
+            out, owners = [], {}
+            from . import mailbox_access
             for r in rows:
                 action, result, args = r["action"], json.loads(r["result"] or "{}"), json.loads(r["args"])
+                if r["automation_id"] not in owners:
+                    found = c.execute("SELECT owner_id FROM automations WHERE id=?", (r["automation_id"],)).fetchone()
+                    owners[r["automation_id"]] = found["owner_id"] if found else ""
                 if action in ("send", "forward") and not sending:
                     # Both send mail out: a reply becomes a draft reply, a forward a draft to its target.
                     action, result = "draft" if action == "send" else action, {**result, "send_off": True}
@@ -3039,6 +3137,12 @@ def install(app, store, auth, mutate):
                     owner = c.execute("SELECT owner_id FROM automations WHERE id=?", (r["automation_id"],)).fetchone()
                     H.event(c, A.actor_of(owner["owner_id"] if owner else ""), "automation.send_off", r["automation_id"],
                             {"run": r["run_id"], "mailbox": mailbox, "msg_id": r["msg_id"]})
+                # The owner's level now, not when it was queued (backend/mailbox_access.py): an owner who lost the
+                # mailbox, or holds it read only, has nothing carried out on it.
+                refused = mailbox_access.action_refusal(c, owners[r["automation_id"]], mailbox, action, args)
+                if refused:
+                    _mail_report(c, r, "failed", {**result, "ok": False, "detail": refused, "retry": False})
+                    continue
                 c.execute("UPDATE automation_mail_actions SET state='claimed',claimed_at=?,claimed_by=?,"
                           "attempts=attempts+1,action=?,result=? WHERE id=?",
                           (now, runner["id"], action, json.dumps(result) if result else None, r["id"]))
@@ -3058,7 +3162,11 @@ def install(app, store, auth, mutate):
             row = c.execute("SELECT * FROM automation_mail_actions WHERE id=?", (mid,)).fetchone()
             if not row:
                 raise Problem("not_found", "No such mail action", 404)
-            mail_computer(c, who, row["mailbox"])
+            # The computer whose lease this is reports it, even after its mailbox moved (plan v4 R): a finished action is
+            # never retried. Any other computer must pass the gate.
+            from . import google_rights
+            if row["claimed_by"] != google_rights.runner_of(app.state.execution, c, who)["id"]:
+                mail_computer(c, who, row["mailbox"])
             if row["state"] in ("done", "failed", "canceled"):
                 return {"id": mid, "state": row["state"]}
             state = ("done" if body.ok else _requeue(c, row) if body.retry and row["attempts"] < MAIL_TRIES else "failed")

@@ -244,7 +244,7 @@ class Run:
             return {}
         marks = ",".join("?" * len(bots))
         with w.store.read() as c:
-            obsolete = {r[0] for r in c.execute("SELECT j.id " + X.obsolete_notices_sql(),
+            obsolete = {r[0] for r in c.execute("SELECT j.id " + X.obsolete_notices_sql(c),
                                                 (w.runner["runner_id"], H.KEEPER, H.now()))}
             rows = c.execute(f"SELECT id,bot_id FROM jobs WHERE state='queued' AND held=0 AND bot_id IN ({marks})",
                              bots).fetchall()

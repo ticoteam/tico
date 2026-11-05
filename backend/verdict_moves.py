@@ -51,6 +51,8 @@ def at_step(c, task_id, refs):
 def _ticket(c, row):
     """The ticket a bot builds, or None: an open ticket owned by a bot, on a type whose steps have a flow, and not
     held: a hold keeps the ticket at its check step, where a verdict must wait for it to clear (`resumed`)."""
+    from . import task_holds
+    row = task_holds.with_holds(c, row)     # its holds, when the row came from plain `tasks`
     return row if (row and H.is_bot(row.get("owner_id")) and row.get("status") in H.ACTIVE_STATUSES
                    and not row.get("blocked_since") and F.has_flow(c, row.get("type_id"))) else None
 
@@ -111,7 +113,7 @@ def move(c, row, target, why):
     c.execute("SAVEPOINT verdict_move")
     try:
         # The owner hears of the move on the hand-off that caused it, not again from a step rule.
-        H.task_update(c, H.KEEPER, row["id"], step=target["id"], skip_step_wake=(row["owner_id"],))
+        H.task_update(c, H.KEEPER, row["id"], step=target["id"], skip_step_wake=(row["owner_id"],), strict=False)
         H._task_event(c, row["id"], H.KEEPER, "verdict_move", None, target["name"], why)
     except H.Refused as exc:
         c.execute("ROLLBACK TO verdict_move")
@@ -146,7 +148,7 @@ def after_verdict(c, check):
     # Verdicts are commonly written inside the checker turn's final tool call. The executed
     # model segments are committed by turn_finish afterwards, so this callback records an
     # immutable pending marker and leaves routing to the post-capture callback.
-    attempt = c.execute("SELECT id FROM turns WHERE task_id=? ORDER BY started_at DESC,id DESC LIMIT 1",
+    attempt = c.execute("SELECT id FROM attempts WHERE task_id=? ORDER BY created_at DESC,id DESC LIMIT 1",
                         (check["id"],)).fetchone()
     attempt_id = attempt["id"] if attempt else None
     pending = {"check_id": check["id"], "attempt_id": attempt_id, "step": name, "head": head,
@@ -175,11 +177,11 @@ def after_capture(c, check_id, head, attempt_id):
     verdict = _verdict(check or {})
     if not verdict or str(check.get("verdict_head") or _judged_head(c, check) or "").lower() != str(head or "").lower():
         return None
-    attempt = c.execute("SELECT task_id,bot,finished_at FROM turns WHERE id=?", (attempt_id,)).fetchone()
-    latest = c.execute("SELECT id FROM turns WHERE task_id=? ORDER BY started_at DESC,id DESC LIMIT 1", (check_id,)).fetchone()
-    if (not attempt or attempt["task_id"] != check_id or not attempt["finished_at"] or
+    attempt = c.execute("SELECT task_id,bot_id,settled_at FROM attempts WHERE id=?", (attempt_id,)).fetchone()
+    latest = c.execute("SELECT id FROM attempts WHERE task_id=? ORDER BY created_at DESC,id DESC LIMIT 1", (check_id,)).fetchone()
+    if (not attempt or attempt["task_id"] != check_id or not attempt["settled_at"] or
             not latest or latest["id"] != attempt_id or check.get("status") != "done" or
-            H.actor_id(attempt["bot"]) != H.actor_id(check.get("owner_id"))):
+            H.actor_id(attempt["bot_id"]) != H.actor_id(check.get("owner_id"))):
         return None
     ticket = _ticket(c, H.task(c, TR.parent_of(c, check_id) or ""))
     step = ticket and F.check_step(c, check, ticket)
@@ -233,7 +235,7 @@ def resumed(c, task_id):
                  if _verdict(t) and H._subtask_result_parent(c, t)), None)
     if not last or (delivery(c, last) or {}).get("consumed") or not after_verdict(c, last):
         return None
-    attempt = c.execute("SELECT id FROM turns WHERE task_id=? ORDER BY started_at DESC,id DESC LIMIT 1",
+    attempt = c.execute("SELECT id FROM attempts WHERE task_id=? ORDER BY created_at DESC,id DESC LIMIT 1",
                         (last["id"],)).fetchone()
     head = str(last.get("verdict_head") or _judged_head(c, last) or "").lower()
     return after_capture(c, last["id"], head, attempt["id"]) if attempt else None
@@ -287,7 +289,7 @@ def delivery(c, check):
     marker = c.execute("SELECT new FROM history_events WHERE subject_type='task' AND subject_id=? AND kind='verdict_wait' "
                        "ORDER BY rowid DESC LIMIT 1", (TR.parent_of(c, check["id"]) or "",)).fetchone()
     pending = H._json(marker["new"], {}) if marker else {}
-    turn = c.execute("SELECT id FROM turns WHERE task_id=? ORDER BY started_at DESC,id DESC LIMIT 1",
+    turn = c.execute("SELECT id FROM attempts WHERE task_id=? ORDER BY created_at DESC,id DESC LIMIT 1",
                      (check["id"],)).fetchone()
     waiting = turn and pending.get("check_id") == check["id"] and pending.get("attempt_id") == turn["id"]
     verdict = _verdict(check)
@@ -476,7 +478,7 @@ def timeouts(c, at=None):
             for check in _checks(c, ticket, step):
                 if check["status"] in H.ACTIVE_STATUSES:
                     H.task_close(c, H.KEEPER, check["id"],
-                                 note=f"Unanswered for {hours:g} h; Tico closed it and skipped this round.")
+                                 note=f"Unanswered for {hours:g} h; Tico closed it and skipped this round.", strict=False)
             if verdict:
                 note = f"{step['name']}: {verdict} at head {head[:12]}; round closed after {hours:g} h"
             else:

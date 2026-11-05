@@ -74,16 +74,19 @@ def restore(path):
 # backend/migrations/0044_drop_kpi_goal_columns.py with kpis.goal_id, the column it indexes, and idempotency_by_created
 # by backend/migrations/0050_idempotency_one_table.py (the answers' partial index replaces it).
 DROPPED_INDEXES = {"invariants_lease", "invariants_open_approvals", "tasks_private_parties", "kpis_goal",
-                   "idempotency_by_created"}
+                   "idempotency_by_created",
+                   # learning_runs drops its night UNIQUE in 20261105010100_learn_beta: Learn can run more than once a day.
+                   "sqlite_autoindex_learning_runs_2"}
 # Dropped by backend/migrations/0052_drop_queue_bot_message.sql: backend/enqueue.py queues the job in Python now.
 DROPPED_TRIGGERS = {"queue_bot_message"}
 # Dropped after the renames ran on them: by backend/migrations/0035_growth_rethink.py, the operation-binding tables
 # 0050_idempotency_one_table.py moves into `idempotency`, 0053_usage_facts.py (its rows are usage facts) and
-# 0054_budget_nodes.py (its rows are budget nodes), and the federation tables 0058_drop_federation.sql drops with
+# 0054_budget_nodes.py (its rows are budget nodes), 0072_turns_into_attempts.py (its rows are attempts), and the
+# federation tables 0058_drop_federation.sql drops with
 # their indexes.
 RETIRED = {"growth_ideas", "growth_idea_channels", "growth_segments", "growth_channel_segments", "growth_idea_segments",
            "gtm_versions", "gtm_drafts", "invite_sends", "github_product_repo_operations", "github_review_operations",
-           "turn_usage_segments", "usage_limits", "usage_pools",
+           "turns", "turn_usage_segments", "usage_limits", "usage_pools",
            "federation_deferrals", "federation_outbox_items", "federation_receipts", "federation_messages",
            "federation_items", "federation_members", "federation_threads", "federation_directory_entries",
            "federation_peerings", "federation_keys", "federation_states",
@@ -94,6 +97,12 @@ RUNNER_STATE = {name for name, _ in importlib.import_module("backend.migrations.
 # Moved out of its table by migration 0070 (backend/migrations/0070_bot_settings.py) into the table named here: the
 # declaration is in bot_settings, which backend/tests/test_bot_settings.py checks.
 MOVED = {("bot_config", "config_json"): "bot_settings"}
+# Dropped by backend/migrations/0075_task_holds.py: a task's hold columns became task_holds rows, and the indexes and
+# triggers that named them go with them.
+_HOLDS = importlib.import_module("backend.migrations.0075_task_holds")
+DROPPED = {("tasks", column) for column in _HOLDS.COLUMNS}
+DROPPED_INDEXES |= set(_HOLDS.OLD_INDEXES)
+DROPPED_TRIGGERS |= set(_HOLDS.OLD_TRIGGERS)
 
 
 @pytest.fixture(scope="module")
@@ -133,6 +142,9 @@ def test_every_column_has_its_new_name_and_the_rows_kept_their_values(upgraded):
             continue
         renamed = NEW.get((table, renamed), renamed)
         have = columns(conn, "runner_states" if table == "runners" and renamed in RUNNER_STATE else table)
+        if (table, renamed) in DROPPED:
+            assert renamed not in have and old not in have, (table, old, renamed)
+            continue
         assert renamed in have and old not in have, (table, old, renamed)
     assert conn.execute("SELECT readiness FROM runners_with_state WHERE id='runner-1'").fetchone()[0] == '{"ok":true}'
     task = conn.execute("SELECT * FROM tasks WHERE id='task-1'").fetchone()

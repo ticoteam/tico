@@ -12,8 +12,16 @@ from backend.config import Settings
 from backend.store import Store
 
 TABLES = {
+    rows.MeetingTaskLinkRow: "meeting_task_links",
     rows.TaskRow: "tasks",
     rows.TaskCheckBackWakeRow: "task_check_back_wakes",
+    rows.TaskHoldRow: "task_holds",
+    rows.MaintenanceStepRow: "maintenance_steps",
+    rows.MaintenanceRunRow: "maintenance_runs",
+    rows.MaintenanceRunStepRow: "maintenance_run_steps",
+    rows.MaintenanceListingRow: "maintenance_listings",
+    rows.MaintenanceHandoffRow: "maintenance_handoffs",
+    rows.MaintenanceRequestRow: "maintenance_requests",
     rows.AttemptRow: "attempts",
     rows.RunnerRow: "runners",
     rows.RunnerStateRow: "runner_states",
@@ -84,6 +92,7 @@ UNTYPED = frozenset({
     "fin_view_defaults", "fin_view_grants", "fin_view_versions", "flight_db", "flight_events", "flight_process",
     "flight_requests", "flight_slow", "flight_sql", "goal_asks", "goal_checkins", "goal_kpis",
     "goal_proposals", "goals", "google_connects", "google_mail_holders", "google_signin_refusals",
+    "connector_reports", "google_oauth_clients", "google_setup_codes", "google_setup_generations", "google_workspaces",
     "granola_connections", "growth_channels", "growth_cohorts",     "growth_settings", "gtm_sources", "health_findings", "health_reports",
     "hook_relay_state", "hosting_enrollments", "human_tokens", "humans", "idempotency", "idempotency_messages",
     "import_refs", "inbound_inboxes", "inbound_messages", "inbound_sync", "intake_items", "invariant_state",
@@ -92,7 +101,7 @@ UNTYPED = frozenset({
     "linked_docs", "listen_items", "listen_judgments", "listen_runs", "listening_destinations", "live_meeting_access",
     "live_meeting_bots", "live_meeting_chat", "live_meeting_chat_routes", "live_meeting_chunk_versions",
     "live_meeting_chunks", "live_meeting_events", "live_meeting_humans", "live_meeting_turns", "live_meeting_windows",
-    "live_meetings", "mail_agent_instructions", "mail_intake", "mail_items", "mail_mailboxes", "mail_messages",
+    "live_meetings", "mail_agent_instructions", "mail_intake", "mail_items", "mail_mailboxes", "mail_messages", "mailbox_accesses", "mailboxes",
     "mail_private_backfill", "mail_reads", "main_pushes", "market_briefings", "market_citations", "market_edges",
     "market_entities", "market_entity_keys", "market_evidence", "market_figures", "market_insights",
     "market_pages", "market_sizes", "market_sources", "market_turn_sources", "market_watches", "media_assets",
@@ -118,7 +127,7 @@ UNTYPED = frozenset({
     "task_manager_seen", "task_milestone_waits", "task_reconnects", "task_relations", "task_reminders",
     "task_requesters", "task_roles", "task_rules", "task_run_models", "task_steps", "task_tags", "task_trash",
     "task_trash_assets", "task_types", "tico_notices", "tico_storage", "trigger_bodies", "trigger_deliveries",
-    "trigger_relays", "trigger_seen", "triggers", "turns", "update_archive_overrides",
+    "trigger_relays", "trigger_seen", "triggers", "update_archive_overrides",
     "update_queue", "update_reads", "update_settings", "updates", "usage_alerts",
     "watcher_items", "watcher_pending", "watcher_refs", "watcher_runs", "watcher_triage", "webhook_attempts",
     "webhook_events", "webhook_sends", "webhooks", "worktree_waits"

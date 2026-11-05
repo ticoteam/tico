@@ -33,7 +33,7 @@ def pending(conn):
     if current is not None and current["conn"] is conn:
         yield
         return
-    state = {"conn": conn, "items": []}
+    state = {"conn": conn, "items": [], "unblocked": set()}
     token = _PENDING.set(state)
     try:
         yield
@@ -52,6 +52,34 @@ def _write_chain(conn):
     """The automation chain behind this write, read the way automations decide what a write starts."""
     from . import automations as A
     return tuple(A.CHAIN.get() or A._turn_chain(conn))
+
+
+def unblocked(conn):
+    """Dependents already notified during this complete write, including nested completions."""
+    queue = _PENDING.get()
+    return queue["unblocked"] if queue is not None and queue["conn"] is conn else set()
+
+
+@contextmanager
+def savepoint(conn):
+    """Roll back a task write together with the Task Triggers it queued in an enclosing write."""
+    queue = _PENDING.get()
+    queue = queue if queue is not None and queue["conn"] is conn else None
+    start = len(queue["items"]) if queue is not None else 0
+    notified = unblocked(conn).copy()
+    conn.execute("SAVEPOINT task_write")
+    try:
+        yield
+    except BaseException:
+        if conn.in_transaction:
+            conn.execute("ROLLBACK TO task_write")
+        if queue is not None:
+            del queue["items"][start:]
+            queue["unblocked"].intersection_update(notified)
+        raise
+    finally:
+        if conn.in_transaction:
+            conn.execute("RELEASE task_write")
 
 
 def enqueue(conn, event, task, actor, revision, *, field=None, new=None):
@@ -166,6 +194,7 @@ def _run(conn, item, rule, params):
     by, row, action = rule["action_by"], item["row"], params.get("action")
     queue = _PENDING.get()
     start = len(queue["items"]) if queue else 0
+    notified = unblocked(conn).copy()
     token = _CHAIN.set((rule["id"],))
     conn.execute("SAVEPOINT task_trigger_action")
     try:
@@ -204,6 +233,7 @@ def _run(conn, item, rule, params):
         conn.execute("RELEASE task_trigger_action")
         if queue:
             del queue["items"][start:]
+            queue["unblocked"].intersection_update(notified)
         # Rule rows are shared settings; never persist task content or an exception's
         # arbitrary text there. The source task retains the rule's history.
         detail = f"Action failed ({type(exc).__name__})"

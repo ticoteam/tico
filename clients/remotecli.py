@@ -250,6 +250,8 @@ def run(args, who=None):
         return via_tool(client, _rules_args(args))
     if args.cmd in ("mail", "connections"):
         return via_tool(client, args)
+    if args.cmd == "maintenance":
+        return via_tool(client, args)
     if args.cmd == "thread":
         return via_tool(client, args)
     if args.cmd == "finance":
@@ -339,7 +341,7 @@ def run(args, who=None):
             return hubtools.BY_NAME["hub_run_export"]["fn"](client, {"run": args.run})
         found = hubtools.run_export_full(client, args.run)
         return {"written": hubtools.write_fixture(found, Path(args.out or "."))}
-    if fn in ("task child create", "task tree", "task bulk", "task model"):
+    if fn in ("task child create", "task tree", "task bulk", "task model", "task meetings"):
         return via_tool(client, args)
     if fn in ("task requesters", "task requester-save", "task requester-remove", "task publication-preview",
               "task comment-moderate", "roadmap tasks"):
@@ -358,7 +360,7 @@ def run(args, who=None):
                                                   "operation_id": os.environ.get("HUB_OPERATION_ID")})
     if args.cmd in ("chat", "replay"):
         return via_tool(client, args)
-    if fn in ("stall-triage", "audit"):
+    if fn == "audit":
         return via_tool(client, args)
     if fn and fn.startswith("task-manager "):
         from clients import hubtools
@@ -371,12 +373,6 @@ def run(args, who=None):
                   "task-manager schedule": {"preset": getattr(args, "preset", None), "at": getattr(args, "at", None)},
                   "task-manager bot": {"bot": getattr(args, "state", None)}}[fn]
         return hubtools.task_manager_set(client, {**change, "operation_id": op})
-    if fn in ("health-monitor findings", "health-monitor report"):
-        from clients import hubtools
-        if fn == "health-monitor findings":
-            return hubtools.health_monitor_findings(client, {})
-        return hubtools.health_monitor_report(client, {"key": args.key, "process": args.process, "cpu": args.cpu,
-                                                       "mb": args.mb, "operation_id": os.environ.get("HUB_OPERATION_ID")})
     if fn in ("support report", "support send"):
         from clients import hubtools
         key = os.environ.get("HUB_OPERATION_ID")
@@ -816,6 +812,13 @@ def run(args, who=None):
         if sub == "apply":
             body = {"evidence": {"source_url": args.source or "", "source_kind": args.source_kind or "other",
                                  "quote": args.quote or "", "our_read": args.our_read or ""}}
+            verified = None
+            if args.last_verified_at:
+                from clients import hubtools
+                try:
+                    verified = hubtools.market_day(args.last_verified_at)
+                except ValueError as exc:
+                    raise APIError("date", str(exc), 422) from None
             if args.entity_type and args.entity_name:
                 body["entity"] = {"type": args.entity_type, "name": args.entity_name,
                                   "summary": args.summary or ""}
@@ -823,10 +826,16 @@ def run(args, who=None):
                     body["entity"]["tier"] = args.tier
                 if args.new_id:
                     body["entity"]["id"] = args.new_id
+                if verified:
+                    body["entity"]["last_verified_at"] = verified
             if args.entity_id:
                 body["entity_id"] = args.entity_id
                 if args.summary is not None:
                     body["summary"] = args.summary
+                if verified:
+                    body["last_verified_at"] = verified
+            if verified and "entity" not in body and "entity_id" not in body:
+                raise APIError("entity", "--last-verified-at needs --entity-id, or --entity-type and --entity-name for a new entity")
             if args.edge_src and args.edge_rel and args.edge_dst:
                 body["edge"] = {"src": args.edge_src, "rel": args.edge_rel, "dst": args.edge_dst}
             return post(f"market/insights/{args.id}/apply", body)
@@ -882,7 +891,7 @@ def run(args, who=None):
             query.update({k: v for k, v in (("from", args.from_actor), ("before", args.before), ("since", args.since)) if v})
             return client.get("approvals", **query)
         if sub == "read-back":
-            return post("assistant/read-back", {"approvals": args.ids})
+            return post("assistant/read-back", {"approvals": args.ids, "note": args.note})
         if sub in ("approve", "decline"):
             return post("approvals/" + args.id, {"decision": sub + "d", "note": args.note},
                         delegate=getattr(args, "on_behalf_of", None) or False)
@@ -1036,7 +1045,7 @@ def local_slug(client, args, workspace):
         known = {b.get("slug") or b.get("name") for b in client.get("bots", include_archived="1")}
     except (APIError, AttributeError, TypeError):
         known = set()
-    reserved = ("assistant", "botops", "librarian", "goal-manager", "coo", "task-manager", "health-monitor", "bookkeeper")
+    reserved = ("assistant", "botops", "librarian", "goal-manager", "coo", "task-manager", "bookkeeper")
     return catalog.free_slug(args.name or card.get("name") or args.template, lambda slug: (
         slug in known or slug in reserved
         or any((workspace / (prefix + slug)).exists() for prefix in (REPO_PREFIX, OLD_REPO_PREFIX))))

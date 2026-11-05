@@ -241,7 +241,7 @@ def render_shown(items, counts):
 
 
 def _open_check(c, name=TITLE):
-    return H._one(c, "SELECT * FROM tasks WHERE owner_id=? AND requester_id=? AND title LIKE ? "
+    return H._one(c, f"SELECT * FROM {H.TASKS} tasks WHERE owner_id=? AND requester_id=? AND title LIKE ? "
                      "AND status IN ('open','doing','waiting','review','ready') ORDER BY created_at DESC LIMIT 1",
                   (ACTOR, H.KEEPER, name + " (%"))
 

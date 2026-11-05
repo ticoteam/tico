@@ -3,7 +3,7 @@
 The card says what broke in one line ("Sales Bot can't reach Google (ana@acme.example).") and carries the fix: the
 person's own Connect Google, the computer's sign-in pop-up, or a credential card. The task waits on the card, a
 recorded wait like a milestone's (hubdb.wait_detail, wake_rules.parked): it is in the fixer's Needs you under
-connect (hubdb.needs_you), and no stall wake, stranded sweep or news spends turns on it meanwhile. It does not set
+connect (hubdb.needs_you), and no news spends turns on it meanwhile. It does not set
 `waiting_on`: a bot naming a person there asks in a subtask instead, and this card is that ask. When the account
 works again the card says "Reconnected" and the task's owner gets ONE wake on that task, through the one wake path
 (H._wake, refs `reconnected`, an AWAITED kind in backend/wake_rules.py).
@@ -606,10 +606,12 @@ def _accounts(values):
     return list(dict.fromkeys(str(a).strip().lower() for a in values or () if a and str(a).strip()))
 
 
-def google_report(c, service, refused, listed=()):
+def google_report(c, service, refused, listed=(), ok=None):
     """One connector health report for `service` (mail or calendar): `refused` are the accounts whose Google sign-in
-    it was refused, `listed` every account it reports failing for any reason. A refused account's tasks get a card;
-    an account this service refused before and no longer lists works again for it (`google_good`)."""
+    it was refused, `listed` every account it reports failing for any reason. A refused account's tasks get a card.
+    An account this service refused before works again for it when `ok` names it as read by the reporting computer
+    (plan v4 P, v5 T: the caller passes only accounts no other fresh computer still fails). Without `ok` (an older
+    runner), it works again when no longer listed."""
     H = _H()
     ensure(c)
     refused = _accounts(refused)
@@ -618,8 +620,9 @@ def google_report(c, service, refused, listed=()):
         c.execute("INSERT INTO google_signin_refusals(account,service,created_at) VALUES(?,?,?) "
                   "ON CONFLICT(account,service) DO UPDATE SET created_at=excluded.created_at", (account, service, H.now()))
     opened = google_failing(c, refused)
+    read = None if ok is None else set(_accounts(ok))
     good = [a for (a,) in c.execute("SELECT account FROM google_signin_refusals WHERE service=?", (service,)).fetchall()
-            if a not in listed]
+            if a not in listed and (read is None or a in read)]
     google_good(c, service, good)
     return opened
 
@@ -662,8 +665,8 @@ def google_failing(c, accounts):
             continue
         bot = box["bot"]
         for (task_id,) in c.execute(
-                "SELECT DISTINCT u.task_id FROM turns u JOIN tasks t ON t.id=u.task_id WHERE u.bot=? AND t.owner_id=? "
-                "AND u.started_at>? AND (u.finished_at IS NULL OR u.finished_at>?)",
+                "SELECT DISTINCT u.task_id FROM attempts u JOIN tasks t ON t.id=u.task_id WHERE u.bot_id=? AND t.owner_id=? "
+                "AND u.created_at>? AND (u.settled_at IS NULL OR u.settled_at>?)",
                 (bot, H.bot_actor(bot), H.shift(since, hours=-6), since)).fetchall():
             row = open(c, task_id, bot, "google:" + address, "google", f"Google ({address})",
                        H.human_actor(box["person_id"]), {"kind": "google", "account": address})

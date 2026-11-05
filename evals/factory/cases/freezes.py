@@ -157,7 +157,8 @@ def window_of(text):
 def pool_turns(run, scope):
     """The turns the pool covers: every turn for the company, or the turns of the bots the server counts in the group."""
     from backend import usage_limits
-    turns = [dict(r) for r in run.w.sql("SELECT bot, started_at, finished_at, est_cost_usd FROM turns ORDER BY started_at")]
+    turns = [dict(r) for r in run.w.sql("SELECT bot_id AS bot, created_at AS started_at, settled_at AS finished_at, "
+                                        "est_cost_usd FROM attempts WHERE (job_id IS NULL OR trigger IS NOT NULL) ORDER BY created_at")]
     if scope == usage_limits.COMPANY:
         return turns
     with run.w.store.read() as c:
@@ -203,7 +204,7 @@ def hour_spent(run, when):
     """The company's spend in the clock hour of `when`, from the turns that had finished by then: the figure a cap is
     compared with, as usage_limits counts it."""
     at = (START + when).strftime("%Y-%m-%dT%H:%M:%S")
-    rows = [dict(r) for r in run.w.sql("SELECT est_cost_usd FROM turns WHERE substr(started_at,1,13)=? AND finished_at < ?",
+    rows = [dict(r) for r in run.w.sql("SELECT est_cost_usd FROM attempts WHERE substr(created_at,1,13)=? AND settled_at < ?",
                                        (at[:13], at))]
     return sum(r["est_cost_usd"] or 0 for r in rows)
 

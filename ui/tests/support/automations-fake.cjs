@@ -88,11 +88,11 @@ const DRAFT_VERSIONS = [{n: 1, actor: 'bot:support', at: '2026-10-28T09:00:00Z',
   summary: 'Archive receipts from billing'}];
 
 // A system job's mirror (`system: true`): Tico runs it from its own code, so it reads only; the top of the org may pause it.
-const SYSTEM = {id: 'au_sys_still', name: 'Still wanted check', owner_id: 'person:dana', enabled: true, builtin: true, readonly: true,
+const SYSTEM = {id: 'au_sys_still', name: 'KPI stale asks check', owner_id: 'person:dana', enabled: true, builtin: true, readonly: true,
   kind: 'system', version: 1, schedule: 'Daily at 07:00', can_edit: false, can_pause: true,
-  description: 'Asks each owner whether tasks open for 30 days are still wanted.',
-  trigger: {type: 'event', name: 'tico.builtin.job.still_wanted'}, steps: [], controls: {on: true},
-  source: {kind: 'system_job', id: 'job:still_wanted'}};
+  description: 'Asks a KPI keeper for a reading when it goes out of date.',
+  trigger: {type: 'event', name: 'tico.builtin.job.kpi_asks'}, steps: [], controls: {on: true},
+  source: {kind: 'system_job', id: 'job:kpi_asks'}};
 const systemRuns = (now = Date.now()) => Array.from({length: 8}, (_, i) => ({id: 'sys_' + (50 - i), automation_id: SYSTEM.id,
   started_at: new Date(now - (i * 3 + 1) * 3600000).toISOString(), finished_at: new Date(now - (i * 3 + 1) * 3600000 + 4000).toISOString(),
   status: i === 2 ? 'failed' : 'ok', cost: 0, steps: [], started_by: 'Schedule', outcome: i === 2 ? 'Mail down' : 'Asked 3 owners',

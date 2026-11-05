@@ -22,6 +22,7 @@ function taskDialogWire(d) {
     if (!TASK_CHAT || TASK_CHAT.dialog === d) taskChatStop();
     d.tfEl?.querySelector('video, audio')?.pause();
     d.tfEl = null; d.tfOpen = null;
+    d.tpOff?.(); d.tpOff = null; d.tpEl = null;
     d.taskOpening = {}; d.askDrafts = new Map();
   });
 }
@@ -97,6 +98,7 @@ async function taskModalShow(task, d = taskModal(), opts = {}) {
   const peek = !!d.dataset.peek;
   // A fresh open starts with no file open, whether or not the last close's event has run yet.
   if (!d.open || String(d.dataset.task) !== String(task.id)) {
+    d.tpOff?.(); d.tpOff = null; d.tpEl = null;
     d.taskOpening = {pending: !d.open}; d.askDrafts = new Map(); d.tfEl = null; d.tfOpen = null;
     d.classList.toggle('thread', !peek && !!opts.thread);     // a redraw of the same task keeps the view it had
   } else askDraftCapture(d);
@@ -205,6 +207,7 @@ function taskPropFocus(d) {
 function taskModalBind(d, task, full = false) {
   fbSync();                     // the task's own 👍 / 👎 in the header, when a bot asked for it
   tfAdopt(d, task);
+  taskMeetingsAdopt(d, task);
   taskPagesAdopt(d, task);      // the task's pages, as cards at its top (ui/app/pages.js)
   ruleHoldsAdopt(d, task);      // a rule review's held outputs and their actions (ui/app/org-rule-holds.js)
   d.dataset.version = String(task.version ?? '');
@@ -558,6 +561,7 @@ function commentLineHTML(x, i, all, files = [], taskId = '', canAnswer = true) {
     if ((x.field === 'type' || x.field === 'step') && x.old == null
       && all?.some(y => y.kind === 'event' && y.field === 'status' && y.old == null && Math.abs(Date.parse(y.ts) - Date.parse(x.ts)) < 2000)) return '';
     if (x.field === 'comment' && x.new) return '';                  // an edit: the comment itself says edited
+    if (x.field === 'closed_with') return '';                       // its close's note already says so
     // A step move already names where the task went; its status change would say it twice.
     if (x.field === 'status' && all?.some(y => y.kind === 'event' && y.field === 'step' && y.new && y.ts === x.ts)) return '';
     // A note saved with a status change or a comment is already shown there; a note on its own says what it is.
@@ -1006,8 +1010,12 @@ function taskDeferredHTML(t) {
 // A question to you on a task past the Needs you pages held: its item is read alone, and its question box takes the
 // plain ask's place once it lands.
 function taskQcardWait(t) {
-  if (needsAll() || needsOneHeld(t.id)) return '';
-  void v2NeedsOne(t.id).then(() => {
+  // Before the first Needs you read lands, nothing is known past it: wait for it, then read the item alone if needed.
+  const landed = needsFirstIn();
+  if (landed && (needsAll() || needsOneHeld(t.id))) return '';
+  const read = landed ? v2NeedsOne(t.id)
+    : NEEDS_FIRST.then(() => qcardItem(t) || needsAll() || needsOneHeld(t.id) ? null : v2NeedsOne(t.id));
+  void read.then(() => {
     const el = qcardItem(t) && document.querySelector(`[data-qcard-wait="${CSS.escape(String(t.id))}"]`);
     if (el) el.outerHTML = qcardBoxHTML(t);
   });
@@ -1075,6 +1083,7 @@ function hubModalHTML(t, it, opts = {}) {
       ${taskSessionsHTML(t)}
       <section class="tsec task-runs" data-task-runs aria-label="Runs" hidden></section>
       ${t.relations ? taskRelHTML(t) : ''}
+      <section class="tsec task-meetings" data-task-meetings aria-label="Meetings" hidden></section>
       <section class="tsec task-files" data-task-files aria-label="Files" hidden></section>
       </div>
       </div>

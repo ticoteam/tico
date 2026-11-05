@@ -6,7 +6,7 @@ including the former `current` setting, use Performance. New bots start as Doers
 Under a preset, two kinds of job wait at enqueue time (the `wake_preset_hold` trigger on jobs, so every
 event source is held the same way): a nonblocking notice the server marks with `refs.wake_batch`
 (BATCH_KINDS: a finished request, review comments, a failing check nobody armed a wait for) and a sweep
-(a routine's scheduled run, a stall or status check). Only the keeper writes those refs, so nobody can make
+(a routine's scheduled run, or a legacy stall or status check). Only the keeper writes those refs, so nobody can make
 an immediate wake wait by sending text that looks like one. Other news (a comment, a task's status, step or relation
 moving, any notice no rule names) starts no job at all: the rules engine writes it as a note (backend/rules.py,
 `default_note`), so nothing here holds it. A held batch never holds anything else back: a person's message starts
@@ -36,7 +36,7 @@ from . import hubdb as H
 from . import bot_settings as BS
 
 # A run's tokens: its input (uncached and cached) and output, as its usage records them.
-RUN_TOKENS = "coalesce(t.input_tokens,0)+coalesce(t.cached_tokens,0)+coalesce(t.output_tokens,0)"
+RUN_TOKENS = "coalesce(a.input_tokens,0)+coalesce(a.cached_tokens,0)+coalesce(a.output_tokens,0)"
 
 CURRENT = "current"
 TOKEN_SAVER = "token_saver"
@@ -116,7 +116,6 @@ def ensure(c):
     H.add_column(c, "jobs", "hold_streak", "INTEGER NOT NULL DEFAULT 0")
     # The job whose turn carried this one's notice (a batch's newest, or its digest), for `measures`.
     H.add_column(c, "jobs", "wake_carrier", "TEXT")
-    H.add_column(c, "attempts", "wake", "TEXT")
     c.execute("CREATE INDEX IF NOT EXISTS jobs_held ON jobs(bot_id,hold_until) WHERE held=1")
     # The few held jobs still queued, in claim order: what tick reads every pass under the write lock (HELD_*_SQL).
     c.execute("CREATE INDEX IF NOT EXISTS jobs_held_queued ON jobs(created_at, id) WHERE held=1 AND state='queued'")
@@ -170,7 +169,7 @@ def effective(config):
     batch = _duration(spec["batch_seconds"])
     summary = (f"{spec['label']}: finished requests and a person's review comments wait up to {batch}"
                + (" (at most one such wake per " + batch + ")" if spec["batch_scope"] == "bot" else "")
-               + f"; an enabled routine or stall check runs at most every {_duration(spec['sweep_seconds'])}. "
+               + f"; an enabled routine runs at most every {_duration(spec['sweep_seconds'])}. "
                "People, assignments, questions, awaited results, blockers and review requests wake it at once.")
     if own and own.get("digest_hour") is not None:
         summary = (f"The rest of the news arrives once a day, at {own['digest_hour']:02d}:00 team time. "
@@ -529,9 +528,9 @@ def _runs(c, job_ids):
     out, ids = {}, sorted(i for i in job_ids if i)
     for n in range(0, len(ids), 500):
         part = ids[n:n + 500]
-        for row in c.execute("SELECT a.job_id,min(a.created_at) AS claimed,count(t.id) AS turns,"
+        for row in c.execute("SELECT a.job_id,min(a.created_at) AS claimed,count(a.trigger) AS turns,"
                              f"coalesce(sum({RUN_TOKENS}),0) AS tokens,"
-                             "max(t.task_id) AS task FROM attempts a LEFT JOIN turns t ON t.id=a.id "
+                             "max(a.task_id) AS task FROM attempts a "
                              f"WHERE a.job_id IN ({','.join('?' * len(part))}) GROUP BY a.job_id", part):
             out[row["job_id"]] = dict(row)
     return out

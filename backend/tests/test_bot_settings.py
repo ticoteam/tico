@@ -92,7 +92,9 @@ def _old_shape(path):
         c.execute("DROP TABLE bot_settings")
         c.execute("ALTER TABLE bot_config ADD COLUMN config TEXT NOT NULL DEFAULT '{}'")
         c.execute("CREATE TRIGGER old_reads_config AFTER UPDATE OF config ON bot_config BEGIN SELECT 1; END")
-        c.execute("DELETE FROM schema_migrations WHERE version='0070_bot_settings'")
+        # 0070 and every migration after it are unapplied, as on main before 0070: a later one left applied would make
+        # 0070 sort before an applied migration, which a start refuses.
+        c.execute("DELETE FROM schema_migrations WHERE version>='0070' AND version NOT LIKE 'legacy_%'")
         rows = [("full", {**SETTINGS, **ODD}), ("empty", {}), ("broken", None), ("list", [1, 2]),
                 *((f"many{n}", {"model": f"m{n}", "turns_per_day": n, "team": "ops"}) for n in range(1200))]
         for bot, config in rows:
@@ -130,8 +132,7 @@ def test_migration_0061_gives_a_team_that_0070_moves_into_bot_settings(tmp_path)
     _old_shape(path)
     people = {"people": [{"id": "ana", "team": "engineering"}], "org_groups": {"engineering": {"name": "Engineering"}}}
     with sqlite3.connect(path) as c:
-        # The migrations after 0061 are applied too (0067_home_merges among them): they go with it, the runner
-        # refuses an unapplied migration that sorts before an applied one.
+        # Replay the later migrations too, so 0070 moves the team that 0061 writes into bot_settings.
         c.execute("DELETE FROM schema_migrations WHERE version>='0061' AND version NOT LIKE 'legacy_%'")
         c.execute("INSERT INTO registry_metadata VALUES('people',?) ON CONFLICT(key) DO UPDATE SET value=excluded.value",
                   (json.dumps(people),))

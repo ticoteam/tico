@@ -15,6 +15,9 @@ from e2e.normalize import normalize
 
 GOLDENS = Path(__file__).resolve().parents[1] / "goldens"
 RECORD = os.environ.get("TICO_E2E_RECORD") == "1"
+UPDATE_GOLDENS = ("For an intended API contract change, re-record e2e/goldens/*.json with: "
+                  "TICO_E2E_RECORD=1 python3 -m pytest -q -m slow e2e/tests/test_contract.py\n"
+                  "Review git diff -- e2e/goldens before committing.")
 
 
 def fresh_capture(api, live):
@@ -44,7 +47,8 @@ def test_v2_responses_match_the_goldens(api, live):  # noqa: F811
         return
     rename_map = renames.active()
     expected = {p.stem for p in GOLDENS.glob("*.json")}
-    assert expected == set(captured), "goldens and captures differ: %s" % sorted(expected ^ set(captured))
+    assert expected == set(captured), ("goldens and captures differ: %s\n%s" %
+                                      (sorted(expected ^ set(captured)), UPDATE_GOLDENS))
     differences = []
     for name in sorted(captured):
         golden = json.loads((GOLDENS / f"{name}.json").read_text())
@@ -54,5 +58,5 @@ def test_v2_responses_match_the_goldens(api, live):  # noqa: F811
             old = json.dumps(golden, indent=2, sort_keys=True, ensure_ascii=False).splitlines()
             new = json.dumps(fresh, indent=2, sort_keys=True, ensure_ascii=False).splitlines()
             diff = "\n".join(list(difflib.unified_diff(old, new, "golden " + name, "fresh " + name, lineterm=""))[:60])
-            differences.append(f"--- {name}\n{diff}")
-    assert not differences, "\n\n".join(differences)
+            differences.append(f"--- e2e/goldens/{name}.json\n{diff}")
+    assert not differences, "\n\n".join(differences) + "\n\n" + UPDATE_GOLDENS

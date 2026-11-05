@@ -5,8 +5,8 @@ track builds against this page. Owner: `threads/core`. A change here is announce
 ("contract:"), and additive changes are preferred over renames.
 
 Terms in UI and docs: **Thread, Home, DM, Sub-thread, Call**. Internally the table stays `conversations` and a
-thread id **is** a conversation id. `turns.thread_id` (like `bot_sessions`) is a provider session: never read or
-reuse it as a thread id.
+thread id **is** a conversation id. `bots.thread_id` and `attempts.thread_id` are provider sessions: never read or
+reuse them as thread ids.
 
 ## 0. Files core owns
 
@@ -407,7 +407,7 @@ paused or quarantined bot keeps its deliveries; a new batch waits while the last
 reads the threads it names only if the bot is still in their audience at the claim (`thread_bot_digest.grant`).
 
 Never wakes: the author itself, imports and replays (`refs.import`/`refs.replay`), a message whose
-`refs.origin` names that same bot (`threads.never_wakes`), and follow-up nudges and update cards (`refs.follow_up`,
+`refs.origin` names that same bot (`threads.never_wakes`), and legacy follow-up nudges and update cards (`refs.follow_up`,
 `refs.card`: `threads.quiet_notice`; `post` also marks them `quiet`, so not even the addressed bot's run starts). This
 binds the primary recipient too: its delivery is `mode='none'` and its message is `quiet`. A `refs.origin` holds no time,
 so a bot's own message coming back never wakes it, however late. Today's bot-to-bot hold (`rules.bot_to_bot_decision`)
@@ -503,7 +503,7 @@ first:
  "since": "<wait start>", "run_id": "<attempt id>|null", "fix": {"label": "Fix", "href": "#/settings/computers"}|null}
 ```
 - `working`: its run for this root is running; `detail` is the run's current step (its last tool or progress line,
-  "Writing a reply", "Starting").
+  "Writing a reply", "Thinking", "Starting").
 - `up_next`: it is running elsewhere; "Finishing <task title>" or "Finishing # <thread title>" only when the viewer
   reads that task or thread, else "Busy with other work".
 - `cant_reply`, `fix` set: paused or draining → "Paused" (bot Info); its computer offline or none → "Its computer is

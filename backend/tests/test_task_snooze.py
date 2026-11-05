@@ -2,7 +2,7 @@
 import json
 from datetime import timedelta
 
-from backend import still_wanted
+from backend import task_check_backs, task_roundup
 from backend.scheduler import Scheduler
 from backend.store import H
 from backend.tests.test_api import api, get, hold, post  # noqa: F401
@@ -58,8 +58,7 @@ def test_nothing_automatic_wakes_a_snoozed_task_but_a_person_still_reaches_it(ap
         H.TS.snooze(c, "human:ana", row["id"], ahead(30))
         assert notices(c, row["id"], "Snoozed until") == 1 and jobs(c) == 0             # told, not run
         c.execute("UPDATE tasks SET updated_at=? WHERE id=?", (H.shift(H.now(), days=-9), row["id"]))
-        assert row["id"] not in [t["id"] for t in still_wanted.idle_tasks(c)]
-        assert H.wake_stalled(c)["woke"] == []
+        assert "ops" not in task_roundup.run(c)["woke"], "a snooze in force is on no roundup list"
         H.task_update(c, H.human_actor("ana"), row["id"], status="open")
         assert notices(c, row["id"], "Open:") == 1 and jobs(c) == 0, "news about it waits for the bot's next run"
         assert not H.comment_wakes(c, "bot:finance", H.task(c, row["id"]), "Any news?")
@@ -198,3 +197,18 @@ def test_a_note_for_a_person_or_a_paused_bot_is_left_on_the_task_when_the_snooze
         assert len(woken) == 1 and woken[0][0].endswith("\nYour note: Check the reply")
         assert snooze_wakes(c, paused["id"], "Snooze over:") == [], "no wake for a paused bot"
         assert H.task(c, person["id"])["snoozed_note"] is None
+
+
+def test_a_snooze_sets_no_follow_up_time_and_a_person_setting_one_records_it(api):
+    store = api.app.state.store
+    with store.transaction() as c:
+        row = H.task_create(c, H.human_actor("ana"), "Chase the grant", "Due in spring.", "bot:ops")
+        H.TS.snooze(c, "human:ana", row["id"], ahead(30))
+        assert H.task(c, row["id"])["check_back_at"] is None
+        assert c.execute("SELECT count(*) FROM history_events WHERE subject_type='task' AND subject_id=? "
+                         "AND kind='check_back_at'", (row["id"],)).fetchone()[0] == 0
+        later = ahead(31)
+        task_check_backs.set_time(c, H.task(c, row["id"]), later, "Look at the grant", actor=H.human_actor("ana"))
+        assert H.task(c, row["id"])["check_back_at"] == later
+        assert c.execute("SELECT count(*) FROM history_events WHERE subject_type='task' AND subject_id=? "
+                         "AND kind='check_back_explicit' AND new=?", (row["id"], later)).fetchone()[0] == 1

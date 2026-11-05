@@ -52,7 +52,7 @@ def _snoozed(c, actor):
 
 
 def _children(c, task_id, owner):
-    return H._rows(c.execute("SELECT * FROM tasks WHERE id IN (SELECT from_task FROM task_relations WHERE kind='parent' AND to_task=?) AND owner_id=? AND status IN ('open','doing','waiting','review','ready') "
+    return H._rows(c.execute(f"SELECT * FROM {H.TASKS} tasks WHERE id IN (SELECT from_task FROM task_relations WHERE kind='parent' AND to_task=?) AND owner_id=? AND status IN ('open','doing','waiting','review','ready') "
                              "ORDER BY created_at", (task_id, owner)))
 
 
@@ -71,7 +71,7 @@ def _row(it, actor):
     if it.get("person_ask"):
         row["ask"] = it["person_ask"]
     if it.get("ask_missing"):
-        # Nothing to decide yet: the bot has been asked to say plainly what it needs (backend/restate_asks.py).
+        # Nothing to decide yet: the bot has not yet said plainly what it needs.
         row["ask_missing"] = True
     if (it.get("ask") or {}).get("body"):
         row["question"] = _clip(it["ask"]["body"], 1500)

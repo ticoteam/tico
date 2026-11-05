@@ -305,7 +305,8 @@ def bot_wait_sql(visible_sql):
                 "WHERE r.to_task=tasks.id AND r.kind='blocks' AND b.status NOT IN ('done','closed','declined') "
                 f"AND EXISTS (SELECT 1 FROM tasks WHERE tasks.id=b.id AND ({visible_sql}))")
     return ("status='waiting' AND coalesce(waiting_on,'') NOT LIKE 'human:%' "
-            "AND coalesce(blocked_kind,'') NOT IN ('gate','worktree') "
+            "AND NOT EXISTS (SELECT 1 FROM task_holds bh WHERE bh.task_id=tasks.id AND bh.kind='blocked' "
+            "AND bh.released_at IS NULL AND bh.cause IN ('gate','worktree')) "
             f"AND ({blockers} ORDER BY r.created_at,r.rowid LIMIT 1) LIKE 'bot:%' "
             f"AND NOT EXISTS ({blockers} AND b.owner_id LIKE 'human:%') "
             "AND NOT EXISTS (SELECT 1 FROM messages m JOIN conversations cv ON cv.id=m.conversation_id "
