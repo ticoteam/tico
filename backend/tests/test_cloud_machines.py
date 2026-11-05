@@ -1003,6 +1003,22 @@ def test_replace_requires_own_cloud_mode_and_permission_to_manage_the_bot(cloud)
         assert not c.execute("SELECT revoked_at FROM runners WHERE id=?", (computer["runner_id"],)).fetchone()[0]
 
 
+def test_an_unused_own_machine_can_be_deleted_while_the_bot_runs_elsewhere(cloud):
+    old = enrolled(cloud)
+    other = runner(cloud.api)
+    idle(cloud)
+    assign(cloud.api, other, "ops", generation(cloud, "ops"))
+    ready(cloud.api, other, ["ops"])
+    work(cloud)
+    assert claim_on(cloud, other, "ops")["attempt"]
+    response = cloud.api.delete("/api/v2/bots/ops/cloud-machine", headers=headers())
+    assert response.status_code == 200, response.text
+    assert cloud.row()["state"] == "deleted" and cloud.row()["mode"] == "computer"
+    with cloud.store.read() as c:
+        assert c.execute("SELECT revoked_at FROM runners WHERE id=?", (old["runner_id"],)).fetchone()[0]
+        assert not c.execute("SELECT revoked_at FROM runners WHERE id=?", (other["runner_id"],)).fetchone()[0]
+
+
 @pytest.mark.parametrize("state", ["leased", "running"])
 def test_replace_waits_for_the_current_turn(cloud, state):
     computer = enrolled(cloud)

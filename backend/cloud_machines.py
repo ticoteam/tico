@@ -1405,7 +1405,7 @@ def remove(store, hq, who, auth, key, request, mutate, replace=False):
             current = removable(c, auth, who, key, replace)
             # The claim takes this same write lock. Hold new work before asking HQ, without holding SQLite over HTTP.
             if c.execute("SELECT 1 FROM attempts WHERE state IN ('leased','running') AND "
-                         "(bot_id=? OR runner_id=?) LIMIT 1", (key, current["runner_id"])).fetchone():
+                         "(runner_id=? OR (bot_id=? AND ?)) LIMIT 1", (current["runner_id"], key, replace)).fetchone():
                 raise Problem("busy", "Wait for the current turn to finish", 409)
             if (current["stop_until"] or 0) > now():
                 raise Problem("busy", "This cloud machine is stopping. Try again shortly", 409)
