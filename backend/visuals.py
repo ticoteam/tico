@@ -563,11 +563,14 @@ def decorate(c, who, files, key, base, messages, full=True, hosted=None):
     plain = is_counsel(who)
     for message in messages:
         items = ((message or {}).get("refs") or {}).get("attachments") or []
-        if not any(isinstance(a, dict) and a.get("file_id") for a in items):
+        if not attempt_id and not any(isinstance(a, dict) and a.get("file_id") for a in items):
             continue
         fresh = []
         for a in items:
             if not isinstance(a, dict) or not a.get("file_id"):
+                if (attempt_id and isinstance(a, dict) and a.get("id")
+                        and turn_scope.blob_allowed(c, files.auth, who, a["id"]) is False):
+                    continue
                 fresh.append(a)
                 continue
             if plain:
@@ -728,19 +731,19 @@ def serve(request, store, auth, files, blobs, key, ancestors, token, full=True, 
             return gone
         else:
             blob = {"digest": v["digest"], "size": v["size"], "name": v["name"], "content_type": mime}
+        if kind in ("page", "svg") and not part:
+            from .tico_storage import visual_link
+            # A page with live blocks never has a hosted copy (tico_storage.make_visual).
+            link = visual_link(blobs, blob["digest"], blob["size"], mime, ancestors)
+            if link:
+                return Response(status_code=302, headers={"Location": link, "Cache-Control": "private, no-store",
+                                                          "Referrer-Policy": "no-referrer"})
+            if not (full and on_host(request, visual_origin)):
+                return gone
         if kind == "page" and not part:
             text = blobs.get(blob["digest"]).decode("utf-8", errors="replace")
             if has_live(text):
                 filled = fill_live(text, c, who, auth, files).encode("utf-8")
-    if kind in ("page", "svg") and not part:
-        from .tico_storage import visual_link
-        # A page with live blocks never has a hosted copy (tico_storage.make_visual).
-        link = visual_link(blobs, blob["digest"], blob["size"], mime, ancestors)
-        if link:
-            return Response(status_code=302, headers={"Location": link, "Cache-Control": "private, no-store",
-                                                      "Referrer-Policy": "no-referrer"})
-        if not (full and on_host(request, visual_origin)):
-            return gone
     rule = policy(kind, ancestors)
     if kind in ("page", "svg"):
         data = filled if filled is not None else blobs.get(blob["digest"])

@@ -30,7 +30,7 @@ from . import teammate_access as TA
 from .privacy_index import ReadIndex
 from .bot_access import q, qlist
 from .models import Contract
-from .store import H, Problem
+from .store import H, Problem, encode
 
 # Rows and seconds per query; `max_rows` in the request may only lower the cap.
 LIMITS = {"owner": (5000, 20.0), "human": (500, 5.0), "bot": (500, 5.0)}
@@ -568,7 +568,8 @@ def guarded(c, auth, who, inner, function, columns=None, unseen=None):
     rules["bot_file_versions"] += " AND (attempt_id IS NULL OR " + by_attempt + ")"
     from . import turn_scope
     if turn_scope.scope(c, who) is not None:
-        rules["task_assets"] += " AND " + function("scope_blob") + "(blob_id)"
+        for table in ("task_assets", "message_assets"):
+            rules[table] += " AND " + function("scope_blob") + "(blob_id)"
         for table, check in (("meetings", "scope_meeting"), ("bot_files", "scope_file"), ("blobs", "scope_blob")):
             rules[table] = "(" + rules[table] + ") AND " + function(check) + "(id)"
     hidden = {table: set(HIDDEN.get(table, ())) for table in rules}
@@ -812,7 +813,22 @@ def connect(path, c, auth, who, trace=None, seconds=None):
                     raise
                 return False
 
+        def scoped_refs(refs):
+            value = H._json(refs, {})
+            if not isinstance(value, dict) or not isinstance(value.get("attachments"), list):
+                return refs
+            shown = []
+            for item in value["attachments"]:
+                if isinstance(item, dict):
+                    if item.get("file_id") and not scoped_file(item["file_id"]):
+                        continue
+                    if not item.get("file_id") and item.get("id") and turn_scope.blob_allowed(source, auth, who, item["id"]) is False:
+                        continue
+                shown.append(item)
+            return encode({**value, "attachments": shown})
+
         functions = {"message": (4, index.message), "attempt": (1, index.attempt),
+                     "scope_refs": (1, scoped_refs),
                      "scope_file": (1, scoped_file), "scope_meeting": (1, scoped_meeting),
                      "scope_blob": (1, lambda bid: turn_scope.blob_allowed(source, auth, who, bid)),
                      "conversation": (1, index.conversation), "meeting_room": (1, index.meeting_room),
@@ -840,6 +856,8 @@ def connect(path, c, auth, who, trace=None, seconds=None):
         tables = materialize(conn, index, tables, inner, function, private)
         conn.set_progress_handler(None, 0)
         masks = {**MASKED, **live_masks(unsettled_watched(conn, inner))}
+        if turn_scope.scope(c, who) is not None:
+            masks["messages"] = {**masks.get("messages", {}), "refs": prefix + "privacy_scope_refs(source.refs)"}
         from . import threads
         names = qlist(threads.Viewer(auth, who).member_names(conn))
         bots = TA.hidden(conn, who, "see", ("bot",), auth)

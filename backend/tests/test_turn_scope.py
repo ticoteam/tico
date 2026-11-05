@@ -387,6 +387,10 @@ def test_task_attachment_projections_omit_rejected_files_blobs_and_covers(api):
     with api.app.state.store.transaction() as c:
         legacy = blobs.register(c, Identity("human:ana", "owner"), digest, len(image) + 6, "hidden-legacy.png", "image/png")
         c.execute("INSERT INTO task_assets(task_id,blob_id) VALUES(?,?)", (other["id"], legacy["id"]))
+        comment = H.task_comment(c, "human:ana", other["id"], "Review the attachments", wake=False,
+                                 extra_refs={"attachments": [legacy, {"id": fid, "file_id": fid, "version": 1,
+                                                                     "kind": "image", "title": "hidden-cover.png"}]})
+        c.execute("INSERT INTO message_assets(message_id,blob_id) VALUES(?,?)", (comment["id"], legacy["id"]))
     # Ordinary readers retain their attachments and newest cover.
     ordinary = get(api, "tasks/" + other["id"])["task"]
     assert ordinary["attachments"] and ordinary["cover"]
@@ -399,11 +403,17 @@ def test_task_attachment_projections_omit_rejected_files_blobs_and_covers(api):
         assert projected["attachments"] == [] and projected["cover"] is None
         assert "hidden-" not in json.dumps(projected)
     assert get(api, f'tasks/{other["id"]}/files', token)["files"] == []
-    for query in ("SELECT task_id,blob_id FROM task_assets", "SELECT count(*) FROM task_assets"):
+    comments = get(api, f'tasks/{other["id"]}/comments', token)["comments"]
+    assert next(row for row in comments if row["id"] == comment["id"])["refs"]["attachments"] == []
+    for query in ("SELECT task_id,blob_id FROM task_assets", "SELECT count(*) FROM task_assets",
+                  "SELECT message_id,blob_id FROM message_assets", "SELECT count(*) FROM message_assets"):
         rows = post(api, "sql", {"sql": query}, token)["rows"]
         assert rows == ([[0]] if "count" in query else [])
+    refs = post(api, "sql", {"sql": "SELECT refs FROM messages WHERE id=?", "params": [comment["id"]]}, token)["rows"]
+    assert json.loads(refs[0][0])["attachments"] == []
     # A legacy upload on the carried task stays visible, including its cover and SQL row.
     with api.app.state.store.transaction() as c:
+        c.execute("DELETE FROM message_assets WHERE blob_id=?", (legacy["id"],))
         c.execute("DELETE FROM task_assets WHERE blob_id=?", (legacy["id"],))
         c.execute("INSERT INTO task_assets(task_id,blob_id) VALUES(?,?)", (t["id"], legacy["id"]))
     own = get(api, "tasks/" + t["id"], token)["task"]
