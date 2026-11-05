@@ -106,6 +106,7 @@ fn plan(url: &str) -> Plan {
         model: DEFAULT_MODEL.into(),
         language: "en".into(),
         key: Some("fixture-key".into()),
+        follow_settings: false,
         tico: None,
         required: true,
         retry: Duration::from_millis(50),

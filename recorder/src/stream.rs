@@ -57,8 +57,10 @@ pub struct Plan {
     pub url: String,
     pub model: String,
     pub language: String,
-    /// None follows saved settings and reads the key for every connection.
+    /// None reads the saved key for every connection.
     pub key: Option<String>,
+    /// Plans made from Settings follow later saves; caller-supplied plans keep their endpoint.
+    pub follow_settings: bool,
     /// Streams through this Tico's relay with the person's sign-in instead of a key ("Your
     /// Tico"); its token is read again for every connection, since it renews hourly.
     pub tico: Option<Destination>,
@@ -104,6 +106,7 @@ impl Plan {
             },
             language: config.transcription_language.trim().into(),
             key: None,
+            follow_settings: true,
             // The Tico says whether it streams; nothing to add here when it does not.
             required: config.streaming == Some(true) && tico.is_none(),
             tico,
@@ -274,7 +277,7 @@ impl Streams {
             queued: queued.clone(),
             dropped: dropped.clone(),
             reconnects: 0,
-            settings_version: self.plan.key.is_none().then(settings::version),
+            settings_version: self.plan.follow_settings.then(settings::version),
         };
         let spawned = thread::Builder::new()
             .name(format!("tico-stream-{channel}"))
