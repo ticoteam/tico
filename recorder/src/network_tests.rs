@@ -3733,7 +3733,7 @@ fn recorder_save_retry_reconciles_current_fields_or_keeps_a_closed_draft() {
 
 #[test]
 fn recorder_add_after_save_uploads_once_and_create_always_uses_push() {
-    for explicit_add in [false, true] {
+    for (status, explicit_add) in [("sent", false), ("sent", true), ("failed", false)] {
         let dir = tempfile::tempdir().unwrap();
         let store = Store::open(dir.path()).unwrap();
         let record = transcript(&store, "Add after Save");
@@ -3754,7 +3754,7 @@ fn recorder_add_after_save_uploads_once_and_create_always_uses_push() {
                 &Delivery {
                     destination_id: "synthetic".into(),
                     meeting_id: "filed".into(),
-                    status: "sent".into(),
+                    status: status.into(),
                     error: String::new(),
                     receipt: json!({"approved":true}),
                 },
