@@ -163,8 +163,10 @@ class Chain(Stage2):
             pl.SERVER_GET = server
             d = self.decide([STRANGER], approval="77")
             self.assertEqual((d.allowed, d["gate"]), (False, "onboarding"), d)
-        # The owner sends on their own word, with or without Tico.
-        self.assertTrue(self.decide([STRANGER], slug=pl.OWNER, approval="77", verbs=["send"]).allowed)
+        # The connector sends what Tico leased it (the server checked the automation's owner), with no stage to read;
+        # the owner's own handle is held like everyone (no bypass).
+        self.assertTrue(self.decide([STRANGER], slug=access.CONNECTOR, approval="77", verbs=["send"]).allowed)
+        self.assertFalse(self.decide([STRANGER], slug=pl.OWNER, approval="77", verbs=["send"]).allowed)
 
     def test_with_sending_off_none_of_it_applies(self):
         p = self.root / "emp-inbox" / "employee.yaml"

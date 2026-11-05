@@ -810,10 +810,12 @@ def switch(slug, manifest=None):
     this run) sending without approval is off. `read` says Tico answered, so `onboarding` is known; a run that
     cannot read it cannot tell an onboarding bot from an Active one. `asks` / `asks_forward` are what bot.yaml
     requests, for messages."""
-    if str(slug).strip().lower() == OWNER:
-        # The owner has no per-bot switch; the company's Send mail still holds its every send (oauth.company_allows).
-        return {"on": True, "forward_to": [], "source": "owner", "detail": "the owner", "asks": True,
-                "asks_forward": [], "read": True, "onboarding": False}
+    from . import access as _access                     # noqa: PLC0415 - avoids a cycle
+    if str(slug).strip().lower() == _access.CONNECTOR:
+        # The connector sends only what the server leased it (an automation's send, checked against its owner's
+        # level and the inbox's switch there); the company's Send mail still holds it (oauth.company_allows).
+        return {"on": True, "forward_to": [], "source": "connector", "detail": "a send Tico leased this computer",
+                "asks": True, "asks_forward": [], "read": True, "onboarding": False}
     try:
         from . import access                            # noqa: PLC0415 - avoids a cycle
         if manifest is None:
@@ -856,12 +858,22 @@ def company(slug):
 
     None for a server that answers without the fields (an older one). UNREAD when the setting could not be read: the
     run's writes are refused then, and its reads go on."""
+    from . import access                                # noqa: PLC0415 - avoids a cycle
     slug = str(slug or "").strip().lower()
-    if slug == OWNER:
+    if slug == access.CONNECTOR:
         return runner_company()
     row = _server_row(slug)
     if row is None:
-        return UNREAD
+        if access.entries(access._manifest(slug)):
+            return UNREAD                               # a bot here whose own mail setting Tico did not answer
+        # Not a bot with a mail setting (a person's own run): What Tico may do as Tico answered about this run's access.
+        try:
+            got = access.answer(slug).get("company")
+        except Refused:
+            got = None
+        if not isinstance(got, dict):
+            return UNREAD
+        return {name: got.get(name) is not False for name in COMPANY_FIELDS}
     return _allowed(row)
 
 
@@ -877,7 +889,7 @@ RUNNER_GET = None
 
 
 def runner_company():
-    """What Tico may do for an owner run (an automation's mail action, a calendar booking, a person's own run): asked
+    """What Tico may do for the connector (an automation's mail action, a calendar booking): asked
     of Tico over the runner's registration, as a bot's run asks for its own, so nothing on stdin decides it. UNREAD
     when Tico could not be asked, a run without the registration included."""
     try:
@@ -897,7 +909,7 @@ def runner_company():
 
 
 def outbound_send(slug, manifest=None):
-    """Whether `slug` sends without a per-message approval: the server-held switch. The owner is the human; always true."""
+    """Whether `slug` sends without a per-message approval: the server-held switch (the connector's leased sends: true)."""
     return switch(slug, manifest)["on"]
 
 
@@ -1014,7 +1026,7 @@ def check_send(pol, slug, mailbox, to, cc=(), attachments=(), thread_id="",
             _, verbs = access.resolve(slug, box, "send", manifest)
         except Refused as e:
             return no("verb", e.msg)
-    if slug != OWNER and "send" not in (verbs or []):
+    if "send" not in (verbs or []):
         return no("verb", f"{slug} declares {', '.join(verbs or ['nothing'])} on {box}, not send")
     ok("verb", f"{slug} may send as {box}")
 

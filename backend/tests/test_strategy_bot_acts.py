@@ -12,6 +12,7 @@ from backend.tests.test_strategy_bot_suggests import bot_task
 from backend.tests.test_company import bot, with_strategy_bot
 from backend.tests.test_kpis import goal_with_kpi
 from backend import bot_settings as BS
+from backend import mailbox_access
 
 OWNER, STRATEGY_BOT = "human:ana", "bot:goal-manager"
 
@@ -112,6 +113,9 @@ def test_everything_on_the_owners_list_is_refused_on_the_server_and_proposed_ins
     goal, kpi = goal_with_kpi(api)
     with api.app.state.store.transaction() as c:          # a task it asked for, so it may otherwise change it
         mine = H.task_create(c, STRATEGY_BOT, "Write the onboarding email", "Work it.", "bot:ops", lint=False)["id"]
+        # Ana gave it her calendar (Read and write on her mailbox), so the invitation reaches the owner's list.
+        mailbox_access.give(c, mailbox_access.ensure_mailbox(c, "ana@acme.example"), "bot", STRATEGY_BOT[4:],
+                            "read_write", "person:ana")
     tries = [
         ("cost", "bots/ops/model", {"model": "opus", "expected_revision": 1}),
         ("publish", "tasks", {"title": "Share the roadmap", "body": "Publish it.", "owner": "bot:ops",

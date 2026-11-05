@@ -17,7 +17,7 @@ const bots = [
   bot('cmo', 'AI CMO', 'p:ana'), bot('seo', 'SEO', 'b:cmo'), bot('sales', 'Sales', 'p:ana'),
   bot('support', 'Support', 'p:ana', {status: 'paused', onboarding_state: 'needs_setup'}),
   bot('old', 'Old bot', 'p:ana', {status: 'archived'}),
-  bot('coo', 'Assistant', ''), bot('librarian', 'Librarian', ''), bot('botops', 'BotOps', ''), bot('goal-manager', 'Strategy Bot', 'p:ana', {reports_to: ''}), bot('inbox', 'Inbox Manager', 'b:botops', {template: 'inbox'}),
+  bot('coo', 'Assistant', ''), bot('librarian', 'Librarian', ''), bot('botops', 'BotOps', ''), bot('goal-manager', 'Strategy Bot', 'p:ana', {reports_to: ''}), bot('inbox', 'Inbox Manager', 'b:botops', {template: 'inbox', helper: true}),
   bot('channel', 'Channel Inbox', 'b:botops', {helper: true}),
 ];
 const day = Date.now() - 2 * 86400000;

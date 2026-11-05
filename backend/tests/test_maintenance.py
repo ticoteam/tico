@@ -86,6 +86,7 @@ def test_run_now_runs_every_step_in_order_like_a_scheduled_run(api):
     assert [s["step"] for s in run["steps"]] == list(M.ORDER), "one log row per step, in order"
     steps = {s["step"]: s for s in run["steps"]}
     assert steps["collect"]["status"] == "ran"
+    assert steps["find_stuck"]["status"] == "ran" and cursor(store, "find_stuck"), "Find stuck is live"
     assert steps["learn"]["status"] == "off", "learn is off by default"
     assert steps["check_health"]["status"] == "skipped" and steps["check_health"]["reason"] == "on its old timer"
     assert steps["suggest"]["reason"] == "on its old timer"

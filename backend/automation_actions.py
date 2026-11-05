@@ -104,6 +104,11 @@ def _queue_mail(c, auto, run_id, action, message, args, result=None, step=None, 
                      "AND msg_id=? ORDER BY created_at DESC, rowid DESC LIMIT 1",
                      (run_id, step, mailbox, msg_id)).fetchone() if step else None
     after, state = (prev["id"] if prev else None), "queued"
+    if not refused:
+        # The owner's level on the mailbox now (backend/mailbox_access.py); the claim checks it again.
+        from . import mailbox_access
+        refused = mailbox_access.action_refusal(c, ((auto.get("flow") or {}).get("owner") or auto.get("owner_id")),
+                                                mailbox, action, args, queued=True)
     if prev and prev["state"] in ("failed", "skipped", "canceled"):
         state = "canceled" if prev["state"] == "canceled" else "skipped"
     elif refused:
