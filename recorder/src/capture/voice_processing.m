@@ -75,6 +75,7 @@ static BOOL eligible(const char *selected) {
 @property BOOL failVoice;
 @property NSUInteger generation;
 - (BOOL)restart;
+- (void)observe:(id)engine;
 - (void)close;
 @end
 
@@ -109,6 +110,9 @@ static BOOL eligible(const char *selected) {
             context.receive(context.pointer, (const float *const *)buffer.floatChannelData,
                             buffer.format.channelCount, buffer.frameLength, time.hostTime, buffer.format.sampleRate);
         }];
+        // Installing voice processing can itself reconfigure the already-running raw engine.
+        // Observe before start so that transition cannot stop raw capture without a restart.
+        [self observe:engine];
         if (![engine startAndReturnError:&error]) { [engine stop]; return nil; }
         return engine;
     } @catch (NSException *exception) { return nil; }
@@ -158,8 +162,10 @@ static BOOL eligible(const char *selected) {
         if (eligible(self.selectedName.UTF8String)) self.voice = [self engine:YES context:self.voiceContext];
     }
     self.rawContext.state(self.rawContext.pointer, self.voice != nil);
-    [self observe:self.raw];
-    if (self.voice) [self observe:self.voice];
+    if (self.testing) {
+        [self observe:self.raw];
+        if (self.voice) [self observe:self.voice];
+    }
     return YES;
 }
 - (void)close {
