@@ -195,6 +195,7 @@ class TaskBlocker(Contract):
 
 
 class TaskCreate(Contract):
+    live_meeting_id: ID | None = None
     visibility: Literal['public', 'private'] | None = None
     # Publishing at creation needs explicit public text; the internal title and body are never copied.
     public_title: str | None = Field(default=None, max_length=300)

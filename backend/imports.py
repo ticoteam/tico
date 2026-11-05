@@ -31,7 +31,7 @@ from . import models as M
 from . import people as P
 from .auth import Identity
 from .connectors import EMAIL, instant
-from .media import Note, Send, attachments, authorized, deliver, form, new_note, save, upload_contract, write_upload
+from .media import Note, Send, attachments, authorized, deliver, effective_audience, form, new_note, save, upload_contract, write_upload
 from .meetings import get as meeting, initial_review, announce
 from .store import H, Problem, encode
 from .views import roster
@@ -411,7 +411,7 @@ def install_imports(app, store, auth, execution, mutate):
             meta["title"] = body.title or meta.get("title") or "Imported meeting"
         if body.private is not None and (not existing or not meta.get("reviewed_at") or meta.get("review_state") != "live"):
             meta["private"] = body.private
-        if body.audience == "participants" or meta.get("audience") == "participants":
+        if body.audience == "participants" or effective_audience(meta) == "participants":
             # Narrowing is always allowed, even after review, and only a review widens it again (meeting_review.py).
             named = {str(e).strip().lower() for e in meta.get("audience_emails") or []} | {(who.email or "").lower()}
             meta.update(private=True, audience="participants", audience_emails=sorted(named - {""}))

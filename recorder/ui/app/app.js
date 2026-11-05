@@ -364,17 +364,170 @@
   }
   /** Tasks: ones already in Tico by number, then proposals drafted as people talk, each created or dismissed. */
   function actions(a) {
+    const recovered = nativeClosedDrafts(a);
+    if (a.saved) return sharedActions(a, recovered);
     let html = `<section class="section"><div class="label head">Tasks<span class="grow"></span><button class="btn small" data-act="add-open">${icon('plus', 12)}Add</button></div>`;
+
     if (a.draft_status) html += `<div class="notice inline">${icon('alert')}<span class="grow">${esc(a.draft_status)}</span></div>`;
     if (a.mode === 'choose' && a.items.some((it) => !it.sent)) {
       html += `<div class="choose-org"><span class="faint">Owners from</span>${a.orgs.map((o) => `<button class="btn small" data-act="choose-org" data-id="${esc(o.id)}">${esc(o.name)}</button>`).join('')}</div>`;
     }
-    const sent = a.items.filter((it) => it.sent);
+    const sent = a.items.filter((it) => it.sent && !recovered.some(r => r.localId === it.id));
+    html += recovered.map(it => sharedClosedCard(it, sharedDraft(it.id), a)).join('');
     const proposed = a.items.filter((it) => !it.sent);
     if (sent.length) html += `<ul class="items tasks">${sent.map(task).join('')}</ul>`;
     if (proposed.length) html += `<ul class="items">${proposed.map(proposal).join('')}</ul>`;
     if (S.ui.adding || !a.items.length) html += `<div class="add-item"><span class="check">${icon('plus', 13)}</span><input data-model="addItem" data-enter="add-item" data-blur="add-close" placeholder="Add a task" spellcheck="false" aria-label="Add a task"></div>`;
     return html + '</section>';
+  }
+  const sharedDrafts = new Map();
+  const nativeDraftAcknowledged = new Set();
+  const sharedKey = id => `${S.meeting.id}:${S.meeting.actions.shared_scope || ''}:${id}`;
+  function sharedDraft(id) {
+    const key = sharedKey(id);
+    if (!sharedDrafts.has(key)) sharedDrafts.set(key, {patch: {}, dirty: {}, flight: null, error: '', timer: 0, version:null, current:null});
+    return sharedDrafts.get(key);
+  }
+  const mergeShared = (a, b) => ({...a, ...b, ...((a.detail || b.detail) ? {detail: {...a.detail, ...b.detail}} : {})});
+  const sharedValue = (item, key) => (key === 'text' ? item?.text : item?.detail?.[key]) || '';
+  function sharedAccepted(draft, patch, item) {
+    for (const key of [...('text' in patch ? ['text'] : []), ...Object.keys(patch.detail || {})]) {
+      if (key === 'text' ? 'text' in draft.patch : key in (draft.patch.detail || {})) draft.dirty[key] = sharedValue(item, key);
+      else delete draft.dirty[key];
+    }
+    draft.version = item.version; draft.base = item; draft.current = null;
+  }
+  function nativeClosedDrafts(a) {
+    return (a.items || []).flatMap(local => {
+      const closed = local.closed_draft;
+      if (!closed) return [];
+      const key = `${S.meeting.id}:${a.org}:${local.id}:${closed.item.id}`;
+      if (nativeDraftAcknowledged.has(key)) return [];
+      const draft = sharedDraft(closed.item.id);
+      draft.closed ||= {text:closed.text, detail:closed.detail};
+      draft.nativeRecovery = key;
+      return [{...closed.item, localId:local.id}];
+    });
+  }
+  function sharedClosedCard(it, draft, a) {
+    clearTimeout(draft.timer);
+    draft.closed ||= mergeShared(mergeShared(draft.base || it, draft.inflightPatch || {}), draft.patch);
+    const text = [draft.closed.text, ...Object.values(draft.closed.detail || {})].filter(Boolean).join('\n\n');
+    const name = a.owners.find(o => o.actor === it.updated_by)?.name || it.updated_by;
+    return `<div class="shared-item" data-shared-row="${esc(it.id)}"><div>${it.status === 'pushed' ? 'Sent by ' : 'Dismissed by '}${esc(name)}</div><pre class="selectable" style="white-space:pre-wrap;overflow-wrap:anywhere">${esc(text)}</pre><div class="actions"><button class="btn small" data-act="shared-copy" data-id="${esc(it.id)}">Copy</button><button class="btn small" data-act="shared-close" data-id="${esc(it.id)}">Close</button></div></div>`;
+  }
+  function sharedActions(a, recovered = []) {
+    const data = a.shared;
+    if (data?.gone) return '';
+    if ((!data || !data.sections) && !recovered.length) return '<section class="section"><h2>Tasks</h2>' + (data?.gone ? '' : '<span>Loading…</span>') + '</section>';
+    const here = (data?.presence?.actors || []).filter(p => p.actor !== a.actor).map(p => p.name);
+    const rows = new Map(Object.values(data?.sections || {}).flat().map(it => [it.id, it]));
+    for (const it of recovered) {
+      if (!rows.has(it.id) || it.version >= rows.get(it.id).version) rows.set(it.id, it);
+    }
+    return `<section class="section" data-shared-panel><div class="section-head"><h2>Tasks</h2><span class="aside">${here.length ? esc(here.join(', ') + (here.length === 1 ? ' is here' : ' are here')) : ''}</span></div>` +
+      [...rows.values()].map(it => {
+        const draft = sharedDraft(it.id);
+        if (it.status !== 'proposed' && !(draft.sending && it.updated_by === a.actor) && !draft.closedAcknowledged && (draft.closed || draft.flight || Object.keys(draft.dirty).length)) {
+          return sharedClosedCard(it, draft, a);
+        }
+        if (it.status === 'dismissed' || draft.closedAcknowledged) return '';
+        if (it.status === 'pushed') return `<div class="item sent" data-shared-row="${esc(it.id)}">${esc(it.text)} · Sent${it.result_ref && a.shared_url ? ` · <button class="link" data-act="open-url" data-url="${esc(a.shared_url + '/#/task/' + encodeURIComponent(it.result_ref))}">Open</button>` : ''}</div>`;
+        const server = draft.base?.version > it.version ? draft.base : it;
+        const current = mergeShared(mergeShared(server, draft.inflightPatch || {}), draft.patch), detail = current.detail || {};
+        if (!draft.flight && !draft.sending && !Object.keys(draft.dirty).length) { draft.version = server.version; draft.base = server; }
+        const fields = it.section === 'task' ? ['owner', 'due', 'body'] : it.section === 'doc' ? ['document', 'change', 'why'] : ['side', 'app', 'area'];
+        const owners = a.owners.filter(o => !data.audience || data.audience.includes(o.actor));
+        return `<div class="shared-item" data-shared-row="${esc(it.id)}" data-shared-item="${esc(it.id)}"><label>Title<textarea data-defer data-shared-field="text" aria-label="Title">${esc(current.text)}</textarea></label>` + fields.map(key => {
+          const label = ({body:'Details', owner:'Owner', due:'Due'})[key] || key;
+          if (key === 'owner') return `<label>Owner<select data-defer data-shared-field="owner" aria-label="Owner"><option value="">Choose</option>${owners.map(o => `<option value="${esc(o.actor)}" ${o.actor === detail.owner ? 'selected' : ''}>${esc(o.name)}</option>`).join('')}</select></label>`;
+          const value = key === 'due' ? String(detail[key] || '').slice(0, 10) : detail[key] || '';
+          return `<label>${label}<${key === 'body' ? 'textarea' : 'input'} data-defer data-shared-field="${key}" aria-label="${label}" ${key === 'due' ? 'type="date"' : ''} ${key === 'body' ? '' : `value="${esc(value)}"`}>${key === 'body' ? esc(detail.body || '') + '</textarea>' : ''}</label>`;
+        }).join('') + `<div class="aside" data-shared-edited>${it.updated_by ? esc((a.owners.find(o => o.actor === it.updated_by)?.name || it.updated_by) + ' edited · just now') : ''}</div>
+          <span class="error" data-shared-error ${draft.error ? '' : 'hidden'}>Not saved · <button class="link" data-act="shared-retry" data-id="${esc(it.id)}">Retry</button></span>
+          <div class="aside" data-shared-current ${draft.current ? '' : 'hidden'}>${draft.current ? `Current: ${esc(draft.current.text)} · ${esc(Object.values(draft.current.detail || {}).join(' · '))}` : ''}</div>
+          <div class="actions"><button class="btn small" data-act="shared-dismiss" data-id="${esc(it.id)}">Dismiss</button><button class="btn small primary" data-act="shared-send" data-id="${esc(it.id)}" ${draft.sending || !data.can_send ? 'disabled' : ''}>Send${detail.owner ? ' to ' + esc(owners.find(o => o.actor === detail.owner)?.name || detail.owner) : ''}</button></div></div>`;
+      }).join('') + '</section>';
+  }
+  function sharedRefresh(element, content) {
+    const panel = element.querySelector('[data-shared-panel]');
+    if (!panel) return;
+    const template = document.createElement('template'); template.innerHTML = content;
+    const next = template.content.querySelector('[data-shared-panel]');
+    if (!next) return;
+    panel.querySelector('.section-head').innerHTML = next.querySelector('.section-head').innerHTML;
+    for (const row of panel.querySelectorAll('[data-shared-row]')) {
+      if (![...next.querySelectorAll('[data-shared-row]')].some(n => n.dataset.sharedRow === row.dataset.sharedRow)) row.remove();
+    }
+    for (const row of next.querySelectorAll('[data-shared-row]')) {
+      const old = [...panel.querySelectorAll('[data-shared-row]')].find(n => n.dataset.sharedRow === row.dataset.sharedRow);
+      if (!old) { panel.append(row); continue; }
+      if (!old.hasAttribute('data-shared-item') || !row.hasAttribute('data-shared-item')) { old.replaceWith(row); continue; }
+      // Keep field nodes in place so a refresh never interrupts typing or moves the caret.
+      for (const field of old.querySelectorAll('[data-shared-field]')) {
+        const value = row.querySelector(`[data-shared-field="${field.dataset.sharedField}"]`);
+        if (field.tagName === 'SELECT' && field.innerHTML !== value.innerHTML) field.innerHTML = value.innerHTML;
+        if (field.value !== value.value) {
+          const selection = field === document.activeElement && typeof field.selectionStart === 'number' ? [field.selectionStart, field.selectionEnd] : null;
+          field.value = value.value;
+          if (selection) field.setSelectionRange(...selection);
+        }
+      }
+      for (const selector of ['[data-shared-edited]', '[data-shared-error]', '[data-shared-current]', '.actions']) {
+        const target = old.querySelector(selector), value = row.querySelector(selector);
+        target.innerHTML = value.innerHTML; target.hidden = value.hidden;
+      }
+    }
+  }
+  const sharedFieldValue = field => field.dataset.sharedField === 'due' && field.value ? new Date(field.value + 'T12:00:00').toISOString() : field.value;
+  function sharedChanged(field) {
+    const id = field.closest('[data-shared-item]').dataset.sharedItem, draft = sharedDraft(id), key = field.dataset.sharedField;
+    if (!(key in draft.dirty)) draft.dirty[key] = sharedValue(draft.base, key);
+    if (key === 'text') draft.patch.text = field.value;
+    else (draft.patch.detail ||= {})[key] = sharedFieldValue(field);
+    clearTimeout(draft.timer);
+    if (!draft.error) draft.timer = setTimeout(() => sharedSave(id), 700);
+  }
+  async function sharedSave(id) {
+    const draft = sharedDraft(id);
+    clearTimeout(draft.timer);
+    if (draft.closed || draft.closedAcknowledged || draft.flight || draft.sending || !Object.keys(draft.patch).length) return draft.flight?.catch(() => {});
+    const patch = draft.patch; draft.patch = {}; draft.error = '';
+    draft.inflightPatch = patch;
+    draft.flight = invoke('shared_item', {id, body:{...patch, version:draft.version}});
+    try { const reply = await draft.flight; if (reply.conflict) { draft.current=reply.conflict; draft.version=reply.conflict.version; draft.base=reply.conflict; throw new Error('This item changed'); } sharedAccepted(draft, patch, reply.item); }
+    catch (e) { draft.patch = mergeShared(patch, draft.patch); draft.error = String(e); }
+    finally { draft.flight = null; draft.inflightPatch = null; }
+    if (!draft.error && Object.keys(draft.patch).length && !draft.sending) return sharedSave(id);
+    await poll();
+    const node = [...document.querySelectorAll('[data-shared-item]')].find(n => n.dataset.sharedItem === id);
+    if (node) node.querySelector('[data-shared-error]').hidden = !draft.error;
+    render();
+  }
+  async function sharedFinish(button, send) {
+    const id = button.dataset.id, draft = sharedDraft(id), node = button.closest('[data-shared-item]');
+    if (draft.sending) return;
+    draft.sending = true; clearTimeout(draft.timer); node.querySelectorAll('button,input,textarea,select').forEach(f => f.disabled = true);
+    try {
+      if (draft.flight) { try { await draft.flight; } catch {} if(draft.error) throw new Error(draft.error); }
+      const reply = await invoke('shared_item', {id, action:send ? 'send' : null, body:send ? {...draft.patch,version:draft.version} : {status:'dismissed',version:draft.version}});
+      if (reply.conflict) { draft.current=reply.conflict; draft.version=reply.conflict.version; draft.base=reply.conflict; throw new Error('This item changed'); }
+      if (send && reply.pushed === false && Object.keys(draft.dirty).length) {
+        draft.closed ||= mergeShared(draft.base, draft.patch);
+      } else {
+        draft.patch = {}; draft.dirty = {}; draft.error = ''; draft.current=null; draft.closed=null;
+      }
+    } catch (e) { draft.error = String(e); }
+    finally { draft.sending = false; node.querySelectorAll('button,input,textarea,select').forEach(f => f.disabled = false); }
+    await poll(); render();
+  }
+  async function sharedClose(id, copy) {
+    const draft = sharedDraft(id);
+    if (!draft.closed) return;
+    if (copy) await copyText([draft.closed.text, ...Object.values(draft.closed.detail || {})].filter(Boolean).join('\n\n'));
+    if (draft.nativeRecovery) nativeDraftAcknowledged.add(draft.nativeRecovery);
+    draft.closedAcknowledged = true; draft.closed = null; draft.patch = {}; draft.dirty = {};
+    render();
   }
   /** Tico's task number, when the task's id or link ends in one. */
   function taskNumber(it) {
@@ -390,6 +543,7 @@
     return `<li class="item task"><span class="check done">${icon('check', 11)}</span><div class="content"><div class="title selectable">${n ? `<span class="num">#${esc(n)}</span> ` : ''}${esc(it.title)}</div><div class="sub">${sub}${sub && open ? ' · ' : ''}${open}</div></div></li>`;
   }
   function proposal(it) {
+
     const id = esc(it.id);
     const picking = S.ui.pop?.kind === 'owner' && S.ui.pop.id === it.id;
     const at = it.quote || it.at_ms ? `<span class="at" title="${esc(it.quote)}">${clock(it.at_ms)}</span><span>·</span>` : '';
@@ -1014,7 +1168,8 @@
       if (regions[name] === content) continue;
       const element = document.getElementById(`r-${name}`);
       // Never replace text the person is editing; it renders once they leave it.
-      if (element.contains(active) && active.matches('[data-defer]')) {
+      if (element.contains(active) && active.matches('[data-defer]') && !(name === 'page' && S.meeting?.actions?.shared?.gone)) {
+        if (name === 'page') sharedRefresh(element, content);
         S.deferred = true;
         continue;
       }
@@ -1475,6 +1630,11 @@
       const c = S.meeting?.chat;
       if (c?.retry) act('ask', { question: c.retry });
     },
+    'shared-retry': el => sharedSave(el.dataset.id),
+    'shared-copy': el => sharedClose(el.dataset.id, true),
+    'shared-close': el => sharedClose(el.dataset.id, false),
+    'shared-send': el => sharedFinish(el, true),
+    'shared-dismiss': el => sharedFinish(el, false),
     'remove-item': (el) => act('remove_item', { id: el.dataset.id }),
     'add-open': () => { S.ui.adding = true; S.ui.focusNext = '[data-model="addItem"]'; render(); },
     // Create files the proposal as a private Tico task; one that may quote paused speech asks twice.
@@ -1568,6 +1728,7 @@
   });
   document.addEventListener('input', (event) => {
     const el = event.target;
+    if (el.dataset.sharedField) sharedChanged(el);
     if (el.dataset.model) {
       setModel(el.dataset.model, el.value);
       if (el.dataset.model === 'notes') {
@@ -1600,6 +1761,7 @@
   });
   document.addEventListener('change', (event) => {
     const el = event.target;
+    if (el.dataset.sharedField) { const id = el.closest('[data-shared-item]').dataset.sharedItem; if (!sharedDraft(id).error) sharedSave(id); }
     if (el.dataset.check) {
       S.ui.form[el.dataset.check] = el.checked;
       render();
@@ -1613,6 +1775,7 @@
   }, true);
   document.addEventListener('focusout', async (event) => {
     const el = event.target;
+    if (el.dataset.sharedField) { const id = el.closest('[data-shared-item]').dataset.sharedItem; if (!sharedDraft(id).error) await sharedSave(id); }
     if (el.dataset?.blur === 'rename' && S.ui.titleDraft !== null) {
       const title = S.ui.titleDraft;
       S.ui.titleDraft = null;

@@ -66,8 +66,14 @@ async function auStatsLoad(state) {
   try { s = await get('/v2/automations/stats?range=' + range); }
   catch (e) { s = {error: e.message}; }
   if (AU !== state || state.range !== range) return;
-  state.stats = {range, at: Date.now(), error: s.error || '', n: s.totals?.buckets?.length || 0,
-                 per: new Map((s.automations || []).map(x => [x.id, x]))};
+  const n = s.totals?.buckets?.length || 0, per = new Map((s.automations || []).map(x => [x.id, x]));
+  // Maintenance keeps its own run log (automations-maintenance.js); its counts are added from there.
+  if (state.maint && n) {
+    const mt = await auMaintStats(range, n).catch(() => null);
+    if (AU !== state || state.range !== range) return;
+    if (mt) per.set(AU_MAINT, mt);
+  }
+  state.stats = {range, at: Date.now(), error: s.error || '', n, per};
   auDrawTable();
 }
 function auAllQuery() {
