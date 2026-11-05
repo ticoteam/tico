@@ -207,8 +207,7 @@ def test_standing_booking_retries_reuse_one_verified_silent_hold(inbox, scenario
         request.execute = finish
         return request
     with closing(sqlite3.connect(":memory:")) as connection:
-        ctx = SimpleNamespace(conn=connection, mailbox=BOX, dry=False, calendar=calendar, gmail=mock.MagicMock(), audit=mock.MagicMock(),
-                              policy={"defaults": {"max_sends_per_day": 20}})
+        ctx = SimpleNamespace(conn=connection, mailbox=BOX, dry=False, calendar=calendar, gmail=mock.MagicMock(), audit=mock.MagicMock())
         def submit(mailbox, raw, thread_id, reply_id):
             return queue(inbox, actor="bot:ops", raw=raw, thread_id=thread_id, reply_to_id=reply_id)
         def read(path):

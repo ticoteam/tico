@@ -11,19 +11,19 @@ and who can change it, and stop. Do not look for another way in.
 
 Inputs: the human's chat message asking for sending to go on, with the bot, the recipients and any forward address they named.
 
-Done when: the switch reads back on, or the refusal is reported in one line with who can change it; the bot's rules name only the recipients the human asked for.
+Done when: the sending policy reads back On their own or Ask first, or the refusal is reported in one line with who can change it; the bot's rules name only the recipients the human asked for.
 
 ## What "on" means, so you can say it in one message
 
-With sending on, the bot follows the rules the human gave it with no approval for each message. Three kinds of
-recipient go out that way; everything else still waits for an allowance or an approval:
+Every send goes through Tico's send queue, which decides it under the bot's sending policy, set in Tico:
 
-1. **People inside the team's own domain.**
-2. **The sender of the message it is answering**: a reply only, to that one person, nobody added.
-3. **The forward addresses the human listed** for this bot, such as their other email.
+1. **On their own**: the bot sends within the rules the human gave it, each send after a short undo window.
+2. **Ask first**: each send waits until a person approves it in Tico.
+3. **Never**: nothing is sent; drafts only.
 
-The daily cap, the wait between messages to one person, the blocklist and the people the owner handles personally
-still apply. The human can turn it off again in one message.
+Some sends always ask a person whatever the mode (a new correspondent, attachments, an outside Cc, legal or money
+matters, by default), and blocked recipients and the people the owner handles personally never get one. The human can
+turn it off again in one message.
 
 ## Steps
 
@@ -36,8 +36,8 @@ still apply. The human can turn it off again in one message.
    checks against their rights; it answers at once. A refusal ends the playbook. It files one task for you with the
    entry; when step 3 has put that entry in `bot.yaml`, close it: `hub task update <id> --status done --note "..."`.
 3. **Change the bot's repository** (`$HUB_WORKSPACE/bot-<slug>`):
-   - `bot.yaml`: the gmail entry's `can: [read, draft, send]`. Never touch `outbound_send` or `forward_to`: they are
-     only a request, and the switch itself is the person's (step 6).
+   - `bot.yaml`: the gmail entry's `can: [read, draft, send]`. The sending policy itself is the person's, in Tico
+     (step 5); `bot.yaml` carries no sending setting.
    - `playbooks/inbox-preferences.md`, `## Sending`: change `Off` to `On` and write their rules in their own
      words, one bullet each ("Reply to support senders that support has it". "Forward job, business-development,
      partnership, investor and press mail to <address> with the subject `🔔 Tico inbound: <subject>`, and add a
@@ -48,28 +48,26 @@ still apply. The human can turn it off again in one message.
      `$HUB_DIR/questions/mail-triage.json`.
 4. **Check and commit.** `hub bot check <slug>`; fix what it reports; commit with one line. Put the decision in
    `memory/decisions.md` (who asked, which rules, which addresses).
-5. **Ask them to turn the switch on themselves.** Only a person who manages the bot can, and never you, even as them:
-   Settings > Bots > <bot> > Mail sending (tick "Send without a per-message approval" and type the forward
-   addresses), or `hub bot mail <slug> --send --forward-to <addresses>` with their own token. Say exactly which
-   addresses to type.
-6. **Report in one message.** Say what you changed, which three kinds of recipient go without approval once they turn
-   it on (say them plainly: the team's own domain, a reply to the person who wrote, and the forward address(es) by
-   name), what the rules are, that the daily cap and the blocklist still apply, and how to turn it off (the same
-   switch). Once they say it is on, `$HUB_DIR/scripts/mail.sh policy show --as <slug>` says `outbound_send True`
-   and lists the forward targets.
+5. **Ask them to set the sending policy themselves.** Only a person who manages the bot can, and never you, even as
+   them: Settings > Bots > <bot> > Email sending, **On their own** or **Ask first**, or
+   `hub email policy --bot <slug> --settings '{"mode":"on_their_own"}'` with their own token.
+6. **Report in one message.** Say what you changed, what the rules are (the recipients and forward address(es) by
+   name), what each mode means, that Tico's always-ask rules, caps and blocklist still apply, and how to turn it off
+   (the same setting, Never). Once they say it is set, `$HUB_DIR/scripts/mail.sh policy show --as <slug>` prints the
+   mode.
 
 ## Turning it off, or changing who it forwards to
 
-The person turns the switch off, or changes the forward addresses, in the same place; you change the matching line in
-`## Sending`. Taking an address off the list is reversible by asking again; tell them at once.
+The person sets Never in the same place; you change the matching line in `## Sending`. A change to who it forwards to
+is a change to the rules in `## Sending`. Taking an address off the list is reversible by asking again; tell them at once.
 
 ## When it goes sideways
 
 - **The server refuses `hub tool add` or `hub tool update`.** They do not manage the bot. Say who does.
 - **`on_behalf_of` refused.** The run was not started by the human's own chat message or comment. Tell whoever is on the task;
   do not act as anyone and do not turn anything on.
-- **`mail.sh policy show` says outbound_send False.** The person has not turned it on in Tico yet; its line says so.
-  Never report "on" before it says so.
+- **`mail.sh policy show` says Never.** The person has not set it in Tico yet. Never report "on" before it says
+  On their own or Ask first.
 - **The bot is not its person's message bot yet.** `hub health check` says so; link it as them
   (`playbooks/set-up-a-bot.md`, step 3).
 

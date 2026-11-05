@@ -514,7 +514,7 @@ resolves against the computer before a bot goes active.
 tools:
   - service: gmail
     identity: "desk@example.com"
-    can: [read, draft]         # sends need the Tico mail switch on
+    can: [read, draft]         # send also needs Tico's sending policy to allow it
     env: GOOGLE_SA_KEY
     note: "reads and drafts on its own mailbox; never files or sends"
   - service: warehouse-api

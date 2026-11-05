@@ -237,7 +237,8 @@ not add a blanket Confirm step. A bot may ask about an uncertain action.
    `bot.yaml` with `enabled: false`, so `hub bot create` seeds it off; starting the setup (**Set up**, go-live) switches it on,
    so nobody approves it separately, and the bot logs it.
 4. **Draft until sending is on.** A bot drafts messages to outsiders until a person who manages it turns mail sending on in Tico
-   (Settings → Bots → Mail sending). Once it is on, the bot sends within the requested work and granted Tools.
+   (Settings → Bots → <bot> → Email sending: On their own or Ask first). Every send goes through Tico's send queue;
+   under Ask first a person approves each one. The bot sends within the requested work and granted Tools.
 5. **Parked until then.** Recruiting a seat creates the starter as `needs_setup`: it answers a human's message and nothing else
    (no routine, task notice, Slack route or bot request wakes it) until its setup playbook ends with `hub bot setup-done`,
    which it calls once its answers and first result are recorded. **Set up** on its page, or any first message, begins the
@@ -344,7 +345,7 @@ team_templates: [bookkeeping, ar-followup, accounts-payable, expense-auditor, sp
 
 Same layout as every template, plus what makes a starter reviewable:
 
-- `AGENT.md`, under 150 lines (most are 80 to 100): mandate, what it owns, its setup conversation, `## Sending` (matching the Tico mail switch), how it starts and ends a run, how it uses `hub`, quality
+- `AGENT.md`, under 150 lines (most are 80 to 100): mandate, what it owns, its setup conversation, `## Sending` (matching the bot's sending policy in Tico), how it starts and ends a run, how it uses `hub`, quality
   standards and how it escalates. A head's also has `## Hiring`.
 - `playbooks/`: one for the first routine, one for the most common request, and `onboarding.md`.
 - `knowledge/examples/`: one sample of excellent output for the fictional team Acme. Never a real

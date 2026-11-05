@@ -479,7 +479,8 @@ def test_a_mailbox_the_server_cannot_mint_for_is_still_dispatched_by_its_compute
     from backend import google_workspace as GW
     autonomous(inbox)
     calls = workspace(monkeypatch, (200, {"id": "gmail-1"}))
-    monkeypatch.setattr(GW, "authority", lambda c, mailbox: "personal")      # a person's own Google grant
+    # No Workspace key covers it: the grant its computer holds sends (a personal grant's own computer is the same path).
+    monkeypatch.setattr(GW, "authority", lambda c, mailbox: "legacy")
     queued = queue(inbox, reply_to_id="inbound", thread_id="thread")
     assert S.drain(inbox.app.state.store, inbox.app.state.auth) == 0 and calls == []
     machine = runner(inbox)
