@@ -163,6 +163,8 @@ const path = require('node:path');
       },id);
       const local=page.getByRole('textbox',{name:'Task',exact:true});
       await local.fill('My native unsaved title');
+      await local.press('Tab');
+      await page.waitForFunction(()=>window.pendingFixture.a.items[0].title==='My native unsaved title');
       await page.getByRole('button',{name:'Create',exact:true}).click();
       const closed=page.locator(`[data-shared-row="server-${id}"]`);
       await closed.getByText('Sent by Sam Okafor',{exact:true}).waitFor();
