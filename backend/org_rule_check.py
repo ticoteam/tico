@@ -819,8 +819,9 @@ def apply(c, verdict, payload=None, replay=None, tell=False, obj_now=None, audie
     if operation == "task_answer":
         asked = H.answer_question(c, body.get("target") or {})
         text, text_refs = H.answer_text(asked, body.get("answers") or {}, text=text)
-    elif operation == "answer":
-        text, text_refs = H.answer_text(H.message(c, replay["message"]), body.get("text") or "", text=text)
+    elif operation in ("answer", "reply"):
+        text, text_refs = H.answer_text(H.message(c, replay["message"]),
+                                        replay.get("text") or body.get("text") or "", text=text)
     else:
         text_refs = {}
     from .files import page_references

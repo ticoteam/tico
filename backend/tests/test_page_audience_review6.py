@@ -70,3 +70,33 @@ def test_held_and_replayed_answers_revoke_question_option_labels(api, send):
         for path in [*("rule-holds/" + hid for hid in holds), "rule-holds", f"tasks/{tid}/comments", f"tasks/{tid}/answers"]:
             shown = json.dumps(get(api, path, token="cara-test"))
             assert label not in shown and fid not in shown, (path, shown)
+
+
+def test_held_runner_answer_keeps_its_question_option_source(api):
+    tid, attempt, fid = public_page(api)
+    label = "Confidential draft"
+    question = ask("bot:ops")
+    question["questions"][0]["options"][0].update(label=label, file=fid + "@1")
+    asked = post(api, f"tasks/{tid}/comments", {"text": "Choose the draft", "ask": question})["comment"]
+    # Give the already-claimed test turn this question as its input, as a runner claim would.
+    with api.app.state.store.transaction() as c:
+        c.execute("UPDATE jobs SET message_id=? WHERE id=(SELECT job_id FROM attempts WHERE id=?)",
+                  (asked["id"], attempt["id"]))
+    text = "Never publish an unreviewed draft."
+    api.app.state.judge = Judge(api.app.state.store, {text: label})
+    rule(api, {"kind": "internal", "text": text, "who": {"bots": ["ops"]},
+               "if_broken": "escalate", "reviewer": "cara"})
+    post(api, f"attempts/{attempt['id']}/started", {"thread_id": "held-answer"}, token=attempt["token"])
+    post(api, f"attempts/{attempt['id']}/complete", {"outcome": "completed", "text": label, "last_seq": 0},
+         token=attempt["token"])
+    with api.app.state.store.read() as c:
+        row = c.execute("SELECT id,payload FROM org_rule_holds WHERE operation='reply'").fetchone()
+        assert row and {"file": fid, "version": 1} in H._json(row["payload"], {})["body_sources"]
+        hid = row["id"]
+    assert get(api, "rule-holds/" + hid, token="cara-test")["text"] == label
+    edit(api, fid, {"people": ["ben"]})
+    for deleted in (False, True):
+        if deleted:
+            assert api.delete("/api/v2/files/" + fid, headers=headers()).status_code == 200
+        shown = json.dumps(get(api, "rule-holds/" + hid, token="cara-test"))
+        assert label not in shown and fid not in shown
