@@ -120,13 +120,17 @@ const scenarios = {
         assert.deepEqual(await controls(), pending, 'an old read cannot roll back or unlock a pending save');
       }
       await page.unroute('**/api/v2/mailboxes');
-      await page.evaluate(() => renderSettingsMailboxes());
+      if (finishRead === 'during') {
+        fake.state.mailboxes.push(box('mb-later', 'later@acme.example'));
+        await page.evaluate(() => renderSettingsMailboxes());
+      }
       assert.deepEqual(await controls(), pending, 'another render leaves the pending save alone');
       assert.equal(await calendar.evaluate(el => el.isConnected), true);
       const answer = google.answer('/api/v2/google/permissions', save.request().url(), 'PUT', body);
       Object.assign(fake.may, {organize: true, send: false, change_calendar: true});
       await save.fulfill({contentType: 'application/json', body: JSON.stringify(answer)});
       await page.waitForFunction(() => [...document.querySelectorAll('#mailboxes-may [data-google-may]')].every(el => !el.disabled));
+      if (finishRead === 'during') await page.locator('[data-mb-row=mb-later]').waitFor();
       if (finishRead === 'after') await finish();
       assert.deepEqual(await controls(), pending.map(([field, checked]) => [field, checked, false]));
       await page.evaluate(() => renderSettingsMailboxes());
