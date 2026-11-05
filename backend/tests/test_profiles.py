@@ -189,6 +189,11 @@ WIDE_GAP_NOT_RUNS = [
     "Check and update production acceptance tests", "Verify and add production acceptance tests",
     "Run writing production acceptance tests",
 ]
+# Review 1 (PR 2599): a change verb in the gap is work on the acceptance tests, not a run, at either scope.
+CHANGE_VERB_NOT_RUNS = [
+    "Finish changing production acceptance tests", "Run changing production acceptance tests",
+    "Verify and modify production acceptance tests", "Complete fixing production acceptance tests",
+]
 
 
 @pytest.mark.parametrize("title,child", [
@@ -224,6 +229,8 @@ WIDE_GAP_NOT_RUNS = [
     # run verb and the phrase; these five match the old two-word gap, so they stay ordinary, top-level and parent-linked.
     *[pytest.param(t, child, id=f"production-acceptance-gap-{i}-{'child' if child else 'top'}")
       for i, t in enumerate(WIDE_GAP_NOT_RUNS) for child in (False, True)],
+    *[pytest.param(t, child, id=f"production-acceptance-change-{i}-{'child' if child else 'top'}")
+      for i, t in enumerate(CHANGE_VERB_NOT_RUNS) for child in (False, True)],
 ])
 def test_ordinary_tasks_remain_outside_the_reviewer_profile(api, title, child):
     with api.app.state.store.transaction() as c:

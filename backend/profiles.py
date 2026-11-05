@@ -68,7 +68,11 @@ _NOT_BUILDING_THE_ACCEPTANCE = (
     r"(?!(?:add|adds|adding|added|build|builds|building|built|write|writes|writing|wrote|written"
     r"|update|updates|updating|updated|implement|implements|implementing|implemented|create|creates|creating|created"
     r"|draft|drafts|drafting|drafted|plan|plans|planning|planned|develop|develops|developing|developed"
-    r"|author|authors|authoring|authored|and|or)\b)")
+    r"|author|authors|authoring|authored|change|changes|changing|changed|edit|edits|editing|edited"
+    r"|modify|modifies|modifying|modified|fix|fixes|fixing|fixed|remove|removes|removing|removed"
+    r"|delete|deletes|deleting|deleted|rewrite|rewrites|rewriting|rewrote|rewritten"
+    r"|revise|revises|revising|revised|extend|extends|extending|extended|refactor|refactors|refactoring"
+    r"|and|or)\b)")
 PRODUCTION_ACCEPTANCE_RUN_TITLE = re.compile(
     r"^(?:(?:run|rerun|re-run|execute|perform|carry out|complete|finish|check|verify|do)\b"
     r"(?:\s+" + _NOT_BUILDING_THE_ACCEPTANCE + r"[\w-]+){0,2}?"
