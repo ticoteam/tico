@@ -1395,7 +1395,15 @@ def letter_blob_readable(c, principals, row, seen, memo):
             room = H.conversation(c, cid)
             for principal in principals if isinstance(principals, tuple) else (principals,):
                 viewer = threads.actor_viewer(c, principal)
-                if viewer is None or threads.denial(c, viewer, room) is not None:
+                viewers = [viewer] if viewer else []
+                if viewer and H.is_bot(principal):
+                    from dataclasses import replace
+                    # A stored proof keeps the original bot run's thread grant, with current task privacy.
+                    for aid in attempts:
+                        attempt = read_cache.one(c, "SELECT bot_id FROM attempts WHERE id=?", (aid,))
+                        if attempt and "bot:" + attempt["bot_id"] == principal:
+                            viewers.append(threads.Viewer(None, replace(viewer.who, attempt_id=aid)))
+                if not any(threads.denial(c, candidate, room) is None for candidate in viewers):
                     return False
     return not row["original_blob_id"] or blob_readable(c, principals, row["original_blob_id"], seen, memo)
 

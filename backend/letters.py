@@ -142,7 +142,7 @@ def authorize(c, auth, who, *, deferred=False):
     return company, dict(own) if own else {}, mode
 
 
-def access(c, auth, who, row):
+def record_access(c, auth, who, row):
     """A delegated read qualifies independently as the person and the actual bot."""
     auth.task_snapshot(c)
     other = who.task_actor
@@ -172,7 +172,10 @@ def _access(c, auth, who, row):
         if row["task_id"]:
             auth.task(c, who, row["task_id"])
         if row["thread_id"]:
-            auth.conversation(c, who, row["thread_id"])
+            reader = who
+            if who.role == "bot" and who.actor == row["requested_by"] and row["attempt_id"]:
+                reader = replace(who, attempt_id=row["attempt_id"])
+            auth.conversation(c, reader, row["thread_id"])
         if not privacy.blob_readable(c, privacy.actor(who), row["source_blob_id"]):
             raise Problem("privacy", "The letter's source is no longer readable", 403)
     except Problem:
@@ -228,12 +231,12 @@ def provenance(c, who, body, original):
 
 
 def readable(c, auth, who, row):
-    return access(c, auth, who, row) == "full"
+    return record_access(c, auth, who, row) == "full"
 
 
 def get(c, auth, who, ident, *, metadata=False):
     row = c.execute("SELECT * FROM letters WHERE id=?", (ident,)).fetchone()
-    level = access(c, auth, who, row) if row else None
+    level = record_access(c, auth, who, row) if row else None
     if level is None or (level != "full" and not metadata):
         raise Problem("not_found", "Letter not found", 404)
     return dict(row) | {"_redacted": level != "full"}
@@ -662,7 +665,7 @@ class Letters:
                      else later(BACKOFF[min(row["attempts"], len(BACKOFF)-1)]), H.now(), ident))
 
     def check_sender(self, c, row):
-        who = (Identity(row["requested_by"], "bot") if H.is_bot(row["requested_by"]) else
+        who = (Identity(row["requested_by"], "bot", attempt_id=row["attempt_id"] or "") if H.is_bot(row["requested_by"]) else
                self.auth.identity_for_actor(c, row["requested_by"]))
         if row["acting_bot_id"] and not H.is_bot(who.actor):
             who = replace(who, task_actor="bot:" + row["acting_bot_id"])
@@ -930,7 +933,7 @@ def install(app, config, store, auth, mutate):
             shown, used, cursor = [], 0, None
             for row in rows:
                 cursor = row["id"]
-                level = access(c, auth, request.state.identity, row)
+                level = record_access(c, auth, request.state.identity, row)
                 if level is None:
                     continue
                 entry = public(dict(row) | {"_redacted": level != "full"})
