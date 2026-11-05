@@ -2201,7 +2201,7 @@ STABLE.extend([
 ])
 TAGS['Connections'] = 'Every connection in one list: who reads what it brings in, its bots and where to configure it.'
 STABLE.extend([
-    ('/api/v2/connections','get','Connections','listConnections','Slack, GitHub, mail bots, Email & Phone inboxes, meeting '
+    ('/api/v2/connections','get','Connections','listConnections','Slack, GitHub, mail bots, Tico addresses and numbers, meeting '
      'importers, webhooks, physical mail and Listening: the owner and admins see every row, anyone else their own and the '
      'company\'s they may read. Paged with cursor','ConnectionList'),
 ])
@@ -3182,7 +3182,7 @@ STABLE.extend([
 ])
 
 
-# Settings > Mailboxes (backend/mailboxes.py): which inboxes Tico uses and who may use each.
+# Settings > Inboxes (backend/mailboxes.py): which inboxes Tico uses and who may use each.
 TAGS["Mailboxes"] = "Which mailboxes Tico uses and who may use each: Read, or Read and write (organize, draft and send, as far as the company allows)."
 _MAILBOX_LEVEL = {"enum": ["none", "read", "read_write"]}
 _MAILBOX_REF = obj({"id": "s", "name": "s"})
@@ -3191,7 +3191,10 @@ SCHEMAS.update({
                     "person_id": "n", "person_name": "s", "connection": {"enum": ["workspace", "personal"]},
                     "status": {"enum": ["active", "stopped"]},
                     "state": {"enum": ["connected", "not_connected", "awaiting_person", "stopped"]},
-                    "level": _MAILBOX_LEVEL, "routines": items(_MAILBOX_REF)}),
+                    "level": _MAILBOX_LEVEL, "routines": items(_MAILBOX_REF),
+                    "used_by": obj({"people": "i", "bots": "i", "names": items({"type": "string"})}),
+                    "synced_at": "n", "newest_epoch": {"type": ["integer", "null"]},
+                    "sync": {"enum": ["", "signin", "failed"]}, "sync_error": "s"}),
     "MailboxMay": obj({"read": "b", "organize": "b", "send": "b", "change_calendar": "b"}),
     "MailboxList": obj({"admin": "b", "domain": "s", "may": ref("MailboxMay"), "mine": {"anyOf": [ref("Mailbox"), {"type": "null"}]},
                         "shared": items(ref("Mailbox")), "mailboxes": items(ref("Mailbox"))}),
@@ -3222,6 +3225,35 @@ STABLE.extend([
     ("/api/v2/mailboxes/{mid}/accesses/{access_id}", "delete", "Mailboxes", "removeMailboxAccess",
      "Take one person's or bot's access away", "MailboxDetail"),
 ])
+
+TAGS["Physical mail"] = "Company letters, explicit Read grants and legal mail routing (docs/physical-mail.md)."
+SCHEMAS.update({
+    "PostalMailGrant": obj({"id": "s", "address_id": "s", "grantee_type": {"enum": ["person", "bot"]},
+                            "grantee_id": "s", "level": {"enum": ["read"]}, "granted_by_id": "s",
+                            "created_at": "s", "updated_at": "s"}),
+    "PostalMailGrants": obj({"address_id": "s", "grants": items(ref("PostalMailGrant")), "next": "n"}),
+    "PostalMailGrantResult": obj({"grant": ref("PostalMailGrant")}),
+    "PostalMailRevoked": obj({"ok": "b"}),
+    "PostalMailBots": obj({"bots": items(obj({"id": "s", "slug": "s", "display_name": "s", "state": "s",
+                                            "read_error": "n", "routing_error": "n"})), "next": "n"}),
+    "PostalMailSettings": obj({"settings": obj({"id": "i", "legal_bot_id": "n", "updated_by_id": "n",
+                                               "created_at": "s", "updated_at": "s"})}),
+})
+STABLE.extend([
+    ("/api/v2/postal/bots", "get", "Physical mail", "listPostalMailBots",
+     "Mail picker bots and read/routing restrictions; paged and 64 KB capped; owner or admin", "PostalMailBots"),
+    ("/api/v2/postal/addresses/{address_id}/grants", "get", "Physical mail", "listPostalMailGrants",
+     "Read grants for one assignment, or all addresses (`all`); paged and 64 KB capped; owner or admin", "PostalMailGrants"),
+    ("/api/v2/postal/addresses/{address_id}/grants/{grantee_type}/{grantee_id}", "put", "Physical mail", "grantPostalMailRead",
+     "Give one person or bot Read, including private letters and scans; owner or admin", "PostalMailGrantResult"),
+    ("/api/v2/postal/addresses/{address_id}/grants/{grantee_type}/{grantee_id}", "delete", "Physical mail", "revokePostalMailRead",
+     "Revoke one Read grant; owner or admin", "PostalMailRevoked"),
+    ("/api/v2/postal/settings", "get", "Physical mail", "getPostalMailSettings",
+     "Legal mail routing; null legal_bot_id means owner", "PostalMailSettings"),
+    ("/api/v2/postal/settings", "put", "Physical mail", "setPostalMailSettings",
+     "Route future legal mail to an active bot or the owner (null), keeping the owner informed; owner or admin", "PostalMailSettings"),
+])
+
 
 def generate():
     """The document for a default installation: what docs/openapi/v2.json holds."""

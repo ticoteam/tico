@@ -1,10 +1,10 @@
 # Physical mail
 
-> **Unreleased**: the install side and Settings > Mail are built; Tico Gateway's mailboxes are not on sale yet. The API
+> **Unreleased**: the install side and Settings > Inboxes' Letters in are built; Tico Gateway's mailboxes are not on sale yet. The API
 > below may change.
 
 Tico Mail brings the company's paper mail into Tico. Each scanned letter is saved as a file, read, sorted by kind and
-sent to whoever handles that kind. Legal papers reach the owner at once.
+sent to whoever handles that kind. Legal papers reach the owner at once, including when a chosen bot handles them.
 
 ## Where letters come from
 
@@ -14,7 +14,7 @@ sent to whoever handles that kind. Legal papers reach the owner at once.
 
   Prices: shared $10 a month per recipient, private from $25 a month; scans $1 a letter for up to 10 pages, then
   $0.25 a page. Tico doesn't deposit checks: ask Tico support to forward one, or deposit it yourself.
-- **Your own provider, by email.** An owner or admin names one company email inbox (Email & Phone) as the mail-intake
+- **Your own provider, by email.** An owner or admin names one Tico address as the mail-intake
   address and who sends it scans: `PUT /api/v2/postal/intake` with `{"inbox_id": "...", "senders":
   ["scans@provider.com", "@provider.com"]}` (at least one address or `@domain`), or `{"inbox_id": null}` to stop.
   Have your mail provider send its scans there. Each PDF or image attached to a message from a listed sender becomes a
@@ -36,7 +36,7 @@ of its tries.
 
 | Kind | Goes to |
 |---|---|
-| Legal (summons, lawsuit, subpoena, court papers) | The owner's Needs you, private, due on the deadline |
+| Legal (summons, lawsuit, subpoena, court papers) | The owner by default; optionally a chosen bot, with the owner as requester and a notice to the owner; private, due on the deadline |
 | Government or tax | The Finance bot, or the owner when there is none; private |
 | Bill | The Finance bot, or the owner; private |
 | Financial (statements, bank notices) | The Finance bot, or the owner; private |
@@ -48,14 +48,31 @@ of its tries.
 Legal goes to the owner whenever the reader or Decide says legal, however unsure: a missed summons costs more than
 a wrong card. A check works the same way: when the mailbox provider flags one in the envelope, or the reader sees
 one, it goes to the owner whatever Decide says, never to junk or the Assistant. Junk is archived only when Decide is sure; anything else short of its threshold goes to the Assistant.
-The routing lives in one table (`ROUTES` in `backend/postal_mail.py`) so it can become editable later.
+An owner or admin may choose an active bot for future legal mail in Settings > Inboxes > Settings > Letters in (Legal mail). The owner remains a party to
+each private task and receives a notice with its deadline. A paused or unavailable bot falls back to the owner.
+Resetting the setting to Owner affects future letters; existing tasks stay where they are. Upgrading enables no
+grants and keeps legal mail going to the owner.
 
 A letter's text comes from outside the company. The reading prompt and the Decide question both treat it as data,
 never as instructions, and each task says so.
 
 ## Who sees a letter
 
-A filed letter shows to whoever may read its task. Every kind but Other is a private task (account numbers and amounts
+A Read grant lets one person or bot read the company's letters and scans, including private legal mail. A grant
+covers all addresses or one Gateway assignment. Only an owner or admin may grant or revoke access; the grant keeps
+who granted it and when, and both actions leave audit events. A grant covers letter content and its scan, without
+opening the private task. Revocation removes this access immediately; task-party rights and other grants still apply.
+
+When the Assistant or BotOps reads for a person, both the person and the actual bot must independently qualify by
+a mail grant or the letter's existing access policy. A person's grant alone never grants the Assistant access.
+This applies to letters, hub/MCP reads, raw scan downloads and exact file-version downloads.
+
+The built-in Counsel also supports these tools inside its claimed runs. A grant permits only the letters and scans
+within its scope; without a grant, Counsel reads the legal letter handled by its current task. Its restrictions on
+other files, document versions, credentials and outgoing actions still apply. Bots whose hosts only sync chat cannot
+use physical mail; both the API and pickers explain this restriction.
+
+Without a grant, a filed letter shows to whoever may read its task. Every kind but Other is a private task (account numbers and amounts
 are not the whole company's to read), so it shows only to the owner and the bot it went to, not to admins. A letter with no task (just in, failed, or archived as junk) shows in full only to the
 owner; admins see that it came and its status, so they can retry it, but not its sender, summary or scan. The scan
 download (`/api/v2/files/{id}`) follows the same rule, and so do the hub tools.
@@ -67,11 +84,15 @@ A letter whose scan or reading fails is marked `failed` and tried again after 1 
 last try a scan that still cannot be read is filed for the owner unread, so nobody misses it. A retry never makes a
 second task.
 
-## Settings > Mail
+## Settings > Inboxes
 
-Addresses (state, kind, the full address once active, registered agent, Form 1583 status) with open orders as
-Pending; Get an address (owner or admin: state, kind, monthly and scan prices); Bring your own (the intake
-inbox); Recent letters, with Retry on a failed one for an owner or admin.
+Each address is a Letters in row in Settings > Inboxes (`#/settings/inboxes`), with open orders as Pending and the
+email-in inbox as Mail by email (still listed, as Not in use, once it is turned off while letters it brought in remain,
+so a failed one can be retried). An address's page shows its Form 1583 progress until it is active, who reads it (an
+owner or admin gives and removes Read on that address there), its automations and its letters (date, sender, kind,
+scan, the task it went to, status), with Retry on a failed one for an owner or admin. Inboxes > Settings > Letters in
+has the addresses with Get an address (owner or admin: state, kind, monthly and scan prices), Bring your own (the
+intake inbox), Who can use it (Read and Remove on all addresses) and Legal mail (who receives legal letters).
 
 ## API, CLI and MCP
 
@@ -83,5 +104,20 @@ inbox); Recent letters, with Retry on a failed one for an owner or admin.
 | `GET /api/v2/postal/addresses` | The company's addresses at Tico Gateway, its orders, and prices when Tico Gateway sends them. |
 | `POST /api/v2/postal/orders` | Order an address (`kind`: `shared` or `private`; `state`; `company_name`), owner or admin, with an `Idempotency-Key`. Tico staff fulfil it. |
 | `GET` / `PUT /api/v2/postal/intake` | The email-in inbox. |
+| `GET /api/v2/postal/addresses/{address_id}/grants` | Explicit Read grants, owner or admin; `limit` (1–100) and `after` page, `next` cursor, 64 KB cap. Use `all` for company-wide grants. |
+| `PUT /api/v2/postal/addresses/{address_id}/grants/{grantee_type}/{grantee_id}` | Give Read with `{"level":"read"}`; owner or admin, idempotent. `grantee_type` is `bot` or `person`; a bot id or slug is accepted and stored as its stable id. |
+| `DELETE /api/v2/postal/addresses/{address_id}/grants/{grantee_type}/{grantee_id}` | Revoke that grant; owner or admin. |
+| `GET` / `PUT /api/v2/postal/settings` | Legal routing: `{"legal_bot_id":null}` for the owner (default), or an active bot's id or slug; only an owner or admin writes. |
+| `GET /api/v2/postal/bots` | Owner/admin mail pickers: paged bot ids, slugs and read/routing errors; the server enforces these same restrictions. |
+
+For a Gateway address, use its `assignment_id` from `GET /api/v2/postal/addresses`. The letter's `address_id` is the
+same assignment from the relay delivery; older deliveries and email intake use their exact `address` instead.
+An assignment grant never matches a different assignment that happens to share the same street address.
+Use URL encoding for address and grantee path segments and an `Idempotency-Key` for writes.
+
+For example, to let a bot whose slug is `legal` read physical mail at every company address, send
+`PUT /api/v2/postal/addresses/all/grants/bot/legal` with `{"level":"read"}`. Optionally send
+`PUT /api/v2/postal/settings` with `{"legal_bot_id":"legal"}` to give it future legal-mail tasks while keeping the
+owner informed. Use `DELETE` on the grant's URL to revoke it, and `{"legal_bot_id":null}` to restore owner routing.
 
 Bots and people read letters with `hub mail list` and `hub mail read <id>` (MCP `hub_mail_list`, `hub_mail_read`).

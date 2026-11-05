@@ -3194,6 +3194,7 @@ export type Mailbox = {
   id: string;
   kind: "personal" | "shared";
   level: "none" | "read" | "read_write";
+  newest_epoch: number | null;
   person_id: string | null;
   person_name: string;
   provider: string;
@@ -3203,6 +3204,14 @@ export type Mailbox = {
 }>;
   state: "connected" | "not_connected" | "awaiting_person" | "stopped";
   status: "active" | "stopped";
+  sync: "" | "signin" | "failed";
+  sync_error: string;
+  synced_at: string | null;
+  used_by: {
+  bots: number;
+  names: Array<string>;
+  people: number;
+};
 };
 
 export type MailboxAccessCreate = {
@@ -3766,6 +3775,61 @@ export type PlaceSave = {
   audience?: PlaceAudience | null;
 };
 
+export type PostalLegalRouting = {
+  legal_bot_id: string | null;
+};
+
+export type PostalMailBots = {
+  bots: Array<{
+  display_name: string;
+  id: string;
+  read_error: string | null;
+  routing_error: string | null;
+  slug: string;
+  state: string;
+}>;
+  next: string | null;
+};
+
+export type PostalMailGrant = {
+  address_id: string;
+  created_at: string;
+  granted_by_id: string;
+  grantee_id: string;
+  grantee_type: "person" | "bot";
+  id: string;
+  level: "read";
+  updated_at: string;
+};
+
+export type PostalMailGrantResult = {
+  grant: PostalMailGrant;
+};
+
+export type PostalMailGrants = {
+  address_id: string;
+  grants: Array<PostalMailGrant>;
+  next: string | null;
+};
+
+export type PostalMailRevoked = {
+  ok: boolean;
+};
+
+export type PostalMailSettings = {
+  settings: {
+  created_at: string;
+  id: number;
+  legal_bot_id: string | null;
+  updated_at: string;
+  updated_by_id: string | null;
+};
+};
+
+export type PostalReadGrant = {
+  level?: string;
+};
+
 export type Preset = {
   name: string;
 };
@@ -3953,6 +4017,10 @@ export type RanOn = {
   runtime: string | null;
 }>;
   task_model: Record<string, unknown> | null;
+};
+
+export type ReadAll = {
+  ago_ms?: number | null;
 };
 
 export type ReadMark = {
@@ -7703,6 +7771,11 @@ export type GetPlaceParams = {
 export type GetPlaceBody = never;
 export type GetPlaceResponse = Place;
 
+/** GET /api/v2/postal/settings */
+export type GetPostalMailSettingsParams = Record<string, never>;
+export type GetPostalMailSettingsBody = never;
+export type GetPostalMailSettingsResponse = PostalMailSettings;
+
 /** GET /api/v2/presence */
 export type GetPresenceParams = {
   place: string;
@@ -7971,6 +8044,15 @@ export type GiveFeedbackParams = {
 };
 export type GiveFeedbackBody = FeedbackGive;
 export type GiveFeedbackResponse = Feedback;
+
+/** PUT /api/v2/postal/addresses/{address_id}/grants/{grantee_type}/{grantee_id} */
+export type GrantPostalMailReadParams = {
+  address_id: string;
+  grantee_id: string;
+  grantee_type: string;
+};
+export type GrantPostalMailReadBody = PostalReadGrant;
+export type GrantPostalMailReadResponse = PostalMailGrantResult;
 
 /** POST /api/v2/goals/{gid}/status/auto */
 export type HandBackGoalStatusParams = {
@@ -8811,6 +8893,23 @@ export type ListPagesParams = {
 export type ListPagesBody = never;
 export type ListPagesResponse = PageList;
 
+/** GET /api/v2/postal/bots */
+export type ListPostalMailBotsParams = {
+  after?: string;
+  limit?: number;
+};
+export type ListPostalMailBotsBody = never;
+export type ListPostalMailBotsResponse = PostalMailBots;
+
+/** GET /api/v2/postal/addresses/{address_id}/grants */
+export type ListPostalMailGrantsParams = {
+  address_id: string;
+  after?: string;
+  limit?: number;
+};
+export type ListPostalMailGrantsBody = never;
+export type ListPostalMailGrantsResponse = PostalMailGrants;
+
 /** GET /api/v2/profiles */
 export type ListProfilesParams = Record<string, never>;
 export type ListProfilesBody = never;
@@ -9217,7 +9316,7 @@ export type MarkThreadAndSubthreadsReadParams = {
   "Idempotency-Key": string;
   thread_id: string;
 };
-export type MarkThreadAndSubthreadsReadBody = never;
+export type MarkThreadAndSubthreadsReadBody = ReadAll | null;
 export type MarkThreadAndSubthreadsReadResponse = ThreadReadAll;
 
 /** POST /api/v2/threads/{thread_id}/read */
@@ -9959,6 +10058,16 @@ export type RevokeMyTokenParams = {
 export type RevokeMyTokenBody = Empty;
 export type RevokeMyTokenResponse = unknown;
 
+/** DELETE /api/v2/postal/addresses/{address_id}/grants/{grantee_type}/{grantee_id} */
+export type RevokePostalMailReadParams = {
+  "Idempotency-Key": string;
+  address_id: string;
+  grantee_id: string;
+  grantee_type: string;
+};
+export type RevokePostalMailReadBody = never;
+export type RevokePostalMailReadResponse = PostalMailRevoked;
+
 /** POST /api/v2/service-keys/{key_id}/revoke */
 export type RevokeServiceKeyParams = {
   "Idempotency-Key": string;
@@ -10356,6 +10465,11 @@ export type SetPersonAccessParams = {
 };
 export type SetPersonAccessBody = TeammateAccess;
 export type SetPersonAccessResponse = TeammateAccessView;
+
+/** PUT /api/v2/postal/settings */
+export type SetPostalMailSettingsParams = Record<string, never>;
+export type SetPostalMailSettingsBody = PostalLegalRouting;
+export type SetPostalMailSettingsResponse = PostalMailSettings;
 
 /** PUT /api/v2/org/order/{manager} */
 export type SetReportOrderParams = {
