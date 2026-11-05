@@ -1547,6 +1547,10 @@ class SettingsAdmin:
         kept = (before or {}).get("model") or ""
         saved = self.models.get(kept) if kept else None
         held = bool(saved and saved.get("held"))
+        # An undo restores the record a save replaced. A record that named no model was the bot's own model, not the held
+        # one the save added, so the held rule does not keep the held model for it.
+        if undo_change_id and chosen is not None and not chosen.model:
+            held = False
         # A body that leaves `task_model` out names no model, so on the saved held model it keeps it, as `{}` does. An
         # explicit null still clears the whole setting. The undo below names every field it sends.
         if chosen is None and held and "task_model" not in body.model_fields_set:
