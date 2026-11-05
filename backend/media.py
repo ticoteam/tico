@@ -437,7 +437,7 @@ def blob_for(c, auth, who, bid):
     from . import task_privacy as privacy
     if not privacy.blob_readable(c, privacy.actor(who), bid):
         raise Problem("not_found", "File not found", 404)
-    # A letter's scan follows the letter's own policy (backend/postal_mail.py), its task's or the owner's alone.
+    # Scan grants are checked for the represented person and the actual bot independently.
     from . import postal_mail
     scan = postal_mail.scan_access(c, auth, who, bid)
     if scan is not None:
