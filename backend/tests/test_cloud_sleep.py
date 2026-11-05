@@ -72,7 +72,9 @@ def test_a_sleeping_bots_hold_does_not_hide_its_signed_out_check(cloud, company_
     if company_stopped:
         work(cloud)
         with cloud.store.transaction() as c:
-            parent = H.task_create(c, 'human:ana', 'Change to check', '', 'human:ana', private=False)
+            parent = H.task_create(c, 'human:ana', 'Change to check', '', 'bot:ops', private=False)
+            c.execute("UPDATE jobs SET state='completed' WHERE state='queued' AND message_id IN "
+                      "(SELECT id FROM messages WHERE conversation_id=?)", (parent['conversation_id'],))
             c.execute("UPDATE jobs SET created_at=? WHERE bot_id='ops' AND state='queued'",
                       (H.shift(H.now(), hours=-4),))
             org_turns.save(c, org_turns.LEVELS, {'warning_per_person': 1, 'stop_per_person': 1})
