@@ -17,7 +17,7 @@ import tempfile
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[2]
-DIRS = ("backend", "clients", "scripts", "e2e", "runner")
+DIRS = ("backend", "clients", "scripts", "e2e", "runner_support")
 SKIP = ("backend/migrations/", "backend/tests/fixtures/", "scripts/cleanup/", "backend/tests/test_schema_renames.py",
         "backend/tests/test_hubdb_upgrade")
 DML = re.compile(r"^\s*(SELECT|INSERT|UPDATE|DELETE|WITH|REPLACE)\b", re.I)

@@ -2,10 +2,16 @@
    and knowledge/, as its computer reported them (GET /api/v2/bots/{bot}/memory). A small button beside the bot's
    name shows how many are new; it opens a panel on a desktop and a sheet on a phone with the updates, newest first,
    and the bot's learnings.md and decisions.md, working rules first and then newest entries first (learnNewestFirst).
-   Opening it marks the updates seen. */
+   Opening it marks the updates seen.
+   Dream (backend/dream.py): a button at the top of the panel starts a cleanup task for the bot over its own memory.
+   While it runs the panel is in dream mode: a status line (with the reason, for an auto dream), its questions as cards
+   to answer, then its summary and the commits it made. A question also shows as a small card on the bot's page, and the button carries a mark. */
 'use strict';
 
 const learnApi = slug => `/v2/bots/${encodeURIComponent(slug)}/memory`;
+const dreamApi = slug => `/v2/bots/${encodeURIComponent(slug)}/dream`;
+const DREAM_LINES = {starting: 'Falling asleep…', dreaming: 'Dreaming…', asking: 'A few questions', done: 'Awake', stopped: 'Awake'};
+const dreamOpen = dream => !!dream && !['done', 'stopped'].includes(dream.state);
 
 async function botLearningsLoad(slug) {
   const button = $('#bot-learn');
@@ -21,11 +27,104 @@ async function botLearningsLoad(slug) {
   button.onclick = async () => {
     button.disabled = true;
     try {
-      const current = await get(learnApi(slug));
-      if (BOT?.slug === slug && button.isConnected) learnOpen(slug, current);
+      const [current, dream] = await Promise.all([get(learnApi(slug)), dreamFetch(slug)]);
+      if (BOT?.slug === slug && button.isConnected) learnOpen(slug, current, dream);
     } catch (e) { toast(e.message); }
     finally { button.disabled = false; }
   };
+}
+
+// The bot's dream, or null: an older server has none, and a failed read shows the panel as it was.
+async function dreamFetch(slug, fresh = false) {
+  try { return (await get(dreamApi(slug), {fresh}))?.dream || null; } catch { return null; }
+}
+
+// With the bot's page: the mark on the Learnings button, and its open questions as a card near the top.
+async function botDreamLoad(slug) {
+  const dream = await dreamFetch(slug);
+  if (BOT?.slug === slug) dreamPageShow(slug, dream);
+}
+
+function dreamPageShow(slug, dream) {
+  const button = $('#bot-learn');
+  if (button) {
+    button.classList.toggle('dreaming', dreamOpen(dream));
+    button.title = dreamOpen(dream) ? 'Learnings · Dreaming' : 'Learnings';
+  }
+  const host = $('#bot-dream-host');
+  if (!host) return;
+  const q = dream?.state === 'asking' && dream.questions?.mine ? dream.questions : null;
+  if (!q) { host.innerHTML = ''; host.dataset.ask = ''; return; }
+  if (host.dataset.ask === q.message_id) return;              // the same question: keep what was typed
+  host.dataset.ask = q.message_id;
+  host.innerHTML = `<section class="dream-card-page" aria-label="Dream questions">
+    <div class="dream-sky" aria-hidden="true"><i></i><i></i><i></i></div>
+    <div class="dream-page-head"><span class="nav-icon" aria-hidden="true">auto_awesome</span>A few questions</div>
+    ${dreamQuestionsHTML(q)}</section>`;
+  dreamWire(host, q, () => { host.innerHTML = ''; host.dataset.ask = ''; });
+}
+
+// A question's text as cards: numbered questions ("1. …", "2) …") each get one, anything else is one card. A
+// "Suggested: …" (or "Suggestion:", "Suggested answer:") at its end becomes a chip that fills the box.
+function dreamSplit(text) {
+  const lines = String(text || '').split('\n');
+  const parts = [];
+  let lead = [];
+  for (const line of lines) {
+    const m = line.match(/^\s*(?:\*\*)?(\d{1,2})[.)](?:\*\*)?\s+(.*)$/);
+    if (m) parts.push({n: m[1], lines: [m[2]]});
+    else if (parts.length) parts[parts.length - 1].lines.push(line);
+    else lead.push(line);
+  }
+  const card = (n, body) => {
+    const t = body.join('\n').trim();
+    const s = t.match(/\(?\b(?:suggested(?: answer)?|suggestion|my suggestion)\s*:\s*([^\n]+?)\)?\s*$/i);
+    return {n, text: s ? t.slice(0, s.index).trim() : t, suggested: s ? s[1].trim() : ''};
+  };
+  if (parts.length < 2) return [card('', lines)];
+  const intro = lead.join('\n').trim();
+  return parts.map((p, i) => ({...card(p.n, p.lines), intro: i === 0 ? intro : ''}));
+}
+
+let dreamForms = 0;                                       // each form's boxes get their own ids
+function dreamQuestionsHTML(q) {
+  const cards = dreamSplit(q.text), key = `dream-a${++dreamForms}`;
+  return `<form class="dream-form" data-dream-ask="${esc(q.message_id)}">
+    ${cards.map((c, i) => `<div class="dream-q" style="--i:${i}">
+      ${c.intro ? `<div class="dream-intro">${md(c.intro)}</div>` : ''}
+      <label class="dream-q-text" for="${key}-${i}">${c.n ? `<span class="dream-n">${esc(c.n)}</span>` : ''}<span class="md">${md(c.text)}</span></label>
+      ${c.suggested ? `<button type="button" class="dream-chip" data-dream-fill="${i}" title="Use the suggested answer">${esc(c.suggested)}</button>` : ''}
+      <textarea id="${key}-${i}" rows="2" data-dream-n="${esc(c.n)}" placeholder="Your answer"></textarea>
+    </div>`).join('')}
+    <div class="dream-actions"><button class="primary" type="submit">Send</button></div>
+  </form>`;
+}
+
+// Send the answers as one reply to the question, numbered to match, as Needs you answers it: it wakes the bot.
+function dreamWire(root, q, sent) {
+  const form = root.querySelector('.dream-form');
+  if (!form) return;
+  const cards = dreamSplit(q.text);
+  form.addEventListener('click', ev => {
+    const chip = ev.target.closest('[data-dream-fill]');
+    if (!chip) return;
+    const box = form.querySelectorAll('textarea')[Number(chip.dataset.dreamFill)];
+    box.value = cards[Number(chip.dataset.dreamFill)].suggested;
+    box.focus();
+  });
+  form.addEventListener('submit', async ev => {
+    ev.preventDefault();
+    const boxes = [...form.querySelectorAll('textarea')];
+    if (!boxes.some(b => b.value.trim())) { boxes[0].focus(); return; }
+    const text = boxes.length === 1 ? boxes[0].value.trim()
+      : boxes.map(b => `${b.dataset.dreamN}. ${b.value.trim() || 'No answer'}`).join('\n');
+    const button = form.querySelector('[type="submit"]');
+    button.disabled = true;
+    try {
+      await post(`/v2/messages/${encodeURIComponent(q.message_id)}/answer`, {text});
+      sent();
+    } catch (e) { button.disabled = false; toast(e.message); }
+  });
 }
 
 function learnBadge(button, unseen) {
@@ -113,25 +212,92 @@ function learnRow(u) {
   </li>`;
 }
 
-function learnOpen(slug, data) {
+function learnOpen(slug, data, dream = null) {
   $('#learn-panel')?.remove();
   const d = document.createElement('dialog');
   d.id = 'learn-panel'; d.className = 'learn-panel';
   d.setAttribute('aria-labelledby', 'learn-title');
+  let poll = 0;
   d.addEventListener('click', ev => { if (ev.target === d) d.close(); });
-  d.addEventListener('close', () => d.remove(), {once: true});
-  const docs = data.documents || {};
-  const statuses = data.document_status || {};
-  const views = [['updates', 'Updates'], ['memory/learnings.md', 'Learnings'], ['memory/decisions.md', 'Decisions']]
+  d.addEventListener('close', () => { clearInterval(poll); d.remove(); }, {once: true});
+  let docs = data.documents || {};
+  let statuses = data.document_status || {};
+  const viewsOf = () => [['updates', 'Updates'], ['memory/learnings.md', 'Learnings'], ['memory/decisions.md', 'Decisions']]
     .filter(([k]) => k === 'updates' || String(docs[k] || '').trim() || statuses[k]?.oversized);
-  d.innerHTML = `<div class="learn-head"><h2 id="learn-title">Learnings</h2>
-      ${views.length > 1 ? `<div class="learn-switch" role="tablist">${views.map(([k, label], i) =>
-        `<button type="button" role="tab" data-learn-view="${esc(k)}" aria-selected="${i === 0}">${label}</button>`).join('')}</div>` : ''}
+  const switchHTML = views => views.length > 1 ? `<div class="learn-switch" role="tablist">${views.map(([k, label], i) =>
+    `<button type="button" role="tab" data-learn-view="${esc(k)}" aria-selected="${i === 0}">${label}</button>`).join('')}</div>` : '';
+  d.innerHTML = `<div class="dream-sky" aria-hidden="true"><i></i><i></i><i></i></div>
+    <div class="learn-head"><h2 id="learn-title">Learnings</h2>
+      <span class="learn-tabs">${switchHTML(viewsOf())}</span>
+      <button class="ghost learn-dream" type="button" data-dream-start><span class="nav-icon" aria-hidden="true">auto_awesome</span>Dream</button>
       <button class="ghost tmodal-x" type="button" data-learn-close aria-label="Close">✕</button></div>
     <div class="learn-body" id="learn-body"></div>`;
   document.body.appendChild(d);
   let updates = data.updates || [], next = data.next_before;
   const body = $('#learn-body', d);
+  // Dream mode: the status line, then the questions, or the summary and this dream's commits once it is over.
+  let shown = null;                                       // the dream as last drawn
+  const dreamDraw = async latest => {
+    const before = shown;
+    shown = latest;
+    dreamPageShow(slug, latest);
+    if (!latest) { dreamLeave(); return; }
+    const ask = latest.state === 'asking' && latest.questions ? latest.questions : null;
+    if (before && before.state === latest.state && before.questions?.message_id === ask?.message_id) {
+      dreamDoing(latest);
+      return;
+    }
+    const line = DREAM_LINES[latest.state] || 'Dreaming…';
+    let content = '';
+    if (ask) content = ask.mine ? dreamQuestionsHTML(ask) : `<div class="dream-quiet md">${md(ask.text)}</div>`;
+    else if (!dreamOpen(latest)) {
+      let mine = [];
+      try {
+        const page = await get(`${learnApi(slug)}?include_documents=false`, {fresh: true});
+        mine = (page.updates || []).filter(u => u.source?.task === latest.task);
+      } catch {}
+      if (shown !== latest) return;
+      content = `${latest.summary ? `<div class="dream-summary md">${md(latest.summary)}</div>` : ''}
+        ${mine.length ? `<ol class="learn-list dream-commits">${mine.map(learnRow).join('')}</ol>` : ''}
+        <div class="dream-actions"><button class="primary" type="button" data-dream-wake>Wake up</button></div>`;
+    }
+    body.innerHTML = `<div class="dream-view">
+      <p class="dream-line" role="status">${esc(line)}</p>
+      ${latest.auto && latest.reason ? `<p class="dream-reason">${esc(latest.reason)}</p>` : ''}
+      <p class="dream-doing" aria-live="polite"></p>
+      <div class="dream-content">${content}</div>
+      ${dreamOpen(latest) ? `<div class="dream-foot"><a href="#/task/${encodeURIComponent(latest.task)}">Task</a>
+        <button class="ghost" type="button" data-dream-stop>Stop</button></div>` : ''}
+    </div>`;
+    dreamDoing(latest);
+    if (ask?.mine) dreamWire(body, ask, () => { void dreamRefresh(); });
+  };
+  // While it dreams: the bot's own line on what it is doing now, and how long the dream has run.
+  const dreamDoing = latest => {
+    const el = $('.dream-doing', body);
+    if (!el) return;
+    const mins = Math.max(0, Math.round((Date.now() - new Date(latest.started_at)) / 60000));
+    const text = latest.state === 'dreaming' ? [latest.doing, `${mins} min`].filter(Boolean).join(' · ') : '';
+    if (el.textContent === text) return;
+    el.textContent = text;
+    el.classList.remove('fresh'); void el.offsetWidth; el.classList.add('fresh');
+  };
+  const dreamRefresh = async () => {
+    const latest = await dreamFetch(slug, true);
+    if (d.open && d.classList.contains('dreaming') && latest !== null) await dreamDraw(latest);
+  };
+  const dreamEnter = latest => {
+    d.classList.add('dreaming');
+    clearInterval(poll);
+    poll = setInterval(() => { void dreamRefresh(); }, 4000);
+    void dreamDraw(latest);
+  };
+  function dreamLeave() {
+    clearInterval(poll);
+    d.classList.remove('dreaming');
+    shown = null;
+    show('updates');
+  }
   const show = view => {
     d.querySelectorAll('[data-learn-view]').forEach(b => b.setAttribute('aria-selected', String(b.dataset.learnView === view)));
     if (view !== 'updates') {
@@ -150,6 +316,34 @@ function learnOpen(slug, data) {
     const t = ev.target.closest('button, a');
     if (!t) return;
     if (t.matches('[data-learn-close]')) d.close();
+    else if (t.matches('[data-dream-start]')) {
+      t.disabled = true;
+      try {
+        const started = (await post(dreamApi(slug), {})).dream;
+        // Closed while the start was in flight: the close already cleared polling, so only the page shows it.
+        if (d.open && d.isConnected) dreamEnter(started);
+        else dreamPageShow(slug, started);
+      }
+      catch (e) { toast(e.message); }
+      finally { t.disabled = false; }
+    } else if (t.matches('[data-dream-stop]')) {
+      t.disabled = true;
+      try {
+        const task = (await get(`/v2/tasks/${encodeURIComponent(shown.task)}`, {fresh: true})).task;
+        await post(`/v2/tasks/${encodeURIComponent(shown.task)}`, {version: task.version, close: true});
+        await dreamRefresh();
+      } catch (e) { t.disabled = false; toast(e.message); }
+    } else if (t.matches('[data-dream-wake]')) {
+      t.disabled = true;
+      try {
+        const fresh = await get(learnApi(slug), {fresh: true});
+        docs = fresh.documents || {}; statuses = fresh.document_status || {};
+        updates = (fresh.updates || []).map(u => ({...u, new: false})); next = fresh.next_before;
+        $('.learn-tabs', d).innerHTML = switchHTML(viewsOf());
+      } catch (e) { toast(e.message); }
+      dreamLeave();
+      dreamPageShow(slug, null);
+    }
     else if (t.dataset.learnView) show(t.dataset.learnView);
     else if (t.matches('[data-learn-more]')) {
       t.disabled = true;
@@ -165,6 +359,7 @@ function learnOpen(slug, data) {
   });
   show('updates');
   d.showModal();
+  if (dreamOpen(dream)) dreamEnter(dream);
   updates.forEach(u => { u.new = false; });                 // marked once; reopening shows them as read
   if (data.unseen) {
     learnBadge($('#bot-learn'), 0);

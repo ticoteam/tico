@@ -6,6 +6,7 @@ import pytest
 
 from backend import hubdb as H
 from backend.tests.test_tasks_board import api, bot_token, headers, post  # noqa: F401 (fixture)
+from backend import bot_settings as BS
 
 
 def notes_for(api, slug):
@@ -81,9 +82,9 @@ def test_a_quarantined_bots_manager_bot_writes_to_it_and_it_waits_but_no_other_b
 def test_a_manager_declared_only_in_the_bots_definition_counts_too(api):
     import json
     with api.app.state.store.transaction() as c:
-        config = json.loads(c.execute("SELECT config FROM bot_config WHERE bot='cpo'").fetchone()[0])
-        c.execute("UPDATE bot_config SET reports_to=NULL, config=? WHERE bot='cpo'",
-                  (json.dumps({**config, "reports_to": "ops"}),))
+        config = BS.read(c, 'cpo')
+        c.execute("UPDATE bot_config SET reports_to=NULL WHERE bot='cpo'")
+        BS.write(c, 'cpo', {**config, 'reports_to': 'ops'})
         H.quarantine(c, "cpo", "10 repeated refusals today")
     with api.app.state.store.transaction() as c:
         assert H.note_create(c, "bot:ops", "bot:cpo", "The roadmap label needs an approval.")

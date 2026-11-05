@@ -49,7 +49,7 @@ async function settingsHostedStart(button) {
     if (r.state === 'started') { await renderSettingsHosted(true); return; }
     if (r.state === 'paused') {
       say(`<span class="hosted-paused" role="alert">${esc(r.message)}</span>${r.credit_url
-        ? ` <a class="link" href="${esc(r.credit_url)}" target="_blank" rel="noopener noreferrer" data-hosted-credit>Ask for more credit</a>` : ''}`);
+        ? ` <a class="link" href="${esc(r.credit_url)}" target="_blank" rel="noopener noreferrer" data-hosted-credit>Contact support for more credit</a>` : ''}`);
     } else say(`<span class="muted" role="alert">${esc(HOSTED_START[r.state] || HOSTED_START.unreachable)}</span>`);
   } catch (e) { say(`<span class="err" role="alert">${esc(e.message)}</span>`); }
   button.disabled = false; button.textContent = 'Start';

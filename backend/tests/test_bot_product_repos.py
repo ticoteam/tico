@@ -12,6 +12,8 @@ from backend.auth import Identity
 from backend.repositories import PRODUCT_GRANTS, metadata
 from backend.store import encode
 from backend.tests.test_github_app import api, gh, auth, botops_turn, connect, product_repo_request, runner_token  # noqa: F401
+from backend.enqueue import enqueue_stored
+from backend import bot_settings as BS
 
 PREVIEW = "/api/v2/github/product-repos/preview"
 ACCESS = "/api/v2/bots/cmo/repositories"
@@ -28,6 +30,7 @@ def ready(api, gh, administration="write"):
         c.execute("INSERT OR REPLACE INTO registry_metadata VALUES('owner',?)", (encode({"email": "ana@acme.example"}),))
         c.execute("INSERT INTO messages(id,sender_id,recipient_id,kind,body,created_at) "
                   "VALUES('m-cmo','keeper','bot:cmo','request','Make the services repository',?)", (H.now(),))
+        enqueue_stored(c, 'm-cmo')
         job = c.execute("SELECT id FROM jobs WHERE bot_id='cmo'").fetchone()["id"]
         c.execute("INSERT INTO attempts(id,job_id,bot_id,runner_id,generation,token_hash,state,lease_until,created_at) "
                   "VALUES('a1',?,'cmo','r1',1,'x-cmo','running',?,?)", (job, H.shift(H.now(), hours=1), H.now()))
@@ -130,9 +133,8 @@ def test_a_chosen_bot_keeps_its_grants_and_bots_on_every_ticked_repo_are_named(a
     gh.repositories.append({"full_name": "Acme/tico"})            # the installation sees the ticked repository
     with api.app_state.store.transaction() as c:
         c.execute("INSERT INTO repositories(id,full_name,enabled,updated_at) VALUES('r-tico','Acme/tico',1,?)", (H.now(),))
-        config = json.loads(c.execute("SELECT config FROM bot_config WHERE bot='cpo'").fetchone()[0])
-        c.execute("UPDATE bot_config SET config=? WHERE bot='cpo'",
-                  (json.dumps({**config, "repo_access_mode": "all"}),))
+        config = BS.read(c, 'cpo')
+        BS.write(c, 'cpo', {**config, 'repo_access_mode': 'all'})
     assert api.put(ACCESS, json={"mode": "chosen", "chosen": [{"full_name": "Acme/tico", "access": "read"}],
                                  "create_product_repositories": True}, headers=auth()).status_code == 200
     made = product_repo_request(api, BODY, actor="bot-test", key="chosen-bot")
@@ -263,7 +265,7 @@ CARRIED = "acting for someone"
 def nothing_made(api, gh):
     assert not creates(gh)
     with api.app_state.store.read() as c:
-        assert c.execute("SELECT COUNT(*) FROM github_product_repo_operations").fetchone()[0] == 0
+        assert c.execute("SELECT COUNT(*) FROM idempotency WHERE binding='github_product_repo'").fetchone()[0] == 0
         assert c.execute("SELECT COUNT(*) FROM events WHERE action='github.product_repo_created'").fetchone()[0] == 0
         assert c.execute("SELECT COUNT(*) FROM repositories WHERE full_name='Acme/tico-services'").fetchone()[0] == 0
         assert c.execute("SELECT COUNT(*) FROM messages WHERE recipient_id='human:ana' AND kind='notice'").fetchone()[0] == 0

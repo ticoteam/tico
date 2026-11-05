@@ -27,7 +27,7 @@ def test_stop_settles_a_login_wait_without_starting_or_retrying(api, outcome):
         row = c.execute("SELECT state,started_at,finished_at FROM attempts WHERE id=?", (attempt["id"],)).fetchone()
         assert row["state"] == outcome and row["started_at"] is None and row["finished_at"]
         assert c.execute("SELECT state FROM jobs WHERE id=?", (attempt["job_id"],)).fetchone()[0] == "canceled"
-        assert c.execute("SELECT exit FROM turns WHERE id=?", (attempt["id"],)).fetchone()[0] == outcome
+        assert c.execute("SELECT exit FROM attempts WHERE id=?", (attempt["id"],)).fetchone()[0] == outcome
         assert H.status(c, "ops")["state"] == "idle"
     # Even after the old lease would have elapsed, no fresh reservation is possible.
     expire(api, attempt["id"])

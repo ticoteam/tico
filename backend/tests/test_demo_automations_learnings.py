@@ -116,7 +116,7 @@ def test_runs_spread_over_the_week_and_some_fall_in_the_last_hour(built):
         assert len({run["started_at"][:10] for run in calibration}) == 7
         recent = []
         for name in ("Calibration failures to technical support", "Calibration failed twice to Ben",
-                     "Firmware rings to health monitor"):
+                     "Firmware rings to BotOps"):
             runs, _ = runs_of(api, ids[name])
             recent += [run for run in runs if run["started_at"] >= LAST_HOUR]
         assert len(recent) >= 4
@@ -135,6 +135,15 @@ def occurrences_between(trigger, start, end):
     return found
 
 
+def sweep_automation_id(settings):
+    """The Assistant's daily sweep (routine key daily-sweep, templates/catalog/assistant/bot.yaml) as its automation:
+    a routine moves to an automation (redesign_migration.adopt), and redesign_migrated keeps the pair."""
+    with sqlite3.connect(settings.db_path) as db:
+        [(aid,)] = db.execute("SELECT m.automation FROM redesign_migrated m JOIN schedules s ON s.id = m.id "
+                              "WHERE m.kind='routine' AND s.routine_key='daily-sweep'").fetchall()
+    return aid
+
+
 def test_every_enabled_schedule_ran_at_its_times_this_week_and_is_next_in_the_future(built):
     _, settings = built
     with signed_in(settings) as api:
@@ -142,10 +151,19 @@ def test_every_enabled_schedule_ran_at_its_times_this_week_and_is_next_in_the_fu
         enabled = {row["name"]: row["enabled"] for row in rows}
         assert enabled["Weekday inbox sweep"] is False
         schedules = [row for row in rows if row["enabled"] and row["trigger"]["type"] == "schedule"]
-        assert len(schedules) == 16
+        # 16 on main, and the Assistant's daily sweep is the one new enabled schedule (backend/onboarding.py).
+        assert len(schedules) == 17
+        sweep = sweep_automation_id(settings)
         week_start = NOW - timedelta(days=7)
         for row in schedules:
             trigger = row["trigger"]
+            if row["id"] == sweep:
+                # Created at boot after the demo window (onboarding.ensure_builtin_routines), on the real clock, so it
+                # has no run in the window. It is next at its first time after its creation.
+                made = at_time(row["created_at"])
+                assert at_time(row["next_run"]) > made, row["name"]
+                assert at_time(row["next_run"]) == next_due(trigger["cron"], made, trigger["tz"]), row["name"]
+                continue
             # Next is the schedule's first time after the build's now.
             assert at_time(row["next_run"]) > NOW, row["name"]
             assert at_time(row["next_run"]) == next_due(trigger["cron"], NOW, trigger["tz"]), row["name"]
@@ -204,7 +222,7 @@ def test_two_bots_hear_each_tico_release_after_the_first(built):
 # 00:30 Pacific on the 25th: tonight's schedule (02:00) and Learnings night (03:00) have not happened yet.
 EARLY = datetime(2026, 9, 25, 7, 30, tzinfo=timezone.utc)
 # Columns that hold a future time by design: a schedule's next run, a message's expiry, and a task's due date.
-FUTURE_BY_DESIGN = {"next_due_at", "expires_at", "due_at"}
+FUTURE_BY_DESIGN = {"next_due_at", "expires_at", "due_at", "check_back_at"}
 
 
 @pytest.fixture(scope="module")
@@ -224,7 +242,8 @@ def test_nothing_is_dated_after_an_early_build(early):
                     continue
                 count = db.execute(
                     f'SELECT count(*) FROM "{table}" WHERE typeof("{column}")=\'text\' AND "{column}" > ? '
-                    f'AND "{column}" LIKE \'20__-__-__T%\'', (cut,)).fetchone()[0]
+                    f'AND "{column}" LIKE \'20__-__-__T%\'' +
+                    (" AND NOT (subject_type='task' AND kind IN ('check_back_at','check_back_explicit'))" if table == "history_events" and column in ("old", "new") else ""), (cut,)).fetchone()[0]
                 if count:
                     later.append((table, column, count))
     assert later == []

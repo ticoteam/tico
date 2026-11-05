@@ -22,6 +22,11 @@ Your selection is remembered, shared links carry it, and new
 tasks start with that type. Clearing filters keeps the selected type. Older combined views and
 deleted types fall back to General.
 
+**Needs you** counts the tasks waiting on you in the selected type and filters, plus approvals and
+questions outside any task. The count includes those on unread pages and stays the same on a phone
+and desktop. Tasks folded or merged into another card count only through that card, even before it loads.
+Thread mentions, unread DMs and held messages are counted in Inbox.
+
 Picking a step sets the task's status. Steps can move in any order. Bots, older runners and
 existing scripts can keep setting `status`:
 
@@ -131,9 +136,9 @@ kept by id, so renaming a step keeps its flow. All keys are optional:
 | `on_merge` | The one step a ticket goes to when its pull request merges, from any earlier step. |
 | `skip_tag` | A ticket with this tag passes the step: it goes straight to `on_pass`, and the skip is recorded. |
 | `timeout_hours` | A check still open this long is closed unanswered and the round skipped: the ticket goes on as if it passed with no comments, unless a check there already gave a fail, changes or comments at the pull request's head, in which case it moves to `on_fail`. |
-| `status_hours`, `late_hours` | A ticket stalled this long at the step gets its bot owner one status check; one this long at the step gets its manager one notice. Dev working steps default to 2 and 4. |
+| `late_hours` | A ticket this long at a working step is listed as late on its manager's task roundup, and again every seven days while it stays late. Dev working steps default to 4. `status_hours` is still accepted but wakes no one. |
 | `assign` | `{pool, slots}`: an unowned ticket here goes to the least busy pool bot with a free slot (tickets past this step it holds). |
-| `backlog` | `{over, per, notify, every_hours}`: more than `over` tickets at the step (`per: step`) or for one owner (`per: owner`) tells `notify`: `manager` (the type's), `owner`, `owner_manager` (one level up on the org chart), or a named bot or person. Once every `every_hours` (4) while over. |
+| `backlog` | `{over, per, notify, every_hours}`: more than `over` tickets at the step (`per: step`) or for one owner (`per: owner`) lists it on the task roundup of `notify`: `manager` (the type's), `owner`, `owner_manager` (one level up on the org chart), or a named bot (a named person is not told by the roundup). Relisted once every `every_hours` (4) while over. |
 | `can_hold` | `false`: a ticket here is never put on hold; a merged change is reverted or fixed forward. |
 | `gate` | Entering the step needs green CI and a test receipt at the head (the review gate above). |
 | `check` | The kind of check the step asks for: `review`, `qa` or `release_qa`. Review pools, the one-open-check rule, Review 2 never going to an earlier review's bot, QA waivers and blocked checks find their steps by this, so a renamed check step keeps working. A check request is titled with the step's name (`QA` for a QA step); `Review <n>`, `QA` and `Post Release QA` still name the board's nth review, its QA and its after-release check. |
@@ -176,10 +181,11 @@ Hand a ready batch of On Deck tickets to builders in one pass. Each assigned tic
 own session and can start on a free turn; it does not need another Lead turn for each ticket.
 The ordinary task cap and prerequisite checks still apply to the whole batch.
 
-If an open assignment has no attempt after one hour, **Recover unstarted assignments** wakes its
-owner once, including a Lead. Waiting, snoozed and deferred work is excluded. The recovery wake
-does not bypass a task cap, an explicit automatic-start off switch or any execution hold. If it
-still has no attempt two hours after that wake, Health and its manager's Needs you show
+If an open assignment has no attempt after one hour, **Recover unstarted assignments** lists it once on its
+owner's task roundup as "Assigned, not started". Only sweeping bots get that line (managers and doers; a lead,
+reviewer, responder or monitor does not), and the assignment's own wake is unchanged. Waiting, snoozed and deferred
+work is excluded. The roundup line does not bypass a task cap, an explicit automatic-start off switch or any
+execution hold. If it still has no attempt two hours after that line, Health and its manager's Needs you show
 **Assigned, not started**, the task title and its current refusal reason. Only readers of that
 task see it; being the manager does not grant access to a private task. An attempt, a wait or
 completion clears the item. A new assignment starts its own one-hour clock.
@@ -233,6 +239,9 @@ own field: `waiting_on` (the person it waits on), `relations.blocks`, `worktree_
 `milestone_waits` and `deferred`. Task list filters are unchanged: `?snoozed=only|all` lists snoozed tasks, and a
 blocked task is a `waiting` one (`?status=waiting`).
 
+Each hold is a row of `task_holds` in the hub database (one open row per kind; a released one keeps its
+`released_at` as history), readable in hub SQL with its task ([Hub SQL](hub-sql.md)).
+
 ### Waiting for a milestone, not the whole task
 
 Often what a task needs is an earlier milestone of another task, not that task being done: a pull request merged
@@ -264,7 +273,7 @@ deleted task keeps its waits in the trash and gets them back when restored. The 
 When a bot's work on a task stops because an account or a credential needs a person, Tico puts one card in the
 task's thread ("Sales Bot can't reach Google (ana@acme.example)."), with the fix for the person who can make it and
 "Waiting on <person>" for everyone else. The task waits on the card: it is in that person's Needs you under connect,
-and no stall check, stranded sweep or news wakes the bot meanwhile. When the account works again the card says
+and no stall check or news wakes the bot meanwhile. When the account works again the card says
 Reconnected and the owner gets one wake ("Google (ana@acme.example) is reconnected. Continue."); the task goes back to
 the step it held. One card per task and account; tasks waiting on the same account are one Needs-you item. While
 another card or hold still stands on the task, the fix is kept and told once, with the last hold to clear. A card
@@ -351,7 +360,7 @@ or, on a private task with no person on it, the one person it brings in as its g
 person on it: its guest").
 
 Bot tasks that were waiting on a person before this rule are moved to it within the hour when their note is a plain
-ask; the rest stay last in the person's Needs you while their bot is asked once to restate the ask.
+ask; the rest stay last in the person's Needs you while their bot's task roundup lists the ask to restate it.
 
 Needs you, Decide and the Assistant's lineup put work that traces back to a person first: a
 person requested the task, or it sits under a task a person requested (only tasks the viewer may
@@ -373,30 +382,31 @@ hub task update <task> --status waiting --note "Needs BotOps's disk snapshot"
 ```
 
 A note alone wakes nobody. A bot's task waiting with no blocker, subtask, approval, question or
-person goes back to open after two hours (unless its due date says to look later), and the update
+person goes back to open at once when its last hold clears (unless its due date says to look later), and the update
 that parks it warns the bot.
 
-A stall or status check leaves a task alone while its owner has a live session on it (a leased or running attempt)
-or the task waits on something recorded: a blocker, an open subtask, a pending approval, an unanswered question, a due
-date, a snooze, a stored resume, a pull request link armed with `--wake-once` or a milestone wait. A bot whose profile
-has no stall sweeps is never checked. A task held only by its own stalled subtasks is still checked (below), and the Task
-Manager's stalled-task list does not use these skips, so a task no sweep wakes still reaches its report.
+The task roundup leaves a task off its bot's list while the bot has a run queued or running on it, or while the task
+waits on something recorded: a blocker, an open subtask, a pending approval, an unanswered question, a due date, a
+snooze, a stored resume, a pull request link armed with `--wake-once` or a milestone wait. A bot whose profile has its
+sweeps off (a reviewer, lead, responder or monitor) is listed only its unanswered questions and its own follow-up
+times. The Task Manager's stalled-task list does not use these skips, so a task no check lists
+still reaches its report.
 
-For unblocked open or doing tasks, automatic stalled-task wakes are limited to three in a rolling
-24 hours, spaced at least 30 minutes apart. Updating a note does not reset that limit. Repeated
-stalls are escalated to BotOps with a separate diagnostic for each source task. If BotOps itself is
-stuck or unavailable, the diagnostic goes to the human requester, or the team's default human for
-bot-requested work. An unresolved diagnostic is reused on later days. Health warns when repeated
-runs have escalated a public task without progress; an explicit run is still available.
+Tico does not wake a bot once for each stalled task, and does not escalate repeated stalls to BotOps. The task roundup
+is the one grouped wake for a bot's tasks: each bot gets at most one list in each run (three times a day by default,
+at 6am, noon and 6pm company time), with its lines (a follow-up time that came, an unanswered question, an assignment
+not started, a task to restate, a late Dev ticket,
+an engineering exception, a backlog, a missed update or a quiet task; see [System routines](system-routines.md)). The list goes only to the bot, in its own notice room with Tico, so the roundup
+never tells a person about a task. A private task is named by its id alone: who set its follow-up and its note, and what
+changed on it, stay out of the line.
 
 A task blocked by its own subtask is allowed (a question for a person in a subtask works that way),
 but relating it returns a warning: a subtask kept open until its parent finishes, such as a hold or
 an acknowledgement, never clears. When every blocker is such a subtask, owned by a bot, stalled five
 minutes and waiting on nothing of its own (not in review, no run of its own able to start or going, no blocker,
 no unanswered question or person it is waiting on, no future due date, snooze, stored resume or milestone wait),
-the task counts as stalled even while `waiting`, unless it is waiting on a person: its bot is woken with the way out, under
-the same limits, and BotOps's stuck list shows it with `own_blockers` while its bot is idle. Health's
-"Tasks not progressing" counts it once escalated, only when the viewer can read every live blocker.
+the task counts as stalled even while `waiting`, unless it is waiting on a person. Tico no longer wakes its bot for it;
+the Task Manager's report still lists it.
 A queued message to a bot still in setup counts as able to start only when it comes from a person or
 that bot's manager. A queued run fenced by an interrupted run of the same task or a scope limiting the bot
 to other work cannot move the blocker and does not exempt its parent. A blocker's review status exempts
@@ -435,19 +445,20 @@ Anything the filter can't judge (no model, the spend or daily cap, an error, no 
 its threshold) reaches you as before. Each call is a `judge.call` row that never holds the item's text, and Decide's
 readout counts the outcomes and what people let through.
 
-**Settings → Tasks → What bots may put on you** sets Off, Rehearsal or On, the budget, the chores budget and up to
+**Settings → Tasks → What bots may put on you** sets Off or On, the budget, the chores budget and up to
 ten lines of what you want to be asked about; an owner or admin sets the team default everyone starts from, and
 **Use the team default** goes back to it. A change applies to the next item; nothing already on a plate moves. It
-ships as **Rehearsal**: nothing changes, and **Filtered for you**, a folded line at the foot of Needs you, lists what
-On would have done. With it On, the same line lists what was kept off today, and **Let it through** puts an item on
-your plate in one click and tells the bot once. **Replay a day** on the settings card judges one past day's bot
+ships as **On**. **Filtered for you**, a folded line at the foot of Needs you, lists what was kept off today, and
+**Let it through** puts an item on your plate in one click and tells the bot once. A Rehearsal saved before this
+change reads as On. **Replay a day** on the settings card judges one past day's bot
 items with your settings and your plate as it was then, so you can see what On would have done before you turn it
 on; nothing moves. A replay counts no chores already waiting (none were grouped before the filter), so it never shows
 "chores full". A bot handing its own task to you (one or many) is judged like a task filed for you, and each item is
 judged against your plate as it was just before it. An owner or admin replaying someone else's day sees only the
 titles they may read.
 
-API: `GET`/`PUT`/`DELETE /api/v2/ask-ingest/settings`, `GET /api/v2/ask-ingest/filtered?hours=24`,
+API: `GET`/`PUT`/`DELETE /api/v2/ask-ingest/settings` (`mode` is `off` or `on`; a `rehearsal` sent is saved as `on`),
+`GET /api/v2/ask-ingest/filtered?hours=24`,
 `POST /api/v2/ask-ingest/items/{id}/let-through`, `POST /api/v2/ask-ingest/replay` (`person`, `date`, `offset`, a page
 of up to 25; the person, or an owner or admin).
 
@@ -477,14 +488,10 @@ Waiting work is not starved: a bot's queued jobs are claimed oldest first (a per
 still goes ahead), so a newer task never jumps one that has been waiting. Task ranks stay as people
 set them.
 
-A task still on the board with no activity for 7 days (no update, comment or checkpoint, no run
-going, and no question already waiting on someone) gets one **Still wanted?** question with
-**Keep** and **Close**: to its requester when a person asked for it, otherwise to its owner when a
-person owns it; a task only bots are on is left alone. It shows in that person's Needs you and
-Decide. **Keep** restarts the clock; **Close** closes the task as theirs with a note. Nothing
-closes without the answer, and the task is asked again only after new activity and another idle
-week (`stale_asked_at`). While the team has **Stale ticket review** on, these questions stop: its
-suggestions cover the quiet week.
+A task still on the board with no activity for a day (no update, comment or checkpoint, and no run going) is quiet.
+Tico asks nobody about a quiet task. A quiet task owned by a bot that sweeps is a line on that bot's roundup, and it
+comes back on the roundup only after a week. A quiet task a person owns gets no line from Tico. A **Still wanted?**
+question put before this change still takes **Keep** or **Close** from the person it went to.
 
 ### Stale ticket review
 
@@ -523,9 +530,6 @@ can mark a task done, and its requester or another authorized person can close i
 is refused. If the task changed after the card showed it, that row is refused and stays on the card,
 so open the task to see what changed. **Accept all** applies only the rows you saw: a row that
 arrived since stays on the card.
-
-**Still wanted? questions stop.** While Stale ticket review is on, Tico doesn't send the
-**Still wanted?** questions described above: its suggestions cover the quiet week.
 
 ### The question card
 
@@ -606,7 +610,7 @@ A send, a spend, a delete, any default when the owner turned going ahead off, an
 written since the ask (a comment, a Clarify tap) never goes ahead, but its question still closes on its date: the bot is
 told nothing went ahead and decides without it. A question with no date that
 is unanswered after two business days (Monday to Friday, Pacific) leaves the person's Needs you at the next weekday
-morning's batch (8:00): each asking bot gets one "Still needed?" wake listing all of its questions that crossed the line,
+morning's batch (8:00): each asking bot gets its questions that crossed the line as lines on its task roundup, with no wake,
 and asks again (a fresh question with a new clock) or drops them (`backend/still_needed.py`). A question also closes
 when its task or any task above it is done, closed or declined (a done task keeps only the structured question asking its
 requester to accept the result, asked once it is done), when the person replies to it or writes on its task to the bot
@@ -625,8 +629,8 @@ specific wins (the **What wakes** automations on the Automations page). The mess
 
 An event no rule names waits as a note (`default_note`): the bot reads it on its next run. Work still wakes the bot: an
 assignment or a task handed back to it, a review or QA request, a blocker, a routine, a schedule, a due date, a snooze
-ending, a requested update, an unanswered ask restated, a release published, the Task Manager's report, a pull request's
-checks finishing, a subtask or a blocker finishing, a stall check, and a task the bot asked for being finished, declined
+ending, a requested update, a release published, the Task Manager's report, a pull request's
+checks finishing, a subtask or a blocker finishing, and a task the bot asked for being finished, declined
 or blocked on someone else (`task_blocked`). A plain
 comment, another bot's status or step move, and the bot's own write (`own_write`, ignored) do not. A rule's outcome is
 `ignore`, `note`, `batch`, `wake`, `ask` or `action`. **Ask** writes the message as a note and puts one item in the
@@ -746,8 +750,7 @@ Until that moment:
 - it is off the board, the Open list, Needs you, Decide and `hub task list`. The **Snoozed** tab on
   the Tasks page (shown while something is snoozed), `hub task list --snoozed only|all` and
   `GET /api/v2/tasks?snoozed=only|all` list it; a read by id or number always finds it.
-- nothing automatic moves it: no stall wake or status check, no stranded or stuck sweep, no
-  **Still wanted?** question and no **Due:** reminder. Tico's notices about it reach its owner bot
+- nothing automatic moves it: no stall wake or status check and no **Due:** reminder. Tico's notices about it reach its owner bot
   deferred, read on the bot's next run instead of starting one, and so does another bot's comment.
   A person's comment still reaches the bot as usual, **Run now** still runs it, and notices to
   anyone else on it (a requester bot it is handed to for review) arrive as usual. A snooze survives
@@ -879,7 +882,7 @@ that an owner may reopen Done with doing or open (with a note for open). The tas
 no Done, Close or Reopen on them. A task that should not
 be on the board is deleted instead. Working statuses still change without a step (a bot's ask sets
 waiting), and filing a task onto the type and the keeper's own automation are unaffected. Such tasks
-are not asked "Still wanted?", their goal asks the bot to move them to a step and a met goal does not finish them, and Needs you says to move them
+get no question from Tico: their goal asks the bot to move them to a step and a met goal does not finish them, and Needs you says to move them
 rather than marking them done or closed. Without steps only, a bare status lands the task in the first step
 with that status, which on a board is rarely the one anyone meant.
 
@@ -902,6 +905,12 @@ dependency on one of those checks holds it. A Review or QA check that is itself 
 an open task, holds its ticket at its step with the check's reason ("QA blocked: GitHub refused the remote
 test run, waiting on Ana"), and the ticket's builder gets one notice in the ticket's thread for that
 hold. When the check works again, the ticket returns to its step.
+
+When a task is Blocked by waits Tico tracks, its reason names the open hold or holds and updates when
+they change. A question to a person belongs to the task that asked it: ending a parent task does not
+withdraw a question on an open child. When a question is withdrawn, its asker is told why. Clearing
+the last tracked hold reopens a bot-owned task; an engineering ticket returns to the step it left.
+An owner-written Blocked reason remains manual.
 
 A task filed to DevOps or a person about a blocker can name it: `--blocker <repo> <status> <endpoint>`,
 for example `--blocker acme/app 403 workflow_dispatch`. When an open ask names the same repository, HTTP
@@ -1033,9 +1042,27 @@ Only the task's owner, requester, their managers or a human mover can re-parent 
 request or manage the new parent. Moving or detaching a subtask also requires its current
 parent's owner, requester, their managers or a human mover. Moving a task moves its whole subtree,
 and cycles are refused.
-A parent may be marked Done or closed, by a bot or a person, while subtasks are still open. The
-subtasks stay open, and the parent's history and its Finished or Closed notice end with
-"Still open:" and their titles. Finishing or moving away the last open subtask wakes the
+Closing a task, or finishing it (status `done`, or a step whose status is done or closed),
+closes every open descendant, including those below an already finished subtask. There is no prompt
+or detach choice. Each subtask keeps its parent link and records "Closed with #N" in its history,
+where N is the task that finished; an unnumbered parent is recorded as "Closed with its parent task".
+The usual close events and question cleanup run for each changed subtask. The parent's
+history and Finished or Closed notice list "Closed with it:" and the subtask titles, keeping private
+titles hidden even when the parent is private. A closed subtask sends no separate notice to its parties,
+unless it has a leased or running turn: then its parties receive the usual direct-close notice so the
+bot stops working. Already Done, Closed or Declined subtasks keep their status, notes and history.
+Dependency links still clear, but a task closing in the same cascade receives no "Unblocked" notice;
+tasks outside the cascade that become unblocked receive their usual notice.
+An explicit close or finish through the API, CLI or MCP requires the actor's usual close permission
+and status rules on every open descendant, including steps-only types; a refusal leaves the whole action
+unchanged, without detaching anything.
+An automatic finish, including roadmap completion or a runner reporting its task goal met, closes every open descendant
+the actor may close and leaves the rest open. The parent's history and completion notice list
+"Still open:" with those titles (private subtasks are always "a private subtask"), and each left-open
+subtask's requester receives one notice asking them to close it when ready. Runner output and the
+final result are still saved. Reopening the parent leaves its subtasks closed;
+its history lists which ones to reopen by hand.
+Finishing or moving away the last open subtask wakes the
 immediate parent's owner with “All subtasks done”, unless its result already resumed that parent or
 that owner made the change (a bot finishing a subtask it filed
 for itself, which runs in its own session, still wakes the parent).
@@ -1142,7 +1169,7 @@ preference: with none that can run, it runs on an author's own, and the subtask'
   session. Closing it is a cancellation and wakes nobody.
 - A usage limit on the check's model holds that subtask alone until the provider's reset: the bot's other work
   goes on, on its own model, and the bot is not marked limited. Held 12 hours with every turn stopped on the limit,
-  it is a Health Monitor setup finding (`check_limited`, docs/health-monitor.md). Once the subtask is done, closed or
+  it is a Check health finding (`check_limited`, docs/health-monitor.md). Once the subtask is done, closed or
   declined, its held turn is let go instead of retrying after each reset; a person's message on it stays queued.
 - When the limit is on the computer's default login (no subscription) and Health already marks that login out of
   quota (`default_login_limited`, docs/health-monitor.md), the check does not wait: its next turn runs at once on
@@ -1168,8 +1195,10 @@ preference: with none that can run, it runs on an author's own, and the subtask'
 
 Every task a bot owns has its own thread (a `kind: task` thread), even one filed from a thread: its comments,
 notices, notes and replies go there, and the thread it was filed from gets one quiet line, "Started task: <title>"
-(`refs.task_started`). A bot's open task filed into a thread before this moves to a thread of its own the next time
-a turn on it is claimed; its earlier messages stay in the thread, and the new thread opens with a line saying so. A
+(`refs.task_started`), written into that thread's history only: task news reaches no person's Inbox or digest. A bot's
+say, notice or ask in its task's thread reaches a person only when it @-mentions them: to get someone's attention on
+a task, the bot @-mentions them; otherwise the comment stays on the task (no Inbox row, digest or push). A bot's
+open task filed into a thread before this moves to a thread of its own the next time a turn on it is claimed; its earlier messages stay in the thread, and the new thread opens with a line saying so. A
 person's own tasks, and the Assistant's (whose turns act for the person of the thread), keep their thread.
 A turn reads only its own lane's messages: the main session reads the Home, with no task traffic, and a task's
 session reads that task (and its subtasks that share the session). The Home hears where its bot's tasks got to
@@ -1195,9 +1224,11 @@ idle; **Defer** wakes nobody and goes in with the bot's next turn on this task, 
 under it (30m to 7d, or Never; 24h unless picked). A Defer sent while the bot works on this task goes in queued; a turn
 on another task does not count. **Set as goal**, apart in the menu, makes the text the goal of the bot's session for
 this task, as `/goal` does in a thread (no files, not public; [chat goals](chat-goals.md)). Only someone on the task (its
-owner, requester or a mover) may steer, queue or set the goal; anyone else may defer. The caret opens the ways, and the
-choice is kept per task in this browser. Only a choice made there is sent: with none, the comment goes the way the
-paragraph on comments above says. Before you send, the box says what the chosen way does, and after, if the server
+owner, requester or a mover) may steer, queue or set the goal; anyone else may defer. Send's icon shows the way, and the caret
+(or a right-click or long press on Send) opens the ways. The web always sends the shown way: your kept way
+(`compose.send_way`, [Steer, queue or defer](using-tico.md#steer-queue-or-defer)), or the nearest one you may use
+here (Steer becomes Queue; otherwise Defer). Set as goal is for one comment. A comment that names no way (the API, CLI
+or MCP) goes the way the paragraph on comments above says. Before you send, the box says what the chosen way does, and after, if the server
 sent it another way (a defer that rode along). With no bot on the task (everyone on it is a person) the send is a plain arrow, and the box says no bot gets the
 message. `GET /v2/tasks/{id}` carries
 this view: each bot reply in `comments` has its `run`; `execution` is the owning bot's newest run in the task's own
@@ -1216,27 +1247,13 @@ delivery; `needs_action` takes none or `steer`; a `goal` takes no files and cann
 a 422, a steer, queue or goal by someone not on the task a 403, a goal on a task still in a thread a 409, and nothing
 is saved.
 
-Tico spot-checks running work. A bot's open or doing task whose own session ran in the last day (or runs now) and
-that has made no progress for 30 minutes (no checkpoint, comment, status change, message from its bot or finished
-turn) gets one "Status check: checkpoint where you are, or mark it blocked or done." in its session. Thirty minutes
-later with still no progress its bot is retried once; thirty minutes after that, still with no progress, it is reported
-stuck in its Home and BotOps gets a task to find out why. A stuck check never goes to a person as a question. These
-share the stall watcher's spacing and its cap of three a day, after which BotOps gets a task to find out why.
+Tico no longer spot-checks running work one task at a time. A bot's open or doing task that makes no progress appears
+in its task roundup when the bot sweeps, one list per run (three times a day by default). A Dev ticket long at a working step is listed on its manager's task roundup, and again every seven days while it stays late.
 
-An idle task unchanged since its owner's last settled checkpoint skips a plain automatic stall or status check.
-Changed state or a missing checkpoint leaves the check eligible under the usual wake rules. Human messages still
-wake the bot as before ([details](hub-sql.md#what-woke-each-run-and-what-it-did)). A running session is not sent status
-checks or retries; they resume once its turn ends without progress.
+Human messages still wake the bot as before ([details](hub-sql.md#what-woke-each-run-and-what-it-did)).
 
-With the team's **Stalled task check** switched on (Settings > System routines, on by default, needs Tico Decide), a
-stalled task that stands as at its owner's last checkpoint is no longer left silent. Decide reads its last six messages
-once for that state and answers one of four things. *Waiting on someone*: the wait it names is set (a task the messages
-mention as a blocker, a date they mention as a snooze, or a person they name as the owner's own waiting-on, with a
-one-line ask in a small subtask), and no run starts. *Finished but unmarked*: the task is closed with a note crediting
-whoever spoke last; reopen it if that was wrong. *Stuck*: the one stall wake goes through with today's way-out text, under
-the usual spacing and daily cap. *Unsure*, or any answer under its confidence, nothing changes and the Task Manager's next
-report names the task with "class: unsure". Decide off, not set up, over its daily or hourly limit or failing leaves the
-check silent, as before. Nothing else is automatic after the wake.
+The **Stalled task check** no longer runs. Tico no longer wakes a bot about one quiet task, so Decide reads none of them.
+A quiet task still shows on its bot's task roundup (for a bot that sweeps) and in the Task Manager's report.
 
 `task_goal: on` on a bot (`hub bot update <slug> --task-goal on`, `hub_bot_update`, or the bot definition API; off by
 default) works each task it owns as a goal: the turn carries `task.goal` (the title and its acceptance criteria), and
@@ -1681,3 +1698,20 @@ and after `--apply`, and each `task.purged` event names the ones its task left.
 
 Open **Settings → Tasks → Task settings** to see what Tico does when a task is created, enters a step, finishes, or is checked on a schedule. Choose a task type to see its steps. Each action shows its source, whether it wakes a bot or stays quiet, and its current state. Edit and Add action open the existing Rules editor with that task type and trigger selected. Built-ins marked Always on have no switch.
 
+
+
+## Following up bot work
+
+A bot's task may carry a **follow-up time** (`check_back_at`, shown as **Follow up by**): an inspection time, separate from the delivery deadline, that does not pause useful work. Choose a time longer than the expected work:
+
+```sh
+hub task check-back <task-id> --in 45m --for "Verify the review assignment and inspect its result"
+# Or use an ISO date-time with its timezone:
+hub task check-back <task-id> --at 2026-12-02T15:00:00-08:00 --for "Read the returned acceptance result"
+```
+
+`hub_task_check_back` and `POST /api/v2/tasks/{id}/check-back` take `at` (a duration or timestamp) and `note`. Task create/update also accept `check_back_at` and `check_back_note`. An omitted time stays empty: Tico sets no follow-up time of its own, only a person or a bot does (the explicit set is recorded in history as `check_back_explicit`). A task view carries the time, the note, who set it and whether it is due, as a `check_back` object. An explicit bot time is at least five minutes ahead and within 14 days, and a bot cannot set one on a done or declined task. A person's dated snooze can be longer, and a human snooze takes precedence over an earlier inspection.
+
+A follow-up time wakes nobody. Once it has come, it is listed once on its owner's task roundup (three times a day by default, at 6am, noon and 6pm company time), and then cleared. Only live tasks (open, doing, waiting, review or ready) are listed.
+
+When it is listed, inspect the actual PR link, assignment or reservation, result and blocker. A missing readable child is not proof that a private child does not exist: check routing before creating a duplicate. Repair routine handoffs within your existing authority, then continue or set the next follow-up naming the actual wait. Waiting on a child never removes the parent bot's responsibility. A ledger entry or status comment is not proof the work ran.

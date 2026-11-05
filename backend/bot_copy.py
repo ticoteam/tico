@@ -13,6 +13,7 @@ owner. Every route is one BotOps may call as the requester (backend/botops_act.p
 """
 import base64
 import json
+import re
 import secrets
 from urllib.parse import quote
 
@@ -24,7 +25,8 @@ from . import built_on, providers
 from .credentials import administrator, ask_admin_detail, effective_grant
 from .github_app import TURN_PERMISSIONS, repo_of
 from .harnesses import EXTERNAL_HARNESSES, resolve_harness
-from .store import H, Problem, encode
+from .store import H, Problem
+from . import bot_settings as BS
 
 READ_PERMISSIONS = {"contents": "read", "metadata": "read"}
 
@@ -40,25 +42,39 @@ def _json(value):
 def folder(c, bot):
     """The folder the bot's checkout has on a computer, as recorded (H.bot_folder): the client finds its files by this,
     never by its slug, which a rename changes while the folder stays."""
-    row = c.execute("SELECT config FROM bot_config WHERE bot=?", (bot,)).fetchone()
+    row = c.execute(BS.ONE_SQL, (bot,)).fetchone()
     return H.bot_folder(bot, _json(row["config"] if row else None))
 
 
+_NUMBER = re.compile(r"-\d+$")
+_NUMBERED_NAME = re.compile(r"\s+\d+$")
+
+
 def free_slug(c, original):
-    base = original[:70] + "-copy"
-    for n in range(1, 100):
-        slug = base if n == 1 else f"{base}-{n}"
+    """The copy's slug: the original's name with the first free number from 2, so `builder` gives `builder-2`, and a copy
+    of `builder-2` gives `builder-3`."""
+    base = _NUMBER.sub("", original)[:70]
+    for n in range(2, 100):
+        slug = f"{base}-{n}"
         if not H.resolve_bot(c, slug):
             return slug
     raise Problem("duplicate", "Give the copy a name of its own (slug)", 409)
+
+
+def free_display_name(c, original):
+    """The copy's display name: the original's with the first number from 2 that no bot has, so "Builder" gives "Builder 2"."""
+    base = (_NUMBERED_NAME.sub("", original.strip()) or original.strip())[:90]
+    taken = {(row["display_name"] or "").strip().lower() for row in c.execute("SELECT display_name FROM bots")}
+    names = [f"{base} {n}".strip() for n in range(2, 100)]
+    return next((name for name in names if name.lower() not in taken), names[-1])
 
 
 def model_settings(c, settings_admin, settings, bot, config):
     """(choice, effort, harness) for the copy: the original's where it is a model the company still offers and runs, else the company's
     default. A bot run by an external agent (a Hermes profile) has no model of its own to copy."""
     company = providers.load(c, settings)
-    choice = settings_admin.models.get(bot.get("model") or config.get("model"))
-    harness = resolve_harness(config, bot.get("runtime"))
+    choice = settings_admin.models.get(config.get("model"))
+    harness = resolve_harness(config, None)
     effort = bot.get("effort") or config.get("reasoning_effort")
     if not choice or choice.get("deprecated") or harness in EXTERNAL_HARNESSES or (
             company["enabled"] and not providers.runtime_enabled(choice["runtime"], company["enabled"], choice)):
@@ -146,7 +162,7 @@ def install(app, store, auth, mutate, settings_admin, place_now):
             row = settings_admin._config(c, bot)
             config = _json(row["config"])
             slug = body.slug or free_slug(c, original["slug"])
-            display = body.display_name.strip() or ("Copy of " + original["display_name"])[:100]
+            display = body.display_name.strip() or free_display_name(c, original["display_name"])
             choice, effort, harness = model_settings(c, settings_admin, settings, original, config)
             created = settings_admin.create_bot(c, who, M.BotDefinitionCreate(
                 slug=slug, display_name=display, description=row["description"] or "",
@@ -156,7 +172,7 @@ def install(app, store, auth, mutate, settings_admin, place_now):
             made = settings_admin._config(c, copy_id)
             declared = _json(made["config"])
             declared["copied_from"] = {"bot": bot, "sha": body.sha}
-            c.execute("UPDATE bot_config SET config=? WHERE bot=?", (encode(declared), copy_id))
+            BS.write(c, copy_id, declared)
             credentials = credentials_for(c, app.state.vault, who, bot, copy_id, [t.model_dump() for t in body.tools],
                                           _declared(c, bot))
             # The copy's history is made after this, in BotOps's workspace, so only the computer BotOps's turn runs on (its
@@ -224,7 +240,7 @@ def install(app, store, auth, mutate, settings_admin, place_now):
             config, source = origin(c, who, bot)
             declared = _json(config["config"])
             declared["copied_from"] = {"bot": source["bot"], "sha": body.applied_sha}
-            c.execute("UPDATE bot_config SET config=? WHERE bot=?", (encode(declared), bot))
+            BS.write(c, bot, declared)
             H.event(c, who.actor, "bot.copy_updated", bot, {"from": source["bot"], "before": source.get("sha") or "",
                                                             "after": body.applied_sha})
             return {"bot": bot, "original": H.bot(c, source["bot"])["slug"], "base_sha": body.applied_sha}

@@ -18,6 +18,7 @@ import threading
 from clients import judge as J
 from .judge import audit_detail, daily_cap, over_spend_cap, server_engine, used_today
 from .store import H
+from . import bot_settings as BS
 
 LOG = logging.getLogger("tico.idea_triage")
 QUESTION_SET = "idea-triage"
@@ -30,8 +31,8 @@ ENGINEERING, PRODUCT = "engineering", "product"
 
 def engineering_bot(c):
     """The active Head of Engineering, or None."""
-    row = c.execute("SELECT bc.bot FROM bot_config bc JOIN bots b ON b.id=bc.bot "
-                    "WHERE json_extract(bc.config,'$.template')='engineering-lead' AND b.state='active' "
+    row = c.execute(f"SELECT bc.bot FROM bot_config bc {BS.JOIN} JOIN bots b ON b.id=bc.bot "
+                    f"WHERE s.template='engineering-lead' AND b.state='active' "
                     "ORDER BY bc.bot LIMIT 1").fetchone()
     return row[0] if row else None
 

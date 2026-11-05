@@ -35,13 +35,25 @@ def test_manifest_matches_the_code_and_the_yaml():
     scopes = set(manifest["oauth_config"]["scopes"]["bot"])
     assert set(G.NEEDED_SCOPES) <= scopes
     events = set(manifest["settings"]["event_subscriptions"]["bot_events"])
-    assert events == {"app_mention", "message.im", "message.channels", "message.groups"}
+    assert events == {"app_mention", "message.im", "message.channels", "message.groups", "link_shared"}
     assert manifest["settings"]["socket_mode_enabled"] is True
     # Every scope the connector CLI names in its own source is requested.
     import re
     named = set(re.findall(r"\b(?:channels|groups|im|mpim|users|chat|app_mentions|files):[a-z.]+\b",
                            (ROOT / "connectors" / "slack.py").read_text()))
     assert {s for s in named if s in scopes or s.endswith((":history", ":read", ":write"))} <= scopes
+
+
+def test_the_manifest_asks_for_previews_only_where_slack_can_register_a_host(tmp_path):
+    text = (ROOT / "connectors" / "slack-app-manifest.json").read_text()
+    public = slack_app.with_hosts(json.loads(text), Settings(db_path=tmp_path / "hub.db", public_url="https://tico.acme.example"))
+    assert public["features"]["unfurl_domains"] == ["tico.acme.example"]
+    assert {"links:read", "links:write"} <= set(public["oauth_config"]["scopes"]["bot"])
+    # A loopback install cannot register a host: no preview scopes, event or domains are asked for.
+    loopback = slack_app.with_hosts(json.loads(text), Settings(db_path=tmp_path / "hub.db", public_url="http://127.0.0.1:8765"))
+    assert "unfurl_domains" not in loopback["features"]
+    assert not {"links:read", "links:write"} & set(loopback["oauth_config"]["scopes"]["bot"])
+    assert "link_shared" not in loopback["settings"]["event_subscriptions"]["bot_events"]
 
 
 @pytest.fixture

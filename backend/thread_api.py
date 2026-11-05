@@ -10,12 +10,17 @@ operation), an edit as `threads_edit`. Every list is paged and byte-capped by th
 
 import asyncio
 import json
+from typing import Literal
 
 from fastapi import Query, Request
 from pydantic import BaseModel, Field
 
-from . import org_rule_check, teammate_access, thread_search, threads
+from . import delivery, org_rule_check, reach, teammate_access, thread_rail, thread_search, threads
 from .store import H, Problem
+
+# How a person's message reaches the bot across a bot's Home or a DM with it (backend/delivery.py). Optional: with none
+# a post goes as it always has, into the bot's running turn.
+Way = Literal["steer", "queue", "defer"]
 
 
 class Nothing(BaseModel):
@@ -31,6 +36,7 @@ class ThreadCreate(BaseModel):
     kind: str = "chat"
     task_id: str | None = None
     body: str | None = None                       # a first message, posted with the thread
+    pin_for_members: bool = False                 # pin it for its starter and every person added
 
 
 class ThreadPatch(BaseModel):
@@ -39,6 +45,7 @@ class ThreadPatch(BaseModel):
     audience: str | None = None
     audience_group_id: str | None = None
     retention_days: int | None = None             # sent as null: keep its messages for good
+    pinned_for_everyone: bool | None = None       # a manager pins the root for everyone who reads it, or unpins it
 
 
 class ThreadPost(BaseModel):
@@ -47,6 +54,9 @@ class ThreadPost(BaseModel):
     to: str | None = None
     refs: dict = Field(default_factory=dict)
     parent_message_id: str | None = None
+    in_reply_to: str | None = None                # the message this one replies to, in the same root (flat replies)
+    delivery: Way | None = None                   # only in a bot's Home or a DM with one bot
+    defer_for: str | None = None                  # with delivery defer: <n>m, <n>h, <n>d or never (the default)
 
 
 class MessagePatch(BaseModel):
@@ -71,6 +81,8 @@ class DmCreate(BaseModel):
     members: list[str] = Field(..., min_length=1, max_length=50)
     body: str | None = None
     title: str = ""
+    delivery: Way | None = None                   # with `body`, in a DM with one bot
+    defer_for: str | None = None
 
 
 class ThreadUpload(BaseModel):
@@ -80,7 +92,120 @@ class ThreadUpload(BaseModel):
     kind: str = "say"
     to: str | None = None
     parent_message_id: str | None = None
+    in_reply_to: str | None = None
     titles: list[str] = Field(default_factory=list, max_length=10)
+    delivery: Way | None = None
+    defer_for: str | None = None
+
+
+def _delivery_words(body):
+    """The `delivery` and `defer_for` a post named, checked before anything is read: 422 when they do not hold together."""
+    if wrong := delivery.check(body.delivery, body.defer_for):
+        raise Problem("delivery", wrong, 422)
+    if body.delivery and getattr(body, "kind", "say") != "say":
+        raise Problem("delivery", "delivery goes with a plain message (kind say)", 422)
+    refs = getattr(body, "refs", None) or {}
+    # The way's marks are the route's own (threads.WAY_KEYS): a client never writes them. A refs.delivery a client
+    # sends with no `delivery` goes as it always did; beside a named way it would contradict it.
+    if any(k in refs for k in threads.WAY_KEYS):
+        raise Problem("delivery", "Name the way with delivery and defer_for", 422)
+    if body.delivery and any(k in refs for k in ("delivery", "defer_for", "quiet")):
+        raise Problem("delivery", "Name the way with delivery and defer_for, not in refs", 422)
+    if body.delivery and getattr(body, "parent_message_id", None):
+        raise Problem("delivery", "delivery goes with a message in a bot's Home or DM, not in a sub-thread", 422)
+
+
+def _reply_check(c, auth, who, thread_id, body):
+    """A post's `in_reply_to`, checked before anything is written: a message of the same root's open subtree the poster
+    reads (threads.reply_target), never beside `parent_message_id`. 422 reply_target_invalid otherwise."""
+    target = getattr(body, "in_reply_to", None)
+    if not target:
+        return None
+    if getattr(body, "parent_message_id", None):
+        raise Problem("reply_target_invalid", "A reply goes in the thread: send in_reply_to without parent_message_id",
+                      422)
+    return threads.reply_target(c, threads.viewer(auth, who), thread_id, target)["id"]
+
+
+def _bot_across(c, v, thread_id, members=None):
+    """The bot on the other side of a post: a bot's Home (its owner), or a DM whose one other member is a bot (`members`
+    for a DM its first message makes). None anywhere else."""
+    if members is not None:
+        others = [a for a in dict.fromkeys(H.resolve_actor(c, m) or m for m in members) if a != v.actor]
+        return others[0] if len(others) == 1 and str(others[0]).startswith("bot:") else None
+    row = threads.thread_row(c, thread_id)
+    if row is None or row.get("parent_id"):
+        return None
+    audience = threads.audience_of(row)
+    if audience == "home":
+        owner = str(threads.home_owner(row) or "")
+        return owner if owner.startswith("bot:") else None
+    if audience in ("personal", "participants"):
+        others = [a for a in threads._dm_members(c, row) if a != v.actor]
+        return others[0] if len(others) == 1 and others[0].startswith("bot:") else None
+    return None
+
+
+def _delivery_refs(c, auth, who, body, thread_id=None, members=None):
+    """(the way, the refs that send it) for a post that named `delivery`, or (None, {}) for one that did not, which goes
+    exactly as before. The rules are a task comment's (backend/app.py): steer and queue wake the bot, so they take the
+    right to message it (Write, or being in a DM with it); a deadline wakes it too, so anyone without that right defers
+    with none. A defer while
+    the bot has a turn going in this thread rides along as a queue. Only a person names a way; a bot's message goes as
+    bot-to-bot messages do."""
+    way, defer_for = body.delivery, body.defer_for
+    if not way:
+        return None, {}
+    if who.role == "bot":
+        raise Problem("delivery", "A bot's message goes as bot-to-bot messages do: send it without a delivery", 422)
+    v = threads.viewer(auth, who)
+    bot = _bot_across(c, v, thread_id, members)
+    if not bot:
+        raise Problem("delivery", "delivery is for a message to a bot: in its Home or a DM with it", 422)
+    try:
+        directs = teammate_access.can(c, who, "write", bot, auth=auth)
+    except (ValueError, KeyError):
+        directs = False
+    # A DM is a conversation with the bot (contract §4.3: a DM queues a run), and a post there without a way already
+    # wakes it: the members of a DM with it may name any way, Write or not. Without this a member's message sent from
+    # the composer (which names its remembered way) went as a quiet defer with no deadline.
+    if not directs and members is not None:
+        directs = True                  # a DM's first message: making the DM is checked as it is made (threads.dm)
+    elif not directs and thread_id and _dm_with(c, v, thread_id, bot):
+        directs = threads.can_post(c, v, thread_id)
+    if way in ("steer", "queue") and not directs:
+        raise Problem("delivery", "Only someone who may message this bot can wake it: send it with defer", 403)
+    if way == "defer" and not directs:
+        if defer_for not in (None, delivery.NEVER):
+            raise Problem("delivery", "Only someone who may message this bot can give it a deadline: send it with "
+                          "defer and no defer_for", 403)
+        defer_for = None
+    # Riding along wakes nothing new, but it is a queue's place in the turn: only for someone who may queue.
+    if way == "defer" and directs and thread_id and delivery.running_in_session(c, H.actor_id(bot), [thread_id]):
+        way = "queue"
+    if way == "queue":
+        return way, {"send_way": "queue", "delivery": "queue"}      # refs.delivery: execution.inputs keeps it out
+    if way == "defer":
+        return way, {"send_way": "defer", "quiet": True, **({"send_defer_for": defer_for} if defer_for else {})}
+    return way, {}
+
+
+def _dm_with(c, v, thread_id, bot):
+    """Whether `thread_id` is a DM root between the viewer and `bot` alone."""
+    row = threads.thread_row(c, thread_id)
+    if row is None or row.get("parent_id") or threads.audience_of(row) not in ("personal", "participants"):
+        return False
+    return sorted(a for a in threads._dm_members(c, row)) == sorted({v.actor, bot})
+
+
+def _sent_as(c, way, message):
+    """What a post that named a way did (delivery.sent_as): the way and, for a defer, its deadline (null: none)."""
+    due = None
+    if way == "defer":
+        row = c.execute("SELECT due_at FROM deferrals WHERE item=? OR item IN (SELECT carrier_id FROM message_deliveries "
+                        "WHERE message_id=? AND carrier_id IS NOT NULL) LIMIT 1", (message["id"], message["id"])).fetchone()
+        due = row[0] if row else None
+    return delivery.sent_as(way, due)
 
 
 def _thread_message(message):
@@ -161,6 +286,7 @@ def _shared(c, v, actor, *, cursor=None, limit=None):
 
 def install(app, store, auth, mutate, rule_check):
     from .media import upload_contract
+    from . import bot_home_merge
 
     def recipients(c, who, thread_id, to):
         """Who a thread write is for, as the org-rule check reads it (`org_rule_check.thread_people`). The recipient and
@@ -200,7 +326,14 @@ def install(app, store, auth, mutate, rule_check):
         return place
 
     def check(who, thread_id, body):
-        """The org-rule check of one message, for a person or a bot alike (operation `threads`), outside the write."""
+        """The org-rule check of one message, for a person or a bot alike (operation `threads`), outside the write. A
+        bot's post to someone out of its reach is refused first (reach.check_thread), so it spends no judgment; so is a
+        reply to a message the poster can't reply to."""
+        if getattr(body, "in_reply_to", None):
+            with store.read() as c:
+                _reply_check(c, auth, who, thread_id, body)
+        reach.precheck(store, who, lambda c: reach.check_thread(c, who, thread_id, body.text, body.to,
+                                                                body.parent_message_id))
         return rule_check(who, "threads", body.text, lambda c: recipients(c, who, thread_id, body.to), "",
                           {"thread_id": thread_id}, place=thread_place(who, thread_id))
 
@@ -217,7 +350,9 @@ def install(app, store, auth, mutate, rule_check):
         `sort=important` by each thread's 1-10 level, then newest, without noise; neither, unread first. With
         `with=<actor>`, only the threads that teammate is a member of, in the same shape."""
         v = threads.viewer(auth, request.state.identity)
-        with store.read() as c:
+        # One snapshot for the whole page: its reads are read_cache's (neutral rows, membership) only inside a
+        # transaction, so a plain read would take each of them again.
+        with store.read_transaction() as c:
             if with_actor:
                 return _shared(c, v, with_actor, cursor=cursor, limit=limit)
             return threads.sidebar(c, v, cursor=cursor, limit=limit, sort=sort)
@@ -230,6 +365,30 @@ def install(app, store, auth, mutate, rule_check):
         with store.read() as c:
             v = threads.viewer(auth, request.state.identity)
             return threads.search(c, v, q, limit=limit or 20, before=before)
+
+    @app.get("/api/v2/threads/rail")
+    def rail(request: Request, cursor: str | None = None, limit: int | None = None):
+        """The threads the viewer is in, by title: `pinned` (first page), then `threads`, paged. Never a 1:1 DM, a Home,
+        a task's thread or a meeting. The first page also has Catch up's count and the unread in each one-teammate DM."""
+        v = threads.viewer(auth, request.state.identity)
+        with store.read_transaction() as c:
+            return thread_rail.rail(c, v, cursor=cursor, limit=limit)
+
+    @app.get("/api/v2/threads/browse")
+    def browse(request: Request, q: str | None = None, cursor: str | None = None, limit: int | None = None):
+        """Company and team threads the viewer may read and is not in, newest activity first, `q` matching the title.
+        Following one (PUT .../follow) puts it in the rail."""
+        v = threads.viewer(auth, request.state.identity)
+        with store.read_transaction() as c:
+            return thread_rail.browse(c, v, q=q, cursor=cursor, limit=limit)
+
+    @app.get("/api/v2/threads/catch-up")
+    def catch_up(request: Request, cursor: str | None = None, limit: int | None = None):
+        """Each thread with something new for the viewer, and each open Needs attention item, mentions first, with its
+        new messages in tree order. `count` (at most 99) is the badge. POST .../read-all reads one."""
+        v = threads.viewer(auth, request.state.identity)
+        with store.read_transaction() as c:
+            return thread_rail.catch_up(c, v, cursor=cursor, limit=limit)
 
     @app.get("/api/v2/threads/home/{actor}")
     def home_thread(request: Request, actor: str):
@@ -262,12 +421,27 @@ def install(app, store, auth, mutate, rule_check):
 
     @app.get("/api/v2/threads/{thread_id}/timeline")
     def timeline(request: Request, thread_id: str, cursor: str | None = None, limit: int | None = None,
-                 max_bytes: int | None = None):
+                 max_bytes: int | None = None, flat: int = 0):
         """The thread in tree order: a page of its own messages, each followed by its sub-thread's messages, and the
-        breadcrumb. `next_cursor` is the seq to pass as `cursor` for the page above."""
+        breadcrumb; with `flat=1`, the thread and its open sub-threads in time order, every message at depth 0.
+        `next_cursor` is the seq to pass as `cursor` for the page above. Each message has `reply_to` and `routed`; the
+        first page has `bot_status`."""
         with store.read() as c:
             return threads.timeline(c, threads.viewer(auth, request.state.identity), thread_id, cursor=cursor,
-                                    limit=limit, max_bytes=max_bytes)
+                                    limit=limit, max_bytes=max_bytes, flat=bool(flat))
+
+    @app.get("/api/v2/threads/{thread_id}/bot-status")
+    def bot_status(request: Request, thread_id: str):
+        """The bots the thread's root waits on, and why (threads-contract §4.10): `{"bots": [...]}`, five at most,
+        oldest wait first. 404 for a thread the viewer cannot read."""
+        from . import thread_bot_status
+        with store.read() as c:
+            v = threads.viewer(auth, request.state.identity)
+            row = threads.require(c, v, thread_id)
+            root = threads.root_of(c, row)
+            if root["id"] != row["id"]:
+                root = threads.require(c, v, root["id"])
+            return {"bots": thread_bot_status.status(c, v, root)}
 
     @app.get("/api/v2/threads/{thread_id}/members")
     def members(request: Request, thread_id: str, cursor: str | None = None, limit: int | None = None):
@@ -282,7 +456,10 @@ def install(app, store, auth, mutate, rule_check):
         it creates, and answers with the hold)."""
         who = request.state.identity
         start = {"title": body.title, "audience": body.audience, "audience_group_id": body.audience_group_id,
-                 "members": body.members, "task_id": body.task_id, "kind": body.kind}
+                 "members": body.members, "task_id": body.task_id, "kind": body.kind,
+                 **({"pin_for_members": True} if body.pin_for_members else {})}
+        if body.body and not body.parent_message_id and body.audience in ("members", "team", "company"):
+            threads.require_name(who.actor, body.audience, body.title, 0)      # before the rule check spends a call
         def audience(c):
             if body.parent_message_id:
                 thread_id = (H.message(c, body.parent_message_id) or {}).get("conversation_id")
@@ -299,18 +476,19 @@ def install(app, store, auth, mutate, rule_check):
             if not body.body:
                 return threads.create(c, v, title=body.title, audience=body.audience,
                                       audience_group_id=body.audience_group_id, members=body.members,
-                                      parent_message_id=body.parent_message_id, task_id=body.task_id, kind=body.kind)
+                                      parent_message_id=body.parent_message_id, task_id=body.task_id, kind=body.kind,
+                                      pin_for_members=body.pin_for_members)
             if body.parent_message_id:
                 # A sub-thread's first message: post makes the sub-thread only once the message goes through.
                 parent = H.message(c, body.parent_message_id)
                 if not parent:
                     raise Problem("not_found", "Message not found", 404)
                 posted = threads.post(c, v, parent["conversation_id"], body.body,
-                                      parent_message_id=body.parent_message_id, checked=rc)
+                                      parent_message_id=body.parent_message_id, checked=rc, reach=True)
             else:
                 # A new thread's first message: post makes the thread only once the message goes through, so a held
                 # first message leaves no thread behind.
-                posted = threads.post(c, v, None, body.body, checked=rc, start=start)
+                posted = threads.post(c, v, None, body.body, checked=rc, start=start, reach=True)
             if "id" not in posted:          # held: no thread is made, its first message is the hold
                 return posted
             return {**threads.get(c, v, posted["conversation_id"]), "message": _thread_message(posted)}
@@ -328,6 +506,8 @@ def install(app, store, auth, mutate, rule_check):
                 threads.set_audience(c, v, thread_id, body.audience, audience_group_id=body.audience_group_id)
             if "retention_days" in body.model_fields_set:
                 threads.set_retention(c, v, thread_id, body.retention_days)
+            if body.pinned_for_everyone is not None:
+                thread_rail.set_pinned_for_everyone(c, v, thread_id, body.pinned_for_everyone)
             return threads.get(c, v, thread_id)
         return mutate(request, body, work)
 
@@ -336,14 +516,24 @@ def install(app, store, auth, mutate, rule_check):
         """A message in the thread (in its sub-thread with `parent_message_id`). A person's or a bot's message passes the
         org-rule check first, outside the write; a held one writes nothing but its hold."""
         who = request.state.identity
+        # A room that moved is checked and written as its Home (bot_home_merge.named_home), named before the check.
+        thread_id = bot_home_merge.named_home(store, thread_id)
+        _delivery_words(body)
         rc = check(who, thread_id, body)
 
         def work(c):
-            message = threads.post(c, threads.viewer(auth, who), thread_id, body.text, kind=body.kind, refs=body.refs,
-                                   parent_message_id=body.parent_message_id, to_actor=body.to, checked=rc)
+            v = threads.viewer(auth, who)
+            replying = _reply_check(c, auth, who, thread_id, body)
+            way, marks = _delivery_refs(c, auth, who, body, thread_id) if body.delivery else (None, {})
+            message = threads.post(c, v, thread_id, body.text, kind=body.kind,
+                                   refs={**body.refs, **marks} if marks else body.refs,
+                                   parent_message_id=body.parent_message_id, to_actor=body.to, checked=rc, reach=True,
+                                   in_reply_to=replying)
             if "id" not in message:         # held: post wrote nothing and answers with the hold
                 return message
-            return _thread_message(message)
+            out = _thread_message(message)
+            out["reply_to"] = threads.reply_quotes(c, v, [out]).get(out["id"])
+            return {**out, "sent_as": _sent_as(c, way, message)} if way else out
         return mutate(request, body, work)
 
     @app.patch("/api/v2/messages/{message_id}")
@@ -351,8 +541,13 @@ def install(app, store, auth, mutate, rule_check):
         """An edit of one's own message. Its new text is checked as `threads_edit` in the message's thread; a held edit
         changes nothing and Send anyway makes it."""
         who = request.state.identity
+        viewer = threads.viewer(auth, who)
         with store.read() as c:
-            thread_id = (H.message(c, message_id) or {}).get("conversation_id") or ""
+            # Only one's own message one can read is edited: anything else is the 404/403 before any check, so neither
+            # the reach check nor the rule check reads (or names who reads) a message hidden from the caller.
+            thread_id = threads._own_say(c, *threads._actor_of(viewer), message_id).get("conversation_id") or ""
+        # A bot's edit that @mentions someone new out of its reach is refused before the rule check spends judgment.
+        reach.precheck(store, who, lambda c: reach.check_edit(c, who, message_id, body.text, viewer))
         rc = rule_check(who, "threads_edit", body.text, lambda c: recipients(c, who, thread_id, None), "",
                         {"message_id": message_id}, place=thread_place(who, thread_id)) if thread_id else None
 
@@ -364,7 +559,8 @@ def install(app, store, auth, mutate, rule_check):
                               retryable=True)
             if gate and gate.get("held"):
                 return org_rule_check.held_answer(c, who, gate, auth=auth)
-            edited = threads.edit_message(c, threads.viewer(auth, who), message_id, body.text)
+            reach.check_edit(c, who, message_id, body.text, viewer)
+            edited = threads.edit_message(c, viewer, message_id, body.text)
             return {**_thread_message(edited), **org_rule_check.answer(gate)}
         return mutate(request, body, work)
 
@@ -409,6 +605,18 @@ def install(app, store, auth, mutate, rule_check):
         return mutate(request, body, lambda c: threads.follow(c, threads.viewer(auth, who), thread_id,
                                                               notify=body.notify))
 
+    @app.put("/api/v2/threads/{thread_id}/pin")
+    def pin(request: Request, thread_id: str):
+        """Pin a root thread for me. Reading it is enough. The answer is the thread view."""
+        who = request.state.identity
+        return mutate(request, Nothing(), lambda c: thread_rail.pin(c, threads.viewer(auth, who), thread_id))
+
+    @app.delete("/api/v2/threads/{thread_id}/pin")
+    def unpin(request: Request, thread_id: str):
+        """Unpin a root thread for me, over a pin for everyone too. The answer is the thread view."""
+        who = request.state.identity
+        return mutate(request, Nothing(), lambda c: thread_rail.unpin(c, threads.viewer(auth, who), thread_id))
+
     @app.delete("/api/v2/threads/{thread_id}/follow")
     def unfollow(request: Request, thread_id: str):
         who = request.state.identity
@@ -420,6 +628,9 @@ def install(app, store, auth, mutate, rule_check):
         `body` is given. Starting one needs Write on each of them (the reply-back rule applies), as adding them to a
         thread does."""
         who = request.state.identity
+        if body.delivery and not body.body:
+            raise Problem("delivery", "delivery goes with a first message (body)", 422)
+        _delivery_words(body)
         start = {"dm": body.members, "title": body.title}
         rc = rule_check(who, "threads", body.body, lambda c: org_rule_check.thread_people(c, {"start": start}), "", {},
                         place=lambda c, author, people: org_rule_check.place_for_start(
@@ -430,10 +641,19 @@ def install(app, store, auth, mutate, rule_check):
             if not body.body:
                 return threads.dm(c, v, body.members, title=body.title)
             # The open DM with these people gets the message, or a new one is made with it: a held message makes none.
-            posted = threads.post(c, v, None, body.body, checked=rc, start=start)
+            way, marks = (None, {})
+            if body.delivery:
+                # The open DM with these people, when there is one: a defer while the bot runs there rides along.
+                actor = v.actor
+                existing = threads._open_dm(c, actor, threads._dm_members_for(c, actor, body.members))
+                way, marks = _delivery_refs(c, auth, who, body, thread_id=existing, members=body.members)
+            posted = threads.post(c, v, None, body.body, refs=marks or None, checked=rc, start=start, reach=True)
             if "id" not in posted:          # held: no DM is made, its first message is the hold
                 return posted
-            return {**threads.get(c, v, posted["conversation_id"]), "message": _thread_message(posted)}
+            message = _thread_message(posted)
+            if way:
+                message = {**message, "sent_as": _sent_as(c, way, posted)}
+            return {**threads.get(c, v, posted["conversation_id"]), "message": message}
         return mutate(request, body, work)
 
     @app.put("/api/v2/messages/{message_id}/reactions/{emoji}")
@@ -471,9 +691,11 @@ def install(app, store, auth, mutate, rule_check):
         from .views import human_only
         who = request.state.identity
         human_only(who)
+        thread_id = bot_home_merge.named_home(store, thread_id)     # as post_message names it: the Home, before the check
         checked = {}
 
         def admit(body):
+            _delivery_words(body)
             with store.read() as c:
                 threads.require(c, threads.viewer(auth, who), thread_id, write=True)
             checked["rc"] = check(who, thread_id, body)
@@ -483,21 +705,26 @@ def install(app, store, auth, mutate, rule_check):
 
         def work(c):
             v = threads.viewer(auth, who)
+            replying = _reply_check(c, auth, who, thread_id, body)
+            way, marks = _delivery_refs(c, auth, who, body, thread_id) if body.delivery else (None, {})
             items = [register(c, who, **upload) for upload in uploads]
             for index, item in enumerate(items):
                 caption = body.titles[index] if index < len(body.titles) else ""
                 item["title"] = caption or item["name"]
-            posted = threads.post(c, v, thread_id, body.text, kind=body.kind, to_actor=body.to,
+            posted = threads.post(c, v, thread_id, body.text, kind=body.kind, to_actor=body.to, refs=marks or None,
                                   parent_message_id=body.parent_message_id, checked=checked["rc"],
-                                  attachments=items or None)
+                                  attachments=items or None, in_reply_to=replying)
             if "id" not in posted:          # held: its files are in the hold's replay, linked when it is released
                 return posted
-            return {"thread": threads.get(c, v, thread_id), "message": _thread_message(H.message(c, posted["id"]))}
+            message = _thread_message(H.message(c, posted["id"]))
+            message["reply_to"] = threads.reply_quotes(c, v, [message]).get(message["id"])
+            if way:
+                message = {**message, "sent_as": _sent_as(c, way, posted)}
+            return {"thread": threads.get(c, v, thread_id), "message": message}
         return await asyncio.to_thread(app.state.uploads.write, request, body, uploads, work)
 
-    # The search index follows every write from here on (its triggers) and is filled from the messages that exist when
-    # it is made. Install can run before the schema, so the first call that finds the tables makes it (at boot if they
-    # are there, else on the first search); a write before then is indexed by that fill.
+    # The search index (migration 0047) follows every write through its triggers. Install can run before the schema,
+    # so the first call that finds the index marks search ready (at boot if it is there, else on the first search).
     ready = []
 
     def search_index():

@@ -5,7 +5,7 @@ act: create the repository on GitHub, or grant the permission. The server puts o
 front of the owner per bot (never one per attempt), keeps the bot as it is (planned, with its files on
 the computer that built it), and finishes on its own once either fix is in place: it creates the empty
 repository when the permission appears, or finds the repository a person made. The bot's runner then
-publishes the local history into it (runner/git_credentials.publish_history), as after any empty create.
+publishes the local history into it (runner_support/git_credentials.publish_history), as after any empty create.
 
 Triggers: the GitHub App's installation webhooks (a permission accepted, repositories added), the
 owner's "Check again" in Tools > GitHub, and a scheduler tick every few minutes while anything waits.
@@ -133,7 +133,7 @@ def _finish(store, bot, wait, how):
         row = H.task(c, task_id) if task_id else None
         if row and row["status"] != "closed":
             try:
-                H.task_close(c, H.KEEPER, task_id, note=how)
+                H.task_close(c, H.KEEPER, task_id, note=how, strict=False)
             except H.Refused:
                 log.warning("Could not close the Needs-you task for %s's repository", bot)
         H.event(c, H.KEEPER, "github.repo_wait_resolved", bot, {"repository": wait.get("repository"), "how": how})

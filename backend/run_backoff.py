@@ -156,7 +156,7 @@ def fresh_session(c, settings, bot, conversation_id, aid, task_id=None):
     from .views import clear_chat_session
     clear_chat_session(c, settings, H.KEEPER, bot, conversation_id,
                        {"reason": AFTER_COMPACT, "attempt": aid, "task": task_id, "bot": bot})
-    c.execute("UPDATE turns SET session_kind='new', session_why=? WHERE id=?", (AFTER_COMPACT, aid))
+    c.execute("UPDATE attempts SET session_kind='new', session_why=? WHERE id=?", (AFTER_COMPACT, aid))
 
 
 def too_long(c, settings, row, conversation_id, aid):
@@ -167,7 +167,7 @@ def too_long(c, settings, row, conversation_id, aid):
     if c.execute("SELECT 1 FROM compact_first WHERE bot=? AND conversation_id=? AND taken_by=?",
                  (bot, conversation_id, aid)).fetchone():
         c.execute("DELETE FROM compact_first WHERE bot=? AND conversation_id=?", (bot, conversation_id))
-        turn = c.execute("SELECT task_id FROM turns WHERE id=?", (aid,)).fetchone()
+        turn = c.execute("SELECT task_id FROM attempts WHERE id=?", (aid,)).fetchone()
         fresh_session(c, settings, bot, conversation_id, aid, turn[0] if turn else None)
         return
     c.execute("INSERT INTO compact_first(bot,conversation_id,marked_at,taken_by) VALUES(?,?,?,NULL) "
@@ -210,10 +210,21 @@ def wait_for(fails):
     return min(FIRST_WAIT * 2 ** max(fails - 1, 0), MAX_WAIT)
 
 
-def refusal(c, bot):
+def get_many(c, bots):
+    """{bot: its row as get returns it} for every bot in `bots`, read in set queries (the claim checks each one)."""
+    from .hubdb import chunks
+    rows = {}
+    for part in chunks(bots):
+        for row in c.execute(f"SELECT * FROM run_backoff WHERE bot IN ({','.join('?' * len(part))})", part):
+            rows[row["bot"]] = dict(row)
+    return {bot: rows.get(bot, {}) for bot in bots}
+
+
+def refusal(c, bot, state=None):
     """Why a claim passes over all of the bot's work for its failed runs: "run_hold" while it is held (until its next
-    try is due), "backoff" until its wait ends, else None. Read only, as every refusal (execution.claim_refusal)."""
-    row = get(c, bot)
+    try is due), "backoff" until its wait ends, else None. Read only, as every refusal (execution.claim_refusal).
+    `state`: the bot's row as get returns it, when the caller has read it already."""
+    row = get(c, bot) if state is None else state
     if not row:
         return None
     if row["held_at"]:
@@ -261,7 +272,7 @@ def _since_failure(c, bot):
 def person_waiting(c, bot):
     """Whether a person wrote to the bot since its last failed run: the job a back-off wait lets through."""
     return bool(c.execute("SELECT 1 FROM jobs j JOIN messages m ON m.id=j.message_id WHERE j.bot_id=? AND j.state='queued' "
-                          "AND m.sender_id LIKE 'human:%' AND m.created_at>? LIMIT 1", (bot, _since_failure(c, bot))).fetchone())
+                          f"AND {H.person_sent_sql()} AND m.created_at>? LIMIT 1", (bot, _since_failure(c, bot))).fetchone())
 
 
 def job_refusal(c, bot, message):
@@ -269,7 +280,7 @@ def job_refusal(c, bot, message):
     (execution.job_refusal)."""
     if refusal(c, bot) != "backoff":
         return None
-    fresh = str(message.get("sender_id") or "").startswith("human:") and str(message.get("created_at") or "") > _since_failure(c, bot)
+    fresh = H.person_sent(message) and str(message.get("created_at") or "") > _since_failure(c, bot)
     return None if fresh else "backoff"
 
 

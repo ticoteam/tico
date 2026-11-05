@@ -14,6 +14,7 @@ reads the YAML and hands the document here; `backend/tests/test_people.py` cover
   load(doc)                              -> roster           normalised, always usable
   is_developer(pid, roster)              -> bool             named in the `developers` list
   team_of(slug, employees, roster)       -> group | None     the bot's group id
+  manager_team(reports_to, employees, roster) -> group | None  the group a new bot takes from above it (a person's team)
   primary_users(slug, roster, employees) -> [person, ...]    never empty
   bots_of(person, roster, employees)     -> [slug, ...]      what that person is primary for
   may_chat(email, slug, roster, employees) -> bool           only an assigned person may chat
@@ -237,6 +238,32 @@ def team_of(slug, employees, roster):
         if at in roots:
             return roots[at]
         seen.add(at)
+        at = _clean(entry.get("reports_to"))
+    return None
+
+
+def manager_team(reports_to, employees, roster):
+    """The group a bot takes when it names none and `team_of` finds none above it: the one its manager is in. `team_of`
+    walks a bot's manager up through bots but stops at a person, so a bot under a person in a group would sit at the
+    root of the chart. This walks the same way and, reaching a person, takes that person's `team` when it is a group.
+    None when nobody above it is in one. Used where a bot is made (settings_admin `_team`), which keeps the copy as the
+    bot's own team, the way external_sync does.
+    """
+    groups = (roster or {}).get("org_groups") or {}
+    roots = {g["root"]: gid for gid, g in groups.items() if g.get("root")}
+    at, seen = _clean(reports_to), set()
+    while at and at not in seen:
+        if at.startswith("human:") or (at not in (employees or {}) and person(at, roster)):
+            pid = _clean(at[6:]) if at.startswith("human:") else at
+            team = _clean((person(pid, roster) or {}).get("team"))
+            return team if team in groups else None
+        seen.add(at)
+        entry = (employees or {}).get(at) or {}
+        named = _clean(entry.get("team"))
+        if entry.get("team") is not None and (named in groups or not named):
+            return named or None           # "" says: in no group, whatever its manager is in
+        if at in roots:
+            return roots[at]
         at = _clean(entry.get("reports_to"))
     return None
 

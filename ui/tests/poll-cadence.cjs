@@ -34,7 +34,7 @@ const {t} = (() => { try { return require('./support/load.cjs'); } catch { retur
       if (p === '/api/me') return json({id: 'ana', role: 'owner', name: 'Ana', email: 'ana@acme.example', cloud: true, registered: true, config});
       if (p === '/api/v2/config') { reads.config++; return json(config); }
       if (p === '/api/v2/health') { reads.health++; return json(health); }
-      if (p === '/api/v2/health-monitor') return json({state: 'active', on: true, findings: []});
+      if (p === '/api/v2/health/findings') return json({findings: [], botops: true, reports_without_asking: false});
       if (p === '/api/v2/system/metrics') return json({});
       if (p === '/api/employees' || p === '/api/issues') return json([]);
       if (p === '/api/humans' || p === '/api/people') return json({people: [{id: 'ana', name: 'Ana'}], teams: {}});

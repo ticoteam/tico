@@ -19,9 +19,10 @@ def test_the_strategy_bot_makes_the_org_change_the_owner_asked_for(api):
     strategy_bot(api)
     _, attempt = turn(api, "coo", "ana-test", "Make a Research group with ops leading it, and Ben reports to me")
     token = attempt["token"]
-    # Without citing what they said it changes nothing.
-    refused = cited(api, "POST", "groups", {"name": "Research"}, token, ref=None, expected=403)
-    assert refused["error"]["code"] == "confirm_required"
+    # The turn cites the message that started it, so an uncited write is admitted on those words; a citation that is not
+    # theirs (or not in their Assistant chat) lends nothing.
+    refused = cited(api, "POST", "groups", {"name": "Research"}, token, ref="nope", expected=403)
+    assert refused["error"]["code"] == "on_behalf_of"
     gid = cited(api, "POST", "groups", {"name": "Research", "add": {"bots": ["ops"]}}, token)["id"]
     cited(api, "PATCH", f"groups/{gid}", {"name": "Lab", "lead": "bot:ops"}, token)
     assert (group(api, gid)["name"], group(api, gid)["lead"]) == ("Lab", "bot:ops")
@@ -33,9 +34,8 @@ def test_the_strategy_bot_makes_the_org_change_the_owner_asked_for(api):
     assert next(b for b in get(api, "bots") if b["slug"] == "ops")["reports_to"] == "cpo"
     cited(api, "DELETE", f"groups/{gid}", None, token)
     assert gid not in {row["id"] for row in get(api, "groups")}
-    # Only who reports to whom rides on their words; anything else on the profile is still a card.
-    assert cited(api, "POST", "humans/ben", {"reports_to": "ana", "title": "CTO"}, token,
-                 expected=403)["error"]["code"] == "confirm_required"
+    # The owner's own turn may change Ben's profile as the owner, on their words; the route's own checks decide the rest.
+    cited(api, "POST", "humans/ben", {"reports_to": "ana", "title": "CTO"}, token)
 
 
 def test_on_its_own_the_strategy_bot_changes_no_group(api):

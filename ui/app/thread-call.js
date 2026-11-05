@@ -7,6 +7,8 @@
 const CALL_LIB = '/vendor/livekit-client.umd.min.js';
 // Tokens last five minutes; a fresh one a minute early keeps a slow answer from dropping the call.
 const CALL_REFRESH_MS = 4 * 60 * 1000;
+// A stalled leave must give up so a later Join can take its turn.
+const CALL_LEAVE_TIMEOUT_MS = 5000;
 // Per thread: {call} (the live call, or null), {off} when the server has calls switched off, {removed} after a removal,
 // {none} when the server has no calls at all.
 const CALL_THREADS = new Map();
@@ -14,12 +16,43 @@ let CALL = null;           // the call this tab is in: {id, threadId, title, con
 let CALL_LIB_LOAD = null;
 // Each join takes the next number; a join that a newer one overtook stops before it turns the microphone on.
 let CALL_GEN = 0;
+// Joins on their way (asked for, not yet in the call or given up).
+let CALL_JOINS = 0;
+// Call id -> joins of it still on their way, so a cancelled Start call never gives back a seat a Join has taken.
+const CALL_JOINING = new Map();
+// Call id -> all leaves still on their way, so a rejoin cannot get ahead of cleanup of its previous seat.
+const CALL_LEAVING = new Map();
+// Start's seat waits for the last Join to settle: a cancelled or failed Join still owes it back.
+// Any leave settles it too, so the last Join cannot give it back twice.
+const CALL_OWED = new Set();
+// A leave stays settled until the last Join finishes, including for a Start response still on its way.
+const CALL_SETTLED = new Set();
 // Named here so scripts/build-icon-font.py keeps them in the icon subset.
 const CALL_ICONS = {mic: 'mic', muted: 'mic_off', share: 'screen_share', stop: 'stop_screen_share', bot: 'smart_toy', leave: 'call_end'};
 
 const callCode = e => (typeof e?.body?.error === 'object' ? e.body.error?.code : e?.body?.error) || '';
 const callPath = id => '/v2/calls/' + encodeURIComponent(id);
 const callShareable = () => !!navigator.mediaDevices?.getDisplayMedia;
+function callSeatSettled(id) {
+  CALL_OWED.delete(id);
+  if (CALL_JOINING.has(id)) CALL_SETTLED.add(id);
+}
+function callPostLeave(id, opts) {
+  const leave = post(callPath(id) + '/leave', {}, undefined,
+    {...opts, timeout: window.__callLeaveTimeoutMs ?? CALL_LEAVE_TIMEOUT_MS}).catch(e => {
+    // Every leave is a new one: a kept request id would make the next leave (after a rejoin) replay this one.
+    if (e?.signature) pendingWrites.delete(e.signature);
+  });
+  const pending = Promise.all([CALL_LEAVING.get(id), leave]).then(() => {
+    if (CALL_LEAVING.get(id) === pending) CALL_LEAVING.delete(id);
+  });
+  CALL_LEAVING.set(id, pending);
+  return pending;
+}
+function callSeatLeave(id) {
+  callSeatSettled(id);
+  void callPostLeave(id, {keepalive: true});
+}
 function callViewsDraw(threadId) { for (const v of THV_VIEWS) if (v.id === threadId && !v.gone) thvDraw(v); }
 function callNoted(threadId, e) {
   if (e?.status === 503) CALL_THREADS.set(threadId, {...CALL_THREADS.get(threadId), off: true});
@@ -54,16 +87,33 @@ function callHeadHTML(view) {
 }
 async function callAction(view, kind) {
   const id = view.id, info = CALL_THREADS.get(id) || {};
+  // Counted as a join on its way from the click, so a page hidden while the call is being made says it is in one,
+  // and never joins the call once it is made.
+  const gen = ++CALL_GEN;
+  CALL_JOINS++;
   try {
     let call = info.call;
     if (kind === 'start') {
       call = await post(`/v2/threads/${encodeURIComponent(id)}/calls`, {});
       call = call?.call || call;
     }
-    if (call?.id) await callJoin(id, call, threadTitle(view.thread));
+    if (gen !== CALL_GEN) {
+      // Hidden or overtaken while the call was being made: the server already counts this person in it, so the seat goes
+      // back, unless a Join of the same call (from the header the call's start redrew) is in it or on its way.
+      if (kind === 'start' && call?.id) {
+        if (CALL_JOINING.get(call.id)) {
+          if (!CALL_SETTLED.has(call.id)) CALL_OWED.add(call.id);
+        } else if (CALL?.id !== call.id) callSeatLeave(call.id);
+      }
+      return;
+    }
+    if (call?.id) await callJoin(id, call, threadTitle(view.thread), gen);
   } catch (e) {
+    if (gen !== CALL_GEN) return;
     if (callCode(e) === 'call_in_progress') { void callLoad(view); toast('A call already started here'); return; }
     callNoted(id, e);
+  } finally {
+    CALL_JOINS--;
   }
 }
 
@@ -77,13 +127,31 @@ function callLib() {
   });
   return CALL_LIB_LOAD;
 }
-async function callJoin(threadId, call, title) {
-  const gen = ++CALL_GEN;
+// `gen` is the join's number: Start call takes it at the click, so the one number runs through the whole join.
+async function callJoin(threadId, call, title, gen = ++CALL_GEN) {
+  CALL_JOINS++;
+  CALL_JOINING.set(call.id, (CALL_JOINING.get(call.id) || 0) + 1);
+  try { await callJoinNow(threadId, call, title, gen); } finally {
+    CALL_JOINS--;
+    const left = CALL_JOINING.get(call.id) - 1;
+    if (left) CALL_JOINING.set(call.id, left);
+    else {
+      CALL_JOINING.delete(call.id);
+      CALL_SETTLED.delete(call.id);
+      if (CALL_OWED.delete(call.id) && CALL?.id !== call.id) callSeatLeave(call.id);
+    }
+  }
+}
+async function callJoinNow(threadId, call, title, gen) {
   if (CALL) await callLeave();
   if (gen !== CALL_GEN) return;
+  while (CALL_LEAVING.has(call.id)) {
+    await CALL_LEAVING.get(call.id);
+    if (gen !== CALL_GEN) return;
+  }
   const j = await post(callPath(call.id) + '/join', {});
   // Overtaken while joining: this seat is given back and the newer join goes on.
-  const stale = () => { if (gen === CALL_GEN) return false; post(callPath(call.id) + '/leave', {}).catch(() => {}); return true; };
+  const stale = () => { if (gen === CALL_GEN) return false; callSeatLeave(call.id); return true; };
   if (stale()) return;
   const LK = await callLib();
   if (stale()) return;
@@ -158,8 +226,9 @@ async function callLeave({end = false} = {}) {
       return;
     }
   } else {
-    try { await post(callPath(here.id) + '/leave', {}); } catch {}
+    await callPostLeave(here.id);
   }
+  callSeatSettled(here.id);
   callDone(here);
 }
 function callDone(here) {
@@ -219,5 +288,28 @@ function callBotPick(button) {
     catch (e) { toast(e?.message || 'Could not add the bot'); }
   });
 }
-// Leaving the page leaves the call, so nobody stays in a call they can no longer see.
-addEventListener('pagehide', () => { if (CALL) { CALL.leaving = true; try { CALL.room?.disconnect(); } catch {} } });
+// Every track this tab sends (microphone, screen; never a camera) stops now, before the room is told.
+function callStopLocal(here) {
+  for (const pub of here.room?.localParticipant?.trackPublications?.values?.() || []) {
+    try { pub.track?.stop?.(); } catch {}
+    try { pub.track?.mediaStreamTrack?.stop?.(); } catch {}
+  }
+}
+// The page goes out of sight: the call ends for this tab at once (its microphone and screen stop, its seat is given
+// back), and a join still on its way stops before it turns anything on. Answers whether a call was on or on its way.
+function callHidden() {
+  const inCall = !!CALL || CALL_JOINS > 0;
+  CALL_GEN++;
+  const here = CALL;
+  if (here) {
+    here.leaving = true;
+    callStopLocal(here);
+    callSeatLeave(here.id);
+    callDone(here);
+  }
+  return {inCall};
+}
+// Leaving the page leaves the call, so nobody stays in a call they can no longer see. The desktop app runs the same
+// when it hides an org's page to show another org's (no pagehide comes then): window.ticoPageHidden.
+addEventListener('pagehide', () => { callHidden(); });
+window.ticoPageHidden = () => callHidden();

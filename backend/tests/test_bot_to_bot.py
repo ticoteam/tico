@@ -6,6 +6,7 @@ Builder sample, Oct 18: 74 of 168 wakes were QA updates, a bot telling another b
 from backend import bot_to_bot as B
 from backend import hubdb as H
 from backend.tests.test_api import api, assign, get, post, ready, runner  # noqa: F401
+from backend.tests.hold_rows import set_holds
 
 
 def claim(api, r, bot=None):
@@ -228,7 +229,7 @@ def test_needs_action_wakes_the_owner_of_a_snoozed_task_where_a_plain_comment_do
     token = ops_token(api, r)
     with api.app.state.store.transaction() as c:
         t = H.task_create(c, "bot:ops", "Ship the export", "Build it", "bot:cpo")
-        c.execute("UPDATE tasks SET snoozed_until=? WHERE id=?", (H.shift(H.now(), days=2), t["id"]))
+        set_holds(c, t["id"], snoozed_until=H.shift(H.now(), days=2))
         c.execute("DELETE FROM jobs WHERE bot_id='cpo'")
     plain = post(api, f"tasks/{t['id']}/comments", {"text": "FYI: docs merged."}, token=token)
     assert plain["woke"] is False and jobs(api, "cpo") == 0

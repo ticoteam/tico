@@ -314,7 +314,7 @@ THREAD_CONTRACT = {
 }
 # The threads build's own route families: each one the server serves is in the document, and each documented one is
 # served (spec() raises on that half).
-THREAD_AREAS = ("/api/v2/threads", "/api/v2/calls", "/api/v2/federation", "/api/v2/slack/links",
+THREAD_AREAS = ("/api/v2/threads", "/api/v2/calls", "/api/v2/slack/links",
                 "/api/v2/uploads/threads", "/api/v2/messages/{message_id}", "/api/v2/rule-holds")
 
 

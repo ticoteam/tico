@@ -124,7 +124,7 @@ async function tabAndToggle(browser) {
   await page.locator('.dash-tabs a', {hasText: 'Graph'}).click();
   await page.waitForFunction(() => location.hash === '#/overview/graph');
   await ready(page, 'rules');
-  assert.deepEqual(await page.locator('.dash-tabs a').allInnerTexts(), ['Mine', 'Company', 'Campus', 'Graph', 'Company page']);
+  assert.deepEqual(await page.locator('.dash-tabs a').allInnerTexts(), ['Mine', 'Company', 'Campus', 'Graph', 'Share']);
   assert.equal(await page.locator('.dash-tabs a.cur').innerText(), 'Graph');
   // The chart: people at the top, the group as a box, bots under their managers; built-ins stay off.
   for (const k of ['p:ana', 'p:sam', 'g:growth', 'b:lead', 'b:writer', 'b:seo', 'b:builder']) assert.equal(await node(page, k).count(), 1, k);

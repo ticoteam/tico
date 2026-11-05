@@ -39,7 +39,7 @@ async function run(browser, viewport) {
       const message = {id: 'm1', sender_id: 'human:ana', recipient_id: 'bot:coo', kind: 'say', body: text, created_at: at(9),
                        conversation_id: 'c1', refs: {topic_changed: true}};
       server = [...server, message];
-      return json({message, fast: true});
+      return json({message});
     }
     return json(unrouted(p));
   });

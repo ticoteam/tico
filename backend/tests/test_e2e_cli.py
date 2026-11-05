@@ -144,7 +144,8 @@ def argv_for(path, leaf, file_path):
         if isinstance(action, (argparse._HelpAction, argparse._SubParsersAction)) or id(action) in skip:
             continue
         if not action.option_strings:
-            if action.nargs not in ("?", "*"):
+            # An optional positional is left out, unless it is the one choice of a required group (`approve <id>|--all`).
+            if action.nargs not in ("?", "*") or id(action) in first_of_required:
                 value = argument_value(action, path)
                 argv.append(str(file_path) if value == "FILE" else value)
             continue
@@ -273,4 +274,9 @@ def test_every_hub_command_in_templates_and_skills_runs_or_is_its_recorded_refus
     gone = sorted(word for word in STALE if word not in stale)
     if gone:
         problems.append("stale.json lists words no template or skill uses any more: " + ", ".join(gone))
-    assert not problems, "\n".join(problems)
+    assert not problems, "\n".join(problems) + (
+        "\nFix unexpected command failures first. For intended refusal changes, edit e2e/cli/expected-refusals.json; "
+        "remove entries no template or skill uses. Fix stale command references or update e2e/cli/stale.json "
+        "(remove unused entries). To regenerate refusals for review: "
+        "TICO_E2E_RECORD_REFUSALS=/tmp/cli-refusals.json python3 -m pytest -q -m slow backend/tests/test_e2e_cli.py. "
+        "Review the diff before copying it over e2e/cli/expected-refusals.json.")

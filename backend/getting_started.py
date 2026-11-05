@@ -13,6 +13,7 @@ import sqlite3
 from . import model_login, providers
 from .statuses import PARKED_SQL
 from .store import H, Problem, encode, readiness_document
+from . import bot_settings as BS
 
 PREFERENCE = "onboarding.progress"
 BOTOPS = "botops"
@@ -69,28 +70,36 @@ def change_state(c, who, body):
 # ------------------------------------------------------------------ live checks
 def _online_runners(c):
     since = H.shift(H.now(), seconds=-ONLINE_SECONDS)
-    return c.execute("SELECT id,label,readiness FROM runners WHERE revoked_at IS NULL "
+    return c.execute("SELECT id,label,readiness FROM runners_with_state WHERE revoked_at IS NULL "
                      "AND last_seen_at>? ORDER BY last_seen_at DESC", (since,)).fetchall()
 
 
 _wanted_runtimes = providers.wanted_runtimes
 
 
-def _signed_in_runtime(runners, wanted):
+def _covered(c, runner, name):
+    """Whether the company's plan or key given to this computer signs `name` in (model_subscriptions.in_effect)."""
+    from .model_subscriptions import in_effect
+    return c is not None and in_effect(c, runner["id"], name) is not None
+
+
+def _signed_in_runtime(runners, wanted, c=None):
+    """A wanted runtime an online computer is signed in to: by its own login, or (with `c`) the company's plan."""
     for runner in runners:
         for name, row in (readiness_document(runner["readiness"]).get("runtimes") or {}).items():
-            if name in wanted and row.get("installed") and row.get("authenticated") == "ready":
+            if name in wanted and row.get("installed") and (row.get("authenticated") == "ready"
+                                                             or _covered(c, runner, name)):
                 return name
     return ""
 
 
-def _login_target(runners, wanted):
-    """A computer that has a wanted runtime installed but not signed in, and that the browser
-    can sign in (backend/model_login.py): where the checklist's Sign in button goes."""
+def _login_target(runners, wanted, c=None):
+    """A computer that has a wanted runtime installed but not signed in, nor (with `c`) given the company's plan for
+    it, and that the browser can sign in (backend/model_login.py): where the checklist's Sign in button goes."""
     for runner in runners:
         for name, row in sorted((readiness_document(runner["readiness"]).get("runtimes") or {}).items()):
             if name in wanted and name in model_login.RUNTIMES and row.get("installed") \
-                    and row.get("authenticated") != "ready":
+                    and row.get("authenticated") != "ready" and not _covered(c, runner, name):
                 return {"runner_id": runner["id"], "runtime": name, "machine": runner["label"]}
     return None
 
@@ -111,7 +120,7 @@ def own_bots(c, settings):
 def _next_bot(c, settings):
     """The starter bot to onboard next: Onboarding (`needs_setup`), in the order first run put them, which
     puts the team's first bot first. Returns (id, name, why), or None when nothing is waiting."""
-    rows = c.execute("SELECT bc.bot,b.display_name,bc.config FROM bot_config bc JOIN bots b ON b.id=bc.bot "
+    rows = c.execute(f"SELECT bc.bot,b.display_name,{BS.CONFIG} AS config FROM bot_config bc {BS.JOIN} JOIN bots b ON b.id=bc.bot "
                      "WHERE bc.onboarding_state IN " + PARKED_SQL + " AND b.state!='archived'").fetchall()
     if not rows:
         return None
@@ -139,7 +148,7 @@ def checklist(c, who, settings, github):
     record = providers.load(c, settings)
     runners = _online_runners(c)
     wanted = _wanted_runtimes(record)
-    signed = _signed_in_runtime(runners, wanted)
+    signed = _signed_in_runtime(runners, wanted, c)
     login = (providers.PROVIDER_BY_RUNTIME.get(next(iter(sorted(wanted)), ""), {}) or {}).get("login", "")
     botops = H.bot(c, BOTOPS)
     mine = own_bots(c, settings)
@@ -155,7 +164,7 @@ def checklist(c, who, settings, github):
         _item("model", "A model is signed in on it", signed,
               ("Sign in to a model on the computer" + (" (run `" + login + "`)" if login else "") + "."
                if wanted else "Choose your AI providers first."),
-              "#/settings", "devices" if wanted else "models", login=_login_target(runners, wanted)),
+              "#/settings", "devices" if wanted else "models", login=_login_target(runners, wanted, c)),
         _item("github", "GitHub is connected", installed,
               "Lets bots keep their work in your GitHub.", "#/settings", "cloud", optional=True),
         _item("botops", "BotOps is active", botops and botops["state"] == "active",

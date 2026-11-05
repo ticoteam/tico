@@ -8,6 +8,7 @@ from datetime import datetime, timedelta, timezone
 from backend import botkpis, strategy_bot, hubdb, kpis as K
 from backend.store import H
 from backend.tests.test_api import api, assign, claim, get, headers, post, ready, runner  # noqa: F401
+from backend import bot_settings as BS
 
 NOW = datetime(2026, 9, 29, 12, 0, tzinfo=timezone.utc)
 
@@ -27,32 +28,32 @@ CLIMB = {"kind": "improve", "baseline": 40.0, "baseline_at": stamp(60), "target"
 
 def test_automatic_cost_uses_measured_api_cost_only(api):
     with api.app.state.store.transaction() as c:
-        c.execute("INSERT INTO turns(id, bot, started_at, billing) VALUES('unmeasured', 'ops', ?, 'api')", (stamp(1),))
+        c.execute("INSERT INTO attempts(id, bot_id, created_at, billing) VALUES('unmeasured', 'ops', ?, 'api')", (stamp(1),))
         assert botkpis.value(c, "ops", "cost_7d", NOW) is None
-        c.executemany("INSERT INTO turns(id, bot, started_at, est_cost_usd, billing) VALUES(?, 'ops', ?, ?, ?)", [
+        c.executemany("INSERT INTO attempts(id, bot_id, created_at, est_cost_usd, billing) VALUES(?, 'ops', ?, ?, ?)", [
             ("measured", stamp(1), 2.5, "api"), ("subscription", stamp(1), 5, "subscription")])
         assert botkpis.value(c, "ops", "cost_7d", NOW) == 2.5
-        c.execute("UPDATE turns SET est_cost_usd=0 WHERE billing='api' AND est_cost_usd IS NOT NULL")
+        c.execute("UPDATE attempts SET est_cost_usd=0 WHERE billing='api' AND est_cost_usd IS NOT NULL")
         assert botkpis.value(c, "ops", "cost_7d", NOW) == 0
 
 
 def test_automatic_cost_distinguishes_missing_usage_from_measured_zero(api):
     with api.app.state.store.transaction() as c:
-        c.executemany("INSERT INTO turns(id, bot, started_at, est_cost_usd, billing, usage_reason) "
+        c.executemany("INSERT INTO attempts(id, bot_id, created_at, est_cost_usd, billing, usage_reason) "
                       "VALUES(?, 'ops', ?, 0, ?, ?)", [
             (f"{reason}-{billing}", stamp(1), billing, reason)
             for reason in ("usage_unreported", "usage_limited", "no_result")
             for billing in ("api", None)
         ])
         # A measured subscription and an API reading outside the window cannot supply a reading.
-        c.executemany("INSERT INTO turns(id, bot, started_at, est_cost_usd, billing) VALUES(?, 'ops', ?, ?, ?)", [
+        c.executemany("INSERT INTO attempts(id, bot_id, created_at, est_cost_usd, billing) VALUES(?, 'ops', ?, ?, ?)", [
             ("subscription", stamp(1), 50, "subscription"), ("old", stamp(8), 100, "api")])
         assert botkpis.value(c, "ops", "cost_7d", NOW) is None
         assert all(r["period_end"] != stamp(0) for r in botkpis.readings(c, "auto:ops:cost_7d", NOW))
-        c.executemany("INSERT INTO turns(id, bot, started_at, est_cost_usd, billing) VALUES(?, 'ops', ?, ?, ?)", [
+        c.executemany("INSERT INTO attempts(id, bot_id, created_at, est_cost_usd, billing) VALUES(?, 'ops', ?, ?, ?)", [
             ("measured", stamp(1), 2.5, "api"), ("legacy-billing", stamp(1), 1.25, None)])
         assert botkpis.value(c, "ops", "cost_7d", NOW) == 3.75
-        c.execute("UPDATE turns SET est_cost_usd=0 WHERE id IN ('measured', 'legacy-billing')")
+        c.execute("UPDATE attempts SET est_cost_usd=0 WHERE id IN ('measured', 'legacy-billing')")
         assert botkpis.value(c, "ops", "cost_7d", NOW) == 0
         assert botkpis.readings(c, "auto:ops:cost_7d", NOW)[-1]["value"] == 0
 
@@ -190,9 +191,10 @@ def test_archive_restore_preserves_kpi_history_and_marks_it_on_goals(api):
 
 def add_strategy_bot(api):
     with api.app.state.store.transaction() as c:
-        c.execute("INSERT INTO bots(id,slug,display_name,runtime,model,effort,cwd,host,state,created_at) "
-                  "VALUES('goal-manager','goal-manager','Goal Manager','fake','','','','keeper','active',?)", (H.now(),))
-        c.execute("INSERT INTO bot_config(bot,config,team,owner_id) VALUES('goal-manager','{}',NULL,'ana')")
+        c.execute("INSERT INTO bots(id,slug,display_name,effort,state,created_at) "
+                  "VALUES('goal-manager','goal-manager','Goal Manager','','active',?)", (H.now(),))
+        c.execute("INSERT INTO bot_config(bot,team,owner_id) VALUES('goal-manager',NULL,'ana')")
+        BS.write(c, 'goal-manager', {"runtime": "fake", "host": "keeper"})
 
 
 def owners_chat(api):
@@ -228,19 +230,18 @@ def test_only_kpi_owner_or_manager_above_can_archive_and_goal_manager_is_refused
     post(api, f"kpis/{kpi['id']}/restore", {}, token=token, expected=403)
 
 
-def test_in_the_owners_chat_the_assistant_acts_as_the_owner_but_leaves_kpi_archive_and_restore_to_them(api):
+def test_in_the_owners_chat_the_assistant_acts_as_the_owner_on_the_words_that_asked(api):
+    """The owner's turn asked to archive the KPI and bring it back: its cited words admit each change as the owner. A KPI
+    change is not a proposal (`assistant/actions` refuses it), so it runs on the turn or not at all."""
     _, kpi = goal_with_kpi(api, owner="ben", token="ben-test")
     token = owners_chat(api)
     assert get(api, "me", token)["actor"] == "human:ana"
     post(api, f"kpis/{kpi['id']}/archive", {}, token="ana-test")
-    for change in ("restore", "archive"):
-        # With the Assistant's rights, not the owner's: never on its own, and not a card the owner confirms either.
-        assert post(api, f"kpis/{kpi['id']}/{change}", {}, token=token,
-                    expected=403)["error"]["code"] == "confirm_required"
-        post(api, "assistant/actions", {"summary": change.title() + " the activation KPI", "method": "POST",
-                                        "path": f"/api/v2/kpis/{kpi['id']}/{change}", "body": {}},
-             token=token, expected=422)
-        post(api, f"kpis/{kpi['id']}/{change}", {}, token="ana-test")
+    post(api, f"kpis/{kpi['id']}/restore", {}, token=token)
+    post(api, f"kpis/{kpi['id']}/archive", {}, token=token)
+    post(api, "assistant/actions", {"summary": "Archive the activation KPI", "method": "POST",
+                                    "path": f"/api/v2/kpis/{kpi['id']}/archive", "body": {}},
+         token=token, expected=422)
 
 
 

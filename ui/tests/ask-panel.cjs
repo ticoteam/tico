@@ -35,7 +35,7 @@ async function open(browser, viewport, state) {
     if (p === '/api/v2/tasks') return json({tasks: []});
     if (p === '/api/v2/conversations/room1/snapshot') return json({messages: state.messages, execution: null, has_more: false, next_before: null});
     if (p === '/api/v2/assistant' && method === 'GET') return json({available: true, state: 'active', bot: 'coo', name: 'Assistant',
-      can_turn_on: false, room_id: 'room1', messages: state.messages, has_more: false, next_before: null, execution: null, actions: {},
+      can_turn_on: false, room_id: 'room1', messages: state.messages, has_more: false, next_before: null, execution: state.execution || null, actions: {},
       pending: state.card?.status === 'pending' ? [state.card] : []});
     if (p === '/api/v2/assistant/actions/act9' && method === 'GET') return json({action: state.card});
     if (p === '/api/v2/assistant/actions/act9/confirm') { state.decided.push('act9'); state.card.status = 'done'; return json({action: state.card}); }
@@ -48,7 +48,7 @@ async function open(browser, viewport, state) {
       const user = msg('u' + state.sent.length, 'human:ben', body.text, new Date().toISOString());
       const bot = msg('b' + state.sent.length, 'bot:coo', "I can't fix that one. [Talk to the Tico team](#/support)", new Date().toISOString());
       state.messages.push(user, bot);
-      return json({message: user, reply: bot, fast: true});
+      return json({message: user});
     }
     if (p === '/api/v2/uploads/assistant/messages') {
       const raw = route.request().postDataBuffer().toString('latin1'), field = name => raw.match(new RegExp(`name="${name}"\\r\\n\\r\\n([^\\r]*)`))?.[1];
@@ -56,7 +56,7 @@ async function open(browser, viewport, state) {
       state.uploaded = (state.uploaded || []).concat([body]);
       const user = msg('f' + state.uploaded.length, 'human:ben', body.text, new Date().toISOString());
       state.messages.push(user, msg('g' + state.uploaded.length, 'bot:coo', 'Read it.', new Date().toISOString()));   // the turn's reply, by the snapshot
-      return json({message: user, reply: null, fast: false});
+      return json({message: user});
     }
     const ticket = p.match(/^\/api\/v2\/support\/tickets\/([^/]+)\/(messages|read)$/), listing = () => json({enabled: state.supportOff !== true, tickets: state.tickets, unread: state.unreadCount ?? state.tickets.filter(t => t.unread).length});
     if (ticket) {
@@ -145,9 +145,14 @@ const words = text => text.trim().split(/\s+/).length;
     assert.ok(level.dy < 2 && level.gap > 0 && level.gap < 16, `the peek sits beside the row: ${JSON.stringify(level)}`);
     assert.ok(words(said) <= 6 && !/asks/i.test(said), said);
     assert.equal(await peek.locator('[data-peek-go]').innerText(), said, 'the line is the action');
+    // A team reply waits too: the support chat waits behind the peek, and opens by itself once the peek is dismissed.
+    assert.equal(await page.evaluate(() => !!document.getElementById('support-pop')?.open), false, 'the support chat waits behind the peek');
     await peek.getByRole('button', {name: 'Dismiss'}).click();
     assert.equal(await peek.isHidden(), true);
     assert.deepEqual(await page.evaluate(() => JSON.parse(localStorage.getItem('tico.ask.peek.ben')).dismissed), ['m9', 't4']);
+    await page.locator('#support-pop[open]').waitFor({timeout: 8000});
+    await page.keyboard.press('Escape');
+    await page.locator('#support-pop').waitFor({state: 'hidden'});
     // Open: the row's dot flies up to its place beside the panel's name and lands exactly there. The row stays, a close
     // mark in its dot's place; the panel stands straight above the row, over the sidebar, and leaves the row in view.
     // The flight is quick: under 350 ms however far it goes.
@@ -323,15 +328,46 @@ const words = text => text.trim().split(/\s+/).length;
     await page.locator('#ask-panel').waitFor({state: 'hidden'});
     await page.locator('#mobile-nav [data-nav="tasks"]').click();
     assert.equal(await page.locator('#ask-panel').isHidden(), true, 'a tab never opens Ask');
-    // A "things need you" sheet already open: the chat opens over it, not under it.
-    await page.evaluate(() => { const s = document.createElement('section'); s.className = 'needs-you'; s.style.height = '600px'; document.body.appendChild(s); });
     await tab.click();
     await page.locator('#ask-panel').waitFor();
-    await page.locator('#ask-panel').evaluate(el => Promise.all(el.getAnimations().map(a => a.finished)));
-    assert.equal(await page.evaluate(() => { const r = document.querySelector('#ask-panel').getBoundingClientRect();
-      return !!document.elementFromPoint(r.left + r.width / 2, r.top + r.height / 2)?.closest('#ask-panel'); }), true, 'the chat is above the needs-you sheet');
     await tab.click();
     await page.locator('#ask-panel').waitFor({state: 'hidden'});
+    assert.deepEqual(errors, []);
+    await page.close();
+
+    // A turn at work with no words yet: its label, how long it has run and its newest step, never the tool's arguments.
+    // Once it replies, the reply instead.
+    state = {messages: [msg('w1', 'human:ben', 'Help me clear out my task list', ago(5))], sent: [], read: [], decided: [], answers: [], tickets: [], needs: [],
+      execution: {job_id: 'j1', message_id: 'w1', bot_id: 'coo', state: 'running', label: 'Working', text: '', started_at: ago(4.3), parts: [
+        {kind: 'tool', text: 'Ran hub hub task list', at: ago(4)}, {kind: 'tool', text: 'Ran hub task bulk close', at: ago(1)}]}};
+    ({page, errors} = await open(browser, {width: 1280, height: 900}, state));
+    await page.locator('#ask-row').click();
+    const working = page.locator('#ask-panel [data-ask-working]');
+    await working.waitFor();
+    assert.equal(await working.innerText(), 'Working · 4m · Closing tasks');
+    // The poll's next draw of the same chat, 5 s on, keeps the thread (and replies typed into it): only the line's time moves.
+    state.execution = {...state.execution, started_at: ago(0.25)};
+    await page.evaluate(() => ASK.refresh());
+    await page.evaluate(() => { document.querySelector('#ask-panel [data-ask-thread]').firstElementChild.dataset.kept = '1';
+      const real = Date.now; Date.now = () => real() + 5000; ASK.draw(); Date.now = real; });
+    assert.equal(await page.locator('#ask-panel [data-ask-thread] [data-kept]').count(), 1, 'a redraw of the same chat leaves the thread be');
+    assert.match(await working.innerText(), /^Working · 2\ds · Closing tasks$/);
+    // A new step on the same chat: the thread stays too, the line names the step.
+    state.execution = {...state.execution, parts: [...state.execution.parts, {kind: 'tool', text: 'Ran hub task list', at: ago(0)}]};
+    await page.evaluate(() => ASK.refresh());
+    assert.equal(await page.locator('#ask-panel [data-ask-thread] [data-kept]').count(), 1, 'a new step leaves the thread be');
+    assert.match(await working.innerText(), /^Working · \d+s · Reading tasks$/);
+    // Two minutes on, a message's "5m ago" reads "7m ago": its time moves in place, the thread stays.
+    const stamp = page.locator('#ask-panel [data-ask-thread] [data-ago]').first();
+    assert.equal(await stamp.innerText(), '5m ago');
+    await page.evaluate(() => { const real = Date.now; Date.now = () => real() + 120000; ASK.draw(); Date.now = real; });
+    assert.equal(await page.locator('#ask-panel [data-ask-thread] [data-kept]').count(), 1, 'a message\'s time ticking leaves the thread be');
+    assert.equal(await stamp.innerText(), '7m ago');
+    state.execution = {...state.execution, state: 'completed', label: 'Complete', parts: []};
+    state.messages.push(msg('w2', 'bot:coo', 'Closed 12 tasks.'));
+    await page.evaluate(() => ASK.refresh());
+    await page.locator('#ask-panel').getByText('Closed 12 tasks.').waitFor();
+    assert.equal(await working.count(), 0, 'no working line once it replied');
     assert.deepEqual(errors, []);
     await page.close();
 

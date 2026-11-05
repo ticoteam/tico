@@ -3,13 +3,13 @@ check behaviour (who owns what, what waits for whom, what every bot has done), n
 
 import re
 import sqlite3
-from contextlib import closing
+from contextlib import closing, contextmanager
 from datetime import datetime, timedelta, timezone
 
 import pytest
 from fastapi.testclient import TestClient
 
-from backend import demo, hubdb
+from backend import demo, demo_seed, hubdb
 from backend import demo_content as D
 from backend import usage_limits as U
 from backend.demo_sections import budgets as B
@@ -47,13 +47,32 @@ def stored(path):
         return out
 
 
+@contextmanager
+def usage_clock_at(moment):
+    """The usage-limit windows read the wall clock when no time is given, so a build that runs across an hour
+    boundary reads two hours and its hourly spend differs. The windows read the moment given for the build."""
+    saved = U.datetime
+
+    class Pinned(datetime):
+        @classmethod
+        def now(cls, tz=None):
+            return moment
+
+    U.datetime = Pinned
+    try:
+        yield
+    finally:
+        U.datetime = saved
+
+
 @pytest.fixture(scope="module")
 def built(tmp_path_factory):
     """Two builds of the same date, back to back, read before any app has opened either database."""
-    first = demo.build(tmp_path_factory.mktemp("company"), now=NOW)
-    rows = stored(first.db_path)
-    second = demo.build(tmp_path_factory.mktemp("company-again"), now=NOW)
-    return first, rows, stored(second.db_path)
+    with usage_clock_at(NOW):
+        first = demo.build(tmp_path_factory.mktemp("company"), now=NOW)
+        rows = stored(first.db_path)
+        second = demo.build(tmp_path_factory.mktemp("company-again"), now=NOW)
+        return first, rows, stored(second.db_path)
 
 
 @pytest.fixture(scope="module")
@@ -165,11 +184,13 @@ def test_each_person_has_a_draft_update_for_every_day_and_the_friday_review(ana)
 
 
 def test_ana_sidebar_leaves_unread_only_the_decisions_she_still_owes(ana):
+    # Task news is not a chat (hubdb.task_news): the decisions she owes wait in Needs you, not as unread task threads.
     listing = ana.get("/api/v2/threads?limit=200").json()
     rows = listing["threads"] + listing["dms"] + listing["attention"]
     unread = {row["title"] for row in rows if row.get("kind") == "task" and (row.get("me") or {}).get("unread")}
     assert unread <= set(D.KEEP_UNREAD), sorted(unread - set(D.KEEP_UNREAD))
-    assert {"Raise Home Pro from $449 to $479 for December?", "Sign the FCC filing for Home Pro 2"} <= unread
+    owed = {item["title"] for item in ana.get("/api/v2/needs-you").json()["items"]}
+    assert {"Raise Home Pro from $449 to $479 for December?", "Sign the FCC filing for Home Pro 2"} <= owed
 
 
 def test_the_price_decision_leads_needs_you_with_a_short_reason(ana):
@@ -179,11 +200,12 @@ def test_the_price_decision_leads_needs_you_with_a_short_reason(ana):
 
 
 def test_the_assistant_answers_whats_waiting_with_the_open_decisions(ana):
-    answers = [message["body"] for message in ana.get("/api/v2/assistant").json()["messages"]
-               if message["sender_id"] == "bot:coo"]
-    waiting = [text for text in answers if "waiting on you" in text]
-    assert waiting and all(name in waiting[0] for name in (
-        "Raise Home Pro from $449 to $479 for December?", "Sign the FCC filing for Home Pro 2", "Choose the Larkford bid price"))
+    """The seeded Assistant thread answers "What needs me today?" with the scripted reply (every message is a bot turn,
+    so the demo script stands in for the model): the December price and the held refund are named."""
+    messages = ana.get("/api/v2/assistant").json()["messages"]
+    asked = [m for m in messages if m["sender_id"] == "human:ana" and m["body"] == "What needs me today?"]
+    answers = [m["body"] for m in messages if m["sender_id"] == "bot:coo" and "waiting on you" in m["body"]]
+    assert asked and answers and "Home Pro's December price" in answers[0] and "refund" in answers[0]
 
 
 def test_home_has_a_bot_page_settings_has_a_team_icon_and_granola_syncs(ana):
@@ -233,6 +255,15 @@ def test_the_team_has_closed_tasks_every_week_for_two_months(built):
         done = datetime.strptime(day, "%Y-%m-%d").date()
         weeks[7 - (monday - (done - timedelta(days=done.weekday()))).days // 7] += 1
     assert all(n >= 20 for n in weeks[:-1]) and weeks[0] < weeks[-2], weeks
+
+
+def test_the_demo_clock_also_reads_the_spend_windows(built):
+    """The spend windows (30 minutes, hour, day...) are read at the build's own moment, not the real clock: a build that
+    straddles a window boundary would otherwise store different spend from its twin (the same-date test's failure)."""
+    clock = demo_seed.Clock(NOW)
+    with demo_seed.fixed(clock):
+        assert U.clock() == NOW
+    assert U.clock() != NOW
 
 
 def test_the_same_date_builds_the_same_company(built):

@@ -20,6 +20,7 @@ from clients.manifest import tools_of
 
 from .context import Ctx
 from .core.errors import CONFLICT, DENIED, FinanceError
+from .. import bot_settings as BS
 from .store import ap as SAP
 from .store import tico
 
@@ -60,16 +61,9 @@ def subject_of(stage: int | None, number: str) -> str:
 def mailbox(c: Any) -> str:
     """The address the Bookkeeper sends from: its gmail tool in the stored bot config, with `send` in its `can`. Empty
     when it has none; then a reminder is refused and an invoice is sent without an email."""
-    row = c.execute("SELECT config FROM bot_config WHERE bot=?", (BOOKKEEPER,)).fetchone()
-    if row is None:
+    if c.execute("SELECT 1 FROM bot_config WHERE bot=?", (BOOKKEEPER,)).fetchone() is None:
         return ""
-    try:
-        parsed: Any = json.loads(row[0] or "{}")
-    except ValueError:
-        return ""
-    if not isinstance(parsed, Mapping):
-        return ""
-    config = cast(Mapping[str, Any], parsed)
+    config = BS.read(c, BOOKKEEPER)
     tools: Any = tools_of(config)
     entries: list[Any] = cast(list[Any], tools) if isinstance(tools, list) else []
     for raw in entries:

@@ -55,3 +55,13 @@ def seed(b):
                 c.execute("UPDATE bots SET last_turn_at=max(coalesce(last_turn_at,''),?) WHERE id=?", (at, slug))
                 c.execute("UPDATE bot_status SET last_turn_at=max(coalesce(last_turn_at,''),?) WHERE bot=?", (at, slug))
     b.write(work)
+
+
+    # Follow-up appointments use the same central defaults as real task creation. Historical demo tasks retain a
+    # useful future date even when their creation clock was replayed weeks earlier.
+    def followups(c):
+        from backend import hubdb, task_check_backs
+        for task in c.execute(f"SELECT * FROM {hubdb.TASKS} tasks WHERE status IN ('open','doing','waiting','review','ready') "
+                              "AND (owner_id LIKE 'bot:%' OR requester_id LIKE 'bot:%') ORDER BY id LIMIT 50").fetchall():
+            task_check_backs.set_time(c, dict(task), hubdb.shift(hubdb.now(), hours=2), "Check the delegated result and continue.", system=True)
+    b.write(followups)

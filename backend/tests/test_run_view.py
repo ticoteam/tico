@@ -6,6 +6,7 @@ from backend.store import H
 from backend.tests.test_shared_logins import queued_login  # noqa: F401
 from backend.tests.test_api import api, assign, claim, expire, get, post, put, ready, runner  # noqa: F401
 from backend.tests.test_execution_review import aged, sweep
+from backend.enqueue import enqueue_stored
 
 
 def task_attempt(api, machine, title="Count the words"):
@@ -153,7 +154,7 @@ def test_a_run_from_a_conversation_the_reader_cannot_open_stays_out(api, monkeyp
     events(api, machine, direct["id"], [("tool", {"tool": "Bash", "status": "started", "item_id": "p1",
                                                   "summary": "payroll-export.sh", "parent_id": None, "background": True})])
     with api.app.state.store.transaction() as c:
-        c.execute("UPDATE turns SET task_id=? WHERE id=?", (tid, direct["id"]))
+        c.execute("UPDATE attempts SET task_id=? WHERE id=?", (tid, direct["id"]))
     assert {r["id"] for r in get(api, f"tasks/{tid}/run-view")["runs"]} == {shared["id"], direct["id"]}
     monkeypatch.setattr("backend.run_view.ATTEMPT_LIMIT", 1)
     seen = get(api, f"tasks/{tid}/run-view", token="cara-test")
@@ -182,7 +183,7 @@ def test_the_task_page_follows_its_session_live_and_each_reply_keeps_its_steps(a
                                ("tool", {"tool": "mcp__hub__task_create", "status": "completed", "item_id": "c1"})])
     live = get(api, f"tasks/{tid}")["execution"]
     assert (live["state"], live["run_id"], live["bot_id"]) == ("running", aid, "ops")
-    assert live["parts"][-1] == {**live["parts"][-1], "kind": "tool", "text": "Ran hub task create"}
+    assert live["parts"][-1] == {**live["parts"][-1], "kind": "tool", "text": "Filing a task"}
     events(api, machine, aid, [("message", {"text": "Counted: 42 words.", "final": True})], first=3)
     post(api, f"attempts/{aid}/complete", {"outcome": "completed", "text": "Counted: 42 words.", "last_seq": 3},
          machine["token"])
@@ -228,6 +229,7 @@ def test_the_working_line_follows_whichever_bot_a_persons_message_went_to(api):
         cid = H.task(c, tid)["conversation_id"]
         c.execute("INSERT INTO messages(id,conversation_id,sender_id,recipient_id,kind,body,refs,created_at) "
                   "VALUES('msg-coo',?,'bot:ops','bot:coo','chat','Over to you','{}',?)", (cid, H.now()))
+        enqueue_stored(c, 'msg-coo')
         assert c.execute("SELECT bot_id FROM jobs WHERE message_id='msg-coo'").fetchone()["bot_id"] == "coo"
     assert get(api, f"tasks/{tid}")["execution"]["run_id"] == attempt["id"], "a bot's message to a bot is not it"
     # A person owns the task and the bot that asked it answers them. A plain comment there is deferred a day
@@ -260,6 +262,38 @@ def test_the_working_line_follows_whichever_bot_a_persons_message_went_to(api):
     with api.app.state.store.transaction() as c:
         c.execute("UPDATE tasks SET requester_id='human:ben' WHERE id=?", (tid,))
     assert get(api, f"tasks/{tid}")["comment_to"] == {"bot": None, "wakes": False, "mention": []}, "no bot gets it"
+
+
+def test_a_persons_message_carried_to_another_bot_in_a_task_reads_as_the_person(api, monkeypatch):
+    """A person's message to a bot that neither owns nor asked the task reaches that bot as a keeper carrier. The task's
+    line reads it as the person's: `from_person` and the queued label take the carried message's person, so a bot's
+    computer hold does not stand for it."""
+    from backend import views
+    from backend.tests.test_scheduler import _wake_by_hand
+    machine = runner(api, "ana")
+    assign(api, machine, "ops")
+    assign(api, machine, "coo")
+    ready(api, machine, ["ops", "coo"])
+    tid, attempt = task_attempt(api, machine)
+    post(api, f"attempts/{attempt['id']}/complete", {"outcome": "completed", "text": "Counted.", "last_seq": 0},
+         machine["token"])
+    assert get(api, f"tasks/{tid}")["execution"]["run_id"] == attempt["id"]
+    humans = []
+    queued_label = views.queued_label
+    monkeypatch.setattr(views, "queued_label",
+                        lambda *a, **kw: humans.append(kw.get("human")) or queued_label(*a, **kw))
+    with api.app.state.store.transaction() as c:
+        cid = H.task(c, tid)["conversation_id"]
+        c.execute("INSERT INTO messages(id,conversation_id,sender_id,recipient_id,kind,body,refs,created_at) "
+                  "VALUES('msg-ana',?,'human:ana','bot:coo','chat','Check the April numbers','{}',?)", (cid, H.now()))
+        c.execute("INSERT INTO messages(id,conversation_id,sender_id,recipient_id,kind,body,refs,created_at) "
+                  "VALUES('msg-carry',?,'keeper','bot:coo','notice','coo: Check the April numbers',?,?)",
+                  (cid, json.dumps({"carries": "msg-ana", "from": "human:ana", "wake": "thread", "reason": "mention"}),
+                   H.now()))
+        _wake_by_hand(c, "msg-carry", "coo")
+    shown = get(api, f"tasks/{tid}")["execution"]
+    assert (shown["message_id"], shown["bot_id"], shown["state"], shown["from_person"]) == ("msg-carry", "coo", "queued", True)
+    assert humans and all(h is True for h in humans), "the carried message is a person's: no bot's computer hold applies"
 
 
 def test_an_opt_in_login_queue_names_the_holder_only_to_who_may_see_it(api, queued_login):

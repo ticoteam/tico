@@ -44,7 +44,9 @@ from . import models as M
 from . import people as P
 from . import rooms
 from .blobs import register
+from .enqueue import enqueue
 from .store import H, Problem, encode
+from . import bot_settings as BS
 
 # A routine runs on a schedule of days, not minutes: a bot synced within the last day and a bit
 # is reporting in.
@@ -153,8 +155,8 @@ def slug_for(c, name, fallback):
 
 
 def find(c, provider, person, ext_id):
-    for row in c.execute("SELECT bot,config FROM bot_config WHERE owner_id=? AND "
-                         "json_extract(config,'$.harness')=?", (person, provider.id)):
+    for row in c.execute(f"SELECT bot,{BS.CONFIG} AS config FROM bot_config bc {BS.JOIN} WHERE owner_id=? AND "
+                         f"s.harness=?", (person, provider.id)):
         record = (H._json(row["config"], {}) or {}).get(provider.key) or {}
         if provider.single or record.get("id") == ext_id:
             return row["bot"]
@@ -330,7 +332,7 @@ def import_messages(c, provider, person, slug, ext_id, messages, images=None, wh
     added = 0
     place = provider.label.split()[0]
     from . import app_delivery
-    config = H._json((c.execute("SELECT config FROM bot_config WHERE bot=?", (slug,)).fetchone()
+    config = H._json((c.execute(BS.ONE_SQL, (slug,)).fetchone()
                       or {"config": "{}"})["config"], {}) or {}
     delivering = app_delivery.setting(config) is not None
     for msg in messages:
@@ -354,12 +356,14 @@ def import_messages(c, provider, person, slug, ext_id, messages, images=None, wh
                 attached.append(register(c, who, *row))
         if attached:
             refs["attachments"] = attached
+        dumped = encode(refs)
         cur = c.execute(
             "INSERT OR IGNORE INTO messages (id, conversation_id, sender_id, recipient_id, kind, body, "
             "refs, created_at, delivered_at, read_at) VALUES (?,?,?,?,?,?,?,?,?,?)",
-            (mid, room["id"], sender, target, "say", text, encode(refs), created, now, now))
+            (mid, room["id"], sender, target, "say", text, dumped, created, now, now))
         added += cur.rowcount
-        if cur.rowcount:
+        if cur.rowcount:           # an ignored row was not inserted, so it queues nothing (the trigger never fired either)
+            enqueue(c, {"id": mid, "sender_id": sender, "recipient_id": target, "refs": dumped, "created_at": created})
             for item in attached:
                 c.execute("INSERT INTO message_assets VALUES(?,?)", (mid, item["id"]))
     if added:
@@ -386,7 +390,7 @@ def take_inbox(c, provider, person, slug):
     if not room:
         return []
     from . import app_delivery
-    config = H._json((c.execute("SELECT config FROM bot_config WHERE bot=?", (slug,)).fetchone()
+    config = H._json((c.execute(BS.ONE_SQL, (slug,)).fetchone()
                       or {"config": "{}"})["config"], {}) or {}
     delivering = 1 if app_delivery.active(c, config) else 0
     rows = c.execute("SELECT m.id,m.body,m.created_at FROM messages m WHERE m.conversation_id=? AND m.sender_id=? "
@@ -429,7 +433,7 @@ def sync(c, auth, settings_admin, who, body, images=None):
                 model=model_for(provider), effort="as-configured", harness=provider.id, operator=person,
                 owners=[person]))
             slug = (H.resolve_bot(c, slug) or {}).get("id", slug)      # the new bot's id (a UUID, not its slug)
-        row = c.execute("SELECT config,description FROM bot_config WHERE bot=?", (slug,)).fetchone()
+        row = c.execute(f"SELECT {BS.CONFIG} AS config,bc.description FROM bot_config bc {BS.JOIN} WHERE bc.bot=?", (slug,)).fetchone()
         config = H._json(row["config"], {}) or {}
         before = dict(config.get(provider.key) or {})
         record = {**before, "id": ext_id, "name": item.name, "last_sync": now,
@@ -448,8 +452,9 @@ def sync(c, auth, settings_admin, who, body, images=None):
             c.execute("UPDATE bot_config SET team=? WHERE bot=?", (group, slug))
             from .finance import actions as FA
             FA.revalidate_org(c)             # the bot's team is part of the org chart Finance's grants follow (spec 7.5)
-        c.execute("UPDATE bot_config SET config=?,description=? WHERE bot=?",
-                  (encode(config), item.description if "description" in item.model_fields_set else row["description"], slug))
+        BS.write(c, slug, config)
+        c.execute("UPDATE bot_config SET description=? WHERE bot=?",
+                  (item.description if "description" in item.model_fields_set else row["description"], slug))
         c.execute("UPDATE bots SET display_name=? WHERE id=?", (name, slug))
         added, known = import_messages(c, provider, person, slug, ext_id, item.messages, images, who)
         H.event(c, who.actor, provider.id + ".synced", slug, {"id": ext_id, "created": created, "messages": added})

@@ -18,6 +18,7 @@ from backend import hubdb as H
 from backend.config import Settings
 
 BOT_IDS = importlib.import_module("backend.migrations.0012_bot_ids")
+THREADS_SCHEMA = importlib.import_module("backend.migrations.0047_native_threads_schema")
 
 EMPLOYEES = {
     "coo": {"display_name": "COO", "status": "active", "host": "keeper", "runtime": "codex"},
@@ -35,6 +36,14 @@ NEW_BOTS_DDL = """CREATE TABLE IF NOT EXISTS bots (
   id TEXT PRIMARY KEY NOT NULL, slug TEXT NOT NULL UNIQUE, display_name TEXT, runtime TEXT, model TEXT, effort TEXT,
   cwd TEXT, host TEXT DEFAULT 'dispatcher', thread_id TEXT, token_hash TEXT,
   state TEXT DEFAULT 'active', created_at TEXT, last_turn_at TEXT);"""
+
+# runners as store.SCHEMA made it before migration 0062 split off its heartbeat state
+OLD_RUNNERS_DDL = """CREATE TABLE IF NOT EXISTS runners(
+ id TEXT PRIMARY KEY, label TEXT NOT NULL, owner_id TEXT NOT NULL REFERENCES humans(id),
+ token_hash TEXT NOT NULL UNIQUE, created_at TEXT NOT NULL, last_seen_at TEXT,
+ revoked_at TEXT, platform TEXT, version TEXT, capacity INTEGER NOT NULL DEFAULT 4,
+ readiness TEXT NOT NULL DEFAULT '{}', capabilities TEXT NOT NULL DEFAULT '[]',
+ awake_since TEXT, checkout TEXT, restart_requested_at TEXT, readiness_at TEXT);"""
 
 # The 14 foreign keys into bots: 11 in store.SCHEMA, bot_tool_requests, bot_files and chat_goals.
 CHILD_TABLES = ("bot_config", "bot_control", "bot_transitions", "settings_changes", "bot_session_epochs",
@@ -58,12 +67,19 @@ def _old_shape_database(path):
     old_first = H.SCHEMA.replace(NEW_BOTS_DDL, OLD_BOTS_DDL)
     assert old_first != H.SCHEMA
     # v0.5 had no migration files: hubdb.migrate, which now runs them after its numbered steps, leaves them out here.
+    # Its start did make the threads schema (now migration 0047's, unrecorded here so the real start still runs it),
+    # which threads.migrate, at the end of hubdb.migrate, reads.
     with unittest.mock.patch.object(H, "MIGRATIONS", [old_first, *H.MIGRATIONS[1:]]), \
-            unittest.mock.patch.object(migrations, "apply", lambda conn, directory=None: None):
+            unittest.mock.patch.object(migrations, "apply", lambda conn, directory=None: THREADS_SCHEMA.up(conn)):
         conn = H.connect(path)
     conn.execute("PRAGMA foreign_keys=OFF")
+    conn.execute(OLD_RUNNERS_DDL)
     for schema in (store.SCHEMA, bot_tools.SCHEMA, files.SCHEMA):
         conn.executescript(schema.replace("REFERENCES bots(id)", "REFERENCES bots(slug)"))
+    # v0.5's bot_config held each declaration in `config`, which migration 0043 reads. Today's SCHEMA has no such column
+    # (migration 0070 moves it to bot_settings), so the fixture adds it back.
+    if "config" not in {row[1] for row in conn.execute("PRAGMA table_info(bot_config)")}:
+        conn.execute("ALTER TABLE bot_config ADD COLUMN config TEXT NOT NULL DEFAULT '{}'")
     return conn
 
 
@@ -92,10 +108,21 @@ def _store_tables(conn):
         conn.executescript(schema)
 
 
-def _shape(conn, table):
+# Migration 0070 moves bot_config.config into bot_settings (test_bot_settings.py checks the declarations): that column goes.
+MOVED_OUT = {"bot_config": ("config",)}
+
+
+def _rows(conn, table, dropped=()):
+    """The table's rows, without the columns the upgrade moves out."""
+    names = [row[1] for row in conn.execute(f'PRAGMA table_info("{table}")') if row[1] not in dropped]
+    select = ", ".join(f'"{name}"' for name in names)
+    return [tuple(r) for r in conn.execute(f'SELECT {select} FROM "{table}"')]
+
+
+def _shape(conn, table, dropped=()):
     """What the upgrade must not change in a child table: its columns, its indexes and triggers as written, and its
     definition after the header (the name in the CREATE statement changes with the rebuild)."""
-    columns = [tuple(row) for row in conn.execute(f'PRAGMA table_info("{table}")')]
+    columns = [tuple(row) for row in conn.execute(f'PRAGMA table_info("{table}")') if row[1] not in dropped]
     indexes = sorted((row[1], row[3]) for row in conn.execute(f'PRAGMA index_list("{table}")'))
     objects = sorted(row[0] for row in conn.execute(
         "SELECT sql FROM sqlite_master WHERE tbl_name=? AND type IN ('index','trigger') AND sql IS NOT NULL",
@@ -144,9 +171,8 @@ class Upgrade(unittest.TestCase):
     def test_upgrade_keeps_every_bot_and_every_child_row_and_moves_references_to_id(self):
         # the fixture's table list is the 14 foreign keys into bots(slug), no more and no less
         self.assertEqual(sorted(BOT_IDS._slug_references(self.conn)), sorted(CHILD_TABLES))
-        before_rows = {table: [tuple(r) for r in self.conn.execute(f'SELECT * FROM "{table}"')]
-                       for table in CHILD_TABLES}
-        before_shape = {table: _shape(self.conn, table) for table in CHILD_TABLES}
+        before_rows = {table: _rows(self.conn, table, MOVED_OUT.get(table, ())) for table in CHILD_TABLES}
+        before_shape = {table: _shape(self.conn, table, MOVED_OUT.get(table, ())) for table in CHILD_TABLES}
         before_violations = {table: len(self.conn.execute(f'PRAGMA foreign_key_check("{table}")').fetchall())
                              for table in CHILD_TABLES}
         bots_before = [tuple(r) for r in self.conn.execute("SELECT slug, display_name, state FROM bots ORDER BY slug")]
@@ -167,18 +193,19 @@ class Upgrade(unittest.TestCase):
 
         for table in CHILD_TABLES:
             with self.subTest(table=table):
-                # every row, with the same values
-                after = [tuple(r) for r in conn.execute(f'SELECT * FROM "{table}"')]
-                self.assertEqual(after, before_rows[table])
+                # every row, with the same values (less the columns the upgrade moves out)
+                dropped = MOVED_OUT.get(table, ())
+                self.assertEqual(_rows(conn, table, dropped), before_rows[table])
                 # every column, index and trigger, and the same definition apart from the header
-                columns, indexes, objects, body = _shape(conn, table)
+                columns, indexes, objects, body = _shape(conn, table, dropped)
                 old_columns, old_indexes, old_objects, old_body = before_shape[table]
                 self.assertEqual(columns, old_columns)
                 self.assertEqual(indexes, old_indexes)
                 self.assertEqual(objects, old_objects)
-                # migration 0002 runs first and adds its status CHECKs; the rest of the definition is the same
-                self.assertEqual(_without_status_checks(body),
-                                 _without_status_checks(old_body.replace("REFERENCES bots(slug)", "REFERENCES bots(id)")))
+                if not dropped:     # a rebuilt definition loses the dropped column's text; its columns are checked above
+                    # migration 0002 runs first and adds its status CHECKs; the rest of the definition is the same
+                    self.assertEqual(_without_status_checks(body),
+                                     _without_status_checks(old_body.replace("REFERENCES bots(slug)", "REFERENCES bots(id)")))
                 # no foreign key still names bots(slug)
                 self.assertFalse([r for r in conn.execute(f'PRAGMA foreign_key_list("{table}")')
                                   if r[2] == "bots" and (r[4] or "").lower() == "slug"])
@@ -379,6 +406,7 @@ class Ids(_Case):
 
         bot_id = self.make_bot("ops-lead")
         self.assertEqual(tuple(principal(H.bot_actor(bot_id))), ("bot", None))
+        self.conn.execute("DELETE FROM bot_settings WHERE bot_id=?", (bot_id,))
         self.conn.execute("DELETE FROM bots WHERE id=?", (bot_id,))
         gone = principal(H.bot_actor(bot_id))
         self.assertIsNotNone(gone)                    # the row is kept

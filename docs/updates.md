@@ -8,15 +8,17 @@ updated never drags its computers ahead of it.
 
 ## What changed since your last look
 
-**What's new** in the sidebar (above Ask Tico, only while something is unread) and **Changelog** in the account menu show product changes you
-have not acknowledged. **Since last look** includes every unread release and team announcement;
+The sidebar's version row (above Ask Tico, one row at a time) reads **Updated to v…** while product changes you have not
+acknowledged are unread, and **Update to v…** while a newer release is on offer (it then wins the row; its pop-up links
+**What's new**). Clicking **Updated to** opens **What's new**, which shows the product changes you have not acknowledged; **Changelog**
+in the account menu lists the same changes. **Since last look** includes every unread release and team announcement;
 choose **All product updates** to browse history or **All activity** to include accessible bot outcomes.
 Search changes, expand a release's remaining bullets, or open its full release notes. Opening the
 page marks the product entries it shows as read, and **Load older changes** does the same for the ones
 it adds; they stay listed and marked **New** until you leave the page.
 Read status belongs to each person and follows them across sign-ins and devices.
 A new company starts caught up: when the owner completes Finish setup, every release shipped before then is marked
-read for them, so a fresh install shows no count on **What's new**. Later releases count as usual, everyone else keeps
+read for them, so a fresh install shows no **Updated to** row. Later releases count as usual, everyone else keeps
 their own read status, and completing setup a second time changes nothing.
 
 Release entries come directly from the installed `CHANGELOG.md`. They work offline and require
@@ -272,9 +274,14 @@ refuses every update. A `cloudflared` command of its own should read `--config /
 COMPOSE_PROFILES=cloudflared,updater    # your existing profiles, plus updater
 TICO_UPDATER_URL=http://updater:8080
 TICO_TAG=vX.Y.Z                         # the release running now
+# TICO_UPDATER_SNAPSHOT_SECONDS=900     # optional; raise if a very large hub needs a longer pre-update copy
 ```
 
 and run `docker compose up -d`. From then on the updater moves `TICO_TAG`.
+
+Before switching images the updater copies `hub.sqlite` with SQLite's online backup API. That copy must pass
+`PRAGMA quick_check`, because rollback refuses a snapshot that fails it. On a multi-gigabyte database the copy and check
+can take minutes; set `TICO_UPDATER_SNAPSHOT_SECONDS` (default 900) in `.env` when a hub needs longer.
 
 ## The runner
 
@@ -285,7 +292,7 @@ Every computer runs the Rust runner (`tico-runner`, from `runner-rs/`). The laun
 - **Mac or Linux checkout:** a checkout on a release tag downloads that release's `tico-runner-<os>-<arch>.gz` from
   GitHub, checked against the release's `tico-runner-SHA256SUMS`, into `runner-rs/target/dist/`. Any other checkout
   with `cargo` on PATH builds it (`cargo build --release`). `scripts/tico install` and every update get the binary
-  before the runner restarts (`python -m runner.engine prepare`); an update that cannot get it backs out and the
+  before the runner restarts (`python -m runner_support.engine prepare`); an update that cannot get it backs out and the
   runner keeps running the old release.
 
 A binary is only run when it was built from this checkout's `runner-rs` sources. When there is none and none can be
@@ -293,7 +300,13 @@ had, the runner does not start: it logs why and launchd or systemd tries again. 
 not drive is not ready, with the reason on that bot; the other bots on the computer run.
 
 The Python runner is gone. `"engine": "python"` in `runner.json` and `TICO_RUNNER_ENGINE=python` are ignored. Python
-still runs the side jobs (connectors, Close calls, meeting importers), the catalog set-up and the update process.
+still runs the side jobs (connectors, Close calls, meeting importers), the catalog set-up and the update process, from
+`runner_support/`. A small `runner/` package forwards the old `python -m runner ...` commands and imports there, so
+launchd plists, systemd units and cloud machine images written before the move, and a runner or update process of an
+earlier release still running while its checkout moves, keep working. What is saved on a computer and started later
+keeps the old names on purpose: `scripts/tico install` still writes `python -m runner --config <path> <job>` into the
+launchd plists and systemd units, and a cloud machine image still boots `python -m runner.cloud_machine boot`. So a
+computer moved back to a release from before the move (hosted staff can set an older target) still starts.
 
 ## A Docker runner
 

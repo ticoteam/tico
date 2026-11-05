@@ -133,10 +133,11 @@ def _untouched(c, task, writer):
     """Nobody but `writer` (who opened it) and BotOps changed the task's words or said anything on it."""
     from .store import H
     botops = "bot:" + H.FLEET_MAINTAINER
-    if c.execute("SELECT 1 FROM task_events WHERE task_id=? AND field IN ('title','body') AND actor NOT IN (?,?) LIMIT 1",
+    if c.execute("SELECT 1 FROM history_events WHERE subject_type='task' AND subject_id=? AND kind IN ('title','body') "
+                 "AND actor_id NOT IN (?,?) LIMIT 1",
                  (task["id"], writer, H.KEEPER)).fetchone():
         return False
-    said = c.execute("SELECT 1 FROM messages m WHERE " + H._task_ref_sql("$.task") + "=? AND m.sender_id NOT IN (?,?,?) "
+    said = c.execute("SELECT 1 FROM message_refs m WHERE m.ref_task_id=? AND m.sender_id NOT IN (?,?,?) "
                      "LIMIT 1", (task["id"], H.KEEPER, botops, writer)).fetchone()
     return not said
 
@@ -157,8 +158,8 @@ def lend_lapsed(c, task):
     requester last spoke on it more than LEND_MAX_DAYS ago."""
     from .store import H
     requester = task["requester_id"]
-    for row in c.execute("SELECT * FROM task_events WHERE task_id=? AND field='status' AND old IN (?,?,?) "
-                         "AND new NOT IN (?,?,?)", (task["id"], *TERMINAL, *TERMINAL)):
+    for row in c.execute("SELECT actor_id AS actor, via FROM history_events WHERE subject_type='task' AND subject_id=? "
+                         "AND kind='status' AND old IN (?,?,?) AND new NOT IN (?,?,?)", (task["id"], *TERMINAL, *TERMINAL)):
         if row["actor"] != requester or dict(row).get("via"):
             # Re-asking on the same task can't clear this: the reopening stays in its history. The person's own new
             # words start a run with their rights anyway (a comment on the open task, or their BotOps chat).
@@ -173,7 +174,7 @@ def lend_lapsed(c, task):
     origin = H.message(c, task["request_id"]) if task.get("request_id") else None
     if origin and origin["sender_id"] == requester:
         spoke.append(origin["created_at"])
-    comment = c.execute("SELECT max(m.created_at) FROM messages m WHERE " + H._task_ref_sql("$.task") + "=? "
+    comment = c.execute("SELECT max(m.created_at) FROM message_refs m WHERE m.ref_task_id=? "
                         "AND m.sender_id=? AND json_extract(m.refs,'$.comment') IS NOT NULL "
                         "AND json_extract(m.refs,'$.via') IS NULL AND json_extract(m.refs,'$.assistant') IS NULL",
                         (task["id"], requester)).fetchone()[0]
@@ -200,6 +201,7 @@ THREADS = _routes(
     ("POST", r"threads"), ("PATCH", rf"threads/{_S}"),
     ("POST", rf"threads/{_S}/(messages|read|read-all|members)"), ("DELETE", rf"threads/{_S}/members/{_S}"),
     ("PUT", rf"threads/{_S}/follow"), ("DELETE", rf"threads/{_S}/follow"),
+    ("PUT", rf"threads/{_S}/pin"), ("DELETE", rf"threads/{_S}/pin"),
     ("PATCH", rf"messages/{_S}"), ("DELETE", rf"messages/{_S}"), ("POST", rf"threads/messages/{_S}/task"),
     ("PUT", rf"messages/{_S}/reactions/{_S}"), ("DELETE", rf"messages/{_S}/reactions/{_S}"),
     ("POST", r"threads/dm"), ("POST", rf"threads/{_S}/open-earlier"), ("POST", rf"uploads/threads/{_S}/messages"),
@@ -269,12 +271,6 @@ DO = _routes(
     # or a token is left out: it hands the person's media token to BotOps, so it stays with the person.
     ("POST", rf"threads/{_S}/calls"), ("POST", rf"calls/{_S}/(end|leave|bots|action-items/retry)"),
     ("DELETE", rf"calls/{_S}/bots/{_S}"),
-    # Peering with another company's Tico and what it shares: the owner's or an admin's call, and a thread's routes also
-    # ask for read and manage on that thread (backend/federation_routes.py).
-    ("POST", r"federation/keys(/rotate)?"), ("POST", r"federation/peerings"),
-    ("POST", rf"federation/peerings/{_S}/(approve|pause|revoke)"),
-    ("POST", rf"federation/threads/{_S}/(readers|installs)"), ("POST", rf"federation/threads/{_S}/installs/{_S}/retry"),
-    ("DELETE", rf"federation/threads/{_S}/installs/{_S}"),
     # Withdrawing a held write to edit and resend it: its author's own call (backend/org_rule_check.py).
     ("POST", rf"rule-holds/{_S}/withdraw"),
     # Who reads an inbox: the route checks the person may change it.
@@ -283,9 +279,9 @@ DO = _routes(
     ("DELETE", rf"credentials/{_S}"),
     # Computers: a restart, a model sign-in (its code is pasted in the app, never here), who may open its screen (opening
     # one is the person's own, in the app), inbox sharing where one owner runs
-    # everything (the route says where). Limits are spending: lowering one is always direct; raising one, and the providers,
+    # everything (the route says where), its name and how many turns it runs at once (owners and admins, which the routes check). Limits are spending: lowering one is always direct; raising one, and the providers,
     # are direct unless the owner's rule says otherwise (TIGHTENED).
-    ("POST", rf"(runners|computers)/{_S}/(restart|inbox-only|logins|screen)"), ("POST", rf"(runners|computers)/{_S}/logins/{_S}/cancel"),
+    ("POST", rf"(runners|computers)/{_S}/(restart|inbox-only|logins|screen|label|turns-at-once)"), ("POST", rf"(runners|computers)/{_S}/logins/{_S}/cancel"),
     ("PUT", r"providers"), ("PUT", r"usage/limits"), ("PUT", rf"usage/limits/{_S}"), ("PUT", rf"usage/pools/(company|groups/{_S})"),
     # The Tico AI Gateway address, off or back to automatic is a provider change too (the owner's, which the route
     # checks). Saving its key is a secret, refused in the request; checking it changes nothing.

@@ -12,7 +12,9 @@ A pin puts a page (`page:<file id>`) or a card (`card:<id>`) at a place, in orde
   lead the group or a group above it arrange it.
 - `bot:<slug>`, the bot's sidebar: its rows follow the page and card widgets saved with the sidebar
   (backend/bot_task_tabs.py), which keeps their order.
-- `task:<id>`, the top of a task, for whoever may read the task.
+- `task:<id>`, the top of a task: its owner, requester, people who may move tasks, and the org owner arrange it.
+  Readers (people, or bots acting as themselves) may link pages they can read. Unpinning is for whoever pinned it,
+  the task's owner or requester, or the org owner. A task pin widens nothing.
 - `person:<id>`, a person's My dashboard (the landing page): theirs alone. Only they read and arrange it, BotOps and
   the Assistant only when acting for them; an admin has no way in, and a card pinned there is known to no one else.
   `person:me` is the caller's own. Its cards are cards they made.
@@ -20,15 +22,17 @@ A pin puts a page (`page:<file id>`) or a card (`card:<id>`) at a place, in orde
 A Dashboard, team page, Growth page or My dashboard nobody saved shows its default cards (DEFAULTS) as pins without
 ids; saving it (PUT) makes them real, and every write saves it first.
 
-The pinning rule keeps a page's data from spreading on its own: a bot pins only its own pages and cards, to its own
-sidebar or a task it holds or asked for. A page a person pins to the Dashboard or a team page is readable by that place's
-audience (`widened`, read by backend/files.py file_visible), so a private task's file is never pinned there, and every
+The pinning rule keeps a page's data from spreading on its own: a bot pins only its own pages to its sidebar, and its
+own cards to its sidebar or a task it holds or asked for. At a task it can read, it may link any page it can read.
+A page a person pins to the Dashboard or a team page is readable by that place's audience (`widened`, read by
+backend/files.py file_visible), so a private task's file is never pinned there, and every
 pin and unpin of a page is in the file's activity. A pin on My dashboard widens nothing: its owner is its only reader,
 and each card and page there is still read with their own rights.
 """
 
 import json
 import re
+import time
 from datetime import datetime, timedelta, timezone
 
 from fastapi import Request
@@ -38,6 +42,7 @@ from . import bot_access as A
 from . import groups as G
 from . import models as M
 from . import people as P
+from . import read_cache
 from .store import H, Problem, encode
 
 SCHEMA = """
@@ -434,7 +439,7 @@ def updates_card(ctx, s):
         return None
     readable = U.visible_authors(ctx.c, ctx.auth, ctx.who)
     found = U.listing(ctx.c, ctx.who.actor, readable, limit=s["count"], may_read=readable,
-                      meetings=U.meeting_reader(ctx.who))
+                      meetings=U.meeting_reader(ctx.who), brief=True)
     return {"unread": found["unread"],
             "updates": [{"id": u["id"], "author": u["bot"], "kind": u["kind"], "day": u["day"],
                          "headline": u["headline"], "created_at": u["created_at"], "read": u["read"]}
@@ -519,16 +524,24 @@ def page_brief(row):
 def page_read(ctx, row, files_cache):
     """A pinned page as pageCard draws it: the contract's page read (status line fields and a fresh src)."""
     pages = ctx.pages
-    found = pages.rows(ctx.c, [row["id"]]).get(row["id"]) if pages is not None else None
+    found = None
+    if pages is not None:
+        known = ctx.memo("pages_found", dict)       # prime_pins reads the place's pages together
+        if row["id"] not in known:
+            known[row["id"]] = pages.rows(ctx.c, [row["id"]]).get(row["id"])
+        found = known[row["id"]]
     if not found:
         return page_brief(row)
     return {**page_brief(row), **pages.view(ctx.c, ctx.who, found, pages.page_of(found), files_cache)}
 
 
+PAGE_ROW_SQL = ("SELECT f.* FROM pages p JOIN bot_files f ON f.id=p.file_id WHERE p.file_id=? "
+                "AND f.state<>'deleted'")
+
+
 def page_row(c, fid):
     """A page's file, or None for anything that is not a page (or was deleted for good)."""
-    return c.execute("SELECT f.* FROM pages p JOIN bot_files f ON f.id=p.file_id WHERE p.file_id=? "
-                     "AND f.state<>'deleted'", (fid,)).fetchone()
+    return read_cache.one(c, PAGE_ROW_SQL, (fid,))
 
 
 PLACE_WORDS = {"dashboard": "Dashboard"}
@@ -747,6 +760,17 @@ DATA = {"tasks_by_status": tasks_by_status, "done_per_week": done_per_week, "nee
         "growth_channels": growth_channels, "growth_retention": growth_retention, "growth_board": growth_board}
 
 
+def card_data(ctx, template, settings):
+    """What a card of this template and these settings shows its reader, or None when it shows nothing. Cards that
+    agree on both read the same rows, so one request works each out once (ctx.memo)."""
+    def make():
+        try:
+            return DATA[template](ctx, settings)
+        except Problem:
+            return None
+    return ctx.memo(("data", template, json.dumps(settings, sort_keys=True)), make)
+
+
 def card_view(ctx, row):
     """A card for its reader: its settings and what it shows them, or `hidden` when that is nothing."""
     settings = json.loads(row["settings"]) if isinstance(row.get("settings"), str) else row["settings"]
@@ -754,11 +778,8 @@ def card_view(ctx, row):
     team = settings.get("team") or ""
     data = None
     if template in DATA and (not team or team in ctx.groups):
-        try:
-            data = DATA[template](ctx, {**{k: v[2] for k, v in TEMPLATES[template]["fields"].items()
-                                           if isinstance(v, tuple)}, **settings})
-        except Problem:
-            data = None
+        data = card_data(ctx, template, {**{k: v[2] for k, v in TEMPLATES[template]["fields"].items()
+                                            if isinstance(v, tuple)}, **settings})
     name = TEMPLATES.get(template, {}).get("name", template)
     return {"id": row.get("id"), "template": template, "title": row.get("title") or "", "settings": settings,
             "name": name, "heading": row.get("title") or name,
@@ -866,6 +887,21 @@ def may_manage(ctx, kind, ident):
                            or H.can_move(ctx.c, who.actor))
 
 
+def may_link(ctx, kind, ident):
+    """Only adding a page link to a task uses the reader's rights instead of the place manager's."""
+    return (kind == "task" and (ctx.person or (ctx.who.role == "bot" and not ctx.who.via))
+            and may_view(ctx, kind, ident))
+
+
+def may_unpin(ctx, pin, kind, ident):
+    if kind != "task":
+        return may_manage(ctx, kind, ident)
+    if not ctx.person and (ctx.who.role != "bot" or ctx.who.via):
+        return False
+    row = ctx.auth.task(ctx.c, ctx.who, ident)
+    return ctx.who.role == "owner" or ctx.who.actor in (pin["made_by"], row["owner_id"], row["requester_id"])
+
+
 def require_view(ctx, place):
     kind, ident = parse(ctx, place)
     if not may_view(ctx, kind, ident):
@@ -898,9 +934,41 @@ def pins_at(c, place):
     return [dict(r) for r in c.execute("SELECT * FROM pins WHERE place=? ORDER BY position, created_at, id", (place,))]
 
 
+CARD_ROW_SQL = "SELECT * FROM cards WHERE id=?"
+
+
 def card_row(c, cid):
-    row = c.execute("SELECT * FROM cards WHERE id=?", (cid,)).fetchone()
+    row = read_cache.one(c, CARD_ROW_SQL, (cid,))
     return dict(row) if row else None
+
+
+def prime_pins(ctx, pins):
+    """Read the cards and pages `pins` point at, one query a chunk each, and seed read_cache with them, so the per-pin
+    reads in pin_view take no statement of their own. Each row is the one its own lookup would read."""
+    from . import files as F
+    c = ctx.c
+    ids = {"card:": set(), "page:": set()}
+    for pin in pins:
+        item = pin.get("item") or ""
+        if pin.get("card") is None and item[:5] in ids:
+            ids[item[:5]].add(item[5:])
+    cards, pages = {}, {}
+    for kind, found, sql in (("card:", cards, "SELECT * FROM cards WHERE id IN (%s)"),
+                             ("page:", pages, "SELECT f.* FROM pages p JOIN bot_files f ON f.id=p.file_id "
+                                              "WHERE p.file_id IN (%s) AND f.state<>'deleted'")):
+        wanted = sorted(ids[kind])
+        for part in H.chunks(wanted):
+            for row in c.execute(sql % ",".join("?" * len(part)), part):
+                found[row["id"]] = row
+    read_cache.prime(c, CARD_ROW_SQL, {(cid,): cards.get(cid) for cid in ids["card:"]})
+    read_cache.prime(c, PAGE_ROW_SQL, {(fid,): pages.get(fid) for fid in ids["page:"]})
+    if pages:
+        from . import pages as PG
+        F.prime_visible(c, list(pages.values()))
+        PG.prime_views(c, list(pages.values()))
+        if ctx.pages is not None:
+            found = ctx.pages.rows(c, sorted(pages))
+            ctx.memo("pages_found", dict).update({fid: found.get(fid) for fid in ids["page:"]})
 
 
 def default_settings(kind, ident, template):
@@ -935,14 +1003,53 @@ def pin_view(ctx, pin, files_cache):
     return {**out, "page": page_read(ctx, row, files_cache)}
 
 
-def place_view(ctx, place):
+def place_timing(timings):
+    entries = [f"{kind};dur={timings[kind]:.1f}" for kind in ("prep", "cards")]
+    for kind, ms in sorted(timings["kinds"].items(), key=lambda item: -item[1])[:8]:
+        entry = f"card-{kind};dur={ms:.1f}"
+        # Leave room for the separator the middleware adds to the existing timings.
+        if len(", ".join([*entries, entry])) > 298:
+            break
+        entries.append(entry)
+    return ", ".join(entries)
+
+
+def place_view(ctx, place, timings=None):
+    started = time.perf_counter()
     kind, ident = require_view(ctx, place)
     place = canonical(kind, ident)
     saved = kind not in DEFAULTS or bool(place_row(ctx.c, place))
     pins = pins_at(ctx.c, place) if saved else default_pins(kind, ident)
+    prime_pins(ctx, pins)
     cache = ctx.memo("file_cache", dict)
-    shown = [v for v in (pin_view(ctx, p, cache) for p in pins) if v]
+    prep = (time.perf_counter() - started) * 1000
+    shown, costs = [], {}
+    for pin in pins:
+        began = time.perf_counter()
+        view = pin_view(ctx, pin, cache)
+        ms = (time.perf_counter() - began) * 1000
+        if not view:
+            # A pin the caller can't read still costs its access check.
+            name = "hidden"
+        elif "card" in view:
+            template = view["card"]["template"]
+            # Only built-in kinds enter the header, never a card's title or id.
+            template = template if template in TEMPLATES else "unknown"
+            name = re.sub(r"[^a-z0-9-]+", "-", template.lower()).strip("-") or "unknown"
+        else:
+            name = "page"
+        if view:
+            shown.append(view)
+        costs[name] = costs.get(name, 0) + ms
+    if timings is not None:
+        timings.update(prep=prep, cards=sum(costs.values()), kinds=costs)
+    if kind == "task":
+        by_id = {p["id"]: p for p in pins}
+        for pin in shown:
+            pin["can_unpin"] = may_unpin(ctx, by_id[pin["id"]], kind, ident)
     out = {"place": place, "kind": kind, "saved": saved, "can_edit": may_manage(ctx, kind, ident), "pins": shown}
+    if kind == "task":
+        out["can_link"] = may_link(ctx, kind, ident)
     if kind == "growth":
         # The month picker: the month the cards read, and the newest months with cohort rows, oldest first.
         from . import growth_numbers as GN
@@ -1029,7 +1136,7 @@ def check_item(ctx, kind, item):
         raise Problem("not_found", "No such page", 404)
     if who.role == "bot" and kind == "growth":
         raise Problem("forbidden", "A bot pins only cards on the Growth page", 403)
-    if who.role == "bot" and row["bot_id"] != H.actor_id(who.actor):
+    if who.role == "bot" and kind != "task" and row["bot_id"] != H.actor_id(who.actor):
         raise Problem("forbidden", "A bot pins only its own pages; a person pins another bot's", 403)
     if kind in WIDENING and row["task_id"] and H.task_private(ctx.c, H.task(ctx.c, row["task_id"])):
         raise Problem("privacy", "Private task files stay on their task", 403)
@@ -1069,7 +1176,12 @@ def drop_pin(ctx, pin):
 
 
 def add_pin(ctx, place, item, size="medium", position=None):
-    kind, ident = require_manage(ctx, place)
+    kind, ident = require_view(ctx, place)
+    if kind == "task" and item.startswith("page:"):
+        if not may_link(ctx, kind, ident):
+            raise Problem("forbidden", "You cannot link pages here", 403)
+    else:
+        require_manage(ctx, place)
     check_item(ctx, kind, item)
     place = canonical(kind, ident)
     if kind == "bot":
@@ -1109,7 +1221,9 @@ def edit_pin(ctx, pid, size=None, position=None):
 
 def remove_pin(ctx, pid):
     pin, kind, ident = pin_or_404(ctx, pid)
-    require_manage(ctx, pin["place"])
+    if not may_unpin(ctx, pin, kind, ident):
+        raise Problem("forbidden", "Only whoever pinned it, the task's owner or requester, or the org owner unpins it"
+                      if kind == "task" else "You cannot unpin here", 403)
     if kind == "bot":
         from . import bot_task_tabs as T
         T.remove_widget(ctx, ident, pin["item"])
@@ -1315,8 +1429,11 @@ def install(app, store, auth, mutate, settings, task_view):
         """A place's pins in order, each card with what it shows the caller; pages the caller may not read are left
         out. A Dashboard, team page or My dashboard nobody saved shows its default cards, pins without ids (`saved`
         false). The Growth page takes `month` (YYYY-MM): the month its cards read, and the months it may pick from."""
+        timings = {}
         with store.read_transaction() as c:
-            return place_view(context(c, request, month_of(month)), place)
+            out = place_view(context(c, request, month_of(month)), place, timings)
+        request.state.server_timing = place_timing(timings)
+        return out
 
     @app.put("/api/v2/places/{place}")
     def place_save(request: Request, place: str, body: PlaceSave):

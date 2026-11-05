@@ -527,8 +527,7 @@ def _identity(record):
 
 
 def install_id(c):
-    """The install's Gateway id (`gi_...`), or '' before its first sign-up. It names the install on Tico HQ, in
-    federation envelopes and in every actor it sends out (backend/federation*.py)."""
+    """The install's Gateway id (`gi_...`), or '' before its first sign-up. It names the install on Tico HQ."""
     return str(_row(c).get("install") or "")
 
 

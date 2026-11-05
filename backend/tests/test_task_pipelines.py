@@ -78,9 +78,9 @@ def test_wont_do_steps_are_retired_once_and_a_teams_waiting_step_keeps_its_tasks
     assert not c.execute("SELECT 1 FROM task_steps s JOIN task_types t ON t.id=s.type_id WHERE s.status='declined' AND t.id<>'product-roadmap'").fetchone()
     # The Product roadmap's Declined is public: it stays.
     assert product and c.execute("SELECT id FROM task_steps WHERE type_id='product-roadmap' AND status='declined'").fetchall() == product
-    events = c.execute("SELECT count(*) FROM task_events").fetchone()[0]
+    events = c.execute("SELECT count(*) FROM history_events WHERE subject_type='task'").fetchone()[0]
     H.migrate(c)
-    assert c.execute("SELECT count(*) FROM task_events").fetchone()[0] == events
+    assert c.execute("SELECT count(*) FROM history_events WHERE subject_type='task'").fetchone()[0] == events
     assert dict(c.execute('SELECT id, step_id || ":" || status FROM tasks').fetchall()) == place
     assert c.execute('PRAGMA foreign_key_check').fetchall() == []
     c.close()

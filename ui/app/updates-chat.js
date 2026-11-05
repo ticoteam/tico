@@ -121,24 +121,34 @@ async function updcLoad(chat) {
   const el = chat.el, thread = el.querySelector('[data-updc-thread]'), error = el.querySelector('[data-updc-error]');
   const current = () => UPDC === chat && el.isConnected;
   const fail = text => { if (!current()) return; error.textContent = text || ''; error.hidden = !text; };
-  let info = null, messages = [], execution = null, rendered = '', es = null, poll = null;
+  let info = null, messages = [], execution = null, rendered = '', es = null, poll = null, tick = null;
   const stopStream = () => { try { es?.(); } catch { /* released */ } es = null; clearInterval(poll); poll = null; };
-  chat.stop = stopStream;
+  chat.stop = () => { stopStream(); clearInterval(tick); tick = null; };
   const isReply = m => m.sender_id === 'bot:' + info?.bot;
   const draw = () => {
-    if (!current()) return;
+    if (!current()) { clearInterval(tick); tick = null; return; }
     const rows = messages.map(m => v2MessageHTML({...m, run: null}));
     const live = execution && execution.state !== 'completed' ? execution.text : '';
+    // No words yet: what the turn is doing and for how long (ui/app/ask-rules.js), its time kept current by a tick.
+    const working = !live && messages.length && !isReply(messages.at(-1)) ? askWorkingLine(execution) : '';
     if (live) rows.push(`<div data-updc-live>${v2MessageHTML({from_actor: 'bot:' + info.bot, body: live})}</div>`);
-    else if (messages.length && !isReply(messages.at(-1))) rows.push(`<p class="muted" role="status">${esc(execution?.label || 'Waiting for reply…')}</p>`);
+    // The thread holds only the line's label (its time and step are set after the draw), so a redraw of the same chat leaves the thread be.
+    else if (messages.length && !isReply(messages.at(-1))) rows.push(`<p class="muted" role="status" data-updc-working>${esc(execution?.label || (working ? 'Working' : 'Waiting for reply…'))}</p>`);
+    // The tick moves only the line's time, never the thread (its cards would load again).
+    if (working && !tick) tick = setInterval(() => { const el = current() && thread.querySelector('[data-updc-working]'), t = askWorkingLine(execution);
+      if (el && t) el.textContent = t; }, ASK_TICK_MS);
+    else if (!working && tick) { clearInterval(tick); tick = null; }
     const html = rows.join('') || `<div class="updc-empty"><p class="muted">Ask ${esc(info.name)} about today's updates.</p>
       <button class="ghost" type="button" data-updc-hint="${esc(UPDC_HINT)}">${esc(UPDC_HINT)}</button></div>`;
-    if (html === rendered) return;
+    const time = () => { const wl = working && thread.querySelector('[data-updc-working]'); if (wl) wl.textContent = working; };
+    // Compared without the messages' "2m ago" (format.js agoStill): those move in place.
+    if (agoStill(html) === rendered) { agoTick(thread); return time(); }
     stickScroll(thread).update(() => {
       thread.innerHTML = html;
       if (thread.querySelector('[data-action-host]')) void window.assistantChat?.cards(thread, {get, post, esc, toast, reload: snapshot});
     }, {fresh: !!rendered});
-    rendered = html;
+    rendered = agoStill(html);
+    time();
   };
   const snapshot = async () => {
     if (!info?.room_id || !current()) return;
@@ -167,9 +177,12 @@ async function updcLoad(chat) {
     P.sending = true; pillButtons(P); fail('');
     try {
       const r = await post('/v2/assistant/messages', {text, place: 'updates'});
+      // An org rule held it: nothing was written, so the box keeps the text and there is no message to show.
+      if (r?.held) { if (current()) fail('An org rule held this message. Nothing was sent.'); return; }
+      if (!r?.message) throw new Error('Not sent. Try again.');
       CHAT_CACHE.delete(info.bot);                    // the menu tab reads the conversation again when it opens
       if (!current()) return;
-      for (const m of [r.message, r.reply].filter(Boolean)) if (!messages.some(x => x.id === m.id)) messages.push(m);
+      if (!messages.some(x => x.id === r.message.id)) messages.push(r.message);
       if (r.message?.conversation_id && r.message.conversation_id !== info.room_id) { info.room_id = r.message.conversation_id; watch(); }
       pillAcknowledge(P, text, []); stickScroll(thread).toBottom(); draw();
       if (!es && !poll) watch();

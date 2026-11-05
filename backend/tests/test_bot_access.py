@@ -13,6 +13,7 @@ from backend import bot_access as BA
 from backend.auth import Identity
 from backend.store import H, encode
 from backend.tests.test_api import api, get, headers, post, put  # noqa: F401  (fixture)
+from backend import bot_settings as BS
 
 ALL = ("ana", "ben", "cara", "dee", "stranger", "analyst")
 EVERYONE = {"everyone": True}
@@ -325,7 +326,8 @@ def test_the_old_private_and_routing_lists_are_retired_with_one_note_for_the_own
                 H.sync_registry(c, {"inbox": {"name": "inbox", "runtime": "fake", "status": "active"}},
                                 {"people": [{"id": "ana", "email": "ana@acme.example"},
                                             {"id": "ben", "email": "ben@acme.example"}]})
-                c.execute("INSERT INTO bot_config(bot,config,owner_id) VALUES('inbox','{}','ana')")
+                c.execute("INSERT INTO bot_config(bot,owner_id) VALUES('inbox','ana')")
+                BS.write(c, 'inbox', {})
             # The bot the file called private is Open: Ben sees, reads and writes to it.
             row = next(b for b in get(client, "bots", "ben-test") if b["slug"] == "inbox")
             assert row["access"] == {"see": True, "read": True, "write": True}
