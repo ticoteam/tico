@@ -69,6 +69,10 @@ export type ApprovalRequested = {
   status?: string;
 };
 
+export type AsksSeen = {
+  asks: Array<string>;
+};
+
 export type Assistant = {
   actions: Record<string, unknown>;
   actors?: Record<string, string>;
@@ -973,6 +977,23 @@ export type CloudAgentRequest = {
   team?: string;
 };
 
+export type CloudSupportChange = {
+  on: boolean;
+};
+
+export type CloudSupportMachine = {
+  helper: "on" | "off" | "offline" | "none";
+  id: string;
+  key: string;
+  seen: string | null;
+};
+
+export type CloudSupportView = {
+  available: boolean;
+  machines: Array<CloudSupportMachine>;
+  on: boolean | null;
+};
+
 export type CommentDelivery = {
   default: "queue" | "defer" | null;
   default_for: string | null;
@@ -1282,7 +1303,72 @@ export type EditionBody = {
   title?: string | null;
 };
 
+export type EmailSend = {
+  actor: string;
+  approval_id: string;
+  attachments: Array<Record<string, unknown>>;
+  automation_action_id: string | null;
+  body_sha256: string;
+  bot: string;
+  calendar_action_id: string | null;
+  claimed_at: string | null;
+  classification: Record<string, unknown>;
+  content_sha256: string;
+  created_at: string;
+  decision: Record<string, unknown>;
+  detail: string;
+  finished_at: string | null;
+  id: string;
+  mailbox: string;
+  provider_message_id: string | null;
+  recipients: Array<string>;
+  send_after: string;
+  state: string;
+  subject: string;
+  via: string;
+};
+
+export type EmailSendDetail = {
+  bodies: Array<Record<string, unknown>>;
+  body: string;
+  preview_complete: boolean;
+  send: EmailSend;
+};
+
+export type EmailSendList = {
+  next_cursor: string | null;
+  sends: Array<EmailSend>;
+};
+
+export type EmailSendResult = {
+  send: EmailSend;
+};
+
+export type EmailSendingPolicy = {
+  bot: Record<string, unknown>;
+  company: Record<string, unknown>;
+  effective: Record<string, unknown>;
+  inbox: Record<string, unknown>;
+};
+
+export type EmailSuppressionList = {
+  next_cursor: string | null;
+  recipients: Array<Record<string, unknown>>;
+};
+
 export type Empty = Record<string, unknown>;
+
+export type Enqueue = {
+  approval_id?: string;
+  automation_action_id?: string;
+  calendar_action_id?: string;
+  draft_id?: string;
+  mailbox: string;
+  operation_id?: string;
+  raw: string;
+  reply_to_id?: string;
+  thread_id?: string;
+};
 
 export type Estimate = (FinanceOrderRow & {
   lines: Array<{
@@ -3331,6 +3417,37 @@ export type Locations = {
   next_cursor: string | null;
 };
 
+export type MailOrganizeBody = {
+  action: "archive" | "unarchive" | "mark_read" | "mark_unread" | "label" | "unlabel";
+  ids: Array<string>;
+  label?: string;
+  limit?: number;
+  mailbox: string;
+  query?: string;
+} | {
+  action: "archive" | "unarchive" | "mark_read" | "mark_unread" | "label" | "unlabel";
+  ids?: Array<string>;
+  label?: string;
+  limit?: number;
+  mailbox: string;
+  query: string;
+};
+
+export type MailOrganizeResult = {
+  action: "archive" | "unarchive" | "mark_read" | "mark_unread" | "label" | "unlabel";
+  count: number;
+  ids: Array<string>;
+  label?: string;
+  mailbox: string;
+  undo: MailOrganizeUndo;
+};
+
+export type MailOrganizeUndo = {
+  action: "archive" | "unarchive" | "mark_read" | "mark_unread" | "label" | "unlabel";
+  ids: Array<string>;
+  label?: string;
+};
+
 export type Mailbox = {
   address: string;
   connection: "workspace" | "personal";
@@ -3581,6 +3698,7 @@ export type Message = {
   sender_id: string;
   sender_name?: string;
   sent_as?: SentAs;
+  source?: MessageSource;
   woke?: boolean;
 };
 
@@ -3613,6 +3731,12 @@ export type MessagePatch = {
 
 export type MessageResult = {
   message: Message;
+};
+
+export type MessageSource = {
+  kind: "person" | "bot" | "assistant_for" | "task_update" | "builtin" | "automation" | "system";
+  link: string | null;
+  name: string;
 };
 
 export type MessageTask = {
@@ -3690,11 +3814,13 @@ export type NeedsYou = {
   items: Array<NeedsYouItem>;
   next?: string | null;
   older?: Array<Record<string, unknown>>;
+  plate_count?: number;
   restart?: boolean;
   went_away?: Record<string, unknown>;
 } | {
   actor: string;
   count: number;
+  plate_count: number;
 };
 
 export type NeedsYouItem = {
@@ -3973,6 +4099,24 @@ export type PlaceOrder = {
 
 export type PlaceSave = {
   audience?: PlaceAudience | null;
+};
+
+export type PolicyUpdate = {
+  approvers?: Array<string> | null;
+  ask_attachments?: boolean | null;
+  ask_legal_money?: boolean | null;
+  ask_many_recipients?: boolean | null;
+  ask_new_address?: boolean | null;
+  company_daily_cap?: number | null;
+  daily_cap?: number | null;
+  inherit?: boolean;
+  mailbox_daily_cap?: number | null;
+  mode?: string | null;
+  pacing_seconds?: number | null;
+  to?: string | null;
+  undo_seconds?: number | null;
+  what?: string | null;
+  who_can_ok?: string | null;
 };
 
 export type PostalLegalRouting = {
@@ -4707,6 +4851,10 @@ export type SeatUpdate = {
   title?: string | null;
 };
 
+export type SendApproval = {
+  approval_id: string;
+};
+
 export type SentAs = {
   delivery: "steer" | "queue" | "defer";
   until: string | null;
@@ -5308,6 +5456,24 @@ export type TaskComments = {
   comments: Array<Message>;
 };
 
+export type TaskContext = {
+  meetings: Array<TaskContextMeeting>;
+  pages: Array<TaskContextPage>;
+};
+
+export type TaskContextMeeting = {
+  date: string;
+  id: string;
+  title: string;
+};
+
+export type TaskContextPage = {
+  id: string;
+  title: string;
+  updated_at: string;
+  version: number;
+};
+
 export type TaskCreate = {
   acceptance_criteria?: Array<string>;
   blocker?: TaskBlocker | null;
@@ -5354,7 +5520,9 @@ export type TaskDetail = {
   children: Array<unknown>;
   comment_delivery?: CommentDelivery | null;
   comments: Array<Message>;
-  events: Array<unknown>;
+  events: Array<{
+  source: MessageSource;
+}>;
   has_more: boolean;
   messages: Array<Message>;
   mover?: boolean;
@@ -5763,6 +5931,7 @@ export type ThreadMessage = {
   routed?: ThreadRouted | null;
   sender_id?: string;
   seq: number;
+  source?: MessageSource;
   sub_thread?: Record<string, unknown> | null;
   thread_id: string;
 };
@@ -5838,6 +6007,7 @@ export type ThreadSearch = {
   excerpt: string;
   message_id: string;
   sender_id?: string;
+  source?: MessageSource;
   thread_id: string;
   title?: string;
 }>;
@@ -6631,6 +6801,14 @@ export type AttachCallBotsParams = {
 export type AttachCallBotsBody = CallBots;
 export type AttachCallBotsResponse = Call;
 
+/** POST /api/v2/email/sends/{sid}/approve */
+export type AttachEmailApprovalParams = {
+  "Idempotency-Key": string;
+  sid: string;
+};
+export type AttachEmailApprovalBody = SendApproval;
+export type AttachEmailApprovalResponse = EmailSendResult;
+
 /** POST /api/v2/tasks/{tid}/files */
 export type AttachTaskFileParams = {
   "Idempotency-Key": string;
@@ -6690,6 +6868,14 @@ export type CancelAssistantActionParams = {
 };
 export type CancelAssistantActionBody = Empty;
 export type CancelAssistantActionResponse = AssistantActionResult;
+
+/** POST /api/v2/email/sends/{sid}/cancel */
+export type CancelEmailSendParams = {
+  "Idempotency-Key": string;
+  sid: string;
+};
+export type CancelEmailSendBody = never;
+export type CancelEmailSendResponse = EmailSendResult;
 
 /** POST /api/v2/inbound/phone-requests/{ident}/cancel */
 export type CancelInboundPhoneRequestParams = {
@@ -7460,6 +7646,14 @@ export type GetBotDreamParams = {
 export type GetBotDreamBody = never;
 export type GetBotDreamResponse = BotDreamView;
 
+/** GET /api/v2/bots/{bot}/email-sending-policy */
+export type GetBotEmailSendingPolicyParams = {
+  bot: string;
+  mailbox?: string;
+};
+export type GetBotEmailSendingPolicyBody = never;
+export type GetBotEmailSendingPolicyResponse = EmailSendingPolicy;
+
 /** GET /api/v2/bots/{bot}/instructions */
 export type GetBotInstructionsParams = {
   bot: string;
@@ -7541,6 +7735,11 @@ export type GetChatGoalParams = {
 export type GetChatGoalBody = never;
 export type GetChatGoalResponse = ChatGoalResult;
 
+/** GET /api/v2/cloud-machines/support */
+export type GetCloudMachineSupportParams = Record<string, never>;
+export type GetCloudMachineSupportBody = never;
+export type GetCloudMachineSupportResponse = CloudSupportView;
+
 /** GET /api/v2/company */
 export type GetCompanyParams = Record<string, never>;
 export type GetCompanyBody = never;
@@ -7603,6 +7802,18 @@ export type GetEditionParams = {
 };
 export type GetEditionBody = never;
 export type GetEditionResponse = unknown;
+
+/** GET /api/v2/email/sends/{sid} */
+export type GetEmailSendParams = {
+  sid: string;
+};
+export type GetEmailSendBody = never;
+export type GetEmailSendResponse = EmailSendDetail;
+
+/** GET /api/v2/email/sending-policy */
+export type GetEmailSendingPolicyParams = Record<string, never>;
+export type GetEmailSendingPolicyBody = never;
+export type GetEmailSendingPolicyResponse = EmailSendingPolicy;
 
 /** GET /api/v2/estimates/{estimate_id} */
 export type GetEstimateParams = {
@@ -7809,6 +8020,14 @@ export type GetFinanceSalesTaxCsvParams = {
 export type GetFinanceSalesTaxCsvBody = never;
 export type GetFinanceSalesTaxCsvResponse = string;
 
+/** GET /api/v2/email/sends/{sid}/attachments/{part} */
+export type GetFrozenEmailAttachmentParams = {
+  part: number;
+  sid: string;
+};
+export type GetFrozenEmailAttachmentBody = never;
+export type GetFrozenEmailAttachmentResponse = unknown;
+
 /** GET /api/v2/goals/{gid} */
 export type GetGoalParams = {
   gid: string;
@@ -7876,6 +8095,13 @@ export type GetInboxSendParams = {
 };
 export type GetInboxSendBody = never;
 export type GetInboxSendResponse = InboxSwitch;
+
+/** GET /api/v2/email/inboxes/{mailbox}/sending-policy */
+export type GetInboxSendingPolicyParams = {
+  mailbox: string;
+};
+export type GetInboxSendingPolicyBody = never;
+export type GetInboxSendingPolicyResponse = EmailSendingPolicy;
 
 /** GET /api/v2/docs/{doc_id} */
 export type GetInternalDocParams = {
@@ -7982,6 +8208,7 @@ export type GetMeetingReviewSettingsResponse = MeetingReviewPreferences;
 export type GetMeetingTranscriptParams = {
   id: string;
   limit?: number;
+  notes?: boolean;
   offset?: number;
 };
 export type GetMeetingTranscriptBody = never;
@@ -8230,6 +8457,13 @@ export type GetTaskResponse = TaskDetail;
 export type GetTaskCapsParams = Record<string, never>;
 export type GetTaskCapsBody = never;
 export type GetTaskCapsResponse = TaskCaps;
+
+/** GET /api/v2/tasks/{tid}/context */
+export type GetTaskContextParams = {
+  tid: string;
+};
+export type GetTaskContextBody = never;
+export type GetTaskContextResponse = TaskContext;
 
 /** GET /api/v2/task-manager */
 export type GetTaskManagerParams = Record<string, never>;
@@ -8727,6 +8961,25 @@ export type ListEditionsParams = {
 };
 export type ListEditionsBody = never;
 export type ListEditionsResponse = unknown;
+
+/** GET /api/v2/email/sends */
+export type ListEmailSendsParams = {
+  cursor?: string;
+  limit?: number;
+  mailbox: string;
+  pending?: boolean;
+};
+export type ListEmailSendsBody = never;
+export type ListEmailSendsResponse = EmailSendList;
+
+/** GET /api/v2/email/inboxes/{mailbox}/suppressed-recipients */
+export type ListEmailSuppressionsParams = {
+  cursor?: string;
+  limit?: number;
+  mailbox: string;
+};
+export type ListEmailSuppressionsBody = never;
+export type ListEmailSuppressionsResponse = EmailSuppressionList;
 
 /** GET /api/v2/estimates */
 export type ListEstimatesParams = {
@@ -9680,6 +9933,13 @@ export type ModerateTaskCommentParams = {
 export type ModerateTaskCommentBody = Moderate;
 export type ModerateTaskCommentResponse = unknown;
 
+/** POST /api/v2/needs-you/seen */
+export type NeedsYouSeenParams = {
+  "Idempotency-Key": string;
+};
+export type NeedsYouSeenBody = AsksSeen;
+export type NeedsYouSeenResponse = unknown;
+
 /** POST /api/v2/threads/{thread_id}/open-earlier */
 export type OpenEarlierMessagesParams = {
   "Idempotency-Key": string;
@@ -9703,6 +9963,13 @@ export type OrderPlaceParams = {
 };
 export type OrderPlaceBody = PlaceOrder;
 export type OrderPlaceResponse = Place;
+
+/** POST /api/v2/mail/messages/organize */
+export type OrganizeMailMessagesParams = {
+  "Idempotency-Key": string;
+};
+export type OrganizeMailMessagesBody = MailOrganizeBody;
+export type OrganizeMailMessagesResponse = MailOrganizeResult;
 
 /** POST /api/v2/editions/{edition_id}/override */
 export type OverrideEditionParams = {
@@ -9802,6 +10069,13 @@ export type PurgeAutomaticQueueParams = {
 };
 export type PurgeAutomaticQueueBody = QueuePurge;
 export type PurgeAutomaticQueueResponse = QueuePurgeResult;
+
+/** POST /api/v2/email/sends */
+export type QueueEmailParams = {
+  "Idempotency-Key": string;
+};
+export type QueueEmailBody = Enqueue;
+export type QueueEmailResponse = EmailSendResult;
 
 /** GET /api/v2/inbound/phone-quote */
 export type QuoteInboundPhoneParams = Record<string, never>;
@@ -10023,6 +10297,15 @@ export type RemoveCompanyLogoParams = {
 };
 export type RemoveCompanyLogoBody = never;
 export type RemoveCompanyLogoResponse = unknown;
+
+/** DELETE /api/v2/email/inboxes/{mailbox}/suppressed-recipients/{address} */
+export type RemoveEmailSuppressionParams = {
+  "Idempotency-Key": string;
+  address: string;
+  mailbox: string;
+};
+export type RemoveEmailSuppressionBody = never;
+export type RemoveEmailSuppressionResponse = unknown;
 
 /** DELETE /api/v2/feedback/{feedback_id} */
 export type RemoveFeedbackParams = {
@@ -10672,6 +10955,13 @@ export type SetBotBudgetParams = {
 export type SetBotBudgetBody = BotBudget;
 export type SetBotBudgetResponse = BotBudgetState;
 
+/** PUT /api/v2/bots/{bot}/email-sending-policy */
+export type SetBotEmailSendingPolicyParams = {
+  bot: string;
+};
+export type SetBotEmailSendingPolicyBody = PolicyUpdate;
+export type SetBotEmailSendingPolicyResponse = EmailSendingPolicy;
+
 /** PUT /api/v2/letters/bots/{bot_id}/settings */
 export type SetBotLettersSettingsParams = {
   bot_id: string;
@@ -10725,6 +11015,11 @@ export type SetChatGoalParams = {
 export type SetChatGoalBody = GoalAction;
 export type SetChatGoalResponse = ChatGoalResult;
 
+/** PUT /api/v2/cloud-machines/support */
+export type SetCloudMachineSupportParams = Record<string, never>;
+export type SetCloudMachineSupportBody = CloudSupportChange;
+export type SetCloudMachineSupportResponse = CloudSupportView;
+
 /** POST /api/v2/company-page/logo */
 export type SetCompanyLogoParams = {
   "Idempotency-Key": string;
@@ -10752,6 +11047,11 @@ export type SetComputerTurnsAtOnceParams = {
 };
 export type SetComputerTurnsAtOnceBody = RunnerTurnsAtOnce;
 export type SetComputerTurnsAtOnceResponse = unknown;
+
+/** PUT /api/v2/email/sending-policy */
+export type SetEmailSendingPolicyParams = Record<string, never>;
+export type SetEmailSendingPolicyBody = PolicyUpdate;
+export type SetEmailSendingPolicyResponse = EmailSendingPolicy;
 
 /** PUT /api/v2/bots/{bot}/github-repos */
 export type SetExtraRepositoriesParams = {
@@ -10818,6 +11118,13 @@ export type SetInboxSendParams = {
 };
 export type SetInboxSendBody = InboxSend;
 export type SetInboxSendResponse = InboxSwitch;
+
+/** PUT /api/v2/email/inboxes/{mailbox}/sending-policy */
+export type SetInboxSendingPolicyParams = {
+  mailbox: string;
+};
+export type SetInboxSendingPolicyBody = PolicyUpdate;
+export type SetInboxSendingPolicyResponse = EmailSendingPolicy;
 
 /** POST /api/v2/bots/{bot}/keep-tasks-going */
 export type SetKeepTasksGoingParams = {
@@ -11078,6 +11385,14 @@ export type TakeRecommendationParams = {
 };
 export type TakeRecommendationBody = TakeRecommendation;
 export type TakeRecommendationResponse = unknown;
+
+/** POST /api/v2/tasks/{tid}/seen */
+export type TaskSeenParams = {
+  "Idempotency-Key": string;
+  tid: string;
+};
+export type TaskSeenBody = Empty;
+export type TaskSeenResponse = unknown;
 
 /** POST /api/v2/alerts/me/test */
 export type TestMyAlertsParams = {

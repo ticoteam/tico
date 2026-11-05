@@ -1167,6 +1167,23 @@ def test_a_computer_on_a_release_the_server_cannot_work_with_is_bad(environment,
         found = {f["check_id"]: f for f in MH.findings(c, api.app.state.store.settings)}
     assert found["runner_outdated"]["severity"] == severity
 
+
+@pytest.mark.parametrize("reason", ["will be recovered automatically on the next update",
+                                  "cannot recover: 1 changed file; commit or stash it first: app.py",
+                                  "switch it to main to follow releases"])
+def test_branch_blocks_give_botops_the_branch_and_its_recovery_or_refusal(environment, monkeypatch, reason):
+    monkeypatch.setenv("TICO_VERSION", "0.4.45")
+    api, runner = built(environment)
+    error = "the checkout is on branch tico/b427e9ee-fix-runner; " + reason
+    with api.app.state.store.transaction() as c:
+        c.execute("UPDATE runner_states SET last_seen_at=? WHERE runner_id=?", (H.now(), runner["runner_id"]))
+        c.execute("INSERT INTO runner_versions(runner_id,release,update_state,update_error,reported_at) "
+                  "VALUES(?,?,'blocked',?,?) ON CONFLICT(runner_id) DO UPDATE SET release=excluded.release,"
+                  "update_state=excluded.update_state,update_error=excluded.update_error",
+                  (runner["runner_id"], "0.4.40", error, H.now()))
+        found = next(f for f in MH.findings(c, api.app.state.store.settings) if f["check_id"] == "runner_outdated")
+    assert error in found["detail"] and found["fix"] == error
+
 def test_event_stream_counts_drops_and_not_the_ones_a_server_restart_caused(environment, readers, monkeypatch):
     api, runner = built(environment)
     monkeypatch.setattr(diagnostics.RING, "started", "2026-01-10T23:00:00Z")      # this process: far from the lines

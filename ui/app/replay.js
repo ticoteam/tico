@@ -140,7 +140,7 @@ const replayName = data => a => {
   const slug = actorSlug(a), pid = actorPerson(a);
   if (slug) return botDisplayName(slug);
   if (pid) return data.names?.[a] || (S.people || []).find(p => p.id === pid)?.name || personDisplay(pid);
-  return a === 'keeper' ? assistantName() : String(a || '');
+  return a === 'keeper' ? KEEPER_LABEL : String(a || '');     // the server itself, never the Assistant or the app
 };
 
 // The app's own faces: a bot's blob in the replayed state (never the live one), a person's photo or initials.

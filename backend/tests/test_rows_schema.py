@@ -12,6 +12,12 @@ from backend.config import Settings
 from backend.store import Store
 
 TABLES = {
+    rows.EmailSendingPolicyRow: "email_sending_policies",
+    rows.EmailSendRow: "email_sends",
+    rows.EmailSuppressedRecipientRow: "email_suppressed_recipients",
+    rows.EmailLegacyAutomationRow: "email_legacy_automations",
+    rows.EmailSendPreviewRow: "email_send_previews",
+    rows.EmailSendOperationRow: "email_send_operations",
     rows.LetterOutboxRow: "letter_outboxes",
     rows.LetterOutboxGrantRow: "letter_outbox_grants",
     rows.LetterBotSettingRow: "letter_bot_settings",
@@ -38,6 +44,8 @@ TABLES = {
     rows.MaintenanceHandoffRow: "maintenance_handoffs",
     rows.MaintenanceRequestRow: "maintenance_requests",
     rows.AttemptRow: "attempts",
+    rows.CloudMachineDeletionRow: "cloud_machine_deletions",
+    rows.CloudMachineEnrollmentFailureRow: "cloud_machine_enrollment_failures",
     rows.RunnerRow: "runners",
     rows.RunnerStateRow: "runner_states",
     rows.ApprovalRow: "approvals",

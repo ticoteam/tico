@@ -7,6 +7,7 @@ a checkout with changes is left alone and the reason goes to Health.
 """
 import argparse
 import contextlib
+from datetime import datetime, timezone
 import fcntl
 import hashlib
 import json
@@ -21,7 +22,7 @@ import time
 import uuid
 from pathlib import Path
 
-from . import checkout_links
+from . import checkout_links, release_branch
 from .regular_file import SMALL, read as read_regular, lock as open_regular_lock
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -530,6 +531,7 @@ def update(root, version, directory, *, run=subprocess.run, install=pip_install,
     tag = "v" + version.lstrip("v")
     version = tag[1:]
     repair_note = ""
+    recovery_note = ""
 
     def say(state, error="", **extra):
         # A blocked checkout's message holds file names, which may look like a disk error (test_enospc.py).
@@ -540,7 +542,8 @@ def update(root, version, directory, *, run=subprocess.run, install=pip_install,
                 disk["disk_free"] = shutil.disk_usage(directory).free
             except OSError:
                 pass
-        notes = {"note": repair_note} if repair_note else {}
+        note = "; ".join(filter(None, (repair_note, recovery_note)))
+        notes = {"note": note} if note else {}
         write_status(directory, state=state, target=version, error=error[:300], at=clock(), **notes, **disk, **extra)
         return {"state": state, "target": version, "error": error, **notes}
 
@@ -549,10 +552,14 @@ def update(root, version, directory, *, run=subprocess.run, install=pip_install,
 
     if not key(version):
         return say("failed", f"{version!r} is not a release version")
-    old = g("rev-parse", "HEAD").stdout.strip()
-    branch = g("rev-parse", "--abbrev-ref", "HEAD").stdout.strip()
-    if branch not in ("main", "HEAD"):        # HEAD: detached, which is where a release update leaves it
-        return say("blocked", f"the checkout is on branch {branch}; switch it to main to follow releases")
+    old_head = g("rev-parse", "--verify", "HEAD")
+    if old_head.returncode or not old_head.stdout.strip():
+        return say("blocked", "cannot inspect the checkout commit")
+    old = old_head.stdout.strip()
+    checked = release_branch.inspect(root, g)
+    branch, recover = checked["branch"], checked["recover"]
+    if checked["error"] and not recover:
+        return say("blocked", checked["error"])
     dirty = [line for line in g("status", "--porcelain", "--untracked-files=no").stdout.splitlines() if line]
     flattened = []
     if dirty:
@@ -589,7 +596,7 @@ def update(root, version, directory, *, run=subprocess.run, install=pip_install,
         return say("failed", f"release {tag} does not name a commit")
     if busy and busy():
         return defer_update(directory, version, "this computer still has work running", clock=clock, transient=True)
-    if target == old and started in ("", target):
+    if target == old and started in ("", target) and not recover:
         return say("healthy")
     if target != old:
         pending = binary_pending(root, old, target, version, run=run, listed=listed, which=which)
@@ -604,7 +611,7 @@ def update(root, version, directory, *, run=subprocess.run, install=pip_install,
             except Exception as exc:     # the runner is on the new release; a helper that is missed follows on its own
                 print(f"Tico update: could not restart the helper jobs: {type(exc).__name__}", flush=True)
 
-    if target == old:
+    if target == old and not recover:
         # Nothing to switch. The dependencies may still differ from the ones this runner started with (a runner with
         # its own interpreter); going back would only restart onto this same code, so a failure is reported as it is.
         error = install(root, started, target) or prepare(root)
@@ -630,9 +637,27 @@ def update(root, version, directory, *, run=subprocess.run, install=pip_install,
                    reason + (". Went back to the previous release." if ok else ". The previous release did not start either.")
                    + (" " + note if note else ""))
 
+    if recover:
+        # Recheck after fetch/binary waits, under tico-update.lock and after the runner's drain.
+        checked = release_branch.inspect(root, g)
+        if checked["branch"] != branch or not checked["recover"] or g("rev-parse", "HEAD").stdout.strip() != old:
+            return say("blocked", checked["error"] if not checked["recover"] and checked["error"] else
+                       "the checkout changed during the update; retry")
+        preview = g("read-tree", "--dry-run", "-m", "-u", "HEAD", target)
+        if preview.returncode:
+            return say("blocked", f"the checkout is on branch {branch}; cannot recover: local files are in the way")
+        stamp = datetime.fromtimestamp(clock(), timezone.utc).strftime("%Y%m%dT%H%M%S%fZ")
+        ref = f"refs/tico/recovered/{stamp}-{branch}"
+        saved = g("update-ref", ref, old, "0" * len(old))
+        if saved.returncode:
+            return say("blocked", f"the checkout is on branch {branch}; cannot save a recovery ref")
     switched = g("checkout", "--quiet", "--detach", target)
     if switched.returncode:
-        return say("failed", switched.stderr if switched.stderr.startswith("repository copy needs attention:") or disk_space_error(switched.stderr) else f"could not switch to {tag}: local files are in the way")
+        return say("blocked" if recover else "failed", switched.stderr if switched.stderr.startswith("repository copy needs attention:") or disk_space_error(switched.stderr) else f"could not switch to {tag}: local files are in the way")
+    if recover:
+        recovery_note = f"moved the install off bot branch {branch} (kept at {ref})"
+        print(f"Tico update: {recovery_note}", flush=True)
+        say("updating")
     error = install(root, old, target) or prepare(root)
     if error:
         return back_out(error)

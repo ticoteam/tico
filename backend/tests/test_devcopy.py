@@ -34,6 +34,9 @@ def source_db(tmp_path):
         c.execute("INSERT INTO bots(id,slug,state) VALUES('sales','sales','active')")
         c.execute("INSERT INTO runners(id,label,owner_id,token_hash,created_at) VALUES('r1','mac','morgan','rh',?)", (now,))
         c.execute("INSERT INTO enrollments(code_hash,owner_id,expires_at) VALUES('ch','morgan',?)", (now,))
+        c.execute("INSERT INTO cloud_machine_deletions(machine_id,bot,runner_id,reason,next_try_at,failures,created_at) "
+                  "VALUES('machine-old','sales','r1','never_enrolled',0.0,1,0.0)")
+        c.execute("INSERT INTO cloud_machine_enrollment_failures(machine_id,bot) VALUES('machine-old','sales')")
         c.execute("INSERT INTO conversations(id) VALUES('cv')")
         c.execute("INSERT INTO tasks(id,title,requester_id,owner_id,status) "
                   "VALUES('linked-task','Review the plan','human:morgan','human:morgan','open')")
@@ -81,6 +84,7 @@ def test_a_dev_copy_keeps_history_empties_what_acts_and_refuses_runners(tmp_path
     assert source.read_bytes() == before                                    # the source is only read
     assert loose == [] and removed["attempts"] == 2 and removed["attempt_events"] == 2 and removed["messages"] == 2
     assert removed['alert_preferences'] == 1 and removed['personal_alerts'] == 3
+    assert removed["cloud_machine_deletions"] == 1 and removed["cloud_machine_enrollment_failures"] == 1
     assert stat.S_IMODE(dest.stat().st_mode) == 0o600
     assert not any((dest.parent / name).exists() for name in ("credential.key", "github-app.key", "slack.key"))
     with closing(sqlite3.connect(dest)) as c:

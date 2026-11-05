@@ -2,8 +2,8 @@
 // an older one, a launch plan on Dana's task and a signup funnel CSV (seed `pages`). Library › Files lists them, a kind
 // filter and a search narrow it, a page opens full size with Tico's status line, a replaced page links on, the task
 // shows the pages pinned to it at the top, the search box finds a file by its words, and the owner deletes a page for good. This hub
-// has no visual address, so pages are Open cards; one framed page (its address faked) takes the height it reports,
-// cut at a card's size. Phone, then desktop.
+// has no visual address, so pages are Open cards; one framed page (its address faked) takes the height it reports in
+// the full view, and a card holds its size's fixed height and fades the cut. Phone, then desktop.
 const assert = require('node:assert/strict');
 const {run, open, go, ok, api, sideways, shot, t} = require('./support/redesign-e2e.cjs');
 
@@ -133,15 +133,21 @@ run('redesign-e2e-pages', ['org', 'toured', 'groups', 'pages'], async ({hub, bro
     await frame.waitFor({timeout: t(5000)});
     assert.equal(await frame.getAttribute('sandbox'), 'allow-scripts allow-popups allow-popups-to-escape-sandbox');
     await page.waitForFunction(() => document.querySelector('#pg-view iframe.page-frame')?.style.height === '600px', null, {timeout: t(5000)});
+    assert.equal(await frame.getAttribute('src'), FRAME + '#tico-view=full&tico-size=full', 'the full view says full');
     const small = await page.evaluate(([p, src]) => {
       const card = pageCard({...p, src}, {size: 'small'});
       card.id = 'probe'; document.querySelector('#pg-view').append(card);
-      return {tap: !!card.querySelector('a.pg-tap'),
-        bar: card.classList.contains('pg-framed') && card.firstElementChild.classList.contains('pg-status')};
+      return {tap: !!card.querySelector('a.pg-tap'), expand: card.querySelector('a.pg-expand')?.getAttribute('href'),
+        bar: card.classList.contains('pg-framed') && card.firstElementChild.classList.contains('pg-status'),
+        src: card.querySelector('iframe').getAttribute('src')};
     }, [weekly, FRAME]);
     assert.ok(small.tap, 'a card opens its page on a tap');
+    assert.equal(small.expand, '#/page/' + weekly.file_id, 'its expand icon opens the full view');
     assert.ok(small.bar, 'a framed card carries its status line as its top bar');
-    await page.waitForFunction(() => document.querySelector('#probe iframe.page-frame')?.style.height === '180px', null, {timeout: t(5000)});
+    assert.equal(small.src, FRAME + '#tico-view=card&tico-size=small', 'the frame says it is in a small card');
+    // The 600px page is cut at the card's fixed 180, with the fade.
+    await page.waitForFunction(() => document.querySelector('#probe iframe.page-frame')?.style.height === '180px'
+      && document.querySelector('#probe .pg-box')?.classList.contains('pg-cut'), null, {timeout: t(5000)});
     await shot(page, `${tag}-06-framed`);
     await page.unrouteAll({behavior: 'wait'});
 

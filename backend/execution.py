@@ -23,6 +23,7 @@ from .verdict_moves import HANDOFF_FIRST_SQL
 from .store import H, P, Problem, bot_readiness, digest, encode, message_page, readiness_document
 from .config import Settings
 from . import bot_settings as BS
+from . import sources as SRC
 
 # The wait after a usage limit whose provider gave no reset time; a reported reset is used instead.
 LIMIT_COOLDOWN = 1800        # seconds a bot waits after its runtime reported a usage limit
@@ -3998,7 +3999,7 @@ class Execution:
         subscriptions = model_subscriptions.hand_out(c, aid, subscribed)
         parked = c.execute("SELECT onboarding_state FROM bot_config WHERE bot=?", (row["bot_id"],)).fetchone()
         from .chat_goals import current
-        from . import worktrees
+        from . import task_context, worktrees
         # A runner from before task goals would treat a task room's goal as running without ever setting it.
         chat_goal = current(c, conv["id"]) if not (conv.get("kind") == "task" and not task_goals_on(runner)) else None
         if chat_goal and chat_goal["bot"] != row["bot_id"]:
@@ -4050,6 +4051,7 @@ class Execution:
                             # (backend/learned.py; rendered by runner-rs/src/prompt.rs). Outside their own chat only
                             # `strategy`, the team's published strategy, which every turn carries (backend/strategy.py).
                             "learned": learned.for_turn(c, self.store.settings, conv, row["bot_id"]),
+                            "task_context": task_context.for_turn(c, self.auth, acting or bot_who, task),
                             # Asked from the Updates chat: the recent updates that person may read and open, read now as
                             # them (backend/updates_chat.py). None for every other turn.
                             "updates": updates_chat.for_turn(c, self.auth, self.store.settings, conv, row["bot_id"], msg, aid),
@@ -4545,7 +4547,9 @@ class Execution:
             c.execute("UPDATE jobs SET state='input',attempt_id=? WHERE id=?", (aid, queued["job_id"]))
             H.mark_delivered(c, H.KEEPER, queued["id"])
             text = str(queued["body"] or "")
-            lines.append(f"- From {queued['sender_id']} at {str(queued['created_at'])[11:16]} UTC:\n"
+            # A keeper line reads by what made it ("Task update", "Stuck check"), never as the keeper.
+            who = (SRC.message_source({}, dict(queued))["name"] or "System") if queued["sender_id"] == H.KEEPER else f"From {queued['sender_id']}"
+            lines.append(f"- {who} at {str(queued['created_at'])[11:16]} UTC:\n"
                          + (text if len(text) <= FOLD_TEXT else text[:FOLD_TEXT] + "\u2026"))
             folded.append(queued["job_id"])
         if not folded:

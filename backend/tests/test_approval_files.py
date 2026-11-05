@@ -1,7 +1,7 @@
 """A send approval's files in Needs you link only to a stored version whose sha256 and size are the approved ones."""
 import hashlib
 
-from backend.tests.test_api import api, headers, post, setup_attempt  # noqa: F401
+from backend.tests.test_api import api, headers, post, setup_attempt, legacy_send_approval  # noqa: F401
 
 
 def meta(name, data, file_id):
@@ -18,8 +18,8 @@ def test_needs_you_links_only_the_approved_bytes_and_keeps_that_version(api):
                                meta("notes.md", b"# Not these notes", other["file_id"]),   # the bytes differ
                                meta("gone.md", b"# Gone", "no-such-file-0001"),
                                {"name": "plain.md", "size": 3, "sha256": "c" * 64}]}
-    approval = post(api, "approvals", {"kind": "send", "payload": payload, "task_id": tid},
-                    token=setup_attempt(api)[2]["token"])
+    setup_attempt(api)
+    approval = legacy_send_approval(api, payload, task_id=tid)
 
     def links():
         items = api.get("/api/v2/needs-you", headers=headers()).json()["items"]

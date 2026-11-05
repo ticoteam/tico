@@ -43,6 +43,7 @@ PAGES = {
     "tools": page("tools", "integrations"),
     "connections": page("connections", "connections"),
     "meetings": page("meetings", "meetings"),
+    "meetings-live": page("live-meetings", "meetings"),
     "threads": page("threads", "threads"),
     # The sidebar's Inbox header opens the Threads page on its Inbox view: the same threads.
     "inbox": page("threads", "threads"),
@@ -64,6 +65,7 @@ PAGES = {
     "settings-inboxes-letters-out": page("letters", "items"),
     # History reuses the runs, task changes and decisions the existing demo sections record.
     "settings-history": page("history", "items"),
+    "settings-email-sending": page("email/sends", "sends", mailbox="ana@acme.example", pending=True),
     "settings-alerts": page("alerts/me"),
     # Not a nav row: its seats show in the Team chart and open from there.
     "recruit": page("seats", "seats"),
@@ -128,6 +130,15 @@ def test_a_demo_task_and_meeting_link_to_each_other(api):
     response = api.get(f'/api/v2/tasks/{task}/meetings')
     assert response.status_code == 200, response.text
     assert meeting in {row['meeting_id'] for row in response.json()['meetings']}
+
+
+def test_meeting_follow_up_has_an_answerable_needs_you_card(api):
+    meetings = api.get('/api/v2/meetings').json()['meetings']
+    linked = {row['task_id'] for meeting in meetings for row in
+              api.get(f"/api/v2/meetings/{meeting['id']}/tasks").json()['tasks']}
+    needs = api.get('/api/v2/needs-you?limit=200').json()['items']
+    assert any(it['id'] in linked and (it.get('ask') or {}).get('recipient_id') == 'human:ana'
+               and 'answer' in it.get('actions', []) for it in needs)
 
 
 def test_demo_task_has_an_editor_for_the_live_task_page(api):

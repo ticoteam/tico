@@ -20,6 +20,7 @@ from . import hubdb as H
 from . import idempotency_messages
 from . import message_links
 from . import people as P
+from . import sources as SRC
 
 # A message to a bot queues its job in Python, in the writer's transaction: backend/enqueue.py.
 
@@ -1108,6 +1109,7 @@ class Store:
         c.execute(f"PRAGMA journal_size_limit={H.WAL_SIZE_LIMIT}")
         return c
 
+    @SRC.scoped("system:migration")
     def migrate(self):
         """The preflight and the pending migrations only (hubdb.connect runs them), for create_app before its installs."""
         from . import migrations as Migrations
@@ -2359,6 +2361,11 @@ class Store:
                                                     attempt_id=aid)
                         if not privacy.attempt_readable(c, replay_principal.actor, aid):
                             raise Problem("privacy", "This execution is no longer available", 403)
+                        if operation == "/api/v2/jobs/claim" and isinstance(saved, dict):
+                            from . import task_context
+                            attempt = c.execute("SELECT * FROM attempts WHERE id=?", (aid,)).fetchone()
+                            acting = replay_auth.assistant_principal(c, attempt) or replay_principal
+                            saved["task_context"] = task_context.for_turn(c, replay_auth, acting, saved.get("task"))
                 # Cached results keep their retry semantics, but access is current on every retry.
                 task_ids = set()
                 for part in operation.split("/"):

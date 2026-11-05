@@ -568,10 +568,12 @@ files a task for you, or sets its own task waiting on you (`hub task update --st
 <you> --note "<what you need to do>"`). A bot's waiting note, or the first paragraph of a task it gives
 you, must say in one or two plain sentences what it needs and what happens after, with no ids, file
 paths or tool names; Tico refuses it otherwise. A task a bot set waiting on you before that rule, with
-no plain ask, sits at the bottom of Needs you as "Waiting for <bot> to explain" while the bot's task roundup lists it to restate it. All of these appear in **Needs you** at the top of **Tasks** with
-**Reply**, **Approve** / **Decline**, **Done** / **Close**. Needs you is your queue: approvals and
-questions first (each blocks a bot), then your own tasks in rank order. Tickets on a numbered type
-stay on their board and come to Needs you only with a question for you ([Tasks](tasks.md)). There
+no plain ask, sits at the bottom of Needs you while the bot's task roundup lists it to restate it.
+**Needs you** at the top of **Tasks** lists everything waiting on you across all boards. Rows answerable
+on a card open that card; other rows open the full task. **Catch up** walks the answerable cards one
+at a time. The tab, list header and Tasks badges share their count, independent of the selected board;
+the badges hide at zero. Tickets on a numbered type stay on their board and come to Needs you only
+with a question for you ([Tasks](tasks.md)). There
 is no priority; a mover (anyone in the leadership, product or engineering group) drags a task up or
 down, into another column, or between lanes; everyone else sees the board and comments.
 

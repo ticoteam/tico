@@ -84,6 +84,7 @@ an old-head approval never clears the new head. Changes wake the owner with the 
 has all required approvals and green checks, Tico wakes the owner: `Approved at <sha>, checks green: merge PR #N`.
 If the owner lacks repo write access, an existing repo manager, Release Manager or repo owner with write access
 gets the merge task. This grants no new access and does not change the repo's merge rules.
+The merge is of the approved head: a push after approval needs new reviews, so non-blocking notes go in a follow-up PR.
 
 Forwarded review and QA notes keep the source check's readers, even when a later public check sends them.
 A wake or saved result stays limited by both the source check and the task it reaches.

@@ -24,7 +24,7 @@
       editLine: null, editDraft: '', editInitial: '', removeLine: null, // { id, seq }: a draft or question belongs to one meeting
       hot: 0, mention: null, address: false,
       pop: null, tsearch: false, showAudio: false, confirm: null, hideSide: false,
-      share: null, finish: null, taskPicker: null, taskQuery: '',
+      share: null, finish: null, taskPicker: null, taskQuery: '', taskKind: '',
       form: null, saving: false, titleDraft: null, notesDraft: null, prevPage: 'library', stick: true,
     },
   };
@@ -87,6 +87,9 @@
   const orgs = () => S.settings?.connections || [];
   const orgById = (id) => orgs().find((o) => o.id === id) || null;
   const defaultOrg = () => orgs().find((o) => o.default) || orgs()[0] || null;
+  /** The desktop app's orgs this Recorder is not signed in to yet: one tap each. */
+  const desktopToAdd = () => S.desktopOrgs.filter((org) => !org.connected && org.url);
+  const waitingLine = () => `<span class="spin"></span>Choose Allow in ${S.ui.signingDesktop ? 'Tico' : 'your browser'}…`;
   /** The Recorder's mark: the Liquid Dot holding a mic, on ink. */
   const MARK = '<svg width="72" height="72" viewBox="0 0 64 64" role="img" aria-label="Tico Recorder"><rect width="64" height="64" rx="14" fill="#172221"/><path fill="#56a578" d="M29.9 15A17.1 13.2 0 0 1 47 28.2A16.5 16.8 0 0 1 30.5 45A13.5 18.6 0 0 1 17 26.4A12.9 11.4 0 0 1 29.9 15Z"/><g fill="none" stroke="#172221" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><rect x="28.4" y="20.5" width="6.4" height="11.6" rx="3.2" fill="#172221"/><path d="M25.3 27.6v.9a6.3 6.3 0 0 0 12.6 0v-.9"/><path d="M31.6 34.8v3.2"/></g></svg>';
   const WORDMARK = '<svg class="word" height="30" viewBox="0 -744 1424 754" role="img" aria-label="tico"><path fill="currentColor" d="M245 10Q159 10 118 -31Q77 -73 77 -157V-615L219 -674V-155Q219 -129 234 -115Q249 -102 281 -102Q292 -102 303 -104Q313 -107 323 -111V-3Q312 4 291 7Q270 10 245 10ZM0 -400V-510H320V-400Z M343 0V-510H485V0Z M729 10Q664 10 614 -22Q563 -54 534 -114Q505 -174 505 -256Q505 -339 535 -398Q565 -457 616 -488Q668 -520 732 -520Q789 -520 835 -496Q881 -473 909 -427Q936 -382 940 -315H809Q805 -366 785 -387Q764 -408 735 -408Q712 -408 693 -394Q673 -379 663 -346Q652 -312 652 -256Q652 -200 663 -166Q673 -132 693 -117Q712 -102 735 -102Q764 -102 785 -123Q805 -144 809 -195H940Q936 -129 907 -83Q878 -38 832 -14Q786 10 729 10Z M1187 10Q1117 10 1063 -23Q1010 -56 980 -117Q950 -177 950 -257Q950 -337 980 -396Q1010 -455 1063 -488Q1116 -520 1187 -520Q1259 -520 1312 -488Q1365 -455 1395 -396Q1424 -337 1424 -257Q1424 -177 1395 -117Q1365 -56 1312 -23Q1258 10 1187 10ZM1187 -102Q1213 -102 1233 -118Q1253 -134 1265 -169Q1277 -203 1277 -257Q1277 -337 1252 -373Q1226 -408 1187 -408Q1148 -408 1123 -372Q1098 -336 1098 -257Q1098 -203 1109 -169Q1121 -134 1141 -118Q1162 -102 1187 -102Z"/><circle fill="#56a578" cx="414" cy="-662" r="82"/></svg>';
@@ -243,7 +246,8 @@
     }
     if (m.sent) html += badge(`${icon('check', 12)}In Tico`, '');
     else if (sending) html += `<button class="btn small" disabled><span class="spin"></span>${esc(sending.label)}</button>`;
-    else html += `<button class="btn" data-act="finish-open" data-id="${esc(m.id)}" ${st.busy ? 'disabled' : ''}>Finish</button>`;
+    // While recording, Stop finishes; Finish stays for a stopped meeting not yet saved.
+    else if (st.recording?.id !== m.id) html += `<button class="btn" data-act="finish-open" data-id="${esc(m.id)}" ${st.busy ? 'disabled' : ''}>Finish</button>`;
     html += `<button class="icon-btn ${S.ui.pop?.kind === 'more' ? 'on' : ''}" data-act="pop" data-pop="more" title="More" aria-label="More">${icon('more')}${m.audio.attention ? '<span class="dot"></span>' : ''}</button>`;
     return html;
   }
@@ -263,7 +267,7 @@
     const desktop = S.desktopOrgs;
     const address = S.ui.address || !desktop.length;
     let intro = `<div class="intro">${MARK}<div class="brand">${WORDMARK}<span class="sub">Recorder</span></div><p>Record any meeting on this Mac. It goes to the Tico you pick.</p>`;
-    if (st.signing_in) intro += `<div class="waiting"><span class="spin"></span>Choose Allow in ${S.ui.signingDesktop ? 'Tico' : 'your browser'}…</div>`;
+    if (st.signing_in) intro += `<div class="waiting">${waitingLine()}</div>`;
     else if (address) {
       intro += `<div class="address"><input class="field" data-model="signin" data-enter="signin" placeholder="your-tico.example" spellcheck="false" aria-label="Tico address"><button class="btn primary" data-act="signin" ${st.busy ? 'disabled' : ''}>Sign in</button></div>`;
       if (desktop.length) intro += `<button class="link" data-act="address-off">Cancel</button>`;
@@ -556,8 +560,8 @@
   function task(it) {
     const n = taskNumber(it);
     const open = it.task_url ? `<button class="link" data-act="open-url" data-url="${esc(it.task_url)}">Open</button>` : '';
-    const sub = [it.pending ? 'Pending' : it.status, it.owner_name, it.sent_to].filter(Boolean).map(esc).join(' · ');
-    return `<li class="item task"><span class="check ${it.pending ? '' : 'done'}">${it.pending ? '<span class="spin"></span>' : icon(it.kind === 'link' ? 'link' : 'check', 11)}</span><div class="content"><div class="title selectable">${n ? `<span class="num">#${esc(n)}</span> ` : ''}${esc(it.title)}</div><div class="sub">${sub}${sub && open ? ' · ' : ''}${open}</div></div>${it.kind === 'link' ? `<button class="icon-btn tiny" data-act="unlink-item" data-id="${esc(it.id)}" aria-label="Unlink" title="Unlink">${icon('close', 12)}</button>` : ''}</li>`;
+    const sub = [it.pending ? 'Linking' : it.status, it.owner_name, it.sent_to].filter(Boolean).map(esc).join(' · ');
+    return `<li class="item task"><span class="check ${it.pending ? '' : 'done'}">${it.pending ? '<span class="spin"></span>' : icon(it.kind === 'link' ? 'link' : 'check', 11)}</span><div class="content"><div class="title selectable">${n ? `<span class="num">#${esc(n)}</span> ` : ''}${esc(it.title)}</div><div class="sub">${sub}${sub && open ? ' · ' : ''}${open}</div>${it.error ? `<div class="error selectable">${esc(it.error)}</div>` : ''}</div>${it.kind === 'link' ? `<button class="icon-btn tiny" data-act="unlink-item" data-id="${esc(it.id)}" aria-label="Unlink" title="Unlink">${icon('close', 12)}</button>` : ''}</li>`;
   }
   function proposal(it) {
 
@@ -583,18 +587,40 @@
 
   // ---- Transcript sidebar ----
   let taskSearchTimer;
+  let taskTypes = { scope: null, list: [] };
+  /** The org's task types, once per org, for the picker's filter. */
+  async function loadTaskTypes(picker) {
+    if (taskTypes.scope === picker.scope) return;
+    try {
+      const list = await invoke('task_types');
+      taskTypes = { scope: picker.scope, list: Array.isArray(list) ? list : [] };
+      if (S.ui.taskPicker === picker) render();
+    } catch {}
+  }
+  /** Typing marks the rows stale at once; the read follows after a pause, and only the newest reply lands. */
+  function taskSearchTyped() {
+    const picker = S.ui.taskPicker;
+    if (!picker) return;
+    picker.request = (picker.request || 0) + 1;
+    picker.loading = true;
+    render();
+    clearTimeout(taskSearchTimer);
+    taskSearchTimer = setTimeout(() => loadTaskPicker(), 250);
+  }
   async function loadTaskPicker(more = false) {
     const picker = S.ui.taskPicker;
     if (!picker) return;
+    clearTimeout(taskSearchTimer);
     const request = (picker.request || 0) + 1;
     picker.request = request;
     picker.loading = true; picker.error = '';
     render();
     try {
-      const reply = await invoke('task_picker', { query: S.ui.taskQuery.trim(), offset: more ? picker.next : 0 });
+      const reply = await invoke('task_picker', { query: S.ui.taskQuery.trim(), kind: S.ui.taskKind || '', offset: more ? picker.next : 0 });
       if (S.ui.taskPicker !== picker || picker.request !== request || picker.scope !== JSON.stringify(S.meeting?.actions.link_scope)) return;
       picker.rows = more ? picker.rows.concat(reply.tasks) : reply.tasks;
       picker.next = reply.next_offset;
+      for (const task of reply.tasks) if (picker.picks.includes(task.id)) picker.picked[task.id] = task;
     } catch (error) {
       if (S.ui.taskPicker === picker && picker.request === request) { picker.rows = []; picker.error = String(error); }
     } finally {
@@ -605,7 +631,18 @@
     const p = S.ui.taskPicker;
     if (!p) return '';
     if (!S.meeting?.actions.can_link || p.scope !== JSON.stringify(S.meeting.actions.link_scope)) { S.ui.taskPicker = null; return ''; }
-    return `<div class="scrim" data-act="task-picker-close"></div><div class="sheet tasks" id="sheet" role="dialog" aria-modal="true" aria-label="Link tasks"><h2>Link tasks</h2><input class="field" data-model="taskQuery" placeholder="Search tasks" aria-label="Search tasks"><div class="pop-list">${p.rows.map((task) => `<button class="menu-item" data-act="task-pick" data-id="${esc(task.id)}" aria-pressed="${p.picks.includes(task.id)}"><span class="check">${p.picks.includes(task.id) ? icon('check', 12) : ''}</span><span class="grow">${task.number ? '#' + esc(task.number) + ' ' : ''}${esc(task.title)} · ${esc(task.status)}</span></button>`).join('')}</div>${p.loading ? '<span class="spin"></span>' : !p.rows.length && !p.error ? '<div class="pop-text">No tasks</div>' : ''}${p.error ? `<div class="sheet-error">${esc(p.error)}</div>` : ''}<div class="sheet-foot">${p.next != null ? '<button class="link" data-act="task-picker-more">More</button>' : ''}<span class="grow"></span><button class="btn quiet" data-act="task-picker-close">Cancel</button><button class="btn primary" data-act="task-picker-link" ${!p.picks.length || p.loading ? 'disabled' : ''}>Link</button></div></div>`;
+    // Picked tasks stay on top while the search moves on, so a pick never vanishes from view.
+    const shown = new Set(p.rows.map((t) => t.id));
+    const rows = [...p.picks.filter((id) => !shown.has(id) && p.picked[id]).map((id) => p.picked[id]), ...p.rows];
+    const row = (task) => {
+      const on = p.picks.includes(task.id);
+      return `<button class="menu-item task-row ${on ? 'on' : ''}" data-act="task-pick" data-id="${esc(task.id)}" aria-pressed="${on}"><span class="pick">${on ? icon('check', 11) : ''}</span><span class="grow">${task.number ? `<span class="num">#${esc(task.number)}</span> ` : ''}${esc(task.title)}<span class="faint"> · ${esc(task.status)}</span></span></button>`;
+    };
+    const types = taskTypes.scope === p.scope ? taskTypes.list : [];
+    const kind = S.ui.taskKind || '';
+    const filter = types.length > 1 ? `<select class="field" data-model="taskKind" aria-label="Type"><option value="">All types</option>${types.map((t) => `<option value="${esc(t.id)}" ${t.id === kind ? 'selected' : ''}>${esc(t.name)}</option>`).join('')}</select>` : '';
+    const count = p.picks.length;
+    return `<div class="scrim" data-act="task-picker-close"></div><div class="sheet tasks" id="sheet" role="dialog" aria-modal="true" aria-label="Link tasks"><h2>Link tasks</h2><div class="task-search"><label class="search-box">${icon('search', 13)}<input class="field" data-model="taskQuery" placeholder="Search or #number" spellcheck="false" aria-label="Search tasks">${p.loading ? '<span class="spin"></span>' : ''}</label>${filter}</div><div class="pop-list ${p.loading ? 'stale' : ''}" aria-busy="${!!p.loading}">${rows.map(row).join('')}</div>${!p.loading && !rows.length && !p.error ? '<div class="pop-text">No tasks</div>' : ''}${p.error ? `<div class="sheet-error">${esc(p.error)}</div>` : ''}<div class="sheet-foot">${p.next != null ? `<button class="link" data-act="task-picker-more" ${p.loading ? 'disabled' : ''}>More</button>` : ''}<span class="grow"></span><button class="btn quiet" data-act="task-picker-close">Cancel</button><button class="btn primary" data-act="task-picker-link" ${!count ? 'disabled' : ''}>${count ? `Link ${count}` : 'Link'}</button></div></div>`;
   }
   function taskDueDay(value) {
     if (/^\d{4}-\d{2}-\d{2}$/.test(value)) return value;
@@ -670,6 +707,7 @@
     else if (a.finding_speakers) status = `<span class="status"><span class="spin"></span>Speakers</span>`;
     let html = `<aside class="sidebar"><div class="side-head"><h3>Transcript</h3>${status}<span class="grow"></span>`;
     if (a.attention) html += `<button class="icon-btn ${S.ui.showAudio ? 'on' : ''}" data-act="toggle-audio" title="Audio" aria-label="Audio">${icon('mic', 15)}<span class="dot"></span></button>`;
+    if (transcriptBlocks().length) html += `<button class="icon-btn ${S.ui.copied ? 'done' : ''}" data-act="copy-transcript" title="${S.ui.copied ? 'Copied' : 'Copy transcript'}" aria-label="${S.ui.copied ? 'Copied' : 'Copy transcript'}">${icon(S.ui.copied ? 'check' : 'copy', 15)}</button>`;
     html += `<button class="icon-btn ${S.ui.tsearch ? 'on' : ''}" data-act="tsearch" title="Search (⌘F)" aria-label="Search transcript">${icon('search', 15)}</button></div>`;
     if (S.ui.tsearch) html += `<label class="side-search">${icon('search', 13)}<input data-model="tq" data-enter="next-hit" placeholder="Search transcript" spellcheck="false" aria-label="Search transcript"><span class="hits" id="thits"></span><button class="icon-btn tiny" data-act="hit" data-step="-1" title="Previous (⇧↩)" aria-label="Previous match">${icon('up', 12)}</button><button class="icon-btn tiny" data-act="hit" data-step="1" title="Next (↩)" aria-label="Next match">${icon('down', 12)}</button></label>`;
     if (S.ui.showAudio) {
@@ -992,6 +1030,23 @@
     html += `<button class="btn primary big block" data-act="finish-save" ${S.status.busy || blocked ? 'disabled' : ''}>${paused ? 'Save anyway' : 'Save'}</button>`;
     return html + `</div>`;
   }
+  /** Stop is the one end action: a live-shared meeting is saved where it is shared, any other opens Finish. */
+  async function stopAndFinish() {
+    const id = S.status.recording?.id;
+    if (!id) return;
+    const src = finishSource(id);
+    const m = S.meeting?.id === id ? S.meeting : null;
+    const done = !src || src.sent || m?.kept_local || m?.discarded;
+    const live = src && !done && src.live && src.live_org && src.targets.some((t) => t.id === src.live_org && !t.already);
+    if (live && m?.live_state !== 'paused' && !src.paused && !S.status.busy) {
+      // Save stops the recording first, waits for the last words, then ends the live meeting in Tico.
+      await act('save_meeting', { id, destination: src.live_org, audience: src.team ? 'team' : 'participants', title: src.title, pausedConfirmed: false });
+      if (S.status.recording?.id !== id) return;
+    }
+    // Refused or not shared: stop here and ask where it goes (This Mac or an org), as Finish does.
+    if (S.status.recording?.id === id) await act('stop_recording');
+    if (!done) openFinish(id);
+  }
   function saveFinish() {
     const f = S.ui.finish;
     const src = f && finishSource(f.id);
@@ -1046,8 +1101,18 @@
         : `<button class="btn small quiet" data-act="make-default" data-id="${esc(c.id)}">Make default</button>`;
       html += `<div class="line">${orgTile(c, 's28')}<div class="name">${esc(c.name)}${c.host ? `<small>${esc(c.host)}</small>` : ''}</div>${tail}<button class="btn small" data-act="sign-out" data-id="${esc(c.id)}">Sign out</button></div>`;
     }
-    html += `<div class="line">${field('signin', 'your-tico.example').replace('class="field"', 'class="field" data-enter="signin"')}<button class="btn ${s.connections.length ? '' : 'primary'}" data-act="signin" ${st.busy ? 'disabled' : ''}>${s.connections.length ? 'Add org' : 'Sign in'}</button></div>`;
-    if (st.signing_in) html += `<div class="line"><div class="waiting" style="height:auto"><span class="spin"></span>Choose Allow in your browser…</div></div>`;
+    // The desktop app's other orgs, one tap each, as on first run.
+    const toAdd = desktopToAdd();
+    for (const org of toAdd) {
+      const tail = st.signing_in && S.ui.signingDesktop === org.url
+        ? `<span class="spin"></span>`
+        : `<button class="btn small ${s.connections.length ? '' : 'primary'}" data-act="signin-desktop" data-url="${esc(org.url)}" ${st.busy ? 'disabled' : ''} aria-label="Connect ${esc(org.name)}">Connect</button>`;
+      html += `<div class="line desktop-org">${orgTile(org, 's28')}<div class="name">${esc(org.name)}<small>${esc(hostOf(org.url) || org.url)}</small></div>${tail}</div>`;
+    }
+    const address = field('signin', 'acme.tico.page').replace('class="field"', 'class="field" data-enter="signin" aria-label="Tico address"');
+    if (!s.connections.length && !toAdd.length) html += `<div class="line">${address}<button class="btn primary" data-act="signin" ${st.busy ? 'disabled' : ''}>Sign in</button></div>`;
+    else html += `<div class="line other-address"><div class="name">Other address</div>${address}<button class="btn small quiet" data-act="signin" ${st.busy ? 'disabled' : ''}>Connect</button></div>`;
+    if (st.signing_in) html += `<div class="line"><div class="waiting" style="height:auto">${waitingLine()}</div></div>`;
     html += line('Use my Tico calendar', toggle('calendar', f.calendar, !s.calendar_available));
     html += `</div></div>`;
     html += speechGroup(s, f, line, field, toggle);
@@ -1116,7 +1181,9 @@
     return orgs().filter((o) => !only || only.includes(o.id)).map((o) => `<button class="menu-item" data-act="${act}" data-id="${esc(o.id)}">${orgTile(o, 's18')}<span class="grow">${esc(o.name)}</span>${o.id === current ? `<span class="check">${icon('check')}</span>` : ''}</button>`).join('');
   }
   function orgsPop() {
-    return orgList('make-default', defaultOrg()?.id) + `<div class="menu-sep"></div><button class="menu-item" data-act="settings">${icon('plus')}<span class="grow">Add org</span></button>`;
+    const toAdd = desktopToAdd();
+    const add = toAdd.map((org) => `<button class="menu-item" data-act="signin-desktop" data-url="${esc(org.url)}" ${S.status.busy ? 'disabled' : ''} aria-label="Connect ${esc(org.name)}">${orgTile(org, 's18')}<span class="grow">${esc(org.name)}</span>${icon('plus')}</button>`).join('');
+    return orgList('make-default', defaultOrg()?.id) + `<div class="menu-sep"></div>${add}${toAdd.length ? `<button class="menu-item" data-act="settings"><span class="otile s18 add">+</span><span class="grow">Other address</span></button>` : `<button class="menu-item" data-act="settings">${icon('plus')}<span class="grow">Add org</span></button>`}`;
   }
   function morePop(pop) {
     const m = S.meeting;
@@ -1312,8 +1379,11 @@
     options[S.ui.hot].scrollIntoView({ block: 'nearest' });
   }
 
-  // ---- @mentions in Notes: stored as plain "@Name" text, drawn as chips behind the words ----
+  // ---- @mentions in Notes and task text: stored as plain "@Name" text, drawn as chips behind Notes' words ----
   const roster = () => S.meeting?.actions?.owners || [];
+  /** The field the open mention list types into: Notes, Add a task, or a shared task's title. */
+  let mentionField = null;
+  const mentionable = (el) => el?.dataset && (el.dataset.model === 'notes' || el.dataset.model === 'addItem' || el.dataset.sharedField === 'text');
   function paintMentions(area) {
     const back = area.previousElementSibling;
     if (!back?.classList.contains('notes-backdrop')) return;
@@ -1342,7 +1412,8 @@
     }
     const start = before.length - match[2].length - 1;
     const query = match[2].toLowerCase();
-    if (S.ui.mention?.start !== start || S.ui.mention.query !== query) S.ui.hot = 0;
+    if (S.ui.mention?.start !== start || S.ui.mention.query !== query || mentionField !== area) S.ui.hot = 0;
+    mentionField = area;
     S.ui.mention = { start, query, left: 0, top: 0, max: 260 };
     Object.assign(S.ui.mention, caretPoint(area, start));
     render();
@@ -1354,7 +1425,11 @@
   }
   function mentionMatches() {
     const q = S.ui.mention?.query || '';
-    return (q ? ranked(roster(), q).filter((o) => startsWord(o.name, q)) : roster()).slice(0, 8);
+    const me = roster().find((o) => o.actor === S.meeting?.actions?.actor);
+    const others = roster().filter((o) => o !== me);
+    // The person is first, by name, and "@me" finds them too.
+    const mine = me && (!q || startsWord(me.name, q) || 'me'.startsWith(q)) ? [me] : [];
+    return [...mine, ...(q ? ranked(others, q).filter((o) => startsWord(o.name, q)) : others)].slice(0, 8);
   }
   function mentionPop() {
     const m = S.ui.mention;
@@ -1555,6 +1630,8 @@
       if (id) openMeeting(id);
     },
     'signin-desktop': async (el) => {
+      // From the org menu, Settings shows the sign-in as it waits.
+      if (el.closest('#popover')) settings();
       S.ui.signingDesktop = el.dataset.url;
       // Builds without the desktop contract fall back to typing an address.
       try { await invoke('sign_in_desktop', { url: el.dataset.url }); await poll(); } catch (error) { console.error(error); S.ui.signingDesktop = ''; S.ui.address = true; render(); }
@@ -1625,7 +1702,7 @@
     'screen-cancel': () => { S.ui.screen = null; render(); },
     'screen-go': () => shareScreen(),
     'stop-screen': () => act('stop_screen'),
-    stop: () => act('stop_recording'),
+    stop: stopAndFinish,
     'ask-delete': (el) => { S.ui.confirm = el.dataset.id; render(); },
     'cancel-delete': () => { S.ui.confirm = null; render(); },
     delete: async (el) => {
@@ -1691,6 +1768,7 @@
       render();
     },
     copy: () => { S.ui.pop = null; copyTranscript(); },
+    'copy-transcript': () => copyTranscript(),
     ask: submitAsk,
     'ask-retry': () => {
       const c = S.meeting?.chat;
@@ -1698,14 +1776,17 @@
     },
     'task-picker-open': () => {
       S.ui.taskQuery = ''; S.ui.pop = null; S.ui.share = null; S.ui.finish = null;
-      S.ui.taskPicker = { rows: [], picks: [], next: null, scope: JSON.stringify(S.meeting?.actions.link_scope) };
-      S.ui.focusNext = '[data-model="taskQuery"]'; loadTaskPicker();
+      S.ui.taskKind = '';
+      S.ui.taskPicker = { rows: [], picks: [], picked: {}, next: null, scope: JSON.stringify(S.meeting?.actions.link_scope) };
+      S.ui.focusNext = '[data-model="taskQuery"]'; loadTaskPicker(); loadTaskTypes(S.ui.taskPicker);
     },
     'task-picker-close': () => { S.ui.taskPicker = null; render(); },
     'task-picker-more': () => loadTaskPicker(true),
     'task-pick': (el) => {
       const p = S.ui.taskPicker; if (!p) return;
-      p.picks = p.picks.includes(el.dataset.id) ? p.picks.filter((id) => id !== el.dataset.id) : [...p.picks, el.dataset.id]; render();
+      const id = el.dataset.id, task = p.rows.find((t) => t.id === id);
+      if (task) p.picked[id] = task;
+      p.picks = p.picks.includes(id) ? p.picks.filter((x) => x !== id) : [...p.picks, id]; render();
     },
     'task-picker-link': () => {
       const p = S.ui.taskPicker; if (!p?.picks.length) return;
@@ -1749,7 +1830,7 @@
     'dismiss-notice': () => act('dismiss_notice'),
     'connect-ok': () => act('confirm_connect'),
     'connect-cancel': () => act('dismiss_connect'),
-    signin: () => { const address = model('signin').trim(); if (address) act('sign_in', { address }); },
+    signin: () => { const address = model('signin').trim(); if (address) { S.ui.signingDesktop = ''; act('sign_in', { address }); } },
     'sign-out': (el) => act('sign_out', { id: el.dataset.id }),
     'make-default': (el) => { S.ui.pop = null; act('make_default', { id: el.dataset.id }); },
     import: () => { const directory = S.ui.legacy.trim(); if (directory) act('import_legacy', { directory }); },
@@ -1766,7 +1847,7 @@
     'add-item': () => {
       const title = S.ui.addItem.trim();
       if (!title) return;
-      S.ui.addItem = '';
+      S.ui.addItem = ''; S.ui.mention = null;
       S.ui.focusNext = '[data-model="addItem"]';
       act('add_item', { title });
     },
@@ -1824,9 +1905,10 @@
   document.addEventListener('input', (event) => {
     const el = event.target;
     if (el.dataset.sharedField) sharedChanged(el);
+    if (mentionable(el) && el.dataset.model !== 'notes') findMention(el);
     if (el.dataset.model) {
       setModel(el.dataset.model, el.value);
-      if (el.dataset.model === 'taskQuery') { clearTimeout(taskSearchTimer); taskSearchTimer = setTimeout(() => loadTaskPicker(), 250); }
+      if (el.dataset.model === 'taskQuery') taskSearchTyped();
       if (el.dataset.model === 'notes') {
         grow(el);
         paintMentions(el);
@@ -1852,8 +1934,7 @@
     const option = event.target.closest?.('#mention [data-opt]');
     if (!option) return;
     event.preventDefault();
-    const area = document.querySelector('textarea.notes');
-    if (area) insertMention(area, option.dataset.name);
+    if (mentionField?.isConnected) insertMention(mentionField, option.dataset.name);
   });
   document.addEventListener('change', (event) => {
     const el = event.target;
@@ -1863,7 +1944,8 @@
       render();
     } else if (el.tagName === 'SELECT' && el.dataset.model) {
       setModel(el.dataset.model, el.value);
-      render();
+      if (el.dataset.model === 'taskKind') loadTaskPicker();
+      else render();
     }
   });
   document.addEventListener('toggle', (event) => {
@@ -1877,9 +1959,15 @@
       S.ui.titleDraft = null;
       if (title.trim() && title.trim() !== S.meeting?.title) await act('rename', { title });
     }
-    if (el.dataset?.blur === 'add-close' && !S.ui.addItem.trim() && S.ui.adding) {
-      S.ui.adding = false;
-      setTimeout(render, 0);
+    if (el === mentionField && el.dataset.model !== 'notes') closeMention();
+    // Closes when left empty; not when a render only replaced it and focus moved to the new field (Enter adds the next).
+    if (el.dataset?.blur === 'add-close') {
+      setTimeout(() => {
+        if (S.ui.adding && !S.ui.addItem.trim() && document.activeElement?.dataset?.model !== 'addItem') {
+          S.ui.adding = false;
+          render();
+        }
+      }, 0);
     }
     if (el.dataset?.editItem) {
       const text = el.textContent.replace(/\s+/g, ' ').trim();
@@ -1905,7 +1993,7 @@
       moveHot(el.closest('#popover, #sheet'), event.key === 'ArrowDown' ? 1 : -1);
       return;
     }
-    if (S.ui.mention && el.dataset?.model === 'notes' && !event.isComposing) {
+    if (S.ui.mention && el === mentionField && !event.isComposing) {
       if (event.key === 'ArrowDown' || event.key === 'ArrowUp') {
         event.preventDefault();
         moveHot(document.getElementById('mention'), event.key === 'ArrowDown' ? 1 : -1);
@@ -1943,7 +2031,8 @@
         enter[el.dataset.enter]?.(el);
         return;
       }
-      if (el.dataset?.editItem) {
+      // A task's title is one line: Enter keeps it (Shift+Enter still breaks the line).
+      if (el.dataset?.editItem || el.dataset?.sharedField === 'text') {
         event.preventDefault();
         el.blur();
         return;

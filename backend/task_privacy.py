@@ -1037,10 +1037,12 @@ def require_batch(c, who, row):
             require_message(c, who, H.message(c, row["message_id"]))
 
 
+PAGE_MESSAGE_KEYS = ("target", "answer", "review", "body_sources")
+
+
 def page_message_readable(c, actor, refs):
     """Generated file-review messages carry names in prose as well as structured refs."""
-    return isinstance(refs, dict) and page_content_readable(c, actor, [refs.get("target"), refs.get("answer"),
-                                                                    refs.get("review"), refs.get("body_sources")])
+    return isinstance(refs, dict) and page_content_readable(c, actor, [refs.get(key) for key in PAGE_MESSAGE_KEYS])
 
 
 def page_content_readable(c, actor, payload):

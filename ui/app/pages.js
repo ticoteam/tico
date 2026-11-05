@@ -5,7 +5,7 @@
 'use strict';
 
 const PAGE_ROUTE = '#/page/', RD_FILES = '#/library/files';
-// A card shows the top of the page at the card's width, cut at its size's height; full follows the page's own height.
+// A card shows the top of the page at the card's width and its size's fixed height; full follows the page's own height.
 const PAGE_SIZES = {small: 180, medium: 320, large: 520};
 const PAGE_FULL_MIN = 240;
 
@@ -42,7 +42,11 @@ function pageStatusHTML(p, {link = true} = {}) {
 // (visualPageSrc, ui/app/visual-cards.js) applies where that build has it.
 // visualPageSrc (ui/app/visual-cards.js): null when this window can't frame it, e.g. an older desktop app.
 const pageSrc = p => p.src ? visualPageSrc(p.src) : null;
-function pageFrame(p, src, height) {
+// The frame's address says where the page is drawn: the server's height reporter (backend/visuals.py) reads
+// `#tico-view=card|full&tico-size=<size>` into <html data-tico-view data-tico-size>, so a page's own CSS can draw a
+// compact widget in a card. A fragment changes no signature, cache key or audience check, and follows a redirect.
+const pageViewSrc = (src, size) => `${src.split('#')[0]}#tico-view=${size === 'full' ? 'full' : 'card'}&tico-size=${size}`;
+function pageFrame(p, src, height, size) {
   const f = document.createElement('iframe');
   f.className = 'page-frame';
   // Set before the frame joins the page, as a message's visual page is (VISUAL_PAGE_SANDBOX): the only script it runs
@@ -50,18 +54,22 @@ function pageFrame(p, src, height) {
   f.setAttribute('sandbox', VISUAL_PAGE_SANDBOX);
   f.setAttribute('credentialless', '');
   f.referrerPolicy = 'no-referrer';
+  // A card is a fixed window onto the page's top: nothing scrolls inside it.
+  if (size !== 'full') f.setAttribute('scrolling', 'no');
   f.title = p.title || 'Page';
   f.style.height = height + 'px';
-  f.src = src;
+  f.src = pageViewSrc(src, size);
   return f;
 }
 // pageCard(page, {size}): one card holding the page's status line and the framed page (or an Open card, the status
-// under its title, when there is no address). Tapping a card opens the page full size; `full` is that full size, where
-// the status line sits under the view's own title. `page` is GET /api/v2/pages/{id}'s page.
+// under its title, when there is no address). A card is a widget: the page's top at a fixed height, faded at the
+// bottom when the page runs on, and the whole card one tap that opens the page full size, as its expand icon does.
+// `full` is that full size, where the status line sits under the view's own title. `page` is GET
+// /api/v2/pages/{id}'s page.
 window.pageCard = function pageCard(page, {size = 'medium'} = {}) {
-  const full = size === 'full', cap = PAGE_SIZES[size] || PAGE_SIZES.medium;
+  const full = size === 'full', named = full ? 'full' : PAGE_SIZES[size] ? size : 'medium', cap = PAGE_SIZES[named];
   const el = document.createElement('article');
-  el.className = `pg-card pg-${full ? 'full' : PAGE_SIZES[size] ? size : 'medium'}`;
+  el.className = `pg-card pg-${named}`;
   el.dataset.page = page.file_id;
   const src = pageSrc(page);
   if (!src) {
@@ -78,27 +86,33 @@ window.pageCard = function pageCard(page, {size = 'medium'} = {}) {
   el.innerHTML = pageStatusHTML(page);
   const box = document.createElement('div');
   box.className = 'pg-box';
-  const frame = pageFrame(page, src, full ? PAGE_FULL_MIN : cap);
+  const frame = pageFrame(page, src, full ? PAGE_FULL_MIN : cap, named);
   frame.pageCap = full ? 0 : cap;
   box.append(frame);
-  if (!full) {
-    const tap = document.createElement('a');
-    tap.className = 'pg-tap'; tap.href = pageHref(page.file_id);
-    tap.setAttribute('aria-label', 'Open ' + (page.title || 'page'));
-    box.append(tap);
-  }
   el.append(box);
+  if (!full) {
+    const href = pageHref(page.file_id);
+    const tap = document.createElement('a');
+    tap.className = 'pg-tap'; tap.href = href;
+    tap.setAttribute('aria-label', 'Open ' + (page.title || 'page'));
+    const expand = document.createElement('a');
+    expand.className = 'pg-expand'; expand.href = href;
+    expand.setAttribute('aria-label', 'Open full screen'); expand.title = 'Open full screen';
+    expand.innerHTML = '<span class="nav-icon" aria-hidden="true">open_in_full</span>';
+    el.append(tap, expand);
+  }
   return el;
 };
-// The height a page reports (backend/visuals.py REPORTER), from a page frame's own window only: a card takes it up to
-// its cut, so a short page leaves no blank; the full view takes it whole.
+// The height a page reports (backend/visuals.py REPORTER), from a page frame's own window only. A card keeps its fixed
+// height and fades its bottom when the page is taller; the full view takes the height whole.
 window.addEventListener('message', ev => {
   const n = ev.data && typeof ev.data === 'object' ? ev.data.ticoVisualHeight : undefined;
   if (typeof n !== 'number' || !Number.isFinite(n) || !ev.source) return;
   const frame = [...document.querySelectorAll('iframe.page-frame')].find(x => x.contentWindow === ev.source);
   if (!frame) return;
-  const h = Math.max(24, Math.min(Math.ceil(n), VISUAL_PAGE_MAX));
-  frame.style.height = (frame.pageCap ? Math.min(h, frame.pageCap) : Math.max(h, PAGE_FULL_MIN)) + 'px';
+  const h = frame.pageHeight = Math.max(24, Math.min(Math.ceil(n), VISUAL_PAGE_MAX));
+  if (frame.pageCap) frame.parentElement?.classList.toggle('pg-cut', h > frame.pageCap);
+  else frame.style.height = Math.max(h, PAGE_FULL_MIN) + 'px';
 });
 
 // ----------------------------------------------------------------- the full view, #/page/<id>

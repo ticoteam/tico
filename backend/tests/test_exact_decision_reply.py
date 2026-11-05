@@ -2,7 +2,7 @@
 import pytest
 
 from backend import hubdb as H
-from backend.tests.test_api import api, get, headers, post, setup_attempt  # noqa: F401
+from backend.tests.test_api import api, get, headers, post, setup_attempt, legacy_send_approval  # noqa: F401
 
 
 def question(api, *, questions=None):
@@ -62,10 +62,10 @@ def test_publish_label_settles_question_without_approving_a_send(api):
         {'id': 'decision', 'header': '', 'question': 'Publish the draft?',
          'options': [{'label': 'Publish', 'then': 'Select the prepared draft'},
                      {'label': 'Wait', 'then': 'Keep the draft'}]}])
-    _, _, attempt = setup_attempt(api, bot='cpo')
-    post(api, 'approvals', {'kind': 'send', 'payload': {
+    setup_attempt(api, bot='cpo')
+    legacy_send_approval(api, {
         'to': 'colleague@acme.example', 'cc': [], 'subject': 'Synthetic draft',
-        'body_sha256': 'a' * 64, 'mailbox': 'work'}}, attempt['token'])
+        'body_sha256': 'a' * 64, 'mailbox': 'work'}, actor='bot:cpo')
     with api.app.state.store.read() as c:
         approvals = [tuple(r) for r in c.execute('SELECT * FROM approvals')]
     post(api, f'messages/{mid}/answer', {'text': 'Publish'})

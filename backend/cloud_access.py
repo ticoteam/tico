@@ -228,6 +228,14 @@ def gate(store, who, path):
         return
     if getattr(who, "role", "") == "runner" or getattr(who, "support", False):
         return
+    # Revoking machine access stays available to the owner; the route gates enabling separately.
+    if path == "/api/v2/cloud-machines/support" and getattr(who, "role", "") == "owner":
+        return
+    require_unlocked(store)
+
+
+def require_unlocked(store):
+    """Refuse an action that needs an unlocked company, even on a route that also permits revocation."""
     found = current(store)
     if found and found.get("access") == "locked":
         raise Problem("locked", LOCKED, 402, extra={"cloud": view(found)})

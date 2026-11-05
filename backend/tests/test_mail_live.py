@@ -6,7 +6,7 @@ import jwt
 import pytest
 
 from backend import google_workspace, mailbox_access
-from backend.tests.test_api import api, get, headers  # noqa: F401
+from backend.tests.test_api import api, get, headers, setup_attempt  # noqa: F401
 from backend.tests.test_assistant import assistant_turn
 from backend.tests.test_gmail_live import BOX, NEXT, gmail_http  # noqa: F401
 from backend.tests.test_google_workspace import personal
@@ -131,3 +131,157 @@ def test_legacy_reads_keep_fts_and_the_stored_cursor(api, gmail_http):
     assert read(api, "messages/old1", mailbox=BOX)["subject"] == "Old invoice"
     assert len(read(api, "threads/old-thread", mailbox=BOX)["messages"]) == 2
     assert gmail_http["calls"] == []
+
+
+def organize(api, token="ana-test", expected=200, **body):
+    answer = api.post("/api/v2/mail/messages/organize", json=body, headers=headers(token))
+    assert answer.status_code == expected, answer.text
+    return answer.json()
+
+
+@pytest.mark.parametrize("token_kind", ["person", "assistant"])
+def test_organizing_explicit_ids_is_live_and_audits_only_action_facts(api, live, workspace_key, assistant_token, token_kind):
+    token = "ana-test" if token_kind == "person" else assistant_token
+    result = organize(api, token, mailbox=SHARED, action="archive", ids=["m1", "m2", "m1"])
+    assert result == {"mailbox": SHARED, "action": "archive", "count": 2, "ids": ["m1", "m2"],
+                      "undo": {"action": "unarchive", "ids": ["m1", "m2"]}}
+    assert len(live["calls"]) == 1 and live["writes"][0][1] == {
+        "ids": ["m1", "m2"], "addLabelIds": [], "removeLabelIds": ["INBOX"]}
+    assert jwt.decode(workspace_key[-1]["assertion"], options={"verify_signature": False})["scope"] == (
+        google_workspace.WORKSPACE_SCOPES["gmail"][0])
+    with api.app.state.store.read() as c:
+        rows = c.execute("SELECT actor,detail FROM events WHERE action='mail.organize'").fetchall()
+        assert len(rows) == 1 and rows[0]["actor"] == "human:ana"
+        detail = json.loads(rows[0]["detail"])
+        assert {k: detail[k] for k in ("mailbox", "action", "label", "count", "ids")} == {
+            "mailbox": SHARED, "action": "archive", "label": None, "count": 2, "ids": ["m1", "m2"]}
+        if token_kind == "assistant":
+            assert detail["via"] == "assistant"
+        assert not {"subject", "body", "snippet", "query"} & detail.keys()
+        assert "Live contract body" not in rows[0]["detail"]
+        assert c.execute("SELECT COUNT(*) FROM mail_messages").fetchone()[0] == 0
+
+
+def test_query_resolves_ids_with_default_and_explicit_caps_before_modifying(api, live):
+    result = organize(api, mailbox=BOX, action="archive", query="in:inbox category:promotions", limit=1)
+    assert result["ids"] == ["m2"] and live["calls"][0][1]["maxResults"] == ["1"]
+    live["calls"].clear()
+    result = organize(api, mailbox=BOX, action="mark_read", query="is:unread")
+    assert result["ids"] == ["m2", "m1"]
+    assert live["calls"][0][1]["maxResults"] == ["100"]
+    assert live["calls"][1][1]["pageToken"] == [NEXT]
+    assert [path.rsplit("/", 1)[-1] for path, _, _ in live["calls"]] == ["messages", "messages", "batchModify"]
+    live["pages"] = {"": {"messages": [{"id": "m" + str(i)} for i in range(500)], "nextPageToken": "more"}}
+    assert organize(api, mailbox=BOX, action="archive", query="in:inbox", limit=500)["count"] == 500
+    assert len(live["writes"][-1][1]["ids"]) == 500
+
+
+@pytest.mark.parametrize("selection", [{"ids": ["m1"], "query": "in:inbox"}, {}, {"ids": []},
+                                      {"ids": ["m"] * 501}, {"query": " "}, {"query": "in:inbox", "limit": 501}])
+def test_invalid_selections_never_reach_gmail(api, live, selection):
+    organize(api, expected=422, mailbox=BOX, action="archive", **selection)
+    assert not live["calls"]
+
+
+def test_read_only_level_and_company_switch_are_rechecked_before_each_write(api, live, assistant_token):
+    with api.app.state.store.transaction() as c:
+        row = mailbox_access._row(c, SHARED)
+        mailbox_access.grant(c, "human:ana", row["id"], "person", "cara", "read")
+    result = organize(api, "cara-test", expected=403, mailbox=SHARED, action="archive", ids=["m1"])
+    assert "Who can use it" in result["error"]["detail"] and not live["calls"]
+    with api.app.state.store.transaction() as c:
+        mailbox_access.grant(c, "human:ana", row["id"], "person", "cara", "read_write")
+    organize(api, "cara-test", mailbox=SHARED, action="archive", ids=["m1"])
+    changed = api.put("/api/v2/google/permissions", json={"organize_mail": False, "send_mail": True,
+                                                       "change_calendar": True}, headers=headers())
+    assert changed.status_code == 200, changed.text
+    before = len(live["calls"])
+    for token in ("cara-test", assistant_token):
+        result = organize(api, token, expected=403, mailbox=SHARED, action="archive", ids=["m1"])
+        assert "What Tico may do" in result["error"]["detail"]
+    assert len(live["calls"]) == before
+
+
+def test_a_bot_organizes_only_with_its_own_current_grant(api, live):
+    _, _, attempt = setup_attempt(api)
+    token = attempt["token"]
+    organize(api, token, expected=403, mailbox=BOX, action="archive", ids=["m1"])
+    with api.app.state.store.transaction() as c:
+        row = mailbox_access.ensure_mailbox(c, BOX, person_id="ana", created_by="human:ana")
+        bot = c.execute("SELECT bot_id FROM attempts WHERE id=?", (attempt["id"],)).fetchone()[0]
+        mailbox_access.grant(c, "human:ana", row["id"], "bot", bot, "read_write")
+    organize(api, token, mailbox=BOX, action="archive", ids=["m1"])
+    with api.app.state.store.transaction() as c:
+        mailbox_access.grant(c, "human:ana", row["id"], "bot", bot, "read")
+    organize(api, token, expected=403, mailbox=BOX, action="archive", ids=["m1"])
+    assert len(live["writes"]) == 1
+
+
+def test_a_personal_grant_cannot_be_organized_live(api, live):
+    personal(api, "ana", BOX)
+    result = organize(api, expected=422, mailbox=BOX, action="archive", ids=["m1"])
+    assert result["error"]["detail"] == "Live organizing needs Whole Workspace" and not live["calls"]
+
+
+def test_label_unlabel_and_empty_queries_do_not_create_unwanted_labels(api, live):
+    result = organize(api, mailbox=BOX, action="label", label="Review later", ids=["m1"])
+    assert result["label"] == "Review later" and result["undo"]["label"] == "Review later"
+    assert live["writes"][0][1] == {"name": "Review later"}
+    result = organize(api, mailbox=BOX, action="unlabel", label="Review later", ids=["m1"])
+    assert result["undo"]["action"] == "label"
+    assert len([path for path, _, _ in live["writes"] if path.endswith("/labels")]) == 1
+    organize(api, expected=404, mailbox=BOX, action="unlabel", label="Missing", ids=["m1"])
+    organize(api, expected=422, mailbox=BOX, action="label", label="TRASH", ids=["m1"])
+    live["pages"] = {"": {}}
+    before = len(live["writes"])
+    assert organize(api, mailbox=BOX, action="label", label="Unused", query="from:nobody")["count"] == 0
+    assert len(live["writes"]) == before
+
+
+def test_a_gmail_write_refusal_is_never_reported_or_audited_as_success(api, live):
+    live["write_status"] = 403
+    result = organize(api, expected=403, mailbox=BOX, action="archive", ids=["m1"])
+    assert result["error"]["code"] == "gmail_refused"
+    with api.app.state.store.read() as c:
+        assert c.execute("SELECT COUNT(*) FROM events WHERE action='mail.organize'").fetchone()[0] == 0
+
+
+@pytest.mark.parametrize("mode", ["rehearsal", "demo"])
+def test_demo_and_rehearsal_cannot_organize_live_mail(api, live, mode):
+    setattr(api.app.state.store.settings, mode, True)
+    try:
+        organize(api, expected=403, mailbox=BOX, action="archive", ids=["m1"])
+        assert not live["calls"]
+    finally:
+        setattr(api.app.state.store.settings, mode, False)
+
+
+def test_query_retries_keep_the_original_ids_and_recheck_access(api, live):
+    auth_headers = headers(key="organize-retry")
+    body = {"mailbox": BOX, "action": "archive", "query": "in:inbox", "limit": 1}
+    first = api.post("/api/v2/mail/messages/organize", json=body, headers=auth_headers)
+    assert first.status_code == 200, first.text
+    live["pages"] = {"": {"messages": [{"id": "next-message"}]}}
+    second = api.post("/api/v2/mail/messages/organize", json=body, headers=auth_headers)
+    assert second.status_code == 200 and second.json()["ids"] == first.json()["ids"] == ["m2"]
+    assert len([path for path, _, _ in live["calls"] if path.endswith("/messages")]) == 1
+    changed = api.put("/api/v2/google/permissions", json={"organize_mail": False, "send_mail": True,
+                                                       "change_calendar": True}, headers=headers())
+    assert changed.status_code == 200, changed.text
+    refused = api.post("/api/v2/mail/messages/organize", json=body, headers=auth_headers)
+    assert refused.status_code == 403 and len(live["writes"]) == 1
+    with api.app.state.store.read() as c:
+        assert c.execute("SELECT COUNT(*) FROM events WHERE action='mail.organize'").fetchone()[0] == 1
+
+
+def test_query_retry_after_a_gmail_failure_keeps_the_attempted_selection(api, live):
+    auth_headers = headers(key="organize-failed-retry")
+    body = {"mailbox": BOX, "action": "archive", "query": "in:inbox", "limit": 1}
+    live["write_status"] = 503
+    first = api.post("/api/v2/mail/messages/organize", json=body, headers=auth_headers)
+    assert first.status_code == 502, first.text
+    live["write_status"] = 200
+    live["pages"] = {"": {"messages": [{"id": "next-message"}]}}
+    second = api.post("/api/v2/mail/messages/organize", json=body, headers=auth_headers)
+    assert second.status_code == 200 and second.json()["ids"] == ["m2"]
+    assert [body["ids"] for _, body, _ in live["writes"]] == [["m2"], ["m2"]]

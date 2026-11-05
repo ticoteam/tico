@@ -65,6 +65,8 @@ EMPTY = (
     "screening_pending", "screening_verdicts",  # screening: outside text waiting for its check, and the model's verdicts
     # runner and bot sessions
     "enrollments", "hosting_enrollments", "assignments", "cloud_machines", "cloud_machine_codes", "agent_pairings", "bot_sessions", "session_epochs", "bot_session_epochs", "compact_first", "model_logins", "model_login_cleared", "computer_keys", "model_login_key_off",
+    # Deletion retries and enrollment failures belong to live HQ machines; a copy must never resume them.
+    "cloud_machine_deletions", "cloud_machine_enrollment_failures",
     "computer_profiles", "subscription_assignments", "runner_harness_actions", "runner_harness_choices",
     "runner_versions", "start_places", "org_turn_waits",
     # Browse through: a computer's sharing and a bot's choice open tunnels through a real person's internet; the relay's
@@ -80,6 +82,8 @@ EMPTY = (
     "directory_credentials", "company_storage", "tico_storage",
     # company model subscriptions: the sealed logins (vault values) and which computer or attempt holds which one
     "model_subscriptions", "computer_subscriptions", "attempt_subscriptions", "pending_subscription_fallbacks", "subscription_connects",
+    # A frozen outbox, its operation receipts and preview proofs can authorize delivery on the source only.
+    "email_sends", "email_send_operations", "email_send_previews", "email_legacy_automations",
     # mail, Slack, GitHub, Granola, meeting bots, support
     "mail_mailboxes", "mailboxes", "mailbox_accesses", "bot_mail_settings", "google_connects", "google_mail_holders", "slack_credentials", "slack_posts", "slack_events", "slack_threads",
     # Settings > Inboxes: the Workspace key (sealed), setup codes and the OAuth client secret (sealed), and the health each
@@ -132,6 +136,7 @@ HISTORY = {"attempts": "created_at", "jobs": "created_at", "messages": "created_
            "maintenance_run_steps": "started_at", "maintenance_runs": "started_at"}
 # Kept whole, except rows whose parent went (a pruned attempt's events). Tokens on runners are replaced.
 KEEP = frozenset((
+    "email_sending_policies", "email_suppressed_recipients",   # retain the team's send restrictions
     "letter_outboxes", "letter_bot_settings",
     "alert_company_settings",   # the company's spend cap is safe without phones or queued alerts
     "postal_mail_grants", "postal_mail_settings",   # access and routing settings cannot send in rehearsal mode
