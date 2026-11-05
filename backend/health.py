@@ -1563,7 +1563,8 @@ def _review_actors(c, who, auth, tickets):
         boards.setdefault(step["type_id"], []).append(step)
     check_boards = {type_id: [s for s in board if F.check_kind(s)] for type_id, board in boards.items()}
     for ticket in tickets:
-        states.setdefault(ticket["task_id"], {"ticket": ticket, "children": [], "prs": [], "waits": [], "events": [], "tags": [],
+        states.setdefault(ticket["task_id"], {"ticket": {**ticket, "id": ticket["task_id"]},
+                                             "children": [], "prs": [], "waits": [], "events": [], "tags": [],
                                              "complete": True})
     role, visible = auth.settings.github_review_role or "reviewer", auth.task_sql(c, who)
     for part in H.chunks(sorted(states)):
@@ -1626,19 +1627,27 @@ def _review_actors(c, who, auth, tickets):
     return states, actors
 
 
-def _review_move(c, link, state, actors):
+def _review_move(c, link, state, actors, *, reason="review"):
     """Whose move the check evidence at this PR head calls for, and the short action to show."""
     from . import step_flow as F, verdict_moves as V
     owner, number = link["owner_id"], link["number"]
+    eligible = V._ticket(c, state["ticket"], evidence=state)
+    if reason == "conflict":
+        if not eligible:
+            return owner, f"{owner}: check ticket status for PR #{number}"
+        return owner, f"{owner}: merge main into {str(link['branch'] or 'the PR branch')[:150]} and push"
     head = V._head(link)
     children, step = V.review_checks(c, link, evidence=state), state["step"]
     route = V.verdict_route(c, link, head, evidence=state)
     if route and route["verdict"] not in V.GOOD:
         return owner, f"{owner}: address review changes on PR #{number}"
     ready = state["complete"] and V.merge_ready(c, link, evidence=state)
+    advance = state["complete"] and route and route["target"] and route["target"] != F.MERGE
+    if (ready or advance) and not eligible:
+        return owner, f"{owner}: check ticket status for PR #{number}"
     if ready:
         return owner, f"{owner}: merge PR #{number}"
-    if state["complete"] and route and route["target"] and route["target"] != F.MERGE:
+    if advance:
         return owner, f"{owner}: move PR #{number} on"
     # A bot check at this step judges the current head when it runs, including a push since it was filed.
     assigned = {t["id"] for t in V._checks(c, link, step, evidence=state)} if step else set()
@@ -1670,9 +1679,10 @@ def _aged_pr_checks(c, who, auth, full, kind):
     # task_sql binds visibility predicates to the tasks table name.
     rows = c.execute(
         "SELECT l.*,tasks.title task_title,tasks.owner_id,tasks.type_id,tasks.step_id,tasks.number ticket, "
+        "tasks.status,tasks.blocked_since, "
         "EXISTS(SELECT 1 FROM task_steps s WHERE s.type_id=tasks.type_id AND s.flow IS NOT NULL AND s.flow NOT IN ('','{}')) check_flow "
         "FROM task_links l "
-        "JOIN tasks ON tasks.id=l.task_id WHERE l.kind='pr' AND l.state IN ('open','draft') "
+        f"JOIN {H.TASKS} tasks ON tasks.id=l.task_id WHERE l.kind='pr' AND l.state IN ('open','draft') "
         "AND tasks.owner_id LIKE 'bot:%' AND coalesce(tasks.private,1)=0 "
         f"AND ({auth.task_sql(c, who)}) ORDER BY l.created_at,l.id")
     waits, seen = [], set()
@@ -1690,14 +1700,10 @@ def _aged_pr_checks(c, who, auth, full, kind):
         waits.append((link, reason, wait, minutes))
         if len(waits) >= DIAGNOSTIC_LIMIT:
             break
-    states, actors = _review_actors(c, who, auth, [link for link, reason, _, _ in waits if reason == "review"])
+    states, actors = _review_actors(c, who, auth, [link for link, _, _, _ in waits])
     items = []
     for link, reason, wait, minutes in waits:
-        if reason == "conflict":
-            actor = link["owner_id"]
-            action = f"{actor}: merge main into {str(link['branch'] or 'the PR branch')[:150]} and push"
-        else:
-            actor, action = _review_move(c, link, states[link["task_id"]], actors.get(link["task_id"], []))
+        actor, action = _review_move(c, link, states[link["task_id"]], actors.get(link["task_id"], []), reason=reason)
         task_name = f"#{link['ticket']} " if link["ticket"] else ""
         items.append({"bot": H.actor_id(link["owner_id"]), "name": f"PR #{link['number']}", "pr": link["url"],
                       "task": link["task_id"], "reason": reason, "since": wait["since"], "age_minutes": minutes,

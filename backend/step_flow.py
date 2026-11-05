@@ -163,8 +163,10 @@ def merge_step(c, type_id):
     return next((s for s in steps(c, type_id) if of(s).get("on_merge")), None)
 
 
-def has_flow(c, type_id):
-    """Whether any step of the type has a flow: only then does Tico move its tickets."""
+def has_flow(c, type_id, *, evidence=None):
+    """Whether any step of the type has a flow, from rows or Health's set-read board."""
+    if evidence is not None:
+        return bool(type_id) and any(s.get("flow") not in (None, "", "{}") for s in evidence["board"])
     return bool(type_id) and _ready(c) and bool(c.execute(
         "SELECT 1 FROM task_steps WHERE type_id=? AND flow IS NOT NULL AND flow NOT IN ('','{}') LIMIT 1",
         (type_id,)).fetchone())
@@ -271,20 +273,22 @@ def fixes_for(c, s, ticket, *, evidence=None):
     A shared fixes target needs the recorded move, not board order. Pair each verdict move with its step event:
     step ids survive renames, and later checks that moved nothing cannot replace the source of the feedback.
     A manual return has no verdict move; standing changes at the current head take priority over old feedback.
+    Without failed feedback, the step the ticket returned from is its source, even before a verdict arrives.
     """
     board = evidence["board"] if evidence is not None else steps(c, s["type_id"])
-    sources = {x["id"]: x for x in board if of(x).get("on_fail") == s["id"]}
+    sources = {x["id"]: x for x in board if s["id"] in (of(x).get("on_pass"), of(x).get("on_fail"))}
     if not sources:
         return None
     events = (evidence["events"] if evidence is not None else
               c.execute("SELECT kind,old,new FROM history_events WHERE subject_type='task' AND subject_id=? "
                         "AND kind IN ('step','verdict_move') ORDER BY created_at,rowid", (ticket["id"],)))
-    entered, source = None, None
+    entered, source, returned_from = None, None, None
     for event in events:
         if event["kind"] == "step":
             entered = event
             if entered["new"] == s["id"]:
                 source = None
+                returned_from = entered["old"]
         elif event["kind"] == "verdict_move" and entered and entered["new"] == s["id"]:
             source = entered["old"]
     if source in sources:
@@ -298,6 +302,8 @@ def fixes_for(c, s, ticket, *, evidence=None):
                                            t.get("updated_at") or t.get("created_at") or "",
                                            t.get("created_at") or "", t["id"]))
         return sources[latest["check_step"]["id"]]
+    if returned_from in sources:
+        return sources[returned_from]
     return next(iter(sources.values())) if len(sources) == 1 else None
 
 

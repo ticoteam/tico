@@ -68,6 +68,46 @@ def test_approval_that_satisfies_merge_ready_names_the_builder_to_merge(environm
     assert 'bot:builder: merge PR #206' in item['fix']
 
 
+@pytest.mark.parametrize('state', ['held', 'blocked', 'done', 'ready'])
+@pytest.mark.parametrize('action', ['merge', 'advance', 'after_green', 'shared_after_green', 'conflict'])
+def test_health_recommendations_use_the_flows_ticket_eligibility(environment, state, action):
+    from backend import step_flow as F, task_holds, verdict_moves as V
+    api = setup(environment)
+    source = 'Second look' if action in ('advance', 'shared_after_green') else 'In QA'
+    task = ticket(api, step=source)
+    child(api, task, title='Second look: PR #206' if source == 'Second look' else 'QA: PR #206',
+          verdict='approve' if source == 'Second look' else 'pass', head=OLD if 'after_green' in action else HEAD)
+    with api.app.state.store.transaction() as c:
+        if 'after_green' in action:
+            fixes_name = 'Build' if action == 'shared_after_green' else 'QA Fixes'
+            fixes = c.execute('SELECT id FROM task_steps WHERE type_id=? AND name=?', (task['type_id'], fixes_name)).fetchone()[0]
+            c.execute('UPDATE task_steps SET flow=? WHERE id=?', (json.dumps({'after_green': 'merge'}), fixes))
+            c.execute("UPDATE tasks SET step_id=?,status='doing' WHERE id=?", (fixes, task['id']))
+            H._task_event(c, task['id'], H.KEEPER, 'step', task['step_id'], fixes, '')
+        elif action == 'conflict':
+            link = H.task_links(c, task['id'])[0]
+            detail = H._json(link['detail'], {})
+            detail['health_wait']['reason'] = 'conflict'
+            c.execute("UPDATE task_links SET mergeable='conflict',detail=? WHERE id=?", (json.dumps(detail), link['id']))
+        if state in ('held', 'blocked'):
+            task_holds.put(c, task['id'], 'blocked', H.now(), cause='manual', reason='Wait for the release window.')
+        if state in ('blocked', 'done'):
+            c.execute('UPDATE tasks SET status=? WHERE id=?', ('waiting' if state == 'blocked' else 'done', task['id']))
+        current = H.task(c, task['id'])
+        eligible = V._ticket(c, current)
+        assert bool(eligible) == (state == 'ready')
+        if action in ('merge', 'after_green', 'shared_after_green'):
+            assert V.merge_ready(c, current) is not None
+            assert V.merge_wake(c, current) == (state == 'ready')
+        elif action == 'advance':
+            assert V.verdict_route(c, current, HEAD)['target'] == F.steps(c, task['type_id'])[0]['id']
+    [item] = items(api)
+    expected = 'move PR #206 on' if action == 'advance' else 'merge main into' if action == 'conflict' else 'merge PR #206'
+    assert (expected in item['fix']) == (state == 'ready')
+    if state != 'ready':
+        assert 'merge PR' not in item['fix'] and 'move PR' not in item['fix'] and 'merge main' not in item['fix']
+
+
 def test_a_qa_title_filed_at_build_cannot_approve_a_later_qa_step(environment):
     from backend import step_flow as F, verdict_moves as V
     api = setup(environment)

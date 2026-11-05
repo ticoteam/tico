@@ -5,7 +5,77 @@ import pytest
 
 from backend import hubdb as H, step_flow as F, verdict_moves as V
 from backend.tests.test_github import PR, _suite, api, hook, pr_event  # noqa: F401
-from backend.tests.test_verdict_moves import HEAD, NEW, check, step, verdict
+from backend.tests.test_verdict_moves import HEAD, NEW, builder_jobs, check, step, verdict
+
+
+@pytest.mark.parametrize('reviews,source', [(1, 'Review 1'), (2, 'Review 1'), (2, 'Review 2')])
+@pytest.mark.parametrize('return_kind', ['failed_check', 'verdict_move', 'manual_approval', 'manual_before_verdict'])
+def test_every_return_to_fixes_keeps_the_source_for_a_green_merge(api, reviews, source, return_kind):
+    store = api.app.state.store
+    with store.transaction() as c:
+        typ = H.type_create(c, H.KEEPER, 'Merge after fixes', [
+            {'name': 'Build', 'status': 'doing', 'flow': {'after_green': 'merge'}},
+            *[{'name': f'Review {n}', 'status': 'review',
+               'flow': {'check': 'review', 'on_pass': 'Build', 'on_fail': 'Build'}}
+              for n in range(1, reviews + 1)],
+        ])
+        task = H.task_create(c, 'human:ana', 'Build messages', '', 'bot:cpo', type=typ['id'], step=source, lint=False)
+        link = H.task_link(c, 'human:ana', task['id'], PR)
+        c.execute("UPDATE task_links SET state='open',checks='passing',mergeable='clean',detail=? WHERE id=?",
+                  (json.dumps({'head_sha': HEAD}), link['id']))
+    review = check(api, task, title=f'{source}: PR #412')
+    if return_kind == 'verdict_move':
+        verdict(api, review, 'approve')
+    else:
+        with store.transaction() as c:
+            if return_kind != 'manual_before_verdict':
+                H.task_update(c, review['owner_id'], review['id'], status='done', note='Reviewed.',
+                              verdict='changes' if return_kind == 'failed_check' else 'approve', verdict_head=HEAD)
+            H.task_update(c, 'bot:cpo', task['id'], step='Build')
+
+    with store.read_transaction() as c:
+        current = H.task(c, task['id'])
+        fixes = F.step(c, current['step_id'])
+        assert fixes['name'] == 'Build'
+        assert F.fixes_for(c, fixes, current)['name'] == source
+        moved = c.execute("SELECT 1 FROM history_events WHERE subject_id=? AND kind='verdict_move'",
+                          (task['id'],)).fetchone()
+        assert bool(moved) == (return_kind == 'verdict_move')
+
+    if return_kind == 'manual_before_verdict':
+        # The check finishes after the builder returns; its verdict still belongs to the source step.
+        verdict(api, review, 'approve')
+    with store.transaction() as c:
+        current = H.task(c, task['id'])
+        assert V._judged_by(c, current, F.step(c, current['step_id'])) == HEAD
+        c.execute('DELETE FROM jobs')
+    _suite(api, 'github-actions', 'completed', 'success', sha=HEAD)
+    assert not [m for m in builder_jobs(api) if m['refs'].get(V.HANDOFF) == 'merge']
+    hook(api, 'pull_request', pr_event('synchronize', head={'sha': NEW}))
+    _suite(api, 'github-actions', 'completed', 'success', sha=NEW)
+    handoffs = [m for m in builder_jobs(api) if m['refs'].get(V.HANDOFF) == 'merge']
+    assert len(handoffs) == 1
+    assert handoffs[0]['refs']['pr_head'] == NEW
+    assert step(api, task) == 'Build'
+
+
+def test_an_approval_return_uses_a_step_whose_failure_goes_elsewhere(api):
+    with api.app.state.store.transaction() as c:
+        typ = H.type_create(c, H.KEEPER, 'Split feedback', [
+            {'name': 'Build', 'status': 'doing', 'flow': {'after_green': 'merge'}},
+            {'name': 'Changes', 'status': 'doing'},
+            {'name': 'Review', 'status': 'review',
+             'flow': {'check': 'review', 'on_pass': 'Build', 'on_fail': 'Changes'}},
+        ])
+        task = H.task_create(c, 'human:ana', 'Build messages', '', 'bot:cpo', type=typ['id'], step='Review', lint=False)
+        link = H.task_link(c, 'human:ana', task['id'], PR)
+        c.execute("UPDATE task_links SET state='open',checks='passing',mergeable='clean',detail=? WHERE id=?",
+                  (json.dumps({'head_sha': HEAD}), link['id']))
+    verdict(api, check(api, task, title='Review: PR #412'), 'approve')
+    assert step(api, task) == 'Build'
+    hook(api, 'pull_request', pr_event('synchronize', head={'sha': NEW}))
+    _suite(api, 'github-actions', 'completed', 'success', sha=NEW)
+    assert [m['refs']['pr_head'] for m in builder_jobs(api) if m['refs'].get(V.HANDOFF) == 'merge'] == [NEW]
 
 
 @pytest.mark.parametrize('reviews,feedback,return_kind,pushed,source', [

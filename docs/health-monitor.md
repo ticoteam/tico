@@ -27,8 +27,9 @@ that nothing is set to move, the tasks Task Manager lists as stalled. Settings >
 **Pull requests not progressing** names visible bot PRs that have remained conflicting for more than 12 hours,
 or green and mergeable without a review for more than 12 hours. Each names the ticket, waiting age and whose
 move it is: the author fixes conflicts or review changes, merges after approval, or moves the ticket on;
-an open check names its reviewer even after a push. Health calls the ticket flow's merge and verdict rules to decide
-whether to merge, move on or fix changes. A QA failure still stands after re-entering QA and passing at the same head,
+an open check names its reviewer even after a push. Health calls the ticket flow's ticket, merge and verdict rules to decide
+whether to merge, move on or fix changes. A held or finished ticket calls for a ticket status check, with no advice
+to merge or move on. A QA failure still stands after re-entering QA and passing at the same head,
 including when the ticket is back at QA Fixes; only a new head clears it. A QA title filed at a recorded Build step
 cannot approve a later QA step. Completed human subtasks do not count as check verdicts.
 Health keeps private check owners and verdicts hidden. When it cannot see all check evidence, it asks for a
