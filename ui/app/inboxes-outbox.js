@@ -1,4 +1,5 @@
-/* ui/app/inboxes-outbox.js — Letters out through Tico's Gateway. Registry: ui/app/inboxes.js. */
+/* ui/app/inboxes-outbox.js — Letters out through Tico's Gateway: its page (#/tools/address/outbox) and its card on
+   Tools › Settings › Letters out. Registry: ui/app/inboxes.js. */
 'use strict';
 
 const LETTERS_OUT_MODES = [['ask_first', 'Ask first'], ['on_their_own', 'On their own'], ['never', 'Never']];
@@ -110,7 +111,7 @@ async function lettersOutDetail(host, id, ctx) {
   let refreshing = null, refreshDirty = false, epoch = 0, revision = 0;
   const rowRevisions = new Map();
   host.innerHTML = inboxesHead(host, {name: 'Letters out', status, statusText, sub: 'Tico Gateway · At cost + 25%',
-    actions: '<a class="ghost" href="#/settings/inboxes/settings/letters-out">Settings</a>'}) +
+    actions: '<a class="ghost" href="#/tools/settings/letters-out">Settings</a>'}) +
     '<div class="lo-layout"><div><div data-lo-access></div>' +
     inboxesCard('lo-automations', 'Automations', '<div data-lo-automations>Loading…</div>', inboxesAutomationsLink('letters')) +
     inboxesCard('lo-activity', 'Activity', '<ul class="lo-activity" data-lo-activity></ul><button type="button" class="ghost" data-lo-more hidden>Load more</button>') +
@@ -193,7 +194,7 @@ async function lettersOutSettingsRender(host, ctx) {
     <label class="lo-setting-row"><span>Sending</span><select name="mode">${lettersOutOptions(config.mode)}</select></label>
     <label class="lo-setting-row"><span>Monthly cap ($)</span><input name="cap" type="number" min="0" max="1000000" step="0.01" placeholder="No cap" value="${config.monthly_cap_micros == null ? '' : Number(config.monthly_cap_micros) / 1000000}"></label>
     <div class="lo-setting-row"><span>Always ask</span><span>Certified mail<br>Courts and agencies<br>Letters we couldn’t fully read<br>First letter to an address</span></div>
-    ${ctx.admin ? '<div class="lo-controls"><button type="submit" class="primary">Save</button><button type="button" class="ghost" data-lo-check>Check connection</button><a href="#/settings/inboxes/outbox/company">Who can use it</a></div>' : ''}</fieldset></form>`);
+    ${ctx.admin ? '<div class="lo-controls"><button type="submit" class="primary">Save</button><button type="button" class="ghost" data-lo-check>Check connection</button><a href="#/tools/address/outbox">Who can use it</a></div>' : ''}</fieldset></form>`);
   if (!ctx.admin) return;
   const form = host.querySelector('form');
   form.onsubmit = async event => {
@@ -218,20 +219,6 @@ async function lettersOutSettingsRender(host, ctx) {
   };
 }
 
-inboxesKind('outbox', {group: 'letters-out', label: 'Letters out', order: 50,
-  rows: async ctx => { const config = await lettersOutSettings(ctx); if (!ctx.live() || config.id !== 'company') return [];
-    const [data, grants] = await Promise.all([ctx.once('letters-out-latest', () => get('/v2/letters?limit=1', {fresh: true})), lettersOutGrants(ctx)]); if (!ctx.live()) return [];
-    const [status, statusText] = lettersOutStatus(config), all = grants.grants || [];
-    return [{id: 'company', name: 'Letters out', sub: 'Tico Gateway', status, statusText, latest: data.items?.[0]?.created_at ? Date.parse(data.items[0].created_at) : null,
-      usedBy: {bots: all.filter(g => g.grantee_type === 'bot').length, people: all.filter(g => g.grantee_type === 'person').length,
-        names: all.slice(0, 3).map(lettersOutName)}, search: 'letters print post postage ' + lettersOutAddress(config.return_address)}]; },
+inboxesKind('outbox', {label: 'Letters out', order: 50,
   detail: lettersOutDetail});
 inboxesSetting('letters-out', {section: 'letters-out', order: 10, render: lettersOutSettingsRender});
-inboxesStep('letters-out', {order: 40, title: 'Send letters', optional: true,
-  done: async ctx => !!(await lettersOutSettings(ctx)).return_address,
-  render: async (host, ctx) => {
-    const config = await lettersOutSettings(ctx); if (!ctx.live()) return;
-    // An older server keeps the shell's disabled setup step until its Letters API is available.
-    if (config.id !== 'company') { host.innerHTML = '<p><button type="button" class="ghost" disabled>Connect Click2Mail</button> <span class="pill">Coming soon</span></p>'; return; }
-    await lettersOutSettingsRender(host, ctx);
-  }});

@@ -30,7 +30,7 @@
   const defaultDomain = g => domainOf(g.me?.mailbox) || domainOf((typeof S === 'object' && S?.me?.email) || '');
   const watchable = host => host.isConnected && !host.closest('[hidden]');
   // This tab's address on the server's public URL, for a teammate or an agent to open.
-  const googleLink = () => `${String((typeof publicUrl === 'function' && publicUrl()) || location.origin).replace(/\/+$/, '')}/#/settings/inboxes/settings/email`;
+  const googleLink = () => `${String((typeof publicUrl === 'function' && publicUrl()) || location.origin).replace(/\/+$/, '')}/#/tools/settings/email`;
   const unchecked = row => (row ? {...row, checked_at: null} : null);
   // The active row (connected or failing) and the one pending row, which is a replacement while a key is active.
   const rowsOf = g => {

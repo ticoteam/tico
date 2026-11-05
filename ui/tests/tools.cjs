@@ -1,0 +1,226 @@
+// Tools (ui/app/tools.js, tools-api.js and the inbox pages under it) over a contract-shaped fake API: GET
+// /api/v2/tool-index (rows, counts), one API tool (GET/PATCH /api/v2/api-tools/<id>, PUT …/access/<subject>, POST
+// …/check, GET …/activity) and the mailboxes fake (support/mailboxes-fake.cjs) for a mailbox's page and its Limits.
+// Covers: the list, its filters and Needs you; an API tool's level change, Check now and Move to proxy; the Activity
+// tab's filter; the mailbox Limits card; the old addresses' redirects; 390px with no sideways scroll; light and dark.
+// TICO_UI_SHOTS=<dir> saves a screenshot of each page in each theme and width.
+const {chromium} = require('playwright');
+const assert = require('node:assert/strict');
+const fs = require('node:fs');
+const path = require('node:path');
+const {mailboxesFake, open} = require('./support/mailboxes-fake.cjs');
+const {googleFake} = require('./support/google-fake.cjs');
+
+const at = mins => new Date(Date.UTC(2026, 10, 5, 12, 0) - mins * 60000).toISOString();
+const who = (kind, id, name) => ({kind, id, name, initials: name.split(' ').map(w => w[0]).join('').slice(0, 2)});
+const ROWS = [
+  {id: 'api:t-crm', kind: 'api', name: 'Acme CRM', detail: 'api.crm.acme.example', way: 'API key', status: {tone: 'ok', text: 'Working'},
+    who: [who('human', 'ana', 'Ana'), who('bot', 'support-bot', 'Support bot'), who('bot', 'sales', 'Sales'), who('bot', 'ops', 'Ops'), who('bot', 'books', 'Books')],
+    who_total: 7, needs_you: false, href: '#/tools/api/t-crm'},
+  {id: 'api:t-billing', kind: 'api', name: 'Acme Billing', detail: 'billing.acme.example', way: 'API key', status: {tone: 'fail', text: 'Key rejected'},
+    who: [who('bot', 'books', 'Books')], who_total: 1, needs_you: true, href: '#/tools/api/t-billing'},
+  {id: 'mailbox:mb-support', kind: 'mailbox', name: 'support@acme.example', detail: 'Shared inbox', way: 'Google', status: {tone: 'ok', text: 'Connected'},
+    who: [who('human', 'cara', 'Cara'), who('bot', 'support-bot', 'Support bot')], who_total: 2, needs_you: false, href: '#/tools/mailbox/support@acme.example'},
+  {id: 'number:ibx-1', kind: 'number', name: '+1 555 0100', detail: 'Texts', way: 'Tico number', status: {tone: 'ok', text: 'On'},
+    who: [], who_total: 0, needs_you: false, href: '#/tools/number/ibx-1'},
+  {id: 'slack', kind: 'slack', name: 'Slack', detail: 'acme.slack.com', way: 'Slack app', status: {tone: 'wait', text: 'Waiting for OK'},
+    who: [who('human', 'ana', 'Ana')], who_total: 12, needs_you: true, href: '#/tools/slack'},
+  {id: 'github', kind: 'github', name: 'GitHub', detail: '', way: 'GitHub App', status: {tone: 'idle', text: 'Off'},
+    who: [], who_total: 0, needs_you: false, href: '#/tools/github'},
+];
+const COUNTS = {all: 6, needs_you: 2, api: 2, mail: 2, websites: 0};
+
+// One API tool's document as GET /api/v2/api-tools/<id> sends it, and the writes that change it.
+function apiFake() {
+  const checks = n => Array.from({length: n}, (_, i) => ({ok: i !== 3, status_code: i === 3 ? 401 : 200, detail: i === 3 ? 'Key rejected' : '', checked_at: at(i * 30)}));
+  const call = (i, result, extra = {}) => ({id: 'c' + i, tool_id: 't-crm', credential_id: 'k-read', actor: 'bot:support-bot', bot: 'support-bot', access_level: 'read',
+    method: 'GET', path: '/v1/leads?q=acme', status_code: result === 'sent' ? 200 : null, result, detail: result === 'sent' ? '' : 'Write needs Read and write',
+    duration_ms: 120, created_at: at(i * 7), ...extra});
+  const tools = {
+    't-crm': {tool: {id: 't-crm', name: 'Acme CRM', service: 'acme-crm', base_url: 'https://api.crm.acme.example', auth_scheme: 'bearer', check_path: '/v1/me', delivery: 'proxy'},
+      keys: [{id: 'k-read', name: 'Read key', preview: 'sk_…4f2a', access_level: 'read', expires_on: '2027-01-31', created_by: 'ana', created_at: at(60 * 24 * 30), last_used_at: at(4), last_used_by: 'support-bot'},
+        {id: 'k-write', name: 'Write key', preview: 'sk_…9c1d', access_level: 'read_write', expires_on: null, created_by: 'ana', created_at: at(60 * 24 * 20), last_used_at: at(90), last_used_by: 'sales'}],
+      access: [{subject: 'human:ana', kind: 'human', name: 'Ana', initials: 'A', level: 'read_write', last_used_at: at(200)},
+        {subject: 'bot:support-bot', kind: 'bot', name: 'Support bot', initials: 'SB', level: 'read', last_used_at: at(4)},
+        {subject: 'bot:sales', kind: 'bot', name: 'Sales', initials: 'S', level: 'read_write', last_used_at: at(90)}],
+      checks: checks(24), recent: [call(1, 'sent'), call(2, 'refused', {method: 'POST', path: '/v1/leads'}), call(3, 'sent')],
+      status: {tone: 'ok', text: 'Working'}, can_manage: true},
+    't-billing': {tool: {id: 't-billing', name: 'Acme Billing', service: 'acme-billing', base_url: 'https://billing.acme.example', auth_scheme: 'header:X-Api-Key', check_path: '/status', delivery: 'computer'},
+      keys: [{id: 'k-bill', name: 'Key', preview: 'ak_…77e0', access_level: 'read_write', expires_on: null, created_by: 'ana', created_at: at(60 * 24 * 90), last_used_at: null, last_used_by: null}],
+      access: [{subject: 'bot:books', kind: 'bot', name: 'Books', initials: 'B', level: 'read_write', last_used_at: null}],
+      checks: checks(5).map(c => ({...c, ok: false, status_code: 401, detail: 'Key rejected'})), recent: [], status: {tone: 'fail', text: 'Key rejected'}, can_manage: true},
+  };
+  const calls = [call(1, 'sent'), call(2, 'refused', {method: 'POST', path: '/v1/leads'}), call(3, 'sent'), call(4, 'failed', {status_code: 502, detail: 'Upstream 502'})];
+  const fake = {tools, writes: [], reads: []};
+  fake.answer = (p, method, body, url) => {
+    if (p === '/api/v2/tool-index') return {rows: structuredClone(ROWS), counts: COUNTS};
+    const m = p.match(/^\/api\/v2\/api-tools\/([^/]+)(\/.*)?$/);
+    if (!m) return undefined;
+    if (method !== 'GET') fake.writes.push({method, path: p, body});
+    const t = tools[decodeURIComponent(m[1])], rest = m[2] || '';
+    if (!t) return {status: 404, body: {error: {code: 'not_found', detail: 'No such tool', retryable: false}}};
+    if (!rest && method === 'GET') return structuredClone(t);
+    if (!rest && method === 'PATCH') { Object.assign(t.tool, body); return structuredClone(t); }
+    const acc = rest.match(/^\/access\/(.+)$/);
+    if (acc && method === 'PUT') {
+      const subject = decodeURIComponent(acc[1]), row = t.access.find(a => a.subject === subject);
+      if (body.level === 'none') t.access = t.access.filter(a => a !== row); else if (row) row.level = body.level;
+      return {access: t.access};
+    }
+    if (rest === '/check' && method === 'POST') { t.checks.unshift({ok: true, status_code: 200, detail: 'Checked now', checked_at: at(0)}); return t.checks[0]; }
+    if (rest === '/activity') {
+      fake.reads.push(url.search);
+      const result = url.searchParams.get('result');
+      return {calls: calls.filter(c => !result || c.result === result), next_cursor: null};
+    }
+    return undefined;
+  };
+  return fake;
+}
+
+const sideways = page => page.evaluate(() => [document.documentElement, document.querySelector('#main')].some(el => el && el.scrollWidth > el.clientWidth + 1));
+async function shot(page, name) {
+  const dir = process.env.TICO_UI_SHOTS;
+  if (!dir) return;
+  fs.mkdirSync(dir, {recursive: true});
+  for (const theme of ['light', 'dark']) {
+    await page.evaluate(t => document.documentElement.setAttribute('data-theme', t), theme);
+    await page.evaluate(() => Promise.all(document.getAnimations()
+      .filter(a => a.effect?.getComputedTiming().endTime !== Infinity).map(a => a.finished.catch(() => {}))));
+    await page.screenshot({animations: 'disabled', path: path.join(dir, `tools-${name}-${theme}.png`), fullPage: true});
+  }
+}
+async function start(browser, hash, {width = 1440, ready} = {}) {
+  const api = apiFake(), mail = mailboxesFake();
+  const got = await open(browser, mail, googleFake(), {hash, width, height: width < 500 ? 844 : 900, ready, extra: (p, method, body, url) => api.answer(p, method, body, url)});
+  return {...got, api, mail};
+}
+
+(async () => {
+  const browser = await chromium.launch({channel: process.env.TICO_BROWSER_CHANNEL ?? 'chrome', headless: true});
+  try {
+    for (const width of [1440, 390]) {
+      const tag = width < 500 ? 'phone' : 'desktop';
+      // The list: every row, its faces and "+N more", the filters and Needs you; Websites stays hidden at zero.
+      {
+        const {page, seen} = await start(browser, '#/tools', {width, ready: 'tr[data-tl-row]'});
+        const rows = page.locator('tr[data-tl-row]');
+        assert.equal(await rows.count(), 6, `${tag}: all rows`);
+        assert.equal(await page.locator('[data-tl-show="websites"]').count(), 0, `${tag}: no Websites filter at zero`);
+        const crm = page.locator('tr[data-tl-row="api:t-crm"]');
+        assert.equal(await crm.locator('.tl-face').count(), 4, `${tag}: four faces`);
+        assert.match(await crm.locator('.tl-more').innerText(), /\+3 more/, `${tag}: the rest counted`);
+        assert.equal(await crm.locator('.tl-face').first().getAttribute('title'), 'Ana', `${tag}: named on hover`);
+        await page.locator('[data-tl-show="needs"]').click();
+        assert.deepEqual(await rows.evaluateAll(r => r.map(x => x.dataset.tlRow)), ['api:t-billing', 'slack'], `${tag}: Needs you`);
+        assert.equal(await page.evaluate(() => location.hash), '#/tools?show=needs', `${tag}: the filter is in the address`);
+        await page.locator('[data-tl-show="mail"]').click();
+        assert.deepEqual(await rows.evaluateAll(r => r.map(x => x.dataset.tlKind)), ['mailbox', 'number'], `${tag}: Mail and numbers`);
+        await page.locator('[data-tl-show="api"]').click();
+        assert.equal(await rows.count(), 2, `${tag}: APIs`);
+        await page.locator('[data-tl-show=""]').click();
+        assert.equal(await sideways(page), false, `${tag}: the list has no sideways scroll`);
+        if (tag === 'desktop') await page.locator('#side a[data-nav="tools"].cur').waitFor({state: 'attached'});
+        await shot(page, `list-${tag}`);
+        await rows.filter({hasText: 'Acme CRM'}).locator('.tl-st').click();
+        await page.waitForFunction(() => location.hash === '#/tools/api/t-crm');
+        await page.locator('#tool-access').waitFor();
+        assert.deepEqual(seen.errors, [], `${tag}: list errors`);
+        await page.close();
+      }
+      // An API tool: Who can use it with levels, Recent, Keys, Check, Limits not yet.
+      {
+        const {page, seen, api} = await start(browser, '#/tools/api/t-crm', {width, ready: '#tool-access tr'});
+        assert.equal(await page.locator('#tool-access tr').count(), 3, `${tag}: who can use it`);
+        assert.equal(await page.locator('#tool-recent tbody tr').count(), 3, `${tag}: recent calls`);
+        assert.equal(await page.locator('#tool-keys [data-ta-key]').count(), 2, `${tag}: keys`);
+        assert.match(await page.locator('#tool-keys').innerText(), /Through Tico · logged/, `${tag}: proxied`);
+        assert.equal(await page.locator('#tool-keys [data-ta-proxy]').count(), 0, `${tag}: nothing to move`);
+        assert.equal(await page.locator('#tool-check .tl-sq').count(), 24, `${tag}: 24 squares`);
+        assert.equal(await page.locator('#tool-check .tl-sq.fail').count(), 1, `${tag}: the failed check`);
+        assert.match(await page.locator('#tool-limits').innerText(), /Not available yet/, `${tag}: Limits placeholder`);
+        assert.equal(await page.locator('#tool-limits input').isDisabled(), true, `${tag}: Limits switch off`);
+        // Read → Read and write calls PUT access.
+        await page.locator('[data-ta-subject="bot:support-bot"][data-ta-level="read_write"]').click();
+        await page.locator('[data-ta-subject="bot:support-bot"][data-ta-level="read_write"][aria-checked="true"]').waitFor();
+        assert.deepEqual(api.writes.at(-1), {method: 'PUT', path: '/api/v2/api-tools/t-crm/access/bot%3Asupport-bot', body: {level: 'read_write'}}, `${tag}: level write`);
+        // Check now posts and redraws the squares with the new one last.
+        await page.locator('[data-ta-check]').click();
+        await page.waitForFunction(() => document.querySelector('#tool-check .tl-squares')?.lastElementChild?.title.includes('Checked now'));
+        assert.equal(api.writes.at(-1).path, '/api/v2/api-tools/t-crm/check', `${tag}: check write`);
+        assert.equal(await page.locator('#tool-check .tl-sq.fail').count(), 1, `${tag}: still 24 squares, one failed`);
+        assert.equal(await sideways(page), false, `${tag}: the API page has no sideways scroll`);
+        await shot(page, `api-${tag}`);
+        // Activity: the log and its filter.
+        await page.locator('.tl-tabs a[data-ta-tab="activity"]').click();
+        await page.locator('#tool-api [data-ta-call]').first().waitFor();
+        assert.equal(await page.locator('#tool-api [data-ta-call]').count(), 4, `${tag}: every call`);
+        await page.locator('[data-ta-show="refused"]').click();
+        await page.waitForFunction(() => document.querySelectorAll('#tool-api [data-ta-call]').length === 1);
+        assert.equal(api.reads.at(-1), '?limit=50&result=refused', `${tag}: refused read`);
+        assert.equal(await page.locator('#tool-api [data-ta-call] [data-result="refused"]').count(), 1, `${tag}: the refused call`);
+        assert.equal(await sideways(page), false, `${tag}: Activity has no sideways scroll`);
+        await shot(page, `api-activity-${tag}`);
+        assert.deepEqual(seen.errors, [], `${tag}: API page errors`);
+        await page.close();
+      }
+      // A key on computers: Move to proxy patches delivery.
+      {
+        const {page, seen, api} = await start(browser, '#/tools/api/t-billing', {width, ready: '#tool-keys [data-ta-proxy]'});
+        assert.match(await page.locator('#tool-keys').innerText(), /Key on computers/, `${tag}: on computers`);
+        assert.match(await page.locator('#tool-api .tl-title').innerText(), /Key rejected/, `${tag}: status`);
+        await page.locator('#tool-keys [data-ta-proxy]').click();
+        await page.locator('dialog [data-confirm-ok]').click();
+        await page.locator('#tool-keys [data-ta-delivery="proxy"]').waitFor();
+        assert.deepEqual(api.writes.at(-1), {method: 'PATCH', path: '/api/v2/api-tools/t-billing', body: {delivery: 'proxy'}}, `${tag}: delivery write`);
+        assert.deepEqual(seen.errors, [], `${tag}: billing errors`);
+        await page.close();
+      }
+      // A mailbox: Who can use it, Keys, and Limits (Bot | Sends | What | A day, then the summary).
+      {
+        const {page, seen} = await start(browser, '#/tools/mailbox/support@acme.example', {width, ready: '#inbox-sending [data-send-bot-row]'});
+        const limits = page.locator('#inbox-sending');
+        assert.deepEqual(await limits.locator('thead th').allTextContents(), ['Bot', 'Sends', 'What', 'A day'], `${tag}: Limits columns`);
+        assert.match(await limits.locator('[data-send-bot-row="support-bot"]').innerText(), /Replies only[\s\S]*50/, `${tag}: the bot's limits`);
+        const summary = await limits.locator('.ib-send-summary').innerText();
+        for (const word of ['Always ask for', 'This mailbox', 'Company', 'Pacing', 'Undo', 'Who approves', '200 a day', '1,000 a day', '2 min', 'Bot managers'])
+          assert.match(summary, new RegExp(word), `${tag}: summary ${word}`);
+        assert.match(await limits.innerText(), /People send as themselves, with no limits\./, `${tag}: the footer`);
+        assert.equal(await limits.locator('[data-send-edit-body]').isHidden(), true, `${tag}: the form waits behind Edit`);
+        await limits.locator('[data-send-edit]').click();
+        await limits.locator('[data-send-edit-body] [data-send-form]').waitFor();
+        await limits.locator('[data-send-edit]').click();
+        assert.equal(await page.locator('#mailbox-access .tl-who-table tr').count() >= 2, true, `${tag}: who can use it`);
+        assert.match(await page.locator('#mailbox-keys').innerText(), /Google Workspace/, `${tag}: its key`);
+        assert.equal(await page.locator('.tl-tabs a[data-ib-tab-link="activity"]').getAttribute('href'), '#/tools/mailbox/support%40acme.example/activity', `${tag}: Activity tab`);
+        assert.equal(await sideways(page), false, `${tag}: the mailbox page has no sideways scroll`);
+        await shot(page, `mailbox-${tag}`);
+        assert.deepEqual(seen.errors, [], `${tag}: mailbox errors`);
+        await page.close();
+      }
+    }
+    // The old addresses land on their Tools homes.
+    {
+      const {page, seen} = await start(browser, '#/tools');
+      for (const [from, to] of [
+        ['#/library/connections', '#/tools'], ['#/library/tools', '#/tools'], ['#/library/tools/github', '#/tools/github'],
+        ['#/library/tools?who=bot:ops', '#/tools/keys?who=bot:ops'], ['#/integrations/close-crm', '#/tools/close-crm'],
+        ['#/credentials', '#/tools/keys?show=credentials'], ['#/settings/inboxes', '#/tools?show=mail'],
+        ['#/settings/inboxes/settings/email', '#/tools/settings/email'], ['#/settings/inboxes/mailbox/mb-support', '#/tools/mailbox/mb-support'],
+        ['#/settings/mailboxes', '#/tools?show=mail'], ['#/settings/mail', '#/tools/settings/letters-in'], ['#/settings/google', '#/tools/settings/email'],
+      ]) {
+        await page.evaluate(h => { location.hash = h; }, from);
+        await page.waitForFunction(h => location.hash === h, to, {timeout: 3000}).catch(async () => {
+          assert.fail(`${from} went to ${await page.evaluate(() => location.hash)}, not ${to}`);
+        });
+      }
+      // Settings › Inboxes is gone; phone alerts are in Settings › General.
+      await page.evaluate(() => { location.hash = '#/settings/general'; });
+      await page.locator('#settings-notifications #inboxes-alerts').waitFor();
+      assert.equal(await page.locator('[data-settings-tab="inboxes"]').count(), 0, 'no Inboxes tab');
+      assert.deepEqual(seen.errors, [], 'redirect errors');
+      await page.close();
+    }
+    console.log('Tools: list, filters, Needs you, API levels, Check now, Move to proxy, Activity, mailbox Limits, redirects, phone, themes');
+  } finally { await browser.close(); }
+})().catch(e => { console.error(e); process.exit(1); });

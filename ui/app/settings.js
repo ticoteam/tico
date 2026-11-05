@@ -82,12 +82,12 @@ let SETTINGS_TAB = (() => { try { return sessionStorage.getItem(SETTINGS_TAB_KEY
 let SETTINGS_ADDRESS = '';
 // Every tab's address (`#/settings/<tab>`), and the other names people use for one. A known tab this person
 // can't see opens General with a line saying so; an unknown name just opens General.
-const SETTINGS_TABS = ['general', 'people', 'bots', 'devices', 'models', 'repos', 'tasks', 'inboxes', 'system',
+const SETTINGS_TABS = ['general', 'people', 'bots', 'devices', 'models', 'repos', 'tasks', 'system',
   'webhooks', 'health', 'history', 'gateway', 'billing'];
 // System was Rules (wake rules, now automations) and before that Routines; chat: the old Chat tab; providers and
-// subscriptions: what is the Models tab now; limits: its turn levels. Mailboxes, Email & Phone and Mail are Inboxes.
-const SETTINGS_ALIAS = {humans: 'people', computers: 'devices', repositories: 'repos', google: 'inboxes', inbox: 'inboxes',
-  mailboxes: 'inboxes', inbound: 'inboxes', 'email-phone': 'inboxes', 'company-inbox': 'inboxes', mail: 'inboxes',
+// subscriptions: what is the Models tab now; limits: its turn levels. Inboxes (and Mailboxes, Email & Phone and Mail
+// before it) moved to Tools; their addresses redirect there (ui/app/tools.js toolsRoute).
+const SETTINGS_ALIAS = {humans: 'people', computers: 'devices', repositories: 'repos',
   rules: 'system', routines: 'system', recurring: 'system', chat: 'models', providers: 'models', subscriptions: 'models',
   limits: 'models', 'turn-levels': 'models'};
 // Cards that moved from Computers to Models: an old link to one (the settings catalogue's) opens Models.
@@ -97,7 +97,8 @@ let SETTINGS_TRANSITION_TIMER = null;
 // A section a link points into (an old tab's name, settingsShow); it scrolls there once drawn.
 let SETTINGS_REVEAL = '';
 // The old tabs that are now sections of General.
-const SETTINGS_GENERAL = {team: '#settings-team', company: '#settings-company', assistant: '#settings-assistant-pane', privacy: '#settings-privacy', storage: '#settings-storage'};
+const SETTINGS_GENERAL = {team: '#settings-team', company: '#settings-company', assistant: '#settings-assistant-pane', privacy: '#settings-privacy', storage: '#settings-storage',
+  notifications: '#settings-notifications', alerts: '#settings-notifications'};
 const settingsReveal = selector => {
   if (!selector || SETTINGS_REVEAL !== selector) return;
   SETTINGS_REVEAL = ''; $(selector)?.scrollIntoView({block: 'start'});
@@ -211,7 +212,6 @@ function pageSettings() {
       <button type="button" data-settings-tab="models" role="tab">Models</button>
       <button type="button" data-settings-tab="repos" role="tab">Repositories</button>
       <button type="button" data-settings-tab="tasks" role="tab">Tasks</button>
-      <button type="button" data-settings-tab="inboxes" role="tab">Inboxes</button>
       <details class="settings-more" id="settings-more"><summary>More</summary><div>
         <button type="button" data-settings-tab="system" role="tab">System</button>
         <button type="button" data-settings-tab="webhooks" role="tab">Webhooks</button>
@@ -240,6 +240,7 @@ function pageSettings() {
         ${settingsCanManageBot(botRow(assistantBot())) ? `<a class="ghost" href="#/bot/${encodeURIComponent(assistantBot())}/more">Bot settings</a>` : ''}
       </div></header><div id="settings-assistant-approvals"></div></section>
       <div id="settings-assistant"></div>
+      <div id="settings-notifications"></div>
       ${S.me?.role === 'owner' ? `<section class="card" id="settings-privacy"><header><h2>Privacy</h2></header><div id="set-privacy">${skelRows(3, {card: true, dot: false})}</div></section>
       <section class="card" id="settings-storage"><header><h2>Storage</h2></header><div id="set-storage">${skelRows(3, {card: true, dot: false})}</div></section>` : ''}
     </div>
@@ -285,7 +286,6 @@ function pageSettings() {
       <section class="card" id="settings-roadmaps"></section>
       <section class="card"><header><h2>Task tags</h2></header><div id="settings-tags"></div></section>
     </div>
-    <div class="settings-pane" id="settings-inboxes" role="tabpanel" hidden><div id="set-inboxes"></div></div>
     <div class="settings-pane" id="settings-history" role="tabpanel" hidden><section class="card"><header><h2>History</h2>
       <div class="theme-seg" id="settings-history-view" role="radiogroup" aria-label="History"><button type="button" role="radio" data-history-view="log">Log</button><button type="button" role="radio" data-history-view="runs">Runs</button>${S.me?.role === 'owner' ? '<button type="button" role="radio" data-history-view="changes">Changes</button>' : ''}</div></header>
       <div id="set-log"></div>
@@ -305,7 +305,7 @@ function pageSettings() {
   });
   $('#settings-tabs').onclick = event => {
     const button = event.target.closest('[data-settings-tab]');
-    if (button) { INBOXES_VIEW = ''; settingsShow(button.dataset.settingsTab); }
+    if (button) settingsShow(button.dataset.settingsTab);
   };
   // Opening More on a phone shows its tabs at the end of the scrolling row, or the current one when it is in More.
   $('#settings-more').addEventListener('toggle', event => {
@@ -399,7 +399,8 @@ function settingsShow(tab) {
         // The owner's one click when the team has no Assistant (ui/assistant.js): restore it or add it.
         owner && window.assistantChat?.settingsStrip($('#settings-assistant'), {get, post, esc, toast, after: async () => { await refresh(true); renderSettingsBots(); }}),
         privacy && owner && renderSettingsPrivacy(), storage && owner && renderSettingsStorage(),
-        company && settingsIsAdmin() && renderSettingsCompany(), owner && renderSettingsBotReports()]).then(() => settingsReveal(SETTINGS_REVEAL));
+        company && settingsIsAdmin() && renderSettingsCompany(), owner && renderSettingsBotReports(),
+        !formBusy($('#settings-notifications')) && settingsNotificationsRender()]).then(() => settingsReveal(SETTINGS_REVEAL));
     }
   }
   const peoplePane = $('#settings-people');
@@ -410,8 +411,6 @@ function settingsShow(tab) {
   if (gatewayPane) { gatewayPane.hidden = SETTINGS_TAB !== 'gateway'; if (SETTINGS_TAB === 'gateway') void renderSettingsGateway(); }
   const healthPane = $('#settings-health');
   if (healthPane) { healthPane.hidden = SETTINGS_TAB !== 'health'; if (SETTINGS_TAB === 'health') window.hlMount?.(); }
-  const inboxesPane = $('#settings-inboxes');
-  if (inboxesPane) { inboxesPane.hidden = SETTINGS_TAB !== 'inboxes'; if (SETTINGS_TAB === 'inboxes' && (inboxesMoved() || !formBusy(inboxesPane))) void renderSettingsInboxes(); }
   const reposPane = $('#settings-repos');
   if (reposPane) { reposPane.hidden = SETTINGS_TAB !== 'repos'; if (SETTINGS_TAB === 'repos' && !formBusy(reposPane)) void renderSettingsRepos(); }
   const system = $('#settings-system');
@@ -424,8 +423,7 @@ function settingsShow(tab) {
 // It replaces the entry: no hashchange, no new history step.
 function settingsAddress() {
   if (S.route !== SETTINGS) return;
-  SETTINGS_ADDRESS = `${SETTINGS}/${SETTINGS_TAB}${SETTINGS_TAB === 'history' ? settingsHistoryQuery() : ''}${
-    SETTINGS_TAB === 'inboxes' ? inboxesAddress() : ''}`;
+  SETTINGS_ADDRESS = `${SETTINGS}/${SETTINGS_TAB}${SETTINGS_TAB === 'history' ? settingsHistoryQuery() : ''}`;
   if (location.hash !== SETTINGS_ADDRESS) history.replaceState(history.state, '', SETTINGS_ADDRESS);
 }
 // On a phone the tabs are one row that scrolls sideways (styles/settings.css); bring the current one into view.
