@@ -251,7 +251,7 @@ def blob_allowed(c, auth, who, bid):
     from .files import file_visible
     for row in c.execute("SELECT DISTINCT f.* FROM bot_file_versions v JOIN bot_files f ON f.id=v.file_id "
                          "WHERE v.blob_id=? OR v.poster_blob_id=? OR v.thumb_blob_id=?", (bid, bid, bid)):
-        if file_visible(c, auth, who, row, {}):
+        if not row["archived"] and file_visible(c, auth, who, row, {}):
             return True
     from . import context_search
     for r in c.execute("SELECT meeting_id FROM media_assets WHERE blob_id=?", (bid,)):
