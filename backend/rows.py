@@ -37,6 +37,15 @@ class AlertPreferenceRow(TypedDict):
     updated_at: str
 
 
+class RecorderInstallRow(TypedDict):
+    person_id: str
+    install_id: str
+    version: str
+    last_seen_at: str
+    created_at: str
+    updated_at: str
+
+
 class AlertCompanySettingRow(TypedDict):
     id: int
     monthly_cap: int

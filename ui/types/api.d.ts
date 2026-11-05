@@ -3796,6 +3796,15 @@ export type Moderate = {
   action: string;
 };
 
+export type MyRecorder = {
+  download_url: string;
+  last_seen_at: string | null;
+  latest: string;
+  recent: boolean;
+  update_available: boolean;
+  version: string;
+};
+
 export type NeedsSummary = {
   actor: string;
   bots_left: number;
@@ -8232,6 +8241,11 @@ export type GetMessageResponse = Message;
 export type GetMyAlertsParams = Record<string, never>;
 export type GetMyAlertsBody = never;
 export type GetMyAlertsResponse = PersonalAlerts;
+
+/** GET /api/v2/meetings/recorder */
+export type GetMyRecorderParams = Record<string, never>;
+export type GetMyRecorderBody = never;
+export type GetMyRecorderResponse = MyRecorder;
 
 /** GET /api/v2/needs-you */
 export type GetNeedsYouParams = {
