@@ -340,7 +340,7 @@ def _apply(c, change, goal_id, reason):
     elif do == "reassign":
         H.task_update(c, STRATEGY_BOT, row["id"], owner=change["owner"], mover=True)
     else:
-        H.task_close(c, H.KEEPER, row["id"], change["note"] or f"Closed by the {strategy_bot.name(c)}: {reason}")
+        H.task_close(c, H.KEEPER, row["id"], change["note"] or f"Closed by the {strategy_bot.name(c)}: {reason}", strict=False)
         c.execute("UPDATE tasks SET closed_by_id=? WHERE id=?", (STRATEGY_BOT, row["id"]))
     _bump(c, row["id"])
     return {"task_id": row["id"], "made": False, "before": before, "after": _snapshot(H.task(c, row["id"]))}

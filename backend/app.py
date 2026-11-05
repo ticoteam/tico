@@ -4036,7 +4036,7 @@ def create_app(settings=None):
               offset: int = 0, sort: str = "queue", type: str | None = None, step: str | None = None,
               number: int | None = None, updated_since: str | None = None, brief: bool = False,
               member: str | None = None, role: str | None = None, changed_after: str | None = None,
-              ids: str | None = None, snoozed: str | None = None):
+              ids: str | None = None, snoozed: str | None = None, q: str = ""):
         from . import task_reads as reads
         who = request.state.identity
         auth.domain(who)
@@ -4051,7 +4051,7 @@ def create_app(settings=None):
                 c, owner=owner, requester=requester, status=status, lane=lane, label=label, type=type, step=step,
                 number=number, updated_since=updated_since, member=member, role=role, snoozed=snoozed,
                 # A snoozed task is off every list until its date unless asked for by id, number or filter.
-                by_id=ids is not None or number is not None)
+                by_id=ids is not None or number is not None or bool(re.fullmatch(r"#\d+", q.strip())))
             # One read: the visibility, the rows, the cursor and the ETag agree (backend/task_reads.py).
             visible_sql = auth.task_sql(c, who)
             # Several tasks by id in one read (an agent's "show these"), instead of one GET each.
@@ -4060,7 +4060,7 @@ def create_app(settings=None):
                 typed, found = task_idents(c, who, ids, visible_sql)
                 if changed_after is not None:
                     raise Problem("ids", "ids and changed_after are separate reads", 422)
-            filters.update(order=sort, visible_sql=visible_sql)
+            filters.update(order=sort, visible_sql=visible_sql, q=q)
             if typed is not None:
                 filters["ids"] = [tid for tid in found.values() if tid]
             def brief_rows(rows):
@@ -7194,26 +7194,16 @@ def create_app(settings=None):
 
     @app.post("/api/v2/runners/{rid}/revoke")
     def revoke(request: Request, rid: str, body: M.Empty):
+        from . import computers
         who = request.state.identity
         def work(c):
             runner = c.execute("SELECT * FROM runners_with_state WHERE id=?", (rid,)).fetchone()
             if not runner or not (auth.bot_admin(who) or who.role == "human" and who.actor == "human:" + runner["owner_id"]):
                 raise Problem("forbidden", "You cannot revoke this runner", 403)
-            c.execute("UPDATE runners SET revoked_at=? WHERE id=?", (H.now(), rid))
-            c.execute('DELETE FROM registry_metadata WHERE key IN (?,?)',
-                      ('computer-repositories:' + rid, 'computer-enrolled-as:' + rid))
-            app_delivery.runner_revoked(c, who.actor, rid)
-            H.event(c, who.actor, "runner.revoked", rid)
+            computers.revoke(c, who.actor, rid)
             return {"revoked": True}
         result = mutate(request, body, work)
-        screen_sessions.set_mode(rid, "off", "computer removed")
-        # A removed computer is no one's browser exit, and its bots' connections through others close.
-        screen_sessions.push_exit_policy(rid)
-        screen_sessions.exit_close(exit=rid, reason="computer removed")
-        with store.read() as c:
-            removed_bots = [r[0] for r in c.execute("SELECT bot FROM assignments WHERE runner_id=?", (rid,))]
-        for bot in removed_bots:
-            screen_sessions.push_bot_generation(bot, "computer removed")
+        computers.disconnect(store, rid)
         return result
 
     def closed_computer(c, who, bot, runner_id):
@@ -8524,7 +8514,9 @@ def create_app(settings=None):
     from .team_icon import install_team_icon
     install_team_icon(app, store)
     from .meeting_items import install_meeting_items
-    install_meeting_items(app, store, mutate, task_create)
+    install_meeting_items(app, store, mutate, task_create, auth)
+    from .meeting_task_links import install as install_meeting_task_links
+    install_meeting_task_links(app, store, auth, mutate)
     from .connectors import install_connectors
     install_connectors(app, store, execution, mutate)
     from .imports import install_imports
@@ -8539,6 +8531,8 @@ def create_app(settings=None):
     finance_vault.use_vault(app.state.vault)      # never one an earlier app left behind (the scheduler may be off)
     from .google_workspace import install as install_google_workspace
     install_google_workspace(app, store)
+    from .mailboxes import install as install_mailboxes
+    install_mailboxes(app, store)
     install_credential_cards(app, store, app.state.vault, auth, BOTOPS, delegated_identity, settings_admin._manager)
     from . import company_storage
     company_storage.install(app, store, auth)

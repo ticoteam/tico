@@ -20,6 +20,11 @@ UI_MAP = {"ui/app/chat.js": ["chat", "imported-history"],
           "ui/app/visual-cards.js": ["visual-cards", "visual-fallback", "visual-hosted"],
           "ui/app/visual-media.js": ["visual-media", "visual-media-app"]}
 CONFORMANCE = "runner_support/tests/test_conformance.py"
+# These release contracts are marked slow and absent from default collection. Run them together on a separate VM:
+# recorded release times are CLI 108s, MCP 34s and goldens 3s; four workers keep it below the 180s job target with setup.
+CONTRACT_TESTS = ("backend/tests/test_e2e_mcp.py", "backend/tests/test_e2e_cli.py", "e2e/tests/test_contract.py")
+CONTRACT_INPUTS = ("backend/", "clients/", "e2e/", "templates/", "skills/", "roles/", "company/", "companies/",
+                   "company.yaml", "employees.yaml", "roles.yaml")
 # Each crate's `cargo test --locked` runs in the conformance job when any of its test inputs change:
 # runner-rs tests read runner_support/ and runner/ (the Python helpers they compare against: source_id, the redactor)
 # and the backend's gateway enroll contract fixture, which gateway_relay's tests check the runner against, and the runner wire
@@ -529,7 +534,7 @@ def selection(changed, event="pull_request", root=ROOT, graph=None, base=None, a
     A pull request runs the default tests that use a changed file (DependencyMap) and, of the browser scripts that
     do, the core ones the full suite runs; a UI change runs its mapped scripts or all of them. `added` names the new
     files (None: any may be new) and `core` the core browser scripts (None: read from scripts/ui-tests.cjs)."""
-    full = {"python": None, "browser": None, "caddy": True, "reason": "full default suite"}
+    full = {"python": None, "browser": None, "caddy": True, "contracts": True, "reason": "full default suite"}
     rust = sorted(crate for crate, inputs in RUST_INPUTS.items() if any(p.startswith(inputs) for p in changed))
     runner = bool(rust) or any(p.startswith(("runner/", "runner_support/", "runner-rs/", "relay-rs/")) or
                                p in ("backend/harness_actions.py", "backend/runner_versions.py") for p in changed)
@@ -556,7 +561,7 @@ def selection(changed, event="pull_request", root=ROOT, graph=None, base=None, a
         return {**full, "browser": ["--all"] if browser else None, "conformance": runner,
                 "reason": "unmapped, shared, deleted or uncertain change: full default suite", "uncertain": uncertain}
     if not changed:
-        return {"python": [], "browser": [], "conformance": False, "rust": [], "caddy": False,
+        return {"python": [], "browser": [], "conformance": False, "rust": [], "caddy": False, "contracts": False,
                 "reason": "documentation that no test or script reads"}
     affected = graph.affected(changed, added)
     python = sorted(p for p in affected if is_test(p) and not p.startswith("ui/"))
@@ -569,7 +574,9 @@ def selection(changed, event="pull_request", root=ROOT, graph=None, base=None, a
                 core = scripts
         browser |= scripts & set(core)
     caddy = any(n.startswith(CADDY_INPUTS) for n in changed) or bool(affected & set(CADDY_ROOTS))
+    contracts = any(n.startswith(CONTRACT_INPUTS) for n in changed) or bool(affected & set(CONTRACT_TESTS))
     return {"python": python, "browser": sorted(browser), "conformance": runner, "rust": rust, "caddy": caddy,
+            "contracts": contracts,
             "reason": "measured dependency map"}
 
 
@@ -679,6 +686,8 @@ def prepare(event, base, output, timings_path=None):
         loads += browser_loads
     if picked["conformance"]:
         jobs.append({"suite": "conformance", "files": [CONFORMANCE], "crates": picked["rust"]})
+    if picked["contracts"]:
+        jobs.append({"suite": "contracts", "files": list(CONTRACT_TESTS)})
     # Actions rejects an empty matrix. Keep an explicit successful selection job
     # for documented no-test changes, without invoking bare pytest.
     if not jobs:
@@ -708,7 +717,7 @@ def run(plan_path, suite):
     job = next(j for j in plan["matrix"]["include"] if j["suite"] == suite)
     files = job["files"]
     if suite == "selection":
-        if plan["python"] != [] or plan["browser"] != [] or plan["caddy"] or plan["conformance"]:
+        if plan["python"] != [] or plan["browser"] != [] or plan["caddy"] or plan["conformance"] or plan["contracts"]:
             raise RuntimeError("Selection-only job requires an explicitly unaffected plan")
         print("Documentation-only change: no affected tests")
         return 0
@@ -723,7 +732,7 @@ def run(plan_path, suite):
             raise RuntimeError("Python check requires an explicit nonempty existing file list")
         command = [sys.executable, "-m", "pytest", "-q", "-n", str(WORKERS),
                    "-o", "junit_family=xunit1", f"--junitxml=ci-results/{suite}.xml"]
-        if suite == "conformance":
+        if suite in ("conformance", "contracts"):
             command += ["-m", "slow"]
         command += files
     (ROOT / "ci-results").mkdir(exist_ok=True)

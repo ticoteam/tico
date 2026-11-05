@@ -2664,9 +2664,9 @@ class Execution:
             # computer (Settings > Computers). Its Screen starts at Control when it first offers one
             # (backend/screen.py).
             # Computers that existed before these defaults keep what they had.
-            c.execute("INSERT INTO runners(id,label,owner_id,token_hash,created_at,platform,accepts_member_bots,"
-                      "screen_default_pending) VALUES(?,?,?,?,?,?,?,1)",
-                      (rid, label, row["owner_id"], digest(token), H.now(), body.platform,
+            c.execute("INSERT INTO runners(id,label,owner_id,token_hash,created_at,platform,device_id,accepts_member_bots,"
+                      "screen_default_pending) VALUES(?,?,?,?,?,?,?,?,1)",
+                      (rid, label, row["owner_id"], digest(token), H.now(), body.platform, body.device_id,
                        int(cloud_machines.opens(cloud_bot)) if cloud_bot else 1))
             c.execute("UPDATE enrollments SET consumed_at=?,runner_id=? WHERE code_hash=?",
                       (H.now(), rid, digest(body.code)))
@@ -2679,6 +2679,10 @@ class Execution:
 
     def heartbeat(self, c, who, body, *, live_tasks=None):
         row = self.runner(c, who)
+        # An upgraded runner fills a legacy enrollment once. A missing or changed report never erases its identity.
+        if body.device_id and row["device_id"] is None:
+            c.execute("UPDATE runners SET device_id=? WHERE id=? AND device_id IS NULL",
+                      (body.device_id, who.runner_id))
         now = H.now()
         awake_since = self.waking(row, now)
         self.record_contact(now)
@@ -2742,7 +2746,7 @@ class Execution:
         reported = (body.version, stored[1] or body.platform, body.capacity, encode(readiness),
                     encode(sorted(set(body.capabilities))))
         # The beat's state is one upsert into runner_states (the runner's contact, the restart under way, its checkout and,
-        # when the report changed, the report). The identity row changes only when it has no platform yet.
+        # when the report changed, the report). Identity fields are filled only when still unknown.
         state = {"last_seen_at": now, "awake_since": awake_since, "readiness_at": now}
         # A restart under way is kept until the heartbeat that no longer carries it: the restarted runner's first. A time
         # ahead of the server's clock reads as now.
@@ -2766,6 +2770,8 @@ class Execution:
         if reported != stored:
             state.update(version=body.version, capacity=body.capacity, readiness=reported[3], capabilities=reported[4])
         runner_states.save(c, who.runner_id, **state)
+        from . import cloud_machines
+        cloud_machines.checked_in(c, who.runner_id)
         if reported != stored:
             if not stored[1] and body.platform:
                 c.execute("UPDATE runners SET platform=? WHERE id=? AND coalesce(platform,'')=''",
@@ -5794,7 +5800,7 @@ class Execution:
                 if task['status'] not in ('open', 'doing', 'waiting', 'review', 'ready'):
                     continue
                 H.task_update(c, H.KEEPER, task['id'], status='done', quiet=True,
-                              note='Recovery decisions saved. Tico applies deferred choices when the lane frees.')
+                              note='Recovery decisions saved. Tico applies deferred choices when the lane frees.', strict=False)
 
     def _decide(self, c, row, attempt_id, decision, note, actor, *, action='job.reconcile', shown=None, deferred=False, saved=False,
                 cause=None):

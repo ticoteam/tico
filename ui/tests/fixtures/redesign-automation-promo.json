@@ -1,0 +1,9 @@
+{
+  "message": {
+    "mailbox": "dana@acme.example",
+    "id": "promo-sample",
+    "from": "promo@deals.example",
+    "subject": "Sale",
+    "body": "50% off"
+  }
+}

@@ -1523,7 +1523,7 @@ TASK_ATTACH = _default_task_attach
 def attach_to_task(ctx, task_id, draft_id, attachments):
     """Put each `--attach` file on the draft's task so the approver can open it. Returns
     {sha256: file id} for the files that went up; a missing task or a failed upload leaves the
-    draft as it is and the approval request without links."""
+    draft as it is and the optional approval request without links."""
     if not task_id or not draft_id or ctx.dry:
         return {}
     ids = {}
@@ -1542,7 +1542,7 @@ def attach_to_task(ctx, task_id, draft_id, attachments):
 
 
 def approval_request(ctx, draft_id, to, cc, subject, body, files, file_ids=None, task_id=""):
-    """The Tico send approval a human decides for a draft with files: the existing `send` payload
+    """An optional Tico send approval request for a draft with files: the existing `send` payload
     plus this draft's id and each file's name, size and sha256, which the send checks again.
     `file_ids` ({sha256: Tico file id}) adds a `file_id` to the files that are on the task, so the
     approval card can open them; the send never compares it."""
@@ -1755,7 +1755,7 @@ def make_draft(ctx, to, subject, body, reply_to="", cc=(), slot=None,
                "created": created, "reply": bool(reply_to), "chars": len(body),
                "attachments": files, "review": verdict.get("backend"),
                "review_ok": None if not verdict.get("available") else verdict.get("ok")})
-    # The files go on the draft's task before the request is printed, so the approver can open them.
+    # Keep the files on the task, with links in the optional send approval payload.
     task_id = draft_task(ctx) if files else ""
     file_ids = attach_to_task(ctx, task_id, draft_id, attachments) if files else {}
     payload = {"ok": True, "employee": ctx.slug, "mailbox": ctx.mailbox, "issue": ctx.issue,
@@ -1763,7 +1763,6 @@ def make_draft(ctx, to, subject, body, reply_to="", cc=(), slot=None,
                "to": to, "cc": cc, "subject": subject, "reply_to": reply_to or "",
                "attachments": files, "created": created, "updated": not created, "dry_run": ctx.dry,
                "body_sha256": hashlib.sha256(body.encode()).hexdigest(),   # what a send approval names
-               "send_needs_approval": bool(files),     # check_send: an attached send needs a yes
                "approval_request": (approval_request(ctx, draft_id, to, cc, subject, body, files,
                                                      file_ids, task_id) if files else None),
                "label": lb.DRAFTED if not review_no else f"{lb.DRAFTED}+{lb.NEEDS_OWNER}",
@@ -1788,8 +1787,7 @@ def draft_text(p):
              f"  subject: {p['subject']}",
              f"  thread:  {p['thread'] or '(new)'}",
              *(["  attach:  " + ", ".join(f"{a['name']} ({a['size']} bytes)"
-                                          for a in p["attachments"])
-                + "; sending it needs the approval below"] if p.get("attachments") else []),
+                                          for a in p["attachments"])] if p.get("attachments") else []),
              f"  draft:   {p['draft'] or '(not created: dry run)'}",
              f"  key:     {p['key'][:16]}...",
              f"  lint:    {p['lint']['summary']}",
@@ -1803,19 +1801,11 @@ def draft_text(p):
                      "downgraded to a draft.")
     if not p["dry_run"]:
         lines.append(f"  labelled {p['label']}; the owner can see it in Gmail.")
-    if p.get("approval_request"):
-        req = p["approval_request"]
-        lines += ["", "  sending it needs this approval (a person decides it; then "
-                      "`mail send --draft ... --approval-issue <approval id>`):",
-                  *("    " + line for line in req["text"].splitlines()),
-                  "  request it with:", "    " + req["command"]]
     return "\n".join(lines) + "\n"
 
 
 def cmd_draft(args):
     ctx = Ctx(args, "draft")
-    if args.attach:                                     # the policy says no before any file is read
-        pl.check_attachments_allowed(ctx.policy, ctx.mailbox)
     payload, _ = make_draft(ctx, args.to, args.subject, body_of(args.body_file),
                             reply_to=args.reply_to, cc=args.cc or [],
                             approval=args.approval_issue,
@@ -1851,8 +1841,8 @@ def send_result(ctx, payload):
 def attempt_send(ctx, draft_id, to, cc, subject, thread_id, msgs, verdict, approval=None,
                  extra=None, attachments=(), body=None):
     """The full send chain. Returns a payload; a policy problem is a downgrade, not an error.
-    Attachments ride the same chain: they need allow_attachments and a per-message approval
-    whoever the recipient is, are named in the audit, and lift nothing. `body` is the text the
+    Attachments ride the same chain, are named in the audit, and lift nothing. An approval
+    that names files must match the draft and its files. `body` is the text the
     draft carries; a Tico send approval covers only the text it names by sha256."""
     names = [a["name"] for a in attachments or ()]
     files = list(attachments or ())
@@ -1873,7 +1863,7 @@ def attempt_send(ctx, draft_id, to, cc, subject, thread_id, msgs, verdict, appro
     # A hash-bound Tico send approval covers the exact text and keeps its advisory review.
     appr = (pl.approval_check(approval, pl.externals(ctx.policy, to),
                               pl.externals(ctx.policy, cc), thread_id,
-                              slug=ctx.slug, attachments=files or None, draft=draft_id, body=body)
+                              slug=ctx.slug, attachments=files, draft=draft_id, body=body)
             if approval else None)
     advisory = bool(appr and appr["full"] and not appr.get("owner_instruction"))
     review_note = ""
@@ -1890,8 +1880,7 @@ def attempt_send(ctx, draft_id, to, cc, subject, thread_id, msgs, verdict, appro
         if not advisory:
             if not approval:
                 why += (". If the owner told you in Tico to send this, send again with "
-                        "--approval-issue <the id of that message>; with files, use the Tico send "
-                        "approval `mail draft` asked for")
+                        "--approval-issue <the id of that message>")
             elif appr and not appr.get("full"):
                 why += f". --approval-issue {approval} did not count: {appr['detail']}"
             elif appr:
@@ -1992,7 +1981,7 @@ def cmd_send(args):
     allowance = pl.allowance_for(policy, ctx.slug, ctx.mailbox)
     appr = (pl.approval_check(args.approval_issue, pl.externals(policy, to),
                               pl.externals(policy, cc), thread_id, slug=ctx.slug,
-                              attachments=files or None, draft=args.draft, body=sent_text)
+                              attachments=files, draft=args.draft, body=sent_text)
             if args.approval_issue else None)
     res = ln.run(body, subject=subject, to=to, cc=cc, slug=ctx.slug,
                  reply_to=thread_id if msgs else "", allowance=allowance,
@@ -2222,8 +2211,7 @@ def cmd_policy_show(args):
              f"  sends per day           {d['caps']['max_sends_per_day']}",
              f"  per-recipient cooldown  {d['caps']['per_recipient_cooldown_days']} days",
              f"  external recipients     {d['caps']['max_external_recipients']}",
-             f"  cc outside acme.example     {d['caps']['allow_cc_external']}",
-             f"  attachments             {d['caps']['allow_attachments']}"]
+             f"  cc outside acme.example     {d['caps']['allow_cc_external']}"]
     if d["allowance"]:
         a = d["allowance"]
         lines += ["", "  standing allowance", f"    purpose   {a['purpose']}",
@@ -2922,8 +2910,8 @@ def build_parser():
                          "a full yes allows external Cc")
     df.add_argument("--attach", action="append", default=None, metavar="PATH",
                     help="a file in this bot's own folder to attach (relative paths start "
-                         "there); repeat for several (25 MB in all). Needs allow_attachments in "
-                         "the mailbox's policy, and sending it needs --approval-issue")
+                         "there); repeat for several (25 MB in all). Uses the same send and "
+                         "approval rules as mail without files")
     df.set_defaults(func=cmd_draft)
 
     dc = writes(base(sub.add_parser("discard", help="delete an unsent draft this employee made")))

@@ -254,7 +254,7 @@ STABLE = [
     ("/api/v2/task-types/{type_id}", "delete", "Tasks", "deleteTaskType", "Delete an unused task type (movers only)", "TaskTypeResult"),
     ("/api/v2/task-types/{type_id}/delete", "post", "Tasks", "deleteTaskTypePost", "Delete an unused type for clients using POST", "TaskTypeResult"),
     ("/api/v2/tasks", "get", "Tasks", "listTasks",
-     "Tasks the caller can see; type, step, number and updated_since filter, member=<actor> keeps the tasks that "
+     "Tasks the caller can see; q matches title words or #N; type, step, number and updated_since filter, member=<actor> keeps the tasks that "
      "person or bot is on in some role (role=<name> narrows it to one), sort=step orders a board's columns, "
      "brief=true leaves out bodies. Snoozed tasks are left out unless snoozed=only|all or asked for by ids or "
      "number. Each answer carries a `cursor`; changed_after=<cursor> with the same filters "
@@ -2840,6 +2840,27 @@ SCHEMAS.update({
 })
 
 
+STABLE.extend([
+    ('/api/v2/meetings/{rid}/tasks', 'get', 'Meetings', 'listMeetingTasks',
+     'Readable tasks linked to a shared meeting; limit 20 by default, at most 50, cursor and 64 KB cap', 'MeetingTaskLinks'),
+    ('/api/v2/meetings/{rid}/tasks', 'post', 'Meetings', 'linkMeetingTasks',
+     'Link up to 20 readable tasks; sent is only for their requester; links never widen access', 'MeetingTaskLinks'),
+    ('/api/v2/meetings/{rid}/tasks/{tid}', 'delete', 'Meetings', 'removeMeetingTask',
+     'Remove a link as its creator, meeting owner, task owner or requester, or org owner', 'MeetingTaskRemoved'),
+    ('/api/v2/tasks/{tid}/meetings', 'get', 'Tasks', 'listTaskMeetings',
+     'Readable linked meetings, newest first; limit 20 by default, at most 50, cursor and 64 KB cap', 'TaskMeetings'),
+])
+SCHEMAS.update({
+    'MeetingTaskLink': obj({'task_id': 's', 'number': {'type': ['integer', 'null']}, 'title': 's',
+                            'status': 's', 'kind': {'enum': ['linked', 'sent', 'proposal']}, 'created_by': 's'}),
+    'MeetingTaskLinks': obj({'tasks': items(ref('MeetingTaskLink')), 'next_cursor': 'n'}),
+    'TaskMeeting': obj({'meeting_id': 's', 'title': 's', 'started_at': 's', 'url': 's',
+                        'kind': {'enum': ['linked', 'sent', 'proposal']}}),
+    'TaskMeetings': obj({'meetings': items(ref('TaskMeeting')), 'next_cursor': 'n'}),
+    'MeetingTaskRemoved': obj({'ok': 'b'}),
+})
+
+
 def spec(app):
     """The v2 document for this app: the stable operations of `app.openapi()`, described."""
     full = copy.deepcopy(app.openapi())
@@ -3138,6 +3159,47 @@ SCHEMAS.update({
     "AssistantChangeResult": obj({"id": "s", "restored": "b", "already": "b", "object": "s"}),
 })
 
+
+# Settings > Mailboxes (backend/mailboxes.py): which inboxes Tico uses and who may use each.
+TAGS["Mailboxes"] = "Which mailboxes Tico uses and who may use each: Read, or Read and write (organize, draft and send, as far as the company allows)."
+_MAILBOX_LEVEL = {"enum": ["none", "read", "read_write"]}
+_MAILBOX_REF = obj({"id": "s", "name": "s"})
+SCHEMAS.update({
+    "Mailbox": obj({"id": "s", "address": "s", "provider": "s", "kind": {"enum": ["personal", "shared"]},
+                    "person_id": "n", "person_name": "s", "connection": {"enum": ["workspace", "personal"]},
+                    "status": {"enum": ["active", "stopped"]},
+                    "state": {"enum": ["connected", "not_connected", "awaiting_person", "stopped"]},
+                    "level": _MAILBOX_LEVEL, "routines": items(_MAILBOX_REF)}),
+    "MailboxMay": obj({"read": "b", "organize": "b", "send": "b", "change_calendar": "b"}),
+    "MailboxList": obj({"admin": "b", "domain": "s", "may": ref("MailboxMay"), "mine": {"anyOf": [ref("Mailbox"), {"type": "null"}]},
+                        "shared": items(ref("Mailbox")), "mailboxes": items(ref("Mailbox"))}),
+    "MailboxResult": obj({"mailbox": ref("Mailbox")}),
+    "MailboxDetail": obj({"mailbox": ref("Mailbox"), "can_manage": "b", "can_stop": "b",
+                          "accesses": items(obj({"id": "n", "grantee_type": {"enum": ["person", "bot", "admins"]},
+                                                 "grantee_id": "s", "name": "s", "level": {"enum": ["read", "read_write"]},
+                                                 "implicit": "b"})),
+                          "routines": items(obj({"id": "s", "name": "s", "enabled": "b", "can_edit": "b"})),
+                          "may": ref("MailboxMay"),
+                          "candidates": items(obj({"type": {"enum": ["person", "bot"]}, "id": "s", "name": "s"}))}),
+})
+STABLE.extend([
+    ("/api/v2/mailboxes", "get", "Mailboxes", "listMailboxes",
+     "An admin's every mailbox (person, status, routines); for everyone their own mailbox and the ones shared with them", "MailboxList"),
+    ("/api/v2/mailboxes", "post", "Mailboxes", "connectMailbox",
+     "An admin connects a mailbox: a person's own by verified email, else a shared inbox when `shared`, else it waits for its person", "MailboxResult"),
+    ("/api/v2/mailboxes/{mid}", "get", "Mailboxes", "getMailbox",
+     "One mailbox: who can use it, its routines, and who could be added (for whoever manages it)", "MailboxDetail"),
+    ("/api/v2/mailboxes/{mid}", "delete", "Mailboxes", "stopMailbox",
+     "Stop using this mailbox in Tico (an admin, or the person whose mailbox it is)", "MailboxResult"),
+    ("/api/v2/mailboxes/{mid}/share", "post", "Mailboxes", "shareMailbox",
+     "An admin makes a mailbox that has no person a shared inbox", "MailboxDetail"),
+    ("/api/v2/mailboxes/{mid}/accesses", "post", "Mailboxes", "addMailboxAccess",
+     "Give a person or a bot Read, or Read and write (the mailbox's owner, or an admin for a shared inbox)", "MailboxDetail"),
+    ("/api/v2/mailboxes/{mid}/accesses/{access_id}", "patch", "Mailboxes", "changeMailboxAccess",
+     "Change one access between Read and Read and write", "MailboxDetail"),
+    ("/api/v2/mailboxes/{mid}/accesses/{access_id}", "delete", "Mailboxes", "removeMailboxAccess",
+     "Take one person's or bot's access away", "MailboxDetail"),
+])
 
 def generate():
     """The document for a default installation: what docs/openapi/v2.json holds."""

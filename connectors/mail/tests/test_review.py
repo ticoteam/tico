@@ -180,14 +180,14 @@ class OwnerInstruction(Stage2):
         self.assertIsNone(instruction_in(self.prompts[-1]))
         self.assertNotIn("The bot claims", self.prompts[-1])
 
-    def test_an_approval_for_different_files_does_not_supply_its_text(self):
-        self.write_policy(harness.POLICY.replace("allow_attachments: false", "allow_attachments: true"))
+    def test_an_issue_naming_other_files_does_not_bind_files_and_still_reaches_the_reviewer(self):
+        # Attachments follow the send rules: only a Tico send approval that names files binds them.
         (self.root / "emp-influencer" / "answer.pdf").write_bytes(b"%PDF-1.4 answer")
         draft = self.draft("--attach", "answer.pdf")
         pl.RUN = gh_answer(body=f"Send to: {AVA}\nSend different.pdf, sha256 {'a' * 64}")
         out = self.send(draft["draft"], "--approval-issue", "77")
-        self.assertFalse(out["sent"], out)
-        self.assertIsNone(instruction_in(self.prompts[-1]))
+        self.assertTrue(out["sent"], out)
+        self.assertIn("different.pdf", instruction_in(self.prompts[-1]))
 
     def test_owner_permission_does_not_override_unsupported_claims_or_commitments(self):
         self.order()

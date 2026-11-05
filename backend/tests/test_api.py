@@ -175,9 +175,12 @@ def put(api, path, body, token="ana-test", expected=200):
     return r.json()
 
 
-def runner(api, operator="ana", label="Test Mac"):
+def runner(api, operator="ana", label="Test Mac", device_id=None):
     code = post(api, "enrollments", {"operator": operator})["code"]
-    return post(api, "runners/enroll", {"code": code, "label": label, "platform": "test"})
+    body = {"code": code, "label": label, "platform": "test"}
+    if device_id is not None:
+        body["device_id"] = device_id
+    return post(api, "runners/enroll", body)
 
 
 def test_the_installers_enrollment_request_needs_an_idempotency_key(api):
