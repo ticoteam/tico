@@ -133,9 +133,9 @@ maintained, replacing the catch-all is a manifest and a host adapter, described 
 
 ## How providers map to harnesses
 
-The owner enables providers in **Settings > Models** (`backend/providers.py`). Each provider names its runtime
-(the host adapter) and its harness (the manifest). Enabling a provider offers its models; it does not install
-anything. Each computer installs only:
+The owner turns providers on in the first-run setup, or by adding a company subscription or the Tico Gateway key in
+**Settings > Models** (`backend/providers.py`). Each provider names its runtime (the host adapter) and its harness (the
+manifest). Enabling a provider offers its models; it does not install anything. Each computer installs only:
 
 - the harness of every bot assigned to it, and of each bot's fallback (`fallback.harness`);
 - with no bot yet, the harness of the company's default model (`default_runtime` in `GET /api/v2/config`), so the
