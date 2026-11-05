@@ -378,7 +378,7 @@ fn parts(attempt: &Value, names: &Names, after: Option<&str>, resumed: bool, rep
     // last turn, its own replies included, and has seen nothing older. A resumed thread that a side session ran after
     // is given the replies that session made.
     let own_replies = truthy(&attempt["_replaced"]) || truthy(&attempt["_side_ran"]);
-    let pointer = if (!history.is_empty() && !own_replies) || all.is_empty() {
+    let pointer = if make_page || (!history.is_empty() && !own_replies) || all.is_empty() {
         String::new()
     } else {
         format!(" earlier messages are in {app}; `hub conversation show {conv_id}` reads them.")
@@ -496,14 +496,15 @@ mod tests {
 
     #[test]
     fn make_page_prompt_never_loads_private_learning_or_shared_checkout_memory() {
+        let message = json!({"id": "m1", "from_actor": "human:ana", "body": "Make a public plan"});
         let turn = json!({"id": "make-1", "bot": "coo", "config": {"session": "bot"},
             "conversation": {"id": "private-chat", "scope": "personal"},
             "make_page": {"task": {"id": "t1"}},
             "learned": {"personal": ["PRIVATE-LEARNING-MARKER"], "company": {"vision": "PRIVATE-COMPANY-MARKER"}},
-            "message": {"body": "Make a public plan"}});
+            "message": message, "history": [message]});
         let text = prompt(&turn, &Names::from_config(None), None, false);
         assert!(text.contains("scratch directory") && text.contains("hub page publish"), "{text}");
-        for private in ["PRIVATE-LEARNING-MARKER", "PRIVATE-COMPANY-MARKER", "hub conversation show", "Read AGENT.md", "Read the working rules"] {
+        for private in ["PRIVATE-LEARNING-MARKER", "PRIVATE-COMPANY-MARKER", "hub conversation", "hub thread", "Read AGENT.md", "Read the working rules"] {
             assert!(!text.contains(private), "{text}");
         }
     }

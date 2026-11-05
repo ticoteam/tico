@@ -25,6 +25,21 @@ journey('make-page', async ({hub, browser, phone}) => {
   await section.getByRole('button', {name: 'Make page', exact: true}).click();
   const card = section.locator('.tp-making');
   await card.filter({hasText: 'Making page…'}).waitFor({timeout: t(10000)});
+  status.state = 'update_required';
+  await page.evaluate(cid => liveEmit('runs', {conversation_id: cid, state: 'queued'}), status.conversation_id);
+  const retry = card.getByRole('button', {name: 'Retry', exact: true});
+  await retry.waitFor({timeout: t(10000)});
+  assert.match(await card.innerText(), /Update this computer to make pages/);
+  const pendingMessage = status.message_id;
+  await retry.click();
+  await page.waitForFunction(() => {
+    const button = document.querySelector('[data-tp-retry]');
+    return button && !button.disabled;
+  }, null, {timeout: t(10000)});
+  assert.equal(status.message_id, pendingMessage, 'Retry preserves the queued request');
+  status.state = 'making';
+  await card.getByRole('button', {name: 'Retry', exact: true}).click();
+  await card.filter({hasText: 'Making page…'}).waitFor({timeout: t(10000)});
   assert.equal(await field.evaluate(el => el.matches(':user-invalid')), false, 'a sent request leaves no validation error');
   assert.equal(await section.getByRole('button', {name: 'Make page', exact: true}).isDisabled(), true);
   await shot(page, 'make-page-' + (phone ? 'phone' : 'desktop'));

@@ -2881,7 +2881,7 @@ STABLE.extend([
     ('/api/v2/tasks/{tid}/make-page', 'post', 'Tasks', 'makeTaskPage',
      "Ask the caller's own Assistant to make and pin a page from the task's shared context; 409 at 60 pins", 'AssistantSent'),
     ('/api/v2/tasks/{tid}/make-page', 'get', 'Tasks', 'getTaskMakePage',
-     "The caller's latest Make page request on this task, or null; making, made or failed", 'TaskMakePage'),
+     "The caller's latest Make page request on this task, or null; making, made, failed or update_required (queued for an updated runner)", 'TaskMakePage'),
 ])
 SCHEMAS.update({
     'MeetingTaskLink': obj({'task_id': 's', 'number': {'type': ['integer', 'null']}, 'title': 's',
@@ -2896,7 +2896,7 @@ SCHEMAS.update({
     'TaskContextMeeting': obj({'id': 's', 'title': 's', 'date': 's'}),
     'TaskContext': obj({'pages': items(ref('TaskContextPage')), 'meetings': items(ref('TaskContextMeeting'))}),
     'TaskMakePage': obj({'make_page': {'anyOf': [obj({'message_id': 's', 'conversation_id': 's',
-                                                  'state': {'enum': ['making', 'made', 'failed']}}),
+                                                  'state': {'enum': ['making', 'made', 'failed', 'update_required']}}),
                                                {'type': 'null'}]}}),
     'MeetingTaskRemoved': obj({'ok': 'b'}),
 })

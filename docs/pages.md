@@ -178,10 +178,13 @@ through a later turn's upload scan.
 The card says **Making page…** until the page is pinned. A turn that ends without a pin says **Not made · Open chat**.
 The card survives reopening the task. Publishing identical HTML again still completes that request, retaining the
 existing version. A task with 60 pins returns **This task has 60 pins**; unlink a page to make room.
+An older runner receives no Make page claim. The card says **Update this computer to make pages · Retry**;
+Retry checks the queued request again without duplicating it. An updated runner advertises `make_page` and claims
+the request in a fresh session, clearing the update state.
 Publication checks the initiating request and every logged file or meeting read again. Removing a source from the
 context or making a meeting Participants only refuses publication with 403. A link never widens a source's access.
 
 `POST /api/v2/tasks/{id}/make-page {text}` sends your own Assistant message with the server's `refs.make_page` mark;
 other message routes refuse that mark with 403. `GET` on the same route returns your latest request's status
-(`making`, `made`, or `failed`), or null. These controls are for the person acting as themselves. The Assistant uses
+(`making`, `made`, `failed`, or retryable `update_required`), or null. These controls are for the person acting as themselves. The Assistant uses
 the existing `hub page publish FILE --task ID` / `hub_page_publish` tool, without `--source`.

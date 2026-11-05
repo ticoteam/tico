@@ -129,6 +129,9 @@ SOURCE_CONTINUE = "source_continue_v1"
 # so the server gives it each chat's own session instead (start_claimed).
 THREADS = "threads_v1"
 
+# Make page requires a fresh provider session and disposable scratch, never a private Assistant session or checkout.
+MAKE_PAGE = "make_page"
+
 
 def positive_effect(c, aid, body):
     """Evidence the turn did real work even when its event stream looks empty (sparse host telemetry).
@@ -2183,6 +2186,8 @@ def job_refusal(c, job, followed, ready, busy, lanes, roots, live=frozenset(), *
     task_id = work_task_id(message, conversation)
     task = H.task(c, task_id) if task_id else None
     refs = message.get("refs") or {}
+    if "make_page" in refs and (not runner or MAKE_PAGE not in capability_set(runner["capabilities"])):
+        return "make_page_upgrade"
     from . import task_check_backs
     if task_check_backs.stale(c, message, job):
         return "obsolete_check_back"

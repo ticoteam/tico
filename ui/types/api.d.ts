@@ -5501,7 +5501,7 @@ export type TaskMakePage = {
   make_page: {
   conversation_id: string;
   message_id: string;
-  state: "making" | "made" | "failed";
+  state: "making" | "made" | "failed" | "update_required";
 } | null;
 };
 

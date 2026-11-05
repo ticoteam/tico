@@ -247,7 +247,7 @@ function taskPagesAdopt(d, task) {
   const make = $('.tp-make', slot), prompt = $('input', make), error = $('.tp-error', slot);
   make.onsubmit = async ev => {
     ev.preventDefault();
-    if (slot.tpSending || slot.tpMaking?.state === 'making' || !prompt.value.trim()) return;
+    if (slot.tpSending || ['making', 'update_required'].includes(slot.tpMaking?.state) || !prompt.value.trim()) return;
     slot.tpSending = true; $('button', make).disabled = true; error.hidden = true;
     try {
       const r = await post('/v2/tasks/' + encodeURIComponent(id) + '/make-page', {text: prompt.value.trim()});
@@ -257,7 +257,7 @@ function taskPagesAdopt(d, task) {
       taskPageMakeDraw(d, {state: 'making', conversation_id: r.message.conversation_id});
       await taskPageMakeLoad(d);
     } catch (e) { if (d.tpEl === slot) { error.textContent = e.message; error.hidden = false; } }
-    finally { slot.tpSending = false; $('button', make).disabled = slot.tpMaking?.state === 'making'; }
+    finally { slot.tpSending = false; $('button', make).disabled = ['making', 'update_required'].includes(slot.tpMaking?.state); }
   };
   const picker = $('.tp-picker', slot), input = $('input', picker), results = $('.tp-results', picker);
   $('[data-tp-link]', slot).onclick = () => { picker.hidden = false; input.focus(); };
@@ -295,25 +295,35 @@ function taskPagesAdopt(d, task) {
     if (d.open && d.tpEl === slot && (e.kinds || [e.kind]).includes('files') && String(e.id) === id)
       liveSoon('task-pages:' + d.id + ':' + id, refresh, 200);
   }), liveOn('runs', e => {
-    if (slot.tpMaking?.state === 'making' && e.conversation_id === slot.tpMaking.conversation_id)
+    if (['making', 'update_required'].includes(slot.tpMaking?.state) && e.conversation_id === slot.tpMaking.conversation_id)
       liveSoon('task-pages:' + d.id + ':' + id, refresh, 200);
   }), liveOn('reset', refresh)];
-  const poll = liveFallback(() => { if (slot.tpMaking?.state === 'making') refresh(); }, 5000);
+  const poll = liveFallback(() => { if (['making', 'update_required'].includes(slot.tpMaking?.state)) refresh(); }, 5000);
   d.tpOff = () => { offs.forEach(off => off()); slot.tpFollow?.(); clearInterval(poll); };
   void taskPagesLoad(d);
 }
 function taskPageMakeDraw(d, status) {
   const slot = d.tpEl;
   if (!slot) return;
-  const cid = status?.state === 'making' ? status.conversation_id : null;
+  const pending = ['making', 'update_required'].includes(status?.state);
+  const cid = pending ? status.conversation_id : null;
   if (slot.tpFollowCid !== cid) {
     slot.tpFollow?.(); slot.tpFollow = cid ? liveFollow(cid) : null; slot.tpFollowCid = cid;
   }
   slot.tpMaking = status;
   const card = $('.tp-making', slot);
   card.hidden = !status || status.state === 'made';
-  card.innerHTML = status?.state === 'making' ? 'Making page…' : 'Not made · <a href="#/assistant">Open chat</a>';
-  $('button', $('.tp-make', slot)).disabled = slot.tpSending || status?.state === 'making';
+  card.innerHTML = status?.state === 'making' ? 'Making page…' : status?.state === 'update_required'
+    ? 'Update this computer to make pages · <button type="button" class="ghost" data-tp-retry>Retry</button>'
+    : 'Not made · <a href="#/assistant">Open chat</a>';
+  const retry = $('[data-tp-retry]', card);
+  if (retry) retry.onclick = async () => {
+    retry.disabled = true;
+    try { await taskPageMakeLoad(d); }
+    catch (e) { toast(e.message, true); }
+    finally { retry.disabled = false; }
+  };
+  $('button', $('.tp-make', slot)).disabled = slot.tpSending || pending;
 }
 async function taskPageMakeLoad(d) {
   const slot = d.tpEl;

@@ -15,6 +15,8 @@
   },
   "error": "ErrorEnvelope",
   "gated": {
+    "heartbeat.request.capabilities": "runner-rs/src/lanes.rs refused_field drops capabilities on an older server's 422 until its list fits; Make page remains queued without its flag",
+    "heartbeat.request.capabilities[]=\"make_page\"": "runner-rs/src/lanes.rs refused_field drops it on an older server's 422; the server hands Make page only to a runner advertising it",
     "heartbeat.request.readiness.worktree_recovery": "runner-rs/src/readiness_extra.rs OPTIONAL: an older server's 422 drops this field for ten minutes; retired worktrees are not allocated to computers without this capability",
     "start_place.request.harness_allocated": "runner-rs/src/execute.rs post_allocated: a 422 naming harness_allocated retries without the field",
     "started.request.harness_allocated": "runner-rs/src/execute.rs post_allocated: a 422 naming harness_allocated retries without the field",

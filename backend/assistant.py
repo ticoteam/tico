@@ -1628,7 +1628,7 @@ def install(app, store, auth, mutate, onboarding):
         with store.read_transaction() as c:
             task = auth.task(c, who, auth.resolve_task(c, who, tid))
             room = find_room(c, who.actor)
-            row = c.execute("SELECT m.id,m.conversation_id,j.state,a.state AS attempt_state,a.lease_until "
+            row = c.execute("SELECT m.id,m.conversation_id,j.bot_id,j.state,a.state AS attempt_state,a.lease_until "
                             "FROM messages m LEFT JOIN jobs j ON j.message_id=m.id "
                             "LEFT JOIN attempts a ON a.id=j.attempt_id WHERE m.conversation_id=? "
                             "AND m.sender_id=? AND m.deleted_at IS NULL AND json_extract(m.refs,'$.assistant')=1 "
@@ -1645,8 +1645,15 @@ def install(app, store, auth, mutate, onboarding):
                              ("task:" + task["id"], row["id"])).fetchone()
             active = (row["state"] == "queued" or row["state"] in ("leased", "running")
                       and row["attempt_state"] in ("leased", "running") and str(row["lease_until"] or "") > H.now())
+            state = "made" if made else "making" if active else "failed"
+            if not made and row["state"] == "queued":
+                from .execution import MAKE_PAGE, capability_set
+                computer = c.execute("SELECT r.capabilities FROM assignments a JOIN runners_with_state r ON r.id=a.runner_id "
+                                     "WHERE a.bot=?", (row["bot_id"],)).fetchone()
+                if computer and MAKE_PAGE not in capability_set(computer["capabilities"]):
+                    state = "update_required"
             return {"make_page": {"message_id": row["id"], "conversation_id": row["conversation_id"],
-                                  "state": "made" if made else "making" if active else "failed"}}
+                                  "state": state}}
 
     # Files and pictures in a person's own Assistant chat (the Ask panel, the Assistant page), stored on the message like
     # any bot chat's, in their room's conversation.

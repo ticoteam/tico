@@ -38610,7 +38610,7 @@
         ]
       },
       "get": {
-        "summary": "The caller's latest Make page request on this task, or null; making, made or failed",
+        "summary": "The caller's latest Make page request on this task, or null; making, made, failed or update_required (queued for an updated runner)",
         "operationId": "getTaskMakePage",
         "parameters": [
           {
@@ -73377,7 +73377,8 @@
                     "enum": [
                       "making",
                       "made",
-                      "failed"
+                      "failed",
+                      "update_required"
                     ]
                   }
                 },
