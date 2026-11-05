@@ -309,9 +309,10 @@ def test_rehearsal_keeps_restrictions_but_discards_send_permits_and_proofs(inbox
     '<style>p::before { content: "We agree to pay $100000"; }</style><p>Thanks.</p>',
     '<p style="content: \'We agree to pay $100000\'">Thanks.</p>',
     '<link rel="stylesheet" href="https://assets.acme.example/contract.css"><p>Thanks.</p>',
+    '<!--[if mso]><p>We agree to pay $100000.</p><![endif]--><p>Thanks.</p>',
 ])
 @pytest.mark.parametrize("prompt_legal", [False, True])
-def test_css_dependent_body_is_previewed_but_cannot_be_classified_as_harmless(inbox, html, prompt_legal):
+def test_render_dependent_body_is_previewed_but_cannot_be_classified_as_harmless(inbox, html, prompt_legal):
     autonomous(inbox, ask_legal_money=prompt_legal)
     msg = EmailMessage()
     msg["From"], msg["To"], msg["Subject"] = BOX, CONTACT, "Update"

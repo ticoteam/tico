@@ -746,7 +746,7 @@ policy: company admins, an inbox's person/admin, or a bot's manager for that bot
 change these settings for them.
 
 The default always-ask rules cover a new correspondent, attachments, more than ten recipients, and legal or money
-matters. Inline and unnamed non-body MIME parts count as files. Decide reads all plain-text and sanitized HTML body representations; unavailable, incomplete or over-limit classification also asks a person, even when the legal/money prompt is off. CSS-dependent HTML and referenced stylesheets need review, with stylesheet text included in the frozen preview. This is triage, not a
+matters. Inline and unnamed non-body MIME parts count as files. Decide reads all plain-text and sanitized HTML body representations; unavailable, incomplete or over-limit classification also asks a person, even when the legal/money prompt is off. CSS-dependent HTML, referenced stylesheets and conditional HTML need review; the frozen preview includes stylesheet and conditional-body text. This is triage, not a
 security boundary. Read/write grants, Never, sender identity, content-bound approval and caps remain deterministic.
 The approval rule is configurable: bot managers (the default), inbox admins, or named people. Hash-bound approvals
 must match the content, subject, recipients and files. The approval card loads an authorized frozen body preview and links to the exact attachment bytes before enabling Approve. An in-chat “send it” must be an unambiguous affirmative instruction from an authorized person after they viewed the frozen send, and must name that send or reply to its approval message. Otherwise use the content-bound card. Changing content requires another send and approval.

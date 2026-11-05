@@ -42,6 +42,16 @@ class VisibleHTML(HTMLParser):
         if not self.ignored:
             self.text.append("\n")
 
+    def handle_comment(self, data):
+        # Outlook can render conditional-comment bodies that ordinary HTML text extraction omits.
+        if data.lstrip().lower().startswith("[if"):
+            self.complete = False
+            self.text.append("\n" + data + "\n")
+
+    def unknown_decl(self, data):
+        self.complete = False
+        self.text.append("\n" + data + "\n")
+
     def handle_data(self, data):
         if not self.ignored:
             self.text.append(data)
