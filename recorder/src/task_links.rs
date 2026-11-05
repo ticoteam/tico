@@ -16,6 +16,15 @@ use std::{
     time::{Duration, Instant},
 };
 
+/// Request state is shared by jobs and the outbox worker, and never survives a process restart.
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct Activity {
+    pub destination: String,
+    pub task_ids: Vec<String>,
+    pub sending: bool,
+    pub error: String,
+}
+
 /// The link outbox runs even when no recording is open. Network failures retain the action keys.
 pub struct TaskLinkSync {
     stop: Arc<AtomicBool>,
@@ -54,8 +63,26 @@ impl TaskLinkSync {
                             if retries.get(&id).is_some_and(|(at, _)| Instant::now() < *at) {
                                 continue;
                             }
-                            let result = connect(&store, &destination)
-                                .and_then(|tico| tico.flush_saved_links(&store, &id));
+                            let result = match connect(&store, &destination) {
+                                Ok(tico) => tico.flush_saved_links(&store, &id),
+                                Err(error) => {
+                                    let ids = store
+                                        .context(&id)
+                                        .unwrap_or_default()
+                                        .task_link_operations
+                                        .into_iter()
+                                        .flat_map(|op| op.task_ids)
+                                        .collect();
+                                    store.set_link_activity(
+                                        &id,
+                                        &destination,
+                                        ids,
+                                        false,
+                                        "Couldn't update link.".into(),
+                                    );
+                                    Err(error)
+                                }
+                            };
                             if let Err(error) = result {
                                 let delay = retries
                                     .get(&id)
@@ -98,6 +125,41 @@ impl Drop for TaskLinkSync {
 }
 
 impl Store {
+    pub fn task_link_activity(&self, id: &str) -> Activity {
+        self.link_activity
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .get(id)
+            .cloned()
+            .unwrap_or_default()
+    }
+
+    fn set_link_activity(
+        &self,
+        id: &str,
+        destination: &str,
+        task_ids: Vec<String>,
+        sending: bool,
+        error: String,
+    ) {
+        let mut activity = self.link_activity.lock().unwrap_or_else(|e| e.into_inner());
+        if task_ids.is_empty() {
+            activity.remove(id);
+        } else {
+            activity.insert(
+                id.to_owned(),
+                Activity {
+                    destination: destination.to_owned(),
+                    task_ids,
+                    sending,
+                    error,
+                },
+            );
+        }
+        drop(activity);
+        self.poke();
+    }
+
     fn pending_task_links(&self) -> Result<Vec<(String, String)>> {
         let db = self.db()?;
         let mut query = db.prepare(
@@ -128,6 +190,36 @@ pub struct Task {
 }
 
 impl Tico {
+    fn link_request<T>(
+        &self,
+        store: &Store,
+        id: &str,
+        tasks: &[String],
+        send: impl FnOnce() -> Result<T>,
+    ) -> Result<T> {
+        store.set_link_activity(
+            id,
+            &self.destination.id,
+            tasks.to_vec(),
+            true,
+            String::new(),
+        );
+        let result = send();
+        match &result {
+            Ok(_) => {
+                store.set_link_activity(id, &self.destination.id, vec![], false, String::new())
+            }
+            Err(_) => store.set_link_activity(
+                id,
+                &self.destination.id,
+                tasks.to_vec(),
+                false,
+                "Couldn't update link.".into(),
+            ),
+        }
+        result
+    }
+
     pub fn linked_tasks(&self, meeting: &str, cursor: Option<&str>) -> Result<Value> {
         let mut url = reqwest::Url::parse("https://localhost/")?;
         url.query_pairs_mut().append_pair("limit", "50");
@@ -377,17 +469,20 @@ impl Tico {
             .iter()
             .find(|d| d.destination_id == self.destination.id && crate::live::saved_in_tico(d))
         {
+            let _drain = store.task_links_lock();
             let server_id = delivery.receipt["items"][item_id]["id"]
                 .as_str()
                 .context("This proposal is not saved")?;
-            self.call(
-                &format!(
-                    "/api/v2/meetings/{}/items/{server_id}/link",
-                    delivery.meeting_id
-                ),
-                Some(&json!({})),
-                &format!("recorder:{id}:accept-link:{server_id}"),
-            )?;
+            self.link_request(store, id, &[item.proposed_task_id.clone()], || {
+                self.call(
+                    &format!(
+                        "/api/v2/meetings/{}/items/{server_id}/link",
+                        delivery.meeting_id
+                    ),
+                    Some(&json!({})),
+                    &format!("recorder:{id}:accept-link:{server_id}"),
+                )
+            })?;
         }
         store.update_context(id, |c| {
             c.live_destination = self.destination.id.clone();
@@ -462,15 +557,17 @@ impl Tico {
         for op in context.task_link_operations {
             for batch in op.task_ids.chunks(20) {
                 let key = format!("recorder:{id}:links:{}:{}", op.id, hash(&json!(batch)));
-                let reply = if op.kind == "unlink" {
-                    self.unlink_meeting_task(&delivery.meeting_id, &batch[0], &key)?
-                } else {
-                    self.call(
-                        &format!("/api/v2/meetings/{}/tasks", delivery.meeting_id),
-                        Some(&json!({"task_ids":batch,"kind":op.kind})),
-                        &key,
-                    )?
-                };
+                let reply = self.link_request(store, id, batch, || {
+                    if op.kind == "unlink" {
+                        self.unlink_meeting_task(&delivery.meeting_id, &batch[0], &key)
+                    } else {
+                        self.call(
+                            &format!("/api/v2/meetings/{}/tasks", delivery.meeting_id),
+                            Some(&json!({"task_ids":batch,"kind":op.kind})),
+                            &key,
+                        )
+                    }
+                })?;
                 let skipped: Vec<_> = batch
                     .iter()
                     .enumerate()

@@ -348,6 +348,9 @@ pub struct Recorder {
     draft_status: String,
     link_tasks: Value,
     link_tasks_at: Instant,
+    link_tasks_generation: u64,
+    seen_task_links: Value,
+    link_activity: tico_recorder_native::task_links::Activity,
     chat_error: String,
     /// A question or message that failed, offered back in the input.
     chat_retry: String,
@@ -481,6 +484,9 @@ impl Recorder {
             draft_status: String::new(),
             link_tasks: Value::Null,
             link_tasks_at: Instant::now() - Duration::from_secs(60),
+            link_tasks_generation: 0,
+            seen_task_links: Value::Null,
+            link_activity: Default::default(),
             chat_error: String::new(),
             chat_retry: String::new(),
             adding: None,
@@ -627,7 +633,9 @@ impl Recorder {
         }
         let record = self.store.get(id)?;
         self.context = self.store.context(id).unwrap_or_default();
+        self.link_activity = self.store.task_link_activity(id);
         self.current = Some(record);
+        self.seen_task_links = self.task_links_snapshot();
         self.link_tasks = Value::Null;
         self.link_tasks_at = Instant::now() - Duration::from_secs(60);
         self.reset_saved();
@@ -773,21 +781,26 @@ impl Recorder {
     }
     /// The open meeting refreshes often; the whole library only every few seconds.
     fn reload_open(&mut self) {
+        // Take the mark before reading: a concurrent receipt write must trigger another refresh.
+        self.seen_open = self.store.version();
         if let Some(id) = &self.meeting
             && let Ok(stored) = self.store.context(id)
-            && stored.task_link_operations != self.context.task_link_operations
+            && Self::context_links(&stored) != Self::context_links(&self.context)
         {
             // Merge background link results without losing notes or unsent edits in the window.
             self.save_context();
-            self.link_tasks_at = Instant::now() - Duration::from_secs(60);
         }
-        self.seen_open = self.store.version();
         if let Some(id) = &self.meeting {
             self.ui_version += 1;
             match self.store.get(id) {
                 Ok(record) => self.current = Some(record),
                 Err(error) => self.error = error.to_string(),
             }
+        }
+        let links = self.task_links_snapshot();
+        if links != self.seen_task_links {
+            self.seen_task_links = links;
+            self.invalidate_task_links();
         }
         self.refresh = Instant::now();
     }
@@ -1135,18 +1148,19 @@ impl Recorder {
                 continue;
             }
             if reply.kind == "task-links" {
-                if here {
-                    self.link_tasks = reply
-                        .result
-                        .ok()
-                        .filter(|v| v["scope"] == self.link_scope())
-                        .unwrap_or(Value::Null);
+                if here
+                    && reply.result.as_ref().is_ok_and(|v| {
+                        v["scope"] == self.link_scope()
+                            && v["generation"] == self.link_tasks_generation
+                    })
+                {
+                    self.link_tasks = reply.result.unwrap()["data"].clone();
                 }
                 continue;
             }
             if reply.kind == "link" && here {
                 self.save_context();
-                self.link_tasks_at = Instant::now() - Duration::from_secs(60);
+                self.invalidate_task_links();
             }
             if ["items", "presence"].contains(&reply.kind.as_str())
                 && (!here
@@ -1413,6 +1427,15 @@ impl Recorder {
             self.reload();
         }
         self.refresh_task_links();
+        let activity = self
+            .meeting
+            .as_deref()
+            .map(|id| self.store.task_link_activity(id))
+            .unwrap_or_default();
+        if self.link_activity != activity {
+            self.link_activity = activity;
+            self.bump();
+        }
         self.sync_presence();
         self.sync_saved();
         self.watch_inputs();
@@ -3235,7 +3258,7 @@ impl Recorder {
                     "send_blocked": send_blocked,
                     "paused_warning": !self.context.paused_windows.is_empty() && (!item.quote.trim().is_empty() || !item.title.trim().is_empty()),
                     "can_send": can_send && !chosen.is_empty() && !item.title.trim().is_empty(),
-                    "error": error,
+                    "error": if item.kind == "link" { self.task_link_error(&item.task_id).to_owned() } else { error },
                 })
             })
             .collect();
