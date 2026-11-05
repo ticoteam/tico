@@ -141,11 +141,12 @@ function inboxesBind(el) {
 }
 
 // ---------------------------------------------------------------------------------------------------------- Home
-// First run while a required step is undone (an admin only, until they skip it), else the list.
+// First run while a required step is undone (an admin only, until they skip it), else the list. The demo starts set
+// up with no Google connection, so it always opens on the list.
 async function inboxesHome(el, ctx) {
   if (!el.querySelector('[data-ib-home]')) el.innerHTML = `<div data-ib-home>${skelRows(4, {card: true, dot: false})}</div>`;
   const rows = inboxesLoad(ctx);
-  if (ctx.admin && inboxesStored(INBOX_SKIP_KEY) !== '1') {
+  if (ctx.admin && !S.config?.demo && inboxesStored(INBOX_SKIP_KEY) !== '1') {
     const required = INBOX_STEPS.filter(s => !s.optional);
     const done = await Promise.all(required.map(s => Promise.resolve(s.done(ctx)).catch(() => false)));
     if (!ctx.live()) return;
