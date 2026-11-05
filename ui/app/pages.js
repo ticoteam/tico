@@ -261,7 +261,7 @@ function taskPagesAdopt(d, task) {
     if (d.open && d.tpEl === slot && (e.kinds || [e.kind]).includes('files') && String(e.id) === id)
       liveSoon('task-pages:' + d.id + ':' + id, refresh, 200);
   }), liveOn('runs', e => {
-    if (slot.tpMaking && e.conversation_id === slot.tpMaking.conversation_id)
+    if (slot.tpMaking?.state === 'making' && e.conversation_id === slot.tpMaking.conversation_id)
       liveSoon('task-pages:' + d.id + ':' + id, refresh, 200);
   }), liveOn('reset', refresh)];
   const poll = liveFallback(() => { if (slot.tpMaking?.state === 'making') refresh(); }, 5000);
@@ -271,8 +271,9 @@ function taskPagesAdopt(d, task) {
 function taskPageMakeDraw(d, status) {
   const slot = d.tpEl;
   if (!slot) return;
-  if (slot.tpMaking?.conversation_id !== status?.conversation_id) {
-    slot.tpFollow?.(); slot.tpFollow = status?.conversation_id ? liveFollow(status.conversation_id) : null;
+  const cid = status?.state === 'making' ? status.conversation_id : null;
+  if (slot.tpFollowCid !== cid) {
+    slot.tpFollow?.(); slot.tpFollow = cid ? liveFollow(cid) : null; slot.tpFollowCid = cid;
   }
   slot.tpMaking = status;
   const card = $('.tp-making', slot);

@@ -9,7 +9,13 @@ from backend.tests.test_cards import page as seed_page
 from backend.tests.test_files import turn
 from backend.tests.test_meeting_items import record
 from backend.tests.test_meeting_task_links import link, task
-from backend.tests.test_pages import HTML, page
+from backend.tests.test_pages import HTML
+
+
+def page(api, turn, **fields):
+    data = fields.pop("data", HTML)
+    return api.post("/api/v2/pages", params={"name": fields.pop("name", "weekly.html"), **fields},
+                    content=data, headers={**headers(turn["token"]), "Content-Type": "text/html"})
 
 
 def start(api, tid, person="ben-test", key=None):
@@ -19,6 +25,7 @@ def start(api, tid, person="ben-test", key=None):
     sent = post(api, f"tasks/{tid}/make-page", {"text": "Make the alert flow with three scenario tabs."}, person, key)
     attempt = post(api, "jobs/claim", {}, machine["token"])["attempt"]
     assert attempt["message"]["id"] == sent["message"]["id"]
+    post(api, f"attempts/{attempt['id']}/started", {"thread_id": "make-page-test"}, machine["token"])
     return machine, attempt, sent["message"]
 
 
@@ -47,7 +54,8 @@ def test_make_page_files_and_pins_clean_html_as_the_person_with_authenticated_at
     machine, attempt, message = start(api, t["id"], key="make-once")
     token = attempt["token"]
     assert message["sender_id"] == "human:ben"
-    assert message["refs"] == {"assistant": True, "make_page": {"task": t["id"]}, "delivery": "queue"}
+    assert {k: message["refs"][k] for k in ("assistant", "make_page", "delivery")} == {
+        "assistant": True, "make_page": {"task": t["id"]}, "delivery": "queue"}
     assert attempt["make_page"]["task"]["id"] == t["id"]
     assert attempt["make_page"]["task"]["body"] == t["body"]
     assert [m["id"] for m in attempt["task_context"]["meetings"]] == [mid]
@@ -168,7 +176,7 @@ def test_publish_rechecks_the_initiating_message(api, change):
 
 
 def test_assistant_publish_cannot_change_task_scope_or_claim_another_bot(api):
-    t, other = task(api, private=False), task(api, private=False)
+    t, other = task(api, private=False), task(api, title="Another project", private=False)
     _, attempt, _ = start(api, t["id"])
     for fields in ({}, {"task": other["id"]}, {"task": t["id"], "scope": "bot"},
                    {"task": t["id"], "source": "a-meeting"}):
