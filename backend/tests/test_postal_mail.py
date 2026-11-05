@@ -843,3 +843,25 @@ def test_a_subtask_deleted_before_the_backfill_comes_back_private_under_its_bill
     with api.app.state.store.transaction() as c:
         assert task_delete.restore_tasks(c, [sub])["restored"] == [sub]
     assert (task(api, task_id)["private"], task(api, sub)["private"], task(api, sub)["visibility"]) == (1, 1, "private")
+
+
+def test_scoped_mail_grant_does_not_widen_a_public_task_audience(api, hq, mail):
+    from backend.tests.test_org_rules import as_bot
+    from backend.tests.test_turn_scope import task_turn
+
+    _, attempt = task_turn(api)
+    put(api, "postal/addresses/all/grants/bot/ops", {})
+    letter(api, "scope-mail", "legal", summary="Restricted postal source")
+    deliver(hq, "scope-mail")
+    service(api).tick()
+    drain(api)
+    row = items(api)["scope-mail"]
+    # The bot's own Read grant cannot disclose this scan to the other readers of its public task.
+    shown = get(api, "postal/items", attempt["token"])
+    assert shown["items"] == [] and "Restricted postal source" not in str(shown)
+    assert scan(api, row, attempt["token"]) == 403
+    get(api, f"files/{row['file_id']}/versions/1", attempt["token"], expected=403)
+    # Outside a task turn the same independent grant remains sufficient.
+    as_bot(api, "ops", "ops-mail-grant")
+    assert get(api, "postal/items", "ops-mail-grant")["items"][0]["summary"] == "Restricted postal source"
+    assert scan(api, row, "ops-mail-grant") == 200

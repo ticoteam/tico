@@ -50,12 +50,14 @@ ALLOWLIST = (
     ("POST", r"/api/v2/(?:files/(?:uploads|imports|links)|file-reviews)", False),
     # Both task bots and Make publish pages; step f checks the initiating Make request.
     ("POST", r"/api/v2/pages", True),
+    # Counsel's mail tools read individually granted or carried letters; scan bytes also pass the audience ceiling.
+    ("GET", r"/api/v2/postal/items(?:/[^/]+)?", False),
     # Counsel's task workflow writes its reviewed rules through its own additional route gate.
     ("POST", r"/api/v2/rules", False),
 )
 
 
-def require_route(c, auth, who, method, path):
+def require_route(c, auth, who, method, path, query=None):
     from . import turn_scope
     scoped = turn_scope.scope(c, who)
     if scoped is None:
@@ -64,13 +66,17 @@ def require_route(c, auth, who, method, path):
     if not any(method in methods.split() and (make or not scoped.make_page) and re.fullmatch(pattern, path)
                for methods, pattern, make in ALLOWLIST):
         raise Problem("forbidden", "Route unavailable to a scoped turn", 403)
-    download = re.fullmatch(r"/api/v2/files/([^/]+)(?:/(?:versions/[0-9]+|thumb|poster))?", path)
+    download = re.fullmatch(r"/api/v2/files/([^/]+)(?:/(?:versions/([0-9]+)|thumb|poster))?", path)
     if download and method in ("GET", "HEAD") and download[1] != "search":
         ref = download[1]
         row = c.execute("SELECT * FROM bot_files WHERE id=?", (ref,)).fetchone()
         if row:
             from .files import file_visible
-            ok = not row["archived"] and file_visible(c, auth, who, row, {})
+            requested = download[2] or (query or {}).get("v") or row["current_version"]
+            version = c.execute("SELECT blob_id FROM bot_file_versions WHERE file_id=? AND version=?",
+                                (ref, requested)).fetchone()
+            scan = turn_scope.postal_allowed(c, auth, who, version[0]) if version else None
+            ok = scan if scan is not None else not row["archived"] and file_visible(c, auth, who, row, {})
         else:
             ok = turn_scope.blob_allowed(c, auth, who, ref) is True
         if not ok:
