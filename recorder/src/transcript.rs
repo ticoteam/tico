@@ -365,10 +365,47 @@ pub fn delivery_frontier(record: &Recording, streamed: &BTreeMap<String, Vec<Wor
         .filter(|c| c.channel == "me")
         .filter(|c| !echo_ready(record, c.start_ms, c.end_ms, &them))
         .map(|c| c.words.first().map_or(c.start_ms, |w| w.start_ms));
-    pending_stream
+    let held = pending_stream
         .chain(pending_chunks)
         .min()
-        .unwrap_or(u64::MAX)
+        .unwrap_or(u64::MAX);
+    if record.state != "recording" || !record.meeting_audio {
+        return held;
+    }
+    // A quiet or delayed channel gets the same bounded grace as the echo reference. This
+    // prevents a later final on the other channel overtaking audio not transcribed yet.
+    let expired = recording_ms(record).map_or(0, |now| now.saturating_sub(REFERENCE_WAIT_MS));
+    let progress = ["me", "them"]
+        .into_iter()
+        .filter(|channel| {
+            *channel != "me"
+                || !record.microphone.is_empty()
+                || streamed.contains_key("me")
+                || record.chunks.iter().any(|c| c.channel == "me")
+        })
+        .map(|channel| {
+            streamed
+                .get(channel)
+                .into_iter()
+                .flatten()
+                .map(|w| w.end_ms)
+                .chain(
+                    record
+                        .chunks
+                        .iter()
+                        .filter(|c| {
+                            c.channel == channel
+                                && ["done", "silence", "failed"].contains(&c.status.as_str())
+                        })
+                        .map(|c| c.end_ms),
+                )
+                .max()
+                .unwrap_or(0)
+                .max(expired)
+        })
+        .min()
+        .unwrap_or(u64::MAX);
+    held.min(progress)
 }
 
 /// Hold a whole microphone utterance until its reference is ready, before echo decisions or

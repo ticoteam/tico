@@ -534,37 +534,61 @@ impl Store {
             .collect::<Result<_>>()?;
         drop(query);
         let before = value.speaker_labels.clone();
-        let mut identities: Vec<_> = value
-            .chunks
-            .iter()
-            .filter(|c| c.channel == "them")
-            .flat_map(|c| {
-                c.words
-                    .iter()
-                    .map(move |w| (crate::transcript::speaker_identity(c, w), w.speaker.clone()))
-            })
-            .chain(
-                value
-                    .chunks
-                    .iter()
-                    .filter(|c| c.channel == "them" && c.words.is_empty())
-                    .map(|c| {
-                        (
-                            crate::transcript::speaker_identity(c, &Word::default()),
-                            c.speaker.clone(),
-                        )
-                    }),
-            )
-            .collect();
         let mut query = db.prepare("SELECT words FROM live_words WHERE recording_id=? AND channel='them' ORDER BY start_ms,rowid")?;
+        let mut live = Vec::new();
         for row in query.query_map([id], |r| r.get::<_, String>(0))? {
-            identities.extend(
-                serde_json::from_str::<Vec<Word>>(&row?)?
-                    .into_iter()
-                    .map(|w| (w.speaker.clone(), w.speaker)),
-            );
+            live.extend(serde_json::from_str::<Vec<Word>>(&row?)?);
         }
         drop(query);
+        live.sort_by_key(|w| w.start_ms);
+        let mut ends = Vec::with_capacity(live.len());
+        let mut end = 0;
+        for word in &live {
+            end = end.max(word.end_ms);
+            ends.push(end);
+        }
+        let mut identities: Vec<_> = live
+            .iter()
+            .map(|w| (w.speaker.clone(), w.speaker.clone()))
+            .collect();
+        for chunk in value.chunks.iter().filter(|c| c.channel == "them") {
+            if chunk.words.is_empty() {
+                identities.push((
+                    crate::transcript::speaker_identity(chunk, &Word::default()),
+                    chunk.speaker.clone(),
+                ));
+            }
+            let mut votes: BTreeMap<String, BTreeMap<String, u64>> = BTreeMap::new();
+            for word in &chunk.words {
+                let id = crate::transcript::speaker_identity(chunk, word);
+                let first = ends.partition_point(|end| *end <= word.start_ms);
+                for other in live[first..]
+                    .iter()
+                    .take_while(|w| w.start_ms < word.end_ms)
+                    .filter(|w| !w.speaker.is_empty())
+                {
+                    let overlap = word
+                        .end_ms
+                        .min(other.end_ms)
+                        .saturating_sub(word.start_ms.max(other.start_ms));
+                    if overlap > 0 {
+                        *votes
+                            .entry(id.clone())
+                            .or_default()
+                            .entry(other.speaker.clone())
+                            .or_default() += overlap;
+                    }
+                }
+            }
+            for word in &chunk.words {
+                let id = crate::transcript::speaker_identity(chunk, word);
+                let preferred = votes
+                    .get(&id)
+                    .and_then(|v| v.iter().max_by_key(|(_, weight)| *weight))
+                    .map_or_else(|| word.speaker.clone(), |(speaker, _)| speaker.clone());
+                identities.push((id, preferred));
+            }
+        }
         value.register_speakers(identities);
         if value.speaker_labels != before {
             db.execute("UPDATE recordings SET document=json_set(document,'$.speaker_labels',json(?)) WHERE id=?",

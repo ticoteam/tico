@@ -176,11 +176,14 @@ microphone and system audio are separate channels, so "Me" versus "Them" needs n
 model. The far end is diarized on-device after the meeting with a pyannote 3.1 pipeline, and words
 take the overlapping speaker. When the transcription model labels speakers within each chunk
 (Scribe), those turns are joined across the meeting by WeSpeaker voiceprints, the usual way to
-combine an STT provider's per-request speaker labels into one meeting. On the built-in Mac microphone/speaker route, macOS voice processing removes acoustic echo before
-transcription (minimum other-audio ducking, AGC off); headphones and unsupported routes keep the
-original capture. A shared transcript filter also drops utterances with at least 60% echoed words,
-including unmatched short fragments, with punctuation, hyphen, number and small spelling tolerance.
-Live mic text waits for the meeting-audio reference, so it cannot escape to the page or Tico first.
+combine an STT provider's per-request speaker labels into one meeting. Saved mic WAVs and chunk transcription use raw audio. On the built-in Mac microphone/speaker route,
+a separate macOS voice-processing stream aids live text (minimum ducking, AGC off); headphones,
+unsupported routes and processing restart failures use plain capture. Route notifications rebuild
+the native engines with a fixed 16 kHz client format. The shared transcript filter removes only
+matching runs of at least three words, with punctuation, hyphen, number and small spelling tolerance.
+Unmatched words, isolated acknowledgements and names stay. Live mic text waits for the reference
+for at most eight seconds; terminal failure, mic-only capture and Stop also release it. Both
+sharing channels wait at one frontier and retain their actual word timestamps.
 Finished service turns are also linked during capture by the existing WeSpeaker path, with an
 in-memory bounded print cache; full diarization after Stop still refines the final labels. Speech defaults to English (Settings › Language;
 empty guesses per chunk, which turned short "mm-hmm"s into Japanese and Chinese).
@@ -203,17 +206,21 @@ python3 recorder/bench/meeting_bench.py --bleed-check --cli recorder/target/debu
 
 This replays four synthetic remote-only utterances with a 20 ms microphone offset, followed by
 four independent local replies. `before` reproduces the former exact per-word filter; `after`
-uses the production utterance filter. It reports all words left in known remote-only spans,
-including fragments that exact duplicate counting would miss. Measured on RunsOn: 36 input bleed words; the former exact filter leaves 12, the utterance
-filter leaves **0**. All **20/20** independent local words survive both. This replay measures
-transcript rules, not recognition quality or acoustic cancellation. Run it on RunsOn after building the CLI.
+uses the production matching-run filter. It reports words left in known remote-only spans.
+The expected five remaining tokens are unmatched recognition fragments ("Uh", "an", "uh", "a", "uh");
+keeping them protects genuine adjacent replies. All 20 independent local words must survive.
+The Rust regressions also cover eight echoed words immediately followed by "I disagree", and
+isolated shared "yes", "okay" and names. This replay measures transcript rules, not recognition
+quality or acoustic cancellation. Run it on RunsOn after building the CLI.
 
 VoiceProcessingIO requires a real audio device and realtime hardware rendering; it does not run
-on Linux or in AVAudioEngine's offline rendering mode. AEC attenuation and playback/ducking need
-a Mac with a built-in mic/speaker route, using identical speaker playback and comparing raw
-`capture::start_microphone` with `capture::start_microphone_for_meeting(..., true)`. The meeting
-process tap stays the reference recording in both runs. Headphones must remain on the raw path.
-macOS PR CI compiles/links the native bridge; it cannot measure a room's acoustic response.
+on Linux or in AVAudioEngine's offline rendering mode. Physical attenuation, dual-engine capture,
+route transitions and ducking still need a Mac with real devices. The Rust-facing native bridge
+regression simulates configuration notifications, successful restart, processing restart failure
+and subsequent recovery, without opening a device; saved raw and processed aid samples are distinct.
+Linux tests verify that WAV writing always uses the raw queue, including after plain fallback.
+macOS PR CI compiles/links the bridge and runs its hardware-free lifecycle test.
+
 ## Suggested task owners
 
 `assist_cases.json` covers commitments, named requests, concierge bot/team work, multiple recipients,

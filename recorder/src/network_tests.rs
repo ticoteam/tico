@@ -1320,7 +1320,7 @@ fn without_streamed_text_finished_chunks_go_whole_and_a_paused_meeting_gets_noth
     assert_eq!(store.context(id).unwrap().live_state, "paused");
     assert_eq!(
         seen.lock().unwrap()[0].1["chunks"],
-        json!([{"seq":1,"speaker":"Me","start_ms":0,"end_ms":5000,"text":"Morning all"}])
+        json!([{"seq":1,"speaker":"Me","start_ms":400,"end_ms":1000,"text":"Morning all"}])
     );
     // While paused nothing new goes, even with streamed words.
     streamed(&store, id, "me", 5_500, "still talking", "");

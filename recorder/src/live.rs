@@ -1186,9 +1186,7 @@ impl<'a> Queue<'a> {
             let fresh: Vec<Word> = words
                 .into_iter()
                 .filter(|word| {
-                    word.start_ms >= from
-                        && word.start_ms < frontier
-                        && !transcript::covered(record, channel, word.start_ms)
+                    word.start_ms >= from && !transcript::covered(record, channel, word.start_ms)
                 })
                 .collect();
             turns.extend(streamed_turns(channel, &fresh).into_iter().map(|mut turn| {
