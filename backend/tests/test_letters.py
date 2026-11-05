@@ -230,10 +230,10 @@ def test_bot_quotes_an_uploaded_pdf_through_the_existing_library_path(api, hq):
     import base64
     ident, token = bot(api)
     grant(api, ident)
-    failed, uploaded = call(api, "hub_file_upload", {"path": "letter.pdf", "content_base64":
+    failed, uploaded = call(api, "hub_file_publish", {"name": "letter.pdf", "content_base64":
         base64.b64encode(L.render("A letter uploaded by a bot")).decode(), "scope": "bot"}, token=token)
     assert not failed, uploaded
-    row = post(api, "letters/quotes", {"file_id": uploaded["id"], "recipient": RECIPIENT}, token=token)
+    row = post(api, "letters/quotes", {"file_id": uploaded["file"]["id"], "recipient": RECIPIENT}, token=token)
     assert row["page_count"] == 1 and row["proof"]
 
 

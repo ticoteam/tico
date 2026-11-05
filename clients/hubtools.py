@@ -6969,7 +6969,7 @@ LETTER_ADDRESS = {"type": "object", "additionalProperties": False,
 
 
 @tool("hub_letter_quote", "Quote a physical US letter through Tico's Gateway (print and postage at cost + 25%). "
-      "Provide a PDF already uploaded with hub_file_upload (file_id), or text/markdown printed as clean US Letter text. "
+      "Provide a PDF already uploaded with hub_file_publish (file_id), or text/markdown printed as clean US Letter text. "
       "Returns id, page_count, total_micros (USD millionths) and a PDF proof link. Requires Letters out send access "
       "and a return address. Quotes last 15 minutes. Next use hub_letter_send; quoting never prints a letter. "
       "Coming soon / Not set up means the service is unavailable; do not retry in a loop.",

@@ -21435,10 +21435,12 @@
         ],
         "responses": {
           "200": {
-            "description": "Successful Response",
+            "description": "OK",
             "content": {
               "application/json": {
-                "schema": {}
+                "schema": {
+                  "$ref": "#/components/schemas/LetterOutPage"
+                }
               }
             }
           },
@@ -21474,10 +21476,12 @@
         "operationId": "getLettersAccess",
         "responses": {
           "200": {
-            "description": "Successful Response",
+            "description": "OK",
             "content": {
               "application/json": {
-                "schema": {}
+                "schema": {
+                  "$ref": "#/components/schemas/LettersAccess"
+                }
               }
             }
           },
@@ -21524,10 +21528,12 @@
         ],
         "responses": {
           "200": {
-            "description": "Successful Response",
+            "description": "OK",
             "content": {
               "application/json": {
-                "schema": {}
+                "schema": {
+                  "$ref": "#/components/schemas/LetterBotSettings"
+                }
               }
             }
           },
@@ -21582,10 +21588,12 @@
         },
         "responses": {
           "200": {
-            "description": "Successful Response",
+            "description": "OK",
             "content": {
               "application/json": {
-                "schema": {}
+                "schema": {
+                  "$ref": "#/components/schemas/LetterBotSettings"
+                }
               }
             }
           },
@@ -21633,10 +21641,12 @@
         ],
         "responses": {
           "200": {
-            "description": "Successful Response",
+            "description": "OK",
             "content": {
               "application/json": {
-                "schema": {}
+                "schema": {
+                  "$ref": "#/components/schemas/LettersGrants"
+                }
               }
             }
           },
@@ -21716,10 +21726,12 @@
         },
         "responses": {
           "200": {
-            "description": "Successful Response",
+            "description": "OK",
             "content": {
               "application/json": {
-                "schema": {}
+                "schema": {
+                  "$ref": "#/components/schemas/LettersGrant"
+                }
               }
             }
           },
@@ -21796,10 +21808,12 @@
         ],
         "responses": {
           "200": {
-            "description": "Successful Response",
+            "description": "OK",
             "content": {
               "application/json": {
-                "schema": {}
+                "schema": {
+                  "$ref": "#/components/schemas/LettersRevoked"
+                }
               }
             }
           },
@@ -21845,10 +21859,12 @@
         },
         "responses": {
           "200": {
-            "description": "Successful Response",
+            "description": "OK",
             "content": {
               "application/json": {
-                "schema": {}
+                "schema": {
+                  "$ref": "#/components/schemas/LetterOut"
+                }
               }
             }
           },
@@ -21895,10 +21911,12 @@
         "operationId": "getLettersSettings",
         "responses": {
           "200": {
-            "description": "Successful Response",
+            "description": "OK",
             "content": {
               "application/json": {
-                "schema": {}
+                "schema": {
+                  "$ref": "#/components/schemas/LettersSettings"
+                }
               }
             }
           },
@@ -21942,10 +21960,12 @@
         },
         "responses": {
           "200": {
-            "description": "Successful Response",
+            "description": "OK",
             "content": {
               "application/json": {
-                "schema": {}
+                "schema": {
+                  "$ref": "#/components/schemas/LettersSettings"
+                }
               }
             }
           },
@@ -21992,10 +22012,12 @@
         ],
         "responses": {
           "200": {
-            "description": "Successful Response",
+            "description": "OK",
             "content": {
               "application/json": {
-                "schema": {}
+                "schema": {
+                  "$ref": "#/components/schemas/LetterOut"
+                }
               }
             }
           },
@@ -22051,10 +22073,12 @@
         ],
         "responses": {
           "200": {
-            "description": "Successful Response",
+            "description": "OK",
             "content": {
               "application/json": {
-                "schema": {}
+                "schema": {
+                  "$ref": "#/components/schemas/LetterOut"
+                }
               }
             }
           },
@@ -22110,10 +22134,12 @@
         ],
         "responses": {
           "200": {
-            "description": "Successful Response",
+            "description": "OK",
             "content": {
               "application/json": {
-                "schema": {}
+                "schema": {
+                  "$ref": "#/components/schemas/LetterOut"
+                }
               }
             }
           },
@@ -58799,6 +58825,359 @@
         "additionalProperties": false,
         "type": "object",
         "title": "KpiUpdate"
+      },
+      "LetterBotSettings": {
+        "type": "object",
+        "properties": {
+          "bot_id": {
+            "type": "string"
+          },
+          "mode": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "monthly_cap_micros": {
+            "type": [
+              "integer",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "bot_id",
+          "mode",
+          "monthly_cap_micros"
+        ],
+        "additionalProperties": true
+      },
+      "LetterOut": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "requested_by": {
+            "type": "string"
+          },
+          "mail_class": {
+            "type": "string"
+          },
+          "currency": {
+            "type": "string"
+          },
+          "status": {
+            "type": "string"
+          },
+          "error": {
+            "type": "string"
+          },
+          "created_at": {
+            "type": "string"
+          },
+          "updated_at": {
+            "type": "string"
+          },
+          "acting_bot_id": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "automation_id": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "task_id": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "thread_id": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "quote_id": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "quote_expires_at": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "approval_id": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "approval_hash": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "hq_letter_id": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "proof": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "recipient": {
+            "type": "object"
+          },
+          "return_address": {
+            "type": "object"
+          },
+          "tracking": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "barcode": {
+                  "type": "string"
+                },
+                "status": {
+                  "type": [
+                    "string",
+                    "null"
+                  ]
+                }
+              },
+              "required": [
+                "barcode",
+                "status"
+              ],
+              "additionalProperties": true
+            }
+          },
+          "page_count": {
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "total_micros": {
+            "type": "integer"
+          },
+          "color": {
+            "type": "boolean"
+          },
+          "duplex": {
+            "type": "boolean"
+          },
+          "cancel_possible": {
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "acting_bot_id",
+          "approval_hash",
+          "approval_id",
+          "automation_id",
+          "cancel_possible",
+          "color",
+          "created_at",
+          "currency",
+          "duplex",
+          "error",
+          "hq_letter_id",
+          "id",
+          "mail_class",
+          "page_count",
+          "proof",
+          "quote_expires_at",
+          "quote_id",
+          "recipient",
+          "requested_by",
+          "return_address",
+          "status",
+          "task_id",
+          "thread_id",
+          "total_micros",
+          "tracking",
+          "updated_at"
+        ],
+        "additionalProperties": true
+      },
+      "LetterOutPage": {
+        "type": "object",
+        "properties": {
+          "items": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/LetterOut"
+            }
+          },
+          "next_before": {
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "items",
+          "next_before"
+        ],
+        "additionalProperties": true
+      },
+      "LettersAccess": {
+        "type": "object",
+        "properties": {
+          "send": {
+            "type": "boolean"
+          },
+          "outbox_id": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "outbox_id",
+          "send"
+        ],
+        "additionalProperties": true
+      },
+      "LettersGrant": {
+        "type": "object",
+        "properties": {
+          "principal_type": {
+            "type": "string"
+          },
+          "principal_id": {
+            "type": "string"
+          },
+          "level": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "level",
+          "principal_id",
+          "principal_type"
+        ],
+        "additionalProperties": true
+      },
+      "LettersGrants": {
+        "type": "object",
+        "properties": {
+          "grants": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "outbox_id": {
+                  "type": "string"
+                },
+                "principal_type": {
+                  "type": "string"
+                },
+                "principal_id": {
+                  "type": "string"
+                },
+                "level": {
+                  "type": "string"
+                },
+                "granted_by": {
+                  "type": "string"
+                },
+                "created_at": {
+                  "type": "string"
+                }
+              },
+              "required": [
+                "created_at",
+                "granted_by",
+                "level",
+                "outbox_id",
+                "principal_id",
+                "principal_type"
+              ],
+              "additionalProperties": true
+            }
+          }
+        },
+        "required": [
+          "grants"
+        ],
+        "additionalProperties": true
+      },
+      "LettersRevoked": {
+        "type": "object",
+        "properties": {
+          "revoked": {
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "revoked"
+        ],
+        "additionalProperties": true
+      },
+      "LettersSettings": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "mode": {
+            "type": "string"
+          },
+          "return_address": {
+            "type": [
+              "object",
+              "null"
+            ]
+          },
+          "monthly_cap_micros": {
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "availability": {
+            "type": "string"
+          },
+          "checked_at": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "created_at": {
+            "type": "string"
+          },
+          "updated_at": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "availability",
+          "checked_at",
+          "created_at",
+          "id",
+          "mode",
+          "monthly_cap_micros",
+          "return_address",
+          "updated_at"
+        ],
+        "additionalProperties": true
       },
       "Librarian": {
         "type": "object",

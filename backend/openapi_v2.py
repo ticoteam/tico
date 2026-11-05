@@ -3209,6 +3209,21 @@ STABLE.extend([
 ])
 
 TAGS["Letters out"] = "Physical letters sent through the Gateway; approvals bind the saved proof and price."
+SCHEMAS["LetterOut"] = obj({
+    **{key: "s" for key in ("id", "requested_by", "mail_class", "currency", "status", "error", "created_at", "updated_at")},
+    **{key: "n" for key in ("acting_bot_id", "automation_id", "task_id", "thread_id", "quote_id", "quote_expires_at",
+                            "approval_id", "approval_hash", "hq_letter_id", "proof")},
+    "recipient": "o", "return_address": "o", "tracking": items(obj({"barcode": "s", "status": "n"})),
+    "page_count": {"type": ["integer", "null"]}, "total_micros": "i", "color": "b", "duplex": "b", "cancel_possible": "b"})
+SCHEMAS["LetterOutPage"] = obj({"items": items(ref("LetterOut")), "next_before": "n"})
+SCHEMAS["LettersSettings"] = obj({"id": "s", "mode": "s", "return_address": {"type": ["object", "null"]},
+    "monthly_cap_micros": {"type": ["integer", "null"]}, "availability": "s", "checked_at": "n", "created_at": "s", "updated_at": "s"})
+SCHEMAS["LettersAccess"] = obj({"send": "b", "outbox_id": "s"})
+SCHEMAS["LettersGrants"] = obj({"grants": items(obj({"outbox_id": "s", "principal_type": "s", "principal_id": "s",
+    "level": "s", "granted_by": "s", "created_at": "s"}))})
+SCHEMAS["LettersGrant"] = obj({"principal_type": "s", "principal_id": "s", "level": "s"})
+SCHEMAS["LettersRevoked"] = obj({"revoked": "b"})
+SCHEMAS["LetterBotSettings"] = obj({"bot_id": "s", "mode": "n", "monthly_cap_micros": {"type": ["integer", "null"]}})
 STABLE.extend([
     ("/api/v2/letters", "get", "Letters out", "listLetters", "Letters the caller may read, paged and byte capped", None),
     ("/api/v2/letters/quotes", "post", "Letters out", "quoteLetter", "Quote a PDF or rendered text without sending", None),
@@ -3224,6 +3239,12 @@ STABLE.extend([
     ("/api/v2/letters/bots/{bot_id}/settings", "get", "Letters out", "getBotLettersSettings", "Bot's sending policy override and optional cap", None),
     ("/api/v2/letters/bots/{bot_id}/settings", "put", "Letters out", "setBotLettersSettings", "Bot manager sets a policy that cannot loosen company policy", None),
 ])
+_LETTERS_ANSWERS = {"listLetters": "LetterOutPage", "quoteLetter": "LetterOut", "getLetter": "LetterOut",
+    "sendLetter": "LetterOut", "cancelLetter": "LetterOut", "getLettersSettings": "LettersSettings",
+    "setLettersSettings": "LettersSettings", "getLettersAccess": "LettersAccess", "listLettersGrants": "LettersGrants",
+    "grantLettersAccess": "LettersGrant", "revokeLettersAccess": "LettersRevoked", "getBotLettersSettings": "LetterBotSettings",
+    "setBotLettersSettings": "LetterBotSettings"}
+STABLE = [(*entry[:-1], _LETTERS_ANSWERS.get(entry[3], entry[-1])) for entry in STABLE]
 
 
 def generate():
