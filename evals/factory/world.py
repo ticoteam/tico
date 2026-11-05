@@ -78,12 +78,19 @@ class World:
         from fastapi.testclient import TestClient
         from backend.app import create_app
         from backend.auth import Identity
-        from backend import bot_settings
+        from backend import bot_settings, maintenance
         from backend.config import Settings
         from backend.scheduler import Scheduler
         from backend.store import H, encode
         from backend import rules as R
         self.H = H
+        # The fake clock advances only between completed passes. A Maintenance thread can otherwise post a roundup
+        # after a round's last empty claim but before its queue snapshot, making newly arrived work look starved.
+        def inline_maintenance(start):
+            def run(store, auth, run_id, only, wait):
+                return start(store, auth, run_id, only, wait=True)
+            return run
+        self.patch(maintenance, "_start", inline_maintenance)
         registry = self.tmp / "registry"
         registry.mkdir()
         (registry / "hub-access.yaml").write_text(json.dumps({"owner": "ana@acme.example"}))

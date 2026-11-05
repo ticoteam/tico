@@ -9,6 +9,37 @@ import pytest
 from runner_support import release_update as ru
 
 
+def test_a_second_updater_exits_before_drain_or_checkout_work_and_leaves_status_alone(tmp_path, monkeypatch):
+    ru.write_status(tmp_path, state="updating", target="0.2.0", error="", at=1)
+    before = ru.read_status(tmp_path)
+    calls = []
+
+    def run(args):
+        with ru.updater_lock(tmp_path) as acquired:
+            assert not acquired                         # held through the whole update, before any drain wait
+        calls.append(args.version)
+        return 0
+
+    monkeypatch.setattr(ru, "run_update", run)
+    argv = ["--version", "0.3.0", "--state-dir", str(tmp_path), "--pid", "42"]
+    with ru.updater_lock(tmp_path) as acquired:
+        assert acquired
+        assert ru.main(argv) == 0 and calls == []
+        assert ru.read_status(tmp_path) == before
+    assert ru.main(argv) == 0 and calls == ["0.3.0"]
+
+
+def test_an_updater_releases_its_process_lock_when_it_fails(tmp_path, monkeypatch):
+    def fail(args):
+        raise RuntimeError("update failed")
+
+    monkeypatch.setattr(ru, "run_update", fail)
+    with pytest.raises(RuntimeError, match="update failed"):
+        ru.main(["--version", "0.2.0", "--state-dir", str(tmp_path), "--pid", "42"])
+    with ru.updater_lock(tmp_path) as acquired:
+        assert acquired
+
+
 def sh(cwd, *args):
     return subprocess.run(args, cwd=cwd, check=True, capture_output=True, text=True).stdout.strip()
 

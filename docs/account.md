@@ -9,6 +9,13 @@ It stays available when your Tico server or bot computer stops.
 Sign in with your Tico account and select your company from the **Company** menu.
 The page shows only companies you belong to.
 
+In Tico, open your account menu at the bottom of the left navigation and choose **Admin**.
+Only the owner and admins see it. It appears for organizations using Tico account sign-in, companies with a Tico Cloud account, and self-run servers
+linked to a Tico company in Settings. It opens the default browser from the desktop app, or a new tab on the web.
+A linked server uses the portal address supplied by its company connection, and a Cloud company uses its account's
+billing address when available; otherwise it opens the portal home.
+The browser uses its own Tico account session, so you may need to sign in and select your company.
+
 ## Before approval
 
 While you wait, the page shows **You’re on the waitlist**.

@@ -39,7 +39,6 @@ backend/idempotency_messages.py:6
 backend/inbound.py:5
 backend/invariants.py:2
 backend/learned.py:2
-backend/learnings.py:4
 backend/lenses.py:2
 backend/lifecycle.py:7
 backend/listening.py:1

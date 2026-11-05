@@ -98,6 +98,7 @@ pub fn mcp_disable_config(codex_home: Option<&str>) -> Map<String, Value> {
 type Reply = Result<Value, Value>;
 
 struct Shared {
+    allocation: super::Allocation,
     tx: Events,
     env: Env,
     base_config: Map<String, Value>,
@@ -133,6 +134,7 @@ impl CodexHost {
     /// A host for a subscription profile: the servers silenced are the ones in that profile's config.toml.
     pub fn on_home(env: Env, tx: Events, codex_home: Option<&str>) -> CodexHost {
         CodexHost(Arc::new(Shared {
+            allocation: super::Allocation::default(),
             tx,
             env,
             base_config: mcp_disable_config(codex_home),
@@ -180,6 +182,7 @@ impl CodexHost {
         command.arg("app-server").stdin(Stdio::piped()).stdout(Stdio::piped()).stderr(Stdio::piped()).env_clear().envs(&self.0.env);
         super::new_group(&mut command);
         let mut child = command.spawn().map_err(|e| failed(format!("could not start codex app-server: {e}")))?;
+        self.0.allocation.mark();
         let _stderr = crate::run_diagnostics::Stderr::capture(&mut child, self.0.tx.clone(), &self.0.env);
         let stdout = child.stdout.take().ok_or_else(|| failed("codex app-server has no stdout"))?;
         *self.0.stdin.lock().await = child.stdin.take();
@@ -255,6 +258,10 @@ impl CodexHost {
         if let Some(mut reaped) = reaped {
             let _ = reaped.wait_for(|gone| *gone).await;
         }
+    }
+
+    pub fn track_allocation(&self, turn: std::sync::Arc<std::sync::atomic::AtomicBool>) {
+        self.0.allocation.track(turn);
     }
 
     pub fn alive(&self) -> bool {
