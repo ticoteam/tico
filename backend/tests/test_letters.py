@@ -717,6 +717,12 @@ def test_external_sender_losing_an_inferred_source_thread_gets_only_metadata(api
         source = saved["source_blob_id"]
         assert thread["id"] in json.loads(saved["source_provenance"])["threads"]
     assert api.get(row["proof"], headers=headers(token)).status_code == 200
+    if audience == "company":
+        from backend import bot_settings
+        with api.app.state.store.transaction() as c:
+            bot_settings.patch(c, ident, {"harness": "codex", "runtime": "codex"})
+        # A profile edit does not turn the still-active standing credential into a runner lease.
+        assert api.app.state.auth.authenticate(headers(token), "/api/v2/letters", "GET").agent == "hermes"
     removed = api.delete("/api/v2/threads/" + thread["id"] + "/members/bot:" + ident, headers=headers())
     assert removed.status_code == 200 and removed.json()["removed"]
     get(api, "threads/" + thread["id"], token, expected=404)
@@ -756,6 +762,7 @@ def test_revoked_external_identity_stops_deferred_send_instead_of_becoming_inter
     approve(api, row)
     assert fetch(api, row)["error"] == "identity" and hq.provider_submits == 0
     with api.app.state.store.read() as c:
+        assert c.execute("SELECT next_sync_at FROM letters WHERE id=?", (row["id"],)).fetchone()[0] is None
         from backend.auth import bot_identity
         from backend.store import Problem
         with pytest.raises(Problem):
