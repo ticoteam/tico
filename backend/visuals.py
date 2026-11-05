@@ -561,8 +561,11 @@ def decorate(c, who, files, key, base, messages, full=True, hosted=None):
     plain = is_counsel(who)
     for message in messages:
         from .files import readable_page_refs
-        if message and message.get("refs"):
-            message["refs"] = readable_page_refs(c, files.auth, who, message["refs"])
+        if message:
+            shown = readable_page_refs(c, files.auth, who, message)
+            if shown != message:
+                message.clear()
+                message.update(shown)
         items = ((message or {}).get("refs") or {}).get("attachments") or []
         if not any(isinstance(a, dict) and a.get("file_id") for a in items):
             continue

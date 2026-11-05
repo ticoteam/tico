@@ -84,7 +84,9 @@ def test_asks_raw_task_attachments_and_blob_history_are_scrubbed_after_narrowing
     _, attempt = turn(api)
     tid = post(api, "tasks", {"owner": "ops", "title": "Shared review", "body": "Review", "private": False})["id"]
     fid = page(api, attempt, task=tid, title="Audience secret").json()["page"]["file_id"]
-    question = post(api, f"tasks/{tid}/comments", {"text": "Review", "ask": ask("cara"), "attachments": [fid + "@1"]})["comment"]
+    question_ask = ask("cara")
+    question_ask["questions"][0]["options"][0]["file"] = fid + "@1"
+    question = post(api, f"tasks/{tid}/comments", {"text": "Review", "ask": question_ask, "attachments": [fid + "@1"]})["comment"]
     with api.app.state.store.transaction() as c:
         version = c.execute("SELECT * FROM bot_file_versions WHERE file_id=?", (fid,)).fetchone()
         blob = dict(c.execute("SELECT * FROM blobs WHERE id=?", (version["blob_id"],)).fetchone())
@@ -187,7 +189,7 @@ def test_restricted_page_leak_matrix_across_stored_shapes_transports_and_deletio
         H.history_event(c, "task", tid, "bot:ops", "file", new=name, data={"file": bid, "version": 1})
         H.event(c, "bot:ops", "message.visual", tid, {"visual": metadata})
         cid = H.task(c, tid)["conversation_id"]
-        secrets = (fid, bid, title, name, str(version["size"]), fid + "@1", version["digest"], version["source_digest"])
+        secrets = (fid, bid, title, name, str(version["size"]), fid + "@1", version["digest"], version["source_digest"], "Canary confidential quote.")
     api.app.state.store.settings.visual_origin = "https://visuals.acme.example"
     signed = get(api, "pages/" + fid, token="cara-test")["page"]["src"]
     assert api.get(signed).status_code == 200
@@ -224,7 +226,7 @@ def test_restricted_page_leak_matrix_across_stored_shapes_transports_and_deletio
               "threads", "threads/search?q=Review", "threads/search?q=Canary", "context/search?q=Canary",
               "threads/" + cid, "threads/" + cid + "/timeline", "threads/" + cid + "/members",
               "rules?status=any", "rules/" + rid, "rules/counts", "bots/ops/rules", "bots/finance/rules", "audit",
-              "needs-you", "updates", "updates/unread", "updates/tree", "inbox", "answers?ids=" + comment["id"], "status", "live/brief",
+              "needs-you", "needs-you/summary", "updates", "updates/unread", "updates/tree", "inbox", "answers?ids=" + comment["id"], "status", "live/brief",
               "bots/ops/history", "bots/finance/history", "bots/ops/turns", "bots/finance/turns",
               "threads/catch-up", "threads/rail", "threads/browse", "threads/home/bot:finance"]
     for ident in (fid, bid):
@@ -271,7 +273,7 @@ def test_restricted_page_leak_matrix_across_stored_shapes_transports_and_deletio
         response(state + ":signed visual", api.get(signed))
         response(state + ":runner claim", api.post("/api/v2/jobs/claim",
                  json={"bot": "finance", "start_places": True}, headers=headers(machine["token"], "matrix-claim")))
-    assert not failures, failures
+    assert not failures, json.dumps(failures, indent=2)
 
 
 def test_migration_links_name_only_history_before_page_content_is_purged(api):

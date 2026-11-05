@@ -851,11 +851,9 @@ class Known:
         return [a for a in actors if a not in self.strangers]
 
     def message(self, message):
-        if isinstance(message, dict) and message.get("refs"):
+        if isinstance(message, dict):
             from .files import readable_page_refs
-            refs = readable_page_refs(self.c, self.auth, self.viewer, message["refs"])
-            if refs != message["refs"]:
-                message = {**message, "refs": refs}
+            message = readable_page_refs(self.c, self.auth, self.viewer, message)
         if not self.people or not isinstance(message, dict):
             return message
         named = [key for key in ("sender_id", "recipient_id") if message.get(key) in self.people]

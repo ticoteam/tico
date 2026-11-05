@@ -6859,7 +6859,8 @@ def create_app(settings=None):
                 privacy.require_message(c, who, msg)
             answers = H.answers_to(c, mids)
             privacy.require_payload(c, who, answers)
-            return answers
+            from .files import readable_page_refs
+            return readable_page_refs(c, auth, who, answers)
 
     @app.post("/api/v2/messages/{mid}/ack")
     def acknowledge(request: Request, mid: str, body: M.Empty):
