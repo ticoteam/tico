@@ -122,3 +122,20 @@ def test_a_generated_pick_answer_forwarded_to_a_merged_ask_keeps_its_sources(api
         for token in ("cara-test", "finance-test"):
             shown = json.dumps(get(api, "tasks/" + second["id"] + "/comments", token=token))
             assert "Confidential draft" not in shown and fid not in shown, shown
+
+
+def test_quoted_pick_labels_keep_sources_in_the_answer_and_its_body(api):
+    tid, _, fid = public_page(api)
+    question = ask("cara")
+    question["questions"][0]["options"][0].update(label="Confidential draft", file=fid + "@1")
+    asked = post(api, f"tasks/{tid}/comments", {"text": "Choose the draft", "ask": question}, token="ops-test")["comment"]
+    quoted = post(api, f"tasks/{tid}/comments/{asked['id']}/resolve", {"quote": "Confidential draft"}, token="ops-test")
+    assert quoted["comment"]["refs"]["answer"]["body_sources"] == [{"file": fid, "version": 1}]
+    edit(api, fid, {"people": ["ben"]})
+    for deleted in (False, True):
+        if deleted:
+            assert api.delete("/api/v2/files/" + fid, headers=headers()).status_code == 200
+        for token in ("cara-test", "finance-test"):
+            for suffix in ("", "/comments", "/answers"):
+                shown = json.dumps(get(api, "tasks/" + tid + suffix, token=token))
+                assert "Confidential draft" not in shown and fid not in shown, shown
