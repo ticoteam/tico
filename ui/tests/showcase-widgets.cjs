@@ -96,7 +96,7 @@ run('showcase-widgets', ['org', 'toured', 'groups', 'pages'], async ({hub, brows
   await go(page, '#/overview');
   await page.locator('.pg-card').first().waitFor({timeout: t(15000)}).catch(() => {});
   if (await skip.count()) await skip.click();
-  await page.waitForFunction(() => [...document.querySelectorAll('.pg-card iframe.page-frame')].every(f => f.style.height), null, {timeout: t(8000)}).catch(() => {});
+  await page.waitForFunction(() => [...document.querySelectorAll('.pg-card iframe.page-frame')].every(f => f.pageHeight), null, {timeout: t(8000)}).catch(() => {});
   const state = await page.evaluate(() => [...document.querySelectorAll('.pg-card')].map(c => ({cls: c.className,
     frame: c.querySelector('iframe')?.getAttribute('src') || '', h: c.getBoundingClientRect().height, expand: !!c.querySelector('.pg-expand')})));
   console.log('cards', JSON.stringify(state));
