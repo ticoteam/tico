@@ -233,7 +233,7 @@ async function shot(page, name) {
       assert.equal(await page.locator('#dash-grid .grc-ret-t tbody tr').count(), 2);
       // Opened at that address, the page reads that month.
       await page.evaluate(() => { location.hash = '#/overview'; });
-      await page.locator('#dash-grid .dash-pin').first().waitFor();
+      await page.locator('.dash-tabs a[href="#/overview"][aria-current="page"]').waitFor();
       await page.evaluate(() => { location.hash = '#/growth?m=2026-09'; });
       await page.waitForFunction(() => document.querySelector('[data-gr-month]')?.value === '2026-09');
       assert.equal(fake.reads.at(-1), '2026-09');
