@@ -10,7 +10,8 @@ Home or a DM, and a chat a bot shared with its people is a thread for its member
 - **Home**: a bot's or a person's public thread, readable by their Read audience. A bot's Home is where its open asks
   wait, so the next person who looks finds them.
 - **DM**: a private thread for exactly the people in it. Starting one with the same people reuses the open one.
-- **Sub-thread**: a side topic under one message. It has its own read state and sits under that message in the thread.
+- **Sub-thread**: a side topic under one message. It has its own read state. The thread page lists its messages in
+  time order, with the rest of the thread.
 - **Call**: a [Tico Meet](meet.md) call started in a thread. Its transcript and action items go back into that thread.
 
 ## Who can read a thread
@@ -72,8 +73,8 @@ you change it, so there is no Save button. A row you may not use is left out. On
 
 **Reply** on a message answers it in the thread: your message goes at the bottom, with a short quote of the one it
 answers. Replying to a bot's message wakes that bot, as an @mention does. A quote of a message you can't read shows
-only that it is hidden. `hub thread post <thread> "..." --reply-to <message>` replies from the command line; the
-message must be in the same thread or a sub-thread under it, and one you can read.
+**Message not shown**. `hub thread post <thread> "..." --reply-to <message>` replies from the command line. The message
+must be in this thread or an open sub-thread under it, and one you can read.
 
 `hub thread show <thread> --flat` reads the thread and its open sub-threads as one list in time order.
 
@@ -83,14 +84,16 @@ Reply under one message when the side topic would bury the main discussion:
 `hub thread reply <thread> <message> "..."`. `hub thread sub <message>` opens the sub-thread without posting.
 Use them sparingly. The work that everyone needs to see stays in the thread.
 
-A thread shows its sub-threads inline: each message is followed by its sub-thread's messages, indented and quieter, in
-tree order. They organize; they don't hide. Tap one to open that sub-thread with the path back above it, and it shows
-its own sub-threads the same way. A long sub-thread shows its latest messages under an **N more** row that loads the
-rest in place. `hub thread show` returns the same tree: each row has its `depth`, and a `collapsed` row's `cursor` reads
-the rest with `hub thread show <that thread> --cursor <cursor>`.
+The thread page shows the thread and its open sub-threads as one list in time order. A message from a sub-thread
+quotes the message that sub-thread opened under, unless it answers another message. The thread list opens the
+sub-thread that holds what is new. A sub-thread's page shows the threads above it as a path, with a Back link.
 
-Opening a thread reads what it shows, per thread: it and each sub-thread inline, up to the last message drawn. A
-sub-thread whose **N more** holds something unread stays unread until you open that part.
+`hub thread show` returns the tree instead: each message, then the sub-threads under it, and each row has its `depth`.
+A long branch has a `collapsed` row for its older part; its `cursor` reads the rest with
+`hub thread show <that thread> --cursor <cursor>`.
+
+Opening a thread in the app reads what its page shows: the thread and each sub-thread on it, up to the last message
+drawn.
 
 ## Following and unread
 
@@ -126,8 +129,9 @@ sub-thread under it.
   removed from the thread during the run, the reply is not posted.
 - A person's message that names nobody, in a thread with several bots, goes to the bots it is for: a small model picks up
   to three, after the message posts, and the message says who it went to. Name a bot to choose it yourself.
-- Under the messages, a thread shows the bots it is waiting on: working (with what it is doing now), up next (finishing
-  other work first) or can't reply (why, with a Fix link). `hub thread bot-status <thread>` lists the same.
+- Under the messages, a thread shows the bots it is waiting on: working, up next (finishing other work first) or can't
+  reply. A working row shows what the bot is doing, when it says, and how long it has run. A can't-reply row says why,
+  with a Fix link where there is one. A working bot you can manage has a **Stop** button. `hub thread bot-status <thread>` lists the same.
 - A bot that follows a thread on digest gets one run an hour for all its threads with new messages.
 - A bot acknowledges a request with a one-word `✅` in its thread.
 - A bot's open asks to people go in its Home.
