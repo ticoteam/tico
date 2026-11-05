@@ -1621,13 +1621,12 @@ def install(app, store, auth, mutate, onboarding):
                             ((room or {}).get("id"), who.actor, task["id"])).fetchone()
             if not row:
                 return {"make_page": None}
-            page = c.execute("SELECT f.* FROM bot_files f JOIN pages p ON p.file_id=f.id "
-                             "JOIN pins pin ON pin.item='page:' || f.id AND pin.place=? "
-                             "WHERE f.scope=? AND p.archived=0 AND f.archived=0 AND f.state<>'deleted' "
+            # Publish and pin commit together. Later unlinking or archiving keeps a successful request successful.
+            made = c.execute("SELECT 1 FROM bot_files f JOIN pages p ON p.file_id=f.id "
+                             "WHERE f.scope=? "
                              "AND EXISTS (SELECT 1 FROM bot_file_versions v JOIN attempts a ON a.id=v.attempt_id "
                              "JOIN jobs j ON j.id=a.job_id WHERE v.file_id=f.id AND j.message_id=?) LIMIT 1",
-                             ("task:" + task["id"], "task:" + task["id"], row["id"])).fetchone()
-            made = bool(page and app.state.files.visible(c, who, page, {}))
+                             ("task:" + task["id"], row["id"])).fetchone()
             active = (row["state"] == "queued" or row["state"] in ("leased", "running")
                       and row["attempt_state"] in ("leased", "running") and str(row["lease_until"] or "") > H.now())
             return {"make_page": {"message_id": row["id"], "conversation_id": row["conversation_id"],

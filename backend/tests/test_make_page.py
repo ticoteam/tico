@@ -78,6 +78,10 @@ def test_make_page_files_and_pins_clean_html_as_the_person_with_authenticated_at
         assert c.execute("SELECT 1 FROM attempt_reads WHERE attempt_id=? AND kind='meeting' AND ref=?",
                          (attempt["id"], mid)).fetchone()
     assert status(api, t["id"])["state"] == "made"
+    with api.app.state.store.transaction() as c:
+        c.execute("DELETE FROM pins WHERE place=? AND item=?", ("task:" + t["id"], "page:" + fid))
+        c.execute("UPDATE pages SET archived=1 WHERE file_id=?", (fid,))
+    assert status(api, t["id"])["state"] == "made"
     post(api, f"attempts/{attempt['id']}/complete", {"outcome": "completed", "last_seq": 0}, machine["token"])
     # A retry creates no second message; a later chat cannot erase this request's result.
     repeated = post(api, f"tasks/{t['id']}/make-page", {"text": "Make the alert flow with three scenario tabs."},
