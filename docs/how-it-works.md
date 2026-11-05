@@ -318,7 +318,9 @@ approval. Missing telemetry or any output or possible effect keeps the safe revi
 A refusal-count quarantine holds only the responsible task or chat when every counted refusal comes from that
 one source. Its task note or chat notice says why and when the hour's cooldown ends; other tasks of the same bot
 keep running. Refusals from an already held source stay contained and do not count against other work or the
-bot-wide limit. Without a run token, an external agent's writes are fenced by the task being changed.
+bot-wide limit. Without a run token, an external agent's writes are fenced by the task being changed, and
+validation refusals throughout that mutation stay attributed to the task even when the write rolls back.
+Native thread posts and file publishing check the resolved task; files also check the publishing attempt's hold.
 Two or more distinct tasks/chats in the remaining count, or any refusal with no attributable task/chat, still
 quarantine the whole bot. A run's source takes precedence over the task its refused write names. Escape quarantines
 always stop the whole bot and require a person to clear them. The cooldown resets only the held source's count;

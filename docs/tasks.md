@@ -23,8 +23,12 @@ the hold and its cooldown; the bot continues its other tasks. A person who manag
 quarantine clear, and the task keeps its existing status and other holds.
 The held task does not consume the bot's optional limit on tasks in progress.
 Every task change by that bot, including an external agent's snoozes, relations and waits, respects the hold.
+Its task-scoped validation refusals count against that task throughout the write, including after rollback.
+Posts in the task's native thread and file uploads, imports and links also respect the task hold; publishing
+files from a held attempt stays refused even when the bot is active.
 Another run of the bot cannot change the held task either. Notes copied from messages on a held task or chat
-stay pending and unread until release; other tasks' runs carry only notes from sources that are free.
+stay pending and unread until release; their task references use the same whitespace and list normalization
+as claims. Other tasks' runs carry only notes from sources that are free.
 The cooldown still releases a hold if its bot has been archived or its release notice cannot be sent.
 Each release runs independently, so a failed release does not hold up other cooldowns or scheduled work.
 Your selection is remembered, shared links carry it, and new

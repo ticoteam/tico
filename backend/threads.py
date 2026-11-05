@@ -1957,6 +1957,16 @@ def post(c, principal, thread_id, body, *, kind="say", refs=None, parent_message
 
     `reach`: the post is a bot's own write through the API, so whoever it reaches must be in the bot's reach
     (backend/reach.py check_post); a run's reply to what woke it, and a held post a person sends anyway, are not."""
+    thread = thread_row(c, thread_id) if thread_id else start
+    on_task = H.message_task_id({"refs": refs}, thread)
+    with H.refusal_task(on_task):
+        return _post(c, principal, thread_id, body, kind=kind, refs=refs, parent_message_id=parent_message_id,
+                     to_actor=to_actor, via=via, origin=origin, checked=checked, attachments=attachments,
+                     start=start, in_reply_to=in_reply_to, reach=reach)
+
+
+def _post(c, principal, thread_id, body, *, kind, refs, parent_message_id, to_actor, via, origin, checked,
+          attachments, start, in_reply_to, reach):
     actor, v = _actor_of(principal)
     if origin and origin.get("origin_id") and start is not None:
         raise Problem("start", "A replicated message posts into a linked thread", 422)
@@ -1987,6 +1997,8 @@ def post(c, principal, thread_id, body, *, kind="say", refs=None, parent_message
             raise Problem("not_found", "Thread not found", 404)
         if not can_post(c, v, thread):
             raise Problem("forbidden", "You can read this thread but not post in it", 403)
+    H._writer(c, actor, task_id=thread.get("task_id"))
+    H._writer(c, actor, task_id=H.message_task_id({"refs": refs}, thread))
     if origin and origin.get("origin_id"):
         duplicate = _duplicate(c, origin, thread)
         if duplicate is not None:
@@ -2107,8 +2119,8 @@ def _emit_message_held(c, thread, actor, verdict):
 def _write_open(c, actor, text, thread, kind, refs, target, in_reply_to=None):
     """A message addressed to nobody (or to an outside destination): the guards hubdb.say runs that do not need a
     recipient, then the same insert."""
-    H._writer(c, actor)
-    on_task = refs.get("task") or thread.get("task_id")
+    on_task = H.message_task_id({"refs": refs}, thread)
+    H._writer(c, actor, task_id=on_task)
     H.path_mentioned(c, actor, "task note" if on_task else "message", text, on_task)
     return H._write_message(c, actor, target, text, thread, kind, refs, in_reply_to, None)
 
@@ -3009,6 +3021,9 @@ def _own_say(c, actor, v, message_id):
         raise Problem("forbidden", "Only its author changes a message", 403)
     if message.get("kind") not in EDITABLE_KINDS or (message.get("refs") or {}).get("carries"):
         raise Problem("kind", "Asks, answers and notices cannot be changed", 422)
+    thread = thread_row(c, message["conversation_id"])
+    H._writer(c, actor, task_id=thread.get("task_id"))
+    H._writer(c, actor, task_id=H.message_task_id(message, thread))
     return message
 
 

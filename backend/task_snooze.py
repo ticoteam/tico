@@ -97,6 +97,11 @@ def _label(until):
 def snooze(conn, actor, task_id, until, mover=False, note=None):
     """Snooze a live task until `until` (see parse_until); snoozing it again moves the date. `note` is what to
     check when the snooze ends; snoozing again replaces it (none clears it)."""
+    with _H().refusal_task(task_id):
+        return _snooze(conn, actor, task_id, until, mover, note)
+
+
+def _snooze(conn, actor, task_id, until, mover, note):
     H = _H()
     row = _check(conn, actor, task_id, mover)
     if row["status"] not in H.ACTIVE_STATUSES:
@@ -132,6 +137,11 @@ def snooze(conn, actor, task_id, until, mover=False, note=None):
 
 def unsnooze(conn, actor, task_id, mover=False):
     """End a snooze early: the task is back now, and its owner bot is woken once."""
+    with _H().refusal_task(task_id):
+        return _unsnooze(conn, actor, task_id, mover)
+
+
+def _unsnooze(conn, actor, task_id, mover):
     H = _H()
     row = _check(conn, actor, task_id, mover)
     if not row.get("snoozed_until"):

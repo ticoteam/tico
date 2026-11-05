@@ -1243,7 +1243,10 @@ def create_app(settings=None):
             token = H.PRIVATE_WRITE.set(H.PRIVATE_WRITE.get() or privacy.private_execution(c, source))
             path = org_rule_check.PATH.set(request.url.path)     # a hold keeps its route, for Send anyway's guard
             try:
-                return fn(c)
+                tid = request.path_params.get("tid")
+                task_id = auth.resolve_task(c, request.state.identity, tid) if tid else None
+                with H.refusal_task(task_id):
+                    return fn(c)
             except H.Refused as exc:
                 exc.private = getattr(exc, "private", False) or H.PRIVATE_WRITE.get()
                 raise

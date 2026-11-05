@@ -181,6 +181,91 @@ def test_an_external_agent_cannot_write_a_held_task_but_can_write_another_over_m
     assert not call(api, "hub_task_update", {"id": first["id"], "status": "doing"}, token=token)[0]
 
 
+@pytest.mark.parametrize("mutation", ["snooze", "relations"])
+def test_external_validation_refusals_keep_the_task_scope_through_rollback(api, mutation):
+    from backend.tests.test_agents import credential, hermes_bot
+
+    hermes_bot(api)
+    token = credential(api)["token"]
+    task = new_task(api, "Check the export", owner="scout")
+    other = new_task(api, "Check the archive", owner="scout")
+    if mutation == "snooze":
+        body, rule = {"until": H.shift(H.now(), days=-1)}, "date"
+    else:
+        body, rule = {"task": task["id"], "kind": "related"}, "kind"
+    for _ in range(H.QUARANTINE_AT + 1):
+        result = post(api, f"tasks/{task['id']}/{mutation}", body, token, expected=422)
+        assert result["error"]["code"] == rule
+    assert [row["task_id"] for row in holds(api)] == [task["id"]]
+    with api.app.state.store.read() as c:
+        assert H.bot(c, "scout")["state"] == "active"
+        rows = c.execute("SELECT detail FROM refusals WHERE actor='bot:scout' AND rule=?", (rule,)).fetchall()
+        assert len(rows) == H.QUARANTINE_AT + 1
+        assert {H._json(row["detail"], {}).get("scope") for row in rows} == {"task:" + task["id"]}
+        assert H.task(c, task["id"])["snoozed_until"] is None
+    post(api, f"tasks/{other['id']}/snooze", {"until": H.shift(H.now(), days=2)}, token)
+
+
+@pytest.mark.parametrize("mutation", ["thread", "upload", "import", "link"])
+def test_external_native_posts_and_file_publishing_fence_the_resolved_task(api, mutation):
+    from backend import task_quarantine as Q
+    from backend.tests.test_agents import credential, hermes_bot
+
+    hermes_bot(api)
+    token = credential(api)["token"]
+    task = new_task(api, "Check the export", owner="scout")
+    other = new_task(api, "Check the archive", owner="scout")
+
+    def write(row, expected=200):
+        if mutation == "thread":
+            return post(api, f"threads/{row['conversation_id']}/messages", {"text": "Checked the report."},
+                        token, expected=expected)
+        if mutation == "link":
+            return post(api, "files/links", {"task": row["id"], "url": "https://acme.example/report"},
+                        token, expected=expected)
+        body = {"task": row["id"], "name": "report.txt", "text": "Checked the report."}
+        if mutation == "import":
+            body.update(source="s3://acme-reports/report.txt", etag="v1")
+        return post(api, "files/" + ("imports" if mutation == "import" else "uploads"), body,
+                    token, expected=expected)
+
+    with api.app.state.store.transaction() as c:
+        Q.hold(c, "scout", "task:" + task["id"], "Repeated refusals", {"rule": "identity"})
+        before = c.execute("SELECT count(*) FROM messages").fetchone()[0]
+    assert write(task, expected=403)["error"]["code"] == "quarantined"
+    with api.app.state.store.read() as c:
+        assert c.execute("SELECT count(*) FROM messages").fetchone()[0] == before
+        assert c.execute("SELECT count(*) FROM bot_files").fetchone()[0] == 0
+        assert c.execute("SELECT count(*) FROM bot_file_versions").fetchone()[0] == 0
+        assert H.bot(c, "scout")["state"] == "active"
+    write(other)
+    post(api, "bots/scout/quarantine/clear", {})
+    write(task)
+
+
+@pytest.mark.parametrize("scope", ["task", "chat"])
+def test_runner_file_publishing_checks_the_supplied_attempt_hold(api, scope):
+    from backend import task_quarantine as Q
+
+    machine = task_bot(api, lanes=True)
+    if scope == "task":
+        task = new_task(api, "Check the export")
+        held_scope = "task:" + task["id"]
+    else:
+        message = post(api, "chat/ops", {"text": "Check the export."})
+        held_scope = "chat:" + message["conversation_id"]
+    attempt = started(api, machine)
+    body = {"bot": "ops", "attempt": attempt["id"], "scope": "bot", "name": "report.txt", "text": "Checked."}
+    with api.app.state.store.transaction() as c:
+        Q.hold(c, "ops", held_scope, "Repeated refusals", {"rule": "identity"})
+    result = post(api, "files/uploads", body, machine["token"], expected=403)
+    assert result["error"]["code"] == "quarantined"
+    with api.app.state.store.read() as c:
+        assert c.execute("SELECT count(*) FROM bot_files").fetchone()[0] == 0
+    post(api, "bots/ops/quarantine/clear", {})
+    post(api, "files/uploads", body, machine["token"])
+
+
 def test_claim_fence_uses_both_partial_quarantine_indexes(api):
     from backend import execution
     machine = task_bot(api, lanes=True)
@@ -443,7 +528,7 @@ def test_external_task_mutations_fence_the_explicit_task_and_allow_an_unheld_tas
     post(api, path, body, token)
 
 
-@pytest.mark.parametrize("source", ["task", "task_id", "task_room", "chat"])
+@pytest.mark.parametrize("source", ["task", "task_padded", "task_id", "task_room", "chat", "chat_blank_task"])
 def test_notes_from_held_sources_stay_pending_and_unread_until_release(api, source, monkeypatch):
     from backend import bot_to_bot as B, task_quarantine as Q
     from backend import threads
@@ -451,9 +536,11 @@ def test_notes_from_held_sources_stay_pending_and_unread_until_release(api, sour
     monkeypatch.setattr(threads, "NOTES_READ", 1)
     machine = task_bot(api, lanes=True)
     with api.app.state.store.transaction() as c:
-        if source == "chat":
+        if source.startswith("chat"):
             message = H.say(c, "bot:finance", "bot:ops", "The export is ready to check.")
             scope = "chat:" + message["conversation_id"]
+            if source == "chat_blank_task":
+                c.execute("UPDATE messages SET refs=? WHERE id=?", (H._dump({"task": " \t\u2003"}), message["id"]))
         else:
             task = H.task_create(c, "bot:finance", "Check the export", "Check the report.", "bot:ops")
             message = H.task_comment(c, "bot:finance", task["id"], "The export is ready to check.")
@@ -462,6 +549,8 @@ def test_notes_from_held_sources_stay_pending_and_unread_until_release(api, sour
                 refs = {k: v for k, v in message["refs"].items() if k != "task"}
                 if source == "task_id":
                     refs["task_id"] = task["id"]
+                elif source == "task_padded":
+                    refs["task"] = " \t\u2003" + task["id"] + "\n\u00a0"
                 c.execute("UPDATE messages SET refs=? WHERE id=?", (H._dump(refs), message["id"]))
         Q.hold(c, "ops", scope, "Repeated refusals", {"rule": "identity"})
         pending = H._one(c, "SELECT * FROM notes WHERE message_id=?", (message["id"],))
@@ -476,14 +565,14 @@ def test_notes_from_held_sources_stay_pending_and_unread_until_release(api, sour
         assert all(note[key] is None for key in ("carried_by", "settled_at", "canceled_at"))
         assert H.message(c, message["id"])["read_at"] is None
         assert B.continue_backlog(c, "ops") is None, "a held note must not start a backlog loop"
-    if source != "chat":
+    if not source.startswith("chat"):
         row = get(api, "tasks/" + task["id"])["task"]
         result = post(api, "tasks/" + task["id"], {"version": row["version"], "status": "doing"}, attempt["token"], expected=403)
         assert result["error"]["code"] == "quarantined"
     post(api, f"attempts/{attempt['id']}/started", {"thread_id": attempt["lane"]}, machine["token"])
     post(api, f"attempts/{attempt['id']}/complete", {"outcome": "completed", "last_seq": 0}, machine["token"])
     post(api, "bots/ops/quarantine/clear", {})
-    if source == "chat":
+    if source.startswith("chat"):
         new_task(api, "Check the summary")
     resumed = post(api, "jobs/claim", {"next_run": True, "start_places": True}, machine["token"])["attempt"]
     assert [n["message"] for n in resumed["notes"] if n.get("message")] == [message["id"]]

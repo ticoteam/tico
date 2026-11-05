@@ -82,12 +82,14 @@ def _notice(c, bot, conversation_id, said):
 
 def notes_free_sql():
     """A waiting note n may travel only when its recipient's source task/chat is free, before any batch limit."""
+    from .execution import queued_task_sql
+    task_sql = queued_task_sql()
     return ("NOT EXISTS(SELECT 1 FROM messages m JOIN conversations cv ON cv.id=m.conversation_id "
             "WHERE m.id=n.message_id AND (EXISTS(SELECT 1 FROM quarantine_holds qh "
             "WHERE qh.bot_id=substr(n.to_actor,5) AND qh.released_at IS NULL "
-            f"AND qh.task_id={H.MESSAGE_TASK_SQL}) OR EXISTS(SELECT 1 FROM quarantine_holds qh "
+            f"AND qh.task_id={task_sql}) OR EXISTS(SELECT 1 FROM quarantine_holds qh "
             "WHERE qh.bot_id=substr(n.to_actor,5) AND qh.released_at IS NULL "
-            f"AND qh.conversation_id=m.conversation_id AND {H.MESSAGE_TASK_SQL} IS NULL)))")
+            f"AND qh.conversation_id=m.conversation_id AND {task_sql} IS NULL)))")
 
 
 def _release_notice(c, row):

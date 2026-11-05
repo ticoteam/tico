@@ -68,6 +68,7 @@ import os
 import re
 import sqlite3
 import uuid
+from contextlib import contextmanager
 from datetime import datetime, timedelta, timezone
 from urllib.parse import urlsplit
 from pathlib import Path
@@ -1702,6 +1703,16 @@ BULK_CALL = contextvars.ContextVar("hub_bulk_call", default="")
 NO_TRIGGERS = contextvars.ContextVar("hub_no_triggers", default=False)
 
 
+@contextmanager
+def refusal_task(task_id):
+    """Attribute the whole mutation; refuse keeps its scope on the exception across rollback."""
+    token = REFUSAL_TASK.set(_task_ref(task_id) or REFUSAL_TASK.get())
+    try:
+        yield
+    finally:
+        REFUSAL_TASK.reset(token)
+
+
 def private_task_write(fn):
     """Keep refusal audit/escalation content-free for a private domain write, including local runners."""
     import functools
@@ -2782,7 +2793,7 @@ def _actor_exists(conn, actor):
     return False
 
 
-def _writer(conn, actor, task_id=None):
+def _writer(conn, actor, task_id=None, attempt_id=None):
     """Rule 1: the actor must be someone hubdb knows, outside a bot quarantine or a held turn."""
     if not actor_kind(actor):
         refuse(conn, str(actor), "identity", f"{actor!r} is not an actor")
@@ -2797,7 +2808,8 @@ def _writer(conn, actor, task_id=None):
         refuse(conn, actor, "quarantined", f"{actor_name(conn, actor)} is quarantined; {release}")
     if is_bot(actor):
         from . import task_quarantine
-        hold = task_quarantine.for_attempt(conn, {"id": RUN.get()}) if RUN.get() else None
+        attempt_id = RUN.get() or attempt_id
+        hold = task_quarantine.for_attempt(conn, {"id": attempt_id}) if attempt_id else None
         hold = hold or task_quarantine.for_task(conn, actor_id(actor), task_id or REFUSAL_TASK.get())
         if hold:
             refuse(conn, actor, "quarantined", "This task or chat is held after repeated refusals; it resumes after "
@@ -3157,6 +3169,12 @@ def _opener(conn, conversation_id):
 def say(conn, actor, to_actor, body, conversation_id=None, kind="say", refs=None,
         in_reply_to=None, wait_s=None):
     """The one write every message goes through: rules 1, 2, 3, 4, 7 and 8 all live here."""
+    on_task = message_task_id({"refs": refs}, conversation(conn, conversation_id) if conversation_id else None)
+    with refusal_task(on_task):
+        return _say(conn, actor, to_actor, body, conversation_id, kind, refs, in_reply_to, wait_s)
+
+
+def _say(conn, actor, to_actor, body, conversation_id, kind, refs, in_reply_to, wait_s):
     _writer(conn, actor)
     if kind not in MESSAGE_KINDS:
         refuse(conn, actor, "kind", f"a message is {'|'.join(MESSAGE_KINDS)}, not {kind}")
