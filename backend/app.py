@@ -33,7 +33,7 @@ from . import outcome_stats
 from . import assistant_changes, why_here
 from . import teammate_access
 from . import start_places
-from . import ask_ingest, delivery, strategy_bot, invites, owner_link
+from . import ask_ingest, ask_routing, delivery, strategy_bot, invites, owner_link
 from . import org_rule_check
 from . import bot_home_merge
 from .roadmaps import exact_approval
@@ -606,7 +606,7 @@ def create_app(settings=None):
     app.state.timing.recorder = recorder
     app.state.flight = recorder
 
-    from .assistant import write_allowed as assistant_writes, own_room as assistant_room, create_proposal
+    from .assistant import write_allowed as assistant_writes, create_proposal
     from .assistant import valid_operation as assistant_valid
     from .assistant import describe as describe_action
     from .assistant import instruction as assistant_instruction
@@ -1190,7 +1190,7 @@ def create_app(settings=None):
             raise Problem("forbidden", "Request timings are for the owner and BotOps", 403)
         return app.state.timing.summary()
 
-    def mutate(request, body, fn, check=None, durable=False):
+    def mutate(request, body, fn, check=None, durable=False, retry_body=None):
         def current_access(c):
             # Privacy can narrow after middleware preflight, including before a cached retry.
             source = getattr(request.state, "privacy_source", request.state.identity)
@@ -1222,6 +1222,8 @@ def create_app(settings=None):
                 H.PRIVATE_WRITE.reset(token)
         # Money writes and approval decisions pass `durable`; every other keyed write keeps the call it always made.
         money = {"durable": True} if durable else {}
+        if retry_body:
+            money["retry_body"] = retry_body
         result = store.mutate(request.state.identity, request.url.path,
                               request.headers.get("idempotency-key"), body.model_dump(), protected_write,
                               check=current_access, **money)
@@ -1519,115 +1521,17 @@ def create_app(settings=None):
                 # the asker typed or picked, never another person's data.
                 if not isinstance(values, dict) or len(json.dumps(values)) > 2000:
                     raise Problem("reference", "automations_filter is a small object", 422)
-            elif kind not in ("depth", "turn_id"):
+            elif kind not in ("depth", "turn_id", "rerouted_from"):
                 raise Problem("reference", f"Unsupported reference kind: {kind}", 422)
 
     def named_destination(c, who, body, create=True):
-        """The conversation a message lands in, named before any check reads it, so each check and the write see the same
-        one. A room that moved names its Home (backend/bot_home_merge.py). A bot's message to a person that names no room
-        lands in that person's chat Home when there is one (hubdb.chat_home): where `H.say` would put it, but otherwise
-        only after the checks had run, so a private run's words would reach a Home that others read. A message to a bot,
-        or from a person with no room named, costs no lookup here."""
-        if body.conversation_id:
-            return bot_home_merge.home_for(c, body.conversation_id, create=create) or body.conversation_id
-        if H.is_human(who.actor) or str(body.to).lower() == "assistant" or str(body.to).startswith("bot:"):
-            return None
-        to = body.to if str(body.to).startswith("human:") else auth.target(c, who, body.to)
-        return H.chat_home(c, who.actor, to, {"ask": "ask", "notice": "notice"}.get(body.kind, "chat"), create=create)
+        return ask_routing.named_destination(c, who, body, auth, create=create)
 
     def send(c, who, body):
-        body.conversation_id = named_destination(c, who, body)
-        in_assistant_room = False
-        if str(body.to).lower() == "assistant":
-            if who.role not in ("human", "owner") or who.via:
-                raise Problem("forbidden", "Only a human writes to their private Assistant", 403)
-            if body.conversation_id and not assistant_room(c, who, body.conversation_id):
-                raise Problem("forbidden", "Use your own Assistant room", 403)
-            info = assistant_mod.availability(c, settings, who)
-            if not info["available"]:
-                raise Problem("assistant_off", "The " + info["name"] + " is off", 409)
-            body.to = info["bot"]
-            body.conversation_id = assistant_mod.chat_room(c, settings, who)["id"]
-        to = auth.target(c, who, body.to)
-        if not body.conversation_id:
-            from .shared_bots import route
-            to = auth.target(c, who, route(c, who.actor, to))
-        if to.startswith("bot:"):
-            docs = (who.role in ("human", "owner") and body.conversation_id and to == "bot:" + views.DOC_BOT
-                    and views.docs_room(auth.conversation(c, who, body.conversation_id), who))
-            if not docs:
-                if who.role in ("human", "owner") and H.actor_id(to) == settings.assistant_bot:
-                    # The assistant takes chat in the caller's own Assistant room and nowhere else.
-                    if not assistant_room(c, who, body.conversation_id):
-                        raise Problem("forbidden", settings.assistant_name + " chats only in your own Assistant "
-                                      "(/api/v2/assistant); message one of your bots here", 403)
-                    in_assistant_room = True
-                elif who.role in ("human", "owner") and H.actor_id(to) == strategy_bot.SLUG:
-                    # No person chats with the Strategy Bot: their Assistant asks it (backend/assistant.py HELPERS). A
-                    # person's post with no room (the Goals page, `hub chat`) goes to their Assistant instead; the
-                    # owner's earlier chat with it is history, read-only. Bots still message it: its goals session.
-                    if body.conversation_id or who.via:
-                        raise Problem("forbidden", "Nobody chats with the " + strategy_bot.name(c) + " directly; ask "
-                                      "your " + settings.assistant_name + ", which hands it the work", 403)
-                    info = assistant_mod.availability(c, settings, who)
-                    if not info["available"]:
-                        raise Problem("assistant_off", "The " + info["name"] + " is off", 409)
-                    to = "bot:" + info["bot"]
-                    body.conversation_id = assistant_mod.chat_room(c, settings, who)["id"]
-                    in_assistant_room = True
-                auth.require_write(c, who, H.actor_id(to), missing="Unknown recipient")
-        auth.require_bot_contact(c, who, to, body.conversation_id, H.refs_task_id(body.refs), kind="message")
-        # A bot's message to a teammate out of its reach (docs/reach.md) is refused before anything is written.
-        reach.check(c, who, to, "chat", task_id=H.refs_task_id(body.refs),
-                    conversation_id=body.conversation_id, in_reply_to=body.in_reply_to)
-        if body.conversation_id:
-            conv = auth.conversation(c, who, body.conversation_id, write=True)
-            from . import threads
-            if conv.get("audience") == "home":
-                # A bot's Home is read by its readers, not by its participant list (which names the bot alone).
-                if not threads.readable(c, threads.actor_viewer(c, to), conv["id"]):
-                    raise Problem("forbidden", "Recipient is not a conversation participant", 403)
-            elif to not in threads.legacy_participants(c, conv):
-                raise Problem("forbidden", "Recipient is not a conversation participant", 403)
-        if body.in_reply_to:
-            msg = H.message(c, body.in_reply_to)
-            if not msg:
-                raise Problem("not_found", "Original message not found", 404)
-            auth.conversation(c, who, msg["conversation_id"], write=True)
-            privacy.require_message(c, who, msg)
-            if body.conversation_id and msg["conversation_id"] != body.conversation_id:
-                raise Problem("reference", "Reply belongs to a different conversation", 422)
+        body = routed_message(c, who, body)
         check_refs(c, who, body.refs)
-        refs = dict(body.refs or {})
-        if body.command:
-            refs["command"] = True
-        if body.needs_action:
-            refs["needs_action"] = True
-        if wrong := delivery.check(body.delivery, body.defer_for):
-            raise Problem("delivery", wrong, 422)
-        if body.delivery and body.kind == "ask":
-            raise Problem("delivery", "A question always wakes the one it is for: send it without a delivery", 422)
-        # How it reaches a bot (backend/delivery.py). With none named a message goes as it always has: a person's
-        # steers, a bot's goes as bot-to-bot messages do (backend/bot_to_bot.py).
-        way = body.delivery
-        if to.startswith("bot:") and way in ("steer", "queue") and who.role == "bot":
-            refs["needs_action"] = True
-        if in_assistant_room:
-            refs["assistant"] = True           # the server's mark: this turn acts for the person
-        conversation_id = body.conversation_id
-        steer_task = H._task_ref(refs.get("task"))
-        if not conversation_id and body.kind == "steer" and who.role == "bot" and steer_task:
-            # A requester's steer goes to the task's own room, which its owner's running turn takes input from.
-            task = H.task(c, steer_task)
-            if not task or task["requester_id"] != who.actor or task["owner_id"] != to or not task.get("conversation_id"):
-                raise Problem("steer_target", "Steer a task you requested, sent to its owner", 422)
-            conversation_id = task["conversation_id"]
-        if not conversation_id and who.role in ("owner", "human") and to.startswith("bot:"):
-            conversation_id = rooms.chat_room(c, auth, who, H.actor_id(to))["id"]
-        # An onboarding bot only learns: it answers in chat and talks with its manager, and sends nothing else.
-        lifecycle.refuse_send(c, who, to, H.conversation(c, conversation_id) if conversation_id else None)
-        privacy.require_destination(c, who, to, conversation_id, refs,
-                                    H.message(c, body.in_reply_to) if body.in_reply_to else None)
+        body = ask_routing.require_recipient(c, who, body.to, body=body, auth=auth)
+        to, refs, conversation_id, way = body.to, body.refs, body.conversation_id, body.delivery
         # Ride-along: a defer while the bot has a turn going in this chat goes in right after that turn.
         if way == "defer" and to.startswith("bot:") and who.role != "bot" and conversation_id \
                 and delivery.running_in_session(c, H.actor_id(to), [conversation_id]):
@@ -1638,9 +1542,7 @@ def create_app(settings=None):
             refs["quiet"] = True                 # no job: the session's next turn, or its deadline, takes it
         message = H.say(c, who.actor, to, body.text, conversation_id=conversation_id,
                         kind=body.kind, refs=refs, in_reply_to=body.in_reply_to, wait_s=body.wait_s)
-        # Everyone else it reached (its @mentions, a DM's members) is checked too; a refusal rolls the send back.
-        reach.check_delivered(c, who, message["id"], task_id=H.refs_task_id(refs),
-                              conversation_id=message.get("conversation_id"), in_reply_to=body.in_reply_to)
+        ask_routing.require_recipient(c, who, to, body=body, auth=auth, delivered=message)
         due = None
         if to.startswith("bot:") and way == "defer":
             if who.role == "bot":
@@ -1668,11 +1570,6 @@ def create_app(settings=None):
             message = {**visual_view(c, who, [H.message(c, message["id"])])[0], "visuals": report}
         if (goal and goal["status"] == "active") or body.attachments:
             H.held_queue_recheck(c, message["id"])
-        if who.role == "bot":
-            conv = H.conversation(c, message["conversation_id"])
-            if who.attempt_id and all(p.startswith("bot:") for p in conv["participants"]):
-                c.execute("INSERT OR IGNORE INTO attempt_conversations VALUES(?,?)", (who.attempt_id, conv["id"]))
-            auth.conversation(c, who, conv["id"])
         # An onboarding bot starts only a person's message or its manager's; anyone else's waits for it to be Active.
         if note := (H.held_note(c, to) or usage_limits.warning(c, to) or bot_stops.warning(c, to)
                     or (None if H.is_human(who.actor) else H.setup_hold(c, to, who.actor))):
@@ -3074,6 +2971,10 @@ def create_app(settings=None):
         people = H.mentioned_people(c, text, row, author) if text else []
         return [a for a in (row["owner_id"], row["requester_id"], *people, *extra) if a]
 
+    def rule_comment_audience(c, who, row, text, ask=None):
+        target = [H.task_ask_route(c, who.actor, row, ask)[0]] if ask else []
+        return rule_task_audience(c, row, who.actor, text, *target)
+
     def rule_message_to(c, who, body):
         """The actor a message goes to, as `send` writes it: `to: assistant` is the person's Assistant bot."""
         if str(body.to).lower() == "assistant" and who.role in ("human", "owner") and not who.via:
@@ -3084,6 +2985,7 @@ def create_app(settings=None):
         """A message's audience as the check reads it: its target and its conversation's participants. Both are
         authorized first, as the write authorizes them: a caller who cannot name the target or read the conversation
         gets 404 here, so no check reads the participants and no hold names them."""
+        body = routed_message(c, who, body)
         out = {auth.target(c, who, rule_message_to(c, who, body))}
         if body.conversation_id:
             out |= set(auth.conversation(c, who, body.conversation_id).get("participants") or [])
@@ -3121,21 +3023,28 @@ def create_app(settings=None):
             return org_rule_check.place_for(c, author, recipients, (row or {}).get("conversation_id") or "")
         return place
 
-    def rule_check(who, operation, output, audience, obj="", context=None, place=None):
+    def rule_check(who, operation, output, audience, obj="", context=None, place=None, *, track_route=False):
         """The check for one write by a person or a bot, or None (nothing to judge). An audience the caller may not name
         is `org_rule_check.refused`: never unchecked, the write fails with that error (`apply`). `place`: the write's
-        place, or a function of (c, author, recipients) that reads it."""
-        if not output or not org_rule_check.author_of(who, settings.assistant_bot):
+        place, or a function of (c, author, recipients) that reads it. `track_route` keeps the audience even when
+        nothing matches, so a send cannot move to an unchecked recipient."""
+        author = org_rule_check.author_of(who, settings.assistant_bot)
+        if not track_route and (not output or not author):
             return None
         with store.read() as c:
-            if not org_rule_check.in_force(c):
+            in_force = org_rule_check.in_force(c)
+            if not track_route and not in_force:
                 return None             # no rule in force: the audience (a roster read, @mentions) is never resolved
             try:
                 recipients = audience(c)
             except Problem as exc:
                 return org_rule_check.refused(exc)
-        return org_rule_check.preflight(store, app.state.judge, who, operation, output, recipients, context, obj,
-                                        place=place)
+        verdict = (org_rule_check.preflight(store, app.state.judge, who, operation, output, recipients, context, obj,
+                                           place=place) if in_force and output and author else None)
+        if track_route and verdict is None:
+            return {"author": author or who.actor, "operation": operation, "outcome": "no_rules",
+                    "recipients": sorted({r for r in recipients if r and r != (author or who.actor)})}
+        return verdict
 
     def rule_public(body):
         """Whether a task write makes the task public: the whole company reads it."""
@@ -3243,6 +3152,8 @@ def create_app(settings=None):
         the write, as the rule check is."""
         if body.kind != "ask":
             return None
+        with store.read() as c:
+            body = routed_message(c, who, body)
         title = body.text.strip().split("\n")[0][:300]
         tref = H._task_ref((body.refs or {}).get("task"))
         if tref and ask_ingest.gated(who, settings.assistant_bot):
@@ -3255,11 +3166,21 @@ def create_app(settings=None):
         return ask_ingest.preflight(store, app.state.judge, who, body.to, title, body.text,
                                     kind="question" if tref else "loose", asked=(body.refs or {}).get("questions"))
 
+    def routed_message(c, who, body):
+        body = body.model_copy(deep=True)
+        if body.kind == "ask":
+            from . import ask_routing
+            body.to, body.refs = ask_routing.resolve(c, who.actor, body.to, body.refs,
+                                                    body.conversation_id, body.in_reply_to, body=body, who=who, auth=auth)
+        return body
+
     def message_write(c, who, body, rc=None, ingest=None, files=None):
         """One message, as every route that sends one writes it (`/messages`, a conversation's `/messages`) and Send
         anyway replays it: the org rule check's verdict, then ask ingest's, then the send. A hold names the audience the
         check read, so the audience is read again here, inside the write: a caller who lost access gets 404, and an
         audience that moved since the check is checked again (409)."""
+        body = routed_message(c, who, body)
+        body.conversation_id = named_destination(c, who, body)
         audience = rule_message_audience(c, who, body) if rc is not None else None
         replay = {"body": body.model_dump(mode="json", by_alias=True), **({"files": files} if files else {})}
         rule = org_rule_check.apply(c, rc, body.text, replay, audience_now=audience)
@@ -3289,6 +3210,10 @@ def create_app(settings=None):
         """Both checks of one message, outside the write: the rule check, then ask ingest (a held one skips it, and so
         does a saved retry, `retry`: `mutate` replays its answer without the write). `place`: the message's place when
         the route does not name a conversation (`rule_message_place`)."""
+        if retry:
+            return None, None
+        with store.read() as c:
+            body = routed_message(c, who, body)
         if body.conversation_id:
             # A reply to a room that moved names its Home for every check below (backend/bot_home_merge.py); the sender's
             # attempt, a private run's, still decides what the Home allows. A room whose Home is archived gets the bot's
@@ -3330,15 +3255,27 @@ def create_app(settings=None):
             c, who, auth.target(c, who, body.to), "chat", conversation_id=body.conversation_id,
             task_id=H.refs_task_id(body.refs), in_reply_to=body.in_reply_to))
         rc = rule_check(who, operation, body.text, lambda c: rule_message_audience(c, who, body),
-                        place=place or rule_message_place(who, body))
+                        place=place or rule_message_place(who, body), track_route=body.kind == "ask")
         return rc, (None if org_rule_check.holds(rc) or retry else message_ingest(who, body))
 
     @app.post("/api/v2/messages")
     def say(request: Request, body: M.MessageCreate):
         who = request.state.identity
         rc, ingest = message_checks(who, body, retry=saved_retry(request, who))
+
+        def legacy_body(c, receipt):
+            # Older checks hashed a bot's resolved Home. Use its saved destination:
+            # a retry must not create a Home or follow today's recipient routing.
+            if ((H.is_human(who.actor) and not body.conversation_id) or not isinstance(receipt, dict)
+                    or receipt.get("sender_id") != who.actor or not receipt.get("conversation_id")):
+                return None
+            cid = receipt["conversation_id"]
+            if body.conversation_id and named_destination(c, who, body, create=False) != cid:
+                return None
+            return {**body.model_dump(), "conversation_id": cid}
+
         return ask_ingest.judged(store, ingest, lambda: mutate(request, body, lambda c: message_write(
-            c, who, body, rc, ingest)))
+            c, who, body, rc, ingest), retry_body=legacy_body))
 
     def rule_prepare_message(store_, bot, replay):
         return message_ingest(bot, M.MessageCreate.model_validate(replay["body"]))
@@ -5246,7 +5183,11 @@ def create_app(settings=None):
         ask ingest first (backend/ask_ingest.py): sent back, it is withdrawn as soon as it is asked and the task does
         not wait on them."""
         who = request.state.identity
-        rc = rule_check(who, "task_ask", body.text, lambda c: [auth.task(c, who, auth.resolve_task(c, who, tid))["requester_id"]])
+        def recipients(c):
+            row = auth.task(c, who, auth.resolve_task(c, who, tid))
+            target, _ = H.task_ask_route(c, who.actor, row)
+            return [target]
+        rc = rule_check(who, "task_ask", body.text, recipients, track_route=True)
         ingest = None if org_rule_check.holds(rc) or saved_retry(request, who) else task_ask_ingest(who, tid, body)
         return ask_ingest.judged(store, ingest, lambda: mutate(request, body, lambda c: task_ask_write(
             c, who, tid, body, ingest, rc)))
@@ -5266,7 +5207,8 @@ def create_app(settings=None):
         with store.read() as c:
             if dream.exempt(c, row):
                 return None             # the person started the dream to be asked (backend/dream.py)
-        return ask_ingest.preflight(store, app.state.judge, who, row["requester_id"], row["title"], body.text,
+            target, _ = H.task_ask_route(c, who.actor, row)
+        return ask_ingest.preflight(store, app.state.judge, who, target, row["title"], body.text,
                                     kind="task_ask")
 
     def rule_prepare_task_ask(store_, bot, replay):
@@ -5281,17 +5223,22 @@ def create_app(settings=None):
         task_id = auth.resolve_task(c, who, tid)
         row = auth.task(c, who, task_id)
         lifecycle.refuse_send(c, who, None, what="task questions")
-        rule = org_rule_check.apply(c, rc, body.text, {"task": task_id, "body": body.model_dump(mode="json", by_alias=True)})
+        route = H.task_ask_route(c, who.actor, row)
+        target, _ = route
+        rule = org_rule_check.apply(c, rc, body.text, {"task": task_id, "body": body.model_dump(mode="json", by_alias=True)},
+                                    audience_now=[target])
+        if rule and rule.get("moved"):
+            raise Problem("moved", "Who this goes to changed while it was checked; send it again", 409, retryable=True)
         if rule and rule.get("held"):
             if ingest:
                 ask_ingest.skipped(c, ingest, "held")
             return org_rule_check.answer(rule)
         body = body.model_copy(update={"text": org_rule_check.warned_text(rule, body.text)}) if rule else body
-        gate = ask_ingest.apply(c, ingest) if ask_ingest.matches(ingest, row["requester_id"]) else None
+        gate = ask_ingest.apply(c, ingest) if ask_ingest.matches(ingest, target) else None
         if ingest and not gate:
             ask_ingest.skipped(c, ingest, "target")
         # Not parked on a question that is not sent: the task keeps its status and the bot's own note.
-        msg = H.task_ask(c, who.actor, task_id, body.text, park=not (gate and gate["acts"]))
+        msg = H.task_ask(c, who.actor, task_id, body.text, park=not (gate and gate["acts"]), route=route)
         if gate:
             ask_ingest.record(c, ingest, gate, task_id, msg["id"])
             if gate["acts"]:
@@ -5311,7 +5258,11 @@ def create_app(settings=None):
         comment_rights(c, auth, who, task_id)
         ask = check_ask(c, task_id, body.ask, auth, who)
         # The org rule check (backend/org_rule_check.py), applied before anything is written: held, nothing is.
-        rule = org_rule_check.apply(c, rc, body.text, {"task": task_id, "body": body.model_dump(mode="json", by_alias=True)})
+        audience = rule_comment_audience(c, who, row, body.text, ask) if rc is not None else None
+        rule = org_rule_check.apply(c, rc, body.text, {"task": task_id, "body": body.model_dump(mode="json", by_alias=True)},
+                                    audience_now=audience)
+        if rule and rule.get("moved"):
+            raise Problem("moved", "Who this goes to changed while it was checked; send it again", 409, retryable=True)
         if rule and rule.get("held"):
             if ingest:
                 ask_ingest.skipped(c, ingest, "held")
@@ -5414,7 +5365,8 @@ def create_app(settings=None):
     def comment_ingest(who, tid, body):
         if not body.ask or not ask_ingest.gated(who, settings.assistant_bot) or not (row := readable_task(who, tid)):
             return None
-        asked = body.ask.who or (row["owner_id"] if who.actor == row["requester_id"] else row["requester_id"])
+        with store.read() as c:
+            asked = H.task_ask_recipient(c, who.actor, row, body.ask.model_dump())
         return ask_ingest.preflight(store, app.state.judge, who, asked, row["title"], body.text, kind="question",
                                     asked=[q.model_dump() for q in body.ask.questions])
 
@@ -5443,9 +5395,9 @@ def create_app(settings=None):
         if body.delivery == "goal" and (body.attachments or body.public):
             raise Problem("delivery", "A goal is the comment's text: send it without files or as a public comment",
                           422)
-        rc = rule_check(who, "comment", body.text, lambda c: rule_task_audience(
-            c, auth.task(c, who, auth.resolve_task(c, who, tid)), who.actor, body.text,
-            *([rule_target(c, who, body.ask.who)] if body.ask and body.ask.who else [])), place=task_place(who, tid))
+        rc = rule_check(who, "comment", body.text, lambda c: rule_comment_audience(
+            c, who, auth.task(c, who, auth.resolve_task(c, who, tid)), body.text,
+            body.ask.model_dump() if body.ask else None), place=task_place(who, tid), track_route=body.ask is not None)
         ingest = None if org_rule_check.holds(rc) or saved_retry(request, who) else comment_ingest(who, tid, body)
         result = ask_ingest.judged(store, ingest, lambda: mutate(request, body, lambda c: comment_write(
             c, who, tid, body, ingest, rc, request.state.identity)))
@@ -8381,8 +8333,8 @@ def create_app(settings=None):
 
         def comment(c, bot, replay):
             body = M.TaskComment.model_validate(replay["body"])
-            return rule_task_audience(c, task_row(c, bot, replay), bot.actor, body.text,
-                                      *([rule_target(c, bot, body.ask.who)] if body.ask and body.ask.who else []))
+            return rule_comment_audience(c, bot, task_row(c, bot, replay), body.text,
+                                         body.ask.model_dump() if body.ask else None)
 
         def comment_edit(c, bot, replay):
             body = M.TaskComment.model_validate(replay["body"])
@@ -8391,7 +8343,7 @@ def create_app(settings=None):
         return {"message": message, "note": note, "task_create": task_create, "task_update": task_update,
                 "task_owner": task_update, "bulk": task_update, "comment": comment, "comment_edit": comment_edit,
                 "answer": lambda c, bot, replay: answer_audience(c, bot, replay["message"]),
-                "task_ask": lambda c, bot, replay: [task_row(c, bot, replay)["requester_id"]],
+                "task_ask": lambda c, bot, replay: [H.task_ask_route(c, bot.actor, task_row(c, bot, replay))[0]],
                 "task_answer": lambda c, bot, replay: rule_task_audience(c, task_row(c, bot, replay), bot.actor),
                 "reply": reply_audience}
 

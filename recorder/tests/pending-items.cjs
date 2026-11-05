@@ -25,6 +25,7 @@ const path = require('node:path');
       Object.defineProperty(navigator,'clipboard',{value:{writeText:async text=>{window.copiedText=text;}},configurable:true});
       window.pendingFixture = {a, calls:0, inflight:0, max:0, fail:false};
       const original = window.__TAURI__.core.invoke;
+      window.pendingFixture.original=original;
       window.__TAURI__.core.invoke = async (cmd, args) => {
         if (cmd !== 'shared_item') return original(cmd, args);
         const f = window.pendingFixture;
@@ -81,7 +82,7 @@ const path = require('node:path');
     assert.equal(await page.evaluate(()=>window.pendingFixture.sent.detail.body),'B saved before Send');
     assert.match(await page.evaluate(()=>window.pendingFixture.sent.detail.due),/^2026-12-01T.*Z$/);
     assert.equal(await page.evaluate(()=>window.pendingFixture.max),1);
-    assert.equal(await page.getByRole('button',{name:'Open',exact:true}).getAttribute('data-url'),'https://app.acme.example/#/task/created-task');
+    assert.equal(await page.locator('[data-shared-row="shared-1"]').getByRole('button',{name:'Open',exact:true}).getAttribute('data-url'),'https://app.acme.example/#/task/created-task');
     await page.evaluate(() => {
       const a=window.pendingFixture.a;
       a.shared.sections.task[0].status='proposed';
@@ -143,6 +144,7 @@ const path = require('node:path');
     await page.locator('[data-shared-item]').waitFor({state:'detached'});
     await page.evaluate(() => {
       const original = window.__TAURI__.core.invoke;
+      window.pendingFixture.original=original;
       window.__TAURI__.core.invoke = async (cmd, args) => {
         if (cmd !== 'send_item') return original(cmd, args);
         const f = window.pendingFixture, local = f.a.items.find(it => it.id === args.id);
@@ -179,14 +181,69 @@ const path = require('node:path');
       await page.locator('[data-shared-panel]').waitFor();
       await closed.getByText('Sent by Sam Okafor',{exact:true}).waitFor();
       assert.match(await closed.locator('pre').textContent(),/My native unsaved title/);
-      await page.evaluate(()=>window.pendingFixture.a.shared.sections.task=[window.pendingFixture.adopted]);
+      await page.evaluate(()=>{
+        const f=window.pendingFixture;
+        f.a.shared.sections.task=[f.adopted];
+        f.a.linked={tasks:[{task_id:'existing-task',title:'Original server title',number:42,status:'open'}]};
+      });
+      await closed.getByText('Sent by Sam Okafor',{exact:true}).waitFor();
+      assert.match(await closed.locator('pre').textContent(),/My native unsaved title/);
       await closed.getByRole('button',{name:close,exact:true}).click();
       await closed.locator('pre').waitFor({state:'detached'});
       if(close==='Copy') assert.match(await page.evaluate(()=>window.copiedText),/My native unsaved title/);
-      await page.evaluate(()=>window.pendingFixture.a.shared_scope+='-refresh');
+      await page.evaluate(()=>{window.pendingFixture.a.shared_scope+='-refresh';window.pendingFixture.a.linked=null;});
       await page.getByText('Original server title · Sent',{exact:false}).waitFor();
       assert.equal(await page.locator('[data-shared-row] pre').count(),0);
     }
+    // A Save recovery also keeps local fields when the server is still proposed but has moved on.
+    await page.evaluate(() => {
+      const a=window.pendingFixture.a;
+      const current={id:'changed-on-save',section:'task',status:'proposed',version:2,text:'New remote title',detail:{owner:'human:sam'},updated_by:'human:sam'};
+      a.saved=true; a.shared_scope='save-recovery';
+      a.shared={can_send:true,sections:{task:[current]}};
+      a.items=[{id:'local-save',title:'My retry title',sent:false,closed_draft:{item:current,text:'My retry title',detail:{owner:'human:dana',body:'My retry details'}}}];
+    });
+    const moved=page.locator('[data-shared-row="changed-on-save"]');
+    await moved.getByText('Changed by Sam Okafor',{exact:true}).waitFor();
+    assert.match(await moved.locator('pre').textContent(),/My retry title[\s\S]*My retry details/);
+    assert.equal(await moved.locator('textarea,input,select').count(),0);
+    await moved.getByRole('button',{name:'Copy',exact:true}).click();
+    assert.match(await page.evaluate(()=>window.copiedText),/My retry title/);
+    await moved.getByRole('textbox',{name:'Title',exact:true}).waitFor();
+    assert.equal(await moved.getByRole('textbox',{name:'Title',exact:true}).inputValue(),'New remote title');
+    // Linking controls and remote rows stay in the saved shared panel.
+    await page.evaluate(() => {
+      const f=window.pendingFixture, a=f.a;
+      a.items=[]; a.can_link=true; a.link_scope=['m1','acme'];
+      a.shared_scope='saved-links'; a.linked_browser='https://app.acme.example';
+      a.linked={tasks:[{task_id:'linked-task',number:45,title:'Linked pricing',status:'open'}]};
+      a.shared={can_send:true,sections:{task:[{id:'link-proposal',version:1,section:'task',status:'proposed',text:'Pricing follow up',proposed_task_id:'linked-task',proposed_number:45,detail:{}}]}};
+      window.__TAURI__.core.invoke=async (cmd,args) => {
+        if(cmd==='task_picker') return {tasks:[{id:'unnumbered',number:null,title:'Unnumbered target',status:'open'}],next_offset:null};
+        if(cmd==='shared_item') {
+          f.linkAction=args.action; f.linkBody=args.body;
+          const item=a.shared.sections.task[0]; item.status='pushed';item.result_ref='linked-task';item.version++;
+          return {item:structuredClone(item),pushed:true};
+        }
+        return f.original(cmd,args);
+      };
+    });
+    await page.getByRole('button',{name:'Link #45',exact:true}).waitFor();
+    assert.equal(await page.getByRole('button',{name:/^Send/}).count(),0);
+    await page.getByRole('button',{name:'Link',exact:true}).waitFor();
+    await page.getByText('Linked pricing',{exact:false}).waitFor();
+    await page.getByRole('button',{name:'Unlink',exact:true}).waitFor();
+    await page.getByRole('button',{name:'Link #45',exact:true}).click();
+    await page.waitForFunction(()=>window.pendingFixture.linkAction==='link');
+    assert.deepEqual(await page.evaluate(()=>window.pendingFixture.linkBody),{});
+    await page.locator('[data-shared-row="link-proposal"]').waitFor({state:'detached'});
+    assert.equal(await page.getByText('Linked pricing',{exact:false}).count(),1);
+    await page.getByRole('button',{name:'Add',exact:true}).click();
+    await page.getByRole('textbox',{name:'Add a task',exact:true}).fill('Added after Save');
+    assert.equal(await page.getByRole('textbox',{name:'Add a task',exact:true}).inputValue(),'Added after Save');
+        await page.getByRole('button',{name:'Link',exact:true}).click();
+    await page.getByRole('button',{name:'Unnumbered target · open',exact:true}).waitFor();
+    await page.getByRole('button',{name:'Cancel',exact:true}).click();
     assert.deepEqual(errors,[]);
     console.log('Recorder: in-flight draft, retry and final Send passed');
   } finally { await browser.close(); }

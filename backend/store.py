@@ -2317,7 +2317,7 @@ class Store:
             "SELECT 1 FROM idempotency WHERE binding IS NULL AND actor=? AND operation=? AND key=?",
             (self._principal(identity), operation, key)).fetchone() is not None
 
-    def mutate(self, identity, operation, key, body, fn, check=None, durable=False):
+    def mutate(self, identity, operation, key, body, fn, check=None, durable=False, retry_body=None):
         if not key or len(key) > 200:
             raise Problem("idempotency_key", "Provide an Idempotency-Key of 1–200 characters", 422)
         hashed = digest(encode(body))
@@ -2333,9 +2333,11 @@ class Store:
             row = c.execute("SELECT * FROM idempotency WHERE binding IS NULL AND actor=? AND operation=? AND key=?",
                             (principal, operation, key)).fetchone()
             if row:
-                if row["request_hash"] != hashed:
-                    raise Problem("idempotency_conflict", "This key was used for different content", 409)
                 result = json.loads(row["response"])
+                if row["request_hash"] != hashed:
+                    legacy = retry_body(c, result) if retry_body else None
+                    if legacy is None or row["request_hash"] != digest(encode(legacy)):
+                        raise Problem("idempotency_conflict", "This key was used for different content", 409)
                 from .auth import Auth, Identity
                 from . import task_privacy as privacy
                 replay_auth = Auth(self)
