@@ -380,7 +380,9 @@ function lcVaultChanged() {
 // The tool's page full width under Tools (#/tools/<service>): who has it, its credentials and issues, what its page
 // says, and Slack's and GitHub's connect cards. It reads what Keys reads, so a vault dialog's change redraws it alike.
 async function pageToolService(service) {
-  $('#main').innerHTML = `<div class="tt tt-page" id="tool-service">
+  // A redraw of the same page (route() again, a poll) keeps it, and what is typed in its forms.
+  if (LC?.single && LC.key === service && document.body.contains(LC.root)) return;
+  $('#main').innerHTML =`<div class="tt tt-page" id="tool-service">
     <nav class="tt-crumb" aria-label="Breadcrumb"><a href="${TOOLS_ROUTE}">Tools</a><span aria-hidden="true">›</span><span data-tl-crumb>${esc(service)}</span></nav>
     <div id="int-detail">${skelRows(4, {card: true})}</div>
     <dialog class="bot-editor" id="credential-dialog" aria-label="Credential"></dialog></div>`;

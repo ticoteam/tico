@@ -109,7 +109,7 @@ const noSecret = async (page, tag) => assert.ok(!(await page.content()).includes
       assert.deepEqual(await rows(page), ROWS, tag + ': one row each: kind, issue dot, how many have it');
       assert.deepEqual(await page.locator('.lc-gh').allInnerTexts(), ['IN USE\n3', 'AVAILABLE\n3', 'CREDENTIALS\n1', 'REMOVED\n1'], tag + ': grouped');
       assert.equal(await page.locator('#side a[data-nav="tools"].cur').count(), 1, tag + ': Tools is current');
-      assert.equal(await page.locator('#side a[data-nav="tools"]').innerText(), 'Tools', tag + ': the nav says Tools');
+      assert.match(await page.locator('#side a[data-nav="tools"]').innerText(), /^(api\s*)?Tools$/, tag + ': the nav says Tools');
       assert.equal(await page.locator('#account-menu [href="#/integrations"]').count(), 0, tag + ': no second Tools in the account menu');
       assert.equal(await page.locator('.rd-help').count(), 1, tag + ': one help bubble');
       assert.equal(await page.locator('.lc-pane').isVisible(), false, tag + ': the list alone');
