@@ -254,6 +254,9 @@ NEVER = [(m, re.compile(p)) for m, p in (
     ("POST", r"/api/v2/me/tokens(/[^/]+/revoke)?"),
     ("POST", r"/api/v2/service-keys(/[^/]+/revoke)?"),
     (None, r"/api/v2/credentials(/.*)?"), (None, r"/api/v2/credential-set"),
+    # An API tool's keys and levels are credentials and grants; its address and auth scheme decide where a key is sent,
+    # so changing, adding or deleting a tool is the person's tap too (backend/api_tools.py). Its check only reads.
+    (None, r"/api/v2/api-tools(/[^/]+(/(keys|access)(/.*)?)?)?"),
     # HQ's cloud-machine support switch grants access just like the support_access team rule.
     ("PUT", r"/api/v2/cloud-machines/support"),
     (None, r"/api/v2/credential-imports(/.*)?"), (None, r"/api/v2/runner-credential-(migration|imports)(/.*)?"),

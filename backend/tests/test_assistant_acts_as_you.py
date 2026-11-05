@@ -333,6 +333,7 @@ REVIEWED = {
     "POST /api/v2/bots/{bot}/copy": "copies a bot the person may copy; no secret is shown in the chat, and the route checks the person's right",
     "POST /api/v2/settings/catalog/{key}/plan": "plans a setting and names the run it would make; the run is checked by the gate when it is made",
     "PUT /api/v2/access/rules": "refused by the keys on its body (credential and Assistant rules, in admits_on_turn); the walk sends no body",
+    "POST /api/v2/api-tools/{tool_id}/check": "one authenticated GET per stored key; it reads, records the result and returns no value",
     "PUT /api/v2/usage/limits": "a spend cap, not a credential; the person sets it on their own word",
     "POST /api/v2/assistant/actions": "the Assistant's own card route: a proposal the person confirms",
     "POST /api/v2/computers/{rid}/revoke": "removes a computer the person may remove (its operator or an admin; a Confirm card in BotOps); the extra key it deletes holds the computer's first name, not a credential",
