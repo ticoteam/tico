@@ -66,6 +66,37 @@ approval before merge even when the team's task review policy allows a fixes-onl
 
 ## Dev tickets: the steps
 
+A bot PR on a General task, or any board with no check steps, uses the company's Dev ticket review pools too.
+Tico files `Review 1: PR #N` with the PR link and head, then Review 2 if the ticket flow has two reviews.
+The same pool rules pick the reviewer. A `qa` task also needs QA. Code and docs use the same route, including
+PRs that mix both. Owners can also file `hub task child <task> --owner <reviewer> --role review --title "PR #N"`.
+Add `--check-model` only when asking for a check on another model.
+
+Each PR head has one open request per review. Reviews match the full PR link: host, owner, repo and number.
+PR #1 and PR #12, or equal numbers in different repos, keep their own reviews even at the same head.
+On this route, each review checks the evidence for its own PR, so other linked PRs do not block it.
+Before dispatch, Tico adds the full PR link to an older number-only request when the number names just one
+linked PR and every child reader can read the parent. A child with more readers keeps its own words and
+history; its clear PR number still prevents a second review. New requests, saved heads and verdict results
+follow the same reader rule. If the number is unclear, Tico leaves the request as it is and logs it for review.
+A push closes the old request as superseded and gets a new review;
+an old-head approval never clears the new head. Changes wake the owner with the findings. Once the current head
+has all required approvals and green checks, Tico wakes the owner: `Approved at <sha>, checks green: merge PR #N`.
+If the owner lacks repo write access, an existing repo manager, Release Manager or repo owner with write access
+gets the merge task. This grants no new access and does not change the repo's merge rules.
+The merge is of the approved head: a push after approval needs new reviews, so non-blocking notes go in a follow-up PR.
+
+Forwarded review and QA notes keep the source check's readers, even when a later public check sends them.
+A wake or saved result stays limited by both the source check and the task it reaches.
+Merge tasks hold the work instructions; their approval notice keeps the checks' readers too.
+
+The once-a-minute dispatcher also picks up older open bot PRs, oldest first, at most three new checks per reviewer
+per hour and within each pool's open-check limit. A settled approval at the current head that has no saved outcome
+runs the next step once: Review 2 when needed, else the merge handoff when checks are green. This also applies when
+a hold clears; an old-head approval does not count. Conflicting PRs and branches reported behind main go back to the
+owner to rebase. A done task with an open PR returns to review. Private tasks stay private: a reviewer who cannot
+read the task gets no request. Health names visible bot PRs open over 24 hours without a review and the wait reason.
+
 In Settings → Tasks, rename the default **Engineering** type to **Dev tickets** and replace its steps with these.
 Renaming keeps the type with Head of Engineering, so a roadmap item follows its Dev tickets (below), and so does a type
 you create named Dev tickets. Move any tasks off a step before you delete it or change its status.
@@ -100,21 +131,21 @@ ticket stays at its step with a Waiting tag.
   for the same check on the same head is refused with the open one's id.
 - **Tico files the check.** Each check step has a pool of bots, set on the step in Settings → Tasks. Entering the step
   files its check to a free pool bot, preferring another model company than the Builder, or leaves it "Waiting for a
-  reviewer" until the first one finishes a check ([Tasks](tasks.md#check-pools-who-takes-a-tickets-check)).
+  reviewer" until one finishes a check or the once-a-minute retry finds room ([Tasks](tasks.md#check-pools-who-takes-a-tickets-check)).
+- **Health names the next move at the current PR head.** Changes are the Builder’s move; a passed check is the
+  Builder’s move to merge or move on. An old-head verdict needs a new review. A check still open names its owner
+  even after a push, and an unfiled check names its pool and wait reason. Human subtasks are not check verdicts.
+  Private check owners and verdicts stay hidden; incomplete evidence cannot approve a merge or move on.
 - **Moving a step wakes nobody unless a rule says so.** A Dev tickets type comes with three editable rules: **QA Fixes**
   wakes the Builder, **In QA** wakes QA only, and **Pending Release** is a note to the Release Manager. Change them in the type's
   **What wakes** automation on the Automations page.
 - **A ticket at a working step (In Progress or a Fixes step) shows its age at that step** on its card (`step_since`
   on the task), amber past 4 hours. Waiting time is not counted: the clock restarts when the ticket comes back to
-  work. After 4 hours at the step, the type's manager (Head of Engineering), or else the owner's manager, is woken once to unblock or reroute it. Owners are not woken for a status: a quiet ticket is listed on its owner's task roundup, once per run (three times a day by default). It happens once per stay at the step. A step's flow sets its own late hours (`late_hours`), on any board; a Dev step without one uses 4. `status_hours` no longer wakes anyone.
-- **A turn that ends and leaves its ticket in progress with nothing queued wakes its owner once.** Ten minutes after
-  the owner's last run on a working ticket, or on an open check below it, finished with nothing live, queued or held
-  after it and nothing recorded to wait on, the owner is woken once per stay at the step, a reviewer included.
+  work. After 4 hours at the step, the type's manager (Head of Engineering), or else the owner's manager, is listed on the task roundup as late, to unblock or reroute it, and again every seven days while it stays late. Owners are not woken for a status: a quiet ticket is listed on its owner's task roundup, once per run (three times a day by default). A step's flow sets its own late hours (`late_hours`), on any board; a Dev step without one uses 4. `status_hours` no longer wakes anyone.
 - **Head of Engineering works by exception.** On the **Manager** profile it has no step on any ticket: a ticket's
-  steps, its subtasks' results, checks, verdicts, blockers and refused moves on tickets it asked for, and late or
-  backlog notices are notes for its next run, not wakes. An incident still wakes it.
-  About hourly (Settings > Routines, *Engineering exceptions*) Tico builds the board's exceptions list and wakes it
-  only when the list has an entry the last one did not:
+  steps, its subtasks' results, checks, verdicts, blockers and refused moves on tickets it asked for are notes for its next run, not wakes. An incident still wakes it.
+  Tico builds the board's exceptions list, and the manager's task roundup lists each entry (relisted every seven days while it
+  stands). The entries are:
   - a ticket, or the open check below it, with no live, queued or held run for 45 minutes and nothing recorded to wait
     on, or at a check step with no check filed and none waiting, or whose check finished 45 minutes ago without the
     ticket moving on, with its owner and since when;
@@ -129,7 +160,7 @@ ticket stays at its step with a Waiting tag.
   It reads the list any time with `hub pipeline` (`exceptions`), and fixes the cause by hand: moves a ticket
   (`hub task update <id> --step ...`), reassigns it (`--owner`) or closes a duplicate. People and tasks given to it
   still wake it at once. Notes held for it wake nothing: its next run, whatever starts it, carries them, so a week of
-  normal tickets is no turn at all. On the Lead profile it keeps the late and backlog notices instead, and gets no list.
+  normal tickets is no turn at all.
 - **Bots move a ticket by its step** (`hub task update <id> --step "Review 1"`), not by its status. Several steps
   share a status, and setting a status lands on the first step that has it.
 

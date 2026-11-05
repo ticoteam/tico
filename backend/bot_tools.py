@@ -24,7 +24,7 @@ from fastapi import Request
 from clients import access_entry, harness_manifests, mcp_servers
 from . import model_subscriptions
 from . import models as M
-from . import providers, read_cache, routines
+from . import google_workspace, providers, read_cache, routines
 from .harnesses import EXTERNAL_HARNESSES, resolve_harness
 from .store import H, Problem, encode, readiness_document, repo_url
 from . import bot_settings as BS
@@ -360,13 +360,20 @@ def listing(c, settings, bot, reads=None):
     # Only the Google key: a computer also holds other credentials for its bots (a vault grant), and
     # those reach the run whoever its message bot is.
     google = lambda entry: entry.get("held") and entry.get("env") == "GOOGLE_SA_KEY"
-    if any(google(entry) for entry in state["raw"]) and not routines.token_mailboxes(c, bot):
+    covered = routines.token_mailboxes(c, bot)
+    if covered and all(google_workspace.authority(c, box) == "workspace" for box in covered):
+        # The server holds the Google Workspace key and mints each run's token (plan v5): this bot needs no key on its
+        # computer, and its mailbox's workspace is the one the server covers.
+        for tool, entry in zip(declared, state["raw"]):
+            if entry.get("env") == "GOOGLE_SA_KEY":
+                tool.update(status="ready", problem="", detail="ready (Google Workspace on the server)")
+    elif any(google(entry) for entry in state["raw"]) and not covered:
         for tool, entry in zip(declared, state["raw"]):
             if google(entry):
                 tool.update(status="problem", held=True, detail="", problem=(
                     f"{label} holds the Google key, but {slug} is nobody's message bot on the server, so its runs get no mail "
                     "token. An owner or admin names it: POST /api/v2/access/people/<person> "
-                    '{"inbox_bot": "' + slug + '", "mailbox": "<address>"}'))
+                    '{"inbox_bot": "' + bot + '", "mailbox": "<address>"}'))
     adding = [_pending_tool(r) for r in requests if r["kind"] == "add"
               and not any(_same(entry, r["entry"]) for entry in state["raw"])]
     if external:
@@ -508,7 +515,7 @@ def unregister(c, auth, settings_admin, settings, who, bot, tool_id):
         if not found:
             raise Problem("not_found", "That request is not waiting any more", 404)
         c.execute("UPDATE bot_tool_requests SET state='canceled' WHERE id=?", (found["id"],))
-        H.task_close(c, H.KEEPER, found["task_id"], note="Tool request withdrawn; do not apply this change.")
+        H.task_close(c, H.KEEPER, found["task_id"], note="Tool request withdrawn; do not apply this change.", strict=False)
         c.execute("UPDATE tasks SET version=version+1 WHERE id=?", (found["task_id"],))
         H.event(c, who.actor, "bot.tool_request_canceled", bot, {"service": found["service"], "task": found["task_id"]})
         return {"canceled": True, "task_id": found["task_id"],

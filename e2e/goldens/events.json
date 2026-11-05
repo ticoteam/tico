@@ -10,7 +10,10 @@
           "runs",
           "bots",
           "needs",
-          "threads"
+          "threads",
+          "meeting_items",
+          "presence",
+          "letters"
         ]
       },
       "event": "ready",
@@ -868,6 +871,11 @@
         "actor": "human:ana",
         "at": "<time>",
         "id": "<task>",
+        "kind": "update",
+        "kinds": [
+          "insert",
+          "update"
+        ],
         "seq": 80,
         "task": {
           "acceptance": "[]",
@@ -910,6 +918,7 @@
           "labels": [],
           "lane": "company",
           "links": [],
+          "live_meeting_id": null,
           "next_run": false,
           "note": "Accepted.",
           "number": null,
@@ -1158,6 +1167,11 @@
         "actor": "human:ana",
         "at": "<time>",
         "id": "<open_task>",
+        "kind": "update",
+        "kinds": [
+          "insert",
+          "update"
+        ],
         "seq": 97,
         "task": {
           "acceptance": "[]",
@@ -1199,6 +1213,7 @@
           "labels": [],
           "lane": "company",
           "links": [],
+          "live_meeting_id": null,
           "next_run": false,
           "note": "",
           "number": null,
@@ -1557,6 +1572,7 @@
         "actor": "bot:ops",
         "at": "<time>",
         "count": 1,
+        "folded_task_ids": [],
         "items": [
           {
             "actions": [
@@ -1720,6 +1736,7 @@
         "actor": "runner:<id30>",
         "at": "<time>",
         "count": 1,
+        "folded_task_ids": [],
         "items": [
           {
             "actions": [

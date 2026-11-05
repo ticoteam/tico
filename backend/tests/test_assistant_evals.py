@@ -246,6 +246,32 @@ def _hub_answer(tmp_path, monkeypatch, canned):
 PAUSED = {"items": [{"id": "bot_a", "status": "paused"}]}
 ACTIVE = {"items": [{"id": "bot_a", "status": "active"}]}
 
+@pytest.mark.parametrize(("spelling", "stdin", "code"), [
+    (["--file", "-"], "", 1), (["--file=-"], "", 1), (["--fi=-"], "not-json", 1), (["--f", "-"], "", 1),
+    (["--file", "-"], '{"name": "x"}', 0), (["--file=-"], '{"name": "x"}', 0)])
+def test_a_routine_payload_on_stdin_must_be_json(tmp_path, monkeypatch, spelling, stdin, code):
+    """`--file -` reads stdin, in any spelling the real parser takes, and an empty or non-JSON flow writes nothing."""
+    answer = _hub_answer(tmp_path, monkeypatch, [{"match": r"^automation create\b", "out": {"automation": {"id": "a1"}}}])
+    monkeypatch.setattr(sys, "stdin", io.StringIO(stdin))
+    text, got = answer(["automation", "create", *spelling], "cli")
+    assert got == code, text
+    assert ("not JSON" in text) == bool(code)
+
+
+def test_plain_text_on_stdin_is_not_held_to_json(tmp_path, monkeypatch):
+    answer = _hub_answer(tmp_path, monkeypatch, [{"match": r"^doc write", "out": {"ok": True}}])
+    monkeypatch.setattr(sys, "stdin", io.StringIO("Meeting notes\n"))
+    assert answer(["doc", "write", "memo.md", "--body-file", "-"], "cli")[1] == 0
+
+
+def test_the_mcp_surface_never_reads_stdin(tmp_path, monkeypatch):
+    answer = _hub_answer(tmp_path, monkeypatch, [{"match": r"^automation create\b", "out": {"automation": {"id": "a1"}}}])
+    stdin = io.StringIO('{"jsonrpc": "2.0"}')
+    monkeypatch.setattr(sys, "stdin", stdin)
+    assert answer(["automation", "create", "--file", "-"], "mcp")[1] == 1
+    assert stdin.tell() == 0
+
+
 
 def test_a_read_after_a_successful_write_shows_the_new_value(tmp_path, monkeypatch):
     answer = _hub_answer(tmp_path, monkeypatch, [{"match": r"^bot status list", "out": PAUSED,

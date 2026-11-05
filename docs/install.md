@@ -388,7 +388,7 @@ plans and diagnostics, and stay in setup's 0600 private environment copy for ret
 excluded from public setup state and runner settings. An explicit nonempty environment value replaces its saved value.
 
 For an existing workspace with an Inbox key, a signed-in owner or admin can connect its Inbox to a company in the
-customer portal. In **Settings > More > Email & Phone**, open **Connect Inbox to Tico account/company** and follow the
+customer portal. In **Settings > Inboxes > Settings > Email**, open **Join your company's shared Inbox** and follow the
 portal link to obtain a five-minute connection code. Paste it into the workspace, preview the company name and ID,
 then confirm sharing in both directions: existing workspace inboxes and messages join the company's shared Inbox,
 and the workspace's agents can read that shared Inbox. The key stays on the server; no agent receives it. A saved
@@ -1314,6 +1314,14 @@ In **Settings > Computers**, revoked computers are hidden by default; **Show rev
 records. **Remove computer** revokes its registration immediately. Its assigned bots remain visible;
 use **Reassign in Bots** to choose another computer. The page shows how to stop the Docker runner from that computer's
 install directory; this keeps its repositories and sign-in. Re-register it with a new code if you want to use it again.
+
+The hourly cleanup automatically revokes only replaced self-hosted computers: one with no bots assigned and more than
+24 hours without contact (or since enrollment if it never connected), when a newer, unrevoked computer with the same
+owner, machine name and platform enrolled or checked in after its last contact. Sharing browser exits, cloud machines,
+app delivery computers, and computers with model subscriptions, stored keys, login records, profiles or reported
+signed-in AI tools are kept. A computer without a matching replacement is kept however long it is offline.
+The event records why it was retired and names its replacement. Retired computers leave Health and the active computer
+list; they can be registered again with a new code.
 
 ## Operating it
 

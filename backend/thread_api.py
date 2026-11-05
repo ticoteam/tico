@@ -67,6 +67,12 @@ class ReadMark(BaseModel):
     seq: int
 
 
+class ReadAll(BaseModel):
+    # Read what was there this long ago, not what came since: Catch up sends it once its Undo is gone, so a message
+    # that arrived while Undo showed stays unread. Milliseconds, measured by the client, so its clock never matters.
+    ago_ms: int | None = Field(None, ge=0, le=600_000)
+
+
 class MemberAdd(BaseModel):
     actor: str
     role: str = "member"
@@ -545,13 +551,16 @@ def install(app, store, auth, mutate, rule_check):
         with store.read() as c:
             # Only one's own message one can read is edited: anything else is the 404/403 before any check, so neither
             # the reach check nor the rule check reads (or names who reads) a message hidden from the caller.
-            thread_id = threads._own_say(c, *threads._actor_of(viewer), message_id).get("conversation_id") or ""
+            # Writer refusals belong in the mutation transaction; this lookup only checks ownership.
+            thread_id = threads._own_say(c, *threads._actor_of(viewer), message_id,
+                                         check_writer=False).get("conversation_id") or ""
         # A bot's edit that @mentions someone new out of its reach is refused before the rule check spends judgment.
         reach.precheck(store, who, lambda c: reach.check_edit(c, who, message_id, body.text, viewer))
         rc = rule_check(who, "threads_edit", body.text, lambda c: recipients(c, who, thread_id, None), "",
                         {"message_id": message_id}, place=thread_place(who, thread_id)) if thread_id else None
 
         def work(c):
+            threads._own_say(c, *threads._actor_of(viewer), message_id)
             gate = org_rule_check.apply(c, rc, body.text, {"message_id": message_id, "text": body.text},
                                         audience_now=recipients(c, who, thread_id, None) if rc else None)
             if gate and gate.get("moved"):
@@ -576,10 +585,12 @@ def install(app, store, auth, mutate, rule_check):
         return mutate(request, body, lambda c: threads.mark_read(c, threads.viewer(auth, who), thread_id, body.seq))
 
     @app.post("/api/v2/threads/{thread_id}/read-all")
-    def read_all(request: Request, thread_id: str):
-        """Read up to now in the thread and every sub-thread under it."""
+    def read_all(request: Request, thread_id: str, body: ReadAll | None = None):
+        """Read up to now in the thread and every sub-thread under it (`ago_ms`: up to that long ago)."""
         who = request.state.identity
-        return mutate(request, Nothing(), lambda c: threads.mark_all_read(c, threads.viewer(auth, who), thread_id))
+        body = body or ReadAll()
+        return mutate(request, body, lambda c: threads.mark_all_read(c, threads.viewer(auth, who), thread_id,
+                                                                     ago_ms=body.ago_ms))
 
     @app.post("/api/v2/threads/{thread_id}/members")
     def add_member(request: Request, thread_id: str, body: MemberAdd):

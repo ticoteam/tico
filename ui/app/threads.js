@@ -128,8 +128,11 @@ async function threadsLoad() {
     } catch (e) {
       // 404: a server without threads. Anything else keeps what was drawn and tries again on the next change.
       if (e?.status === 404 && THREADS.on !== true) THREADS.on = false;
-    } finally { THREADS.loading = null; }
-    threadsSideRender();
+    } finally {
+      THREADS.loading = null;
+      // Every way out draws the sidebar again, the early return for a server without threads included.
+      threadsSideRender();
+    }
   })();
   const loading = THREADS.loading;
   await loading;
@@ -153,13 +156,14 @@ async function threadsReady() {
 
 // ----------------------------------------------------------------- the sidebar
 function threadsSideRender() {
-  const on = THREADS.on === true;
+  // Shown from the first paint, before the first read lands: only a server without threads (THREADS.on false) hides it.
+  const on = THREADS.on !== false;
   const link = $('#nav-threads'); if (link) link.hidden = !on;
   // On a phone Threads takes Search's place in the bottom bar; global search is then in More (the drawer's footer).
   const tab = $('#mobile-threads'), search = $('#mobile-search');
   if (tab) tab.hidden = !on;
   if (search) search.hidden = on;
-  if (!on) return;
+  if (THREADS.on !== true) return;
   // The link and the phone tab carry the same count: what Catch up has left.
   const n = threadsCatchUp();
   for (const badge of [$('#nav-threads .nav-badge'), $('#mobile-threads .nav-badge')]) {

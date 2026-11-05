@@ -203,8 +203,12 @@ def late_told(run):
 
 
 def lead_only_scheduled(run):
-    """Head of Engineering runs on its schedule (and when a person asks), never on routine notices."""
-    other = [r for r in run.t.bot("engineering-lead").turns if r["action"] is None and r["news"] != "update"]
+    """Head of Engineering runs on its schedule (and when a person asks), never on routine notices. Its task roundup is the
+    schedule's one grouped run (each profile's roundup row, rules.PROFILE_RULES), so a roundup wake is a scheduled one."""
+    from backend import rules
+    roundups = {r["id"] for found in rules.PROFILE_RULES.values() for r in found if r["event"] == "task_roundup"}
+    other = [r for r in run.t.bot("engineering-lead").turns
+             if r["action"] is None and r["news"] != "update" and r["news"] not in roundups]
     kinds = Counter(r["news"] for r in other)
     return not other, f"{len(other)} turns on routine notices: " + ", ".join(f"{k} {n}" for k, n in kinds.most_common(4))
 

@@ -10,6 +10,7 @@ from datetime import datetime, timedelta, timezone
 
 import httpx
 import pytest
+import time_machine
 from fastapi.testclient import TestClient
 
 from clients import gateway as G
@@ -19,6 +20,13 @@ from backend.app import create_app
 from backend.demo_sections.finance import CONTENT as FINANCE
 
 NOW = datetime(2026, 9, 25, 18, 30, tzinfo=timezone.utc)
+
+
+@pytest.fixture(scope="module", autouse=True)
+def demo_clock():
+    """Builds and API reads see the same day, including clocks outside hubdb.now."""
+    with time_machine.travel(NOW, tick=False):
+        yield
 
 
 @pytest.fixture(scope="module")
@@ -62,6 +70,14 @@ def test_phone_requests_read_is_empty_in_the_demo_not_an_error(built):
         listed = api.get("/api/v2/inbound/phone-requests")
         assert listed.status_code == 200
         assert listed.json() == {"phone_requests": [], "next": None}
+
+
+def test_letters_out_keeps_a_local_proof_and_a_provider_receipt_in_the_demo(built):
+    with as_ana(built) as api:
+        row = api.get("/api/v2/letters").json()["items"][0]
+        assert row["status"] == "mailed" and row["hq_letter_id"] == "lt_demo"
+        assert api.get(row["proof"]).content.startswith(b"%PDF-")
+        assert api.get("/api/v2/letters/settings").json()["return_address"]
 
 
 def test_letters_carry_the_mailing_address_and_reach_their_owners(built):
@@ -180,7 +196,7 @@ def test_the_demo_sends_nothing_with_its_gateway_key(built, monkeypatch):
 
 
 def test_email_and_phone_writes_refuse_in_the_demo_before_any_call_out(built, monkeypatch):
-    """The Email & Phone buttons (a new inbox, a phone request, the phone quote, the company connection) are refused by
+    """The Tico address and number buttons (a new inbox, a phone request, the phone quote, the company connection) are refused by
     the product in the demo before any request leaves: no HTTP client sends. Every send is recorded here."""
     sent = []
     local_send, local_async_send = httpx.Client.send, httpx.AsyncClient.send
@@ -244,7 +260,7 @@ def test_billing_is_a_sample_that_agrees_with_the_usage_page(built):
 
 def test_a_build_long_after_its_dates_keeps_every_message_body(tmp_path):
     """Retention runs on the demo's own clock while it is built: a demo built months before today keeps its bodies."""
-    settings = demo.build(tmp_path, now=datetime.now(timezone.utc) - timedelta(days=200))
+    settings = demo.build(tmp_path, now=NOW - timedelta(days=200))
     with closing(sqlite3.connect(settings.db_path)) as db:
         total = db.execute("SELECT COUNT(*) FROM inbound_messages").fetchone()[0]
         removed = db.execute("SELECT COUNT(*) FROM inbound_messages WHERE body IS NULL OR retention_removed=1").fetchone()[0]

@@ -1,6 +1,6 @@
 // Settings > Computers' hosted servers against a fake server (paused-start, d8f8efaa): the owner sees the Tico server
 // and the bot computer, Start on the stopped one; a start while the company is paused for credit says "Paused: out of
-// credit. Add credit to start this computer." with "Ask for more credit" opening the account page, and stays on screen
+// credit. Add credit to start this computer." with "Contact support for more credit" opening the account page, and stays on screen
 // through Settings' reloads; once credit is added the start goes through. An install HQ hosts nothing for has no
 // section, and a member never asks. No sideways scroll on a phone. Every request is intercepted. TICO_SHOTS=<dir>
 // saves screenshots of the refusal (desktop and phone, dark and light).
@@ -82,7 +82,7 @@ const shots = process.env.TICO_SHOTS || '';
     await note.locator('.hosted-paused').waitFor();
     assert.equal(await note.locator('.hosted-paused').innerText(), PAUSED);
     const ask = note.locator('[data-hosted-credit]');
-    assert.equal(await ask.innerText(), 'Ask for more credit');
+    assert.equal(await ask.innerText(), 'Contact support for more credit');
     assert.equal(await ask.getAttribute('href'), 'https://app.tico.dev');
     assert.equal(await ask.getAttribute('target'), '_blank');
     assert.equal(await card.locator(`[data-hosted-start="${BOTS}"]`).isDisabled(), false, 'Start can be tried again');

@@ -7,6 +7,7 @@ from datetime import datetime, timedelta, timezone
 
 from backend import hubdb as H, task_relations as TR
 from backend.tests.test_api import api, as_member, get, post, put, setup_attempt  # noqa: F401  (api is a fixture)
+from backend.tests.hold_rows import set_holds
 
 ACTIVE = ["open", "doing", "waiting"]
 OTHERS = {"name": "Assigned to Others", "show_count": True, "conditions": [
@@ -46,7 +47,10 @@ def task(api, title, owner, requester, **columns):
         for name, value in columns.items():
             if name in ("created_at", "updated_at", "done_at"):
                 value = stamp(value)
-            c.execute(f"UPDATE tasks SET {name}=? WHERE id=?", (value, tid))
+            if name.startswith(("blocked_", "snoozed_")):
+                set_holds(c, tid, **{name: value})
+            else:
+                c.execute(f"UPDATE tasks SET {name}=? WHERE id=?", (value, tid))
     return tid
 
 

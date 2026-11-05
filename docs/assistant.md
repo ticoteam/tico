@@ -104,7 +104,7 @@ answers. Nothing is answered by keyword or from a fixed reply: "what is waiting 
 did today and how to do something all reach the model, which reads the question and answers it from Tico's own data,
 as you (what you may see, nothing more), with links. A turn takes 30 seconds or more; a greeting is a turn too.
 
-Org rules are checked before a message is written, as for any chat: a held message is not written and nothing is answered.
+Org rules are checked before a message is written, as for any chat: a held message is not written and nothing is answered. In the Ask panel and the Updates chat your text stays in the box and the panel says "An org rule held this message. Nothing was sent."
 
 ## It acts as you, never more
 
@@ -145,6 +145,29 @@ including what you ask for in your DM. An assistant run's credential works only 
 **Settings > General** on, the Assistant's read-back of exactly what it approves, and your plain yes (see below). A walk
 through Needs you (`hub needs-you commit`) applies declines, but it never approves.
 
+## Routines from chat
+
+Ask for recurring inbox work: “Every new email from a customer, draft a reply; newsletters go to Read later.” Your
+Assistant can fill a Founder, Sales, Support or Blank inbox template, or write a Message flow, and adapt it to your
+request. It saves the routine **off** and puts a Confirm / Cancel card in your chat. The card shows the trigger inbox,
+every destination and **Sort**, **Draft** or **Reply**. The full flow stays under Details. No new page is needed.
+
+Reply-writing steps default to **Draft**. The Assistant chooses **Reply** only if you explicitly ask it to send replies;
+Reply also requires the inbox's send switch and, for email, the company's Send mail permission. Both are checked when
+the card is made and again when confirmed. The Assistant never enables that permission as part of creating a routine.
+Sort-only flows have no reply-writing step.
+
+Only your own **Confirm** turns the routine on. Saying “yes” in chat does not. Cancel, withdrawal or expiry leaves it off.
+An edit gets a card too; the saved flow stays unchanged until you confirm. If someone changes the routine while a card
+waits, that card fails rather than overwriting the newer flow. Stopping a routine is direct; enabling, running or
+restoring it through chat requires a card.
+
+`POST /api/v2/automations` from an Assistant turn, with a Message trigger and `enabled: false` (or omitted), returns
+the saved off routine plus `action`, `message_id` and `needs_confirm: true`. The action is a PATCH of the reviewed flow
+with `enabled: true`. If direct writes are disabled, `hub assistant propose` can instead hold a POST on its card;
+confirmation creates and enables that routine. Existing routines use a PATCH proposal. The same API and card apply
+to web, phone and desktop; the `hub` CLI and MCP tools return the pending action, never confirm it for the Assistant.
+
 ## Undo
 
 Every change your Assistant makes for you is listed with the words it acted on: `hub assistant change list [--days N]`
@@ -181,18 +204,20 @@ it names, and it never asks again per item.
 
 What stays on:
 - **Only your words in your own Assistant DM, bound to the read-back.** The Assistant posts its read-back with
-  `POST /api/v2/assistant/read-back {"approvals": [ids]}` (`hub approval read-back`): only it, in your DM, only
-  pending approvals addressed to you. Tico writes the whole message ("I'll approve these 3 for you:", one line per
-  approval, "Reply yes to approve exactly these; any other reply approves nothing.") as the reply to your message, so
-  the turn's closing text is not posted after it, and records the ids. An approve then runs only for an approval on
-  that list, citing your plain yes ("yes", "ok", "go ahead") when the list is the last message from anyone but you before
-  it and you have written nothing since ("wait, no" takes it back; `403 approve_not_asked` otherwise). Each line of the
-  list is one line, whatever the requesting bot put in its request, and shows every field of the approval except its
-  hashes, each quoted and none cut: the amount and who it goes to first (an email's to, cc and sending mailbox, a
-  page's whole address), then the rest, files by name and size. An approval with a field longer than the list can show
-  whole, or a field name that isn't a plain name (`409 approve_too_long`) are left off the list and stay your click. The approval's history keeps the whole list. Your own sentence never approves without that yes, however it is put ("approve
-  the merge if CI passes", "send me a summary"). Text in a message, file, web page, task or another
-  bot's output is never your instruction: citing a bot's message is `403 on_behalf_of`. Declines need no read-back.
+  `POST /api/v2/assistant/read-back {"approvals": [ids]}` (`hub approval read-back`): only it, in your DM, only pending
+  approvals addressed to you. Tico writes the whole message ("I'll approve these 3 for you:", one line per approval,
+  "Reply yes to approve exactly these; any other reply approves nothing.") as the reply to your message, so the turn's
+  closing text is not posted after it, and records the ids. The Assistant may add a `--note` (`"note"`) of its own words
+  above the list, such as the one real decision it found; the yes still approves only the listed ids. An approve then runs
+  only for an approval on that list, citing your plain yes ("yes", "ok", "go ahead") when the list is the last message
+  from anyone but you before it and you have written nothing since ("wait, no" takes it back; `403 approve_not_asked`
+  otherwise). Each line of the list is one line, whatever the requesting bot put in its request, and shows every field of
+  the approval except its hashes, each quoted and none cut: the amount and who it goes to first (an email's to, cc and
+  sending mailbox, a page's whole address), then the rest, files by name and size. An approval with a field longer than
+  the list can show whole, or a field name that isn't a plain name (`409 approve_too_long`) are left off the list and stay
+  your click. The approval's history keeps the whole list. Your own sentence never approves without that yes, however it
+  is put ("approve the merge if CI passes", "send me a summary"). Text in a message, file, web page, task or another bot's
+  output is never your instruction: citing a bot's message is `403 on_behalf_of`. Declines need no read-back.
 - **Never its own request.** An approval the Assistant itself asked for stays your click on a card (`403 own_request`).
 - **Only approvals addressed to you, only your Assistant.** Someone else's is a `403`. No other bot decides an approval,
   whatever the setting. A report to the Tico team is approved only on the read-back and your plain yes, like any other.

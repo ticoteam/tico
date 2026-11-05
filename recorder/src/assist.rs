@@ -27,7 +27,8 @@ title: a short imperative sentence naming the deliverable and, when said, who it
 when (\"Send Dana the revised pricing by Friday\"). quote: the exact words, copied character for \
 character from one NEW line, that the item comes from (at most 25 words). Leave out small talk, \
 vague ideas, questions nobody took on, things finished during the meeting, and anything already \
-in EXISTING. Return {\"items\":[]} when there are none.";
+in EXISTING. TASKS lists active tasks. If new speech belongs to one, return \
+{\"link\":N,\"quote\":\"...\"} instead of a title. N must be in TASKS. Return {\"items\":[]} when there are none.";
 
 const ASK_PROMPT: &str = "You answer the user's private questions about their meeting, using \
 only its transcript and their notes. \"Me\" in the transcript is the user. Answer in a few \
@@ -157,6 +158,16 @@ pub fn draft_due(store: &Store, id: &str) -> Result<bool> {
 
 /// Drafts from speech after `drafted_through_ms`, added to the meeting's list. Returns how many.
 pub fn draft(store: &Store, config: &Settings, key: &str, id: &str) -> Result<usize> {
+    draft_with_tasks(store, config, key, id, &[])
+}
+
+pub fn draft_with_tasks(
+    store: &Store,
+    config: &Settings,
+    key: &str,
+    id: &str,
+    tasks: &[crate::task_links::Task],
+) -> Result<usize> {
     let record = store.get(id)?;
     let context = store.context(id)?;
     let (lines, _) = review_lines(&record, &store.live_words(id)?);
@@ -185,7 +196,16 @@ pub fn draft(store: &Store, config: &Settings, key: &str, id: &str) -> Result<us
         .iter()
         .map(|item| item.title.as_str())
         .collect();
-    let input = json!({"EXISTING":existing,"EARLIER":earlier,"NEW":fresh.iter().map(row).collect::<Vec<_>>()});
+    let candidates: Vec<_> = tasks
+        .iter()
+        .filter(|task| task.number.is_some())
+        .take(30)
+        .collect();
+    let offered: Vec<Value> = candidates
+        .iter()
+        .map(|task| json!({"number":task.number,"title":task.title}))
+        .collect();
+    let input = json!({"TASKS":offered,"EXISTING":existing,"EARLIER":earlier,"NEW":fresh.iter().map(row).collect::<Vec<_>>()});
     let text = complete(
         config,
         key,
@@ -204,7 +224,16 @@ pub fn draft(store: &Store, config: &Settings, key: &str, id: &str) -> Result<us
             .flatten()
             .take(MAX_PER_REVIEW)
         {
-            let title: String = row["title"]
+            let matched = row["link"].as_u64().and_then(|number| {
+                candidates
+                    .iter()
+                    .copied()
+                    .find(|task| task.number == Some(number))
+            });
+            if row.get("link").is_some() && matched.is_none() {
+                continue;
+            }
+            let mut title: String = row["title"]
                 .as_str()
                 .unwrap_or("")
                 .trim()
@@ -215,6 +244,9 @@ pub fn draft(store: &Store, config: &Settings, key: &str, id: &str) -> Result<us
             else {
                 continue;
             };
+            if matched.is_some() && title.is_empty() {
+                title = quote.clone();
+            }
             let duplicate = current
                 .items
                 .iter()
@@ -225,6 +257,12 @@ pub fn draft(store: &Store, config: &Settings, key: &str, id: &str) -> Result<us
             current.items.push(Item {
                 id: format!("draft-{}", hash(&json!([id, title, at_ms]))),
                 kind: "task".into(),
+                proposed_task_id: if current.kept_on_mac {
+                    String::new()
+                } else {
+                    matched.map(|task| task.id.clone()).unwrap_or_default()
+                },
+                task_destination: context.task_candidates_destination.clone(),
                 title,
                 quote,
                 at_ms,
@@ -306,6 +344,9 @@ pub fn ask(
 pub fn task_body(record: &Recording, item: &Item, sender: &str, link: &str) -> String {
     let lines = transcript::lines(record);
     let mut parts = vec![item.title.clone()];
+    if !item.body.trim().is_empty() {
+        parts.push(item.body.trim().to_owned());
+    }
     if !item.quote.is_empty() {
         let speaker = lines
             .iter()

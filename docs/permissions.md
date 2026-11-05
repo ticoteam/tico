@@ -181,6 +181,10 @@ Threads ([Threads](threads.md)) have their own audience, separate from a bot's t
 - A message the org rules hold writes nothing. The author may withdraw it, and so may the person a bot reports to; only
   the reviewer sends it anyway ([Rules](rules-plan.md)).
 
+A page's maintainer bot and its managers may narrow **Who can see it**, archive and restore it. The audience applies
+to people and bots after inherited file visibility, including wider pins; the maintainer and managers always pass
+that audience check. Only managers see its chosen names ([Pages](pages.md#who-can-see-it)).
+
 ## Dashboard, team pages and pins
 
 The owner and admins arrange the Dashboard. A team page is arranged by them and by a person who leads the group or a group
@@ -193,6 +197,14 @@ sidebar or a task it holds or asked for; a person who manages a bot may pin anot
 person pins to the Dashboard or a team page may be read by that place's audience, and a private task's file is never
 pinned there ([Overview](overview.md), [Files](files.md)). BotOps does all of this with the rights of the person who
 asked (`hub card`, `hub pin`).
+
+## History's Log
+
+Settings > History > Log reads through the reader's own SQL rights ([Hub SQL](hub-sql.md)): a row shows when that
+person or bot could select it from `POST /api/v2/sql`, and never otherwise. A member sees their own rows and those of
+the tasks, chats and bots they may read. Not even the owner sees a decision made in someone else's personal chat. Filtering by a bot needs Read on that bot. A credential's name shows
+only to someone who may see the credential. A blocked send names its automation only while the reader may see that
+automation; otherwise it shows “An automation”. Export CSV (`GET /api/v2/history.csv`) is the owner's and the Admins'.
 
 ## Team rules
 

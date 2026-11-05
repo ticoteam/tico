@@ -78,12 +78,19 @@ class World:
         from fastapi.testclient import TestClient
         from backend.app import create_app
         from backend.auth import Identity
-        from backend import bot_settings
+        from backend import bot_settings, maintenance
         from backend.config import Settings
         from backend.scheduler import Scheduler
         from backend.store import H, encode
         from backend import rules as R
         self.H = H
+        # The fake clock advances only between completed passes. A Maintenance thread can otherwise post a roundup
+        # after a round's last empty claim but before its queue snapshot, making newly arrived work look starved.
+        def inline_maintenance(start):
+            def run(store, auth, run_id, only, wait):
+                return start(store, auth, run_id, only, wait=True)
+            return run
+        self.patch(maintenance, "_start", inline_maintenance)
         registry = self.tmp / "registry"
         registry.mkdir()
         (registry / "hub-access.yaml").write_text(json.dumps({"owner": "ana@acme.example"}))
@@ -515,8 +522,10 @@ class World:
     # ------------------------------------------------------------------ board reads (no turn, no side effects)
     def tickets(self):
         """The Dev tickets: tasks of the Dev type, with their step names."""
-        rows = self.sql("SELECT t.id,t.title,t.owner_id,t.status,t.step_id,s.name step,t.blocked_since,t.updated_at,"
-                        "t.labels,t.created_at FROM tasks t LEFT JOIN task_steps s ON s.id=t.step_id WHERE t.type_id=?",
+        rows = self.sql("SELECT t.id,t.title,t.owner_id,t.status,t.step_id,s.name step,b.created_at blocked_since,"
+                        "t.updated_at,t.labels,t.created_at FROM tasks t LEFT JOIN task_steps s ON s.id=t.step_id "
+                        "LEFT JOIN task_holds b ON b.task_id=t.id AND b.kind='blocked' AND b.released_at IS NULL "
+                        "WHERE t.type_id=?",
                         (self.dev["id"],))
         for r in rows:
             r["labels"] = json.loads(r.pop("labels") or "[]")

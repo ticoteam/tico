@@ -125,7 +125,7 @@ def settled(c, row, status, result=None):
     told = TOLD.get(status, TOLD["failed"]).format(name=name, what=what, error=error or "it was refused")
     task = H.task(c, ask["task"])
     if task and task.get("status") not in ("done", "declined", "closed"):
-        H.task_update(c, row["owner"], ask["task"], status="done" if status == "done" else "declined", note=told)
+        H.task_update(c, row["owner"], ask["task"], status="done" if status == "done" else "declined", note=told, strict=False)
     room = H.conversation(c, ask["room"]) if ask.get("room") else None
     if room and not room.get("closed_at"):
         H._write_message(c, "bot:" + ask.get("bot", BOTOPS), ask["asker"], told, room, "say",

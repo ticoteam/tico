@@ -91,7 +91,11 @@ def test_add_setup_report_attach_dirty_push_remove_restore(trees):
     git(path, 'checkout', '-q', row['branch'])
     # A failure names the step and the reason instead of a list of guesses.
     broken = workspace / 'tasks' / 'broken' / 'org__product'
+    missing = W.inspect(workspace, {**row, 'path': 'tasks/broken/org__product'})
+    assert missing['state'] == 'missing' and 'error' not in missing, missing
     broken.mkdir(parents=True)
+    not_repo = W.inspect(workspace, {**row, 'path': 'tasks/broken/org__product'})
+    assert 'Tracked path is not a Git worktree' in not_repo['error'], not_repo
     (broken / '.git').write_text('gitdir: /nonexistent/worktree\n')
     failed = W.inspect(workspace, {**row, 'path': 'tasks/broken/org__product'})
     assert failed['error'].startswith('Could not read its remote: Git config failed'), failed
@@ -107,6 +111,181 @@ def test_add_setup_report_attach_dirty_push_remove_restore(trees):
     assert git(path, 'symbolic-ref', '--short', 'HEAD') == row['branch']
     assert (path / 'file').read_text() == 'changed'
     assert (path / 'setup-ran').exists()  # saved file, not a rerun of setup
+
+
+def retired_allocation(row, client, published=None):
+    client.post.return_value.update(
+        state='pending', recovery={'branch': row['branch'], 'published_head': published,
+                                   'fallback_branch': 'tico/12345678-recovery-unique'},
+        retired_worktree={'computer_id': 'retired', 'branch': row['branch'], 'last_commit': 'f' * 40,
+                          'ahead': 2, 'dirty_files': 1})
+
+
+@pytest.mark.parametrize('wire', [False, True], ids=['add-response', 'runner-record'])
+def test_recovery_warning_keeps_facts_from_each_retired_computer(wire):
+    first = {'computer_id': 'first', 'last_commit': 'a' * 40, 'ahead': 2, 'dirty_files': 1}
+    latest = {'computer_id': 'second', 'last_commit': 'b' * 40, 'ahead': 4, 'dirty_files': 3}
+    detail = {'retired_worktree': latest, 'retired_worktrees': [first, latest]}
+    link = {'detail_json': json.dumps(detail)} if wire else detail
+    warning = W._recovery_warning(link)
+    assert '2 unpushed commits' in warning and '4 unpushed commits' in warning
+    assert '1 changed files' in warning and '3 changed files' in warning
+    assert 'a' * 40 in warning and 'b' * 40 in warning
+    assert '(first)' in warning and '(second)' in warning
+    assert warning.count('4 unpushed commits') == 1
+    assert '2 unpushed commits' in W._recovery_warning({'retired_worktree': first})
+
+
+def publish_task_branch(base, row):
+    git(base, 'checkout', '-b', row['branch'])
+    (base / 'file').write_text('published task work')
+    git(base, 'add', 'file')
+    git(base, '-c', 'user.name=Sam', '-c', 'user.email=sam@example.com', 'commit', '-m', 'Task work')
+    head = git(base, 'rev-parse', 'HEAD')
+    git(base, 'push', 'origin', row['branch'])
+    git(base, 'checkout', 'main')
+    git(base, 'branch', '-D', row['branch'])
+    return head
+
+
+@pytest.mark.slow
+def test_retired_worktree_add_fetches_published_task_branch_and_keeps_unpushed_facts(trees):
+    workspace, base, remote, row, client = trees
+    head = publish_task_branch(base, row)
+    retired_allocation(row, client, head)
+    result = W.command(client, 'add', 'org/product')
+    assert git(Path(result['workspace_path']), 'rev-parse', 'HEAD') == head
+    assert result['branch'] == row['branch']
+    assert result['retired_worktree']['ahead'] == 2
+    assert '2 unpushed commits stayed on the retired computer' in result['warning']
+    assert git(remote, 'rev-parse', row['branch']) == head
+
+
+@pytest.mark.slow
+def test_retired_worktree_missing_origin_branch_uses_new_branch_and_keeps_old_local_history(trees):
+    workspace, base, remote, row, client = trees
+    old = row['branch']
+    git(base, 'branch', old)
+    prior = git(base, 'rev-parse', old)
+    retired_allocation(row, client)
+    result = W.command(client, 'add', 'org/product')
+    assert result['branch'] == 'tico/12345678-recovery-unique' != old
+    assert git(Path(result['workspace_path']), 'rev-parse', 'HEAD') == git(remote, 'rev-parse', 'main')
+    assert git(base, 'rev-parse', old) == prior
+    assert 'not published' in result['warning'] and 'unpushed commits stayed' in result['warning']
+    assert any(call.args[1] == {'recovery_branch_missing': True} for call in client.patch.call_args_list)
+
+
+@pytest.mark.slow
+@pytest.mark.parametrize('separate', ['local', 'origin'])
+def test_retired_recovery_never_moves_a_branch_backwards_or_replaces_separate_history(trees, separate):
+    workspace, base, remote, row, client = trees
+    published = publish_task_branch(base, row)
+    if separate == 'local':
+        git(base, 'branch', row['branch'], 'main')
+        git(base, 'checkout', row['branch'])
+        (base / 'file').write_text('local work that must stay')
+        git(base, 'add', 'file')
+        git(base, '-c', 'user.name=Sam', '-c', 'user.email=sam@example.com', 'commit', '-m', 'Local work')
+        before = git(base, 'rev-parse', 'HEAD')
+        git(base, 'checkout', 'main')
+    else:
+        git(base, 'push', '--force', 'origin', 'main:refs/heads/' + row['branch'])
+        before = git(base, 'rev-parse', 'main')
+    retired_allocation(row, client, published)
+    with pytest.raises(ValueError, match='separate history|last published head'):
+        W.command(client, 'add', 'org/product')
+    assert not (workspace / row['path']).exists()
+    if separate == 'local':
+        assert git(base, 'rev-parse', row['branch']) == before
+    assert not any(call.args[1].get('recovery_branch_missing') for call in client.patch.call_args_list)
+
+
+@pytest.mark.slow
+@pytest.mark.parametrize('mode', ['restore', 'recovery-add', 'recovery-prepare'])
+@pytest.mark.parametrize('branch_tip,snapshot_tip,local_tip,expected', [
+    ('published', 'snapshot', None, 'snapshot'),
+    ('latest', 'snapshot', 'published', 'latest'),
+    ('latest', None, None, 'latest'),
+    (None, 'snapshot', None, 'snapshot'),
+    ('published', 'snapshot', 'latest', 'latest'),
+    (None, None, None, 'main'),
+], ids=['snapshot-newer', 'branch-newer', 'no-snapshot', 'no-branch', 'local-newer', 'neither'])
+def test_restore_and_recovery_choose_the_newest_saved_history(trees, mode, branch_tip, snapshot_tip, local_tip, expected):
+    workspace, base, remote, row, client = trees
+    heads = {'published': publish_task_branch(base, row), 'main': git(base, 'rev-parse', 'main')}
+    git(base, 'checkout', '-b', 'saved', heads['published'])
+    for tip in ('snapshot', 'latest'):
+        (base / 'file').write_text(tip)
+        git(base, '-c', 'user.name=Sam', '-c', 'user.email=sam@example.com', 'commit', '-am', tip)
+        heads[tip] = git(base, 'rev-parse', 'HEAD')
+    git(base, 'checkout', 'main')
+    if branch_tip:
+        git(base, 'push', 'origin', heads[branch_tip] + ':refs/heads/' + row['branch'])
+    else:
+        git(base, 'push', 'origin', '--delete', row['branch'])
+    if snapshot_tip:
+        git(base, 'push', 'origin', heads[snapshot_tip] + ':refs/heads/' + W.wip_branch(row))
+    if local_tip:
+        git(base, 'branch', row['branch'], heads[local_tip])
+    path = workspace / row['path']
+    if mode == 'restore':
+        W.act(workspace, row, 'restore', os.environ.copy())
+    else:
+        retired_allocation(row, client, heads['published'])
+        if mode == 'recovery-add':
+            W.command(client, 'add', 'org/product')
+        else:
+            row['detail_json'] = json.dumps({
+                'checkout_state': 'queued', 'setup_pending': True,
+                'recovery': client.post.return_value['recovery']})
+            W.prepare(workspace, row, client.get.return_value['repositories'][0], os.environ.copy(), client)
+        assert (path / 'setup-ran').exists()
+        assert client.patch.call_args.args[1]['checkout_state'] == 'ready'
+    assert git(path, 'rev-parse', 'HEAD') == heads[expected]
+    fallback = mode != 'restore' and not (branch_tip or snapshot_tip)
+    assert git(path, 'symbolic-ref', '--short', 'HEAD') == (
+        'tico/12345678-recovery-unique' if fallback else row['branch'])
+    assert (path / 'file').read_text() == {
+        'main': 'initial', 'published': 'published task work', 'snapshot': 'snapshot', 'latest': 'latest'}[expected]
+    if branch_tip:
+        assert git(remote, 'rev-parse', row['branch']) == heads[branch_tip]
+    else:
+        assert subprocess.run(['git', '-C', str(remote), 'show-ref', '--verify', 'refs/heads/' + row['branch']],
+                              capture_output=True).returncode != 0
+    assert any(call.args[1].get('recovery_branch_missing') for call in client.patch.call_args_list) == fallback
+
+
+@pytest.mark.slow
+def test_retired_recovery_does_not_treat_remote_failure_as_an_unpublished_branch(trees, monkeypatch):
+    workspace, base, remote, row, client = trees
+    retired_allocation(row, client)
+    def unavailable(*args):
+        raise ValueError('Git fetch failed; cannot determine remote branch, retry later')
+    monkeypatch.setattr(W, 'remote_branch', unavailable)
+    with pytest.raises(ValueError, match='cannot determine remote branch'):
+        W.command(client, 'add', 'org/product')
+    assert not (workspace / row['path']).exists()
+    assert [call.args[1] for call in client.patch.call_args_list] == [{'state': 'pending'}]
+
+
+@pytest.mark.slow
+def test_retired_recovery_checks_the_reported_published_head_when_the_webhook_is_older(trees):
+    workspace, base, remote, row, client = trees
+    older = publish_task_branch(base, row)
+    git(base, 'checkout', '-b', 'later', older)
+    (base / 'file').write_text('later published head')
+    git(base, 'add', 'file')
+    git(base, '-c', 'user.name=Sam', '-c', 'user.email=sam@example.com', 'commit', '-m', 'Later head')
+    later = git(base, 'rev-parse', 'HEAD')
+    git(base, 'checkout', 'main')
+    retired_allocation(row, client, older)
+    client.post.return_value['recovery']['published_heads'] = [older, later]
+    with pytest.raises(ValueError, match='last published head'):
+        W.command(client, 'add', 'org/product')
+    assert not (workspace / row['path']).exists()
+    assert subprocess.run(['git', '-C', str(base), 'show-ref', '--verify', 'refs/heads/' + row['branch']],
+                          capture_output=True).returncode != 0
 
 
 @pytest.mark.slow
@@ -130,11 +309,16 @@ def test_failed_push_keeps_tree_and_retry_preserves_saved_branch(trees):
 def test_restore_remote_branch_then_default(trees):
     workspace, base, remote, row, client = trees
     path = Path(W.command(client, 'add', 'org/product')['workspace_path'])
+    (path / 'file').write_text('published task work')
+    git(path, '-c', 'user.name=Sam', '-c', 'user.email=sam@example.com', 'commit', '-am', 'Task work')
+    published = git(path, 'rev-parse', 'HEAD')
     git(path, 'push', 'origin', row['branch'])
     git(base, 'worktree', 'remove', '--force', str(path))
     git(base, 'branch', '-D', row['branch'])
     W.act(workspace, row, 'restore', os.environ.copy())
     assert git(path, 'symbolic-ref', '--short', 'HEAD') == row['branch']
+    assert git(path, 'rev-parse', 'HEAD') == published
+    assert (path / 'file').read_text() == 'published task work'
     git(base, 'worktree', 'remove', '--force', str(path))
     git(base, 'branch', '-D', row['branch'])
     git(base, 'push', 'origin', '--delete', row['branch'])
@@ -409,10 +593,14 @@ def test_removal_keeps_a_changed_name_that_is_not_utf8_and_saves_nothing(trees):
     odd.write_text('ghp_abcdefghijklmnopqrstuvwxyz0123\n')
     (path / 'draft.txt').write_text('half done')
     head = git(path, 'rev-parse', 'HEAD')
+    branch = git(path, 'symbolic-ref', '--short', 'HEAD')
+    index = git(path, 'write-tree')
     with pytest.raises(UnicodeDecodeError):
         W.act(workspace, row, 'remove', os.environ.copy())
     assert odd.exists() and (path / 'draft.txt').read_text() == 'half done'
     assert git(path, 'rev-parse', 'HEAD') == head
+    assert git(path, 'symbolic-ref', '--short', 'HEAD') == branch, 'the removal must not switch branches'
+    assert git(path, 'write-tree') == index, 'the removal must not add to the index'
     assert 'refs/heads/' + W.wip_branch(row) not in git(remote, 'for-each-ref', '--format=%(refname)', 'refs/heads').split()
 
 

@@ -1,14 +1,15 @@
 """Head of Engineering works by exception (backend/pipeline_exceptions.py): one list of what did not move on its own,
-read about hourly, and no wake for a ticket's routine steps, subtask results, checks or verdicts."""
+read in the manager's roundup list (test_task_roundup.py), and no wake for a ticket's routine steps, subtask results, checks or verdicts."""
 import json
 
-from backend import check_pools, pipeline_exceptions as PE, pipeline_stats, rules, step_age, step_backlog
+from backend import check_pools, pipeline_exceptions as PE, pipeline_stats, rules, step_age, step_backlog, task_roundup
 from backend import task_relations
 from backend.auth import Identity
-from backend.store import H, encode
+from backend.store import H
 from backend.tests.test_api import api, get  # noqa: F401
 from backend.tests.test_dev_ticket_rules import dev_type
 from backend import bot_settings as BS
+from backend.tests.hold_rows import set_holds
 
 HEAD = "a" * 40
 
@@ -76,11 +77,6 @@ def listed(c, typ, kind=None):
     return [e for e in PE.build(c, typ) if kind is None or e["kind"] == kind]
 
 
-def late_notices(c, row):
-    return c.execute("SELECT count(*) FROM messages WHERE recipient_id='bot:coo' AND json_extract(refs,'$.task')=? "
-                     "AND json_extract(refs,'$.step_late')", (row["id"],)).fetchone()[0]
-
-
 def unheld_jobs(c, slug):
     return c.execute("SELECT count(*) FROM jobs WHERE bot_id=? AND state='queued' AND coalesce(held,0)=0",
                      (slug,)).fetchone()[0]
@@ -91,7 +87,7 @@ def test_a_ticket_with_no_run_for_45_minutes_is_listed_once_with_its_owner_and_s
         typ = board(c)
         quiet, fresh, snoozed = ticket(c, typ, "Fix Cursor", minutes=50), ticket(c, typ, "Fix Muse", minutes=20), \
             ticket(c, typ, "Fix Grok", minutes=50)
-        c.execute("UPDATE tasks SET snoozed_until=? WHERE id=?", (H.shift(H.now(), hours=5), snoozed["id"]))
+        set_holds(c, snoozed["id"], snoozed_until=H.shift(H.now(), hours=5))
         [entry] = listed(c, typ, "stuck")
         assert entry["ticket"]["id"] == quiet["id"] and entry["ticket"]["owner_id"] == "cpo"
         assert "owner cpo" in entry["cause"]
@@ -175,28 +171,33 @@ def test_only_the_boards_manager_reads_the_list_in_pipeline(api):
     assert "exceptions" not in get(api, f"pipeline?type={typ['id']}"), "a person reading the board gets no list"
 
 
-def test_the_hourly_list_wakes_a_manager_only_for_a_new_entry(api):
+def test_an_exception_is_one_line_on_the_managers_roundup_list_and_no_wake_of_its_own(api):
     with api.app.state.store.transaction() as c:
         typ = board(c)
-        assert PE.deliver(c) == [], "nothing on the list: no turn"
+        assert "coo" not in task_roundup.run(c)["woke"], "nothing on the list: no turn"
         ticket(c, typ, "Fix Cursor", minutes=50)
-        before = unheld_jobs(c, "coo")
-        assert PE.deliver(c) == ["coo"]
-        assert unheld_jobs(c, "coo") == before + 1
-        [wake] = c.execute("SELECT body, refs FROM messages WHERE recipient_id='bot:coo' AND "
-                           "json_extract(refs,'$.wake')='exceptions'").fetchall()
-        assert "Fix Cursor" in wake[0] and "no run for 45 minutes" in wake[0]
-        assert PE.deliver(c) == [], "the same entry an hour later: no second turn"
+        assert "coo" in task_roundup.run(c)["woke"]
+        assert c.execute("SELECT count(*) FROM jobs j JOIN messages m ON m.id=j.message_id WHERE j.bot_id='coo' "
+                         "AND j.state='queued' AND json_extract(m.refs,'$.wake')='task_roundup'").fetchone()[0] == 1, \
+            "the list is the manager's one queued wake"
+        listing = ("SELECT body FROM messages WHERE recipient_id='bot:coo' AND json_extract(refs,'$.wake')='task_roundup' "
+                   "ORDER BY created_at")
+        [(first,)] = c.execute(listing).fetchall()
+        assert "Fix Cursor" in first and "no run for 45 minutes" in first
+        assert c.execute("SELECT count(*) FROM messages WHERE recipient_id='bot:coo' AND json_extract(refs,'$.wake')='exceptions'"
+                         ).fetchone()[0] == 0, "no wake of its own"
+        assert "coo" not in task_roundup.run(c, H.shift(H.now(), hours=1))["woke"], "the same entry is not listed again"
         ticket(c, typ, "Fix Muse", minutes=50)
-        assert PE.deliver(c) == ["coo"], "a new entry wakes it again"
-        # A manager still on the Lead profile is not sent the list: it keeps the notices it had.
+        assert "coo" in task_roundup.run(c)["woke"], "a new entry is listed"
+        latest = c.execute(listing + " DESC LIMIT 1").fetchone()[0]
+        assert "Fix Muse" in latest and "Fix Cursor" not in latest
         board(c, profile="lead")
         ticket(c, typ, "Fix Grok", minutes=50)
-        assert PE.deliver(c) == []
+        assert "coo" not in task_roundup.run(c)["woke"], "a manager on the Lead profile gets no exception line"
 
 
 def test_routine_ticket_events_never_wake_a_manager_and_file_no_review_without_a_pr(api):
-    """Steps, subtask results, checks, verdicts, blocked and finished tickets and late or backlog notices are no turn
+    """Steps, subtask results, checks, verdicts, blocked and finished tickets are no turn, and late tickets and backlogs are lines on the roundup, not wakes
     for a manager on the Manager profile. The same events on the Lead profile are the control: its late-ticket and
     blocker notices wake it."""
 
@@ -213,7 +214,6 @@ def test_routine_ticket_events_never_wake_a_manager_and_file_no_review_without_a
         H._wake(c, H.task(c, row["id"]), "bot:coo", f"A setup blocker on {title} needs you.", {"wake": "blocker"})
         c.execute("UPDATE history_events SET created_at=? WHERE subject_type='task' AND subject_id=?", (H.shift(H.now(), hours=-5), late["id"]))
         c.execute("UPDATE tasks SET updated_at=? WHERE id=?", (H.shift(H.now(), hours=-5), late["id"]))
-        step_age.sweep(c, H.shift(H.now(), minutes=1))
         H.task_update(c, "bot:cpo", row["id"], status="done", note="Shipped")
         return late
 
@@ -221,16 +221,16 @@ def test_routine_ticket_events_never_wake_a_manager_and_file_no_review_without_a
         typ = board(c, profile="lead")
         before = unheld_jobs(c, "coo")
         late = routine(c, typ, "Fix Cursor")
-        assert unheld_jobs(c, "coo") > before, "control: the Lead profile is woken for the blocker and the late one"
+        assert unheld_jobs(c, "coo") > before, "control: the Lead profile is woken for the blocker notice"
         assert step_backlog._targets(c, {"notify": ["manager"], "per": "step"}, late, late["owner_id"]) == ["bot:coo"]
-        assert late_notices(c, late) == 1
+        assert late["id"] in [item["row"]["id"] for item in step_age.late_items(c)], "control: a lead is told of a late ticket"
 
         typ = board(c, profile="manager")
         settled(c)
         late = routine(c, typ, "Fix Muse")
         assert unheld_jobs(c, "coo") == 0, "no routine event woke the manager"
         assert step_backlog._targets(c, {"notify": ["manager"], "per": "step"}, late, late["owner_id"]) == []
-        assert late_notices(c, late) == 0, "not even a held note: the list carries it"
+        assert late["id"] not in [item["row"]["id"] for item in step_age.late_items(c)], "the manager's roundup carries it"
         settled(c)      # its owner's status check ran and left it as it was
         assert any(e["key"] == "ticket:" + late["id"] + ":stuck" for e in listed(c, typ)), "it is on the list instead"
         # Entering a check step with no linked pull request files no review.
@@ -255,7 +255,6 @@ def test_a_turn_that_ends_doing_with_nothing_queued_wakes_no_owner_and_is_listed
         assert unheld_jobs(c, "ops") == before
         [entry] = listed(c, typ, "stuck")
         assert entry["check"]["id"] == check["id"]
-        assert rules.EVENTS["exceptions"]
 
 
 def test_a_verdict_a_handoff_and_a_child_or_blocker_result_are_a_note_for_a_manager_and_wake_any_other(api):
@@ -299,7 +298,7 @@ def test_a_verdict_a_handoff_and_a_child_or_blocker_result_are_a_note_for_a_mana
 
 
 def test_a_reviewers_recorded_waits_keep_its_check_off_the_list_until_it_is_really_idle(api):
-    """A reviewer's profile has no stall sweeps; what its check waits on is read all the same."""
+    """A reviewer's profile has its sweeps off; what its check waits on is read all the same."""
     with api.app.state.store.transaction() as c:
         typ = board(c)
         row = ticket(c, typ, minutes=200)
@@ -318,8 +317,8 @@ def test_a_reviewers_recorded_waits_keep_its_check_off_the_list_until_it_is_real
                             c.execute("DELETE FROM messages WHERE id=?", (m["id"],)))
 
         def snooze():
-            c.execute("UPDATE tasks SET snoozed_until=? WHERE id=?", (H.shift(H.now(), hours=3), check["id"]))
-            return lambda: c.execute("UPDATE tasks SET snoozed_until=NULL WHERE id=?", (check["id"],))
+            set_holds(c, check["id"], snoozed_until=H.shift(H.now(), hours=3))
+            return lambda: set_holds(c, check["id"], snoozed_until=None)
 
         def approval():
             aid = H.new_id()
@@ -364,18 +363,18 @@ def test_a_finished_check_is_filed_so_an_idle_ticket_is_listed_as_not_moving_on_
         assert listed(c, typ, "stuck") == [], "a check that just finished: the builder has time to move it on"
 
 
-def test_held_notes_alone_never_wake_a_manager_and_ride_with_its_next_list(api):
-    """A week of normal tickets leaves the manager notes (verdicts, results) and no turn: they are read when something
-    real wakes it."""
+def test_held_notes_alone_never_wake_a_manager(api):
+    """A week of normal tickets leaves the manager notes (verdicts, results) and no turn: a list is written only for a real
+    exception, and the notes are not on it."""
     with api.app.state.store.transaction() as c:
         typ = board(c)
         for day in range(7):
             c.execute("INSERT INTO notes(id,from_actor,to_actor,body,created_at) VALUES(?,?,?,?,?)",
                       (H.new_id(), "keeper", "bot:coo", f"Review 1 approved #{day}.", H.shift(H.now(), days=-day)))
-        assert [PE.deliver(c, H.shift(H.now(), hours=h)) for h in range(0, 7 * 24, 6)] == [[]] * 28
+        assert [task_roundup.run(c, H.shift(H.now(), hours=h))["woke"] for h in range(0, 7 * 24, 6)] == [[]] * 28
         assert unheld_jobs(c, "coo") == 0
         ticket(c, typ, "Fix Cursor", minutes=50)
-        assert PE.deliver(c) == ["coo"], "a real exception wakes it, and its run carries the notes"
+        assert "coo" in task_roundup.run(c)["woke"], "a real exception is listed"
 
 
 # ------------------------------------------------------------------------------------------- what the reader may read
@@ -404,14 +403,9 @@ def flow(c, typ, step, **value):
 
 
 def both_reads(api, c, typ, kind):
-    """(Pipeline's list, the hourly wake's list) for the manager, each of `kind`."""
+    """(Pipeline's list, the manager's roundup text) for the manager, each of `kind`: the roundup builds its list fresh."""
     shown = pipeline_stats.report(c, api.app.state.auth, Identity("bot:coo", "bot"), type=typ["id"])["exceptions"]
-    c.execute("DELETE FROM events WHERE action=?", (PE.EVENT,))      # every entry is new to this pass
-    before = c.execute("SELECT coalesce(max(rowid),0) FROM messages").fetchone()[0]
-    PE.deliver(c)
-    body = (c.execute("SELECT body FROM messages WHERE rowid>? AND recipient_id='bot:coo' AND "
-                      "json_extract(refs,'$.wake')='exceptions'", (before,)).fetchone() or [""])[0]
-    return [e for e in shown if e["kind"] == kind], body
+    return [e for e in shown if e["kind"] == kind], task_roundup._list(c, "coo", H.now(), {})[0] or ""
 
 
 def test_slots_count_only_the_tickets_the_manager_reads_in_pipeline_and_the_hourly_wake(api):

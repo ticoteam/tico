@@ -217,6 +217,7 @@ def acl(c, settings):
 
 # ----------------------------------------------------------------------------- roster
 def _save_roster(c, roster):
+    before = _load_json(c, "people") or {}
     from .report_order import roster_saved
     roster_saved(c, roster)                        # a person who joins a manager goes last among its reports
     c.execute("INSERT INTO registry_metadata VALUES('people',?) ON CONFLICT(key) DO UPDATE SET "
@@ -225,6 +226,12 @@ def _save_roster(c, roster):
     FA.revalidate_org(c)                           # Finance's view grants follow the org chart at once (spec 7.5)
     from . import people_mirror
     people_mirror.changed()                        # the Tico account gets the sign-in list again (backend/people_mirror.py)
+    def memberships(value):
+        return ({p["id"]: p.get("team") for p in value.get("people", [])},
+                {gid: g.get("parent") for gid, g in value.get("org_groups", {}).items()})
+    if memberships(before) != memberships(roster):
+        from . import pages
+        pages.group_access_changed(c)
 
 
 save_roster = _save_roster
@@ -287,6 +294,9 @@ def add_person(c, actor, roster, *, name, email, title="", team="", reports_to="
     _sync_human(c, row)
     _allow(c, email)
     H.event(c, actor, event, row["id"], {"email": email})
+    # A personal mailbox awaiting this address becomes theirs; joining never connects one (backend/mailbox_access.py).
+    from . import mailbox_access
+    mailbox_access.link_person(c, row["id"], email)
     return {**roster, "people": [*roster["people"], row]}, row
 
 
@@ -392,9 +402,11 @@ def join_on_sign_in(c, email):
 
 def assign_message_bot(c, roster, row, body):
     """Name `row`'s message bot, and the address it reads for them when that is not their own email. This is the
-    one thing that lets a bot's runs ask a Docker computer for a mail token (backend/routines.token_mailboxes), so
+    one thing that gives a bot a grant on that mailbox (backend/mailbox_access.py message_bot_changed), so
     it is an owner's or admin's word: a bot cannot claim a mailbox by describing itself in its own repository."""
-    from . import inbox_isolation, routines
+    from . import inbox_isolation, mailbox_access, routines
+    old_bot = row.get("inbox_bot") or None
+    old_address = mailbox_access.message_bot_mailbox(c, row, old_bot) if old_bot else ""
     bot = row.get("inbox_bot") if body.inbox_bot is None else P._clean(body.inbox_bot)
     bot = (H.resolve_bot(c, bot) or {}).get("id", bot)
     if bot:
@@ -415,6 +427,8 @@ def assign_message_bot(c, roster, row, body):
         raise Problem("mailbox", "Name the message bot that reads it (inbox_bot) too", 422)
     else:
         row = {**row, "inbox_bot": None}
+    # The grant that lets the bot use the mailbox (backend/mailbox_access.py); a bot replaced loses its own.
+    mailbox_access.message_bot_changed(c, row, old_bot, old_address, row.get("inbox_bot") or None)
     return row
 
 

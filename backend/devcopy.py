@@ -37,14 +37,21 @@ from .hubdb import now, shift
 
 # Emptied, never pruned: one surviving row is one thing the copy could do.
 EMPTY = (
+    # Provider jobs and send grants never become actionable in a rehearsal copy.
+    "letter_sources", "letter_proofs", "letters", "letter_outbox_grants",
+    # Maintenance's working state: its listings, its handoffs, and the Idempotency-Key receipts of its runs
+    "maintenance_listings", "maintenance_handoffs", "maintenance_requests",
     # queued work
     "job_recovery", "service_jobs", "doc_source_jobs", "update_queue", "task_reminders", "task_check_back_wakes", "calendar_actions",
+    "suggestions",   # each waiting one is an Update turn the copy would give, and each outcome a report to HQ
     "meeting_deliveries", "worktree_waits", "check_waits", "check_head_provenance", "idempotency",   # bindings too
     "idempotency_messages", "blob_media_retries", "seat_requests",   # a cloud agent request's key: a replay re-files
     # milestone waits: each pending row is a wake the copy could send; the milestones seen only settle those
     "task_milestone_waits", "milestones",
     # reconnect cards: an open one is a wake the copy could send; the refusals only settle those
     "task_reconnects", "google_signin_refusals",
+    # refusal holds on one task or chat: their cooldowns belong to the source's runs; the copy starts with none
+    "quarantine_holds",
     # Pass deadlines can withdraw tasks; a rehearsal copy never resumes that work.
     "memory_tidy_passes", "memory_tidy_packets",
     # routines and watchers
@@ -58,11 +65,15 @@ EMPTY = (
     "screening_pending", "screening_verdicts",  # screening: outside text waiting for its check, and the model's verdicts
     # runner and bot sessions
     "enrollments", "hosting_enrollments", "assignments", "cloud_machines", "cloud_machine_codes", "agent_pairings", "bot_sessions", "session_epochs", "bot_session_epochs", "compact_first", "model_logins", "model_login_cleared", "computer_keys", "model_login_key_off",
+    # Deletion retries and enrollment failures belong to live HQ machines; a copy must never resume them.
+    "cloud_machine_deletions", "cloud_machine_enrollment_failures",
     "computer_profiles", "subscription_assignments", "runner_harness_actions", "runner_harness_choices",
     "runner_versions", "start_places", "org_turn_waits",
     # Browse through: a computer's sharing and a bot's choice open tunnels through a real person's internet; the relay's
     # batch marks only settle that relay's usage reports (backend/browser_exit.py)
     "browser_exits", "bot_browser_exits", "browser_exit_marks",
+    # Open windows and their heartbeats belong to the source, not the rehearsal.
+    "presences",
     # human sign-in and service keys
     "human_tokens", "oidc_sessions", "oidc_codes", "oauth_grants", "oauth_clients", "service_keys",
     "service_key_tasks", "owner_links",
@@ -71,12 +82,19 @@ EMPTY = (
     "directory_credentials", "company_storage", "tico_storage",
     # company model subscriptions: the sealed logins (vault values) and which computer or attempt holds which one
     "model_subscriptions", "computer_subscriptions", "attempt_subscriptions", "pending_subscription_fallbacks", "subscription_connects",
+    # A frozen outbox, its operation receipts and preview proofs can authorize delivery on the source only.
+    "email_sends", "email_send_operations", "email_send_previews", "email_legacy_automations",
     # mail, Slack, GitHub, Granola, meeting bots, support
-    "mail_mailboxes", "bot_mail_settings", "google_connects", "google_mail_holders", "slack_credentials", "slack_posts", "slack_events", "slack_threads",
+    "mail_mailboxes", "mailboxes", "mailbox_accesses", "bot_mail_settings", "google_connects", "google_mail_holders", "slack_credentials", "slack_posts", "slack_events", "slack_threads",
+    # Settings > Inboxes: the Workspace key (sealed), setup codes and the OAuth client secret (sealed), and the health each
+    # computer reported. A copy holds none of them (google_connects.client_id goes with its table).
+    "google_workspaces", "google_setup_codes", "google_oauth_clients", "connector_reports",
     "github_app", "github_app_states", "granola_connections", "meeting_importers", "live_meeting_bots",
     "support_tickets", "support_access", "support_access_log",
     # Agent inbox bodies/codes and delivery cursors never enter a rehearsal copy.
     "inbound_inboxes", "inbound_messages", "inbound_sync",
+    # Personal phone consent and paid dispatch queues belong to the source install.
+    "alert_preferences", "personal_alerts",
     "bills_inbound",     # emailed bills: senders, subjects and HQ delivery ids
     "usage_alerts", "task_requesters", "roadmap_actions",
     # raw provider streams: customer text, and whatever the secret scrub missed
@@ -113,9 +131,16 @@ AUTOMATIONS = ("schedules", "schedule_config", "task_rules", "triggers", "webhoo
                "automation_versions")
 # Cut to `--days`, in this order: {table: its time column}. A row a kept row still points at stays.
 HISTORY = {"attempts": "created_at", "jobs": "created_at", "messages": "created_at", "events": "created_at", "deltas": "created_at",
-           "bot_status_history": "started_at", "audit_log": "created_at", "browser_exit_usage": "day"}
+           "bot_status_history": "started_at", "audit_log": "created_at", "browser_exit_usage": "day",
+           # Run steps before their runs: a step row points at its run.
+           "maintenance_run_steps": "started_at", "maintenance_runs": "started_at"}
 # Kept whole, except rows whose parent went (a pruned attempt's events). Tokens on runners are replaced.
 KEEP = frozenset((
+    "email_sending_policies", "email_suppressed_recipients",   # retain the team's send restrictions
+    "letter_outboxes", "letter_bot_settings",
+    "alert_company_settings",   # the company's spend cap is safe without phones or queued alerts
+    "postal_mail_grants", "postal_mail_settings",   # access and routing settings cannot send in rehearsal mode
+    "maintenance_steps",   # each step's switch, "How often" and cursor: a copy keeps the team's settings
     "agents", "approvals", "archives", "assistant_actions", "attempt_conversations", "attempt_events", "attempt_load_snapshots",
     "attempt_inputs", "backup_verified_blobs", "batches", "blob_locations", "blob_media", "blobs",
     "bot_agent_instructions", "bot_budget", "bot_config", "bot_settings", "bot_control", "bot_file_activity", "bot_file_versions", "bot_files",
@@ -137,13 +162,14 @@ KEEP = frozenset((
     "live_meeting_turns", "live_meeting_windows", "live_meetings", "mail_agent_instructions", "mail_messages",
     "main_pushes", "market_citations", "market_edges", "market_entities", "market_entity_keys",
     "market_evidence", "market_figures", "market_insights", "market_sizes", "market_sources", "market_watches", "market_briefings", "market_pages", "market_turn_sources", "media_assets", "media_control", "meeting_brain", "meeting_comments",
-    "meeting_items", "meeting_versions", "meetings", "message_assets", "message_links", "message_links_dirty",
-    "message_links_seen", "notes", "pages", "runner_load_samples", "perf_overloads", "perf_points", "perf_usage", "preferences", "rate_limits",
+    "meeting_items", "meeting_task_links", "meeting_versions", "meetings", "message_assets", "message_links", "message_links_dirty",
+    "message_links_seen", "notes", "pages", "page_identities", "runner_load_samples", "perf_overloads", "perf_points", "perf_usage", "preferences", "rate_limits",
     "recording_source_refs", "recording_transcripts", "org_rules", "org_rule_misses", "redesign_migrated", "refusals", "registry_metadata", "repositories", "rule_due_dates", "rule_due_status", "rule_reads", "rule_sources", "rule_suggestions", "rules", "run_backoff", "runners", "runner_states",
     "seats", "service_health", "settings_changes", "slack_channels", "slack_digests", "slack_reads", "stale_judged",
     "memory_tidy_cards", "memory_tidy_keeps", "stale_suggestions", "stall_triage", "storage_moves", "strategy_bets", "strategy_versions",
     "system_runs", "tags", "task_assets",
-    "task_check_models", "task_delegations", "history_events", "task_file_reviews", "task_links", "task_relations",
+    "task_check_models", "task_delegations", "history_events", "task_file_reviews", "task_holds", "task_links",
+    "task_relations",
     "task_roles", "task_run_models", "task_steps", "task_tags", "task_trash", "task_trash_assets", "task_types", "tasks",
     "turns", "update_archive_overrides", "update_reads", "update_settings", "updates",
     "usage_facts", "usage_meter_reads", "budget_nodes", "task_caps", "reach_settings", "reach_lines",
@@ -167,6 +193,9 @@ KEEP = frozenset((
     "message_routes",
     "message_search_keys",    # the search index's keys (thread_search.py); its FTS table is copied whole too, and search joins messages
     "home_merges", "home_merge_messages",   # where each person's old chat with a bot went (backend/bot_home_merge.py)
+    # The Google Workspace generation counter (backend/google_workspace.py): no secrets, and kept so a copy never issues
+    # a number that an older setup code already holds.
+    "google_setup_generations",
 )) | frozenset(finance.DEV_COPY_KEPT)
 # Work still to do: a job or attempt in any other state is finished and kept as history.
 # Rows that belong to their attempt: they go with it and never hold an old attempt back.
@@ -374,7 +403,8 @@ def prune(c, days, keep_automations=False):
     if "runners" in present:
         c.execute("UPDATE runners SET token_hash='devcopy-revoked:'||id, revoked_at=coalesce(revoked_at,?)", (stamp,))
     if "attempts" in present:
-        c.execute("UPDATE attempts SET token_hash='devcopy-revoked:'||id, lease_until=coalesce(finished_at,created_at)")
+        c.execute("UPDATE attempts SET token_hash='devcopy-revoked:'||id, lease_until=coalesce(finished_at,created_at) "
+                  "WHERE job_id IS NOT NULL")
     # A row that points at one just removed goes too (attempt_events of an attempt, oauth_grants of a token):
     # repeated until no foreign key is broken by what this run removed.
     touched, frontier = set(removed), set(removed)

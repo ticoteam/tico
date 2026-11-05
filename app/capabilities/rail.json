@@ -10,6 +10,7 @@
     "core:event:default",
     "allow-rail-orgs",
     "allow-rail-switch",
+    "allow-rail-hover",
     "allow-rail-add",
     "allow-rail-menu"
   ],

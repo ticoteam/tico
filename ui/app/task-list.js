@@ -205,10 +205,9 @@ function taskItems(state, view = state.view) {
   state.memo?.set(view, out);
   return out;
 }
-// Your Needs you count: the tasks, then the approvals, questions and stale check outside any task, less what was just
-// answered on a card. While only some pages of Needs you are held, the server's count of the whole list.
-const tasksMyCount = active => needsAll() ? active.filter(it => taskNeedsViewer(it.task) && !needsFolded(it.id) && !decideGone('task:' + it.id)).length + needsExtras().length
-  : S.v2.needsCount;
+// Your Needs you count: the filtered tasks and the whole list's approvals, questions and stale checks outside any
+// task, less what was just answered on a card. Every width uses this same scope, however many pages are held.
+const tasksMyCount = active => active.filter(it => taskNeedsViewer(it.task) && !needsFolded(it.id) && !decideGone('task:' + it.id)).length + needsExtrasCount();
 function tasksCounts(state) {
   if (state.loading) return {};
   const active = taskItems(state, 'list');
@@ -573,10 +572,7 @@ function tasksListHTML(items, state) {
     const k = 'need:' + (it.need || 'do');
     extra.set(k, [...(extra.get(k) || []), it]);
   }
-  // What the ask filter kept off the plate today, folded at the foot (askFilteredHTML).
-  const filtered = cards ? askFilteredHTML(state) : '';
-  if (!items.length && asks) return `<div class="tl">${asks}${filtered}</div>`;
-  if (!items.length && !extra.size && filtered) return `<div class="tl">${tasksEmptyHTML(state, 'Nothing needs you.')}${filtered}</div>`;
+  if (!items.length && asks) return `<div class="tl">${asks}</div>`;
   if (!items.length && !extra.size) {
     const who = tasksWhoKey(state);
     const emptyWhat = queue ? 'Nothing needs you.' : state.view === 'foryou' ? who === 'all' ? 'Nothing open.' : state.side === 'asked' ? 'Nothing asked.'
@@ -617,7 +613,7 @@ function tasksListHTML(items, state) {
       </header>` : '';
     return `<section class="tl-group${collapsed ? ' collapsed' : ''}" data-group="${esc(g.key)}">${head}
       <div class="tl-rows" id="${id}" role="list"${g.label ? ` aria-label="${esc(g.label)}"` : ' aria-label="Tasks"'}${collapsed ? ' hidden' : ''}>${byNeed ? tasksNeedRowsHTML(more, tops, ctx) : tops.map(it => taskListRowHTML(it, ctx)).join('')}</div></section>`;
-  }).join('')}${filtered}${done && state.doneNext != null ? '<button class="ghost tl-more" type="button" id="board-more">Show more</button>' : ''}</div>`;
+  }).join('')}${done && state.doneNext != null ? '<button class="ghost tl-more" type="button" id="board-more">Show more</button>' : ''}</div>`;
 }
 // A need group: its items outside any task among its tasks, all in the server's order.
 function tasksNeedRowsHTML(more, tops, ctx) {

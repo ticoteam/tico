@@ -52,6 +52,7 @@ import re
 import secrets
 import time
 import uuid
+from datetime import datetime, timedelta, timezone
 
 from . import people as P
 from . import read_cache
@@ -1501,7 +1502,8 @@ NO_WAKE_REF_KEYS = ("follow_up", "card", "earlier_messages")
 
 
 def quiet_notice(message):
-    """A follow-up nudge, an update card or a closed-history notice (refs.follow_up, refs.card, refs.earlier_messages) is read,
+    """A legacy follow-up nudge (refs.follow_up), an update card or a closed-history notice (refs.card, refs.earlier_messages)
+    is read,
     never a reason to start a run."""
     refs = (message or {}).get("refs") or {}
     return isinstance(refs, dict) and any(refs.get(k) for k in NO_WAKE_REF_KEYS)
@@ -1663,7 +1665,7 @@ def notes_for_run(c, bot, conv, run_class):
     against its source first (revalidate_notes). Reads past a run's own batch, so private notes that wait for their own
     thread's turn never hide the ones this run may carry."""
     fits, left = [], []
-    for item in revalidate_notes(c, bot, H.notes_waiting(c, H.actor_id(bot), limit=NOTES_READ)):
+    for item in revalidate_notes(c, bot, H.notes_waiting(c, H.actor_id(bot), limit=NOTES_READ, unheld=True)):
         if not note_fits_run(c, item, conv, run_class):
             left.append(item)
         elif len(fits) < NOTES_PER_RUN:
@@ -1744,7 +1746,10 @@ def _carrier(c, thread, message, bot, reason, rule, wake="thread", body=None, wa
     elif way == "defer":
         refs["quiet"] = True
     author = message.get("sender_id") or ""
-    body = body or f"{author} in this thread: {message.get('body') or ''}"
+    from .files import page_references
+    sources = (H._json(message.get("refs"), {}) or {}).get("body_sources", [])
+    body, refs = H.sourced_text(body or f"{author} in this thread: {message.get('body') or ''}",
+                               [*sources, *({"file": fid} for fid in sorted(page_references(message, c)))], refs)
     legacy = c.execute("SELECT legacy_audience FROM messages WHERE id=?", (message["id"],)).fetchone()
     dumped, created = H._dump(refs), _now()
     c.execute("INSERT INTO messages(id,conversation_id,sender_id,recipient_id,kind,body,refs,in_reply_to,created_at,"
@@ -1759,9 +1764,10 @@ def _carrier(c, thread, message, bot, reason, rule, wake="thread", body=None, wa
 def _defer_note(c, message, bot):
     """A deferred delivery rides to the bot's next run as a quiet note, as bot_to_bot.hold leaves one."""
     try:
+        body, refs = H.sourced_text(str(message.get("body") or "")[:2000], refs={"message_id": message["id"]})
         c.execute("INSERT INTO notes(id,from_actor,to_actor,body,created_at,message_id) VALUES(?,?,?,?,?,?)",
                   (_new_id(), message.get("sender_id") or H.KEEPER, bot,
-                   str(message.get("body") or "")[:2000], _now(), message["id"]))
+                   body, _now(), refs["message_id"]))
     except Exception:  # noqa: BLE001, S110 - a bare hub database has no notes table
         pass
 
@@ -1956,6 +1962,16 @@ def post(c, principal, thread_id, body, *, kind="say", refs=None, parent_message
 
     `reach`: the post is a bot's own write through the API, so whoever it reaches must be in the bot's reach
     (backend/reach.py check_post); a run's reply to what woke it, and a held post a person sends anyway, are not."""
+    thread = thread_row(c, thread_id) if thread_id else start
+    on_task = H.message_task_id({"refs": refs}, thread)
+    with H.refusal_task(on_task):
+        return _post(c, principal, thread_id, body, kind=kind, refs=refs, parent_message_id=parent_message_id,
+                     to_actor=to_actor, via=via, origin=origin, checked=checked, attachments=attachments,
+                     start=start, in_reply_to=in_reply_to, reach=reach)
+
+
+def _post(c, principal, thread_id, body, *, kind, refs, parent_message_id, to_actor, via, origin, checked,
+          attachments, start, in_reply_to, reach):
     actor, v = _actor_of(principal)
     if origin and origin.get("origin_id") and start is not None:
         raise Problem("start", "A replicated message posts into a linked thread", 422)
@@ -1986,6 +2002,7 @@ def post(c, principal, thread_id, body, *, kind="say", refs=None, parent_message
             raise Problem("not_found", "Thread not found", 404)
         if not can_post(c, v, thread):
             raise Problem("forbidden", "You can read this thread but not post in it", 403)
+    H._message_writer(c, actor, {"refs": refs}, thread)
     if origin and origin.get("origin_id"):
         duplicate = _duplicate(c, origin, thread)
         if duplicate is not None:
@@ -2106,8 +2123,8 @@ def _emit_message_held(c, thread, actor, verdict):
 def _write_open(c, actor, text, thread, kind, refs, target, in_reply_to=None):
     """A message addressed to nobody (or to an outside destination): the guards hubdb.say runs that do not need a
     recipient, then the same insert."""
-    H._writer(c, actor)
-    on_task = refs.get("task") or thread.get("task_id")
+    on_task = H.message_task_id({"refs": refs}, thread)
+    H._writer(c, actor, task_id=on_task)
     H.path_mentioned(c, actor, "task note" if on_task else "message", text, on_task)
     return H._write_message(c, actor, target, text, thread, kind, refs, in_reply_to, None)
 
@@ -2188,6 +2205,7 @@ def _create_plan(c, principal, *, title="", audience="members", audience_group_i
     if audience == "task":
         if not task_id or (v is not None and not _task_readable(c, v, task_id)):
             raise Problem("not_found", "Task not found", 404)
+    H._writer(c, actor, task_id=task_id)
     if audience in ("company", "team") and v is not None and not v.is_person:
         raise Problem("forbidden", "A bot starts members threads; a person makes them public", 403)
     resolved = []
@@ -2486,6 +2504,7 @@ def sub_thread(c, principal, parent_message_id):
     found = c.execute("SELECT id FROM conversations WHERE parent_message_id=?", (parent_message_id,)).fetchone()
     if found:
         return thread_row(c, found[0])
+    H._message_writer(c, actor, parent_message, parent)
     import sqlite3
     try:
         c.execute("SAVEPOINT threads_sub_thread")
@@ -2546,6 +2565,7 @@ def react(c, principal, message_id, emoji):
     """Add the principal's reaction. Idempotent: the same emoji twice is one reaction. Returns the message's
     reactions."""
     actor, message = _reactable(c, principal, message_id)
+    H._message_writer(c, actor, message, thread_row(c, message["conversation_id"]))
     emoji = str(emoji or "").strip()
     if not emoji or len(emoji) > MAX_EMOJI or any(ch.isspace() for ch in emoji):
         raise Problem("emoji", "A reaction is one emoji or a short :name:", 422)
@@ -2564,6 +2584,7 @@ def react(c, principal, message_id, emoji):
 def unreact(c, principal, message_id, emoji):
     """Remove the principal's own reaction (a no-op when there is none). Returns the message's reactions."""
     actor, message = _reactable(c, principal, message_id)
+    H._message_writer(c, actor, message, thread_row(c, message["conversation_id"]))
     emoji = str(emoji or "").strip()
     gone = c.execute("DELETE FROM message_reactions WHERE message_id=? AND actor=? AND emoji=?",
                      (message["id"], actor, emoji)).rowcount
@@ -2596,6 +2617,7 @@ def _require_thread(c, principal, thread_id):
     row = require(c, v, thread_id) if v is not None else thread_row(c, thread_id)
     if row is None:
         raise Problem("not_found", "Thread not found", 404)
+    H._writer(c, actor, task_id=row.get("task_id"))
     return actor, v, row
 
 
@@ -2720,7 +2742,7 @@ def members(c, v, thread_id, *, cursor=None, limit=100):
 
 def follow(c, v, thread_id, *, notify="live"):
     v = viewer(None, v) if not isinstance(v, Viewer) else v
-    row = require(c, v, thread_id)
+    _, _, row = _require_thread(c, v, thread_id)
     if notify not in NOTIFY:
         raise Problem("notify", "notify is live, mentions, digest or muted", 422)
     now = _now()
@@ -2735,7 +2757,7 @@ def follow(c, v, thread_id, *, notify="live"):
 
 def unfollow(c, v, thread_id):
     v = viewer(None, v) if not isinstance(v, Viewer) else v
-    row = require(c, v, thread_id)
+    _, _, row = _require_thread(c, v, thread_id)
     c.execute("UPDATE thread_followers SET following=0, updated_at=? WHERE thread_id=? AND actor=?",
               (_now(), row["id"], v.actor))
     _event(c, v.actor, "thread.unfollowed", row["id"], {})
@@ -2820,7 +2842,7 @@ def update(c, principal, thread_id, *, title=None, archived=None):
 def mark_read(c, v, thread_id, seq):
     """Advance the viewer's read mark in this thread (max wins: another device may be ahead)."""
     v = viewer(None, v) if not isinstance(v, Viewer) else v
-    row = require(c, v, thread_id)
+    _, _, row = _require_thread(c, v, thread_id)
     seq = min(max(int(seq or 0), 0), int(row.get("last_seq") or 0))
     return {"thread_id": row["id"], "last_read_seq": _read_to(c, row, v.actor, seq)}
 
@@ -2854,27 +2876,36 @@ def task_opened(c, conversation, actor, requester, notice):
         _insert_delivery(c, message, requester, row, root_of(c, row), "none", "member")
 
 
-def mark_all_read(c, v, thread_id):
-    """Read up to now in the thread and every sub-thread under it."""
+def mark_all_read(c, v, thread_id, ago_ms=None):
+    """Read up to now in the thread and every sub-thread under it; with `ago_ms`, only what was written by then."""
     v = viewer(None, v) if not isinstance(v, Viewer) else v
     row = require(c, v, thread_id)
     path = row.get("path") or f"/{row['id']}/"
+    by = None
+    if ago_ms:
+        by = (datetime.now(timezone.utc) - timedelta(milliseconds=ago_ms)).strftime("%Y-%m-%dT%H:%M:%S.%f") + "Z"
     n = 0
     for sub in c.execute("SELECT id, last_seq FROM conversations WHERE path LIKE ? ESCAPE '\\'",
                          (path.replace("%", "\\%").replace("_", "\\_") + "%",)).fetchall():
-        mark_read(c, v, sub["id"], sub["last_seq"])
+        seq = sub["last_seq"]
+        if by:
+            seq = c.execute("SELECT COALESCE(MAX(seq),0) FROM messages WHERE conversation_id=? AND created_at<=?",
+                            (sub["id"], by)).fetchone()[0]
+        mark_read(c, v, sub["id"], seq)
         n += 1
     return {"threads": n}
 
 
-def unread_message_sql(m="m"):
+def unread_message_sql(m="m", *, me="?", delivery=None):
     """What makes a message unread for a reader once it is past their mark (contract §5), as SQL over a messages row:
     written by a person or delivered to the reader, not their own, and not history written back. Takes the reader's actor twice. Every surface
-    that counts unread (the thread, the sidebar, DMs, email digests) reads this one rule."""
-    return (f"{m}.deleted_at IS NULL AND {m}.sender_id<>? AND NOT {_backfill_sql(m)} "
-            f"AND ({m}.sender_id LIKE 'human:%' OR EXISTS (SELECT 1 "
-            f"FROM message_deliveries unread_d WHERE unread_d.message_id={m}.id AND unread_d.recipient=? "
-            f"AND {H.delivery_counts_sql(m, 'unread_d.recipient', 'unread_d.reason')}))")
+    that counts unread (the thread, the sidebar, DMs, email digests) reads this one rule. `delivery`, when given, is the
+    already joined unique delivery for this message and reader; `me` can name a shared SQL parameter."""
+    delivered = (H.delivery_counts_sql(m, delivery + '.recipient', delivery + '.reason') if delivery else
+                 f"EXISTS (SELECT 1 FROM message_deliveries unread_d WHERE unread_d.message_id={m}.id "
+                 f"AND unread_d.recipient={me} AND {H.delivery_counts_sql(m, 'unread_d.recipient', 'unread_d.reason')})")
+    return (f"{m}.deleted_at IS NULL AND {m}.sender_id<>{me} AND NOT {_backfill_sql(m)} "
+            f"AND ({m}.sender_id LIKE 'human:%' OR {delivered})")
 
 
 def unread(c, v, thread_id, *, follower=None):
@@ -2911,36 +2942,63 @@ def _subtree_mark(c, v):
     return f"MAX(COALESCE(f.last_read_seq,0),{int(_backfill_floor(c, v))})"
 
 
+def _subtree_unread_sql(c, v, root_ids):
+    """(SQL, args) for unread candidates in these roots' open subtrees. The human half seeks messages_thread_human;
+    the bot half starts at this reader's deliveries. Neither scans plain bot history to discover it is not unread.
+    A delivery is unique per (message, recipient), and the halves are disjoint, so UNION ALL counts each once."""
+    mark, subtree = _subtree_mark(c, v), _SUBTREE.format(me=":me")
+    args = {"me": v.actor, **{f"root{i}": root for i, root in enumerate(root_ids)}}
+    marks = ",".join(f":root{i}" for i in range(len(root_ids)))
+    columns = ("SELECT s.root_id AS root, s.id AS thread, s.last_unread_seq, m.id, m.seq, "
+               "(m.restricted=0 AND m.legacy_audience IS NULL) AS plain ")
+    where = f"s.root_id IN ({marks}) AND {_SUBTREE_OPEN} AND s.last_unread_seq>{mark} AND m.seq>{mark}"
+    return (columns + f"FROM {subtree}CROSS JOIN messages m INDEXED BY messages_thread_human ON "
+            f"m.conversation_id=s.id WHERE {where} AND m.sender_id LIKE 'human:%' "
+            f"AND {unread_message_sql(me=':me')} UNION ALL " + columns +
+            "FROM message_deliveries d INDEXED BY message_deliveries_recipient "
+            "CROSS JOIN messages m ON m.id=d.message_id "
+            f"CROSS JOIN {subtree}WHERE s.id=m.conversation_id AND d.recipient=:me "
+            f"AND m.sender_id NOT LIKE 'human:%' AND {where} "
+            f"AND {unread_message_sql(me=':me', delivery='d')}", args)
+
+
 def subtree_summaries(c, v, root_ids):
     """Per root, for this viewer, from the counters of its whole subtree (contract §5): {root id: {"unread",
     "activity", "activity_seq", "last_message_at"}}, and `new_at` when what is new starts in a sub-thread: the oldest
     unread message, else the sub-thread with the newest activity. A reply under an old parent may be pages up the root's
     timeline, so a row opens the place itself. Asked of the rows a page lists, so its cost follows the page."""
     v = viewer(None, v) if not isinstance(v, Viewer) else v
-    out = {}
-    subtree, mark = _SUBTREE.format(me="?"), _subtree_mark(c, v)
-    for part in H.chunks(list(root_ids)):
-        marks = ",".join("?" * len(part))
-        for r in c.execute(f"SELECT s.root_id AS root, MAX(s.last_seq) AS seq, MAX(s.last_message_at) AS at, "
-                           f"MAX(s.last_seq>{mark}) AS active FROM {subtree}WHERE s.root_id IN ({marks}) "
-                           f"AND {_SUBTREE_OPEN} GROUP BY s.root_id", (v.actor, *part)):
-            out[r["root"]] = {"unread": 0, "activity": bool(r["active"]), "activity_seq": int(r["seq"] or 0),
-                              "last_message_at": r["at"]}
-        for r in c.execute(f"SELECT s.root_id AS root, s.id AS thread, MAX(s.last_seq) FROM {subtree}WHERE s.root_id IN "
-                           f"({marks}) AND {_SUBTREE_OPEN} AND s.last_seq>{mark} GROUP BY s.root_id",
-                           (v.actor, *part)):
-            if r["thread"] != r["root"] and r["root"] in out:
-                out[r["root"]]["new_at"] = {"thread_id": r["thread"], "message_id": None}
-        # With one MIN in the select, SQLite takes the bare columns from that row: the oldest unread message.
-        for r in c.execute(f"SELECT s.root_id AS root, COUNT(*) AS n, MIN(m.seq), s.id AS thread, m.id AS message "
-                           f"FROM {subtree}JOIN messages m ON "
-                           f"m.conversation_id=s.id AND m.seq>{mark} WHERE s.root_id IN ({marks}) "
-                           f"AND {_SUBTREE_OPEN} AND s.last_unread_seq>{mark} AND {unread_message_sql()} "
-                           "GROUP BY s.root_id", (v.actor, *part, v.actor, v.actor)):
-            if r["root"] in out:
-                out[r["root"]]["unread"] = r["n"]
-                out[r["root"]]["new_at"] = (None if r["thread"] == r["root"]
-                                            else {"thread_id": r["thread"], "message_id": r["message"]})
+    out, newest, oldest = {}, {}, {}
+    subtree, mark = _SUBTREE.format(me=":me"), _subtree_mark(c, v)
+    for part in H.chunks(list(dict.fromkeys(root_ids))):
+        unread_sql, args = _subtree_unread_sql(c, v, part)
+        marks = ",".join(f":root{i}" for i in range(len(part)))
+        # One pass holds both counters and unread, including threads with no unread. Candidates come from the human
+        # index and this reader's deliveries, never through the company's plain bot history.
+        # With one MIN, SQLite takes m.id from the oldest unread row; the other bare columns belong to this thread.
+        for r in c.execute(f"WITH unread AS ({unread_sql}) "
+                           f"SELECT s.root_id AS root, s.id AS thread, s.last_seq AS seq, s.last_message_at AS at, "
+                           f"s.last_seq>{mark} AS active, COUNT(m.seq) AS n, MIN(m.seq) AS oldest, m.id AS message "
+                           f"FROM {subtree}LEFT JOIN unread m ON m.thread=s.id "
+                           f"WHERE s.root_id IN ({marks}) AND {_SUBTREE_OPEN} GROUP BY s.root_id, s.id", args):
+            root = r["root"]
+            summary = out.setdefault(root, {"unread": 0, "activity": False, "activity_seq": 0,
+                                            "last_message_at": None})
+            summary["activity_seq"] = max(summary["activity_seq"], int(r["seq"] or 0))
+            if r["at"] is not None and (summary["last_message_at"] is None or r["at"] > summary["last_message_at"]):
+                summary["last_message_at"] = r["at"]
+            if r["active"]:
+                summary["activity"] = True
+                if root not in newest or r["seq"] > newest[root]["seq"]:
+                    newest[root] = r
+            summary["unread"] += r["n"]
+            if r["n"] and (root not in oldest or r["oldest"] < oldest[root]["oldest"]):
+                oldest[root] = r
+    for root, summary in out.items():
+        target = oldest.get(root) or newest.get(root)
+        if target and (root in oldest or target["thread"] != root):
+            summary["new_at"] = (None if target["thread"] == root else {
+                "thread_id": target["thread"], "message_id": target["message"] if root in oldest else None})
     return out
 
 
@@ -2969,7 +3027,7 @@ def unread_dms(c, v, *, limit=50):
 
 
 # ----------------------------------------------------------------------------- C5: edit and delete
-def _own_say(c, actor, v, message_id):
+def _own_say(c, actor, v, message_id, *, check_writer=True):
     message = H.message(c, message_id)
     if not message:
         raise Problem("not_found", "Message not found", 404)
@@ -2979,6 +3037,9 @@ def _own_say(c, actor, v, message_id):
         raise Problem("forbidden", "Only its author changes a message", 403)
     if message.get("kind") not in EDITABLE_KINDS or (message.get("refs") or {}).get("carries"):
         raise Problem("kind", "Asks, answers and notices cannot be changed", 422)
+    if check_writer:
+        thread = thread_row(c, message["conversation_id"])
+        H._message_writer(c, actor, message, thread)
     return message
 
 
@@ -3680,10 +3741,24 @@ def person_dm_unread(c, v):
     return {a: n for a, n in one_dm_unread(c, v).items() if a.startswith("human:")}
 
 
-def one_dm_unread(c, v):
+def one_dm_unread(c, v, *, pairs=None, summaries=None):
     """{actor: unread count} over the viewer's open, followed, unmuted DMs with exactly one other teammate (a person or a
     bot), each summed over its subtree. A person's only: a bot has no DM list."""
     v = viewer(None, v) if not isinstance(v, Viewer) else v
+    if not v.is_person:
+        return {}
+    pairs = _one_dm_pairs(c, v) if pairs is None else pairs
+    summaries = subtree_summaries(c, v, list(pairs)) if summaries is None else summaries
+    out = {}
+    for thread_id, actor in pairs.items():
+        summary = summaries.get(thread_id) or {}
+        if summary.get("unread"):
+            out[actor] = out.get(actor, 0) + summary["unread"]
+    return out
+
+
+def _one_dm_pairs(c, v):
+    """{root id: other actor} for the one-teammate DMs: lists batch their summaries with the roots they show."""
     if not v.is_person:
         return {}
     ids = [r[0] for r in c.execute(
@@ -3700,18 +3775,14 @@ def one_dm_unread(c, v):
         others = [a for a in _dm_members(c, root, rows=members[thread_id]) if a != v.actor]
         if len(others) == 1:
             pairs[thread_id] = others[0]
-    out = {}
-    for thread_id, summary in subtree_summaries(c, v, list(pairs)).items():
-        if summary.get("unread"):
-            out[pairs[thread_id]] = out.get(pairs[thread_id], 0) + summary["unread"]
-    return out
+    return pairs
 
 
-def _dm_counts(c, v, cursor):
+def _dm_counts(c, v, cursor, *, pairs=None, summaries=None):
     """The sidebar's first page counts unread in each one-teammate DM: `bot_dms` by bot, `person_dms` by person."""
     if cursor:
         return {"bot_dms": {}, "person_dms": {}}
-    found = one_dm_unread(c, v)
+    found = one_dm_unread(c, v, pairs=pairs, summaries=summaries)
     return {"bot_dms": {a: n for a, n in found.items() if a.startswith("bot:")},
             "person_dms": {a: n for a, n in found.items() if a.startswith("human:")}}
 
@@ -3751,15 +3822,19 @@ def _prefetch_members(c, v, ids):
     of its rows does not ask again (`_is_member`)."""
     ids = list(ids)
     names = v.member_names(c)
+    values = read_cache.cache(c)
+    memo = values.setdefault(("thread_members", tuple(names)), {}) if values is not None else {}
+    missing = [i for i in dict.fromkeys(ids) if i not in memo]
     found = set()
-    for part in H.chunks(ids):
+    for part in H.chunks(missing):
         found.update(r[0] for r in c.execute(
             "SELECT DISTINCT thread_id FROM thread_members WHERE thread_id IN (%s) AND actor IN (%s)"
             % (",".join("?" * len(part)), ",".join("?" * len(names))), (*part, *names)))
-    return {thread_id: thread_id in found for thread_id in ids}
+    memo.update({thread_id: thread_id in found for thread_id in missing})
+    return {thread_id: memo[thread_id] for thread_id in ids}
 
 
-def prime_members(c, who, conversation_ids):
+def prime_members(c, who, conversation_ids, *, roots=None):
     """Seed `_is_member` for the rooms these conversations sit in (each one's root), in one query a chunk, for the
     checks that follow in this snapshot. A check builds its own Viewer (`conversation`), so the page's rows cannot
     share `_prefetch_members`' dict; the seeded rows are the same rows `_is_member` reads."""
@@ -3767,10 +3842,12 @@ def prime_members(c, who, conversation_ids):
         return
     v = viewer(None, who)
     ids = list(dict.fromkeys(i for i in conversation_ids if i))
-    roots = set()
-    for part in H.chunks(ids):
-        for r in c.execute("SELECT id,root_id FROM conversations WHERE id IN (%s)" % ",".join("?" * len(part)), part):
-            roots.add(r["root_id"] or r["id"])
+    # A batch that already holds the conversation rows also knows their roots; do not read their ids again.
+    if roots is None:
+        roots = set()
+        for part in H.chunks(ids):
+            for r in c.execute("SELECT id,root_id FROM conversations WHERE id IN (%s)" % ",".join("?" * len(part)), part):
+                roots.add(r["root_id"] or r["id"])
     names = v.member_names(c)
     member = _prefetch_members(c, v, sorted(roots))
     read_cache.prime(c, _member_sql(names), {(tid, *names): (1,) if yes else None for tid, yes in member.items()})
@@ -3801,7 +3878,7 @@ def read_threads(c, who, ids):
         for r in c.execute("SELECT * FROM conversations WHERE id IN (%s)" % ",".join("?" * len(part)), part):
             rows[r["id"]] = thread_row(c, dict(r))
     members.update(_member_rows(c, who, list(rows)))
-    prime_members(c, who, list(rows))
+    prime_members(c, who, list(rows), roots={r.get("root_id") or r["id"] for r in rows.values()})
     return rows, members
 
 
@@ -3925,7 +4002,8 @@ def _sidebar_page(c, v, cursor, limit, sort):
 
     listed = [section(f"NOT {is_dm}", positions[0]), section(is_dm, positions[1])]
     every = [r for rows, _ in listed for r in rows]
-    summaries = subtree_summaries(c, v, [r["id"] for r in every])
+    pairs = _one_dm_pairs(c, v) if not cursor else {}
+    summaries = subtree_summaries(c, v, list(dict.fromkeys([r["id"] for r in every] + list(pairs))))
     followers = _followers_of(c, v, [r["id"] for r in every])
     dms = dm_with(c, v, every)
     pins = pin_rows(c, v.actor, [r["id"] for r in every])
@@ -3956,7 +4034,7 @@ def _sidebar_page(c, v, cursor, limit, sort):
                        key=lambda pair: (pair[1]["activity_seq"], pair[1]["id"]), reverse=True)
     return {"attention": [{**needing[r["id"]], **item} for r, item in attention],
             "threads": [item for _, item in threads_found], "dms": [item for _, item in dms_found],
-            **_dm_counts(c, v, cursor),
+            **_dm_counts(c, v, cursor, pairs=pairs, summaries=summaries),
             "next_cursor": None if threads_next == dms_next == _SIDEBAR_DONE else f"{threads_next}|{dms_next}"}
 
 

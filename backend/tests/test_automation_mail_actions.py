@@ -8,19 +8,21 @@ import io
 import json
 import time
 from datetime import datetime, timedelta, timezone
+from pathlib import Path
 from unittest import mock
 
 import pytest
 import time_machine
 
+from backend.store import H
 from backend.tests.test_api import api, assign, get, headers, post, ready, runner  # noqa: F401
 from backend.tests.test_automation_turns import finish
 from clients.tico import APIError
-from connectors.mail import access, audit as audit_log, db, gmail as gm
+from connectors.mail import access, audit as audit_log, db, gmail as gm, policy as pl
 from connectors.mail import __main__ as cli
-from connectors.mail import actions as mail_actions, unsubscribe as unsub
+from connectors.mail import actions as mail_actions, unsubscribe as unsub, oauth
 from connectors.mail.tests import fake
-from runner_support.connectors import ConnectorPublisher
+from runner_support.connectors import CalendarRefused, CalendarInvitationPending, ConnectorPublisher
 
 BOX = "ana@acme.example"
 INVOICE = {"From": "Billing <billing@vendor.example>", "To": BOX, "Subject": "Invoice 4471",
@@ -64,8 +66,10 @@ class Computer:
             "m1", "t1", INVOICE, body="Please pay invoice 4471.", epoch_ms=int(time.time() * 1000) - 3_600_000)])
         self.worker = ConnectorPublisher({"url": "http://localhost:8765", "token": "unused",
                                           "owner_handle": access.OWNER, "projects_dir": str(tmp_path)},
-                                         client=Hub(api, token), mail=self.mail, action=self.action)
+                                         client=Hub(api, token), mail=self.mail, action=self.action,
+                                         event=self.event)
         self.worker.mail_boxes = [BOX]
+        self.calendar = fake.FakeCalendarService()
 
     def mail(self, args):
         rc, answer = run_cli(args)
@@ -73,7 +77,17 @@ class Computer:
         return answer
 
     def action(self, action):
-        return run_cli(["mail-action", "--as", access.OWNER, "--json"], json.dumps(action))[1]
+        return run_cli(["mail-action", "--as", access.CONNECTOR, "--json"], json.dumps(action))[1]
+
+    def event(self, action):
+        """ConnectorPublisher.calendar_event, in this process: exit 2 is a refusal before Google was asked."""
+        rc, answer = run_cli(["connector-event", "--as", access.CONNECTOR, "--json"], json.dumps(action))
+        if rc == 2:
+            raise CalendarRefused("Tico refused the calendar event before calling Google")
+        if rc == 75 and answer.get("kind") == "conference_pending":
+            raise CalendarInvitationPending(answer["event_id"])
+        assert rc == 0, answer
+        return answer
 
     def sync(self):
         """The real sync: Gmail into mail.db, exported and published to the hub as this runner."""
@@ -94,13 +108,37 @@ def computer(api, tmp_path, monkeypatch):
     monkeypatch.setattr(cli, "open_db", lambda: db.connect(tmp_path / "mail.db"))
     monkeypatch.setattr(audit_log, "AUDIT_PATH", tmp_path / "audit.jsonl")
     monkeypatch.setattr(access, "PROJECTS", tmp_path)
+    # The CLI runs as the connector and reads What Tico may do from the hub as this runner (policy.runner_company). The
+    # registration lives where TICO_RUNNER_CONFIG says, with none in the home, as a custom install has it: nothing the
+    # runner runs looks for one.
+    monkeypatch.setattr(pl, "RUNNER_GET", lambda path: box.worker.client.get(path))
+    # The CLI's connector principal reads the mailboxes this computer acts for as the worker does (its mail targets;
+    # here the mailbox it was given).
+    monkeypatch.setattr(access, "RUNNER_ACCESS", lambda: {**box.worker.client.get("connectors/mail/targets"),
+                                                          "mailboxes": [{"address": a} for a in box.worker.mail_boxes]})
+    monkeypatch.setattr(cli, "open_calendar", lambda mailbox: box.calendar)
+    (tmp_path / "home").mkdir()
+    (tmp_path / "elsewhere").mkdir()
+    (tmp_path / "elsewhere/runner.json").write_text(json.dumps({"url": "http://localhost:8765", "token": "unused"}))
+    monkeypatch.setenv("HOME", str(tmp_path / "home"))
+    monkeypatch.setenv("TICO_RUNNER_CONFIG", str(tmp_path / "elsewhere/runner.json"))
     box.token = machine["token"]
+    monkeypatch.setattr(oauth, "broker", lambda **kw: box.worker.client)
     return box
 
 
 def automate(api, *steps, **extra):
     return post(api, "automations", {"name": "Invoices", "owner": "person:ana",
                                      "trigger": {"type": "message", "inbox": BOX}, "steps": list(steps), **extra})["id"]
+
+
+def owned_by_ana(c, *ids):
+    """Automation rows for actions a test queues by hand: the claim checks each action's owner holds the mailbox."""
+    now = H.now()
+    for aid in ids:
+        c.execute("INSERT OR IGNORE INTO automations(id,name,owner_id,trigger_type,enabled,flow,version,created_at,"
+                  "created_by_id,updated_at) VALUES(?,?,?,'manual',0,?,1,?,?,?)",
+                  (aid, aid, "person:ana", json.dumps({"owner": "person:ana", "steps": []}), now, "person:ana", now))
 
 
 def last_run(api, aid):
@@ -119,7 +157,73 @@ def later(minutes):
     return time_machine.travel(datetime.now(timezone.utc) + timedelta(minutes=minutes), tick=False)
 
 
+def approve_and_dispatch(api, computer, send_id=None):
+    with api.app.state.store.read() as c:
+        row = c.execute("SELECT id,approval_id FROM email_sends WHERE " + ("id=?" if send_id else "state='waiting_approval'") + " ORDER BY rowid DESC LIMIT 1", (send_id,) if send_id else ()).fetchone()
+    assert row
+    assert api.get("/api/v2/email/sends/" + row["id"], headers=headers()).status_code == 200
+    post(api, "approvals/" + row["approval_id"], {"decision": "approved"})
+    assert computer.worker.email_send_tick() == 0  # approval starts the undo window
+    with later(3):
+        count = computer.worker.email_send_tick()
+        with api.app.state.store.read() as c:
+            state = c.execute("SELECT state,decision,detail,send_after FROM email_sends WHERE id=?", (row["id"],)).fetchone()
+        assert count == 1, dict(state)
+    return row["id"]
+
+
 # ---------------------------------------------------------------------------------------------- the whole loop
+def test_redesign_promo_sample_queues_danas_archive_without_a_mailbox_row():
+    from backend import automations, mailbox_access
+    from evals.redesign import seeds
+    from evals.redesign.harness import DANA_REF, Org
+
+    # The browser and this check use the same sample so it targets a message the connector can identify.
+    sample = json.loads((Path(__file__).resolve().parents[2] / "ui/tests/fixtures/redesign-automation-promo.json")
+                        .read_text())
+    with Org() as world:
+        seeds.automations(world)
+        listed = world.api("get", "/api/v2/automations")
+        assert listed.status == 200, listed.body
+        triage = next(a for a in listed.body["automations"] if a["name"] == "Inbox triage")
+        inbox = triage["trigger"]["inbox"]
+        with world.store.read() as c:
+            assert triage["owner_id"] == DANA_REF
+            assert mailbox_access.principal(c, DANA_REF) == mailbox_access.Principal("person", "dana")
+            assert c.execute("SELECT 1 FROM mailboxes WHERE address=?", (inbox,)).fetchone() is None
+            assert mailbox_access.level(c, DANA_REF, inbox) == "read_write"
+            assert automations.may_read_inbox(c, DANA_REF, inbox)
+            assert mailbox_access.action_refusal(c, DANA_REF, inbox, "archive") is None
+        reply = world.api("post", f"/api/v2/automations/{triage['id']}/run", {"input": sample})
+        assert reply.status == 200, reply.body
+        run = reply.body["run"]
+        assert run["status"] == "waiting", run
+        assert run["steps"][0]["status"] == "waiting", run
+        with world.store.read() as c:
+            action, = c.execute("SELECT mailbox, msg_id, action, state FROM automation_mail_actions WHERE run_id=?",
+                                (run["id"],)).fetchall()
+            assert dict(action) == {"mailbox": inbox, "msg_id": "promo-sample", "action": "archive", "state": "queued"}
+
+
+def test_a_sample_naming_no_mailbox_is_mail_in_the_trigger_inbox():
+    """The page's default sample has no mailbox; its archive targets the trigger's inbox, not none (refused)."""
+    from evals.redesign import seeds
+    from evals.redesign.harness import Org
+
+    with Org() as world:
+        seeds.automations(world)
+        triage = next(a for a in world.api("get", "/api/v2/automations").body["automations"]
+                      if a["name"] == "Inbox triage")
+        sample = {"message": {"from": "promo@deals.example", "subject": "Sale", "body": "50% off"}}
+        reply = world.api("post", f"/api/v2/automations/{triage['id']}/run", {"input": sample})
+        assert reply.status == 200, reply.body
+        assert reply.body["run"]["steps"][0]["status"] == "waiting", reply.body["run"]
+        with world.store.read() as c:
+            action, = c.execute("SELECT mailbox, action, state FROM automation_mail_actions WHERE run_id=?",
+                                (reply.body["run"]["id"],)).fetchall()
+        assert dict(action) == {"mailbox": triage["trigger"]["inbox"], "action": "archive", "state": "queued"}
+
+
 def test_mail_in_runs_the_automation_and_its_computer_drafts_and_replies_in_the_thread(api, computer):
     aid = automate(api, DRAFT, SEND)
     assert computer.sync() == 1
@@ -128,7 +232,12 @@ def test_mail_in_runs_the_automation_and_its_computer_drafts_and_replies_in_the_
     assert run["status"] == "waiting" and run["finished_at"] is None
     assert [(s["status"], s["outputs"]["queued"]) for s in run["steps"]] == [("waiting", True), ("waiting", True)]
     assert computer.worker.mail_action_tick() == 2
-    draft, = computer.drafts()
+    assert computer.sent() == []
+    assert len(computer.drafts()) == 2
+    approve_and_dispatch(api, computer)
+    # Raw MIME delivery preserves source drafts so a concurrent user edit is never deleted.
+    assert len(computer.drafts()) == 2
+    draft = next(d for d in computer.drafts() if "checking with finance" in fake.base64.urlsafe_b64decode(d["payload"]["body"]["data"] + "==").decode())
     sent, = computer.sent()
     for msg, text in ((draft, "checking with finance"), (sent, "pay this week")):
         assert msg["threadId"] == "t1" and header(msg, "In-Reply-To") == "<inv-4471@vendor.example>"
@@ -163,6 +272,8 @@ def test_forward_sends_the_message_on_with_the_note_first(api, computer):
                          "args": {"to": "ap@acme.example", "body": "For payment."}})
     computer.sync()
     computer.worker.mail_action_tick()
+    assert computer.sent() == []
+    approve_and_dispatch(api, computer)
     sent, = computer.sent()
     text = fake.base64.urlsafe_b64decode(sent["payload"]["body"]["data"] + "==").decode()
     assert header(sent, "To") == "ap@acme.example" and header(sent, "Subject") == "Fwd: Invoice 4471"
@@ -174,41 +285,53 @@ def test_forward_sends_the_message_on_with_the_note_first(api, computer):
 def test_a_lost_claim_and_a_lost_result_never_send_twice(api, computer):
     aid = automate(api, SEND)
     computer.sync()
-    lost = claim(api, computer.token)["actions"]             # the answer never reached the computer
-    assert len(lost) == 1 and claim(api, computer.token)["actions"] == []    # leased: nobody else gets it
+    lost = claim(api, computer.token)["actions"]
+    assert len(lost) == 1 and claim(api, computer.token)["actions"] == []
     with later(6):
-        again, = claim(api, computer.token)["actions"]       # the lease ran out: back in the queue
+        again, = claim(api, computer.token)["actions"]
         assert again["id"] == lost[0]["id"] and again["attempt"] == 2
-        done = computer.action(again)                        # sent, but the report is lost
-        assert done["detail"] == "sent" and len(computer.gmail.sent) == 1
+        first = computer.action(again)
+        assert first["detail"] == "waiting_approval" and computer.gmail.sent == []
     with later(12):
         third, = claim(api, computer.token)["actions"]
-        assert computer.action(third)["detail"].startswith("already sent")
-        assert len(computer.gmail.sent) == 1
-        ok = {"ok": True, "detail": "sent", "message": done["message"]}
+        repeated = computer.action(third)
+        assert repeated["send_queue_id"] == first["send_queue_id"]
+        assert computer.gmail.sent == []
+        report = {"ok": True, "send_queue_id": first["send_queue_id"]}
         url = f"automations/mail-actions/{third['id']}/result"
-        assert post(api, url, ok, computer.token) == {"id": third["id"], "state": "done"}
-        # A repeated report (its answer lost too) changes nothing.
-        assert post(api, url, {"ok": False, "detail": "late"}, computer.token) == {"id": third["id"], "state": "done"}
-    step = last_run(api, aid)["steps"][0]
-    assert step["status"] == "ok" and step["outputs"]["message"] == done["message"]
+        assert post(api, url, report, computer.token)["state"] == "waiting_send"
+    # The approval follows both lease retries in time; the undo window never moves backward.
+    with later(15):
+        approve_and_dispatch(api, computer, first["send_queue_id"])
+    assert len(computer.gmail.sent) == 1
+    assert last_run(api, aid)["status"] == "ok"
 
 
 def test_a_send_whose_answer_was_lost_inside_the_cli_is_not_sent_again(api, computer):
-    """The send went out but the CLI died before it recorded so: the row is pending and the draft is gone."""
+    """An uncertain provider delivery stays unknown and a second CLI call cannot send it again."""
     automate(api, SEND)
     computer.sync()
-    action, = claim(api, computer.token)["actions"]
-    real = gm.Gmail.send_draft
-
-    def sent_then_crash(self, draft_id):
-        real(self, draft_id)
+    computer.worker.mail_action_tick()
+    with api.app.state.store.read() as c:
+        queued = c.execute("SELECT id,approval_id FROM email_sends ORDER BY rowid DESC LIMIT 1").fetchone()
+    assert api.get("/api/v2/email/sends/" + queued["id"], headers=headers()).status_code == 200
+    post(api, "approvals/" + queued["approval_id"], {"decision": "approved"})
+    assert computer.worker.email_send_tick() == 0
+    real = gm.Gmail.send_raw
+    def sent_then_crash(self, raw, thread_id=""):
+        real(self, raw, thread_id)
         raise gm.Failure("connection reset after the send", status=503)
-    with mock.patch.object(gm.Gmail, "send_draft", sent_then_crash):
-        answer = computer.action(action)
-    assert answer["ok"] is False and answer["retry"] is True and len(computer.gmail.sent) == 1
-    assert computer.action(action)["detail"].startswith("already sent")
+    with later(3), mock.patch.object(gm.Gmail, "send_raw", sent_then_crash):
+        count = computer.worker.email_send_tick()
+        with api.app.state.store.read() as c:
+            state = c.execute("SELECT state,decision,detail,send_after FROM email_sends WHERE id=?", (queued["id"],)).fetchone()
+        assert count == 1, dict(state)
     assert len(computer.gmail.sent) == 1
+    repeated = computer.action({"id": queued["id"], "mailbox": BOX, "action": "dispatch_send"})
+    assert repeated["status"] == "unknown" and repeated["retry"] is False
+    assert len(computer.gmail.sent) == 1
+    with api.app.state.store.read() as c:
+        assert c.execute("SELECT state FROM email_sends WHERE id=?", (queued["id"],)).fetchone()[0] == "unknown"
 
 
 def test_three_failed_tries_fail_the_action_and_the_run_says_where(api, computer):
@@ -268,6 +391,7 @@ def test_a_claim_stops_inside_the_byte_budget_and_the_rest_wait_for_the_next(api
     computer.sync()
     body = json.dumps({"body": "x" * 100_000})                   # 100 KB each: a claim takes two or three at most
     with api.app.state.store.transaction() as c:
+        owned_by_ana(c, "auto_x")
         for i in range(5):
             c.execute("INSERT INTO automation_mail_actions(id,automation_id,run_id,mailbox,msg_id,action,args,"
                       "state,created_at,attempts) VALUES(?,?,?,?,?,?,?,?,?,0)",
@@ -293,6 +417,55 @@ def test_a_send_claimed_after_the_switch_went_off_is_a_draft(api, computer):
     assert step["status"] == "ok" and step["outputs"]["detail"] == "send_off" and step["outputs"]["send_off"]
     with api.app.state.store.read() as c:
         assert c.execute("SELECT count(*) FROM events WHERE action='automation.send_off'").fetchone()[0] == 1
+
+
+def test_what_tico_may_do_holds_automations_a_send_is_claimed_as_a_draft_which_organize_off_refuses(api, computer):
+    """Settings > Inboxes > Settings > What Tico may do covers automations: Send mail off claims a send as a draft, as the inbox's
+    own switch does. With Send mail off only, the send is leased as a draft; with Organize mail off too the server's
+    one check (backend/mailbox_access.py action_refusal) fails the draft and the archive at the claim, so no computer
+    is asked, and the connector still refuses whatever an action on stdin says, from the hub's own setting."""
+    send = automate(api, SEND)
+    archive = automate(api, ARCHIVE)
+    automate(api, DRAFT)
+    computer.sync()
+    r = api.put("/api/v2/google/permissions", json={"organize_mail": True, "send_mail": False, "change_calendar": True},
+                headers=headers())
+    assert r.status_code == 200, r.text
+    leased = claim(api, computer.token)["actions"]
+    assert sorted(a["action"] for a in leased) == ["archive", "draft", "draft"]      # the send became a draft
+    assert all("company" not in a for a in leased)
+    drafted = next(a for a in leased if a["action"] == "draft")
+    answer = computer.action(dict(drafted, action="send", company={}))   # a send made up on stdin, past the draft
+    assert answer["ok"] is False and "What Tico may do" in answer["detail"], answer
+    assert computer.gmail.sent == []                      # at most a draft: Organize mail is still on
+    drafts = len(computer.drafts())
+
+    with api.app.state.store.transaction() as c:          # queue them again, then turn Organize mail off too
+        c.execute("UPDATE automation_mail_actions SET state='queued', claimed_at=NULL, claimed_by=NULL, attempts=0")
+    r = api.put("/api/v2/google/permissions", json={"organize_mail": False, "send_mail": False, "change_calendar": True},
+                headers=headers())
+    assert r.status_code == 200, r.text
+    assert claim(api, computer.token)["actions"] == []
+    for aid in (send, archive):
+        step = last_run(api, aid)["steps"][0]
+        assert step["status"] == "failed" and "What Tico may do" in json.dumps(step["outputs"]), step
+    with api.app.state.store.transaction() as c:
+        assert {r["state"] for r in c.execute("SELECT state FROM automation_mail_actions")} == {"failed"}
+    assert "INBOX" in computer.gmail.store["m1"]["labelIds"] and len(computer.drafts()) == drafts
+    assert computer.gmail.sent == []
+
+
+def test_a_mail_action_that_cannot_read_what_tico_may_do_writes_nothing_and_is_retried(api, computer, monkeypatch):
+    automate(api, ARCHIVE)
+    computer.sync()
+    action, = claim(api, computer.token)["actions"]
+
+    def down(path):
+        raise APIError("unavailable", "the hub is down", 503)
+    monkeypatch.setattr(pl, "RUNNER_GET", down)
+    answer = computer.action(action)
+    assert (answer["ok"], answer["retry"]) == (False, True) and "couldn't check" in answer["detail"], answer
+    assert "INBOX" in computer.gmail.store["m1"]["labelIds"]
 
 
 def test_a_send_queued_with_the_switch_off_still_says_send_off_once_drafted(api, computer):
@@ -400,9 +573,30 @@ def test_a_lease_that_runs_out_after_its_run_failed_is_canceled_not_queued(api, 
             "canceled"
 
 
+ARCHIVE = {"id": "gate", "type": "filter", "rules": [{"when": [], "then": [{"do": "archive"}]}]}
+
+
+def test_a_lease_another_computer_let_run_out_is_not_run_again_unless_the_action_is_repeatable(api, computer):
+    send = automate(api, SEND)
+    automate(api, ARCHIVE)
+    computer.sync()
+    claimed = {action["action"]: action for action in claim(api, computer.token)["actions"]}
+    assert set(claimed) == {"send", "archive"}                 # both leased to the first computer, which never answers
+    second = runner(api, label="Second Mac")
+    post(api, "connectors/mail/messages", {"mailbox": BOX, "messages": [], "deleted": [], "synced_at": H.now()},
+         second["token"])                                      # the second computer now reads the mailbox
+    with later(6):
+        again, = claim(api, second["token"])["actions"]
+        assert (again["action"], again["attempt"]) == ("archive", 2)   # a label change is safe to run again
+    step = last_run(api, send)["steps"][0]
+    assert step["status"] == "failed" and "not run again" in step["outputs"]["detail"]
+    assert computer.gmail.sent == []                           # the send was never carried out on either computer
+
+
 def test_no_computer_claims_or_reports_for_a_mailbox_not_published_yet(api, computer):
     claim(api, computer.token, expected=403)
     with api.app.state.store.transaction() as c:
+        owned_by_ana(c, "auto_1")
         c.execute("INSERT INTO automation_mail_actions(id,automation_id,mailbox,msg_id,action,args,state,created_at) "
                   "VALUES('ma_1','auto_1',?,'m1','send','{}','queued',?)", (BOX, "2026-10-28T09:00:00Z"))
     post(api, "automations/mail-actions/ma_1/result", {"ok": True, "detail": "sent"}, computer.token, expected=403)
@@ -414,14 +608,15 @@ def test_no_computer_claims_or_reports_for_a_mailbox_not_published_yet(api, comp
 def test_the_sync_carries_the_mail_fields_to_the_trigger(api, computer):
     """The real sync and publish: the owner's earlier send makes the sender known to a later message only; a category
     label, a calendar part and an .ics file come through the hub copy as the trigger reads them."""
-    now, day, person = int(time.time() * 1000), 86_400_000, "person@customer.example"
+    # The first sync acts on the last 24 hours of mail, so these times stay inside that window, in this order.
+    now, hour, person = int(time.time() * 1000), 3_600_000, "person@customer.example"
     store = computer.gmail.store
     store["sent-1"] = fake.message("sent-1", "t-person", {"From": BOX, "To": person, "Subject": "Pricing"},
-                                   body="Here it is.", labels=("SENT",), epoch_ms=now - 2 * day)
+                                   body="Here it is.", labels=("SENT",), epoch_ms=now - 10 * hour)
     store["early"] = fake.message("early", "t-early", {"From": person, "To": BOX, "Subject": "Hello"},
-                                  body="Hi.", epoch_ms=now - 3 * day)
+                                  body="Hi.", epoch_ms=now - 20 * hour)
     store["reply"] = fake.message("reply", "t-person", {"From": person, "To": BOX, "Subject": "Re: Pricing"},
-                                  body="Thanks.", epoch_ms=now - day)
+                                  body="Thanks.", epoch_ms=now - 2 * hour)
     store["promo"] = fake.message("promo", "t-promo", {"From": "Deals <deals@shop.example>", "To": BOX,
                                                        "Subject": "Sale"}, body="50% off.",
                                   labels=("INBOX", "CATEGORY_PROMOTIONS"), epoch_ms=now - 2 * 3_600_000)
@@ -575,6 +770,7 @@ def test_a_chain_longer_than_the_recursion_limit_settles_and_the_mailbox_still_c
     and the mailbox's next claim is not held up by them."""
     computer.sync()
     with api.app.state.store.transaction() as c:
+        owned_by_ana(c, "auto_x")
         for i in range(1100):
             c.execute('INSERT INTO automation_mail_actions(id,automation_id,run_id,mailbox,msg_id,action,args,state,'
                       'created_at,attempts,step,"after") VALUES(?,?,?,?,?,?,?,?,?,0,?,?)',
@@ -589,6 +785,7 @@ def test_a_chain_longer_than_the_recursion_limit_settles_and_the_mailbox_still_c
             "SELECT state, COUNT(*) FROM automation_mail_actions WHERE automation_id='auto_x' GROUP BY state")}
     assert states == {"failed": 1, "skipped": 1099}
     with api.app.state.store.transaction() as c:
+        owned_by_ana(c, "auto_y")
         c.execute("INSERT INTO automation_mail_actions(id,automation_id,run_id,mailbox,msg_id,action,args,state,"
                   "created_at,attempts) VALUES('free','auto_y',NULL,?,'m1','archive','{}','queued',"
                   "'2026-10-28T01:00:00.000000Z',0)", (BOX,))
@@ -630,6 +827,11 @@ def bot_ops(api):
     r = runner(api, label="Bot Mac")
     assign(api, r, "ops")
     ready(api, r, ["ops"])
+    # ana let ops use her mailbox (Settings > Inboxes): a bot's automation acts on a mailbox it was given.
+    from backend import mailbox_access
+    with api.app.state.store.transaction() as c:
+        bot = H.resolve_bot(c, "ops")["id"]
+        mailbox_access.give(c, mailbox_access.ensure_mailbox(c, BOX), "bot", bot, "read_write", "human:ana")
     return r
 
 
@@ -659,3 +861,71 @@ def test_reply_mode_with_the_send_switch_off_saves_a_draft(api, computer):
     assert computer.worker.mail_action_tick() == 1
     assert computer.gmail.sent == [] and len(computer.drafts()) == 1
     assert last_run(api, aid)["steps"][0]["outputs"]["actions"][0]["detail"] == "send_off"
+
+
+def test_change_calendar_off_refuses_a_booking_and_fails_what_was_queued_at_claim(api, computer):
+    """What Tico may do holds the calendar on the server too: no booking is queued while Change calendar is off, and one
+    queued before it went off fails at the claim instead of landing on the calendar later."""
+    booking = {"calendar": BOX, "title": "Planning", "start": "2099-01-01T09:00:00+00:00",
+               "end": "2099-01-01T09:30:00+00:00", "attendees": []}
+    queued = post(api, "calendar/appointments", booking)["action"]
+    r = api.put("/api/v2/google/permissions", json={"organize_mail": True, "send_mail": True, "change_calendar": False},
+                headers=headers())
+    assert r.status_code == 200, r.text
+    refused = api.post("/api/v2/calendar/appointments", json=booking, headers=headers())
+    assert refused.status_code == 403 and refused.json()["error"]["code"] == "company_off", refused.text
+    assert post(api, "connectors/calendar/actions/claim", {}, computer.token) == {"action": None}
+    with api.app.state.store.read() as c:
+        row = c.execute("SELECT status,error FROM calendar_actions WHERE id=?", (queued["id"],)).fetchone()
+        assert row["status"] == "failed" and "What Tico may do" in row["error"]
+        assert c.execute("SELECT count(*) FROM calendar_actions").fetchone()[0] == 1
+
+
+def test_the_runner_s_own_commands_need_no_owner_proof_wherever_its_registration_lives(api, computer):
+    """Sync, a mail action's lease and a calendar booking's claim run as the owner with the registration at
+    TICO_RUNNER_CONFIG (the fixture): each reads What Tico may do from the hub and nothing else about who runs it."""
+    automate(api, ARCHIVE)
+    computer.sync()
+    assert computer.worker.mail_action_tick() >= 1
+    assert "INBOX" not in computer.gmail.store["m1"]["labelIds"]
+    booking = {"calendar": BOX, "title": "Planning", "start": "2099-01-01T09:00:00+00:00",
+               "end": "2099-01-01T09:30:00+00:00", "attendees": []}
+    queued = post(api, "calendar/appointments", booking)["action"]
+    assert computer.worker.calendar_action_tick() == 1
+    assert len(computer.calendar.created_events) == 1
+    with api.app.state.store.read() as c:
+        assert c.execute("SELECT status FROM calendar_actions WHERE id=?", (queued["id"],)).fetchone()[0] == "succeeded"
+
+
+def test_completed_silent_calendar_hold_does_not_revoke_its_approved_invitation(api, computer):
+    booking = {"calendar": BOX, "title": "Planning", "start": "2099-01-01T09:00:00+00:00",
+               "end": "2099-01-01T09:30:00+00:00", "attendees": ["ben@acme.example"]}
+    queued = post(api, "calendar/appointments", booking)["action"]
+    assert computer.worker.calendar_action_tick() == 1
+    assert computer.gmail.sent == []
+    with api.app.state.store.read() as c:
+        assert c.execute("SELECT status FROM calendar_actions WHERE id=?", (queued["id"],)).fetchone()[0] == "succeeded"
+        send = c.execute("SELECT * FROM email_sends WHERE calendar_action_id=?", (queued["id"],)).fetchone()
+        assert send is not None and send["state"] == "waiting_approval"
+    approve_and_dispatch(api, computer, send["id"])
+    assert len(computer.gmail.sent) == 1
+    assert "text/calendar" in str(computer.sent()[0])
+
+
+def test_hub_conference_preparation_failure_returns_a_retryable_non_send(api, computer):
+    from connectors.mail import calendar
+    booking = {"calendar": BOX, "title": "Planning", "start": "2099-01-01T09:00:00+00:00",
+               "end": "2099-01-01T09:30:00+00:00", "attendees": ["ben@acme.example"]}
+    queued = post(api, "calendar/appointments", booking)["action"]
+    with mock.patch.object(calendar.Calendar, "ready_conference", side_effect=calendar.ConferencePending("Meeting link pending", status=503)), \
+            mock.patch.object(pl, "queue_send") as send:
+        assert computer.worker.calendar_action_tick() == 1
+    send.assert_not_called()
+    result = get(api, "calendar/actions/" + queued["id"])["action"]
+    assert result["status"] == "failed" and "Retry scheduling" in result["error"]
+    assert result["result"]["event_id"] and all(event["sendUpdates"] == "none" for event in computer.calendar.created_events.values())
+    retried = post(api, "calendar/appointments", booking)["action"]
+    assert retried["id"] != queued["id"]
+    assert computer.worker.calendar_action_tick() == 1
+    with api.app.state.store.read() as c:
+        assert c.execute("SELECT state FROM email_sends WHERE calendar_action_id=?", (retried["id"],)).fetchone()[0] == "waiting_approval"

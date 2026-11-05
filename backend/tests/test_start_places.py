@@ -540,6 +540,100 @@ def test_memory_at_85_holds_new_starts_and_they_start_again_below_80(api):
     assert claim(api, computer, 'finance') is not None
 
 
+def test_memory_pressure_holds_a_persons_message_even_when_the_computer_is_overloaded(api):
+    """Human priority must not start another process on a memory-starved computer."""
+    computer = bot_waiting_for_finance(api, sender='human:ana')
+    with api.app.state.store.transaction() as c:
+        c.execute("UPDATE runners SET platform='linux' WHERE id=?", (computer['runner_id'],))
+    overload(api, computer, mem=.96)
+    assert claim(api, computer, 'finance') is None
+    from backend.start_places import computer_hold
+    with api.app.state.store.read() as c:
+        assert computer_hold(c, computer['runner_id'], person=True)[0] == 'computer busy: memory'
+    memory(api, computer, .82)
+    assert claim(api, computer, 'finance') is None
+    memory(api, computer, .79)
+    assert claim(api, computer, 'finance') is not None
+
+
+@pytest.mark.parametrize('allocated', [False, True])
+def test_memory_pressure_revokes_only_a_persons_unallocated_start_place(api, allocated):
+    """Memory holds an unused grant, while a real allocated process keeps its grant and starts."""
+    computer = bot_waiting_for_finance(api, sender='human:ana')
+    ready(api, computer, ['ops', 'finance'], capabilities=['harness_allocation_v1'])
+    with api.app.state.store.transaction() as c:
+        c.execute("UPDATE runners SET platform='linux' WHERE id=?", (computer['runner_id'],))
+    attempt = claim(api, computer, 'finance')
+    aid = attempt['id']
+    memory(api, computer, .86)
+    allocation = {'harness_allocated': True} if allocated else {}
+    if allocated:
+        # The Codex app-server now exists; the next sample includes that allocation's memory.
+        assert post(api, f'attempts/{aid}/start-place', allocation, computer['token'])['reserved']
+    response = api.post(f'/api/v2/attempts/{aid}/started', json={'thread_id': 'synthetic-thread', **allocation},
+                        headers=headers(computer['token']))
+    if allocated:
+        assert response.status_code == 200 and response.json()['started']
+        with api.app.state.store.read() as c:
+            assert c.execute('SELECT state FROM attempts WHERE id=?', (aid,)).fetchone()[0] == 'running'
+            assert c.execute('SELECT start_until FROM start_places WHERE attempt_id=?', (aid,)).fetchone()[0]
+        return
+    assert response.status_code == 409 and response.json()['error']['code'] == 'start_wait'
+    place = post(api, f'attempts/{aid}/start-place', {}, computer['token'])
+    assert not place['reserved'] and place['waiting'].startswith('computer busy: memory')
+    with api.app.state.store.read() as c:
+        assert c.execute('SELECT state FROM attempts WHERE id=?', (aid,)).fetchone()[0] == 'leased'
+        assert c.execute('SELECT start_until FROM start_places WHERE attempt_id=?', (aid,)).fetchone()[0] is None
+    memory(api, computer, .79)
+    assert post(api, f'attempts/{aid}/start-place', {}, computer['token'])['reserved']
+    assert post(api, f'attempts/{aid}/started', {'thread_id': 'synthetic-thread'}, computer['token'])['started']
+
+
+@pytest.mark.parametrize('sender,capabilities', [('human:ana', []), ('bot:ops', ['turns_at_once_v1'])])
+def test_memory_cannot_revoke_a_grant_without_negotiated_allocation_reporting(api, sender, capabilities):
+    """After a hub upgrade an older runner may already have a process but cannot report its allocation."""
+    computer = bot_waiting_for_finance(api, sender=sender)
+    ready(api, computer, ['ops', 'finance'], capabilities=capabilities)
+    with api.app.state.store.transaction() as c:
+        c.execute("UPDATE runners SET platform='linux' WHERE id=?", (computer['runner_id'],))
+    attempt = claim(api, computer, 'finance')
+    aid = attempt['id']
+    grant = post(api, f'attempts/{aid}/start-place', {}, computer['token'])
+    assert grant['reserved']
+    overload(api, computer, cpu=20, mem=.96)
+    assert post(api, f'attempts/{aid}/start-place', {}, computer['token']) == grant
+    assert post(api, f'attempts/{aid}/started', {'thread_id': 'older-runner-thread'}, computer['token'])['started']
+    with api.app.state.store.read() as c:
+        assert c.execute('SELECT state FROM attempts WHERE id=?', (aid,)).fetchone()[0] == 'running'
+        assert c.execute('SELECT start_until FROM start_places WHERE attempt_id=?', (aid,)).fetchone()[0] == grant['start_until']
+
+
+@pytest.mark.parametrize('cpu,held', [(0, False), (95, True)])
+def test_an_allocated_bot_bypasses_sustained_memory_but_retains_the_cpu_brake(api, cpu, held):
+    computer = bot_waiting_for_finance(api, sender='bot:ops')
+    attempt = claim(api, computer, 'finance')
+    overload(api, computer, cpu=cpu, mem=.96)
+    place = post(api, f"attempts/{attempt['id']}/start-place", {'harness_allocated': True}, computer['token'])
+    assert place['reserved'] is not held
+    if held:
+        assert place['waiting'] == 'computer busy'
+
+
+@pytest.mark.parametrize('platform,held', [('darwin', False), ('linux', True), (None, False)])
+def test_a_person_at_90_percent_memory_waits_only_on_linux(api, platform, held):
+    computer = bot_waiting_for_finance(api, sender='human:ana')
+    with api.app.state.store.transaction() as c:
+        c.execute('UPDATE runners SET platform=? WHERE id=?', (platform, computer['runner_id']))
+    memory(api, computer, .90)
+    attempt = claim(api, computer, 'finance')
+    if held:
+        assert attempt is None
+        assert any(w['reason'] == 'computer busy: memory' for w in waits_of(api, computer))
+    else:
+        assert attempt is not None
+        assert post(api, f"attempts/{attempt['id']}/started", {'thread_id': 'human-answer'}, computer['token'])['started']
+
+
 def test_memory_between_80_and_85_admits_a_start_when_none_waits(api):
     computer = bot_waiting_for_finance(api)
     memory(api, computer, .82)

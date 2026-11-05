@@ -1,4 +1,6 @@
 from datetime import datetime, timezone
+import sqlite3
+from unittest.mock import Mock
 
 import pytest
 
@@ -6,6 +8,45 @@ from backend import routines
 from backend.tests.test_api import api, post  # noqa: F401
 from backend.scheduler import Scheduler
 from backend.store import H
+
+
+def test_failed_computer_retirement_records_failure_and_runs_the_remaining_cleanup(api, monkeypatch, caplog):
+    from backend import computers, screening, support_triage
+
+    retirement = Mock(side_effect=sqlite3.OperationalError("writer lock timeout"))
+    monkeypatch.setattr(computers, "sweep", retirement)
+    following = []
+    for module in (support_triage, screening):          # the deadline sweeps after retirement (pruning is Clean up's)
+        sweep = Mock(wraps=module.sweep)
+        monkeypatch.setattr(module, "sweep", sweep)
+        following.append(sweep)
+    result = Scheduler(api.app.state.store, api.app.state.execution).tick()
+    assert result["failures"] == [{"computer_retirement": "OperationalError"}]
+    retirement.assert_called_once()
+    for sweep in following:
+        sweep.assert_called_once()
+    assert any(record.name == "tico.scheduler" and record.exc_info for record in caplog.records)
+
+
+def test_saved_nightly_learnings_never_runs_beside_maintenance(api, monkeypatch):
+    import json
+    from backend import learnings, maintenance
+
+    store = api.app.state.store
+    started = []
+    monkeypatch.setattr(learnings, "nightly", lambda *args: started.append(args), raising=False)
+    with store.transaction() as c:
+        c.execute("INSERT INTO registry_metadata VALUES('system_routines',?) ON CONFLICT(key) DO UPDATE SET "
+                  "value=excluded.value", (json.dumps({"learnings": {"on": True, "preset": "daily", "at": "03:00"}}),))
+        maintenance.save_settings(c, "human:ana", paused=True)
+    scheduler = Scheduler(store, api.app.state.execution)
+    for day in (3, 4):
+        scheduler.tick(datetime(2026, 11, day, 4, tzinfo=maintenance.ZONE))
+    assert not started
+    with store.read() as c:
+        assert c.execute("SELECT count(*) FROM learning_runs").fetchone()[0] == 0
+        assert c.execute("SELECT count(*) FROM system_runs WHERE job='learnings'").fetchone()[0] == 0
+        assert c.execute("SELECT count(*) FROM maintenance_runs").fetchone()[0] == 0
 
 
 def test_schedule_survives_restart_without_duplicate_work(api):

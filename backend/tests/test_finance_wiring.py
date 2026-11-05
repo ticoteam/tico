@@ -26,7 +26,8 @@ def _turn(c, bot, finished, cost, model="tico-medium", billing="api", tid=None):
         c.execute("UPDATE attempts SET settled_at=?, usage_model=?, est_cost_usd=?, billing=?, trigger='message' WHERE id=?",
                   (finished, model, cost, billing, tid))
         return tid
-    c.execute("INSERT INTO attempts(id, bot_id, created_at, settled_at, usage_model, est_cost_usd, billing) VALUES(?,?,?,?,?,?,?)",
+    c.execute("INSERT INTO attempts(id, bot_id, created_at, settled_at, trigger, usage_model, est_cost_usd, billing) "
+              "VALUES(?,?,?,?,'message',?,?,?)",
               (tid, bot, finished, finished, model, cost, billing))
     return tid
 
@@ -585,8 +586,9 @@ def test_a_claim_fits_what_is_left_along_the_whole_budget_path(books):
         assert c.execute("SELECT amount FROM fin_holds WHERE id=?", (held.hold_id,)).fetchone()[0] == 2
 
 
-def test_a_quarter_budgets_gateway_cut_is_made_again_each_month(books):
+def test_a_quarter_budgets_gateway_cut_is_made_again_each_month(books, monkeypatch, caplog):
     from backend.finance import jobs
+    monkeypatch.setattr(usage_limits, "LOGGED", set())
     with books.transaction() as c:
         ai = budget(c, "AI services")
         c.execute("UPDATE fin_budgets SET period='quarter' WHERE id=?", (ai,))
@@ -594,6 +596,10 @@ def test_a_quarter_budgets_gateway_cut_is_made_again_each_month(books):
         spend(c, "5100", 100)
         assert jobs.cap_wanted(c, AT) == ("cut", "2026-10")
         assert jobs.cap_wanted(c, "2026-11-02T00:00:00Z") == ("cut", "2026-11")
+        assert usage_limits.blocked(c, "coder", at=NOON) == "quarterly"
+        assert usage_limits.blocked(c, "seller", at=NOON.replace(month=11)) == "quarterly"
+    logs = [r for r in caplog.records if r.name == "backend.usage_limits"]
+    assert len(logs) == 1 and logs[0].args[:3] == ("budget:" + ai, "quarterly", "2027-01-01T00:00:00Z")
 
 
 def test_a_one_time_budget_at_its_cutoff_pauses_its_bots_with_no_end(books):
@@ -602,6 +608,7 @@ def test_a_one_time_budget_at_its_cutoff_pauses_its_bots_with_no_end(books):
         c.execute("UPDATE fin_budgets SET period='once' WHERE id=?", (ai,))
         act(c, OWNER, "budget_update", {"budget_id": ai, "amount": 100})
         spend(c, "5100", 100, day="2026-10-15")
+        assert usage_limits.blocked(c, "coder", at=NOON) == "budget"
         met = usage_limits.over(c, "coder", at=NOON)
         assert met["scope"] == "budget" and met["until"] == ""
         assert usage_limits.why(met) == "Paused: AI services budget reached"
