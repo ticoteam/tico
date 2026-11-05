@@ -536,25 +536,25 @@ def test_delivery_retry_reports_its_final_saved_count(api, monkeypatch, first_st
 
 @pytest.mark.parametrize("resend", [False, True])
 def test_redo_keeps_the_original_delivery_turn_for_feedback_and_history(api, monkeypatch, resend):
-    bot(api, "archivist", "Archivist")
-    scoring(api, monkeypatch, count=2, recipients=("archivist",))
+    bot(api, "librarian", "Librarian")
+    scoring(api, monkeypatch, count=2, recipients=("librarian",))
     run_step(api)
     store = api.app.state.store
     docs = Docs(api.app, store, api.app.state.auth, None)
     with store.transaction() as c:
-        row = queue(c, bot_id="archivist")
+        row = queue(c, bot_id="librarian")
         updates.send_request(c, row, delivery=True)
         sent = c.execute("SELECT * FROM update_queue WHERE id=?", (row["id"],)).fetchone()
     turn = start(api, sent)
-    post(api, "bots/archivist/memory/report", {"commits": [{
-        "sha": "a" * 40, "subject": "Keep the invoice cutoff", "author": "archivist", "committed": H.now(),
+    post(api, "bots/librarian/memory/report", {"commits": [{
+        "sha": "a" * 40, "subject": "Keep the invoice cutoff", "author": "librarian", "committed": H.now(),
         "files": ["memory/learnings.md"], "diff": "+ Keep the Friday cutoff", "attempt": turn[1]["id"]}]}, turn[0]["token"])
     with store.transaction() as c:
-        doc = docs.insert(c, "bot:archivist", "Invoice policy", "Friday is the cutoff.")
-        evidence, _ = market.create_evidence(c, "bot:archivist", quote="Invoices close on Friday.")
-        entity, _ = market.create_entity(c, "bot:archivist", type="company", name="Acme Billing",
+        doc = docs.insert(c, "bot:librarian", "Invoice policy", "Friday is the cutoff.")
+        evidence, _ = market.create_evidence(c, "bot:librarian", quote="Invoices close on Friday.")
+        entity, _ = market.create_entity(c, "bot:librarian", type="company", name="Acme Billing",
                                         evidence_ids=[evidence["id"]])
-        updates.redo(c, row["kind"], row["day"], bots=["archivist"])
+        updates.redo(c, row["kind"], row["day"], bots=["librarian"])
         redo = c.execute("SELECT * FROM update_queue WHERE id=?", (row["id"],)).fetchone()
         assert redo["message_id"] is None
         if resend:
@@ -566,8 +566,8 @@ def test_redo_keeps_the_original_delivery_turn_for_feedback_and_history(api, mon
         assert [e["id"] for e in learnings.market_subjects(c, delivery, "")] == [entity["id"]]
     complete(api, turn, "learnings_saved: 1")
     with store.transaction() as c:
-        docs.insert(c, "bot:archivist", "Unrelated policy", "Outside the delivery turn.")
-        market.create_entity(c, "bot:archivist", type="company", name="Acme Shipping", evidence_ids=[evidence["id"]])
+        docs.insert(c, "bot:librarian", "Unrelated policy", "Outside the delivery turn.")
+        market.create_entity(c, "bot:librarian", type="company", name="Acme Shipping", evidence_ids=[evidence["id"]])
         updates.settle_learnings(c)
         assert c.execute("SELECT learnings_saved FROM learning_deliveries").fetchone()[0] == 1
         run_id = c.execute("SELECT run_id FROM learning_deliveries").fetchone()[0]
