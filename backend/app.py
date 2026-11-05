@@ -1243,7 +1243,13 @@ def create_app(settings=None):
             token = H.PRIVATE_WRITE.set(H.PRIVATE_WRITE.get() or privacy.private_execution(c, source))
             path = org_rule_check.PATH.set(request.url.path)     # a hold keeps its route, for Send anyway's guard
             try:
-                return fn(c)
+                # Only bot refusals count; human-only routes also address tasks in the trash.
+                tid = request.path_params.get("tid") if H.is_bot(request.state.identity.actor) else None
+                task_id = auth.resolve_task(c, request.state.identity, tid) if tid else None
+                with H.refusal_task(task_id):
+                    if task_id:
+                        H._writer(c, request.state.identity.actor, task_id=task_id)
+                    return fn(c)
             except H.Refused as exc:
                 exc.private = getattr(exc, "private", False) or H.PRIVATE_WRITE.get()
                 raise
@@ -5745,7 +5751,7 @@ def create_app(settings=None):
                 readback = TR.readback(c, task_id, other_id, "blocked_by", remove=body.remove, changed=changed)
                 note = None if body.remove else TR.own_subtask_warning(c, task_id, other_id, "blocked_by")
             else:
-                H._writer(c, who.actor)
+                H._writer(c, who.actor, task_id=task_id)
                 H._task_private_writer(c, who.actor, row)
                 # The same gate as a blocked_by: a wait parks the task's news just as a blocker does.
                 TR._blocker_gate(c, who.actor, row, TR._mover(c, who.actor, mover(c, who) or None))
@@ -6801,9 +6807,16 @@ def create_app(settings=None):
                         {"on_behalf_of": who.actor, "message_id": body.on_behalf_of})
             if not (auth.operator(c, who, bot) or auth.bot_manager(c, who, bot)):
                 raise Problem("forbidden", "Only a person who manages this bot can clear quarantine", 403)
-            if (H.bot(c, bot) or {}).get("state") != "quarantined":
+            from . import task_quarantine
+            quarantined = (H.bot(c, bot) or {}).get("state") == "quarantined"
+            held = c.execute("SELECT 1 FROM quarantine_holds WHERE bot_id=? AND released_at IS NULL LIMIT 1", (bot,)).fetchone()
+            if not quarantined and not held:
                 raise Problem("quarantined", "This bot is not quarantined", 409)
-            settings_admin.ensure_activation(c, who, bot)
+            if quarantined:
+                settings_admin.ensure_activation(c, who, bot)
+            task_quarantine.release(c, who.actor, bot=bot)
+            if not quarantined:
+                return {"status": H.status(c, bot)}
             # Stopped runs settle on their own (execution.auto_reconcile); they no longer hold a resume.
             return {"status": H.status_set(c, who.actor, bot, state="active", focus="",
                                             reason=(body.note or "").strip() or "Resumed")}
@@ -6879,6 +6892,7 @@ def create_app(settings=None):
                 raise Problem("forbidden", "You may acknowledge only messages addressed to you", 403)
             auth.conversation(c, who, msg["conversation_id"])
             privacy.require_message(c, who, msg)
+            H._message_writer(c, who.actor, msg, H.conversation(c, msg["conversation_id"]))
             H.mark_read(c, who.actor, mid, recipient=who.actor)
             H.mark_delivered(c, who.actor, mid, recipient=who.actor)
             # A waiting CLI has already consumed the answer in its current turn.

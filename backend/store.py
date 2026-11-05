@@ -419,7 +419,8 @@ def refused(c, identity, exc, savepoint="domain_write"):
     # Preserve refusal auditing, but never a partial domain operation.
     token = H.PRIVATE_WRITE.set(getattr(exc, 'private', False))
     try:
-        H.refuse(c, identity.actor, exc.rule, exc.detail, exc.severity, task=getattr(exc, 'task', None))
+        H.refuse(c, identity.actor, exc.rule, exc.detail, exc.severity, task=getattr(exc, 'task', None),
+                 scope=getattr(exc, 'scope', None))
     except H.Refused:
         pass
     finally:
