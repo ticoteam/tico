@@ -377,7 +377,7 @@ STABLE = [
     ("/api/v2/meetings/granola/connect", "delete", "Meetings", "disconnectGranola", "Delete your encrypted Granola tokens", "GranolaDisconnect"),
     ("/api/v2/meetings/granola/sync", "post", "Meetings", "syncGranola", "Start a background sync; reuse the last two minutes", "GranolaSync"),
     ("/api/v2/meetings/search", "get", "Meetings", "searchMeetings", "Search or list recorded meetings", "MeetingSearch"),
-    ("/api/v2/meetings/transcript", "get", "Meetings", "getMeetingTranscript", "A meeting's transcript", None),
+    ("/api/v2/meetings/transcript", "get", "Meetings", "getMeetingTranscript", "A meeting's transcript; includes saved notes at offset zero, or notes only with notes=true", None),
     ("/api/v2/bots/{bot}/files", "get", "Files", "listBotFiles",
      "A bot's files the caller may see, newest activity first, with the visible total; limit and cursor page", "BotFileList"),
     ("/api/v2/files/uploads", "post", "Files", "uploadBotFile",
@@ -2872,6 +2872,8 @@ STABLE.extend([
      'Link up to 20 readable tasks; sent is only for their requester. Results match input order; 404 skips an unavailable task without its data', 'MeetingTaskLinkBatch'),
     ('/api/v2/meetings/{rid}/tasks/{tid}', 'delete', 'Meetings', 'removeMeetingTask',
      'Remove a link as its creator, meeting owner, task owner or requester, or org owner', 'MeetingTaskRemoved'),
+    ('/api/v2/tasks/{tid}/context', 'get', 'Tasks', 'getTaskContext',
+     'Up to 10 pages and 10 meetings, newest first, filtered by your current read access; metadata only', 'TaskContext'),
     ('/api/v2/tasks/{tid}/meetings', 'get', 'Tasks', 'listTaskMeetings',
      'Readable linked meetings, newest first; limit 20 by default, at most 50, cursor and 64 KB cap', 'TaskMeetings'),
 ])
@@ -2884,6 +2886,10 @@ SCHEMAS.update({
     'TaskMeeting': obj({'meeting_id': 's', 'title': 's', 'started_at': 's', 'url': 's',
                         'kind': {'enum': ['linked', 'sent', 'proposal']}}),
     'TaskMeetings': obj({'meetings': items(ref('TaskMeeting')), 'next_cursor': 'n'}),
+    'TaskContextPage': obj({'id': 's', 'title': 's', 'version': 'i', 'updated_at': 's', 'limited': 'b'}),
+    'TaskContextMeeting': obj({'id': 's', 'title': 's', 'date': 's', 'limited': 'b'}),
+    'TaskContext': obj({'pages': {**items(ref('TaskContextPage')), 'maxItems': 10},
+                        'meetings': {**items(ref('TaskContextMeeting')), 'maxItems': 10}}),
     'MeetingTaskRemoved': obj({'ok': 'b'}),
 })
 
