@@ -1099,7 +1099,7 @@
   "backend/tests/test_thread_timeline.py": 10.42,
   "backend/tests/test_threads_audit_reads.py": 24.51,
   "backend/tests/test_threads_compat_e2e.py": 12.41,
-  "backend/tests/test_threads_core.py": 837.63,
+  "backend/tests/test_threads_core.py": 62.17,
   "backend/tests/test_threads_delivery.py": 61.07,
   "backend/tests/test_threads_e2e_bots.py": 9.39,
   "backend/tests/test_threads_e2e_meet.py": 1.24,

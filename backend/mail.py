@@ -1,6 +1,6 @@
-"""Human read API over the server-stored mail copy.
+"""Human read API over live Workspace Gmail or the existing personal/legacy mail copy.
 
-People browse `mail_messages`, never live Gmail: the mailboxes they hold a level on (backend/mailbox_access.py), the
+People browse the mailboxes they hold a level on (backend/mailbox_access.py), the
 owner and managers included, with no bypass. Bots and runners are refused here. Every thread or message body read is
 audited as `mail.read`.
 
@@ -14,7 +14,7 @@ import sqlite3
 
 from fastapi import Request
 
-from . import google_workspace, mailbox_access, routines
+from . import gmail_live, google_workspace, mailbox_access, routines
 from .store import H, Problem
 from .views import human_only, roster
 
@@ -106,6 +106,32 @@ def message_public(row, body=False):
     return out
 
 
+def gmail_query(q, label, since_epoch, until_epoch, has_attachment):
+    terms = [f"({q.strip()})"] if q.strip() else []
+    if label:
+        terms.append("label:" + json.dumps(label, ensure_ascii=False))
+    if since_epoch is not None:
+        terms.append(f"after:{since_epoch}")
+    if until_epoch is not None:
+        terms.append(f"before:{until_epoch}")
+    if truthy(has_attachment):
+        terms.append("has:attachment")
+    return " ".join(terms)
+
+
+def live_message_public(mailbox, item, domains, body=False):
+    """Adapt the shared Gmail normalizer to the stored read API's public shape, only in memory."""
+    row = {**item, "mailbox": mailbox, "msg_id": item["id"], "from_addr": item["from"],
+           "to_addresses": json.dumps(item["to"]), "cc": json.dumps(item["cc"]),
+           "labels": json.dumps(item["labels"]), "attachments": json.dumps(item["attachments"]),
+           "has_unsubscribe": item["unsubscribe"], "rule_hits": "[]"}
+    everyone = [item["from"], *item["to"], *item["cc"]]
+    row["is_internal"] = bool(item["from"]) and all(
+        any(address.rpartition("@")[2] == domain or address.rpartition("@")[2].endswith("." + domain)
+            for domain in domains) for address in everyone)
+    return message_public(row, body=body)
+
+
 def mailbox_view(c, address, people, who, auth):
     row = c.execute("SELECT * FROM mail_mailboxes WHERE address=?", (address,)).fetchone()
     person = routines.person_for_mailbox(address, routines.message_bot_mailboxes(c, people), people)
@@ -183,10 +209,6 @@ def install_mail(app, store, auth):
         human_only(who)
         cap = min(LIMIT_MAX, max(1, int(limit or LIMIT_DEFAULT)))
         since_epoch, until_epoch = epoch_bound(since, "since"), epoch_bound(until, "until")
-        after = decode_cursor(cursor) if cursor else None
-        match = sanitize_fts(q)
-        if str(q or "").strip() and not match:
-            return {"messages": [], "next_cursor": None, "q": ""}
         with store.read() as c:
             allowed = visible_addresses(c, who)
             if mailbox:
@@ -194,6 +216,17 @@ def install_mail(app, store, auth):
                 boxes = [addr]
             else:
                 boxes = allowed
+            if mailbox and google_workspace.authority(c, addr) == "workspace":
+                query = gmail_query(q, label, since_epoch, until_epoch, has_attachment)
+                page = gmail_live.list(c, addr, query, page_token=cursor, limit=min(cap, gmail_live.LIMIT_MAX))
+                domains = mailbox_access.company_domains(c)
+                return {**page, "messages": [live_message_public(addr, item, domains) for item in page["messages"]]}
+            if not mailbox and any(google_workspace.authority(c, box) == "workspace" for box in boxes):
+                raise Problem("mailbox", "Choose a mailbox to read live from Gmail", 422)
+            after = decode_cursor(cursor) if cursor else None
+            match = sanitize_fts(q)
+            if str(q or "").strip() and not match:
+                return {"messages": [], "next_cursor": None, "q": ""}
             if not boxes:
                 return {"messages": [], "next_cursor": None, "q": match}
             sql = ("SELECT m.mailbox,m.msg_id,m.thread_id,m.epoch,m.date,m.from_addr,m.from_header,"
@@ -241,14 +274,20 @@ def install_mail(app, store, auth):
         # anything is returned.
         with store.read() as c:
             addr, _ = require_mailbox(c, who, mailbox)
-            rows = c.execute(
-                "SELECT * FROM mail_messages WHERE mailbox=? AND thread_id=? AND deleted_at IS NULL "
-                "ORDER BY epoch, msg_id", (addr, tid)).fetchall()
-            if not rows:
-                raise Problem("not_found", "Thread not found", 404)
-            out = {"mailbox": addr, "thread_id": tid, "messages": [message_public(row, body=True) for row in rows]}
+            if google_workspace.authority(c, addr) == "workspace":
+                domains = mailbox_access.company_domains(c)
+                items = [live_message_public(addr, item, domains, body=True)
+                         for item in gmail_live.thread(c, addr, tid)]
+            else:
+                rows = c.execute(
+                    "SELECT * FROM mail_messages WHERE mailbox=? AND thread_id=? AND deleted_at IS NULL "
+                    "ORDER BY epoch, msg_id", (addr, tid)).fetchall()
+                if not rows:
+                    raise Problem("not_found", "Thread not found", 404)
+                items = [message_public(row, body=True) for row in rows]
+            out = {"mailbox": addr, "thread_id": tid, "messages": items}
         with store.transaction() as c:
-            H.event(c, who.actor, "mail.read", tid, {"mailbox": addr, "kind": "thread", "messages": len(rows)})
+            H.event(c, who.actor, "mail.read", tid, {"mailbox": addr, "kind": "thread", "messages": len(items)})
         return out
 
     @app.get("/api/v2/mail/messages/{msg_id}")
@@ -260,11 +299,15 @@ def install_mail(app, store, auth):
             raise Problem("message", "msg_id is required", 422)
         with store.read() as c:
             addr, _ = require_mailbox(c, who, mailbox)
-            row = c.execute("SELECT * FROM mail_messages WHERE mailbox=? AND msg_id=? AND deleted_at IS NULL",
-                            (addr, mid)).fetchone()
-            if not row:
-                raise Problem("not_found", "Message not found", 404)
-            out = message_public(row, body=True)
+            if google_workspace.authority(c, addr) == "workspace":
+                out = live_message_public(addr, gmail_live.message(c, addr, mid),
+                                          mailbox_access.company_domains(c), body=True)
+            else:
+                row = c.execute("SELECT * FROM mail_messages WHERE mailbox=? AND msg_id=? AND deleted_at IS NULL",
+                                (addr, mid)).fetchone()
+                if not row:
+                    raise Problem("not_found", "Message not found", 404)
+                out = message_public(row, body=True)
         with store.transaction() as c:
-            H.event(c, who.actor, "mail.read", mid, {"mailbox": addr, "kind": "message", "thread_id": row["thread_id"]})
+            H.event(c, who.actor, "mail.read", mid, {"mailbox": addr, "kind": "message", "thread_id": out["thread_id"]})
         return out

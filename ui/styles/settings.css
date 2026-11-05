@@ -826,10 +826,21 @@ fieldset.brepo>.repo-name+p{margin:-4px 0 4px 24px;font-size:var(--t-xs);line-he
 .gw-table .num{text-align:right;font-variant-numeric:tabular-nums}
 .gw-table .gw-bots-word{display:none}
 .gw-table code{font-size:var(--t-sm);margin-right:4px;white-space:nowrap}
+.gw-status-cell{white-space:nowrap}
 .gw-status-cell[data-status=live]{color:var(--ok)}
 .gw-status-cell:not([data-status=live]){color:var(--muted)}
 .gw-table .gw-note{color:var(--muted)}
 .gw-table .gw-open{text-align:right;white-space:nowrap}
+.gw-table .gw-sub{display:block;color:var(--muted);font-size:var(--t-xs);font-weight:400}
+.gw-table .gw-word{display:none}
+.gw-table .gw-ctx{white-space:nowrap}
+.gw-same{margin:8px 0 12px;font-size:var(--t-sm)}
+.gw-table tr.gw-has-details td{border-bottom:0;padding-bottom:2px}
+.gw-table .gw-details-row td{padding-top:0}
+.gw-details{display:flex;flex-wrap:wrap;gap:2px 18px;margin:0;font-size:var(--t-xs)}
+.gw-details div{display:flex;gap:6px;min-width:0}
+.gw-details dt{color:var(--muted);white-space:nowrap}
+.gw-details dd{margin:0;min-width:0;overflow-wrap:anywhere}
 @media (max-width:640px){
   .gw-table thead{display:none}
   .gw-table tbody tr{display:grid;grid-template-columns:minmax(0,1fr) auto;gap:2px 12px;padding:8px 0;border-bottom:1px solid var(--line)}
@@ -839,6 +850,16 @@ fieldset.brepo>.repo-name+p{margin:-4px 0 4px 24px;font-size:var(--t-xs);line-he
   .gw-table .gw-bots-word{display:inline}
   .gw-table .gw-model,.gw-table .gw-tools,.gw-table .gw-price,.gw-table .gw-note{grid-column:1 / -1;color:var(--muted)}
   .gw-table .gw-open{grid-column:2;grid-row:1}
+  .gw-table tbody tr.gw-has-details{border-bottom:0;padding-bottom:2px}
+  .gw-table tbody tr.gw-details-row{padding-top:0}
+  .gw-table .gw-details-row td{grid-column:1 / -1}
+  .gw-table .gw-word{display:inline}
+  .gw-table.gw-levels .gw-ctx{grid-column:2;grid-row:1;text-align:right;color:var(--muted)}
+  .gw-table.gw-levels .gw-model{grid-column:1;grid-row:2;color:var(--ink)}
+  .gw-table.gw-levels .gw-price{grid-column:2;grid-row:2;text-align:right;color:var(--ink)}
+  .gw-table.gw-levels .gw-fast{grid-column:1;grid-row:3}
+  .gw-table.gw-levels .gw-fast-price{grid-row:3}
+  .gw-table.gw-others .gw-price{grid-column:2;grid-row:1;text-align:right}
 }
 .settings-tier{display:grid;gap:8px;min-width:0}
 .settings-tier-row{display:flex;flex-wrap:wrap;gap:8px 12px;align-items:flex-end;min-width:0}

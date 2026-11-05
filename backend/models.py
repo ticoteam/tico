@@ -195,6 +195,7 @@ class TaskBlocker(Contract):
 
 
 class TaskCreate(Contract):
+    live_meeting_id: ID | None = None
     visibility: Literal['public', 'private'] | None = None
     # Publishing at creation needs explicit public text; the internal title and body are never copied.
     public_title: str | None = Field(default=None, max_length=300)
@@ -2087,6 +2088,11 @@ class SystemUpdate(Contract):
 
 class UsageCount(Contract):
     enabled: bool
+
+
+class SuggestionSettings(Contract):
+    share_stats_for_suggestions: StrictBool | None = None
+    report_suggestion_outcomes: StrictBool | None = None
 
 
 class StrategyBotChecks(Contract):

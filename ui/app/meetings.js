@@ -9,6 +9,7 @@ let MEET = null;
 function meetStop() {
   if (MEET) {
     clearInterval(MEET.poll); clearInterval(MEET.sourcesPoll);
+    meetSharedStop(MEET);
     granolaStop(MEET);   // ui/app/meetings-granola.js
     MEET = null;
   }
@@ -345,6 +346,7 @@ function meetShow(state, open) {
   const dialog = $('#notes-modal'); if (!dialog) return;
   if (open && !dialog.open) dialog.showModal();
   if (!open) {
+    meetSharedStop(state);
     state.editing = false;
     state.itemEdit = ''; state.itemAdd = ''; state.itemConfirm = '';
     dialog.close();
@@ -798,7 +800,7 @@ function meetNotesOpen(state) {
 // the meeting's owner only, which is what `can_push` says, and it makes a hub task.
 const MEET_SECTIONS = [
   {key: 'doc', title: 'Doc updates', fields: [['document', 'Document, e.g. docs/pricing.md'], ['change', 'What it should say now'], ['why', 'Why']]},
-  {key: 'task', title: 'Tasks', fields: [['owner', 'Owner — human:<id> or bot:<slug>'], ['due', 'Due — 2026-09-18T17:00:00-07:00'], ['priority', 'Priority — p0 to p3']]},
+  {key: 'task', title: 'Tasks', fields: [['owner', 'Owner — human:<id> or bot:<slug>'], ['due', 'Due — 2026-09-18T17:00:00-07:00'], ['priority', 'Priority'], ['body', 'Details']]},
   {key: 'feature', title: 'Feature requests', fields: [['side', 'Product area (optional)'], ['app', 'App (optional)'], ['area', 'Label (optional)']]},
 ];
 const meetAuthor = a => a === 'brain' ? 'Tico' : actorLabel(a);
@@ -817,7 +819,7 @@ const meetItemLine = it => {
 // Where a pushed item ended up: the task it became, or a link.
 const meetResultLink = it => {
   const ref = it.result_ref || '';
-  if (!ref) return '<span class="muted">pushed</span>';
+  if (!ref) return '<span class="muted">Sent</span>';
   if (/^https?:\/\//.test(ref)) return `<a href="${esc(ref)}" target="_blank" rel="noopener">the link</a>`;
   return `<a href="#/task/${encodeURIComponent(ref)}">the task</a>`;   // a hub task id opens it in full
 };
@@ -856,8 +858,8 @@ function meetItemHTML(state, it, canPush) {
         <div class="row"><button class="primary" type="submit">Save</button>
           <button class="ghost" type="button" data-cancel>Cancel</button></div></form></div>`;
   }
-  const pill = it.status === 'pushed' ? `<span class="pill ok">pushed</span> <span class="muted">→ ${meetResultLink(it)}</span>`
-    : it.status === 'dismissed' ? '<span class="pill">deleted</span>'
+  const pill = it.status === 'pushed' ? `<span class="pill ok">Sent</span> <span class="muted">→ ${meetResultLink(it)}</span>`
+    : it.status === 'dismissed' ? '<span class="pill">Dismissed</span>'
     : '<span class="pill">proposed</span>';
   const line = meetItemLine(it);
   const buttons = it.status === 'proposed' ? [
@@ -879,13 +881,12 @@ function meetItemsRender(state, rec) {
   if (!box) return;
   const data = state.items?.[rec.id];
   if (!data) { box.innerHTML = ''; return; }
-  const canPush = !!data.can_push;
+  const canPush = !!(data.can_send ?? data.can_push);
   const sections = MEET_SECTIONS.map(({key, title}) => {
-    const rows = data.sections?.[key] || [];
+    const rows = (data.sections?.[key] || []).filter(it => it.status !== 'proposed');
     const proposed = (data.sections?.[key] || []).filter(it => it.status === 'proposed').length;
     return `<section class="meet-sec" data-sec="${key}"><header><h4>${esc(title)}</h4>
         ${proposed ? `<span class="count">${proposed}</span>` : ''}
-        ${canPush && proposed > 1 ? `<button class="linkish" type="button" data-all="${key}">Push all</button>` : ''}
         <button class="linkish" type="button" data-add="${key}">Add</button></header>
       ${rows.map(it => meetItemHTML(state, it, canPush)).join('') || '<div class="meet-empty">Nothing yet.</div>'}
       ${key === 'task' ? '<div data-linked-tasks></div>' : ''}
@@ -895,7 +896,25 @@ function meetItemsRender(state, rec) {
           <div class="row"><button class="primary" type="submit">Add</button>
             <button class="ghost" type="button" data-cancel>Cancel</button></div></form></div>` : ''}</section>`;
   }).join('');
-  box.innerHTML = `<div class="cols">${sections}</div>`;
+  if (!box.querySelector('[data-pending-panel]')) box.innerHTML = '<div data-pending-panel></div><div data-other-items></div>';
+  const other = box.querySelector('[data-other-items]');
+  if (!other.firstElementChild) other.innerHTML = '<div class="cols"></div>';
+  const template = document.createElement('template'); template.innerHTML = sections;
+  for (const next of template.content.children) {
+    let section = other.querySelector(`[data-sec="${next.dataset.sec}"]`);
+    if (!section) { other.firstElementChild.append(next.cloneNode(true)); continue; }
+    const keep = [...section.children].filter(n => n.querySelector('form'));
+    const children = [...next.children].map(child => {
+      if (child.matches('[data-linked-tasks]')) return section.querySelector('[data-linked-tasks]') || child;
+      const form = child.querySelector('form');
+      const existing = form && keep.find(n => n.querySelector(`form[${form.dataset.new ? 'data-new' : 'data-edit'}="${form.dataset.new || form.dataset.edit}"]`));
+      return existing || child;
+    });
+    // Retain form nodes themselves, including their text, focus and selection.
+    for (const child of [...section.children]) if (!children.includes(child)) child.remove();
+    children.forEach((child, index) => { if (section.children[index] !== child) section.insertBefore(child, section.children[index] || null); });
+  }
+  meetPendingRender(state, rec, data);
   meetItemsHandlers(state, rec);
   meetLinkedTasksRender(state, rec.id);
   box.querySelectorAll('.at[data-seek]').forEach(b => { b.onclick = () => meetSeek(Number(b.dataset.seek)); });
@@ -946,8 +965,8 @@ function meetItemsHandlers(state, rec) {
       if (!text) return;
       const detail = {};
       form.querySelectorAll('[data-field]').forEach(f => { if (f.value.trim()) detail[f.dataset.field] = meetFieldValue(f); });
-      state.itemEdit = '';
-      if (await call('/' + encodeURIComponent(form.dataset.edit), {text, detail}, form.dataset.edit)) toast('Saved');
+      const item = Object.values(state.items[id].sections).flat().find(i => i.id === form.dataset.edit);
+      if (await call('/' + encodeURIComponent(form.dataset.edit), {text, detail, version:item.version}, form.dataset.edit)) { state.itemEdit = ''; repaint(); toast('Saved'); }
       else repaint();
     };
   });
@@ -958,11 +977,11 @@ function meetItemsHandlers(state, rec) {
       if (state.itemConfirm !== item) { state.itemConfirm = item; b.textContent = 'Really delete?'; return; }
       state.itemConfirm = '';
       b.disabled = true;
-      if (await call('/' + encodeURIComponent(item), {status: 'dismissed'}, item)) toast('Deleted');
+      if (await call('/' + encodeURIComponent(item), {status: 'dismissed', version:Object.values(state.items[id].sections).flat().find(i => i.id === item).version}, item)) toast('Deleted');
       return;
     }
     b.disabled = true;
-    const done = await call('/' + encodeURIComponent(item) + '/push', {force: act === 'force'}, item);
+    const done = await call('/' + encodeURIComponent(item) + '/push', {force: act === 'force', version:Object.values(state.items[id].sections).flat().find(i => i.id === item).version}, item);
     if (done) toast(done.pushed ? 'Pushed' : 'Already pushed');
     else b.disabled = false;
   });
@@ -970,16 +989,18 @@ function meetItemsHandlers(state, rec) {
     const section = b.dataset.all;
     b.disabled = true;
     for (const it of (state.items?.[id]?.sections?.[section] || []).filter(x => x.status === 'proposed')) {
-      if (!await call('/' + encodeURIComponent(it.id) + '/push', {force: false}, it.id)) break;
+      if (!await call('/' + encodeURIComponent(it.id) + '/push', {force: false, version:it.version}, it.id)) break;
     }
     b.disabled = false;
   });
 }
 async function meetItemsLoad(state, id) {
+  const sequence = state.itemLoadSequence = (state.itemLoadSequence || 0) + 1;
+  getForget();
   let data;
   try { data = await get(`/meetings/${encodeURIComponent(id)}/items`); }
   catch { return null; }                        // a meeting that went away takes its sections with it
-  if (MEET !== state) return null;
+  if (MEET !== state || sequence !== state.itemLoadSequence) return null;
   state.items = {...(state.items || {}), [id]: data};
   if (state.open && state.selected === id) {
     const rec = {...(state.list.find(r => r.id === id) || {}), id};
@@ -1076,6 +1097,7 @@ function meetItemsWire(state, rec) {
   if (!$('#meet-sections')) return;
   meetItemsRender(state, rec);
   meetItemsLoad(state, rec.id);
+  meetSharedStart(state, rec.id);
   meetLinkedTasksLoad(state, rec.id);
 }
 
@@ -1136,4 +1158,218 @@ async function meetComments(state, rec, quiet) {
     } catch (e) { toast(e.message, true); form.querySelector('button').disabled = false; }
   };
   text.onkeydown = ev => { if (ev.key === 'Enter' && !ev.shiftKey) { ev.preventDefault(); form.requestSubmit(); } };
+}
+
+
+// One queue per item. Only changed keys are sent; newer edits survive either an old reply or a failed write.
+function meetPendingDraft(state, id) {
+  state.pendingDrafts ||= new Map();
+  if (!state.pendingDrafts.has(id)) state.pendingDrafts.set(id, {patch: {}, dirty: {}, flight: null, error: '', timer: 0, version: null, current: null});
+  return state.pendingDrafts.get(id);
+}
+function meetPendingPatch(draft, key, value) {
+  if (!(key in draft.dirty)) draft.dirty[key] = meetPendingValue(draft.base, key);
+  if (key === 'text') draft.patch.text = value;
+  else (draft.patch.detail ||= {})[key] = value;
+}
+function meetPendingMerge(a, b) {
+  return {...a, ...b, ...((a.detail || b.detail) ? {detail: {...a.detail, ...b.detail}} : {})};
+}
+function meetPendingValue(item, key) {
+  return (key === 'text' ? item?.text : item?.detail?.[key]) || '';
+}
+function meetPendingAccepted(draft, patch, item) {
+  for (const key of [...('text' in patch ? ['text'] : []), ...Object.keys(patch.detail || {})]) {
+    if (key === 'text' ? 'text' in draft.patch : key in (draft.patch.detail || {})) draft.dirty[key] = meetPendingValue(item, key);
+    else delete draft.dirty[key];
+  }
+  draft.version = item.version; draft.base = item; draft.current = null;
+}
+async function meetPendingSave(state, rid, iid) {
+  const draft = meetPendingDraft(state, iid);
+  clearTimeout(draft.timer);
+  if (draft.closed || draft.closedAcknowledged || draft.flight || draft.sending || !Object.keys(draft.patch).length) return draft.flight?.catch(() => {});
+  const patch = draft.patch;
+  draft.patch = {}; draft.error = '';
+  draft.inflightPatch = patch;
+  draft.flight = post(`/meetings/${encodeURIComponent(rid)}/items/${encodeURIComponent(iid)}`, {...patch, version: draft.version});
+  try { const reply = await draft.flight; meetPendingAccepted(draft, patch, reply.item); }
+  catch (e) {
+    draft.patch = meetPendingMerge(patch, draft.patch); draft.error = e.message;
+    if (e.body?.error?.item) { draft.current = e.body.error.item; draft.version = draft.current.version; draft.base = draft.current; }
+  }
+  finally { draft.flight = null; draft.inflightPatch = null; }
+  if (!draft.error && Object.keys(draft.patch).length && !draft.sending) return meetPendingSave(state, rid, iid);
+  await meetItemsLoad(state, rid);
+}
+function meetPendingRender(state, rec, data) {
+  const panel = $('#meet-sections [data-pending-panel]');
+  if (!panel) return;
+  if (!panel.firstElementChild) panel.innerHTML = '<header class="row"><h4>Pending tasks</h4><span data-meet-presence class="muted"></span></header><div data-pending-rows></div>';
+  const list = panel.querySelector('[data-pending-rows]');
+  const pending = Object.values(data.sections || {}).flat().filter(it => {
+    const draft = meetPendingDraft(state, it.id);
+    if (it.status === 'proposed') return true;
+    if (draft.sending && it.updated_by === 'human:' + S.me?.id) return false;
+    if (!draft.closedAcknowledged && (draft.closed || draft.flight || Object.keys(draft.dirty).length)) {
+      clearTimeout(draft.timer);
+      // Capture before a late save reply can replace the draft's base or dirty fields.
+      draft.closed ||= meetPendingMerge(meetPendingMerge(draft.base || it, draft.inflightPatch || {}), draft.patch);
+      return true;
+    }
+    return false;
+  });
+  for (const node of [...list.children]) if (!pending.some(it => it.id === node.dataset.pending)) node.remove();
+  panel.hidden = !pending.length;
+  for (const item of pending) {
+    const draft = meetPendingDraft(state, item.id);
+    const server = draft.base?.version > item.version ? draft.base : item;
+    if (!draft.flight && !draft.sending && !Object.keys(draft.dirty).length) { draft.version = server.version; draft.base = server; }
+    let node = [...list.children].find(row => row.dataset.pending === item.id);
+    if (item.status !== 'proposed') {
+      if (!node) {
+        node = document.createElement('section'); node.className = 'meet-item meet-pending'; node.dataset.pending = item.id; list.append(node);
+      }
+      const text = [draft.closed.text, ...Object.values(draft.closed.detail || {})].filter(Boolean).join('\n\n');
+      node.innerHTML = `<div>${esc(item.status === 'pushed' ? 'Sent by ' : 'Dismissed by ')}${esc(meetAuthor(item.updated_by))}</div><pre class="selectable" style="white-space:pre-wrap;overflow-wrap:anywhere"></pre><button type="button" class="ghost" data-copy>Copy</button> <button type="button" class="ghost" data-close>Close</button>`;
+      node.querySelector('pre').textContent = text;
+      const close = () => { draft.closedAcknowledged = true; draft.closed = null; draft.patch = {}; draft.dirty = {}; node.remove(); panel.hidden = !list.children.length; };
+      node.querySelector('[data-copy]').onclick = async () => { try { await copyText(text); close(); } catch (e) { toast(e.message, true); } };
+      node.querySelector('[data-close]').onclick = close;
+      continue;
+    }
+    if (!node) {
+      node = document.createElement('section'); node.className = 'meet-item meet-pending'; node.dataset.pending = item.id;
+      node.innerHTML = `<label>Title<textarea data-pending-field="text" aria-label="Title"></textarea></label>
+        ${item.section === 'task' ? '<div class="row"><label>Owner<select data-pending-field="owner" aria-label="Owner"></select></label><label>Due<input data-pending-field="due" type="date" aria-label="Due"></label></div><label>Details<textarea data-pending-field="body" aria-label="Details"></textarea></label>'
+          : MEET_SECTIONS.find(s => s.key === item.section).fields.map(([key]) => `<label>${esc(key)}<input data-pending-field="${key}" aria-label="${key}"></label>`).join('')}
+        <div class="row"><span class="muted" data-edited></span><span data-save-error hidden>Not saved · <button type="button" class="linkish" data-retry>Retry</button></span></div>
+        <div data-pending-duplicate hidden></div>
+        <div class="row"><button type="button" class="ghost" data-dismiss>Dismiss</button><button type="button" class="primary" data-send>Send</button></div>`;
+      list.append(node);
+      for (const field of node.querySelectorAll('[data-pending-field]')) {
+        const changed = () => {
+          const key = field.dataset.pendingField;
+          const value = key === 'due' && field.value ? new Date(field.value + 'T12:00:00').toISOString() : field.value;
+          meetPendingPatch(draft, key, value);
+          clearTimeout(draft.timer);
+          if (!draft.error) draft.timer = setTimeout(() => meetPendingSave(state, rec.id, item.id), 700);
+        };
+        field.oninput = changed;
+        field.onchange = () => { if (!draft.error) meetPendingSave(state, rec.id, item.id); };
+        field.onblur = () => { if (!draft.error) meetPendingSave(state, rec.id, item.id); };
+      }
+      node.querySelector('[data-retry]').onclick = () => meetPendingSave(state, rec.id, item.id);
+      const finish = async (send, force = false) => {
+        if (draft.sending) return;
+        draft.sending = true; clearTimeout(draft.timer);
+        node.querySelectorAll('button, input, textarea, select').forEach(field => field.disabled = true);
+        try {
+          if (draft.flight) { try { await draft.flight; } catch {} if (draft.error) throw new Error(draft.error); }
+          const reply = await post(`/meetings/${encodeURIComponent(rec.id)}/items/${encodeURIComponent(item.id)}${send ? '/push' : ''}`,
+                     send ? {...draft.patch, force, version: draft.version} : {status: 'dismissed', version: draft.version});
+          if (send && reply.pushed === false && Object.keys(draft.dirty).length) {
+            draft.closed ||= meetPendingMerge(draft.base, draft.patch);
+          } else {
+            draft.patch = {}; draft.dirty = {}; draft.error = ''; draft.current = null; draft.closed = null;
+          }
+          await meetItemsLoad(state, rec.id);
+        } catch (e) {
+          draft.error = e.message;
+          if (e.body?.error?.item) {
+            const current = e.body.error.item;
+            draft.current = current; draft.version = current.version; draft.base = current;
+          }
+          const duplicate = e.body?.error?.duplicate;
+          if (duplicate) {
+            const box = node.querySelector('[data-pending-duplicate]');
+            box.hidden = false;
+            box.innerHTML = `<a href="#/task/${encodeURIComponent(duplicate.id)}">${esc(duplicate.name)}</a> <button type="button" class="linkish">Send anyway</button>`;
+            box.querySelector('button').onclick = () => finish(true, true);
+          } else toast(e.message, true);
+        }
+        finally { draft.sending = false; node.querySelectorAll('button, input, textarea, select').forEach(field => field.disabled = false); }
+        await meetItemsLoad(state, rec.id);
+        const error = node.querySelector('[data-save-error]');
+        if (error) error.hidden = !draft.error;
+      };
+      node.querySelector('[data-send]').onclick = () => finish(true);
+      node.querySelector('[data-dismiss]').onclick = () => finish(false);
+    }
+    node._item = item;
+    const displayed = meetPendingMerge(meetPendingMerge(server, draft.inflightPatch || {}), draft.patch);
+    for (const field of node.querySelectorAll('[data-pending-field]')) {
+      const key = field.dataset.pendingField;
+      if (draft.sending) continue;
+      const value = key === 'text' ? displayed.text : displayed.detail[key] || '';
+      if (key === 'owner') {
+        const options = [...(S.people || []).map(p => ['human:' + p.id, p.name || p.id]),
+                         ...activeEmps().map(b => ['bot:' + b.id, b.display_name])]
+          .filter(([actor]) => !data.audience || data.audience.includes(actor));
+        const html = '<option value="">Choose</option>' + options.map(([actor, name]) => `<option value="${esc(actor)}">${esc(name)}</option>`).join('');
+        if (field.innerHTML !== html) field.innerHTML = html;
+      }
+      const next = key === 'due' ? String(value).slice(0, 10) : value;
+      if (field.value !== next) {
+        const selection = field === document.activeElement && typeof field.selectionStart === 'number' ? [field.selectionStart, field.selectionEnd] : null;
+        field.value = next;
+        if (selection) field.setSelectionRange(...selection);
+      }
+    }
+    node.querySelector('[data-edited]').textContent = item.updated_by ? `${meetAuthor(item.updated_by)} edited · just now` : '';
+    node.querySelector('[data-save-error]').hidden = !draft.error;
+    let conflict = node.querySelector('[data-current]');
+    if (!conflict) { conflict = document.createElement('div'); conflict.dataset.current = ''; node.append(conflict); }
+    conflict.hidden = !draft.current;
+    conflict.textContent = draft.current ? 'Current: ' + draft.current.text + ' · ' + Object.values(draft.current.detail || {}).join(' · ') : '';
+    const owner = displayed.detail.owner;
+    node.querySelector('[data-send]').textContent = owner ? `Send to ${actorLabel(owner)}` : 'Send';
+    node.querySelector('[data-send]').disabled = draft.sending || !(data.can_send ?? data.can_push) || (item.section === 'task' && !owner);
+  }
+}
+function meetSharedStop(state) {
+  const shared = state.shared;
+  if (!shared) return;
+  state.shared = null;
+  shared.source?.close(); clearInterval(shared.timer);
+  document.removeEventListener('visibilitychange', shared.visibility);
+  window.removeEventListener('pagehide', shared.leave);
+  shared.leave();
+}
+function meetSharedStart(state, id) {
+  if (state.shared?.id === id) return;
+  meetSharedStop(state);
+  const place = 'meeting:' + id;
+  const shared = state.shared = {id, session: crypto.randomUUID()};
+  const present = async () => {
+    try {
+      getForget();
+      const reply = await get('/v2/presence?place=' + encodeURIComponent(place));
+      if (state.shared !== shared) return;
+      const el = $('#meet-sections [data-meet-presence]');
+      const others = (reply.actors || []).filter(a => a.actor !== 'human:' + S.me?.id);
+      if (el) el.textContent = others.length ? `${others.map(a => a.name).join(', ')} ${others.length === 1 ? 'is' : 'are'} here` : '';
+    } catch {}
+  };
+  const heartbeat = async gone => {
+    try { await post('/v2/presence', {place, session_id: shared.session, gone}, undefined, {keepalive: gone}); if (!gone) await present(); } catch {}
+  };
+  shared.leave = () => { heartbeat(true); };
+  shared.visibility = () => { heartbeat(document.hidden); if (!document.hidden) meetItemsLoad(state, id); };
+  document.addEventListener('visibilitychange', shared.visibility);
+  window.addEventListener('pagehide', shared.leave);
+  shared.timer = setInterval(() => { if (!document.hidden) heartbeat(false); }, 15000);
+  if (!document.hidden) heartbeat(false);
+  if (typeof EventSource !== 'undefined') {
+    const source = shared.source = new EventSource(API + '/v2/events?topics=meeting_items,presence&meeting=' + encodeURIComponent(id) + '&place=' + encodeURIComponent(place));
+    source.addEventListener('meeting_items', event => {
+      const data = JSON.parse(event.data);
+      if (data.gone) { meetSharedStop(state); delete state.items[id]; meetShow(state, false); return; }
+      meetItemsLoad(state, id);
+    });
+    source.addEventListener('presence', present);
+    source.addEventListener('ready', () => { meetItemsLoad(state, id); present(); });
+    source.addEventListener('reset', () => { meetItemsLoad(state, id); present(); });
+    source.addEventListener('expired', () => { meetSharedStop(state); meetShow(state, false); });
+  }
 }

@@ -238,9 +238,9 @@ def test_item_references_are_redacted_in_lists_mutations_replays_and_outbox(api)
         value = task_references.redact(c, api.app.state.auth, Identity('human:cara', 'human', email='cara@acme.example'),
                                       {'proposed_task_id': hidden['id']})
         assert value['proposed_task_id'] is None
-    changed = change(api, rid, item['id'], {'text': 'Review pricing again'}, 'cara-test', key='edit-retry')
+    changed = change(api, rid, item['id'], {'version': item['version'], 'text': 'Review pricing again'}, 'cara-test', key='edit-retry')
     assert changed['item']['result_ref'] is None
-    assert change(api, rid, item['id'], {'text': 'Review pricing again'}, 'cara-test', key='edit-retry')['item']['result_ref'] is None
+    assert change(api, rid, item['id'], {'version': item['version'], 'text': 'Review pricing again'}, 'cara-test', key='edit-retry')['item']['result_ref'] is None
     assert items(api, rid, 'cara-test')['sections']['task'][0]['result_ref'] is None
     response = api.get('/api/meetings/' + rid, headers=headers('cara-test'))
     assert response.status_code == 200, response.text
