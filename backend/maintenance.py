@@ -25,8 +25,8 @@ import threading
 from contextlib import contextmanager
 from datetime import datetime, time, timedelta, timezone
 
-from . import learnings, updates
-from .maintenance_steps import check_health, clean_up, collect, dream, find_stuck, learn, update
+from . import learnings, suggestions, updates
+from .maintenance_steps import check_health, clean_up, collect, dream, find_stuck, learn, suggest, update
 from .store import H, Problem
 from .updates import START_HOUR, ZONE
 
@@ -36,9 +36,9 @@ ORDER = ("collect", "clean_up", "check_health", "find_stuck", "learn", "suggest"
 NAMES = {"collect": "Collect", "clean_up": "Clean up", "check_health": "Check health", "find_stuck": "Find stuck",
          "learn": "Learn", "suggest": "Suggest", "update": "Update", "dream": "Dream"}
 EVERY_RUN = ("collect", "clean_up", "check_health")   # "How often" is every run, and fixed (Find stuck is custom: every 6 hours)
-OLD_TIMER = ("suggest",)   # still on their own timers until their track lands
+OLD_TIMER = ()   # every step runs here now; a step listed here would show "on its old timer"
 LIVE = {"collect": collect.run, "clean_up": clean_up.run, "check_health": check_health.run, "find_stuck": find_stuck.run,
-        "learn": learn.run, "update": update.run, "dream": dream.run}
+        "learn": learn.run, "suggest": suggest.run, "update": update.run, "dream": dream.run}
 SCHEDULES = {"hourly": 1, "2h": 2, "3h": 3, "6h": 6, "12h": 12, "daily": 0}
 MAX_BOTS_STEPS = ("find_stuck", "dream")          # the steps that take "Most bots per run"
 STATUSES = ("ran", "skipped", "failed", "pending")
@@ -568,6 +568,8 @@ def listing(c, settings, auth, who):
                      "cursor_at": step["cursor_at"]})
         if key == "learn":
             rows[-1]["stats"] = learnings.beta_stats(c)
+        if key == "suggest":
+            rows[-1]["consent"] = suggestions.privacy(c, settings)["share_stats_for_suggestions"]
     last = c.execute("SELECT id FROM maintenance_runs ORDER BY started_at DESC LIMIT 1").fetchone()
     live = live_run(c, H.now())
     return {"settings": {**cfg, "monthly_cap_usd_in_effect": budget_cap(c, settings)},
