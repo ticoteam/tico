@@ -10,6 +10,7 @@ from datetime import datetime, timedelta, timezone
 
 import httpx
 import pytest
+import time_machine
 from fastapi.testclient import TestClient
 
 from clients import gateway as G
@@ -19,6 +20,13 @@ from backend.app import create_app
 from backend.demo_sections.finance import CONTENT as FINANCE
 
 NOW = datetime(2026, 9, 25, 18, 30, tzinfo=timezone.utc)
+
+
+@pytest.fixture(scope="module", autouse=True)
+def demo_clock():
+    """Builds and API reads see the same day, including clocks outside hubdb.now."""
+    with time_machine.travel(NOW, tick=False):
+        yield
 
 
 @pytest.fixture(scope="module")
@@ -244,7 +252,7 @@ def test_billing_is_a_sample_that_agrees_with_the_usage_page(built):
 
 def test_a_build_long_after_its_dates_keeps_every_message_body(tmp_path):
     """Retention runs on the demo's own clock while it is built: a demo built months before today keeps its bodies."""
-    settings = demo.build(tmp_path, now=datetime.now(timezone.utc) - timedelta(days=200))
+    settings = demo.build(tmp_path, now=NOW - timedelta(days=200))
     with closing(sqlite3.connect(settings.db_path)) as db:
         total = db.execute("SELECT COUNT(*) FROM inbound_messages").fetchone()[0]
         removed = db.execute("SELECT COUNT(*) FROM inbound_messages WHERE body IS NULL OR retention_removed=1").fetchone()[0]
