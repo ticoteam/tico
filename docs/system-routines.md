@@ -131,7 +131,6 @@ Check health runs as a [Maintenance](maintenance.md) step. It has no separate Sy
 | **Rules digest** | Once a week, opens the Bookkeeper's "Rules digest" task for the posting rules made in the last seven days. No new rules is a quiet run. Not a switch. | Weekly |
 | **Nightly learnings** (AI) | Reads yesterday's chats, tasks, Slack, mail and meetings and sends each bot what it should remember. See [Learnings](learnings.md). | Nightly at 03:00 |
 | **Due reminders** | Tells a bot when one of its tasks reaches its due time. | Every 10 seconds |
-| **Task check-backs** | Sends a bot back to unfinished work when its **Follow up by** time passes, to verify the handoff or read the result. Off until an owner or admin turns it on; see [Following up bot work](tasks.md#following-up-bot-work). | When a follow-up is due |
 | **Ask go-ahead** | A bot's question past its deadline goes ahead on its default answer, or expires. | Hourly |
 | **Earlier messages** | Tells each manager of a bot once, in a direct message, when the bot's Home still holds closed history. Plain code: no model is called, and nothing new is a quiet run. Asks nobody answered are on the bot's task roundup. See [Thread helper](thread-helper.md). Not a switch. | Every 15 minutes |
 | **Email digest** | Emails a person once an hour the threads they follow on digest that have new messages: each title, its unread count and a link, never the messages. Nothing new is a quiet run. Each person turns theirs off under Email digests. See [Thread helper](thread-helper.md). Not a switch. | Hourly |
