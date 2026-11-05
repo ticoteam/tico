@@ -410,7 +410,6 @@
       for (const id of ids) open().actions.items.push(item({ id, task_id: id, number: id.slice(1), title: id === 't42' ? 'Review pricing' : 'Test recovery', status: 'open', kind: 'link', sent: true }));
     },
     unlink_item: ({ id }) => { open().actions.items = open().actions.items.filter((i) => i.id !== id); },
-    edit_task_detail: ({ id, due, body }) => Object.assign(open().actions.items.find((i) => i.id === id), { due, body }),
     accept_link_item: ({ id }) => Object.assign(open().actions.items.find((i) => i.id === id), { sent: true, kind: 'link', task_id: 't42', number: 42, title: 'Review pricing' }),
     send_item: ({ id }) => {
       const m = open();

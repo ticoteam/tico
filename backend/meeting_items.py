@@ -74,31 +74,6 @@ class ItemPush(M.Contract):
     private: bool = False
 
 
-class CommentCreate(M.Contract):
-    text: str = Field(min_length=1, max_length=4_000)
-    at_ms: int | None = Field(default=None, ge=0, le=86_400_000)
-
-
-# ----------------------------------------------------------------------------- comments
-def comments(c, rid, people=None):
-    """The thread on one meeting, oldest first, with the author's roster name."""
-    people = people if people is not None else roster(c)
-    out = []
-    for row in c.execute("SELECT * FROM meeting_comments WHERE meeting_id=? ORDER BY created_at, id", (rid,)):
-        person = P.person(H.actor_id(row["author"]), people) if str(row["author"]).startswith("human:") else None
-        out.append({**dict(row), "author_name": (person or {}).get("name") or row["author"]})
-    return out
-
-
-def comment(c, record, who, body):
-    """Anyone who can open the meeting can add to its thread; the recorder's own note is separate."""
-    ts, cid = H.now(), H.new_id()
-    c.execute("INSERT INTO meeting_comments(id,meeting_id,author,text,at_ms,created_at) VALUES(?,?,?,?,?,?)",
-              (cid, record["id"], who.actor, body.text.strip(), body.at_ms, ts))
-    H.event(c, who.actor, "meeting.comment_added", record["id"], {"comment": cid})
-    return comments(c, record["id"])[-1]
-
-
 def detail_of(section, value):
     """The detail a section understands. An unknown key is a mistake, not something to drop."""
     if value is None:
@@ -409,25 +384,6 @@ def install_meeting_items(app, store, mutate, task_create, auth):
         human_only(who)
         with store.read() as c:
             return listing(c, who, rid, auth)
-
-    @app.get("/api/v2/meetings/{rid}/comments")
-    @app.get("/api/meetings/{rid}/comments")
-    def thread(request: Request, rid: str):
-        who = request.state.identity
-        human_only(who)
-        with store.read() as c:
-            media.authorized(c, who, rid)
-            return {"id": rid, "comments": comments(c, rid)}
-
-    @app.post("/api/v2/meetings/{rid}/comments")
-    @app.post("/api/meetings/{rid}/comments")
-    def say(request: Request, rid: str, body: CommentCreate):
-        who = request.state.identity
-        human_only(who)
-        def work(c):
-            record = media.authorized(c, who, rid)
-            return {"comment": comment(c, record, who, body)}
-        return reply(request, body, work, rid)
 
     @app.post("/api/v2/meetings/{rid}/items")
     @app.post("/api/meetings/{rid}/items")

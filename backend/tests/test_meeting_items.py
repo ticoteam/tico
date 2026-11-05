@@ -64,9 +64,6 @@ def test_a_private_meeting_keeps_its_items_to_the_people_the_invite_names(api):
     assert items(api, rid, "cara-test")["can_send"] is True
 
 
-# ----------------------------------------------------------------------------- comments
-
-
 def test_a_pushed_item_is_a_hub_task_with_the_meeting_it_came_from(api):
     rid = record(api, {"title": "Weekly sync"})
     iid = add(api, rid, {"section": "task", "text": "Send Dana the pricing sheet", "quote": "We agreed to ship on Friday.",

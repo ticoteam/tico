@@ -2876,7 +2876,12 @@ def create_app(settings=None):
         with store.read() as c:
             choice = Providers.load(c, settings)
             cat = gateway_page.catalog(c, settings)
-        return {"models": [row for row in MODEL_CATALOG if not row.get("held")], "harnesses": list(HARNESS_CATALOG),
+            # A held row (Dev 693) is listed only while a bot or the team default already runs it, so the Settings
+            # editor can keep the saved model and its efforts; the picker offers it to that bot alone (ui settings-bots).
+            in_use = {choice["model"]} | {(json.loads(row["config"] or "{}") or {}).get("model")
+                                          for row in c.execute(BS.ROW_SQL).fetchall()}
+        return {"models": [row for row in MODEL_CATALOG if not row.get("held") or row["id"] in in_use],
+                "harnesses": list(HARNESS_CATALOG),
                 "gateway": gateway_tiers.view(cat), "enabled_providers": choice["enabled"],
                 "default": {"runtime": choice["runtime"], "model": choice["model"]}}
 
@@ -7937,7 +7942,6 @@ def create_app(settings=None):
             choice = MODEL_BY_ID.get(body.model)
             if not choice:
                 raise Problem("model", "Choose one of the supported models", 422)
-            settings_admin.refuse_retired(choice)
             row = c.execute(BS.ROW_SQL + " WHERE bc.bot=?", (bot,)).fetchone()
             if not row:
                 raise Problem("not_found", "Bot not found", 404)
@@ -7945,6 +7949,9 @@ def create_app(settings=None):
                 raise Problem("version_conflict", "Bot configuration changed; refresh before changing models", 409)
             config = json.loads(row["config"])
             old_model = config.get("model") or ""
+            # A saved held model (Dev 693) stays editable: a save that keeps it is not a fresh pick (settings_admin._target).
+            if not (choice.get("held") and choice["id"] == old_model):
+                settings_admin.refuse_retired(choice)
             old_runtime = config.get("runtime") or ""
             old_effort = config.get("reasoning_effort") or H.bot(c, bot).get("effort")
             old_harness = resolve_harness(config, old_runtime)

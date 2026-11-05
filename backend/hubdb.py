@@ -4620,7 +4620,8 @@ def _set_status(conn, actor, row, status=None, type=None, step=None, note="", *,
         RT.turn_result(conn, actor, row, RT.result_outcome(row.get("status"), effective), event, effective)
         if effective in ("done", "closed", "declined", "review"):
             TS.clear_finished(conn, actor, row)     # review hands it on: the requester looks now, not at the date
-        if effective in ("done", "closed", "declined"):
+        if effective in TASK_ENDED:
+            delivery.task_closed(conn, row)
             # A finished task's open questions to people are moot, every kind. A question lives and dies with its own
             # task: closing or finishing also closes each open descendant through task_close, so its asks end there.
             # A done task asks its requester to accept what it delivered only after this, so that question stays.
