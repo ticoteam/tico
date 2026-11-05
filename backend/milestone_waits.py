@@ -36,11 +36,11 @@ KINDS = ("pr_merged", "release_published")
 SCHEMA = (
     """CREATE TABLE IF NOT EXISTS task_milestone_waits(
   task_id TEXT NOT NULL, kind TEXT NOT NULL CHECK (kind IN ('pr_merged','release_published')), target TEXT NOT NULL,
-  label TEXT NOT NULL, url TEXT, created_by TEXT, created TEXT NOT NULL, woke_at TEXT,
+  label TEXT NOT NULL, url TEXT, created_by TEXT, created_at TEXT NOT NULL, woke_at TEXT,
   PRIMARY KEY(task_id, kind, target))""",
     "CREATE INDEX IF NOT EXISTS task_milestone_waits_open ON task_milestone_waits(kind, target) WHERE woke_at IS NULL",
     """CREATE TABLE IF NOT EXISTS milestones(
-  kind TEXT NOT NULL, target TEXT NOT NULL, at TEXT NOT NULL, source TEXT, PRIMARY KEY(kind, target))""",
+  kind TEXT NOT NULL, target TEXT NOT NULL, reached_at TEXT NOT NULL, source TEXT, PRIMARY KEY(kind, target))""",
 )
 PR_URL = re.compile(r"^https://github\.com/([\w.-]+)/([\w.-]+)/pull/(\d+)/?$", re.IGNORECASE)
 TAG = re.compile(r"^v?\d+(\.\d+){1,3}([-+][\w.-]+)?$")
@@ -106,7 +106,7 @@ def parse(c, actor, spec, release_repo="", resolve_task=None):
         parsed = pr_target(value)
         if not parsed and resolve_task:
             other = resolve_task(value)
-            prs = H._rows(c.execute("SELECT url FROM task_links WHERE task_id=? AND kind='pr' ORDER BY created",
+            prs = H._rows(c.execute("SELECT url FROM task_links WHERE task_id=? AND kind='pr' ORDER BY created_at",
                                     (other,)))
             if len(prs) != 1:
                 H.refuse(c, actor, "milestone", f"{value} has {len(prs)} pull request links; name the one to wait for "
@@ -131,10 +131,11 @@ def add(c, actor, task_row, spec, release_repo="", resolve_task=None, note=None)
     already happened. `note` goes in the owner's wake when it fires; a repeat with a note replaces the stored one."""
     from .task_snooze import clean_note
     H = _H()
+    H._writer(c, actor, task_id=task_row["id"])
     ensure(c)
     kind, target, label, url = parse(c, actor, spec, release_repo, resolve_task)
     note = clean_note(c, actor, note)
-    added = c.execute("INSERT OR IGNORE INTO task_milestone_waits(task_id,kind,target,label,url,created_by,created,note) "
+    added = c.execute("INSERT OR IGNORE INTO task_milestone_waits(task_id,kind,target,label,url,created_by,created_at,note) "
                       "VALUES(?,?,?,?,?,?,?,?)", (task_row["id"], kind, target, label, url, actor, H.now(), note)).rowcount == 1
     if not added and note:
         # A changed note is a change to the task: its history shows who changed it, and clients see the new version.
@@ -144,11 +145,11 @@ def add(c, actor, task_row, spec, release_repo="", resolve_task=None, note=None)
             c.execute("UPDATE task_milestone_waits SET note=? WHERE task_id=? AND kind=? AND target=? AND woke_at IS NULL",
                       (note, task_row["id"], kind, target))
             H._task_event(c, task_row["id"], actor, "milestone_wait_note", was[0], note, "")
-            c.execute("UPDATE tasks SET version=version+1, updated=? WHERE id=?", (H.now(), task_row["id"]))
+            c.execute("UPDATE tasks SET version=version+1, updated_at=? WHERE id=?", (H.now(), task_row["id"]))
             H.event(c, actor, "task.milestone_wait_note", task_row["id"], {"kind": kind, "target": target})
     if added:
         H._task_event(c, task_row["id"], actor, "milestone_wait", None, f"{kind}:{target}", "")
-        c.execute("UPDATE tasks SET version=version+1, updated=? WHERE id=?", (H.now(), task_row["id"]))
+        c.execute("UPDATE tasks SET version=version+1, updated_at=? WHERE id=?", (H.now(), task_row["id"]))
         H.event(c, actor, "task.milestone_wait", task_row["id"], {"kind": kind, "target": target})
     reconcile(c, task_id=task_row["id"])
     if pending(c, task_row["id"]):
@@ -162,13 +163,14 @@ def add(c, actor, task_row, spec, release_repo="", resolve_task=None, note=None)
 def remove(c, actor, task_row, spec, release_repo="", resolve_task=None):
     """Take a wait off, read from the same spec that added it. Returns its label."""
     H = _H()
+    H._writer(c, actor, task_id=task_row["id"])
     ensure(c)
     kind, target, label, _ = parse(c, actor, spec, release_repo, resolve_task)
     if not c.execute("DELETE FROM task_milestone_waits WHERE task_id=? AND kind=? AND target=?",
                      (task_row["id"], kind, target)).rowcount:
         H.refuse(c, actor, "not-found", f"{task_row['id']} does not wait on {spec}")
     H._task_event(c, task_row["id"], actor, "milestone_wait", f"{kind}:{target}", None, "")
-    c.execute("UPDATE tasks SET version=version+1, updated=? WHERE id=?", (H.now(), task_row["id"]))
+    c.execute("UPDATE tasks SET version=version+1, updated_at=? WHERE id=?", (H.now(), task_row["id"]))
     from .task_blocked import reconcile as reconcile_blocked
     reconcile_blocked(c, task_row["id"])
     return sentence(kind, label)
@@ -177,7 +179,7 @@ def remove(c, actor, task_row, spec, release_repo="", resolve_task=None):
 # ------------------------------------------------------------------------------------------------ reads
 def view(c, row):
     return {"kind": row["kind"], "target": row["target"], "label": row["label"], "url": row.get("url"),
-            "sentence": describe(c, row), "created": row["created"], "woke_at": row.get("woke_at"), "note": row.get("note"),
+            "sentence": describe(c, row), "created_at": row["created_at"], "woke_at": row.get("woke_at"), "note": row.get("note"),
             "met": bool(row.get("woke_at")) or happened_already(c, row["kind"], row["target"])}
 
 
@@ -186,11 +188,11 @@ def waits(c, task_id):
     if not _present(c):
         return []
     return [view(c, r) for r in _H()._rows(c.execute(
-        "SELECT * FROM task_milestone_waits WHERE task_id=? ORDER BY created, target", (task_id,)))]
+        "SELECT * FROM task_milestone_waits WHERE task_id=? ORDER BY created_at, target", (task_id,)))]
 
 
 PENDING_SQL = ("SELECT kind,label FROM task_milestone_waits WHERE task_id=? AND woke_at IS NULL "
-               "ORDER BY created LIMIT 1")
+               "ORDER BY created_at LIMIT 1")
 
 
 def pending(c, task_id):
@@ -231,11 +233,11 @@ def _fire(c, wait, why):
         # Resume the retained working step without the generic assignment wake: the milestone tells it once.
         step = H._one(c, "SELECT status FROM task_steps WHERE id=?", (row.get("step_id"),))
         retained = row.get("step_id") if step and step["status"] in H.ACTIVE_STATUSES and step["status"] != "waiting" else None
-        H._set_status(c, H.KEEPER, row, "open", step=retained, note=why, skip_step_wake=(row["owner"],))
+        H._set_status(c, H.KEEPER, row, "open", step=retained, note=why, skip_step_wake=(row["owner_id"],))
         c.execute("UPDATE tasks SET version=version+1 WHERE id=?", (row["id"],))
         row = H.task(c, row["id"])
     note = wait.get("note")
-    H._wake(c, row, row["owner"], f"Milestone: {row['title']}\n{why}" + (f"\nYour note: {note}" if note else ""),
+    H._wake(c, row, row["owner_id"], f"Milestone: {row['title']}\n{why}" + (f"\nYour note: {note}" if note else ""),
             refs={WAKE_REF: f"{wait['kind']}:{wait['target']}", **({"note": note} if note else {})},
             trigger="status_or_relation", source=f"{wait['kind']}:{wait['target']}")
     return row["id"]
@@ -251,7 +253,7 @@ def happened(c, kind, target, source="", release_repo=""):
     The first time a release is recorded it also follows up the Dev tickets it carries (backend/release_flow.py)."""
     H = _H()
     ensure(c)
-    new = c.execute("INSERT OR IGNORE INTO milestones(kind,target,at,source) VALUES(?,?,?,?)",
+    new = c.execute("INSERT OR IGNORE INTO milestones(kind,target,reached_at,source) VALUES(?,?,?,?)",
                     (kind, target, H.now(), source)).rowcount == 1
     if new and kind == "release_published":
         from . import release_flow
@@ -259,7 +261,7 @@ def happened(c, kind, target, source="", release_repo=""):
             release_flow.published(c, target, source if str(source).startswith("https://") else "", release_repo)
     woken = []
     for wait in H._rows(c.execute("SELECT * FROM task_milestone_waits WHERE kind=? AND target=? AND woke_at IS NULL "
-                                  "ORDER BY created, task_id", (kind, target))):
+                                  "ORDER BY created_at, task_id", (kind, target))):
         if _fire(c, wait, _why(wait)):
             woken.append(wait["task_id"])
     return woken
@@ -299,7 +301,7 @@ def _pending_targets(c, task_id=None, limit=RECONCILE_TARGETS):
     marks = ",".join("?" * (len(H.ACTIVE_STATUSES) + 1))
     return [(r[0], r[1]) for r in c.execute(
         "SELECT w.kind,w.target FROM task_milestone_waits w JOIN tasks t ON t.id=w.task_id WHERE w.woke_at IS NULL "
-        f"AND t.status IN ({marks}) {where} GROUP BY w.kind,w.target ORDER BY min(w.created) LIMIT ?",
+        f"AND t.status IN ({marks}) {where} GROUP BY w.kind,w.target ORDER BY min(w.created_at) LIMIT ?",
         (*H.ACTIVE_STATUSES, "blocked", *args, limit))]
 
 
@@ -316,7 +318,7 @@ def reconcile(c, failures=None, task_id=None):
         with isolated(c, "milestone_wait", f"{kind}:{target}", failures):
             where, args = ("AND task_id=?", (task_id,)) if task_id else ("", ())
             for wait in H._rows(c.execute(f"SELECT * FROM task_milestone_waits WHERE kind=? AND target=? "
-                                          f"AND woke_at IS NULL {where} ORDER BY created, task_id",
+                                          f"AND woke_at IS NULL {where} ORDER BY created_at, task_id",
                                           (kind, target, *args))):
                 if _fire(c, wait, _why(wait)):
                     woken.append(wait["task_id"])

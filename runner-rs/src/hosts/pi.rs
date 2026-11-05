@@ -965,6 +965,7 @@ struct Inner {
 }
 
 struct Shared {
+    allocation: super::Allocation,
     bot: String,
     cmd: Vec<String>,
     tx: Events,
@@ -978,7 +979,7 @@ pub struct PiHost(Arc<Shared>);
 
 impl PiHost {
     pub fn new(bot: &str, cmd: Vec<String>, tx: Events, pool: Arc<Pool>) -> Self {
-        PiHost(Arc::new(Shared { bot: bot.into(), cmd, tx, pool, inner: Mutex::new(Inner::default()) }))
+        PiHost(Arc::new(Shared { allocation: super::Allocation::default(), bot: bot.into(), cmd, tx, pool, inner: Mutex::new(Inner::default()) }))
     }
 
     fn inner(&self) -> std::sync::MutexGuard<'_, Inner> {
@@ -991,6 +992,10 @@ impl PiHost {
 
     pub fn start(&self) {
         self.inner().up = true;
+    }
+
+    pub fn track_allocation(&self, turn: std::sync::Arc<std::sync::atomic::AtomicBool>) {
+        self.0.allocation.track(turn);
     }
 
     pub fn alive(&self) -> bool {
@@ -1080,12 +1085,14 @@ impl PiHost {
     pub(crate) fn launch(&self, argv: &[String], settings: &Settings) -> std::io::Result<(tokio::process::Child, crate::run_diagnostics::Stderr)> {
         let env = Pi::env(settings);
         let mut child = self.command(argv, settings, &env)?.spawn()?;
+        self.0.allocation.mark();
         let stderr = crate::run_diagnostics::Stderr::capture(&mut child, self.0.tx.clone(), &env);
         Ok((child, stderr))
     }
 
     fn spawn(&self, argv: &[String], settings: &Settings, env: &Env, key: String, home: PathBuf, thinking: &str) -> std::io::Result<Arc<Proc>> {
         let mut child = self.command(argv, settings, env)?.spawn()?;
+        self.0.allocation.mark();
         let sink: Arc<Mutex<Option<Events>>> = Arc::default();
         let to = sink.clone();
         let stderr = crate::run_diagnostics::Stderr::capture_with(&mut child, move |value| {
@@ -1125,6 +1132,7 @@ impl PiHost {
         };
         if let Some(p) = held {
             if p.key == key && p.alive() {
+                self.0.allocation.mark();
                 p.token(&token);
                 self.inner().procs.insert(thread_id.into(), p.clone());
                 return Ok(p);
@@ -1381,6 +1389,11 @@ while True:
     /// The records of one of its JSON-lines logs.
     pub fn logged(dir: &Path, name: &str) -> Vec<Value> {
         std::fs::read_to_string(dir.join(name)).unwrap_or_default().lines().filter_map(|l| serde_json::from_str(l).ok()).collect()
+    }
+
+    /// Whether the idle pool still owns this conversation's lease or relay.
+    pub fn has_held(pool: &super::Pool, owner: &str) -> bool {
+        pool.kept().values().any(|k| k.owner == owner && !k.held.is_empty())
     }
 
     /// A fake pi in `dir`, kept in `pool` for `owner` with `held` after one turn that completed.

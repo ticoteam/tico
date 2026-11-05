@@ -31,6 +31,7 @@ from cryptography.hazmat.primitives.asymmetric import rsa  # noqa: E402
 
 from backend.app import create_app  # noqa: E402
 from backend.auth import Identity  # noqa: E402
+from backend import bot_settings  # noqa: E402
 from backend.config import Settings  # noqa: E402
 from backend.store import H, encode  # noqa: E402
 
@@ -166,8 +167,9 @@ def main():
         H.sync_registry(c, bots, {"people": people})
         c.execute("INSERT INTO registry_metadata VALUES('people',?)", (encode({"people": people}),))
         for slug, config in bots.items():
-            c.execute("INSERT INTO bot_config(bot,config_json,operator,reports_to,description) VALUES(?,?,?,?,?)",
-                      (slug, encode(config), "ana", "ana" if slug == "coo" else "coo", config.get("description", "")))
+            c.execute("INSERT INTO bot_config(bot,owner_id,reports_to,description) VALUES(?,?,?,?)",
+                      (slug, "ana", "ana" if slug == "coo" else "coo", config.get("description", "")))
+            bot_settings.write(c, slug, config)
         c.execute("INSERT INTO registry_metadata VALUES('onboarding',?)", (encode({"completed": "2026-01-01T00:00:00Z"}),))
     call = lambda path, body: httpx.post(url + "/api/v2/" + path, json=body, timeout=20, headers={  # noqa: E731
         "Authorization": "Bearer admin", "Idempotency-Key": H.new_id()}).raise_for_status()

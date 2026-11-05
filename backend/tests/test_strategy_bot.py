@@ -12,6 +12,7 @@ from backend.store import H
 from backend.tests.test_goal_manager import BASE, with_goal_manager
 from backend.tests.test_onboarding import (SUPPORT_AGENT, SUPPORT_CARD, as_person, build_team, draft,  # noqa: F401
                                            environment, machine, signed_in)
+from backend import bot_settings as BS
 
 LEAD_CARD = {"template": "sales-lead", "slug": "sales-lead", "name": "Head of Sales", "required": False,
              "bootstrap": False, "lead": True, "summary": "Runs sales.", "owns": ["the pipeline"], "never": ["sends"],
@@ -40,42 +41,65 @@ def company(environment):
                                 "reports_to": boss} for slug, (template, boss) in TEAM.items()})
     build_team(api)
     # The team builder put the Heads and their reports in the Heads' department (Sales); the owner has a group too.
-    assert {g["id"]: g["bots"] for g in api.get("/api/v2/groups", headers=signed_in()).json()} == \
-        {"sales": ["eng-lead", "sales-lead", "support"]}
+    names = labels(api)
+    assert {g["id"]: sorted(names.get(bot, bot) for bot in g["bots"])
+            for g in api.get("/api/v2/groups", headers=signed_in()).json()} == {"sales": ["eng-lead", "sales-lead", "support"]}
     home = api.post("/api/v2/groups", json={"name": "Home", "add": {"people": ["morgan"], "bots": ["scribe"]}},
                     headers=signed_in())
     assert home.status_code == 200, home.text
     return api
 
 
+def labels(api):
+    """Bot id to slug. The chart, the groups and the stored `reports_to` hold ids; these tests compare the slugs people
+    see, so every reference read here is turned into its slug."""
+    with api.app.state.store.read() as c:
+        return {r["id"]: r["slug"] for r in c.execute("SELECT id,slug FROM bots")}
+
+
+def as_slug(names, ref):
+    """A reference (`b:<id>`, a bare bot id, or anything else) with the bot's slug in place of its id."""
+    if ref.startswith("b:"):
+        return "b:" + names.get(ref[2:], ref[2:])
+    return names.get(ref, ref)
+
+
 def chart(api, headers=None):
     view = api.get("/api/v2/org", headers=headers or signed_in()).json()
-    return {b["id"]: (b["org_parent"], b["reports_to"], b["display_name"]) for b in view["bots"]}
+    names = labels(api)
+    return {names.get(b["id"], b["id"]): (as_slug(names, b["org_parent"]), as_slug(names, b["reports_to"] or ""),
+                                          b["display_name"]) for b in view["bots"]}
 
 
 def groups(api, path="/api/v2/org"):
-    return {g["id"]: g["org_parent"] for g in api.get(path, headers=signed_in()).json()["org_groups"]}
+    names = labels(api)
+    return {g["id"]: as_slug(names, g["org_parent"]) for g in api.get(path, headers=signed_in()).json()["org_groups"]}
 
 
 def employees(api):
-    return {e["name"]: (e["org_parent"], e["display_name"]) for e in api.get("/api/employees", headers=signed_in()).json()}
+    names = labels(api)
+    return {e["name"]: (as_slug(names, e["org_parent"]), e["display_name"])
+            for e in api.get("/api/employees", headers=signed_in()).json()}
 
 
 def stored(api):
+    names = labels(api)
     with api.app.state.store.read() as c:
-        reports = {r["bot"]: r["reports_to"] for r in c.execute("SELECT bot,reports_to FROM bot_config")}
-        names = {r["slug"]: r["display_name"] for r in c.execute("SELECT slug,display_name FROM bots")}
-    return reports, names
+        reports = {names.get(r["bot"], r["bot"]): as_slug(names, r["reports_to"] or "")
+                   for r in c.execute("SELECT bot,reports_to FROM bot_config")}
+        display = {r["slug"]: r["display_name"] for r in c.execute("SELECT slug,display_name FROM bots")}
+    return reports, display
 
 
 def as_bot(api, slug):
     """The bot itself, as an agent credential (the way backend/tests/test_health.py signs one in)."""
     token = slug + "-test"
     with api.app.state.store.transaction() as c:
-        c.execute("UPDATE bots SET state='active' WHERE slug=?", (slug,))
-        c.execute("INSERT OR IGNORE INTO agents(bot,harness,token_hash,created,created_by) "
-                  "VALUES(?,'hermes',?,?,'human:morgan')", (slug, "x-" + slug, H.now()))
-    api.app.state.store.settings.test_identities[token] = Identity("bot:" + slug, "bot", agent="hermes")
+        bot_id = (H.resolve_bot(c, slug) or {}).get("id", slug)
+        c.execute("UPDATE bots SET state='active' WHERE id=?", (bot_id,))
+        c.execute("INSERT OR IGNORE INTO agents(bot,harness,token_hash,created_at,created_by) "
+                  "VALUES(?,'hermes',?,?,'human:morgan')", (bot_id, "x-" + bot_id, H.now()))
+    api.app.state.store.settings.test_identities[token] = Identity(H.bot_actor(bot_id), "bot", agent="hermes")
     return {"Authorization": "Bearer " + token, "Idempotency-Key": str(uuid.uuid4())}
 
 
@@ -120,10 +144,12 @@ def test_the_strategy_bot_gains_no_access(environment):
     access says."""
     api = company(environment)
     with api.app.state.store.transaction() as c:
-        c.execute("UPDATE bot_config SET access_json=? WHERE bot='eng-lead'",
-                  ('{"see":{"everyone":true},"read":{"people":["morgan"]},"write":{"people":["morgan"]}}',))
+        c.execute("UPDATE bot_config SET access=? WHERE bot=?",
+                  ('{"see":{"everyone":true},"read":{"people":["morgan"]},"write":{"people":["morgan"]}}',
+                   H.resolve_bot(c, "eng-lead")["id"]))
     after = api.get("/api/v2/org", headers=as_bot(api, "goal-manager")).json()
-    access = {b["id"]: b["access"] for b in after["bots"]}
+    names = labels(api)
+    access = {names.get(b["id"], b["id"]): b["access"] for b in after["bots"]}
     assert access["eng-lead"]["write"] is False and access["eng-lead"]["read"] is False
 
 
@@ -159,7 +185,7 @@ def test_the_name_sticks_and_its_history_stays_attached(environment):
     logged = api.post(f"/api/v2/kpis/{kid}/readings", json={"value": 12}, headers=as_bot(api, "goal-manager"))
     assert logged.status_code == 200, logged.text
     readings = api.get(f"/api/v2/kpis/{kid}/readings", headers=signed_in()).json()["readings"]
-    assert [r["actor"] for r in readings] == ["bot:goal-manager"]
+    assert [r["actor_id"] for r in readings] == ["bot:goal-manager"]
     from backend import names
     with api.app.state.store.read() as c:
         assert names.lookup(c, {"bot:goal-manager"}) == {"bot:goal-manager": "Strategy Bot"}
@@ -234,10 +260,12 @@ def drawn(api, headers):
     parents beside them): the org chart API, the employee rows, the people chart."""
     org = api.get("/api/v2/org", headers=headers).json()
     humans = api.get("/api/humans", headers=headers).json()
-    return {"org": {b["id"]: (b["org_parent"], b["reports_to"]) for b in org["bots"]},
+    names = labels(api)
+    return {"org": {names.get(b["id"], b["id"]): (as_slug(names, b["org_parent"]), as_slug(names, b["reports_to"] or ""))
+                    for b in org["bots"]},
             "org_groups": {g["id"]: g["org_parent"] for g in org["org_groups"]},
             "org_seats": {s["id"]: s["org_parent"] for s in org["seats"]},
-            "employees": {name: (e["org_parent"], e.get("chart_hidden", False))
+            "employees": {name: (as_slug(names, e["org_parent"]), e.get("chart_hidden", False))
                           for name, e in rows(api, headers).items()},
             "humans_groups": {g["id"]: g["org_parent"] for g in humans["org_groups"]},
             "humans_seats": {s["id"]: s["org_parent"] for s in humans["seats"]},
@@ -259,7 +287,7 @@ def test_a_person_hides_the_strategy_bot_from_their_own_chart(environment):
     bot_before = chart(api, bot)
     stored_before = stored(api)
     with api.app.state.store.read() as c:
-        config_before = tuple(c.execute("SELECT * FROM bot_config WHERE bot='goal-manager'").fetchone())
+        config_before = tuple(c.execute(BS.ROW_SQL + " WHERE bc.bot='goal-manager'").fetchone())
     strategy_before = api.get("/api/v2/strategy-bot", headers=signed_in()).json()
     row_before = rows(api)["goal-manager"]
     assert before["morgan"]["org"]["eng-lead"][0] == "b:goal-manager"      # today's chart: the Strategy Bot heads it
@@ -271,9 +299,11 @@ def test_a_person_hides_the_strategy_bot_from_their_own_chart(environment):
     from backend import people as P
     with api.app.state.store.read() as c:
         from backend import views
-        archived = {r["slug"] for r in H.bots(c) if r.get("state") == "archived"}
+        archived = {r["id"] for r in H.bots(c) if r.get("state") == "archived"}
         unmoved = P.org_view(views.roster(c), views.entries(c), archived)
-    expected = {b["id"]: b["org_parent"] for b in unmoved["bots"] if b["id"] != "goal-manager"}
+    names = labels(api)
+    expected = {names.get(b["id"], b["id"]): as_slug(names, b["org_parent"]) for b in unmoved["bots"]
+                if names.get(b["id"]) != "goal-manager"}
     assert "goal-manager" not in mine["org"]
     assert {slug: parent for slug, (parent, _) in mine["org"].items()} == expected
     assert not any(parent == "b:goal-manager" for parent, _ in mine["org"].values())
@@ -299,8 +329,8 @@ def test_a_person_hides_the_strategy_bot_from_their_own_chart(environment):
     # The bot itself: nothing changed but where this person's chart draws it.
     assert stored(api) == stored_before
     with api.app.state.store.read() as c:
-        assert tuple(c.execute("SELECT * FROM bot_config WHERE bot='goal-manager'").fetchone()) == config_before
-        assert [tuple(r) for r in c.execute("SELECT actor,value_json FROM preferences WHERE key=?",
+        assert tuple(c.execute(BS.ROW_SQL + " WHERE bc.bot='goal-manager'").fetchone()) == config_before
+        assert [tuple(r) for r in c.execute("SELECT actor,value FROM preferences WHERE key=?",
                                             (strategy_bot.HIDE_PREF,))] == [("human:morgan", "true")]
     assert api.get("/api/v2/strategy-bot", headers=signed_in()).json() == strategy_before
     row = rows(api)["goal-manager"]
@@ -320,7 +350,7 @@ def test_hiding_the_strategy_bot_is_a_persons_own_yes_or_no(environment):
     assert refused.status_code == 422, refused.text
     assert hide(api, True, as_bot(api, "botops")).status_code == 403
     with api.app.state.store.transaction() as c:          # even a row a bot left some other way hides nothing for it
-        c.execute("INSERT INTO preferences(actor,key,value_json,updated) VALUES('bot:botops',?,'true',?)",
+        c.execute("INSERT INTO preferences(actor,key,value,updated_at) VALUES('bot:botops',?,'true',?)",
                   (strategy_bot.HIDE_PREF, H.now()))
     assert "goal-manager" in chart(api, as_bot(api, "botops"))
     assert hide(api, True, as_person(api, "riley")).status_code == 200
@@ -340,27 +370,27 @@ def test_the_settings_an_install_from_before_stored_under_old_keys_move_to_the_n
     api = company(environment)
     with api.app.state.store.transaction() as c:
         c.execute("DELETE FROM registry_metadata WHERE key=?", (strategy_bot.KEY,))
-        c.execute("INSERT OR REPLACE INTO registry_metadata(key,value_json) VALUES(?,?)",
+        c.execute("INSERT OR REPLACE INTO registry_metadata(key,value) VALUES(?,?)",
                   (strategy_bot.OLD_KEY, '{"migrated_at":"2026-01-01T00:00:00Z","on":true}'))
         for person in ("human:ana", "human:ben"):
-            c.execute("INSERT INTO preferences(actor,key,value_json,updated) VALUES(?,?,'true',?)",
+            c.execute("INSERT INTO preferences(actor,key,value,updated_at) VALUES(?,?,'true',?)",
                       (person, strategy_bot.OLD_HIDE_PREF, H.now()))
-        c.execute("INSERT INTO preferences(actor,key,value_json,updated) VALUES('human:ben',?,'false',?)",
+        c.execute("INSERT INTO preferences(actor,key,value,updated_at) VALUES('human:ben',?,'false',?)",
                   (strategy_bot.HIDE_PREF, H.shift(H.now(), minutes=1)))
         # Cara chose under the new key, then an older release ran and she chose again under the old one.
-        c.execute("INSERT INTO preferences(actor,key,value_json,updated) VALUES('human:cara',?,'true',?)",
+        c.execute("INSERT INTO preferences(actor,key,value,updated_at) VALUES('human:cara',?,'true',?)",
                   (strategy_bot.HIDE_PREF, H.shift(H.now(), minutes=-5)))
-        c.execute("INSERT INTO preferences(actor,key,value_json,updated) VALUES('human:cara',?,'false',?)",
+        c.execute("INSERT INTO preferences(actor,key,value,updated_at) VALUES('human:cara',?,'false',?)",
                   (strategy_bot.OLD_HIDE_PREF, H.now()))
     with api.app.state.store.transaction() as c:
         assert strategy_bot.migrate(c) is False                      # the moved record says it has run
-        record = json.loads(c.execute("SELECT value_json FROM registry_metadata WHERE key=?",
+        record = json.loads(c.execute("SELECT value FROM registry_metadata WHERE key=?",
                                       (strategy_bot.KEY,)).fetchone()[0])
         old_rows = c.execute("SELECT COUNT(*) "
                              "FROM registry_metadata WHERE key=?", (strategy_bot.OLD_KEY,)).fetchone()[0]
-        hidden = {r[0]: r[1] for r in c.execute("SELECT actor, value_json FROM preferences WHERE key=?",
+        hidden = {r[0]: r[1] for r in c.execute("SELECT actor, value FROM preferences WHERE key=?",
                                                 (strategy_bot.HIDE_PREF,))}
-        left = {r[0]: r[1] for r in c.execute("SELECT actor, value_json FROM preferences WHERE key=?",
+        left = {r[0]: r[1] for r in c.execute("SELECT actor, value FROM preferences WHERE key=?",
                                               (strategy_bot.OLD_HIDE_PREF,))}
     assert record["migrated_at"] == "2026-01-01T00:00:00Z" and old_rows == 1
     assert hidden == {"human:ana": "true", "human:ben": "false", "human:cara": "false"} and left == hidden
@@ -373,12 +403,12 @@ def test_a_level_and_checks_chosen_while_an_older_release_ran_win_over_the_recor
     api = company(environment)
     with api.app.state.store.transaction() as c:
         strategy_bot._save(c, {**strategy_bot._record(c), "level": 3, "checks": True, "review_settled": True})
-        c.execute("INSERT OR REPLACE INTO registry_metadata(key,value_json) VALUES(?,?)",
+        c.execute("INSERT OR REPLACE INTO registry_metadata(key,value) VALUES(?,?)",
                   (strategy_bot.OLD_KEY, '{"on":true,"level":1,"checks":false}'))
     with api.app.state.store.transaction() as c:
         strategy_bot.migrate(c)
         record = strategy_bot._record(c)
-        old = json.loads(c.execute("SELECT value_json FROM registry_metadata WHERE key=?",
+        old = json.loads(c.execute("SELECT value FROM registry_metadata WHERE key=?",
                                    (strategy_bot.OLD_KEY,)).fetchone()[0])
     assert (record["level"], record["checks"], record.get("review_settled")) == (1, False, True)
     assert old == record
@@ -393,9 +423,9 @@ def test_an_older_release_after_a_rollback_reads_the_owners_settings_and_hide_ch
     r = api.post("/api/v2/preferences/" + strategy_bot.HIDE_PREF, json={"value": True}, headers=signed_in())
     assert r.status_code == 200, r.text
     with api.app.state.store.transaction() as c:
-        old = json.loads(c.execute("SELECT value_json FROM registry_metadata WHERE key=?",
+        old = json.loads(c.execute("SELECT value FROM registry_metadata WHERE key=?",
                                    (strategy_bot.OLD_KEY,)).fetchone()[0])
-        hide = c.execute("SELECT value_json FROM preferences WHERE key=?", (strategy_bot.OLD_HIDE_PREF,)).fetchall()
+        hide = c.execute("SELECT value FROM preferences WHERE key=?", (strategy_bot.OLD_HIDE_PREF,)).fetchall()
         assert (old["level"], old["checks"]) == (1, False) and [tuple(h) for h in hide] == [("true",)]
         # A second start with nothing changed under the old keys leaves the record as it is.
         before = strategy_bot._record(c)

@@ -51,7 +51,7 @@ class Gates(Stage2):
 
     def test_the_blocklist_beats_an_approval_issue(self):
         pl.RUN = gh_answer(body="blocked@nope.example is fine by me")
-        d = pl.check_send(self.policy(), "ana", "ana@acme.example", ["blocked@nope.example"],
+        d = pl.check_send(self.policy(), "influencer", "ana@acme.example", ["blocked@nope.example"],
                           root=self.root, approval="77")
         self.assertEqual(d["gate"], "blocklist")
         self.assertIn("blocked@nope.example", d["reason"])

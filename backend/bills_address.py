@@ -2,7 +2,7 @@
 `finance.actions.set_bills_email` and read with `finance.reads.bills_email`), and the path that turns a PDF or image
 emailed to it into a file the Bookkeeper enters as a bill.
 
-Mail reaches Tico through an Email & Phone inbox (backend/inbound.py). When the bills email is that inbox's address (or
+Mail reaches Tico through a Tico address (backend/inbound.py). When the bills email is that inbox's address (or
 the message was sent to it), each PDF or image attachment is kept once per (delivery, sha256) inside the inbound ingest
 transaction, so a re-delivered page never makes a second row. The inbound loop then fetches the bytes from HQ (outside
 any transaction), files them in the Bookkeeper's Library and hands them to Finance as an unmatched receipt (`attach`,
@@ -17,9 +17,11 @@ or kept as an unmatched receipt, makes it `filed`). A fetch that fails is tried 
 is `failed`, listed in one check, then `reported`: never listed or woken on again."""
 import hashlib
 import re
+import sqlite3
 import urllib.parse
 from email.utils import getaddresses
 from types import SimpleNamespace
+from typing import Any
 
 from fastapi import Request
 from pydantic import Field
@@ -56,7 +58,7 @@ def bills_email(c):
 
 
 def inbox_for(c, address):
-    """The Email & Phone inbox whose address is the bills email, or None: then mail to it never reaches Tico."""
+    """The Tico address whose address is the bills email, or None: then mail to it never reaches Tico."""
     if not address:
         return None
     row = c.execute("SELECT inbox_id FROM inbound_inboxes WHERE kind='email' AND lower(address)=? LIMIT 1",
@@ -130,7 +132,7 @@ def reconcile(c):
     return len(held)
 
 
-def for_bookkeeper(c, limit=50):
+def for_bookkeeper(c: sqlite3.Connection, limit: int = 50) -> list[dict[str, Any]]:
     """Bills from the address the Bookkeeper enters by hand: Finance did not take them as they came, or their bytes
     could not be fetched (listed once, see `listed`)."""
     return [dict(r) for r in c.execute("SELECT id, received_at, sender, subject, name, file_id, code, state "
@@ -225,7 +227,8 @@ def install(app, store, auth):
     @app.put("/api/v2/finance/bills-address")
     def bills_address_set(request: Request, body: BillsAddress):
         """Set the bills email vendors send bills to (`address`), or clear it (`null`). Owner or admin. `inbox_id` says
-        which Email & Phone inbox receives it; null means mail to it never reaches Tico, and uploads still work."""
+        which Tico address receives it; null means mail to it never reaches Tico, and uploads still work."""
+        import uuid
         from .finance import actions as FA
         who = request.state.identity
         auth.domain(who)
@@ -233,9 +236,10 @@ def install(app, store, auth):
             raise Problem("forbidden", "Only the owner or an admin sets the bills address", 403)
         with store.transaction() as c:
             validate_identity(c, who)
-            try:
-                FA.set_bills_email(c, body.address, by=who.actor)
-            except FA.FinanceError as e:
-                raise Problem("validation", e.message, 422) from e
+            done = FA.act(c, who.actor, "bills_address_set", {"address": body.address or ""},
+                          uuid.uuid4().hex)     # each PUT is its own request
+            if done.status != "committed":
+                raise Problem(done.code or "validation", done.reason or "The bills address was not set",
+                              403 if done.code == "denied" else 422)
             H.event(c, who.actor, "finance.bills_address", bills_email(c) or "", {})
             return view(c)

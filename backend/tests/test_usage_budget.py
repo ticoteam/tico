@@ -8,6 +8,8 @@ from backend.store import H, encode
 from backend.tests.test_api import api, get, headers  # noqa: F401  (the api fixture)
 from backend.tests.test_groups import send
 from backend.tests.test_usage_limits import finish, fleet, groups, put, start
+from backend import usage_limits
+from backend import bot_settings as BS
 
 
 def test_every_bot_and_pool_row_says_what_it_spent_in_each_window_capped_or_not(api):
@@ -39,6 +41,9 @@ def test_a_person_who_leads_lists_and_may_edit_the_bots_of_what_it_leads(api):
     assert limits["bots"]["sdr"]["may_edit"] is True
     put(api, "usage/limits/sdr", {"daily_usd": 3}, "cara-test")             # what the page offers, the hub takes
     assert get(api, "usage/limits", token="cara-test")["bots"]["sdr"]["daily_usd"] == 3
+    # and the spend page shows the same bots, so a led bot's spend is not a false zero
+    assert api.get("/api/v2/usage", params={"bot": "sdr"}, headers=headers("cara-test")).status_code == 200
+    assert api.get("/api/v2/usage", params={"bot": "outside"}, headers=headers("cara-test")).status_code in (403, 404)
 
 
 def big_org(api, first, last, groups_=8):
@@ -51,22 +56,20 @@ def big_org(api, first, last, groups_=8):
         org[f"g{g}-n"] = {"name": f"Group {g} nested", "parent": f"g{g}"}
     teams = sorted(org)
     with store.transaction() as c:
-        people = json.loads(c.execute("SELECT value_json FROM registry_metadata WHERE key='people'").fetchone()[0])
+        people = json.loads(c.execute("SELECT value FROM registry_metadata WHERE key='people'").fetchone()[0])
         people["org_groups"] = org
-        c.execute("UPDATE registry_metadata SET value_json=? WHERE key='people'", (json.dumps(people),))
+        c.execute("UPDATE registry_metadata SET value=? WHERE key='people'", (json.dumps(people),))
         for n in range(first, last):
             slug = f"acme-bot-{n:03d}"
-            c.execute("INSERT INTO bots(slug,display_name,runtime,model,effort,cwd,host,state,created) "
-                      "VALUES(?,?,?,?,?,'','keeper','active',?)", (slug, slug, "fake", "m", "", H.now()))
-            c.execute("INSERT INTO bot_config(bot,config_json,operator,team) VALUES(?,?,?,?)",
-                      (slug, encode({"name": slug}), "ana", teams[n % len(teams)]))
-            c.execute("INSERT INTO turns(id,bot,started,finished,est_cost_usd,billing) VALUES(?,?,?,?,?,?)",
+            c.execute("INSERT INTO bots(id,slug,display_name,effort,state,created_at) VALUES(?,?,?,?,'active',?)",
+                      (slug, slug, slug, "", H.now()))
+            c.execute("INSERT INTO bot_config(bot,owner_id,team) VALUES(?,?,?)", (slug, "ana", teams[n % len(teams)]))
+            BS.write(c, slug, {"name": slug, "runtime": "fake", "model": "m", "host": "keeper"})
+            c.execute("INSERT INTO attempts(id,bot_id,created_at,settled_at,est_cost_usd,billing) VALUES(?,?,?,?,?,?)",
                       (H.new_id(), slug, H.now(), H.now(), 0.25, "api"))
-            c.execute("INSERT INTO usage_limits(bot,daily_usd,updated,updated_by) VALUES(?,?,?,?)",
-                      (slug, 10, H.now(), "human:ana"))
+            usage_limits.save_own(c, slug, {"daily_usd": 10}, "human:ana")
         for gid in org:
-            c.execute("INSERT OR IGNORE INTO usage_pools(scope,daily_usd,updated,updated_by) VALUES(?,?,?,?)",
-                      ("group:" + gid, 100, H.now(), "human:ana"))
+            usage_limits.save_pool(c, "group:" + gid, {"daily_usd": 100}, "human:ana")
 
 
 def statements(api, monkeypatch):

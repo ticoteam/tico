@@ -25,13 +25,14 @@ MIN_ORIGINALS, MAX_ORIGINALS = 2, 10
 
 def _name(c, actor):
     if H.is_bot(actor):
-        return (H.bot(c, H.actor_id(actor)) or {}).get("display_name") or H.actor_id(actor)
+        found = H.bot(c, H.actor_id(actor)) or {}
+        return found.get("display_name") or found.get("slug") or H.actor_id(actor)
     return (H.human(c, H.actor_id(actor)) or {}).get("name") or H.actor_id(actor or "")
 
 
 def _open_ask(c, row, person):
     """The open question a bot asked `person` on this task, or None."""
-    return next((a for a in H.open_task_asks(c, row) if a["to_actor"] == person and H.is_bot(a["from_actor"])), None)
+    return next((a for a in H.open_task_asks(c, row) if a["recipient_id"] == person and H.is_bot(a["sender_id"])), None)
 
 
 def waiting_on(c, person, row):
@@ -42,11 +43,11 @@ def waiting_on(c, person, row):
         return None
     ask = _open_ask(c, row, person)
     if ask:
-        return "asked", ask["from_actor"], ask["id"]
-    if H.is_bot(row["owner"]) and row["status"] == "waiting" and row.get("waiting_on") == person:
-        return "waiting", row["owner"], None
-    if row["owner"] == person and H.is_bot(row["requester"]):
-        return "owned", row["requester"], None
+        return "asked", ask["sender_id"], ask["id"]
+    if H.is_bot(row["owner_id"]) and row["status"] == "waiting" and row.get("waiting_on") == person:
+        return "waiting", row["owner_id"], None
+    if row["owner_id"] == person and H.is_bot(row["requester_id"]):
+        return "owned", row["requester_id"], None
     return None
 
 
@@ -66,11 +67,12 @@ def _asked_again(c, link, row):
     them on it, or the task set waiting on them again."""
     said = c.execute(
         "SELECT 1 FROM messages m JOIN conversations cv ON cv.id=m.conversation_id WHERE m.conversation_id=? AND "
-        "m.to_actor=? AND m.from_actor<>? AND m.from_actor LIKE 'bot:%' AND m.created>? "
+        "m.recipient_id=? AND m.sender_id<>? AND m.sender_id LIKE 'bot:%' AND m.created_at>? "
         f"AND {H.MESSAGE_TASK_SQL}=? LIMIT 1",
         (row["conversation_id"], link["person"], STRATEGY_BOT, link["settled_at"], row["id"])).fetchone()
     return bool(said) or bool(c.execute(
-        "SELECT 1 FROM task_events WHERE task_id=? AND field='waiting_on' AND new=? AND ts>? LIMIT 1",
+        "SELECT 1 FROM history_events WHERE subject_type='task' AND subject_id=? AND kind='waiting_on' AND new=? "
+        "AND created_at>? LIMIT 1",
         (row["id"], link["person"], link["settled_at"])).fetchone())
 
 
@@ -159,7 +161,7 @@ def merge(c, actor, person, title, question, task_ids):
     H.task_update(c, STRATEGY_BOT, item["id"], status="waiting", waiting_on=person, note=question[:1000])
     at = H.now()
     for row, how in found:
-        c.execute("INSERT INTO strategy_merges (merged_into, original, person, asker, how, ask_id, created) "
+        c.execute("INSERT INTO strategy_merges (merged_into, original, person, asker, how, ask_id, created_at) "
                   "VALUES (?,?,?,?,?,?,?)", (item["id"], row["id"], person, how[1], how[0], how[2], at))
         H.task_comment(c, STRATEGY_BOT, row["id"],
                        f'Merged with {len(found) - 1} similar ask(s) into one item for {_name(c, person)}: "{title}". '
@@ -174,17 +176,18 @@ def _settle(c, merged_into, original, state, note):
               (state, H.now(), note[:500], merged_into, original))
 
 
-def _pass_on(c, person, link, item, text):
+def _pass_on(c, person, link, item, text, text_sources=()):
     """The person's answer to one original, as the bot that asked reads it. Returns why it couldn't be, or None."""
     row = H.task(c, link["original"])
     if not _current(c, link, row):
         # Answered there already, or asked something else since: this answer was for what was merged, not that.
         return "it no longer waits on them for what was merged"
-    said = f'{_name(c, person)} answered this in the {strategy_bot.name(c)}\'s merged item "{item["title"]}": "{text}"'
+    said, refs = H.sourced_text(
+        f'{_name(c, person)} answered this in the {strategy_bot.name(c)}\'s merged item "{item["title"]}": "{text}"', text_sources)
     if link["how"] == "asked":
-        H.task_ask_resolve(c, STRATEGY_BOT, row["id"], link["ask_id"], quote=text, relay=True)
+        H.task_ask_resolve(c, STRATEGY_BOT, row["id"], link["ask_id"], quote=text, relay=True, text_sources=text_sources)
         return None
-    H.task_comment(c, STRATEGY_BOT, row["id"], said)
+    H.task_comment(c, STRATEGY_BOT, row["id"], said, extra_refs=refs)
     if link["how"] == "waiting":
         # The person has answered: the next move is the bot's, as when they reply on its task themselves.
         c.execute("UPDATE tasks SET waiting_on=NULL WHERE id=?", (row["id"],))
@@ -192,11 +195,11 @@ def _pass_on(c, person, link, item, text):
     return None
 
 
-def on_reply(c, actor, row, text):
+def on_reply(c, actor, row, text, *, text_sources=()):
     """A person's reply on a merged item they were asked (hubdb.task_comment, hubdb.answer): passed to every original,
     then the item is done; called again for the same reply, it finds nothing left to pass on. An original it can't
     reach is back in their Needs you, with the reason kept."""
-    if not row or row["owner"] != STRATEGY_BOT or not H.is_human(actor):
+    if not row or row["owner_id"] != STRATEGY_BOT or not H.is_human(actor):
         return
     links = H._rows(c.execute("SELECT * FROM strategy_merges WHERE merged_into=? AND person=? AND state='merged'",
                               (row["id"], actor)))
@@ -206,7 +209,7 @@ def on_reply(c, actor, row, text):
     for link in links:
         c.execute("SAVEPOINT strategy_merge_answer")
         try:
-            why = _pass_on(c, actor, link, row, text)
+            why = _pass_on(c, actor, link, row, text, text_sources)
         except H.Refused as exc:
             c.execute("ROLLBACK TO strategy_merge_answer")
             why = exc.detail or str(exc.rule)
@@ -218,5 +221,5 @@ def on_reply(c, actor, row, text):
             _settle(c, row["id"], link["original"], "answered", "")
             passed += 1
     note = f"Answered; passed to {passed} bot(s)." + (f" {len(back)} could not be: {'; '.join(back)}." if back else "")
-    H.task_update(c, STRATEGY_BOT, row["id"], status="done", note=note[:1000], quiet=True)
+    H.task_update(c, STRATEGY_BOT, row["id"], status="done", note=note[:1000], quiet=True, strict=False)
     H.recount(c, [link["asker"] for link in links])

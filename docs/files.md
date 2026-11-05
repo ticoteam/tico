@@ -14,7 +14,7 @@ bot publishes appears.
 
 One row is one file. Editing it does not add rows: the row keeps its title, gains a version and an
 activity entry, and moves to the top. A row is identified by the bot, where it came from (its task,
-its conversation, or bot-wide) and a canonical identity:
+its thread, or bot-wide) and a canonical identity:
 
 | Identity | Meaning |
 |---|---|
@@ -52,7 +52,7 @@ open, comma-separated as `bucket=https://base[/prefix]`, for example
 `acme-files=https://d1234example.cloudfront.net`: put a CloudFront distribution in front of the bucket (the bucket as
 its origin, with origin access control) and name the distribution's address here. `s3://acme-files/reports/q3.pdf`
 then becomes `https://d1234example.cloudfront.net/reports/q3.pdf`, each path segment URL-encoded. Tico shows such
-links in task bodies, comments and chat (images as thumbnails, PDFs and documents as cards), and `hub` and the MCP
+links in task bodies, comments and threads (images as thumbnails, PDFs and documents as cards), and `hub` and the MCP
 tools rewrite them in a bot's text before sending. An entry that is not https, names a malformed bucket, or names
 `TICO_BLOB_BUCKET` (Tico's own private store, served only through its access checks) is ignored and logged. Whether the distribution is public or behind signed URLs or cookies is the operator's choice; Tico only
 rewrites the link and never signs or fetches it. An unmapped `s3://` URI shows as a file chip with a Copy button;
@@ -101,7 +101,7 @@ A bot's deliverable attached to a task (`hub task attach`) is listed as a file f
 Text attachments preserve indentation, spaces and final newlines. Unsupported bot deliverable types return a clear
 422 error listing the allowed types.
 
-A picture, SVG, HTML page, video or audio clip can also go on a chat reply or task comment as a titled visual
+A picture, SVG, HTML page, video or audio clip can also go on a thread reply or task comment as a titled visual
 (`--visual PATH --title "…"`); it is stored as a file there and shows inline as a card; video and audio play in it. See
 [Visuals in replies](visuals.md).
 
@@ -110,12 +110,15 @@ archive it; the attachment is detached from the task and the action is recorded.
 
 ## Visibility
 
+- A page's **Who can see it** audience can narrow its inherited visibility for humans and bots; pins and task links
+  never bypass it. The maintainer and page managers always pass this audience check ([Pages](pages.md#who-can-see-it)).
+
 A file inherits the visibility of where it came from:
 
 - made for a **task**: whoever can see the task;
-- made in a **conversation**: whoever can see the conversation. A direct chat's files are visible
-  to its participants and to the team owner, who can open direct chats. Personal Assistant rooms are the exception:
-  only their human sees them, the owner included. In a shared bot room, only its members do. Anyone else does not learn a file name, a count, a version or an
+- made in a **thread**: whoever can see the thread. A DM's files are visible
+  to its participants and to the team owner, who can open DMs. Personal Assistant DMs are the exception:
+  only their human sees them, the owner included. In a shared bot thread, only its members do. Anyone else does not learn a file name, a count, a version or an
   activity entry from it, on the bot's page or anywhere else;
 - **bot-wide**: anyone with **Read** permission on the bot ([See, Read and Write](permissions.md)). **See** alone lets them reach the bot's page, not read its files;
 - **pinned wider**: a page a person pinned to the Dashboard or a team page is also readable by that place's audience
@@ -124,8 +127,8 @@ A file inherits the visibility of where it came from:
 
 The check applies to every list row, the total, metadata, activity, versions and every download.
 
-A bot cannot make a chat's file bot-wide. The owner or a bot administrator **promotes** a task or
-conversation file to bot-wide, explicitly and never automatically (`PATCH /api/v2/files/{id}` with `promote: true`); the move is
+A bot cannot make a thread's file bot-wide. The owner or a bot administrator **promotes** a task or
+thread file to bot-wide, explicitly and never automatically (`PATCH /api/v2/files/{id}` with `promote: true`); the move is
 recorded in the file's activity. Archiving (`archived: true`) takes a file off the list; its bytes stay, and it returns when
 the bot publishes a changed version.
 
@@ -136,7 +139,7 @@ activity, with the visible `total`), `POST /api/v2/files/uploads`, `/links`, `/i
 `PATCH /api/v2/files/{id}` (title, task, archive, promote), `GET /api/v2/files/{id}/activity` and
 `/versions`. Display names come as `actor_name` and in `actors`, as everywhere in v2.
 `GET /api/v2/bots/{bot}/instructions` reads the Computer's latest Instructions snapshot with the bot's Read permission.
-It returns `content`, `published`, `updated` and `source`; `published: false` means the Computer has not reported content yet.
+It returns `content`, `published`, `updated_at` and `source`; `published: false` means the Computer has not reported content yet.
 It never substitutes the bot's description for its Instructions.
 `docs/custom-frontend.md` and `examples/custom-frontend` show a bot's Files in a frontend of your own.
 Pages, Library › Files, search and deleting for good are below and in [Pages](pages.md).
@@ -144,7 +147,7 @@ Pages, Library › Files, search and deleting for good are below and in [Pages](
 ## Library › Files
 
 **Library › Files** lists every file the viewer may see, across all bots and whoever added it: bots' files and
-[pages](pages.md), task and chat attachments, people's uploads, links and imports. Each row passes the same check as
+[pages](pages.md), task and thread attachments, people's uploads, links and imports. Each row passes the same check as
 the bot's page, so a file you may not read adds no row, name or count.
 
 - **Filters:** kind (Pages, Documents, Images, Data, Video and audio, Other), bot, team (its bots' files and the
@@ -152,7 +155,8 @@ the bot's page, so a file you may not read adds no row, name or count.
   address (`#/library/files?kind=page&bot=…`). On a phone they scroll sideways.
 - **Rows:** title, kind, bot, last updated, and where a page is pinned. A page opens full size; another stored file
   opens in the file viewer; a link opens at its provider.
-- **Paging:** newest activity first, 50 rows at a time, each answer capped in bytes, with no total.
+- **Paging:** newest activity first, 50 rows at a time, each answer capped in bytes, with no total. Cursors are
+  encrypted and authenticated; a scan can return an empty page with a continuation past hidden rows.
 
 `GET /api/v2/files?kind=&bot=&team=&task=&since=&until=&pinned=&archived=&limit=&cursor=`.
 
@@ -166,8 +170,11 @@ visibility check as a list row.
 Tico indexes a version when it is published. A file from before this release is indexed in the background, a few
 hundred at a time; until then only its title is found.
 
-`GET /api/v2/files/search?q=&limit=`, `hub file search "<words>"`, file hits in the search box (⌘K), and the
+`GET /api/v2/files/search?q=&limit=&kind=`, `hub file search "<words>" [--kind page]`, file hits in the search box (⌘K), and the
 Librarian, which searches files beside the docs.
+
+`kind` accepts the Library's kinds (`page`, `document`, `image`, `data`, `media`, `other`). The task's **Link page**
+picker searches with `kind=page`.
 
 ## Deleting a file for good
 
@@ -176,10 +183,11 @@ page's menu, `DELETE /api/v2/files/{id}`, or `hub file delete ID` with an owner 
 confirm first.
 
 - Every version's bytes leave every place Tico stored them: this server, the company's bucket and its earlier
-  places, and Tico file hosting. Bytes anything else still uses stay: another file, a task or chat attachment, a
+  places, and Tico file hosting. Bytes anything else still uses stay: another file, a task or thread attachment, a
   meeting's recording, market evidence, the team icon. Bytes this server wrote in the last two minutes (the same
   bytes, uploaded again) go on a later pass, within a few minutes.
-- Its search text, page settings and pins go.
+- Its search text and pins go. A page keeps a tombstone with its audience and identity provenance, so deleting it
+  never reopens copied content. Saved page references and citations show **A deleted page** for everyone.
 - One row stays, titled **Deleted file**, and its activity records who deleted it, when and how many versions,
   without the name or the content. Publishing the same path again makes a new file.
 - The backup (`TICO_BACKUP_URL`) keeps its copy: files there are only ever added. Remove them there by hand if they
@@ -325,7 +333,7 @@ Keys are passed directly to S3 clients, never exported into the server's environ
 ### Tico file hosting
 
 A self-hosted company with Gateway credits can keep its files in storage Tico runs, served from its own
-`ticofiles.com` address. It covers task files, chat attachments, visuals, reports and recordings.
+`ticofiles.com` address. It covers task files, thread attachments, visuals, reports and recordings.
 The owner turns it on in **Settings** through the Gateway page. Tico HQ supplies the storage access and files
 address; you do not enter AWS keys. For example, Acme at `acme.example` can use `acme-files.ticofiles.com` for its files.
 
@@ -342,7 +350,7 @@ be started again to copy what remains.
 Files in Tico storage are reachable only through short-lived signed links. Tico checks access on every request,
 private-task files stay private, and there is no public listing. Pictures, video and audio open inline from the
 company's files address. Web pages and SVG files show inline from it too, so a Mac or local install with no
-[visual address](visuals.md#self-hosting) of its own still shows them in conversations and on pages: Tico stores a
+[visual address](visuals.md#self-hosting) of its own still shows them in threads and on pages: Tico stores a
 cleaned copy beside each one (`/visuals/…`, as described above) and, after checking the reader, sends their browser
 to a four-minute link to it. A page stored before file hosting was turned on stays an **Open** card until **Move
 existing files** copies it. While credits are out or hosting is stopped, a page that already has its copy still

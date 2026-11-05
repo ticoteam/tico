@@ -16,7 +16,8 @@ suggests one.
 ## 1. Pick the lens
 
 `hub lens list` for the ids and what each is for. Scenarios or Pre-mortem fit a tripped bet; Blue Ocean fits "are we
-different enough"; Seven Powers fits "what stops a bigger company copying us". If the owner named one, use it. A
+different enough"; Seven Powers fits "what stops a bigger company copying us"; Startup idea check fits a young company asking "is this
+worth building". If the owner named one, use it. A
 market lens (Where to Play, Five Forces) is the Librarian's, not yours.
 
 ## 2. Answer from the record

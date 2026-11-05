@@ -2,10 +2,14 @@
 //! the old Python runner). Only the checks the chat path needs: runtime install, version, sign-in and models for
 //! Claude, Codex, Gemini (the Gemini CLI, and `agy` for Antigravity bots), Muse Code, Pi, Cursor and Grok Build, and per bot its repository, AGENT.md and bot.yaml. The server gates claims on these rows.
 
+use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
-use std::time::Duration;
+use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::OnceLock;
+use std::time::{Duration, Instant};
 
 use serde_json::{json, Map, Value};
+use tokio::sync::Notify;
 
 use crate::client::Client;
 use crate::config::Config;
@@ -52,6 +56,19 @@ pub fn codex_models(home: Option<PathBuf>) -> Vec<String> {
 /// One runtime's row: installed, signed in, version, models, controls, detail, goals, commands. With a
 /// profile, every check runs in that profile's home and no shared key signs it in.
 pub async fn runtime_readiness(runtime: &str, sign: &SignIn, client: &Client, assignments: &[Value], profile: Option<&Profile>) -> Map<String, Value> {
+    runtime_readiness_from(runtime, sign, client, assignments, profile, None).await
+}
+
+/// `runtime_readiness`, given the row the last probe left for this login: its goals and commands stand while the
+/// installed version is the same, since they depend on the version alone.
+async fn runtime_readiness_from(
+    runtime: &str,
+    sign: &SignIn,
+    client: &Client,
+    assignments: &[Value],
+    profile: Option<&Profile>,
+    previous: Option<&Map<String, Value>>,
+) -> Map<String, Value> {
     let caps = crate::harness_tools::caps(runtime, "");
     let exe = if crate::harness_tools::runtimes().iter().any(|r| r == runtime) { executable(runtime) } else { None };
     let mut process: Env = std::env::vars().collect();
@@ -80,6 +97,11 @@ pub async fn runtime_readiness(runtime: &str, sign: &SignIn, client: &Client, as
             state
         }
     };
+    // A host's per-version facts (Claude Code's features) are read here, when its version is new, so a turn starts no
+    // process for them.
+    if exe.is_some() {
+        crate::hosts::note_version(runtime, &version).await;
+    }
     // Signed in but unable to save a session (Muse Code's data folder): no turn could run, so not ready, and no
     // fallback hop picks it. `data_problem` tells it from a sign-in that could not be checked, so the Computers page
     // names the folder instead of asking for a sign-in.
@@ -117,7 +139,15 @@ pub async fn runtime_readiness(runtime: &str, sign: &SignIn, client: &Client, as
     if let Some(problem) = data_problem.filter(|_| crate::fallback::server_takes_data_problem()) {
         row.insert("data_problem".into(), json!(problem));
     }
-    row.extend(crate::goals::capabilities(runtime, exe.as_deref(), &version).await);
+    // Kept from the last probe while the version is the same; read again only when it changed (or on the first probe).
+    let kept = previous.filter(|p| !version.is_empty() && p["version"].as_str() == Some(version.as_str()));
+    match kept {
+        Some(p) => {
+            row.insert("goals".into(), p.get("goals").cloned().unwrap_or(json!(false)));
+            row.insert("commands".into(), p.get("commands").cloned().unwrap_or(json!([])));
+        }
+        None => row.extend(crate::goals::capabilities(runtime, exe.as_deref(), &version).await),
+    }
     row
 }
 
@@ -176,6 +206,8 @@ async fn sign_in_state(
                 Err(e) => Err(e),
             },
             "json" => {
+                // A sign-in or sign-out while this runs (accounts::forget) makes its account stale: it is then not kept.
+                let since = crate::accounts::read_started(&account_key, runtime);
                 let ran = run_env(&argv, timeout, env).await;
                 match &ran {
                     Err(true) => Err(true),
@@ -184,8 +216,12 @@ async fn sign_in_state(
                         Some(s) if s[&status.field] == true => {
                             if caps.account == "status-json" {
                                 match crate::accounts::from_status_json(&s) {
-                                    Some(account) => crate::accounts::remember(&account_key, runtime, account),
-                                    None => crate::accounts::forget(&account_key, runtime),
+                                    Some(account) => {
+                                        crate::accounts::keep_if_current(&account_key, runtime, since, || crate::accounts::remember(&account_key, runtime, account));
+                                    }
+                                    None => {
+                                        crate::accounts::forget_if_current(&account_key, runtime, since);
+                                    }
                                 }
                             }
                             let method = text_of(&s[&status.method_field]);
@@ -270,36 +306,195 @@ fn joined(rows: &Map<String, Value>) -> String {
     parts.join("; ").chars().take(500).collect()
 }
 
+/// The logins a runtime's rows are read for: each profile the bots on it use, or the computer's own login alone
+/// (named by profile, "" for the computer's own). The probe and the composition both read them from here.
+fn logins(config: &Config, assignments: &[Value], computer_logins: bool, runtime: &str) -> BTreeMap<String, Option<Profile>> {
+    let mut used: BTreeMap<String, Option<Profile>> = Default::default();
+    if computer_logins {
+        let own = profiles::computer_login(&config.data);
+        used.insert(own.as_ref().map(|p| p.name.clone()).unwrap_or_default(), own);
+    } else {
+        for entry in assignments {
+            let requested = text_of(&entry["profile"]);
+            let profile = profiles::assignment_profile(&config.data, entry, false);
+            if text_of(&entry["config"]["runtime"]) == runtime && (profile.is_some() || requested.is_empty()) {
+                used.entry(profile.as_ref().map(|p| p.name.clone()).unwrap_or_default()).or_insert(profile);
+            }
+        }
+    }
+    used
+}
+
+/// One probe result per runtime and login: (runtime, profile name, "" for the computer's own login).
+pub type Rows = BTreeMap<(String, String), Map<String, Value>>;
+
+/// What a probe reads besides the sign-in state: the runtimes the bots use, the logins used on each with the folder and
+/// sharing its environment is built from, each runtime's bot-key sign-in (read from the bots' grants), the config
+/// entries that pick the logins (`profiles`, `default_profile`, `bot_profiles`), and the server's word on a data problem
+/// (fallback.rs). A change in any of them asks for a probe (runner.rs).
+pub fn probe_inputs(config: &Config, assignments: &[Value], computer_logins: bool) -> String {
+    let mut parts = vec![
+        format!("computer_logins={computer_logins}"),
+        format!("server_takes_data_problem={}", crate::fallback::server_takes_data_problem()),
+    ];
+    for key in ["profiles", "default_profile", "bot_profiles"] {
+        parts.push(format!("{key}={}", config.data.get(key).map(|v| v.to_string()).unwrap_or_default()));
+    }
+    for runtime in crate::harness_tools::runtimes() {
+        let used = logins(config, assignments, computer_logins, &runtime);
+        let names: Vec<String> = used
+            .iter()
+            .map(|(name, profile)| match profile {
+                Some(p) => format!("{name:?}@{}:share={}", p.directory.display(), p.share_operator),
+                None => format!("{name:?}"),
+            })
+            .collect();
+        parts.push(format!(
+            "{runtime} assigned={} logins={names:?} bot_key={:?}",
+            crate::signin::assigned(assignments, &runtime),
+            crate::hosts::bot_key_sign_in(&runtime, assignments)
+        ));
+    }
+    parts.join("\n")
+}
+
+/// Probes every runtime's logins. This is the only place that starts a runtime for its version or sign-in, or asks the
+/// hub for a key; the heartbeat never calls it (runner.rs keeps its rows). `previous` is the last probe's rows, whose
+/// commands stand while a version is unchanged. Returns the rows and the inputs they were taken with.
+pub async fn probe_all(config: &Config, sign: &SignIn, client: &Client, assignments: &[Value], computer_logins: bool, previous: &Rows) -> (Rows, String) {
+    // Read before the first check: an input that changes while the probe runs is then not in the signature these rows
+    // carry, so the next pass sees the difference and probes again (runner.rs probe_now asks for one at once).
+    let inputs = probe_inputs(config, assignments, computer_logins);
+    let mut rows = Rows::new();
+    for runtime in crate::harness_tools::runtimes() {
+        let used = logins(config, assignments, computer_logins, &runtime);
+        let targets: Vec<(String, Option<Profile>)> = if used.keys().all(|k| k.is_empty()) { vec![(String::new(), None)] } else { used.into_iter().collect() };
+        for (name, profile) in targets {
+            let before = previous.get(&(runtime.clone(), name.clone()));
+            let row = runtime_readiness_from(&runtime, sign, client, assignments, profile.as_ref(), before).await;
+            rows.insert((runtime.clone(), name), row);
+        }
+    }
+    (rows, inputs)
+}
+
+/// When the probe last ran, and whether an event asked for one since. The timer is `PROBE_EVERY`; events are `request`.
+#[derive(Default)]
+pub struct Schedule {
+    last: Option<Instant>,
+    requested: bool,
+}
+
+/// How long the readiness rows stand when nothing changes: the owner's schedule (a plain timer, not a memo).
+pub const PROBE_EVERY: Duration = Duration::from_secs(600);
+
+impl Schedule {
+    pub fn request(&mut self) {
+        self.requested = true;
+    }
+
+    /// Whether a probe is due now: an event asked for one, or the timer has run out. Never before the first probe, which
+    /// the start-up pass runs itself.
+    pub fn due(&self, now: Instant) -> bool {
+        self.requested || self.last.is_some_and(|t| now.duration_since(t) >= PROBE_EVERY)
+    }
+
+    pub fn ran(&mut self, now: Instant) {
+        self.requested = false;
+        self.last = Some(now);
+    }
+
+    pub fn ran_before(&self) -> bool {
+        self.last.is_some()
+    }
+
+    /// How long the probe loop may sleep before the timer makes a probe due; None until the first probe has run.
+    pub fn wait(&self, now: Instant) -> Option<Duration> {
+        self.last.map(|t| (t + PROBE_EVERY).saturating_duration_since(now))
+    }
+}
+
+/// The last probe's rows, the inputs they were taken with, and the schedule.
+#[derive(Default)]
+pub struct Probed {
+    pub rows: Rows,
+    pub inputs: String,
+    pub schedule: Schedule,
+}
+
+static WAKE: OnceLock<Notify> = OnceLock::new();
+
+/// The probe loop's wake-up (runner.rs).
+pub fn wake() -> &'static Notify {
+    WAKE.get_or_init(Notify::new)
+}
+
+/// Every request so far (`requests`, for the tests that a finished action asked for a probe).
+static REQUESTS: AtomicUsize = AtomicUsize::new(0);
+
+/// An event that changes what a probe reads (an install or update finished, a sign-in or sign-out, a credential changed)
+/// asks for a probe now rather than at the next scheduled one. A request made while a probe runs keeps its notice, so
+/// the next wait ends at once and one more probe runs after it. Several before a wait make one probe.
+pub fn request_probe() {
+    REQUESTS.fetch_add(1, Ordering::SeqCst);
+    wake().notify_one();
+}
+
+#[cfg(test)]
+pub fn requests() -> usize {
+    REQUESTS.load(Ordering::SeqCst)
+}
+
+/// Waits until a probe is due: an event has asked for one (`wake`), or the timer has run out. Events before the probe
+/// runs are one probe, since `wake` keeps one pending notice. It returns without probing, and whether an event asked
+/// (the caller probes and records it with `Schedule::ran`).
+pub async fn wait_due(probed: &std::sync::Mutex<Probed>, wake: &Notify) -> bool {
+    loop {
+        // Before the first probe the wait is a full window; a start-up probe may land in it, and the next wait then runs
+        // to the timer from that probe.
+        let after = probed.lock().unwrap().schedule.wait(Instant::now()).unwrap_or(PROBE_EVERY);
+        let woken = tokio::select! {
+            _ = wake.notified() => true,
+            _ = tokio::time::sleep(after) => false,
+        };
+        let mut probed = probed.lock().unwrap();
+        if woken {
+            probed.schedule.request();
+            return true;
+        }
+        if probed.schedule.due(Instant::now()) {
+            return false;
+        }
+    }
+}
+
 /// Readiness per runtime, and per subscription profile for the profiles in use (service.py runtime_report): the
 /// runtime row reports the profile that needs attention first and carries every profile's row under `profiles`.
 /// A sign-in the provider refused on a real turn shows as `rejected` until its credentials change.
-pub async fn runtime_report(config: &Config, sign: &SignIn, client: &Client, assignments: &[Value], computer_logins: bool) -> Map<String, Value> {
+/// Composed from the last probe's `rows`, so it starts no process and reads no sign-in; a login the probe has not
+/// read yet is left out until the next probe (runner.rs asks for one).
+pub fn runtime_report(config: &Config, sign: &SignIn, assignments: &[Value], computer_logins: bool, rows: &Rows) -> Map<String, Value> {
     let mut report = Map::new();
     for runtime in crate::harness_tools::runtimes() {
         let runtime = runtime.as_str();
-        let mut used: std::collections::BTreeMap<String, Option<Profile>> = Default::default();
-        if computer_logins {
-            let own = profiles::computer_login(&config.data);
-            used.insert(own.as_ref().map(|p| p.name.clone()).unwrap_or_default(), own);
-        } else {
-            for entry in assignments {
-                let requested = text_of(&entry["profile"]);
-                let profile = profiles::assignment_profile(&config.data, entry, false);
-                if text_of(&entry["config"]["runtime"]) == runtime && (profile.is_some() || requested.is_empty()) {
-                    used.entry(profile.as_ref().map(|p| p.name.clone()).unwrap_or_default()).or_insert(profile);
-                }
-            }
-        }
+        let used = logins(config, assignments, computer_logins, runtime);
         let mut targets = Map::new();
-        if used.keys().all(|k| k.is_empty()) {
-            targets.insert(String::new(), Value::Object(runtime_readiness(runtime, sign, client, assignments, None).await));
-        } else {
-            for (name, profile) in &used {
-                targets.insert(name.clone(), Value::Object(runtime_readiness(runtime, sign, client, assignments, profile.as_ref()).await));
+        let names: Vec<String> = if used.keys().all(|k| k.is_empty()) { vec![String::new()] } else { used.keys().cloned().collect() };
+        for name in names {
+            if let Some(row) = rows.get(&(runtime.to_string(), name.clone())) {
+                targets.insert(name, Value::Object(row.clone()));
             }
         }
         for (name, status) in targets.iter_mut() {
             let profile = used.get(name).cloned().flatten();
+            // The account is read live (accounts.rs), not the copy the probe stored, and only beside a sign-in the probe
+            // confirmed, as before: a row that is not ready shows none, even a read that finished after a sign-out.
+            let account = if status["authenticated"] == "ready" { crate::accounts::account(name, runtime) } else { None };
+            let fields = status.as_object_mut().unwrap();
+            match account {
+                Some(account) => fields.insert("account".into(), account),
+                None => fields.remove("account"),
+            };
             // A profile whose turns use the computer's own login on this runtime (`share_operator`): the server holds
             // that login once, not once per name (backend/login_holds.py canonical). Only to a server that keeps
             // login holds, since an older one refuses a field it does not know.
@@ -325,7 +520,7 @@ pub async fn runtime_report(config: &Config, sign: &SignIn, client: &Client, ass
         }
         let default = profiles::computer_login(&config.data).map(|p| p.name).unwrap_or_default();
         let own_name = if computer_logins { default.as_str() } else { "" };
-        let own = crate::profiles::windows(own_name, runtime);
+        let own = crate::profiles::windows_for_server(own_name, runtime);
         let row = computer_row(targets, own, computer_logins);
         report.insert(runtime.into(), row);
     }
@@ -466,6 +661,10 @@ pub async fn preflight(config: &Config, sign: &SignIn, assignments: &[Value], ru
         let refused = if signin::bot_keyed(&runtime) { sign.rejection(&runtime, profile.as_ref(), &bot) } else { None };
         let mut sign_in = status.get("authenticated").cloned().unwrap_or(json!("unknown"));
         let mut problems: Vec<String> = vec![];
+        let repo_problem = if app { None } else { crate::repo_safety::outside_installation(&path).err() };
+        if let Some(problem) = &repo_problem {
+            problems.push(problem.clone());
+        }
         let mut warnings: Vec<String> = crate::readiness_extra::credential_warnings(&bot);
         if !requested.is_empty() && !profiles::covers(expected) {
             problems.push(format!("Subscription {requested} doesn't cover {runtime}"));
@@ -473,8 +672,8 @@ pub async fn preflight(config: &Config, sign: &SignIn, assignments: &[Value], ru
         if !profiles::missing(&config.data, &requested).is_empty() {
             problems.push(profiles::subscription_problem(&config.data, assignments, &requested, false, &computer));
         }
-        let repository_present = path.join("AGENT.md").is_file();
-        if !repository_present && !app {
+        let repository_present = repo_problem.is_none() && path.join("AGENT.md").is_file();
+        if !repository_present && !app && repo_problem.is_none() {
             problems.push(crate::product_files::problem(&bot).or_else(|| crate::fetchrepo::problem(&bot)).unwrap_or_else(|| "Missing bot repository or AGENT.md".into()));
         } else if repository_present {
             if caps.repo_permission_lint {
@@ -555,7 +754,12 @@ pub async fn preflight(config: &Config, sign: &SignIn, assignments: &[Value], ru
                     let same = |key: &str| {
                         cloud || declared.get(key).map(text_of).filter(|v| !v.is_empty()).is_none_or(|v| v == text_of(&expected[key]))
                     };
-                    (name == bot || (!shared.is_empty() && name == shared)) && same("runtime") && same("model")
+                    // A bot made after bots got stable ids keeps its slug in bot.yaml (its id is a UUID): the slug it
+                    // has now, or the one its folder was named from before a rename.
+                    let slug = text_of(&expected["name"]);
+                    let named = crate::sessions::named_folder(expected).is_some_and(|f| crate::sessions::folder_named_from(&f, &name));
+                    let known_name = name == bot || (!slug.is_empty() && name == slug) || named;
+                    (known_name || (!shared.is_empty() && name == shared)) && same("runtime") && same("model")
                 }
                 _ => false,
             };
@@ -653,7 +857,7 @@ pub fn document(runtimes: &Map<String, Value>, checks: &[Map<String, Value>], st
     }
     // `worktree_waits`: a worktree the server reserves for a waiting task is prepared here while its bot is
     // idle (worktrees.rs prepare), so the server records a wait instead of refusing a task at its limit.
-    let mut doc = json!({"schema_version": 1, "runtimes": runtimes, "bots": bots, "worktrees": true, "worktree_waits": true});
+    let mut doc = json!({"schema_version": 1, "runtimes": runtimes, "bots": bots, "worktrees": true, "worktree_waits": true, "worktree_recovery": true});
     // Bots run as their own user here, so the server may hand this computer a turn on a Tico model
     // (backend/models_preset.py); without it the server keeps such turns away (gateway_relay.rs refuses them).
     doc["isolated"] = json!(crate::isolation::enabled());
@@ -870,6 +1074,29 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn explicit_named_and_shared_bot_roots_inside_the_install_are_not_ready() {
+        let mut config = checkouts(&["guard-root", "guard-named", "guard-shared"]);
+        let projects = config.projects_dir();
+        for name in ["alias", "bot-named", "bot-source"] {
+            std::os::unix::fs::symlink(crate::env::root(), projects.join(name)).unwrap();
+        }
+        config.data.insert("repos".into(), json!({"guard-root": projects.join("alias/templates")}));
+        let assignments = vec![
+            json!({"bot": "guard-root", "config": {"runtime": "codex"}}),
+            json!({"bot": "guard-named", "config": {"runtime": "codex", "folder": "bot-named"}}),
+            json!({"bot": "guard-shared", "config": {"runtime": "codex", "shared_from": "guard-source", "repo": "acme/bot-source"}}),
+        ];
+        let sign = SignIn::new(&projects);
+        let rows = preflight(&config, &sign, &assignments, &Map::new(), false).await;
+        for row in rows {
+            assert_eq!(row["ready"], false);
+            assert!(row["problems"].to_string().contains("inside the Tico install"), "{row:?}");
+            assert_eq!(row["repository_present"], false);
+        }
+        std::fs::remove_dir_all(projects).unwrap();
+    }
+
+    #[tokio::test]
     async fn a_bot_key_runtime_is_ready_per_bot_by_its_own_grant() {
         use crate::hosts::gemini::set_credential_names;
         let config = checkouts(&["has-key", "no-key", "gateway", "g-key", "g-none"]);
@@ -935,5 +1162,236 @@ mod tests {
         let covered = row_of(&rows, "covered-bot");
         assert_eq!((covered["ready"].clone(), covered["sign_in"].clone()), (json!(true), json!("rejected")), "{covered:?}");
         let _ = std::fs::remove_dir_all(config.str("projects_dir"));
+    }
+}
+
+#[cfg(test)]
+pub(crate) mod probe_tests {
+    use super::*;
+
+    /// PATH is process-wide, so the tests that put fake runtimes on it run one at a time.
+    pub(crate) static PATH_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
+    /// Fake runtime executables first on PATH, each reporting `version`: each run appends its arguments to one log, so
+    /// spawns can be counted. Returns the log and the PATH to put back.
+    pub(crate) fn fake_runtimes(root: &Path, version: &str) -> (PathBuf, String) {
+        let bin = root.join("bin");
+        std::fs::create_dir_all(&bin).unwrap();
+        let log = root.join("spawns.log");
+        for rt in crate::harness_tools::runtimes() {
+            let exe = bin.join(crate::harness_tools::executable_for(&rt));
+            std::fs::write(&exe, format!("#!/bin/sh\necho \"{rt} $*\" >> '{}'\necho '{version} (Claude Code)'\n", log.display())).unwrap();
+            use std::os::unix::fs::PermissionsExt;
+            std::fs::set_permissions(&exe, std::fs::Permissions::from_mode(0o755)).unwrap();
+        }
+        let before = std::env::var("PATH").unwrap_or_default();
+        std::env::set_var("PATH", format!("{}:{before}", bin.display()));
+        (log, before)
+    }
+
+    fn spawns(log: &Path) -> Vec<String> {
+        std::fs::read_to_string(log).map(|s| s.lines().map(String::from).collect()).unwrap_or_default()
+    }
+
+    fn runner_config(root: &Path) -> (Config, SignIn, Client) {
+        let data = json!({"projects_dir": root.join("projects").display().to_string()}).as_object().unwrap().clone();
+        let config = Config { path: PathBuf::new(), data };
+        let sign = SignIn::new(&root.join("projects"));
+        let client = Client::new("http://127.0.0.1:9", "t", 1, 0).unwrap();
+        (config, sign, client)
+    }
+
+    #[tokio::test]
+    async fn a_heartbeat_pass_composes_the_probe_rows_and_starts_no_process() {
+        let _guard = PATH_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let root = std::env::temp_dir().join(format!("tico-probe-{}", uuid::Uuid::new_v4().simple()));
+        std::fs::create_dir_all(root.join("projects")).unwrap();
+        let (log, path) = fake_runtimes(&root, "2.1.300");
+        let (config, sign, client) = runner_config(&root);
+        let (rows, _) = probe_all(&config, &sign, &client, &[], false, &Rows::new()).await;
+        let probed = spawns(&log).len();
+        assert!(probed > 0, "the probe starts the runtimes");
+        for _ in 0..40 {
+            let report = runtime_report(&config, &sign, &[], false, &rows);
+            assert!(report["claude"]["version"].as_str().unwrap().starts_with("2.1.300"));
+        }
+        assert_eq!(spawns(&log).len(), probed, "forty heartbeat passes start no process");
+        std::env::set_var("PATH", path);
+        std::fs::remove_dir_all(root).ok();
+    }
+
+    #[tokio::test]
+    async fn a_probe_on_the_same_versions_reads_no_feature_or_protocol_again() {
+        let _guard = PATH_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let root = std::env::temp_dir().join(format!("tico-probe-reuse-{}", uuid::Uuid::new_v4().simple()));
+        std::fs::create_dir_all(root.join("projects")).unwrap();
+        // A version of its own: Claude Code's features are kept per command for the process, and the other test's is 2.1.300.
+        let (log, path) = fake_runtimes(&root, "2.1.301");
+        let (config, sign, client) = runner_config(&root);
+        let (rows, _) = probe_all(&config, &sign, &client, &[], false, &Rows::new()).await;
+        let first = spawns(&log);
+        assert!(first.iter().any(|l| l == "claude --help"), "the first probe reads Claude Code's features");
+        assert!(first.iter().any(|l| l.starts_with("codex app-server")), "the first probe reads the codex protocol");
+        let _ = probe_all(&config, &sign, &client, &[], false, &rows).await;
+        let second = &spawns(&log)[first.len()..];
+        assert!(!second.iter().any(|l| l == "claude --help"), "Claude Code's features stand while its version is the same");
+        assert!(!second.iter().any(|l| l.starts_with("codex app-server")), "the codex protocol stands while its version is the same");
+        std::env::set_var("PATH", path);
+        std::fs::remove_dir_all(root).ok();
+    }
+
+    #[test]
+    fn the_timer_probes_once_per_ten_minutes_and_each_event_adds_one_probe() {
+        let start = Instant::now();
+        let at = |secs: u64| start + Duration::from_secs(secs);
+        let mut schedule = Schedule::default();
+        assert!(!schedule.due(at(0)), "nothing is due before the start-up probe");
+        schedule.ran(at(0));
+        let mut probes = 0;
+        for pass in 1..=240 {
+            // An hour of heartbeat passes, one every 15 s.
+            if schedule.due(at(15 * pass)) {
+                schedule.ran(at(15 * pass));
+                probes += 1;
+            }
+        }
+        assert_eq!(probes, 6, "one probe per ten-minute window");
+        schedule.request();
+        schedule.request();
+        schedule.request();
+        assert!(schedule.due(at(3615)), "an event makes a probe due");
+        schedule.ran(at(3615));
+        assert!(!schedule.due(at(3630)), "one event is one probe");
+    }
+
+    #[tokio::test]
+    async fn an_event_ends_the_wait_once_and_only_the_timer_ends_it_otherwise() {
+        let probed = std::sync::Mutex::new(Probed::default());
+        let wake = Notify::new();
+        probed.lock().unwrap().schedule.ran(Instant::now());
+        wake.notify_one();
+        wake.notify_one();
+        wake.notify_one();
+        tokio::time::timeout(Duration::from_secs(2), wait_due(&probed, &wake)).await.expect("an event makes a probe due");
+        probed.lock().unwrap().schedule.ran(Instant::now());
+        assert!(tokio::time::timeout(Duration::from_millis(100), wait_due(&probed, &wake)).await.is_err(), "no event and no timer: no probe");
+        wake.notify_one();
+        tokio::time::timeout(Duration::from_secs(2), wait_due(&probed, &wake)).await.expect("the next event makes one more probe");
+    }
+
+    /// The probe reads each login's folder and sharing, and the config entries that pick it: a change in either changes
+    /// the inputs, so a probe runs (runner.rs maintain).
+    #[test]
+    fn the_probe_inputs_change_with_a_profiles_folder_or_how_it_is_shared() {
+        let assignments = json!([{"profile": "acme", "bot": "sales", "config": {"runtime": "claude"}}]);
+        let inputs = |dir: &str, share: bool| {
+            let data = json!({"profiles": {"acme": {"dir": dir, "share_operator": share}}, "default_profile": "acme"}).as_object().unwrap().clone();
+            probe_inputs(&Config { path: PathBuf::new(), data }, assignments.as_array().unwrap(), false)
+        };
+        let before = inputs("/p/acme", false);
+        assert_eq!(before, inputs("/p/acme", false), "the same config reads the same inputs");
+        assert_ne!(before, inputs("/p/moved", false), "a moved folder");
+        assert_ne!(before, inputs("/p/acme", true), "a login that now shares the operator's");
+    }
+
+    /// A request made while a probe runs keeps its notice, so the next wait ends at once and one more probe runs (finding 2).
+    #[tokio::test]
+    async fn a_request_during_a_probe_ends_the_next_wait_at_once() {
+        let probed = std::sync::Mutex::new(Probed::default());
+        probed.lock().unwrap().schedule.ran(Instant::now());
+        let wake = Notify::new();
+        wake.notify_one();
+        let asked = tokio::time::timeout(Duration::from_millis(500), wait_due(&probed, &wake))
+            .await
+            .expect("the request ends the wait, not the ten-minute timer");
+        assert!(asked, "the wait says an event asked");
+    }
+
+    /// The probe keeps the account it read, but the row shows the account read last, so a background read that finished
+    /// after the probe is on the next heartbeat (finding 5).
+    #[test]
+    fn a_composed_row_shows_the_account_read_last_not_the_one_the_probe_stored() {
+        let config = Config { path: PathBuf::new(), data: json!({"profiles": {"live-acct": {"dir": "/p/live-acct"}}}).as_object().unwrap().clone() };
+        let assignments = json!([{"profile": "live-acct", "bot": "live-bot", "config": {"runtime": "claude"}}]);
+        let root = std::env::temp_dir().join(format!("tico-probe-account-{}", uuid::Uuid::new_v4().simple()));
+        let sign = SignIn::new(&root.join("projects"));
+        let mut rows = Rows::new();
+        let stored = json!({"installed": true, "authenticated": "ready", "detail": "Signed in", "version": "2.1.300"});
+        rows.insert(("claude".into(), "live-acct".into()), stored.as_object().unwrap().clone());
+        let shown = |rows: &Rows| runtime_report(&config, &sign, assignments.as_array().unwrap(), false, rows)["claude"]["profiles"]["live-acct"]["account"].clone();
+        crate::accounts::remember("live-acct", "claude", json!({"email": "first@example.com"}));
+        assert_eq!(shown(&rows)["email"], "first@example.com");
+        crate::accounts::remember("live-acct", "claude", json!({"email": "second@example.com"}));
+        assert_eq!(shown(&rows)["email"], "second@example.com", "the next heartbeat shows the read that finished after the probe");
+        crate::accounts::forget("live-acct", "claude");
+    }
+
+    /// A row that is not ready shows no account, even one a background read kept after a sign-out: the overlay follows the
+    /// sign-in state, as the stored row did before (finding 2 of the re-review).
+    #[test]
+    fn a_row_that_is_not_ready_shows_no_account() {
+        let config = Config { path: PathBuf::new(), data: json!({"profiles": {"gated-acct": {"dir": "/p/gated-acct"}}}).as_object().unwrap().clone() };
+        let assignments = json!([{"profile": "gated-acct", "bot": "gated-bot", "config": {"runtime": "claude"}}]);
+        let root = std::env::temp_dir().join(format!("tico-probe-gated-{}", uuid::Uuid::new_v4().simple()));
+        let sign = SignIn::new(&root.join("projects"));
+        let mut rows = Rows::new();
+        let missing = json!({"installed": true, "authenticated": "missing", "detail": "Not signed in", "version": "2.1.300"});
+        rows.insert(("claude".into(), "gated-acct".into()), missing.as_object().unwrap().clone());
+        crate::accounts::remember("gated-acct", "claude", json!({"email": "old@example.com"}));
+        let report = runtime_report(&config, &sign, assignments.as_array().unwrap(), false, &rows);
+        let row = &report["claude"]["profiles"]["gated-acct"];
+        assert_eq!(row["authenticated"], "missing", "the row is there, and not ready");
+        assert!(row.get("account").is_none(), "and shows no account");
+        // The same login once it is ready shows the account, so the overlay itself still works.
+        rows.insert(("claude".into(), "gated-acct".into()), json!({"installed": true, "authenticated": "ready", "version": "2.1.300"}).as_object().unwrap().clone());
+        let report = runtime_report(&config, &sign, assignments.as_array().unwrap(), false, &rows);
+        assert_eq!(report["claude"]["profiles"]["gated-acct"]["account"]["email"], "old@example.com");
+        crate::accounts::forget("gated-acct", "claude");
+    }
+
+    fn median<T: PartialOrd + Copy>(mut values: Vec<T>) -> T {
+        values.sort_by(|a, b| a.partial_cmp(b).unwrap());
+        values[values.len() / 2]
+    }
+
+    /// The first probe of a process, then the median of fifty probes with the same versions and of fifty heartbeat
+    /// passes over the rows they left, with spawns counted for each. Run with --ignored --nocapture.
+    #[tokio::test]
+    #[ignore]
+    async fn probe_and_heartbeat_spawns_bench() {
+        let _guard = PATH_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let root = std::env::temp_dir().join(format!("tico-probe-bench-{}", uuid::Uuid::new_v4().simple()));
+        std::fs::create_dir_all(root.join("projects")).unwrap();
+        let (log, path) = fake_runtimes(&root, "2.1.300");
+        let (config, sign, client) = runner_config(&root);
+        let started = Instant::now();
+        let (mut rows, _) = probe_all(&config, &sign, &client, &[], false, &Rows::new()).await;
+        let first_spawns = spawns(&log).len();
+        let first_ms = started.elapsed().as_secs_f64() * 1000.0;
+        let (mut probe_ms, mut probe_spawns) = (Vec::new(), Vec::new());
+        for _ in 0..50 {
+            let before = spawns(&log).len();
+            let started = Instant::now();
+            let (next, _) = probe_all(&config, &sign, &client, &[], false, &rows).await;
+            probe_ms.push(started.elapsed().as_secs_f64() * 1000.0);
+            probe_spawns.push(spawns(&log).len() - before);
+            rows = next;
+        }
+        let (mut pass_us, before) = (Vec::new(), spawns(&log).len());
+        for _ in 0..50 {
+            let started = Instant::now();
+            let _ = runtime_report(&config, &sign, &[], false, &rows);
+            pass_us.push(started.elapsed().as_secs_f64() * 1e6);
+        }
+        let pass_spawns = spawns(&log).len() - before;
+        eprintln!(
+            "BENCH runtimes={} first_probe_spawns={first_spawns} first_probe_ms={first_ms:.0} same_version_probe_spawns_median={} same_version_probe_ms_median={:.1} heartbeat_passes=50 heartbeat_spawns={pass_spawns} heartbeat_pass_us_median={:.0}",
+            crate::harness_tools::runtimes().len(),
+            median(probe_spawns),
+            median(probe_ms),
+            median(pass_us)
+        );
+        std::env::set_var("PATH", path);
+        std::fs::remove_dir_all(root).ok();
     }
 }

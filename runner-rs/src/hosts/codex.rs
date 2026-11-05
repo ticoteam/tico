@@ -98,6 +98,7 @@ pub fn mcp_disable_config(codex_home: Option<&str>) -> Map<String, Value> {
 type Reply = Result<Value, Value>;
 
 struct Shared {
+    allocation: super::Allocation,
     tx: Events,
     env: Env,
     base_config: Map<String, Value>,
@@ -133,6 +134,7 @@ impl CodexHost {
     /// A host for a subscription profile: the servers silenced are the ones in that profile's config.toml.
     pub fn on_home(env: Env, tx: Events, codex_home: Option<&str>) -> CodexHost {
         CodexHost(Arc::new(Shared {
+            allocation: super::Allocation::default(),
             tx,
             env,
             base_config: mcp_disable_config(codex_home),
@@ -180,6 +182,7 @@ impl CodexHost {
         command.arg("app-server").stdin(Stdio::piped()).stdout(Stdio::piped()).stderr(Stdio::piped()).env_clear().envs(&self.0.env);
         super::new_group(&mut command);
         let mut child = command.spawn().map_err(|e| failed(format!("could not start codex app-server: {e}")))?;
+        self.0.allocation.mark();
         let _stderr = crate::run_diagnostics::Stderr::capture(&mut child, self.0.tx.clone(), &self.0.env);
         let stdout = child.stdout.take().ok_or_else(|| failed("codex app-server has no stdout"))?;
         *self.0.stdin.lock().await = child.stdin.take();
@@ -255,6 +258,10 @@ impl CodexHost {
         if let Some(mut reaped) = reaped {
             let _ = reaped.wait_for(|gone| *gone).await;
         }
+    }
+
+    pub fn track_allocation(&self, turn: std::sync::Arc<std::sync::atomic::AtomicBool>) {
+        self.0.allocation.track(turn);
     }
 
     pub fn alive(&self) -> bool {
@@ -598,7 +605,20 @@ impl CodexHost {
         // No memory under this computer's CODEX_HOME, even where the operator's config.toml turns it on: a bot
         // remembers in its repository's memory/ (Dev 301).
         cfg.insert("features.memories".into(), json!(false));
-        let mut params = json!({"cwd": settings.cwd, "approvalPolicy": "never", "sandbox": "danger-full-access"});
+        if settings.packet_only {
+            // Retain the disabled operator-server entries from base_config.
+            for feature in ["shell_tool", "multi_agent", "multi_agent_v2", "image_generation", "view_image",
+                "skill_search", "tool_suggest", "sleep_tool", "hooks", "plugins", "apps"] {
+                cfg.insert(format!("features.{feature}"), json!(false));
+            }
+            cfg.insert("tools.view_image".into(), json!(false));
+            cfg.insert("apps._default.enabled".into(), json!(false));
+            cfg.insert("project_doc_max_bytes".into(), json!(0));
+            cfg.insert("features.apply_patch_freeform".into(), json!(false));
+            cfg.insert("web_search".into(), json!("disabled"));
+        }
+        let mut params = json!({"cwd": settings.cwd, "approvalPolicy": "never",
+            "sandbox": if settings.packet_only { "read-only" } else { "danger-full-access" }});
         if let Some(m) = settings.model.as_ref().filter(|m| !m.is_empty()) {
             params["model"] = json!(m);
         }
@@ -819,6 +839,20 @@ mod tests {
     fn no_thread_keeps_a_codex_memory_outside_the_repository() {
         let host = CodexHost::on_home(Env::new(), tokio::sync::mpsc::unbounded_channel().0, None);
         assert_eq!(host.thread_params(&Settings::default())["config"]["features.memories"], json!(false));
+    }
+
+    #[test]
+    fn packet_threads_disable_local_external_and_delegated_tools() {
+        let host = CodexHost::on_home(Env::new(), tokio::sync::mpsc::unbounded_channel().0, None);
+        let settings = Settings { packet_only: true, cwd: "/synthetic/empty".into(), ..Settings::default() };
+        let params = host.thread_params(&settings);
+        assert_eq!(params["sandbox"], "read-only");
+        for key in ["features.shell_tool", "features.multi_agent", "features.image_generation",
+            "features.view_image", "tools.view_image", "apps._default.enabled"] {
+            assert_eq!(params["config"][key], false, "{key}");
+        }
+        assert_eq!(params["config"]["web_search"], "disabled");
+        assert!(params["config"]["mcp_servers"].get("hub").is_none());
     }
 
     #[tokio::test]

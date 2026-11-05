@@ -14,7 +14,7 @@ system.update events). Computers follow their server as always. An update alread
 finish. The outcome (updated, failed, rolled_back, or timed_out after SETTLE_S with no final state from the updater) is
 told to HQ at the next check-in, a minute later, and HQ clears the target. Each target staff set has its own
 `request_id`, and one request is acted on once: a failed or rolled-back update is never tried again until staff set
-the target again. A target the server is already on (or past) is reported `updated` without an update.
+the target again. A target the server is already on (or past) is reported `updated_at` without an update.
 
 The owner stays in control: their Update now still works, and while a target waits Health's Version line and the New
 version popover say "Tico will update this server to vX when idle" (`notice`).
@@ -61,7 +61,7 @@ def on(settings):
 
 
 def load(c):
-    row = c.execute("SELECT value_json FROM registry_metadata WHERE key=?", (KEY,)).fetchone()
+    row = c.execute("SELECT value FROM registry_metadata WHERE key=?", (KEY,)).fetchone()
     try:
         stored = json.loads(row[0]) if row else {}
     except ValueError:
@@ -70,7 +70,7 @@ def load(c):
 
 
 def save(c, record):
-    c.execute("INSERT INTO registry_metadata VALUES(?,?) ON CONFLICT(key) DO UPDATE SET value_json=excluded.value_json",
+    c.execute("INSERT INTO registry_metadata VALUES(?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value",
               (KEY, json.dumps(record, sort_keys=True)))
 
 
@@ -107,7 +107,7 @@ def record_outcome(c, result):
     """The updater's final state for the update the `update-pending` marker names: its system.update.finished event,
     once (the GET route, the updater's restart and this module may each see it first). A state for another release
     leaves the marker. True when it wrote the event."""
-    row = c.execute("SELECT value_json FROM registry_metadata WHERE key='update-pending'").fetchone()
+    row = c.execute("SELECT value FROM registry_metadata WHERE key='update-pending'").fetchone()
     if not row:
         return False
     pending = json.loads(row[0])
@@ -237,7 +237,7 @@ def advance(store, now):
             record.update(state="updating", started_s=now)
             save(c, record)
             c.execute("INSERT INTO registry_metadata VALUES('update-pending',?) "
-                      "ON CONFLICT(key) DO UPDATE SET value_json=excluded.value_json",
+                      "ON CONFLICT(key) DO UPDATE SET value=excluded.value",
                       (json.dumps({"actor": ACTOR, "from": current, "to": target}),))
             H.event(c, ACTOR, "system.update.started", target, {"from": current, "to": target})
             from .execution import flag_cut

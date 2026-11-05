@@ -74,6 +74,7 @@ import ipaddress
 import json
 import os
 import re
+import urllib.parse
 import secrets
 import shutil
 import socket
@@ -182,6 +183,14 @@ HOLD_FOR, HOLD_EVERY = "30s", "250ms"
 # A config reload (every add, remove, sleep and wake) leaves open WebSockets this long before closing them.
 STREAM_CLOSE_DELAY = "5m"
 HOLD_BODY = "Tico is starting. Try again in a few seconds."
+# Routes (`cell route`): a service on this host that is not a company (Tico's public demo), on its own hosts and
+# loopback ports, kept in <root>/routes/<name>.json. Its ports stay clear of the companies' and the cell's own.
+ROUTES = "routes"
+ROUTE_PORTS = range(1024, PORT_BASE)
+CELL_PORTS = frozenset({2019, ROUTER_PORT, ROUTER_PORT + 1, WAKE_PORT, UPDATER_PORT})    # Caddy admin, router, tunnel metrics
+MAX_ROUTE_HOSTS, MAX_ROUTE_PORTS = 5, 2
+NOINDEX = "noindex, nofollow"
+ROBOTS_TXT = "User-agent: *\nDisallow: /\n"          # a literal newline inside a quoted Caddyfile token is kept
 HEALTH_POLL = 0.15                      # seconds between /healthz probes while a server starts
 # A timed wake (`sleep --wake-at`): the record's wake_at, always UTC in this format, at most WAKE_AT_DAYS out when set.
 WAKE_AT_FORMAT = "%Y-%m-%dT%H:%M:%SZ"
@@ -342,6 +351,19 @@ def check_host(value: str, flag: str, cell_domain: str) -> str:
     return host
 
 
+def refuse_server_host(host: str, env: dict[str, str], flag: str) -> None:
+    """bad_domain when a page host is the app's, visuals' or runners' host in the company's settings: its server refuses
+    to start with that reader origin (backend/company_page/reader_app.py)."""
+    for key in ("TICO_PUBLIC_URL", "TICO_VISUAL_ORIGIN", "TICO_RUNNER_URL"):
+        value = (env.get(key) or "").strip()
+        try:
+            other = urllib.parse.urlsplit(value).hostname if value else None    # as backend/visuals.py hostname()
+        except ValueError:
+            other = None
+        if host and other and other.lower() == host:
+            raise CellError("bad_domain", f"{flag} {host} is the company's {key}")
+
+
 def carried_env(text: str) -> dict[str, str]:
     """--env-file: KEY=VALUE lines (comments and blank lines allowed), read as the cell reads .env. The errors name the
     line, never a value."""
@@ -482,6 +504,10 @@ def parser() -> Parser:
     z.add_argument("--company", required=True, metavar="SLUG")
     z.add_argument("--minutes", required=True, metavar="N|default",
                    help=f"idle minutes before it sleeps, 0 to {SLEEP_MINUTES_MAX} (0 = never); default removes the policy")
+    h = cmd("set-page-host", "a running company's page host (docs/company-page.md), without add's sign-in settings")
+    h.add_argument("--company", required=True, metavar="SLUG")
+    h.add_argument("--host", required=True, help="such as acme.tico.page; \"\" clears it (the folder is kept)")
+    h.add_argument("--timeout", type=int, default=HEALTH_TIMEOUT, help="seconds to wait for /healthz")
     u = cmd("update", "run another release; the database is snapshotted first and put back if it does not come up")
     u.add_argument("--company", required=True, metavar="SLUG")
     u.add_argument("--version", required=True)
@@ -489,6 +515,18 @@ def parser() -> Parser:
     r = cmd("remove", "remove one company's containers, route and (unless --keep-data) its folder")
     r.add_argument("--company", required=True, metavar="SLUG")
     r.add_argument("--keep-data", action="store_true", help="keep its folder, data and port for a later add")
+    o = cmd("route", "a service on this host that is not a company (the public demo): its hosts to its loopback ports")
+    o.add_argument("op", choices=["set", "remove", "list"])
+    o.add_argument("--name", metavar="NAME", help="the route's name (a slug)")
+    o.add_argument("--host", action="append", metavar="HOST", help=f"a hostname (repeat, at most {MAX_ROUTE_HOSTS})")
+    o.add_argument("--port", action="append", type=int, metavar="PORT",
+                   help=f"a loopback port (repeat, at most {MAX_ROUTE_PORTS}): the first healthy one is used")
+    o.add_argument("--noindex", action="store_true", help="X-Robots-Tag: noindex, nofollow and a robots.txt that "
+                   "disallows everything")
+    o.add_argument("--if-router-current", action="store_true", help="refuse (router_changed) unless the router's "
+                   "file is what this checkout writes, checked under the cell lock")
+    o.add_argument("--router-only", action="store_true", help="leave the tunnel's routes for a later change (no "
+                   "tunnel restart); the answer's tunnel_pending says whether one is due")
     return p
 
 
@@ -532,7 +570,7 @@ def networks(index: int) -> dict[str, str]:
             "cloudflared_address": str(edge.network_address + 3)}
 
 
-def router_config(companies: list[dict]) -> str:
+def router_config(companies: list[dict], routes: list[dict] = ()) -> str:
     """The router's Caddyfile: each company's domain and aliases to its loopback port, anything else a 404. Plain HTTP on
     loopback only: the tunnel in front holds TLS. The forwarded scheme is https because that is what the visitor used.
 
@@ -547,7 +585,8 @@ def router_config(companies: list[dict]) -> str:
     A sleeping company's hosts go to the wake service instead, with the company named in WAKE_HEADER by the route
     itself (header_up replaces any copy the visitor sent). A stopped one is answered 503 at once.
 
-    A page host (page_site) serves its three public paths from disk first, and only those; see page_site."""
+    A page host (page_site) serves its three public paths from disk first, and only those; see page_site. Routes
+    (`cell route`, route_site) come after every company, before the catch-all."""
     lines = ["# Written by `python3 -m setup cell`; regenerated whenever a company is added, removed, stopped, started, "
              "put to sleep or woken. Do not edit.",
              "{", "\tadmin localhost:2019", "\tauto_https off", "\tpersist_config off", f"\thttp_port {ROUTER_PORT}",
@@ -557,6 +596,8 @@ def router_config(companies: list[dict]) -> str:
         lines += company_site(c, sites)
         if c.get("page_host"):
             lines += page_site(c)
+    for r in sorted(routes, key=lambda r: r["name"]):
+        lines += route_site(r)
     lines += [f"http://:{ROUTER_PORT} {{", f"\trespond {ROUTER_HEALTH_PATH} \"ok\" 200",
               "\trespond \"No Tico company at this address.\" 404", "}"]
     return "\n".join(lines) + "\n"
@@ -618,20 +659,43 @@ def proxy_lines(c: dict) -> list[str]:
             f"\t\tstream_close_delay {STREAM_CLOSE_DELAY}", "\t}"]
 
 
+def route_site(r: dict) -> list[str]:
+    """A route (`cell route set`): something on this host that is not a company, such as Tico's public demo, on hosts
+    of its own, sent to its loopback ports. With more than one port, the first port whose /healthz answers gets each
+    request (Caddy's active health check), so a second copy can start beside the first and take over when the first
+    stops, with no router reload. A route holds requests the way a company does. `noindex` adds
+    `X-Robots-Tag: noindex, nofollow` to every answer and serves a robots.txt that disallows everything."""
+    sites = ", ".join(f"http://{h}:{ROUTER_PORT}" for h in r["hosts"])
+    ports = [int(p) for p in r["ports"]]
+    tag = [f"\theader X-Robots-Tag \"{NOINDEX}\""] if r.get("noindex") else []
+    robots = ["\thandle /robots.txt {", "\t\theader Content-Type \"text/plain; charset=utf-8\"",
+              f"\t\trespond \"{ROBOTS_TXT}\" 200", "\t}"] if r.get("noindex") else []
+    health = ["\t\t\tlb_policy first", f"\t\t\thealth_uri {contract.HEALTH_PATH}", "\t\t\thealth_interval 2s",
+              "\t\t\thealth_timeout 2s", "\t\t\tfail_duration 5s"] if len(ports) > 1 else []
+    return [f"{sites} {{", *tag, *robots, "\thandle {",
+            "\t\treverse_proxy " + " ".join(f"127.0.0.1:{p}" for p in ports) + " {",
+            "\t\t\theader_up X-Forwarded-Proto https", *("\t" + line for line in HELD), *health,
+            f"\t\t\tstream_close_delay {STREAM_CLOSE_DELAY}", "\t\t}", "\t}",
+            "\thandle_errors {", *("\t" + line for line in tag), "\t\theader Retry-After 5",
+            f"\t\trespond \"{HOLD_BODY}\" 503", "\t}", "}", ""]
+
+
 def hosts_of(c: dict) -> list[str]:
     """Every host a company answers on: its domain, its aliases and its page host (the wake service checks these too)."""
     return [c["domain"], *c.get("aliases", []), *([c["page_host"]] if c.get("page_host") else [])]
 
 
-def tunnel_hosts(domain: str, companies: list[dict], page_domain: str | None = None) -> list[str]:
-    """The company hosts the tunnel's wildcards do not match: `*.<domain>` and, when set, `*.<page domain>`, each covering
-    exactly one label."""
+def tunnel_hosts(domain: str, companies: list[dict], page_domain: str | None = None,
+                 routes: list[dict] = ()) -> list[str]:
+    """The company and route hosts the tunnel's wildcards do not match: `*.<domain>` and, when set, `*.<page domain>`,
+    each covering exactly one label."""
     covered = [domain] + ([page_domain] if page_domain else [])
 
     def wildcard(h: str) -> bool:
         return any(h.endswith("." + d) and "." not in h[:-len(d) - 1] for d in covered)
 
-    return sorted({h for c in companies for h in hosts_of(c) if not wildcard(h)})
+    every = {h for c in companies for h in hosts_of(c)} | {h for r in routes for h in r["hosts"]}
+    return sorted(h for h in every if not wildcard(h))
 
 
 def tunnel_config(domain: str, hosts: list[str] = (), page_domain: str | None = None) -> str:
@@ -854,7 +918,7 @@ class Cell:
         return r.returncode == 0 and bool(rules) and rules[0] == IMDS_LINE
 
     def wait_healthy(self, c: dict, started: float, timeout: int) -> int:
-        """Milliseconds from `started` (the command's start) until /healthz answers 200 through the router (with
+        """Milliseconds from `started_at` (the command's start) until /healthz answers 200 through the router (with
         `direct`, on the server's own loopback port: a sleeping company's route leads to the wake service); the wait
         itself is up to `timeout` seconds from now, so a slow image pull does not use it up."""
         deadline = self.system.monotonic() + max(timeout, 1)
@@ -877,7 +941,7 @@ class Cell:
         """Regenerate the Caddyfile from every company not removed and reload the router. A config the router refuses
         is replaced by the one it had, so a bad change never takes every company down."""
         path = self.root / "router" / "Caddyfile"
-        text = router_config(self.live_companies())
+        text = router_config(self.live_companies(), self.routes())
         try:
             old = path.read_text()
         except OSError:
@@ -899,12 +963,24 @@ class Cell:
     def live_companies(self) -> list[dict]:
         return [c for c in self.companies() if c.get("state") != "removed"]
 
+    def routes(self) -> list[dict]:
+        """Every route (`cell route set`), by name. A file that is not a route record is skipped, not fatal: the router
+        still gets every company."""
+        out = []
+        with contextlib.suppress(OSError):
+            for p in sorted((self.root / ROUTES).glob("*.json")):
+                with contextlib.suppress(OSError, ValueError, KeyError, TypeError):
+                    r = json.loads(p.read_text())
+                    if r["name"] == p.stem and r["hosts"] and r["ports"]:
+                        out.append(r)
+        return out
+
     def pages_dir(self, slug: str) -> Path:
         """A company's folder of public files for its page host (mounted into its server, read by the router)."""
         return self.root / PAGES / slug
 
     def tunnel_text(self, domain: str, page_domain: str | None = None) -> str:
-        return tunnel_config(domain, tunnel_hosts(domain, self.live_companies(), page_domain), page_domain)
+        return tunnel_config(domain, tunnel_hosts(domain, self.live_companies(), page_domain, self.routes()), page_domain)
 
     def write_tunnel(self) -> bool:
         """Under the cell lock: regenerate cloudflared's routes and, when the file changed and the tunnel runs, restart
@@ -1238,11 +1314,7 @@ class Cell:
                 host = (old or {}).get("page_host", "") if page_host is None else page_host
                 if host in {domain, *aliases} and host:
                     raise CellError("bad_domain", f"--page-host {host} is one of the company's own hosts")
-                mine = {domain, *aliases, *([host] if host else [])}
-                for other in self.live_companies():
-                    clash = sorted(mine & set(hosts_of(other))) if other["slug"] != slug else []
-                    if clash:
-                        raise CellError("domain_taken", f"{clash[0]} belongs to {other['slug']}")
+                self.refuse_taken(slug, {domain, *aliases, *([host] if host else [])})
                 index = old["index"] if old else self.allocate()
                 d = self.dir(slug)
                 old_env = envfile.parse(_read(d / ".env"))
@@ -1250,7 +1322,7 @@ class Cell:
                      "memory": memory or (old or {}).get("memory") or MEMORY_DEFAULT,
                      "version": args.version or (old or {}).get("version") or self.default_version(),
                      "hosted": args.hosted or (old or {}).get("hosted") or HOSTED_DEFAULT,
-                     "created": (old or {}).get("created") or time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+                     "created_at": (old or {}).get("created_at") or time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
                      "state": "running"}
                 if aliases:
                     c["aliases"] = aliases
@@ -1311,6 +1383,7 @@ class Cell:
                 ignored = sorted(k for k in extra if k in written or cell_owned(k))
                 extra = {k: v for k, v in extra.items() if v and k not in ignored}
                 env.update(extra)
+                refuse_server_host(host, env, "--page-host")
                 changed = False
                 if carried is not None:
                     changed = _write_atomic(d / "extra.env", "# Carried from the install this company moved from "
@@ -1604,6 +1677,67 @@ class Cell:
                 raise failed
         return c, ready, True
 
+    def refuse_taken(self, slug: str, mine: set[str]) -> None:
+        """domain_taken when another company or a route already answers on one of `mine`."""
+        for other in self.live_companies():
+            clash = sorted(mine & set(hosts_of(other))) if other["slug"] != slug else []
+            if clash:
+                raise CellError("domain_taken", f"{clash[0]} belongs to {other['slug']}")
+        for r in self.routes():
+            clash = sorted(mine & set(r["hosts"]))
+            if clash:
+                raise CellError("domain_taken", f"{clash[0]} belongs to the route {r['name']}")
+
+    def set_page_host(self, args) -> dict:
+        """A running company's page host (docs/company-page.md), or "" to clear it: what `add --page-host` sets, without
+        add's sign-in settings, so staff can turn on the page for a company that already runs. Its settings are
+        rewritten, its server restarts and the host is routed; a cleared host keeps the folder. The record carries
+        `page_pending` until the restarted server answers, so a run that failed is redone in full when given again; a
+        settled one only re-writes its routes."""
+        started = self.system.monotonic()
+        slug = check_slug(args.company)
+        cell = self.load_cell()
+        host = check_host(args.host, "--host", cell["domain"]) if (args.host or "").strip() else ""
+        with self.lock("company-" + slug):
+            c = self.live(slug)
+            if c.get("state") != "running":
+                raise CellError("not_running", f"{slug} is {c.get('state')}; start it before giving it a page host")
+            if host and host in {c["domain"], *c.get("aliases", [])}:
+                raise CellError("bad_domain", f"--host {host} is one of the company's own hosts")
+            if host == c.get("page_host", "") and not c.get("page_pending"):
+                with self.lock("cell"):
+                    routed = [self.write_router(), self.write_tunnel()]
+                return {"ok": True, "company": slug, "page_host": host or None, "changed": any(routed)}
+            d = self.dir(slug)
+            env = envfile.parse(_read(d / ".env"))
+            self.secrets += [v for k, v in env.items() if k in contract.SECRET_KEYS and v and v not in self.secrets]
+            refuse_server_host(host, env, "--host")
+            with self.lock("cell"):     # the host's owner is checked and recorded under one lock, as add does
+                self.refuse_taken(slug, {host} if host else set())
+                if host:
+                    pages = self.pages_dir(slug)
+                    pages.mkdir(parents=True, exist_ok=True)
+                    os.chmod(pages, 0o755)
+                    self.system.chown(pages, SERVER_UID, SERVER_UID)
+                    c["page_host"] = host
+                    env.update(TICO_READER_ORIGIN=f"https://{host}", TICO_COMPANY_PAGE_DIR=PAGE_MOUNT)
+                else:
+                    c.pop("page_host", None)
+                    env.pop("TICO_READER_ORIGIN", None)
+                    env.pop("TICO_COMPANY_PAGE_DIR", None)
+                c["page_pending"] = True
+                self.write_company(c, envfile.render(env), "")
+                self.save(c)
+
+            def route():
+                with self.lock("cell"):
+                    self.write_router()
+                    self.write_tunnel()
+            ready = self.launch(c, started, args.timeout, route)
+            c.pop("page_pending", None)
+            self.save(c)
+            return {**self.answer(c, ready, True), "page_host": host or None}
+
     def set_sleep(self, args) -> dict:
         """The company's sleep policy on its record (its server reads it through GET /sleep): N idle minutes, 0 for
         never, or `default` to remove it. Under the company's lock, as the other per-company commands; a no-op changes
@@ -1759,6 +1893,55 @@ class Cell:
             self.wait_healthy(c, self.system.monotonic(), timeout)
         except CellError as e:
             raise failed(f"{old} and its database are back, but it does not answer: {e.detail}") from None
+
+    def route(self, args) -> dict:
+        """A route: hosts that are not a company's, sent to a loopback port on this host (docs/cell.md, Routes). `set`
+        replaces the route's hosts and ports; `remove` drops it. Both rewrite the router (a reload, as `add` does) and,
+        unless --router-only, the tunnel's routes, restarting the tunnel when a host the wildcard misses came or went.
+        Every command that rewrites the router or tunnel keeps the routes."""
+        cell = self.load_cell()
+        if args.op == "list":
+            return {"ok": True, "routes": self.routes()}
+        if not args.name:
+            raise CellError("bad_args", "--name is required")
+        name = check_slug(args.name)
+        path = self.root / ROUTES / f"{name}.json"
+        with self.lock("cell"):
+            if getattr(args, "if_router_current", False):
+                # A checkout that may be older than the host's core (the demo's deploy): change nothing unless the
+                # router's file is what this checkout writes, read under the same lock the rewrite takes.
+                live = self.live_companies()
+                if _read(self.root / "router" / "Caddyfile") not in (router_config(live), router_config(live, self.routes())):
+                    raise CellError("router_changed", "the router's file is not what this checkout's cell writes for "
+                                                      "these companies; not touching it")
+            if args.op == "set":
+                hosts = [check_host(h, "--host", cell["domain"]) for h in args.host or []]
+                ports = list(args.port or [])
+                if not hosts or len(hosts) > MAX_ROUTE_HOSTS or len(set(hosts)) != len(hosts):
+                    raise CellError("bad_domain", f"--host: 1 to {MAX_ROUTE_HOSTS} different hostnames")
+                if not ports or len(ports) > MAX_ROUTE_PORTS or len(set(ports)) != len(ports) or any(
+                        p not in ROUTE_PORTS or p in CELL_PORTS for p in ports):
+                    raise CellError("bad_args", f"--port: 1 to {MAX_ROUTE_PORTS} different loopback ports from "
+                                                f"{ROUTE_PORTS.start} to {ROUTE_PORTS.stop - 1}, not the cell's own")
+                for c in self.live_companies():
+                    clash = sorted(set(hosts) & set(hosts_of(c)))
+                    if clash:
+                        raise CellError("domain_taken", f"{clash[0]} belongs to {c['slug']}")
+                for r in self.routes():
+                    clash = sorted(set(hosts) & set(r["hosts"])) if r["name"] != name else []
+                    if clash:
+                        raise CellError("domain_taken", f"{clash[0]} belongs to the route {r['name']}")
+                record = {"name": name, "hosts": hosts, "ports": ports, "noindex": bool(args.noindex)}
+                changed = _write_atomic(path, json.dumps(record, indent=2, sort_keys=True) + "\n", 0o600)
+            else:
+                changed = path.exists()
+                path.unlink(missing_ok=True)
+            routed = self.write_router()
+            tunneled = False if args.router_only else self.write_tunnel()
+            pending = (self.root / "tunnel.env").exists() and self.tunnel_text(cell["domain"], cell.get("page_domain")) \
+                != _read(self.root / "tunnel" / "cloudflared.yml")
+        return {"ok": True, "route": name, "changed": changed, "router": routed, "tunnel": tunneled,
+                "tunnel_pending": pending}
 
     def remove(self, args) -> dict:
         """The company's slot (its index, so its port) stays taken until the router no longer sends its domain there:

@@ -11,7 +11,7 @@ const AU_STEP_STATUS = {skipped: 'skipped', failed: 'failed', spend_cap: 'spend 
 // A run's outcome in one to three words: what its last action did.
 const AU_DONE = {archive: 'Archived', leave_for_you: 'Left for you', draft_reply: 'Draft reply', send_reply: 'Replied',
   create_task: 'Task created', label: 'Labeled', forward: 'Forwarded', wake_bot: 'Bot woken', note: 'Noted',
-  post_update: 'Update posted', call_webhook: 'Webhook called', assign: 'Assigned'};
+  post_update: 'Update posted', call_webhook: 'Webhook called', assign: 'Assigned', unsubscribe: 'Unsubscribed'};
 
 async function auRunsLoad(state, more = false) {
   const id = state.cur?.id;
@@ -68,7 +68,10 @@ function auRunStepText(rs) {
   const o = rs.outputs || {};
   // A step that is waiting (a queued mail action, a bot's turn) has already said what it did.
   if (rs.status === 'waiting') return [auRunStepDid({...rs, status: 'ok'}), 'waiting'].filter(Boolean).join(' · ');
-  if (rs.status !== 'ok') return (AU_STEP_STATUS[rs.status] || rs.status || '') + (o.error ? ' · ' + o.error : '');
+  if (rs.status !== 'ok') {
+    const reason = o.error || (rs.status === 'failed' ? o.actions?.find(a => a.ok === false)?.detail : '');
+    return (AU_STEP_STATUS[rs.status] || rs.status || '') + (reason ? ' · ' + String(reason).split('\n')[0].slice(0, 80) : '');
+  }
   return auRunStepDid(rs);
 }
 function auRunStepDid(rs) {
@@ -96,7 +99,7 @@ function auRunsDraw(pane) {
     ${r.rows.map(run => {
       const open = r.open.has(run.id), dot = auRunDot(run);
       return `<tr class="au-rr${open ? ' open' : ''}" role="button" tabindex="0" aria-expanded="${open}" data-run="${esc(run.id)}">
-        <td class="au-rt"><span class="nav-icon" aria-hidden="true">${open ? 'expand_more' : 'chevron_right'}</span>${esc(auRunTime(run.started))}</td>
+        <td class="au-rt"><span class="nav-icon" aria-hidden="true">${open ? 'expand_more' : 'chevron_right'}</span>${esc(auRunTime(run.started_at))}</td>
         <td><span class="au-dot ${dot}" role="img" aria-label="${esc(AU_RUN_STATUS[run.status] || run.status)}"></span></td>
         <td class="au-ro">${esc(auRunOutcome(run))}</td><td class="au-n">${esc(auMoney(run.cost))}</td></tr>`
         + (open ? `<tr class="au-rx"><td colspan="4">${(run.steps || []).map(s => `<div class="au-sl">${auTag(s.type)}<span>${esc(auRunStepText(s))}</span>

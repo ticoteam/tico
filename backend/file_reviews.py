@@ -52,7 +52,7 @@ def resolve(c, auth, blobs, who, person, items):
             raise Problem("validation", f"{row['id']}@{number} is under review twice", 422)
         seen.add((row["id"], number))
         if not file_visible(c, auth, reader, row, {}):
-            raise Problem("privacy", f"{H.actor_id(person)} cannot open {row['id']}, so they could not review it: "
+            raise Problem("privacy", f"{H.actor_name(c, person)} cannot open {row['id']}, so they could not review it: "
                           "publish it where they can read it", 403)
         mime = (v["mime"] or "").split(";", 1)[0].strip().lower()
         kind = kind_of(mime, v["size"], _head(blobs, v["digest"]) if blobs else b"")
@@ -69,10 +69,10 @@ def same_versions(entries):
     mine = {(e["file"], e["version"]) for e in entries}
 
     def same(c, task_id):
-        row = c.execute("SELECT m.refs_json FROM messages m JOIN tasks t ON t.conversation_id=m.conversation_id "
-                        "WHERE t.id=? AND json_extract(m.refs_json,'$.review') IS NOT NULL "
-                        "ORDER BY m.created DESC, m.id DESC LIMIT 1", (task_id,)).fetchone()
-        files = ((H._json(row["refs_json"], {}) or {}).get("review") or {}).get("files") or [] if row else []
+        row = c.execute("SELECT m.refs FROM messages m JOIN tasks t ON t.conversation_id=m.conversation_id "
+                        "WHERE t.id=? AND json_extract(m.refs,'$.review') IS NOT NULL "
+                        "ORDER BY m.created_at DESC, m.id DESC LIMIT 1", (task_id,)).fetchone()
+        files = ((H._json(row["refs"], {}) or {}).get("review") or {}).get("files") or [] if row else []
         return {(f.get("file"), f.get("version")) for f in files} == mine
     return same
 
@@ -134,14 +134,15 @@ def require_readable(c, auth, who, reviewed):
         row = c.execute("SELECT * FROM bot_files WHERE id=?", (entry["file"],)).fetchone()
         if not row or not file_visible(c, auth, who, row, {}):
             raise Problem("privacy", "You can no longer open a file under review", 403)
+        H._writer(c, who.actor, task_id=row["task_id"])
 
 
 def record(c, who, task_id, question_id, answer_id, reviewed):
     """Each verdict as a `reviewed` line in its file's activity log, which hub file approved reads."""
     at = H.now()
     for entry in reviewed:
-        c.execute("INSERT INTO bot_file_activity(file_id,actor,action,attempt_id,task_id,version,digest,created,"
-                  "detail_json) VALUES(?,?,'reviewed',NULL,?,?,?,?,?)",
+        c.execute("INSERT INTO bot_file_activity(file_id,actor,action,attempt_id,task_id,version,digest,created_at,"
+                  "detail) VALUES(?,?,'reviewed',NULL,?,?,?,?,?)",
                   (entry["file"], who.actor, task_id, entry["version"], entry["digest"], at,
                    H._dump({"verdict": entry["verdict"], "question": question_id, "answer": answer_id})))
 
@@ -155,10 +156,11 @@ def spend_approval(c, who, asked, task_id, spend, previous):
             return answer["spend_approval"]
     if not H.is_human(who.actor):
         raise Problem("forbidden", "Only a person approves spending", 403)
-    made = H.approval_request(c, asked["from_actor"], "spend", spend_payload(spend), task_id=task_id, to=who.actor)
+    made = H.approval_request(c, asked["sender_id"], "spend", spend_payload(spend), task_id=task_id, to=who.actor)
     # The request's own notice to the person is answered by this pick: it never sits unread in their inbox.
     c.execute("UPDATE messages SET read_at=? WHERE id=? AND read_at IS NULL", (H.now(), made["message_id"]))
-    H.approval_decide(c, who.actor, made["id"], "approved", note=f'Picked "{spend["label"]}".')
+    note, refs = H.answer_text(asked, spend["label"], text=f'Picked "{spend["label"]}".')
+    H.approval_decide(c, who.actor, made["id"], "approved", note=note, note_sources=refs.get("body_sources", []))
     return made["id"]
 
 
@@ -169,6 +171,7 @@ def review(c, auth, who, fid=None, version=None, path=None, digest=None, task=No
     if verdict not in VERDICTS:
         raise Problem("validation", "A review approves or asks for changes", 422)
     task_id = auth.task(c, who, auth.resolve_task(c, who, task))["id"]
+    H._writer(c, who.actor, task_id=task_id)
     mine = H.actor_id(who.actor) if H.is_bot(who.actor) else None
     if fid:
         row = c.execute("SELECT * FROM bot_files WHERE id=?", (fid,)).fetchone()
@@ -182,7 +185,7 @@ def review(c, auth, who, fid=None, version=None, path=None, digest=None, task=No
         # The same bytes another bot published from the same path: the newest such version this reviewer can open.
         row = v = None
         for found in c.execute("SELECT v.* FROM bot_file_versions v JOIN bot_files f ON f.id=v.file_id WHERE "
-                               "v.repo_path=? AND v.digest=? AND NOT f.archived ORDER BY (f.bot=?), v.created DESC "
+                               "v.repo_path=? AND v.digest=? AND NOT f.archived ORDER BY (f.bot_id=?), v.created_at DESC "
                                "LIMIT 20", (path, digest, mine or "")).fetchall():
             candidate = c.execute("SELECT * FROM bot_files WHERE id=?", (found["file_id"],)).fetchone()
             if file_visible(c, auth, who, candidate, {}):
@@ -192,11 +195,12 @@ def review(c, auth, who, fid=None, version=None, path=None, digest=None, task=No
             raise Problem("not_found", "No published file you can open has these bytes at this path", 404)
     else:
         raise Problem("validation", "Give a file id, or a path and its digest", 422)
-    if mine and row["bot"] == mine:
+    H._writer(c, who.actor, task_id=row["task_id"])
+    if mine and row["bot_id"] == mine:
         raise Problem("forbidden", "A bot never reviews its own file: ask a person or another bot", 403)
     entry = {"file": row["id"], "version": v["version"], "digest": v["source_digest"] or v["digest"]}
-    c.execute("INSERT INTO bot_file_activity(file_id,actor,action,attempt_id,task_id,version,digest,created,"
-              "detail_json) VALUES(?,?,'reviewed',?,?,?,?,?,?)",
+    c.execute("INSERT INTO bot_file_activity(file_id,actor,action,attempt_id,task_id,version,digest,created_at,"
+              "detail) VALUES(?,?,'reviewed',?,?,?,?,?,?)",
               (entry["file"], who.actor, getattr(who, "attempt_id", "") or None, task_id, entry["version"], entry["digest"],
                H.now(), H._dump({"verdict": verdict, "question": None, "task": task_id, "note": note or ""})))
     return _verdict(c, who, [(row["id"], v["version"], entry["digest"])], by=who.actor)
@@ -210,6 +214,8 @@ def approved(c, auth, who, fid=None, version=None, path=None, digest=None, by="h
     from .files import file_visible
     if not BY.fullmatch(by or ""):
         raise Problem("validation", "--by is human, any or bot:SLUG", 422)
+    if by.startswith("bot:"):
+        by = H.bot_actor((H.resolve_bot(c, by) or {}).get("id", by[4:]))
     if fid:
         row = c.execute("SELECT * FROM bot_files WHERE id=?", (fid,)).fetchone()
         if not row or not file_visible(c, auth, who, row, {}):
@@ -223,8 +229,8 @@ def approved(c, auth, who, fid=None, version=None, path=None, digest=None, by="h
         if who.role != "bot":
             raise Problem("validation", "A path is a bot's own file: give a file id", 422)
         found = []
-        for v in c.execute("SELECT * FROM bot_file_versions v JOIN bot_files f ON f.id=v.file_id WHERE f.bot=? "
-                           "AND v.repo_path=? AND v.digest=? ORDER BY v.created DESC LIMIT 20",
+        for v in c.execute("SELECT * FROM bot_file_versions v JOIN bot_files f ON f.id=v.file_id WHERE f.bot_id=? "
+                           "AND v.repo_path=? AND v.digest=? ORDER BY v.created_at DESC LIMIT 20",
                            (H.actor_id(who.actor), path, digest)).fetchall():
             row = c.execute("SELECT * FROM bot_files WHERE id=?", (v["file_id"],)).fetchone()
             if file_visible(c, auth, who, row, {}):
@@ -259,10 +265,10 @@ def _verdict(c, who, versions, by="human"):
         task = H.task(c, r["task_id"]) if r["task_id"] else None
         if not _counts(r["actor"], by) or not task or not privacy.task_readable(c, who, task):
             continue
-        detail = H._json(r["detail_json"], {}) or {}
+        detail = H._json(r["detail"], {}) or {}
         verdict = detail.get("verdict")
         digest = digests[(r["file_id"], r["version"])]
-        return {"approved": verdict == "approve" and r["digest"] == digest, "by": r["actor"], "at": r["created"],
+        return {"approved": verdict == "approve" and r["digest"] == digest, "by": r["actor"], "at": r["created_at"],
                 "task": r["task_id"], "question": detail.get("question"), "file": r["file_id"],
                 "version": r["version"], "digest": digest, "verdict": verdict}
     fid, number, digest = versions[0]

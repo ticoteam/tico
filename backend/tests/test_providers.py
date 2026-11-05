@@ -5,6 +5,7 @@ import pytest
 
 from backend import providers as P
 from backend.tests.test_api import api  # noqa: F401  (the fixture)
+from backend import bot_settings as BS
 
 def test_resolution_order_bot_then_company_then_first_provider_then_error():
     none = P._record({})
@@ -27,7 +28,7 @@ def test_a_claimed_attempt_carries_the_company_default_for_a_bot_that_names_none
     from backend.tests.test_api import claim, post, put, runner, assign, ready
     put(api, "providers", {"enabled": ["openai"], "runtime": "codex", "model": "gpt-6-luna", "expected_revision": 0})
     with api.app.state.store.transaction() as c:
-        c.execute("UPDATE bot_config SET config_json=? WHERE bot='ops'", (encode({"name": "ops", "status": "active"}),))
+        BS.write(c, 'ops', {'name': 'ops', 'status': 'active'})
     r = runner(api)
     assign(api, r, "ops")
     ready(api, r, ["ops"])
@@ -75,7 +76,7 @@ def test_the_bot_list_says_the_effort_a_bot_runs_at_and_nothing_when_it_has_none
                "cpo": ({}, ""), "coo": ({"effort": "xhigh"}, "low"), "inbox": ({}, "medium")}
     with api.app.state.store.transaction() as c:
         for bot, (config, stored) in configs.items():
-            c.execute("UPDATE bot_config SET config_json=? WHERE bot=?", (encode({"name": bot, "status": "active", **config}), bot))
+            BS.write(c, bot, {'name': bot, 'status': 'active', **config})
             c.execute("UPDATE bots SET effort=? WHERE slug=?", (stored, bot))
     rows = {row["name"]: row for row in api.get("/api/employees", headers={"Authorization": "Bearer ana-test"}).json()}
     said = {bot: (rows[bot]["resolved_runtime"], rows[bot]["resolved_model"], rows[bot]["resolved_effort"]) for bot in configs}
@@ -85,6 +86,37 @@ def test_the_bot_list_says_the_effort_a_bot_runs_at_and_nothing_when_it_has_none
     put(api, "providers", {"enabled": [], "runtime": "", "model": "", "expected_revision": 1})
     rows = {row["name"]: row for row in api.get("/api/employees", headers={"Authorization": "Bearer ana-test"}).json()}
     assert (rows["cpo"]["resolved_runtime"], rows["cpo"]["resolved_effort"], rows["inbox"]["resolved_effort"]) == ("", "", "")
+
+
+def test_gpt_6_1_terra_is_priced_at_the_approved_rate_and_held_from_every_pick(api):
+    """Gated (Dev 693): the row is priced at Tico's rate, held, and refused by every pick and listing."""
+    from backend.store import Problem
+    from backend import task_models
+    row = P.MODEL_BY_ID["gpt-6.1-terra"]
+    assert row["held"] and row["deprecated"]
+    assert P.price_of("gpt-6.1-terra") == (1.25, 0.062, 6.25)
+    assert "gpt-6.1-terra" not in [r["id"] for r in P.provider_models("openai")]
+    assert "gpt-6.1-terra" not in [r["id"] for r in P.provider_models("openai", current=False)]
+    with pytest.raises(P.ProviderError):
+        P.complete_choice(["openai"], model="gpt-6.1-terra")
+    assert P.complete_choice(["openai"], model="gpt-6.1-terra", kept="gpt-6.1-terra") == ("codex", "gpt-6.1-terra")
+    with pytest.raises(P.ProviderError):
+        P.meeting_choice(P._record({"enabled": ["openai"]}), "gpt-6.1-terra")
+    with pytest.raises(Problem):
+        task_models.refuse_retired(row)
+    listed = api.get("/api/v2/models", headers={"Authorization": "Bearer ana-test"}).json()["models"]
+    assert "gpt-6.1-terra" not in [m["id"] for m in listed]
+
+
+def test_a_live_gateway_tier_for_the_held_id_does_not_expose_it(monkeypatch):
+    """Once Tico HQ publishes a Terra tier, the gateway's lookups must not make the held id pickable."""
+    live = {"id": "gpt-6.1-terra", "label": "live", "runtime": "pi", "provider": "tico", "efforts": ("low",),
+            "default_effort": "low", "tier": {"department": "x", "level": "low", "fast": False, "version": 1, "auto": False}}
+    monkeypatch.setattr(P.gateway_tiers, "row_for", lambda model: live if model == "gpt-6.1-terra" else None)
+    assert P.MODEL_BY_ID["gpt-6.1-terra"]["provider"] == "openai"
+    with pytest.raises(P.ProviderError):
+        P.complete_choice(["tico", "openai"], model="gpt-6.1-terra")
+    assert "gpt-6.1-terra" not in [r["id"] for r in P.provider_models("tico")]
 
 
 def test_mercury_on_openrouter_is_offered_only_as_a_meeting_model_and_priced():

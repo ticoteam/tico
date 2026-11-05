@@ -325,7 +325,7 @@ def from_pdf(data):
             raise ValueError(f"That PDF has more than {MAX_PDF_PAGES} pages; split it first")
         pages = [(page.extract_text() or "").strip() for page in reader.pages]
         title = str((reader.metadata or {}).get("/Title") or "").strip()
-    except ValueError:
+    except (ValueError, MemoryError):
         raise
     except Exception as exc:
         raise ValueError("That PDF could not be read") from exc

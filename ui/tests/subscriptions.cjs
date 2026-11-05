@@ -2,10 +2,11 @@
 // company's saved plan login or API key; a computer holds at most one per AI tool; a bot never picks one.
 //  - Settings has a Models tab between Computers and Repositories with Subscriptions, Tico Gateway, Defaults and
 //    Limits; old links (AI providers, Subscriptions, Chat, the Models card on Computers) open it;
-//  - Add subscription: a kind search box that starts on Claude plan, a required name, POST {kind, name, secret};
+//  - Add subscription: a kind search box that starts on Claude plan, a required name, an owner (you unless changed), the
+//    own-bots line, POST {kind, name, secret} (owner_id only when changed); an API key has no owner and no such line;
 //  - Connect: a plan signs in through a computer the server picks, in the same dialog, with Reconnect asking first when
 //    runs would restart; no computer says so; an API key and an older server have no button, and the page never holds a value;
-//    Rename, Reconnect and Remove from the row's menu, Reconnect and Remove asking first when runs would restart;
+//    Edit (name, owner), Reconnect and Remove from the row's menu, Reconnect and Remove asking first when runs would restart;
 //  - Computers: one row per computer with a picker per AI tool; a switch that stops runs asks in the page first
 //    (409 confirm_restart), then sends confirm; an older computer says Needs update; Gateway off reads None;
 //  - a computer's pop-up still lists one connection per AI tool, its own login, and the queue line;
@@ -20,15 +21,15 @@ const {unrouted} = require('./support/routes.cjs');
 const SHOTS = process.env.SUBS_SHOTS || '';
 
 const KINDS = [
-  {kind: 'claude_token', label: 'Claude plan', runtime: 'claude', secret_label: 'Token from claude setup-token', help: 'Run claude setup-token on a computer signed in to the plan, then paste the token.', connect: true},
-  {kind: 'codex_login', label: 'ChatGPT plan', runtime: 'codex', secret_label: "Codex's auth.json", help: 'Paste ~/.codex/auth.json from a computer where codex login is signed in.', connect: true},
+  {kind: 'claude_token', label: 'Claude plan', runtime: 'claude', secret_label: 'Token from claude setup-token', help: 'Run claude setup-token on a computer signed in to the plan, then paste the token.', connect: true, owned: true},
+  {kind: 'codex_login', label: 'ChatGPT plan', runtime: 'codex', secret_label: "Codex's auth.json", help: 'Paste ~/.codex/auth.json from a computer where codex login is signed in.', connect: true, owned: true},
   {kind: 'anthropic_key', label: 'Anthropic API key', runtime: 'claude', secret_label: 'API key', help: ''},
   {kind: 'openai_key', label: 'OpenAI API key', runtime: 'codex', secret_label: 'API key', help: ''}];
 
 function fixtures() {
   const now = new Date().toISOString();
   const ready = {installed: true, authenticated: 'ready'}, missing = {installed: true, authenticated: 'missing'};
-  const machine = (id, label, operator, bots = [], runtimes = {codex: ready, claude: ready}, extra = {}) => ({id, label, operator, last_seen: now,
+  const machine = (id, label, operator, bots = [], runtimes = {codex: ready, claude: ready}, extra = {}) => ({id, label, owner_id: operator, last_seen_at: now,
     version: '0.5.14', platform: 'linux', bots, accepts_member_bots: true, readiness: {runtimes},
     turn_counts: {running: 0, starting: 0, waiting: 0, queued: 0, waits: []}, turn_summary: '0 running · 0 starting · 0 waiting', ...extra});
   return {
@@ -37,20 +38,25 @@ function fixtures() {
         {version: '0.5.4', release: '0.5.19',
           turn_counts: {running: 1, starting: 0, waiting: 0, queued: 55, waits: []}, turn_summary: '1 running · 0 starting · 55 queued · 0 waiting'}),
       machine('r2', 'Cloud · shared', 'ana', ['scout'], {claude: missing, codex: missing}),
-      machine('r3', 'Cloud · Video Producer', 'ana', ['video'], {claude: missing, codex: missing}, {cloud_machine: {state: 'stopped'}}),
+      machine('r3', 'Cloud · Video Producer', 'ana', ['video'], {claude: missing, codex: missing},
+        {cloud_machine: {state: 'stopped'}, last_seen_at: new Date(Date.now() - 2 * 3600e3).toISOString()}),
       machine('r4', "Sam's Mac", 'sam', [], {claude: ready, codex: missing}, {version: '0.4.2',
         turn_counts: {running: 0, starting: 0, waiting: 3, queued: 0, waits: []},
         update: {state: 'needs_update', label: 'Needs update', release: '0.4.2', commit: 'c0ffee'.padEnd(40, '0'), outdated: true, server_release: '0.5.14', error: ''}}),
     ],
     subs: [
       {id: 's1', name: 'Claude Max (Ana)', kind: 'claude_token', runtime: 'claude', label: 'Claude plan', status: 'working', status_detail: '',
-        computers: ['r1', 'r2', 'r3'], usage: {window: '5h', used_pct: 62, cost_usd_month: null}, added_by: 'ana'},
+        computers: ['r1', 'r2', 'r3'], usage: {window: '5h', used_pct: 62, cost_usd_month: null}, added_by: 'ana', owner_id: 'human:ana', owner_name: 'Ana'},
       {id: 's2', name: 'ChatGPT Pro (Ana)', kind: 'codex_login', runtime: 'codex', label: 'ChatGPT plan', status: 'working', status_detail: '',
         computers: ['r1'], usage: {window: 'week', used_pct: 13, cost_usd_month: null}, added_by: 'ana'},
       {id: 's3', name: 'OpenAI key (company)', kind: 'openai_key', runtime: 'codex', label: 'OpenAI API key', status: 'working', status_detail: '',
-        computers: [], usage: {window: null, used_pct: null, cost_usd_month: 41.2}, added_by: 'ana'},
+        computers: [], usage: {window: null, used_pct: null, cost_usd_month: 41.2}, added_by: 'ana', owner_id: '', owner_name: ''},
       {id: 's4', name: 'Claude Max (Sam)', kind: 'claude_token', runtime: 'claude', label: 'Claude plan', status: 'needs_reconnect', status_detail: 'Token expired',
-        computers: [], usage: null, added_by: 'sam'},
+        computers: [], usage: null, added_by: 'sam', owner_id: 'human:sam', owner_name: 'Sam'},
+      {id: 's5', name: 'ChatGPT Team (Cy)', kind: 'codex_login', runtime: 'codex', label: 'ChatGPT plan', status: 'working', status_detail: '',
+        computers: ['r2'], usage: {window: 'week', used_pct: 0, cost_usd_month: null}, added_by: 'cy'},
+      {id: 's6', name: 'Claude Max (Dee)', kind: 'claude_token', runtime: 'claude', label: 'Claude plan', status: 'working', status_detail: '',
+        computers: ['r3'], usage: {window: null, used_pct: null, cost_usd_month: null, reason: 'Waiting for a computer to report'}, added_by: 'dee'},
     ],
     assignments: [{runner_id: 'r1', runtime: 'claude', subscription_id: 's1'}, {runner_id: 'r1', runtime: 'codex', subscription_id: 's2'},
       {runner_id: 'r2', runtime: 'claude', subscription_id: 's1'}, {runner_id: 'r3', runtime: 'claude', subscription_id: 's1'}],
@@ -79,9 +85,9 @@ async function open(browser, {viewport = {width: 1440, height: 900}, theme = 'da
   Object.assign(me, {email: me.id + '@example.com', cloud: true, registered: true});
   const policy = {see: {everyone: true}, read: {everyone: true}, write: {everyone: true}};
   const bots = [
-    {name: 'builder', display_name: 'Builder', status: 'active', state: 'active', operator: 'ana', repo: 'bot-builder', can_manage: true, revision: 3,
+    {name: 'builder', display_name: 'Builder', status: 'active', state: 'active', owner_id: 'ana', repo: 'bot-builder', can_manage: true, revision: 3,
       users: [{id: 'ana', name: 'Ana'}], bot_owners: [], resolved_runtime: 'claude', resolved_model: 'claude-sonnet-5-5', model: 'claude-sonnet-5-5', harness: 'claude',
-      machine: {runner_id: 'r1', label: 'Tico Team box', operator: 'ana', last_seen: new Date().toISOString()},
+      machine: {runner_id: 'r1', label: 'Tico Team box', owner_id: 'ana', last_seen_at: new Date().toISOString()},
       my_access: {see: true, read: true, write: true}, access_policy: policy},
   ];
   // A refusal as the server sends it (backend/app.py Problem handler: the extra facts beside code and detail).
@@ -124,7 +130,7 @@ async function open(browser, {viewport = {width: 1440, height: 900}, theme = 'da
       const kind = KINDS.find(k => k.kind === (body.kind || sub.kind));
       data.login = {id: `l${writes.length}`, runner_id: 'r1', runtime: kind.runtime, kind: 'connect', state: 'waiting', url: 'https://sign-in.example/authorize?x=1',
         code: kind.runtime === 'codex' ? 'ABCD-1234' : '', lines: [], message: '', accepts_code: kind.runtime === 'claude', code_sent: false,
-        created: new Date().toISOString(), updated: new Date().toISOString(), computer: 'Tico Team box', not_yours: Boolean(data.connectNotYours), target: body.name};
+        created_at: new Date().toISOString(), updated_at: new Date().toISOString(), computer: 'Tico Team box', not_yours: Boolean(data.connectNotYours), target: body.name};
       return json(data.login);
     }
     const signIn = p.match(/^\/api\/v2\/computers\/r1\/logins\/([^/]+)(?:\/(code|cancel))?$/);
@@ -132,7 +138,7 @@ async function open(browser, {viewport = {width: 1440, height: 900}, theme = 'da
       if (method === 'GET') return json(data.login);
       const body = req.postDataJSON(); writes.push({p, method, body});
       if (signIn[2] === 'code') Object.assign(data.login, {code_sent: true});
-      if (signIn[2] === 'cancel') Object.assign(data.login, {state: 'cancelled', url: ''});
+      if (signIn[2] === 'cancel') Object.assign(data.login, {state: 'canceled', url: ''});
       return json(data.login);
     }
     if (p === '/api/v2/model-subscriptions' && method === 'POST') {
@@ -232,13 +238,20 @@ async function modelsTab(browser) {
   assert.equal(await pane.locator('section.card > header .sub').count(), 0);
   // Rows: name, kind, a computer count, usage (share used, or the month's cost), Reconnect when the login stopped working.
   const rows = await pane.locator('[data-subs-row]').evaluateAll(list => list.map(r => [
-    r.querySelector('.subs-name').textContent, r.querySelector('.subs-kind').textContent, r.querySelector('.subs-count .tnum').textContent,
+    r.querySelector('.subs-name').textContent, r.querySelector('.subs-kind').textContent, r.querySelector('.subs-owner').textContent,
+    r.querySelector('.subs-count .tnum').textContent,
     [...r.querySelector('.subs-use').querySelectorAll('.subs-usage-w, .tnum, .subs-usage:not(:has(.tnum)), .pill')].map(e => e.textContent).join(' ')]));
   assert.deepEqual(rows, [
-    ['Claude Max (Ana)', 'Claude plan', '3', '5h 62%'],
-    ['ChatGPT Pro (Ana)', 'ChatGPT plan', '1', 'week 13%'],
-    ['OpenAI key (company)', 'OpenAI API key', '0', '$41.20 this month'],
-    ['Claude Max (Sam)', 'Claude plan', '0', 'Reconnect']]);
+    ['Claude Max (Ana)', 'Claude plan', 'Ana', '3', '5h 62%'],
+    ['ChatGPT Pro (Ana)', 'ChatGPT plan', '', '1', 'week 13%'],
+    ['OpenAI key (company)', 'OpenAI API key', '', '0', '$41.20 this month'],
+    ['Claude Max (Sam)', 'Claude plan', 'Sam', '0', 'Reconnect'],
+    ['ChatGPT Team (Cy)', 'ChatGPT plan', '', '1', 'week 0%'],
+    ['Claude Max (Dee)', 'Claude plan', '', '1', 'Waiting for a computer to report']]);
+  // A reading of 0% still draws its bar, and a plan with no reading says why in muted text.
+  assert.equal(await pane.locator('[data-subs-row=s5] .subs-bar b').getAttribute('style'), 'width:0%');
+  assert.equal(await pane.locator('[data-subs-row=s6] .subs-bar').count(), 0);
+  assert.equal(await pane.locator('[data-subs-row=s6] .subs-use .subs-usage.muted').count(), 1);
   assert.equal(await pane.locator('[data-subs-row=s1] .subs-count').getAttribute('title'), 'Tico Team box, Cloud · shared, Cloud · Video Producer');
   assert.equal(await pane.locator('[data-subs-row=s1] .subs-count .nav-icon').count(), 1);
   // The Gateway is one toggle; the key, address and spend wait behind Advanced. No four-way choice, no provider boxes.
@@ -282,8 +295,12 @@ async function addSubscription(browser) {
   assert.equal(await kind.inputValue(), 'Claude plan', 'starts on Claude plan');
   assert.equal(await dialog.locator('#subs-secret').getAttribute('type'), 'password');
   assert.match(await dialog.locator('[data-subs-secret] .k label').innerText(), /Token from claude setup-token/);
-  // No computers to choose here: the server picks one for Connect.
-  assert.equal(await dialog.locator('select, input[type=checkbox]').count(), 0);
+  // No computers to choose here (the server picks one for Connect): only the owner, you unless changed.
+  assert.equal(await dialog.locator('input[type=checkbox]').count(), 0);
+  assert.deepEqual(await dialog.locator('select').evaluateAll(list => list.map(s => s.name)), ['owner']);
+  assert.equal(await dialog.locator('select[name=owner]').inputValue(), 'ana');
+  assert.deepEqual(await dialog.locator('select[name=owner] option').allInnerTexts(), ['Ana', 'Sam']);
+  assert.equal(await dialog.locator('.subs-note').innerText(), 'Only use your subscription on your own bots, not shared ones.');
   assert.deepEqual(await dialog.locator('.tmodal-foot button').allInnerTexts(), ['Cancel', 'Save']);
   // The name is required.
   await dialog.locator('#subs-secret').fill('sk-ant-oat01-abc');
@@ -337,8 +354,13 @@ async function connectPlan(browser) {
   const kind = dialog.locator('#subs-kind');
   await kind.fill('anthropic'); await kind.press('Enter');
   assert.equal(await button.count(), 0);
+  // An API key has no owner, and the own-bots line is for plans only.
+  assert.equal(await dialog.locator('select[name=owner]').isVisible(), false);
+  assert.equal(await dialog.locator('.subs-note').isVisible(), false);
   assert.equal(await dialog.locator('.tmodal-foot button[type=submit]').getAttribute('class'), 'primary');
   await kind.fill('claude'); await kind.press('Enter');
+  assert.equal(await dialog.locator('select[name=owner]').isVisible(), true);
+  assert.equal(await dialog.locator('.subs-note').isVisible(), true);
   // A refusal stays in the form.
   data.connectRefused = 'That computer is offline';
   await dialog.locator('input[name=name]').fill('Company Max');
@@ -347,10 +369,11 @@ async function connectPlan(browser) {
   assert.equal(await dialog.locator('input[name=name]').inputValue(), 'Company Max');
   await button.and(page.locator(':not([disabled])')).waitFor();
   data.connectRefused = '';
-  // The sign-in carries on in the same dialog: a link and a pasted code, as on a computer.
+  // The sign-in carries on in the same dialog: a link and a pasted code, as on a computer. Another owner goes with it.
+  await dialog.locator('select[name=owner]').selectOption('sam');
   await button.click();
   await dialog.locator('[data-link]').waitFor();
-  assert.deepEqual(writes.at(-1), {p: '/api/v2/model-subscriptions/connect', method: 'POST', body: {kind: 'claude_token', name: 'Company Max'}});
+  assert.deepEqual(writes.at(-1), {p: '/api/v2/model-subscriptions/connect', method: 'POST', body: {kind: 'claude_token', name: 'Company Max', owner_id: 'human:sam'}});
   assert.equal(await dialog.locator('h2').innerText(), 'Connect Company Max');
   assert.equal(await dialog.locator('[data-link]').getAttribute('href'), 'https://sign-in.example/authorize?x=1');
   await shot(page, 'connect-waiting-desktop-dark', dialog);
@@ -358,6 +381,24 @@ async function connectPlan(browser) {
   await dialog.locator('[data-paste] button').click();
   await until(page, () => writes.at(-1).p.endsWith('/code'), 'the pasted code');
   assert.deepEqual(writes.at(-1).body, {code: 'pasted-code'});
+  // A code rejected by the CLI ends the attempt even while that command would otherwise wait for Enter.
+  // Try again starts a fresh login and offers its code field, rather than leaving the old code marked sent.
+  const rejectedId = data.login.id;
+  Object.assign(data.login, {state: 'failed', url: '', accepts_code: false,
+    message: 'The sign-in could not finish. Choose Try again and use the code from the new sign-in page.',
+    lines: ['sk-ant-oat01-not-for-the-page']});
+  await dialog.locator('[data-retry]').waitFor();
+  assert.match(await dialog.locator('[data-status]').innerText(), /sign-in could not finish/);
+  assert.doesNotMatch(await dialog.innerText(), /sk-ant-oat|Code sent/);
+  await dialog.locator('[data-retry]').click();
+  await dialog.locator('[name=code]').waitFor();
+  assert.notEqual(data.login.id, rejectedId);
+  assert.deepEqual(writes.at(-1), {p: '/api/v2/model-subscriptions/connect', method: 'POST', body: {kind: 'claude_token', name: 'Company Max', owner_id: 'human:sam'}});
+  await dialog.locator('[name=code]').fill('fresh-code');
+  await dialog.locator('[data-paste] button').click();
+  await until(page, () => writes.at(-1).p.endsWith('/code'), 'the fresh code');
+  assert.equal(writes.at(-1).p, `/api/v2/computers/r1/logins/${data.login.id}/code`);
+  assert.deepEqual(writes.at(-1).body, {code: 'fresh-code'});
   // Done when the server says so: the row appears, and the dialog goes by itself.
   data.subs.push({id: 's8', name: 'Company Max', kind: 'claude_token', runtime: 'claude', label: 'Claude plan', status: 'new', status_detail: '', computers: [], usage: null, added_by: 'ana'});
   Object.assign(data.login, {state: 'done', url: ''});
@@ -401,7 +442,7 @@ async function connectPlan(browser) {
   await closing.waitFor({state: 'detached'});
   release(); data.connectHeld = null;
   await until(page, () => writes.at(-1).p.endsWith('/cancel'), 'the cancel');
-  assert.equal(data.login.state, 'cancelled');
+  assert.equal(data.login.state, 'canceled');
   // The same for Try again after a failure.
   await page.locator('#subs-add').click();
   const asking = page.locator('dialog.subs-dialog[open]');
@@ -419,7 +460,7 @@ async function connectPlan(browser) {
   await retrying.waitFor({state: 'detached'});
   release(); data.connectHeld = null;
   await until(page, () => writes.at(-1).p.endsWith('/cancel') && data.login.id !== failedLogin, 'the cancel of the retry');
-  assert.equal(data.login.state, 'cancelled');
+  assert.equal(data.login.state, 'canceled');
   assert.deepEqual(errors, []);
   await page.close();
   // No computer can run it right now: the button says so and paste still works.
@@ -438,15 +479,26 @@ async function connectPlan(browser) {
 async function rowMenu(browser) {
   const {page, errors, writes, data} = await open(browser);
   await modelsReady(page);
-  // Rename.
+  // Edit: an API key's name only (no owner); a plan's name and owner (only a change is sent). No own-bots line here.
   await page.locator('[data-subs-more=s3]').click();
-  assert.deepEqual(await page.locator('#subs-menu [data-subs-act]').allInnerTexts(), ['Rename', 'Reconnect', 'Remove']);
-  await page.locator('#subs-menu [data-subs-act=rename]').click();
+  assert.deepEqual(await page.locator('#subs-menu [data-subs-act]').allInnerTexts(), ['Edit', 'Reconnect', 'Remove']);
+  await page.locator('#subs-menu [data-subs-act=edit]').click();
   const rename = page.locator('dialog.subs-dialog[open]');
+  assert.equal(await rename.locator('h2').innerText(), 'Edit OpenAI key (company)');
+  assert.equal(await rename.locator('select').count(), 0);
+  assert.equal(await rename.locator('.subs-note').count(), 0);
   await rename.locator('input[name=name]').fill('OpenAI (ops)');
   await rename.locator('button[type=submit]').click();
   await rename.waitFor({state: 'detached'});
   assert.deepEqual(writes.at(-1), {p: '/api/v2/model-subscriptions/s3', method: 'POST', body: {name: 'OpenAI (ops)'}});
+  await page.locator('[data-subs-more=s1]').click();
+  await page.locator('#subs-menu [data-subs-act=edit]').click();
+  const owner = page.locator('dialog.subs-dialog[open]');
+  assert.equal(await owner.locator('select[name=owner]').inputValue(), 'ana');
+  await owner.locator('select[name=owner]').selectOption('sam');
+  await owner.locator('button[type=submit]').click();
+  await owner.waitFor({state: 'detached'});
+  assert.deepEqual(writes.at(-1), {p: '/api/v2/model-subscriptions/s1', method: 'POST', body: {name: 'Claude Max (Ana)', owner_id: 'human:sam'}});
   // Reconnect from the row's pill: a new value only.
   await page.locator('[data-subs-row=s4] [data-subs-reconnect]').click();
   const again = page.locator('dialog.subs-dialog[open]');
@@ -508,9 +560,9 @@ async function computersTable(browser) {
   assert.doesNotMatch(await table.innerText(), /0 starting/, 'the long queue line is on the computer page');
   // The picker offers the subscriptions for that tool; with none, the computer's own login, else the Gateway.
   const claude = row('r2').locator('[data-subs-pick=claude]');
-  assert.deepEqual(await claude.locator('option').allInnerTexts(), ['Gateway', 'Claude Max (Ana)', 'Claude Max (Sam)']);
+  assert.deepEqual(await claude.locator('option').allInnerTexts(), ['Gateway', 'Claude Max (Ana)', 'Claude Max (Sam)', 'Claude Max (Dee)']);
   assert.equal(await claude.inputValue(), 's1');
-  assert.deepEqual(await row('r1').locator('[data-subs-pick=codex] option').allInnerTexts(), ['Signed in here', 'ChatGPT Pro (Ana)', 'OpenAI key (company)']);
+  assert.deepEqual(await row('r1').locator('[data-subs-pick=codex] option').allInnerTexts(), ['Signed in here', 'ChatGPT Pro (Ana)', 'OpenAI key (company)', 'ChatGPT Team (Cy)']);
   assert.equal(await row('r4').locator('[data-subs-needs-update]').count(), 2, 'an older computer says Needs update');
   assert.equal(await row('r1').locator('.machine-chip').count(), 1, 'Muse Code shows its login as before');
   // Under its own column a tool's chip says its state, not the tool's name again.
@@ -534,9 +586,14 @@ async function computersTable(browser) {
   await page.locator('dialog.settings-confirm[open] [data-confirm-ok]').click();
   await page.waitForFunction(() => document.querySelector('[data-computer-row=r1] [data-subs-pick=claude]')?.dataset.current === 's4');
   assert.deepEqual(writes.at(-1).body, {runner_id: 'r1', runtime: 'claude', subscription: 's4', confirm: true});
-  assert.match(await page.locator('#toast, .toast').last().innerText(), /Tico Team box's Claude Code: Claude Max \(Sam\) · 2 tasks restarted/);
-  // A login that needs reconnecting says so beside the picker.
-  assert.equal(await row('r1').locator('[data-subs-reconnect]').count(), 1);
+  const switchMessage = /Tico Team box's Claude Code: Claude Max \(Sam\) · 2 tasks restarted/;
+  const switchedToast = page.locator('#toast, .toast', {hasText: switchMessage}).last();
+  await switchedToast.waitFor();
+  assert.match(await switchedToast.innerText(), switchMessage);
+  // The saved picker and toast precede subsRefresh's redraw, which adds the reconnect action.
+  const reconnect = row('r1').locator('[data-subs-reconnect]');
+  await reconnect.waitFor();
+  assert.equal(await reconnect.count(), 1);
   // A click on the row's name opens the computer's pop-up, with the queue line and one connection per AI tool.
   await row('r1').locator('.machine-name').click();
   const detail = page.locator('#set-machines dialog.computer-detail[open]');

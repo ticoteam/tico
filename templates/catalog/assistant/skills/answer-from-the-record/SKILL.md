@@ -9,7 +9,7 @@ description: "Answers a human's question about a task, bot, goal, meeting or per
 
 - A human asks what a bot is doing, what a task is waiting on, or where something stands.
 - You are about to state a run, a number, an outcome or a date in a reply.
-- The question is a lookup that the server's own answer did not cover.
+- The question is a lookup (what is waiting, a search, where something is, what a bot did).
 
 ## Steps
 

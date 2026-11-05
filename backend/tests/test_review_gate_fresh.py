@@ -9,13 +9,14 @@ import pytest
 from backend import hubdb as H, task_blocked
 from backend.tests.test_github import api, headers, hook, post, pr_event, PR  # noqa: F401
 from backend.tests.test_review_gate import HEAD, OLD, BASE, ticket, get, move
+from backend.tests.test_api import hold
 
 STALE = f'Tests: head {OLD}: 9 passed, 0 failed'
 GREEN = {f'check {i}': 'success' for i in range(16)}
 
 
-def github(api, monkeypatch, checks):
-    """A configured GitHub App whose PR #412 is at HEAD with these check-run conclusions; returns the paths read."""
+def github(api, monkeypatch, checks, head=HEAD):
+    """A configured GitHub App whose PR #412 has this head and check-run conclusions; returns the paths read."""
     service = api.app.state.github_app
     monkeypatch.setattr(service, 'row', lambda c: {'org': 'ticoteam'})
     monkeypatch.setattr(service, 'mint', lambda *a: ('synthetic', 'later'))
@@ -23,7 +24,7 @@ def github(api, monkeypatch, checks):
     def fetch(method, path, **kw):
         reads.append(path)
         if '/pulls/' in path:
-            data = {'head': {'sha': HEAD}}
+            data = {'head': {'sha': head}}
         elif path.endswith('check-runs'):
             data = {'check_runs': [{'id': i, 'name': name, 'conclusion': result}
                                    for i, (name, result) in enumerate(checks.items(), 1)]}
@@ -32,6 +33,27 @@ def github(api, monkeypatch, checks):
         return SimpleNamespace(status_code=200, json=lambda: data)
     monkeypatch.setattr(service, '_call', fetch)
     return reads
+
+
+def test_fresh_ci_reads_write_only_to_close_an_open_access_outage(api, monkeypatch):
+    from backend import review_gate, source_outages
+    task = ticket(api)
+    github(api, monkeypatch, GREEN)
+    store, service = api.app.state.store, api.app.state.github_app
+    with store.transaction() as c:
+        prs = review_gate.links(c, H.task(c, task['id']))
+        source_outages.observe(c, 'github:' + prs[0]['repo'].lower(), 'GitHub checks access', waiting=1)
+    review_gate.snapshot(service, prs)
+    with store.read_transaction() as c:
+        assert c.execute("SELECT count(*) FROM events WHERE action='source_outage.restored'").fetchone()[0] == 1
+
+    def unexpected(*args, **kwargs):
+        raise AssertionError('an already restored source needs no writer')
+
+    with monkeypatch.context() as patched:
+        patched.setattr(store, 'transaction', unexpected)
+        for _ in range(2):
+            assert review_gate.snapshot(service, prs)[prs[0]['id']]['head_sha'] == HEAD
 
 
 def bot_token(api, slug='cpo'):
@@ -81,7 +103,7 @@ def test_renamed_review_step_reads_fresh_ci_before_refusing_move(api, monkeypatc
     assert response.status_code == 422 and 'CI failing at head ' + HEAD in response.text, response.text
     assert 'python' in response.text
     current = get(api, 'tasks/' + task['id'])['task']
-    assert current['step']['name'] == 'In Progress' and 'CI failing' in current['blocked_reason']
+    assert current['step']['name'] == 'In Progress' and 'CI failing' in hold(current)['reason']
 
 
 def test_review_question_is_filed_when_every_hosted_check_passes_at_the_current_head(api, monkeypatch):
@@ -97,7 +119,7 @@ def test_review_question_is_filed_when_every_hosted_check_passes_at_the_current_
     with api.app.state.store.transaction() as c:
         task_blocked.sweep(c, H.now())
     current = get(api, 'tasks/' + task['id'])['task']
-    assert current['step']['name'] == 'In Progress' and not current.get('blocked_since')
+    assert current['step']['name'] == 'In Progress' and not hold(current).get('since')
 
 
 def test_fresh_green_checks_do_not_clear_a_waiting_reviewers_hold(api, monkeypatch):
@@ -112,11 +134,11 @@ def test_fresh_green_checks_do_not_clear_a_waiting_reviewers_hold(api, monkeypat
         since = held_row['blocked_since']
     assert task_blocked.fresh(api.app.state.github_app, force=True) == []
     current = get(api, 'tasks/' + task['id'])['task']
-    assert current['step']['name'] == 'In Progress' and current['blocked_since'] == since
+    assert current['step']['name'] == 'In Progress' and hold(current)['since'] == since
     with api.app.state.store.transaction() as c:
         H.task_update(c, 'bot:cmo', check['id'], status='doing')
     current = get(api, 'tasks/' + task['id'])['task']
-    assert current['step']['name'] == 'In Progress' and not current.get('blocked_since')
+    assert current['step']['name'] == 'In Progress' and not hold(current).get('since')
 
 
 @pytest.mark.parametrize('result,refusal', [('failure', 'CI failing at head ' + HEAD),
@@ -140,7 +162,7 @@ def test_a_question_titled_otherwise_reads_no_github(api, monkeypatch):
 
 def test_blocked_gate_hold_clears_on_a_fresh_all_green_read(api, monkeypatch):
     task = ticket(api, STALE)
-    hold = held(api, task)
+    parked = held(api, task)
     service = api.app.state.github_app
     with api.app.state.store.transaction() as c:
         task_blocked.reconcile(c, task['id'])
@@ -149,8 +171,8 @@ def test_blocked_gate_hold_clears_on_a_fresh_all_green_read(api, monkeypatch):
     assert task_blocked.fresh(service, force=True) == [task['id']]
     assert any('/commits/' + HEAD + '/check-runs' in p for p in reads)
     current = get(api, 'tasks/' + task['id'])['task']
-    assert current['step']['name'] == 'In Progress' and not current.get('blocked_since')
-    assert current['version'] > hold['version']
+    assert current['step']['name'] == 'In Progress' and not hold(current).get('since')
+    assert current['version'] > parked['version']
 
 
 @pytest.mark.parametrize('result', ['failure', None])
@@ -165,7 +187,7 @@ def test_blocked_gate_hold_stays_unless_every_hosted_check_passes_and_reads_once
     assert count and task_blocked.fresh(service, force=True) == []
     assert len(reads) == count, 'nothing the gate reads changed, so GitHub is not read again'
     with api.app.state.store.transaction() as c:
-        H.task_update(c, task['owner'], task['id'], note='Checks rerunning.')
+        H.task_update(c, task['owner_id'], task['id'], note='Checks rerunning.')
     github(api, monkeypatch, GREEN)
     assert task_blocked.fresh(service, force=True) == [task['id']]
 

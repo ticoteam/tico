@@ -13,34 +13,39 @@ from backend.settings_admin import SettingsAdmin, compact_at as compact_at_of
 from backend.store import H, P, encode, repo_url
 from backend.tests import test_api as T
 from backend.tests.test_api import api  # noqa: F401
+from backend import bot_settings as BS
 
 BASE = ("coo", "ops", "cpo", "product-design", "finance", "inbox", "doc-updater")
-SEE_ONLY = ("slug", "display_name", "state", "description", "team", "operator", "reports_to", "owners",
+SEE_ONLY = ("slug", "display_name", "state", "description", "team", "owner_id", "reports_to", "owners",
             "thread_mode", "temp", "access", "bot_owners", "onboarding_state", "private_tasks_default", "stage",
            "can_complete_onboarding")
 
 
 def per_bot_view(c, settings, auth, bot, level, access, registry_roster, registry_entries, who):
     """The bot list's row as it was read before backend/bot_rows.py: one bot at a time."""
-    row = {k: v for k, v in bot.items() if k not in ("token_hash", "cwd", "thread_id")}
-    config = c.execute("SELECT team,operator,owner_ids_json,revision,description,reports_to,repo,"
-                       "thread_mode,config_json,onboarding_state FROM bot_config WHERE bot=?", (bot["slug"],)).fetchone()
-    assignment = c.execute("SELECT a.bot,a.runner_id,a.generation,r.label,r.operator,r.last_seen,"
-                           "r.revoked_at FROM assignments a JOIN runners r ON r.id=a.runner_id "
+    row = dict(bot)
+    # runtime, model and host are the bot's declaration (bot_settings), as backend/app.py bot_view reads them.
+    row.update({"model": "", "runtime": "", "host": "dispatcher"})
+    config = c.execute("SELECT team,owner_id,owner_ids,revision,description,reports_to,repo,"
+                       f"thread_mode,{BS.CONFIG} AS config,onboarding_state FROM bot_config bc {BS.JOIN} WHERE bot=?", (bot["slug"],)).fetchone()
+    assignment = c.execute("SELECT a.bot,a.runner_id,a.generation,r.label,r.owner_id,r.last_seen_at,"
+                           "r.revoked_at FROM assignments a JOIN runners_with_state r ON r.id=a.runner_id "
                            "WHERE a.bot=?", (bot["slug"],)).fetchone() if level["read"] else None
     row["access"] = level
     row["team"] = config["team"] if config else None
-    row["operator"] = config["operator"] if config else None
+    row["owner_id"] = config["owner_id"] if config else None
     row["revision"] = config["revision"] if config else None
     row["onboarding_state"] = (config["onboarding_state"] or "") if config else ""
     row["stage"] = lifecycle.stage(row["onboarding_state"])
     if row["stage"] == lifecycle.ONBOARDING:
         row["can_complete_onboarding"] = lifecycle.may_complete(auth, c, who, bot["slug"])
-        row["onboarding_ready"] = lifecycle.ready_of(config["config_json"]) if config else None
+        row["onboarding_ready"] = lifecycle.ready_of(config["config"]) if config else None
     if config:
         repo = config["repo"] or ("emp-" + bot["slug"])
         from backend.shared_bots import follow
-        declared = follow(c, bot["slug"], json.loads(config["config_json"]) if config["config_json"] else {})
+        declared = follow(c, bot["slug"], json.loads(config["config"]) if config["config"] else {})
+        row.update({"model": declared.get("model") or "", "runtime": declared.get("runtime") or "",
+                    "host": declared.get("host") or "dispatcher"})
         if declared.get("shared_from"):
             repo = declared.get("repo") or repo
             row.update({"model": declared.get("model") or "", "runtime": declared.get("runtime") or "",
@@ -50,6 +55,7 @@ def per_bot_view(c, settings, auth, bot, level, access, registry_roster, registr
                     "harness": resolve_harness(declared, bot.get("runtime")),
                     "reports_to": config["reports_to"], "repo": repo,
                     "repo_url": repo_url(repo, settings.github_owner),
+                    "folder": H.bot_folder(bot["slug"], declared),
                     "bot_contact": declared.get("bot_contact") or "open",
                     "private_tasks_default": H.private_tasks_default(c, "bot:" + bot["slug"]),
                     "template": declared.get("template") or "",
@@ -60,15 +66,15 @@ def per_bot_view(c, settings, auth, bot, level, access, registry_roster, registr
                     "temp": bool(declared.get("temp")),
                     "compact_at": compact_at_of(declared),
                     "task_model": task_models.of(declared),
-                    "keep_tasks_going": auto_tasks.of(json.loads(config["config_json"]) or {}),
-                    "turns_at_once": start_places.bot_limit(json.loads(config["config_json"]) or {}),
+                    "keep_tasks_going": auto_tasks.of(json.loads(config["config"]) or {}),
+                    "turns_at_once": start_places.bot_limit(json.loads(config["config"]) or {}),
                     "task_model_warning": task_models.warning(c, settings, bot["slug"], declared,
                                                               task_models.of(declared)),
                     "manages_reports": report_managers.switch_on(declared),
                     "wake": wake_presets.effective(declared),
                     "profile": profiles.effective(declared),
                     "thread_mode": config["thread_mode"] or rooms.thread_mode(c, bot["slug"])})
-    configured = json.loads(config["owner_ids_json"]) if config and config["owner_ids_json"] else None
+    configured = json.loads(config["owner_ids"]) if config and config["owner_ids"] else None
     owner_rows = ([H.human(c, owner) for owner in configured] if configured is not None
                   else P.primary_users(bot["slug"], registry_roster, registry_entries))
     row["owners"] = [P.brief(owner) for owner in owner_rows if owner]
@@ -85,8 +91,8 @@ def per_bot_view(c, settings, auth, bot, level, access, registry_roster, registr
     row["claim_task"] = scope if scope and privacy.task_readable(c, who, H.task(c, scope)) else None
     row["status"] = privacy.status(c, who, H.status(c, bot["slug"]))
     row["assignment"] = dict(assignment) if assignment else None
-    row["online"] = bool(assignment and not assignment["revoked_at"] and assignment["last_seen"]
-                         and assignment["last_seen"] > H.shift(H.now(), seconds=-60))
+    row["online"] = bool(assignment and not assignment["revoked_at"] and assignment["last_seen_at"]
+                         and assignment["last_seen_at"] > H.shift(H.now(), seconds=-60))
     row["queued"] = privacy.job_count(c, who, bot["slug"])
     row["next_run"] = sum(privacy.task_readable(c, who, t) for t in H.next_run_tasks(c, bot["slug"]))
     row["notes"] = len(H.notes_waiting(c, bot["slug"], limit=500))
@@ -121,8 +127,8 @@ def add_bots(api, extra):
         bots = {slug: {"name": slug, "runtime": "fake", "status": "active"} for slug in (*BASE, *extra)}
         H.sync_registry(c, bots, {"people": [{"id": p, "email": p + "@acme.example"} for p in ("ana", "ben", "cara")]})
         for slug, config in extra.items():
-            c.execute("INSERT INTO bot_config(bot,config_json,team,operator) VALUES(?,?,?,?)",
-                      (slug, encode({**bots[slug], **config}), None, "ana"))
+            c.execute('INSERT INTO bot_config(bot,team,owner_id) VALUES(?,?,?)', (slug, None, 'ana'))
+            BS.write(c, slug, {**bots[slug], **config})
 
 
 def test_bot_list_answers_as_read_one_bot_at_a_time(api):
@@ -134,11 +140,10 @@ def test_bot_list_answers_as_read_one_bot_at_a_time(api):
     with store.transaction() as c:
         T.restrict(c, "cpo", see={"people": ["ana", "cara"]}, read={"people": ["ana"]}, write={"people": ["ana"]})
         c.execute("UPDATE bot_config SET reports_to='inbox' WHERE bot='doc-updater'")
-        c.execute("UPDATE bot_config SET owner_ids_json=? WHERE bot='finance'", (encode(["ben", "nobody"]),))
-        c.execute("UPDATE bot_config SET config_json=? WHERE bot='ops'",
-                  (encode({"name": "ops", "runtime": "fake", "private_tasks_default": True, "model": "m2"}),))
+        c.execute("UPDATE bot_config SET owner_ids=? WHERE bot='finance'", (encode(["ben", "nobody"]),))
+        BS.write(c, 'ops', {'name': 'ops', 'runtime': 'fake', 'private_tasks_default': True, 'model': 'm2'})
         c.execute("INSERT INTO bot_control(bot,draining) VALUES('finance',1)")
-        c.execute("INSERT INTO agents(bot,harness,token_hash,created,created_by,last_seen) VALUES(?,?,?,?,?,?)",
+        c.execute("INSERT INTO agents(bot,harness,token_hash,created_at,created_by,last_seen_at) VALUES(?,?,?,?,?,?)",
                   ("scout", "hermes", "h", H.now(), "human:ana", H.now()))
     r = T.runner(api)
     for bot in ("ops", "finance"):
@@ -152,18 +157,18 @@ def test_bot_list_answers_as_read_one_bot_at_a_time(api):
     with store.transaction() as c:
         c.execute("UPDATE tasks SET next_run=1,status='open' WHERE id IN (?,?)", (secret["id"], bens["id"]))
         for bot, to in (("ops", "ops"), ("finance", "finance"), ("ops", "finance")):
-            c.execute("INSERT INTO notes(id,from_actor,to_actor,body,created) VALUES(?,?,?,?,?)",
+            c.execute("INSERT INTO notes(id,from_actor,to_actor,body,created_at) VALUES(?,?,?,?,?)",
                       (H.new_id(), "human:ana", "bot:" + to, "note from " + bot, H.now()))
         c.execute("INSERT INTO bot_status(bot,state,focus,task_id,last_result,open_tasks,needs_human) "
-                  "VALUES('ops','working','the secret',?,'done',1,1)", (secret["id"],))
+                  "VALUES('ops','running','the secret',?,'done',1,1)", (secret["id"],))
         c.execute("INSERT INTO bot_status(bot,state,focus,open_tasks,needs_human) VALUES('finance','idle','',2,2)")
-        cid = c.execute("SELECT conversation_id FROM messages WHERE to_actor='bot:ops' LIMIT 1").fetchone()[0]
+        cid = c.execute("SELECT conversation_id FROM messages WHERE recipient_id='bot:ops' LIMIT 1").fetchone()[0]
         for kind, refs in (("ask", {"task": bens["id"], "questions": []}), ("notice", {"task": bens["id"]})):
             mid = H.new_id()
-            c.execute("INSERT INTO messages(id,conversation_id,from_actor,to_actor,kind,body,refs_json,created) "
+            c.execute("INSERT INTO messages(id,conversation_id,sender_id,recipient_id,kind,body,refs,created_at) "
                       "VALUES(?,?,?,?,?,?,?,?)", (mid, cid, "bot:finance", "human:ben", kind, "?", encode(refs), H.now()))
             if kind == "notice":
-                c.execute("INSERT INTO approvals(id,kind,task_id,message_id,requested_by,created) VALUES(?,?,?,?,?,?)",
+                c.execute("INSERT INTO approvals(id,kind,task_id,message_id,requested_by_id,created_at) VALUES(?,?,?,?,?,?)",
                           (H.new_id(), "spend", bens["id"], mid, "bot:finance", H.now()))
         c.execute("INSERT INTO chat_goals(id,conversation_id,bot,objective,status,set_by,set_at,updated_at) "
                   "VALUES('g1',?,'ops','Ship it','active','human:ana',?,?)", (cid, H.now(), H.now()))
@@ -296,7 +301,7 @@ def test_status_task_read_seeks_each_bots_tasks_on_a_big_task_table(api):
     bots = [f"t{n:02d}" for n in range(60)]
     add_bots(api, {slug: {} for slug in bots})
     with store.transaction() as c:
-        c.executemany("INSERT INTO tasks(id,title,body,requester,owner,status,created,updated,private) "
+        c.executemany("INSERT INTO tasks(id,title,body,requester_id,owner_id,status,created_at,updated_at,private) "
                       "VALUES(?,?,?,?,?,?,?,?,?)",
                       [(H.new_id(), "Old", "Done.", "human:ana", "bot:" + bots[n % 60],
                         "done" if n % 9 else "open", H.now(), H.now(), 0) for n in range(4000)])
@@ -305,8 +310,8 @@ def test_status_task_read_seeks_each_bots_tasks_on_a_big_task_table(api):
     with store.read_transaction() as c:
         plan = [row[3] for row in c.execute("EXPLAIN QUERY PLAN " + status_tasks_sql(f" IN ({marks})"),
                                             [*("bot:" + b for b in bots)] * 4)]
-    assert any(line.startswith("SEARCH tasks USING") and "tasks_owner_status" in line for line in plan), plan
-    assert any(line.startswith("SEARCH tasks USING") and "tasks_requester_status" in line for line in plan), plan
+    assert any(line.startswith("SEARCH tasks USING") and "tasks_owner_status_cover" in line for line in plan), plan
+    assert any(line.startswith("SEARCH tasks USING") and "tasks_requester_status_cover" in line for line in plan), plan
     assert not [line for line in plan if line.startswith("SCAN tasks") and "tasks_private_" not in line], plan
 
 
@@ -319,7 +324,7 @@ def test_status_private_tasks_are_read_from_an_index_holding_their_status(api):
     bots = [f"t{n:02d}" for n in range(60)]
     add_bots(api, {slug: {} for slug in bots})
     with store.transaction() as c:
-        c.executemany("INSERT INTO tasks(id,title,body,requester,owner,status,created,updated,private) "
+        c.executemany("INSERT INTO tasks(id,title,body,requester_id,owner_id,status,created_at,updated_at,private) "
                       "VALUES(?,?,?,?,?,?,?,?,?)",
                       [(H.new_id(), "Old", "Done.", "human:ana", "bot:" + bots[n % 60],
                         "done" if n % 9 else "open", H.now(), H.now(), int(n % 5 == 0)) for n in range(4000)])

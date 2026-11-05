@@ -11,7 +11,7 @@ A task's own model (backend/task_run_models.py) comes before the bot's task mode
 (backend/check_models.py) before both; the task context length applies to all of them. A task model that cannot
 run here (retired, its provider off, not installed or not signed in on its computer) never holds or fails the turn:
 the next one in that order runs, and the bot's own model runs last, with the task context length and any task effort
-that model takes, and the run and the task say so. Each turn's choice is kept on its attempt (`model_json`) for its
+that model takes, and the run and the task say so. Each turn's choice is kept on its attempt (`model`) for its
 run history (usage_records.ran_on). A config with no model, effort or context length is the same as the bot."""
 import json
 
@@ -62,6 +62,8 @@ def _context(value):
 
 def refuse_retired(choice):
     """A retired model stays in the catalog for bots already on it; nothing new may pick it."""
+    if choice.get("held"):
+        raise Problem("model", f"{choice['label']} is not offered yet", 422)
     if choice.get("deprecated"):
         raise Problem("model", f"{choice['label']} is retired; choose a current model", 422)
 
@@ -142,7 +144,7 @@ def readiness(c, bot, choice, runner_id=None):
     can = can_run(c, bot, choice["runtime"], runner=runner_id, harness=choice["harness"], model=choice["model"])
     computer = can.get("computer") or {}
     where = computer.get("label") or "this bot's computer"
-    row = c.execute("SELECT readiness_json FROM runners WHERE id=?", (computer.get("id") or "",)).fetchone()
+    row = c.execute("SELECT readiness FROM runners_with_state WHERE id=?", (computer.get("id") or "",)).fetchone()
     ready = readiness_document(row[0]) if row else {}
     state = (ready.get("runtimes") or {}).get(choice["runtime"])
     if ready.get("schema_version") == 1 and isinstance(state, dict) and state.get("installed") is False:
@@ -157,21 +159,25 @@ def readiness(c, bot, choice, runner_id=None):
     return can
 
 
-def why_not(c, settings, bot, choice, runner_id, job_id=None):
+def why_not(c, settings, bot, choice, runner_id, job_id=None, kept=""):
     """Why the task model cannot run this turn on `bot`'s computer `runner_id`, or "" when it can. A no from
     `readiness` is a reason (not installed, not signed in). Its "don't know" is not: Grok's sign-in can't be checked
     without starting it (`check = "none"`) and Antigravity reports no readiness, so a "don't know" would keep them off
     for good. Such a turn runs, and a refused login comes back through `mark_rejected` as a no for the next claim. A
     login a usage limit holds, or that another job is probing after one, is a reason too, so the task runs on the
-    bot's model rather than wait on it."""
+    bot's model rather than wait on it. `kept` is the bot's saved task model: a held row that is that model still runs
+    (a saved held default keeps running, Dev 693); any other held row is refused as a pick."""
     from . import login_holds
     row = providers.MODEL_BY_ID.get(choice["model"])
     if not row:
         return f"{choice['model']} is not a model Tico knows any more"
-    if row.get("deprecated") and row.get("lineup") != "old":      # the Gateway's old lineup is not offered but still runs
+    saved = bool(row.get("held")) and choice["model"] == kept
+    # The Gateway's old lineup is not offered but still runs.
+    if row.get("deprecated") and row.get("lineup") != "old" and not saved:
         return f"{row.get('label') or choice['model']} is retired"
     try:
-        providers.complete_choice(providers.load(c, settings)["enabled"], choice["runtime"], choice["model"])
+        providers.complete_choice(providers.load(c, settings)["enabled"], choice["runtime"], choice["model"],
+                                  kept=choice["model"] if saved else "")
     except providers.ProviderError as exc:
         return str(exc).replace("default model", "task model")
     can = readiness(c, bot, choice, runner_id)
@@ -197,13 +203,13 @@ def stakes(c, settings, bot):
     """What is at stake on `bot`, plain words per signal: each send, spend or publish approval it has asked for, and
     each tool grant that lets it write beyond its own repository (backend/bot_tools.py). Empty for a bot with none.
     Customer data and permission changes have no signal of their own beyond these."""
-    asked = {row[0] for row in c.execute("SELECT DISTINCT kind FROM approvals WHERE requested_by=?",
+    asked = {row[0] for row in c.execute("SELECT DISTINCT kind FROM approvals WHERE requested_by_id=?",
                                          (H.bot_actor(bot),))}
     found = [{"kind": kind, "does": STAKES[kind][0], "risk": STAKES[kind][1]} for kind in STAKES if kind in asked]
     from . import bot_tools
     from .github_app import repo_of
     row = c.execute("SELECT repo FROM bot_config WHERE bot=?", (bot,)).fetchone()
-    stored = (row and row[0]) or "emp-" + bot
+    stored = (row and row[0]) or "emp-" + (H.bot(c, bot) or {}).get("slug", bot)
     own = (repo_of(stored, settings.github_owner) or stored).lower()
 
     def own_repo(tool):
@@ -325,7 +331,7 @@ def pick(c, settings, bot, followed, task_id, session_task_id, conversation_id, 
                      "effort": applied, "compact_at": compact_at, "note": note}
     failed = []
     for cand in [x for x in (mine, choice) if x]:
-        why = why_not(c, settings, bot, cand, runner_id, job_id)
+        why = why_not(c, settings, bot, cand, runner_id, job_id, kept=choice["model"] if choice else "")
         if not why:
             return _on_task_model(c, settings, bot, followed, cand, cand is mine, compact_at, failed)
         failed.append((cand, why))
@@ -388,10 +394,11 @@ def handed(c, attempt_id, task_id, record):
     event, once per reason, so the task says it happened and why without a line for every turn."""
     if not record:
         return
-    c.execute("UPDATE attempts SET model_json=? WHERE id=?", (json.dumps(record), attempt_id))
+    c.execute("UPDATE attempts SET model=? WHERE id=?", (json.dumps(record), attempt_id))
     if (record["source"] != "fallback" and not record.get("below_minimum")) or not task_id:
         return
-    last = c.execute("SELECT note FROM task_events WHERE task_id=? AND field='task_model' ORDER BY rowid DESC LIMIT 1",
+    last = c.execute("SELECT note FROM history_events WHERE subject_type='task' AND subject_id=? AND kind='task_model' "
+                     "ORDER BY rowid DESC LIMIT 1",
                      (task_id,)).fetchone()
     if not last or last[0] != record["note"]:
         H._task_event(c, task_id, H.KEEPER, "task_model", label(record["asked"]),
@@ -399,7 +406,7 @@ def handed(c, attempt_id, task_id, record):
 
 
 def _record(c, attempt_id):
-    row = c.execute("SELECT model_json FROM attempts WHERE id=?", (attempt_id,)).fetchone()
+    row = c.execute("SELECT model FROM attempts WHERE id=?", (attempt_id,)).fetchone()
     record = H._json(row[0]) if row and row[0] else None
     return record if isinstance(record, dict) else None
 

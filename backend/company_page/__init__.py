@@ -3,7 +3,7 @@ the app. docs/company-page.md is the user's description.
 
 Modules, and who may call what. Everything outside this package goes through these names:
 
-  schema.py      COMPANY_PAGE_SCHEMA, applied by hubdb.MIGRATIONS.
+  schema.py      COMPANY_PAGE_SCHEMA, applied by backend/migrations/0033_company_page.py.
   settings.py    get(c) -> dict; set_transparency(c, actor, value); update(c, actor, **fields). TRANSPARENCY = closed,
                  private, open. A change that takes anything away calls release.rebuild(c, reason) in the same step.
   audiences.py   list_all(c); get(c, id); create/update/delete(c, actor, ...); sources(c, id); members(c, id).

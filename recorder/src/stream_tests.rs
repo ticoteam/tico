@@ -434,6 +434,14 @@ fn a_full_stream_queue_drops_streamed_audio_and_never_recorded_audio() {
                     })
                     .collect();
                 for part in samples.chunks(1024 * 32) {
+                    let deadline = Instant::now() + Duration::from_secs(10);
+                    while sink.queued_capacity() < part.len() {
+                        assert!(
+                            Instant::now() < deadline,
+                            "Synthetic audio consumer stalled"
+                        );
+                        thread::sleep(Duration::from_millis(2));
+                    }
                     sink.push_interleaved(part, 1);
                     thread::sleep(Duration::from_millis(20));
                 }

@@ -16,11 +16,6 @@ const launch = () => chromium.launch({headless: true,
 async function open(browser, hub, who, {phone = false, hash = '', time = null, timezone = ''} = {}) {
   const page = await pageAs(browser, hub, who, {phone, timezone});
   if (time) await page.clock.install({time});
-  // The simulated runner reports version "test", which the hub calls out of date: that card is the harness's, not
-  // the journey's, so it stays snoozed and the screenshots show the page.
-  await page.context().addInitScript(() => {
-    try { localStorage.setItem('tico.needsYou', JSON.stringify({snoozedUntil: Date.now() + 864e5})); } catch {}
-  });
   await page.reload();
   page.errors = [];
   page.on('pageerror', e => page.errors.push(e.message));
@@ -47,7 +42,7 @@ async function ok(page, method, p, body) {
   assert.ok(r.status >= 200 && r.status < 300, `${method} ${p}: ${r.status} ${JSON.stringify(r.body).slice(0, 300)}`);
   return r.body;
 }
-const automationNamed = async (page, name) => (await ok(page, 'GET', 'automations')).automations.find(a => a.name === name);
+const automationNamed = async (page, name) => (await ok(page, 'GET', 'automations?limit=500')).automations.find(a => a.name === name);
 
 // No sideways scroll on the page itself (a path strip scrolls inside its own box).
 const sideways = page => page.evaluate(() => document.documentElement.scrollWidth > document.documentElement.clientWidth + 1);
@@ -55,7 +50,7 @@ async function shot(page, name) {
   const dir = process.env.TICO_UI_SHOTS;
   if (!dir) return;
   fs.mkdirSync(dir, {recursive: true});
-  await page.evaluate(() => Promise.all(document.getAnimations().map(a => a.finished.catch(() => {}))));
+  await page.evaluate(() => Promise.all(document.getAnimations().filter(a => a.effect?.getTiming().iterations !== Infinity).map(a => a.finished.catch(() => {}))));
   await page.screenshot({path: path.join(dir, name + '.png')});
 }
 

@@ -151,7 +151,7 @@ def test_the_preview_is_the_page_s_own_view_so_pnl_lines_and_the_logo_show_as_th
         line = post_income(c, "4100", 70_000_00)
         ST.create_stat(c, OWNER, "finance_line", line, label="Subscriptions")
         D.set_rule(c, OWNER, "investors", "pnl_line", line, mode="show")
-        c.execute("INSERT INTO blobs (id, owner, digest, size, name, content_type, created) VALUES ('logo-p',?,?,?,?,?,?)",
+        c.execute("INSERT INTO blobs (id, owner, digest, size, name, content_type, created_at) VALUES ('logo-p',?,?,?,?,?,?)",
                   (OWNER, "ab" * 32, len(PNG), S.LOGO_NAME + ".png", "image/png", H.now()))
         S.update(c, OWNER, logo_file_id="logo-p")
         monkeypatch.setattr(release, "_logo_bytes", lambda c_read, settings, view: PNG)
@@ -184,7 +184,7 @@ def test_a_logo_is_a_picture_by_its_bytes_and_only_the_page_s_own_upload_can_be_
         upload(api, data, expected=422)
     upload(api, b"\x89PNG\r\n\x1a\n" + b"0" * (release.MAX_LOGO_BYTES), expected=413)
     with api.app.state.store.transaction() as c:
-        c.execute("INSERT INTO blobs (id, owner, digest, size, name, content_type, created) "
+        c.execute("INSERT INTO blobs (id, owner, digest, size, name, content_type, created_at) "
                   "VALUES ('tour','human:ana','d0',10,'tour.png','image/png',?)", (H.now(),))
     r = api.patch("/api/v2/company-page", headers=headers(), json={"logo_file_id": "tour"})
     assert r.status_code == 422 and "uploaded to the Company page" in r.text
@@ -209,10 +209,10 @@ def test_a_logo_is_a_picture_by_its_bytes_and_only_the_page_s_own_upload_can_be_
 
 def test_only_an_owner_or_admin_uploads_the_logo_and_a_bot_is_refused(api):
     """A bot never changes what leaves the install, and a member who is not an owner or admin doesn't either."""
-    api.app.state.auth.settings.test_identities["ops-test"] = Identity("bot:ops", "bot", agent="test")
+    api.app.state.auth.settings.test_identities["ops-test"] = Identity("bot:logo-bot", "bot", agent="test")
     with api.app.state.store.transaction() as c:
-        c.execute("INSERT OR IGNORE INTO bots(slug,display_name,runtime,created) VALUES('ops','ops','fake',?)", (H.now(),))
-        c.execute("INSERT INTO agents(bot,harness,token_hash,created,created_by) VALUES('ops','test','x-ops',?,'human:ana')",
+        c.execute("INSERT OR IGNORE INTO bots(id,slug,display_name,created_at) VALUES('logo-bot','logo-bot','logo-bot',?)", (H.now(),))
+        c.execute("INSERT INTO agents(bot,harness,token_hash,created_at,created_by) VALUES('logo-bot','test','x-ops',?,'human:ana')",
                   (H.now(),))
     upload(api, PNG, token="ops-test", expected=403)
     upload(api, PNG, token="cara-test", expected=403)

@@ -7,6 +7,7 @@ from backend.store import H
 from backend.tests.test_api import api, assign, get, headers, post, ready, restrict, runner  # noqa: F401  (fixtures)
 from backend.tests.test_credentials import setup
 from backend.tests.test_model_subscriptions import add, company, give, machine, on
+from backend import bot_settings as BS
 
 RUNTIMES = {"codex": {"installed": True, "authenticated": "ready"}}
 TOOLS = [
@@ -20,9 +21,8 @@ TOOLS = [
 
 def configure(api, bot="ops"):
     with api.app.state.store.transaction() as c:
-        c.execute("UPDATE bot_config SET config_json=?,repo=? WHERE bot=?",
-                  (json.dumps({"name": bot, "runtime": "codex", "model": "gpt-6-luna", "reasoning_effort": "high"}),
-                   "acme-co/emp-" + bot, bot))
+        c.execute('UPDATE bot_config SET repo=? WHERE bot=?', ('acme-co/emp-' + bot, bot))
+        BS.write(c, bot, {'name': bot, 'runtime': 'codex', 'model': 'gpt-6-luna', 'reasoning_effort': 'high'})
 
 
 def report(api, machine, bot, tools):
@@ -73,7 +73,7 @@ def test_no_value_can_reach_the_row(api):
     assert report(api, machine, "ops", [{**TOOLS[1], "env": {"SLACK_TOKEN": "xoxb-not-a-real-token"}}]).status_code == 422
     assert report(api, machine, "ops", TOOLS).status_code == 200
     with api.app.state.store.read() as c:
-        stored = c.execute("SELECT readiness_json FROM runners").fetchone()[0]
+        stored = c.execute("SELECT readiness FROM runners_with_state").fetchone()[0]
     for text in (api.get("/api/v2/bots/ops/tools", headers=headers()).text, stored,
                  api.get("/api/v2/operations", headers=headers()).text, api.get("/api/v2/bots", headers=headers()).text):
         assert "xoxb-not-a-real-token" not in text

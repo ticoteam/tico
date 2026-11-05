@@ -31,13 +31,15 @@ def add(api, rid, body, token="ana-test", expected=200, key=None):
 
 
 def change(api, rid, iid, body, token="ana-test", expected=200, key=None):
+    body = {"version": next(i["version"] for rows in items(api, rid, token)["sections"].values() for i in rows if i["id"] == iid), **body}
     r = api.post(f"/api/meetings/{rid}/items/{iid}", json=body, headers=headers(token, key))
     assert r.status_code == expected, r.text
     return r.json()
 
 
 def push(api, rid, iid, body=None, token="ana-test", expected=200, key=None):
-    r = api.post(f"/api/meetings/{rid}/items/{iid}/push", json=body or {}, headers=headers(token, key))
+    body = {"version": next(i["version"] for rows in items(api, rid, token)["sections"].values() for i in rows if i["id"] == iid), **(body or {})}
+    r = api.post(f"/api/meetings/{rid}/items/{iid}/push", json=body, headers=headers(token, key))
     assert r.status_code == expected, r.text
     return r.json()
 
@@ -54,7 +56,7 @@ def test_a_private_meeting_keeps_its_items_to_the_people_the_invite_names(api):
     # Making it a company meeting again opens the items with it.
     api.post(f"/api/meetings/{rid}/edit", json={"private": False, "version": 1},
              headers=headers("ben-test"))
-    assert items(api, rid, "cara-test")["can_push"] is False
+    assert items(api, rid, "cara-test")["can_send"] is True
 
 
 # ----------------------------------------------------------------------------- comments
@@ -67,7 +69,7 @@ def test_a_pushed_item_is_a_hub_task_with_the_meeting_it_came_from(api):
     pushed = push(api, rid, iid)
     assert pushed["pushed"] and pushed["item"]["status"] == "pushed"
     task = get(api, "tasks/" + pushed["item"]["result_ref"])["task"]
-    assert task["owner"] == "human:ben" and task["title"] == "Send Dana the pricing sheet"
+    assert task["owner_id"] == "human:ben" and task["title"] == "Send Dana the pricing sheet"
     assert "From meeting: Weekly sync" in task["body"] and "> We agreed to ship on Friday." in task["body"]
     assert f"#/meetings?meeting={rid}" in task["body"]
     # A second push is one result, not a second task.

@@ -90,14 +90,15 @@ def _department(value, group):
 
 
 def _filled(c, group):
-    """{template: the bot's slug} for the live bots on the team, by the template each one was built from."""
+    """{template: the bot's id} for the live bots on the team, by the template each one was built from."""
     configs = Groups._configs(c)
     return {configs[slug].get("template"): slug for slug in group["bots"] if configs.get(slug, {}).get("template")}
 
 
 def _bot(c, slug, icon):
-    """The bot on the team that fills a role: its slug, the name it goes by, and its template's icon."""
-    return {"slug": slug, "name": (H.bot(c, slug) or {}).get("display_name") or slug, "icon": icon}
+    """The bot on the team that fills a role: its id and slug, the name it goes by, and its template's icon."""
+    row = H.bot(c, slug) or {}
+    return {"id": slug, "slug": row.get("slug") or slug, "name": row.get("display_name") or slug, "icon": icon}
 
 
 def _about(c, who):
@@ -158,15 +159,27 @@ def suggest(auth, onboarding, c, who, team, briefing=""):
         return {"team": team, "department": "", "roles": []}
     text = _briefing(briefing)
     ranked = R.rank(value, dept, text, _about(c, who), limit=len(value["cards"]))
-    picked = [row["template_id"] for row in ranked["bots"]]
     members = {card["template"]: card for card in value["cards"] if card["department"] == dept}
     filled = _filled(c, group)
+    picked = [row["template_id"] for row in ranked["bots"]]
+    # A filled role the recommender left out (a niche card the briefing does not name) still counts, after the ranked ones.
+    picked += [t for t in members if t in filled and t not in picked]
     words, common = R._words(text), R._common(list(members.values()))
     raw = {row["template"]: row for row in read_cards(onboarding.settings)}
     suggested = set(ranked["suggested_default"])
-    shown = picked[:ROLES]
+    # The head and every role the team already fills are always shown, whatever their rank (so more than ROLES when a
+    # team has that many); the other slots go in rank order.
+    head = R.head_of(value, dept)
+    kept = {t for t in picked if t in filled or t == head}
+    shown, open_slots = [], ROLES - len(kept)
+    for template in picked:
+        if template in kept:
+            shown.append(template)
+        elif open_slots > 0:
+            shown.append(template)
+            open_slots -= 1
     # The rest of the department, the recommender's leftovers first, as the alternatives a role can take instead.
-    rest = picked[ROLES:] + sorted((t for t in members if t not in picked),
+    rest = [t for t in picked if t not in shown] + sorted((t for t in members if t not in picked),
                                                 key=lambda t: ({"default": 0, "common": 1}.get(members[t]["suggest"], 2),
                                                                members[t]["name"].lower()))
     pool = [t for t in rest if t not in filled and t not in shown][:ALTERNATIVES]
@@ -220,6 +233,7 @@ def hire(auth, onboarding, c, who, team, reports_to, picks):
     filled = _filled(c, group)
     head_bot = filled.get(R.head_of(value, dept)) if dept else None
     owner = str(reports_to or "").strip() or who.actor
+    owner = (H.resolve_bot(c, owner) or {}).get("id", owner)
     seats, head_seat = [], None
     for role, card in chosen:
         if card["lead"]:
@@ -236,11 +250,12 @@ def hire(auth, onboarding, c, who, team, reports_to, picks):
     bots = []
     for role, card, seat_id in seats:
         hired = recruiting.hire(auth, onboarding, c, who, seat_id, M.SeatHire(template=card["template"]))
-        if (Groups._configs(c).get(hired["slug"]) or {}).get("team") != team:
-            Groups._set_bot(c, hired["slug"], team)     # the team's group is the bot's own (backend/groups.py)
-        bots.append({"slug": hired["slug"], "name": card["name"], "template": card["template"], "role": role,
+        bot_id = (H.resolve_bot(c, hired["slug"]) or {}).get("id", hired["slug"])
+        if (Groups._configs(c).get(bot_id) or {}).get("team") != team:
+            Groups._set_bot(c, bot_id, team)     # the team's group is the bot's own (backend/groups.py)
+        bots.append({"id": bot_id, "slug": hired["slug"], "name": card["name"], "template": card["template"], "role": role,
                      "stage": hired["stage"]})
-    H.event(c, who.actor, "team.built", team, {"bots": [bot["slug"] for bot in bots]})
+    H.event(c, who.actor, "team.built", team, {"bots": [bot["id"] for bot in bots]})
     return {"team": team, "bots": bots}
 
 

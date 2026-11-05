@@ -34,7 +34,7 @@ case "$*" in
   *healthz*) echo ok ;;
   *enrollments*) echo "curl $*" >> "$STUB_LOG"; cat > "$STUB_CURL_CONFIG"
     case "$*" in
-      *"Idempotency-Key: "?*) [ -n "${STUB_REFUSE:-}" ] || [ -n "${STUB_NO_CODE:-}" ] || printf '{"code": "%s", "expires": "2026-10-18T23:00:00Z", "operator": null}\\n' "$STUB_CODE" ;;
+      *"Idempotency-Key: "?*) [ -n "${STUB_REFUSE:-}" ] || [ -n "${STUB_NO_CODE:-}" ] || printf '{"code": "%s", "expires_at": "2026-10-18T23:00:00Z", "operator": null}\\n' "$STUB_CODE" ;;
       *) STUB_REFUSE=1 ;;
     esac
     [ -z "${STUB_REFUSE:-}" ] || printf '{"error":{"code":"idempotency_key","detail":"Provide an Idempotency-Key of 1–200 characters"}}\\n' ;;

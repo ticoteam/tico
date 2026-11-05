@@ -22,23 +22,28 @@ def comment_rights(c, auth, who, task_id):
     from . import lifecycle
     lifecycle.refuse_send(c, who, None, what="task comments")
     if who.role == "bot" and not H.task_participant(c, who.actor, row):
-        delegated = c.execute("SELECT 1 FROM task_delegations WHERE task_id=? AND delegate=? AND expires>?",
+        delegated = c.execute("SELECT 1 FROM task_delegations WHERE task_id=? AND delegate=? AND expires_at>?",
                               (task_id, who.actor, H.now())).fetchone()
         if not delegated and not H.task_ancestor_party(c, who.actor, row) and not H.type_bot_reads(c, who.actor, row) \
                 and not H.task_manager_acts(c, who.actor, row):
             raise Problem("forbidden", "Only task parties, their managers, delegates, ancestor parties or bots allowed by the task type may comment", 403)
     origin = None if H.task_private(c, row) else H.task_origin(c, row)
-    others = [a for a in dict.fromkeys([row["owner"], row["requester"], origin])
+    others = [a for a in dict.fromkeys([row["owner_id"], row["requester_id"], origin])
               if a and a not in (who.actor, H.KEEPER)]
     target = next((a for a in others if H.is_bot(a)), None)
-    if target and not H.task_represents(c, who.actor, row["owner"]):
+    if target and not H.task_represents(c, who.actor, row["owner_id"]):
         auth.require_write(c, who, H.actor_id(target))
     if target:
         auth.require_bot_contact(c, who, target, task_id=task_id, kind="comment")
     return row
 
 
-def file_version(c, task_id, fid, number):
+def file_version(c, task_id, fid, number, *, auth=None, who=None):
+    if who is not None:
+        from .files import file_visible, page_blob_visible
+        file = c.execute("SELECT * FROM bot_files WHERE id=?", (fid,)).fetchone()
+        if (file and not file_visible(c, auth, who, file, {})) or (not file and not page_blob_visible(c, auth, who, fid)):
+            raise Problem("not_found", "File version not found on this task", 404)
     row = c.execute("SELECT v.* FROM bot_file_versions v JOIN bot_files f ON f.id=v.file_id "
                     "WHERE f.task_id=? AND v.file_id=? AND v.version=?", (task_id, fid, number)).fetchone()
     if row:
@@ -57,7 +62,7 @@ def comment_file(c, auth, files, who, task_id, fid, number):
     the task gets its own copy of the same bytes through the task-file service, so the task's readers open it
     through the task, and the chat file's own access and lifetime stay as they were."""
     try:
-        return fid, file_version(c, task_id, fid, number)
+        return fid, file_version(c, task_id, fid, number, auth=auth, who=who)
     except Problem:
         # A person's own chat upload is also a versioned file in that chat (backend/visuals.py); any other file's
         # bytes are shared by that file's id, never by its blob's.
@@ -76,7 +81,7 @@ def comment_file(c, auth, files, who, task_id, fid, number):
                      "WHERE f.task_id=? AND f.archived=0 AND v.digest=? AND v.name=? ORDER BY v.version DESC LIMIT 1",
                      (task_id, source["digest"], source["name"])).fetchone()
     if same:
-        return same["file_id"], file_version(c, task_id, same["file_id"], same["version"])
+        return same["file_id"], file_version(c, task_id, same["file_id"], same["version"], auth=auth, who=who)
     item = register(c, who, source["digest"], source["size"], source["name"], source["content_type"])
     copy = files.publish_task_deliverable(c, who, task_id, item, source["digest"])
     c.execute("INSERT INTO task_assets VALUES(?,?)", (task_id, item["id"]))
@@ -88,8 +93,13 @@ def comment_file(c, auth, files, who, task_id, fid, number):
 def file_added(c, who, task_id, item, number, poster=None):
     """What a file added to a task records, uploaded or shared from a chat: the task's own "file" activity line,
     the task.file audit event and the preview worker's row. The caller wakes the media worker once it commits."""
-    H._task_event(c, task_id, who.actor, "file", None, item["name"], "" if number == 1 else f"version {number}")
-    H.event(c, who.actor, "task.file", task_id, {"file": item["id"], "name": item["name"], "size": item["size"]})
+    from .files import page_references
+    provenance = {"file": item["id"], "version": number}
+    if pages := page_references(item["id"], c):
+        provenance["page_files"] = sorted(pages)
+    name, data = H.sourced_text(item["name"], [provenance], provenance)
+    H._task_event(c, task_id, who.actor, "file", None, name, "" if number == 1 else f"version {number}", data=data)
+    H.event(c, who.actor, "task.file", task_id, {**data, "name": name, "size": item["size"]})
     c.execute("INSERT OR IGNORE INTO blob_media(blob_id,poster_blob_id) VALUES(?,?)", (item["id"], poster))
 
 
@@ -105,29 +115,33 @@ def check_ask(c, task_id, ask, auth, who, lint=True):
         if not question.get("why"):
             question.pop("why", None)
         for option in question["options"]:
+            if option.get("file"):
+                fid, number = option["file"].rsplit("@", 1)
+                option["source"] = {"file": fid, "version": int(number)}
             if not option.get("then"):
                 option.pop("then", None)
             if not option.get("recommended"):
                 option.pop("recommended", None)
+    row = H.task(c, task_id)
+    target, refs = H.task_ask_route(c, who.actor, row, value)
+    value = {k: v for k, v in refs.items() if k != "task"}
     if lint and who.role == "bot":
-        row = H.task(c, task_id)
-        H.require_plain_question(c, who.actor, H.task_ask_recipient(c, who.actor, row, value), ask.questions)
+        H.require_plain_question(c, who.actor, target, ask.questions)
     if ask.who:
-        target = H.resolve_actor(c, ask.who)
         if not H.bot(c, H.actor_id(target)) and not H.human(c, H.actor_id(target)):
             raise Problem("validation", "Question recipient not found", 422)
         if not H.task_private_readable(c, target, H.task(c, task_id)):
             raise Problem("privacy", "Private questions stay with the requester and current owner", 403)
         if H.is_bot(target):
             row = H.task(c, task_id)
-            if target not in (row["owner"], row["requester"], H.task_origin(c, row)):
+            if target not in (row["owner_id"], row["requester_id"], H.task_origin(c, row)):
                 auth.require_write(c, who, H.actor_id(target))
             auth.require_bot_contact(c, who, target, task_id=task_id, kind="comment")
     for question in ask.questions:
         for option in question.options:
             if option.file:
                 fid, number = option.file.rsplit("@", 1)
-                file_version(c, task_id, fid, int(number))
+                file_version(c, task_id, fid, int(number), auth=auth, who=who)
     if ask.if_no_answer and ask.if_no_answer.by:
         by = H.parse_ts(ask.if_no_answer.by)
         if not by or by.tzinfo is None:
@@ -140,7 +154,18 @@ def check_ask(c, task_id, ask, auth, who, lint=True):
                           422)
         # Stored in UTC as every timestamp is, so it compares with them as text.
         value["if_no_answer"]["by"] = H.shift(by.astimezone(timezone.utc).isoformat())
+    default_source(value)
     return value
+
+
+def default_source(ask):
+    """A fallback that copies an option's label keeps that option's source too."""
+    default = ask.get("if_no_answer") or {}
+    wanted = str(default.get("do") or "").strip().casefold()
+    for question in ask.get("questions", []):
+        for option in question.get("options", []):
+            if wanted and str(option.get("label") or "").strip().casefold() == wanted and option.get("source"):
+                default["source"] = option["source"]
 
 
 def version_review(c, fid, number, *, actor):
@@ -148,22 +173,31 @@ def version_review(c, fid, number, *, actor):
     asked = H.message(c, row["ask_message_id"]) if row and row["ask_message_id"] else None
     if asked and not privacy.message_readable(c, actor, asked):
         asked = None
+    if asked:
+        from .files import readable_page_refs
+        from .teammate_access import _viewer_for
+        for principal in actor if isinstance(actor, (tuple, list, set)) else [actor]:
+            viewer = _viewer_for(c, principal)
+            if viewer:
+                asked = {**asked, "refs": readable_page_refs(c, None, viewer, asked["refs"],
+                                                             task_id=H.message_task_id(asked))}
     comment_visible = row and (not row["comment_id"] or privacy.message_readable(c, actor, H.message(c, row["comment_id"])))
     return {"note": row["note"] if comment_visible else None, "comment_id": row["comment_id"] if comment_visible else None,
-            "ask": {**{k: asked["refs"].get(k) for k in ("questions", "who")}, "by": asked["from_actor"]} if asked else None,
+            "ask": {**{k: asked["refs"].get(k) for k in ("questions", "who")}, "by": asked["sender_id"]} if asked else None,
             "answers": H.review_answers(c, asked["id"], actor=actor) if asked else []}
 
 
 def edit_version(c, auth, who, task_id, fid, number, body):
     auth.task(c, who, task_id)
+    H._writer(c, who.actor, task_id=task_id)
     if body.ask is not None:
         comment_rights(c, auth, who, task_id)
-    version = file_version(c, task_id, fid, number)
+    version = file_version(c, task_id, fid, number, auth=auth, who=who)
     if version["actor"] != who.actor:
         raise Problem("forbidden", "Only whoever added this version may edit its note or question", 403)
     value = check_ask(c, task_id, body.ask, auth, who)
     current = version_review(c, fid, number, actor=privacy.actor(who))
-    c.execute("UPDATE tasks SET updated=? WHERE id=?", (H.now(), task_id))
+    c.execute("UPDATE tasks SET updated_at=? WHERE id=?", (H.now(), task_id))
     c.execute("INSERT OR IGNORE INTO task_file_reviews(file_id,version) VALUES(?,?)", (fid, number))
     if "note" in body.model_fields_set:
         c.execute("UPDATE task_file_reviews SET note=? WHERE file_id=? AND version=?", (body.note, fid, number))
@@ -176,14 +210,17 @@ def edit_version(c, auth, who, task_id, fid, number, body):
             if H.answers_to(c, [existing]):
                 raise Problem("validation", "This version's question was answered; attach a new version for another review", 422)
             asked = H.message(c, existing)
+            H._message_writer(c, who.actor, asked, H.conversation(c, asked["conversation_id"]))
             row = H.task(c, task_id)
-            recipient = H.task_ask_recipient(c, who.actor, row, value)
-            c.execute("UPDATE messages SET refs_json=?,to_actor=? WHERE id=?",
-                      (encode({**asked["refs"], **value}), recipient, existing))
+            recipient, refs = H.task_ask_route(c, who.actor, row, {**asked["refs"], **value})
+            c.execute("UPDATE messages SET refs=?,recipient_id=? WHERE id=?",
+                      (encode(refs), recipient, existing))
             return version_review(c, fid, number, actor=privacy.actor(who))
         if value:
-            msg = H.task_comment(c, who.actor, task_id, body.note or f'Review "{version["name"]}" v{number}.',
-                                 ask=value, extra_refs={"target": {"file": fid, "version": number}})
+            text, refs = H.sourced_text(body.note or f'Review "{version["name"]}" v{number}.',
+                                       [] if body.note else [{"file": fid, "version": number}],
+                                       {"target": {"file": fid, "version": number}})
+            msg = H.task_comment(c, who.actor, task_id, text, ask=value, extra_refs=refs)
             c.execute("UPDATE task_file_reviews SET ask_message_id=? WHERE file_id=? AND version=?",
                       (msg["id"], fid, number))
     return version_review(c, fid, number, actor=privacy.actor(who))
@@ -193,7 +230,7 @@ def answer_text(c, auth, who, asked, text, *, unknown=False, warn=""):
     """Only a unique exact label for one question can stand in for a card pick. `warn` (an org rule's Warn,
     backend/org_rule_check.py) goes on the message the asker reads, after the pick is resolved on `text` itself."""
     from . import models as M
-    if asked["to_actor"] != who.actor or asked["from_actor"] == who.actor:
+    if asked["recipient_id"] != who.actor or asked["sender_id"] == who.actor:
         raise Problem("forbidden", "Only the question's recipient may answer it", 403)
     privacy.require_message(c, who, asked)
     task_id = H.message_task_id(asked, H.conversation(c, asked["conversation_id"]))
@@ -205,7 +242,7 @@ def answer_text(c, auth, who, asked, text, *, unknown=False, warn=""):
             target=target, answers={questions[0]["id"]: matches}), wake=True, warn=warn)
     # The original words stay on the task; an unmatched note cannot settle its question.
     note = H.answer(c, who.actor, asked["id"], warn + "\n\n" + text if warn else text, unknown=unknown,
-                    classify_text=text)
+                    classify_text=text, turn_id=who.attempt_id)
     return {**note, "decision_open": True,
             "feedback": "Note saved. Decision still open; choose one of the options."}
 
@@ -226,12 +263,14 @@ def reply_answer(c, auth, who, asked, text, warn=""):
             c.execute("RELEASE reply_answer")
             made = out.get("comment") or (out if out.get("id") else None)
             return H.message(c, made["id"]) if made else None      # None: that very pick was already recorded
-    return H.answer(c, who.actor, asked["id"], warn + "\n\n" + text if warn else text, classify_text=text)
+    return H.answer(c, who.actor, asked["id"], warn + "\n\n" + text if warn else text, classify_text=text,
+                    turn_id=who.attempt_id)
 
 
 def answer_task(c, auth, who, task_id, body, wake, warn=""):
     """A structured answer. `warn` (an org rule's Warn) opens the answer comment its readers get; the answer itself
     (its picks and Other text) is recorded as given."""
+    H._writer(c, who.actor, task_id=task_id)
     mark = H.jobs_mark(c)
     comment_rights(c, auth, who, task_id)
     target = body.target.model_dump(exclude_none=True)
@@ -243,18 +282,19 @@ def answer_task(c, auth, who, task_id, body, wake, warn=""):
         if (asked.get("refs") or {}).get("target"):
             raise Problem("validation", "Use the file and version target for a file question", 422)
     else:
-        version = file_version(c, task_id, body.target.file, body.target.version)
+        version = file_version(c, task_id, body.target.file, body.target.version, auth=auth, who=who)
         review = c.execute("SELECT ask_message_id FROM task_file_reviews WHERE file_id=? AND version=?",
                            (body.target.file, body.target.version)).fetchone()
         asked = H.message(c, review[0]) if review and review[0] else None
     if not asked or asked["kind"] != "ask" or not asked["refs"].get("questions"):
         raise Problem("validation", "The target has no structured question", 422)
     privacy.require_message(c, who, asked)
-    if asked["from_actor"] == who.actor:
+    H._message_writer(c, who.actor, asked, H.conversation(c, asked["conversation_id"]))
+    if asked["sender_id"] == who.actor:
         raise Problem("forbidden", "The asker cannot answer their own question", 403)
     # A bot's question answered by the person it was put to (or its task waits on) is that bot's next move: it wakes.
-    wake = wake or H.is_bot(asked["from_actor"]) and (
-        asked["to_actor"] == who.actor or H.task(c, task_id).get("waiting_on") == who.actor)
+    wake = wake or H.is_bot(asked["sender_id"]) and (
+        asked["recipient_id"] == who.actor or H.task(c, task_id).get("waiting_on") == who.actor)
     questions = {q["id"]: q for q in asked["refs"]["questions"]}
     if body.dismiss:
         if body.answers or body.other:
@@ -324,8 +364,11 @@ def answer_task(c, auth, who, task_id, body, wake, warn=""):
     picked = still_wanted.choice(asked, body, who.actor)
     if picked == still_wanted.CLOSE:
         wake = False                 # the close itself tells the bot; the answer need not start a run too
-    msg = H.task_comment(c, who.actor, task_id, text, wake=wake,
-                         extra_refs={"answer": value}, answer_to=asked["id"], answer_text=body.other or "")
+    text, refs = H.answer_text(asked, body.answers, text=text, passed=passed, refs={"answer": value},
+                               file_subject=bool(version))
+    value = refs["answer"]
+    msg = H.task_comment(c, who.actor, task_id, text, wake=wake, extra_refs=refs,
+                         answer_to=asked["id"], answer_text=body.other or "")
     if value.get("reviewed"):
         file_reviews.record(c, who, task_id, asked["id"], msg["id"], value["reviewed"])
     still_wanted.act(c, who.actor, task_id, picked)
@@ -337,20 +380,20 @@ def answer_task(c, auth, who, task_id, body, wake, warn=""):
 # The newest visual per task. `bot_files_task` (backend/files.py) finds a task's files without scanning every file.
 COVERS_SQL = (
     "WITH visuals AS ("
-    "SELECT f.task_id,f.id,v.version,v.mime,v.created,v.rowid AS position,"
+    "SELECT f.task_id,f.id,v.version,v.mime,v.created_at,v.rowid AS position,"
     "coalesce(v.width,m.width) AS width,coalesce(v.height,m.height) AS height,"
     "coalesce(v.thumb_blob_id,m.thumb_blob_id) AS thumb_blob_id,"
     "coalesce(v.poster_blob_id,m.poster_blob_id) AS poster_blob_id "
     "FROM bot_files f JOIN bot_file_versions v ON v.file_id=f.id "
     "LEFT JOIN blob_media m ON m.blob_id=v.blob_id "
     "WHERE f.task_id IN ({marks}) AND f.archived=0 AND f.locator='tico_blob' "
-    "UNION ALL SELECT a.task_id,b.id,1,b.content_type,b.created,b.rowid,"
+    "UNION ALL SELECT a.task_id,b.id,1,b.content_type,b.created_at,b.rowid,"
     "m.width,m.height,m.thumb_blob_id,m.poster_blob_id "
     "FROM task_assets a JOIN blobs b ON b.id=a.blob_id LEFT JOIN blob_media m ON m.blob_id=b.id "
     "WHERE a.task_id IN ({marks}) AND NOT EXISTS "
     "(SELECT 1 FROM bot_file_versions v WHERE v.blob_id=b.id)), "
     "ranked AS (SELECT *,ROW_NUMBER() OVER (PARTITION BY task_id "
-    "ORDER BY created DESC,version DESC,position DESC) AS rank FROM visuals "
+    "ORDER BY created_at DESC,version DESC,position DESC) AS rank FROM visuals "
     "WHERE mime LIKE 'image/%' OR (mime LIKE 'video/%' AND poster_blob_id IS NOT NULL)) "
     "SELECT * FROM ranked WHERE rank=1")
 

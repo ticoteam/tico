@@ -6,16 +6,16 @@
 // no group headings, with a search box that matches name, trigger, action, department tag and group word. Each row reads
 // WHEN <trigger> THEN <action>, with its department tag, schedule, last and next run and, for a job that asks Decide,
 // which route answered and this month's spend. An owner or admin switches the six AI/people jobs (and Topic changed),
-// picks their schedule preset and runs them now; Health scan only the owner (`can_change`, enforced by the server too).
+// picks their schedule preset and runs them now. Who may change a job is the server's `can_change`, enforced there too.
 // Fetched again at most once a minute while the tab is open.
 let SYSTEM_ROUTINES = null, SYSTEM_ROUTINES_AT = 0, SYSTEM_ROUTINES_Q = '', SYSTEM_ROUTINES_HELD = false;
 const SYSTEM_ROUTINE_BUSY = new Set();
 // Jobs a happening starts, not a clock: they keep no run log, so the row says so in place of a last run.
-const SYSTEM_ROUTINE_ON_EVENT = new Set(['topic_fresh', 'stall_triage']);
+const SYSTEM_ROUTINE_ON_EVENT = new Set(['topic_fresh']);
 function systemRoutineLastHTML(j) {
   if (!j.records) return SYSTEM_ROUTINE_ON_EVENT.has(j.key) ? '<span class="muted">Runs when it happens</span>' : '<span class="muted">Each connection shows its own</span>';
   if (!j.last) return '<span class="muted">Not run yet</span>';
-  const when = `<span class="tnum muted" title="${esc(fmt(j.last.finished || j.last.started))}">${esc(ago(j.last.finished || j.last.started))}</span>`;
+  const when = `<span class="tnum muted" title="${esc(fmt(j.last.finished_at || j.last.started_at))}">${esc(ago(j.last.finished_at || j.last.started_at))}</span>`;
   return `<span class="${j.last.ok ? '' : 'sysr-failed'}" data-sysr-result>${esc(j.last.result)}</span> ${when}`;
 }
 function systemRoutineAIHTML(j) {
@@ -45,7 +45,7 @@ function systemRoutineControlHTML(j) {
   if (!j.switch) return j.needed ? '<span class="muted sysr-needed">Tico needs this to run</span>' : '';
   const busy = SYSTEM_ROUTINE_BUSY.has(j.key);
   if (!j.can_change) {
-    // A member reads on or off; an admin looking at Health scan sees why they cannot change it.
+    // A member reads on or off; an admin looking at a job only the owner changes sees why they cannot change it.
     return `<span class="sysr-state" data-sysr-state>${j.on ? 'On' : 'Off'}</span>${j.owner_only && settingsIsAdmin() ? '<span class="muted sysr-owner" data-sysr-owner>Only the owner changes this</span>' : ''}`;
   }
   return `<label class="sysr-switch">${peopleSwitch('data-sysr-on', j.on, busy, j.name)}<span>${j.on ? 'On' : 'Off'}</span></label>
@@ -103,11 +103,11 @@ async function systemRoutineWrite(key, send, status) {
 }
 // A Run now that asks Decide works on its own thread: read its row again until its result lands (about two minutes).
 function systemRoutineFollow(key, n) {
-  const before = (SYSTEM_ROUTINES?.jobs || []).find(j => j.key === key)?.last?.started || '';
+  const before = (SYSTEM_ROUTINES?.jobs || []).find(j => j.key === key)?.last?.started_at || '';
   setTimeout(async () => {
     try { SYSTEM_ROUTINES = await get('/v2/system-routines'); SYSTEM_ROUTINES_AT = Date.now(); } catch (e) { return; }
     systemRoutinesPaint();
-    const now = (SYSTEM_ROUTINES.jobs || []).find(j => j.key === key)?.last?.started || '';
+    const now = (SYSTEM_ROUTINES.jobs || []).find(j => j.key === key)?.last?.started_at || '';
     if (now === before && n < 24) systemRoutineFollow(key, n + 1);
   }, 5000);
 }
@@ -210,7 +210,7 @@ function memoryTidyEditor(job) {
   const rows = dialog.querySelector('[data-pilot-rows]'), add = dialog.querySelector('[data-add]');
   const addRow = (entry = {}) => {
     const row = document.createElement('div'); row.dataset.pilotRow = '';
-    row.innerHTML = `<label>Bot slug<input data-bot required maxlength="100" value="${esc(entry.bot || '')}"></label>
+    row.innerHTML = `<label>Bot slug<input data-bot required maxlength="100" value="${esc(entry.slug || entry.bot || '')}"></label>
       <label>Pass model<select data-model required><option value="">Choose a model</option>${choices.map(c => `<option value="${esc(c.model)}"${c.model === entry.model ? ' selected' : ''}>${esc(c.label)}</option>`).join('')}
       ${entry.model && !choices.some(c => c.model === entry.model) ? `<option value="${esc(entry.model)}" selected disabled>${esc(entry.model)} (unavailable)</option>` : ''}</select></label>
       <label>Reasoning effort<select data-effort><option value="low">low</option></select></label><button type="button" class="ghost" data-remove>Remove bot</button>`;

@@ -22,7 +22,7 @@ def label(api, task_id, labels, token, expected=200, **extra):
 
 def refusals(api, slug):
     with api.app.state.store.read() as c:
-        return [(r[0], r[1]) for r in c.execute("SELECT rule, detail_json FROM refusals WHERE actor=?", ("bot:" + slug,))]
+        return [(r[0], r[1]) for r in c.execute("SELECT rule, detail FROM refusals WHERE actor=?", ("bot:" + slug,))]
 
 
 def state(api, slug):
@@ -111,7 +111,7 @@ def test_a_bot_still_changes_no_lane_or_number_and_a_mover_is_unchanged(api):
     label(api, other["id"], [], "priya-test", expected=403)               # a person who is not a mover, as before
 
 
-def test_a_repeated_label_refusal_counts_once_per_task_an_hour_but_other_repeats_still_quarantine(api):
+def test_a_repeated_label_refusal_counts_once_per_task_an_hour_but_other_repeats_still_hold_the_chat(api):
     token = bot_token(api, "cpo")
     ticket = post(api, "tasks", {"owner": "cmo", "title": "Build imports", "body": "x", "type": "Engineering"})
     for _ in range(H.QUARANTINE_AT + 2):
@@ -132,7 +132,11 @@ def test_a_repeated_label_refusal_counts_once_per_task_an_hour_but_other_repeats
     for _ in range(H.QUARANTINE_AT + 1):
         r = api.post("/api/v2/tasks/" + item["id"], json={"version": item["version"], "number": 992}, headers=headers(token))
         assert r.status_code == 403, r.text
-    assert state(api, "cpo") == "quarantined"
+    assert state(api, "cpo") == "active"
+    with api.app.state.store.read() as c:
+        hold = c.execute("SELECT task_id,conversation_id,reason FROM quarantine_holds WHERE released_at IS NULL").fetchone()
+        assert hold["task_id"] is None and hold["conversation_id"]
+        assert hold["reason"] == f"{H.QUARANTINE_AT} repeated refusals today"
 
 
 def test_an_approval_for_a_public_label_never_carries_a_goal_label_and_is_used_once_on_a_public_task(api):
@@ -165,14 +169,14 @@ def test_label_refusals_on_different_tasks_each_count(api):
             label(api, ticket["id"], ["qa"], token, expected=403)
     with api.app.state.store.read() as c:
         about = [json.loads(r[0]).get("task") for r in c.execute(
-            "SELECT detail_json FROM refusals WHERE actor='bot:cpo' AND rule='label' ORDER BY ts")]
+            "SELECT detail FROM refusals WHERE actor='bot:cpo' AND rule='label' ORDER BY created_at")]
     assert about == [tickets[0]["id"]] * 2 + [tickets[1]["id"]] * 2, "the replayed refusal keeps its task"
 
 
 
 def created(api, slug, title):
     with api.app.state.store.read() as c:
-        return c.execute("SELECT count(*) FROM tasks WHERE requester=? AND title=?", ("bot:" + slug, title)).fetchone()[0]
+        return c.execute("SELECT count(*) FROM tasks WHERE requester_id=? AND title=?", ("bot:" + slug, title)).fetchone()[0]
 
 
 def written(api):

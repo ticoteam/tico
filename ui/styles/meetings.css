@@ -39,9 +39,12 @@
 .p-thumb{flex:none;width:44px;height:44px;padding:0;border:0;border-radius:7px;overflow:hidden;background:var(--bg);cursor:zoom-in}
 .p-thumb img{display:block;width:100%;height:100%;object-fit:cover}
 @media (max-width:760px){
-  .p-pill{flex-wrap:wrap;border-radius:14px;padding:8px}
+  /* One line on a phone too, as the bot chat's pill was: Attach on the left, then the words, Goal and Send. The box
+     grows only when the words wrap. (#chat-composer lays its row out on a grid, ui/styles/chat.css.) */
+  .p-pill>.p-attach,.p-pill>.thv-attach-wrap{order:-1}
+  .p-pill .p-attach,.p-pill .p-goal{width:36px;height:36px;padding:0;justify-content:center}
   /* iOS Safari zooms focused controls below 16px. Keep page zoom available, but not automatic. */
-  .ask textarea{order:-1;flex:1 0 100%;padding:4px 6px;font-size:16px;touch-action:manipulation}
+  .ask textarea{font-size:16px;touch-action:manipulation}
   .p-chips{padding-left:var(--s1);padding-right:var(--s1)}
   .p-go{margin-left:0}
   /* the bot page composer stays in reach while the thread scrolls */
@@ -429,3 +432,10 @@ a.mg-open{display:inline-flex;align-items:center;padding:5px 11px;border-radius:
   .live-bot-picker{align-items:stretch;flex-direction:column}.live-bot-picker select{max-width:none}
   .live-transcript>p,.live-chat>p{grid-template-columns:1fr;gap:3px}.live-transcript>p small,.live-transcript>p>small:first-child,.live-chat>p small{grid-column:1}
 }
+
+.meet-pending { display: grid; gap: 12px; max-width: 680px; }
+.meet-pending label { display: grid; gap: 6px; flex: 1; min-width: 0; }
+.meet-pending textarea, .meet-pending input, .meet-pending select { width: 100%; box-sizing: border-box; }
+.meet-pending textarea { min-height: 76px; resize: vertical; }
+.meet-pending [data-save-error] { color: var(--danger); }
+@media (max-width: 600px) { .meet-pending .row { flex-wrap: wrap; } }

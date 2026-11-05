@@ -35,7 +35,7 @@ function taskQaWaiverHTML(w) {
 
 // ---- Code: one line per worktree and per pull request
 const taskLinkDetail = l => {
-  let d = l.detail || l.detail_json || {};
+  let d = l.detail || l.detail || {};
   if (typeof d === 'string') { try { d = JSON.parse(d); } catch { d = {}; } }
   return d && typeof d === 'object' ? d : {};
 };
@@ -95,7 +95,7 @@ function taskCodeLineHTML(l, mover, siblings = []) {
   // A released worktree (an open task whose pull requests are all finished) also stops retrying, but its cleanup resumes
   // by itself once its work is saved; a removal request there would remove it from a task that is still open.
   const wtDetail = l.kind === 'worktree' ? taskLinkDetail(l) : {};
-  const retry = mover && l.id && l.kind === 'worktree' && l.state !== 'removed' && wtDetail.cleanup_gave_up === true
+  const retry = mover && l.id && l.kind === 'worktree' && !['removed', 'retired'].includes(l.state) && wtDetail.cleanup_gave_up === true
     && wtDetail.release_requested !== true
     ? `<div class="code-retry-row"><span class="code-retry-hint">Cleanup stopped retrying. Fix the cause above, then retry.</span><button type="button" class="ghost code-retry" data-code-drop="${esc(l.id)}" data-code-retry aria-label="Retry cleanup of ${esc(what)}">Retry cleanup</button></div>` : '';
   if (l.kind === 'worktree') {
@@ -104,13 +104,18 @@ function taskCodeLineHTML(l, mover, siblings = []) {
     const url = taskWorktreeURL(l);
     const bits = [wtRepo ? `<span class="code-repo">${esc(wtRepo)}</span>` : '<span class="code-repo unknown">unknown repo</span>'];
     if (l.branch) bits.push(`<span class="code-branch mono">${esc(l.branch)}</span>`);
+    if (l.state === 'retired' && wtDetail.last_commit) bits.push(`<span class="code-branch mono">${esc(String(wtDetail.last_commit).slice(0, 12))}</span>`);
     const sync = [ahead ? `↑${ahead}` : '', behind ? `↓${behind}` : ''].filter(Boolean).join(' ');
     if (sync) bits.push(`<span class="tnum">${sync}</span>`);
     if (files) bits.push(`<span class="tnum">${files} file${files === 1 ? '' : 's'}</span>`);
-    const odd = ['missing', 'removed', 'unknown', 'pending'].includes(l.state) || error
-      ? ` <span class="code-state${error ? ' err' : ''}">${esc(['missing', 'removed', 'unknown', 'pending'].includes(l.state) ? l.state : 'error')}</span>` : '';
+    const odd = l.state === 'retired' ? ' <span class="code-state">left on a retired computer</span>'
+      : ['missing', 'removed', 'unknown', 'pending'].includes(l.state) || error
+        ? ` <span class="code-state${error ? ' err' : ''}">${esc(['missing', 'removed', 'unknown', 'pending'].includes(l.state) ? l.state : 'error')}</span>` : '';
     const title = [repo, l.branch, l.path].filter(Boolean).join(' · ');
-    const explanation = error ? `<div class="props-msg code-error">${esc(error)}</div>` : '';
+    const history = wtDetail.retired_worktrees || [wtDetail.retired_worktree || {}];
+    const left = [...history.flatMap(old => [old.ahead ? `${old.ahead} unpushed commits stayed on the retired computer (head ${old.last_commit || 'unknown'}).` : '',
+      old.dirty_files ? `${old.dirty_files} changed files stayed there.` : '', old.recovery_note || '']), wtDetail.recovery_note || ''].filter(Boolean).join(' ');
+    const explanation = [error, left].filter(Boolean).map(text => `<div class="props-msg code-error">${esc(text)}</div>`).join('');
     const inner = bits.join('<span class="code-dot">·</span>');
     return `<li class="code-line wt${l.state === 'removed' ? ' gone' : ''}" data-code-link="${esc(l.id || '')}">${url
       ? `<a class="code-main" href="${esc(url)}" target="_blank" rel="noopener" title="${esc(title)}">${inner}</a>` : `<span class="code-main" title="${esc(title)}">${inner}</span>`}${odd}${x}${explanation}${retry}</li>`;
@@ -161,12 +166,12 @@ function taskSubSummary(t, kids) {
 // One line per child: the same status words as the list, the title, its PR badge, then the owner's face.
 function taskSubRowHTML(k, open) {
   const kids = k.children || [];
-  const who = k.owner ? actorFace(k.owner, 16) : '';
+  const who = k.owner_id ? actorFace(k.owner_id, 16) : '';
   const key = String(k.id);
   return `<li class="sub-row${['done', 'closed', 'declined'].includes(String(k.status)) ? ' finished' : ''}" data-sub="${esc(key)}">
     <div class="sub-line">${kids.length ? `<button type="button" class="sub-chev${open.has(key) ? ' open' : ''}" data-sub-toggle="${esc(key)}" aria-expanded="${open.has(key)}" aria-label="${open.has(key) ? 'Hide' : 'Show'} subtasks of ${esc(k.title || '')}">›</button>` : '<span class="sub-chev-pad"></span>'}
-      ${taskStatusText(k)}<button type="button" class="sub-open" data-sub-open="${esc(key)}" title="${esc(`${k.title || ''} · ${taskStatusLabel(k)} · ${actorLabel(k.owner)}`)}"><span class="sub-title">${esc(k.title || 'Untitled')}</span></button>
-      ${prStateBadge(k.pr_state)}${taskVerdictHTML(k)}<span class="sub-who" title="${esc(actorLabel(k.owner))}">${who}</span></div>
+      ${taskStatusText(k)}<button type="button" class="sub-open" data-sub-open="${esc(key)}" title="${esc(`${k.title || ''} · ${taskStatusLabel(k)} · ${actorLabel(k.owner_id)}`)}"><span class="sub-title">${esc(k.title || 'Untitled')}</span></button>
+      ${prStateBadge(k.pr_state)}${taskVerdictHTML(k)}<span class="sub-who" title="${esc(actorLabel(k.owner_id))}">${who}</span></div>
     ${kids.length && open.has(key) ? `<ul class="sub-list">${kids.map(c => taskSubRowHTML(c, open)).join('')}</ul>` : ''}</li>`;
 }
 const taskSubAdder = t => canMove() && !['done', 'closed'].includes(String(t.status || ''));
@@ -175,7 +180,7 @@ function taskSubtasksHTML(t, kids, open, adding, owner, refused = '') {
   const summary = taskSubSummary(t, kids), counts = taskSubCounts(t, kids);
   // The heading counts the children shown here; the roll-up of the whole tree sits on the same line, with a thin bar.
   const count = t.children_summary?.direct_total ?? kids.length;
-  const pick = owner || actorSlug(t.owner) || t.owner || '';
+  const pick = owner || actorSlug(t.owner_id) || t.owner_id || '';
   const actor = pick.includes(':') ? pick : 'bot:' + pick;
   return `<section class="rail-sec task-subs" aria-labelledby="task-subs-h"><h3 class="rail-h" id="task-subs-h">Subtasks${count ? ` <span class="cnt">${count}</span>` : ''}${
     summary ? `<span class="sub-sum tnum"><span>${esc(summary)}</span><span class="sub-bar" aria-hidden="true"><i style="width:${Math.round(100 * counts.done / counts.total)}%"></i></span></span>` : ''}</h3>
@@ -189,6 +194,7 @@ function taskSubtasksHTML(t, kids, open, adding, owner, refused = '') {
 function taskRailPaint(d, t) {
   const rail = $('[data-task-rail]', d); if (!rail) return;
   const st = d.taskRail ||= {open: new Set()};
+  const keptForm = taskFormCapture(rail);
   const kids = st.kids || [];
   const old = $('[data-sub-add]', rail);
   if (old) st.owner = old.elements.owner.value;
@@ -203,6 +209,7 @@ function taskRailPaint(d, t) {
   if (form && typed) form.elements.title.value = typed;
   // st.focus holds through the modal's redraws after adding one, until the tree is in (taskRailLoad).
   if (form && (focused || st.focus)) form.elements[focused || 'title'].focus();
+  taskFormRestore(rail, keptForm);
 }
 async function taskRailLoad(d, t, detail) {
   const id = String(t.id);
@@ -278,11 +285,11 @@ function taskRailBind(d, t) {
     if (!title || form.dataset.busy) return;
     if (!owner) { form.elements.owner.focus(); return; }
     form.dataset.busy = '1'; input.disabled = true;
-    d.taskRail.owner = owner; d.taskRail.refused = '';
+    d.taskRail.owner_id = owner; d.taskRail.refused = '';
     $('[data-sub-add-error]', rail)?.remove();
     try {
       // The details are required; the title stands in until someone writes more (the modal does not repeat it).
-      await post('/v2/tasks', {title, body: title, owner, relations: [{task: t.id, kind: 'parent'}]});
+      await post('/v2/tasks', {title, body: title, owner: owner.includes(':') ? owner : 'bot:' + owner, relations: [{task: t.id, kind: 'parent'}]});
       input.value = '';
       const data = await get(`/v2/tasks/${encodeURIComponent(t.id)}`);
       if (TASKS_ST) void tasksLoad(TASKS_ST);

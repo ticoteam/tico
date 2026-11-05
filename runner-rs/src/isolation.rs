@@ -1,4 +1,4 @@
-//! Bot code as another user (runner/isolation.py): on the Docker runner the supervisor keeps runner.json and
+//! Bot code as another user (runner_support/isolation.py): on the Docker runner the supervisor keeps runner.json and
 //! its state to itself and starts every process that runs bot-controlled code (the model CLI, git in a bot's
 //! checkout, a watcher, any runtime probe) as `TICO_RUNNER_BOT_UID` with no capabilities, through `setpriv`.
 //! Off wherever that variable is unset (a Mac is a trust group of one user).
@@ -137,6 +137,7 @@ pub fn chown_file(file: &std::fs::File) -> std::io::Result<()> {
 
 /// `mkdir -p` where every directory it creates belongs to the bot user when isolation is on.
 pub fn mkdir(path: &Path, mode: u32) -> std::io::Result<PathBuf> {
+    crate::repo_safety::outside_installation(path).map_err(std::io::Error::other)?;
     let missing: Vec<PathBuf> = path.ancestors().take_while(|p| !p.as_os_str().is_empty() && !p.exists()).map(Path::to_path_buf).collect();
     std::fs::DirBuilder::new().recursive(true).mode(mode).create(path)?;
     for part in missing {

@@ -8,6 +8,7 @@ const path = require('node:path');
 const {execFileSync} = require('node:child_process');
 const {html, uiFile} = require('./support/page.cjs');
 const {unrouted} = require('./support/routes.cjs');
+const {threadsFake} = require('./support/threads-fake.cjs');
 const fs = require('node:fs');
 
 const ROOT = path.resolve(__dirname, '..', '..');
@@ -64,16 +65,16 @@ const A = (id, kind, over = {}) => ({id, file_id: id, version: 1, ref: id + '@1'
     : await chromium.launch({channel: process.env.TICO_BROWSER_CHANNEL === undefined ? 'chrome' : process.env.TICO_BROWSER_CHANNEL || undefined, headless: true});
   const now = new Date().toISOString();
   const MESSAGES = [
-    {id: 'm1', from_actor: 'bot:designer', body: 'Here is the chart, the logo and two pages.', created: now, refs: {attachments: [
+    {id: 'm1', sender_id: 'bot:designer', body: 'Here is the chart, the logo and two pages.', created_at: now, refs: {attachments: [
       A('f-chart', 'image', {width: 800, height: 400}), A('f-logo', 'svg'), A('f-short', 'page'), A('f-tall', 'page')]}},
-    {id: 'm2', from_actor: 'bot:designer', body: 'Six pictures.', created: now, refs: {attachments:
+    {id: 'm2', sender_id: 'bot:designer', body: 'Six pictures.', created_at: now, refs: {attachments:
       [1, 2, 3, 4, 5, 6].map(i => A('f-six' + i, 'image', {width: 400, height: 200}))}},
-    {id: 'm3', from_actor: 'bot:designer', body: 'Older ones.', created: now, refs: {attachments: [
+    {id: 'm3', sender_id: 'bot:designer', body: 'Older ones.', created_at: now, refs: {attachments: [
       A('f-moved', 'image', {width: 400, height: 200, current_version: 3}), A('f-gone', 'page', {removed: true, src: undefined, current_version: null}),
       A('f-bad', 'page'), A('f-nosrc', 'image', {src: null, width: 400, height: 200}), A('f-hostile', 'page')]}},
-    {id: 'm4', from_actor: 'human:ana', body: 'My photo', created: now, refs: {attachments: [A('f-mine', 'image', {width: 300, height: 300, title: 'Ana photo'})]}},
-    {id: 'm5', from_actor: 'bot:designer', body: 'Two full-screen pages.', created: now, refs: {attachments: [A('f-vh', 'page'), A('f-dvh', 'page'), A('f-tiny', 'page'), A('f-mid', 'page')]}},
-    {id: 'm7', from_actor: 'bot:designer', body: 'A plain page.', created: now, refs: {attachments: [A('f-clamp', 'page')]}},
+    {id: 'm4', sender_id: 'human:ana', body: 'My photo', created_at: now, refs: {attachments: [A('f-mine', 'image', {width: 300, height: 300, title: 'Ana photo'})]}},
+    {id: 'm5', sender_id: 'bot:designer', body: 'Two full-screen pages.', created_at: now, refs: {attachments: [A('f-vh', 'page'), A('f-dvh', 'page'), A('f-tiny', 'page'), A('f-mid', 'page')]}},
+    {id: 'm7', sender_id: 'bot:designer', body: 'A plain page.', created_at: now, refs: {attachments: [A('f-clamp', 'page')]}},
   ];
   const run = async ({viewport, hasTouch = false, label}) => {
     const context = await browser.newContext({viewport, hasTouch, isMobile: hasTouch, serviceWorkers: 'block'});
@@ -83,8 +84,14 @@ const A = (id, kind, over = {}) => ({id, file_id: id, version: 1, ref: id + '@1'
     // The snapshot as the server sends it: each read signs every visual's address afresh (gen), as on a live update.
     const messages = [...MESSAGES];
     let hold = null, gen = 1;
+    const refreshId = 'file-' + 'a'.repeat(24), expires = Math.floor(Date.now() / 1000) + 3600;
+    const token = fields => Buffer.from(JSON.stringify(fields)).toString('base64url') + '.fixture';
+    const legacySrc = VIS + token(['human:ana', refreshId, 1, '', expires]);
+    const freshSrc = VIS + token(['human:ana', refreshId, 1, '', expires, '']);
+    let pageReads = 0;
     const signed = () => gen === 1 ? messages : messages.map(m => ({...m, refs: {...m.refs, attachments: m.refs.attachments.map(a => a.src ? {...a, src: `${a.src}.${gen}`} : a)}}));
     page.on('pageerror', e => { if (!/sandboxed/i.test(e.message)) errors.push(e.message); });
+    const threads = threadsFake({bot: 'designer', messages: () => signed()});
     await context.route('**/*', async route => {
       const req = route.request(), url = new URL(req.url()), p = url.pathname;
       const json = body => route.fulfill({contentType: 'application/json', body: JSON.stringify(body)});
@@ -92,6 +99,8 @@ const A = (id, kind, over = {}) => ({id, file_id: id, version: 1, ref: id + '@1'
       if (url.hostname === 'outside.test') return route.fulfill({contentType: 'text/html', body: '<p>Outside</p>'});
       if (url.hostname === 'visuals.test') {
         visualReqs.push({path: p, cookie: req.headers().cookie || ''});
+        if (url.href === legacySrc) return route.fulfill({status: 404, body: ''});
+        if (url.href === freshSrc) return route.fulfill({contentType: 'text/html', body: server.pages.short});
         const id = p.replace('/visuals/tok-', '').replace(/\.\d+$/, '');
         if (hold && id === 'f-chart') await hold;
         const headers = {'Cross-Origin-Resource-Policy': 'cross-origin', 'Referrer-Policy': 'no-referrer', 'X-Content-Type-Options': 'nosniff'};
@@ -115,20 +124,23 @@ const A = (id, kind, over = {}) => ({id, file_id: id, version: 1, ref: id + '@1'
       if (p === '/api/issues') return json([]);
       if (p.endsWith('/watch')) return route.fulfill({contentType: 'text/event-stream', body: ': fixture\n\n'});
       if (p === '/api/v2/events') { held.push(route); return; }      // live events (ui/app/live.js), held open
-      if (p === '/api/v2/conversations') return json({conversations: url.searchParams.get('chat_with') ? [{id: 'c-designer', kind: 'chat', scope: 'personal', participants: ['human:ana', 'bot:designer']}] : []});
-      if (p === '/api/v2/conversations/c-designer/snapshot') return json({messages: signed(), execution: null});
+      if (p === '/api/v2/pages/' + refreshId) return json({page: {file_id: refreshId, title: 'Refreshed page',
+        version: 1, updated_at: now, bot_id: 'designer', src: ++pageReads === 1 ? legacySrc : freshSrc}, pinned: []});
+      if (p === '/api/v2/files/' + refreshId + '/versions') return json({versions: []});
+      const answer = threads(p, url, req.method());
+      if (answer !== undefined) return json(answer);
       if (p === '/api/v2/tasks' && req.method() === 'GET') return json({tasks: [task], next_offset: null});
       if (p === '/api/v2/tasks/t1/files') return json({files: taskFiles});
       if (p === '/api/v2/tasks/t1') return json({task, comments: taskComments, events: [], children: [], parent: null, mover: true, messages: [], can_comment: true});
       return json(unrouted(p));
     });
-    const task = {id: 't1', title: 'Launch page', owner: 'bot:designer', requester: 'human:ana', status: 'review', lane: 'company', rank: 1, labels: [], links: [],
-      parts: {total: 0, done: 0}, version: 1, created: now, updated: now, body: 'Make the page.', attachments: []};
-    const tver = (id, mime) => ({n: 1, size: 1000, mime, sha256: 'x', created: now, by: 'bot:designer', comment_id: 'c1', note: null, ask: null, answers: [],
+    const task = {id: 't1', title: 'Launch page', owner_id: 'bot:designer', requester_id: 'human:ana', status: 'review', lane: 'company', rank: 1, labels: [], links: [],
+      parts: {total: 0, done: 0}, version: 1, created_at: now, updated_at: now, body: 'Make the page.', attachments: []};
+    const tver = (id, mime) => ({n: 1, size: 1000, mime, sha256: 'x', created_at: now, by: 'bot:designer', comment_id: 'c1', note: null, ask: null, answers: [],
       width: null, height: null, duration_ms: null, media_state: 'none', url: `/api/v2/files/${id}?v=1`, poster_url: null, thumb_url: null});
     const taskFiles = [{id: 'f-chart', name: 'f-chart.png', mime: 'image/png', current_version: 1, archived: false, versions: [tver('f-chart', 'image/png')]},
       {id: 'f-short', name: 'f-short.html', mime: 'text/html', current_version: 1, archived: false, versions: [tver('f-short', 'text/html')]}];
-    const taskComments = [{id: 'c1', kind: 'say', from_actor: 'bot:designer', body: 'Chart and page attached.', created: now, answers: [],
+    const taskComments = [{id: 'c1', kind: 'say', sender_id: 'bot:designer', body: 'Chart and page attached.', created_at: now, answers: [],
       refs: {task: 't1', comment: true, attachments: [A('f-chart', 'image', {width: 800, height: 400}), A('f-short', 'page')]}}];
 
     const noSideways = async where => {
@@ -137,7 +149,7 @@ const A = (id, kind, over = {}) => ({id, file_id: id, version: 1, ref: id + '@1'
     };
     // ---- chat: hold the chart so its held space can be measured before it loads
     let release; hold = new Promise(r => { release = r; });
-    await page.goto('https://tico-ui.test/#/bot/designer/chat');
+    await page.goto('https://tico-ui.test/#/bot/designer/dm');
     const m1 = page.locator('[data-message="m1"]');
     await m1.locator('figure.vcard').nth(3).waitFor();
     const chart = m1.locator('figure.vcard[data-kind="image"] .vcard-body');
@@ -291,7 +303,7 @@ const A = (id, kind, over = {}) => ({id, file_id: id, version: 1, ref: id + '@1'
     }
 
     // ---- Expand: full screen, zoom, Esc / swipe down back to the same place
-    const thread = page.locator('#conv-thread');
+    const thread = page.locator('#bot-thread .thv-scroll');
     await m1.locator('figure.vcard[data-kind="image"] .vcard-hit').click();
     const full = page.locator('#vcard-full[open]');
     await full.locator('img.vcard-full-img').waitFor();
@@ -342,7 +354,7 @@ const A = (id, kind, over = {}) => ({id, file_id: id, version: 1, ref: id + '@1'
     // ---- a redraw keeps a card's node (and its loaded page); a new version is a new card
     const kept = await page.evaluate(() => {
       const old = document.querySelector('figure.vcard[data-file="f-tall"]');
-      V2C.html = ''; v2ChatRender(V2C);
+      for (const v of THV_VIEWS) { PATCH_SRC.delete(v.el.querySelector('.thv-list')); thvDraw(v); }
       const a = document.createElement('div'), b = document.createElement('div');
       a.innerHTML = '<figure class="vcard" data-visual-key="m:f@1" data-state="ready" data-fresh-src="old"></figure>';
       b.innerHTML = '<figure class="vcard" data-visual-key="m:f@2" data-state="ready" data-fresh-src="new"></figure><figure class="vcard" data-visual-key="m:f@1" data-state="ready" data-fresh-src="fresh"></figure>';
@@ -390,7 +402,7 @@ const A = (id, kind, over = {}) => ({id, file_id: id, version: 1, ref: id + '@1'
       let loads = 0;
       f.addEventListener('load', () => loads++);
       const before = await new Promise((go, fail) => {
-        const redraw = () => { const b = h(); V2C.html = ''; v2ChatRender(V2C); go(b); };
+        const redraw = () => { const b = h(); for (const v of THV_VIEWS) { PATCH_SRC.delete(v.el.querySelector('.thv-list')); thvDraw(v); } go(b); };
         if (!pin) return redraw();
         const t = setTimeout(() => fail(new Error(`the card never took the height ${pin} its page sent`)), 10000);
         addEventListener('message', function took() { if (f.visualHeight !== pin) return; removeEventListener('message', took); clearTimeout(t); redraw(); });
@@ -450,8 +462,8 @@ const A = (id, kind, over = {}) => ({id, file_id: id, version: 1, ref: id + '@1'
     for (let i = 0; !held.length && i < 100; i++) await page.waitForTimeout(50);
     assert(held.length, `${label}: the page follows the live event stream`);
     gen = 2;
-    messages.push({id: 'm6', from_actor: 'bot:designer', body: 'Live one.', created: now, refs: {attachments: [A('f-live', 'image', {width: 400, height: 200}), A('f-live-page', 'page')]}});
-    await held.at(-1).fulfill({contentType: 'text/event-stream', body: `id: 9\nevent: messages\ndata: ${JSON.stringify({seq: 9, conversation_id: 'c-designer'})}\n\n`});
+    messages.push({id: 'm6', sender_id: 'bot:designer', body: 'Live one.', created_at: now, refs: {attachments: [A('f-live', 'image', {width: 400, height: 200}), A('f-live-page', 'page')]}});
+    await held.at(-1).fulfill({contentType: 'text/event-stream', body: `id: 9\nevent: messages\ndata: ${JSON.stringify({seq: 9, thread_id: 't-dm-designer'})}\n\n`});
     const m6 = page.locator('[data-message="m6"]');
     await m6.locator('figure.vcard[data-kind="page"] .vcard-body.ready').waitFor();
     assert.deepEqual(await m6.locator('img.vcard-img, iframe.vcard-frame').evaluateAll(els => els.map(e => e.getAttribute('src'))),
@@ -474,6 +486,18 @@ const A = (id, kind, over = {}) => ({id, file_id: id, version: 1, ref: id + '@1'
     await c1.locator('figure.vcard[data-kind="image"] [data-vcard-act="open"]').click();
     assert.deepEqual(await page.evaluate(() => [$('#task-modal').tfOpen?.id, $('#task-modal').tfOpen?.n]), ['f-chart', 1]);
     await noSideways('task');
+
+    // A page left open with an obsolete five-field address gets a fresh six-field address on reload.
+    const rejected = page.waitForResponse(r => r.url() === legacySrc);
+    await page.goto('https://tico-ui.test/#/page/' + refreshId);
+    assert.equal((await rejected).status(), 404);
+    assert.equal(await page.locator('#pg-view iframe.page-frame').getAttribute('src'), legacySrc);
+    const reminted = page.waitForResponse(r => r.url() === freshSrc);
+    await page.reload();
+    assert.equal((await reminted).status(), 200);
+    assert.equal(await page.locator('#pg-view iframe.page-frame').getAttribute('src'), freshSrc);
+    assert.equal(pageReads, 2, `${label}: reload requests a fresh page address`);
+    assert.equal(JSON.parse(Buffer.from(freshSrc.slice(VIS.length).split('.')[0], 'base64url')).length, 6);
 
     // ---- nothing reached outside; visuals never carried the app's cookie
     await page.waitForTimeout(300);

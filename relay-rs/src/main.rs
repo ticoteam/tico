@@ -497,7 +497,7 @@ async fn command(
             let ticket = id() + &id();
             let (btx, brx) = oneshot::channel();
             let (rtx, rrx) = oneshot::channel();
-            let (cancel, cancelled) = watch::channel(None);
+            let (cancel, canceled) = watch::channel(None);
             hub.screens.insert(
                 sid.clone(),
                 Screen {
@@ -516,7 +516,7 @@ async fn command(
                     cancel,
                 },
             );
-            tokio::spawn(screen_task(app.clone(), sid, brx, rrx, cancelled));
+            tokio::spawn(screen_task(app.clone(), sid, brx, rrx, canceled));
             json!({"ticket": ticket})
         }
         Action::Activate { id: sid } => {
@@ -673,7 +673,7 @@ async fn screen_task(
     sid: String,
     mut browser_rx: oneshot::Receiver<WebSocket>,
     mut runner_rx: oneshot::Receiver<WebSocket>,
-    mut cancelled: watch::Receiver<Option<Close>>,
+    mut canceled: watch::Receiver<Option<Close>>,
 ) {
     let mut browser = None;
     let mut runner = None;
@@ -682,7 +682,7 @@ async fn screen_task(
     let mut deadline = Instant::now() + TICKET;
     let mut session_deadline = Instant::now() + SESSION;
     let outcome = loop {
-        if let Some(close) = cancelled.borrow().clone() {
+        if let Some(close) = canceled.borrow().clone() {
             break close;
         }
         if let (Some(browser_socket), Some(runner_socket)) = (&mut browser, &mut runner) {
@@ -690,13 +690,13 @@ async fn screen_task(
                 browser_socket,
                 runner_socket,
                 &mut backlog,
-                &mut cancelled,
+                &mut canceled,
                 session_deadline,
             )
             .await;
         }
         tokio::select! {
-            _ = cancelled.changed() => { if let Some(close) = cancelled.borrow().clone() { break close; } },
+            _ = canceled.changed() => { if let Some(close) = canceled.borrow().clone() { break close; } },
             _ = tokio::time::sleep_until(deadline.into()) => break Close::new(4404, if browser.is_some() { "computer did not answer" } else { "nobody opened the screen" }),
             socket = &mut browser_rx, if browser.is_none() => match socket {
                 Ok(s) => {
@@ -870,6 +870,10 @@ async fn main() -> std::result::Result<(), Box<dyn std::error::Error>> {
         Err(_) => None,
     };
     println!("screen relay listening on {}", listener.local_addr()?);
+    // The public port is announced as well, so a caller that binds port 0 learns the port the relay took.
+    if let Some(public) = &public {
+        println!("screen gateway listening on {}", public.local_addr()?);
+    }
     tls::announce(|line| println!("{line}"));
     if let Some(public) = public {
         let gateway = gateway::routes(app.clone());

@@ -52,6 +52,23 @@
     "sources": ["enrolled", "issued"],
     "refused": {"unknown_key": 401, "revoked_key": 401}
   },
+  "key_usage": {
+    "method": "GET",
+    "path": "/v1/gateway/key/usage",
+    "query": {"month": "YYYY-MM, this month when left out"},
+    "fields": ["month", "rows", "totals", "as_of"],
+    "row_fields": ["model", "category", "charged", "calls", "price_usd"],
+    "total_fields": ["price_usd", "charged_price_usd"],
+    "refused": {"bad_request": 400, "unknown_key": 401, "revoked_key": 401, "rate_limited": 429}
+  },
+  "key_cap": {
+    "method": "POST",
+    "path": "/v1/gateway/key/cap",
+    "auth": "Authorization: Bearer <key>",
+    "request": {"required": ["self_cap_usd"], "value": "a number, or null to clear the self cap"},
+    "success": {"status": "any 2xx", "fields": ["status", "month", "cap_usd", "self_cap_usd", "effective_cap_usd", "spent_usd", "used", "warning", "cap_reached", "rpm", "tpm", "source", "rotate_after"]},
+    "refused": {"bad_request": 400, "unknown_key": 401, "rate_limited": 429}
+  },
   "app": {
     "stop": ["install_revoked"],
     "enroll_again": ["revoked_key", "unknown_key"],

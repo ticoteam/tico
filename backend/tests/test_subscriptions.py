@@ -2,6 +2,7 @@
 import json
 
 from backend.tests.test_api import api, assign, claim, get, post, put, ready, runner  # noqa: F401
+from backend import bot_settings as BS
 
 
 def test_the_api_refuses_a_bot_its_own_sign_in(api):
@@ -80,7 +81,7 @@ def test_server_rejection_blocks_only_matching_profile(api):
     post(api, 'runners/heartbeat', body, token=r['token'])
     with api.app.state.store.transaction() as c:
         Execution.mark_rejected(c, r['runner_id'], 'codex', 'Unauthorized', 'one')
-        report = json.loads(c.execute('SELECT readiness_json FROM runners WHERE id=?', (r['runner_id'],)).fetchone()[0])
+        report = json.loads(c.execute('SELECT readiness FROM runners_with_state WHERE id=?', (r['runner_id'],)).fetchone()[0])
     assert report['bots']['ops']['ready'] is False
     assert report['bots']['cpo']['ready'] is True
     assert report['runtimes']['codex']['authenticated'] == 'ready'
@@ -98,7 +99,7 @@ def test_a_refused_bot_key_marks_only_that_bot_and_a_computer_refusal_marks_ever
 
     def report():
         with api.app.state.store.transaction() as c:
-            return json.loads(c.execute('SELECT readiness_json FROM runners WHERE id=?', (r['runner_id'],)).fetchone()[0])
+            return json.loads(c.execute('SELECT readiness FROM runners_with_state WHERE id=?', (r['runner_id'],)).fetchone()[0])
 
     with api.app.state.store.transaction() as c:
         Execution.mark_rejected(c, r['runner_id'], 'pi', 'Unauthorized', None, 'alpha')
@@ -116,9 +117,9 @@ def test_a_refused_bot_key_marks_only_that_bot_and_a_computer_refusal_marks_ever
 
 def set_runtime(api, runtime, harness=None, bot="ops"):
     with api.app.state.store.transaction() as c:
-        config = json.loads(c.execute("SELECT config_json FROM bot_config WHERE bot=?", (bot,)).fetchone()[0])
+        config = BS.read(c, bot)
         config.update(runtime=runtime, harness=harness or runtime)
-        c.execute("UPDATE bot_config SET config_json=? WHERE bot=?", (json.dumps(config), bot))
+        BS.write(c, bot, config)
 
 
 def test_a_login_whose_turns_cannot_save_a_session_names_the_folder_not_a_sign_in(api):

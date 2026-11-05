@@ -48,14 +48,14 @@
   function onceHTML(id, esc) {
     const once = shownOnce.get(id);
     if (!once?.code) return '';
-    const until = once.expires ? new Date(once.expires).toLocaleTimeString([], {hour: '2-digit', minute: '2-digit'}) : '';
+    const until = once.expires_at ? new Date(once.expires_at).toLocaleTimeString([], {hour: '2-digit', minute: '2-digit'}) : '';
     return `<div class="asst-once" data-shown-once><span class="asst-state">One-time code for a new computer${until ? `, until ${esc(until)}` : ''}. It is shown only here and works once: use it where the computer's setup asks for a code (Settings &gt; Computers &gt; Add computer shows the commands).</span><code>${esc(once.code)}</code></div>`;
   }
   const SENT = new Set(['message', 'body', 'text', 'comment']);
   function actionCard(action, esc, open = false, assistantName = '') {
     // A bulk card that ran with some steps refused is done, and says which did not go through.
     const done = {done: 'Done.' + (action.result?.error ? ' ' + action.result.error : ''), failed: 'It did not go through' + (action.result?.error ? ': ' + action.result.error : '.'),
-      cancelled: 'Cancelled.', expired: 'Expired: ask again.', running: 'Running…'}[action.status];
+      canceled: 'Canceled.', withdrawn: 'Withdrawn: nothing ran.', expired: 'Expired: ask again.', running: 'Running…'}[action.status];
     // Never cut a value: a long one is folded behind "Show more", whole.
     const shown = v => { const t = typeof v === 'string' ? v : JSON.stringify(v); return t.length > 160
       ? `<details class="asst-long"><summary>${esc(t.slice(0, 120))}… <span>Show more</span></summary>${esc(t)}</details>` : esc(t); };
@@ -69,7 +69,8 @@
     const title = plain ? what : summary || 'A change for you';
     // A task change (old → new) and a bulk card's one line per step read as words; any other card's fields are the
     // request itself, so they go under Details with the method and path.
-    const readable = action.path === '/api/v2/assistant/batch' || (action.diff || []).some(d => 'old' in d || d.group) || !plain && !summary;
+    const routine = (action.diff || []).some(d => d.routine);
+    const readable = routine || action.path === '/api/v2/assistant/batch' || (action.diff || []).some(d => 'old' in d || d.group) || !plain && !summary;
     const fields = action.diff?.length
       ? `<ul class="asst-body" aria-label="Changes">${action.diff.map(d => `<li><strong>${esc(d.field)}</strong>: ${'old' in d ? shown(d.old ?? '') + ' → ' : ''}${shown(d.new)}</li>`).join('')}</ul>`
       : Object.keys(action.body || {}).length
@@ -84,7 +85,7 @@
     return `<div class="asst-card" tabindex="-1" data-action="${esc(action.id)}" data-status="${esc(action.status)}">
       <div class="asst-who">${esc(name.replace(/^The /, ''))} asks</div>
       <details class="asst-raw"${open ? ' open' : ''}><summary title="Details"><b data-what>${esc(title)}</b><span class="nav-icon" aria-hidden="true">expand_more</span></summary>
-        ${said && !repeats ? `<p class="asst-state">${esc(who)}“${esc(said)}”</p>` : ''}${readable ? '' : fields}${action.original_summary
+        ${said && !repeats ? `<p class="asst-state">${esc(who)}“${esc(said)}”</p>` : ''}${routine ? `<ul class="asst-body" aria-label="Request">${Object.entries(action.body || {}).map(([k, v]) => `<li><strong>${esc(k)}</strong>: ${shown(v)}</li>`).join('')}</ul>` : readable ? '' : fields}${action.original_summary
         ? `<p class="asst-state">First written as: “${esc(action.original_summary)}”</p>` : ''}<code>${esc(action.method)} ${esc(action.path)}</code></details>
       ${sends}${readable ? fields : ''}
       ${action.status === 'pending'

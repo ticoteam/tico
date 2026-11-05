@@ -17,6 +17,7 @@ from backend.onboarding import helper_templates
 from backend.store import H
 from backend.tests.test_goal_manager import BASE
 from backend.tests.test_onboarding import draft, environment, machine, signed_in  # noqa: F401
+from backend import bot_settings as BS
 
 TEMPLATE = Path(__file__).resolve().parents[2] / "templates" / "catalog" / "task-manager"
 SECRET = "Acme payroll for March"
@@ -33,7 +34,7 @@ def built(environment):
 
 def as_manager(api):
     with api.app.state.store.transaction() as c:
-        c.execute("INSERT OR IGNORE INTO agents(bot,harness,token_hash,created,created_by) VALUES(?,?,?,?,?)",
+        c.execute("INSERT OR IGNORE INTO agents(bot,harness,token_hash,created_at,created_by) VALUES(?,?,?,?,?)",
                   (TM.SLUG, "hermes", "hash-tm", "2026-01-01T00:00:00Z", "human:test"))
     api.app.state.store.settings.test_identities["tm"] = Identity(TM.ACTOR, "bot", agent="hermes")
     return signed_in("tm")
@@ -46,7 +47,7 @@ def quiet_task(api, title="Reconcile the Acme invoices", private=False, owner="b
     made = made.json()["task"]
     with api.app.state.store.transaction() as c:
         c.execute("DELETE FROM jobs")
-        c.execute("UPDATE tasks SET updated=?, private=? WHERE id=?", (H.shift(H.now(), hours=-3), int(private), made["id"]))
+        c.execute("UPDATE tasks SET updated_at=?, private=? WHERE id=?", (H.shift(H.now(), hours=-3), int(private), made["id"]))
     return made["id"]
 
 
@@ -58,7 +59,7 @@ def report(api):
 
 def checks(api):
     with api.app.state.store.read() as c:
-        return [dict(r) for r in c.execute("SELECT id,title,body,status FROM tasks WHERE owner=? ORDER BY created", (TM.ACTOR,))]
+        return [dict(r) for r in c.execute("SELECT id,title,body,status FROM tasks WHERE owner_id=? ORDER BY created_at", (TM.ACTOR,))]
 
 
 def test_it_is_built_in_active_and_outside_the_org_chart(environment):
@@ -74,7 +75,7 @@ def test_an_empty_report_opens_no_task_and_wakes_nothing(environment):
     assert report(api)["words"] == "Nothing to do"
     assert checks(api) == []
     with api.app.state.store.read() as c:
-        assert c.execute("SELECT count(*) FROM jobs WHERE bot=?", (TM.SLUG,)).fetchone()[0] == 0
+        assert c.execute("SELECT count(*) FROM jobs WHERE bot_id=?", (TM.SLUG,)).fetchone()[0] == 0
 
 
 def test_a_quiet_task_opens_one_check_that_a_later_report_absorbs_and_a_private_task_never_appears(environment):
@@ -128,7 +129,7 @@ def test_it_reassigns_only_within_the_owners_department(environment):
     api = built(environment)
     task = quiet_task(api)
     with api.app.state.store.transaction() as c:
-        c.execute("UPDATE bot_config SET config_json=json_set(config_json,'$.team','sales') WHERE bot='botops'")
+        BS.update(c, 'botops', {'team': 'sales'})
         groups = {"sales": {"name": "Sales", "parent": ""}, "support": {"name": "Support", "parent": ""}}
         c.execute("INSERT OR REPLACE INTO registry_metadata VALUES('people', ?)",
                   (json.dumps({"people": [], "org_groups": groups}),))

@@ -137,10 +137,9 @@ def _code(body):
 
 
 def state_of(payload):
-    """(state, used share or None) from a 200 answer of `<base>/key`."""
+    """(state, used share or None) from a 200 answer of `<base>/key`. A revoked key never gets one: it is a 401
+    `revoked_key` (state_of_error)."""
     payload = payload if isinstance(payload, dict) else {}
-    if str(payload.get("status") or "active") == "revoked":
-        return "revoked", None
     try:
         used = float(payload.get("used")) if payload.get("used") is not None else None
     except (TypeError, ValueError):
@@ -179,6 +178,41 @@ def branded_opener(*handlers):
     opener = urllib.request.build_opener(*handlers)
     opener.addheaders = [("User-Agent", user_agent())]
     return opener
+
+
+class LettersError(Exception):
+    """A fixed Gateway code, never a provider's text or letter contents."""
+
+    def __init__(self, status, code):
+        self.status, self.code = status, code
+        super().__init__(code)
+
+
+def letters(key, base, path="", *, body=None, idempotency_key=None, pdf=False):
+    """The install Letters API through the same key, safe URL and branded transport as other Gateway calls."""
+    headers = {"Authorization": "Bearer " + key, "Accept": "application/pdf" if pdf else "application/json"}
+    if idempotency_key:
+        headers["Idempotency-Key"] = idempotency_key
+    if body is not None:
+        headers["Content-Type"] = "application/json"
+    request = urllib.request.Request(safe_base(base) + "/letters" + path,
+        data=json.dumps(body).encode() if body is not None else None, headers=headers)
+    cap = 8 * 1024 * 1024 if pdf else 128 * 1024
+    try:
+        with branded_opener(_Unredirected()).open(request, timeout=60) as response:
+            data = response.read(cap + 1)
+            if len(data) > cap:
+                raise LettersError(502, "response_too_large")
+            return data if pdf else json.loads(data)
+    except urllib.error.HTTPError as exc:
+        code = _code(exc.read(4096))
+        allowed = {"unconfigured", "cannot_cancel", "quote_changed", "quote_expired", "idempotency_conflict",
+                   "quote_already_used", "invalid", "provider_rejected", "provider_error", "address_pending",
+                   "out_of_credit", "cap_reached", "billing_required", "rate_limited", "not_found", "revoked_key", "unknown_key",
+                   "idempotency_key_abandoned"}
+        raise LettersError(exc.code, code if code in allowed else "gateway_error") from None
+    except (OSError, ValueError, urllib.error.URLError):
+        raise LettersError(502, "gateway_unavailable") from None
 
 
 def _send(request, timeout):

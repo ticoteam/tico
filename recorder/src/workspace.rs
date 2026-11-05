@@ -13,6 +13,11 @@ pub struct Item {
     pub quote: String,
     pub at_ms: u64,
     pub owner: String,
+    pub due: String,
+    pub body: String,
+    /// A note-taker match is a proposal until the person chooses Link.
+    pub proposed_task_id: String,
+    pub task_destination: String,
     pub document: String,
     pub change: String,
     pub selected: bool,
@@ -21,9 +26,23 @@ pub struct Item {
     pub task_url: String,
     /// Who it went to, by name, as shown after sending.
     pub sent_to: String,
+    /// A completed shared item that did not accept this person's local edits.
+    pub closed_draft: Option<Value>,
     /// The transcript line the item was drafted from, as it read then. Streamed text can be
     /// rewritten by the chunked transcript later; the quote is checked against this. Stays local.
     pub source: String,
+}
+/// Only writable fields count as local edits; server-added display names do not.
+pub fn item_fields_match(item: &Item, row: &Value) -> bool {
+    row["text"] == item.title
+        && if item.kind == "doc" {
+            row["detail"]["document"].as_str().unwrap_or("") == item.document
+                && row["detail"]["change"].as_str().unwrap_or("") == item.change
+        } else {
+            row["detail"]["owner"].as_str().unwrap_or("") == item.owner
+                && row["detail"]["due"].as_str().unwrap_or("") == item.due
+                && row["detail"]["body"].as_str().unwrap_or("") == item.body
+        }
 }
 /// One turn of the private chat about this recording. `via` leaves room for voice turns.
 #[derive(Clone, Debug, Default, Serialize, Deserialize, PartialEq)]
@@ -37,6 +56,13 @@ pub struct Turn {
 }
 pub const MAX_ITEMS: usize = 200;
 pub const MAX_TURNS: usize = 200;
+/// One person action, durable before its first request; retries retain its identity.
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
+pub struct TaskLinkOperation {
+    pub id: String,
+    pub kind: String,
+    pub task_ids: Vec<String>,
+}
 #[derive(Clone, Debug, Default, Serialize, Deserialize)]
 #[serde(default)]
 pub struct Context {
@@ -51,6 +77,9 @@ pub struct Context {
     pub paused_windows: Vec<(u64, Option<u64>)>,
     /// Discard is durable before the request, so recovery cannot accidentally file it.
     pub live_discarded: bool,
+    /// Kept on this computer after a live share: Tico ended the meeting and removed what was said,
+    /// so it may be saved to Tico later as a meeting recorded here.
+    pub live_removed: bool,
     pub locally_paused: bool,
     pub legacy_import_complete: bool,
     pub finalize_payload: Option<Value>,
@@ -58,6 +87,13 @@ pub struct Context {
     pub chat: Vec<Turn>,
     /// Transcript already reviewed for drafts, so automatic drafting only sends new speech.
     pub drafted_through_ms: u64,
+    /// Candidate ids are refreshed every five minutes; their current read access is checked before use.
+    pub task_candidates: Vec<String>,
+    pub task_candidates_at: i64,
+    pub task_candidates_destination: String,
+    pub kept_on_mac: bool,
+    pub task_link_operations: Vec<TaskLinkOperation>,
+    pub skipped_task_links: usize,
 }
 impl Store {
     pub fn context(&self, id: &str) -> Result<Context> {

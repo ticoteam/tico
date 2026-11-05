@@ -5,6 +5,8 @@ refused and says which rules."""
 import copy
 import json
 
+import pytest
+
 from backend import redesign_migration as M
 from backend.tests.test_api import api, get, headers, post  # noqa: F401  (api is a fixture)
 from backend.tests.test_redesign_migration import db, first_start
@@ -26,15 +28,15 @@ def convert(api, typ, rules):
     automation (as an install's rules move at upgrade)."""
     with db(api).transaction() as c:
         for position, (rid, step) in enumerate(rules):
-            c.execute("INSERT INTO rules(id,scope_kind,scope_id,event,when_json,then_outcome,params_json,enabled,position,"
-                      "created_by,created,updated,revision) VALUES(?,?,?,?,?,?,?,1,?,?,?,?,1)",
+            c.execute("INSERT INTO rules(id,scope_kind,scope_id,event,condition,then_outcome,params,enabled,position,"
+                      "created_by,created_at,updated_at,revision) VALUES(?,?,?,?,?,?,?,1,?,?,?,?,1)",
                       (rid, "type", typ["id"], "step_entered", json.dumps({"step": step}), "wake", "{}", position,
                        "human:ana", "2026-10-01T00:00:00Z", "2026-10-01T00:00:00Z"))
     first_start(api)
 
 
 def wake_id(api, typ):
-    [found] = [a for a in get(api, "automations")["automations"] if (a.get("wakes") or {}).get("scope_id") == typ["id"]]
+    [found] = [a for a in get(api, "automations?limit=500")["automations"] if (a.get("wakes") or {}).get("scope_id") == typ["id"]]
     return found["id"]
 
 
@@ -72,7 +74,7 @@ def test_a_rule_that_names_no_step_is_flagged_in_the_list_and_the_detail_and_sti
     typ = build_type(api)
     convert(api, typ, [("rule_qa", "QA Fixes")])
     aid = wake_id(api, typ)
-    listed = [a for a in get(api, "automations")["automations"] if a["id"] == aid][0]
+    listed = [a for a in get(api, "automations?limit=500")["automations"] if a["id"] == aid][0]
     [problem] = listed["problems"]
     assert problem["rule"] == "rule_qa" and problem["step"] == "QA Fixes"
     assert "QA/PR Rejected" in problem["why"] and "Ready" in problem["why"]
@@ -122,6 +124,30 @@ def test_a_new_rule_naming_a_missing_step_is_refused(api):
     flow["steps"][0]["rules"].append(added)
     r = patch(api, aid, {"steps": flow["steps"]}, expected=422)
     assert "In Review" in r.text and "Ready" in r.text
+
+
+@pytest.mark.parametrize("edit", ["to", "next", "destinations"])
+def test_a_wake_rule_takes_no_destination_to_or_next_so_an_edit_adding_one_is_refused(api, edit):
+    """The wake executor runs one action per rule and no destination: an edit that adds one is refused (422, as every
+    refused wake edit is), and nothing changes."""
+    typ = build_type(api)
+    convert(api, typ, [("rule_ok", "Ready")])
+    aid = wake_id(api, typ)
+    before = detail(api, aid)
+    steps = copy.deepcopy(before["steps"])
+    rule = steps[0]["rules"][0]
+    dests = [{"id": "legal", "name": "Legal", "color": "red", "then": [{"do": "note", "args": {"bot": "coo", "text": "Hi"}}]}]
+    body = {"steps": steps}
+    if edit == "to":
+        rule["to"], body["destinations"] = "legal", dests
+    elif edit == "next":
+        rule["next"] = "end"
+    else:
+        body["destinations"] = dests
+    r = patch(api, aid, body, expected=422)
+    assert "wake rule" in r.text, r.text
+    after = detail(api, aid)
+    assert after["steps"] == before["steps"] and not after.get("destinations"), "a refused edit saves nothing"
 
 
 def test_renaming_a_step_moves_the_rules_that_name_it(api):

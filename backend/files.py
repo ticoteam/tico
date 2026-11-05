@@ -14,10 +14,11 @@ import hashlib
 import json
 import re
 import secrets
+import sqlite3
 import tempfile
 from collections import namedtuple
 from contextlib import ExitStack
-from urllib.parse import quote, urlsplit
+from urllib.parse import quote, unquote, urlsplit
 
 from fastapi import Request
 from pydantic import Field
@@ -26,6 +27,7 @@ from . import models as M
 from .auth import Identity
 from .blobs import register
 from .store import H, Problem, encode, repo_url
+from . import bot_home_merge
 from . import file_library
 from . import read_cache
 from . import task_privacy as privacy
@@ -48,23 +50,23 @@ def raw_media(request, imported=False):
 
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS bot_files(
- id TEXT PRIMARY KEY, bot TEXT NOT NULL REFERENCES bots(slug), scope TEXT NOT NULL,
+ id TEXT PRIMARY KEY, bot_id TEXT NOT NULL REFERENCES bots(id), scope TEXT NOT NULL,
  identity TEXT NOT NULL, title TEXT NOT NULL, kind TEXT NOT NULL, mime TEXT NOT NULL DEFAULT '',
  locator TEXT NOT NULL, url TEXT, provider TEXT, current_version INTEGER NOT NULL DEFAULT 0,
  state TEXT NOT NULL DEFAULT 'ready', task_id TEXT, conversation_id TEXT,
  first_activity_at TEXT NOT NULL, last_activity_at TEXT NOT NULL, archived INTEGER NOT NULL DEFAULT 0,
- UNIQUE(bot, scope, identity));
-CREATE INDEX IF NOT EXISTS bot_files_recent ON bot_files(bot, archived, last_activity_at, id);
+ UNIQUE(bot_id, scope, identity));
+CREATE INDEX IF NOT EXISTS bot_files_recent ON bot_files(bot_id, archived, last_activity_at, id);
 CREATE INDEX IF NOT EXISTS bot_files_task ON bot_files(task_id, archived, locator);
 CREATE TABLE IF NOT EXISTS bot_file_versions(
  file_id TEXT NOT NULL REFERENCES bot_files(id), version INTEGER NOT NULL,
  blob_id TEXT NOT NULL REFERENCES blobs(id), digest TEXT NOT NULL, source_digest TEXT,
  size INTEGER NOT NULL, name TEXT NOT NULL, mime TEXT NOT NULL, commit_sha TEXT, repo_path TEXT,
- attempt_id TEXT, actor TEXT NOT NULL, created TEXT NOT NULL, PRIMARY KEY(file_id, version));
+ attempt_id TEXT, actor TEXT NOT NULL, created_at TEXT NOT NULL, PRIMARY KEY(file_id, version));
 CREATE TABLE IF NOT EXISTS bot_file_activity(
  id INTEGER PRIMARY KEY AUTOINCREMENT, file_id TEXT NOT NULL REFERENCES bot_files(id),
  actor TEXT NOT NULL, action TEXT NOT NULL, attempt_id TEXT, task_id TEXT, version INTEGER,
- digest TEXT, created TEXT NOT NULL, detail_json TEXT);
+ digest TEXT, created_at TEXT NOT NULL, detail TEXT);
 CREATE INDEX IF NOT EXISTS bot_file_activity_file ON bot_file_activity(file_id, id);
 CREATE TRIGGER IF NOT EXISTS bot_file_activity_append_only BEFORE UPDATE ON bot_file_activity
  BEGIN SELECT RAISE(ABORT, 'bot_file_activity is append-only'); END;
@@ -90,7 +92,15 @@ def new_id():
 def removed_event(c, task_id, actor, fid, title):
     """The task's activity says which file was taken off it, by its newest name."""
     row = c.execute("SELECT name FROM bot_file_versions WHERE file_id=? ORDER BY version DESC LIMIT 1", (fid,)).fetchone()
-    H._task_event(c, task_id, actor, "file", row["name"] if row else title, None, "")
+    provenance = file_provenance(c, fid)
+    name, data = H.sourced_text(row["name"] if row else title, [provenance], provenance)
+    H._task_event(c, task_id, actor, "file", name, None, "", data=data)
+
+
+def file_provenance(c, fid, version=None):
+    """History keeps canonical page identities alongside either an old or a new display name."""
+    return {"file": fid, **({"version": version} if version is not None else {}),
+            "page_files": sorted(page_references(fid, c))}
 
 
 def is_file_id(value):
@@ -145,7 +155,7 @@ def prime_visible(c, rows):
     privacy.prime_attempts(c, {v["attempt_id"] for found in versions.values() for v in found})
 
 
-def asked_to_read(c, who, file_id, version=None, cache=None):
+def asked_to_read(c, who, file_id, version=None, cache=None, auth=None):
     """Whether this call is Counsel's run on a document's read (backend/counsel.py `run_read`: the `rule_reads` row of
     the read task it runs on) and names that read's file, and with `version` that read's version. That run reads the
     file, whichever bot's or task's it is: the person had to be able to read it when they asked. No other Counsel run,
@@ -160,7 +170,47 @@ def asked_to_read(c, who, file_id, version=None, cache=None):
         read = counsel.run_read(c, who)
         if cache is not None:
             cache[key] = read
-    return bool(read) and read["file_id"] == file_id and (version is None or int(version) == read["version"])
+    if not read or read["file_id"] != file_id or (version is not None and int(version) != read["version"]):
+        return False
+    from . import counsel
+    return counsel.page_copy_readable(c, read, who, auth)
+
+
+def restricted_pages(c):
+    """The restricted set is neutral input, read once in this snapshot, including for SQL callbacks."""
+    privacy.snapshot(c)
+    def build():
+        try:
+            return {r["id"]: dict(r) for r in c.execute(
+                "SELECT f.*,p.audience FROM pages p JOIN bot_files f ON f.id=p.file_id WHERE p.audience IS NOT NULL")}
+        except sqlite3.OperationalError as exc:
+            if "no such table" not in str(exc) and "no such column: p.audience" not in str(exc):
+                raise
+            return {}                     # standalone hubdb and pre-pages migration databases
+    return read_cache.value(c, ("restricted_pages",), build, shared=True)
+
+
+def page_audience_visible(c, auth, who, row, cache):
+    """A page only narrows its inherited visibility, with management kept outside its audience."""
+    privacy.snapshot(c)
+    page = restricted_pages(c).get(row["id"])
+    if page:
+        from . import pages, teammate_access
+        cache = read_cache.value(c, ("page_audience_answers", who.actor, who.role,
+                                     getattr(who, "task_actor", ""), auth is not None), dict, shared=True)
+        key = ("page_audience", row["id"], who.actor, getattr(who, "task_actor", ""))
+        if key not in cache:
+            cache[key] = (pages.may_manage(c, auth, who, row) or
+                          teammate_access.in_audience(c, who, H._json(page["audience"], {}), auth))
+            other = getattr(who, "task_actor", "")
+            if other and other != who.actor:
+                viewer = teammate_access._viewer_for(c, other)
+                cache[key] = cache[key] and bool(viewer) and (
+                    pages.may_manage(c, auth, viewer, row) or
+                    teammate_access.in_audience(c, viewer, H._json(page["audience"], {}), auth))
+        if not cache[key]:
+            return False
+    return True
 
 
 def file_visible(c, auth, who, row, cache):
@@ -169,7 +219,9 @@ def file_visible(c, auth, who, row, cache):
     to the Counsel run a person asked to read it (asked_to_read)."""
     if who.role not in ("owner", "human", "bot"):
         return False
-    if asked_to_read(c, who, row["id"], cache=cache):
+    if not page_audience_visible(c, auth, who, row, cache):
+        return False
+    if asked_to_read(c, who, row["id"], cache=cache, auth=auth):
         return True
     if row["task_id"] and not privacy.task_readable(c, who, H.task(c, row["task_id"])):
         return False
@@ -180,18 +232,18 @@ def file_visible(c, auth, who, row, cache):
         if version["attempt_id"] and not privacy.attempt_readable(c, privacy.actor(who), version["attempt_id"],
                                                                   memo=cache):
             return False
-    if who.role == "bot" and H.actor_id(who.actor) != row["bot"] and not row["scope"].startswith("task:"):
+    if who.role == "bot" and H.actor_id(who.actor) != row["bot_id"] and not row["scope"].startswith("task:"):
         return False
     # A bot-wide file is its bot's: one cache serves files of many bots (a card's latest pages).
-    key = ("bot", row["bot"]) if row["scope"] == "bot" else row["scope"]
+    key = ("bot", row["bot_id"]) if row["scope"] == "bot" else row["scope"]
     if key not in cache:
         kind, _, ident = row["scope"].partition(":")
         try:
             if kind == "task":
                 auth.task(c, who, ident)
             elif kind == "conversation":
-                auth.conversation(c, who, ident)
-            elif not auth.bot_access(c, who, row["bot"])["read"]:
+                auth.conversation(c, who, bot_home_merge.scope_home(c, ident))
+            elif not auth.bot_access(c, who, row["bot_id"])["read"]:
                 raise Problem("forbidden", "private", 403)
             cache[key] = True
         except Problem:
@@ -200,6 +252,308 @@ def file_visible(c, auth, who, row, cache):
         return True
     from . import cards
     return cards.widened(c, auth, who, row["id"], cache)
+
+
+def page_rows(c):
+    """Neutral page/file rows shared by all blob checks in one snapshot, including tombstones."""
+    privacy.snapshot(c)
+    def build():
+        try:
+            return {r["id"]: dict(r) for r in c.execute("SELECT f.* FROM bot_files f JOIN pages p ON p.file_id=f.id")}
+        except sqlite3.OperationalError as exc:
+            if "no such table" not in str(exc):
+                raise
+            return {}
+    return read_cache.value(c, ("page_rows",), build, shared=True)
+
+
+def page_identities(c):
+    """All page aliases, including purged versions, resolved once per read snapshot."""
+    privacy.snapshot(c)
+    def build():
+        found = {}
+        def add(identity, fid):
+            if identity:
+                found.setdefault(identity, set()).add(fid)
+        try:
+            for fid in page_rows(c):
+                add(fid, fid)
+            for r in c.execute("SELECT v.* FROM bot_file_versions v JOIN pages p ON p.file_id=v.file_id"):
+                for key in ("blob_id", "poster_blob_id", "thumb_blob_id", "digest", "source_digest"):
+                    add(r[key], r["file_id"])
+            for r in c.execute("SELECT identity,file_id FROM page_identities"):
+                add(r[0], r[1])
+            # A digest describes bytes, not a deleted identity. A live file in the same context wins.
+            live = {}
+            digests = [identity for identity, ids in found.items() if re.fullmatch(r"[0-9a-f]{64}", identity)
+                       and any(page_rows(c).get(fid, {}).get("state") == "deleted" for fid in ids)]
+            rows = []
+            for chunk in H.chunks(digests):
+                marks = ",".join("?" * len(chunk))
+                rows.extend(c.execute("SELECT f.*,v.digest,v.source_digest FROM bot_file_versions v "
+                                      "JOIN bot_files f ON f.id=v.file_id WHERE f.state<>'deleted' "
+                                      f"AND (v.digest IN ({marks}) OR v.source_digest IN ({marks}))", (*chunk, *chunk)))
+            for r in rows:
+                context = ("task", r["task_id"]) if r["task_id"] else (r["bot_id"], r["scope"], r["conversation_id"])
+                for key in ("digest", "source_digest"):
+                    if r[key]:
+                        live.setdefault(r[key], set()).add(context)
+            for identity, contexts in live.items():
+                for fid in list(found.get(identity, ())):
+                    row = page_rows(c).get(fid)
+                    if row and row["state"] == "deleted":
+                        context = ("task", row["task_id"]) if row["task_id"] else (row["bot_id"], row["scope"], row["conversation_id"])
+                        if context in contexts:
+                            found[identity].discard(fid)
+        except sqlite3.OperationalError as exc:
+            if "no such table" not in str(exc):
+                raise
+        return found
+    return read_cache.value(c, ("page_identities",), build, shared=True)
+
+
+def page_blobs(c, bid):
+    """The pages whose bytes or previews this blob holds, including deleted provenance."""
+    rows = page_rows(c)
+    return [rows[fid] for fid in page_references(bid, c) if fid in rows]
+
+
+def page_blob_visible(c, auth, who, bid):
+    return all(file_visible(c, auth, who, row, {}) for row in page_blobs(c, bid))
+
+
+def page_event_readable(c, auth, who, target, detail):
+    data = H._json(detail, {}) if isinstance(detail, str) else detail
+    if page_ref_denials(c, auth, who, [target, data]):
+        return False
+    names_audience = isinstance(data, dict) and ("before" in data or "after" in data)
+    # Audience-change details remain restricted to managers, including on tombstones.
+    row = c.execute("SELECT f.* FROM bot_files f LEFT JOIN pages p ON p.file_id=f.id "
+                    "WHERE f.id=? AND (p.file_id IS NOT NULL OR ?)", (target, int(names_audience))).fetchone()
+    cache = {}
+    if row and not (file_visible(c, auth, who, row, cache) if auth else page_audience_visible(c, auth, who, row, cache)):
+        return False
+    if row and names_audience:
+        from . import pages
+        return pages.may_manage(c, auth, who, row)
+    return True
+
+
+def page_reference(value):
+    """One file identity, versioned attachment, pin, page route or absolute app page URL."""
+    if not isinstance(value, str):
+        return None
+    try:
+        value = unquote(value)
+        url = urlsplit(value)
+        if url.scheme in ("http", "https"):
+            value = "#" + url.fragment if url.fragment else url.path
+        match = re.fullmatch(r"(?:page:|#/page/|/(?:api/(?:v2/)?)?(?:pages|files)/)?"
+                             r"(file-[^/?#@\s]{24})(?:@\d+|/(?:versions(?:/\d+)?|meta|thumb|poster|activity))?(?:[?][^#]*)?", value)
+        return match[1] if match else None
+    except ValueError:
+        return None
+
+
+def page_references(value, c=None, *, file_ids=None):
+    """Resolve file, version, blob and digest identities through one recognizer on every transport."""
+    found = set()
+    aliases = page_identities(c) if c is not None else {}
+    def collect(part, explicit=None):
+        if isinstance(part, str):
+            fid = page_reference(part)
+            if fid:
+                found.add(fid)
+            candidate = unquote(part)
+            try:
+                url = urlsplit(candidate)
+                if url.scheme in ("http", "https"):
+                    candidate = url.path
+                candidate = re.sub(r"^/(?:api/(?:v2/)?)?files/", "", candidate)
+                candidate = re.sub(r"^(?:page|file|blob):", "", candidate)
+                candidate = re.split(r"[/?@]", candidate, maxsplit=1)[0]
+                resolved = aliases.get(candidate, ())
+                # A structured live version identifies its own bytes; matching digests on unrelated pages do not.
+                if (resolved and explicit and not set(resolved).issubset(explicit) and c is not None
+                        and re.fullmatch(r"[0-9a-f]{64}", candidate)):
+                    live = {fid for fid in explicit if read_cache.one(c,
+                        "SELECT 1 FROM bot_file_versions v JOIN bot_files f ON f.id=v.file_id "
+                        "WHERE v.file_id=? AND f.state<>'deleted' AND (v.digest=? OR v.source_digest=?) LIMIT 1",
+                        (fid, candidate, candidate))}
+                    if live:
+                        resolved = set(resolved) & live
+                found.update(resolved)
+            except ValueError:
+                pass
+            if part.startswith(("{", "[")):
+                collect(H._json(part, None), explicit)
+        elif isinstance(part, dict):
+            ids = {fid for key in ("file", "file_id", "page", "page_id")
+                   if (fid := page_reference(part.get(key)))}
+            for child in part.values():
+                collect(child, ids or explicit)
+        elif isinstance(part, (list, tuple)):
+            for child in part:
+                collect(child, explicit)
+    collect(value, file_ids)
+    return found
+
+
+def page_ref_denials(c, auth, who, refs):
+    ids = page_references(refs, c)
+    if not ids:
+        return {}
+    pages, cache = restricted_pages(c), {}
+    # Retained page tombstones deny every saved reference, even for managers.
+    def tombstones():
+        try:
+            return {r[0] for r in c.execute("SELECT file_id FROM pages WHERE deleted_at IS NOT NULL "
+                                            "UNION SELECT id FROM bot_files WHERE state='deleted' AND lower(mime) LIKE 'text/html%'")}
+        except sqlite3.OperationalError as exc:
+            if "no such table" not in str(exc) and "no such column" not in str(exc):
+                raise
+            return set()                 # standalone hubdb and pre-files migration databases
+    deleted = read_cache.value(c, ("deleted_page_refs",), tombstones, shared=True)
+    return {fid: "A deleted page" if fid in deleted else "A page you can't open" for fid in ids
+            if fid in deleted or (fid in pages and not (
+                file_visible(c, auth, who, pages[fid], cache) if auth else
+                page_audience_visible(c, auth, who, pages[fid], cache)))}
+
+
+def readable_page_refs(c, auth, who, refs, *, task_id=None):
+    """Remove the entire metadata object of a denied page, even on undecorated message transports."""
+    original = refs
+    refs = H._json(refs, {}) if isinstance(refs, str) else refs
+    denied = page_ref_denials(c, auth, who, refs)
+    def removed_page(value):
+        if isinstance(value, dict):
+            return (value.get("removed") is True and value.get("label") in
+                    ("A page you can't open", "A deleted page") or any(removed_page(v) for v in value.values()))
+        return isinstance(value, list) and any(removed_page(v) for v in value)
+    def legacy_labels(value):
+        if isinstance(value, dict):
+            return (isinstance(value.get("answers"), dict) or
+                    any(not option.get("source") and not option.get("file") for option in value.get("options") or []
+                        if isinstance(option, dict)) or any(legacy_labels(v) for v in value.values()))
+        return isinstance(value, list) and any(legacy_labels(v) for v in value)
+    if not denied and not legacy_labels(refs) and not removed_page(refs):
+        return original
+    def hidden_titles(tid):
+        if not isinstance(tid, str) or not tid:
+            return set()
+        def build():
+            rows = page_rows(c)
+            if not rows:
+                return set()
+            attached = {r[0] for r in c.execute("SELECT v.file_id FROM task_assets a JOIN bot_file_versions v "
+                                              "ON v.blob_id=a.blob_id WHERE a.task_id=?", (tid,))}
+            if file_library.has_pins(c):
+                attached.update(r[0] for r in c.execute("SELECT substr(item,6) FROM pins WHERE place=? AND item LIKE 'page:%'",
+                                                       ("task:" + tid,)))
+            return {row["title"] for row in rows.values()
+                    if (row["task_id"] == tid or row["scope"] == "task:" + tid or row["id"] in attached)
+                    and row["state"] != "deleted" and page_ref_denials(c, auth, who, row["id"])}
+        return read_cache.value(c, ("hidden_page_titles", who.actor, who.role, getattr(who, "task_actor", ""),
+                                    tid, auth is not None), build)
+
+    def rejected(value):
+        return removed_page(value) or bool(page_references(value, c) & denied.keys())
+
+    def clean(value, parent="", tid=task_id, context=None):
+        direct = page_references(value, c, file_ids=context) & denied.keys() if isinstance(value, str) else set()
+        if isinstance(value, dict):
+            carried = H._json(value.get("refs"), {}) or {}
+            carried = carried if isinstance(carried, dict) else {}
+            tid = H.refs_task_id(carried) or H.refs_task_id(value) or value.get("task_id") or tid
+            if "owner_id" in value and "title" in value:
+                tid = value.get("id") or tid
+            context = {fid for key in ("file", "file_id", "page", "page_id")
+                       if (fid := page_reference(value.get(key)))} or context
+            if (rejected(value.get("source")) or parent == "options" and
+                    not value.get("source") and not value.get("file") and value.get("label") in hidden_titles(tid) or
+                    parent in ("if_no_answer", "recommend") and not value.get("source") and
+                    value.get("do") in hidden_titles(tid)):
+                return None if parent == "recommend" else {"removed": True, "label": "A page you can't open"}
+            direct = page_references({k: v for k, v in value.items() if isinstance(v, str) and not v.startswith(("{", "["))},
+                                     c, file_ids=context) & denied.keys()
+            if direct:
+                return {"removed": True, "label": denied[sorted(direct)[0]]}
+            shown = {k: clean(v, k, tid, context) for k, v in value.items()}
+            if isinstance(value.get("label_sources"), dict):
+                shown["label_sources"] = {qid: {label: source for label, source in sources.items() if not rejected(source)}
+                                          for qid, sources in value["label_sources"].items()}
+            if isinstance(value.get("answers"), dict):
+                sources = value.get("label_sources", {})
+                for key in ("answers", "not"):
+                    if isinstance(value.get(key), dict):
+                        shown[key] = {qid: [label for label in picks if not (
+                            rejected(sources.get(qid, {}).get(label)) or
+                            label not in sources.get(qid, {}) and label in hidden_titles(tid))]
+                                      for qid, picks in value[key].items()}
+            answer = carried.get("answer", {})
+            shown_refs = H._json(shown.get("refs"), {}) or {}
+            shown_answer = shown_refs.get("answer", {}) if isinstance(shown_refs, dict) else {}
+            if (rejected(value.get("body_sources")) or rejected(carried.get("body_sources")) or
+                    answer.get("answers") != shown_answer.get("answers") or
+                    answer.get("not") != shown_answer.get("not")):
+                for key in ("body", "text", "note", "old", "new", "title", "name", "recommend", "other"):
+                    if key in shown:
+                        shown[key] = "A page you can't open"
+            return shown
+        if isinstance(value, list):
+            return [clean(v, parent, tid, context) for v in value]
+        if isinstance(value, str) and value.startswith(("{", "[")):
+            return readable_page_refs(c, auth, who, value, task_id=tid)
+        if direct:
+            return {"removed": True, "label": denied[sorted(direct)[0]]}
+        return value
+
+    shown = clean(refs)
+    return encode(shown) if isinstance(original, str) else shown
+
+
+def retain_page_label_sources(c, row):
+    """Before deletion erases a title, link legacy exact-title labels on this page's task to its identity."""
+    task_ids = {r[0] for r in c.execute("SELECT a.task_id FROM task_assets a JOIN bot_file_versions v "
+                                      "ON v.blob_id=a.blob_id WHERE v.file_id=?", (row["id"],))}
+    if file_library.has_pins(c):
+        task_ids.update(r[0] for r in c.execute("SELECT substr(place,6) FROM pins WHERE item=? AND place LIKE 'task:%'",
+                                               ("page:" + row["id"],)))
+    if row["task_id"]:
+        task_ids.add(row["task_id"])
+    if not task_ids:
+        return
+    source = {"file": row["id"]}
+    def annotate(value):
+        changed = False
+        if isinstance(value, dict):
+            if value.get("do") == row["title"] and not value.get("source"):
+                value["source"] = source
+                changed = True
+            for option in value.get("options") or []:
+                if isinstance(option, dict) and option.get("label") == row["title"] and not option.get("source"):
+                    option["source"] = source
+                    changed = True
+            if isinstance(value.get("answers"), dict):
+                for qid, picks in value["answers"].items():
+                    if row["title"] in picks or row["title"] in value.get("not", {}).get(qid, []):
+                        value.setdefault("label_sources", {}).setdefault(qid, {})[row["title"]] = source
+                        changed = True
+            for child in list(value.values()):
+                changed = annotate(child) or changed
+        elif isinstance(value, list):
+            for child in value:
+                changed = annotate(child) or changed
+        return changed
+    for message in c.execute("SELECT id,refs FROM messages WHERE conversation_id IN "
+                             "(SELECT conversation_id FROM tasks WHERE id IN (SELECT value FROM json_each(?))) "
+                             "OR json_extract(refs,'$.task') IN (SELECT value FROM json_each(?))",
+                             (encode(sorted(task_ids)), encode(sorted(task_ids)))).fetchall():
+        refs = H._json(message["refs"], {}) or {}
+        if annotate(refs):
+            if refs.get("answer"):
+                _, refs = H.sourced_text(None, [source], refs)
+            c.execute("UPDATE messages SET refs=? WHERE id=?", (encode(refs), message["id"]))
 
 
 class Files:
@@ -215,6 +569,7 @@ class Files:
         if who.role == "bot":
             return H.actor_id(who.actor)
         if who.role == "runner":
+            given = (H.resolve_bot(c, given) or {}).get("id", given)
             if not given or not H.bot(c, given):
                 raise Problem("not_found", "Bot not found", 404)
             return H.actor_id(given)
@@ -228,7 +583,7 @@ class Files:
             return None, None
         row = c.execute("SELECT a.runner_id,m.id AS mid,m.conversation_id FROM attempts a "
                         "JOIN jobs j ON j.id=a.job_id JOIN messages m ON m.id=j.message_id "
-                        "WHERE a.id=? AND a.bot=?", (attempt_id, bot)).fetchone()
+                        "WHERE a.id=? AND a.bot_id=?", (attempt_id, bot)).fetchone()
         if not row or (who.role == "runner" and row["runner_id"] != who.runner_id):
             raise Problem("forbidden", "That turn is not this computer's", 403)
         message, conversation = H.message(c, row["mid"]), H.conversation(c, row["conversation_id"])
@@ -241,6 +596,7 @@ class Files:
         a task must be one this bot may see, and bot-wide is refused from inside a chat."""
         attempt = who.attempt_id if who.role == "bot" and not who.agent else str(fields.get("attempt") or "")
         conversation, turn_task = self.turn_context(c, who, bot, attempt)
+        H._writer(c, self.actor_of(who, bot), task_id=turn_task, attempt_id=attempt)
         task = str(fields.get("task") or "").strip()
         wanted = str(fields.get("scope") or "").strip()
         if wanted not in ("", "task", "bot"):
@@ -255,6 +611,7 @@ class Files:
         if task:
             acting = who if who.role == "bot" else Identity("bot:" + bot, "bot", runner_id=who.runner_id, attempt_id=attempt)
             self.auth.task(c, acting, task)
+            H._writer(c, self.actor_of(who, bot), task_id=task, attempt_id=attempt)
         if wanted == "bot":
             if ((task or turn_task) and H.task_private(c, H.task(c, task or turn_task))
                     or attempt and any(H.task_private(c, H.task(c, tid)) for tid in privacy.attempt_tasks(c, attempt))):
@@ -271,15 +628,15 @@ class Files:
 
     # ------------------------------------------------------------------ writes
     def find(self, c, bot, scope, identity):
-        return c.execute("SELECT * FROM bot_files WHERE bot=? AND scope=? AND identity=?",
+        return c.execute("SELECT * FROM bot_files WHERE bot_id=? AND scope=? AND identity=?",
                          (bot, scope, identity)).fetchone()
 
     def activity(self, c, fid, actor, action, *, attempt="", task=None, version=None, digest=None, detail=None, now=None):
-        c.execute("INSERT INTO bot_file_activity(file_id,actor,action,attempt_id,task_id,version,digest,created,detail_json) "
+        c.execute("INSERT INTO bot_file_activity(file_id,actor,action,attempt_id,task_id,version,digest,created_at,detail) "
                   "VALUES(?,?,?,?,?,?,?,?,?)", (fid, actor, action, attempt or None, task, version, digest,
                                                 now or H.now(), encode(detail or {})))
         if task:
-            c.execute("UPDATE tasks SET updated=? WHERE id=?", (now or H.now(), task))
+            c.execute("UPDATE tasks SET updated_at=? WHERE id=?", (now or H.now(), task))
 
     def open_row(self, c, *, bot, scope, identity, title, kind, mime, locator, url=None, provider=None,
                  task, conversation, now, fid=None):
@@ -287,7 +644,7 @@ class Files:
         if row:
             return row, False
         fid = fid or new_id()
-        c.execute("INSERT INTO bot_files(id,bot,scope,identity,title,kind,mime,locator,url,provider,current_version,state,"
+        c.execute("INSERT INTO bot_files(id,bot_id,scope,identity,title,kind,mime,locator,url,provider,current_version,state,"
                   "task_id,conversation_id,first_activity_at,last_activity_at) VALUES(?,?,?,?,?,?,?,?,?,?,0,'ready',?,?,?,?)",
                   (fid, bot, scope, identity, title[:300], kind, mime, locator, url, provider, task, conversation, now, now))
         return c.execute("SELECT * FROM bot_files WHERE id=?", (fid,)).fetchone(), True
@@ -306,7 +663,7 @@ class Files:
         version = row["current_version"]
         if changed:
             version += 1
-            c.execute("INSERT INTO bot_file_versions(file_id,version,blob_id,digest,source_digest,size,name,mime,commit_sha,repo_path,attempt_id,actor,created,media_state) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,'pending')",
+            c.execute("INSERT INTO bot_file_versions(file_id,version,blob_id,digest,source_digest,size,name,mime,commit_sha,repo_path,attempt_id,actor,created_at,media_state) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,'pending')",
                       (row["id"], version, blob_id, digest, source_digest, size, name, mime, commit or None,
                        repo_path or None, attempt or None, actor, now))
         action = "created" if created else "modified" if changed else "published"
@@ -328,7 +685,7 @@ class Files:
         """Compatibility hook for attachment upload paths, including streaming uploads."""
         from .views import default_bot
         task = H.task(c, task_id)
-        actors = (who.actor, task["owner"], task["requester"])
+        actors = (who.actor, task["owner_id"], task["requester_id"])
         bot = next((H.actor_id(a) for a in actors if H.is_bot(a)), None) or default_bot(c, self.store.settings)
         if who.role == "bot":
             try:
@@ -339,27 +696,30 @@ class Files:
         return fid
 
     def attach_task(self, c, who, task_id, item, digest, bot):
-        """Same task and display name means one series, even across authors."""
+        """A visible file with the same task and display name continues its series."""
         row = c.execute("SELECT f.* FROM bot_files f JOIN bot_file_versions v "
                         "ON v.file_id=f.id AND v.version=f.current_version "
                         "WHERE f.task_id=? AND f.archived=0 AND v.name=? "
-                        "ORDER BY f.last_activity_at DESC LIMIT 1", (task_id, item["name"])).fetchone()
+                        "ORDER BY f.last_activity_at DESC", (task_id, item["name"])).fetchall()
+        row = next((r for r in row if self.visible(c, who, r, {})), None)
         created = row is None
         legacy = None
         if row is None:
             legacy = c.execute("SELECT b.* FROM blobs b JOIN task_assets a ON a.blob_id=b.id "
                                "WHERE a.task_id=? AND b.name=? AND b.id<>? AND NOT EXISTS "
                                "(SELECT 1 FROM bot_file_versions v WHERE v.blob_id=b.id) "
-                               "ORDER BY b.created DESC LIMIT 1", (task_id, item["name"], item["id"])).fetchone()
+                               "ORDER BY b.created_at DESC", (task_id, item["name"], item["id"])).fetchall()
+            legacy = next((b for b in legacy if not page_ref_denials(c, self.auth, who, b["id"])
+                           and privacy.blob_readable(c, privacy.actor(who), b["id"])), None)
             fid, stamp = (legacy["id"] if legacy else new_id()), H.now()
-            c.execute("INSERT INTO bot_files(id,bot,scope,identity,title,kind,mime,locator,task_id,"
+            c.execute("INSERT INTO bot_files(id,bot_id,scope,identity,title,kind,mime,locator,task_id,"
                       "first_activity_at,last_activity_at) VALUES(?,?,?,?,?,?,?,'tico_blob',?,?,?)",
                       (fid, bot, "task:" + task_id, "task-file:" + fid, item["name"], BF.kind_of(item["name"]),
                        item["content_type"], task_id, stamp, stamp))
             row = c.execute("SELECT * FROM bot_files WHERE id=?", (fid,)).fetchone()
             if legacy:
                 self.insert_task_version(c, fid, 1, legacy["id"], legacy["digest"], legacy["size"],
-                                         legacy["name"], legacy["content_type"], legacy["owner"], legacy["created"], pending=False)
+                                         legacy["name"], legacy["content_type"], legacy["owner"], legacy["created_at"], pending=False)
         number = row["current_version"] + 1 + (1 if legacy else 0)
         self.insert_task_version(c, row["id"], number, item["id"], digest, item["size"], item["name"],
                                  item["content_type"], who.actor, H.now())
@@ -371,7 +731,7 @@ class Files:
 
     @staticmethod
     def insert_task_version(c, fid, number, blob, digest, size, name, mime, actor, created, *, pending=True):
-        c.execute("INSERT INTO bot_file_versions(file_id,version,blob_id,digest,size,name,mime,actor,created,media_state) "
+        c.execute("INSERT INTO bot_file_versions(file_id,version,blob_id,digest,size,name,mime,actor,created_at,media_state) "
                   "VALUES(?,?,?,?,?,?,?,?,?,?)",
                   (fid, number, blob, digest, size, name, mime, actor, created, "pending" if pending else "none"))
         if not pending:
@@ -393,7 +753,7 @@ class Files:
             for v in c.execute("SELECT * FROM bot_file_versions WHERE file_id=? ORDER BY version DESC", (row["id"],)):
                 fields = dict(v)
                 versions.append({"n": v["version"], "size": v["size"], "mime": v["mime"], "sha256": v["digest"],
-                                 "created": v["created"], "by": v["actor"],
+                                 "created_at": v["created_at"], "by": v["actor"],
                                  **version_review(c, row["id"], v["version"], actor=privacy.actor(who)),
                                  **{k: fields.get(k) for k in ("width", "height", "duration_ms", "media_state")},
                                  "poster_url": f"/api/v2/files/{row['id']}/poster?v={v['version']}" if fields.get("poster_blob_id") else None,
@@ -407,11 +767,11 @@ class Files:
         for b in c.execute("SELECT b.*,m.width,m.height,m.duration_ms,m.media_state,m.poster_blob_id,m.thumb_blob_id "
                            "FROM blobs b JOIN task_assets a ON a.blob_id=b.id LEFT JOIN blob_media m ON m.blob_id=b.id WHERE a.task_id=? "
                            "AND NOT EXISTS(SELECT 1 FROM bot_file_versions v WHERE v.blob_id=b.id)", (task_id,)):
-            if not privacy.blob_readable(c, privacy.actor(who), b["id"]):
+            if not page_blob_visible(c, self.auth, who, b["id"]) or not privacy.blob_readable(c, privacy.actor(who), b["id"]):
                 continue
             out.append({"id": b["id"], "name": b["name"], "mime": b["content_type"], "current_version": 1,
                         "archived": False, "versions": [{"n": 1, "size": b["size"], "mime": b["content_type"],
-                        "sha256": b["digest"], "created": b["created"], "by": b["owner"],
+                        "sha256": b["digest"], "created_at": b["created_at"], "by": b["owner"],
                         **version_review(c, b["id"], 1, actor=privacy.actor(who)),
                         **{k: b[k] for k in ("width", "height", "duration_ms", "media_state")},
                         "poster_url": f"/api/v2/files/{b['id']}/poster?v=1" if b["poster_blob_id"] else None,
@@ -481,6 +841,13 @@ class Files:
 
         def work(c):
             scope, task, conversation, attempt = self.target(c, who, bot, fields)
+            existing = self.find(c, bot, scope, identity)
+            stored_task = existing["task_id"] if existing else None
+            H._writer(c, self.actor_of(who, bot), task_id=stored_task, attempt_id=attempt)
+            with H.refusal_task(task or stored_task):
+                return write_file(c, scope, task, conversation, attempt)
+
+        def write_file(c, scope, task, conversation, attempt):
             actor = self.actor_of(who, bot)
             if failed:
                 row, created = self.open_row(c, bot=bot, scope=scope, identity=identity,
@@ -571,7 +938,7 @@ class Files:
         def work(c):
             managing = who.role in ("owner", "human")
             if managing:
-                bot = H.actor_id(body.bot)
+                bot = (H.resolve_bot(c, body.bot) or {}).get("id", H.actor_id(body.bot))
                 if not H.bot(c, bot) or not self.auth.visible_bot(c, who, bot):
                     raise Problem("not_found", "Bot not found", 404)
                 self.require_manager(who)
@@ -586,7 +953,7 @@ class Files:
             now = H.now()
             if body.file and not body.url:
                 row = c.execute("SELECT * FROM bot_files WHERE id=?", (body.file,)).fetchone()
-                if (not row or row["bot"] != bot or row["locator"] != "remote_link" or row["state"] == "deleted"
+                if (not row or row["bot_id"] != bot or row["locator"] != "remote_link" or row["state"] == "deleted"
                         or not self.visible(c, who, row, {})):
                     raise Problem("not_found", "That link is not one of yours", 404)
                 scope, task, conversation = row["scope"], row["task_id"], row["conversation_id"]
@@ -596,9 +963,11 @@ class Files:
                     url, identity, kind, provider, _ = BF.normalize_link(body.url)
                 except BF.Refused as exc:
                     raise refused(exc) from exc
+            H._writer(c, actor, task_id=task, attempt_id=attempt)
             row, created = self.open_row(c, bot=bot, scope=scope, identity=identity,
                                          title=body.title or url, kind=kind, mime="", locator="remote_link", url=url,
                                          provider=provider, task=task, conversation=conversation, now=now)
+            H._writer(c, actor, task_id=row["task_id"], attempt_id=attempt)
             fields = {"last_activity_at": now, "url": url, "state": "ready"}
             if body.title:
                 fields["title"] = body.title[:300]
@@ -626,13 +995,14 @@ class Files:
             stored = c.execute("SELECT * FROM bot_files WHERE id=? AND identity LIKE 'task-file:%'", (fid,)).fetchone()
             if stored and body.model_dump(exclude_none=True) == {"archived": True}:
                 task = self.auth.task(c, who, stored["task_id"])
-                if (who.actor not in (task["owner"], task["requester"])
+                H._writer(c, who.actor, task_id=task["id"])
+                if (who.actor not in (task["owner_id"], task["requester_id"])
                         and not (who.role == "owner" or who.role == "human" and H.can_move(c, who.actor))):
                     raise Problem("forbidden", "Only a task participant or someone who can move it archives its attachments", 403)
                 c.execute("UPDATE bot_files SET archived=1,last_activity_at=? WHERE id=?", (H.now(), fid))
                 c.execute("DELETE FROM task_assets WHERE task_id=? AND blob_id IN "
                           "(SELECT blob_id FROM bot_file_versions WHERE file_id=?)", (stored["task_id"], fid))
-                c.execute("UPDATE tasks SET updated=? WHERE id=?", (H.now(), stored["task_id"]))
+                c.execute("UPDATE tasks SET updated_at=? WHERE id=?", (H.now(), stored["task_id"]))
                 self.activity(c, fid, who.actor, "archived", task=stored["task_id"])
                 removed_event(c, stored["task_id"], who.actor, fid, stored["title"])
                 H.event(c, who.actor, "task.file_archived", stored["task_id"], {"file": fid})
@@ -645,14 +1015,17 @@ class Files:
                     raise Problem("not_found", "File not found", 404)
                 for task in linked:
                     row = self.auth.task(c, who, task["task_id"])
-                    if (who.actor not in (row["owner"], row["requester"])
+                    H._writer(c, who.actor, task_id=row["id"])
+                    if (who.actor not in (row["owner_id"], row["requester_id"])
                             and not (who.role == "owner" or who.role == "human" and H.can_move(c, who.actor))):
                         raise Problem("forbidden", "Only a task participant or someone who can move it archives its attachments", 403)
                 c.execute("DELETE FROM task_assets WHERE blob_id=?", (fid,))
                 blob = c.execute("SELECT name FROM blobs WHERE id=?", (fid,)).fetchone()
                 for task in linked:
-                    H._task_event(c, task["task_id"], who.actor, "file", blob["name"] if blob else fid, None, "")
-                    c.execute("UPDATE tasks SET updated=? WHERE id=?", (H.now(), task["task_id"]))
+                    provenance = file_provenance(c, fid)
+                    name, data = H.sourced_text(blob["name"] if blob else fid, [provenance], provenance)
+                    H._task_event(c, task["task_id"], who.actor, "file", name, None, "", data=data)
+                    c.execute("UPDATE tasks SET updated_at=? WHERE id=?", (H.now(), task["task_id"]))
                     for published in c.execute("SELECT f.id FROM bot_files f JOIN bot_file_versions v "
                                                "ON v.file_id=f.id "
                                                "WHERE v.blob_id=? AND f.scope=? AND f.archived=0",
@@ -667,8 +1040,9 @@ class Files:
             if not row or row["state"] == "deleted" or not self.visible(c, who, row, {}):
                 raise Problem("not_found", "File not found", 404)
             actor, now = who.actor, H.now()
+            H._writer(c, actor, task_id=row["task_id"])
             if who.role == "bot":
-                if H.actor_id(who.actor) != row["bot"]:
+                if H.actor_id(who.actor) != row["bot_id"]:
                     raise Problem("not_found", "File not found", 404)
                 if body.archived is not None or body.promote:
                     raise Problem("forbidden", "A bot cannot remove or promote files; an owner does", 403)
@@ -680,13 +1054,14 @@ class Files:
             if body.task is not None:
                 if body.task:
                     self.auth.task(c, who, body.task)
+                    H._writer(c, actor, task_id=body.task)
                 fields["task_id"] = body.task or None
             if body.promote:
                 if row["task_id"] and H.task_private(c, H.task(c, row["task_id"])):
                     raise Problem("privacy", "Private task files stay on their task", 403)
                 if row["scope"] == "bot":
                     raise Problem("conflict", "This file is already bot-wide", 409)
-                if self.find(c, row["bot"], "bot", row["identity"]):
+                if self.find(c, row["bot_id"], "bot", row["identity"]):
                     raise Problem("conflict", "A bot-wide file with the same identity already exists", 409)
                 fields["scope"] = "bot"
             if body.archived:
@@ -739,14 +1114,14 @@ class Files:
     def view(self, c, who, row, caches):
         version = c.execute("SELECT * FROM bot_file_versions WHERE file_id=? AND version=?",
                             (row["id"], row["current_version"])).fetchone()
-        last = c.execute("SELECT actor,action,created FROM bot_file_activity WHERE file_id=? ORDER BY id DESC LIMIT 1",
+        last = c.execute("SELECT actor,action,created_at FROM bot_file_activity WHERE file_id=? ORDER BY id DESC LIMIT 1",
                          (row["id"],)).fetchone()
         link = row["locator"] == "remote_link"
         synced = row["state"] == "ready" and (link or version is not None)
         provider = row["provider"] or ""
         _, label = BF.provider_of(urlsplit(row["url"] or "").hostname or "") if link else ("", "")
         task = self.task_info(c, who, row["task_id"], caches["task"])
-        value = {**({k: version[k] for k in ("width", "height", "duration_ms", "poster_blob_id", "thumb_blob_id", "media_state")} if version else {}), "id": row["id"], "bot": row["bot"], "title": row["title"], "kind": row["kind"], "mime": row["mime"],
+        value = {**({k: version[k] for k in ("width", "height", "duration_ms", "poster_blob_id", "thumb_blob_id", "media_state")} if version else {}), "id": row["id"], "bot": row["bot_id"], "title": row["title"], "kind": row["kind"], "mime": row["mime"],
                  "locator": row["locator"], "scope": row["scope"].partition(":")[0], "version": row["current_version"],
                  "state": row["state"], "synced": synced, "size": version["size"] if version else None,
                  "name": version["name"] if version else None,
@@ -759,7 +1134,7 @@ class Files:
                  "source": "s3" if row["identity"].startswith("s3:") else "",
                  "task_id": row["task_id"] if task else None, "task_title": task["title"] if task else None,
                  "working": bool(task and task["status"] == "doing"),
-                 "github_url": self.github_url(c, row["bot"], version, caches),
+                 "github_url": self.github_url(c, row["bot_id"], version, caches),
                  "actor": last["actor"] if last else None, "action": last["action"] if last else None,
                  "first_activity_at": row["first_activity_at"], "last_activity_at": row["last_activity_at"],
                  "archived": bool(row["archived"])}
@@ -778,11 +1153,12 @@ class Files:
 
     def listing(self, who, bot, limit, cursor):
         with self.store.read() as c:
+            bot = (H.resolve_bot(c, bot) or {}).get("id", bot)
             self.bot_row(c, who, bot)
             cache, caches = {}, {"task": {}, "repo": {}}
-            rows = c.execute("SELECT * FROM bot_files WHERE bot=? AND archived=0 "
+            rows = c.execute("SELECT * FROM bot_files WHERE bot_id=? AND archived=0 "
                              "AND (identity NOT LIKE 'task-file:%' OR EXISTS (SELECT 1 FROM bot_file_versions v "
-                             "WHERE v.file_id=bot_files.id AND v.actor='bot:' || bot_files.bot)) "
+                             "WHERE v.file_id=bot_files.id AND v.actor='bot:' || bot_files.bot_id)) "
                              "ORDER BY last_activity_at DESC, id DESC", (bot,)).fetchall()
             prime_visible(c, rows)
             rows = [r for r in rows if self.visible(c, who, r, cache)]
@@ -797,7 +1173,7 @@ class Files:
             more = start + limit < len(rows)
             nxt = (base64.urlsafe_b64encode(f"{page[-1]['last_activity_at']}|{page[-1]['id']}".encode()).decode()
                    if more and page else None)
-            return {"bot": bot, "files": [self.view(c, who, r, caches) for r in page], "total": len(rows),
+            return {"bot_id": bot, "files": [self.view(c, who, r, caches) for r in page], "total": len(rows),
                     "next_cursor": nxt, "has_more": more,
                     "can_manage": who.role in ("owner", "human") and self.auth.bot_admin(who)}
 
@@ -815,8 +1191,8 @@ class Files:
             for v in c.execute("SELECT * FROM bot_file_versions WHERE file_id=? ORDER BY version DESC", (fid,)):
                 out.append({"version": v["version"], "current": v["version"] == row["current_version"], "name": v["name"],
                             "size": v["size"], "mime": v["mime"], "digest": v["source_digest"] or v["digest"],
-                            "actor": v["actor"], "created": v["created"], "url": f"/api/v2/files/{fid}/versions/{v['version']}",
-                            "github_url": self.github_url(c, row["bot"], v, caches),
+                            "actor": v["actor"], "created_at": v["created_at"], "url": f"/api/v2/files/{fid}/versions/{v['version']}",
+                            "github_url": self.github_url(c, row["bot_id"], v, caches),
                             **{k: v[k] for k in ("width", "height", "duration_ms", "poster_blob_id", "thumb_blob_id", "media_state")}})
             return {"file": fid, "versions": out}
 
@@ -824,7 +1200,7 @@ class Files:
         with self.store.read() as c:
             self.visible_file(c, who, fid)
             rows = [{"id": r["id"], "actor": r["actor"], "action": r["action"], "task_id": r["task_id"],
-                     "version": r["version"], "digest": r["digest"], "created": r["created"]}
+                     "version": r["version"], "digest": r["digest"], "created_at": r["created_at"]}
                     for r in c.execute("SELECT * FROM bot_file_activity WHERE file_id=? ORDER BY id DESC LIMIT 500", (fid,))]
             H.prime_tasks(c, {r["task_id"] for r in rows})
             rows = [r for r in rows if not r["task_id"] or privacy.task_readable(c, who, H.task(c, r["task_id"]))]
@@ -833,13 +1209,24 @@ class Files:
     def serve(self, who, fid, version=None, meta=False, request=None, derivative=None):
         """The bytes of one version through Tico, never a storage address."""
         with self.store.read() as c:
-            row = self.visible_file(c, who, fid)
+            row = c.execute("SELECT * FROM bot_files WHERE id=?", (fid,)).fetchone()
+            if not row or not page_audience_visible(c, self.auth, who, row, {}):
+                raise Problem("not_found", "File not found", 404)
             # Adopted legacy blob IDs keep their original bytes at an unversioned URL.
             number = (row["current_version"] if is_file_id(fid) else 1) if version is None else version
-            if asked_to_read(c, who, fid) and not asked_to_read(c, who, fid, number):
-                raise Problem("not_found", "File not found", 404)    # Counsel's read names one version of it
             v = c.execute("SELECT v.*,b.digest AS blob_digest,b.content_type FROM bot_file_versions v "
                           "JOIN blobs b ON b.id=v.blob_id WHERE v.file_id=? AND v.version=?", (fid, number)).fetchone()
+            if v and not page_blob_visible(c, self.auth, who, v["blob_id"]):
+                raise Problem("not_found", "File not found", 404)
+            from . import postal_mail
+            scan = postal_mail.scan_access(c, self.auth, who, v["blob_id"]) if v else None
+            if scan is not None:
+                if not scan or not privacy.blob_readable(c, privacy.actor(who), v["blob_id"]):
+                    raise Problem("not_found", "File not found", 404)
+            else:
+                self.visible_file(c, who, fid)
+                if asked_to_read(c, who, fid) and not asked_to_read(c, who, fid, number):
+                    raise Problem("not_found", "File not found", 404)    # Counsel's read names one version of it
             if not v or row["locator"] != "tico_blob":
                 raise Problem("not_found", "This file has no stored copy to open" if not v else "File not found", 404)
             if meta:

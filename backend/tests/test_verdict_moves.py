@@ -3,7 +3,9 @@
 import pytest
 
 from backend import hubdb as H, rules, verdict_moves as V
-from backend.tests.test_github import PR, _suite, api, hook, post, pr_event  # noqa: F401
+from backend.tests.test_github import PR, _status, _suite, api, hook, post, pr_event  # noqa: F401
+from backend.tests.usage_rows import segment
+from backend import bot_settings as BS
 
 HEAD, NEW, BASE = "a" * 40, "d" * 40, "c" * 40
 STEPS = [("On Deck", "open"), ("In Progress", "doing"), ("Review 1", "review"), ("Review 1 Fixes", "doing"),
@@ -16,14 +18,13 @@ def receipt(api, task, head=HEAD):
         c.execute("UPDATE tasks SET note=? WHERE id=?", (f"Tests: base {BASE} head {head}: 9 passed, 0 failed", task["id"]))
 
 
-def usage(c, task_id, bot, model="claude-sonnet-5-5", provider="anthropic"):
+def usage(c, task_id, bot, model="claude-sonnet-5-5", provider="anthropic", runtime=None):
     turn = H.new_id()
-    c.execute("INSERT INTO turns(id,bot,started,finished,task_id) VALUES(?,?,?,?,?)",
+    c.execute("INSERT INTO attempts(id,bot_id,created_at,settled_at,task_id) VALUES(?,?,?,?,?)",
               (turn, bot, H.now(), H.now(), task_id))
-    c.execute("INSERT INTO turn_usage_segments(turn_id,position,input_tokens,output_tokens,model,provider,runtime,"
-              "harness,effort) VALUES(?,0,20,20,?,?,? ,?,'high')",
-              (turn, model, provider, "claude" if provider == "anthropic" else "codex",
-               "claude" if provider == "anthropic" else "codex"))
+    runtime = runtime or ("claude" if provider == "anthropic" else "codex")
+    segment(c, turn, input_tokens=20, output_tokens=20, model=model, provider=provider, runtime=runtime,
+            harness=runtime, effort="high")
     return turn
 
 
@@ -44,10 +45,11 @@ def ticket(api, step="Review 1", labels=()):
     return task
 
 
-def check(api, task, title="Review 1: PR #412", owner="bot:cmo"):
+def check(api, task, title="Review 1: PR #412", owner="bot:cmo", **ran):
+    """A check `owner` ran on the ticket; `ran` names the model it ran on (usage's model, provider, runtime)."""
     with api.app.state.store.transaction() as c:
         row = H.task_create(c, "bot:cpo", title, f"Check PR #412 head {HEAD}", owner, parent_id=task["id"], lint=False)
-        turn = usage(c, row["id"], H.actor_id(owner))
+        turn = usage(c, row["id"], H.actor_id(owner), **ran)
         from backend.check_independence import capture_attempt
         capture_attempt(c, task["id"], row["id"], HEAD, turn)
         c.execute("DELETE FROM jobs")
@@ -56,8 +58,8 @@ def check(api, task, title="Review 1: PR #412", owner="bot:cmo"):
 
 def verdict(api, row, value, head=HEAD):
     with api.app.state.store.transaction() as c:
-        H.task_update(c, row["owner"], row["id"], status="done", note="Reviewed.", verdict=value, verdict_head=head)
-        turn = c.execute("SELECT id FROM turns WHERE task_id=? ORDER BY started DESC,id DESC LIMIT 1",
+        H.task_update(c, row["owner_id"], row["id"], status="done", note="Reviewed.", verdict=value, verdict_head=head)
+        turn = c.execute("SELECT id FROM attempts WHERE task_id=? ORDER BY created_at DESC,id DESC LIMIT 1",
                          (row["id"],)).fetchone()
         if turn:
             V.after_capture(c, row["id"], head, turn["id"])
@@ -86,13 +88,13 @@ def checks_of(api, task):
 def builder_jobs(api):
     with api.app.state.store.read() as c:
         return [H.message(c, r[0]) for r in c.execute(
-            "SELECT message_id FROM jobs WHERE bot='cpo' AND state='queued' ORDER BY rowid")]
+            "SELECT message_id FROM jobs WHERE bot_id='cpo' AND state='queued' ORDER BY rowid")]
 
 
 def step_events(api, task):
     with api.app.state.store.read() as c:
         return [(r["actor"], r["new"]) for r in c.execute(
-            "SELECT actor,new FROM task_events WHERE task_id=? AND field='step' ORDER BY rowid", (task["id"],))]
+            "SELECT actor_id AS actor,new FROM history_events WHERE subject_type='task' AND subject_id=? AND kind='step' ORDER BY rowid", (task["id"],))]
 
 
 def test_a_review_is_feedback_its_approval_goes_back_to_the_builder_once(api):
@@ -156,15 +158,7 @@ def test_duplicate_delivery_of_the_same_eligible_verdict_moves_only_once(api):
 
 def test_configured_other_family_checker_fallback_verdict_still_moves(api):
     task = ticket(api)
-    review = check(api, task)
-    with api.app.state.store.transaction() as c:
-        c.execute("DELETE FROM turn_usage_segments WHERE turn_id IN (SELECT id FROM turns WHERE task_id=?)",
-                  (review["id"],))
-        turn = c.execute("SELECT id FROM turns WHERE task_id=?", (review["id"],)).fetchone()[0]
-        c.execute("INSERT INTO turn_usage_segments(turn_id,position,input_tokens,output_tokens,model,provider,runtime,"
-                  "harness,effort) VALUES(?,0,20,20,'gpt-6.1-sol','openai','codex','codex','high')", (turn,))
-        from backend.check_independence import capture_attempt
-        capture_attempt(c, task["id"], review["id"], HEAD, turn)
+    review = check(api, task, model="gpt-6.1-sol", provider="openai")
     verdict(api, review, "approve")
     assert step(api, task) == "Review 1 Fixes"
     with api.app.state.store.read() as c:
@@ -174,19 +168,13 @@ def test_configured_other_family_checker_fallback_verdict_still_moves(api):
         assert not eligibility["eligible"] and eligibility["known"]
         assert eligibility["builder_families"] == ["openai"]
         assert eligibility["checker_families"] == ["openai"]
-        assert c.execute("SELECT count(*) FROM task_events WHERE task_id=? AND field='verdict_wait'",
+        assert c.execute("SELECT count(*) FROM history_events WHERE subject_type='task' AND subject_id=? AND kind='verdict_wait'",
                          (task["id"],)).fetchone()[0] == 1
 
 
 def test_unknown_executed_checker_family_is_recorded_but_does_not_block_verdict(api):
     task = ticket(api)
-    review = check(api, task)
-    with api.app.state.store.transaction() as c:
-        turn = c.execute("SELECT id FROM turns WHERE task_id=?", (review["id"],)).fetchone()[0]
-        c.execute("UPDATE turn_usage_segments SET model='synthetic-unknown-model',provider='unknown' WHERE turn_id=?",
-                  (turn,))
-        from backend.check_independence import capture_attempt
-        capture_attempt(c, task["id"], review["id"], HEAD, turn)
+    review = check(api, task, model="synthetic-unknown-model", provider="unknown", runtime="claude")
     verdict(api, review, "approve")
     assert step(api, task) == "Review 1 Fixes"
     with api.app.state.store.read() as c:
@@ -201,11 +189,11 @@ def test_verdict_waits_for_its_exact_attempt_capture_then_moves_once(api):
     task = ticket(api)
     review = check(api, task)
     with api.app.state.store.transaction() as c:
-        turn = c.execute("SELECT id FROM turns WHERE task_id=?", (review["id"],)).fetchone()[0]
+        turn = c.execute("SELECT id FROM attempts WHERE task_id=?", (review["id"],)).fetchone()[0]
         c.execute("DELETE FROM check_head_provenance WHERE check_id=?", (review["id"],))
-        H.task_update(c, review["owner"], review["id"], status="done", note="Reviewed.",
+        H.task_update(c, review["owner_id"], review["id"], status="done", note="Reviewed.",
                       verdict="approve", verdict_head=HEAD)
-        marker = c.execute("SELECT new FROM task_events WHERE task_id=? AND field='verdict_wait' "
+        marker = c.execute("SELECT new FROM history_events WHERE subject_type='task' AND subject_id=? AND kind='verdict_wait' "
                            "ORDER BY rowid DESC LIMIT 1", (task["id"],)).fetchone()
         assert H._json(marker["new"], {})["attempt_id"] == turn
         assert V.step_of(c, H.task(c, task["id"])) == "Review 1"
@@ -221,14 +209,14 @@ def test_post_capture_callback_ignores_a_different_or_obsolete_attempt(api):
     task = ticket(api)
     review = check(api, task)
     with api.app.state.store.transaction() as c:
-        turn = c.execute("SELECT id FROM turns WHERE task_id=?", (review["id"],)).fetchone()[0]
-        H.task_update(c, review["owner"], review["id"], status="done", note="Reviewed.",
+        turn = c.execute("SELECT id FROM attempts WHERE task_id=?", (review["id"],)).fetchone()[0]
+        H.task_update(c, review["owner_id"], review["id"], status="done", note="Reviewed.",
                       verdict="approve", verdict_head=HEAD)
         assert V.after_capture(c, review["id"], "b" * 40, turn) is None
         assert V.after_capture(c, review["id"], HEAD, "obsolete-attempt") is None
         assert V.step_of(c, H.task(c, task["id"])) == "Review 1"
         # A new attempt supersedes the old callback even if it has the same owner and head.
-        usage(c, review["id"], H.actor_id(review["owner"]))
+        usage(c, review["id"], H.actor_id(review["owner_id"]))
         assert V.after_capture(c, review["id"], HEAD, turn) is None
         assert V.step_of(c, H.task(c, task["id"])) == "Review 1"
 
@@ -301,7 +289,7 @@ def test_a_ticket_tagged_with_a_steps_skip_tag_passes_it_by_and_the_skip_is_reco
     assert not checks_of(api, task), "a skipped step files no check"
     assert [m["refs"].get(V.HANDOFF) for m in builder_jobs(api)] == ["merge"]
     with api.app.state.store.read() as c:
-        assert c.execute("SELECT new FROM task_events WHERE task_id=? AND field='step_skipped'",
+        assert c.execute("SELECT new FROM history_events WHERE subject_type='task' AND subject_id=? AND kind='step_skipped'",
                          (task["id"],)).fetchone()[0] == "In QA"
 
 
@@ -321,6 +309,40 @@ def test_a_green_new_head_at_a_step_with_after_green_moves_on_to_the_next_check(
     assert step_events(api, task)[-1][0] == H.KEEPER
 
 
+@pytest.mark.parametrize('target', ['merge', 'In QA'])
+def test_shared_fixes_waits_for_a_head_newer_than_the_review_that_returned_it(api, target):
+    from backend import step_flow as F
+    task = ticket(api)
+    flow(api, task, 'Review 2', on_pass='Review 1 Fixes', on_fail='Review 1 Fixes')
+    flow(api, task, 'Review 1 Fixes', after_green=target)
+    verdict(api, check(api, task), 'approve')
+    assert step(api, task) == 'Review 1 Fixes'
+    hook(api, 'pull_request', pr_event('synchronize', head={'sha': NEW}))
+    receipt(api, task, NEW)
+    with api.app.state.store.transaction() as c:
+        H.task_update(c, 'bot:cpo', task['id'], step='Review 2')
+    verdict(api, check(api, task, title='Review 2: PR #412'), 'changes', head=NEW)
+    assert step(api, task) == 'Review 1 Fixes'
+    with api.app.state.store.transaction() as c:
+        current = H.task(c, task['id'])
+        assert V._judged_by(c, current, F.step(c, current['step_id'])) == NEW
+        assert V.merge_ready(c, current) is None
+        c.execute('DELETE FROM jobs')
+    _suite(api, 'github-actions', 'completed', 'success', sha=NEW)
+    assert step(api, task) == 'Review 1 Fixes'
+    assert not builder_jobs(api), 'green CI on the returned head must not skip its changes'
+
+    fixed = 'e' * 40
+    hook(api, 'pull_request', pr_event('synchronize', head={'sha': fixed}))
+    receipt(api, task, fixed)
+    _suite(api, 'github-actions', 'completed', 'success', sha=fixed)
+    if target == 'merge':
+        assert step(api, task) == 'Review 1 Fixes'
+        assert [m['refs'].get(V.HANDOFF) for m in builder_jobs(api)] == ['merge']
+    else:
+        assert step(api, task) == 'In QA'
+
+
 def test_on_the_dev_board_the_builder_moves_on_from_fixes_not_ci(api):
     task = ticket(api)
     verdict(api, check(api, task), "changes")
@@ -334,9 +356,9 @@ def test_a_check_finished_with_no_verdict_is_feedback_and_goes_to_on_fail(api):
     task = ticket(api, step="In QA")
     qa = check(api, task, "QA: PR #412")
     with api.app.state.store.transaction() as c:
-        H.task_update(c, qa["owner"], qa["id"], status="done", note="Looked at it; the login form is odd.")
+        H.task_update(c, qa["owner_id"], qa["id"], status="done", note="Looked at it; the login form is odd.")
         from backend import check_pools
-        turn = c.execute("SELECT id FROM turns WHERE task_id=?", (qa["id"],)).fetchone()[0]
+        turn = c.execute("SELECT id FROM attempts WHERE task_id=?", (qa["id"],)).fetchone()[0]
         check_pools.capture_attempt(c, turn)
     assert step(api, task) == "QA Fixes"
     assert [m["refs"].get(V.HANDOFF) for m in builder_jobs(api)] == ["verdict"], [(m["refs"], m["body"][:200]) for m in builder_jobs(api)]
@@ -386,16 +408,21 @@ def test_allocator_skips_inactive_pool_members_and_assigns_remaining_checks(api,
         checks = [H.task_create(c, "human:ana", f"Review 1: synthetic check {i}", "Check messages.", "human:ana",
                                 type=typ["id"], parent_id=parent["id"], private=False, lint=False)
                   for i, parent in enumerate(parents)]
+        # Rows an older release wrote, before these CHECKs: the allocator still skips them.
+        legacy = unavailable.get("state") == "" or unavailable.get("onboarding_state") == "needs_onboarding"
+        if legacy:
+            c.execute("PRAGMA ignore_check_constraints=ON")
         if "state" in unavailable:
             c.execute("UPDATE bots SET state=? WHERE slug='cmo'", (unavailable["state"],))
         if "onboarding_state" in unavailable:
             c.execute("UPDATE bot_config SET onboarding_state=? WHERE bot='cmo'", (unavailable["onboarding_state"],))
-        for key, value in unavailable.get("config", {}).items():
-            c.execute("UPDATE bot_config SET config_json=json_set(config_json, ?, ?) WHERE bot='cmo'",
-                      ("$." + key, value))
+        if legacy:
+            c.execute("PRAGMA ignore_check_constraints=OFF")
+        if unavailable.get("config"):
+            BS.update(c, "cmo", unavailable["config"])
 
         assert task_allocator.allocate(c) == [(check["id"], "cpo") for check in checks]
-        assert all(H.task(c, check["id"])["owner"] == "bot:cpo" for check in checks)
+        assert all(H.task(c, check["id"])["owner_id"] == "bot:cpo" for check in checks)
         assert task_allocator.allocate(c) == [], "already assigned checks are not allocated twice"
 
 
@@ -412,9 +439,9 @@ def test_allocator_never_grants_a_pool_bot_access_to_an_unreadable_private_task(
         assert not H.task_private_readable(c, "bot:cmo", secret)
         assert task_allocator.allocate(c) == [(public["id"], "cmo")]
         secret = H.task(c, secret["id"])
-        assert secret["owner"] == "bot:cpo"
+        assert secret["owner_id"] == "bot:cpo"
         assert not H.task_private_readable(c, "bot:cmo", secret)
-        assert H.task(c, public["id"])["owner"] == "bot:cmo"
+        assert H.task(c, public["id"])["owner_id"] == "bot:cmo"
 
 
 def test_a_merge_outside_the_flow_moves_the_ticket_to_the_merged_step_from_any_earlier_step(api):
@@ -431,7 +458,7 @@ def test_a_green_head_the_gate_refuses_stays_and_the_builder_hears_what_clears_i
     _suite(api, "github-actions", "completed", "success", sha=NEW)
     assert step(api, task) == "Review 1 Fixes", "no receipt at the new head holds the ticket where it is"
     with api.app.state.store.read() as c:
-        told = c.execute("SELECT body FROM messages WHERE conversation_id=? AND json_extract(refs_json,'$.review_gate') "
+        told = c.execute("SELECT body FROM messages WHERE conversation_id=? AND json_extract(refs,'$.review_gate') "
                          "IS NOT NULL", (task["conversation_id"],)).fetchall()
     assert len(told) == 1 and "receipt" in told[0][0]
     # Tico remembers the refused move and makes it itself once the receipt names the new head.
@@ -456,7 +483,7 @@ def test_a_failed_check_at_a_review_step_is_a_builder_hand_off(api):
     _suite(api, "github-actions", "completed", "failure", sha=HEAD)
     from backend import github
     with api.app.state.store.transaction() as c:
-        c.execute("UPDATE registry_metadata SET value_json=json_set(value_json,'$.due','2000-01-01T00:00:00Z') "
+        c.execute("UPDATE registry_metadata SET value=json_set(value,'$.due','2000-01-01T00:00:00Z') "
                   "WHERE key LIKE 'github-task-wake:%'")
         github.flush_wakes(c)
     failed = [m for m in builder_jobs(api) if m["refs"].get("pr_result") == "fail"]
@@ -475,7 +502,7 @@ def test_a_verdict_given_while_the_ticket_was_held_moves_it_once_the_hold_clears
         if hold == "ask":
             H.task_update(c, "bot:cpo", task["id"], status="waiting", waiting_on="human:ana",
                           note="Is the vendor contract signed?")
-            ask = next(H.task(c, i) for i in H.TR.child_ids(c, task["id"]) if H.task(c, i)["owner"] == "human:ana")
+            ask = next(H.task(c, i) for i in H.TR.child_ids(c, task["id"]) if H.task(c, i)["owner_id"] == "human:ana")
         else:
             ask = H.task_create(c, "human:ana", "Security: confirm the vendor contract", "Confirm it.", "human:ana",
                                 parent_id=task["id"], lint=False)
@@ -507,12 +534,12 @@ def test_a_private_review_is_not_replayed_into_its_wider_parent_when_a_hold_clea
         turn = usage(c, review["id"], "cmo")
         capture_attempt(c, task["id"], review["id"], HEAD, turn)
         assert not H.task_private(c, H.task(c, task["id"]))
-        assert not H.task_private_readable(c, task["owner"], review)
+        assert not H.task_private_readable(c, task["owner_id"], review)
         assert H._subtask_result_parent(c, review) is None
         H.task_update(c, "bot:cpo", task["id"], status="waiting", waiting_on="human:ana",
                       note="Is the vendor contract signed?")
         ask = next(H.task(c, i) for i in H.TR.child_ids(c, task["id"])
-                   if H.task(c, i)["owner"] == "human:ana")
+                   if H.task(c, i)["owner_id"] == "human:ana")
     assert step(api, task) == "Review 1"
     verdict(api, review, "changes")
     assert step(api, task) == "Review 1"
@@ -534,7 +561,7 @@ def _github(api, monkeypatch, suites, runs, statuses=()):
     from backend import github as G
     service = api.app.state.github_app
     with service.store.transaction() as c:
-        c.execute("INSERT INTO repositories(full_name,reachable,enabled,added_by,updated) VALUES(?,1,1,?,?)",
+        c.execute("INSERT INTO repositories(full_name,reachable,enabled,added_by,updated_at) VALUES(?,1,1,?,?)",
                   ("ticoteam/tico", "human:ana", H.now()))
     monkeypatch.setattr(service, "row", lambda c=None: {"slug": "test-app", "org": "ticoteam"})
     monkeypatch.setattr(service, "mint", lambda *args, **kw: ("test-token", "later"))
@@ -546,7 +573,10 @@ def _github(api, monkeypatch, suites, runs, statuses=()):
         read.append(path)
         for end, (field, rows) in lists.items():
             if path.endswith(f"/commits/{HEAD}{end}"):
-                return SimpleNamespace(status_code=200, json=lambda field=field, rows=rows: {field: rows})
+                params = kw.get("params") or {}
+                page, per = params.get("page", 1), params.get("per_page", 100)
+                got = rows[(page - 1) * per:page * per]
+                return SimpleNamespace(status_code=200, json=lambda field=field, got=got: {field: got})
         if path.endswith("/pulls/412"):
             return SimpleNamespace(status_code=200, json=lambda: {"state": "open", "head": {"sha": HEAD}})
         return SimpleNamespace(status_code=404, json=lambda: {})
@@ -562,7 +592,7 @@ def _suite_row(id, slug, status, conclusion=None, runs=0, minutes_ago=60):
 def _quiet(api, task, minutes=20):
     """No word from GitHub on the link for `minutes`."""
     with api.app.state.store.transaction() as c:
-        c.execute("UPDATE task_links SET updated=? WHERE task_id=? AND kind='pr'", (H.shift(H.now(), minutes=-minutes),
+        c.execute("UPDATE task_links SET updated_at=? WHERE task_id=? AND kind='pr'", (H.shift(H.now(), minutes=-minutes),
                                                                                    task["id"]))
 
 
@@ -600,7 +630,7 @@ def test_a_pass_at_head_behind_a_suite_that_never_started_wakes_the_merge_on_the
     assert G.refresh_pending_checks(service) == [_link(api, task)["id"]]
     link = _link(api, task)
     assert link["checks"] == "passing"
-    assert not any(k.startswith("suite:tico-team-bots") for k in H._json(link["detail_json"], {})["checks"])
+    assert not any(k.startswith("suite:tico-team-bots") for k in H._json(link["detail"], {})["checks"])
     merges = [m for m in builder_jobs(api) if m["refs"].get(V.HANDOFF) == "merge"]
     assert len(merges) == 1 and merges[0]["refs"]["pr_head"] == HEAD and "--match-head-commit " + HEAD in merges[0]["body"]
     assert step(api, task) == "In QA", "Tico does not merge; the builder does"
@@ -656,7 +686,7 @@ def test_a_round_timed_out_after_a_pass_at_the_head_says_it_passed(api):
     task = _passed_at_head_behind_a_stuck_suite(api)
     with api.app.state.store.transaction() as c:
         assert V.timeouts(c, H.shift(H.now(), hours=3)) == [task["id"]]
-        note = c.execute("SELECT note FROM task_events WHERE task_id=? AND field='round_skipped'",
+        note = c.execute("SELECT note FROM history_events WHERE subject_type='task' AND subject_id=? AND kind='round_skipped'",
                          (task["id"],)).fetchone()[0]
     assert "no usable verdict" not in note and f"pass at head {HEAD[:12]}" in note, note
 
@@ -678,6 +708,36 @@ def test_a_round_timed_out_after_a_fail_at_the_head_goes_to_on_fail_and_never_to
     handoffs = [m for m in builder_jobs(api) if m["refs"].get(V.HANDOFF)]
     assert [m["refs"][V.HANDOFF] for m in handoffs] == ["verdict"], handoffs
     assert handoffs[0]["refs"]["verdict"] == "fail" and "QA Fixes" in handoffs[0]["body"], handoffs[0]
+
+
+def test_timeout_keeps_the_private_qa_verdict_source(api):
+    import json
+    from backend import task_privacy
+    from backend.tests.test_api import unrelated_task_managers
+
+    task = ticket(api, step="In QA")
+    with api.app.state.store.transaction() as c:
+        unrelated_task_managers(c)
+        qa = H.task_create(c, "bot:cpo", "QA: PR #412", f"Check head {HEAD}", "bot:cmo",
+                           parent_id=task["id"], private=True, lint=False)
+        usage(c, qa["id"], "cmo")
+    verdict(api, qa, "fail")
+    with api.app.state.store.transaction() as c:
+        H.task_update(c, "bot:cpo", task["id"], step="In QA")
+        c.execute("DELETE FROM jobs")
+    check(api, task, "QA: PR #412")
+    with api.app.state.store.transaction() as c:
+        assert V.timeouts(c, H.shift(H.now(), hours=24 * 7)) == [task["id"]]
+        [msg] = [H.message(c, r[0]) for r in c.execute(
+            "SELECT m.id FROM jobs j JOIN messages m ON m.id=j.message_id WHERE j.bot_id='cpo' "
+            "AND j.state='queued' AND json_extract(m.refs,'$.handoff') IS NOT NULL")]
+        assert msg["refs"]["trigger_source"] == qa["id"]
+        assert not task_privacy.message_readable(c, "bot:unrelated", msg)
+        assert task_privacy.message_readable(c, "bot:cpo", msg)
+        event = dict(c.execute("SELECT old,new,note FROM history_events WHERE subject_id=? AND kind='round_skipped'",
+                               (task["id"],)).fetchone())
+        assert json.loads(event["old"])["source_tasks"] == [qa["id"]]
+        assert not task_privacy.content_readable(c, "bot:unrelated", event)
 
 
 def test_a_later_pass_at_a_failed_head_does_not_let_a_timed_out_round_clear_the_merge(api):
@@ -810,7 +870,7 @@ def test_a_check_github_sends_while_the_read_is_in_flight_is_not_overwritten_by_
     monkeypatch.setattr(service, "_call", webhook_mid_read)
     assert G.refresh_pending_checks(service) == []
     link = _link(api, task)
-    assert link["checks"] == "failing" and H._json(link["detail_json"], {})["checks"].get("suite:lint#7") == "failing"
+    assert link["checks"] == "failing" and H._json(link["detail"], {})["checks"].get("suite:lint#7") == "failing"
     assert not [m for m in builder_jobs(api) if m["refs"].get(V.HANDOFF) == "merge"]
 
 
@@ -826,7 +886,7 @@ def test_a_failure_among_more_than_100_checks_still_fails_the_head_on_a_fresh_re
     with api.app.state.store.transaction() as c:
         assert G.apply_checks(c, _link(api, task)["id"], HEAD, _many_checks("failing")) == "failing"
     link = _link(api, task)
-    stored = H._json(link["detail_json"], {})["checks"]
+    stored = H._json(link["detail"], {})["checks"]
     assert link["checks"] == "failing" and len(stored) == 100 and stored["lint"] == "failing"
     assert not [m for m in builder_jobs(api) if m["refs"].get(V.HANDOFF) == "merge"]
 
@@ -839,7 +899,7 @@ def test_a_failure_the_store_kept_from_more_than_100_checks_still_fails_the_head
         G.apply_checks(c, _link(api, task)["id"], HEAD, {**_many_checks("failing"), "suite:tico-team-bots#%d" % STUCK: "passing"})
     _suite(api, "vercel", "completed", "success", sha=HEAD, id=8)
     link = _link(api, task)
-    assert link["checks"] == "failing" and H._json(link["detail_json"], {})["checks"]["lint"] == "failing"
+    assert link["checks"] == "failing" and H._json(link["detail"], {})["checks"]["lint"] == "failing"
     assert not [m for m in builder_jobs(api) if m["refs"].get(V.HANDOFF) == "merge"]
 
 
@@ -849,10 +909,10 @@ def test_a_check_still_running_among_more_than_100_checks_keeps_the_head_pending
     task = _passed_at_head_behind_a_stuck_suite(api)
     with api.app.state.store.transaction() as c:
         assert G.apply_checks(c, _link(api, task)["id"], HEAD, _many_checks("pending")) == "pending"
-    assert H._json(_link(api, task)["detail_json"], {})["checks"]["lint"] == "pending"
+    assert H._json(_link(api, task)["detail"], {})["checks"]["lint"] == "pending"
     _suite(api, "vercel", "completed", "success", sha=HEAD, id=8)
     link = _link(api, task)
-    assert link["checks"] == "pending" and H._json(link["detail_json"], {})["checks"]["lint"] == "pending"
+    assert link["checks"] == "pending" and H._json(link["detail"], {})["checks"]["lint"] == "pending"
     assert not [m for m in builder_jobs(api) if m["refs"].get(V.HANDOFF) == "merge"]
 
 
@@ -861,3 +921,83 @@ def test_the_stored_checks_keep_the_newest_when_every_check_passes(api):
     checks = _many_checks("passing")
     kept = G._kept(checks)
     assert len(kept) == 100 and "lint" not in kept and list(kept) == list(checks)[1:]
+
+
+def _all_non_passing(state):
+    """101 checks on the head, all `state`: `shard 0` is the oldest, so the stored copy keeps shards 1-100 and drops it."""
+    return {f"shard {n}": state for n in range(101)}
+
+
+def _github_status_read(state):
+    """GitHub's own list for the head: `shard 0` still `state`, the kept shards all green."""
+    return [{"context": "shard 0", "state": state}] + [{"context": f"shard {n}", "state": "success"} for n in range(1, 101)]
+
+
+@pytest.mark.parametrize("state", ["failing", "pending"])
+def test_a_dropped_check_among_more_than_100_non_passing_keeps_the_head_unpassed_on_later_webhooks(api, monkeypatch, state):
+    """Dev 646 follow-up: the stored copy keeps 100 of 101 non-passing checks. The kept ones then pass one at a time by
+    webhook while the dropped one is still `state`: the head must never read passing, and no merge may be woken."""
+    from backend import github as G
+    task = _passed_at_head_behind_a_stuck_suite(api)
+    with api.app.state.store.transaction() as c:
+        assert G.apply_checks(c, _link(api, task)["id"], HEAD, _all_non_passing(state)) == state
+    for n in range(1, 101):
+        _status(api, f"shard {n}", "success")
+        assert _link(api, task)["checks"] == state, f"after shard {n} passed"
+    assert not [m for m in builder_jobs(api) if m["refs"].get(V.HANDOFF) == "merge"]
+    service, _ = _github(api, monkeypatch, [], [], statuses=_github_status_read(state))
+    _quiet(api, task)
+    G.refresh_pending_checks(service)
+    assert _link(api, task)["checks"] == state, "a fresh read still sees the dropped check"
+    _status(api, "later", "success")
+    assert _link(api, task)["checks"] == state, "a later webhook keeps the fresh read's state"
+    assert not [m for m in builder_jobs(api) if m["refs"].get(V.HANDOFF) == "merge"]
+
+
+def test_a_dropped_failing_check_that_later_passes_reads_green_only_after_a_fresh_read(api, monkeypatch):
+    """The dropped check's own pass cannot say the others are green: one fresh read after it settles the head."""
+    from backend import github as G
+    task = _passed_at_head_behind_a_stuck_suite(api)
+    with api.app.state.store.transaction() as c:
+        G.apply_checks(c, _link(api, task)["id"], HEAD, _all_non_passing("failing"))
+    for n in range(1, 101):
+        _status(api, f"shard {n}", "success")
+    _status(api, "shard 0", "success")
+    assert _link(api, task)["checks"] == "failing"
+    green = [{"context": f"shard {n}", "state": "success"} for n in range(101)]
+    service, _ = _github(api, monkeypatch, [], [], statuses=green)
+    _quiet(api, task)
+    G.refresh_pending_checks(service)
+    assert _link(api, task)["checks"] == "passing"
+    assert [m["refs"]["pr_head"] for m in builder_jobs(api) if m["refs"].get(V.HANDOFF) == "merge"] == [HEAD]
+
+
+def test_a_push_after_a_marked_head_clears_the_dropped_marker_with_its_checks(api):
+    """A push drops the old head's stored copy and its dropped-check marker: the new head's own green reads passing."""
+    from backend import github as G
+    task = _passed_at_head_behind_a_stuck_suite(api)
+    with api.app.state.store.transaction() as c:
+        G.apply_checks(c, _link(api, task)["id"], HEAD, _all_non_passing("failing"))
+    assert H._json(_link(api, task)["detail"], {})["checks_dropped"] == "failing"
+    hook(api, "pull_request", pr_event("synchronize", head={"sha": NEW}))
+    _suite(api, "github-actions", "completed", "success", sha=NEW)
+    link = _link(api, task)
+    assert H._json(link["detail"], {})["head_sha"] == NEW
+    assert link["checks"] == "passing"
+    assert "checks_dropped" not in H._json(link["detail"], {})
+
+
+@pytest.mark.parametrize("state", ["failing", "pending"])
+def test_a_webhook_that_drops_a_non_passing_check_marks_the_head_before_any_full_read(api, state):
+    """Dev 731 review: the first webhook past 100 non-passing checks sets the dropped-check marker itself, with no full
+    read first. The retained checks then pass one by one; the head must stay on the dropped check's state and wake no merge."""
+    task = _passed_at_head_behind_a_stuck_suite(api)
+    for n in range(101):
+        _status(api, f"shard {n}", "failure" if state == "failing" else "pending")
+    detail = H._json(_link(api, task)["detail"], {})
+    assert detail["checks_dropped"] == state, "the 101st non-passing check dropped `shard 0` on the webhook path"
+    for n in range(1, 101):
+        _status(api, f"shard {n}", "success")
+        assert _link(api, task)["checks"] != "passing", n
+    assert _link(api, task)["checks"] == state
+    assert not [m for m in builder_jobs(api) if m["refs"].get(V.HANDOFF) == "merge"]

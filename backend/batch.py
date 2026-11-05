@@ -9,8 +9,8 @@ item, comes back on those items the next time that bot comes up. Any front end r
 loop: the hub tools an outside agent (Grok Bot, Meta Muse) calls, a page.
 
 A batch is what bots are waiting on the person for, never anything else: the
-person's own tasks and other people's requests are on the Tasks page, not here, and nothing goes
-to an assistant in between. It is the whole list, or one bot's part of it (`scope`). "Who needs
+person's own tasks and other people's requests are on the Tasks page, not here. The person's Assistant may walk it for
+them, as them; it never approves on a walk (`_apply_decide`). It is the whole list, or one bot's part of it (`scope`). "Who needs
 me" starts the bot that most needs the person, and commit says who is next: the bots come to the
 person one at a time, most important first.
 """
@@ -41,9 +41,9 @@ def _snoozed(c, actor):
     now = H.now()
     out = set()
     # The person's own rows (events_task_origin), not every person's in ts order (events_action_ts).
-    for row in c.execute("SELECT target, detail_json FROM events INDEXED BY events_task_origin WHERE actor=? "
-                         "AND action='batch.later' ORDER BY ts", (actor,)):
-        until = (H._json(row["detail_json"], {}) or {}).get("until") or ""
+    for row in c.execute("SELECT target, detail FROM events INDEXED BY events_task_origin WHERE actor=? "
+                         "AND action='batch.later' ORDER BY created_at", (actor,)):
+        until = (H._json(row["detail"], {}) or {}).get("until") or ""
         if until > now:
             out.add(row["target"])
         else:
@@ -52,16 +52,16 @@ def _snoozed(c, actor):
 
 
 def _children(c, task_id, owner):
-    return H._rows(c.execute("SELECT * FROM tasks WHERE id IN (SELECT from_task FROM task_relations WHERE kind='parent' AND to_task=?) AND owner=? AND status IN ('open','doing','waiting','review','ready') "
-                             "ORDER BY created", (task_id, owner)))
+    return H._rows(c.execute(f"SELECT * FROM {H.TASKS} tasks WHERE id IN (SELECT from_task FROM task_relations WHERE kind='parent' AND to_task=?) AND owner_id=? AND status IN ('open','doing','waiting','review','ready') "
+                             "ORDER BY created_at", (task_id, owner)))
 
 
 def _row(it, actor):
     """One item as a front end presents it: the whole question, never a clipped title."""
     key = ("approval:" if it["kind"] == "approval" else "task:") + str(it["id"])
     row = {"key": key, "kind": it["kind"], "title": _clip(it.get("title") or it.get("first_line"), 160)}
-    frm = (it.get("requester") if it["kind"] == "approval" else it.get("owner") if it["kind"] == "waiting"
-           else (it.get("ask") or {}).get("from_actor") or it.get("origin_actor") or it.get("requester"))
+    frm = (it.get("requester_id") if it["kind"] == "approval" else it.get("owner_id") if it["kind"] == "waiting"
+           else (it.get("ask") or {}).get("sender_id") or it.get("origin_actor") or it.get("requester_id"))
     if frm:
         row["from"] = frm
     if it.get("status"):
@@ -71,7 +71,7 @@ def _row(it, actor):
     if it.get("person_ask"):
         row["ask"] = it["person_ask"]
     if it.get("ask_missing"):
-        # Nothing to decide yet: the bot has been asked to say plainly what it needs (backend/restate_asks.py).
+        # Nothing to decide yet: the bot has not yet said plainly what it needs.
         row["ask_missing"] = True
     if (it.get("ask") or {}).get("body"):
         row["question"] = _clip(it["ask"]["body"], 1500)
@@ -84,19 +84,20 @@ def _row(it, actor):
         row["ready_since"] = it["ready_since"]
     if it.get("note"):
         row["note"] = _clip(it["note"], 300)
-    if it.get("created"):
-        row["created"] = it["created"]
+    if it.get("created_at"):
+        row["created_at"] = it["created_at"]
     if it.get("from_person"):
         row["from_person"] = it["from_person"]
     if it.get("pressing"):
         row["pressing"] = True
     if deadline(it):
-        row["due"] = deadline(it)
+        row["due_at"] = deadline(it)
     if it.get("recommend"):
-        row["recommend"] = it["recommend"]["do"]       # what the bot would do: "do what you recommend" takes it
+        row["recommend"], provenance = H.sourced_text(it["recommend"]["do"], [it["recommend"].get("source")])
+        row.update(provenance)
     if it.get("folded"):
         # Other bots' tasks waiting on the person for the same thing: said with the card so none is lost.
-        row["folded"] = [{k: v for k, v in (("title", _clip(f.get("title"), 160)), ("from", f.get("owner")),
+        row["folded"] = [{k: v for k, v in (("title", _clip(f.get("title"), 160)), ("from", f.get("owner_id")),
                                             ("ask", _clip(f.get("person_ask") or f.get("note"), 300))) if v}
                          for f in it["folded"]]
     return row
@@ -133,7 +134,7 @@ def relevant(c, actor, items):
         # It has no other requester waiting for an answer and "waiting" explicitly means there is
         # nothing for the owner to do now. A later bot ask on that task changes its kind to a
         # question and brings it back into the pass.
-        if (it["kind"] == "task" and it.get("owner") == actor and it.get("requester") == actor
+        if (it["kind"] == "task" and it.get("owner_id") == actor and it.get("requester_id") == actor
                 and it.get("status") == "waiting" and not it.get("ask")):
             continue
         if it["kind"] != "approval":
@@ -144,7 +145,7 @@ def relevant(c, actor, items):
                 for kid in kids:
                     # Its person, as needs-you has it: its own requester when a person (the viewer's own to-do counts
                     # for nobody), else the parent's, which needs-you worked out under the reader's rule.
-                    own = kid["requester"] if H.is_human(kid["requester"]) else None
+                    own = kid["requester_id"] if H.is_human(kid["requester_id"]) else None
                     kid = {**kid, "kind": "task", "ask": H.unanswered_ask(c, kid, actor=actor), "origin_actor": H.task_origin(c, kid),
                            "first_line": (kid.get("body") or "").split("\n")[0],
                            "from_person": None if own == actor else own or it.get("from_person")}
@@ -177,8 +178,8 @@ def _name(c, actor):
 
 
 def _rank(row):
-    return needs_order(row["kind"], row.get("created"), row.get("rank") if row["kind"] == "task" else None,
-                       row.get("from_person"), row.get("pressing"), bool(row.get("ask_missing")), row.get("due"))
+    return needs_order(row["kind"], row.get("created_at") or row.get("created"), row.get("rank") if row["kind"] == "task" else None,
+                       row.get("from_person"), row.get("pressing"), bool(row.get("ask_missing")), row.get("due_at"))
 
 
 def lineup(c, person, rows):
@@ -205,11 +206,11 @@ def lineup(c, person, rows):
 
 def _sent(c, person, since):
     """The batch messages this person sent since `since`, each with the item keys it carried."""
-    rows = c.execute("SELECT m.id, m.to_actor, m.refs_json, b.id AS batch, b.items_json, b.report_json, "
+    rows = c.execute("SELECT m.id, m.recipient_id, m.refs, b.id AS batch, b.items, b.report, "
                      "b.message_id AS first "
-                     "FROM messages m JOIN batches b ON b.id=json_extract(m.refs_json,'$.live.batch') "
-                     "WHERE m.from_actor=? AND json_extract(m.refs_json,'$.live.kind')='batch' "
-                     "AND m.created>=? ORDER BY m.created DESC", (person, since)).fetchall()
+                     "FROM message_refs m JOIN batches b ON b.id=json_extract(m.refs,'$.live.batch') "
+                     "WHERE m.sender_id=? AND m.ref_live_kind='batch' "
+                     "AND m.created_at>=? ORDER BY m.created_at DESC", (person, since)).fetchall()
     return [dict(r) for r in rows]
 
 
@@ -231,18 +232,18 @@ def _pending(c, person):
     for sent in _sent(c, person, since):
         if not privacy.message_readable(c, person, sent):
             continue
-        if _consumed(sent["report_json"], sent["id"], sent["first"]):
+        if _consumed(sent["report"], sent["id"], sent["first"]):
             continue
-        keys = ((H._json(sent["refs_json"], {}) or {}).get("live") or {}).get("items") or []
-        reply = c.execute("SELECT * FROM messages WHERE in_reply_to=? AND from_actor=? "
-                          "ORDER BY created DESC LIMIT 1", (sent["id"], sent["to_actor"])).fetchone()
+        keys = ((H._json(sent["refs"], {}) or {}).get("live") or {}).get("items") or []
+        reply = c.execute("SELECT * FROM messages WHERE in_reply_to=? AND sender_id=? "
+                          "ORDER BY created_at DESC LIMIT 1", (sent["id"], sent["recipient_id"])).fetchone()
         if not reply:
             for key in keys:
-                awaiting.setdefault(key, sent["to_actor"])
+                awaiting.setdefault(key, sent["recipient_id"])
             continue
         if not privacy.message_readable(c, person, reply):
             continue
-        items = json.loads(sent["items_json"] or "[]")
+        items = json.loads(sent["items"] or "[]")
         parts = MARKER.split(reply["body"] or "")
         answers, loose = {}, parts[0].strip()
         for n, body in zip(parts[1::2], parts[2::2]):
@@ -252,15 +253,15 @@ def _pending(c, person):
             else:
                 loose += ("\n" if loose else "") + body.strip()
         reports.append({"message": sent["id"], "reply": reply["id"], "batch": sent["batch"],
-                        "to": sent["to_actor"], "answers": answers, "loose": loose})
+                        "to": sent["recipient_id"], "answers": answers, "loose": loose})
     return reports, awaiting
 
 
 def _consume(c, report):
-    row = c.execute("SELECT report_json FROM batches WHERE id=?", (report["batch"],)).fetchone()
-    data = H._json(row["report_json"] if row else None, {}) or {}
+    row = c.execute("SELECT report FROM batches WHERE id=?", (report["batch"],)).fetchone()
+    data = H._json(row["report"] if row else None, {}) or {}
     data.setdefault("consumed", {})[report["message"]] = report["reply"]
-    c.execute("UPDATE batches SET report_json=? WHERE id=?", (json.dumps(data), report["batch"]))
+    c.execute("UPDATE batches SET report=? WHERE id=?", (json.dumps(data), report["batch"]))
 
 
 def _scope(c, person, line, asked):
@@ -278,7 +279,7 @@ def _scope(c, person, line, asked):
 
 
 def current(c, actor):
-    row = c.execute("SELECT * FROM batches WHERE person=? AND state='open' ORDER BY created DESC LIMIT 1",
+    row = c.execute("SELECT * FROM batches WHERE person=? AND state='open' ORDER BY created_at DESC LIMIT 1",
                     (actor,)).fetchone()
     return dict(row) if row else None
 
@@ -326,32 +327,32 @@ def start(c, actor, items, snapshot, scope=None):
             _consume(c, report)
     for row in rows:
         row.pop("_report", None)
-    batch = {"id": H.new_id(), "person": actor, "state": "open", "created": H.now(), "committed_at": None,
-             "items_json": json.dumps(rows), "cursor": 0, "responses_json": "{}",
-             "alerts_json": json.dumps(alerts(snapshot)), "message_id": None, "report_json": None,
+    batch = {"id": H.new_id(), "person": actor, "state": "open", "created_at": H.now(), "committed_at": None,
+             "items": json.dumps(rows), "cursor": 0, "responses": "{}",
+             "alerts": json.dumps(alerts(snapshot)), "message_id": None, "report": None,
              "scope": group}
-    c.execute("INSERT INTO batches(id,person,state,created,committed_at,items_json,cursor,responses_json,"
-              "alerts_json,message_id,report_json,scope) VALUES(?,?,?,?,?,?,?,?,?,?,?,?)",
-              tuple(batch[k] for k in ("id", "person", "state", "created", "committed_at", "items_json", "cursor",
-                                       "responses_json", "alerts_json", "message_id", "report_json", "scope")))
+    c.execute("INSERT INTO batches(id,person,state,created_at,committed_at,items,cursor,responses,"
+              "alerts,message_id,report,scope) VALUES(?,?,?,?,?,?,?,?,?,?,?,?)",
+              tuple(batch[k] for k in ("id", "person", "state", "created_at", "committed_at", "items", "cursor",
+                                       "responses", "alerts", "message_id", "report", "scope")))
     H.event(c, actor, "batch.started", batch["id"], {"items": len(rows), "alerts": len(alerts(snapshot)),
                                                      "scope": group})
     return {**view(c, batch), "lineup": line}
 
 
 def _items(batch):
-    return json.loads(batch["items_json"] or "[]")
+    return json.loads(batch["items"] or "[]")
 
 
 def _responses(batch):
-    return json.loads(batch["responses_json"] or "{}")
+    return json.loads(batch["responses"] or "{}")
 
 
 def view(c, batch, resumed=False):
     items, responses = _items(batch), _responses(batch)
     cursor = int(batch["cursor"] or 0)
     out = {"id": batch["id"], "state": batch["state"], "total": len(items), "responded": len(responses),
-           "alerts": json.loads(batch["alerts_json"] or "[]"), "resumed": resumed,
+           "alerts": json.loads(batch["alerts"] or "[]"), "resumed": resumed,
            "scope": batch.get("scope")}
     if batch["state"] != "open":
         return out
@@ -363,7 +364,9 @@ def view(c, batch, resumed=False):
     else:
         out.update({"end": True, "summary": summary(batch),
                     "note": "The list is done. Say the summary and ask whether to commit."})
-    return out
+    from .files import readable_page_refs
+    from .teammate_access import _viewer_for
+    return readable_page_refs(c, None, _viewer_for(c, batch["person"]), out)
 
 
 def _load(c, actor, batch_id):
@@ -414,7 +417,7 @@ def respond(c, actor, batch_id, kind, text="", n=None, decision=None, heard="", 
         # Done is one tap: a note is optional. A yes, a no or a close still says why to the bot that asked.
         if item["key"].startswith("task:") and decision in ("approve", "decline", "close") and not text:
             task = H.task(c, item["key"].split(":", 1)[1])
-            if (task and H.is_human(task.get("owner")) and H.is_bot(task.get("requester"))
+            if (task and H.is_human(task.get("owner_id")) and H.is_bot(task.get("requester_id"))
                     and task["status"] not in ("done", "declined")):
                 raise Problem("decision", "Tell the requesting bot what you decided or completed", 422)
         settles = decision in ("approve", "decline", "done", "close")
@@ -435,7 +438,7 @@ def respond(c, actor, batch_id, kind, text="", n=None, decision=None, heard="", 
     kept = [r for r in responses.get(item["key"], [])
             if not (kind in VERDICTS and r["kind"] in VERDICTS)]
     responses[item["key"]] = kept + [response]
-    c.execute("UPDATE batches SET responses_json=? WHERE id=?", (json.dumps(responses), batch["id"]))
+    c.execute("UPDATE batches SET responses=? WHERE id=?", (json.dumps(responses), batch["id"]))
     return {"recorded": True, "n": idx + 1, "key": item["key"], "response": response,
             "responded": len(responses), "total": len(items)}
 
@@ -464,9 +467,15 @@ def _apply_decide(c, auth, who, item, r, boards):
     decision, text = r["decision"], r.get("text") or ""
     kind, ident = item["key"].split(":", 1)
     if kind == "approval":
+        if decision == "approve" and getattr(who, "via", "") == "assistant":
+            # The person's Assistant walks the batch for them, but an approve is never its to make on a walk: it stays
+            # the person's own click, or the Assistant's read-back and their yes (backend/assistant.py approval_words).
+            raise Problem("approve_not_asked", "Approving is the person's own decision: the Assistant can decline here, "
+                          "but the person approves it in Tico or with their yes to the Assistant's read-back", 403)
         row = auth.approval(c, who, ident, decide=True)
-        if row["kind"] == "support":
-            # As on the approve route: sending off the install is a person's own tap in Tico, not their token.
+        if row["kind"] == "support" and decision == "approve":
+            # As on the approve route: sending off the install is a person's own tap in Tico, not their token. A decline
+            # sends nothing, so it is anyone's who may decide it.
             from .support import require_person
             try:
                 require_person(who)
@@ -493,7 +502,7 @@ def _apply_decide(c, auth, who, item, r, boards):
         said = text or "Done."
         H.task_comment(c, who.actor, ident, said)
         c.execute("UPDATE tasks SET version=version+1 WHERE id=?", (ident,))
-        return f"Told {H.actor_id(row['owner'])}: {_clip(said, 120)}"
+        return f"Told {H.actor_name(c, row['owner_id'])}: {_clip(said, 120)}"
     if decision in ("approve", "decline"):
         status = "done" if decision == "approve" else "declined"
         note = text or ("Approved." if decision == "approve" else "Declined.")
@@ -509,14 +518,14 @@ def _apply_decide(c, auth, who, item, r, boards):
         c.execute("UPDATE tasks SET version=version+1 WHERE id=?", (ident,))
         return f"Closed: {item['title']}"
     ask = H.unanswered_ask(c, row, actor=privacy.actor(who))
-    if ask and ask.get("to_actor") == who.actor:
+    if ask and ask.get("recipient_id") == who.actor:
         H.answer(c, who.actor, ask["id"], text)
-        return f"Answered {H.actor_id(ask['from_actor'])}: {_clip(text, 120)}"
-    to = H.task_origin(c, row) or row.get("requester")
+        return f"Answered {H.actor_name(c, ask['sender_id'])}: {_clip(text, 120)}"
+    to = H.task_origin(c, row) or row.get("requester_id")
     if not to or to == who.actor:
         raise Problem("answer", f"{item['title']} has nobody to answer", 422)
     H.say(c, who.actor, to, text, conversation_id=row.get("conversation_id"))
-    return f"Answered {H.actor_id(to)}: {_clip(text, 120)}"
+    return f"Answered {H.actor_name(c, to)}: {_clip(text, 120)}"
 
 
 def signature(c, who):
@@ -551,11 +560,11 @@ def _comment_instead(c, who, to, lines, detail):
     for key, line in lines:
         kind, ident = key.split(":", 1)
         if kind != "task":
-            errors.append(f"{H.actor_id(to)} could not be told ({detail}): {line.splitlines()[0]}")
+            errors.append(f"{H.actor_name(c, to)} could not be told ({detail}): {line.splitlines()[0]}")
             continue
         try:
             H.task_comment(c, who.actor, ident, line.split("\n", 1)[-1])
-            applied.append(f"Commented on {line.splitlines()[0]} (could not message {H.actor_id(to)})")
+            applied.append(f"Commented on {line.splitlines()[0]} (could not message {H.actor_name(c, to)})")
         except Exception as e:  # a refusal is a line in the record, not an abort
             errors.append(f"{line.splitlines()[0]}: {_clip(str(e), 200)}")
     return applied, errors
@@ -610,8 +619,8 @@ def _deliver(c, who, batch_id, outbox, record, send):
             sent[to] = len(lines)
         if done:
             recorded[to] = len(done)
-        applied.append(f"Sent {len(lines)} to {H.actor_id(to)}" if lines
-                       else f"Recorded {len(done)} for {H.actor_id(to)}")
+        applied.append(f"Sent {len(lines)} to {H.actor_name(c, to)}" if lines
+                       else f"Recorded {len(done)} for {H.actor_name(c, to)}")
     return applied, errors, sent, recorded, first
 
 
@@ -645,7 +654,7 @@ def commit(c, auth, who, batch_id, send, boards):
                     line = _apply_decide(c, auth, who, item, r, boards)
                 elif r["kind"] == "rule":
                     H.event(c, who.actor, "batch.rule", key, {"text": r["text"], "bot": to, "batch": batch["id"], "item": key})
-                    applied.append(f"Rule for {H.actor_id(to)}: {_clip(r['text'], 120)}")
+                    applied.append(f"Rule for {H.actor_name(c, to)}: {_clip(r['text'], 120)}")
                     outbox.setdefault(to, []).append(
                         (key, f"[item {n}] {item['title']} ({item['kind']}, {key})\n"
                               f"{who.actor} sets a standing rule: {r['text']}"))

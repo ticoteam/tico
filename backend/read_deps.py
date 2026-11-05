@@ -32,8 +32,7 @@ from .store import Problem
 
 BATCH = 100
 SPAN = 20000
-SLICE = 20          # rows walked between looks at the clock
-HOLD_MS = 200       # a sweep write gives the lock back after about this long, and queues again behind any waiter
+HOLD_MS = 200       # a sweep write gives the lock back once a row ends past this long, and queues again behind any waiter
 RUN_EVENTS = "('task.next-run.carried','attempt.input.moved')"
 
 
@@ -54,7 +53,7 @@ TURN = ("id", "meeting_id", "bot")
 
 def _turn_rooms(side):
     """The rooms of the keeper inputs naming this turn, as nodes; the partial index holds only such inputs."""
-    turn = "json_extract(m.refs_json,'$.live_meeting.turn_id')"
+    turn = "json_extract(m.refs,'$.live_meeting.turn_id')"
     return f"SELECT 'c:'||m.conversation_id FROM messages m WHERE {turn} IS NOT NULL AND {turn}={side}.id"
 
 
@@ -62,7 +61,7 @@ def _changed(columns):
     return " OR ".join(f"OLD.{c} IS NOT NEW.{c}" for c in columns)
 
 
-MESSAGE = ("id", "conversation_id", "refs_json", "in_reply_to", "from_actor", "to_actor")
+MESSAGE = ("id", "conversation_id", "refs", "in_reply_to", "sender_id", "recipient_id")
 SCHEMA = (
     "CREATE TABLE IF NOT EXISTS read_index(key TEXT PRIMARY KEY) WITHOUT ROWID",
     "CREATE TABLE IF NOT EXISTS read_deps(dep TEXT NOT NULL, key TEXT NOT NULL, PRIMARY KEY(dep, key)) WITHOUT ROWID",
@@ -72,8 +71,8 @@ SCHEMA = (
     "CREATE TRIGGER IF NOT EXISTS read_deps_message_insert AFTER INSERT ON messages BEGIN "
     "INSERT OR IGNORE INTO read_dirty VALUES('m:'||NEW.id); " + _touch("'m:'||NEW.id") + _touch("'t:'||NEW.id") +
     "INSERT OR IGNORE INTO read_dirty SELECT key FROM read_deps WHERE dep='c:'||NEW.conversation_id "
-    "AND instr(coalesce(NEW.refs_json,''),'live_meeting')>0; "
-    "DELETE FROM read_index WHERE instr(coalesce(NEW.refs_json,''),'live_meeting')>0 AND key IN "
+    "AND instr(coalesce(NEW.refs,''),'live_meeting')>0; "
+    "DELETE FROM read_index WHERE instr(coalesce(NEW.refs,''),'live_meeting')>0 AND key IN "
     "(SELECT key FROM read_deps WHERE dep='c:'||NEW.conversation_id); END",
     f"CREATE TRIGGER IF NOT EXISTS read_deps_message_update AFTER UPDATE OF {','.join(MESSAGE)} ON messages "
     f"WHEN {_changed(MESSAGE)} BEGIN INSERT OR IGNORE INTO read_dirty VALUES('m:'||NEW.id); "
@@ -97,8 +96,8 @@ SCHEMA = (
     + _touch("'t:'||OLD.id") + _touch("'a:'||OLD.carried_by") + "END",
     "CREATE TRIGGER IF NOT EXISTS read_deps_attempt_insert AFTER INSERT ON attempts BEGIN "
     "INSERT OR IGNORE INTO read_dirty VALUES('a:'||NEW.id); " + _touch("'a:'||NEW.id") + "END",
-    "CREATE TRIGGER IF NOT EXISTS read_deps_attempt_update AFTER UPDATE OF id, bot, job_id, state ON attempts "
-    f"WHEN {_changed(('id', 'bot', 'job_id', 'state'))} BEGIN " + _touch("'a:'||OLD.id") + _touch("'a:'||NEW.id") + "END",
+    "CREATE TRIGGER IF NOT EXISTS read_deps_attempt_update AFTER UPDATE OF id, bot_id, job_id, state ON attempts "
+    f"WHEN {_changed(('id', 'bot_id', 'job_id', 'state'))} BEGIN " + _touch("'a:'||OLD.id") + _touch("'a:'||NEW.id") + "END",
     "CREATE TRIGGER IF NOT EXISTS read_deps_attempt_delete AFTER DELETE ON attempts BEGIN " + _touch("'a:'||OLD.id") + "END",
     "CREATE TRIGGER IF NOT EXISTS read_deps_input_insert AFTER INSERT ON attempt_inputs BEGIN "
     + _touch("'a:'||NEW.attempt_id") + "END",
@@ -191,7 +190,7 @@ class Walk:
                 # The meeting check also walks each input moved off this run (live_privacy `_attempt_from`), its room
                 # and its ancestors, where the task walk only reads the moved event: walk them here so a change there
                 # unsettles the run.
-                for detail, in self.c.execute("SELECT detail_json FROM events WHERE action='attempt.input.moved' "
+                for detail, in self.c.execute("SELECT detail FROM events WHERE action='attempt.input.moved' "
                                               "AND target=?", (aid,)):
                     detail = H._json(detail, {}) or {}
                     if isinstance(detail, dict) and isinstance(detail.get("message_id"), str):
@@ -207,7 +206,7 @@ class Walk:
         self.nodes.clear()
         self.nodes.add("m:" + row["id"])
         self.nodes.add("c:" + str(row["conversation_id"]))
-        msg = {"id": row["id"], "conversation_id": row["conversation_id"], "refs_json": row["refs_json"],
+        msg = {"id": row["id"], "conversation_id": row["conversation_id"], "refs": row["refs"],
                "in_reply_to": row["in_reply_to"]}
         try:
             self.index.sources(msg)
@@ -243,7 +242,7 @@ def settle(conn, keys, walk=None):
     messages = [k[2:] for k in keys if k.startswith("m:")]
     for start in range(0, len(messages), 500):
         chunk = messages[start:start + 500]
-        for row in conn.execute("SELECT id,conversation_id,refs_json,in_reply_to FROM messages WHERE id IN (%s)"
+        for row in conn.execute("SELECT id,conversation_id,refs,in_reply_to FROM messages WHERE id IN (%s)"
                                 % ",".join("?" * len(chunk)), chunk):
             ok, nodes = walk.message(row)
             deps.extend((node, "m:" + row["id"]) for node in nodes)
@@ -275,18 +274,19 @@ def _write(conn, work, gate=None):
 
 
 def _settle_some(conn, keys, gate=None):
-    """Settle the first of `keys` in one write, SLICE rows at a time, until about HOLD_MS has passed; returns how many.
+    """Settle the first of `keys` in one write, row by row, until HOLD_MS has passed (the row that passes it is the
+    last); returns how many.
 
     The walks run under the lock (a walk outside it could miss a change landing before its write), so a write is cut
-    short by time instead: a claim or heartbeat waiting at the gate goes before the next one (TK-INSRN53V)."""
+    short by time instead: a claim or heartbeat waiting at the gate goes before the next one (TK-INSRN53V). The clock is
+    read after every row, so a starved write overruns the budget by one row at most."""
     settled = [0]
 
     def work():
         start, walk = time.monotonic(), Walk(conn)
-        while settled[0] < len(keys):
-            piece = keys[settled[0]:settled[0] + SLICE]
-            settle(conn, piece, walk)
-            settled[0] += len(piece)
+        for key in keys:
+            settle(conn, [key], walk)
+            settled[0] += 1
             if (time.monotonic() - start) * 1000 >= HOLD_MS:
                 break
     _write(conn, work, gate)
@@ -328,10 +328,13 @@ def sweep(conn, batch=BATCH, span=SPAN, stop=None, gate=None, searched=None):
     return done
 
 
-def loop(store, stop, seconds=10):
-    """`sweep` on its own connection beside the server until it stops; a failed pass is retried on the next."""
+def loop(store, stop, seconds=10, first_wait=60):
+    """`sweep` on its own connection beside the server until it stops; a failed pass is retried on the next. The first
+    pass waits `first_wait` seconds: a server that has just started has every runner replaying its queued writes at
+    once, and a pass started then competes with that burst for the CPU and the writer lock."""
     import logging
     searched, file = {}, None
+    stop.wait(first_wait)
     while not stop.is_set():
         try:
             with store.read() as conn:

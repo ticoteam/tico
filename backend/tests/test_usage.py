@@ -29,7 +29,7 @@ def complete(api, r, attempt, usage=None, **more):
 
 def turn(api, aid):
     with api.app.state.store.read() as c:
-        return dict(c.execute("SELECT * FROM turns WHERE id=?", (aid,)).fetchone())
+        return hubdb.turn(c, aid)
 
 
 def test_a_finished_run_keeps_its_tokens_model_and_list_price_cost(api):
@@ -53,8 +53,8 @@ def test_anthropic_cache_hits_follow_the_pricing_pages_multipliers():
 def test_the_migration_can_run_again_and_a_file_that_has_the_columns_catches_up(tmp_path):
     conn = hubdb.connect(tmp_path / "hub.db")
     assert conn.execute("PRAGMA user_version").fetchone()[0] == len(hubdb.MIGRATIONS)
-    columns = {row[1] for row in conn.execute("PRAGMA table_info(turns)")}
-    assert {"input_tokens", "cached_tokens", "output_tokens", "model", "provider", "est_cost_usd", "billing"} <= columns
+    columns = {row[1] for row in conn.execute("PRAGMA table_info(attempts)")}
+    assert {"input_tokens", "cached_tokens", "output_tokens", "usage_model", "provider", "est_cost_usd", "billing"} <= columns
     conn.execute("PRAGMA user_version=%d" % (len(hubdb.MIGRATIONS) - 1))
     hubdb.migrate(conn)                                                # the change is there but the version is not
     hubdb.migrate(conn)
@@ -65,8 +65,8 @@ def test_the_migration_can_run_again_and_a_file_that_has_the_columns_catches_up(
 def seed(api):
     """Runs on 20 and 21 September: ops (Ana's, no department) and cpo (Ben's, product), one routine."""
     with api.app.state.store.transaction() as c:
-        people = json.loads(c.execute("SELECT value_json FROM registry_metadata WHERE key='people'").fetchone()[0])
-        c.execute("UPDATE registry_metadata SET value_json=? WHERE key='people'",
+        people = json.loads(c.execute("SELECT value FROM registry_metadata WHERE key='people'").fetchone()[0])
+        c.execute("UPDATE registry_metadata SET value=? WHERE key='people'",
                   (json.dumps({**people, "teams": {"product": {"root": "cpo"}}}),))
     t = post_task(api, "ops")
     with api.app.state.store.transaction() as c:
@@ -82,10 +82,10 @@ def seed(api):
             ("t6", "ops", "2026-08-01", (10, 0, 1), "gpt-6-sol", 0.01, "api", None),       # outside the range
         ]
         for tid, bot, day, (i, cache, o), model, est, billing, task in rows:
-            c.execute("INSERT INTO turns(id, bot, started, finished, exit, task_id, input_tokens, cached_tokens, output_tokens, "
-                      "model, est_cost_usd, billing) VALUES(?,?,?,?, 'completed', ?,?,?,?,?,?,?)",
+            c.execute("INSERT INTO attempts(id, bot_id, created_at, settled_at, exit, task_id, input_tokens, cached_tokens, output_tokens, "
+                      "usage_model, est_cost_usd, billing) VALUES(?,?,?,?, 'completed', ?,?,?,?,?,?,?)",
                       (tid, bot, day + "T10:00:00.000000Z", day + "T10:05:00.000000Z", task, i, cache, o, model, est, billing))
-        c.execute("INSERT INTO turns(id, bot, started) VALUES('running','ops',?)", (DAY + "T11:00:00.000000Z",))   # not finished
+        c.execute("INSERT INTO attempts(id, bot_id, created_at) VALUES('running','ops',?)", (DAY + "T11:00:00.000000Z",))   # not finished
 
 
 def post_task(api, owner):
@@ -114,9 +114,47 @@ def test_usage_by_bot_is_sorted_by_spend_with_totals_and_subscription_kept_apart
     assert sum(r["share"] for r in got["rows"]) == pytest.approx(1, abs=1e-3) and cpo["share"] > 0.99
 
 
+def test_usage_by_task_names_each_task_and_bots_narrows_to_those_bots(api):
+    """Strategy › Budget's breakdown: a run's task by its title (a private one only as one), a run with no task apart;
+    `bots` keeps the bots asked for, among those this person may see."""
+    seed(api)
+    hidden = post(api, "tasks", {"owner": "cpo", "title": "Board deck", "body": "Do it.", "private": True})["id"]
+    with api.app.state.store.transaction() as c:
+        c.execute("UPDATE attempts SET task_id=? WHERE id='t5'", (hidden,))
+    got = usage(api, group="task")
+    assert [(r["name"], r["value"], r["runs"]) for r in got["rows"]] == [
+        ("A private task", "A private task", 1), ("Chats and other runs", None, 3), ("Digest", "Digest", 1)]
+    assert "Board deck" not in json.dumps(got)
+    only = usage(api, group="task", bots="ops")
+    assert [r["name"] for r in only["rows"]] == ["Chats and other runs", "Digest"] and only["totals"]["runs"] == 3
+    assert [r["bot"] for r in usage(api, bots="ops, cpo")["rows"]] == ["cpo", "ops"]
+    assert [r["value"] for r in usage(api, group="model", bots="cpo")["rows"]] == ["claude-opus-5", "mystery-model"]
+    assert usage(api, bots="nobody")["rows"] == []
+    as_member(api, "ben@acme.example")
+    assert [r["bot"] for r in usage(api, "ben-test", bots="ops,cpo")["rows"]] == ["cpo"]     # not a way past who may see
+
+
+def test_a_task_the_reader_cannot_open_is_not_named_and_bots_takes_a_renamed_slug(api, monkeypatch):
+    """A run of a bot this person may see can be on a task since moved to a bot whose activity they may not read: the
+    breakdown counts it without its title. `bots` takes a bot's slug as it reads now, not only its first one."""
+    seed(api)
+    moved = post(api, "tasks", {"owner": "ops", "title": "Payroll fix", "body": "Do it."})["id"]
+    with api.app.state.store.transaction() as c:
+        c.execute("UPDATE attempts SET task_id=? WHERE bot_id='cpo'", (moved,))
+    as_member(api, "ben@acme.example")
+    auth = api.app.state.auth
+    monkeypatch.setattr(type(auth), "unreadable_bots", lambda self, c, who: {"ops"} if who.role == "human" else set())
+    got = usage(api, "ben-test", group="task")
+    assert "Payroll fix" not in json.dumps(got) and [r["name"] for r in got["rows"]] == ["A task you can't open"]
+    assert [r["name"] for r in usage(api, group="task", bots="cpo")["rows"]] == ["Payroll fix"]     # the owner reads it
+    with api.app.state.store.transaction() as c:
+        c.execute("UPDATE bots SET slug='ops-renamed' WHERE id='ops'")
+    assert [r["bot"] for r in usage(api, bots="ops-renamed")["rows"]] == ["ops"]
+
+
 def test_usage_does_not_treat_unreported_zero_as_a_priced_run(api):
     with api.app.state.store.transaction() as c:
-        c.executemany("INSERT INTO turns(id,bot,started,finished,input_tokens,cached_tokens,output_tokens,"
+        c.executemany("INSERT INTO attempts(id,bot_id,created_at,settled_at,input_tokens,cached_tokens,output_tokens,"
                       "est_cost_usd,billing,usage_reason) VALUES(?,'ops',?,?,0,0,0,0,?,?)", [
             (reason, DAY + "T10:00:00Z", DAY + "T10:05:00Z", billing, reason)
             for reason, billing in (("usage_unreported", "api"), ("usage_limited", None), ("no_result", "api"))])
@@ -127,16 +165,16 @@ def test_usage_does_not_treat_unreported_zero_as_a_priced_run(api):
                 *[r for r in detail["daily"] if r["runs"]]]
     assert all(r["est_cost_usd"] is None and r["unpriced_runs"] == 3 for r in amounts())
     with api.app.state.store.transaction() as c:
-        c.execute("INSERT INTO turns(id,bot,started,finished,input_tokens,est_cost_usd,billing,usage_reason) "
+        c.execute("INSERT INTO attempts(id,bot_id,created_at,settled_at,input_tokens,est_cost_usd,billing,usage_reason) "
                   "VALUES('unknown','ops',?,?,100,NULL,'api','cost_unpriced')",
                   (DAY + "T10:00:00Z", DAY + "T10:05:00Z"))
     assert all(r["est_cost_usd"] is None and r["input_tokens"] == 100 for r in amounts())
     with api.app.state.store.transaction() as c:
-        c.execute("INSERT INTO turns(id,bot,started,finished,est_cost_usd,billing) "
+        c.execute("INSERT INTO attempts(id,bot_id,created_at,settled_at,est_cost_usd,billing) "
                   "VALUES('measured','ops',?,?,2.5,'api')", (DAY + "T10:00:00Z", DAY + "T10:05:00Z"))
     assert all(r["est_cost_usd"] == 2.5 for r in amounts())
     with api.app.state.store.transaction() as c:
-        c.execute("UPDATE turns SET est_cost_usd=0 WHERE id='measured'")
+        c.execute("UPDATE attempts SET est_cost_usd=0 WHERE id='measured'")
     assert all(r["est_cost_usd"] == 0 for r in amounts())
 
 
@@ -207,6 +245,33 @@ def test_tico_cheap_1_1_bills_a_prompt_over_100k_whole_at_its_long_rate():
         (100_001 * 0.15 + 1_000 * 0.75) / 1e6)
 
 
+def test_gpt_6_1_terra_bills_a_prompt_at_or_over_272k_whole_at_its_long_rate():
+    """Tier at or over 272,000 prompt tokens (Gateway owner ruling 2026-11-03; OpenRouter's min_prompt_tokens)."""
+    standard = lambda n, c=0: (n * 1.25 + c * 0.062 + 1_000 * 6.25) / 1e6
+    over = lambda n, c=0: (n * 2.50 + c * 0.125 + 1_000 * 9.375) / 1e6
+    assert providers.estimate("gpt-6.1-terra", 271_999, 0, 1_000, [[271_999, 0, 1_000]]) == (pytest.approx(standard(271_999)), False)
+    assert providers.estimate("gpt-6.1-terra", 272_000, 0, 1_000, [[272_000, 0, 1_000]]) == (pytest.approx(over(272_000)), False)
+    assert providers.estimate("gpt-6.1-terra", 272_001, 0, 1_000, [[272_001, 0, 1_000]]) == (pytest.approx(over(272_001)), False)
+    # Cached input counts toward the prompt: 1,000 uncached plus 270,999 cached is 271,999 (standard); 271,000 cached is 272,000 (long).
+    assert providers.estimate("gpt-6.1-terra", 1_000, 270_999, 500, [[1_000, 270_999, 500]])[0] == pytest.approx(
+        (1_000 * 1.25 + 270_999 * 0.062 + 500 * 6.25) / 1e6)
+    assert providers.estimate("gpt-6.1-terra", 1_000, 271_000, 500, [[1_000, 271_000, 500]])[0] == pytest.approx(
+        (1_000 * 2.50 + 271_000 * 0.125 + 500 * 9.375) / 1e6)
+
+
+def test_gpt_6_1_terra_is_priced_at_tico_s_approved_rate_for_a_run_and_its_estimate(api):
+    """Synthetic run only: no provider or billing call. The rate is Tico's (Chris, 2026-10-28), not OpenAI's list price."""
+    expected = (1_000 * 1.25 + 2_000 * 0.062 + 500 * 6.25) / 1e6                   # 0.004499
+    assert providers.estimate_cost("gpt-6.1-terra", 1_000, 2_000, 500) == pytest.approx(expected)
+    assert providers.estimate("gpt-6.1-terra", 1_000, 2_000, 500) == (pytest.approx(expected), True)   # no per-request counts: may be low
+    r, _, attempt = setup_attempt(api)
+    complete(api, r, attempt, {"input_tokens": 1_000, "cached_tokens": 2_000, "output_tokens": 500,
+                               "model": "gpt-6.1-terra", "runtime": "codex", "billing": "api"})
+    row = turn(api, attempt["id"])
+    assert (row["model"], row["billing"]) == ("gpt-6.1-terra", "api")
+    assert row["est_cost_usd"] == pytest.approx(expected)
+
+
 @pytest.mark.parametrize("model", ["tico-cheap-1.1", "tico-mid-1.0"])
 def test_a_tico_run_prices_each_request_on_its_own_tier_and_other_tico_models_keep_their_totals(api, model):
     r, _, attempt = setup_attempt(api)
@@ -225,7 +290,6 @@ def test_a_tico_run_prices_each_request_on_its_own_tier_and_other_tico_models_ke
 def zero_usage(row, reason):
     assert (row["input_tokens"], row["cached_tokens"], row["output_tokens"], row["est_cost_usd"],
             row["usage_reason"]) == (0, 0, 0, 0, reason)
-    assert all(row[key] is None for key in ("tokens_in", "tokens_out", "cost"))
 
 
 @pytest.mark.parametrize("outcome,limited,reason", [
@@ -237,7 +301,7 @@ def test_results_with_no_counts_end_with_zero_usage_and_their_reason(api, outcom
     r, _, attempt = setup_attempt(api)
     complete(api, r, attempt, outcome=outcome, limited=limited, tokens_in=None, tokens_out=None)
     row = turn(api, attempt["id"])
-    assert row["finished"] and row["exit"] == outcome
+    assert row["finished_at"] and row["exit"] == outcome
     zero_usage(row, reason)
 
 
@@ -249,7 +313,7 @@ def test_a_run_whose_lease_runs_out_ends_with_zero_usage_and_no_result(api):
     with api.app.state.store.transaction() as c:
         api.app.state.execution.expire(c)
     row = turn(api, attempt["id"])
-    assert row["finished"] and row["exit"] in ("interrupted", "failed")
+    assert row["finished_at"] and row["exit"] in ("interrupted", "failed")
     zero_usage(row, "no_result")
 
 
@@ -258,11 +322,11 @@ def test_a_late_limited_result_keeps_usage_without_reopening_the_dismissed_job(a
     r, _, attempt = finished_then_lapsed(api)
     aged(api, attempt["id"])
     post(api, f"jobs/{attempt['job_id']}/reconcile", {
-        "attempt_id": attempt["id"], "decision": "dismiss", "note": "Nothing left to send.",
+        "run_id": attempt["id"], "decision": "dismiss", "note": "Nothing left to send.",
         "acknowledge_uncertain_effects": True})
     result = post(api, f"attempts/{attempt['id']}/complete", {
         "outcome": "failed", "text": "Usage limit reached.", "last_seq": 3, "limited": True}, token=r["token"])
-    assert result["filed"] is True and settled(api, attempt) == ("expired", "cancelled")
+    assert result["filed"] is True and settled(api, attempt) == ("expired", "canceled")
     zero_usage(turn(api, attempt["id"]), "usage_limited")
 
 
@@ -270,15 +334,15 @@ def test_a_late_completed_result_keeps_measured_usage_without_reopening_the_dism
     from backend.tests.test_execution_review import aged, finished_then_lapsed, settled
     r, _, attempt = finished_then_lapsed(api)
     aged(api, attempt["id"])
-    post(api, "bots/ops/stop", {"attempt_id": attempt["id"]})
+    post(api, "bots/ops/stop", {"run_id": attempt["id"]})
     post(api, f"jobs/{attempt['job_id']}/reconcile", {
-        "attempt_id": attempt["id"], "decision": "dismiss", "note": "Nothing left to send.",
+        "run_id": attempt["id"], "decision": "dismiss", "note": "Nothing left to send.",
         "acknowledge_uncertain_effects": True})
     result = post(api, f"attempts/{attempt['id']}/complete", {
         "outcome": "completed", "text": "Done.", "last_seq": 3,
         "usage": {"input_tokens": 10, "cached_tokens": 20, "output_tokens": 5,
                   "model": "gpt-6-sol", "runtime": "codex", "billing": "api"}}, token=r["token"])
-    assert result["filed"] is True and settled(api, attempt) == ("expired", "cancelled")
+    assert result["filed"] is True and settled(api, attempt) == ("expired", "canceled")
     row = turn(api, attempt["id"])
     assert (row["input_tokens"], row["cached_tokens"], row["output_tokens"]) == (10, 20, 5)
     assert row["est_cost_usd"] == pytest.approx(price("gpt-6-sol", 10, 20, 5))
@@ -300,7 +364,7 @@ def test_a_restore_zeroes_open_runs_and_keeps_a_finished_run_as_measured(api, tm
     restore_snapshot(backup, restored)
     with closing(sqlite3.connect(restored)) as db:
         db.row_factory = sqlite3.Row
-        rows = {x["id"]: dict(x) for x in db.execute("SELECT * FROM turns")}
+        rows = {x["id"]: dict(x) for x in db.execute(f"SELECT {hubdb.TURN_SELECT} FROM attempts")}
     zero_usage(rows[open_run["id"]], "no_result")
     assert rows[open_run["id"]]["exit"] == "interrupted"
     kept = rows[done["id"]]

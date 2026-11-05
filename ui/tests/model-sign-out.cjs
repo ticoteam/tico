@@ -8,7 +8,7 @@
 // named, and a failed lookup offers Try again. After a change the page looks again until a heartbeat newer than the
 // change shows it (a stale one still reads the old state). A switch past its commit point reads as finishing with no cancel, and a Mac offers no
 // Switch account for Claude Code (switch_unavailable_on). Every request is intercepted; the harness capabilities come
-// from runner/harnesses/*.toml.
+// from runner-rs/harnesses/*.toml.
 const {chromium} = require('playwright');
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
@@ -20,7 +20,7 @@ const {unrouted} = require('./support/routes.cjs');
     const now = Date.now(), at = ms => new Date(now + ms).toISOString();
     const chip = (name, runtime) => ({name, runtime, installed: true, version: '1.0.0', managed: true, state: 'idle', wanted: true,
       pinned: false, update_available: false, detail: ''});
-    const fixture = () => ({id: 'box', label: 'Team box', operator: 'sam', bots: ['writer'], platform: 'linux', last_seen: at(-3000),
+    const fixture = () => ({id: 'box', label: 'Team box', owner_id: 'sam', bots: ['writer'], platform: 'linux', last_seen_at: at(-3000),
       readiness_at: at(-3000),
       needed_runtimes: ['claude', 'codex'], bot_runtimes: ['codex'], signed_out: {},
       readiness: {
@@ -43,7 +43,7 @@ const {unrouted} = require('./support/routes.cjs');
         if (early) heartbeats.push({at: Date.now() + 1000, apply: () => {}});
         heartbeats.push({at: Date.now() + 4000, apply});
       };
-      const finish = (id, state, apply, early) => { Object.assign(rows[id], {state, updated: new Date().toISOString()}); beat(apply, early); };
+      const finish = (id, state, apply, early) => { Object.assign(rows[id], {state, updated_at: new Date().toISOString()}); beat(apply, early); };
       // Hold the next bots lookup until the test lets it go: `fail` answers it with an error.
       const hold = () => { let let_go; const held = new Promise(resolve => { let_go = resolve; }); gate = {held}; return fail => let_go(fail); };
       const page = await browser.newPage({viewport: {width: 1440, height: 900}, serviceWorkers: 'block'});
@@ -93,7 +93,7 @@ const {unrouted} = require('./support/routes.cjs');
         const one = p.match(/^\/api\/v2\/computers\/box\/logins\/(\w+)(\/cancel)?$/);
         if (one && one[2]) {
           writes.push({p});
-          rows[one[1]].state = 'cancelled';
+          rows[one[1]].state = 'canceled';
           return json(rows[one[1]]);
         }
         if (one) {
@@ -115,12 +115,12 @@ const {unrouted} = require('./support/routes.cjs');
           // The computer takes the shared key on its next check.
           box.signed_out = {};
           beat(() => { box.readiness.runtimes[body.runtime] = {installed: true, authenticated: 'ready', account: {kind: 'api_key', checked_at: new Date().toISOString()}}; });
-          return json({id: 'key1', kind: 'use_shared_key', state: 'done', created: new Date().toISOString(), lines: []});
+          return json({id: 'key1', kind: 'use_shared_key', state: 'done', created_at: new Date().toISOString(), lines: []});
         }
         if (p === '/api/v2/computers/box/logins' && method === 'POST') {
           const body = req.postDataJSON(), id = `in${++seq}`; writes.push({p, body});
           rows[id] = {id, runtime: body.runtime, profile: body.profile || '', kind: body.switch ? 'switch' : body.to ? 'to_subscription' : 'sign_in', state: 'waiting',
-            url: 'https://auth.openai.com/codex/device', code: 'ABCD-1234', created: new Date().toISOString(), lines: []};
+            url: 'https://auth.openai.com/codex/device', code: 'ABCD-1234', created_at: new Date().toISOString(), lines: []};
           return json(rows[id]);
         }
         if (p.endsWith('/watch')) return route.fulfill({contentType: 'text/event-stream', body: ': fixture\n\n'});
@@ -234,7 +234,7 @@ const {unrouted} = require('./support/routes.cjs');
     await toSub.locator('code', {hasText: 'ABCD-1234'}).waitFor();
     assert.deepEqual(writes.at(-1), {p: '/api/v2/computers/box/logins', body: {runtime: 'codex', to: 'subscription'}});
     await toSub.locator('[data-cancel]').click();
-    await toSub.locator('[data-status]', {hasText: 'cancelled'}).waitFor();
+    await toSub.locator('[data-status]', {hasText: 'canceled'}).waitFor();
     assert.match(await toSub.locator('[data-status]').innerText(), /The API key is still in use\./);
     await page.keyboard.press('Escape');
     await own('codex').getByRole('button', {name: 'Switch to subscription'}).click();
@@ -253,7 +253,7 @@ const {unrouted} = require('./support/routes.cjs');
     await login.locator('code', {hasText: 'ABCD-1234'}).waitFor();
     assert.deepEqual(writes, [{p: '/api/v2/computers/box/logins', body: {runtime: 'claude', switch: true}}]);
     await login.locator('[data-cancel]').click();
-    await login.locator('[data-status]', {hasText: 'cancelled'}).waitFor();
+    await login.locator('[data-status]', {hasText: 'canceled'}).waitFor();
     assert.match(await login.locator('[data-status]').innerText(), /The account signed in before still works\./);
     await page.keyboard.press('Escape');
 
@@ -272,14 +272,14 @@ const {unrouted} = require('./support/routes.cjs');
 
     // Offline: Switch account and Sign out stay, disabled, saying why; nothing can be started.
     const online = await buttons(own('claude'));
-    box.last_seen = at(-3 * 3600000);
+    box.last_seen_at = at(-3 * 3600000);
     await page.evaluate(() => loadSettings());
     await own('claude').locator('.computer-conn-signin', {hasText: 'last checked'}).waitFor();
     assert.deepEqual(await buttons(own('claude')), online);
     assert.ok(online.includes('Sign out') && online.includes('Switch account'), online.join());
     assert.deepEqual(await own('claude').locator('.computer-conn-signin button').evaluateAll(all => all.map(b => b.disabled && b.title)),
       online.map(() => 'Computer is offline'));
-    box.last_seen = at(-3000);
+    box.last_seen_at = at(-3000);
     await page.evaluate(() => loadSettings());
     await own('claude').getByRole('button', {name: 'Sign out'}).waitFor();
 

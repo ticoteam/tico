@@ -14,8 +14,8 @@ const assert = require('node:assert/strict');
 const {open} = require('./tasks-page.cjs');
 const HASH = 'a'.repeat(12) + 'b'.repeat(52), HASH2 = 'c'.repeat(64);
 const PNG = Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==', 'base64');
-const approval = {id: 'ap-1', kind: 'approval', what: 'send', title: 'Approve this send', requester: 'bot:support',
-  requested_by: 'bot:support', created: new Date().toISOString(), conversation_id: 'c-1',
+const approval = {id: 'ap-1', kind: 'approval', what: 'send', title: 'Approve this send', requester_id: 'bot:support',
+  requested_by: 'bot:support', created_at: new Date().toISOString(), conversation_id: 'c-1',
   payload: {to: ['ava@creator.example'], cc: [], subject: '<img src=x onerror="window.pwned=1">Contract', mailbox: 'ana@acme.example',
     draft: 'r-882', body_sha256: 'd'.repeat(64), attachments: [
       {name: 'chart.png', size: 219136, sha256: HASH, file_id: 'f-chart-0001'},
@@ -25,8 +25,8 @@ const approval = {id: 'ap-1', kind: 'approval', what: 'send', title: 'Approve th
 const REPLY = 'You asked how BotOps can restart a stuck runner without losing the queue. ' +
   'Open Settings, then Computers, pick the computer and choose Restart runner; queued_runs_survive_a_restart_because_they_live_in_hub_db_not_in_the_runner.\n\n' +
   '<img src=x onerror="window.pwned=1"> is how the ticket quoted it, and that stays text.\nThanks, Support';
-const publish = {id: 'ap-pub', kind: 'approval', what: 'publish', title: 'Approve this publish', requester: 'bot:support',
-  requested_by: 'bot:support', created: new Date().toISOString(),
+const publish = {id: 'ap-pub', kind: 'approval', what: 'publish', title: 'Approve this publish', requester_id: 'bot:support',
+  requested_by: 'bot:support', created_at: new Date().toISOString(),
   payload: {content_sha256: '355cf' + 'e'.repeat(59), text: REPLY, url: 'hq-ticket:TK-TGYWKV5A'},
   ready_since: new Date(Date.now() - (130 * 60 + 5) * 1000).toISOString()};
 const PUBLISH_CLOCK = new Date();
@@ -112,10 +112,30 @@ async function phonePublish(browser) {
   assert.equal(await page.evaluate(() => window.pwned), undefined);
   assert.deepEqual(errors, []);
 }
+async function letterProof(browser) {
+  const {page, errors} = await open(browser, {viewport: {width: 390, height: 844}});
+  const shown = await page.evaluate(() => {
+    const address = {name: '<img src=x onerror="window.pwned=1">', line1: '2 Main St', city: 'Dover', state: 'DE', postal_code: '19901'};
+    const payload = {letter_id: 'letter-1', approval_hash: 'a'.repeat(64), proof: '/api/v2/files/proof-1',
+      recipient: address, return_address: {...address, name: 'Acme', line1: '1 Main St'}, mail_class: 'certified',
+      total_micros: 1500123, page_count: 2, color: false, duplex: true};
+    const node = approvalPayloadNode({what: 'letter', payload});
+    const host = document.createElement('div'); host.style.width = '350px'; host.append(node); document.body.replaceChildren(host);
+    return {text: node.textContent, href: node.querySelector('a').getAttribute('href'), markup: node.querySelectorAll('img').length,
+      fits: [...node.querySelectorAll('dd')].every(dd => dd.scrollWidth <= dd.clientWidth)};
+  });
+  assert.equal(shown.href, '/api/v2/files/proof-1');
+  assert.ok(shown.text.includes('2 Main St') && shown.text.includes('1 Main St') && shown.text.includes('certified'));
+  assert.ok(shown.text.includes('$1.500123') && shown.text.includes('Open PDF proof'));
+  assert.equal(shown.markup, 0); assert.ok(shown.fits);
+  assert.deepEqual(errors, []);
+  await page.close();
+}
+
 const REPORT = 'hub task update has failed since 0.2.17 with: refused (version); a fresh read gives the same error. ' +
   'Tried: hub task show, then the update with the new version; still refused. <script>window.pwned=1</script> stays text.';
-const report = {id: 'ap-sup', kind: 'approval', what: 'support', title: 'Send this to Tico support?', requester: 'bot:support',
-  requested_by: 'bot:support', created: new Date().toISOString(), support: {to: 'updates.tico.team'},
+const report = {id: 'ap-sup', kind: 'approval', what: 'support', title: 'Send this to Tico support?', requester_id: 'bot:support',
+  requested_by: 'bot:support', created_at: new Date().toISOString(), support: {to: 'updates.tico.team'},
   payload: {message: REPORT, content_sha256: 'e'.repeat(64)}};
 async function phoneSupport(browser) {
   const {page, errors} = await open(browser, {viewport: {width: 390, height: 844}, hash: '#/tasks'});
@@ -151,7 +171,7 @@ async function phoneSupport(browser) {
 async function phoneRedesignKinds(browser) {
   const {page, errors} = await open(browser, {viewport: {width: 390, height: 844}, hash: '#/tasks'});
   const at = new Date().toISOString(), ap = (id, what, payload) => ({id, kind: 'approval', what, title: 'Approve this ' + what,
-    requester: 'bot:analyst', requested_by: 'bot:analyst', created: at, payload});
+    requester_id: 'bot:analyst', requested_by: 'bot:analyst', created_at: at, payload});
   const items = [ap('ap-cap', 'task_cap', {sender: 'bot:engineer', receiver: 'bot:support', per_day: 40}),
     ap('ap-lim', 'spend_limit', {bot: 'bot:engineer', daily_usd: 25, monthly_usd: 400})];
   await page.route('**/api/v2/needs-you*', route => route.fulfill({contentType: 'application/json', body: JSON.stringify({items})}));
@@ -234,6 +254,7 @@ async function phoneRedesignKinds(browser) {
     await phonePublish(browser);
     await phoneSupport(browser);
     await phoneRedesignKinds(browser);
+    await letterProof(browser);
     console.log('Needs you approvals: one line each; the card shows the send payload readable, files open, HTML stays text, Approve posts; publish, support, task cap and spend limit readable at 390px');
   } finally { await browser.close(); }
 })().catch(e => {console.error(e); process.exit(1);});

@@ -1,7 +1,11 @@
 """The redesign's audit trail (backend/audit_log.py): rows written with their change, read newest first, paged,
 the owner seeing all and anyone else only their own."""
 import json
+import sqlite3
+from contextlib import closing
 from urllib.parse import urlencode
+
+import pytest
 
 from backend import audit_log
 from backend.tests.test_api import api, get  # noqa: F401
@@ -11,6 +15,19 @@ def _write(api, *changes):
     with api.app.state.store.transaction() as c:
         for actor, obj, before, after in changes:
             audit_log.write(c, actor, obj, before, after)
+
+
+def test_a_recorded_change_cannot_be_edited_or_removed_by_any_connection(api):
+    _write(api, ("human:ana", "task_cap:1", None, {"per_day": 5}))
+    # A separate connection, as a script or a second process would hold: the database itself refuses both.
+    with closing(sqlite3.connect(str(api.app.state.store.settings.db_path), timeout=5)) as other:
+        with pytest.raises(sqlite3.IntegrityError, match="audit_log is append-only"):
+            other.execute("UPDATE audit_log SET actor='human:mallory'")
+        with pytest.raises(sqlite3.IntegrityError, match="audit_log is append-only"):
+            other.execute("DELETE FROM audit_log")
+        other.rollback()
+    assert [(r["actor"], r["after"]) for r in get(api, "audit?object=task_cap:1")["rows"]] == [
+        ("human:ana", {"per_day": 5})]
 
 
 def test_owner_reads_every_row_newest_first_with_before_and_after(api):

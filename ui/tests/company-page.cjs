@@ -101,7 +101,7 @@ function answer(hub, method, p, url, payload) {
     return [200, {editions: aud ? hub.editions.filter(e => e.audience_id === aud && e.status === url.searchParams.get('status')) : hub.editions, next_before: null, schedule_problems: hub.scheduleProblems}];
   }
   if (p === '/api/v2/editions') return [200, {id: payload.audience_id === 'a-inv' && payload.author === 'company' ? 'e-failed' : 'e-ready'}];
-  if ((m = /^\/api\/v2\/editions\/([^/]+)\/notices$/.exec(p))) return [200, {readers: {pending: 1, sent: 2, failed: 1, unavailable: 0, cancelled: 0}, issuer: {delivered: 2, failed: 1, limited: 0}, email_available: hub.emailAvailable}];
+  if ((m = /^\/api\/v2\/editions\/([^/]+)\/notices$/.exec(p))) return [200, {readers: {pending: 1, sent: 2, failed: 1, unavailable: 0, canceled: 0}, issuer: {delivered: 2, failed: 1, limited: 0}, email_available: hub.emailAvailable}];
   if ((m = /^\/api\/v2\/editions\/([^/]+)\/publish$/.exec(p))) { const e = hub.editions.find(x => x.id === m[1]); Object.assign(e, {status: 'published', published_at: '2026-11-01'}); return [200, {...e, release_failed: hub.releaseFails}]; }
   if ((m = /^\/api\/v2\/editions\/([^/]+)$/.exec(p)) && method === 'GET') {
     const e = hub.editions.find(x => x.id === m[1]);
@@ -118,6 +118,10 @@ function answer(hub, method, p, url, payload) {
     const r = hub.readers.find(x => x.id === m[1]), {audience_ids, ...rest} = payload;
     Object.assign(r, rest, {audiences: AUDIENCES.filter(a => audience_ids.includes(a.id)).map(({id, name, kind}) => ({id, name, kind}))});
     return [200, r];
+  }
+  if (p === '/api/v2/readers') {
+    const r = {id: 'r9', email: payload.email, name: payload.name || null, notify: true, audiences: AUDIENCES.filter(a => payload.audience_ids.includes(a.id)).map(({id, name, kind}) => ({id, name, kind}))};
+    hub.readers.push(r); return [200, r];
   }
   if ((m = /^\/api\/v2\/readers\/([^/]+)$/.exec(p)) && method === 'DELETE') { hub.readers = hub.readers.filter(r => r.id !== m[1]); return [200, {}]; }
   return null;
@@ -143,6 +147,8 @@ async function open(browser, {viewer = 'ana', viewport = DESKTOP, hash = '#/comp
     if (file && fs.existsSync(file)) return route.fulfill({contentType: file.endsWith('.js') ? 'application/javascript' : file.endsWith('.css') ? 'text/css' : file.endsWith('.woff2') ? 'font/woff2' : 'application/octet-stream', body: fs.readFileSync(file)});
     if (p === '/api/v2/events') return;
     const payload = method === 'GET' ? null : req.postDataJSON?.() ?? null;
+    if (method === 'PUT' && p.endsWith('/disclosure') && hub.disclosureDelay)
+      await new Promise(resolve => setTimeout(resolve, hub.disclosureDelay));
     if (method !== 'GET') hub.writes.push([method, p, payload]);
     else if (/company-page|audiences|editions|readers/.test(p)) hub.reads.push(p);
     if (p === '/api/v2/config') return json(config);
@@ -206,12 +212,12 @@ async function shotPart(page, id, name) {
     await close();
     // Overview as it always was: no tab, no way in by address, and search doesn't offer it.
     const tab = await open(browser, {viewer: 'erin', hash: '#/overview', ready: false});
-    assert.deepEqual(await tabLabels(tab.page), ['Dashboard', 'Campus']);
-    assert.equal(await tab.page.evaluate(() => searchEntries().some(x => x.label === 'Company page')), false);
+    assert.deepEqual(await tabLabels(tab.page), ['Mine', 'Company', 'Campus', 'Graph']);
+    assert.equal(await tab.page.evaluate(() => searchEntries().some(x => x.label === 'Share')), false);
     await tab.page.evaluate(h => { location.hash = h; }, '#/overview/company-page');
     await tab.page.locator('#cp-tab-body .empty-state').waitFor();
     assert.equal(await tab.page.locator('.cp-frame, [data-cp-preview], [data-cp-share], [data-cp-manage]').count(), 0, 'no frame, no controls');
-    assert.deepEqual(await tabLabels(tab.page), ['Dashboard', 'Campus']);
+    assert.deepEqual(await tabLabels(tab.page), ['Mine', 'Company', 'Campus', 'Graph']);
     assert.deepEqual(tab.hub.reads, [], 'a member asks the server for nothing here');
     assert.deepEqual(tab.hub.previews, []);
     assert.deepEqual(tab.errors, []);
@@ -224,7 +230,7 @@ async function shotPart(page, id, name) {
     assert.match(await page.locator('#cp-page').innerText(), /Owners and admins only/);
     await page.evaluate(h => { location.hash = h; }, '#/overview/company-page');
     await page.locator('#cp-tab-body .empty-state').waitFor();
-    assert.deepEqual(await tabLabels(page), ['Dashboard', 'Campus', 'Company page']);
+    assert.deepEqual(await tabLabels(page), ['Mine', 'Company', 'Campus', 'Graph', 'Share']);
     assert.equal(await page.locator('.cp-frame').count(), 0, 'no frame');
     assert.equal(await page.locator('.cp-tab-acts').isVisible(), false, 'no controls');
     assert.deepEqual(hub.previews, []);
@@ -405,10 +411,17 @@ async function shotPart(page, id, name) {
 
     // Disclosure on a computer: every audience side by side. A rule change sends that cell.
     assert.equal(await page.locator('.cp-table thead th[scope=col]').count(), 3);
+    // Delay the fake's write receipt so a local repaint cannot accidentally satisfy the assertion.
+    hub.disclosureDelay = 75;
+    const disclosureWrite = dataClass => page.waitForResponse(response => response.request().method() === 'PUT'
+      && response.url().endsWith('/api/v2/audiences/a-inv/disclosure')
+      && response.request().postDataJSON()?.rules?.[0]?.data_class === dataClass);
+    const headcountWrite = disclosureWrite('headcount');
     const cell = page.locator('select[data-cp-mode][data-aud="a-inv"][data-class="headcount"]');
     assert.equal(await cell.inputValue(), 'hidden', 'no rule is Hidden');
     await cell.selectOption('delayed');
     await page.waitForFunction(() => document.querySelector('[data-cp-lag][data-aud="a-inv"][data-class="headcount"]')?.closest('.cp-lag') && !document.querySelector('[data-cp-lag][data-aud="a-inv"][data-class="headcount"]').closest('.cp-lag').hidden);
+    await headcountWrite;
     assert.deepEqual(hub.writes.find(w => w[1] === '/api/v2/audiences/a-inv/disclosure')[2], {rules: [{data_class: 'headcount', ref_id: '', mode: 'delayed', lag_days: 30}]});
     // A KPI on the board has a row of its own, filed under kpi, and reads its class's rule until it has one.
     await page.locator('[data-cp-group="kpi"]').click();
@@ -416,8 +429,10 @@ async function shotPart(page, id, name) {
     await kpiCell.waitFor();
     assert.equal(await kpiCell.inputValue(), 'show', 'its class says Show');
     // "Whole quarters only" stays when the mode changes.
+    const revenueWrite = disclosureWrite('revenue');
     await page.locator('select[data-cp-mode][data-aud="a-inv"][data-class="revenue"]').selectOption('range');
     await page.waitForFunction(() => document.querySelector('select[data-cp-mode][data-aud="a-inv"][data-class="revenue"]')?.value === 'range');
+    await revenueWrite;
     assert.deepEqual(hub.writes.at(-1)[2], {rules: [{data_class: 'revenue', ref_id: '', mode: 'range', lag_days: 0, rounding: 'quarterly'}]});
 
     // A stat comes from the KPIs and Finance's numbers; the server fills in its class and words.
@@ -621,15 +636,15 @@ async function shotPart(page, id, name) {
   // Overview's tab: the page in a sandboxed frame, the share panel, Manage and back.
   {
     const {page, hub, errors, natives, close} = await open(browser, {hash: '#/overview', theme: 'dark', ready: false});
-    assert.deepEqual(await tabLabels(page), ['Dashboard', 'Campus', 'Company page']);
-    assert.equal(await page.evaluate(() => searchEntries().find(x => x.label === 'Company page')?.href), '#/overview/company-page', 'search finds it');
-    await page.locator('.dash-tabs a', {hasText: 'Company page'}).click();
+    assert.deepEqual(await tabLabels(page), ['Mine', 'Company', 'Campus', 'Graph', 'Share']);
+    assert.equal(await page.evaluate(() => searchEntries().find(x => x.label === 'Share')?.href), '#/overview/company-page', 'search finds it');
+    await page.locator('.dash-tabs a', {hasText: 'Share'}).click();
     const frame = page.locator('iframe.cp-frame');
     await frame.waitFor();
     assert.equal(await frame.getAttribute('sandbox'), 'allow-scripts', 'the frame gets no origin');
     assert.match(await frame.getAttribute('src'), /\/api\/v2\/company-page\/preview\?audience=a-board&theme=dark$/, 'the first audience on, in the app\'s theme');
     assert.ok(await page.locator('#side a[data-nav="overview"]').evaluate(a => a.classList.contains('cur')), 'Overview stays lit');
-    assert.equal(await page.locator('.dash-tabs a.cur').innerText(), 'Company page');
+    assert.equal(await page.locator('.dash-tabs a.cur').innerText(), 'Share');
     const pick = page.locator('.cp-tab-acts select');
     await pick.selectOption('a-pub');
     await page.waitForFunction(() => document.querySelector('iframe.cp-frame')?.src.includes('audience=a-pub'));
@@ -640,11 +655,11 @@ async function shotPart(page, id, name) {
     assert.equal(await page.locator('[data-cp-share]').evaluate(b => b.textContent.trim()), '');
     await page.locator('[data-cp-share]').click();
     const panel = page.locator('dialog.cp-share');
-    await panel.locator('[data-cp-reader="r1"]').waitFor();
+    await panel.locator('[data-cp-level]').waitFor();
     assert.equal(await panel.locator('[data-cp-level] [data-v="closed"]').getAttribute('aria-checked'), 'true');
     assert.equal(await panel.locator('.cp-address').count(), 0);
     assert.equal(await panel.locator('.cp-look').count(), 0, 'accent and logo stay in Manage');
-    assert.equal(await panel.locator('[data-cp-new-invite]').count(), 1, 'invite links are here');
+    assert.equal(await panel.locator('[data-cp-reader], [data-cp-share-add]').count(), 0, 'nobody to add while Closed');
     await panel.locator('[data-cp-level] [data-v="open"]').click();
     const sure = page.locator('dialog.cp-dlg:not(.cp-share)');
     assert.match(await sure.innerText(), /public internet/);
@@ -653,6 +668,29 @@ async function shotPart(page, id, name) {
     await panel.locator('[data-cp-not-live]').waitFor();
     assert.deepEqual(hub.writes.at(-1), ['PATCH', '/api/v2/company-page', {transparency: 'open'}]);
     assert.equal(await panel.locator('a.cp-address, [data-cp-copy]').count(), 0, 'not a link until it is live');
+
+    // People: who has access and one line to add someone. Headings, CSV, link lists and the email note stay in Manage.
+    await panel.locator('[data-cp-reader="r1"]').waitFor();
+    assert.equal(await panel.locator('h2, [data-cp-import], [data-cp-new-invite], [data-cp-invite], [data-cp-email-off], [data-cp-reader-edit]').count(), 0);
+    await panel.locator('[data-cp-share-add] [name=email]').fill('lee@acme.example');
+    await panel.locator('[data-cp-share-add] select').selectOption('a-inv');
+    await panel.locator('[data-cp-share-add] button[type=submit]').click();
+    await panel.locator('[data-cp-reader="r9"]').waitFor();
+    assert.deepEqual(hub.writes.at(-1), ['POST', '/api/v2/readers', {email: 'lee@acme.example', name: '', audience_ids: ['a-inv']}]);
+    assert.equal(await panel.locator('[data-cp-share-add] select').inputValue(), 'a-inv', 'the audience chosen holds');
+    await shot(page, 'share-people-1280');
+    // The invite link goes straight to the clipboard; one the clipboard refuses is shown instead.
+    await page.evaluate(() => { window.__copied = []; Object.defineProperty(navigator, 'clipboard', {configurable: true, value: {writeText: async t => { window.__copied.push(t); }}}); });
+    await panel.locator('[data-cp-share-invite]').click();
+    await page.waitForFunction(() => window.__copied.length);
+    assert.deepEqual(await page.evaluate(() => window.__copied), ['https://acme.tico.page/invite/one-time']);
+    assert.deepEqual(hub.writes.at(-1), ['POST', '/api/v2/audiences/a-inv/invites', {}]);
+    await page.evaluate(() => Object.defineProperty(navigator, 'clipboard', {configurable: true, value: {writeText: async () => { throw new Error('no'); }}}));
+    await panel.locator('[data-cp-share-invite]').click();
+    const shown = page.locator('dialog.cp-dlg:not(.cp-share)');
+    assert.equal(await shown.locator('input[name=url]').inputValue(), 'https://acme.tico.page/invite/one-time');
+    await shown.locator('[data-close], .tmodal-x').first().click();
+    await shown.waitFor({state: 'detached'});
     hub.settings.public_live = true;
     await panel.locator('[data-close]').click();
     await panel.waitFor({state: 'detached'});
@@ -668,7 +706,7 @@ async function shotPart(page, id, name) {
     assert.match(await frame.getAttribute('src'), /audience=a-pub/, 'the audience chosen holds');
 
     // The live address copies.
-    await page.evaluate(() => { window.__copied = []; Object.defineProperty(navigator, 'clipboard', {value: {writeText: async t => { window.__copied.push(t); }}}); });
+    await page.evaluate(() => { window.__copied = []; Object.defineProperty(navigator, 'clipboard', {configurable: true, value: {writeText: async t => { window.__copied.push(t); }}}); });
     await page.locator('[data-cp-share]').click();
     await panel.locator('a.cp-address').waitFor();
     await panel.locator('[data-cp-copy]').click();
@@ -742,7 +780,7 @@ async function shotPart(page, id, name) {
       }
       await shot(page, `tab-${w}-${theme}`);
       await page.locator('[data-cp-share]').click();
-      await page.locator('dialog.cp-share [data-cp-reader="r1"]').waitFor();
+      await page.locator('dialog.cp-share [data-cp-level]').waitFor();
       await flat(page, `the share panel at ${w}`);
       await shot(page, `tab-share-${w}-${theme}`);
       assert.deepEqual(errors, []);

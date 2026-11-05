@@ -31,7 +31,7 @@ from . import models as M
 from . import people as P
 from .auth import Identity
 from .connectors import EMAIL, instant
-from .media import Note, Send, attachments, authorized, deliver, form, new_note, save, upload_contract, write_upload
+from .media import Note, Send, attachments, authorized, deliver, effective_audience, form, new_note, save, upload_contract, write_upload
 from .meetings import get as meeting, initial_review, announce
 from .store import H, Problem, encode
 from .views import roster
@@ -176,6 +176,8 @@ class MeetingImport(M.Contract):
     media_url: str = Field(default="", max_length=500)
     context: dict = Field(default_factory=dict)
     private: bool | None = None
+    # "participants": readable only by the person filing it (and people named later), the owner too (media.py).
+    audience: Literal["participants"] | None = None
     review: Literal["pending", "live"] | None = None
     send_to: str = Field(default="", max_length=80)
     owner_email: str = Field(default="", max_length=320)      # a machine names the roster person it files for
@@ -302,7 +304,7 @@ def install_imports(app, store, auth, execution, mutate):
     def importer(c, who):
         runner = execution.runner(c, who)
         # The same operators as connectors: the configured list, else the owner alone.
-        if not runner or runner["operator"] not in (store.settings.processing_operators
+        if not runner or runner["owner_id"] not in (store.settings.processing_operators
                                                     or (execution.auth.owner_id(c),)):
             raise Problem("forbidden", "This machine is not assigned the private app-import capability", 403)
         return runner
@@ -350,11 +352,11 @@ def install_imports(app, store, auth, execution, mutate):
             # Scope the URL fallback to this person's Granola source references, including deleted meetings.
             ref = c.execute("SELECT m.id FROM meetings m JOIN recording_source_refs r ON r.meeting_id=m.id "
                             "WHERE r.source=? AND r.resource_type='meeting' "
-                            "AND substr(r.external_id,1,?)=? AND json_extract(m.metadata_json,'$.media_url')=? LIMIT 1",
+                            "AND substr(r.external_id,1,?)=? AND json_extract(m.metadata,'$.media_url')=? LIMIT 1",
                             (body.source, len(who.actor) + 1, who.actor + ":", body.media_url)).fetchone()
         existing = bool(ref)
         if fill_empty and ref and key:
-            c.execute("INSERT INTO recording_source_refs(source,resource_type,external_id,meeting_id,created) "
+            c.execute("INSERT INTO recording_source_refs(source,resource_type,external_id,meeting_id,created_at) "
                       "VALUES(?,?,?,?,?) ON CONFLICT DO NOTHING", (*key, ref[0], H.now()))
         if ref and deleted(c, ref[0]):
             # Somebody threw this meeting away. Say so, so an importer stops offering it
@@ -389,7 +391,8 @@ def install_imports(app, store, auth, execution, mutate):
         fingerprint = hashlib.sha256(encode({
             "turns": turns, "notes": body.notes, "title": body.title, "started_at": body.started_at,
             "duration": body.duration_seconds, "participants": people, "media_url": body.media_url,
-            "context": body.context, "private": body.private}).encode()).hexdigest()
+            "context": body.context, "private": body.private,
+            **({"audience": body.audience} if body.audience else {})}).encode()).hexdigest()
         known = {(a.get("name"), a.get("size")) for a in meta.get("attachments") or []}
         fresh = [u for u in uploads if (u["name"], u["size"]) not in known]
         if existing and meta.get("import_hash") == fingerprint and not fresh:
@@ -408,6 +411,10 @@ def install_imports(app, store, auth, execution, mutate):
             meta["title"] = body.title or meta.get("title") or "Imported meeting"
         if body.private is not None and (not existing or not meta.get("reviewed_at") or meta.get("review_state") != "live"):
             meta["private"] = body.private
+        if body.audience == "participants" or effective_audience(meta) == "participants":
+            # Narrowing is always allowed, even after review, and only a review widens it again (meeting_review.py).
+            named = {str(e).strip().lower() for e in meta.get("audience_emails") or []} | {(who.email or "").lower()}
+            meta.update(private=True, audience="participants", audience_emails=sorted(named - {""}))
         if people or not existing:
             meta.update(participants=people, confirmed_attendees=[p["email"] for p in people if p["email"]])
         if body.media_url or not existing:
@@ -425,9 +432,10 @@ def install_imports(app, store, auth, execution, mutate):
             else:
                 meta.pop("granola_mcp_notes_hash", None)
         if body.send_to:
-            auth.target(c, who, body.send_to, need="write")
+            send_to = (H.resolve_bot(c, body.send_to) or {}).get("id", body.send_to)
+            auth.target(c, who, send_to, need="write")
             if meta.get("review_state") == "pending":
-                meta["review_send_to"] = body.send_to
+                meta["review_send_to"] = send_to
         transcript = raw_transcript(turns)
         if live_client is not None:
             meta["client"] = live_client
@@ -435,7 +443,7 @@ def install_imports(app, store, auth, execution, mutate):
              stored["transcript_readable"] if fill_empty and existing else None,
              notes=body.notes or None)
         if key and not existing:
-            c.execute("INSERT INTO recording_source_refs(source,resource_type,external_id,meeting_id,created) "
+            c.execute("INSERT INTO recording_source_refs(source,resource_type,external_id,meeting_id,created_at) "
                       "VALUES(?,?,?,?,?)", (*key, rid, H.now()))
         H.event(c, machine.actor, "meeting.imported", rid,
                 {"source": body.source, "owner": who.email, "turns": len(turns), "notes": bool(body.notes),
@@ -447,8 +455,8 @@ def install_imports(app, store, auth, execution, mutate):
                   "existing": existing, "changed": True, "link": "#/meetings?meeting=" + rid}
         if body.send_to and meta.get("review_state") == "live":
             # The same Send a person presses: the bot's task carries the transcript and notes.
-            sent = deliver(c, auth, who, rid, Send(slug=body.send_to), [])
-            result["sent"] = {"slug": sent["slug"], "task": sent.get("task")}
+            sent = deliver(c, auth, who, rid, Send(bot_id=body.send_to), [])
+            result["sent"] = {"bot": sent["bot"], "task": sent.get("task")}
         return result
 
     app.state.import_meeting = file_meeting
@@ -474,11 +482,11 @@ def install_imports(app, store, auth, execution, mutate):
                 # Only an exact event and owner, close in time, is safe to associate automatically.
                 from datetime import datetime
                 start = datetime.fromisoformat(body.started.replace("Z", "+00:00"))
-                for candidate in c.execute("SELECT m.id,m.metadata_json FROM meetings m "
+                for candidate in c.execute("SELECT m.id,m.metadata FROM meetings m "
                                            "LEFT JOIN media_control mc ON mc.meeting_id=m.id "
                                            "WHERE lower(m.owner)=? AND mc.deleted_at IS NULL",
                                            (body.owner_email,)):
-                    meta = json.loads(candidate["metadata_json"])
+                    meta = json.loads(candidate["metadata"])
                     cal = meta.get("calendar") or {}
                     if cal.get("event_id") != body.calendar_event_id or meta.get("status") == "recording":
                         continue
@@ -514,14 +522,14 @@ def install_imports(app, store, auth, execution, mutate):
                             source=body.source, source_type=body.resource_type,
                             source_context=body.context, warning=None, error=None)
             if not ref:
-                c.execute("INSERT INTO recording_source_refs(source,resource_type,external_id,meeting_id,created) "
+                c.execute("INSERT INTO recording_source_refs(source,resource_type,external_id,meeting_id,created_at) "
                           "VALUES(?,?,?,?,?)", (*key, rid, H.now()))
             if body.resource_type == "meeting":
                 # Close explicitly associates these call activities with this meeting. Reserve
                 # their references now, so a call transcript arriving later joins this record.
                 for call_id in body.attached_call_ids:
                     c.execute("INSERT OR IGNORE INTO recording_source_refs"
-                              "(source,resource_type,external_id,meeting_id,created) "
+                              "(source,resource_type,external_id,meeting_id,created_at) "
                               "VALUES('close','call',?,?,?)", (call_id, rid, H.now()))
             turns = [t.model_dump() for t in body.turns]
             transcript = raw_transcript(turns)
@@ -535,7 +543,7 @@ def install_imports(app, store, auth, execution, mutate):
                 return {"id": rid, "status": meta["status"], "existing": existing,
                         "review_state": meta.get("review_state", "live"), "changed": False, "transcript_id": latest["id"]}
             c.execute("INSERT INTO recording_transcripts(meeting_id,source,resource_type,external_id,"
-                      "transcript_index,content_hash,source_updated_at,turns_json,transcript_text,"
+                      "transcript_index,content_hash,source_updated_at,turns,transcript_text,"
                       "summary_text,imported_at) VALUES(?,?,?,?,?,?,?,?,?,?,?)",
                       (rid, *key, body.transcript_index, content_hash, body.source_updated_at,
                        encode(turns), transcript, body.summary_text, H.now()))
@@ -568,22 +576,22 @@ def install_imports(app, store, auth, execution, mutate):
     def close_status(request: Request, body: SourceHeartbeat):
         def work(c):
             importer(c, request.state.identity)
-            old = c.execute("SELECT detail_json FROM service_health WHERE service='recording:close'").fetchone()
+            old = c.execute("SELECT detail FROM service_health WHERE service='recording:close'").fetchone()
             detail = json.loads(old[0]) if old else {}
             detail.update(last_attempt=H.now(), pending=body.pending, imported=body.imported)
             if body.imported:
                 detail["last_import"] = H.now()
             if body.state == "ok":
                 detail["error_code"] = ""
-                c.execute("INSERT INTO service_health(service,last_success,last_error,detail_json) "
+                c.execute("INSERT INTO service_health(service,last_succeeded_at,last_error,detail) "
                           "VALUES('recording:close',?,NULL,?) ON CONFLICT(service) DO UPDATE SET "
-                          "last_success=excluded.last_success,last_error=NULL,detail_json=excluded.detail_json",
+                          "last_succeeded_at=excluded.last_succeeded_at,last_error=NULL,detail=excluded.detail",
                           (H.now(), encode(detail)))
             else:
                 detail["error_code"] = body.error_code or "sync_error"
-                c.execute("INSERT INTO service_health(service,last_success,last_error,detail_json) "
+                c.execute("INSERT INTO service_health(service,last_succeeded_at,last_error,detail) "
                           "VALUES('recording:close',NULL,?,?) ON CONFLICT(service) DO UPDATE SET "
-                          "last_error=excluded.last_error,detail_json=excluded.detail_json",
+                          "last_error=excluded.last_error,detail=excluded.detail",
                           (H.now(), encode(detail)))
             return {"ok": True}
         return mutate(request, body, work)

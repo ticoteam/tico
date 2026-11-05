@@ -474,6 +474,20 @@
      "title": "Outcome",
      "type": "string"
     },
+    "parent_message_id": {
+     "anyOf": [
+      {
+       "maxLength": 200,
+       "minLength": 1,
+       "type": "string"
+      },
+      {
+       "type": "null"
+      }
+     ],
+     "default": null,
+     "title": "Parent Message Id"
+    },
     "primary_held": {
      "default": false,
      "title": "Primary Held",
@@ -683,7 +697,7 @@
   },
   "EngineReadiness": {
    "additionalProperties": false,
-   "description": "Which runner engine the computer runs (runner/engine.py): the Rust runner and its build, or the Python one and why.",
+   "description": "Which runner engine the computer runs (runner_support/engine.py): the Rust runner and its build, or the Python one and why.",
    "properties": {
     "build": {
      "default": "",
@@ -769,7 +783,7 @@
   },
   "HarnessReadiness": {
    "additionalProperties": false,
-   "description": "One model CLI on the runner (runner/harnesses/*.toml): what is installed and whether it can\nbe kept current from Settings.",
+   "description": "One model CLI on the runner (runner-rs/harnesses/*.toml): what is installed and whether it can\nbe kept current from Settings.",
    "properties": {
     "authenticated": {
      "default": "unknown",
@@ -916,7 +930,10 @@
        "model_subscriptions_v1",
        "browser_exit_v1",
        "model_subscription_activation_v1",
-       "model_connect_v1"
+       "model_connect_v1",
+       "threads_v1",
+       "memory_tidy_packets_v1",
+       "harness_allocation_v1"
       ],
       "type": "string"
      },
@@ -954,6 +971,19 @@
      ],
      "default": null,
      "title": "Commit"
+    },
+    "device_id": {
+     "anyOf": [
+      {
+       "pattern": "^[0-9a-f]{64}$",
+       "type": "string"
+      },
+      {
+       "type": "null"
+      }
+     ],
+     "default": null,
+     "title": "Device Id"
     },
     "kind": {
      "anyOf": [
@@ -2207,14 +2237,15 @@
   "StartPlace": {
    "additionalProperties": false,
    "properties": {
+    "harness_allocated": {
+     "default": false,
+     "title": "Harness Allocated",
+     "type": "boolean"
+    },
     "waiting": {
      "default": "",
-     "enum": [
-      "",
-      "shared login",
-      "pre-start requirements",
-      "Docker turn user"
-     ],
+     "maxLength": 40,
+     "pattern": "^(?:|shared login|pre-start requirements|Docker turn user|computer busy: memory (?:100|[1-9]?[0-9])%)$",
      "title": "Waiting",
      "type": "string"
     }
@@ -2225,6 +2256,11 @@
   "Started": {
    "additionalProperties": false,
    "properties": {
+    "harness_allocated": {
+     "default": false,
+     "title": "Harness Allocated",
+     "type": "boolean"
+    },
     "load_snapshot": {
      "anyOf": [
       {
@@ -2430,6 +2466,18 @@
      "default": null,
      "title": "Trust"
     },
+    "worktree_recovery": {
+     "anyOf": [
+      {
+       "type": "boolean"
+      },
+      {
+       "type": "null"
+      }
+     ],
+     "default": null,
+     "title": "Worktree Recovery"
+    },
     "worktree_waits": {
      "anyOf": [
       {
@@ -2568,6 +2616,22 @@
   "SubscriptionWeekly": {
    "additionalProperties": false,
    "properties": {
+    "origin": {
+     "anyOf": [
+      {
+       "enum": [
+        "subscription",
+        "login"
+       ],
+       "type": "string"
+      },
+      {
+       "type": "null"
+      }
+     ],
+     "default": null,
+     "title": "Origin"
+    },
     "reported_at": {
      "maxLength": 50,
      "title": "Reported At",
@@ -2602,6 +2666,19 @@
      ],
      "default": null,
      "title": "Status"
+    },
+    "subscription_id": {
+     "anyOf": [
+      {
+       "maxLength": 80,
+       "type": "string"
+      },
+      {
+       "type": "null"
+      }
+     ],
+     "default": null,
+     "title": "Subscription Id"
     },
     "used_percent": {
      "anyOf": [

@@ -19,7 +19,7 @@ pains:
   - "marketing priorities change every week and nothing is written down"
   - "we get five marketing reports and no overall picture"
 owns:
-  - "The growth ideas, tests and verdicts, the weekly growth meeting and the monthly growth report: channel economics come from Tico, the bot enters the cohorts"
+  - "The growth ideas (Marketing tasks), their tests and close-outs, the weekly growth meeting and the weekly numbers: Tico computes the channel numbers, the bot enters the cohorts and KPI readings from sources"
   - "The weekly marketing page: headline, red, amber or green per workstream with its evidence, blockers, the six-week calendar, up to three priorities for next week"
   - "The routing proposals: which marketing bot or human a new request belongs to, as a task for the owner to review"
   - "Hiring proposals: the marketing role recurring work needs next, with the evidence and its first routine; the set-up task goes to BotOps only when the task asks for it and a granted Tool allows it"

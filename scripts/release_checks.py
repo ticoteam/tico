@@ -57,6 +57,10 @@ ROOT = Path(__file__).resolve().parents[1]
 BUDGET_SECONDS = 480
 DEFAULT_BUDGET_SECONDS = 300
 CANDIDATE = 'v9.9.9'   # what scripts/journey-test.sh calls a local build
+# Checks whose failure is reported but does not fail the gate: none by default. The upgrade journey blocks, since it
+# finds real upgrade bugs (v0.5.54: two crashes on an upgraded database). TICO_RELEASE_OPTIONAL_CHECKS=journey
+# (comma-separated) waives a check for one release.
+OPTIONAL_CHECKS = frozenset(name for name in os.environ.get('TICO_RELEASE_OPTIONAL_CHECKS', '').split(',') if name)
 # The edge network range (A.B.C.0/28, see docker/edge-env.sh) of each compose stack the gate runs side by side. A
 # separate project and host port do not separate networks: Docker refuses a second network on a range in use.
 EDGE = {'journey': '172.30.252', 'smoke': '172.30.253', 'backup-test': '172.30.251'}   # the journey runs backup-test
@@ -188,7 +192,7 @@ def edge_networks(ranges=EDGE):
         remove()
 
 
-ISOLATION_FILE = 'runner/tests/test_isolation_docker.py'
+ISOLATION_FILE = 'runner_support/tests/test_isolation_docker.py'
 PARTS = ('product', 'python', 'browser', 'desktop')
 # The desktop app's own tests, among them its updater installing from a company feed served by this checkout's
 # publisher and download routes (app/tests/update_hub.py). Building them needs WebKitGTK's development files.
@@ -221,7 +225,54 @@ RELEASE_SELECTION = ('-m', 'slow or not slow', f'--ignore={ISOLATION_FILE}')
 TIMINGS = ROOT / 'scripts' / 'test-timings.json'
 
 
-def shard_files(index, total, env, selection=RELEASE_SELECTION):
+# Test files that run the release's own native binaries (runner-rs, relay-rs), by what their source names. The release
+# gate gives them python shards 1-2 (NATIVE_SHARDS), the only python VMs that wait for the native-linux build; the rest start at once.
+NATIVE_TEST = re.compile(r'rust_binary|TICO_RUNNER_BIN|TICO_SCREEN_RELAY_BIN|target/release|"target" / "release"|'
+                         r'engine\.current|screen_binary|from runner(?:_support)? import engine|runner(?:_support)?\.engine|'
+                         # scripts/tico runs the checkout's runner (install, status: runner_support/engine.py finds the binary).
+                         r'"scripts" / "tico"\)|scripts/tico"')
+NATIVE_BINARIES = ('runner-rs/target/release/tico-runner', 'relay-rs/target/release/tico-screen-relay')
+# A test module importing another test module (test_screen borrows test_screen_relay_contract's running_service).
+TEST_IMPORT = re.compile(r'from\s+((?:backend|runner_support|scripts)\.tests(?:\.\w+)*)\s+import\s+([\w, ]+)|'
+                         r'import\s+((?:backend|runner_support|scripts)\.tests(?:\.\w+)+)')
+
+
+def native_test_files(names):
+    """The files of `names` that run the native binaries: they name them, or import a test module that does. Only the
+    named files and the test modules they import are read (no folder listing: PR checks' selector would take one as
+    reading every test, and run the whole suite for any test change)."""
+    texts, verdicts = {}, {}
+
+    def text(name):
+        if name not in texts:
+            try:
+                texts[name] = (ROOT / name).read_text(errors='replace')
+            except OSError:   # not a file here (a test's stand-in name, a package): nothing to run natively
+                texts[name] = ''
+        return texts[name]
+
+    def imports(source):
+        for package, members, module in TEST_IMPORT.findall(source):
+            if module:
+                yield module.replace('.', '/') + '.py'
+            else:
+                yield package.replace('.', '/') + '.py'
+                yield from (f"{package.replace('.', '/')}/{m.strip()}.py" for m in members.split(',') if m.strip())
+
+    def native(name, seen=()):
+        if name not in verdicts:
+            source = text(name)
+            verdicts[name] = bool(NATIVE_TEST.search(source)) or any(
+                native(path, (*seen, name)) for path in imports(source) if path not in seen and path != name)
+        return verdicts[name]
+    return {name for name in names if native(name)}
+
+
+# Release python shards 1..NATIVE_SHARDS hold the native test files (ci.yml: only those python VMs wait for binaries).
+NATIVE_SHARDS = 2
+
+
+def shard_files(index, total, env, selection=RELEASE_SELECTION, native_first=False):
     """The test files of shard `index` of `total`: every file pytest collects with `selection` (by default the
     release Python step's), grouped so each shard takes about the same time: the slowest file by its recorded
     seconds first, into the lightest shard. A file with no record weighs its test count times the recorded files'
@@ -238,17 +289,43 @@ def shard_files(index, total, env, selection=RELEASE_SELECTION):
             counts[name] = counts.get(name, 0) + 1
     if len(counts) < total:
         raise RuntimeError(f'{len(counts)} test files cannot fill {total} shards')
-    weights, unrecorded = file_weights(counts, recorded_timings('release' if selection else 'default'))
-    loads, groups = [0.0] * total, [[] for _ in range(total)]
-    for name in sorted(counts, key=lambda name: (-weights[name], name)):
-        lightest = min(range(total), key=lambda i: (loads[i], i))
-        loads[lightest] += weights[name]
-        groups[lightest].append(name)
+    timings = recorded_timings('release' if selection else 'default')
+    if native_first:
+        # Shards 1..NATIVE_SHARDS: the native test files, balanced between them (those VMs wait ~2 min for the
+        # release's Linux binaries, so the native files are split rather than left on one VM); the other shards: the
+        # rest, balanced as usual.
+        if total <= NATIVE_SHARDS:
+            raise RuntimeError(f'native-first sharding needs more than {NATIVE_SHARDS} shards')
+        native = native_test_files(counts)
+        if index <= NATIVE_SHARDS:
+            groups, loads, _ = bin_shards({name: counts[name] for name in native}, timings, NATIVE_SHARDS)
+            mine = sorted(groups[index - 1])
+            print(f'Python shard {index}/{total}: {len(mine)} of the {len(native)} native test files, '
+                  f'{sum(counts[n] for n in mine)} of {sum(counts.values())} tests, about {loads[index - 1]:.0f} seconds',
+                  flush=True)
+            return mine
+        counts = {name: n for name, n in counts.items() if name not in native}
+        groups, loads, unrecorded = bin_shards(counts, timings, total - NATIVE_SHARDS)
+        index, total = index - NATIVE_SHARDS, total - NATIVE_SHARDS
+    else:
+        groups, loads, unrecorded = bin_shards(counts, timings, total)
     mine = groups[index - 1]
     print(f'Python shard {index}/{total}: {len(mine)} files, {sum(counts[name] for name in mine)} of '
           f'{sum(counts.values())} tests, about {loads[index - 1]:.0f} of {sum(loads):.0f} seconds, recorded or estimated '
           f'({len(unrecorded)} of {len(counts)} files unrecorded, weighed by test count)', flush=True)
     return sorted(mine)
+
+
+def bin_shards(counts, timings, total):
+    """Greedy binning of {file: test count} into `total` shards by weight (see file_weights): the slowest file first,
+    into the lightest shard. Returns (groups, loads in seconds, unrecorded files)."""
+    weights, unrecorded = file_weights(counts, timings)
+    loads, groups = [0.0] * total, [[] for _ in range(total)]
+    for name in sorted(counts, key=lambda name: (-weights[name], name)):
+        lightest = min(range(total), key=lambda i: (loads[i], i))
+        loads[lightest] += weights[name]
+        groups[lightest].append(name)
+    return groups, loads, unrecorded
 
 
 def browser_shard(index, total):
@@ -316,6 +393,37 @@ def record_timings(default_report, slow_report):
     return 0
 
 
+def record_shard_timings(report_dir):
+    """Refresh the 'release' seconds in TIMINGS from the per-shard junit reports of a release validation (every `*.xml`
+    under `report_dir`, written with `-o junit_family=xunit1`). Each file's tests run in one shard, so its seconds are
+    the sum of its cases. A file that did not run keeps its recorded seconds while it still exists in the checkout;
+    the 'default' record is only pruned, since these reports are the release selection's. Browser seconds are kept."""
+    reports = sorted(Path(report_dir).rglob('*.xml'))
+    if not reports:
+        raise RuntimeError(f'no junit reports under {report_dir}')
+    fresh = {}
+    for path in reports:
+        for name, seconds in junit_seconds(path).items():
+            fresh[name] = fresh.get(name, 0.0) + seconds
+    try:
+        recorded = json.loads(TIMINGS.read_text())
+    except FileNotFoundError:
+        recorded = {}
+    exists = lambda name: (ROOT / name).is_file()
+    release = {name: seconds for name, seconds in recorded.get('release', {}).items() if name not in fresh and exists(name)}
+    release.update(fresh)
+    default = {name: seconds for name, seconds in recorded.get('default', {}).items() if exists(name)}
+    timings = {'default': dict(sorted(default.items())),
+               'release': {name: round(seconds, 2) for name, seconds in sorted(release.items())}}
+    if recorded.get('browser'):
+        timings['browser'] = recorded['browser']
+    TIMINGS.write_text(json.dumps(timings, indent=1) + '\n')
+    print(f'Recorded {len(fresh)} files from {len(reports)} junit reports into {TIMINGS.name}; '
+          f'kept {len(release) - len(fresh)} release and {len(default)} default records: '
+          f'{sum(release.values()):.0f}s release', flush=True)
+    return 0
+
+
 def record_browser_timings(*logs):
     """Rewrite the 'browser' seconds in TIMINGS, by script name as `--list` prints it, from `ui-tests.cjs` logs
     (`ok    name.cjs (12.3s)` lines). A failed script's time is how long it took to fail, not to pass, so it is left
@@ -342,7 +450,8 @@ def python_shard(index, total):
     env = {**os.environ, 'TICO_PYTHON': sys.executable}
     # Alone on its VM, a shard uses every core rather than pytest.ini's shared-box cap.
     workers = str(os.cpu_count() or 2)
-    result = subprocess.run([sys.executable, '-m', 'pytest', '-q', '-n', workers] + shard_files(index, total, env, selection=()),
+    result = subprocess.run([sys.executable, '-m', 'pytest', '-q', '-n', workers, '--api-database-snapshots']
+                            + shard_files(index, total, env, selection=()),
                             cwd=ROOT, env=env)
     print(f'Python shard {index}/{total}: exit {result.returncode}, {time.monotonic() - started:.2f}s; '
           f'load {initial_load} -> {load()}', flush=True)
@@ -415,11 +524,18 @@ def release(args):
         built = all(code == 0 for code in build_codes)
         ready.write_text('ok' if built else 'failed')
     if runs('python'):
-        python_cmd = [sys.executable, '-m', 'pytest', '-q', '-n', workers, '-m', 'slow or not slow',
-                      f'--ignore={ISOLATION_FILE}']
+        # Count-based batches can strand several expensive migration tests on one worker when a shard also has
+        # hundreds of cheap tests. Keep batches small so the other workers can share the expensive tests.
+        python_cmd = [sys.executable, '-m', 'pytest', '-q', '-n', workers, '--maxschedchunk=2', '-m', 'slow or not slow',
+                      f'--ignore={ISOLATION_FILE}', '--api-database-snapshots']
         name = 'all-python'
         if shard:
-            python_cmd += shard_files(shard[0], shard[1], test_env)
+            files = shard_files(shard[0], shard[1], test_env, native_first=True)
+            # Never skip a native test for want of its binary: only shard 1's VM waits for the native-linux build.
+            missing = [b for b in NATIVE_BINARIES if not (ROOT / b).exists()]
+            if missing and native_test_files(files):
+                raise RuntimeError(f'python shard {shard[0]} has native tests but no release binaries: {missing}')
+            python_cmd += files
             name = f'python-{shard[0]}-of-{shard[1]}'
         checks.append(Check(name, python_cmd, logs, test_env, tests=True))
     if runs('browser'):
@@ -455,6 +571,10 @@ def release(args):
     failed = [check for check in builds + checks if check.join() != 0]
     for check in failed:
         print(f'\n--- {check.name} (last lines of {check.log}) ---\n{check.tail()}', flush=True)
+    warned = [check for check in failed if check.name in OPTIONAL_CHECKS]
+    for check in warned:
+        print(f'::warning::{check.name} failed; it is optional (OPTIONAL_CHECKS), so the gate does not fail on it', flush=True)
+    failed = [check for check in failed if check not in warned]
     phase_table(builds + checks, started, not_run)
     elapsed = time.monotonic() - started
     verdict = 'failed' if failed else 'passed' if elapsed < BUDGET_SECONDS else 'passed, over budget'
@@ -469,6 +589,9 @@ def main(argv=None):
     parser.add_argument('--part', choices=PARTS, help='with --release: run only this slice of the gate')
     parser.add_argument('--record-timings', nargs=2, metavar=('DEFAULT_XML', 'SLOW_XML'),
                         help='rewrite scripts/test-timings.json from junit reports of the default suite and the slow tests')
+    parser.add_argument('--record-shard-timings', metavar='JUNIT_DIR',
+                        help="refresh the 'release' seconds in scripts/test-timings.json from the per-shard junit reports "
+                             "(xunit1) of a release validation, a directory of python-K-of-N.xml files")
     parser.add_argument('--record-browser-timings', nargs='+', metavar='LOG',
                         help="rewrite the 'browser' seconds in scripts/test-timings.json from browser-test logs")
     parser.add_argument('--shard', type=parse_shard,
@@ -481,6 +604,8 @@ def main(argv=None):
         parser.error('--shard with --release needs --part python or browser')
     if args.record_timings:
         return record_timings(*args.record_timings)
+    if args.record_shard_timings:
+        return record_shard_timings(args.record_shard_timings)
     if args.record_browser_timings:
         return record_browser_timings(*args.record_browser_timings)
     if args.release:
@@ -494,7 +619,7 @@ def in_slot(env=os.environ):
 
 
 if __name__ == '__main__':
-    if not in_slot() and not {'--record-timings', '--record-browser-timings'} & set(sys.argv):
+    if not in_slot() and not {'--record-timings', '--record-shard-timings', '--record-browser-timings'} & set(sys.argv):
         # A local run first takes one of the box's heavy-job slots, at low priority (scripts/heavy.sh).
         os.execvp('bash', ['bash', str(ROOT / 'scripts/heavy.sh'), sys.executable, __file__, *sys.argv[1:]])
     raise SystemExit(main())

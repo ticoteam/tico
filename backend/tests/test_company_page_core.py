@@ -2,6 +2,7 @@
 way a real number could get out: a missing rule, a raw Finance field, a clock that starts in the wrong place, a replaced
 reading, a value worked out from what is shown, or a bot's hand on the switch."""
 import json
+import re
 from datetime import datetime, timezone
 from types import SimpleNamespace
 from unittest import mock
@@ -129,7 +130,7 @@ def test_runway_and_cash_pass_on_their_value_only(books, monkeypatch):
     for stat in result["stats"]:
         assert set(stat) == STAT_KEYS and all(set(p) == POINT_KEYS for p in stat["series"])
     assert stats["Cash"]["display"] == "$5,000" and stats["Runway"]["display"] == "12.5 months"
-    text = json.dumps(result)
+    text = json.dumps(_without_ids(result))
     for leak in ("SENTINEL", "accounts", "monthly_burn", "7777", "6666", "5555", "4444", "view_version", "987651"):
         assert leak not in text
 
@@ -193,7 +194,8 @@ def test_the_delay_counts_from_period_end_never_collected_or_created_time(store)
         read(c, kpi, 222, "2026-09-30", supersedes=september["id"], note="recount")
         corrected = ST.project(c, "investors", "2026-10-15")
         assert [p["value"] for p in by_label(corrected)["Signups"]["series"]] == [111]
-        assert "222" not in json.dumps(corrected) and "200" not in json.dumps(corrected)
+        # Whole numbers only: an id in the dump may contain "222" or "200" by chance.
+        assert not re.search(r"(?<![\w-])(222|200)(?![\w-])", json.dumps(corrected))
         # September comes in at Sep 30 + 30 days, exactly, with its corrected value.
         assert [p["value"] for p in by_label(ST.project(c, "investors", "2026-10-30"))["Signups"]["series"]] == [111]
         later = by_label(ST.project(c, "investors", "2026-10-31"))["Signups"]
@@ -364,6 +366,14 @@ def test_exact_growth_next_to_rounded_revenue_exposes_its_differences(store):
     assert "12,345" not in json.dumps(result)
 
 
+def exact(result, *values):
+    """The exact values shown anywhere in `result`, as plain or comma-grouped numbers. Only whole numbers count: an id,
+    a time's microseconds or a revision can hold the same digits by chance (that made these tests flaky)."""
+    text = json.dumps(result)
+    edge = r"(?![\w,]|\.\d)"
+    return [v for v in values if re.search(rf"(?<![\w.,]){v}{edge}|(?<![\w.,]){v:,}{edge}", text)]
+
+
 def test_a_rounded_series_never_shows_exact_values_or_exact_differences(store):
     setup(store, ("kpi", "", {"mode": "rounded", "rounding": "nearest:1000"}), ("customers", "", {"mode": "rounded"}))
     with store.transaction() as c:
@@ -386,8 +396,16 @@ def test_a_rounded_series_never_shows_exact_values_or_exact_differences(store):
     assert held_labels(result) == {"Same gap", "On grid"}
     stat = by_label(result)["Rounded"]
     assert stat["display"] == "~$12,000,000" and [p["value"] for p in stat["series"]] == [1_000_000, 12_000_000]
-    text = json.dumps(result)
-    assert "234" not in text and "678" not in text
+    # Random ids (uuid4) can contain any digits, so the ids are left out and only the values a reader sees are checked.
+    assert not exact(_without_ids(result), 1234, 2234, 1_234_567, 12_345_678)
+
+
+def _without_ids(value):
+    if isinstance(value, dict):
+        return {k: _without_ids(v) for k, v in value.items() if k != "id" and not k.endswith("_id")}
+    if isinstance(value, list):
+        return [_without_ids(v) for v in value]
+    return value
 
 
 def test_a_range_series_has_no_numbers(store):
@@ -400,7 +418,7 @@ def test_a_range_series_has_no_numbers(store):
         result = ST.project(c, "investors", "2026-10-15")
     stat = by_label(result)["Pipeline"]
     assert stat["display"] == "$2,000,000–$5,000,000" and all(p["value"] is None for p in stat["series"])
-    assert "234" not in json.dumps(result)
+    assert not exact(_without_ids(result), 1_234_567, 3_456_789)
 
 
 def test_a_delayed_value_cant_be_worked_out_before_its_time(store):
@@ -843,7 +861,7 @@ def test_a_logo_is_an_image_in_the_store(store):
         # The page's own upload is named for it; a library picture is an image too but never the logo.
         for blob, name, kind in (("logo-1", S.LOGO_NAME + ".png", "image/png"), ("doc-1", "doc.pdf", "application/pdf"),
                                  ("pic-1", "holiday.png", "image/png")):
-            c.execute("INSERT INTO blobs (id, owner, digest, size, name, content_type, created) VALUES (?,?,?,?,?,?,?)",
+            c.execute("INSERT INTO blobs (id, owner, digest, size, name, content_type, created_at) VALUES (?,?,?,?,?,?,?)",
                       (blob, OWNER, blob, 1, name, kind, H.now()))
         assert S.update(c, OWNER, logo_file_id="logo-1")["logo_file_id"] == "logo-1"
         for bad in ("doc-1", "pic-1", "no-such-file", "../etc/passwd"):
@@ -878,7 +896,8 @@ def test_what_can_go_on_the_board_is_names_only_and_never_a_private_line(books):
     lines = [item for item in found if item["source_kind"] == "finance_line"]
     assert account(c, "6000") in {item["ref_id"] for item in lines}
     assert pay not in {item["ref_id"] for item in lines} and "Payroll" not in json.dumps(found)
-    assert "Old one" not in json.dumps(found) and "4242" not in json.dumps(found) and "42424" not in json.dumps(found)
+    labels = json.dumps([item["label"] for item in found])     # ref_ids are random UUIDs: one can hold "4242"
+    assert "Old one" not in labels and "4242" not in labels and "42424" not in labels
 
 
 def test_built_ins_are_seeded_once_disabled_and_cant_be_deleted(store):
@@ -948,7 +967,7 @@ def test_routes_owners_and_admins_write_bots_and_members_dont(api, monkeypatch, 
     identities["botops-for-cara"] = Identity("human:cara", "human", "cara@acme.example", via="botops", confirmed=True)
     identities["manager-bot"] = Identity("bot:ops", "bot", agent="hermes", via="botops", confirmed=True)
     with api.app.state.store.transaction() as c:
-        c.execute("INSERT OR IGNORE INTO agents(bot,harness,token_hash,created,created_by) "
+        c.execute("INSERT OR IGNORE INTO agents(bot,harness,token_hash,created_at,created_by) "
                   "VALUES('ops','hermes','x-ops',?,'human:ana')", (H.now(),))
 
     # Seeded and listed, all closed.

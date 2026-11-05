@@ -27,5 +27,5 @@ candidate (412) and a flight booked above the policy class (690).**
 - Tomas, claim CL-0921: 2 lines from 2026-07-12, 79 days old, 191.00. Rule: submit within 60 days (policy 1.5).
 
 ## Could not read
-Card 7 (ending 2231) has no rows for September; check whether it was cancelled or the export missed it.
+Card 7 (ending 2231) has no rows for September; check whether it was canceled or the export missed it.
 ```

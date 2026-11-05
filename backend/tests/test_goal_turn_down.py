@@ -70,11 +70,15 @@ def test_another_persons_assistant_cannot_turn_the_owners_suggestion_down(api):
 
 
 def test_without_the_owners_cited_turn_the_write_is_a_card_as_before(api):
+    """An uncited write on a live turn cites that turn (the default citation), so it is admitted. With no message of the
+    owner's behind the run (the one that started it is older than the citable thirty minutes), it is a Confirm card."""
     strategy_bot(api)
     g = goal(api, "Get 100 companies to try Tico", owner="ops")
     r, attempt = turn(api, "coo", "ana-test", "No, leave it.")
-    refused = api.post("/api/v2/goal-proposals/turned-down", json=suggestion(g["id"]),
-                       headers={"Authorization": f"Bearer {attempt['token']}"})
+    with api.app.state.store.transaction() as c:
+        c.execute("UPDATE messages SET created_at=? WHERE id=?",
+                  (H.shift(H.now(), seconds=-31 * 60), turn_message(api, attempt)))
+    refused = api.post("/api/v2/goal-proposals/turned-down", json=suggestion(g["id"]), headers=headers(attempt["token"]))
     assert refused.status_code == 403 and refused.json()["error"]["code"] == "confirm_required"
     assert proposals(api) == []
 
@@ -84,7 +88,7 @@ def test_a_no_cited_from_more_than_thirty_minutes_ago_is_refused(api):
     g = goal(api, "Get 100 companies to try Tico", owner="ops")
     r, attempt = turn(api, "coo", "ana-test", "No, leave it.")
     with api.app.state.store.transaction() as c:
-        c.execute("UPDATE messages SET created=? WHERE id=?",
+        c.execute("UPDATE messages SET created_at=? WHERE id=?",
                   (H.shift(H.now(), seconds=-31 * 60), turn_message(api, attempt)))
     refused = turn_down(api, attempt, suggestion(g["id"]), expected=403)["error"]
     assert refused["code"] == "on_behalf_of"

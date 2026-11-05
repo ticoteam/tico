@@ -202,13 +202,34 @@ def cost_usd(settings, model, usage):
 # month is summed again. The `+` keeps SQLite on the rowid range: without it the planner takes events_action_ts and
 # reads the whole month again.
 _SPEND, _SPEND_LOCK = {}, threading.Lock()
-MONTH_SPEND_SQL = ("SELECT coalesce(sum(json_extract(detail_json,'$.cost_usd')),0), max(rowid) FROM events "
-                   "WHERE ts>=? AND action=?")
-NEW_SPEND_SQL = ("SELECT coalesce(sum(json_extract(detail_json,'$.cost_usd')),0), max(rowid) FROM events "
-                 "WHERE rowid>? AND +ts>=? AND +action=?")
+MONTH_SPEND_SQL = ("SELECT coalesce(sum(json_extract(detail,'$.cost_usd')),0), max(rowid) FROM events "
+                   "WHERE created_at>=? AND action=?")
+NEW_SPEND_SQL = ("SELECT coalesce(sum(json_extract(detail,'$.cost_usd')),0), max(rowid) FROM events "
+                 "WHERE rowid>? AND +created_at>=? AND +action=?")
 # A budget is the settings field holding its monthly cap and the event action its spend rows are written as. Decide's
 # own is the default; org rule checks keep a separate one (backend/org_rule_check.py), so neither can spend the other's.
 DECIDE_BUDGET = ("decisions_monthly_usd", "judge.spend")
+
+
+def saved_cap(c):
+    """The monthly cap saved in Settings > Maintenance (registry_metadata `maintenance`, monthly_cap_usd), or None when
+    none is saved: the environment's TICO_DECISIONS_MONTHLY_USD then holds."""
+    row = c.execute("SELECT value FROM registry_metadata WHERE key='maintenance'").fetchone()
+    try:
+        stored = json.loads(row[0]) if row else {}
+    except (TypeError, ValueError):
+        return None
+    cap = stored.get("monthly_cap_usd") if isinstance(stored, dict) else None
+    return float(cap) if isinstance(cap, (int, float)) and not isinstance(cap, bool) and cap >= 0 else None
+
+
+def budget_cap(c, settings, budget=DECIDE_BUDGET):
+    """The cap a budget enforces: Decide's saved cap when one is saved, else the settings field (the environment's)."""
+    if budget == DECIDE_BUDGET:
+        saved = saved_cap(c)
+        if saved is not None:
+            return saved
+    return float(getattr(settings, budget[0], 0) or 0)
 
 
 def spent_this_month(c, at=None, budget=DECIDE_BUDGET):
@@ -238,7 +259,7 @@ def spent_this_month(c, at=None, budget=DECIDE_BUDGET):
 
 def over_spend_cap(c, settings, at=None, budget=DECIDE_BUDGET):
     """(spent, cap) when the month's decision spend has reached the cap, else None. A cap of 0 is no cap."""
-    cap = float(getattr(settings, budget[0], 0) or 0)
+    cap = budget_cap(c, settings, budget)
     if cap <= 0:
         return None
     spent = spent_this_month(c, at, budget)
@@ -283,7 +304,8 @@ def metered(store, models, state, questions, label, call, budget=DECIDE_BUDGET):
     every transport caps the answer at MAX_OUTPUT_TOKENS; a provider's own reported cost can still be higher. Another
     `budget` (cap field, spend action) meters against its own cap and writes its own spend rows."""
     settings = store.settings
-    cap = float(getattr(settings, budget[0], 0) or 0)
+    with store.read() as c:
+        cap = budget_cap(c, settings, budget)
     reserved = reservation(settings, models, state, questions) if cap > 0 else 0.0
     with _METER:
         if cap > 0:
@@ -521,7 +543,7 @@ def record_outcome(c, actor, body):
                      (body.ref, actor)).fetchone()
     if not call:
         raise Problem("not_found", f"no decision call {body.ref} of yours to record an outcome for", 404)
-    done = c.execute("SELECT id, detail_json FROM events WHERE target=? AND action='decision.outcome' LIMIT 1",
+    done = c.execute("SELECT id, detail FROM events WHERE target=? AND action='decision.outcome' LIMIT 1",
                      (body.ref,)).fetchone()
     if done:
         return {"id": done[0], "ref": body.ref, **json.loads(done[1] or "{}"), "recorded": False}
@@ -552,7 +574,7 @@ def used_today(c, actor, at=None, action="judge.call", target=None):
     elif actor == H.KEEPER and action == "judge.call":
         where, args = " AND target NOT LIKE ?", [*args, RULES_TARGET]
     # The actor's own rows, counted in the index (events_task_origin), not every actor's today (events_action_ts).
-    return c.execute("SELECT count(*) FROM events INDEXED BY events_task_origin WHERE actor=? AND action=? AND ts>=?"
+    return c.execute("SELECT count(*) FROM events INDEXED BY events_task_origin WHERE actor=? AND action=? AND created_at>=?"
                      + where, args).fetchone()[0]
 
 

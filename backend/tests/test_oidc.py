@@ -52,6 +52,8 @@ class Provider:
         self.accounts, self.account_calls = None, []
         # It takes the sign-in list (backend/people_mirror.py): a list of (status, answer) to answer; None = not advertised.
         self.people, self.people_calls = None, []
+        # It mails an install's unread-threads digest (backend/oidc.py `digest`): a list of (status, answer) to answer.
+        self.digests, self.digest_calls = None, []
         self.keys = []
         self.rotate()
         provider = self
@@ -79,7 +81,9 @@ class Provider:
                                 **({"tico_accounts_endpoint": provider.issuer + "/oauth2/accounts"}
                                    if provider.accounts is not None else {}),
                                 **({"tico_people_endpoint": provider.issuer + "/oauth2/people"}
-                                   if provider.people is not None else {})})
+                                   if provider.people is not None else {}),
+                                **({"tico_digest_endpoint": provider.issuer + "/oauth2/digest"}
+                                   if provider.digests is not None else {})})
                 elif path.endswith("/keys"):
                     provider.jwks_fetches += 1
                     self.reply({"keys": [provider.jwk(kid, key) for kid, key in provider.keys]})
@@ -101,6 +105,10 @@ class Provider:
                 if urlparse(self.path).path.endswith("/oauth2/people"):
                     provider.people_calls.append(one)
                     status, answer = provider.people.pop(0)
+                    return self.reply(answer, status)
+                if urlparse(self.path).path.endswith("/oauth2/digest"):
+                    provider.digest_calls.append(one)
+                    status, answer = provider.digests.pop(0)
                     return self.reply(answer, status)
                 if urlparse(self.path).path.endswith("/oauth2/accounts"):
                     provider.account_calls.append(one)
@@ -434,7 +442,7 @@ def test_idle_and_absolute_lifetimes(signin):
     signin.login()
     assert me(signin.api).status_code == 200
     with signin.auth.store.transaction() as c:
-        c.execute("UPDATE oidc_sessions SET last_seen=?", ("2000-01-01T00:00:00.000000Z",))
+        c.execute("UPDATE oidc_sessions SET last_seen_at=?", ("2000-01-01T00:00:00.000000Z",))
     assert me(signin.api).status_code == 401
     signin.login()
     assert me(signin.api).status_code == 200
@@ -701,7 +709,7 @@ def test_sign_in_off_stops_an_address_move_and_the_account_being_remembered(sign
 
 @pytest.fixture
 def mirror(monkeypatch):
-    """The people mirror's state, reset for one test; any timer it armed is cancelled afterwards."""
+    """The people mirror's state, reset for one test; any timer it armed is canceled afterwards."""
     monkeypatch.setattr(people_mirror, "_auth", None)
     monkeypatch.setattr(people_mirror, "_timer", None)
     monkeypatch.setattr(people_mirror, "_next_allowed", 0.0)
