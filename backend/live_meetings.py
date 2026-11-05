@@ -1682,11 +1682,11 @@ def install_live_meetings(app, store, auth, write):
                     person = H.human(c, H.actor_id(member[0])) if H.is_human(member[0]) else None
                     if person and person.get("email"):
                         participants.append(person["email"])
-            body_import = MeetingImport(participants=participants, title=row["title"], started_at=row["started_at"],
+            body_import = MeetingImport(title=row["title"], started_at=row["started_at"],
                                         duration_seconds=duration_ms / 1000, source="tico-live", external_id=rid,
                                         transcript=[{"speaker": chunk["speaker"], "start_ms": chunk["start_ms"],
                                                      "end_ms": chunk["end_ms"], "text": chunk["text"]}
-                                                    for chunk in chunks], review="pending")
+                                                    for chunk in chunks], participants=participants, review="pending")
             result = app.state.import_meeting(c, who, body_import, [], live_client=row["client"])
             imported_id = result["id"]
             c.execute("UPDATE live_meetings SET imported_meeting_id=?,updated_at=? WHERE id=?",
@@ -1714,6 +1714,10 @@ def install_live_meetings(app, store, auth, write):
                           (H.now(), H.now(), rid))
                 _end_open_turns(c, rid)
             c.execute("UPDATE live_meetings SET discarded_at=? WHERE id=?", (H.now(), rid))
+            # A deleted recording kept on its computer leaves no task associations in Tico.
+            c.execute("DELETE FROM meeting_task_links WHERE meeting_id=? AND EXISTS "
+                      "(SELECT 1 FROM media_control WHERE meeting_id=? AND deleted_at IS NOT NULL)",
+                      (row["imported_meeting_id"], row["imported_meeting_id"]))
             from . import meeting_audience
             meeting_audience.revoke_live(c, rid)
             for table in ("live_meeting_chunk_versions", "live_meeting_chunks", "live_meeting_chat_routes",

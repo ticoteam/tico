@@ -20,6 +20,7 @@ from . import hubdb as H
 from . import idempotency_messages
 from . import message_links
 from . import people as P
+from . import sources as SRC
 
 # A message to a bot queues its job in Python, in the writer's transaction: backend/enqueue.py.
 
@@ -1078,6 +1079,8 @@ class Store:
         # In-process writers queue before BEGIN instead of competing in SQLite's busy-handler sleeps.
         # Reads still use independent WAL snapshots; other processes remain governed by busy_timeout.
         self.writer = WriterGate()
+        # Requests in another app must neither drain this store's runs nor consume its pending wakeup.
+        self.automation_bell = threading.Event()
         from .provenance_clock import Cache
         self.provenance_cache = Cache()
         self.roster_rows = {}       # {statement: (roster_clock count, rows)}, shared by this store's connections
@@ -1106,6 +1109,7 @@ class Store:
         c.execute(f"PRAGMA journal_size_limit={H.WAL_SIZE_LIMIT}")
         return c
 
+    @SRC.scoped("system:migration")
     def migrate(self):
         """The preflight and the pending migrations only (hubdb.connect runs them), for create_app before its installs."""
         from . import migrations as Migrations
@@ -2180,6 +2184,7 @@ class Store:
         c.row_cache = self.row_cache
         c.write_transaction = False
         c.after_commit = []
+        c.automation_bell = self.automation_bell
         c.provenance_changes = c.total_changes
         c.provenance_start = None
         c.settings = self.settings      # the server's own settings, for work that holds only the connection
@@ -2314,7 +2319,7 @@ class Store:
             "SELECT 1 FROM idempotency WHERE binding IS NULL AND actor=? AND operation=? AND key=?",
             (self._principal(identity), operation, key)).fetchone() is not None
 
-    def mutate(self, identity, operation, key, body, fn, check=None, durable=False):
+    def mutate(self, identity, operation, key, body, fn, check=None, durable=False, retry_body=None):
         if not key or len(key) > 200:
             raise Problem("idempotency_key", "Provide an Idempotency-Key of 1–200 characters", 422)
         hashed = digest(encode(body))
@@ -2330,9 +2335,11 @@ class Store:
             row = c.execute("SELECT * FROM idempotency WHERE binding IS NULL AND actor=? AND operation=? AND key=?",
                             (principal, operation, key)).fetchone()
             if row:
-                if row["request_hash"] != hashed:
-                    raise Problem("idempotency_conflict", "This key was used for different content", 409)
                 result = json.loads(row["response"])
+                if row["request_hash"] != hashed:
+                    legacy = retry_body(c, result) if retry_body else None
+                    if legacy is None or row["request_hash"] != digest(encode(legacy)):
+                        raise Problem("idempotency_conflict", "This key was used for different content", 409)
                 from .auth import Auth, Identity
                 from . import task_privacy as privacy
                 replay_auth = Auth(self)
@@ -2354,6 +2361,11 @@ class Store:
                                                     attempt_id=aid)
                         if not privacy.attempt_readable(c, replay_principal.actor, aid):
                             raise Problem("privacy", "This execution is no longer available", 403)
+                        if operation == "/api/v2/jobs/claim" and isinstance(saved, dict):
+                            from . import task_context
+                            attempt = c.execute("SELECT * FROM attempts WHERE id=?", (aid,)).fetchone()
+                            acting = replay_auth.assistant_principal(c, attempt) or replay_principal
+                            saved["task_context"] = task_context.for_turn(c, replay_auth, acting, saved.get("task"))
                 # Cached results keep their retry semantics, but access is current on every retry.
                 task_ids = set()
                 for part in operation.split("/"):
@@ -2380,7 +2392,8 @@ class Store:
                 if '/meetings/' in operation or operation.endswith('/meetings'):
                     from .meeting_items import redact
                     result = redact(c, replay_principal, replay_auth, result)
-                return result
+                from .files import readable_page_refs
+                return readable_page_refs(c, replay_auth, replay_principal, result)
             # Who made the changes this write logs (backend/events.py).
             from . import events as changes
             c.execute("SAVEPOINT domain_write")

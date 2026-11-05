@@ -6,6 +6,10 @@ Run now are part of Maintenance; the separate Health scan system routine is remo
 
 Settings > Health lists what it found.
 
+For a runner update blocked by changed files, Health and BotOps say when only flattened Tico links remain.
+The runner checks their bytes and targets: these links are repaired on the next update, with no decision about
+local work. Other changes still need a commit or stash. See [Updates](updates.md#a-mac-or-linux-checkout).
+
 Settings > Health also lists checks that belong to one feature, documented on that feature's page: public roadmap
 suggestions with no receiving bot are in [Public roadmaps](roadmaps.md), and the Tico AI Gateway key (near or at its
 monthly cap, not recognised, or not ready) is in [Tico AI Gateway](ai-gateway.md#what-the-card-says).
@@ -24,10 +28,29 @@ jobs held on purpose), the oldest age, why it cannot
 start, and a fix or a command to inspect its runs. Work held on purpose never makes a bot stuck. The web Stuck list,
 Overview and the silent-computer line split the queue the same way. **Tasks not progressing** names visible bot tasks
 that nothing is set to move, the tasks Task Manager lists as stalled. Settings > Health shows the same summaries.
+**Questions nobody can read** names held tasks waiting on a system, missing or inactive recipient, or someone who
+can no longer read the task or any source, including bot activity. A synced bot without desktop delivery cannot
+take asks and is flagged too. It checks saved asks and explicit waits.
+
+A cloud machine asleep while all its jobs wait on purpose shows those waits as queue information. If any job needs
+a fix, such as signing in its check model, Health marks the bot stuck even when an older task waits on purpose.
+Ready jobs do not hide that fix, even at the company turn limit. If no job needs a fix, the company hold still shows.
+Its last boot's load raises no reporting warning while it rests, even if it just contacted Tico. The queue
+cutoff uses the next runnable job's age, including when readiness still needs a fresh report. Spending limits and
+other holds still apply while that report is missing. Work that can run but stays asleep past that cutoff still
+raises a problem; **Starting** means the machine is starting.
 
 **Pull requests not progressing** names visible bot PRs that have remained conflicting for more than 12 hours,
 or green and mergeable without a review for more than 12 hours. Each names the ticket, waiting age and whose
-move it is: the author merges main, or the reviewer reviews. These clocks start when the existing GitHub sync
+move it is: the author fixes conflicts or review changes, merges after approval, or moves the ticket on;
+an open check names its reviewer even after a push. Health calls the ticket flow's ticket, merge and verdict rules to decide
+whether to merge, move on or fix changes. A held or finished ticket calls for a ticket status check, with no advice
+to merge or move on. Health checks merge readiness before advising fixes, including a step's explicit skip tag
+such as `skip-qa`. Without that skip, a QA failure still stands after re-entering QA and passing at the same head,
+including when the ticket is back at QA Fixes; only a new head clears it. A QA title filed at a recorded Build step
+cannot approve a later QA step. Completed human subtasks do not count as check verdicts.
+Health keeps private check owners and verdicts hidden. When it cannot see all check evidence, it asks for a
+review status check instead of recommending a merge or move on. These clocks start when the existing GitHub sync
 first observes the condition, survive repeated refreshes, and clear when it resolves. A new head starts a new
 review wait. Older links acquire a clock on their next sync; Health performs no extra GitHub polling.
 

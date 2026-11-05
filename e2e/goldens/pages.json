@@ -12,6 +12,7 @@
         "file_id": "<page>",
         "replaced_by_id": null,
         "replaced_by_title": null,
+        "restricted": false,
         "src": null,
         "stale_days": null,
         "task_id": null,

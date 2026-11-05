@@ -23,6 +23,7 @@ from fastapi.responses import Response
 
 from . import replay
 from . import sql
+from . import sources
 from .store import H, Problem
 
 LIMIT = 100
@@ -272,6 +273,9 @@ def install(app, store, auth):
                 item["task"] = task
             out.append(item)
         names = {a: name(a) for item in out for a in (item["actor"], item["about"]) if a}
+        lines = sources.lookup(c, sources.actors_of(out))
+        for item in out:
+            item["source"] = sources.source_of(lines, item)
         return out, names
 
     def params(request):

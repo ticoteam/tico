@@ -112,6 +112,26 @@ async function phonePublish(browser) {
   assert.equal(await page.evaluate(() => window.pwned), undefined);
   assert.deepEqual(errors, []);
 }
+async function letterProof(browser) {
+  const {page, errors} = await open(browser, {viewport: {width: 390, height: 844}});
+  const shown = await page.evaluate(() => {
+    const address = {name: '<img src=x onerror="window.pwned=1">', line1: '2 Main St', city: 'Dover', state: 'DE', postal_code: '19901'};
+    const payload = {letter_id: 'letter-1', approval_hash: 'a'.repeat(64), proof: '/api/v2/files/proof-1',
+      recipient: address, return_address: {...address, name: 'Acme', line1: '1 Main St'}, mail_class: 'certified',
+      total_micros: 1500123, page_count: 2, color: false, duplex: true};
+    const node = approvalPayloadNode({what: 'letter', payload});
+    const host = document.createElement('div'); host.style.width = '350px'; host.append(node); document.body.replaceChildren(host);
+    return {text: node.textContent, href: node.querySelector('a').getAttribute('href'), markup: node.querySelectorAll('img').length,
+      fits: [...node.querySelectorAll('dd')].every(dd => dd.scrollWidth <= dd.clientWidth)};
+  });
+  assert.equal(shown.href, '/api/v2/files/proof-1');
+  assert.ok(shown.text.includes('2 Main St') && shown.text.includes('1 Main St') && shown.text.includes('certified'));
+  assert.ok(shown.text.includes('$1.500123') && shown.text.includes('Open PDF proof'));
+  assert.equal(shown.markup, 0); assert.ok(shown.fits);
+  assert.deepEqual(errors, []);
+  await page.close();
+}
+
 const REPORT = 'hub task update has failed since 0.2.17 with: refused (version); a fresh read gives the same error. ' +
   'Tried: hub task show, then the update with the new version; still refused. <script>window.pwned=1</script> stays text.';
 const report = {id: 'ap-sup', kind: 'approval', what: 'support', title: 'Send this to Tico support?', requester_id: 'bot:support',
@@ -176,6 +196,56 @@ async function phoneRedesignKinds(browser) {
   assert.deepEqual(errors, []);
   await page.close();
 }
+async function frozenEmailPreview(browser) {
+  for (const fail of [false, true]) {
+    const {page, errors} = await open(browser, {viewport: {width:390,height:844}, hash:'#/tasks'});
+    const item = {...approval, id:'frozen-approval', payload:{...approval.payload, email_send_id:'frozen-send', content_sha256:HASH}};
+    const writes = [];
+    let release;
+    const held = new Promise(resolve => { release = resolve; });
+    await page.route('**/api/v2/needs-you*', route => route.fulfill({contentType:'application/json', body:JSON.stringify({items:[item]})}));
+    await page.route('**/api/v2/email/sends/frozen-send', async route => {
+      await held;
+      await route.fulfill({status:fail ? 403 : 200, contentType:'application/json', body:JSON.stringify(fail ? {error:{detail:'This email is private'}} : {
+        send:{id:'frozen-send',subject:'Frozen subject',recipients:['ava@creator.example'],content_sha256:HASH,
+          attachments:[{name:'proof.pdf',part:1,size:5,sha256:HASH2}]},preview_complete:true,
+        bodies:[{type:'text/plain',text:'Frozen <img src=x onerror="window.pwned=1"> body'},
+          {type:'text/html',text:'We agree to pay $100000.'}]})});
+    });
+    await page.route('**/api/v2/approvals/frozen-approval', route => {
+      writes.push(route.request().postDataJSON());
+      return route.fulfill({contentType:'application/json',body:'{}'});
+    });
+    await page.evaluate(async () => { await v2Refresh(); tasksRender(TASKS_ST); });
+    await page.locator('#task-view [data-view="foryou"]').click();
+    await page.locator('[data-need-card="approval:frozen-approval"]').click();
+    const approve = page.locator('#need-card [data-dc="yes"]');
+    assert.equal(await approve.isDisabled(), true);
+    await page.evaluate(() => { DEC.lockUntil = 0; decideAct(DEC, 'yes'); });
+    assert.equal(writes.length, 0, 'keyboard and direct actions cannot approve an unloaded snapshot');
+    release();
+    if (fail) {
+      await page.locator('#need-card .dc-body .err').waitFor();
+      assert.equal(await approve.isDisabled(), true);
+    } else {
+      await page.locator('#need-card .email-send-preview pre').first().waitFor();
+      assert.equal(await approve.isEnabled(), true);
+      assert.match(await page.locator('.email-send-preview').textContent(), /\$100000/);
+      assert.equal(await page.locator('.email-send-preview img').count(), 0);
+      assert.equal(await page.evaluate(() => window.pwned), undefined);
+      assert.equal(await page.locator('.email-send-preview a').getAttribute('href'), '/api/v2/email/sends/frozen-send/attachments/1');
+      await page.evaluate(() => { DEC.lockUntil = 0; });
+      await approve.click();
+      await page.locator('#need-card [data-dc="close"]').click();
+      await page.waitForFunction(() => !DEC);
+      for (let i=0;i<100 && !writes.length;i++) await page.waitForTimeout(20);
+      assert.equal(writes[0].decision, 'approved');
+    }
+    assert.deepEqual(errors, []);
+    await page.close();
+  }
+}
+
 (async () => {
   const browser = await chromium.launch({channel: process.env.TICO_BROWSER_CHANNEL ?? 'chrome', headless: true});
   try {
@@ -231,9 +301,11 @@ async function phoneRedesignKinds(browser) {
     assert.deepEqual(decided, [{decision: 'approved'}]);
     assert.deepEqual(errors, []);
     await page.close();
+    await frozenEmailPreview(browser);
     await phonePublish(browser);
     await phoneSupport(browser);
     await phoneRedesignKinds(browser);
+    await letterProof(browser);
     console.log('Needs you approvals: one line each; the card shows the send payload readable, files open, HTML stays text, Approve posts; publish, support, task cap and spend limit readable at 390px');
   } finally { await browser.close(); }
 })().catch(e => {console.error(e); process.exit(1);});

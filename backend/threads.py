@@ -52,6 +52,7 @@ import re
 import secrets
 import time
 import uuid
+from datetime import datetime, timedelta, timezone
 
 from . import people as P
 from . import read_cache
@@ -1745,7 +1746,10 @@ def _carrier(c, thread, message, bot, reason, rule, wake="thread", body=None, wa
     elif way == "defer":
         refs["quiet"] = True
     author = message.get("sender_id") or ""
-    body = body or f"{author} in this thread: {message.get('body') or ''}"
+    from .files import page_references
+    sources = (H._json(message.get("refs"), {}) or {}).get("body_sources", [])
+    body, refs = H.sourced_text(body or f"{author} in this thread: {message.get('body') or ''}",
+                               [*sources, *({"file": fid} for fid in sorted(page_references(message, c)))], refs)
     legacy = c.execute("SELECT legacy_audience FROM messages WHERE id=?", (message["id"],)).fetchone()
     dumped, created = H._dump(refs), _now()
     c.execute("INSERT INTO messages(id,conversation_id,sender_id,recipient_id,kind,body,refs,in_reply_to,created_at,"
@@ -1760,9 +1764,10 @@ def _carrier(c, thread, message, bot, reason, rule, wake="thread", body=None, wa
 def _defer_note(c, message, bot):
     """A deferred delivery rides to the bot's next run as a quiet note, as bot_to_bot.hold leaves one."""
     try:
+        body, refs = H.sourced_text(str(message.get("body") or "")[:2000], refs={"message_id": message["id"]})
         c.execute("INSERT INTO notes(id,from_actor,to_actor,body,created_at,message_id) VALUES(?,?,?,?,?,?)",
                   (_new_id(), message.get("sender_id") or H.KEEPER, bot,
-                   str(message.get("body") or "")[:2000], _now(), message["id"]))
+                   body, _now(), refs["message_id"]))
     except Exception:  # noqa: BLE001, S110 - a bare hub database has no notes table
         pass
 
@@ -2378,9 +2383,14 @@ def search(c, v, query, *, limit=20, before=None):
     found = thread_search.search(c, query, thread_sql=readable_sql(c, v, "cv"), message_sql=message_sql(c, v, "m"),
                                  readable=lambda m: message_readable(c, v, m), limit=limit, before=before)
     known = v.known(c)
-    hits = [{**hit, "sender_id": known.message({"sender_id": hit["sender_id"],
-                                                 "conversation_id": hit["thread_id"]})["sender_id"]}
-            for hit in found["hits"]]
+    refs_of = {r[0]: r[1] for r in c.execute(
+        "SELECT id, refs FROM messages WHERE id IN (%s)" % ",".join("?" * len(found["hits"])),
+        [h["message_id"] for h in found["hits"]])} if found["hits"] else {}
+    hits = []
+    for hit in found["hits"]:     # the sender's `source` needs the message's refs (a keeper line's kind)
+        shown = known.message({"sender_id": hit["sender_id"], "conversation_id": hit["thread_id"],
+                               "refs": H._json(refs_of.get(hit["message_id"]), {}) or {}})
+        hits.append({**hit, "sender_id": shown["sender_id"], "source": shown["source"]})
     return {**found, "hits": hits}
 
 
@@ -2871,15 +2881,22 @@ def task_opened(c, conversation, actor, requester, notice):
         _insert_delivery(c, message, requester, row, root_of(c, row), "none", "member")
 
 
-def mark_all_read(c, v, thread_id):
-    """Read up to now in the thread and every sub-thread under it."""
+def mark_all_read(c, v, thread_id, ago_ms=None):
+    """Read up to now in the thread and every sub-thread under it; with `ago_ms`, only what was written by then."""
     v = viewer(None, v) if not isinstance(v, Viewer) else v
     row = require(c, v, thread_id)
     path = row.get("path") or f"/{row['id']}/"
+    by = None
+    if ago_ms:
+        by = (datetime.now(timezone.utc) - timedelta(milliseconds=ago_ms)).strftime("%Y-%m-%dT%H:%M:%S.%f") + "Z"
     n = 0
     for sub in c.execute("SELECT id, last_seq FROM conversations WHERE path LIKE ? ESCAPE '\\'",
                          (path.replace("%", "\\%").replace("_", "\\_") + "%",)).fetchall():
-        mark_read(c, v, sub["id"], sub["last_seq"])
+        seq = sub["last_seq"]
+        if by:
+            seq = c.execute("SELECT COALESCE(MAX(seq),0) FROM messages WHERE conversation_id=? AND created_at<=?",
+                            (sub["id"], by)).fetchone()[0]
+        mark_read(c, v, sub["id"], seq)
         n += 1
     return {"threads": n}
 

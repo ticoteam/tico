@@ -97,11 +97,13 @@ def message_sender_can_approve_send(c, auth, row):
     sender, recipient = str(row.get("sender_id") or ""), str(row.get("recipient_id") or "")
     if not sender.startswith("human:") or not recipient.startswith("bot:"):
         return False
-    try:
-        who = auth.identity_for_actor(c, sender)
-    except Problem:
-        return False
-    return auth.bot_manager(c, who, H.actor_id(recipient))
+    from .email_sending import can_ok, effective
+    bot = H.actor_id(recipient)
+    from . import mailbox_access
+    boxes = mailbox_access.mailboxes_for(c, recipient)
+    if boxes:
+        return any(can_ok(c, auth, sender, box["address"], bot, effective(c, box["address"], bot)) for box in boxes)
+    return can_ok(c, auth, sender, "", bot, effective(c, bot=bot))
 
 
 def update(c, auth, who, bot, body):
@@ -130,6 +132,8 @@ def update(c, auth, who, bot, body):
               "ON CONFLICT(bot) DO UPDATE SET outbound_send=excluded.outbound_send, "
               "forward_to=excluded.forward_to, updated_at=excluded.updated_at, updated_by=excluded.updated_by",
               (bot, int(bool(on)), json.dumps(targets), H.now(), who.actor))
+    from .email_sending import PolicyUpdate, update_policy
+    update_policy(c, who, "bot:" + bot, PolicyUpdate(mode="on_their_own" if on else "ask_first"))
     H.event(c, who.actor, "bot.mail_settings", bot, {"outbound_send": bool(on), "forward_to": targets})
     return view(c, bot)
 
@@ -176,7 +180,9 @@ def install(app, store, auth, mutate):
             if not H.bot(c, bot):
                 raise Problem("not_found", "Bot not found", 404)
             found = view(c, bot)
-            # What Tico may do in Settings > Google is the company's own switch over every bot's: with Send mail off
+            from .email_sending import effective
+            found["sending_policy"] = effective(c, bot=bot)
+            # What Tico may do in Settings > Inboxes is the company's own switch over every bot's: with Send mail off
             # the bot's connector refuses each send before any approval (connectors/mail/policy.py), and the bot reads
             # sending as off. Organize mail and Change calendar gate the connector's other writes the same way,
             # whichever credential it holds (connectors/mail/oauth.py company_allows).

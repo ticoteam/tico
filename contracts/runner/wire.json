@@ -15,6 +15,7 @@
   },
   "error": "ErrorEnvelope",
   "gated": {
+    "heartbeat.request.readiness.worktree_recovery": "runner-rs/src/readiness_extra.rs OPTIONAL: an older server's 422 drops this field for ten minutes; retired worktrees are not allocated to computers without this capability",
     "start_place.request.harness_allocated": "runner-rs/src/execute.rs post_allocated: a 422 naming harness_allocated retries without the field",
     "started.request.harness_allocated": "runner-rs/src/execute.rs post_allocated: a 422 naming harness_allocated retries without the field",
     "start_place.request.waiting": "runner-rs/src/execute.rs wait_before_start: an older server's 422 on a computer busy: memory N% reason retries with pre-start requirements",
@@ -121,9 +122,30 @@
         "source_continuation": {"type": "object", "additionalProperties": true},
         "worktrees": {"type": "array", "items": {"type": "object", "additionalProperties": true}},
         "learned": {"oneOf": [{"type": "object", "additionalProperties": true}, {"type": "null"}]},
+        "task_context": {"$ref": "#/$defs/TaskContext"},
         "updates": {"oneOf": [{"type": "object", "additionalProperties": true}, {"type": "null"}]},
         "session_epoch": {"type": "integer"},
         "bot_session_epoch": {"type": "integer"}
+      }
+    },
+    "TaskContext": {
+      "type": "object", "additionalProperties": false, "required": ["pages", "meetings"],
+      "properties": {
+        "pages": {"type": "array", "maxItems": 10, "items": {"$ref": "#/$defs/TaskContextPage"}},
+        "meetings": {"type": "array", "maxItems": 10, "items": {"$ref": "#/$defs/TaskContextMeeting"}}
+      }
+    },
+    "TaskContextPage": {
+      "type": "object", "additionalProperties": false, "required": ["id", "title", "version", "updated_at"],
+      "properties": {
+        "id": {"type": "string"}, "title": {"type": "string", "maxLength": 200},
+        "version": {"type": "integer"}, "updated_at": {"type": "string"}
+      }
+    },
+    "TaskContextMeeting": {
+      "type": "object", "additionalProperties": false, "required": ["id", "title", "date"],
+      "properties": {
+        "id": {"type": "string"}, "title": {"type": "string", "maxLength": 200}, "date": {"type": "string"}
       }
     },
     "StartPlaceAnswer": {

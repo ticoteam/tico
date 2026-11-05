@@ -45,7 +45,7 @@ def test_a_row_says_whose_it_is_who_reads_it_and_where_to_change_it(api):
     seed(api)
     rows = {r["id"]: r for r in get(api, "connections", "cara-test")["connections"]}
     team = rows["inbox:ibx_b"]
-    assert team["scope"] == "team" and team["readers"] == "Sales" and team["configure"] == "#/settings/inbound"
+    assert team["scope"] == "team" and team["readers"] == "Sales" and team["configure"] == "#/settings/inboxes/tico/ibx_b"
     assert team["can_configure"] is False
     assert rows["inbox:ibx_a"]["scope"] == "company" and rows["inbox:ibx_a"]["readers"] == "Everyone"
     assert rows["webhook:wh-cara"]["scope"] == "person" and rows["webhook:wh-cara"]["can_configure"] is True

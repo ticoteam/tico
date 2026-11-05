@@ -217,7 +217,7 @@ function settingsEditBot(slug = '', inline = false) {
         <label class="bot-editor-check"><input type="checkbox" name="shared" ${e?.shared ? 'checked' : ''}><span>Allow branches<small>People can make their own branch of it, on their computer and subscription.</small></span></label>
         <label class="bot-editor-check"><input type="checkbox" name="temp" ${e?.temp ? 'checked' : ''}><span>Temp bot<small>For work expected to end.</small></span></label>
         ${editing ? settingsUpdateSubscriptions(e) : ''}
-        ${editing ? `<h3 class="bot-editor-sec bot-editor-wide">Access, model and computer</h3><p class="bot-editor-hint bot-editor-wide">Nothing here saves until you press Save bot. Then every change saves together.</p><div class="bot-editor-wide sb-rows" data-bot-people></div>` : ''}
+        ${editing ? `<h3 class="bot-editor-sec bot-editor-wide">Access, model and computer</h3><p class="bot-editor-hint bot-editor-wide">Save bot saves your changes.</p><div class="bot-editor-wide sb-rows" data-bot-people></div>` : ''}
         ${editing ? '' : `<h3 class="bot-editor-sec bot-editor-wide">Model and computer</h3><div class="bot-editor-wide" data-add-choice>
           ${settingsChoiceFields(currentModel)}
           <input type="hidden" name="model_effort" value="${esc(currentModel)}">
@@ -289,6 +289,8 @@ function settingsEditBot(slug = '', inline = false) {
       if (pairing) void settingsAgentPair(pairing.dataset.agentPair);
       if (credential) void settingsAgentCredential(credential.dataset.agentCredential);
       if (revoke) void settingsAgentRevoke(revoke.dataset.agentRevoke);
+      const replace = event.target.closest('[data-bot-cloud-replace]');
+      if (replace) void cloudMachineReplace(replace.dataset.botCloudReplace, replace);
     });
     rows.addEventListener('change', event => {
       const changed = control => control.value !== (control.dataset.current || '');

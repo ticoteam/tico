@@ -53,6 +53,7 @@ class ItemCreate(M.Contract):
     detail: dict = Field(default_factory=dict)
     quote: str = Field(default="", max_length=4_000)
     at_ms: int | None = Field(default=None, ge=0, le=86_400_000)
+    proposed_task_id: str | None = Field(default=None, min_length=1, max_length=200)
     status: Literal["proposed", "pushed"] = "proposed"
     result_ref: str | None = Field(default=None, max_length=240)
 
@@ -70,6 +71,7 @@ class ItemPush(M.Contract):
     text: str | None = Field(default=None, min_length=1, max_length=2_000)
     detail: dict | None = None
     result_ref: str | None = Field(default=None, min_length=1, max_length=240)
+    private: bool = False
 
 
 class CommentCreate(M.Contract):
@@ -170,10 +172,10 @@ def add(c, record, author, body):
     detail = detail_of(section, body.detail)
     ts, iid = H.now(), H.new_id()
     c.execute("INSERT INTO meeting_items(id,meeting_id,section,text,detail,quote,at_ms,status,"
-              "created_by,updated_by,pushed_at,result_ref,created_at,updated_at) "
-              "VALUES(?,?,?,?,?,?,?,'proposed',?,NULL,NULL,NULL,?,?)",
+              "created_by,updated_by,pushed_at,result_ref,created_at,updated_at,proposed_task_id) "
+              "VALUES(?,?,?,?,?,?,?,'proposed',?,NULL,NULL,NULL,?,?,?)",
               (iid, record["id"], section, body.text.strip(), json.dumps(detail, sort_keys=True),
-               body.quote.strip(), body.at_ms, author, ts, ts))
+               body.quote.strip(), body.at_ms, author, ts, ts, body.proposed_task_id))
     H.event(c, author, "meeting.item_added", record["id"], {"item": iid, "section": section})
     return view(one(c, record["id"], iid))
 
@@ -237,12 +239,14 @@ def owner_of(c, detail):
     raise Problem("owner", "Choose an owner for this task: human:<id> or bot:<slug>", 422)
 
 
-def push_task(c, settings, task_create, who, record, row, detail):
+def push_task(c, settings, task_create, who, record, row, detail, private=False):
     owner = owner_of(c, detail)
     priority = detail.get("priority") or "p2"
     body = "\n\n".join([detail.get("body") or "", f"Priority: {priority}", source(settings, record, row, person_name(c, who))])
     created = task_create(c, who, M.TaskCreate(title=row["text"][:300], body=body, owner=owner,
-                                              due=detail.get("due") or None))
+                                              due=detail.get("due") or None,
+                                              private=bool(private or record['metadata'].get('private')
+                                                           or media.effective_audience(record['metadata']) != 'team')))
     return created["task"]["id"]
 
 
@@ -378,13 +382,24 @@ def install_meeting_items(app, store, mutate, task_create, auth):
 
     def reply(request, body, work, rid):
         try:
-            result = mutate(request, body, work, check=lambda c: media.authorized(c, request.state.identity, rid))
+            def receipt(c):
+                result = work(c)
+                if 'item' in result:
+                    result = {**result, 'item_id': result['item']['id']}
+                    result.pop('item')
+                return result
+            result = mutate(request, body, receipt, check=lambda c: media.authorized(c, request.state.identity, rid))
         except Problem as exc:
             if exc.code == "version_conflict":
                 with store.read() as c:
                     exc.extra = redact(c, request.state.identity, auth, exc.extra)
             raise
-        with store.read() as c:
+        with store.read_transaction() as c:
+            media.authorized(c, request.state.identity, rid)
+            result = dict(result)
+            iid = result.pop('item_id', None) or (result.get('item') or {}).get('id')
+            if iid:
+                result['item'] = view(one(c, rid, iid))
             return redact(c, request.state.identity, auth, result)
 
     @app.get("/api/v2/meetings/{rid}/items")
@@ -421,6 +436,15 @@ def install_meeting_items(app, store, mutate, task_create, auth):
         human_only(who)
         def work(c):
             record = media.authorized(c, who, rid)
+            if body.proposed_task_id:
+                if body.section != 'task' or body.status != 'proposed':
+                    raise Problem('section', 'Only a proposed task item can propose a link', 422)
+                if not task_references.readable(c, auth, who, body.proposed_task_id):
+                    body_local = body.model_copy(update={'proposed_task_id': None})
+                else:
+                    body_local = body
+            else:
+                body_local = body
             if body.status == "pushed":
                 if not body.result_ref:
                     raise Problem("result_ref", "A sent item needs a task", 422)
@@ -429,11 +453,31 @@ def install_meeting_items(app, store, mutate, task_create, auth):
                     raise Problem('forbidden', 'Only the requester may link a sent task', 403)
             elif body.result_ref:
                 raise Problem("result_ref", "Only a sent item has a task", 422)
-            item = add(c, record, who.actor, body)
+            item = add(c, record, who.actor, body_local)
             if body.status == "pushed":
                 item = record_push(c, who, rid, item["id"], body.result_ref)
                 meeting_audience.record_sent_link(c, rid, body.result_ref, who.actor)
             return {"item": item}
+        return reply(request, body, work, rid)
+
+    @app.post("/api/v2/meetings/{rid}/items/{iid}/link")
+    @app.post("/api/meetings/{rid}/items/{iid}/link")
+    def accept_link(request: Request, rid: str, iid: str, body: M.Empty):
+        who = request.state.identity
+        human_only(who)
+        def work(c):
+            media.require_live(media.authorized(c, who, rid))
+            row = one(c, rid, iid)
+            if row['status'] == 'pushed':
+                return {'item': view(row), 'pushed': False}
+            if row['status'] != 'proposed':
+                raise Problem('status', 'This item was dismissed', 409)
+            if row['section'] != 'task' or not row['proposed_task_id']:
+                raise Problem('proposal', 'This item has no task to link', 409)
+            task = auth.task(c, who, row['proposed_task_id'])
+            c.execute('INSERT OR IGNORE INTO meeting_task_links(id,meeting_id,task_id,kind,created_by,created_at) '
+                      "VALUES(?,?,?,'proposal',?,?)", (H.new_id(), rid, task['id'], who.actor, H.now()))
+            return {'item': record_push(c, who, rid, iid, task['id']), 'pushed': True}
         return reply(request, body, work, rid)
 
     @app.post("/api/v2/meetings/{rid}/items/{iid}")
@@ -491,7 +535,7 @@ def install_meeting_items(app, store, mutate, task_create, auth):
                 return created
 
             if row["section"] == "task":
-                result = push_task(c, settings, create_task, who, record, row, detail)
+                result = push_task(c, settings, create_task, who, record, row, detail, body.private)
             elif row["section"] == "doc":
                 result = push_doc(c, settings, create_task, who, record, row, detail, auth)
             else:

@@ -156,6 +156,7 @@ the server (`backend/hubdb.py`), never here. A command is its tool's name (clien
                                            (docs/pages.md)
     hub page list [--bot X] [--task ID] [--archived]   pages you may read, newest first
     hub page show <id>                     one page's status: updated, by, version, cadence, stale or replaced
+    hub page access <id> [--audience everyone|ben,group:legal,bot:analyst]
     hub page archive <id> [--restore]      hide a page from lists and search, or bring it back
     hub card list [--place P]              what is pinned at dashboard, growth, team:<group>, bot:<slug>, task:<id>
                                            or person:me (My dashboard)
@@ -175,8 +176,10 @@ the server (`backend/hubdb.py`), never here. A command is its tool's name (clien
     hub email search <address> "<gmail query>" [--limit N] [--cursor C] [--json]
     hub email thread <address> <thread-id> [--json]
     hub email message <address> <message-id> [--json]
+    hub email archive|unarchive|mark-read|mark-unread <address> [<id> ...] [--query Q] [--limit N] [--json]
+    hub email label|unlabel <address> <label> [<id> ...] [--query Q] [--limit N] [--json]
     hub inbound audience <inbox-id> company|team [--group G]
-                                           who reads an Email & Phone inbox (owner or admin)
+                                           who reads a Tico address or number (owner or admin)
     hub pin add <place> <page:FILE|card:ID> [--size small|medium|large] [--position N]
     hub pin update <pin-id> [--size S] [--position N]
     hub pin remove <pin-id>
@@ -1008,6 +1011,24 @@ def parser():
 
     sub.add_parser("whoami").set_defaults(fn="whoami")
 
+    alerts = sub.add_parser('alerts', help='your own phone and paid alert preferences').add_subparsers(dest='sub')
+    for action in ('show', 'remove', 'confirm', 'verify', 'test', 'set', 'company'):
+        item = alerts.add_parser(action); item.set_defaults(fn='alerts ' + action)
+        if action == 'confirm': item.add_argument('code')
+        if action == 'verify':
+            item.add_argument('phone')
+            item.add_argument('--sms-consent', action='store_true', required=True)
+            item.add_argument('--call-consent', action='store_true', default=False)
+        if action == 'test':
+            item.add_argument('--accept-charge', action='store_true', required=True, help='company pays $1 if accepted')
+            item.add_argument('--operation-id', required=True, help='stable id for this paid test and retries')
+        if action in ('set', 'company'): item.add_argument('--monthly-cap', type=int)
+        if action == 'set':
+            for flag in ('urgent-needs', 'legal-mail', 'bot-stuck', 'urgent-calls', 'emergency-exception'):
+                item.add_argument('--' + flag, action=argparse.BooleanOptionalAction, default=None)
+            for flag in ('timezone', 'quiet-start', 'quiet-end'):
+                item.add_argument('--' + flag)
+
     inbound = sub.add_parser('inbound', help='shared company email and SMS inboxes').add_subparsers(dest='sub')
     item = inbound.add_parser('inboxes'); item.set_defaults(fn='inbound inboxes')
     item.add_argument('--after'); item.add_argument('--limit', type=int)
@@ -1040,6 +1061,18 @@ def parser():
     item = connections.add_parser('list'); item.set_defaults(fn='connections list')
     item.add_argument('--cursor'); item.add_argument('--limit', type=int)
 
+    letters = sub.add_parser('letter', help='quote and send physical letters through the Gateway').add_subparsers(dest='sub')
+    item = letters.add_parser('quote', help='quote a PDF or text; never prints until send and approval')
+    item.set_defaults(fn='letter quote')
+    item.add_argument('--file-id'); item.add_argument('--text')
+    item.add_argument('--recipient', required=True, type=json.loads, help='US address as JSON: name, line1, city, state, postal_code')
+    item.add_argument('--mail-class', choices=['first_class', 'certified', 'certified_return_receipt'])
+    item.add_argument('--color', action='store_true'); item.add_argument('--duplex', action='store_true')
+    item.add_argument('--task-id'); item.add_argument('--thread-id')
+    item = letters.add_parser('list'); item.set_defaults(fn='letter list')
+    item.add_argument('--before'); item.add_argument('--limit', type=int)
+    for action in ('send', 'show', 'cancel'):
+        item = letters.add_parser(action); item.set_defaults(fn='letter ' + action); item.add_argument('letter_id')
     mail = sub.add_parser('mail', help='physical mail the company received (scanned letters)').add_subparsers(dest='sub')
     item = mail.add_parser('list'); item.set_defaults(fn='mail list')
     item.add_argument('--status', choices=('new','filed','archived','failed'))
@@ -1047,7 +1080,14 @@ def parser():
     item.add_argument('--after'); item.add_argument('--limit', type=int)
     item = mail.add_parser('read'); item.set_defaults(fn='mail read'); item.add_argument('item_id')
 
-    email = sub.add_parser('email', help='read email; Whole Workspace mailboxes read live from Gmail').add_subparsers(dest='sub')
+    email = sub.add_parser('email', help='read and organize email, set sending policy, and manage pending sends').add_subparsers(dest='sub')
+    item = email.add_parser('policy'); item.set_defaults(fn='email policy')
+    item.add_argument('--mailbox'); item.add_argument('--bot')
+    item.add_argument('--settings', type=json.loads, help='JSON policy fields; omit to read')
+    item = email.add_parser('sends'); item.set_defaults(fn='email sends')
+    item.add_argument('--mailbox', required=True); item.add_argument('--pending', action='store_true')
+    item.add_argument('--cursor'); item.add_argument('--limit', type=int)
+    item = email.add_parser('cancel'); item.set_defaults(fn='email cancel'); item.add_argument('id')
     for action in ('mailboxes', 'inbox', 'search', 'thread', 'message'):
         item = email.add_parser(action)
         item.set_defaults(fn='email ' + action)
@@ -1063,6 +1103,16 @@ def parser():
                 item.add_argument('q', help='Gmail search syntax')
         if action in ('thread', 'message'):
             item.add_argument('id', metavar=action + '-id')
+    for action in ('archive', 'unarchive', 'mark-read', 'mark-unread', 'label', 'unlabel'):
+        item = email.add_parser(action)
+        item.set_defaults(fn='email ' + action)
+        item.add_argument('mailbox', metavar='address')
+        if action in ('label', 'unlabel'):
+            item.add_argument('label')
+        item.add_argument('ids', nargs='*', metavar='message-id')
+        item.add_argument('--query', help='Gmail query instead of explicit message ids')
+        item.add_argument('--limit', type=int, default=100, help='query cap, 1 to 500 (default 100)')
+        item.add_argument('--json', action='store_true', help='print the API response as JSON')
 
     # The Company page, read-only (docs/company-page.md): owners and admins; nothing here publishes or changes a reader.
     sub.add_parser('company-page', help='the Company page: transparency, address, last update').set_defaults(fn='company-page')
@@ -1102,6 +1152,7 @@ def parser():
     s.add_argument("id")
     s.add_argument("--offset", type=int, default=0)
     s.add_argument("--limit", type=int, default=20000)
+    s.add_argument("--notes", action="store_true", default=None, help="read only the meeting's notes")
     s.set_defaults(fn="meeting read")
     s = meeting.add_parser("delete", help="delete a Meeting you may edit")
     s.add_argument("id")
@@ -1323,7 +1374,7 @@ def parser():
     s.set_defaults(fn="thread link-slack")
 
     question = sub.add_parser("question", help="ask other bots a question and wait; answer one asked of you").add_subparsers(dest="sub")
-    s = question.add_parser("ask")
+    s = question.add_parser("ask", description="Ask a teammate. A system recipient routes to your manager or the company owner.")
     s.add_argument("words", nargs="*")
     s.add_argument("--wait", type=float, default=60)
     s.set_defaults(fn="question ask")
@@ -1451,6 +1502,7 @@ def parser():
     s.add_argument("--task", help="the task it is for; it shows at the top of that task")
     s.add_argument("--replaces", help="the id of an older page this one takes the place of")
     s.add_argument("--scope", choices=["task", "bot"])
+    s.add_argument("--audience", help="everyone, or ben,group:legal,bot:analyst")
     s.set_defaults(fn="page publish")
     s = page.add_parser("list", help="pages you may read, newest first")
     s.add_argument("--bot")
@@ -1462,6 +1514,10 @@ def parser():
     s = page.add_parser("show", help="one page's status")
     s.add_argument("id")
     s.set_defaults(fn="page show")
+    s = page.add_parser("access", help="show or change who can see a page")
+    s.add_argument("id")
+    s.add_argument("--audience", help="everyone, or ben,group:legal,bot:analyst")
+    s.set_defaults(fn="page access")
     s = page.add_parser("archive", help="hide a page from lists and search, or --restore it")
     s.add_argument("id")
     s.add_argument("--restore", action="store_true", default=None)
@@ -1634,7 +1690,7 @@ def parser():
                         "with no value (put the flag after the parent id), the company's check model, from a provider other "
                         "than the parent's authors when one can run it")
     s.add_argument("--role", dest="check_role", choices=("review", "check"),
-                   help="with --check-model: what the other model is asked for (default check)")
+                   help="review files a review child; with --check-model, what that model is asked for (default check)")
     s.set_defaults(fn="task child create")
     s = task.add_parser("tree", help="show nested subtasks")
     s.add_argument("id")
@@ -1729,7 +1785,7 @@ def parser():
     s.add_argument("--steps-file", dest="steps_file", help="JSON array of steps; keep ids when editing")
     s.add_argument("--delete", action="store_true", help="delete an unused type")
     s.set_defaults(fn="task types")
-    s = task.add_parser("ask")
+    s = task.add_parser("ask", description="Ask the requester. A system requester routes to your manager or the company owner.")
     s.add_argument("id")
     s.add_argument("text")
     s.set_defaults(fn="task ask")
@@ -1962,6 +2018,9 @@ def parser():
     s = task.add_parser("answers", help="list the task's structured answers, oldest first")
     s.add_argument("id")
     s.set_defaults(fn="task answers")
+    s = task.add_parser("context", help="readable page and meeting references for a task")
+    s.add_argument("id")
+    s.set_defaults(fn="task context")
     s = task.add_parser("meetings", help="meetings linked to a task")
     s.add_argument("id")
     s.add_argument("--limit", type=int)

@@ -45,6 +45,12 @@ def ident(slug, key):
     return f"{AUTO}{slug}:{key}"
 
 
+def by_name(name):
+    """The metric key a tag names: its key (`tasks_done_7d`) or its name (`Tasks completed (7d)`), in any case; or None."""
+    wanted = " ".join(str(name or "").split()).lower()
+    return next((key for key, spec in METRICS.items() if wanted in (key, spec["name"].lower())), None)
+
+
 def parse(kpi_id):
     """(bot id, metric key) of an auto KPI id, or None."""
     rest = str(kpi_id or "")[len(AUTO):] if str(kpi_id or "").startswith(AUTO) else ""

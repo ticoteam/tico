@@ -72,7 +72,9 @@ A resumed session is sent only what is new: what was said since its last turn, t
 notices. On a harness that says when it compacts (the `compaction_events` capability: Claude Code and pi), the bot's standing
 instructions become one line while they, AGENT.md and the model are unchanged, and the assigned task one line while it
 is unchanged, but only while the session's last turn and the whole prompt come to under 60% of its Compact at. If the
-session compacts during a shortened turn anyway, the turn is given the lines it left out at once. The whole prompt goes
+runner cannot safely read and hash AGENT.md, including when it is a symlink, it sends the full standing instructions
+each turn so the bot is told to read the rules again. If the session compacts during a shortened turn anyway, the turn
+is given the lines it left out at once. The whole prompt goes
 again on a new session, after any compaction (the harness's own or `compact_first`), after a side session or an
 interrupted turn, and after a turn that did not complete; the repo rules go again after a compaction or a turn that did
 not complete. A resumed session that turns out to be missing starts again with what a replacing session gets: the
@@ -151,7 +153,9 @@ the bot ends its turn and Tico wakes the task when its worktree is ready ([Task 
 or a person, cleans one up first. A task's worktree goes when the task is finished: at the end of
 that bot's turn, or within about 10 minutes for another bot's copy or one whose files were still uploading. A worktree
 with unsaved changes, or commits that are on no remote, stays until someone saves or discards them.
-See [Task worktrees](worktrees.md) for code worktrees and cleanup.
+Before making or reusing a session folder, the Computer checks its full path against the Tico install. A link
+such as `sessions` pointing into the install stops the turn with the path named in the error, before any folder
+or Git work. See [Task worktrees](worktrees.md) for code worktrees and cleanup.
 
 A private live meeting's bot turns get a worktree of their own the same way, `sessions/bot-<slug>/private-<id>`, but
 nothing in it is ever saved: it is never committed for the bot or pushed, and it is deleted, unsaved changes and all,

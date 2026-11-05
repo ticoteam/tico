@@ -11,6 +11,7 @@ function meetStop() {
     clearInterval(MEET.poll); clearInterval(MEET.sourcesPoll);
     meetSharedStop(MEET);
     granolaStop(MEET);   // ui/app/meetings-granola.js
+    $('#meet-src-dialog')?.remove();
     MEET = null;
   }
   window.liveMeetingsStop?.();
@@ -34,7 +35,7 @@ async function pageNotes() {
       <div class="meet-sources" id="meet-sources" hidden></div>
       <a class="linkish" id="meet-recorder" href="${MEET_RECORDER_DMG}" aria-label="Get Tico Recorder for Mac" title="For Mac">Get Tico Recorder</a>
       <button class="linkish" type="button" id="meet-settings">Settings</button></div>
-    <section class="meet-granola" id="meet-granola" aria-label="Granola" hidden></section>
+    <p class="sr-only" id="mg-live" aria-live="polite"></p>
     <div class="meet-review-help muted" id="meet-review-help" hidden></div>
     <div class="meet-review-bulk" id="meet-review-bulk" hidden></div>
     <div class="notes" id="notes">
@@ -241,7 +242,8 @@ function meetSourceState(row, id) {
   if (row.status === 'delayed') return {key: 'delayed', word: 'Delayed'};
   return {key: 'on', word: 'Connected'};
 }
-function meetTile(state, source, big) {
+// A large tile on the empty page: a source and how it is doing.
+function meetTile(state, source) {
   const row = (state.sourceRows || []).find(r => r.id === source.id);
   const known = Array.isArray(state.sourceRows);
   // Granola with account sign-in is per person: the tile shows the viewer's own connection and anyone can use it.
@@ -251,38 +253,34 @@ function meetTile(state, source, big) {
   const when = mine ? (mine.when ? ago(mine.when) : '') : st.key === 'on' ? ago(row.last_import || row.last_succeeded_at) : '';
   const label = `${source.name}: ${st.word || 'Connect'}${when ? (mine ? ', synced ' : ', last import ') + when : ''}`;
   const attrs = source.id === 'close' ? `href="${INTEGRATIONS}/close-crm"` : `type="button" data-msrc="${esc(source.id)}"${S.me?.role === 'owner' || account ? '' : ' disabled title="The owner connects sources"'}`;
-  return `<${source.id === 'close' ? 'a' : 'button'} class="meet-tile${big ? ' big' : ' item'}" data-state="${st.key}" ${attrs}${big ? '' : ' role="menuitem"'} aria-label="${esc(label)}">
-      ${meetLogo(source.id, big ? 40 : 20)}<span class="mt-text"><b>${esc(source.name)}</b><span class="mt-status">${st.key && st.key !== 'off' ? '<i class="dot" aria-hidden="true"></i>' : ''}${esc(st.word)}${when ? ` <span class="mt-when">${esc(when)}</span>` : ''}</span></span></${source.id === 'close' ? 'a' : 'button'}>`;
+  return `<${source.id === 'close' ? 'a' : 'button'} class="meet-tile big" data-state="${st.key}" ${attrs} aria-label="${esc(label)}">
+      ${meetLogo(source.id, 40)}<span class="mt-text"><b>${esc(source.name)}</b><span class="mt-status">${st.key && st.key !== 'off' ? '<i class="dot" aria-hidden="true"></i>' : ''}${esc(st.word)}${when ? ` <span class="mt-when">${esc(when)}</span>` : ''}</span></span></${source.id === 'close' ? 'a' : 'button'}>`;
 }
-// The big empty-state tiles leave Granola out when the viewer's own Granola row is above them; the Add source menu keeps it.
-const meetTilesHTML = (state, big) => MEET_SOURCES.filter(s => s.id !== 'granola' || !state.granola || !big).map(s => meetTile(state, s, big)).join('');
+const meetTilesHTML = state => MEET_SOURCES.map(s => meetTile(state, s)).join('');
 function meetWireTiles(state, root) {
   root.querySelectorAll('[data-msrc]').forEach(b => b.onclick = () => {
     const source = MEET_SOURCES.find(s => s.id === b.dataset.msrc);
-    if (source.id === 'granola' && state.granola) return granolaFromTile(state);
+    if (source.id === 'granola' && state.granola) return granolaConnect(state);
     if (window.openMeetingImporter) window.openMeetingImporter(source.id, source.name, () => meetSources(state));
   });
 }
 // Whether anything already brings meetings in: the viewer's Granola or any importer that has been set up.
 const meetConnected = state => granolaReady(state.granola) || (state.sourceRows || []).some(r => MEET_SOURCES.some(m => m.id === r.id) && r.status && r.status !== 'needs_setup');
-// A quiet "Add source" menu in the tab bar, and the large tiles only on a page with no meetings and nothing connected.
+// A quiet "Sources" link in the tab bar (ui/app/meetings-sources.js), and the large tiles only on a page with no
+// meetings and nothing connected.
 function meetPaintTiles(state) {
   // Granola's status can land after the list: swap the empty state's tiles for a plain line once something is connected.
   if (state.empty && !!$('#notes-rows .meet-blank') === meetConnected(state)) { meetList(state); return; }
   const strip = $('#meet-sources');
   if (strip) {
-    const open = !!strip.querySelector('.meet-src-menu:not([hidden])');
-    const trouble = (state.sourceRows || []).some(r => r.status === 'error' || r.status === 'delayed');
     strip.hidden = !state.loaded || (!!state.empty && !meetConnected(state));
-    strip.innerHTML = `<button type="button" class="linkish meet-src-btn" aria-haspopup="menu" aria-expanded="${open}">${trouble ? '<i class="dot" aria-hidden="true"></i>' : ''}Add source</button>
-      <div class="meet-src-menu" role="menu" aria-label="Sources"${open ? '' : ' hidden'}>${meetTilesHTML(state, false)}</div>`;
-    const button = strip.querySelector('.meet-src-btn'), menu = strip.querySelector('.meet-src-menu');
-    button.onclick = event => { event.stopPropagation(); menu.hidden = !menu.hidden; button.setAttribute('aria-expanded', String(!menu.hidden)); if (!menu.hidden) menu.querySelector('button:not(:disabled), a')?.focus(); };
-    menu.onkeydown = event => { if (event.key === 'Escape') { menu.hidden = true; button.setAttribute('aria-expanded', 'false'); button.focus(); } };
-    meetWireTiles(state, strip);
+    strip.innerHTML = '<button type="button" class="linkish meet-src-btn" aria-haspopup="dialog">Sources</button>';
+    strip.querySelector('.meet-src-btn').onclick = () => meetSourcesOpen(state);
+    meetSourcesDot(state);
   }
   const big = document.querySelector('#notes-rows [data-meet-tiles]');
-  if (big) { big.innerHTML = meetTilesHTML(state, true); meetWireTiles(state, big); }
+  if (big) { big.innerHTML = meetTilesHTML(state); meetWireTiles(state, big); }
+  meetSourcesPaint(state);
 }
 async function meetSources(state) {
   let rows;
@@ -378,10 +376,10 @@ async function meetLoad(state, first) {
   else if (!state.selected) $('#notes-detail').innerHTML = '';
 }
 const meetFiltersOn = state => !!(state.person || state.source || state.filter !== 'all' || (state.when || 'all') !== 'all');
-// No meetings and nothing narrowing the list: the sources, since the Add source menu is hidden until one is connected
+// No meetings and nothing narrowing the list: the sources, since the Sources link is hidden until one is connected
 // (the header has Add notes).
 const meetEmptyHTML = state => meetConnected(state) ? '<div class="notes-empty">No shared meetings yet.</div>'
-  : `<div class="meet-blank"><div class="meet-tiles big" data-meet-tiles>${meetTilesHTML(state, true)}</div></div>`;
+  : `<div class="meet-blank"><div class="meet-tiles big" data-meet-tiles>${meetTilesHTML(state)}</div></div>`;
 const meetPill = r => r.delivery?.status === 'pending' ? '<span class="pill in-progress">sending</span>' : r.delivery?.status === 'error' ? '<span class="pill fail">delivery failed</span>' : r.status === 'error' ? '<span class="pill fail">failed</span>'
   : r.sent ? '<span class="pill ok">sent</span>' : '';
 const meetPeople = r => {
@@ -1147,46 +1145,20 @@ async function meetComments(state, rec, quiet) {
 }
 
 
-// One queue per item. Only changed keys are sent; newer edits survive either an old reply or a failed write.
+// Pending items keep text at the root and their editable details under detail.
 function meetPendingDraft(state, id) {
   state.pendingDrafts ||= new Map();
-  if (!state.pendingDrafts.has(id)) state.pendingDrafts.set(id, {patch: {}, dirty: {}, flight: null, error: '', timer: 0, version: null, current: null});
+  if (!state.pendingDrafts.has(id)) state.pendingDrafts.set(id, sharedDraft());
   return state.pendingDrafts.get(id);
 }
-function meetPendingPatch(draft, key, value) {
-  if (!(key in draft.dirty)) draft.dirty[key] = meetPendingValue(draft.base, key);
-  if (key === 'text') draft.patch.text = value;
-  else (draft.patch.detail ||= {})[key] = value;
-}
-function meetPendingMerge(a, b) {
-  return {...a, ...b, ...((a.detail || b.detail) ? {detail: {...a.detail, ...b.detail}} : {})};
-}
-function meetPendingValue(item, key) {
-  return (key === 'text' ? item?.text : item?.detail?.[key]) || '';
-}
-function meetPendingAccepted(draft, patch, item) {
-  for (const key of [...('text' in patch ? ['text'] : []), ...Object.keys(patch.detail || {})]) {
-    if (key === 'text' ? 'text' in draft.patch : key in (draft.patch.detail || {})) draft.dirty[key] = meetPendingValue(item, key);
-    else delete draft.dirty[key];
-  }
-  draft.version = item.version; draft.base = item; draft.current = null;
-}
+const meetPendingPatch = (draft, key, value) => sharedDraftPatch(draft, key, value, key === 'text' ? '' : 'detail');
+const meetPendingMerge = sharedDraftMerge;
 async function meetPendingSave(state, rid, iid) {
-  const draft = meetPendingDraft(state, iid);
-  clearTimeout(draft.timer);
-  if (draft.closed || draft.closedAcknowledged || draft.flight || draft.sending || !Object.keys(draft.patch).length) return draft.flight?.catch(() => {});
-  const patch = draft.patch;
-  draft.patch = {}; draft.error = '';
-  draft.inflightPatch = patch;
-  draft.flight = post(`/meetings/${encodeURIComponent(rid)}/items/${encodeURIComponent(iid)}`, {...patch, version: draft.version});
-  try { const reply = await draft.flight; meetPendingAccepted(draft, patch, reply.item); }
-  catch (e) {
-    draft.patch = meetPendingMerge(patch, draft.patch); draft.error = e.message;
-    if (e.body?.error?.item) { draft.current = e.body.error.item; draft.version = draft.current.version; draft.base = draft.current; }
-  }
-  finally { draft.flight = null; draft.inflightPatch = null; }
-  if (!draft.error && Object.keys(draft.patch).length && !draft.sending) return meetPendingSave(state, rid, iid);
-  await meetItemsLoad(state, rid);
+  return sharedDraftSave(meetPendingDraft(state, iid), {
+    write: (patch, version) => post(`/meetings/${encodeURIComponent(rid)}/items/${encodeURIComponent(iid)}`, {...patch, version}).then(r => r.item),
+    current: error => error.body?.error?.item,
+    settled: () => meetItemsLoad(state, rid)
+  });
 }
 function meetPendingRender(state, rec, data) {
   const panel = $('#meet-sections [data-pending-panel]');
@@ -1256,8 +1228,16 @@ function meetPendingRender(state, rec, data) {
         node.querySelectorAll('button, input, textarea, select').forEach(field => field.disabled = true);
         try {
           if (draft.flight) { try { await draft.flight; } catch {} if (draft.error) throw new Error(draft.error); }
-          const reply = await post(`/meetings/${encodeURIComponent(rec.id)}/items/${encodeURIComponent(item.id)}${send ? '/push' : ''}`,
-                     send ? {...draft.patch, force, version: draft.version} : {status: 'dismissed', version: draft.version});
+          const proposal = node._item?.section === 'task' && node._item.proposed_task_id;
+          if (send && proposal && Object.keys(draft.patch).length) {
+            const patch = draft.patch;
+            const saved = await post(`/meetings/${encodeURIComponent(rec.id)}/items/${encodeURIComponent(item.id)}`, {...patch, version: draft.version});
+            draft.patch = {};
+            meetPendingAccepted(draft, patch, saved.item);
+          }
+          const route = send ? (proposal ? '/link' : '/push') : '';
+          const reply = await post(`/meetings/${encodeURIComponent(rec.id)}/items/${encodeURIComponent(item.id)}${route}`,
+                     send ? (proposal ? {} : {...draft.patch, force, version: draft.version}) : {status: 'dismissed', version: draft.version});
           if (send && reply.pushed === false && Object.keys(draft.dirty).length) {
             draft.closed ||= meetPendingMerge(draft.base, draft.patch);
           } else {
@@ -1309,7 +1289,7 @@ function meetPendingRender(state, rec, data) {
         if (selection) field.setSelectionRange(...selection);
       }
     }
-    node.querySelector('[data-edited]').textContent = item.updated_by ? `${meetAuthor(item.updated_by)} edited · just now` : '';
+    node.querySelector('[data-edited]').textContent = item.updated_by ? sharedEdited(item.updated_by, meetAuthor) : '';
     node.querySelector('[data-save-error]').hidden = !draft.error || draft.errorCode === 'owner';
     const ownerError = node.querySelector('[data-owner-error]');
     ownerError.hidden = draft.errorCode !== 'owner';
@@ -1319,53 +1299,17 @@ function meetPendingRender(state, rec, data) {
     conflict.hidden = !draft.current;
     conflict.textContent = draft.current ? 'Current: ' + draft.current.text + ' · ' + Object.values(draft.current.detail || {}).join(' · ') : '';
     const owner = displayed.detail.owner;
-    node.querySelector('[data-send]').textContent = owner ? `Send to ${actorLabel(owner)}` : 'Send';
-    node.querySelector('[data-send]').disabled = draft.sending || !(data.can_send ?? data.can_push) || (item.section === 'task' && !owner);
+    const proposal = item.section === 'task' && item.proposed_task_id;
+    node.querySelector('[data-send]').textContent = proposal ? 'Link' : item.section === 'task' ? 'Create' : owner ? `Send to ${actorLabel(owner)}` : 'Send';
+    node.querySelector('[data-send]').disabled = draft.sending || !(data.can_send ?? data.can_push) || (!proposal && item.section === 'task' && !owner);
   }
 }
-function meetSharedStop(state) {
-  const shared = state.shared;
-  if (!shared) return;
-  state.shared = null;
-  shared.source?.close(); clearInterval(shared.timer);
-  document.removeEventListener('visibilitychange', shared.visibility);
-  window.removeEventListener('pagehide', shared.leave);
-  shared.leave();
-}
+function meetSharedStop(state) { sharedPlaceStop(state); }
 function meetSharedStart(state, id) {
-  if (state.shared?.id === id) return;
-  meetSharedStop(state);
-  const place = 'meeting:' + id;
-  const shared = state.shared = {id, session: crypto.randomUUID()};
-  const present = async () => {
-    try {
-      getForget();
-      const reply = await get('/v2/presence?place=' + encodeURIComponent(place));
-      if (state.shared !== shared) return;
-      const el = $('#meet-sections [data-meet-presence]');
-      const others = (reply.actors || []).filter(a => a.actor !== 'human:' + S.me?.id);
-      if (el) el.textContent = others.length ? `${others.map(a => a.name).join(', ')} ${others.length === 1 ? 'is' : 'are'} here` : '';
-    } catch {}
-  };
-  const heartbeat = async gone => {
-    try { await post('/v2/presence', {place, session_id: shared.session, gone}, undefined, {keepalive: gone}); if (!gone) await present(); } catch {}
-  };
-  shared.leave = () => { heartbeat(true); };
-  shared.visibility = () => { heartbeat(document.hidden); if (!document.hidden) meetItemsLoad(state, id); };
-  document.addEventListener('visibilitychange', shared.visibility);
-  window.addEventListener('pagehide', shared.leave);
-  shared.timer = setInterval(() => { if (!document.hidden) heartbeat(false); }, 15000);
-  if (!document.hidden) heartbeat(false);
-  if (typeof EventSource !== 'undefined') {
-    const source = shared.source = new EventSource(API + '/v2/events?topics=meeting_items,presence&meeting=' + encodeURIComponent(id) + '&place=' + encodeURIComponent(place));
-    source.addEventListener('meeting_items', event => {
-      const data = JSON.parse(event.data);
-      if (data.gone) { meetSharedStop(state); delete state.items[id]; meetShow(state, false); return; }
-      meetItemsLoad(state, id);
-    });
-    source.addEventListener('presence', present);
-    source.addEventListener('ready', () => { meetItemsLoad(state, id); present(); });
-    source.addEventListener('reset', () => { meetItemsLoad(state, id); present(); });
-    source.addEventListener('expired', () => { meetSharedStop(state); meetShow(state, false); });
-  }
+  sharedPlaceStart(state, {
+    id, place: 'meeting:' + id, topic: 'meeting_items', filter: 'meeting',
+    changed: () => meetItemsLoad(state, id),
+    gone: () => { meetSharedStop(state); delete state.items[id]; meetShow(state, false); },
+    present: words => { const el = $('#meet-sections [data-meet-presence]'); if (el) el.textContent = words; }
+  });
 }

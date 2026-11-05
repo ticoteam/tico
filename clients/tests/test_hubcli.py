@@ -23,7 +23,7 @@ from clients import hubcli
 
 HUB = Path(__file__).resolve().parents[2] / "scripts" / "hub"
 ALIASES = {"approvals", "automations", "bots", "rule", "tasks"}
-SUBCOMMANDS = ["whoami", "inbound", "connections", "mail", "email", "company-page", "audiences", "editions", "readers", "meeting", "message", "conversation", "thread", "question", "note", "feedback", "file", "page", "card", "pin", "doc", "chat", "assistant", "tag", "task", "replay", "goal", "kpi",
+SUBCOMMANDS = ["whoami", "alerts", "inbound", "connections", "letter", "mail", "email", "company-page", "audiences", "editions", "readers", "meeting", "message", "conversation", "thread", "question", "note", "feedback", "file", "page", "card", "pin", "doc", "chat", "assistant", "tag", "task", "replay", "goal", "kpi",
                "proposal", "rules", "strategy", "brand", "growth", "lens", "market", "listening", "tool", "automation", "audit", "event-types", "trigger", "relay", "call", "sleep", "notice", "settings", "release", "approval", "webhook", "pipeline", "brief", "mcp", "origin", "needs-you", "run", "team", "seat", "org", "health",
                "changelog", "update", "grokbot", "external", "calendar", "sql", "db", "classify", "gateway", "decision", "template", "bot", "repo", "skill", "agent", "human", "group", "api", "computer",
                "credential", "slack", "support", "finance", "task-manager", "maintenance", "roadmap", "service-key"]
@@ -1466,3 +1466,24 @@ def test_maintenance_status_reads_the_one_maintenance_tool(monkeypatch):
     monkeypatch.setenv("HUB_API_URL", "https://tico.acme.example/api/v2")
     remotecli.run(hubcli.parser().parse_args(["maintenance", "status"]))
     assert reads == [("maintenance", {})]
+
+
+def test_personal_alert_cli_keeps_paid_test_identity_and_explicit_consent(monkeypatch):
+    from clients import remotecli, hubtools
+    class API:
+        def __init__(self, *args, **kwargs):
+            self.calls = []
+        def post(self, path, body, key=None):
+            self.calls.append((path, body, key))
+            return {"status": "accepted"}
+    api = API()
+    monkeypatch.setenv("HUB_API_URL", "https://tico.acme.example")
+    monkeypatch.delenv("HUB_OPERATION_ID", raising=False)
+    monkeypatch.setattr(remotecli, "Client", lambda *args, **kwargs: api)
+    args = hubcli.parser().parse_args(["alerts", "test", "--accept-charge", "--operation-id", "paid-once"])
+    assert remotecli.run(args) == {"status": "accepted"}
+    assert api.calls == [("alerts/me/test", {"accept_charge": True}, "paid-once")]
+    args = hubcli.parser().parse_args(["alerts", "verify", "+14155550123", "--sms-consent", "--call-consent"])
+    remotecli.run(args)
+    assert api.calls[-1][1] == {"phone": "+14155550123", "sms_consent": True, "call_consent": True}
+    assert "hub_alerts_test" not in {t["name"] for t in hubtools.listing(kind="botops")}

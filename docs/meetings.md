@@ -6,6 +6,11 @@
 `hub task meetings <task>` lists the meetings you can open. Their MCP equivalents are `hub_meeting_link`,
 `hub_meeting_unlink` and `hub_task_meetings`. Links preserve each meeting and task's own access.
 
+`hub task context <task>` lists up to ten linked meetings and ten task pages the caller may read, as metadata only.
+`hub meeting read <id>` includes saved notes at transcript offset zero; `--notes` reads just the notes, paged with
+`--offset`. A bot attached by a live meeting's owner may read its saved meeting while that attachment remains and
+the owner can still read it. The same read rule applies during task work.
+
 `GET /api/v2/meetings/{id}/tasks` returns `{tasks, next_cursor}`; `POST` on that path takes
 `{task_ids: [id, ...], kind: "linked"}` (up to 20). `kind: "sent"` is only for tasks you requested.
 `DELETE /api/v2/meetings/{id}/tasks/{task_id}` removes the pair. The linker, meeting owner, task owner or requester,
@@ -86,7 +91,11 @@ meeting has `review_state` (`pending`, `live` or `dismissed`). The rail's existi
   `"audience": "participants"` as well, readable then by the person filing it. Only a review widens it again.
 - `POST /api/v2/live-meetings/{id}/discard {}`, by the person who connected it, ends a live meeting and
   removes its transcript, chat and events from Tico; the recording stays on their computer.
-- The same route with `{"action": "dismiss"}` hides a pending meeting from Pending. Live meetings cannot be
+  Recorder **This Mac** uses this path and deletes a meeting already filed for review, removing its delivery
+  receipt and task links. The local recording and transcript stay, and tasks already sent remain unchanged.
+  Queued links and Link proposals are cleared; recovery cannot finalize the discarded live share or send its links.
+  An older Tico without discard ends the meeting and reports that its live transcript remains until Tico is updated.
+- `POST /api/v2/meetings/{id}/review` with `{"action": "dismiss"}` hides a pending meeting from Pending. Live meetings cannot be
   dismissed; existing deletion controls remain available. Later syncs may update its
   contents but keep it dismissed under the same dedup key. `{"action": "restore"}` brings a
   dismissed meeting back to Pending. Re-import never shares a pending or dismissed meeting,
@@ -287,11 +296,15 @@ and 365; it makes one bounded pass, then exits. Restart the service afterward. O
 service to stop: move `secrets/close-calls.env` aside so the runner stops the job, run the backfill, then put it back. The worker stops with an
 error if a single day exceeds its 5,000-activity page limit, so narrow the window and retry.
 
-The **Add source** menu beside Settings on the Meetings page lists Close and each importer below, with the worker's
-heartbeat in one word: **Connect** until the worker connects, **Connected** (with the last import) after a recent
-successful pull, **Delayed** when its heartbeat is stale, **Error** after a failed pull (a red dot on the menu).
-With no meetings and nothing connected, the page shows them as large tiles (**Add notes** stays in the header). An entry opens that source's setup: Close its tool page,
-the others a dialog with the same form as Tools > Meeting importers (owners only).
+**Sources** beside Settings on the Meetings page opens one dialog with every source: your own Granola account, Close
+and each importer below. Connected sources come first, each with its status in one word (**Connected**, **Waiting**
+until the worker connects, **Delayed** when its heartbeat is stale, **Error** after a failed pull, **Signed out** for
+Granola), its last sync and, when it fails, why. Sources shows a red dot while any of them needs a look. A connected
+source has **Sync now** (Granola), **Sign in again** or **Reconnect** when it needs one, and **Remove**: for Granola
+that disconnects your account, for an importer it turns the importer off (owners only), and Close is managed on its
+tool page. The rest have **Connect**: Granola's sign-in for anyone, Close's tool page, and for the others a dialog with
+the same form as Tools > Meeting importers (owners only). With no meetings and nothing connected, the page shows them
+as large tiles instead (**Add notes** stays in the header).
 
 ## Meeting importers
 
@@ -435,10 +448,10 @@ here but not run against a Workspace.
 
 ### Granola
 
-**Connect your own Granola account in Meetings (default).** Choose **Connect Granola** (in Meetings, Add source, or Tools > Granola), open the
+**Connect your own Granola account in Meetings (default).** Choose **Connect** next to Granola (in Meetings > Sources, or Tools > Granola), open the
 verification link and enter the code if asked. Each person connects their own account through
 Granola's official remote MCP at `https://mcp.granola.ai/mcp`. Tico stores tokens encrypted in the
-server credential vault; bots and Computers cannot read them. Disconnect in Meetings to delete them.
+server credential vault; bots and Computers cannot read them. Remove it in Meetings > Sources to delete them.
 
 The free plan imports your own notes and AI summaries from the last 30 days, without transcripts or
 folders. Paid plans can also import transcripts when Granola permits them. Private notes typed by
@@ -476,7 +489,7 @@ the blocked meetings as skipped. Each attempt resets its skipped count. A rate-l
 in about five minutes, or later when Granola supplies a longer `Retry-After`, and resumes from that
 checkpoint. The first free-plan
 sync requests `last_30_days` when supported; otherwise it uses a custom date range.
-Disconnect cancels an active sync and removes the stored token promptly; revocation is attempted in
+Removing Granola cancels an active sync and removes the stored token promptly; revocation is attempted in
 background when Granola advertises a trusted endpoint. Connections are removed when a person leaves
 or loses sign-in. A pending reconnect retains the working token until success or expiry; a successful
 new sign-in starts a fresh 30-day backfill.
@@ -630,3 +643,8 @@ stays is everything that was ever imported or recorded. An upgrading install kee
   (with no menu-bar item since a later release). It no longer asks for microphone or system-audio permission.
 - `TICO_GEMINI_SECRET_ARN` and `TICO_XAI_SECRET_ARN` are no longer read;
   `TICO_PROCESSING_OPERATORS` still names the computers that may run importers and calendar publishers.
+
+Recorder Save replays interrupted item uploads before applying current local fields with the item's version.
+If another teammate has changed or sent the item, the Recorder keeps the local draft with Copy and Close.
+Tasks added after Save go onto the meeting before Create sends them. Link proposals use Link, and queued task
+links are sent last in batches of 20; an interrupted Save resumes the remaining batches.

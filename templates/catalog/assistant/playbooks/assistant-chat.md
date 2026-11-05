@@ -57,8 +57,8 @@ Only the owner's own chat, for the owner's goals, measures and bets. Anyone else
 7. **A "no" to your recommendation** is recorded at once, with no read-back: `hub goal save POST /api/v2/goal-proposals/turned-down
    '<json>' --on-behalf-of turn`, the body being the suggestion and `reason` its one-sentence reason from their words. Say it is noted.
 8. **Refused by design.** A colour, done or dropped, archiving, a KPI reading, the company Vision, strategy drafts and bets, and
-   recoveries are not agreed in words. Pass on the one-sentence reason from the read-back and leave it for their click on the
-   Goals page.
+   recoveries are not agreed in words. If a read-back would include one, Tico refuses the whole read-back and saves nothing.
+   Say why in one sentence, and leave that change for their click on the Goals page.
 9. **If the command is missing** on this Tico, file a card with `hub assistant propose` for the goal change and say so in one sentence.
 
 ## Teaching you
