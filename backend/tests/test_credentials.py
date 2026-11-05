@@ -64,7 +64,9 @@ def test_explicit_human_grants_delegate_only_to_owned_bots_and_revoke_cascades(a
     post(api,'chat/finance',{'text':'Use only the synthetic fixture'})
     attempt=claim(api,machine)
     assert attempt['credential_vault'] is True
-    assert get(api,'credential-runtime',attempt['token'])['credentials'][0]['value'].startswith('phx-')
+    # PostHog is a known service, so its key's tool is on the proxy: the run gets a proxy token, never the value.
+    held=get(api,'credential-runtime',attempt['token'])['credentials'][0]
+    assert held['value'].startswith('tpx1.') and 'phx-' not in str(held)
     get(api,'credential-runtime',machine['token'],expected=403)
     post(api,f'credentials/{cid}/grants/{parent["id"]}/revoke',{},'ben-test')
     assert get(api,'credential-runtime',attempt['token'])['credentials']==[]
