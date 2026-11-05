@@ -1485,6 +1485,15 @@ def event_readable(c, actor, event):
         viewer = teammate_access._viewer_for(c, principal)
         if viewer is not None and not files.page_event_readable(c, None, viewer, event.get("target"), event.get("detail")):
             return False
+    detail = H._json(event.get("detail"), {}) or {}
+    if str(event.get("action", "")).startswith("alerts.") and event["action"] != "alerts.company_cap":
+        recipient = actor[0] if isinstance(actor, tuple) else getattr(actor, "actor", actor)
+        if recipient != event.get("actor"):
+            return False
+        # Old accepted events without task provenance fail closed; their alert target alone carries no permission.
+        if event["action"] == "alerts.accepted" and detail.get("kind") != "test":
+            if not detail.get("task_id") or not _task(c, detail["task_id"]):
+                return False
     meetings = meeting_sources(c)
     if not meetings.readable(actor, meetings.references(H._json(event.get("detail"), {}) or {})):
         return False

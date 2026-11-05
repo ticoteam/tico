@@ -121,3 +121,35 @@ For example, to let a bot whose slug is `legal` read physical mail at every comp
 owner informed. Use `DELETE` on the grant's URL to revoke it, and `{"legal_bot_id":null}` to restore owner routing.
 
 Bots and people read letters with `hub mail list` and `hub mail read <id>` (MCP `hub_mail_list`, `hub_mail_read`).
+
+## Personal alerts
+
+In **Settings → Inboxes → Alerts**, a person can verify their own US or Canadian phone and opt into texts, with
+separate consent for calls. Only that person, including through their personal API token, can read or change the
+number; bots, BotOps and the Assistant cannot do it for them. Verification is free. Each accepted alert, including
+a test, costs the company **$1**, covering its text or call. A test explicitly accepts that charge.
+
+The available choices map to existing Tico state: an overdue active task owned by or waiting on you; newly filed
+legal mail whose task you may read; and a stalled task for a bot you manage, using Health's existing stalled-task
+check. Each incident is kept once per person. Legal mail and overdue tasks are urgent; calls require both call
+consent and **Call for urgent alerts**. Phone messages contain a generic category and an instruction to open Tico,
+never task titles or letter contents. Tico being down and autonomous email/letter sends have no alert checkbox.
+
+Quiet hours use your IANA timezone, including daylight saving changes. They defer alerts until outside that window,
+unless you explicitly allow urgent alerts through. A resolved task or withdrawn preference cancels queued paging.
+Reply STOP to the paging number to block texts **and calls**; reply START to resume existing consent. Inboxes shows
+**Opted out** from HQ's current state. Removing your phone revokes it at HQ and immediately stops local queued work;
+if HQ is unavailable the removal remains pending and can be retried.
+
+The personal monthly cap defaults to $10 and the company cap to $50. Owners/admins set the company cap; a person
+sets their own. Caps count accepted alerts plus reservations for sends whose outcome is not confirmed, across
+concurrent sends and restarts, in UTC calendar months. Zero stops paid alerts. An uncertain send retries with the
+same provider idempotency key; it never gets a fresh incident id to bypass deduplication. The last ten outcomes and
+spend are visible in Alerts settings. Tests bypass quiet hours but still require consent and both spend caps.
+
+These controls use `/api/v2/alerts/me` and `/api/v2/alerts/company`, with `/me/phone`, `/me/phone/confirm` and `/me/test`
+subroutes (see [the v2 contract](openapi/v2.json)). The same actions are `hub alerts show|set|verify|confirm|remove|test|company`
+and MCP's `hub_alerts_*`, offered only to people. `hub alerts test --accept-charge --operation-id <stable-id>` keeps
+retries to one paid test. They are personal settings, including in the Tauri app; Slack/BotOps directs you to them.
+HQ must deploy the person-scoped paging API and configure its signed Twilio opt-out webhook before personal
+verification/sending works. Demo and rehearsal mode send nothing.

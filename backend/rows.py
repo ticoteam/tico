@@ -17,6 +17,50 @@ class PageIdentityRow(TypedDict):
     file_id: str
 
 
+class AlertPreferenceRow(TypedDict):
+    person_id: str
+    phone: str | None
+    phone_version: str
+    verified_at: str | None
+    revocation_pending: int
+    stall_after: str
+    call_consent: int
+    urgent_needs: int
+    legal_mail: int
+    bot_stuck: int
+    urgent_calls: int
+    timezone: str
+    quiet_start: str
+    quiet_end: str
+    emergency_exception: int
+    monthly_cap: int
+    updated_at: str
+
+
+class AlertCompanySettingRow(TypedDict):
+    id: int
+    monthly_cap: int
+
+
+class PersonalAlertRow(TypedDict):
+    id: str
+    person_id: str
+    incident_key: str
+    kind: str
+    subject_id: str
+    emergency: int
+    phone_version: str
+    state: str
+    month: str | None
+    reserved: int
+    send_id: str | None
+    channel: str | None
+    error: str
+    created_at: str
+    attempted_at: str | None
+    next_attempt_at: str | None
+
+
 class PostalMailGrantRow(TypedDict):
     id: str
     address_id: str
