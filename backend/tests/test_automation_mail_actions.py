@@ -383,7 +383,7 @@ def test_a_send_claimed_after_the_switch_went_off_is_a_draft(api, computer):
 
 
 def test_what_tico_may_do_holds_automations_a_send_is_claimed_as_a_draft_which_organize_off_refuses(api, computer):
-    """Settings > Google > What Tico may do covers automations: Send mail off claims a send as a draft, as the inbox's
+    """Settings > Inboxes > Settings > What Tico may do covers automations: Send mail off claims a send as a draft, as the inbox's
     own switch does. With Send mail off only, the send is leased as a draft; with Organize mail off too the server's
     one check (backend/mailbox_access.py action_refusal) fails the draft and the archive at the claim, so no computer
     is asked, and the connector still refuses whatever an action on stdin says, from the hub's own setting."""
@@ -790,7 +790,7 @@ def bot_ops(api):
     r = runner(api, label="Bot Mac")
     assign(api, r, "ops")
     ready(api, r, ["ops"])
-    # ana let ops use her mailbox (Settings > Mailboxes): a bot's automation acts on a mailbox it was given.
+    # ana let ops use her mailbox (Settings > Inboxes): a bot's automation acts on a mailbox it was given.
     from backend import mailbox_access
     with api.app.state.store.transaction() as c:
         bot = H.resolve_bot(c, "ops")["id"]

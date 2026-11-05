@@ -198,7 +198,7 @@ class Chain(Stage2):
             pl.SERVER_GET = lambda slug: dict(on, bot=slug, company_send=False)
             d = self.decide([ME] if approval is None else [STRANGER], approval=approval)
             self.assertEqual((d.allowed, d["gate"]), (False, "company"), d)
-            self.assertIn("Settings > Google", d["reason"])
+            self.assertIn("Settings > Inboxes", d["reason"])
         # A server from before the setting sends no company_send: the bot's own switch decides, as before.
         pl.SERVER_GET = lambda slug: dict(on, bot=slug)
         self.assertTrue(self.decide([ME]).allowed)

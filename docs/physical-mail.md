@@ -1,6 +1,6 @@
 # Physical mail
 
-> **Unreleased**: the install side and Settings > Mail are built; Tico Gateway's mailboxes are not on sale yet. The API
+> **Unreleased**: the install side and Settings > Inboxes' Letters in are built; Tico Gateway's mailboxes are not on sale yet. The API
 > below may change.
 
 Tico Mail brings the company's paper mail into Tico. Each scanned letter is saved as a file, read, sorted by kind and
@@ -14,7 +14,7 @@ sent to whoever handles that kind. Legal papers reach the owner at once, includi
 
   Prices: shared $10 a month per recipient, private from $25 a month; scans $1 a letter for up to 10 pages, then
   $0.25 a page. Tico doesn't deposit checks: ask Tico support to forward one, or deposit it yourself.
-- **Your own provider, by email.** An owner or admin names one company email inbox (Email & Phone) as the mail-intake
+- **Your own provider, by email.** An owner or admin names one Tico address as the mail-intake
   address and who sends it scans: `PUT /api/v2/postal/intake` with `{"inbox_id": "...", "senders":
   ["scans@provider.com", "@provider.com"]}` (at least one address or `@domain`), or `{"inbox_id": null}` to stop.
   Have your mail provider send its scans there. Each PDF or image attached to a message from a listed sender becomes a
@@ -48,7 +48,7 @@ of its tries.
 Legal goes to the owner whenever the reader or Decide says legal, however unsure: a missed summons costs more than
 a wrong card. A check works the same way: when the mailbox provider flags one in the envelope, or the reader sees
 one, it goes to the owner whatever Decide says, never to junk or the Assistant. Junk is archived only when Decide is sure; anything else short of its threshold goes to the Assistant.
-An owner or admin may choose an active bot for future legal mail in Settings > Mail. The owner remains a party to
+An owner or admin may choose an active bot for future legal mail in Settings > Inboxes > Settings > Letters in (Legal mail). The owner remains a party to
 each private task and receives a notice with its deadline. A paused or unavailable bot falls back to the owner.
 Resetting the setting to Owner affects future letters; existing tasks stay where they are. Upgrading enables no
 grants and keeps legal mail going to the owner.
@@ -84,12 +84,15 @@ A letter whose scan or reading fails is marked `failed` and tried again after 1 
 last try a scan that still cannot be read is filed for the owner unread, so nobody misses it. A retry never makes a
 second task.
 
-## Settings > Mail
+## Settings > Inboxes
 
-Addresses (state, kind, the full address once active, registered agent, Form 1583 status) with open orders as
-Pending; Get an address (owner or admin: state, kind, monthly and scan prices); Bring your own (the intake
-inbox); Access and routing (legal-mail recipient, plus Who can use it with Read and Remove for all addresses or a
-chosen address); Recent letters, with Retry on a failed one for an owner or admin.
+Each address is a Letters in row in Settings > Inboxes (`#/settings/inboxes`), with open orders as Pending and the
+email-in inbox as Mail by email (still listed, as Not in use, once it is turned off while letters it brought in remain,
+so a failed one can be retried). An address's page shows its Form 1583 progress until it is active, who reads it (an
+owner or admin gives and removes Read on that address there), its automations and its letters (date, sender, kind,
+scan, the task it went to, status), with Retry on a failed one for an owner or admin. Inboxes > Settings > Letters in
+has the addresses with Get an address (owner or admin: state, kind, monthly and scan prices), Bring your own (the
+intake inbox), Who can use it (Read and Remove on all addresses) and Legal mail (who receives legal letters).
 
 ## API, CLI and MCP
 
