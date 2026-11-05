@@ -227,10 +227,38 @@ Linger is checked at install time; if it is off the command prints `loginctl ena
 logs out and do not start at boot. `scripts/tico status`, `restart`, `logs` and `uninstall` work the same as on a Mac.
 
 A checkout with uncommitted changes, or on a branch other than `main`, is refused: nothing is
-stashed, reset or discarded. Before checking changes, the updater repairs tracked `AGENTS.md` and
-`CLAUDE.md` symlinks flattened by copy tools, but only if they still contain exactly the committed
-link or its unchanged target's contents. Staged changes and different instruction edits stay intact.
-Instruction content reads are limited to 1 MiB and require regular files opened nonblocking without
+stashed, reset or discarded. Settings > Health and Computers name the changed files until someone
+commits or stashes them.
+
+There is one repair for Tico's own links: if every tracked change is a link from HEAD replaced by a regular file
+with exactly its target's HEAD bytes, the updater restores those links under `tico-update.lock` and continues.
+The target must still be unchanged, and nothing may be staged. A different file, different bytes, changed target,
+or any staged change blocks the whole repair. The blocked message marks any matching flattened links by name.
+A refused repair uses the same blocked-checkout status as other local changes. Busy work and locks still use
+the update's usual retry delays.
+Health and BotOps say when only flattened Tico links remain: they are repaired on the next update and need no
+decision about local work. The same check applies on Mac and Linux, including `core.symlinks=false`; the repair
+uses real links without changing that Git setting.
+Both runners use the same repair: move each original into the checkout's Git directory under
+`tico-flattened-links/<UTC timestamp>/<path>`, create the HEAD link, then check the saved bytes and index again.
+The originals stay there, so an editor with an open file can still write to them after the checks. The newest
+five repair backups are kept; older ones are removed after a successful repair. In a linked worktree the backups
+live in its Git directory, not in the worktree's `.git` file.
+If an edit or staged change arrives during the swap, restore the saved files and block the update, keeping the
+backups too. The repair never writes the index. If an editor also replaces the new link, keep that replacement
+in the same backup folder under a `.tico-link-replacement-...` name.
+
+The update process logs to `state-<runner id>/update.log`; the outcome is in `update-status.json` next to it.
+A repair records "restored N flattened links; originals kept in ..." with the full backup path in both.
+No other local work is stashed, reset or discarded.
+Bot repositories and shared or named checkouts must resolve outside the active Tico install, including through
+linked parents. Template refresh also refuses file or folder links that lead outside the bot's repo; it writes
+through a new file and rename in a checked folder.
+
+The updater also keeps the instruction-link repair for tracked `AGENTS.md` and `CLAUDE.md` files
+that contain exactly the committed link text. It does not run a second repair on a refused batch
+of flattened target copies. Staged changes and different instruction edits stay intact.
+This instruction repair's content reads are limited to 1 MiB and require regular files opened nonblocking without
 following the final symlink. FIFOs, devices and oversized files stay untouched; unreadable retained
 backups remain for review, without holding up the updater on a file read.
 Retained backups are compared with their accepted content hash, so later releases can change or
@@ -245,9 +273,7 @@ start if another environment moved the shared checkout to an older release.
 Git lock files also stay in place: once a lock is 30 minutes old, the updater
 reports its full path, age and one removal command. Check no Git is running for that repository
 before running that command on the Computer.
-Settings > Health and Computers name the changed files until someone commits or stashes them.
-The update process logs to `state-<runner id>/update.log`; the outcome is in `update-status.json` next
-to it. `scripts/tico update` still works by hand and still follows `main`.
+`scripts/tico update` still works by hand and still follows `main`.
 
 A launch failure waits six hours before another attempt at the same release. A newly installed runner retries a
 launch failure from an older runner build at once; if that attempt fails, the six-hour wait applies again. A dead

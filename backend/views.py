@@ -1240,7 +1240,9 @@ def checkout_issue(add, row, busy=0):
         add("runner_checkout", row["label"] + " can't update itself",
             f"{behind} commit{'s' if behind != 1 else ''} behind main: {checkout['blocked']}.",
             machine=row["id"], since=checkout.get("checked_at"), severity="warning",
-            action="On that computer: commit or stash the changes (or run pip install and scripts/tico update "
+            action="Tico repairs these links on the next update. No local work needs a decision."
+                   if str(checkout["blocked"]).startswith("only flattened Tico links:") else
+                   "On that computer: commit or stash the changes (or run pip install and scripts/tico update "
                    "for a dependency change); the runner then updates itself.")
     elif behind:
         stamp = checkout.get("behind_since") or checkout.get("checked_at") or ""
