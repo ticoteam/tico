@@ -177,7 +177,9 @@ const scenarios = {
       ['Connect company email', 'Phone number', 'Receive letters', 'Send letters', 'Give inboxes to bots']);
     assert.equal(await page.locator('[data-ib-step=email] [data-ib-dismiss]').count(), 0, 'the required step has no dismiss');
     await page.locator('[data-ib-step=email] #set-google [data-google-mode]').waitFor();
-    assert.equal(await page.locator('[data-ib-step="letters-out"] button[disabled]').textContent(), 'Connect Click2Mail');
+    const sendStep = page.locator('[data-ib-step="letters-out"]');   // its placeholder until letters out lands
+    if (await sendStep.locator('.pill', {hasText: 'Coming soon'}).count())
+      assert.equal(await sendStep.locator('button[disabled]').textContent(), 'Connect Click2Mail');
     assert.ok(await fits(page));
     await shot(page, `inboxes-first-run-desktop-light.png`, 'light');
     await page.locator('[data-ib-dismiss=phone]').click();
@@ -299,13 +301,17 @@ const scenarios = {
     await page.locator('#settings-mail-addresses [data-pm-address="as_1"]').waitFor();
     await page.locator('#set-google [data-google-mode]').waitFor();
     assert.deepEqual(await page.locator('.ib-section > h2').allTextContents(), ['Email', 'Texts', 'Letters in', 'Letters out']);
+    // The existing settings, each in its section and order. Sending, alerts and letters out are other changes' cards:
+    // each section has a card with a header, and one still on its placeholder says Coming soon.
     const cards = section => page.locator(`[data-ib-section="${section}"] .card`).evaluateAll(els => els.map(el => el.id));
-    assert.deepEqual(await cards('email'), ['mailboxes-top', 'mailboxes-may', 'set-inbound', 'inboxes-email-sending']);
-    assert.deepEqual(await cards('texts'), ['inbound-phone-card', 'inboxes-alerts']);
-    assert.deepEqual(await cards('letters-in'), ['settings-mail-addresses', 'settings-mail-intake']);
-    assert.deepEqual(await cards('letters-out'), ['inboxes-letters-out']);
-    for (const id of ['inboxes-email-sending', 'inboxes-alerts', 'inboxes-letters-out'])
-      assert.equal(await page.locator(`#${id} header .pill`).textContent(), 'Coming soon', id);
+    const own = {email: ['mailboxes-top', 'mailboxes-may', 'set-inbound'], texts: ['inbound-phone-card'],
+      'letters-in': ['settings-mail-addresses', 'settings-mail-intake'], 'letters-out': []};
+    for (const [section, ids] of Object.entries(own)) {
+      assert.deepEqual((await cards(section)).filter(id => ids.includes(id)), ids, section);
+      assert.ok(await page.locator(`[data-ib-section="${section}"] .card > header h2`).count(), `${section} has a card`);
+    }
+    for (const soon of await page.locator('.card:has([data-ib-soon])').all())
+      assert.equal(await soon.locator('header .pill').textContent(), 'Coming soon');
     assert.equal(await page.locator('[data-mb-provider]').textContent(), 'Google Workspace · acme.example');
     assert.equal(await page.locator('[data-pm-intake-select]').inputValue(), 'ibx_a');
     assert.equal(await page.locator('[data-in-request="prq_q"] [data-inbound-phone-accept]').count(), 1);
@@ -328,6 +334,58 @@ const scenarios = {
     }
     assert.deepEqual(seen.errors, []);
     await page.close();
+  },
+
+  'a read from before a What Tico may do save cannot replace its controls during or after it': async browser => {
+    for (const finishRead of ['during', 'after']) {
+      const fake = mailboxesFake(), google = googleFake();
+      const {page, seen} = await open(browser, fake, google, {hash: '#/settings/inboxes/settings', ready: '#mailboxes-may [data-google-may]'});
+      const card = page.locator('#mailboxes-may');
+      const calendar = await card.locator('[data-google-may=change_calendar]').elementHandle();
+      let readStarted, saveStarted;
+      const reading = new Promise(resolve => { readStarted = resolve; });
+      const saving = new Promise(resolve => { saveStarted = resolve; });
+      await page.route('**/api/v2/mailboxes', route => readStarted(route));
+      await page.route('**/api/v2/google/permissions', route => saveStarted(route));
+      await page.evaluate(() => { window.inboxesRead = renderSettingsInboxes(); });
+      const read = await reading;
+      const stale = fake.answer('/api/v2/mailboxes');
+      await card.locator('[data-google-may=change_calendar]').check();
+      const save = await saving;
+      const body = save.request().postDataJSON();
+      assert.deepEqual(body, {organize_mail: true, send_mail: false, change_calendar: true});
+      const controls = () => card.locator('[data-google-may]').evaluateAll(els =>
+        els.map(el => [el.dataset.googleMay, el.checked, el.disabled]));
+      const pending = [['organize_mail', true, true], ['send_mail', false, true], ['change_calendar', true, true]];
+      assert.deepEqual(await controls(), pending);
+      const finish = async () => {
+        await read.fulfill({contentType: 'application/json', body: JSON.stringify(stale)});
+        await page.evaluate(() => window.inboxesRead);
+        assert.equal(await calendar.evaluate(el => el.isConnected), true, `${finishRead}: the clicked control stays mounted`);
+      };
+      if (finishRead === 'during') {
+        await finish();
+        assert.deepEqual(await controls(), pending, 'an old read cannot roll back or unlock a pending save');
+      }
+      await page.unroute('**/api/v2/mailboxes');
+      if (finishRead === 'during') await page.evaluate(() => renderSettingsInboxes());
+      assert.deepEqual(await controls(), pending, 'another draw leaves the pending save alone');
+      assert.equal(await calendar.evaluate(el => el.isConnected), true);
+      const answer = google.answer('/api/v2/google/permissions', save.request().url(), 'PUT', body);
+      Object.assign(fake.may, {organize: true, send: false, change_calendar: true});
+      // A draw asked for during the save runs once it settles.
+      const reread = finishRead === 'during' && page.waitForRequest(r => new URL(r.url()).pathname === '/api/v2/mailboxes');
+      await save.fulfill({contentType: 'application/json', body: JSON.stringify(answer)});
+      await page.waitForFunction(() => [...document.querySelectorAll('#mailboxes-may [data-google-may]')].every(el => !el.disabled));
+      if (reread) await reread;
+      if (finishRead === 'after') await finish();
+      const saved = pending.map(([field, checked]) => [field, checked, false]);
+      assert.deepEqual(await controls(), saved);
+      await page.evaluate(() => renderSettingsInboxes());
+      assert.deepEqual(await controls(), saved, 'a fresh read shows the saved settings');
+      assert.deepEqual(seen.errors, []);
+      await page.close();
+    }
   },
 
   'What Tico may do: Read always, each box saves all three together, a refusal puts the box back': async browser => {

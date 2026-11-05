@@ -7,7 +7,8 @@
    Classic script: its globals are shared with the other files under ui/app/, loaded in the order index.html lists them. */
 'use strict';
 
-const MB = {run: 0};
+// may: one more each What Tico may do save; saving: one is in flight; refreshAfterMay: a draw waited for it.
+const MB = {run: 0, may: 0, saving: false, refreshAfterMay: false};
 const MB_LEVELS = [['read', 'Read'], ['read_write', 'Read and write']];
 // What Tico may do (PUT /v2/google/permissions): the field the server keeps, the key GET /v2/mailboxes reads it back as.
 const MB_MAY = [['organize_mail', 'organize', 'Organize', 'label, archive, draft'], ['send_mail', 'send', 'Send', ''],
@@ -236,8 +237,15 @@ inboxesSetting('email-connection', {section: 'email', order: 10,
 inboxesSetting('email-may', {section: 'email', order: 20,
   render: async (host, ctx) => {
     if (!ctx.admin) { host.innerHTML = ''; return; }
+    const save = MB.may;
     const d = await mbMailboxes(ctx);
     if (!ctx.live()) return;
+    // A read from before or during a save cannot replace its controls or put the old permissions back; one that
+    // lands mid-save draws again once the save settles.
+    if ((MB.saving || save !== MB.may) && host.querySelector('[data-google-may]')) {
+      if (MB.saving) MB.refreshAfterMay = true;
+      return;
+    }
     const may = d.may || {};
     const box = ([field, key, label, note]) => `<label class="google-may-row"><input type="checkbox" data-google-may="${field}"${
       may[key] ? ' checked' : ''}><span>${label}${note ? `<span class="muted">${note}</span>` : ''}</span></label>`;
@@ -252,16 +260,19 @@ inboxesSetting('email-may', {section: 'email', order: 20,
 async function mbSaveMay(host, input) {
   const boxes = [...host.querySelectorAll('[data-google-may]')];
   const body = Object.fromEntries(boxes.map(box => [box.dataset.googleMay, box.checked]));
+  MB.may++; MB.saving = true;
   boxes.forEach(box => { box.disabled = true; });
   try {
     await put('/v2/google/permissions', body);
     toast('Saved');
-    boxes.forEach(box => { box.disabled = false; });
     void window.mountGoogleConnect?.($('#set-google'), {force: true});
   } catch (e) {
     input.checked = !input.checked;
-    boxes.forEach(box => { box.disabled = false; });
     toast(e.message, true);
+  } finally {
+    MB.saving = false;
+    boxes.forEach(box => { box.disabled = false; });
+    if (MB.refreshAfterMay) { MB.refreshAfterMay = false; void renderSettingsInboxes(); }
   }
 }
 
