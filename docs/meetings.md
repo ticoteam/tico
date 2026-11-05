@@ -9,8 +9,7 @@
 `hub task context <task>` lists up to ten linked meetings and ten task pages the caller may read, as metadata only.
 `hub meeting read <id>` includes saved notes at transcript offset zero; `--notes` reads just the notes, paged with
 `--offset`. A bot attached by a live meeting's owner may read its saved meeting while that attachment remains and
-the owner can still read it. The same read rule applies during task work. Restricted meetings are marked limited in
-task context; don't copy their content into the task or other shared places.
+the owner can still read it. The same read rule applies during task work.
 
 `GET /api/v2/meetings/{id}/tasks` returns `{tasks, next_cursor}`; `POST` on that path takes
 `{task_ids: [id, ...], kind: "linked"}` (up to 20). `kind: "sent"` is only for tasks you requested.

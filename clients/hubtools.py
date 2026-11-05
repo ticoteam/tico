@@ -544,8 +544,7 @@ def task_meetings(api, args):
 
 
 @tool("hub_task_context", "Task context: up to 10 pages and 10 meetings as metadata only. Read content with "
-      "hub file read or hub meeting read. Each source is checked against your own read access. "
-      "Limited items: don't copy their content into this task or other shared places.",
+      "hub file read or hub meeting read. Each source is checked against your own read access.",
       {"id": TASK_ID}, required=("id",))
 def task_context(api, args):
     return api.get(f"tasks/{args['id']}/context")
