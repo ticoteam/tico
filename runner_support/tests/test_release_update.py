@@ -539,6 +539,59 @@ def hold(checkout):
     return handle
 
 
+@pytest.mark.slow
+def test_a_git_gate_timeout_defers_even_when_the_gate_clears_before_checkout(repos, monkeypatch):
+    _, checkout, state = repos
+    before = head(checkout)
+    index = (checkout / ".git/index").read_bytes()
+    commands, waited = [], []
+    git = ru.git
+
+    def run(command, **kwargs):
+        commands.append(command)
+        return subprocess.run(command, **kwargs)
+
+    # A keeps the checkout lock through install and health, but releases the Git gate after its fetch.
+    with hold(checkout), (checkout / ".git/tico-lock-recovery").open("w") as gate:
+        fcntl.flock(gate, fcntl.LOCK_EX | fcntl.LOCK_NB)
+
+        def release_after_lookup(root, *args, **kwargs):
+            started = time.monotonic()
+            done = git(root, *args, **kwargs)
+            if args == ("rev-parse", "--git-common-dir"):
+                waited.append(time.monotonic() - started)
+                assert done.returncode != 0
+                fcntl.flock(gate, fcntl.LOCK_UN)
+            return done
+
+        monkeypatch.setattr(ru, "git", release_after_lookup)
+        result, calls = run_apply(checkout, state, run=run, lock_wait=0)
+        assert result["state"] == "waiting" and len(waited) == 1 and waited[0] >= 10
+        assert ru.read_status(state)["state"] == "waiting"
+        assert commands == []                                      # B never fetched or checked out without A's lock
+        assert calls.installs == [] and calls.prepared == [] and calls.checks == [] and calls.restarts == 0
+        assert head(checkout) == before and (checkout / ".git/index").read_bytes() == index
+
+    monkeypatch.setattr(ru, "git", git)
+    result, calls = run_apply(checkout, state)
+    assert result["state"] == "healthy" and calls.restarts == 1     # the deferred update can retry normally
+
+
+def test_an_unresolved_update_lock_exits_with_retryable_status(tmp_path, monkeypatch):
+    def git(root, *args, **kwargs):
+        assert args == ("rev-parse", "--git-common-dir")
+        return subprocess.CompletedProcess([], 1, "", "cannot read Git metadata")
+
+    monkeypatch.setattr(ru, "git", git)
+    monkeypatch.setattr(ru, "in_flight", lambda directory: False)
+    ru.write_status(tmp_path, state="updating", target="0.2.0", error="", at=1)
+    assert ru.main(["--root", str(tmp_path), "--version", "v0.2.0", "--state-dir", str(tmp_path),
+                    "--pid", "42"]) == 1
+    status = ru.read_status(tmp_path)
+    assert status["state"] == "waiting" and status["target"] == "0.2.0" and status["at"] > 1
+    assert "update lock cannot be checked" in status["error"]
+
+
 def test_an_update_of_a_shared_checkout_waits_for_another_under_way(repos):
     public, checkout, state = repos
     before = head(checkout)

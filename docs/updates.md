@@ -170,6 +170,8 @@ environments (`scripts/tico -e <env> install`) may share one checkout: the first
 runner, still on the old release, finds the checkout already there, runs the install step for its own Python and
 restarts onto it (with its own jobs). The same happens after a `git checkout` of a release by hand. Their updates take
 turns on a lock in the checkout's git directory, so one never moves the checkout while another is mid-update.
+If the Git gate stays busy for ten seconds, or Git cannot find that shared update lock, the updater exits with
+`waiting` status and retries later. It never installs, restarts or rolls back without the shared update lock.
 
 ### Linux from a checkout: run `scripts/tico install` once
 

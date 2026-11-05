@@ -433,11 +433,13 @@ def apply(root, version, directory, *, run=subprocess.run, lock_wait=LOCK_WAIT_S
     """`update` (below) under the checkout's update lock. Runners of several company environments may share one checkout,
     and their updates must not interleave: one's rollback would move the checkout under another that already restarted.
     The second waits, saying "updating" so its runner does not start another, then sees where the first left the checkout.
-    After `lock_wait` seconds it gives up with "waiting" and its runner tries again later."""
+    If the lock cannot be found, or after `lock_wait` seconds, it gives up with "waiting" and its runner tries again later."""
     path = lock_path(root, run)
-    if path is None:
-        return update(root, version, directory, run=run, clock=clock, **kw)
     target = version.lstrip("v")
+    if path is None:
+        error = "the checkout is busy or its update lock cannot be checked; retrying later"
+        write_status(directory, state="waiting", target=target, error=error, at=clock())
+        return {"state": "waiting", "target": target, "error": error}
     with open_regular_lock(path) as handle:
         deadline, said = time.time() + lock_wait, False
         while True:
