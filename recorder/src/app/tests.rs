@@ -66,6 +66,11 @@ fn picker_search_runs_blocking_http_outside_the_tauri_runtime() {
 }
 
 fn app(store: Store, directory: &std::path::Path) -> Recorder {
+    // No-sign-in fixtures need empty credentials without depending on a desktop secret service.
+    static KEYRING: std::sync::Once = std::sync::Once::new();
+    KEYRING.call_once(|| {
+        keyring::set_default_credential_builder(keyring::mock::default_credential_builder());
+    });
     let lock = AppLock::acquire(directory).unwrap();
     Recorder::new(store, Some(lock), true).unwrap()
 }
@@ -919,6 +924,24 @@ fn send_while_recording_stops_waits_for_the_last_words_then_sends() {
         app.status_view()["recording"].is_null(),
         "Send stopped the recording"
     );
+}
+
+#[test]
+fn settings_reload_controller_observes_writes_without_a_settings_job_reply() {
+    let directory = tempfile::tempdir().unwrap();
+    let store = Store::open(directory.path()).unwrap();
+    let mut app = app(store, directory.path());
+    // Exercise the normal controller refresh with the fixture's background workers disabled.
+    app.demo = false;
+    let mut config = settings::read(directory.path()).unwrap();
+    config.microphone = "Studio mic".into();
+    settings::write(directory.path(), &config).unwrap();
+    app.tick();
+    assert_eq!(app.config.microphone, "Studio mic");
+    config.microphone.clear();
+    settings::write(directory.path(), &config).unwrap();
+    app.tick();
+    assert!(app.config.microphone.is_empty());
 }
 
 #[test]
