@@ -5816,7 +5816,7 @@ def task_comment(conn, actor, task_id, text, wake=True, *, ask=None, extra_refs=
     if not conv:
         refuse(conn, actor, "not-found", f"task {task_id} has no conversation")
     if ask:
-        target, routed = task_ask_route(conn, actor, row, ask)
+        target, routed = task_ask_route(conn, actor, row, {**refs, **ask})
         refs.update(routed)
     if answer_to:
         # The answer goes back to the bot that asked, which may be neither the owner nor the requester.

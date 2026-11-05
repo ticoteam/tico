@@ -275,7 +275,7 @@ def test_health_names_a_system_hold_even_with_a_saved_ask_and_hides_private_text
 
 
 @pytest.mark.parametrize("manager", ["human:cara", "bot:cpo"])
-@pytest.mark.parametrize("source", ["primary", "additional", "reply"])
+@pytest.mark.parametrize("source", ["primary", "additional", "reply", "comment"])
 def test_routing_checks_every_sources_activity_permissions_for_people_and_bots(api, monkeypatch, manager, source):
     from backend.auth import actor_reads_task
     from backend.tests.test_api import restrict
@@ -292,7 +292,11 @@ def test_routing_checks_every_sources_activity_permissions_for_people_and_bots(a
             parent = H._write_message(c, "human:ana", "bot:ops", "Read these figures.",
                                       H.conversation(c, task["conversation_id"]), "say", {"task": restricted["id"]}, None, None)
             refs, reply = {"task": task["id"]}, parent["id"]
-        msg = H.say(c, "bot:ops", H.KEEPER, "Should I publish the figures?", kind="ask", refs=refs, in_reply_to=reply)
+        if source == "comment":
+            msg = H.task_comment(c, "bot:ops", task["id"], "Should I publish the figures?",
+                                 ask={"who": "keeper", "questions": []}, extra_refs={"sources": [restricted["id"]]})
+        else:
+            msg = H.say(c, "bot:ops", H.KEEPER, "Should I publish the figures?", kind="ask", refs=refs, in_reply_to=reply)
         assert msg["recipient_id"] == "human:ana"
 
 
