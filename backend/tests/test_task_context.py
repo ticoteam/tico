@@ -129,7 +129,7 @@ def test_bot_uses_own_page_rights_during_task_work_without_task_reader_intersect
     assert shared_home in {p['id'] for p in restricted_home['pages']}
 
 
-def test_attached_bot_reads_saved_meeting_in_every_turn_and_loses_revoked_grant(api):
+def test_attached_bot_reads_saved_meeting_in_every_turn_until_removed(api):
     mid = record(api, {'private': True, 'notes': 'Owner decisions'})
     live = attach(api, mid)
     other = record(api, {'private': True})
@@ -149,22 +149,14 @@ def test_attached_bot_reads_saved_meeting_in_every_turn_and_loses_revoked_grant(
     get(api, 'meetings/transcript?id=' + mid, token)
     get(api, 'meetings/transcript?id=' + other, token, expected=404)
     with api.app.state.store.transaction() as c:
+        # Who added the bot does not matter: being in the meeting is the permission.
         c.execute("UPDATE live_meeting_bots SET joined_by='human:ben' WHERE meeting_id=?", (live,))
-    get(api, 'meetings/transcript?id=' + mid, token, expected=404)
-    assert not get(api, 'tasks/' + t['id'] + '/context', token)['meetings']
-    with api.app.state.store.transaction() as c:
-        c.execute("UPDATE live_meeting_bots SET joined_by='human:ana' WHERE meeting_id=?", (live,))
-        original = meetings.get(mid, c)['metadata']
-        meetings.snapshot({**original, 'owner': 'ben@acme.example', 'audience': 'participants',
-                           'audience_emails': ['ben@acme.example']}, conn=c)
-    get(api, 'meetings/transcript?id=' + mid, token, expected=404)
-    with api.app.state.store.transaction() as c:
-        meetings.snapshot({**original, 'audience': 'participants', 'audience_emails': ['ana@acme.example']}, conn=c)
-    assert [m['id'] for m in get(api, 'tasks/' + t['id'] + '/context', token)['meetings']] == [mid]
     get(api, 'meetings/transcript?id=' + mid, token)
+    assert [m['id'] for m in get(api, 'tasks/' + t['id'] + '/context', token)['meetings']] == [mid]
     with api.app.state.store.transaction() as c:
         c.execute('DELETE FROM live_meeting_bots WHERE meeting_id=?', (live,))
     get(api, 'meetings/transcript?id=' + mid, token, expected=404)
+    assert not get(api, 'tasks/' + t['id'] + '/context', token)['meetings']
 
 
 def test_claim_retry_rebuilds_metadata_with_current_own_access(api):

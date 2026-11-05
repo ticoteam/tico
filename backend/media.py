@@ -270,6 +270,9 @@ def shared_meeting(record, who):
 
 
 def authorized(c, who, rid, *, include_deleted=False, write=False):
+    if who.role == "bot" and not write:
+        from .context_search import readable
+        return readable(c, who, rid)
     record = MS.get(rid, c)
     if not record:
         raise Problem("not_found", "Note or meeting not found", 404)
@@ -460,6 +463,13 @@ def blob_for(c, auth, who, bid):
     # object below, using the same authorization as its conversation or task.
     allowed = who.role in ("owner", "human") and row["owner"] == who.actor
     if not allowed and who.role in ("owner", "human", "bot"):
+        for linked in c.execute("SELECT meeting_id FROM media_assets WHERE blob_id=?", (bid,)):
+            try:
+                authorized(c, who, linked[0])
+                allowed = True
+                break
+            except Problem:
+                pass
         for linked in c.execute("SELECT m.* FROM message_assets a JOIN messages m ON m.id=a.message_id WHERE a.blob_id=?", (bid,)):
             try:
                 auth.conversation(c, who, linked["conversation_id"])
@@ -1073,7 +1083,7 @@ def install_media(app, store, auth, mutate, send_message, task_create, review_pr
             else:
                 status = "delayed"
             extra = []
-            from .meeting_importers import IMPORTERS, status_of
+            from .meeting_importers import ERROR_TEXT, IMPORTERS, status_of
             for r in c.execute("SELECT source FROM meeting_importers WHERE enabled=1"):
                 if r["source"] not in IMPORTERS:
                     continue
@@ -1086,7 +1096,10 @@ def install_media(app, store, auth, mutate, send_message, task_create, review_pr
                               "last_succeeded_at": health["last_succeeded_at"] if health else None,
                               "last_attempt": detail.get("last_attempt"), "last_import": detail.get("last_import"),
                               "pending": 0, "imported": detail.get("imported_total", 0),
-                              "error_code": detail.get("error_code", "")})
+                              "error_code": detail.get("error_code", ""),
+                              # Why it fails, in words, so the Sources panel can say it to anyone who opens it.
+                              "error": (detail.get("message") or ERROR_TEXT.get(detail.get("error_code") or "", ""))
+                              if detail.get("error_code") else ""})
             return {"sources": [
                 {"id": "import", "name": "Import", "status": "available", "last_succeeded_at": None},
                 {"id": "close", "name": "Close", "status": status,

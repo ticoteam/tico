@@ -538,13 +538,16 @@ function taskChatLive(state) {
   }, 200);
 }
 function taskChatCurrent(state) { return TASK_CHAT === state && state.dialog.open; }
-const commentAuthor = (a, via) => {
+const commentAuthor = (a, via, src = null) => {
   if (a === 'external:roadmap') return '<span class="who">Visitor</span>';
+  // The Assistant passing on a person's words reads as "Ana's Assistant"; the server itself is named by what made the row.
+  if (src?.kind === 'assistant_for') return `${avatar(assistantBot(), 16)}<span class="who">${esc(src.name)}</span>`;
+  if (src && SOURCE_LINES.has(src.kind)) return src.name ? `<span class="who">${esc(src.name)}</span>` : '';
   const pid = actorPerson(a);
   // The Assistant acted for this person (docs/assistant.md): "<name> (via Assistant)".
   const by = via === 'assistant' ? ' (via Assistant)' : '';
   if (pid) return `${personCircle(personDisplay(pid), 16)}<span class="who">${esc((pid === S.me?.id ? 'You' : personDisplay(pid)) + by)}</span>`;
-  if (a === 'keeper') return `<span class="who">${esc(assistantName())}</span>`;
+  if (a === 'keeper') return '';
   const slug = actorSlug(a);
   return `${slug ? avatar(slug, 16, stateOf(slug)) : ''}<span class="who">${esc(actorLabel(a))}</span>`;
 };
@@ -584,11 +587,17 @@ function commentLineHTML(x, i, all, files = [], taskId = '', canAnswer = true) {
       && String(y.message.body || '').trim() === String(x.note).trim() && Math.abs(Date.parse(y.ts) - Date.parse(x.ts)) < 5000);
     // A QA waiver is a person's decision, never a verdict: it keeps its own mark and its full reason.
     const waived = x.field === 'qa_waiver' ? ' <span class="verdict-chip waived" data-qa-waiver>QA waived</span>' : '';
-    return `<div class="tcomment sys tmark${waived ? ' qa-waiver' : ''}"><span class="tcomment-who">${commentAuthor(x.actor, x.via)}</span>${waived} <span class="muted">${esc(say)}${x.note && x.field !== 'note' && !mirrored ? ` — ${esc(waived ? x.note : clipLine(x.note, 200))}` : ''}</span>
+    const src = rowSource(x, x.actor), who = commentAuthor(x.actor, x.via, src);
+    // A change the server made with no name to give it (a system line) reads as a sentence of its own.
+    const said = who ? say : say.charAt(0).toUpperCase() + say.slice(1);
+    return `<div class="tcomment sys tmark${waived ? ' qa-waiver' : ''}">${who ? `<span class="tcomment-who">${who}</span>` : ''}${waived} <span class="muted">${esc(said)}${x.note && x.field !== 'note' && !mirrored ? ` — ${esc(waived ? x.note : clipLine(x.note, 200))}` : ''}</span>
       <time class="muted tnum" title="${esc(fmt(x.ts))}">${esc(ago(x.ts))}</time></div>`;
   }
   const m = x.message, ask = askOf(m);
   if (m.refs?.reconnect && typeof m.refs.reconnect === 'object') return reconnectCardHTML(m);
+  // A task update, a built-in's, an automation's or a system line: one gray line, no sender row (rowSource).
+  if (!ask && isSourceLine(m)) return sourceLineHTML(m, {cls: 'tcomment tline'});
+  const src = rowSource(m);
   // a question's text is in its block; a body that only repeats it is left out
   const body = ask && ask.questions.some(q => String(q.question || '').trim() === String(m.body || '').trim()) ? '' : m.body || '';
   const kind = m.kind === 'ask' ? '<span class="pill needs">question</span>' : m.kind === 'answer' ? '<span class="pill">answer</span>' : '';
@@ -597,7 +606,7 @@ function commentLineHTML(x, i, all, files = [], taskId = '', canAnswer = true) {
   const person = !!actorPerson(m.sender_id), me = m.sender_id === myActor();
   // A bot's comment takes a row of Copy, 👍 and 👎 under it, as in a chat (ui/app/feedback.js).
   const fb = m.id && String(m.sender_id || '').startsWith('bot:') ? fbKey('message', m.id) : '';
-  return `<div class="tcomment tmsg${person ? ' you' : ''}${me ? ' from-me' : ''}${String(m.sender_id || '').startsWith('bot:') ? ' bot' : ''}" data-message="${esc(m.id || '')}"><div class="tcomment-head"><span class="tcomment-who">${commentAuthor(m.sender_id, m.refs?.via)}</span>${kind}${roadmapCommentMark(m, taskId)}
+  return `<div class="tcomment tmsg${person ? ' you' : ''}${me ? ' from-me' : ''}${String(m.sender_id || '').startsWith('bot:') ? ' bot' : ''}" data-message="${esc(m.id || '')}"><div class="tcomment-head"><span class="tcomment-who">${commentAuthor(m.sender_id, m.refs?.via, src)}</span>${kind}${roadmapCommentMark(m, taskId)}
       ${m.refs?.quiet ? '<span class="muted" title="Saved for the bot\'s next run on this task">saved</span>' : ''}
       <span class="spacer"></span>${m.edited_at ? `<span class="muted" title="Edited ${esc(fmt(m.edited_at))}">edited</span>` : ''}<time class="muted tnum" title="${esc(fmt(m.created_at))}">${esc(ago(m.created_at))}</time></div>
     <div class="bubble ${person ? 'you' : 'bot'}"${fb ? ` data-fb-press="${esc(fb)}"` : ''}>${body ? `<div class="md">${safeMd(body)}</div>` : ''}
@@ -835,7 +844,10 @@ function taskCommentsRender(state, data, sent = '') {
       if (ev.metaKey || ev.ctrlKey || (!ev.shiftKey && !touchKeyboard())) { ev.preventDefault(); void taskCommentSend(state); }
     };
     const thread = $('.task-comments', host);
-    thread.addEventListener('toggle', ev => { if (ev.target.matches?.('details.run-steps')) void taskStepsOpen(ev.target); }, true);
+    thread.addEventListener('toggle', ev => {
+      if (ev.target.matches?.('details.run-steps')) void taskStepsOpen(ev.target);
+      sourceGroupToggle(state.openLines, ev.target);
+    }, true);
     thread.addEventListener('click', ev => {
       const stop = ev.target.closest('[data-task-stop]');
       if (stop && taskChatCurrent(state)) void taskRunStop(state, stop);
@@ -855,7 +867,12 @@ function taskCommentsRender(state, data, sent = '') {
   // The run answering the thread; otherwise the bot's next run on this task, when it is queued: what it waits for.
   const live = taskLiveHTML(data.execution, state.stopping, sent);
   const wait = live || !data.waiting_for ? live : `<p class="muted task-wait" role="status">${esc(data.waiting_for)}</p>`;
-  const html = (lines.map((x, i, all) => commentLineHTML(x, i, all, files, state.id, can)).join('') || '<p class="muted">Nothing said yet.</p>') + wait;
+  // Two or more task updates in a row are one "N task updates" row, shut until opened (ui/app/hub-v2.js sourceRunsHTML).
+  const said = lines.filter(x => x.kind !== 'event' || commentLineHTML(x, 0, lines, files, state.id, can));
+  const isUpdate = x => x.kind !== 'event' && !!x.message && !askOf(x.message) && isSourceLine(x.message) && rowSource(x.message).kind === 'task_update';
+  state.openLines ||= new Set();
+  const html = (sourceRunsHTML(said, {isUpdate, open: run => run.some(x => state.openLines.has(x.message.id)),
+    line: x => commentLineHTML(x, 0, lines, files, state.id, can), draw: x => commentLineHTML(x, 0, lines, files, state.id, can)}) || '<p class="muted">Nothing said yet.</p>') + wait;
   const thread = $('.task-comments', host);
   if (!can) d.askDrafts?.clear();
   if (can && askBusy(thread)) return;     // never under someone answering

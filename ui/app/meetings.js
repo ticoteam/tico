@@ -11,6 +11,7 @@ function meetStop() {
     clearInterval(MEET.poll); clearInterval(MEET.sourcesPoll);
     meetSharedStop(MEET);
     granolaStop(MEET);   // ui/app/meetings-granola.js
+    $('#meet-src-dialog')?.remove();
     MEET = null;
   }
   window.liveMeetingsStop?.();
@@ -34,7 +35,7 @@ async function pageNotes() {
       <div class="meet-sources" id="meet-sources" hidden></div>
       <a class="linkish" id="meet-recorder" href="${MEET_RECORDER_DMG}" aria-label="Get Tico Recorder for Mac" title="For Mac">Get Tico Recorder</a>
       <button class="linkish" type="button" id="meet-settings">Settings</button></div>
-    <section class="meet-granola" id="meet-granola" aria-label="Granola" hidden></section>
+    <p class="sr-only" id="mg-live" aria-live="polite"></p>
     <div class="meet-review-help muted" id="meet-review-help" hidden></div>
     <div class="meet-review-bulk" id="meet-review-bulk" hidden></div>
     <div class="notes" id="notes">
@@ -241,7 +242,8 @@ function meetSourceState(row, id) {
   if (row.status === 'delayed') return {key: 'delayed', word: 'Delayed'};
   return {key: 'on', word: 'Connected'};
 }
-function meetTile(state, source, big) {
+// A large tile on the empty page: a source and how it is doing.
+function meetTile(state, source) {
   const row = (state.sourceRows || []).find(r => r.id === source.id);
   const known = Array.isArray(state.sourceRows);
   // Granola with account sign-in is per person: the tile shows the viewer's own connection and anyone can use it.
@@ -251,38 +253,34 @@ function meetTile(state, source, big) {
   const when = mine ? (mine.when ? ago(mine.when) : '') : st.key === 'on' ? ago(row.last_import || row.last_succeeded_at) : '';
   const label = `${source.name}: ${st.word || 'Connect'}${when ? (mine ? ', synced ' : ', last import ') + when : ''}`;
   const attrs = source.id === 'close' ? `href="${INTEGRATIONS}/close-crm"` : `type="button" data-msrc="${esc(source.id)}"${S.me?.role === 'owner' || account ? '' : ' disabled title="The owner connects sources"'}`;
-  return `<${source.id === 'close' ? 'a' : 'button'} class="meet-tile${big ? ' big' : ' item'}" data-state="${st.key}" ${attrs}${big ? '' : ' role="menuitem"'} aria-label="${esc(label)}">
-      ${meetLogo(source.id, big ? 40 : 20)}<span class="mt-text"><b>${esc(source.name)}</b><span class="mt-status">${st.key && st.key !== 'off' ? '<i class="dot" aria-hidden="true"></i>' : ''}${esc(st.word)}${when ? ` <span class="mt-when">${esc(when)}</span>` : ''}</span></span></${source.id === 'close' ? 'a' : 'button'}>`;
+  return `<${source.id === 'close' ? 'a' : 'button'} class="meet-tile big" data-state="${st.key}" ${attrs} aria-label="${esc(label)}">
+      ${meetLogo(source.id, 40)}<span class="mt-text"><b>${esc(source.name)}</b><span class="mt-status">${st.key && st.key !== 'off' ? '<i class="dot" aria-hidden="true"></i>' : ''}${esc(st.word)}${when ? ` <span class="mt-when">${esc(when)}</span>` : ''}</span></span></${source.id === 'close' ? 'a' : 'button'}>`;
 }
-// The big empty-state tiles leave Granola out when the viewer's own Granola row is above them; the Add source menu keeps it.
-const meetTilesHTML = (state, big) => MEET_SOURCES.filter(s => s.id !== 'granola' || !state.granola || !big).map(s => meetTile(state, s, big)).join('');
+const meetTilesHTML = state => MEET_SOURCES.map(s => meetTile(state, s)).join('');
 function meetWireTiles(state, root) {
   root.querySelectorAll('[data-msrc]').forEach(b => b.onclick = () => {
     const source = MEET_SOURCES.find(s => s.id === b.dataset.msrc);
-    if (source.id === 'granola' && state.granola) return granolaFromTile(state);
+    if (source.id === 'granola' && state.granola) return granolaConnect(state);
     if (window.openMeetingImporter) window.openMeetingImporter(source.id, source.name, () => meetSources(state));
   });
 }
 // Whether anything already brings meetings in: the viewer's Granola or any importer that has been set up.
 const meetConnected = state => granolaReady(state.granola) || (state.sourceRows || []).some(r => MEET_SOURCES.some(m => m.id === r.id) && r.status && r.status !== 'needs_setup');
-// A quiet "Add source" menu in the tab bar, and the large tiles only on a page with no meetings and nothing connected.
+// A quiet "Sources" link in the tab bar (ui/app/meetings-sources.js), and the large tiles only on a page with no
+// meetings and nothing connected.
 function meetPaintTiles(state) {
   // Granola's status can land after the list: swap the empty state's tiles for a plain line once something is connected.
   if (state.empty && !!$('#notes-rows .meet-blank') === meetConnected(state)) { meetList(state); return; }
   const strip = $('#meet-sources');
   if (strip) {
-    const open = !!strip.querySelector('.meet-src-menu:not([hidden])');
-    const trouble = (state.sourceRows || []).some(r => r.status === 'error' || r.status === 'delayed');
     strip.hidden = !state.loaded || (!!state.empty && !meetConnected(state));
-    strip.innerHTML = `<button type="button" class="linkish meet-src-btn" aria-haspopup="menu" aria-expanded="${open}">${trouble ? '<i class="dot" aria-hidden="true"></i>' : ''}Add source</button>
-      <div class="meet-src-menu" role="menu" aria-label="Sources"${open ? '' : ' hidden'}>${meetTilesHTML(state, false)}</div>`;
-    const button = strip.querySelector('.meet-src-btn'), menu = strip.querySelector('.meet-src-menu');
-    button.onclick = event => { event.stopPropagation(); menu.hidden = !menu.hidden; button.setAttribute('aria-expanded', String(!menu.hidden)); if (!menu.hidden) menu.querySelector('button:not(:disabled), a')?.focus(); };
-    menu.onkeydown = event => { if (event.key === 'Escape') { menu.hidden = true; button.setAttribute('aria-expanded', 'false'); button.focus(); } };
-    meetWireTiles(state, strip);
+    strip.innerHTML = '<button type="button" class="linkish meet-src-btn" aria-haspopup="dialog">Sources</button>';
+    strip.querySelector('.meet-src-btn').onclick = () => meetSourcesOpen(state);
+    meetSourcesDot(state);
   }
   const big = document.querySelector('#notes-rows [data-meet-tiles]');
-  if (big) { big.innerHTML = meetTilesHTML(state, true); meetWireTiles(state, big); }
+  if (big) { big.innerHTML = meetTilesHTML(state); meetWireTiles(state, big); }
+  meetSourcesPaint(state);
 }
 async function meetSources(state) {
   let rows;
@@ -378,10 +376,10 @@ async function meetLoad(state, first) {
   else if (!state.selected) $('#notes-detail').innerHTML = '';
 }
 const meetFiltersOn = state => !!(state.person || state.source || state.filter !== 'all' || (state.when || 'all') !== 'all');
-// No meetings and nothing narrowing the list: the sources, since the Add source menu is hidden until one is connected
+// No meetings and nothing narrowing the list: the sources, since the Sources link is hidden until one is connected
 // (the header has Add notes).
 const meetEmptyHTML = state => meetConnected(state) ? '<div class="notes-empty">No shared meetings yet.</div>'
-  : `<div class="meet-blank"><div class="meet-tiles big" data-meet-tiles>${meetTilesHTML(state, true)}</div></div>`;
+  : `<div class="meet-blank"><div class="meet-tiles big" data-meet-tiles>${meetTilesHTML(state)}</div></div>`;
 const meetPill = r => r.delivery?.status === 'pending' ? '<span class="pill in-progress">sending</span>' : r.delivery?.status === 'error' ? '<span class="pill fail">delivery failed</span>' : r.status === 'error' ? '<span class="pill fail">failed</span>'
   : r.sent ? '<span class="pill ok">sent</span>' : '';
 const meetPeople = r => {
@@ -799,7 +797,7 @@ function meetNotesOpen(state) {
 // its quote and Edit / Delete / Push. Anyone who can read the meeting edits and deletes; Push is
 // the meeting's owner only, which is what `can_push` says, and it makes a hub task.
 const MEET_SECTIONS = [
-  {key: 'doc', title: 'Doc updates', fields: [['document', 'Document, e.g. docs/pricing.md'], ['change', 'What it should say now'], ['why', 'Why']]},
+  {key: 'doc', title: 'Doc updates', fields: [['document', 'Document, e.g. docs/pricing.md'], ['change', 'What it should say now'], ['why', 'Why'], ['owner', 'Owner — who it is for']]},
   {key: 'task', title: 'Tasks', fields: [['owner', 'Owner — human:<id> or bot:<slug>'], ['due', 'Due — 2026-09-18T17:00:00-07:00'], ['priority', 'Priority'], ['body', 'Details']]},
   {key: 'feature', title: 'Feature requests', fields: [['side', 'Product area (optional)'], ['app', 'App (optional)'], ['area', 'Label (optional)']]},
 ];
@@ -812,7 +810,7 @@ const meetItemLine = it => {
     || (botByRef(o) ? botDisplayName(botByRef(o).id) : o);
   if (it.section === 'task') return [d.owner ? who(d.owner) : 'No owner yet', d.due ? 'due ' + String(d.due).slice(0, 10) : '',
     /^p\d$/i.test(d.priority || '') ? 'priority ' + d.priority.toUpperCase() : d.priority || ''].filter(Boolean).join(' · ');
-  if (it.section === 'doc') return [d.document || 'No document named', d.change].filter(Boolean).join(' — ');
+  if (it.section === 'doc') return [d.owner ? 'For ' + who(d.owner) : '', d.document || 'No document named', d.change].filter(Boolean).join(' — ');
   if (it.section === 'feature') return [({B: 'Backend', F: 'Frontend', 'B/F': 'Backend and frontend'})[d.side] || d.side, ({CA: 'Client app', PA: 'Pro app'})[d.app] || d.app, d.area, d.bug ? 'bug' : ''].filter(Boolean).join(' · ');
   return '';
 };
@@ -839,17 +837,20 @@ function meetSeek(ms) {
 const meetFieldValue = f => { const v = f.value.trim(); return f.dataset.field === 'owner' && !v.includes(':') ? 'bot:' + v : v; };
 function meetItemFields(section, detail) {
   const fields = (MEET_SECTIONS.find(s => s.key === section) || {fields: []}).fields;
+  // A doc update with no owner goes to the documentation bot, when this team has one; else someone must be chosen.
+  const docBot = (S.emps || []).some(e => e.slug === 'doc-updater' && e.status !== 'archived');
   return fields.map(([name, label]) => {
     if (name === 'owner') {
       // An owner the notes named by slug (or a bare name) is picked by its id.
       const named = String((detail || {}).owner || ''), bot = !named.includes(':') || named.startsWith('bot:') ? botByRef(named) : null;
       const current = bot ? bot.id : named;
-      return `<select data-field="owner" aria-label="${esc(label)}">${taskOwnerOptions(current)}</select>`;
+      const blank = section === 'doc' ? (docBot ? 'The doc-updater bot (default)' : 'Choose who this is for') : undefined;
+      return `<select data-field="owner" aria-label="${esc(label)}">${taskOwnerOptions(current, blank)}</select>`;
     }
     return `<input type="text" data-field="${name}" placeholder="${esc(label)}" aria-label="${esc(label)}" value="${esc((detail || {})[name] || '')}">`;
   }).join('');
 }
-function meetItemHTML(state, it, canPush) {
+function meetItemHTML(state, it) {
   const id = it.id, dup = state.itemDup?.[id];
   if (state.itemEdit === id) {
     return `<div class="meet-item" data-item="${esc(id)}"><form data-edit="${esc(id)}">
@@ -865,7 +866,6 @@ function meetItemHTML(state, it, canPush) {
   const buttons = it.status === 'proposed' ? [
     `<button class="linkish" type="button" data-act="edit" data-id="${esc(id)}">Edit</button>`,
     `<button class="linkish" type="button" data-act="del" data-id="${esc(id)}">${state.itemConfirm === id ? 'Really delete?' : 'Delete'}</button>`,
-    canPush ? `<button class="linkish" type="button" data-act="push" data-id="${esc(id)}">Push</button>` : '',
   ].filter(Boolean).join('') : '';
   const at = it.at_ms === null || it.at_ms === undefined ? '' : `<span class="at" data-seek="${it.at_ms}" title="Jump to this moment">${mmss(it.at_ms)}</span>`;
   return `<div class="meet-item${it.status === 'dismissed' ? ' gone' : ''}" data-item="${esc(id)}">
@@ -873,22 +873,20 @@ function meetItemHTML(state, it, canPush) {
       ${line ? `<span class="sub">${esc(line)}</span>` : ''}
       ${it.quote && it.quote.trim().toLowerCase() !== String(it.text || '').trim().toLowerCase() ? `<blockquote data-seek="${it.at_ms === null || it.at_ms === undefined ? '' : it.at_ms}" title="Jump to this moment in the transcript">${esc(it.quote)}</blockquote>` : ''}
       <div class="row">${pill}${buttons}<span class="sub" style="margin:0">${esc(meetAuthor(it.updated_by || it.created_by))}</span></div>
-      ${dup ? `<div class="dup">Already on the board (${esc(STATUS_WORD[dup.list] || dup.list)}): <a href="${esc(dup.url)}" target="_blank" rel="noopener">${esc(dup.name)}</a>
-        <button class="linkish" type="button" data-act="force" data-id="${esc(id)}">Push anyway</button></div>` : ''}</div>`;
+      ${dup ? `<div class="dup">Already on the board (${esc(STATUS_WORD[dup.list] || dup.list)}): <a href="${esc(dup.url)}" target="_blank" rel="noopener">${esc(dup.name)}</a></div>` : ''}</div>`;
 }
 function meetItemsRender(state, rec) {
   const box = $('#meet-sections');
   if (!box) return;
   const data = state.items?.[rec.id];
   if (!data) { box.innerHTML = ''; return; }
-  const canPush = !!(data.can_send ?? data.can_push);
   const sections = MEET_SECTIONS.map(({key, title}) => {
     const rows = (data.sections?.[key] || []).filter(it => it.status !== 'proposed');
     const proposed = (data.sections?.[key] || []).filter(it => it.status === 'proposed').length;
     return `<section class="meet-sec" data-sec="${key}"><header><h4>${esc(title)}</h4>
         ${proposed ? `<span class="count">${proposed}</span>` : ''}
         <button class="linkish" type="button" data-add="${key}">Add</button></header>
-      ${rows.map(it => meetItemHTML(state, it, canPush)).join('') || '<div class="meet-empty">Nothing yet.</div>'}
+      ${rows.map(it => meetItemHTML(state, it)).join('') || '<div class="meet-empty">Nothing yet.</div>'}
       ${key === 'task' ? '<div data-linked-tasks></div>' : ''}
       ${state.itemAdd === key ? `<div class="meet-item"><form data-new="${key}">
           <textarea data-text aria-label="What to add" placeholder="What should happen?"></textarea>
@@ -973,25 +971,11 @@ function meetItemsHandlers(state, rec) {
   box.querySelectorAll('[data-act]').forEach(b => b.onclick = async () => {
     const item = b.dataset.id, act = b.dataset.act;
     if (act === 'edit') { state.itemEdit = item; state.itemAdd = ''; state.itemConfirm = ''; repaint(); return; }
-    if (act === 'del') {
-      if (state.itemConfirm !== item) { state.itemConfirm = item; b.textContent = 'Really delete?'; return; }
-      state.itemConfirm = '';
-      b.disabled = true;
-      if (await call('/' + encodeURIComponent(item), {status: 'dismissed', version:Object.values(state.items[id].sections).flat().find(i => i.id === item).version}, item)) toast('Deleted');
-      return;
-    }
+    if (act !== 'del') return;
+    if (state.itemConfirm !== item) { state.itemConfirm = item; b.textContent = 'Really delete?'; return; }
+    state.itemConfirm = '';
     b.disabled = true;
-    const done = await call('/' + encodeURIComponent(item) + '/push', {force: act === 'force', version:Object.values(state.items[id].sections).flat().find(i => i.id === item).version}, item);
-    if (done) toast(done.pushed ? 'Pushed' : 'Already pushed');
-    else b.disabled = false;
-  });
-  box.querySelectorAll('[data-all]').forEach(b => b.onclick = async () => {
-    const section = b.dataset.all;
-    b.disabled = true;
-    for (const it of (state.items?.[id]?.sections?.[section] || []).filter(x => x.status === 'proposed')) {
-      if (!await call('/' + encodeURIComponent(it.id) + '/push', {force: false, version:it.version}, it.id)) break;
-    }
-    b.disabled = false;
+    if (await call('/' + encodeURIComponent(item), {status: 'dismissed', version:Object.values(state.items[id].sections).flat().find(i => i.id === item).version}, item)) toast('Deleted');
   });
 }
 async function meetItemsLoad(state, id) {
@@ -1216,8 +1200,11 @@ function meetPendingRender(state, rec, data) {
       node = document.createElement('section'); node.className = 'meet-item meet-pending'; node.dataset.pending = item.id;
       node.innerHTML = `<label>Title<textarea data-pending-field="text" aria-label="Title"></textarea></label>
         ${item.section === 'task' ? '<div class="row"><label>Owner<select data-pending-field="owner" aria-label="Owner"></select></label><label>Due<input data-pending-field="due" type="date" aria-label="Due"></label></div><label>Details<textarea data-pending-field="body" aria-label="Details"></textarea></label>'
-          : MEET_SECTIONS.find(s => s.key === item.section).fields.map(([key]) => `<label>${esc(key)}<input data-pending-field="${key}" aria-label="${key}"></label>`).join('')}
+          : MEET_SECTIONS.find(s => s.key === item.section).fields.map(([key]) => key === 'owner'
+            ? '<label>Who this is for<select data-pending-field="owner" aria-label="Who this is for"></select></label>'
+            : `<label>${esc(key)}<input data-pending-field="${key}" aria-label="${key}"></label>`).join('')}
         <div class="row"><span class="muted" data-edited></span><span data-save-error hidden>Not saved · <button type="button" class="linkish" data-retry>Retry</button></span></div>
+        <div class="err" data-owner-error role="alert" hidden></div>
         <div data-pending-duplicate hidden></div>
         <div class="row"><button type="button" class="ghost" data-dismiss>Dismiss</button><button type="button" class="primary" data-send>Send</button></div>`;
       list.append(node);
@@ -1226,6 +1213,7 @@ function meetPendingRender(state, rec, data) {
           const key = field.dataset.pendingField;
           const value = key === 'due' && field.value ? new Date(field.value + 'T12:00:00').toISOString() : field.value;
           meetPendingPatch(draft, key, value);
+          if (key === 'owner' && draft.errorCode === 'owner') { draft.error = ''; draft.errorCode = ''; }
           clearTimeout(draft.timer);
           if (!draft.error) draft.timer = setTimeout(() => meetPendingSave(state, rec.id, item.id), 700);
         };
@@ -1258,6 +1246,7 @@ function meetPendingRender(state, rec, data) {
           await meetItemsLoad(state, rec.id);
         } catch (e) {
           draft.error = e.message;
+          draft.errorCode = e.body?.error?.code || '';
           if (e.body?.error?.item) {
             const current = e.body.error.item;
             draft.current = current; draft.version = current.version; draft.base = current;
@@ -1268,12 +1257,12 @@ function meetPendingRender(state, rec, data) {
             box.hidden = false;
             box.innerHTML = `<a href="#/task/${encodeURIComponent(duplicate.id)}">${esc(duplicate.name)}</a> <button type="button" class="linkish">Send anyway</button>`;
             box.querySelector('button').onclick = () => finish(true, true);
-          } else toast(e.message, true);
+          } else if (draft.errorCode !== 'owner') toast(e.message, true);
         }
         finally { draft.sending = false; node.querySelectorAll('button, input, textarea, select').forEach(field => field.disabled = false); }
         await meetItemsLoad(state, rec.id);
         const error = node.querySelector('[data-save-error]');
-        if (error) error.hidden = !draft.error;
+        if (error) error.hidden = !draft.error || draft.errorCode === 'owner';
       };
       node.querySelector('[data-send]').onclick = () => finish(true);
       node.querySelector('[data-dismiss]').onclick = () => finish(false);
@@ -1288,7 +1277,9 @@ function meetPendingRender(state, rec, data) {
         const options = [...(S.people || []).map(p => ['human:' + p.id, p.name || p.id]),
                          ...activeEmps().map(b => ['bot:' + b.id, b.display_name])]
           .filter(([actor]) => !data.audience || data.audience.includes(actor));
-        const html = '<option value="">Choose</option>' + options.map(([actor, name]) => `<option value="${esc(actor)}">${esc(name)}</option>`).join('');
+        const defaultBot = item.section === 'doc' && (S.emps || []).some(e => e.slug === 'doc-updater' && e.status !== 'archived');
+        const blank = item.section === 'doc' && defaultBot ? 'Doc-updater bot (default)' : 'Choose who this is for';
+        const html = `<option value="">${esc(blank)}</option>` + options.map(([actor, name]) => `<option value="${esc(actor)}">${esc(name)}</option>`).join('');
         if (field.innerHTML !== html) field.innerHTML = html;
       }
       const next = key === 'due' ? String(value).slice(0, 10) : value;
@@ -1299,7 +1290,10 @@ function meetPendingRender(state, rec, data) {
       }
     }
     node.querySelector('[data-edited]').textContent = item.updated_by ? sharedEdited(item.updated_by, meetAuthor) : '';
-    node.querySelector('[data-save-error]').hidden = !draft.error;
+    node.querySelector('[data-save-error]').hidden = !draft.error || draft.errorCode === 'owner';
+    const ownerError = node.querySelector('[data-owner-error]');
+    ownerError.hidden = draft.errorCode !== 'owner';
+    ownerError.textContent = draft.errorCode === 'owner' ? draft.error : '';
     let conflict = node.querySelector('[data-current]');
     if (!conflict) { conflict = document.createElement('div'); conflict.dataset.current = ''; node.append(conflict); }
     conflict.hidden = !draft.current;

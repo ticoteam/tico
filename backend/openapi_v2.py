@@ -16,6 +16,7 @@ import sys
 from pathlib import Path
 
 from . import needs_shape
+from .sources import KINDS as SOURCE_KINDS
 
 VERSION = "2.0.0"
 COPY = Path(__file__).resolve().parents[1] / "docs" / "openapi" / "v2.json"
@@ -731,7 +732,12 @@ NEEDS_ITEM = obj({"id": "s", "kind": {"type": "string", "description": "Needs yo
                              "description": "The writes that settle it: " + "; ".join(
                                  f"`{k}` {v}" for k, v in needs_shape.ACTIONS.items())}})
 
+# Who wrote a line (backend/sources.py): a message's, a search hit's and a task history entry's `source`.
+SOURCE_SCHEMA = obj({"kind": {"type": "string", "enum": list(SOURCE_KINDS)}, "name": "s", "link": "n"},
+                    required=["kind", "name", "link"])
+
 SCHEMAS = {
+    "MessageSource": SOURCE_SCHEMA,
     "SubscriptionList": obj({"profiles_by_computer": items(obj({"runner_id": "s", "label": "s", "profiles": items(
         obj({"name": "s", "id": "s", "display_name": "s", "runtimes": "o"}))}))}),
     "SubscriptionIdentity": obj({"id": "s", "display_name": "s"}),
@@ -1466,6 +1472,8 @@ SCHEMAS.update({
                       "next_offset": {"type": ["integer", "null"]}}),
 })
 SCHEMAS["Task"]["properties"]["tags"] = items(ref("Tag"))
+SCHEMAS["Message"]["properties"]["source"] = ref("MessageSource")
+SCHEMAS["TaskDetail"]["properties"]["events"] = items(obj({"source": ref("MessageSource")}, required=["source"]))
 
 # The named events automations and outgoing webhooks listen for (backend/event_catalog.py).
 TAGS["Events"] = "The catalog of named events (docs/routines.md)."
@@ -2704,6 +2712,8 @@ SCHEMAS.update({
     "ThreadFollow": obj({"thread_id": "s", "following": "b", "notify": "s"}, required=["thread_id", "following"]),
     "ThreadMessageDeleted": obj({"id": "s", "deleted": "b", "revision": "i"}, required=["id", "deleted"]),
 })
+SCHEMAS["ThreadMessage"]["properties"]["source"] = ref("MessageSource")
+SCHEMAS["ThreadSearch"]["properties"]["hits"]["items"]["properties"]["source"] = ref("MessageSource")
 STABLE.extend([
     ("/api/v2/threads", "get", "Threads", "listThreads",
      "The viewer's sidebar, threads and DMs they may read: needs attention, then unread, then recent, one page "

@@ -1,3 +1,4 @@
+pub mod app_location;
 pub mod assist;
 pub mod audio;
 pub mod capture;

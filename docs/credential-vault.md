@@ -16,6 +16,8 @@ Four words, used the same way everywhere:
   granted to that bot, and shares it with their other bots (team rule **Members store credentials for their bots**, on by default).
 - A **bot** is a worker. It has the credentials it was given and nothing else. **A bot never uses a credential that was not
   granted to it**, and never another bot's: having one in its own file on its computer does not make it anyone else's.
+  A bot can list the credentials granted to it (`GET /api/v2/credentials`) to check they reach its turns. Each entry has the
+  credential's name, kind and variable name; it never has the value, a preview, or anyone else's grants.
 - A **credential** is a stored secret with a name and, for a bot, the environment variable it arrives in (`JIRA_BASIC_AUTH`). Its value
   is encrypted and is never shown in a message, a log, an event or to a model.
 - A **grant** is the explicit yes: "this credential, for this bot" (or for a person). A grant can be taken away (**revoked**) and the

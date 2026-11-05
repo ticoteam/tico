@@ -14,6 +14,7 @@ from . import placement, run_triggers
 from . import system_routines as SR
 from .batch_work import isolated
 from .store import H, encode
+from . import sources as SRC
 
 LOG = logging.getLogger("tico.scheduler")
 
@@ -87,7 +88,8 @@ def run_invariants(store, auth, at, failures=None):
         SR.keep(c, run.did(f"{len(firing)} failing: {', '.join(firing)}" if firing else "All checks pass"))
 
     try:
-        invariants.sweep(store, auth, store.settings, at, record=record)
+        with SRC.writing_as("check-health"):
+            invariants.sweep(store, auth, store.settings, at, record=record)
     except Exception as exc:
         run.error = SR.failure_words(exc)
         if failures is None:
@@ -131,7 +133,7 @@ def run_thread_followups(store, auth, at, failures=None):
     with SR.recording(store, "thread_followups", failures, "helper") as run:
         from . import thread_followups
         with store.transaction() as c:
-            notices = thread_followups.earlier_sweep(c, auth, stamp(at))
+            notices = thread_followups.earlier_sweep(c, auth, stamp(at))     # scoped "earlier-messages" there
         run.did(SR.words_of(notices, "notice", "Nothing to tell"), quiet=not notices)
 
 
@@ -702,7 +704,7 @@ class Scheduler:
             # Every minute: the checks that stay per minute. A stalled task no longer wakes its bot here; the task
             # roundup lists it (backend/task_roundup.py).
             self.stall_checked = at
-            with SR.recording(self.store, "stall_checks") as run:
+            with SRC.writing_as("stuck-check"), SR.recording(self.store, "stall_checks") as run:
                 # Holds include person and approval waits that deliberately
                 # never enter the stall candidate list. Reconcile them independently,
                 # with one short transaction per task so runner writes can progress.

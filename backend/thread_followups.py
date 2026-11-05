@@ -11,6 +11,7 @@ Asks that go unanswered get no nudge from Tico: an ask a bot is waiting on is li
 import logging
 
 from . import hubdb as H
+from . import sources as SRC
 
 LOG = logging.getLogger("tico.thread_followups")
 
@@ -33,6 +34,7 @@ def _bot_managers(c, auth, slug):
     return [owner] if owner else []
 
 
+@SRC.scoped("earlier-messages")
 def earlier_sweep(c, auth, at):
     """One notice to each manager of a bot whose Home still holds closed shared-room history. Returns those written."""
     from . import threads

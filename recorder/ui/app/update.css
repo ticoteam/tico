@@ -27,3 +27,26 @@
   font: inherit;
   cursor: pointer;
 }
+.update-banner .btn {
+  margin-left: 4px;
+}
+.update-close {
+  border: 0;
+  background: none;
+  color: var(--text-3);
+  font: 16px/1 var(--font);
+  padding: 2px 6px;
+  cursor: pointer;
+}
+.update-close:hover {
+  color: inherit;
+}
+/* Settings → Updates: status text, then the button. */
+.update-row .value {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+.update-row .btn {
+  flex: none;
+}

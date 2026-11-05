@@ -114,6 +114,49 @@ def test_the_step_sends_at_most_max_bots_oldest_line_first_and_the_rest_wait_for
     assert run_find_stuck(store, at=NOON, settings={"max_bots": 2})["details"]["woken"] == ["finance"]
 
 
+def test_a_bot_with_more_than_25_lines_sent_last_run_waits_for_a_never_sent_bot(api, monkeypatch):
+    store = api.app.state.store
+    monkeypatch.setattr(H, "now", lambda: DAY)
+    with store.transaction() as c:
+        for n in range(26):
+            settle(c, task(c, f"Review invoice {n}")["id"], "finance", ago(days=12))
+        settle(c, task(c, "Sign the menu", owner=H.bot_actor("coo"))["id"], "coo", ago(days=2))
+        complete_jobs(c)
+        complete_jobs(c, "coo")
+    assert run_find_stuck(store, settings={"max_bots": 1})["details"]["woken"] == ["finance"]
+    with store.read() as c:
+        body = only_list(c)
+        assert named_in(body) == 25 and body.endswith("- and 1 more")
+        assert lists(c, "coo") == []
+        assert task_roundup._mark(c, task_roundup.SENT_KEY + "finance") == DAY
+        assert task_roundup._mark(c, task_roundup.SENT_KEY + "coo") is None
+    monkeypatch.setattr(H, "now", lambda: NOON)
+    assert run_find_stuck(store, at=NOON, settings={"max_bots": 1})["details"]["woken"] == ["coo"]
+    with store.read() as c:
+        assert len(lists(c)) == 1 and len(lists(c, "coo")) == 1
+
+
+def test_three_runs_with_one_slot_reach_all_three_bots_with_lines_left_to_send(api, monkeypatch):
+    store = api.app.state.store
+    clock = [DAY]
+    monkeypatch.setattr(H, "now", lambda: clock[0])
+    monkeypatch.setattr(task_roundup, "MAX_LINES", 1)
+    with store.transaction() as c:
+        for slug, days in (("finance", 12), ("coo", 10), ("ops", 8)):
+            for n in range(3):
+                settle(c, task(c, f"Review {slug} invoice {n}", owner=H.bot_actor(slug))["id"], slug, ago(days=days))
+            complete_jobs(c, slug)
+        task_roundup._set(c, task_roundup.SENT_KEY + "coo", ago(days=1))
+        task_roundup._set(c, task_roundup.SENT_KEY + "ops", ago(days=2))
+    for run, slug in enumerate(("finance", "ops", "coo")):
+        clock[0] = H.shift(DAY, hours=6 * run)
+        assert run_find_stuck(store, at=clock[0], settings={"max_bots": 1})["details"]["woken"] == [slug]
+    with store.read() as c:
+        for slug in ("finance", "coo", "ops"):
+            assert named_in(only_list(c, slug)) == 1
+        assert {plan["slug"] for plan in task_roundup.discover(c, H.shift(DAY, hours=18))} == {"finance", "coo", "ops"}
+
+
 def test_a_task_the_limiter_holds_is_dropped_from_its_list_while_an_eligible_one_is_sent(api):
     store = api.app.state.store
     with store.transaction() as c:
@@ -194,7 +237,7 @@ def test_a_blocker_past_the_bot_cap_gets_its_line_on_the_next_run(api):
         assert len(lists(c, "coo")) == 1, "the delivered recipient is not listed again"
 
 
-def test_the_oldest_eligible_line_orders_bots_even_when_it_is_past_the_display_cap(api, monkeypatch):
+def test_a_bots_oldest_unshown_line_does_not_move_it_ahead(api, monkeypatch):
     store = api.app.state.store
     monkeypatch.setattr(task_roundup, "MAX_LINES", 1)
     with store.transaction() as c:
@@ -208,11 +251,16 @@ def test_the_oldest_eligible_line_orders_bots_even_when_it_is_past_the_display_c
         settle(c, other, "coo", ago(days=5))
         complete_jobs(c)
         complete_jobs(c, "coo")
-    assert run_find_stuck(store, settings={"max_bots": 1})["details"]["woken"] == ["finance"]
+    with store.read() as c:
+        plan = next(plan for plan in task_roundup.discover(c, DAY) if plan["slug"] == "finance")
+        assert plan["oldest"] == H.parse_ts(ago(hours=1))
+    assert run_find_stuck(store, settings={"max_bots": 1})["details"]["woken"] == ["coo"]
+    with store.read() as c:
+        assert other[:8] in only_list(c, "coo") and lists(c) == []
+    assert run_find_stuck(store, at=NOON, settings={"max_bots": 1})["details"]["woken"] == ["finance"]
     with store.read() as c:
         body = only_list(c)
-        assert due[:8] in body and oldest[:8] not in body, "the oldest line set priority before the display cap"
-        assert lists(c, "coo") == []
+        assert due[:8] in body and oldest[:8] not in body
 
 
 def test_migration_0093_withdraws_only_the_keepers_open_still_wanted_questions():

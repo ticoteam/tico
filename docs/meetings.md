@@ -86,8 +86,10 @@ meeting has `review_state` (`pending`, `live` or `dismissed`). The rail's existi
   meetings unless their importer chose private. A team meeting with a transcript fires
   `meeting.ready` and the older `recording.ready` once. Repeating approval does not fire again.
   `"audience": "participants"` (as Tico Recorder's **Participants only**) keeps it readable only by the
-  person it is filed for and the people added to or joined in the live meeting it came from; the company
-  owner is held to that too. `"audience": "team"` opens it to the Team. The import route takes
+  person it is filed for, people added to or joined in the live meeting it came from, and attached bots;
+  the company owner is held to that too. Attached bots can read filed notes, transcripts, versions and
+  attachments regardless of who added them or the filed audience, once shared and until deleted or discarded.
+  Pending and dismissed meetings remain unavailable to bots. `"audience": "team"` opens it to the Team. The import route takes
   `"audience": "participants"` as well, readable then by the person filing it. Only a review widens it again.
 - `POST /api/v2/live-meetings/{id}/discard {}`, by the person who connected it, ends a live meeting and
   removes its transcript, chat and events from Tico; the recording stays on their computer.
@@ -214,7 +216,8 @@ format is a `422` that names the problem.
   `TICO_PROCESSING_OPERATORS`, else the owner's) files meetings for a roster human it names in
   `owner_email`. It cannot file for someone who is not on the roster.
 - **A bot** cannot import. Bots read: `hub_meeting_search` and `hub_meeting_read` give them
-  team meetings that are not private, never personal notes or private meetings.
+  Team meetings that are not private and filed meetings they were attached to, including Participants only.
+  Personal notes remain unavailable.
 - **Reading**: a team meeting is readable by everyone signed in. A private one is readable by its
   owner, its participants (matched by email, ignoring case) and the team owner.
 - `send_to` applies the ordinary Send rule: the caller must be allowed to hand that bot work.
@@ -226,9 +229,13 @@ format is a `422` that names the problem.
   asking again for the same bot returns the same task.
 - **Pending tasks.** Beside each meeting are three lists: **Doc updates**, **Tasks** and **Feature
   requests**. A human adds items (with the quote and time they came from if they like) and the
-  readers edit, Send or Dismiss them once the meeting is shared. Send creates ordinary Tico tasks, never a card in another tool: a
-  task item becomes a task for its named owner; a doc update becomes a task for `doc-updater`; a
-  feature request becomes a task for whoever is primary for the product group. Product area, app and label
+  meeting's readers edit, Send or Dismiss them once the meeting is shared. Send creates ordinary Tico tasks, never a card in another tool: a
+  task item becomes a task for its named owner; a doc update becomes a task for the owner it names,
+  or for `doc-updater` when it names none and you can send work to that bot; a feature request
+  becomes a task for whoever is primary for the product group. If a doc update has no owner and
+  `doc-updater` is absent or the sender cannot write to it, or a chosen bot is not writable, Send
+  asks for an owner and leaves the item proposed so it can be edited and sent again. Product area,
+  app and label
   are optional: use your team's names or leave them blank. Existing B/F and CA/PA codes still work.
   A near-identical open task returns a link only if the sender can read it.
   Every sent task ends with a footer naming the meeting and quoting the line. Participants-only meetings send
@@ -292,11 +299,15 @@ and 365; it makes one bounded pass, then exits. Restart the service afterward. O
 service to stop: move `secrets/close-calls.env` aside so the runner stops the job, run the backfill, then put it back. The worker stops with an
 error if a single day exceeds its 5,000-activity page limit, so narrow the window and retry.
 
-The **Add source** menu beside Settings on the Meetings page lists Close and each importer below, with the worker's
-heartbeat in one word: **Connect** until the worker connects, **Connected** (with the last import) after a recent
-successful pull, **Delayed** when its heartbeat is stale, **Error** after a failed pull (a red dot on the menu).
-With no meetings and nothing connected, the page shows them as large tiles (**Add notes** stays in the header). An entry opens that source's setup: Close its tool page,
-the others a dialog with the same form as Tools > Meeting importers (owners only).
+**Sources** beside Settings on the Meetings page opens one dialog with every source: your own Granola account, Close
+and each importer below. Connected sources come first, each with its status in one word (**Connected**, **Waiting**
+until the worker connects, **Delayed** when its heartbeat is stale, **Error** after a failed pull, **Signed out** for
+Granola), its last sync and, when it fails, why. Sources shows a red dot while any of them needs a look. A connected
+source has **Sync now** (Granola), **Sign in again** or **Reconnect** when it needs one, and **Remove**: for Granola
+that disconnects your account, for an importer it turns the importer off (owners only), and Close is managed on its
+tool page. The rest have **Connect**: Granola's sign-in for anyone, Close's tool page, and for the others a dialog with
+the same form as Tools > Meeting importers (owners only). With no meetings and nothing connected, the page shows them
+as large tiles instead (**Add notes** stays in the header).
 
 ## Meeting importers
 
@@ -440,10 +451,10 @@ here but not run against a Workspace.
 
 ### Granola
 
-**Connect your own Granola account in Meetings (default).** Choose **Connect Granola** (in Meetings, Add source, or Tools > Granola), open the
+**Connect your own Granola account in Meetings (default).** Choose **Connect** next to Granola (in Meetings > Sources, or Tools > Granola), open the
 verification link and enter the code if asked. Each person connects their own account through
 Granola's official remote MCP at `https://mcp.granola.ai/mcp`. Tico stores tokens encrypted in the
-server credential vault; bots and Computers cannot read them. Disconnect in Meetings to delete them.
+server credential vault; bots and Computers cannot read them. Remove it in Meetings > Sources to delete them.
 
 The free plan imports your own notes and AI summaries from the last 30 days, without transcripts or
 folders. Paid plans can also import transcripts when Granola permits them. Private notes typed by
@@ -481,7 +492,7 @@ the blocked meetings as skipped. Each attempt resets its skipped count. A rate-l
 in about five minutes, or later when Granola supplies a longer `Retry-After`, and resumes from that
 checkpoint. The first free-plan
 sync requests `last_30_days` when supported; otherwise it uses a custom date range.
-Disconnect cancels an active sync and removes the stored token promptly; revocation is attempted in
+Removing Granola cancels an active sync and removes the stored token promptly; revocation is attempted in
 background when Granola advertises a trusted endpoint. Connections are removed when a person leaves
 or loses sign-in. A pending reconnect retains the working token until success or expiry; a successful
 new sign-in starts a fresh 30-day backfill.

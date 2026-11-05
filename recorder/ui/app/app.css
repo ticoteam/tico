@@ -576,3 +576,23 @@ details.more[open] summary svg { transform: rotate(90deg); }
 .shared-item label { display: grid; gap: 5px; }
 .shared-item input, .shared-item textarea, .shared-item select { width: 100%; box-sizing: border-box; }
 .shared-item textarea { min-height: 64px; resize: vertical; }
+/* Link tasks: search with a live spinner, an optional type filter, picked rows plainly marked. */
+.task-search { display: flex; gap: 8px; }
+.task-search .search-box { position: relative; flex: 1; min-width: 0; display: flex; align-items: center; }
+.task-search .search-box > svg { position: absolute; left: 10px; color: var(--text-3); pointer-events: none; }
+.task-search .search-box .field { width: 100%; padding-left: 30px; padding-right: 30px; }
+.task-search .search-box .spin { position: absolute; right: 10px; }
+.task-search select.field { flex: 0 0 132px; min-width: 0; appearance: none; -webkit-appearance: none; padding-right: 26px; background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='10' height='6'%3E%3Cpath d='M1 1l4 4 4-4' fill='none' stroke='%23999' stroke-width='1.5'/%3E%3C/svg%3E"); background-repeat: no-repeat; background-position: right 9px center; text-overflow: ellipsis; }
+.sheet.tasks .pop-list { transition: opacity 0.12s; }
+.sheet.tasks .pop-list.stale { opacity: 0.45; }
+.task-row .pick { width: 16px; height: 16px; flex: none; display: flex; align-items: center; justify-content: center; border-radius: 50%; border: 1.5px solid var(--g5); color: var(--accent-ink); }
+.task-row.on { background: var(--accent-soft); }
+.task-row.on:hover { background: var(--accent-soft); }
+.task-row.on .pick { background: var(--accent); border-color: var(--accent); }
+.task-row.on .pick svg { color: var(--accent-ink); }
+.task-row.on .grow { font-weight: 500; }
+.task-row .num { color: var(--text-3); font-variant-numeric: tabular-nums; }
+.task-row .faint { color: var(--text-3); font-weight: 400; }
+.side-head .icon-btn.done { color: var(--accent); }
+.inset .line.other-address .name { color: var(--text-2); }
+.otile.s18.add { font-size: 12px; border-width: 1px; }

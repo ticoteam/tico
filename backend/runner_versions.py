@@ -14,6 +14,7 @@ stuck gets a nudge.
 """
 from . import releases
 from .store import H
+from . import sources as SRC
 
 MIN_RUNNER_RELEASE = "0.4.0"
 NUDGE_AFTER_S = 3600
@@ -103,6 +104,7 @@ def record(c, runner_id, body):
     nudge(c, runner_id)
 
 
+@SRC.scoped("system:update")
 def nudge(c, runner_id, server=None):
     """Tell the computer's owner once per server release that it is outdated, after NUDGE_AFTER_S of it behind that
     release: the wait starts again with each server release, so a computer gets its usual chance to update itself

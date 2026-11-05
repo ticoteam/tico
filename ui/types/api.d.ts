@@ -3702,6 +3702,7 @@ export type Message = {
   sender_id: string;
   sender_name?: string;
   sent_as?: SentAs;
+  source?: MessageSource;
   woke?: boolean;
 };
 
@@ -3734,6 +3735,12 @@ export type MessagePatch = {
 
 export type MessageResult = {
   message: Message;
+};
+
+export type MessageSource = {
+  kind: "person" | "bot" | "assistant_for" | "task_update" | "builtin" | "automation" | "system";
+  link: string | null;
+  name: string;
 };
 
 export type MessageTask = {
@@ -5517,7 +5524,9 @@ export type TaskDetail = {
   children: Array<unknown>;
   comment_delivery?: CommentDelivery | null;
   comments: Array<Message>;
-  events: Array<unknown>;
+  events: Array<{
+  source: MessageSource;
+}>;
   has_more: boolean;
   messages: Array<Message>;
   mover?: boolean;
@@ -5934,6 +5943,7 @@ export type ThreadMessage = {
   routed?: ThreadRouted | null;
   sender_id?: string;
   seq: number;
+  source?: MessageSource;
   sub_thread?: Record<string, unknown> | null;
   thread_id: string;
 };
@@ -6009,6 +6019,7 @@ export type ThreadSearch = {
   excerpt: string;
   message_id: string;
   sender_id?: string;
+  source?: MessageSource;
   thread_id: string;
   title?: string;
 }>;
