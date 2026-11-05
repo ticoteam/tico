@@ -584,7 +584,7 @@ def _commit(slug, learned, aid, at):
 def _finish_deliveries(b, night):
     for recipient, batch_id in night["deliveries"]:
         box = {}
-        def state(c):
+        def state(c, box=box, batch_id=batch_id):
             box["state"] = c.execute("SELECT state FROM update_queue WHERE id=?", (batch_id,)).fetchone()[0]
         b.write(state)
         if box["state"] == "sent":

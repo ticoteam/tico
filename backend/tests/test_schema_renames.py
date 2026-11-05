@@ -74,7 +74,9 @@ def restore(path):
 # backend/migrations/0044_drop_kpi_goal_columns.py with kpis.goal_id, the column it indexes, and idempotency_by_created
 # by backend/migrations/0050_idempotency_one_table.py (the answers' partial index replaces it).
 DROPPED_INDEXES = {"invariants_lease", "invariants_open_approvals", "tasks_private_parties", "kpis_goal",
-                   "idempotency_by_created"}
+                   "idempotency_by_created",
+                   # learning_runs drops its night UNIQUE in 20261105010100_learn_beta: Learn can run more than once a day.
+                   "sqlite_autoindex_learning_runs_2"}
 # Dropped by backend/migrations/0052_drop_queue_bot_message.sql: backend/enqueue.py queues the job in Python now.
 DROPPED_TRIGGERS = {"queue_bot_message"}
 # Dropped after the renames ran on them: by backend/migrations/0035_growth_rethink.py, the operation-binding tables
