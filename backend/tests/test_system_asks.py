@@ -143,7 +143,7 @@ def test_migration_resends_dead_letters_once_and_the_answer_clears_the_hold(api,
 
 def test_health_names_a_system_hold_even_with_a_saved_ask_and_hides_private_text(api):
     with api.app.state.store.transaction() as c:
-        task = system_task(c)
+        task = system_task(c, "human:cara")
         legacy_ask(c, task)
     def check(token="ana-test"):
         body = api.get("/api/v2/health", headers=headers(token)).json()
@@ -153,5 +153,5 @@ def test_health_names_a_system_hold_even_with_a_saved_ask_and_hides_private_text
     assert found["fixes"][0]["href"] == "#/task/" + task["id"]
     with api.app.state.store.transaction() as c:
         c.execute("UPDATE tasks SET private=1 WHERE id=?", (task["id"],))
-    hidden = check("cara-test")
+    hidden = check("ben-test")
     assert "Document the release" not in json.dumps(hidden)
