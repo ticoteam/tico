@@ -605,7 +605,7 @@ mod tests {
     }
 
     #[test]
-    fn live_link_saved_by_a_job_clears_the_spinner_and_shows_send_errors_without_reopening() {
+    fn live_link_save_failure_then_worker_success_refreshes_the_view_without_reopening() {
         use std::{
             io::{Read, Write},
             net::TcpListener,
@@ -631,7 +631,6 @@ mod tests {
                     json!({"error":{"code":"unavailable"}}),
                     true,
                 ),
-                ("GET /api/v2/me ", 200, json!({"actor":"human:ana"}), false),
                 (
                     "POST /api/v2/meetings/saved/tasks ",
                     200,
@@ -728,26 +727,39 @@ mod tests {
                 },
             )
             .unwrap();
-        for succeeds in [false, true] {
-            let sending = tico.clone();
-            let store = app.store.clone();
-            let recording = id.clone();
-            assert!(app.job("send", move || {
-                sending.send(&store, &recording, false)?;
-                Ok(json!({}))
-            }));
-            requests.recv_timeout(Duration::from_secs(8)).unwrap();
-            app.tick();
-            assert_eq!(app.actions_view("one")["items"][0]["pending"], true);
-            release.send(()).unwrap();
-            tick_until(&mut app, |a| !a.busy);
-            let view = app.actions_view("one");
-            assert_eq!(view["items"][0]["pending"], false);
-            assert_eq!(
-                view["items"][0]["error"].as_str().unwrap().is_empty(),
-                succeeds
-            );
-        }
+        let sending = tico.clone();
+        let store = app.store.clone();
+        let recording = id.clone();
+        assert!(app.job("send", move || {
+            sending.send(&store, &recording, false)?;
+            Ok(json!({}))
+        }));
+        requests.recv_timeout(Duration::from_secs(8)).unwrap();
+        app.tick();
+        assert_eq!(app.actions_view("one")["items"][0]["pending"], true);
+        release.send(()).unwrap();
+        tick_until(&mut app, |a| !a.busy);
+        let view = app.actions_view("one");
+        assert_eq!(view["items"][0]["pending"], false);
+        assert!(!view["items"][0]["error"].as_str().unwrap().is_empty());
+
+        // This worker has no Recorder reply: only Store changes can update the open view.
+        app.context.notes = "Window draft during retry".into();
+        let destination = tico.destination.clone();
+        let sync = tico_recorder_native::task_links::TaskLinkSync::start_with(
+            app.store.clone(),
+            move |_, _| Tico::new(destination.clone(), "synthetic-token".into()),
+        );
+        requests.recv_timeout(Duration::from_secs(8)).unwrap();
+        app.tick();
+        assert_eq!(app.actions_view("one")["items"][0]["pending"], true);
+        release.send(()).unwrap();
+        tick_until(&mut app, |a| a.context.task_link_operations.is_empty());
+        drop(sync);
+        let view = app.actions_view("one");
+        assert_eq!(view["items"][0]["pending"], false);
+        assert_eq!(view["items"][0]["error"], "");
+        assert_eq!(app.context.notes, "Window draft during retry");
         server.join().unwrap();
         assert_eq!(app.meeting.as_deref(), Some(id.as_str()));
         assert!(app.context.task_link_operations.is_empty());

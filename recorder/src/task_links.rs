@@ -39,7 +39,8 @@ impl TaskLinkSync {
         })
     }
 
-    pub(crate) fn start_with(
+    /// Connect afresh on each attempt, including after credentials change.
+    pub fn start_with(
         store: Store,
         connect: impl Fn(&Store, &str) -> Result<Tico> + Send + 'static,
     ) -> Self {
