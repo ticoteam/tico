@@ -471,7 +471,7 @@ class Scheduler:
                                "hold_ms": round(longest[0] * 1000), "hold_step": longest[2],
                                "wait_ms": round(max((h[1] for h in holds), default=0) * 1000),
                                "transactions": len(holds)})))
-        # Updates (backend/updates.py): today's queue, one bot asked at a time. Its own short
+        # Updates (backend/updates.py): pump the queue built by Maintenance, one bot asked at a time. Its own short
         # transaction, so a failure here never holds back the routines above.
         # A person's draft is written by the company's model in a background thread, so the call never
         # holds the write lock; its row stays out until the thread posts it (or gives up on it).
@@ -490,7 +490,7 @@ class Scheduler:
             settings = self.store.settings
             with self.store.transaction() as c:
                 writer = updates.writer_for(c, settings, self.store)
-                sent = updates.dispatch(c, at, settings.assistant_bot if writer else None)
+                sent = updates.dispatch(c, at, settings.assistant_bot if writer else None, build=False)
             if sent and updates.is_person(sent):
                 threading.Thread(target=updates.write_draft, args=(self.store, sent, writer, settings.assistant_bot),
                                  name="update-draft", daemon=True).start()

@@ -3415,9 +3415,10 @@ def create_app(settings=None):
             # conversation keeps the sender/addressee shortcut as it was.
             native = bool((H.conversation(c, row["conversation_id"]) or {}).get("audience"))
             party = row.get("recipient_id") == who.actor or row.get("sender_id") == who.actor
-            if who.role == "bot" and party and not native:
-                return visual_view(c, who, [row])[0]
-            auth.conversation(c, who, row["conversation_id"])
+            if not (who.role == "bot" and party and not native):
+                auth.conversation(c, who, row["conversation_id"])
+            from .mail_settings import message_sender_can_approve_send
+            row["sender_can_approve_send"] = message_sender_can_approve_send(c, auth, row)
             return visual_view(c, who, [row])[0]
 
     @app.post("/api/v2/chat/{bot}")
@@ -3610,7 +3611,8 @@ def create_app(settings=None):
         # The warn line goes on after the update's own words pass the writing checks (updates.post's `warning`).
         return {"update": updates.post(c, author, body.body, kind=body.kind, day=body.day, slides=slides,
                                        replace_draft=body.replace_draft, reader=updates.meeting_reader(who),
-                                       warning=org_rule_check.warn_line(rule)),
+                                       warning=org_rule_check.warn_line(rule), learnings_saved=body.learnings_saved,
+                                       suggestions_seen=body.suggestions_seen, delivery_batch_id=body.delivery_batch_id),
                 **org_rule_check.answer(rule)}
 
     def update_fixed(body):

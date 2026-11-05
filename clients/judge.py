@@ -694,10 +694,29 @@ def llm(provider, api_key, model, timeout=TIMEOUT, opener=None):
     return engine
 
 
+def _usage(payload):
+    """A provider's usage counts from its answer: `usage`, or Gemini's `usageMetadata`."""
+    return clean_usage((payload.get("usage") or payload.get("usageMetadata")) if isinstance(payload, dict) else None)
+
+
+def _written(text, model, usage):
+    """The JSON object a writer's answer text holds. An answer that is not one was still paid for, so it carries `paid`
+    (`metered` counts it), as an unusable decision answer does."""
+    if text.startswith("```"):
+        text = text.strip("`").removeprefix("json").strip()
+    try:
+        parsed = json.loads(text)
+    except ValueError:
+        raise _paid(JudgeError("shape", "the model did not answer with JSON"), model, usage)
+    if not isinstance(parsed, dict):
+        raise _paid(JudgeError("shape", "the model did not answer with an object"), model, usage)
+    return parsed
+
+
 def gateway_writer(key_of, url, model, timeout=TIMEOUT, opener=None):
     """Writing on the Tico AI Gateway (`<base>/chat/completions`, OpenAI chat shape) with the company's gateway key:
-    `write(system, user)` as `llm_writer`. `key_of()` reads the key at the call, so no writer holds it; it goes only to
-    an https or exact-loopback `url` (`safe_gateway_url`), never through a redirect."""
+    `write(system, user)` as `llm_writer`, capped at MAX_OUTPUT_TOKENS. `key_of()` reads the key at the call, so no
+    writer holds it; it goes only to an https or exact-loopback `url` (`safe_gateway_url`), never through a redirect."""
     opener = opener or gateway_open
 
     def write(system, user):
@@ -706,55 +725,52 @@ def gateway_writer(key_of, url, model, timeout=TIMEOUT, opener=None):
             raise JudgeError("unconfigured", "no Tico AI Gateway key or model to write with")
         if not safe_gateway_url(url):
             raise JudgeError("unconfigured", "the Tico AI Gateway URL is neither https nor this computer")
-        body = {"model": model, "messages": [{"role": "system", "content": system}, {"role": "user", "content": user}]}
+        body = {"model": model, LLM_OUTPUT_LIMIT["openai"]: MAX_OUTPUT_TOKENS,
+                "messages": [{"role": "system", "content": system}, {"role": "user", "content": user}]}
         request = urllib.request.Request(url.rstrip("/") + "/chat/completions", data=json.dumps(body).encode(),
                                          method="POST", headers={"Authorization": "Bearer " + api_key,
                                                                  "Content-Type": "application/json"})
         try:
             with opener(request, timeout=timeout) as response:
-                text = llm_text("openai", json.load(response)).strip()
+                payload = json.load(response)
         except urllib.error.HTTPError as exc:
             raise JudgeError("unavailable", f"the Tico AI Gateway answered {exc.code}", exc.code, retryable=True)
         except (urllib.error.URLError, http.client.HTTPException, TimeoutError, OSError, ValueError, KeyError,
                 IndexError, TypeError) as exc:
             raise JudgeError("unavailable", f"the Tico AI Gateway did not answer: {type(exc).__name__}", retryable=True)
-        if text.startswith("```"):
-            text = text.strip("`").removeprefix("json").strip()
+        usage = _usage(payload)
         try:
-            parsed = json.loads(text)
-        except ValueError:
-            raise JudgeError("shape", "the model did not answer with JSON")
-        if not isinstance(parsed, dict):
-            raise JudgeError("shape", "the model did not answer with an object")
-        return parsed
+            text = llm_text("openai", payload).strip()
+        except (ValueError, KeyError, IndexError, TypeError, AttributeError) as exc:
+            raise _paid(JudgeError("unavailable", f"the Tico AI Gateway did not answer: {type(exc).__name__}",
+                                   retryable=True), model, usage)
+        return _written(text, model, usage)
     write.model = model
     return write
 
 
 def llm_writer(provider, api_key, model, timeout=TIMEOUT, opener=None):
-    """Writing on the company's own provider: `write(system, user)` sends those two texts and nothing
-    else (no tools, no memory, no history) and returns the JSON object the model answered with."""
+    """Writing on the company's own provider: `write(system, user)` sends those two texts and nothing else (no tools,
+    no memory, no history), capped at MAX_OUTPUT_TOKENS, and returns the JSON object the model answered with."""
     if provider not in LLM_URLS or not api_key or not model:
         raise JudgeError("unconfigured", "no provider key or model to write with")
     opener = opener or urllib.request.urlopen
 
     def write(system, user):
         try:
-            with opener(llm_request(provider, api_key, model, system, user), timeout=timeout) as response:
-                text = llm_text(provider, json.load(response)).strip()
+            with opener(llm_request(provider, api_key, model, system, user, MAX_OUTPUT_TOKENS), timeout=timeout) as response:
+                payload = json.load(response)
         except urllib.error.HTTPError as exc:
             raise JudgeError("unavailable", f"{provider} answered {exc.code}", exc.code, retryable=True)
         except (urllib.error.URLError, TimeoutError, OSError, ValueError, KeyError, IndexError, TypeError) as exc:
             raise JudgeError("unavailable", f"{provider} did not answer: {type(exc).__name__}", retryable=True)
-        if text.startswith("```"):
-            text = text.strip("`").removeprefix("json").strip()
+        usage = _usage(payload)
         try:
-            parsed = json.loads(text)
-        except ValueError:
-            raise JudgeError("shape", "the model did not answer with JSON")
-        if not isinstance(parsed, dict):
-            raise JudgeError("shape", "the model did not answer with an object")
-        return parsed
+            text = llm_text(provider, payload).strip()
+        except (ValueError, KeyError, IndexError, TypeError, AttributeError) as exc:
+            raise _paid(JudgeError("unavailable", f"{provider} did not answer: {type(exc).__name__}", retryable=True),
+                        model, usage)
+        return _written(text, model, usage)
     write.model = model
     return write
 

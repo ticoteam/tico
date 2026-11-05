@@ -5596,14 +5596,22 @@ _SLIDES = {
 
 
 @tool("hub_update_create", "Post your daily update (or, on Friday, your week in review) when Tico asks "
-      "for it. A daily is `body`: one to five markdown bullets in plain English and nothing else, no title, "
-      "headings or task ids, at most 25 words a bullet and 90 in all. A week in review is `slides`: goal, "
+      "for it. A daily is `body`: three markdown bullets of work in plain English and nothing else, no title, "
+      "headings or task ids, at most 25 words a bullet and 90 in all, plus a `Blocked:` bullet for each blocker "
+      "and a `Suggestion:` bullet for each suggestion you acted on. A week in review is `slides`: goal, "
       "kpis, done, focus, blockers. One of each a day; posting again replaces it. One that breaks the "
-      "rules is posted with a `warning` saying how to write the next one; an empty one is refused.",
-      {"body": _s("A daily: one to five lines, each starting with '- '"),
+      "rules is posted with a `warning` saying how to write the next one; an empty one is refused. A delivery "
+      "turn (learnings or suggestions only) posts nothing: report `learnings_saved`, `suggestions_seen` and "
+      "`delivery_batch_id` only if you post.",
+      {"body": _s("A daily: three lines, each starting with '- ', plus any `Blocked:` or `Suggestion:` lines"),
        "slides": _SLIDES,
        "kind": _s("daily or weekly; Tico picks from the day when omitted", enum=["daily", "weekly"]),
-       "day": _s("YYYY-MM-DD, only when Tico asks you to redo a past day")},
+       "day": _s("YYYY-MM-DD, only when Tico asks you to redo a past day"),
+       "learnings_saved": {"type": "integer", "minimum": 0, "maximum": 15,
+                           "description": "How many of the learnings Tico handed you you kept"},
+       "suggestions_seen": {"type": "array", "items": {"type": "string"}, "maxItems": 10,
+                            "description": "The suggestions you acted on, one line each"},
+       "delivery_batch_id": _s("The delivery this post answers, when Tico named one")},
       writes=True)
 def update_post(api, args):
     slides = args.get("slides")
@@ -5611,7 +5619,9 @@ def update_post(api, args):
         slides = json.loads(Path(args["slides_file"]).read_text())
     if isinstance(slides, str):
         slides = json.loads(slides)
-    fields = (("body", args.get("body")), ("slides", slides), ("kind", args.get("kind")), ("day", args.get("day")))
+    fields = (("body", args.get("body")), ("slides", slides), ("kind", args.get("kind")), ("day", args.get("day")),
+              ("learnings_saved", args.get("learnings_saved")), ("suggestions_seen", args.get("suggestions_seen")),
+              ("delivery_batch_id", args.get("delivery_batch_id")))
     out = api.post("updates", {k: v for k, v in fields if v is not None}, key=_key(args))
     if "update" not in out:
         return out                  # held by an org rule: the hold, and whom to appeal to
