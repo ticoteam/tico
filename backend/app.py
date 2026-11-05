@@ -2879,8 +2879,8 @@ def create_app(settings=None):
 
     @app.get("/api/v2/conversations")
     def conversations(request: Request, bot: str | None = None, chat_with: str | None = None):
-        """`chat_with=<bot>`: my open chats with that bot, however long ago the last message was
-        (the bot page's chat). Otherwise my conversations, or the owner's view of a bot's."""
+        """`chat_with=<bot>`: my open chat with that bot or its Home after the chats move there.
+        Otherwise my conversations, or the owner's view of a bot's."""
         who = request.state.identity
         auth.domain(who)
         with store.read() as c:
