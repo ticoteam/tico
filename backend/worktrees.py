@@ -2,6 +2,7 @@
 import json
 import re
 import sqlite3
+import shlex
 import uuid
 import unicodedata
 from datetime import datetime, timezone
@@ -31,6 +32,57 @@ IDENTITY = ('expected_head', 'checkout_target', 'expected_base')
 # A computer reports each failed worktree action (restore, prepare, remove) with this prefix until that action succeeds.
 ACTION_FAILED = 'Worktree action failed;'
 REMOVAL = ('cleanup_requested', 'release_requested', 'delete_requested')
+RETIRED = 'Left on a retired computer'
+
+
+def retired(c, computer):
+    """Offline computers still own their trees; only a revoked or deleted registration is gone."""
+    return bool(computer and not c.execute('SELECT 1 FROM runners WHERE id=? AND revoked_at IS NULL',
+                                          (computer,)).fetchone())
+
+
+def status(c, row, *, gone=None):
+    """Keep the last report as history without presenting a retired computer's checkout as ready."""
+    row = dict(row)
+    if row.get('kind') == 'worktree' and row.get('state') != 'removed' and (retired(c, row.get('computer_id')) if gone is None else gone):
+        detail = json.loads(row.get('detail') or '{}')
+        facts = [row.get('branch') or 'branch unknown',
+                 'head ' + str(detail.get('last_commit') or 'unknown'),
+                 'published head ' + str(detail.get('pushed') or 'unknown'),
+                 str(detail.get('ahead', 'unknown')) + ' unpushed commits (last report)']
+        detail.update(checkout_state='retired', error=RETIRED + ': ' + '; '.join(facts))
+        row.update(state='retired', detail=json.dumps(detail))
+    return row
+
+
+def statuses(c, rows):
+    """Read computer liveness once per batch, including installations with many old task links."""
+    rows = [dict(row) for row in rows]
+    computers = {r.get('computer_id') for r in rows if r.get('kind') == 'worktree' and r.get('computer_id')}
+    live = set()
+    for part in H.chunks(computers):
+        live.update(r[0] for r in c.execute('SELECT id FROM runners WHERE revoked_at IS NULL AND id IN (%s)'
+                                           % ','.join('?' * len(part)), part))
+    return [status(c, row, gone=bool(row.get('computer_id') and row['computer_id'] not in live)) for row in rows]
+
+
+def recovery_prompt(c, task, bot):
+    """The owner turn can recover a retired checkout without waiting for a person."""
+    if task['owner_id'] != 'bot:' + bot or start_refusal(c, task):
+        return []
+    notes = []
+    for row in statuses(c, c.execute("SELECT * FROM task_links WHERE task_id=? AND kind='worktree' AND state<>'removed'",
+                                    (task['id'],))):
+        detail = json.loads(row['detail'] or '{}')
+        if detail.get('owner', task['owner_id']) != task['owner_id'] or not row['repo']:
+            continue
+        if row['state'] == 'retired' or detail.get('recovery') and row['state'] == 'pending':
+            command = 'setup' if detail.get('checkout_state') in ('setup_running', 'setup_failed') else 'add'
+            notes.append(f"{RETIRED}: {row['repo']}, branch {row['branch']}. Before code work, run "
+                         f"`hub task worktree {command} {shlex.quote(row['repo'])} --task {task['id']}`. "
+                         "This brings back published work on your current computer. Work that was not pushed "
+                         "stayed on the retired computer; do not ask a person to restore this checkout first.")
+    return notes
 
 
 def ready(state, detail):
@@ -119,6 +171,7 @@ class Update(Contract):
     computer_id: str | None = None
     branch: str | None = Field(default=None, max_length=200)
     cleanup: bool = False
+    recovery_branch_missing: bool = False
     setup_pending: bool | None = None
     checkout_state: Literal['queued', 'attached_pending', 'initializing', 'checkout_ready', 'setup_running', 'setup_failed', 'ready', 'legacy_present', 'unverified'] | None = None
     expected_head: str | None = Field(default=None, pattern=r'^(?:[0-9a-f]{40}|[0-9a-f]{64})$')
@@ -302,7 +355,7 @@ def held_reason(c, row, detail, memo=None):
 
 
 def inventory(c, computer):
-    if not supported(c):
+    if not supported(c) or retired(c, computer):
         return []
     owner = "coalesce(json_extract(l.detail,'$.owner'),CASE WHEN l.added_by LIKE 'bot:%' THEN l.added_by ELSE t.owner_id END)"
     return [dict(r) for r in c.execute(f"SELECT l.*,{owner} AS owner_id,t.status AS task_status,"
@@ -353,6 +406,7 @@ def holdings(c, owner):
     or `in_progress`. A worktree the computer kept says why in `kept`."""
     rows = c.execute("SELECT l.id,l.task_id,l.path,l.repo,l.branch,l.detail,l.created_at,coalesce(l.updated_at,l.created_at) AS updated_at,t.title,t.status FROM task_links l "
                      "JOIN tasks t ON t.id=l.task_id WHERE l.kind='worktree' AND coalesce(l.state,'unknown')<>'removed' "
+                     "AND (l.computer_id IS NULL OR EXISTS (SELECT 1 FROM runners r WHERE r.id=l.computer_id AND r.revoked_at IS NULL)) "
                      "AND coalesce(json_extract(l.detail,'$.owner'),t.owner_id)=? ORDER BY l.created_at", (owner,)).fetchall()
     out = []
     for row in rows:
@@ -384,12 +438,24 @@ def holdings(c, owner):
 
 
 def preparable(c, row, detail):
-    """A worktree reserved for a waiting task (backend/worktree_waits.py): its computer checks it out and runs setup
-    while the bot is idle, then reports it present. A failed attempt is not repeated; the task is told instead."""
-    return (row['state'] == 'pending' and bool(detail.get('wait_id')) and not detail.get('error')
-            and not detail.get('pending_expired')
-            and detail.get('checkout_state') in ('queued', 'initializing', 'checkout_ready', 'setup_running')
-            and bool(waits.preparing(c, row['id'])))
+    """An idle computer prepares a reserved wait or a requested recovery with the same checkout proof."""
+    if (row['state'] != 'pending' or detail.get('error') or detail.get('pending_expired')
+            or detail.get('checkout_state') not in ('queued', 'initializing', 'checkout_ready', 'setup_running')):
+        return False
+    recovery = bool(detail.get('recovery'))
+    if recovery:
+        task = H.task(c, row['task_id'])
+        owner = detail.get('owner')
+        if task['owner_id'] != owner or not c.execute('SELECT 1 FROM assignments WHERE bot=? AND runner_id=?',
+                                                      (H.actor_id(owner), row['computer_id'])).fetchone():
+            return False
+        computer = c.execute('SELECT readiness FROM runners_with_state WHERE id=? AND revoked_at IS NULL',
+                             (row['computer_id'],)).fetchone()
+        if not computer or not readiness_document(computer['readiness']).get('worktree_recovery'):
+            return False
+        if start_refusal(c, task):
+            return False
+    return recovery or bool(detail.get('wait_id') and waits.preparing(c, row['id']))
 
 
 def heartbeat(c, who, reports, capable, default_org="", live_tasks=None):
@@ -598,9 +664,14 @@ def heartbeat(c, who, reports, capable, default_org="", live_tasks=None):
         # Only worktrees that actually existed when closed are eligible on reopening.
         if closed and row['state'] == 'present' and not detail.get('delete_requested'):
             detail['restore_on_reopen'] = True
+        # Restore and guarded retired-computer preparation select the same saved history before setup.
         action = ('remove' if (closed and (finished or detail.get('delete_requested')) or released) and row['state'] != 'removed'
                   else 'restore' if not closed and restore_requested(row, detail)
+                  and (row['state'] == 'removed' or not detail.get('recovery'))
                   else 'prepare' if not closed and preparable(c, row, detail) else None)
+        if action == 'restore' and row['state'] == 'removed':
+            # Cleanup on this computer restores local history; the earlier remote recovery is over.
+            detail.pop('recovery', None)
         if detail.get('delete_requested') and row['state'] == 'removed':
             c.execute('DELETE FROM task_links WHERE id=?', (row['id'],))
             continue
@@ -670,6 +741,17 @@ def provision(c, who, task, repo, path=None, branch=None, default_org='', brief=
     candidates = list(c.execute("SELECT * FROM task_links WHERE kind='worktree' AND (computer_id=? OR task_id=?)", (assigned['id'], task['id'])))
     canonical = unicodedata.normalize('NFC', path).casefold()
     existing = next((r for r in candidates if unicodedata.normalize('NFC', r['path'] or '').casefold() == canonical), None)
+    if not attaching and not existing:
+        # An attached tree or an earlier allocation can have a different folder from today's managed name.
+        existing = next((r for r in candidates if r['task_id'] == task['id'] and (r['repo'] or '').lower() == repo.lower()
+                         and r['state'] != 'removed' and retired(c, r['computer_id'])
+                         and json.loads(r['detail'] or '{}').get('owner', task['owner_id']) == task['owner_id']), None)
+        if existing:
+            path = relative(existing['path'])
+            canonical = unicodedata.normalize('NFC', path).casefold()
+            if any(r['id'] != existing['id'] and r['computer_id'] == assigned['id']
+                   and unicodedata.normalize('NFC', r['path'] or '').casefold() == canonical for r in candidates):
+                raise Problem('worktree_path', 'This worktree path is already used on this computer', 409)
     suffix = ''
     if existing and not attaching and existing['task_id'] == task['id']:
         owner = json.loads(existing['detail'] or '{}').get('owner', task['owner_id'])
@@ -682,8 +764,13 @@ def provision(c, who, task, repo, path=None, branch=None, default_org='', brief=
         owner = json.loads(existing['detail'] or '{}').get('owner', task['owner_id'])
         if existing['task_id'] != task['id'] or existing['path'] != path or owner != task['owner_id'] and existing['state'] != 'removed':
             raise Problem('worktree_path', 'This worktree belongs to another task', 409)
-        if existing['state'] != 'removed':
+        if existing['state'] != 'removed' and existing['computer_id'] != assigned['id'] and not retired(c, existing['computer_id']):
+            raise Problem('forbidden', 'Worktree belongs to another live computer', 403)
+        if existing['state'] != 'removed' and not retired(c, existing['computer_id']):
             detail = json.loads(existing['detail'] or '{}')
+            if (detail.get('recovery') and detail.get('checkout_state') == 'queued'
+                    and not readiness_document(assigned['readiness']).get('worktree_recovery')):
+                raise Problem('computer_update', 'Update this computer to bring back work from a retired computer', 409)
             if existing['state'] == 'pending' and detail.get('pending_expired'):
                 # A retry after the deadline starts the same worktree over: same link, path and branch.
                 if why := start_refusal(c, task):
@@ -706,11 +793,13 @@ def provision(c, who, task, repo, path=None, branch=None, default_org='', brief=
                     'state': existing['state'],
                     'checkout_state': detail.get('checkout_state'), 'setup_pending': detail.get('setup_pending', False),
                     'expected_head': detail.get('expected_head'), 'checkout_target': detail.get('checkout_target'),
-                    'expected_base': detail.get('expected_base')}
+                    'expected_base': detail.get('expected_base'),
+                    **{k: detail[k] for k in ('recovery', 'retired_worktree', 'retired_worktrees', 'recovery_note') if k in detail}}
     # A new or restored tree only for work a coding step can run on now; an existing one is still answered above.
     if why := start_refusal(c, task):
         raise Problem('worktree_start', why, 409)
-    count = c.execute("SELECT count(*) FROM task_links l JOIN tasks t ON t.id=l.task_id WHERE l.kind='worktree' AND coalesce(json_extract(l.detail,'$.owner'),t.owner_id)=? AND coalesce(l.state,'unknown')<>'removed'", (task['owner_id'],)).fetchone()[0]
+    count = c.execute("SELECT count(*) FROM task_links l JOIN tasks t ON t.id=l.task_id WHERE l.kind='worktree' AND coalesce(json_extract(l.detail,'$.owner'),t.owner_id)=? AND coalesce(l.state,'unknown')<>'removed' "
+                      "AND (l.computer_id IS NULL OR EXISTS (SELECT 1 FROM runners r WHERE r.id=l.computer_id AND r.revoked_at IS NULL))", (task['owner_id'],)).fetchone()[0]
     if count >= LIMIT and brief:
         raise Problem('worktree_limit', f'This bot already has {LIMIT} worktrees.', 409, extra={'limit': LIMIT})
     if count >= LIMIT:
@@ -734,6 +823,38 @@ def provision(c, who, task, repo, path=None, branch=None, default_org='', brief=
         raise Problem('worktree_limit', detail, 409, extra={'worktrees': held, 'limit': LIMIT})
     if existing:
         detail = json.loads(existing['detail'] or '{}')
+        if retired(c, existing['computer_id']):
+            if not readiness_document(assigned['readiness']).get('worktree_recovery'):
+                raise Problem('computer_update', 'Update this computer to bring back work from a retired computer', 409)
+            if attaching:
+                raise Problem('worktree_path', 'Use add to bring back work from a retired computer', 409)
+            old = {k: detail[k] for k in ('last_commit', 'pushed', 'ahead', 'behind', 'dirty_files', 'current_branch', 'recovery_note') if k in detail}
+            old.update(computer_id=existing['computer_id'], branch=existing['branch'], path=existing['path'])
+            # A later checkout cannot account for work left on an earlier computer.
+            history = detail.get('retired_worktrees') or ([detail['retired_worktree']] if detail.get('retired_worktree') else [])
+            history = [*history, old]
+            previous = detail.get('recovery') or {}
+            # A fallback starts another branch; its origin need not contain the abandoned branch's heads.
+            heads = {h for tree in history if tree.get('branch') == existing['branch']
+                     for h in H.worktree_heads(tree)}
+            if previous.get('branch') == existing['branch']:
+                heads.update(previous.get('published_heads') or [previous.get('published_head')])
+            heads = sorted(h for h in heads if isinstance(h, str) and re.fullmatch(r'(?:[0-9a-f]{40}|[0-9a-f]{64})', h))
+            head = detail.get('pushed') or (detail.get('last_commit') if detail.get('ahead') == 0 else None)
+            if not isinstance(head, str) or not re.fullmatch(r'(?:[0-9a-f]{40}|[0-9a-f]{64})', head):
+                head = heads[-1] if heads else None
+            detail['retired_worktree'] = old
+            detail['retired_worktrees'] = history
+            detail['recovery'] = {'branch': existing['branch'], 'published_head': head,
+                                  'published_heads': heads,
+                                  'fallback_branch': f'tico/{short}-recovery-{uuid.uuid4().hex[:12]}'}
+            # The old report belongs to that computer. New reports describe only the replacement checkout.
+            for key in ('last_commit', 'pushed', 'ahead', 'behind', 'dirty_files', 'current_branch',
+                        'size_mb', 'runner_report_at', 'wait_id', 'recovery_note', 'missing_since', 'stale_notified'):
+                detail.pop(key, None)
+        else:
+            # A recovered tree later released here follows the ordinary local reuse rules.
+            detail.pop('recovery', None)
         # This is a new allocation on the same link, not another attempt to release the retired tree.
         # A link released before the spelling changed holds `cancelled` in its stored detail.
         for key in (*REMOVAL, 'release_reason', 'removed_by', 'restore_on_reopen', 'canceled', 'cancelled',
@@ -753,7 +874,8 @@ def provision(c, who, task, repo, path=None, branch=None, default_org='', brief=
                 'state': 'pending',
                 'checkout_state': 'attached_pending' if attaching else 'queued',
                 'setup_pending': not attaching, 'expected_head': None, 'checkout_target': None,
-                'expected_base': None}
+                'expected_base': None,
+                **{k: detail[k] for k in ('recovery', 'retired_worktree', 'retired_worktrees', 'recovery_note') if k in detail}}
     slug = re.sub('[^a-z0-9]+', '-', task['title'].lower()).strip('-')[:50] or 'task'
     branch = branch or (None if attaching else f'tico/{short}-{slug}{suffix}')
     if branch is not None and (not re.fullmatch(r'[A-Za-z0-9_./-]+', branch) or branch.startswith('-') or '..' in branch or '@{' in branch or branch.endswith(('/', '.', '.lock')) or '//' in branch):
@@ -833,6 +955,13 @@ def install(app, store, auth, mutate):
             if body.computer_id and body.computer_id != who.runner_id:
                 raise Problem('forbidden', 'Cannot attach on another computer', 403)
             detail = json.loads(link['detail'] or '{}')
+            if body.recovery_branch_missing:
+                recovery = detail.get('recovery') or {}
+                if (not recovery.get('fallback_branch') or detail.get('checkout_state') != 'queued'
+                        or any(detail.get(key) for key in IDENTITY)):
+                    raise Problem('worktree_branch', 'Only a queued recovery can start a new branch', 409)
+                detail['recovery_note'] = 'The old branch is missing on origin. Old work was not published there; starting a new branch from the default branch.'
+                c.execute('UPDATE task_links SET branch=? WHERE id=?', (recovery['fallback_branch'], link_id))
             checkout_state = body.checkout_state if body.checkout_state is not None else detail.get('checkout_state')
             setup_pending = body.setup_pending if body.setup_pending is not None else detail.get('setup_pending', False)
             legacy_restore_report = (who.role == 'runner' and body.state == 'present'
@@ -896,7 +1025,7 @@ def install(app, store, auth, mutate):
                 detail.pop('error', None)       # a successful setup supersedes the failed action before it
             if body.checkout_state is not None or body.state in ('present', 'removed'):
                 detail.pop('pending_expired', None)     # the retry is making progress again
-            fields = body.model_dump(exclude_none=True, exclude={'cleanup', 'setup_pending', 'checkout_state', 'expected_head', 'checkout_target', 'expected_base', 'skipped_files', 'snapshot_skipped', 'restore_source'})
+            fields = body.model_dump(exclude_none=True, exclude={'cleanup', 'recovery_branch_missing', 'setup_pending', 'checkout_state', 'expected_head', 'checkout_target', 'expected_base', 'skipped_files', 'snapshot_skipped', 'restore_source'})
             now = detail['record_changed'] = H.now()
             fields['detail'] = json.dumps(detail)
             if 'path' in fields:

@@ -15,6 +15,7 @@
   },
   "error": "ErrorEnvelope",
   "gated": {
+    "heartbeat.request.readiness.worktree_recovery": "runner-rs/src/readiness_extra.rs OPTIONAL: an older server's 422 drops this field for ten minutes; retired worktrees are not allocated to computers without this capability",
     "start_place.request.harness_allocated": "runner-rs/src/execute.rs post_allocated: a 422 naming harness_allocated retries without the field",
     "started.request.harness_allocated": "runner-rs/src/execute.rs post_allocated: a 422 naming harness_allocated retries without the field",
     "start_place.request.waiting": "runner-rs/src/execute.rs wait_before_start: an older server's 422 on a computer busy: memory N% reason retries with pre-start requirements",

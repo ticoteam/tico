@@ -222,6 +222,21 @@ async function desktop(browser) {
     return out;
   });
   assert.match(bare.text, /^unknown repo\s*·\s*tico\/t-check-misc/);
+  const retired = await page.evaluate(() => {
+    const host = document.createElement('ul');
+    host.innerHTML = taskCodeLineHTML({id: 'retired', kind: 'worktree', repo: 'acme/web', branch: 'tico/retired',
+      state: 'retired', detail: {checkout_state: 'retired', last_commit: 'abcdef0123456789', ahead: 2,
+        cleanup_gave_up: true, error: 'Left on a retired computer: 2 unpushed commits'}}, true);
+    const recovered = document.createElement('ul');
+    recovered.innerHTML = taskCodeLineHTML({kind: 'worktree', repo: 'acme/web', state: 'present',
+      detail: {retired_worktree: {ahead: 2, last_commit: 'abcdef0123456789'}}}, true);
+    return {text: host.textContent, retry: !!host.querySelector('[data-code-retry]'), recovered: recovered.textContent};
+  });
+  assert.match(retired.text, /retired computer/);
+  assert.match(retired.text, /abcdef012345/);
+  assert.match(retired.text, /↑2/);
+  assert.equal(retired.retry, false, 'a retired computer cannot retry cleanup');
+  assert.match(retired.recovered, /2 unpushed commits stayed on the retired computer/);
   // A check waiting for a free reviewer (backend/check_pools.py) shows under Code, even on a task with no links yet.
   const waiting = await page.evaluate(() => {
     const host = document.createElement('div');
@@ -609,9 +624,37 @@ async function botDetail(browser) {
   console.log('bot task detail parity, files, comments, related tasks and return: ok');
 }
 
+async function retirementHistory(browser) {
+  for (const width of [1440, 390]) {
+    const {page, errors} = await open(browser, {viewport: {width, height: 900}});
+    const rail = page.locator('#task-modal [data-task-rail]');
+    await rail.locator('.code-line').first().waitFor();
+    await rail.evaluate(el => {
+      const first = {computer_id: 'first', ahead: 2, dirty_files: 1, last_commit: 'a'.repeat(40)};
+      const second = {computer_id: 'second', ahead: 4, dirty_files: 3, last_commit: 'b'.repeat(40)};
+      const host = document.createElement('ul'); host.className = 'code-list';
+      host.innerHTML = taskCodeLineHTML({id: 'recovered-twice', kind: 'worktree', repo: 'acme/web', state: 'present',
+        detail: {retired_worktree: second, retired_worktrees: [first, second]}}, true);
+      el.append(host);
+    });
+    const warning = rail.locator('[data-code-link="recovered-twice"] .code-error');
+    await warning.scrollIntoViewIfNeeded();
+    assert.equal(await warning.isVisible(), true);
+    const text = await warning.innerText();
+    assert.match(text, /2 unpushed commits/); assert.match(text, /4 unpushed commits/);
+    assert.match(text, /1 changed files/); assert.match(text, /3 changed files/);
+    assert.ok(text.includes('a'.repeat(40)) && text.includes('b'.repeat(40)));
+    assert.equal(text.split('4 unpushed commits').length - 1, 1, 'the latest report appears once');
+    assert.ok(await warning.evaluate(el => el.scrollWidth - el.clientWidth <= 1), 'retired heads wrap inside the rail');
+    assert.deepEqual(errors, []);
+    await page.close();
+  }
+  console.log('worktree retirement history at desktop and phone widths: ok');
+}
+
 module.exports = {open};
 if (require.main === module) (async () => {
   const browser = await chromium.launch({channel: process.env.TICO_BROWSER_CHANNEL ?? 'chrome', headless: true});
-  try { await desktop(browser); await phone(browser); await member(browser); await botPage(browser); await botDetail(browser); }
+  try { await desktop(browser); await phone(browser); await member(browser); await botPage(browser); await botDetail(browser); await retirementHistory(browser); }
   finally { await browser.close(); }
 })().catch(e => { console.error(e); process.exit(1); });
