@@ -3,6 +3,7 @@ import json
 
 from backend.tests.test_api import api  # noqa: F401  (api is a fixture)
 from clients import sessions
+from backend import bot_settings as BS
 
 
 def test_task_turns_get_their_own_session_unless_the_bot_opts_out():
@@ -40,10 +41,10 @@ def test_the_old_written_bot_default_is_cleared_once(api):
     store = api.app.state.store
     def session(bot):
         with store.transaction() as c:
-            return json.loads(c.execute("SELECT config FROM bot_config WHERE bot=?", (bot,)).fetchone()[0]).get("session", "")
+            return BS.read(c, bot).get("session", "")
     def put(bot, value):
         with store.transaction() as c:
-            c.execute("UPDATE bot_config SET config=json_set(config,'$.session',?) WHERE bot=?", (value, bot))
+            BS.update(c, bot, {'session': value})
     put("ops", "bot"), put("cpo", "task")
     with store.transaction() as c:
         c.execute("DELETE FROM registry_metadata WHERE key='task_session_default'")
@@ -65,14 +66,16 @@ def test_a_retired_assignment_hands_its_task_back_awake_but_waits_out_a_running_
     task = post(api, "tasks", {"owner": "ops", "title": "Assigned work", "body": "Keep going."})
     with api.app.state.store.transaction() as c:
         c.execute("INSERT INTO bots(id,slug,display_name,state,created_at) VALUES('ops-a1','ops-a1','Ops A1','active',?)", (H.now(),))
-        c.execute("INSERT INTO bot_config(bot,config,owner_id) VALUES('ops-a1',?,'ana')",
-                  (json.dumps({"assignment_branch": True, "shared_from": "ops"}),))
+        c.execute("INSERT INTO bot_config(bot,owner_id) VALUES('ops-a1','ana')")
+        BS.write(c, 'ops-a1', {'assignment_branch': True, 'shared_from': 'ops'})
         c.execute("UPDATE tasks SET owner_id='bot:ops-a1',status='doing' WHERE id=?", (task["id"],))
         job = c.execute("SELECT id FROM jobs WHERE bot_id='ops'").fetchone()[0]
         c.execute("UPDATE jobs SET state='completed' WHERE bot_id='ops'")
         c.execute("INSERT INTO attempts(id,job_id,bot_id,runner_id,generation,token_hash,state,lease_until,created_at) "
                   "VALUES('a1',?,'ops-a1',?,0,'h','running',?,?)", (job, machine["runner_id"], H.now(), H.now()))
-        reminder = H._setup_reminder(c, "ops-a1")
+        reminder = H.task_create(c, H.KEEPER, "Finish onboarding ops-a1", "Still onboarding.", "human:ana",
+                                 deduplicate=False, lint=False)
+        H.event(c, H.KEEPER, "bot.setup_reminder", "ops-a1", {"task": reminder["id"], "owner": "human:ana"})
         retire_assignments(c)
         assert H.task(c, task["id"])["owner_id"] == "bot:ops-a1"
         assert H.bot(c, "ops-a1")["state"] == "active"

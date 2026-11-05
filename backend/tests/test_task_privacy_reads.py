@@ -8,6 +8,8 @@ from backend import read_cache, sql as SQL, task_privacy, views
 from backend.auth import Identity
 from backend.store import H, Problem, encode
 from backend.tests.test_api import api, assign, claim, get, headers, post, ready, runner, setup_attempt  # noqa: F401
+from backend.enqueue import enqueue_stored
+from backend import bot_settings as BS
 
 
 
@@ -36,6 +38,69 @@ def legacy_message(api, tid, *, body="Private legacy comment"):
         msg = H.say(c, "human:ben", "bot:ops", body, conversation_id=conv["id"])
         c.execute("UPDATE messages SET refs=? WHERE id=?", (encode({"task": tid}), msg["id"]))
         return conv, H.message(c, msg["id"])
+
+
+def test_participant_permission_is_never_reused_for_another_tasks_content(api, monkeypatch):
+    from backend import read_deps, row_clock
+    from backend.privacy_index import ReadIndex
+    from backend.tests.test_meeting_items import record, add, push
+    rid = record(api, {'private':True, 'participants':['ben@acme.example']})
+    iid = add(api, rid, {'section':'task', 'text':'Participant task', 'detail':{'owner':'human:ana'}})['item']['id']
+    allowed = push(api, rid, iid)['item']['result_ref']
+    denied = post(api, 'tasks', {'title':'Unrelated task', 'body':'Private', 'owner':'human:ana', 'private':True})['id']
+    parties = row_clock.parties
+    # The readable task must be encountered first regardless of the covering index's order.
+    monkeypatch.setattr(row_clock, 'parties', lambda c: sorted(parties(c), key=lambda r: r['id'] != allowed))
+    machine, _, attempt = setup_attempt(api)
+    post(api, f"attempts/{attempt['id']}/started", {'thread_id':'participant-probe'}, machine['token'])
+    probes = {}
+    with api.app.state.store.transaction() as c:
+        a, b = H.task(c, allowed), H.task(c, denied)
+        assert [a[k] for k in ('owner_id','requester_id','guest','private')] == [b[k] for k in ('owner_id','requester_id','guest','private')]
+        room = H.open_conversation(c, 'human:ana', ['human:ben','bot:ops'], kind='chat', subject='Provenance probes')
+        c.execute('UPDATE messages SET conversation_id=? WHERE id=(SELECT message_id FROM jobs WHERE id=?)',
+                  (room['id'], attempt['job_id']))
+        for tid in (allowed, denied):
+            payload = {'nested':{'source':'task:' + tid}}
+            msg = H.say(c, 'human:ana', 'bot:ops', 'Provenance probe', conversation_id=room['id'])
+            c.execute('UPDATE messages SET refs=? WHERE id=?', (encode(payload), msg['id']))
+            child = H.say(c, 'human:ana', 'bot:ops', 'Inherited probe', conversation_id=room['id'])
+            c.execute('UPDATE messages SET refs=? WHERE id=?', (encode({'answers':[msg['id']]}), child['id']))
+            H.event(c, 'human:ben', 'participant.probe', 'probe-' + tid, payload)
+            c.execute("INSERT INTO linked_docs(id,title,url,kind,added_by,created_at,updated_at) VALUES(?,?,?,'website','human:ana',?,?)",
+                      (tid, 'Probe', 'https://acme.example/#/task/' + tid, H.now(), H.now()))
+            c.execute("INSERT INTO docs(id,path,title,body,created_by_id,created_at,updated_by_id,updated_at) VALUES(?,?,'Probe',?,'human:ana',?,'human:ana',?)",
+                      (tid, 'probe/' + tid, encode(payload), H.now(), H.now()))
+            c.execute("INSERT INTO doc_versions(doc_id,version,title,path,body,actor,created_at) VALUES(?,1,'Probe',?,?,'human:ana',?)",
+                      (tid, 'probe/' + tid, encode(payload), H.now()))
+            c.execute("INSERT INTO market_pages(id,title,category,body,updated_at) VALUES(?,'Probe','probe',?,?)", (tid, encode(payload), H.now()))
+            c.execute("INSERT INTO history_events(id,subject_type,subject_id,kind,new,created_at) VALUES(?,'task',?,'probe',?,?)",
+                      (tid, allowed, encode(payload), H.now()))
+            probes[tid] = (msg['id'], child['id'])
+    post(api, f"attempts/{attempt['id']}/events", {'events':[
+        {'seq':seq, 'kind':'message', 'payload':{'source':tid}} for seq, tid in enumerate((allowed, denied), 1)
+    ]}, machine['token'])
+    who = Identity('human:ben', 'human', email='ben@acme.example')
+    for settled in (False, True):
+        with api.app.state.store.read() as c:
+            if settled:
+                read_deps.sweep(c)
+            index = ReadIndex(c, who, rooms=True)
+            for tid, expected in ((allowed, True), (denied, False)):
+                assert H.task_private_readable(c, who.actor, H.task(c, tid)) is expected
+                for value in (tid, {'nested':['task:' + tid]}, encode({'task_id':tid}), 'https://acme.example/tasks/' + tid):
+                    assert index.content(value) is expected
+                for mid in probes[tid]:
+                    msg = H.message(c, mid)
+                    assert index.message(mid, msg['conversation_id'], msg['refs'], msg['in_reply_to']) is expected
+                assert index.event('probe-' + tid, 'human:ana', H.now(), encode({'source':tid})) is expected
+        for table, key in (('tasks','id'), ('linked_docs','id'), ('docs','id'), ('doc_versions','doc_id'), ('market_pages','id'), ('history_events','id')):
+            assert sql(api, f"SELECT {key} FROM {table} WHERE {key} IN ('{allowed}','{denied}')", 'ben-test') == [[allowed]], (settled, table)
+        for tid, expected in ((allowed, True), (denied, False)):
+            for mid in probes[tid]:
+                assert bool(sql(api, f"SELECT id FROM messages WHERE id='{mid}'", 'ben-test')) is expected
+        assert sql(api, "SELECT target FROM events WHERE action='participant.probe'", 'ben-test') == [['probe-' + allowed]]
+        assert sql(api, f"SELECT seq FROM attempt_events WHERE attempt_id='{attempt['id']}' AND seq IN (1,2)", 'ben-test') == [[1]]
 
 
 def test_private_relations_tags_and_events_do_not_leak_to_owner(api):
@@ -157,7 +222,7 @@ def test_live_events_stop_when_private_owner_loses_access(api):
     assert "Second packet note" not in after and row["id"] not in after and "Sensitive" not in after
 
 
-def test_context_search_and_cached_fleet_do_not_disclose_revoked_sources(api):
+def test_context_search_and_fleet_do_not_disclose_revoked_sources(api):
     row = task(api, requester="human:cara", owner="human:ben")
     with api.app.state.store.transaction() as c:
         c.execute("INSERT INTO linked_docs(id,title,url,kind,description,added_by,created_at,updated_at) "
@@ -165,10 +230,10 @@ def test_context_search_and_cached_fleet_do_not_disclose_revoked_sources(api):
                   ("private-reference", "Sensitive packet reference", "https://example.test/#/task/" + row["id"],
                    "Sensitive packet", H.now(), H.now()))
         who = Identity("human:ben", "human", email="ben@acme.example")
-        before = views.fleet_snapshot_cached(c, api.app.state.auth, who, lambda row, **k: row)
+        before = views.fleet_snapshot(c, api.app.state.auth, who, lambda row, **k: row)
         assert row["id"] in {t["id"] for t in before["tasks"]}
         c.execute("UPDATE tasks SET owner_id='human:ana' WHERE id=?", (row["id"],))
-        after = views.fleet_snapshot_cached(c, api.app.state.auth, who, lambda row, **k: row)
+        after = views.fleet_snapshot(c, api.app.state.auth, who, lambda row, **k: row)
         assert row["id"] not in {t["id"] for t in after["tasks"]}
     result = get(api, "context/search?q=Sensitive&source=docs", "ben-test")
     assert "private-reference" not in json.dumps(result)
@@ -177,8 +242,8 @@ def test_context_search_and_cached_fleet_do_not_disclose_revoked_sources(api):
 @pytest.mark.parametrize("requester", ["bot:ops"])
 def test_verified_legal_requester_is_kept_without_forged_human_grants(api, requester):
     with api.app.state.store.transaction() as c:
-        config = H._json(c.execute("SELECT config FROM bot_config WHERE bot='ops'").fetchone()[0], {})
-        c.execute("UPDATE bot_config SET config=? WHERE bot='ops'", (encode({**config, "template": "general-counsel"}),))
+        config = H._json(c.execute(f"SELECT {BS.CONFIG} AS config FROM bot_config bc {BS.JOIN} WHERE bot='ops'").fetchone()[0], {})
+        BS.write(c, 'ops', {**config, 'template': 'general-counsel'})
     source = task(api, requester=requester, owner="bot:ops")
     machine = runner(api)
     with api.app.state.store.read() as c:
@@ -247,9 +312,8 @@ def test_delegated_creation_keeps_defaults_and_requires_actual_bot_audience(api,
     api.app.state.store.settings.test_identities["acted-test"] = acted
     with api.app.state.store.transaction() as c:
         if sensitive:
-            config = H._json(c.execute("SELECT config FROM bot_config WHERE bot=?", (sensitive,)).fetchone()[0], {})
-            c.execute("UPDATE bot_config SET config=? WHERE bot=?",
-                      (encode({**config, "private_tasks_default": True}), sensitive))
+            config = H._json(c.execute(f"SELECT {BS.CONFIG} AS config FROM bot_config bc {BS.JOIN} WHERE bot=?", (sensitive,)).fetchone()[0], {})
+            BS.write(c, sensitive, {**config, 'private_tasks_default': True})
         before = c.execute("SELECT count(*) FROM tasks").fetchone()[0]
         rooms_before = c.execute("SELECT count(*) FROM conversations").fetchone()[0]
     created = post(api, "tasks", {"owner": owner, "title": "Review delegated work", "body": "Review it.",
@@ -342,6 +406,7 @@ def test_sql_event_privacy_scales_with_matching_attempts_not_their_cross_product
                 mid, jid, aid = (f"synthetic-{kind}-{n}" for kind in ("message", "job", "attempt"))
                 c.execute("INSERT INTO messages(id,conversation_id,sender_id,recipient_id,kind,body,refs,created_at) "
                           "VALUES(?,?,'human:ana','bot:ops','say','Public request','{}',?)", (mid, conv["id"], started))
+                enqueue_stored(c, mid)
                 jid = c.execute("SELECT id FROM jobs WHERE message_id=?", (mid,)).fetchone()[0]
                 c.execute("UPDATE jobs SET state='completed',attempt_id=? WHERE id=?", (aid, jid))
                 c.execute("INSERT INTO attempts(id,job_id,bot_id,runner_id,generation,token_hash,state,lease_until,created_at,finished_at) "
@@ -414,7 +479,7 @@ def test_task_page_reads_a_fixed_number_of_statements_and_hides_private_provenan
                           ("job-" + aid, asked["id"], H.now(), aid))
                 c.execute("INSERT INTO attempts(id,job_id,bot_id,runner_id,generation,token_hash,state,lease_until,created_at) "
                           "VALUES(?,?,'ops','rn',0,?,'completed',?,?)", (aid, "job-" + aid, aid, H.now(), H.now()))
-                c.execute("INSERT INTO turns(id,bot,started_at,task_id,exit) VALUES(?,'ops',?,?,'ok')", (aid, H.now(), parent["id"]))
+                c.execute("UPDATE attempts SET trigger='task',task_id=?,exit='ok' WHERE id=?", (parent["id"], aid))
                 H.task_comment(c, "bot:ops", parent["id"], f"Did {n}", wake=False, extra_refs={"turn_id": aid})
                 H.task_comment(c, "human:ana", parent["id"], f"See {n}", wake=False,
                                extra_refs={"see": "task:" + hidden["id"]} if n == 2 else None)
@@ -557,12 +622,14 @@ def test_bot_list_reads_a_fixed_number_of_statements_and_seeks_each_bots_last_ru
     with store.transaction() as c:
         source = dict(c.execute("SELECT * FROM bots WHERE slug='ops'").fetchone())
         config = dict(c.execute("SELECT * FROM bot_config WHERE bot='ops'").fetchone())
+        declared = BS.read(c, "ops")
         for n in range(40):
             for table, row in (("bots", {**source, "id": f"crew{n}", "slug": f"crew{n}"}), ("bot_config", {**config, "bot": f"crew{n}"})):
                 c.execute(f"INSERT INTO {table}({','.join(row)}) VALUES({','.join('?' * len(row))})", list(row.values()))
+            BS.write(c, f"crew{n}", declared)
             H.task_create(c, "human:ana", f"Step {n}", "Do it.", f"bot:crew{n}", lint=False)
             for turn, finished in (("a", "2026-01-02"), ("b", "2026-01-03"), ("c", "2026-01-03"), ("d", None)):
-                c.execute("INSERT INTO turns(id,bot,started_at,finished_at) VALUES(?,?,?,?)",
+                c.execute("INSERT INTO attempts(id,bot_id,created_at,settled_at) VALUES(?,?,?,?)",
                           (f"t{n}{turn}", f"crew{n}", "2026-01-01", finished))
     before = {}
     for token in ("ana-test", "ben-test"):
@@ -571,6 +638,7 @@ def test_bot_list_reads_a_fixed_number_of_statements_and_seeks_each_bots_last_ru
         for n in range(40, 80):
             for table, row in (("bots", {**source, "id": f"crew{n}", "slug": f"crew{n}"}), ("bot_config", {**config, "bot": f"crew{n}"})):
                 c.execute(f"INSERT INTO {table}({','.join(row)}) VALUES({','.join('?' * len(row))})", list(row.values()))
+            BS.write(c, f"crew{n}", declared)
     for token in ("ana-test", "ben-test"):
         response, statements = traced(api, lambda: api.get("/api/employees", headers=headers(token)))
         assert response.status_code == 200
@@ -579,17 +647,17 @@ def test_bot_list_reads_a_fixed_number_of_statements_and_seeks_each_bots_last_ru
         assert {flows.get(f"crew{n}")["waiting"] for n in range(40) if flows.get(f"crew{n}")} == {1}
         assert {flows.get(f"crew{n}")["waiting"] for n in range(40, 80) if flows.get(f"crew{n}")} == {0}
     with store.read() as c:
-        latest = dict(c.execute("SELECT bot,id FROM (SELECT bot,id,row_number() OVER(PARTITION BY bot ORDER BY "
-                                "finished_at DESC,id DESC) AS n FROM turns WHERE finished_at IS NOT NULL) WHERE n=1"))
+        latest = dict(c.execute("SELECT bot_id,id FROM (SELECT bot_id,id,row_number() OVER(PARTITION BY bot_id ORDER BY "
+                                "settled_at DESC,id DESC) AS n FROM attempts WHERE settled_at IS NOT NULL) WHERE n=1"))
         assert latest["crew3"] == "t3c"
         sought = dict(row for row in c.execute(
-            "SELECT b.slug,(SELECT t.id FROM turns t WHERE t.bot=b.slug AND t.finished_at IS NOT NULL "
-            "ORDER BY t.finished_at DESC,t.id DESC LIMIT 1) FROM bots b") if row[1])
+            "SELECT b.slug,(SELECT t.id FROM attempts t WHERE t.bot_id=b.slug AND t.settled_at IS NOT NULL "
+            "ORDER BY t.settled_at DESC,t.id DESC LIMIT 1) FROM bots b") if row[1])
         assert sought == {bot: tid for bot, tid in latest.items() if bot in sought} and "crew3" in sought
         plan = " ".join(r[3] for r in c.execute(
-            "EXPLAIN QUERY PLAN SELECT b.slug,(SELECT t.id FROM turns t WHERE t.bot=b.slug AND t.finished_at IS NOT NULL "
-            "ORDER BY t.finished_at DESC,t.id DESC LIMIT 1) FROM bots b"))
-        assert "turns_bot_finished" in plan and "TEMP B-TREE" not in plan, plan
+            "EXPLAIN QUERY PLAN SELECT b.slug,(SELECT t.id FROM attempts t WHERE t.bot_id=b.slug AND t.settled_at IS NOT NULL "
+            "ORDER BY t.settled_at DESC,t.id DESC LIMIT 1) FROM bots b"))
+        assert "attempts_bot_settled" in plan and "TEMP B-TREE" not in plan, plan
 
 
 def busy(api):
@@ -611,9 +679,10 @@ def running_turn(api):
 
 
 def queue(c, mid, cid, refs, *, sender="human:ana", in_reply_to=None):
-    """A message to bot:ops as stored; the jobs trigger queues it."""
+    """A message to bot:ops as stored, with the job it queues."""
     c.execute("INSERT INTO messages(id,conversation_id,sender_id,recipient_id,kind,body,created_at,refs,in_reply_to) "
               "VALUES(?,?,?,'bot:ops','say','More',?,?,?)", (mid, cid, sender, H.now(), encode(refs), in_reply_to))
+    enqueue_stored(c, mid)
 
 
 def test_long_run_reads_a_fixed_number_of_statements_and_keeps_private_provenance(api):

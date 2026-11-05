@@ -553,7 +553,8 @@ const screenshotDir = process.env.TICO_SCREENSHOT_DIR;
       await page.goto('http://tico-ui.test/#/settings/tasks');
       const form = page.locator('#settings-tags [data-tag-create]');
       await form.waitFor();
-      await form.locator('.tag-advanced > summary').click();
+      // A settings refresh preserves Advanced, so open it only when it is shut.
+      if (!await form.locator('.tag-advanced').evaluate(d => d.open)) await form.locator('.tag-advanced > summary').click();
       return form;
     };
     let form = await newTag();
@@ -566,16 +567,21 @@ const screenshotDir = process.env.TICO_SCREENSHOT_DIR;
     assert.equal(await form.locator('[data-tag-key-line]').innerText(), 'Key: quarterly-roadmap-review-for-the-platfor');
     await form.locator('button[type="submit"]').click();
     await page.waitForURL('**/#/tag/quarterly-roadmap-review-for-the-platfor');
+    await page.locator('[data-tag-heading]', {hasText: 'Quarterly roadmap review for the platform team now'}).waitFor();
     assert.equal(posted.at(-1).body.key, 'quarterly-roadmap-review-for-the-platfor');
     // A cut that lands on a word gap drops the hyphen, so the key is 39 characters and the server keeps it as posted.
     form = await newTag();
     await form.locator('input[name="label"]').fill('Notes on the customer interviews we ran in spring 2027');
-    assert.equal(await form.locator('[data-tag-key-line]').innerText(), 'Key: notes-on-the-customer-interviews-we-ran');
+    // The key line is written on input. Wait for the text rather than reading it once, so a redraw in between cannot fail the read.
+    await page.waitForFunction(() => document.querySelector('#settings-tags [data-tag-key-line]')?.innerText === 'Key: notes-on-the-customer-interviews-we-ran');
     await form.locator('input[name="key"]').fill('  Spring Interviews ');
     assert.equal(await form.locator('[data-tag-key-line]').innerText(), 'Key: spring-interviews', 'a typed key shows as it will be saved');
     assert.equal(await page.evaluate(() => tagKeyTyped('a'.repeat(39) + ' b')), 'a'.repeat(39), 'a typed key cut at a gap ends without a hyphen');
     await form.locator('button[type="submit"]').click();
     await page.waitForURL('**/#/tag/spring-interviews');
+    // The hash changes before the view transition draws the tag. Settle that page before changing fixtures or
+    // returning to Settings, where the previous form and starter can still be visible with their old tag list.
+    await page.locator('[data-tag-heading]', {hasText: 'Notes on the customer interviews we ran in spring 2027'}).waitFor();
     assert.equal(posted.at(-1).body.key, 'spring-interviews');
     for (const key of ['quarterly-roadmap-review-for-the-platfor', 'spring-interviews']) tags.splice(tags.findIndex(tag => tag.key === key), 1);
 
@@ -585,6 +591,7 @@ const screenshotDir = process.env.TICO_SCREENSHOT_DIR;
       // The Tasks tab is remembered. Clicking it again starts a second tag-list render that
       // can replace the starter button between pointer down and pointer up.
       await page.goto('http://tico-ui.test/#/settings/tasks');
+      await page.locator('#settings-tags .tags-empty').waitFor();
       await page.locator('#settings-tags [data-release-starter]').waitFor();
     };
     await settingsTags();

@@ -52,7 +52,7 @@ def _addresses(values):
 
 def requested(c, bot):
     """What bot.yaml asks, from the computer the bot is assigned to; None when it asks nothing or says nothing."""
-    row = c.execute("SELECT r.readiness FROM assignments a JOIN runners r ON r.id=a.runner_id "
+    row = c.execute("SELECT r.readiness FROM assignments a JOIN runners_with_state r ON r.id=a.runner_id "
                     "WHERE a.bot=? AND r.revoked_at IS NULL", (bot,)).fetchone()
     return _requested(bot, readiness_document(row["readiness"])) if row else None
 
@@ -92,6 +92,18 @@ def require_person(who, bot=""):
                                    "with their own token" + (". " + mail_settings_hint(bot) if bot else ""), 403)
 
 
+def message_sender_can_approve_send(c, auth, row):
+    """A message's human sender may approve mail for its bot addressee when they may manage its sending."""
+    sender, recipient = str(row.get("sender_id") or ""), str(row.get("recipient_id") or "")
+    if not sender.startswith("human:") or not recipient.startswith("bot:"):
+        return False
+    try:
+        who = auth.identity_for_actor(c, sender)
+    except Problem:
+        return False
+    return auth.bot_manager(c, who, H.actor_id(recipient))
+
+
 def update(c, auth, who, bot, body):
     require_person(who, bot)
     if not H.bot(c, bot):
@@ -127,7 +139,7 @@ def alerts(c):
     out, saved, documents = [], {r["bot"]: r for r in c.execute("SELECT * FROM bot_mail_settings")}, {}
     # One read of each table and one parse a computer, not three statements and a parse for every bot.
     for row in c.execute("SELECT a.bot,r.id runner,r.readiness FROM assignments a JOIN bots b ON b.id=a.bot "
-                         "LEFT JOIN runners r ON r.id=a.runner_id AND r.revoked_at IS NULL "
+                         "LEFT JOIN runners_with_state r ON r.id=a.runner_id AND r.revoked_at IS NULL "
                          "WHERE b.state<>'archived' ORDER BY a.bot"):
         if row["runner"] is None:
             continue
@@ -164,6 +176,16 @@ def install(app, store, auth, mutate):
             if not H.bot(c, bot):
                 raise Problem("not_found", "Bot not found", 404)
             found = view(c, bot)
+            # What Tico may do in Settings > Inboxes is the company's own switch over every bot's: with Send mail off
+            # the bot's connector refuses each send before any approval (connectors/mail/policy.py), and the bot reads
+            # sending as off. Organize mail and Change calendar gate the connector's other writes the same way,
+            # whichever credential it holds (connectors/mail/oauth.py company_allows).
+            from .google_workspace import permissions
+            may = permissions(c)
+            found.update(company_send=may["send_mail"], company_organize=may["organize_mail"],
+                         company_calendar=may["change_calendar"])
+            if who.actor == "bot:" + bot and not found["company_send"]:
+                found["outbound_send"] = False
             from . import lifecycle
             if who.actor == "bot:" + bot and lifecycle.is_onboarding(c, bot):
                 # An onboarding bot sends nothing (backend/lifecycle.py): its mail connector reads sending as off and

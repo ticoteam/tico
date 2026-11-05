@@ -28,6 +28,51 @@ def ana_viewer(api):
     return threads.viewer(api.app.state.auth, Identity("human:ana", "owner", "ana@acme.example"))
 
 
+def test_attention_variants_share_one_snapshot_but_keep_their_filters_and_own_copies(api):
+    from backend import thread_attention as TA
+    tid = members_thread(api)
+    mention = say(api, tid, "@ana please check.")
+    ask = say(api, tid, "Which lease?", kind="ask", to_actor="human:ana")
+    paused = members_thread(api, title="Paused")
+    with api.app.state.store.transaction() as c:
+        now = H.now()
+        c.execute("INSERT INTO message_deliveries(id,message_id,recipient,thread_id,root_id,mode,reason,cause,"
+                  "state,created_at,updated_at) VALUES(?,?,?,?,?,'queue','mention','bot','capped',?,?)",
+                  (H.new_id(), H.new_id(), "bot:finance", paused, paused, now, now))
+    seen = []
+    with api.app.state.store.read_transaction() as c:
+        c.set_trace_callback(seen.append)
+        try:
+            first = TA.items(c, None, ana_viewer(api), skip=[ask["id"]])
+            original = next(it["title"] for it in first if it["id"] == mention["id"])
+            next(it for it in first if it["id"] == mention["id"])["title"] = "Changed by a caller"
+            second = TA.items(c, api.app.state.auth, ana_viewer(api), with_capped=False)
+            third = TA.items(c, None, ana_viewer(api), skip=[mention["id"]])
+        finally:
+            c.set_trace_callback(None)
+    assert {it["id"] for it in first} == {mention["id"], paused}
+    assert {it["id"] for it in second} == {mention["id"], ask["id"]}
+    assert next(it["title"] for it in second if it["id"] == mention["id"]) == original
+    assert {it["id"] for it in third} == {ask["id"], paused}
+    addressed = [q for q in seen if "SELECT m.id, m.conversation_id, m.sender_id" in q]
+    assert len(addressed) == 1, addressed
+    # A returned connection must not lend its attention list to the next request.
+    with api.app.state.store.read_transaction() as c:
+        assert {it["id"] for it in TA.items(c, None, ana_viewer(api))} == {mention["id"], ask["id"], paused}
+
+
+def test_attention_rechecks_after_a_write_and_for_another_identity_in_the_same_snapshot(api):
+    from backend import thread_attention as TA
+    tid = members_thread(api)
+    mention = say(api, tid, "@ana please check.")
+    with api.app.state.store.transaction() as c:
+        assert [it["id"] for it in TA.items(c, None, ana_viewer(api))] == [mention["id"]]
+        ben = Identity("human:ben", "human", "ben@acme.example")
+        assert TA.items(c, api.app.state.auth, ben) == []
+        threads.post(c, "human:ana", tid, "Checked.")
+        assert TA.items(c, None, ana_viewer(api)) == []
+
+
 def test_a_message_to_the_person_is_listed_until_they_reply(api):
     tid = members_thread(api)
     say(api, tid, "Can you look at the lease?", to_actor="human:ana")
@@ -199,3 +244,74 @@ def test_a_bot_post_in_a_group_dm_is_listed_as_unread_for_its_people(api):
     assert row["last_unread_seq"] == row["last_seq"]
     with api.app.state.store.read() as c:
         assert threads.unread(c, ana_viewer(api), tid)["unread"] == 1
+
+
+def test_a_dm_with_only_a_bot_is_counted_on_the_bot_not_listed(api):
+    """A bot is on the Team chart: its DM's unread shows there (sidebar `bot_dms`), and only its question is an item."""
+    setup_attempt(api, "finance")
+    with api.app.state.store.transaction() as c:
+        dm = threads.dm(c, "human:ana", ["bot:finance"], title="Finance")["id"]
+    say(api, dm, "Numbers are in.", actor="bot:finance")
+    assert needs(api, "thread_dm") == []
+    assert get(api, "threads", token="ana-test")["bot_dms"] == {"bot:finance": 1}
+    say(api, dm, "Book the Q3 accrual?", actor="bot:finance", kind="ask", to_actor="human:ana")
+    # Its question is Needs you's own card (answered there, which a plain reply is not), so the DM stays out of Inbox.
+    assert [i["conversation_id"] for i in needs(api, "ask")] == [dm]
+    assert get(api, "threads", token="ana-test")["attention"] == []
+    with api.app.state.store.transaction() as c:
+        threads.mark_all_read(c, ana_viewer(api), dm)
+    assert get(api, "threads", token="ana-test")["bot_dms"] == {}
+
+
+def test_a_dm_with_a_bot_and_a_person_is_listed(api):
+    setup_attempt(api, "finance")
+    with api.app.state.store.transaction() as c:
+        group = threads.dm(c, "human:cara", ["human:ana", "bot:finance"], title="Offer")["id"]
+    say(api, group, "Draft is ready.", actor="bot:finance")
+    assert [i["conversation_id"] for i in needs(api, "thread_dm")] == [group]
+    assert get(api, "threads", token="ana-test")["bot_dms"] == {}
+
+
+def test_a_dm_with_two_bots_is_still_listed(api):
+    setup_attempt(api, "finance")
+    setup_attempt(api, "ops")
+    with api.app.state.store.transaction() as c:
+        group = threads.dm(c, "human:ana", ["bot:finance", "bot:ops"], title="Close")["id"]
+    say(api, group, "Books are closed.", actor="bot:finance")
+    assert [i["conversation_id"] for i in needs(api, "thread_dm")] == [group]
+    assert get(api, "threads", token="ana-test")["bot_dms"] == {}
+
+
+def test_a_bot_dms_count_takes_its_sub_threads(api):
+    setup_attempt(api, "finance")
+    with api.app.state.store.transaction() as c:
+        dm = threads.dm(c, "human:ana", ["bot:finance"], title="Finance")["id"]
+    parent = say(api, dm, "Q3 is ready.", actor="bot:finance")
+    with api.app.state.store.transaction() as c:
+        threads.mark_all_read(c, ana_viewer(api), dm)
+        sub = threads.create(c, "bot:finance", parent_message_id=parent["id"])["id"]
+    say(api, sub, "Ana, one more line.", actor="bot:finance", to_actor="human:ana")      # addressed to her: unread
+    assert get(api, "threads", token="ana-test")["bot_dms"] == {"bot:finance": 1}
+
+
+def test_the_thread_items_take_the_same_statements_however_many_threads_name_the_person(api, monkeypatch):
+    # Each item's message, thread and membership are read together: one read each an item made Needs you and Home take
+    # ~2,300 statements for a person named in a thousand open threads.
+    from backend.tests.test_health_queries import counted
+
+    def mention_in(n):
+        for k in range(n):
+            say(api, members_thread(api, members=("human:ana", "human:ben"), title=f"Plan {k}"), f"Can you check {k}?",
+                to_actor="human:ana")
+
+    mention_in(2)
+    few_body, few = counted(api, monkeypatch, "/api/v2/needs-you")
+    mention_in(20)
+    many_body, many = counted(api, monkeypatch, "/api/v2/needs-you")
+    assert len([i for i in many_body["items"] if i["kind"] == "thread_mention"]) == \
+        len([i for i in few_body["items"] if i["kind"] == "thread_mention"]) + 20
+    assert many - few <= 2, (few, many)
+    _, sidebar_few = counted(api, monkeypatch, "/api/v2/threads?limit=50")
+    mention_in(10)
+    _, sidebar_many = counted(api, monkeypatch, "/api/v2/threads?limit=50")
+    assert sidebar_many - sidebar_few <= 2, (sidebar_few, sidebar_many)

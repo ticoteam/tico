@@ -100,8 +100,6 @@ def record(c, runner_id, body):
                update.error if update else "", H.now(), body.commit or ""))
     c.execute("UPDATE runner_versions SET update_since=?,update_running=?,update_handed_back=? WHERE runner_id=?",
               (since, update.running if update else None, update.handed_back if update else None, runner_id))
-    if body.checkout is None:   # it follows the server's release now, not main: an old "behind main" note is stale
-        c.execute("UPDATE runners SET checkout=NULL WHERE id=?", (runner_id,))
     nudge(c, runner_id)
 
 
@@ -220,6 +218,13 @@ def load(c):
 # What a runner before this release said when nothing supervised it; the line now says how to fix that.
 NO_SUPERVISOR = ("no supervisor would start this runner again after an update: run `scripts/tico install` "
                  "once on this computer and it updates itself")
+
+
+def only_flattened_links(update):
+    """The runner checks content and the index; file names alone cannot prove that a repair is safe."""
+    return (update.get("update_state") == "blocked"
+            and str(update.get("error") or "").startswith("only flattened Tico links:")
+            and "repaired automatically on the next update" in update["error"])
 
 
 def view(row, server=None):

@@ -2,6 +2,7 @@
 
 import pytest
 
+from backend import turns
 from backend.store import H
 from backend.tests.test_api import api, as_member, assign, claim, get, post, ready, runner  # noqa: F401
 
@@ -81,3 +82,53 @@ def test_a_run_that_failed_before_starting_does_not_claim_later_messages(api):
     messages = {m["id"]: m for m in get(api, f"conversations/{asked['conversation_id']}/snapshot")["messages"]}
     assert "prompted_by" not in messages.get(loose["id"], {})
     assert messages[own["id"]]["prompted_by"] == "person"
+
+
+def test_a_tool_call_reads_as_its_work_in_plain_words():
+    assert turns.tool_label({"tool": "mcp__hub__hub_task_create"}) == "Filing a task"
+    assert turns.tool_label({"tool": "mcp__hub__task_create"}) == "Filing a task"
+    assert turns.tool_label({"tool": "Bash", "summary": "hub task close"}) == "Closing a task"
+    assert turns.tool_label({"tool": "Bash", "summary": "npm"}) == "Ran npm"
+    assert turns.tool_label({"tool": "shell", "summary": "hub release now"}) == "Ran hub"
+    assert turns.tool_label({"tool": "Bash"}) == "Ran Bash"
+    assert turns.tool_label({"tool": "mcp__peec-ai__list_brands"}) == "Ran peec ai list brands"
+
+
+def test_a_shell_label_never_shows_an_unknown_program_or_its_arguments():
+    assert turns.tool_label({"tool": "Bash", "summary": "run.sh --key sk-live-1"}) == "Ran Bash"
+    assert turns.tool_label({"tool": "Bash", "summary": "hub task close --token sk-live-1"}) == "Closing a task"
+
+
+def test_a_legacy_shell_summary_naming_a_file_or_arguments_is_never_shown():
+    """Older runners sent a shell line's summary as the line's words, so a file name or its arguments can arrive. None
+    of it is shown: the tool's own name is."""
+    assert turns.tool_label({"tool": "Bash", "summary": "customer-private.json"}) == "Ran Bash"
+    assert turns.tool_label({"tool": "Bash", "summary": "/tmp/customer-private.json"}) == "Ran Bash"
+    assert turns.tool_label({"tool": "Bash", "summary": "npm publish --token x"}) == "Ran Bash"
+    assert turns.tool_label({"tool": "Bash", "summary": "hub customer-private.json"}) == "Ran hub"
+    assert turns.tool_label({"tool": "Bash", "summary": "cd"}) == "Ran cd"
+
+
+def test_a_folded_step_carries_its_label_and_keeps_its_tool_name():
+    rows = [("tool", {"tool": "Bash", "status": "started", "item_id": "b1", "summary": "npm"}, "t1"),
+            ("tool", {"tool": "Bash", "status": "completed", "item_id": "b1"}, "t2")]
+    [step] = turns.build_steps(rows)
+    assert (step["tool"], step["label"], step["text"]) == ("Bash", "Ran npm", "")
+
+
+def test_a_hub_phrase_is_the_longest_command_it_starts_with():
+    assert turns.tool_label({"tool": "Bash", "summary": "hub approval read-back"}) == "Preparing approvals for your yes"
+    assert turns.tool_label({"tool": "mcp__hub__hub_approval_read_back"}) == "Preparing approvals for your yes"
+    assert turns.tool_label({"tool": "Bash", "summary": "hub approval approve"}) == "Approving"
+    assert turns.tool_label({"tool": "Bash", "summary": "hub needs-you list"}) == "Reading the Needs you list"
+    assert turns.tool_label({"tool": "Bash", "summary": "hub finance report"}) == "Working in Finance"
+    assert turns.tool_label({"tool": "Bash", "summary": "hub meeting search"}) == "Searching"
+    assert turns.tool_label({"tool": "Bash", "summary": "hub settings set"}) == "Changing a setting"
+    assert turns.tool_label({"tool": "shell", "summary": "hub history"}) == "Reading the chat"
+    assert turns.tool_label({"tool": "Bash", "summary": "hub ask"}) == "Asking a teammate"
+
+
+def test_an_unmapped_hub_command_never_shows_its_words():
+    assert turns.tool_label({"tool": "Bash", "summary": "hub release now"}) == "Ran hub"
+    assert turns.tool_label({"tool": "Bash", "summary": "hub webhook pause"}) == "Ran hub"
+    assert turns.tool_label({"tool": "Bash", "summary": "hub release sk-live-1"}) == "Ran hub"

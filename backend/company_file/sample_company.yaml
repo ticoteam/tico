@@ -53,7 +53,7 @@ employees:
              does not do, three acceptance tests (Given/When/Then), and one open question.
           2. Put the brief on this task as one comment, so the owner reads it where they answer.
   - id: builder
-    template: pr-reviewer
+    template: builder
     title: "Builder"
     department: engineering
     reports_to: head-of-product

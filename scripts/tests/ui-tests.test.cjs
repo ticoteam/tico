@@ -6,7 +6,28 @@ const vm = require('node:vm');
 const {spawnSync} = require('node:child_process');
 const os = require('node:os');
 const {EventEmitter} = require('node:events');
-const {resources, runScript, sampleCpu, stopTree, stoppedReport} = require('../ui-tests.cjs');
+const {resources, runScript, runScripts, sampleCpu, stopTree, stoppedReport} = require('../ui-tests.cjs');
+
+test('frame timing scripts run alone after the parallel pool, within the selected files', async () => {
+  const active = new Set(), started = [], finished = [];
+  let peak = 0;
+  const run = async file => {
+    if (file === 'dot-perf.cjs') assert.equal(active.size, 0, 'frame timing has no competing script');
+    else assert.equal(active.has('dot-perf.cjs'), false, 'ordinary scripts never overlap frame timing');
+    active.add(file); started.push(file); peak = Math.max(peak, active.size);
+    await new Promise(resolve => setImmediate(resolve));
+    active.delete(file); finished.push(file);
+  };
+  const files = ['dot-perf.cjs', 'a.cjs', 'b.cjs', 'c.cjs'];
+  await runScripts(files, 2, run);
+  assert.equal(peak, 2, 'ordinary scripts still use the parallel pool');
+  assert.deepEqual(started, ['a.cjs', 'b.cjs', 'c.cjs', 'dot-perf.cjs']);
+  assert.equal(finished.at(-1), 'dot-perf.cjs');
+  assert.deepEqual([...started].sort(), [...files].sort(), 'the selection is unchanged');
+  started.length = 0;
+  await runScripts(['a.cjs'], 4, run);
+  assert.deepEqual(started, ['a.cjs'], 'a shard without frame timing never adds it');
+});
 
 test('one CPU-idle policy, explicit overrides and shared context/page timeouts', async () => {
   const counters = (user, idle) => Array.from({length: 12}, () => ({times: {user, nice: 0, sys: 0, idle, irq: 0}}));

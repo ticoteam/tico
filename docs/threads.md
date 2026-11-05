@@ -43,8 +43,17 @@ A thread's audience is one of these:
 - Bots read like people in their seat: an internal bot reads every `company` thread and the `team` threads of its group
   or any group above it. A `members`, `personal` or `participants` thread opens to a bot only as a member. An external
   agent reads only the threads it is in ([Permissions](permissions.md#threads-and-their-audiences)).
-- A thread can also reach outside the company: a linked [Slack](slack.md) channel, or another company's install it is
-  shared with ([Federation](federation.md)). The thread's **Who can read** sheet shows both under Slack and Shared with.
+- A thread can also reach outside the company through a linked [Slack](slack.md) channel. The thread's **Who can read**
+  sheet shows it under Slack.
+
+## Replies
+
+**Reply** on a message answers it in the thread: your message goes at the bottom, with a short quote of the one it
+answers. Replying to a bot's message wakes that bot, as an @mention does. A quote of a message you can't read shows
+only that it is hidden. `hub thread post <thread> "..." --reply-to <message>` replies from the command line; the
+message must be in the same thread or a sub-thread under it, and one you can read.
+
+`hub thread show <thread> --flat` reads the thread and its open sub-threads as one list in time order.
 
 ## Sub-threads
 
@@ -92,7 +101,9 @@ sub-thread under it.
 - A bot woken in a thread answers there, in the sub-thread it was asked in, addressed to whoever asked. If it was
   removed from the thread during the run, the reply is not posted.
 - A person's message that names nobody, in a thread with several bots, goes to the bots it is for: a small model picks up
-  to three, after the message posts. Name a bot to choose it yourself.
+  to three, after the message posts, and the message says who it went to. Name a bot to choose it yourself.
+- Under the messages, a thread shows the bots it is waiting on: working (with what it is doing now), up next (finishing
+  other work first) or can't reply (why, with a Fix link). `hub thread bot-status <thread>` lists the same.
 - A bot that follows a thread on digest gets one run an hour for all its threads with new messages.
 - A bot acknowledges a request with a one-word `✅` in its thread.
 - A bot's open asks to people go in its Home.
@@ -101,6 +112,14 @@ sub-thread under it.
   held first message makes no thread, sub-thread or DM. Send anyway posts it then, and makes the thread with it. The
   author can withdraw a held message (a person's comes back as Edit and resend), and so can the person a bot reports
   to.
+
+## Pinned and Catch up
+
+Anyone who reads a thread can pin it for themselves. A manager can pin a thread for everyone who reads it, except a DM
+with one teammate, a Home, a task's thread or a meeting's; anyone can still unpin it for themselves. Pinned threads lead
+the thread list. Catch up shows every thread with new messages for you, ones that mention you first, each with its new
+messages. A group DM and every other new thread need a name; only a DM with one teammate may go unnamed. Details:
+[threads contract §10.1](dev/threads-contract.md).
 
 ## Editing and deleting
 
@@ -124,13 +143,14 @@ Each command is also an MCP tool with the same name and arguments ([Connect an a
 | Command | Tool | What it does |
 |---|---|---|
 | `hub thread list [--with ACTOR]` | `hub_thread_list` | your threads: needs attention, then unread, then recent; DMs apart; a task's thread only while it is unread; `--with` only the threads shared with that person, bot or group |
-| `hub thread show <thread>` | `hub_thread_show` | the messages in tree order, each sub-thread under its message |
+| `hub thread show <thread> [--flat]` | `hub_thread_show` | the messages in tree order, each sub-thread under its message; `--flat` one list in time order |
 | `hub thread home <actor>` | `hub_thread_home` | a teammate's Home, made on first use; needs Read on them |
 | `hub thread dm <actor>` | `hub_thread_dm` | your DM with one person or bot, the open one or a new one; needs Write |
-| `hub thread dm-group <actor> <actor> ... [--body "..."]` | `hub_thread_dm_group` | a group DM with these people or bots; `--body` is the first message |
-| `hub thread create ["title"]` | `hub_thread_create` | start a thread: `--audience`, `--group`, `--member` (repeat), `--body` |
-| `hub thread post <thread> "..."` | `hub_thread_post` | a message: `--kind say\|ask`, `--to`, `--ref KIND:ID` (repeat) |
-| `hub thread reply <thread> <message> "..."` | `hub_thread_reply` | a reply in that message's sub-thread |
+| `hub thread dm-group <actor> <actor> ... --title "..." [--body "..."]` | `hub_thread_dm_group` | a group DM with these people or bots; a new one needs `--title`; `--body` is the first message |
+| `hub thread create "title"` | `hub_thread_create` | start a thread: `--audience`, `--group`, `--member` (repeat), `--body`, `--pin-for-members` |
+| `hub thread post <thread> "..."` | `hub_thread_post` | a message: `--kind say\|ask`, `--to`, `--reply-to MESSAGE`, `--ref KIND:ID` (repeat) |
+| `hub thread bot-status <thread>` | `hub_thread_bot_status` | the bots the thread waits on: working, up next or can't reply, and why |
+| `hub thread reply <thread> <message> "..."` | `hub_thread_reply` | a side topic in that message's sub-thread (to answer a message, `post --reply-to`) |
 | `hub thread edit <message> "..."` | `hub_thread_edit` | a new revision of your own message |
 | `hub thread sub <message>` | `hub_thread_sub` | open a message's sub-thread without posting |
 | `hub thread react <message-id> <emoji>` | `hub_thread_react` | your reaction to a message, such as `:+1:` |
@@ -142,9 +162,12 @@ Each command is also an MCP tool with the same name and arguments ([Connect an a
 | `hub thread follow <thread> [--notify ...]` | `hub_thread_follow` | follow at a level |
 | `hub thread unfollow <thread>` | `hub_thread_unfollow` | stop following |
 | `hub thread read <thread> [--seq N \| --all]` | `hub_thread_read` | mark read |
+| `hub thread pin <thread>` | `hub_thread_pin` | pin a thread for you |
+| `hub thread unpin <thread>` | `hub_thread_unpin` | unpin it for you, even one pinned for everyone |
+| `hub thread catch-up [--cursor C]` | `hub_thread_catch_up` | the threads with new messages for you, mentions first, each with its new messages |
 | `hub thread search "..."` | `hub_thread_search` | messages in threads you can read |
 | `hub thread members list\|add\|remove` | `hub_thread_members_list`, `_add`, `_remove` | who reads the thread; `add --owner` makes an owner |
-| `hub thread update <thread>` | `hub_thread_update` | `--title`, `--archive` or `--unarchive`, `--audience`, `--group`, `--keep-days N` or `--keep-forever` |
+| `hub thread update <thread>` | `hub_thread_update` | `--title`, `--archive` or `--unarchive`, `--audience`, `--group`, `--keep-days N` or `--keep-forever`, `--pin-for-everyone` or `--unpin-for-everyone` (managers) |
 | `hub thread link-slack <thread> [<channel>] [--history] [--off]` | `hub_thread_link_slack` | link a Slack channel (admins), list the thread's links, or take them away ([Slack](slack.md)) |
 | `hub thread slack-resume <link-id>` | `hub_thread_slack_resume` | check a suspended or refused Slack link again (admins) |
 

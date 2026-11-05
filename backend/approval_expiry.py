@@ -9,8 +9,12 @@ hubdb._set_status and hubdb.approval_request); this sweep catches the rest:
    (backend/task_holds.py). A question on an open task carries on when a task above it ends: it lives and dies with
    its own task (Dev 627). A done task keeps only the question asking its requester to accept what it delivered
    (hubdb.ACCEPTANCE_ASK_SQL).
-4. The keeper's old "no progress" questions to people are superseded: a stuck task goes to BotOps now, never to a person
-   (hubdb._report_stuck). None are asked any more, so this closes the ones open when that shipped, once.
+4. The keeper's old "no progress" questions to people are superseded: no stuck-task question goes to a person any more.
+   None are asked, so this closes the ones open when that shipped, once.
+5. A Confirm card asked of someone for another person (backend/settings_asks.py) that nobody tapped within a day
+   expires: its request is declined and the asker told.
+6. A release's undecided publish approval at or below the newest release the hub knows shipped is withdrawn
+   (backend/release_flow.py superseded_by_shipped). Approvals asked since then are withdrawn as each release publishes.
 """
 
 from . import hubdb as H
@@ -35,6 +39,8 @@ def sweep(conn, at=None):
             elif H.approval_withdraw(conn, row["id"], f"No decision in {H.APPROVAL_STALE_DAYS} days. "
                                                        "Ask again if it is still needed."):
                 stale.append(row["id"])
+    from . import release_flow
+    superseded = release_flow.superseded_by_shipped(conn)
     # Every open ask to a person on a task, with that task's status; few are open at once, so each one's ancestors are
     # walked here rather than in SQL.
     rows = H._rows(conn.execute(
@@ -56,4 +62,6 @@ def sweep(conn, at=None):
                                  if r["status"] in ENDED else "an old no-progress question")
             H._recount(conn, r["sender_id"])
             asks.append(r["id"])
-    return {"stale": stale, "ended": ended, "asks": asks}
+    from . import settings_asks
+    return {"stale": stale, "ended": ended, "superseded": superseded, "asks": asks,
+            "cards": settings_asks.sweep(conn, at)}

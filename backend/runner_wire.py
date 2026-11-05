@@ -1,6 +1,6 @@
 """The runner wire keeps the names it had before the stored columns dropped their `_json` suffix.
 
-Runners already in the field read these bodies (contracts/runner, runner-rs serde, runner/), so a hub answers them
+Runners already in the field read these bodies (contracts/runner, runner-rs serde, runner_support/), so a hub answers them
 with the old names: a message's stored `refs` text as `refs_json` beside the decoded `refs`, a conversation's
 `participants_json` beside `participants`, an assignment's `config_json` beside `config`, a task's text columns (`labels_json`, ...) as they were, and a worktree
 link's `detail_json`. Renamed time and actor columns go back under their old names too (`created` beside a message's
@@ -36,26 +36,33 @@ def _stored(c, table, column, ids):
     return found
 
 
-def messages(c, rows):
+def messages(c, rows, *, who=None, auth=None):
     """Each message dict (decoded `refs`) also gets its stored text as `refs_json`, in place; returns `rows`."""
     rows = [m for m in rows or [] if isinstance(m, dict)]
     stored = _stored(c, "messages", "refs", [m.get("id") for m in rows])
     for m in rows:
+        if who is not None:
+            from .files import readable_page_refs
+            m.update(readable_page_refs(c, auth, who, m))
         if m.get("id") in stored:
-            m["refs_json"] = stored[m["id"]]
+            m["refs_json"] = (readable_page_refs(c, auth, who, stored[m["id"]]) if who is not None
+                              else stored[m["id"]])
         _times("messages", m)
     return rows
 
 
-def message(c, m, *, as_read=False):
+def message(c, m, *, as_read=False, who=None, auth=None):
     """`as_read`: the message was read before this turn changed its refs (a completed turn's reply), so its text is
     the refs it was read with, written the way the hub writes them (hubdb._dump), not the row as it stands now."""
     if isinstance(m, dict):
         if as_read:
+            if who is not None:
+                from .files import readable_page_refs
+                m.update(readable_page_refs(c, auth, who, m))
             m["refs_json"] = H._dump(m.get("refs") if m.get("refs") is not None else {})
             _times("messages", m)
         else:
-            messages(c, [m])
+            messages(c, [m], who=who, auth=auth)
     return m
 
 

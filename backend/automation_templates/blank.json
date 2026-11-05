@@ -1,0 +1,24 @@
+{
+  "id": "blank",
+  "name": "Blank",
+  "summary": "No rules and no questions. The last step reads each message and picks Me or Archive.",
+  "destinations": [
+    {"id": "me", "name": "Me", "color": "amber",
+     "then": [{"do": "leave_for_you", "args": {}}]},
+    {"id": "archive", "name": "Archive", "color": "gray",
+     "then": [{"do": "archive", "args": {}}]}
+  ],
+  "steps": [
+    {"id": "rules", "type": "filter", "rules": []},
+    {"id": "sort", "type": "decide", "level": "high", "out": "sort", "questions": {
+      "route": {"type": "choice", "instructions": "Where does this message belong? Pick the one that fits best.",
+                "criteria": {"me": "The owner should see it", "archive": "Nothing is asked of anyone"}}}},
+    {"id": "route", "type": "filter", "rules": [
+      {"when": [{"field": "sort.route", "op": "is", "value": "me", "min": 0.5}],
+       "to": "me", "next": "end", "stop": true},
+      {"when": [{"field": "sort.route", "op": "is", "value": "archive", "min": 0.5}],
+       "to": "archive", "next": "end", "stop": true},
+      {"when": [], "to": "me", "next": "end", "stop": true}
+    ]}
+  ]
+}

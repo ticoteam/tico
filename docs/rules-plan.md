@@ -76,7 +76,9 @@ lives on other pages; on this page the button is **+ Add document**.
 1. **Bot › Rules tab** (board 1): **Internal** (written rules where the bot is in Who, then its settings as
    sentences, each opening the setting), then **External**.
 2. **Rules › Internal** (board 2): list with Rule | Who | With | Due; filters Who, With, and "Settings too" (off).
-   Clicking a rule opens a side panel: rule, description, Who, With, If broken (Block / Escalate / Warn), due date; Retire / Save.
+   Clicking a rule opens a side panel: rule, description, Who, With, If broken (Block / Escalate / Warn, shown as Stop / Ask first / Warn), due date; Retire / Save.
+   Who may reach whom, how often, and the lines between teammates (each line's rule an internal rule): see
+   [reach.md](reach.md).
 3. **Blocked** (board 3): what a blocked bot gets back and does next (Block, the default), and an Escalate review task
    for the bot's manager (Keep blocked / Send anyway / Edit rule). **Nav:** Rules is a top-level item under Automations and Library, collapsed by default.
 4. **Rules › External** (board 4): the page is **Rules** with tabs **Internal · External · Due · Suggested**. External
@@ -252,7 +254,7 @@ ahead of time so it doesn't try.
     (`GET /api/v2/rule-holds?thread=`), which the chat draws under its messages.
   - **`where:`** narrows a rule to some places: `thread:<conversation id>`, `team:<group>` (the sender's or the
     conversation owner's group chain), `kind:dm` (a direct chat, or a write with no conversation), and
-    `has_outside_members` (someone in it is outside the roster, or is a Slack or federated actor). A write meets the
+    `has_outside_members` (someone in it is outside the roster, or is a Slack actor). A write meets the
     rule when one of its terms holds. A message has the place of its thread (`conversations.id` is the thread id, with
     its root, audience and members read from the thread); a task comment has its task's conversation. The Rules panel
     sets one choice (anywhere, direct chats, outside, a team, or a thread). Its thread list is the threads sidebar
@@ -285,8 +287,9 @@ ahead of time so it doesn't try.
   - The reviewer is the rule's reviewer, else `report_managers.person_above` (first human up the chain), else the
     bot's operator, else the default person (screening's `person_for` order), else the team owner, else an admin;
     someone who left or whose sign-in is off is skipped. Never a bot. With no person at all, an Escalate stays a Block.
-    The owner or an admin can read, keep or send any hold whose reviewer is missing or gone, and the review task's
-    hold list shows it to them.
+    The owner can always read, keep or send a bot's hold, its reviewer named or not (whoever can change a block's
+    source can waive it). An admin does the same once the reviewer is missing or gone. The review task's hold list
+    shows it to them.
   - The held output lives in its own `org_rule_holds` row (operation, payload, author, destinations, rules, verdict),
     readable by the author bot, the reviewer and the person it is held for (who may withdraw it, not release it). It is
     never a message or task row: an undelivered message is
@@ -303,6 +306,8 @@ ahead of time so it doesn't try.
   - A held output never shows as a task hold or on the Blocked tab.
 - **Rollout:** live with Block by default when it ships; no observe-only week (Chris, Oct 30). A team setting turns
   checks Off. The rule-check eval runs before merge and picks the level.
+- A verdict applies to the route it checked, even when it passes or goes unchecked. If the recipients change while
+  the judge runs, the send returns 409 `moved` and sends nothing. A new send checks the new route.
 - **Fails open:** no engine, the team's spend cap, the day's call cap, the deadline, an error or a malformed answer let
   the output through, with a `rules.unchecked` event. Each block, escalate or warn is one `rules.blocked` /
   `rules.escalated` / `rules.warned` event. Never the text.

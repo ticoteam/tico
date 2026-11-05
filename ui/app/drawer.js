@@ -2,16 +2,27 @@
    Classic script: its globals are shared with the other files under ui/app/, loaded in the order index.html lists them. */
 'use strict';
 
+// Only people who can manage the company (owner or admin) see the portal link. S.me can arrive after the config, so
+// opening the menu draws it again.
+function renderAdministration() {
+  const link = $('#account-administration');
+  const url = (S.me?.role === 'owner' || !!S.me?.bot_admin) ? S.config.administration_url : '';
+  if (link.hidden !== !url) link.hidden = !url;
+  if (url) link.href = url;
+  else link.removeAttribute('href');
+}
+
 // Every click and focus elsewhere closes it, so only a real change writes: a `hidden` set, even to the value it has,
 // restyles the whole page (ui/app/ask-panel.js askSet).
 function setAccountMenu(open, returnFocus = false) {
   if ($('#account-menu').hidden === open) {
+    if (open) renderAdministration();
     $('#account-menu').hidden = !open;
     $('#account').setAttribute('aria-expanded', String(open));
   }
   if (returnFocus) $('#account').focus();
 }
-$('#account').onclick = () => setAccountMenu($('#account-menu').hidden);
+$('#account').onclick = () => { if ($('#account-menu').hidden) nativeOrgMenu(); setAccountMenu($('#account-menu').hidden); };
 document.addEventListener('click', ev => {
   if (!ev.target.closest('.account-wrap') || ev.target.closest('#account-menu :is(a, button)')) setAccountMenu(false);
 });

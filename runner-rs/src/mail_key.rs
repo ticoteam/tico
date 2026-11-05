@@ -1,4 +1,4 @@
-//! The company's Google Workspace key, where bots cannot read it (runner/mail_key.py). Under the two-user
+//! The company's Google Workspace key, where bots cannot read it (runner_support/mail_key.py). Under the two-user
 //! layout (crate::isolation) the supervisor keeps it in its own state directory and an inbox bot's turn asks,
 //! over the credential socket, for a short-lived token for one of the mailboxes the hub named for that attempt.
 //! Without the layout the key stays where it was, bots can read it, and readiness says `exposed`.
@@ -266,7 +266,7 @@ struct Mint {
     script: PathBuf,
     key: PathBuf,
     /// The server and this registration, for a Connect Google grant the server refreshes: its client secret stays
-    /// there (connectors/mail/oauth.py broker, runner/connectors.py mail_cli_env).
+    /// there (connectors/mail/oauth.py broker, runner_support/connectors.py mail_cli_env).
     broker: Option<(String, String)>,
 }
 
@@ -431,15 +431,37 @@ mod tests {
         std::fs::remove_dir_all(dir).ok();
     }
 
+    /// The one stub `mail.sh` the answer tests share. MINT is set once per process, so every test sees this script and
+    /// this key path, and no file is ever created at that path: a computer with no key file.
+    fn stub() -> &'static (PathBuf, PathBuf) {
+        static STUB: OnceLock<(PathBuf, PathBuf)> = OnceLock::new();
+        STUB.get_or_init(|| {
+            let dir = std::env::temp_dir().join(format!("tico-mint-{}", uuid::Uuid::new_v4().simple()));
+            std::fs::create_dir_all(&dir).unwrap();
+            let script = dir.join("mail.sh");
+            crate::util::write_script(&script, "#!/bin/sh\n[ -z \"$HUB_TOKEN\" ] || exit 9\n[ \"$TICO_GOOGLE_BROKER_URL $TICO_GOOGLE_BROKER_AUTH\" = \"https://t.example runner-token\" ] || exit 8\ncase \"$3\" in ben@*) s=', \"scopes\": [\"gmail.readonly\"]';; *) s='';; esac\nprintf '{\"token\": \"ya29.%s-%s\", \"expiry\": \"soon\", \"key\": \"%s\"%s}' \"$3\" \"$5\" \"$GOOGLE_SA_KEY\" \"$s\"\n");
+            // The server that refreshes a Connect Google grant reaches the CLI; the hub token never does.
+            let broker = Some(("https://t.example".to_string(), "runner-token".to_string()));
+            let key = dir.join(FILE);
+            let _ = MINT.set(Mint { script, key: key.clone(), broker });
+            (dir, key)
+        })
+    }
+
+    #[tokio::test]
+    async fn a_computer_with_no_key_file_still_answers_the_socket_with_a_token() {
+        let (_dir, key) = stub();
+        // The mint runs the mail CLI, which asks the server for a Workspace token when this computer has no key file
+        // (connectors/mail/auth.py). The socket must not gate on that file.
+        assert!(!key.exists(), "this computer holds no Google key");
+        let allowed: BTreeSet<String> = mailboxes(&json!({"mailboxes": ["ana@acme.example"]}));
+        let got = answer(&allowed, &json!({"service": "gmail", "mailbox": "ana@acme.example"})).await;
+        assert_eq!(got, json!({"token": "ya29.ana@acme.example-gmail", "expiry": "soon"}));
+    }
+
     #[tokio::test]
     async fn mail_answers_name_the_mailboxes_and_mint_only_for_one_of_them() {
-        let dir = std::env::temp_dir().join(format!("tico-mint-{}", uuid::Uuid::new_v4().simple()));
-        std::fs::create_dir_all(&dir).unwrap();
-        let script = dir.join("mail.sh");
-        crate::util::write_script(&script, "#!/bin/sh\n[ -z \"$HUB_TOKEN\" ] || exit 9\n[ \"$TICO_GOOGLE_BROKER_URL $TICO_GOOGLE_BROKER_AUTH\" = \"https://t.example runner-token\" ] || exit 8\ncase \"$3\" in ben@*) s=', \"scopes\": [\"gmail.readonly\"]';; *) s='';; esac\nprintf '{\"token\": \"ya29.%s-%s\", \"expiry\": \"soon\", \"key\": \"%s\"%s}' \"$3\" \"$5\" \"$GOOGLE_SA_KEY\" \"$s\"\n");
-        // The server that refreshes a Connect Google grant reaches the CLI; the hub token never does.
-        let broker = Some(("https://t.example".to_string(), "runner-token".to_string()));
-        let _ = MINT.set(Mint { script, key: dir.join(FILE), broker });
+        stub();
         let allowed: BTreeSet<String> = mailboxes(&json!({"mailboxes": ["Ana@Acme.example", "ben@acme.example"]}));
         assert_eq!(answer(&allowed, &json!({"service": "drive", "mailbox": "ana@acme.example"})).await, json!({"error": "no mail access"}));
         assert_eq!(answer(&BTreeSet::new(), &json!({"service": "gmail", "mailbox": "x@y"})).await, json!({"error": "no mailbox", "mailboxes": []}));
@@ -452,6 +474,5 @@ mod tests {
         let got = answer(&allowed, &json!({"service": "gmail", "mailbox": "ben@acme.example"})).await;
         assert_eq!(got, json!({"token": "ya29.ben@acme.example-gmail", "expiry": "soon", "scopes": ["gmail.readonly"]}),
                    "a connected account's granted scopes reach the turn");
-        std::fs::remove_dir_all(dir).ok();
     }
 }

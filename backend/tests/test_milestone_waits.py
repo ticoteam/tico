@@ -307,7 +307,7 @@ def test_a_changed_wait_note_is_a_task_change_with_history_and_the_later_wake_ca
     raw(api, f"tasks/{waiter['id']}/waits", {"on": "pr:" + PR, "note": "Check the migration, then QA"})
     with api.app.state.store.read() as c:
         notes = [(r["old"], r["new"]) for r in c.execute(
-            "SELECT old,new FROM task_events WHERE task_id=? AND field='milestone_wait_note' ORDER BY created_at,id",
+            "SELECT old,new FROM history_events WHERE subject_type='task' AND subject_id=? AND kind='milestone_wait_note' ORDER BY created_at,id",
             (waiter["id"],))]
     assert notes == [(None, "Check the migration"), ("Check the migration", "Check the migration, then QA")], notes
     merge(api)

@@ -1,24 +1,28 @@
-// Growth and Brand on a real hub. The Growth page: with nothing set up, one line and a link to Sources; with one month of
-// only new customers, only that part shows; then Dana, Acme's owner, has a North Star, inputs and a guardrail with
-// readings, eight channels and Unknown, months with gaps and marketing tasks, all seeded through the API. The parts draw
-// in order with their stats; a stat opens its KPI on Goals; a channel opens in place with its chart, retention, source
-// and open tasks; a Tried row opens its task; the month picker moves the stats; Settings, + Channel, Edit, Retire and a
-// month's correction save; old addresses land where they moved. Then Sources flags a clash, Strategy has How we sell,
-// Brand's Edit publishes, and Goals switches its KPIs between Tree, Loops and Journey. Phone, then desktop.
+// Growth and Brand on a real hub. The Growth page is a grid of cards (place `growth`, ui/app/dashboard.js): with
+// nothing set up, each default card says it has nothing yet and Settings links to Sources; with one month of only new
+// customers, the New customers and Channels cards show it; then Dana, Acme's owner, has a North Star, stage KPIs and a
+// guardrail with readings, eight channels and Unknown, months with gaps and marketing tasks, all seeded through the
+// API. The Funnel, Numbers, Channels, Retention and Growth board cards draw from it; a stage opens its KPI on Goals; a
+// channel's open task is a chip on its row and a card on the board; the month picker reads the cards again and the
+// address keeps it; Settings, + Channel, Edit, Retire and a month's correction save; a Number is added for one channel;
+// old addresses land where they moved. Then Sources flags a clash, Strategy has How we sell, Brand's Edit publishes,
+// and Goals switches its KPIs between Tree, Loops and Journey. Phone, then desktop.
 const assert = require('node:assert/strict');
 const {run, open, go, ok, shot, t} = require('./support/redesign-e2e.cjs');
 
-const REMOVED = /\/api\/v2\/(gtm|growth\/(ideas|segments|evidence|working|week))/;
+const REMOVED = /\/api\/v2\/(gtm|growth\/(ideas|segments|evidence|working|week|numbers))/;
 // The test hub's clock stands still here (evals/factory/world.py).
 const HUB_NOW = Date.UTC(2026, 9, 20, 9);
 const monthsAgo = n => { const d = new Date(HUB_NOW); d.setUTCDate(1); d.setUTCMonth(d.getUTCMonth() - n); return d.toISOString().slice(0, 7); };
 const MONTH = monthsAgo(0);
 // The month with no row at all, and the one where spend went unrecorded: gaps stay gaps.
 const NO_ROW = 6, NO_SPEND = 3;
-const PARTS = ['north-star', 'growth', 'cost', 'retention', 'value', 'channels', 'tried'];
+const CARDS = ['Funnel', 'New customers', 'CAC', 'Spend', 'LTV:CAC', 'Payback', 'Kept 30 days', 'Channels', 'Retention', 'Growth board'];
 const CHANNELS = [['google-ads', 'Google Ads', 'scaling', 'bot:engineering-lead', 1.4], ['referrals', 'Referrals', 'scaling', 'human:dana', .9], ['seo', 'SEO', 'testing', null, .6],
   ['local-pages', 'Local pages', 'testing', 'bot:engineering-lead', .5], ['door-hangers', 'Door hangers in Mueller', 'testing', null, .3], ['partners', 'Property manager partners', 'idea', 'human:dana', .25],
   ['newsletter', 'Newsletter', 'paused', null, .2], ['meta-ads', 'Meta Ads', 'paused', 'bot:engineering-lead', .15]];
+const short = m => new Date(`${m}-15`).toLocaleString('en-US', {month: 'short', timeZone: 'UTC'});
+const long = m => `${short(m)} ${m.slice(0, 4)}`;
 
 const flat = async (page, what) => {
   const info = await page.evaluate(() => ({sw: document.documentElement.scrollWidth, cw: document.documentElement.clientWidth, hash: location.hash,
@@ -41,16 +45,6 @@ async function themed(page, name) {
   await page.setViewportSize(size);
   await page.evaluate(() => { document.documentElement.dataset.theme = 'dark'; });
 }
-// The moves spread over the window, as a real year's would be: the task routes date a move when it happens, so on a
-// seeded hub they all fall on one day and merge into one tick.
-async function spreadMarkers(page) {
-  await page.route('**/api/v2/growth/numbers*', async route => {
-    const res = await route.fetch(), body = await res.json();
-    body.markers.forEach((m, i) => { m.at = new Date(HUB_NOW - (5 + i * 23) * 864e5).toISOString(); });
-    await route.fulfill({response: res, json: body});
-  });
-}
-
 async function seedChannels(page, stripe) {
   for (const [slug, name, stage, owner_ref] of CHANNELS) {
     await ok(page, 'POST', 'growth/channels', {slug, name, track: slug === 'referrals' ? 'brand' : 'performance', stage, owner_ref,
@@ -91,7 +85,7 @@ async function seedKpis(page) {
   await kpi('Site visits', 'visits', 40000, null, null, 'reach', [14200, 15100, 15800, 17200, 18400, 19900, 21100, 23800, 24600, 26900, 28200, 31000]);
   return {nsId, inpId, goalId};
 }
-// Marketing tasks moved through their steps, each move a marker; one left open on Google Ads.
+// Marketing tasks moved through their steps; one left open, in Testing, on Google Ads.
 async function seedTasks(page, goalId) {
   const task = async (title, channel, steps, goal = null) => {
     const made = await ok(page, 'POST', 'tasks', {title, body: title, owner: 'bot:engineering-lead', type: 'idea', labels: channel ? [`channel:${channel}`] : [], ...(goal ? {goal_id: goal} : {})});
@@ -117,45 +111,59 @@ run('growth', ['org', 'toured'], async ({hub, browser, phone, tag}) => {
   const noErrors = where => assert.deepEqual(page.errors, [], `${tag}: ${where} without page errors`);
   const removed = [];
   page.on('request', r => { if (REMOVED.test(r.url())) removed.push(r.url()); });
-  const parts = () => page.locator('#gr-body [data-part]').evaluateAll(els => els.map(el => el.dataset.part));
-  const stat = key => page.locator(`#gr-body [data-stat="${key}"]`);
+  const headings = () => page.locator('#dash-grid .dash-pin-head h2').allInnerTexts();
+  const card = name => page.locator('#dash-grid .dash-pin').filter({has: page.locator('.dash-pin-head h2', {hasText: new RegExp(`^${name}$`)})});
+  const row = slug => page.locator(`#dash-grid .grc-ch tr[data-channel="${slug}"]`);
+  const num = name => card(name).locator('.grc-num-v');
   const toasts = () => page.locator('.toast').allInnerTexts();
   const arrive = (to, why) => page.waitForFunction(w => location.hash === w, to, {timeout: t(5000)}).catch(async () =>
     assert.fail(`${tag}: ${why} lands on ${to} (${await page.evaluate(() => location.hash)})`));
+  const dialog = () => page.locator('dialog.gr-dlg[open]');
+  const settings = async () => {
+    await page.locator('[data-gr-settings]').click();
+    await dialog().locator('[data-gs-channel="unknown"]').waitFor({timeout: t(10000)});
+    return dialog();
+  };
+  // The Growth grid drawn (not the page it came from).
+  const grid = () => page.waitForFunction(() => document.querySelector('.dash-head h1')?.textContent === 'Growth' && document.querySelector('#dash-grid .dash-pin'), null, {timeout: t(15000)});
+  const reload = async () => { await go(page, '#/growth/sources'); await page.locator('[data-gr-back]').waitFor({timeout: t(10000)}); await go(page, '#/growth'); await grid(); };
 
-  // Nothing at all: one line and a link to Sources, which links back.
+  // Nothing at all: every default card says it has nothing yet; Settings links to Sources, which links back.
   if (phone) await page.locator('#mobile-more').click();
   await page.locator('#side a[data-nav="growth"]').click();
   await arrive('#/growth', 'the sidebar');
-  await page.locator('#gr-body .gr-empty').waitFor({timeout: t(10000)});
-  assert.equal(await page.locator('.strat-tabs a').count(), 0, `${tag}: no tabs`);
-  assert.equal(await parts().then(p => p.length), 0, `${tag}: no parts`);
+  await grid();
+  assert.deepEqual(await headings(), CARDS, `${tag}: the default cards`);
+  assert.equal(await page.locator('.dash-head h1').innerText(), 'Growth', `${tag}: the title`);
+  assert.equal(await page.locator('#dash-grid .dash-none').count(), CARDS.length, `${tag}: each says it has nothing yet`);
+  assert.equal(await page.locator('.dash-head [data-gr-ns]').isVisible(), false, `${tag}: no North Star line`);
+  assert.equal(await page.locator('.dash-head .grh-month').isVisible(), false, `${tag}: no month picker`);
+  assert.equal(await page.locator('.dash-head [data-gr-board]').getAttribute('href'), '#/tasks?view=board&type=idea&who=all', `${tag}: the Growth board link`);
+  assert.equal(await page.locator('.dash-actions').isVisible(), true, `${tag}: the owner arranges`);
   await flat(page, `${tag}: empty`);
   await themed(page, `growth-${width}-empty`);
-  await page.locator('#gr-body [data-gr-sources]').click();
-  await arrive('#/growth/sources', 'the empty page\'s link');
+  await (await settings()).locator('a[data-gr-sources]').click();
+  await arrive('#/growth/sources', 'Settings\' Sources link');
+  await dialog().waitFor({state: 'detached', timeout: t(5000)}).catch(() => assert.fail(`${tag}: Settings closes on the way`));
   await page.locator('[data-gr-back]').click();
   await arrive('#/growth', 'the back link');
 
-  // One month of only new customers: Growth and Channels show, and no stat or part with no data is drawn.
+  // One month of only new customers: New customers and Channels show it; an unknown CAC is a dash.
   await ok(page, 'POST', 'growth/channels', {slug: 'flyers', name: 'Flyers', track: 'performance', stage: 'idea'});
   await ok(page, 'PUT', 'growth/cohorts', {channel: 'flyers', month: monthsAgo(1), new_customers: 9, quality: 'actual'});
-  await go(page, '#/growth/sources');
-  await go(page, '#/growth');
-  await stat('new_customers').waitFor({timeout: t(10000)});
-  assert.deepEqual(await parts(), ['growth', 'channels'], `${tag}: only what has data`);
-  assert.equal(await page.locator('#gr-body [data-gr-month]').count(), 0, `${tag}: no month picker with one month`);
-  assert.equal(await page.locator('#gr-body').evaluate(el => /—/.test(el.innerText)), false, `${tag}: never a dash`);
-  assert.equal(await page.locator('[data-gc-row="flyers"] [data-m="cac"]').innerText(), '', `${tag}: an unknown CAC is blank`);
-  const flyers = page.locator('[data-gc-row="flyers"]');
-  // + Month in a channel's detail, and the channel's edit retires it after asking once more on the same button.
-  await flyers.click();
-  await page.locator('[data-ch-edit]').click();
-  const retire = page.locator('dialog.gr-dlg [data-retire]');
+  await reload();
+  await row('flyers').waitFor({timeout: t(10000)});
+  assert.equal(await num('New customers').innerText(), '9', `${tag}: the month's new customers`);
+  assert.match(await card('CAC').innerText(), new RegExp(`None for ${long(monthsAgo(1))}`), `${tag}: no CAC that month`);
+  assert.deepEqual(await row('flyers').locator('td.grc-n').allInnerTexts(), ['9', '—', '—'], `${tag}: the row's numbers`);
+  assert.equal(await page.locator('.dash-head .grh-month').isVisible(), false, `${tag}: no month picker with one month`);
+  // Settings: the channel's Edit retires it after asking once more on the same button.
+  await (await settings()).locator('[data-gs-edit="flyers"]').click();
+  const retire = dialog().locator('[data-retire]');
   await retire.click();
-  assert.ok(await flyers.count(), `${tag}: the first press only asks`);
+  assert.equal(await dialog().count(), 1, `${tag}: the first press only asks`);
   await retire.click();
-  await flyers.waitFor({state: 'detached', timeout: t(10000)}).catch(async () => assert.fail(`${tag}: the channel retires (${await toasts()})`));
+  await row('flyers').waitFor({state: 'detached', timeout: t(10000)}).catch(async () => assert.fail(`${tag}: the channel retires (${await toasts()})`));
 
   const refs = await seedKpis(page);
   const stripe = await ok(page, 'POST', 'growth/sources', {truth_for: 'Revenue', system: 'Stripe', reach_kind: 'credential', reach_ref: 'stripe', may: 'read'});
@@ -163,158 +171,113 @@ run('growth', ['org', 'toured'], async ({hub, browser, phone, tag}) => {
   await seedChannels(page, stripe.source?.id || stripe.id);
   await seedMonths(page);
   const tasks = await seedTasks(page, refs.goalId);
-  await spreadMarkers(page);
 
-  // The page: every part in order, the North Star first with its chart and ticks.
-  await go(page, '#/growth/sources');
-  await go(page, '#/growth');
-  await page.locator('#gr-body [data-part="tried"]').waitFor({timeout: t(15000)});
-  assert.deepEqual(await parts(), PARTS, `${tag}: the order`);
-  assert.equal(await page.locator('#strat-actions button').allInnerTexts().then(b => b.join()), '+ Channel', `${tag}: one action`);
-  assert.match(await page.locator('.gr-hero').innerText(), /Active homes[\s\S]*648[\s\S]*homes/, `${tag}: the North Star's value`);
-  await page.locator('[data-gr-ns] .gr-line').first().waitFor({timeout: t(5000)});
-  assert.ok(await page.locator('[data-gr-ns] [data-gr-tick]').count() >= 1, `${tag}: task ticks on the North Star`);
-  assert.deepEqual(await page.locator('[data-part="value"] .gr-stat-l').allInnerTexts(), ['Revenue / customer', 'Margin', 'LTV', 'LTV:CAC', 'Payback'], `${tag}: Value's stats`);
-  assert.deepEqual(await page.locator('[data-part="growth"] .gr-stat-l').allInnerTexts(), ['New customers', 'Site visits'], `${tag}: an acquisition KPI in Growth`);
-  assert.equal(await page.locator('[data-part="channels"] [data-gc-row]').count(), 9, `${tag}: eight channels and Unknown`);
-  assert.equal(await page.locator('[data-gc-row]').last().getAttribute('data-gc-row'), 'unknown', `${tag}: Unknown last`);
-  assert.match(await stat('new_customers').locator('.gr-d').getAttribute('aria-label'), /^(Up|Down|Flat) /, `${tag}: a change with an arrow`);
-  assert.ok(await stat('new_customers').locator('svg.gr-spark').count(), `${tag}: a trend`);
-  // 30 days has no reading for this month's cohort yet: last month's shows, saying which.
-  assert.match(await page.locator('[data-part="retention"] [data-stat="kept_d30"]').innerText(), new RegExp(`\\d+%[\\s\\S]*${new Date(`${monthsAgo(1)}-15`).toLocaleString('en-US', {month: 'short'})}`), `${tag}: last month's retention`);
+  // The page: the North Star line, then every card with what it reads.
+  await reload();
+  await page.locator('#dash-grid .grc-funnel').waitFor({timeout: t(15000)});
+  assert.deepEqual(await headings(), CARDS, `${tag}: the order`);
+  const ns = page.locator('.dash-head [data-gr-ns]');
+  assert.match(await ns.innerText(), /North Star[\s\S]*Active homes[\s\S]*648/, `${tag}: the North Star line`);
+  assert.equal(await ns.getAttribute('href'), `#/strategy/goals?kpi=${encodeURIComponent(refs.nsId)}`, `${tag}: the line opens its KPI`);
+  // The Funnel: five stages, each its first KPI; a stage with none says so; Refer loops back.
+  const stages = page.locator('#dash-grid .grc-funnel > li');
+  assert.deepEqual(await stages.evaluateAll(els => els.map(el => el.dataset.stage)), ['reach', 'acquire', 'activate', 'retain', 'refer'], `${tag}: five stages`);
+  assert.match(await stages.nth(0).innerText(), /Site visits[\s\S]*31,000/, `${tag}: Reach's KPI`);
+  assert.match(await stages.nth(1).innerText(), /New bookings[\s\S]*97/, `${tag}: Acquire's KPI`);
+  assert.match(await stages.nth(2).innerText(), /No KPI/, `${tag}: Activate has none`);
+  assert.match(await stages.nth(4).innerText(), /↺ loops back to Reach/, `${tag}: the loop`);
+  // Numbers: a value, a change with an arrow, a trend; 30 days has no reading for this month's cohort yet, so last
+  // month's shows, saying which.
+  assert.match(await num('New customers').innerText(), /^\d[\d,]*$/, `${tag}: New customers`);
+  assert.match(await card('New customers').locator('.gr-d').getAttribute('aria-label'), /^(Up|Down|Flat) /, `${tag}: a change with an arrow`);
+  assert.ok(await card('New customers').locator('svg.gr-spark').count(), `${tag}: a trend`);
+  assert.match(await card('Kept 30 days').innerText(), new RegExp(`\\d+%[\\s\\S]*${short(monthsAgo(1))}`), `${tag}: last month's retention`);
+  // Channels: eight and Unknown, names as stored, Unknown last; the open task a chip on its channel's row.
+  const slugs = await page.locator('#dash-grid .grc-ch tbody tr').evaluateAll(els => els.map(el => el.dataset.channel));
+  assert.deepEqual(slugs.slice().sort(), [...CHANNELS.map(c => c[0]), 'unknown'].sort(), `${tag}: eight channels and Unknown`);
+  assert.equal(slugs.at(-1), 'unknown', `${tag}: Unknown last`);
+  assert.equal(await row('door-hangers').locator('th').innerText(), 'Door hangers in Mueller', `${tag}: a name as stored`);
+  assert.equal(await row('google-ads').locator('a.grc-chip').getAttribute('href'), `#/task/${encodeURIComponent(tasks.open)}`, `${tag}: the open task on its row`);
+  assert.equal(await row('google-ads').locator('a.grc-chip .grc-sq').getAttribute('data-stage'), 'testing', `${tag}: in Testing`);
+  assert.equal(await row('referrals').locator('a.grc-chip').count(), 0, `${tag}: closed tasks are not worked on`);
+  // Retention: shaded cells; the Growth board: the open task in Testing with its channel.
+  assert.ok(await page.locator('#dash-grid .grc-ret-t td.grc-k:not(.grc-k-none)').count() >= 3, `${tag}: retention cells`);
+  const testing = page.locator('#dash-grid .grc-lane[data-lane="testing"]');
+  assert.match(await testing.locator(`a.grc-card[href="#/task/${encodeURIComponent(tasks.open)}"]`).innerText(), /Landing page for office cleans[\s\S]*Google Ads/, `${tag}: the board's card`);
   await flat(page, `${tag}: the page`);
   await themed(page, `growth-${width}`);
 
-  // Twenty-four months and thirty channels hold up: axis labels clear of each other, the list folded, no sideways scroll.
-  const stretch = async route => {
-    const res = await route.fetch(), body = await res.json();
-    const earlier = Array.from({length: 12}, (_, i) => monthsAgo(23 - i));
-    body.months = [...earlier, ...body.months];
-    body.series = [...earlier.map((month, i) => ({...body.series[0], month, new_customers: 80 + i * 9})), ...body.series];
-    body.channels = [...Array.from({length: 30}, (_, i) => ({slug: `extra-${i}`, name: `Neighbourhood channel number ${i}`, stage: 'testing', owner_ref: null, series: [{month: MONTH, new_customers: i, cac: 100 + i, ltv_cac: 2}]})), ...body.channels];
-    await route.fulfill({response: res, json: body});
-  };
-  await page.route('**/api/v2/growth/numbers*', stretch);
-  await go(page, '#/growth/sources');
-  await go(page, '#/growth');
-  await page.locator('[data-gc-all]').waitFor({timeout: t(15000)});
-  assert.equal(await page.locator('[data-gc-row]').count(), 10, `${tag}: a long list folds`);
-  await page.locator('[data-gc-all]').click();
-  assert.equal(await page.locator('[data-gc-row]').count(), 39, `${tag}: All shows every channel`);
-  await page.locator('[data-gc-row="extra-3"]').click();
-  await page.locator('#gc-detail').waitFor({timeout: t(5000)});
-  await flat(page, `${tag}: a long list`);
-  await page.locator('[data-gc-row="extra-3"]').click();
-  const axis = await page.locator('[data-gr-ns] text.gr-ax[text-anchor]').evaluateAll(els => els.map(el => { const r = el.getBoundingClientRect(); return [r.left, r.right]; }));
-  axis.forEach((box, i) => { if (i) assert.ok(box[0] >= axis[i - 1][1], `${tag}: axis labels clear of each other (${JSON.stringify(axis)})`); });
-  await themed(page, `growth-${width}-long`);
-  await page.unroute('**/api/v2/growth/numbers*', stretch);
-  await go(page, '#/growth/sources');
-  await go(page, '#/growth');
-  await page.locator('#gr-body [data-part="tried"]').waitFor({timeout: t(15000)});
-
-  // A tap on a tick gives its title; tapping it again, the chart beside it or anywhere else clears it. So does the mouse moving off.
-  const tip = page.locator('[data-gr-ns] .gr-chart-tip'), tick = page.locator('[data-gr-ns] [data-gr-tick]').first();
-  const press = phone ? l => l.tap() : l => l.click();
-  const off = why => tip.waitFor({state: 'hidden', timeout: t(3000)}).catch(() => assert.fail(`${tag}: ${why} clears the title`));
-  const titled = async () => { await tip.waitFor({timeout: t(3000)}); assert.ok((await tip.innerText()).length > 3, `${tag}: a tick's title`); };
-  await press(tick);
-  await titled();
-  await press(tick);
-  await off('the same tick');
-  await press(tick);
-  await titled();
-  await press(page.locator('[data-part="cost"] h2'));
-  await off('a tap elsewhere');
-  await press(tick);
-  await titled();
-  await press(page.locator('[data-gr-ns] [data-gr-tick]').nth(1));
-  assert.match(await tip.innerText(), /\S/, `${tag}: another tick takes over`);
-  const box = await page.locator('[data-gr-ns]').boundingBox();
-  if (phone) await page.touchscreen.tap(box.x + 12, box.y + 40); else await page.mouse.click(box.x + 12, box.y + 40);
-  await off('a tap on the chart');
-  if (!phone) {
-    await tick.hover();
-    await titled();
-    await page.locator('[data-part="cost"] h2').hover();
-    await off('the mouse moving off');
-  }
-
-  // The month picker moves the stats; the month with no spend hides Spend, and a window month with no row is not offered.
+  // The month picker reads every card again: the month with no spend has no CAC, a month with no row is not offered,
+  // and the address keeps the month.
   const picker = page.locator('[data-gr-month]');
+  assert.equal(await picker.inputValue(), MONTH, `${tag}: the newest month`);
   assert.deepEqual((await picker.locator('option').evaluateAll(o => o.map(x => x.value))).includes(monthsAgo(NO_ROW)), false, `${tag}: no empty month`);
-  const before = await stat('new_customers').locator('.gr-stat-v').innerText();
+  const before = await num('New customers').innerText();
   await picker.selectOption(monthsAgo(NO_SPEND));
-  await stat('spend').waitFor({state: 'detached', timeout: t(10000)});
-  assert.notEqual(await stat('new_customers').locator('.gr-stat-v').innerText(), before, `${tag}: the picked month's value`);
-  assert.equal(await stat('cac').count(), 0, `${tag}: no CAC with no spend`);
+  await card('CAC').locator('.dash-none').waitFor({timeout: t(10000)});
+  assert.notEqual(await num('New customers').innerText(), before, `${tag}: the picked month's value`);
+  await arrive(`#/growth?m=${monthsAgo(NO_SPEND)}`, 'the month picked');
+  await go(page, '#/tasks');
+  await go(page, `#/growth?m=${monthsAgo(NO_SPEND)}`);
+  await card('CAC').locator('.dash-none').waitFor({timeout: t(10000)});
+  assert.equal(await page.locator('[data-gr-month]').inputValue(), monthsAgo(NO_SPEND), `${tag}: the address opens on its month`);
   await page.locator('[data-gr-month]').selectOption(MONTH);
-  await stat('spend').waitFor({timeout: t(10000)});
+  await num('CAC').waitFor({timeout: t(10000)});
 
-  // A channel opens in place: chart, retention, source and open tasks, with no ideas or buyers.
-  await page.locator('[data-gc-row="google-ads"]').click();
-  await page.locator('[data-gc-chart] .gr-line').first().waitFor({timeout: t(10000)});
-  assert.ok(await page.locator('#gc-detail [data-gc-kept] .gr-stat').count() >= 1, `${tag}: its retention`);
-  assert.match(await page.locator('#gc-detail [data-gc-from]').innerText(), /Stripe[\s\S]*Google Ads console/, `${tag}: where its numbers come from`);
-  assert.match(await page.locator('#gc-detail [data-gc-tasks]').innerText(), /Landing page for office cleans/, `${tag}: its open tasks`);
-  assert.equal(await page.locator('#gc-detail [data-gc-tasks] a').first().getAttribute('href'), `#/task/${encodeURIComponent(tasks.open)}`, `${tag}: an open task's link`);
-  assert.equal(await page.locator('#gc-detail').evaluate(el => /\b(Ideas|Buyers?|Segments?)\b/.test(el.innerText)), false, `${tag}: no ideas or buyers`);
-  await flat(page, `${tag}: a channel's detail`);
-  await themed(page, `growth-${width}-channel`);
-  // Correct a month.
-  await page.locator('#gc-detail .gc-months summary').click();
-  await page.locator('[data-gc-edit]').first().click();
-  const md = page.locator('dialog.gr-dlg');
-  await md.locator('[name="new_customers"]').fill('99');
-  await md.locator('[type=submit]').click();
-  await page.locator('[data-gc-row="google-ads"] [data-m="new"]').filter({hasText: '99'}).waitFor({timeout: t(10000)})
+  // A stage opens its KPI on Goals.
+  await stages.nth(1).locator('a').click();
+  await page.waitForFunction(id => location.hash.startsWith('#/strategy/goals') && location.hash.includes(id), refs.inpId, {timeout: t(5000)});
+  await page.locator(`#goal-kpis .gkv-hit[data-kpi="${refs.inpId}"]`).waitFor({timeout: t(15000)});
+  await go(page, '#/growth');
+  await page.locator('#dash-grid .grc-funnel').waitFor({timeout: t(15000)});
+
+  // Settings: a channel's months, newest first; correct one and the Channels card shows it.
+  let sd = await settings();
+  assert.equal(await sd.locator('[data-gs-channel]').count(), CHANNELS.length + 1, `${tag}: every channel and Unknown`);
+  await sd.locator('[data-gs-months="google-ads"]').click();
+  await dialog().locator('.gc-coh').first().waitFor({timeout: t(10000)});
+  assert.match(await dialog().locator('.gc-coh').first().innerText(), new RegExp(long(MONTH)), `${tag}: newest first`);
+  await flat(page, `${tag}: a channel's months`);
+  await themed(page, `growth-${width}-months`);
+  await dialog().locator('[data-gc-edit]').first().click();
+  await dialog().locator('[name="new_customers"]').fill('99');
+  await dialog().locator('[type=submit]').click();
+  await row('google-ads').locator('td.grc-n').first().filter({hasText: /^99$/}).waitFor({timeout: t(10000)})
     .catch(async () => assert.fail(`${tag}: the correction shows (${await toasts()})`));
   // Edit changes the channel, and + Channel adds one.
-  await page.locator('[data-ch-edit]').waitFor({timeout: t(10000)});
-  await page.locator('[data-ch-edit]').click();
-  await page.locator('dialog.gr-dlg [name="stage"]').selectOption('paused');
-  await page.locator('dialog.gr-dlg [type=submit]').click();
-  await page.locator('[data-gc-row="google-ads"] .gc-meta').filter({hasText: 'Paused'}).waitFor({timeout: t(10000)})
-    .catch(async () => assert.fail(`${tag}: the stage saved (${await toasts()})`));
-  await page.locator('#strat-actions [data-ch-add]').click();
-  const cn = page.locator('dialog.gr-dlg');
-  await cn.locator('[name="name"]').fill('Yard signs');
-  assert.equal(await cn.locator('[name="slug"]').inputValue(), 'yard-signs', `${tag}: the slug follows the name`);
-  await cn.locator('[type=submit]').click();
-  await page.locator('[data-gc-row="yard-signs"]').waitFor({timeout: t(10000)})
-    .catch(async () => assert.fail(`${tag}: the new channel shows (${await toasts()})`));
-
-  // Settings save.
-  await page.locator('[data-gr-settings]').click();
-  const sd = page.locator('dialog.gr-dlg');
-  await sd.locator('[name="revenue_month"]').waitFor({timeout: t(5000)});
+  await (await settings()).locator('[data-gs-edit="google-ads"]').click();
+  await dialog().locator('[name="stage"]').selectOption('paused');
+  await dialog().locator('[type=submit]').click();
+  await dialog().waitFor({state: 'detached', timeout: t(10000)});
+  const google = (await ok(page, 'GET', 'growth/channels')).channels.find(c => c.slug === 'google-ads');
+  assert.equal(google.stage, 'paused', `${tag}: the stage saved`);
+  await (await settings()).locator('[data-ch-add]').click();
+  await dialog().locator('[name="name"]').fill('Yard signs');
+  assert.equal(await dialog().locator('[name="slug"]').inputValue(), 'yard-signs', `${tag}: the slug follows the name`);
+  await dialog().locator('[type=submit]').click();
+  await row('yard-signs').waitFor({timeout: t(10000)}).catch(async () => assert.fail(`${tag}: the new channel shows (${await toasts()})`));
+  // The numbers save.
+  sd = await settings();
   assert.equal(await sd.locator('[name="revenue_month"]').inputValue(), '92', `${tag}: the saved revenue`);
   await sd.locator('[name="revenue_month"]').fill('95');
   await sd.locator('[type=submit]').click();
   await sd.waitFor({state: 'detached', timeout: t(10000)});
   assert.equal((await ok(page, 'GET', 'growth/settings')).revenue_month, 95, `${tag}: the setting saved`);
 
-  // Tried: five, then All; a row opens its task.
-  const tried = page.locator('[data-part="tried"] [data-marker]');
-  await tried.first().waitFor({timeout: t(10000)});
-  assert.equal(await tried.count(), 5, `${tag}: the newest five`);
-  await page.locator('[data-gr-tried-all]').click();
-  assert.ok(await tried.count() > 5, `${tag}: All shows the rest`);
-  assert.match(await page.locator(`[data-part="tried"] [data-marker="${tasks.won}"]`).first().innerText(), /Won/, `${tag}: the outcome`);
-  await page.locator(`[data-part="tried"] [data-marker="${tasks.won}"]`).first().click();
-  await arrive(`#/task/${encodeURIComponent(tasks.won)}`, 'a Tried row');
-  await page.locator('.tmodal-title').waitFor({timeout: t(10000)});
-  assert.equal(await page.locator('[data-growth-idea]').count(), 0, `${tag}: no idea panel on the task`);
-
-  // A stat opens its KPI on Goals, in Tree.
-  await go(page, '#/growth');
-  await stat(refs.inpId).click();
-  await page.waitForFunction(id => location.hash.startsWith('#/strategy/goals') && location.hash.includes(id), refs.inpId, {timeout: t(5000)});
-  await page.locator(`#goal-kpis .gkv-hit[data-kpi="${refs.inpId}"]`).waitFor({timeout: t(15000)});
+  // A Number for one channel, added from the grid's form, in edit mode.
+  await page.locator('[data-dash-mode="edit"]').click();
+  await page.locator('[data-dash-add="card"]').click();
+  const form = page.locator('#dash-dialog[open]');
+  assert.equal(await form.locator('[name="template"]').inputValue(), 'growth_number', `${tag}: a Number first`);
+  await form.locator('[name="metric"]').selectOption('new_customers');
+  await form.locator('[name="channel"]').selectOption('referrals');
+  await form.locator('[type="submit"]').click();
+  await card('New customers · Referrals').locator('.grc-num-v').waitFor({timeout: t(10000)})
+    .catch(async () => assert.fail(`${tag}: the Number shows (${await headings()})`));
+  assert.equal(await card('New customers · Referrals').getAttribute('data-size'), 'small', `${tag}: a tile`);
 
   // Sources: the link, the back link, the revenue clash, every source a row that opens its form.
-  await go(page, '#/growth');
-  await page.locator('#gr-body [data-gr-sources]').click();
+  await (await settings()).locator('a[data-gr-sources]').click();
   await arrive('#/growth/sources', 'the Sources link');
   await page.locator('[data-clash]').waitFor({timeout: t(10000)});
   assert.equal(await page.locator('[data-src-edit]').count(), 2, `${tag}: a row per source`);
@@ -337,7 +300,7 @@ run('growth', ['org', 'toured'], async ({hub, browser, phone, tag}) => {
   // A late answer never draws over Sources, which sits under #/growth.
   let release;
   const held = new Promise(r => { release = r; });
-  await page.route('**/api/v2/growth/numbers*', async route => { await held; await route.fallback(); });
+  await page.route('**/api/v2/places/growth*', async route => { await held; await route.fallback(); });
   await go(page, '#/growth');
   await go(page, '#/growth/sources');
   await page.locator('[data-clash]').waitFor({timeout: t(10000)});

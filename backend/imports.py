@@ -31,7 +31,7 @@ from . import models as M
 from . import people as P
 from .auth import Identity
 from .connectors import EMAIL, instant
-from .media import Note, Send, attachments, authorized, deliver, form, new_note, save, upload_contract, write_upload
+from .media import Note, Send, attachments, authorized, deliver, effective_audience, form, new_note, save, upload_contract, write_upload
 from .meetings import get as meeting, initial_review, announce
 from .store import H, Problem, encode
 from .views import roster
@@ -176,6 +176,8 @@ class MeetingImport(M.Contract):
     media_url: str = Field(default="", max_length=500)
     context: dict = Field(default_factory=dict)
     private: bool | None = None
+    # "participants": readable only by the person filing it (and people named later), the owner too (media.py).
+    audience: Literal["participants"] | None = None
     review: Literal["pending", "live"] | None = None
     send_to: str = Field(default="", max_length=80)
     owner_email: str = Field(default="", max_length=320)      # a machine names the roster person it files for
@@ -389,7 +391,8 @@ def install_imports(app, store, auth, execution, mutate):
         fingerprint = hashlib.sha256(encode({
             "turns": turns, "notes": body.notes, "title": body.title, "started_at": body.started_at,
             "duration": body.duration_seconds, "participants": people, "media_url": body.media_url,
-            "context": body.context, "private": body.private}).encode()).hexdigest()
+            "context": body.context, "private": body.private,
+            **({"audience": body.audience} if body.audience else {})}).encode()).hexdigest()
         known = {(a.get("name"), a.get("size")) for a in meta.get("attachments") or []}
         fresh = [u for u in uploads if (u["name"], u["size"]) not in known]
         if existing and meta.get("import_hash") == fingerprint and not fresh:
@@ -408,6 +411,10 @@ def install_imports(app, store, auth, execution, mutate):
             meta["title"] = body.title or meta.get("title") or "Imported meeting"
         if body.private is not None and (not existing or not meta.get("reviewed_at") or meta.get("review_state") != "live"):
             meta["private"] = body.private
+        if body.audience == "participants" or effective_audience(meta) == "participants":
+            # Narrowing is always allowed, even after review, and only a review widens it again (meeting_review.py).
+            named = {str(e).strip().lower() for e in meta.get("audience_emails") or []} | {(who.email or "").lower()}
+            meta.update(private=True, audience="participants", audience_emails=sorted(named - {""}))
         if people or not existing:
             meta.update(participants=people, confirmed_attendees=[p["email"] for p in people if p["email"]])
         if body.media_url or not existing:

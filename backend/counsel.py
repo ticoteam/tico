@@ -10,7 +10,8 @@ and answers "can I...?" from the rules in force (docs/rules-plan.md §2, §5).
   version attached to that task, one file per link and requester, so a later change never alters an earlier cite and a
   teammate who cannot read the task cannot read the text. A document cut at DOC_CHARS is marked truncated.
 - Counsel has no credentials and sends nothing: its tool list is `clients/hubtools.py` COUNSEL_TOOLS. It reads its task and
-  the rules in force, and writes suggestions through `POST /api/v2/rules` as `suggested`. A cite is checked here: Counsel
+  the rules in force, plus explicitly granted physical mail or the legal letter its current task handles, and writes
+  suggestions through `POST /api/v2/rules` as `suggested`. A cite is checked here: Counsel
   cites only the exact (file, version) it was asked to read, named in the cite, and the quote must appear in that
   version's normalized text. A quote that does not is dropped (the response says so, and `rules.quote_dropped` counts
   it), never stored. Only Counsel and a person cite; no other bot can.
@@ -22,6 +23,7 @@ Librarian (templates/catalog/tico-counsel). Its tasks are private by default (ba
 owner can turn it on or off.
 """
 import hashlib
+import json
 import re
 import secrets
 import unicodedata
@@ -42,7 +44,7 @@ from . import screening
 from .auth import Identity
 from .blobs import register
 from .models import Contract
-from .store import Problem
+from .store import Problem, encode
 
 SLUG = H.COUNSEL
 NAME = "Counsel"
@@ -316,6 +318,8 @@ def prepare(store, auth, who, blobs, body):
             row = c.execute("SELECT * FROM bot_files WHERE id=?", (body.file_id,)).fetchone()
             if not row or not F.file_visible(c, auth, who, row, {}):
                 raise Problem("not_found", "That file is not one you can read", 404)
+            if not F.page_audience_visible(c, auth, Identity("bot:" + SLUG, "bot"), row, {}):
+                raise Problem("forbidden", "Counsel is outside this page's audience", 403)
             number = row["current_version"]
             text, cut = document(c, blobs, row["id"], number)
         if text is None:
@@ -367,6 +371,8 @@ def read(c, auth, who, files, blobs, body, found):
         row = c.execute("SELECT * FROM bot_files WHERE id=?", (found["file_id"],)).fetchone()
         if not row or not F.file_visible(c, auth, who, row, {}):
             raise Problem("not_found", "That file is not one you can read", 404)
+        if not F.page_audience_visible(c, auth, Identity("bot:" + SLUG, "bot"), row, {}):
+            raise Problem("forbidden", "Counsel is outside this page's audience", 403)
         if row["current_version"] != found["number"]:
             raise Problem("conflict", "The document changed while it was added; add it again", 409)
         file_id, number, plan = found["file_id"], found["number"], None
@@ -436,6 +442,155 @@ def run_read(c, who):
     return attempt_read(c, who.attempt_id)
 
 
+REMOVED_PAGE = "A page you can no longer open was removed"
+
+
+def page_copies(c):
+    """Read copied-page provenance once, without loading document text into the authorization snapshot."""
+    from . import read_cache
+    def build():
+        import sqlite3
+        try:
+            return {r["read_task"]: {"task_id": r["read_task"], "file_id": r["id"], "version": r["version"],
+                                     "requested_by": r["requested_by"], "removed": r["copy_removed"], "page": dict(r)}
+                    for r in c.execute(
+                        "SELECT r.task_id AS read_task,r.requested_by,r.version,t.body=? AS copy_removed,f.* "
+                        "FROM rule_reads r JOIN bot_files f ON f.id=r.file_id LEFT JOIN pages p ON p.file_id=f.id "
+                        "JOIN tasks t ON t.id=r.task_id WHERE p.file_id IS NOT NULL "
+                        "OR (f.state='deleted' AND lower(f.mime) LIKE 'text/html%')", (REMOVED_PAGE,))}
+        except sqlite3.OperationalError as exc:
+            if "no such table" not in str(exc):
+                raise
+            return {}                   # standalone hubdb and pre-Counsel migration databases
+    return read_cache.value(c, ("counsel_page_copies",), build, shared=True)
+
+
+def page_copy_readable(c, read, viewer=None, auth=None):
+    """A copied page remains the asker's and the run's read, never a lasting grant from the task."""
+    from . import teammate_access
+    copied = page_copies(c).get(read.get("task_id"))
+    row = copied["page"] if copied else F.restricted_pages(c).get(read["file_id"])
+    if not row:
+        return True
+    if row["state"] == "deleted":
+        return False
+    if auth is None:
+        from .auth import Auth
+        auth = Auth.read_policy(c)
+    asker = teammate_access._viewer_for(c, read["requested_by"])
+    principals = [asker, Identity("bot:" + SLUG, "bot"), *([viewer] if viewer else [])]
+    return (all(who and F.page_audience_visible(c, auth, who, row, {}) for who in principals)
+            and (not row["task_id"] or F.privacy.task_readable(c, asker, H.task(c, row["task_id"])))
+            and bool(asker) and F.file_visible(c, auth, asker, row, {}))
+
+
+def denied_page_copies(c, viewer, auth=None):
+    from . import read_cache
+    return read_cache.value(c, ("denied_page_copies", viewer.actor, getattr(viewer, "task_actor", ""), auth is not None), lambda: {
+        tid for tid, read in page_copies(c).items()
+        if (not read["removed"] or read["page"]["state"] == "deleted") and not page_copy_readable(c, read, viewer, auth)
+    }, shared=True)
+
+
+def revoke_page_copies(c, auth, fid=None):
+    """Strip copied text before the visibility-changing transaction commits, including queued read tasks."""
+    for tid, read in list(page_copies(c).items()):
+        if fid and read["file_id"] != fid:
+            continue
+        if not page_copy_readable(c, read, auth=auth):
+            scrub_page_task(c, tid)
+
+
+def scrub_page_task(c, tid):
+    """A read task's prose is derived from its document, including edits, replies and run output."""
+    from .execution import bump_bot_session_epoch
+    task = H.task(c, tid)
+    messages = list(c.execute("SELECT m.id FROM messages m LEFT JOIN conversations cv ON cv.id=m.conversation_id "
+                              f"WHERE ({H.MESSAGE_TASK_SQL})=?", (tid,)))
+    attempts = list(c.execute("SELECT DISTINCT a.* FROM attempts a LEFT JOIN jobs j ON j.id=a.job_id "
+                              "LEFT JOIN messages m ON m.id=j.message_id "
+                              "LEFT JOIN conversations cv ON cv.id=m.conversation_id "
+                              f"WHERE a.task_id=? OR ({H.MESSAGE_TASK_SQL})=?", (tid, tid)))
+    c.execute("UPDATE tasks SET title=?,body=?,note=?,checkpoint=NULL,resume=NULL,acceptance='[]',updated_at=? WHERE id=?",
+              (REMOVED_PAGE, REMOVED_PAGE, REMOVED_PAGE, H.now(), tid))
+    # Workflow changes keep their old/new identities; free text and arbitrary notes/data cannot keep page copies.
+    c.execute("UPDATE history_events SET old=CASE WHEN kind IN ('body','title','note','checkpoint','resume','acceptance') "
+              "THEN ? ELSE old END,new=CASE WHEN kind IN ('body','title','note','checkpoint','resume','acceptance') "
+              "THEN ? ELSE new END,note=?,data=NULL WHERE subject_type='task' AND subject_id=?",
+              (REMOVED_PAGE, REMOVED_PAGE, REMOVED_PAGE, tid))
+    for (mid,) in messages:
+        c.execute("UPDATE messages SET body=?,revision=revision+1 WHERE id=?", (REMOVED_PAGE, mid))
+    for attempt in attempts:
+        aid = attempt["id"]
+        c.execute("DELETE FROM deltas WHERE attempt_id=?", (aid,))
+        c.execute("DELETE FROM attempt_captures WHERE attempt_id=?", (aid,))
+        if attempt["thread_id"]:
+            c.execute("DELETE FROM bot_sessions WHERE bot=? AND thread_id=?", (attempt["bot_id"], attempt["thread_id"]))
+        c.execute("UPDATE attempts SET thread_id=NULL,final_text=?,summary=?,result=json_set(coalesce(result,'{}'),'$.text',?) "
+                  "WHERE id=?", (REMOVED_PAGE, REMOVED_PAGE, REMOVED_PAGE, aid))
+        # Keep sequence receipts so a runner can safely retry output already acknowledged before revocation.
+        c.execute("UPDATE attempt_events SET payload=? WHERE attempt_id=?", (encode({"text": REMOVED_PAGE}), aid))
+        c.execute("UPDATE attempt_diagnostics SET stderr_tail=NULL,end_reason=NULL,last_event=NULL WHERE attempt_id=?", (aid,))
+        c.execute("INSERT OR IGNORE INTO attempt_capture_drops(attempt_id,created_at) VALUES(?,?)", (aid, H.now()))
+    if attempts:
+        c.execute("INSERT INTO session_epochs VALUES(?,1,?) ON CONFLICT(conversation_id) DO UPDATE SET "
+                  "epoch=epoch+1,updated_at=excluded.updated_at", (task["conversation_id"], H.now()))
+        for bot in {a["bot_id"] for a in attempts}:
+            bump_bot_session_epoch(c, bot)
+    # Mutation receipts can contain the task or a claim's original context and must not replay its old prose.
+    ids = {tid, *(mid for (mid,) in messages), *(a["id"] for a in attempts)}
+    def clean(value):
+        if isinstance(value, dict):
+            value = {**value, **({"deferred": ""} if "deferred" in value else {}),
+                     **({"notes": []} if "notes" in value else {}),
+                     **({"resume_json": None} if "resume_json" in value else {}),
+                     **({"acceptance_json": "[]"} if "acceptance_json" in value else {})}
+            return {k: (REMOVED_PAGE if k in {"title", "body", "text", "note", "summary", "checkpoint", "resume", "old", "new"}
+                        and isinstance(v, str) else clean(v)) for k, v in value.items()}
+        return [clean(v) for v in value] if isinstance(value, list) else value
+    for row in list(c.execute("SELECT actor,operation,key,response FROM idempotency WHERE binding IS NULL")):
+        if row["response"] and any(ident in row["response"] for ident in ids):
+            c.execute("UPDATE idempotency SET response=? WHERE binding IS NULL AND actor=? AND operation=? AND key=?",
+                      (json.dumps(clean(json.loads(row["response"]))), row["actor"], row["operation"], row["key"]))
+
+
+def revoked_page_run(c, aid):
+    read = attempt_read(c, aid)
+    copied = page_copies(c).get(read["task_id"]) if read else None
+    return bool(copied and (copied["removed"] or not page_copy_readable(c, read)))
+
+
+def postal_task(c, who, letter):
+    """Without an explicit mail grant, Counsel reads only the legal letter its current task handles."""
+    if not who.attempt_id or letter["kind"] != "legal" or not letter["task_id"]:
+        return False
+    from . import read_cache
+    from .task_privacy import carried_tasks
+    carried = read_cache.value(c, ("counsel_postal_tasks", who.attempt_id),
+                               lambda: carried_tasks(c, who.attempt_id), shared=True)
+    task = H.task(c, letter["task_id"])
+    return bool(task and task["owner_id"] == who.actor and task["id"] in carried)
+
+
+def postal_scan(c, auth, who, ident, rest, query):
+    """Only bytes that are a readable letter's scan, at the exact requested file version."""
+    from . import postal_mail
+    file = c.execute("SELECT current_version FROM bot_files WHERE id=?", (ident,)).fetchone()
+    if file:
+        if rest:
+            number = _version(rest[1])
+        elif query.get("v"):
+            number = _version(query["v"])
+        else:
+            number = file[0] if F.is_file_id(ident) else 1
+        version = c.execute("SELECT blob_id FROM bot_file_versions WHERE file_id=? AND version=?",
+                            (ident, number)).fetchone()
+        ident = version[0] if version else ""
+    elif rest:
+        return False
+    return postal_mail.scan_access(c, auth, who, ident) is True
+
+
 def private_suggestion(c, who, data):
     """A rule Counsel writes from a private run. Its read tasks are private, and a private run publishes nothing
     company-wide (backend/task_privacy.py guard_write), except this: on its own read task, Counsel suggests external
@@ -480,9 +635,10 @@ COUNSEL_ROUTES = tuple((methods, re.compile(r"^/api/v2/" + pattern + r"$")) for 
     (WRITE, r"tasks/[^/]+/comments"),
     (GET, r"files/[^/]+"),
     (GET, r"files/[^/]+/versions/\d+"),
+    (GET, r"postal/items(?:/[^/]+)?"),
     (ANY, r"(attempts|turns)/[^/]+(/.*)?"),
 ))
-READ_SCOPE = "Counsel reads only its own task, the document version it was asked to read and its own run."
+READ_SCOPE = "Counsel reads only its own task and run, its requested document version, and authorized physical mail."
 # Counsel outside a run: every turn it takes carries the run's own token (runner-rs env.rs and warm.rs HUB_TOKEN; its
 # credentials are fetched with that token too), and it has no agent credential unless someone makes it an external
 # agent. Such a token owns every read task, so it calls nothing but `me`.
@@ -498,7 +654,8 @@ def read_refused(store, auth, who, method, path, query):
     allow (another run's summary, an answer to another run's question, a page or a review of another version). On those:
     a run's attempt and steps are its own run's alone; a Counsel run reads only the tasks it carries
     (task_privacy.carried_tasks: its read task, or the question it answers) and, on a document's read (run_read), that
-    file at that version, which it names. Counsel outside a run (no attempt) calls only STANDING."""
+    file at that version, which it names. Postal reads independently require a mail grant or the legal letter carried
+    by its current task. Counsel outside a run (no attempt) calls only STANDING."""
     if not is_counsel(who):
         return None
     if SQL_READS.match(path):
@@ -511,18 +668,22 @@ def read_refused(store, auth, who, method, path, query):
         return READ_SCOPE
     parts = path.split("/")[3:]
     kind, ident, rest = parts[0], (parts[1] if len(parts) > 1 else ""), parts[2:]
-    if kind in ("attempts", "turns"):
+    if kind in ("attempts", "turns"):  # `turns` is an older client's path for a run
         return READ_SCOPE if ident != who.attempt_id else None
     if kind not in ("tasks", "files"):
         return None
     from .task_privacy import carried_tasks
     with store.read() as c:
+        if method not in GET and revoked_page_run(c, who.attempt_id):
+            return READ_SCOPE
         if kind == "tasks":
             try:
                 refused = auth.resolve_task(c, who, ident) not in carried_tasks(c, who.attempt_id)
             except Problem:
                 refused = True
         else:
+            if postal_scan(c, auth, who, ident, rest, query):
+                return None
             read = run_read(c, who)
             refused = not read or ident != read["file_id"] or (
                 rest != ["versions", str(read["version"])] if rest else _version(query.get("v")) != read["version"])
@@ -570,7 +731,7 @@ def turn_done(c, attempt, outcome, task_id, text):
     if not row or row["owner_id"] != "bot:" + SLUG or row["status"] not in ("open", "doing"):
         return
     lines = [line.strip() for line in str(text or "").splitlines() if line.strip() and not _disclaimer(line)]
-    H.task_update(c, "bot:" + SLUG, task_id, status="done", note=(lines[-1][:500] if lines else None))
+    H.task_update(c, "bot:" + SLUG, task_id, status="done", note=(lines[-1][:500] if lines else None), strict=False)
 
 
 def check_cite(c, auth, who, blobs, cite):
@@ -586,6 +747,8 @@ def check_cite(c, auth, who, blobs, cite):
         if not row or not read or read["file_id"] != row["id"] or number != read["version"]:
             raise Problem("not_found", "Counsel cites only the document its run was asked to read, at the version its "
                           "task gives, and names that version", 404)
+        if not F.file_visible(c, auth, who, row, {}):
+            raise Problem("not_found", "That file is not one you can read", 404)
     elif who.role == "bot":
         raise Problem("forbidden", "Only Counsel cites a document; a bot's rule is written without a quote", 403)
     else:

@@ -43,9 +43,10 @@ def test_isolation_uses_the_candidate_image_only_after_successful_builds(tmp_pat
         assert release_checks.release(SimpleNamespace(previous=None)) == (0 if builds_ok else 1)
         output = capsys.readouterr().out
         python_command = calls['all-python'][0]
-        isolation_file = 'runner/tests/test_isolation_docker.py'
+        isolation_file = 'runner_support/tests/test_isolation_docker.py'
         assert f'--ignore={isolation_file}' in python_command
         assert python_command[python_command.index('-n') + 1] == workers
+        assert '--maxschedchunk=2' in python_command
         assert calls['all-browser'][1].get('TICO_UI_JOBS') == browser_jobs
         builds = {'build-server', 'build-runner', 'build-updater'}
         assert builds <= calls['all-python'][2] and builds <= calls['all-browser'][2]
@@ -94,7 +95,7 @@ def test_each_part_runs_only_its_own_slice_of_the_gate(tmp_path, monkeypatch):
         run=lambda *args, **kwargs: SimpleNamespace(stdout='a' * 40)))
     monkeypatch.setattr(release_checks, 'tempfile', SimpleNamespace(mkdtemp=lambda **kwargs: str(tmp_path)))
     monkeypatch.setattr(release_checks, 'free_port', lambda: 12345)
-    monkeypatch.setattr(release_checks, 'shard_files', lambda index, total, env: [f'group{index}of{total}.py'])
+    monkeypatch.setattr(release_checks, 'shard_files', lambda index, total, env, native_first=False: [f'group{index}of{total}.py'])
     monkeypatch.setattr(release_checks, 'browser_shard', lambda index, total: [f'page{index}of{total}'])
     calls, edge_checks = {}, []
     monkeypatch.setattr(release_checks, 'edge_networks', lambda: edge_checks.append(len(calls)) or (True, 'ok'))
@@ -124,6 +125,7 @@ def test_each_part_runs_only_its_own_slice_of_the_gate(tmp_path, monkeypatch):
         if part == 'python':   # alone on its VM, the Python slice uses every core
             command = calls[next(iter(expected))]
             assert command[command.index('-n') + 1] == '4'
+            assert '--maxschedchunk=2' in command
             assert ('group2of4.py' in command) == bool(shard)
         if shard and part == 'browser':   # only its own scripts, not --all
             assert calls['browser-1-of-2'][2:] == ['page1of2']
@@ -328,3 +330,52 @@ def test_three_default_shards_collect_exactly_the_single_default_run(monkeypatch
         sharded = [line for output in pool.map(lambda group: collect(*group), shards)
                    for line in output.splitlines() if '::' in line and not line.startswith(' ')]
     assert len(sharded) == len(single) and sorted(sharded) == sorted(single)
+
+
+def test_native_test_files_take_the_first_two_shards_and_the_rest_balance_over_the_other_shards(tmp_path, monkeypatch):
+    for name, text in (('n1.py', 'def test(rust_binary): ...'), ('n2.py', 'env = {"TICO_SCREEN_RELAY_BIN": x}'),
+                       ('a.py', 'def test(): ...'), ('b.py', 'def test(): ...'), ('c.py', 'def test(): ...')):
+        (tmp_path / name).write_text(text)
+    monkeypatch.setattr(release_checks, 'ROOT', tmp_path)
+    monkeypatch.setattr(release_checks, 'TIMINGS', tmp_path / 'none.json')
+    listing = '\n'.join(['n1.py::t', 'n2.py::t', 'a.py::t0', 'a.py::t1', 'a.py::t2', 'b.py::t0', 'b.py::t1', 'c.py::t'])
+    monkeypatch.setattr(release_checks, 'subprocess', SimpleNamespace(
+        run=lambda *args, **kwargs: SimpleNamespace(returncode=0, stdout=listing, stderr='')))
+    shards = [release_checks.shard_files(index, 4, {}, native_first=True) for index in (1, 2, 3, 4)]
+    assert shards == [['n1.py'], ['n2.py'], ['a.py'], ['b.py', 'c.py']]
+    assert sorted(sum(shards, [])) == ['a.py', 'b.py', 'c.py', 'n1.py', 'n2.py']
+    # Without native_first (PR checks), the same files balance over all shards as before.
+    assert sorted(sum((release_checks.shard_files(i, 4, {}) for i in (1, 2, 3, 4)), [])) == sorted(sum(shards, []))
+    with pytest.raises(RuntimeError, match='more than 2 shards'):
+        release_checks.shard_files(1, 2, {}, native_first=True)
+
+
+def test_native_test_files_include_tests_that_borrow_a_native_test_modules_helpers(tmp_path, monkeypatch):
+    tests = tmp_path / 'backend/tests'
+    tests.mkdir(parents=True)
+    (tests / 'test_relay.py').write_text('def relay(): return os.environ["TICO_SCREEN_RELAY_BIN"]\n')
+    (tests / 'test_uses.py').write_text('from backend.tests.test_relay import relay\n')
+    (tests / 'test_uses_too.py').write_text('from backend.tests import test_uses\n')
+    (tests / 'test_plain.py').write_text('from backend.tests.test_api import client\n')
+    monkeypatch.setattr(release_checks, 'ROOT', tmp_path)
+    names = [f'backend/tests/{n}.py' for n in ('test_uses', 'test_uses_too', 'test_plain')]
+    assert release_checks.native_test_files(names) == {'backend/tests/test_uses.py', 'backend/tests/test_uses_too.py'}
+
+
+def test_native_test_files_follow_the_runner_support_package(tmp_path, monkeypatch):
+    tests = tmp_path / 'runner_support/tests'
+    tests.mkdir(parents=True)
+    (tests / 'test_engine.py').write_text('from runner_support import engine\n')
+    (tests / 'test_prepare.py').write_text('run("-m", "runner_support.engine", "prepare")\n')
+    (tests / 'test_borrows.py').write_text('from runner_support.tests.test_engine import fake\n')
+    (tests / 'test_plain.py').write_text('from runner_support import redact\n')
+    monkeypatch.setattr(release_checks, 'ROOT', tmp_path)
+    names = [f'runner_support/tests/{n}.py' for n in ('test_engine', 'test_prepare', 'test_borrows', 'test_plain')]
+    assert release_checks.native_test_files(names) == set(names[:3])
+
+
+def test_the_screen_relay_borrowers_and_scripts_tico_runs_are_native():
+    # v0.5.59's first validation: test_systemd_units runs scripts/tico install, which needs the runner binary.
+    names = ['backend/tests/test_screen.py', 'backend/tests/test_browser_exit_relay.py',
+             'runner_support/tests/test_systemd_units.py', 'backend/tests/test_api.py', 'backend/tests/test_selected_claim.py']
+    assert release_checks.native_test_files(names) == set(names[:3])

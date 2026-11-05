@@ -192,7 +192,7 @@ function qcardRetick(root, it, q, ticked, attr) {
 // What the person has ticked and typed on a task's card, kept while the page redraws it (the task's details landing,
 // a property saved). Keyed by the ask and the question as asked, so a question the bot rewords starts afresh.
 const QC_DRAFTS = new Map();
-const qcardDraftKey = (it, q) => JSON.stringify([it.id, it.ask?.id, q.id, q.question, (q.options || []).map(o => o.label)]);
+const qcardDraftKey = (it, q) => JSON.stringify([it.id, it.ask?.id, q.id, q.question, (q.options || []).map(o => o.label), sessionIdentity()]);
 // A draft belongs to the question the box shows (its `data-qc-key`), never to a newer one the Needs you data holds:
 // if the bot rewords while the old box is open, the next draw finds the draft stale and says so.
 function qcardDraft(box) {
@@ -268,7 +268,9 @@ document.addEventListener('click', async ev => {
     if (n) { n.placeholder = 'What should change?'; n.focus(); }
     return;
   }
+  // Busy while the answer is on its way: nothing draws the box again meanwhile (nativeVisualRepaint skips it).
   box.querySelectorAll('button, input, textarea').forEach(x => { x.disabled = true; });
+  box.setAttribute('aria-busy', 'true');
   try {
     for (const w of qcardWrites(it, q, labels, note)) await post(w.path, w.body, newRequestId());
     QC_DRAFTS.delete(qcardDraftKey(it, q));
@@ -276,6 +278,7 @@ document.addEventListener('click', async ev => {
     void v2Refresh();
   } catch (e) {
     box.querySelectorAll('button, input, textarea').forEach(x => { x.disabled = false; });
+    box.removeAttribute('aria-busy');
     toast(e.message, true);
   }
 });

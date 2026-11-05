@@ -45,7 +45,7 @@ def test_a_row_says_whose_it_is_who_reads_it_and_where_to_change_it(api):
     seed(api)
     rows = {r["id"]: r for r in get(api, "connections", "cara-test")["connections"]}
     team = rows["inbox:ibx_b"]
-    assert team["scope"] == "team" and team["readers"] == "Sales" and team["configure"] == "#/settings/inbound"
+    assert team["scope"] == "team" and team["readers"] == "Sales" and team["configure"] == "#/settings/inboxes/tico/ibx_b"
     assert team["can_configure"] is False
     assert rows["inbox:ibx_a"]["scope"] == "company" and rows["inbox:ibx_a"]["readers"] == "Everyone"
     assert rows["webhook:wh-cara"]["scope"] == "person" and rows["webhook:wh-cara"]["can_configure"] is True
@@ -131,9 +131,9 @@ def test_mcp_and_cli_read_the_same_list_and_set_an_inbox_audience(api, monkeypat
     assert remotecli.tool_name(args.fn) == "hub_inbound_audience" and args.audience == "company"
 
 
-def test_a_member_sees_the_slack_links_and_peers_of_the_threads_they_may_read_and_only_admins_configure_them(api):
-    """Audit 41: a link to a thread and a peer that carries one reach each reader who may read that thread, read-only for
-    a member. A thread a reader cannot read leaves its link and its peer out."""
+def test_a_member_sees_the_slack_links_of_the_threads_they_may_read_and_only_admins_configure_them(api):
+    """A link to a thread reaches each reader who may read that thread, read-only for a member. A thread a reader cannot
+    read leaves its link out."""
     seed(api)
     open_thread = post(api, "threads", {"title": "Launch", "audience": "company", "body": "Launch notes"}, "ana-test")["id"]
     private = post(api, "threads", {"title": "Plans", "audience": "members", "members": ["human:ben"],
@@ -146,19 +146,10 @@ def test_a_member_sees_the_slack_links_and_peers_of_the_threads_they_may_read_an
                       "audience,state,linked_by,created_at,updated_at) VALUES(?,?,?,?,?,?,?,'active','human:ana',?,?)",
                       (link, thread, "#" + channel, "C" + link[-6:].upper(), channel, int(audience == "members"),
                        audience, now, now))
-        c.execute("INSERT INTO federation_peerings (id,hq_peering_id,peer_install,direction,status,peer_company,"
-                  "created_at,updated_at) VALUES('fp-1','hq-1','gi_0123456789abcdef01234567','outgoing','active',"
-                  "'Partner Co',?,?)", (now, now))
-        c.execute("INSERT INTO federation_threads (id,thread_id,home_install,origin_id,created_at,updated_at) "
-                  "VALUES('ft-open',?,'gi_0123456789abcdef01234567','o-open',?,?)", (open_thread, now, now))
-        c.execute("INSERT INTO federation_threads (id,thread_id,home_install,origin_id,created_at,updated_at) "
-                  "VALUES('ft-private',?,'gi_fedcba9876543210fedcba98','o-private',?,?)", (private, now, now))
     member = {r["id"]: r for r in get(api, "connections?limit=100", "cara-test")["connections"]}
     assert "slack_link:sl-open" in member and "slack_link:sl-private" not in member
     assert member["slack_link:sl-open"]["can_configure"] is False
     assert member["slack_link:sl-open"]["configure"] == f"#/thread/{open_thread}"
-    assert "peer:gi_0123456789abcdef01234567" in member
-    assert "peer:gi_fedcba9876543210fedcba98" not in member and "peer:gi_0123456789abcdef01234567" in member
     # A link's thread is shown to a reader only when they read the thread, admins included (as the links listing does).
     assert "slack_link:sl-private" not in ids(api, "ana-test")
     admin = {r["id"]: r for r in get(api, "connections?limit=100", "ben-test")["connections"]}

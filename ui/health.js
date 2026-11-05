@@ -5,7 +5,7 @@
 let HL = null;
 let HL_LOAD = 0;
 let HL_METRICS = null;   // owners and admins: the last hour from the flight recorder (GET /api/v2/system/metrics)
-let HL_MONITOR = null;   // the owner: the Health Monitor's switch and what it found (GET /api/v2/health-monitor)
+let HL_FINDINGS = null;  // Check health's open findings and the team rule (GET /api/v2/health/findings)
 
 async function hlRefresh() {
   if (!S.me?.cloud) return null;
@@ -15,15 +15,15 @@ async function hlRefresh() {
   // all three are read together; the first time, the other two follow the checks.
   const page = !!$('#hl-page');
   const extras = hl => Promise.all([page && hl && hl.audience !== 'human' ? v2Get('/v2/system/metrics?minutes=60') : null,
-    page && hl?.audience === 'owner' ? v2Get('/v2/health-monitor') : null]);
+    page && hl ? v2Get('/v2/health/findings') : null]);
   const checks = data => data && Array.isArray(data.checks) ? data : null;
-  const [data, [metrics, monitor]] = HL ? await Promise.all([v2Get('/v2/health'), extras(HL)])
+  const [data, [metrics, findings]] = HL ? await Promise.all([v2Get('/v2/health'), extras(HL)])
     : await v2Get('/v2/health').then(async data => [data, await extras(checks(data))]);
   if (seq !== HL_LOAD) return HL;
   HL = checks(data);
   if (page) {
     HL_METRICS = HL && HL.audience !== 'human' && metrics?.requests ? metrics : null;
-    HL_MONITOR = HL?.audience === 'owner' && monitor && 'on' in monitor ? monitor : null;
+    HL_FINDINGS = HL && Array.isArray(findings?.findings) ? findings : null;
   }
   // The sidebar's "New version" reads the same answer, so it never lags the page beside it.
   if (HL?.update && S.config) { S.config = {...S.config, update: HL.update}; window.renderNewVersion?.(); }
@@ -33,10 +33,8 @@ async function hlRefresh() {
   return HL;
 }
 
-// What Health says needs looking at, for the account button's one status dot and its lines (ui/app/heartbeat.js).
-// Inside Settings, the Health tab keeps its own dot.
-window.hlAttention = () => (HL?.checks || []).filter(check => check.status === 'warn' || check.status === 'bad');
-// The computers Health lists: everyone's for owners and admins; null for others, who are shown none.
+// The computers Health lists: everyone's for owners and admins; null for others, who are shown none. The account
+// menu reads it for its one no-computer line (ui/app/heartbeat.js).
 window.hlComputers = () => HL && HL.audience !== 'human' ? HL.computers : null;
 window.hlNav = function hlNav() {
   const attention = HL?.attention || 0;
@@ -89,7 +87,7 @@ function hlCredentialFix(source) {
 function hlComputerHtml(machine) {
   const models = machine.runtimes.map(row => {
     const state = row.rejected ? `sign-in rejected${row.rejected_at ? ' ' + esc(ago(row.rejected_at)) : ''}${row.rejected_reason ? ' (' + esc(row.rejected_reason) + ')' : ''}. ${hlCredentialFix(row.credential_source)}`
-      : row.ready ? 'signed in' : row.installed ? 'not signed in' : 'not installed';
+      : row.plan ? (row.plan === 'api' ? 'company API key' : 'company plan') : row.ready ? 'signed in' : row.installed ? 'not signed in' : 'not installed';
     const login = row.signable
       ? ` <button class="ghost" type="button" data-model-login data-runner="${esc(machine.id)}" data-runtime="${esc(row.name)}" data-machine="${esc(machine.label)}">Sign in</button>` : '';
     // Red only when the team or an assigned bot needs it; the server sends only relevant harnesses.
@@ -97,7 +95,7 @@ function hlComputerHtml(machine) {
     return `<li data-ready="${row.ready}"${bad ? ' class="hl-model-bad"' : ''}>${esc(harnessWords(row.name))}: ${state}${login}</li>`;
   }).join('');
   return `<li class="hl-computer" data-online="${machine.online}"><span class="hl-dot ${machine.online ? 'on' : 'off'}" aria-hidden="true"></span>
-    <div><strong>${esc(machine.label)}</strong> <span class="muted">${machine.online ? 'online' : 'offline'}${machine.last_seen_at ? ', last seen ' + esc(ago(machine.last_seen_at)) : ', never seen'}</span>
+    <div><strong>${esc(machine.label)}</strong> <span class="muted">${machine.online ? 'online' : machine.resting ? 'stopped until work comes' : 'offline'}${machine.last_seen_at ? ', last seen ' + esc(ago(machine.last_seen_at)) : ', never seen'}</span>
     ${window.runnerUpdateHtml?.(machine.update, machine.release || machine.update?.release || machine.version) || ''}
     <ul class="hl-models">${models || '<li class="muted">No models reported</li>'}</ul></div></li>`;
 }
@@ -125,40 +123,54 @@ function hlSeen(f) {
   return `seen ${n.toLocaleString()} time${n === 1 ? '' : 's'}, last ${ago(f.last_seen_at)}`;
 }
 
-// The owner: the optional Health Monitor (backend/health_monitor.py). One switch turns it on or off; the second is the team
-// rule that lets it file Tico bug reports without a Needs you card.
-function hlMonitorHtml(m) {
-  if (!m) return '';
-  // A stopped bot's finding (run_hold:<bot>, turn_budget:<bot>) carries the same Release as the bot's page. So does
-  // one for queued runs it could not start (claim_failed:<bot>), which the bot's page does not show.
-  const stopped = f => {
-    const m = /^(?:run_hold|turn_budget|claim_failed):(.+)$/.exec(f.key || '');
-    return m && typeof botReleaseButton === 'function' ? botReleaseButton(m[1], 'ghost') : '';
-  };
-  const found = (m.findings || []).slice(0, 8).map(f => `<li data-hl-finding="${esc(f.key)}"><strong>${esc(f.title)}</strong>
-    <span class="muted">${f.kind === 'setup' ? 'being fixed' : f.ticket_id ? 'reported to Tico' : f.approval_id ? 'report waiting in Needs you' : 'Tico bug'} · since ${esc(ago(f.first_seen_at))} · ${esc(hlSeen(f))}</span>${stopped(f)}</li>`).join('');
-  return `<section class="hl-monitor" data-hl-monitor="${m.on ? 'on' : 'off'}">
-    <label class="hl-monitor-row"><input type="checkbox" role="switch" data-hl-monitor-switch${m.on ? ' checked' : ''}>
-      <span><strong>Health Monitor</strong> <span class="muted">checks this install every hour, gets setup problems fixed and reports Tico bugs to the Tico team. It wakes a model only when it finds something new or worse; seeing a problem again only adds to its count.</span></span></label>
-    <label class="hl-monitor-row"><input type="checkbox" role="switch" data-hl-monitor-rule${m.reports_without_asking ? ' checked' : ''}${m.on ? '' : ' disabled'}>
-      <span>Health Monitor may file Tico bug reports without asking <span class="muted">(only the finding and the redacted diagnostics, never task or message text)</span></span></label>
-    ${m.on && found ? `<ul class="hl-bots">${found}</ul>` : ''}</section>`;
+// Checks: what Check health (the maintenance step) still has open, from GET /api/v2/health/findings. A setup problem is
+// being fixed by BotOps, with its task linked when there is one. A Tico bug is reported to the Tico team or waits for a
+// yes in Needs you; one nobody has reported gets Report to Tico. Seeing a problem again only adds to its count.
+function hlFindingHtml(f, botops) {
+  const setup = f.kind === 'setup';
+  const kind = setup
+    ? (botops === false ? 'not fixed: no BotOps bot' : f.task_id ? `<a href="#/task/${encodeURIComponent(f.task_id)}">being fixed by BotOps</a>` : 'being fixed by BotOps')
+    : f.ticket_id ? 'Tico bug, reported to the Tico team' : f.approval_id ? 'Tico bug, report waiting in Needs you' : 'Tico bug, not reported';
+  const report = !setup && !f.ticket_id && !f.approval_id ? `<button class="ghost" type="button" data-hl-report="${esc(f.key)}">Report to Tico</button>` : '';
+  // A stopped bot's finding (run_hold:<bot>, turn_budget:<bot>, claim_failed:<bot>) carries the same Release as the bot's page.
+  const m = /^(?:run_hold|turn_budget|claim_failed):(.+)$/.exec(f.key || '');
+  const release = m && typeof botReleaseButton === 'function' ? botReleaseButton(m[1], 'ghost') : '';
+  return `<li data-hl-finding="${esc(f.key)}"><strong>${esc(f.title)}</strong>
+    <span class="muted">${kind} · ${esc(hlSeen(f))}</span>${report}${release}</li>`;
 }
 
-async function hlMonitorToggle(box) {
+// Owners also see the team rule that lets Check health report Tico bugs without a Needs you card first.
+function hlFindingsHtml(list) {
+  if (!list) return '';
+  const rows = list.findings.map(f => hlFindingHtml(f, list.botops)).join('');
+  const note = list.botops === false && list.findings.some(f => f.kind === 'setup')
+    ? '<p class="muted">No BotOps bot is set up, so setup problems are not being fixed.</p>' : '';
+  const rule = HL?.audience === 'owner'
+    ? `<label class="hl-monitor-row"><input type="checkbox" role="switch" data-hl-report-rule${list.reports_without_asking ? ' checked' : ''}>
+      <span>Report Tico bugs to the Tico team without asking <span class="muted">(only the finding and the redacted diagnostics, never task or message text)</span></span></label>` : '';
+  return `<section class="hl-findings" data-hl-findings aria-labelledby="hl-findings-h"><h2 id="hl-findings-h">Checks</h2>
+    ${note}${rows ? `<ul class="hl-bots">${rows}</ul>` : '<p class="muted">Nothing open.</p>'}${rule}</section>`;
+}
+
+async function hlReportRuleSave(box) {
   box.disabled = true;
-  try {
-    if (box.matches('[data-hl-monitor-rule]')) await put('/v2/access/rules', {health_monitor_reports: box.checked});
-    else await post(`/v2/health-monitor/${box.checked ? 'turn-on' : 'turn-off'}`, {});
-    toast(box.matches('[data-hl-monitor-rule]') ? 'Saved' : box.checked ? 'The Health Monitor is on' : 'The Health Monitor is off');
-  } catch (e) { toast(e.message, true); }
+  try { await put('/v2/access/rules', {health_monitor_reports: box.checked}); toast('Saved'); }
+  catch (e) { toast(e.message, true); }
+  await hlRefresh();
+}
+
+async function hlReportFinding(button) {
+  button.disabled = true;
+  try { await post(`/v2/health/findings/${encodeURIComponent(button.dataset.hlReport)}/report`, {}); toast('Report sent'); }
+  catch (e) { toast(e.message, true); }
   await hlRefresh();
 }
 
 // A bot's queue as Pipeline splits it (backend/health.py `_queue_words`): work that can start, work behind an interrupted
-// run nobody reviewed, and work held on purpose.
+// run nobody reviewed, refusal-count holds, and work held on purpose.
 function hlQueueWords(row) {
   return [row.queued ? `${row.queued} queued` : '', row.dead ? `${row.dead} behind an interrupted run` : '',
+    row.quarantine_held ? `${row.quarantine_held} held after repeated refusals; resumes after cooldown` : '',
     row.held ? `${row.held} held on purpose` : ''].filter(Boolean);
 }
 
@@ -210,7 +222,7 @@ function hlPageDraw() {
   const notes = (typeof SETTINGS_DATA !== 'undefined' && SETTINGS_DATA.issues || []).filter(issue => !needsPerson(issue));
   host.innerHTML = `<p class="muted" id="hl-summary">${HL.attention ? `${HL.attention} issue${HL.attention === 1 ? '' : 's'} to look at`
     : notes.length ? `Nothing urgent. ${notes.length} note${notes.length === 1 ? '' : 's'} below.` : 'Everything looks fine.'}</p>
-    <ul class="hl-list">${HL.checks.map(hlCheckHtml).join('')}</ul>${hlMonitorHtml(HL_MONITOR)}
+    <ul class="hl-list">${HL.checks.map(hlCheckHtml).join('')}</ul>${hlFindingsHtml(HL_FINDINGS)}
     ${stuck.length ? `<h2>Stuck</h2><ul class="hl-bots">${hlStuckHtml(stuck)}</ul>` : ''}${hlStorageHtml(HL.storage)}
     ${notes.length ? `<h2>Not urgent</h2><ul class="hl-notes">${notes.map(issue => `<li><strong>${esc(issue.title)}</strong> <span class="muted">${esc(issue.detail || '')}</span>${issue.kind === 'uncertain_work' && issue.bot ? ` <button class="ghost" type="button" data-execution-review="${esc(issue.bot)}">Review stopped runs</button>` : ''}</li>`).join('')}</ul>` : ''}
     ${hlMetricsHtml(HL_METRICS)}
@@ -290,7 +302,7 @@ async function hlCheckUpdates() {
 
 // Setup check: `tico-setup doctor`'s checks run by the server against its own address, and Health's failing lines
 // (POST /v2/support/setup-check, backend/setup_check.py). It sits beside the Health list, not in it, so the minute's
-// redraw of that list keeps the result on screen; Send to support attaches it to a request (ui/support.js).
+// redraw of that list keeps the result on screen; Send to Tico team attaches it to a message in the Tico team chat (ui/support.js).
 const hlSetupCheckHTML = () => `<section class="card hl-setup" id="hl-setup-check" aria-labelledby="hl-setup-h"><header><h2 id="hl-setup-h">Setup check</h2></header>
   <p class="muted">Runs the installer's checks from here and says how to fix what fails.</p>
   <button class="ghost" type="button" data-hl-setup-check>Setup check</button>
@@ -310,7 +322,7 @@ async function hlSetupCheck(button) {
       <ul class="hl-list">${rows.map(c => `<li class="hl-check ${esc(c.status)}" data-hl-setup-row="${esc(c.status)}"><span class="nav-icon hl-icon" aria-hidden="true">${HL_ICONS[c.status] || HL_ICONS.unknown}</span>
         <div class="hl-main"><strong>${esc(c.name)}</strong><p>${esc(c.detail)}</p>${c.status !== 'ok' && c.fix ? `<p class="hl-setup-fix">Fix: ${esc(c.fix)}</p>` : ''}</div></li>`).join('')}</ul>
       <p class="muted">${esc(r.doctor_only || '')}</p>
-      ${window.supportOn?.() && window.talkToUs ? '<button class="ghost" type="button" data-hl-setup-send>Send to support</button>' : ''}`;
+      ${window.supportOn?.() && window.talkToUs ? '<button class="ghost" type="button" data-hl-setup-send>Send to Tico team</button>' : ''}`;
     host.querySelector('[data-hl-setup-send]')?.addEventListener('click', () => window.talkToUs({kind: 'setup_check', title: head, checks: rows,
       group: 'setup_check:' + rows.filter(c => c.status === 'bad').map(c => c.name).join(',')}));
   } catch (e) {
@@ -340,12 +352,14 @@ window.hlBoot = function () {
 };
 
 document.addEventListener('change', event => {
-  const box = event.target.closest?.('[data-hl-monitor-switch], [data-hl-monitor-rule]');
-  if (box) void hlMonitorToggle(box);
+  const box = event.target.closest?.('[data-hl-report-rule]');
+  if (box) void hlReportRuleSave(box);
 });
 
 document.addEventListener('click', event => {
   if (event.target.closest('[data-hl-check-updates]')) { void hlCheckUpdates(); return; }
+  const report = event.target.closest('[data-hl-report]');
+  if (report) { void hlReportFinding(report); return; }
   const update = event.target.closest('[data-hl-update]');
   if (update) { if (typeof nvBusy !== 'undefined' && !nvBusy) { update.disabled = true; void nvStart(); } return; }
   const setup = event.target.closest('[data-hl-setup-check]');

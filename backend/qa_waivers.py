@@ -184,7 +184,8 @@ def waivers(c, row, links=None):
         if link["kind"] == "pr":
             heads[link["url"]] = str((H._json(link.get("detail"), {}) or {}).get("head_sha") or "").lower()
     out = []
-    for e in c.execute("SELECT * FROM task_events WHERE task_id=? AND field=? ORDER BY created_at, rowid", (row["id"], FIELD)):
+    for e in c.execute("SELECT new, actor_id AS actor, note, created_at FROM history_events WHERE subject_type='task' "
+                       "AND subject_id=? AND kind=? ORDER BY created_at, rowid", (row["id"], FIELD)):
         record = H._json(e["new"], {}) or {}
         out.append({"head": record.get("head"), "step": record.get("step"), "pr": record.get("pr"),
                     "actor": e["actor"], "reason": e["note"], "at": e["created_at"],

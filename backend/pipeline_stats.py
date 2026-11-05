@@ -7,8 +7,9 @@ they wait on (`H.wait_detail`, the same reasons a ticket's Waiting tag gives), a
 
 The queue is told apart honestly: a queued job behind an interrupted run nobody reviewed (`execution.unfenced_sql`)
 is never handed out until that run is resumed or dismissed, so it is `dead`, never `queued`; a job its wake preset
-holds is `held`. Failed attempts in the window are counted by cause with their first and last time. Every job and
-attempt counts only when the caller may read it (backend/task_privacy.py), as on a bot's page. A stopped run's
+holds is `held`, and a refusal-count hold is `quarantine_held`. Failed attempts in the window are counted by cause
+with their first and last time. Every job and attempt counts only when the caller may read it
+(backend/task_privacy.py), as on a bot's page. A stopped run's
 recovery decision (resume or dismiss) is listed beside the bot's queue with who made it, when and its note.
 
 Counts and ids only: no titles, bodies or run text; a decision's note is the decider's words (Tico's own can name the
@@ -69,9 +70,9 @@ def steps_report(c, typ, rows, now):
     if ids:
         listed = json.dumps(ids)
         for task_id, at in c.execute(
-                "SELECT e.task_id, max(e.created_at) FROM task_events e JOIN tasks t ON t.id=e.task_id "
-                "WHERE e.task_id IN (SELECT value FROM json_each(?)) AND e.field='step' AND e.new=t.step_id "
-                "GROUP BY e.task_id", (listed,)):
+                "SELECT e.subject_id, max(e.created_at) FROM history_events e JOIN tasks t ON t.id=e.subject_id "
+                "WHERE e.subject_type='task' AND e.subject_id IN (SELECT value FROM json_each(?)) AND e.kind='step' "
+                "AND e.new=t.step_id GROUP BY e.subject_id", (listed,)):
             entered[task_id] = at
         for task_id, created in c.execute(
                 "SELECT task_id, created_at FROM task_links WHERE kind='pr' AND state IN ('open','draft') "
@@ -122,10 +123,10 @@ def readable_bots(c, auth, who, bot=None):
 
 
 def job_queues(c, who, bots, now=None):
-    """{bot: {queued, held, dead, uncertain, oldest_queued_hours, dead_ids}} over the jobs the caller may read: the one
+    """{bot: {queued, held, quarantine_held, dead, uncertain, oldest_queued_hours, dead_ids}} for readable jobs: the one
     count of a bot's waiting work, here and on its page (backend/bot_rows.py, views.attention), so the two never
     disagree. A job behind a run nobody reviewed (`execution.unfenced_sql`) is `dead`, a job its wake preset holds
-    is `held`; only the rest is `queued`."""
+    is `held`, and a refusal-count hold is `quarantine_held`; only the rest is `queued`."""
     privacy.snapshot(c)
     actor = privacy.actor(who)
     rows = _queue_job_rows(c, bots)
@@ -141,25 +142,27 @@ def job_queues(c, who, bots, now=None):
 
     out = _tally_queues(bots, rows, now, keep)
     for q in out.values():
-        del q["oldest_queued_at"], q["oldest_dead_at"]
+        del q["oldest_queued_at"], q["oldest_dead_at"], q["oldest_quarantine_at"]
     return out
 
 
 def queue_counts(c, bots, now=None):
-    """job_queues' split over every job, with the oldest queued and dead job's time (`oldest_queued_at`,
-    `oldest_dead_at`). Health reads it, so the queued count it shows a bot is the one Pipeline shows an operator who may
+    """job_queues' split over every job, with the oldest queued, dead and quarantine-held job's time. Health reads it,
+    so the queued count it shows a bot is the one Pipeline shows an operator who may
     read all of that bot's jobs."""
     return _tally_queues(bots, _queue_job_rows(c, bots), now, None)
 
 
 def _queue_job_rows(c, bots):
-    from .execution import unfenced_sql
+    from .execution import queued_task_sql, unfenced_sql
+    from .task_quarantine import free_sql
     rows = []
     for part in H.chunks(list(bots)):
         marks = ",".join("?" * len(part))
         rows.extend(c.execute(
             f"SELECT m.*, j.id AS job_id, j.bot_id AS job_bot, j.state AS job_state, j.created_at AS job_created, "
-            f"j.held AS job_held, j.attempt_id AS job_attempt, {unfenced_sql()} AS free FROM jobs j "
+            f"j.held AS job_held, j.attempt_id AS job_attempt, {unfenced_sql()} AS free, "
+            f"{free_sql(queued_task_sql())} AS quarantine_free FROM jobs j "
             "JOIN messages m ON m.id=j.message_id JOIN conversations cv ON cv.id=m.conversation_id "
             f"WHERE j.state IN ('queued','uncertain') AND j.bot_id IN ({marks}) ORDER BY j.created_at, j.id", part))
     return rows
@@ -167,7 +170,8 @@ def _queue_job_rows(c, bots):
 
 def _tally_queues(bots, rows, now, keep):
     now = now or H.now()
-    out = {b: {"queued": 0, "held": 0, "dead": 0, "uncertain": 0, "oldest_queued_hours": None, "oldest_queued_at": None,
+    out = {b: {"queued": 0, "held": 0, "quarantine_held": 0, "dead": 0, "uncertain": 0,
+               "oldest_quarantine_at": None, "oldest_queued_hours": None, "oldest_queued_at": None,
                "oldest_dead_at": None, "dead_ids": []} for b in bots}
     stopped = {b: set() for b in bots}
     for row in rows:
@@ -180,6 +184,9 @@ def _tally_queues(bots, rows, now, keep):
             if key not in stopped[row["job_bot"]]:
                 stopped[row["job_bot"]].add(key)
                 q["uncertain"] += 1
+        elif not row["quarantine_free"]:
+            q["quarantine_held"] += 1
+            q["oldest_quarantine_at"] = q["oldest_quarantine_at"] or row["job_created"]
         elif not row["free"]:
             q["dead"] += 1
             q["oldest_dead_at"] = q["oldest_dead_at"] or row["job_created"]
@@ -353,8 +360,8 @@ def report(c, auth, who, *, type=None, owner=None, label=None, updated_since=Non
     failures = failures_report(c, who, bots, window)
     for b, decided in decisions_report(c, auth, who, bots, window).items():
         queues[b]["decisions"] = decided
-    busy = {b for b, q in queues.items() if any(q[k] for k in ("running", "queued", "held", "dead", "uncertain",
-                                                                "decisions"))}
+    busy = {b for b, q in queues.items() if any(q[k] for k in ("running", "queued", "held", "quarantine_held", "dead",
+                                                           "uncertain", "decisions"))}
     busy |= set(failures["by_bot"])
     # Only the type's manager reads its exceptions list (backend/pipeline_exceptions.py); everyone else has no key.
     exceptions = pipeline_exceptions.report(c, auth, who, typ, at=now)
@@ -371,7 +378,8 @@ def install(app, store, auth):
     def pipeline(request: Request, type: str | None = None, owner: str | None = None, label: str | None = None,
                  updated_since: str | None = None, snoozed: str = "all", bot: str | None = None, since: str = "24h"):
         """A task type's pipeline in one read: per step the count, age, owners, whom it waits on and open PRs; each
-        readable bot's running, queued, held, dead and uncertain jobs; failed attempts by cause since `since`."""
+        readable bot's running, queued, held, quarantine_held, dead and uncertain jobs; failed attempts by cause
+        since `since`."""
         with store.read() as c:
             return report(c, auth, request.state.identity, type=type, owner=owner, label=label,
                           updated_since=updated_since, snoozed=snoozed, bot=bot, since=since)

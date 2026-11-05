@@ -26,7 +26,7 @@ def finish(api, r, attempt, text="Done."):
 def reply(api, r, attempt, words):
     """The owner's Assistant turn ends on its read-back; the owner answers, and that starts its next turn."""
     finish(api, r, attempt, "Want me to save it?")
-    assert say(api, words)["fast"] is False
+    assert say(api, words)
     return post(api, "jobs/claim", {}, token=r["token"])["attempt"]
 
 
@@ -147,7 +147,7 @@ def test_a_save_after_other_words_or_outside_thirty_minutes_is_not_agreed(api):
         room = H.conversation(c, get(api, "assistant")["room_id"])
         H._write_message(c, "human:ana", "bot:coo", "hmm, the owner", room, "say", {"assistant": True}, None,
                          None)
-    assert say(api, "yes")["fast"] is False
+    assert say(api, "yes")
     attempt = post(api, "jobs/claim", {}, token=r["token"])["attempt"]
     assert save(api, attempt, step, expected=403)["error"]["code"] == "not_agreed"
     # A notice, or the Assistant's own message, between the read-back and the yes: the yes answers that, not the
@@ -159,7 +159,7 @@ def test_a_save_after_other_words_or_outside_thirty_minutes_is_not_agreed(api):
         with api.app.state.store.transaction() as c:
             H._write_message(c, who, "human:ana", "Want a daily digest of this chat?", room, kind, {"assistant": True},
                              None, None)
-        assert say(api, "yes")["fast"] is False
+        assert say(api, "yes")
         attempt = post(api, "jobs/claim", {}, token=r["token"])["attempt"]
         assert save(api, attempt, step, expected=403)["error"]["code"] == "not_agreed", who
     # And so does anything after the yes.
@@ -365,9 +365,9 @@ def test_only_the_owners_strategy_bot_turn_saves_on_a_yes(api):
     from backend.tests.test_assistant import assistant_turn
     r, attempt = assistant_turn(api, "ben-test", "Set a goal for Ops")
     read_back(api, attempt, NEW_GOAL, expected=403)
-    # Another person's Assistant still proposes a goal on a card, as before.
+    # Another person's Assistant may not make a goal: the route's own owner check refuses it as that person.
     refused = asked(api, "goals", {"title": "x", "owner": "ops"}, attempt["token"], "turn", expected=403)["error"]
-    assert refused["code"] == "confirm_required"
+    assert refused["code"] == "forbidden"
 
 
 def test_repeated_changes_are_refused_before_posting_a_draft(api):
@@ -630,7 +630,7 @@ def test_revoked_read_back_access_is_checked_before_conflict_details(api, edited
             else:
                 G.update(c, "human:ana", row["id"], title="Private revised words")
         before = dict(G.goal(c, row["id"]))
-        events = c.execute("SELECT count(*) FROM goal_events WHERE goal_id=?", (row["id"],)).fetchone()[0]
+        events = c.execute("SELECT count(*) FROM history_events WHERE subject_type='goal' AND subject_id=?", (row["id"],)).fetchone()[0]
         saved = c.execute("SELECT count(*) FROM events WHERE action=? AND target=?",
                           (GR.SAVED, back["message_id"])).fetchone()[0]
     for denied in (get(api, "goals/read-back/" + back["message_id"], attempt["token"], expected=403),
@@ -640,6 +640,6 @@ def test_revoked_read_back_access_is_checked_before_conflict_details(api, edited
         assert "Private revised words" not in str(denied) and "inbox" not in str(denied)
     with api.app.state.store.read() as c:
         assert dict(G.goal(c, row["id"])) == before
-        assert c.execute("SELECT count(*) FROM goal_events WHERE goal_id=?", (row["id"],)).fetchone()[0] == events
+        assert c.execute("SELECT count(*) FROM history_events WHERE subject_type='goal' AND subject_id=?", (row["id"],)).fetchone()[0] == events
         assert c.execute("SELECT count(*) FROM events WHERE action=? AND target=?",
                          (GR.SAVED, back["message_id"])).fetchone()[0] == saved

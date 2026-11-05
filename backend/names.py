@@ -12,7 +12,7 @@ instead of them:
 Nothing here reads more than the `humans` and `bots` tables, and a name is only a label.
 """
 
-from . import fast_json
+from . import fast_json, read_cache
 import re
 
 ACTOR_KEYS = ("owner_id", "requester_id", "sender_id", "recipient_id", "actor_id", "status_by_id", "decided_by_id",
@@ -54,11 +54,13 @@ def lookup(conn, ids):
     out = {SUPPORT_ACTOR: SUPPORT_NAME} if SUPPORT_ACTOR in ids else {}
     for start in range(0, len(humans), 500):
         chunk = humans[start:start + 500]
-        for row in conn.execute("SELECT id,name FROM humans WHERE id IN (%s)" % ",".join("?" * len(chunk)), chunk):
+        sql = "SELECT id,name FROM humans WHERE id IN (%s)" % ",".join("?" * len(chunk))
+        for row in read_cache.rows(conn, sql, chunk):
             out["human:" + row[0]] = (row[1] or "").strip() or _title(row[0])
     for start in range(0, len(bots), 500):
         chunk = bots[start:start + 500]
-        for row in conn.execute("SELECT id,slug,display_name FROM bots WHERE id IN (%s)" % ",".join("?" * len(chunk)), chunk):
+        sql = "SELECT id,slug,display_name FROM bots WHERE id IN (%s)" % ",".join("?" * len(chunk))
+        for row in read_cache.rows(conn, sql, chunk):
             out["bot:" + row[0]] = (row[2] or "").strip() or _title(row[1])
     return out
 

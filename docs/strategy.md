@@ -63,8 +63,8 @@ removes a thing.
   may be each. × removes a segment (its sub-segments move up to its parent) and **Add a segment** adds one by name
   (defining the market first, as "<company> market", when there is none). These are the market graph's own rows: Us is
   `company/self` `operates_in` the segment, Next is `next: true` on the segment, as the company file's import writes
-  them. They are also the buyers the company sells to: Us are the segments it sells to now, and Next is the one it
-  enters after. Only a person marks Us or Next here; a removed segment loses its Next, so adding it again does not
+  them. They are also the buyers the company sells to: Us are the segments it sells to now, and Next are the ones it
+  enters after. A company file may mark several segments Us and several Next. Only a person marks Us or Next here; a removed segment loses its Next, so adding it again does not
   bring it back.
 - **Competitors.** Every company or product with a current `competes_with` edge to `company/self`, as chips that link
   to their sites. × ends those edges (the company stays in the graph); **Add a competitor or its site** finds the
@@ -326,7 +326,7 @@ A bet's `wrong_if` is `{kind: kpi|thesis|text, kpi_id?, direction?, threshold?, 
 `strategy_draft` proposal's payload is partial `{summary?, vision?, sections?, bets?: [{id?, statement, why?,
 rules_out?, wrong_if?, cites?, status?}], source?, lens?}` (the server sets `source: "lens"` and `lens` for a lens run). Goals take `bet_id` on `POST /goals` and `POST /goals/{id}` and return
 it in `GET /goals` and `/goals/tree` ([Goals and KPIs](goals-and-kpis.md#hub-and-the-api)); goal proposals carry it
-too. Every change is a row in `strategy_events`, like `market_events`.
+too. Every change is a `history_events` row (`subject_type` `strategy`), as the market's are.
 
 Related: [Growth](growth.md), [Goals and KPIs](goals-and-kpis.md), [Your Strategy Bot](strategy-bot.md), [Librarian](librarian.md),
 [Routines](routines.md), [Agent context](agent-context.md).

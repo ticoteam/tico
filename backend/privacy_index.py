@@ -26,16 +26,10 @@ class ReadIndex:
         # Read private rows by their partial index. Ordinary task identifiers and
         # room references load lazily, without task bodies or room participants.
         self.private = {r["id"]: dict(r) for r in row_clock.parties(c)}
-        # A private task's answer depends only on its parties, guest and private flag, and many tasks share them
-        # (one bot owns most). Ask once per distinct set rather than once per task.
-        answers = {}
-        self.denied = set()
-        for tid, row in self.private.items():
-            key = (row["owner_id"], row["requester_id"], row["guest"], row["private"])
-            if key not in answers:
-                answers[key] = privacy.task_readable(c, who, row)
-            if not answers[key]:
-                self.denied.add(tid)
+        # Meeting participant grants belong to one task, even when its parties match another task's.
+        self.denied = {tid for tid, row in self.private.items() if not privacy.task_readable(c, who, row)}
+        from . import counsel
+        self.denied.update(counsel.denied_page_copies(c, who))
         self._attempts = self._attachments = self._tags = self._intervals = None
         # Each instance belongs to one consistent read transaction.
         self.message_sources = lru_cache(maxsize=4096)(self._message_sources)
@@ -85,6 +79,17 @@ class ReadIndex:
     def known_task(self, tid):
         return tid in self.task_ids
 
+    def listed_tasks_known(self, refs, *, denied=True):
+        """A list-valued `task` or `task_id` is non-empty and every element is text naming an existing task (and, with
+        `denied`, not a denied one). Gates.task in backend/sql.py reads a list the same way, so both sides refuse the
+        same messages. A scalar is checked by its own path, not here."""
+        for key in ("task", "task_id"):
+            value = refs.get(key)
+            if isinstance(value, list) and not (value and all(
+                    isinstance(tid, str) and self.known_task(tid) and not (denied and tid in self.denied) for tid in value)):
+                return False
+        return True
+
     def references(self, value):
         ids, pending = set(), [value]
         while pending:
@@ -111,7 +116,8 @@ class ReadIndex:
         return frozenset(ids)
 
     def content(self, value):
-        return ((not self.denied or not self.denied.intersection(self.references(value)))
+        return (privacy.page_content_readable(self.c, self.principals, value)
+                and (not self.denied or not self.denied.intersection(self.references(value)))
                 and self.meetings.readable(self.principals, self.meetings.references(value)))
 
     def conversation(self, cid):
@@ -252,6 +258,9 @@ class ReadIndex:
         if not isinstance(refs, dict):
             raise ValueError("Unsupported message provenance")
         ids = self.references(refs)
+        # A list naming an unknown task, or none, is unsettled like an unknown scalar; a denied element is in `ids` already.
+        if not self.listed_tasks_known(refs, denied=False):
+            raise ValueError("Unknown task provenance")
         conv = {"task_id": self.conversation_tasks.get(msg["conversation_id"])} if msg.get("conversation_id") else None
         # Explicit refs can narrow provenance, never override a room's task.
         for tid in (H._task_ref((conv or {}).get("task_id")), H.message_task_id({"refs": refs}, conv)):
@@ -321,12 +330,15 @@ class ReadIndex:
         data = H._json(refs, {}) or {}
         if not isinstance(data, dict):
             raise ValueError("Unsupported message provenance")
+        if not privacy.page_message_readable(self.c, self.principals, data):
+            return False
         run = data.get("run")
         aid = data.get("turn_id") or (run.get("attempt_id") if isinstance(run, dict) else None)
         if any(isinstance(data.get(key), list) and data[key] for key in ("answers", "inputs")):
             return None
         tid = H.message_task_id({"refs": data}, {"task_id": self.conversation_tasks.get(cid)})
         return (self.plain_room(cid) and (not tid or (self.known_task(tid) and tid not in self.denied))
+                and self.listed_tasks_known(data)
                 and (not self.possible_content(refs or "") or self.content(data))
                 and (not include_run or not aid or self.attempt(aid)))
 
@@ -368,9 +380,12 @@ class ReadIndex:
         if target in self.tags() and not self.tag(target, False):
             return False
         msg = self.target_message(target)
-        if msg and (msg.get("deleted_at") or msg.get("deleted") or self.denied.intersection(self.sources(msg))
-                    or not self.meetings.message_readable(self.principals, msg)):
-            return False
+        try:
+            if msg and (msg.get("deleted_at") or msg.get("deleted") or self.denied.intersection(self.sources(msg))
+                        or not self.meetings.message_readable(self.principals, msg)):
+                return False
+        except ValueError:
+            return False    # provenance that cannot be read (a list naming a missing task) hides this row, not the query
         if not self.conversation(target):
             return False
         meeting = self.c.execute("SELECT * FROM live_meetings WHERE id=?", (target,)).fetchone()
@@ -420,7 +435,10 @@ class ReadIndex:
             return False
         for mid in row["messages"]:
             msg = self.target_message(mid)
-            if (not msg or msg.get("deleted_at") or msg.get("deleted") or self.denied.intersection(self.sources(msg))
-                    or not self.meetings.message_readable(self.principals, msg)):
-                return False
+            try:
+                if (not msg or msg.get("deleted_at") or msg.get("deleted") or self.denied.intersection(self.sources(msg))
+                        or not self.meetings.message_readable(self.principals, msg)):
+                    return False
+            except ValueError:
+                return False    # the message's provenance cannot be read (see event): this attachment is hidden
         return all(self.attempt(aid) for aid in row["attempts"]) and all(self.blob(parent, seen) for parent in row["parents"])

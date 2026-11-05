@@ -37,6 +37,7 @@ struct Shared {
     changes: Mutex<u64>,
     wake: Condvar,
     live: Mutex<()>,
+    task_links: Mutex<()>,
 }
 impl Shared {
     fn bump(&self, data: bool) {
@@ -204,6 +205,12 @@ fn read_chunk(db: &Connection, id: &str) -> Result<Chunk> {
     Ok(serde_json::from_str(&text)?)
 }
 impl Store {
+    pub(crate) fn task_links_lock(&self) -> std::sync::MutexGuard<'_, ()> {
+        self.shared
+            .task_links
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+    }
     /// Serialize network snapshots and controls, including delayed state replies.
     pub(crate) fn live_lock(&self) -> std::sync::MutexGuard<'_, ()> {
         self.shared.live.lock().unwrap_or_else(|e| e.into_inner())
@@ -218,6 +225,7 @@ impl Store {
                 changes: Mutex::new(0),
                 wake: Condvar::new(),
                 live: Mutex::new(()),
+                task_links: Mutex::new(()),
             }),
         };
         private_dir(&store.root)?;
@@ -936,6 +944,39 @@ impl Store {
     }
     pub fn delivery(&self, id: &str, value: &Delivery) -> Result<()> {
         self.db()?.execute("INSERT INTO deliveries VALUES(?,?,?) ON CONFLICT(recording_id,destination_id) DO UPDATE SET document=excluded.document",params![id,value.destination_id,serde_json::to_string(value)?])?;
+        Ok(())
+    }
+    /// Merge only the caller's fields into the current receipt; link retries run beside uploads.
+    pub(crate) fn update_delivery(
+        &self,
+        id: &str,
+        value: &mut Delivery,
+        change: impl FnOnce(&mut Delivery) -> Result<()>,
+    ) -> Result<()> {
+        let mut db = self.db()?;
+        let transaction = db.transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)?;
+        let text: Option<String> = transaction
+            .query_row(
+                "SELECT document FROM deliveries WHERE recording_id=? AND destination_id=?",
+                params![id, value.destination_id],
+                |row| row.get(0),
+            )
+            .optional()?;
+        let mut current = match text {
+            Some(text) => serde_json::from_str(&text)?,
+            None => value.clone(),
+        };
+        change(&mut current)?;
+        transaction.execute("INSERT INTO deliveries VALUES(?,?,?) ON CONFLICT(recording_id,destination_id) DO UPDATE SET document=excluded.document",params![id,current.destination_id,serde_json::to_string(&current)?])?;
+        transaction.commit()?;
+        *value = current;
+        Ok(())
+    }
+    pub fn remove_delivery(&self, id: &str, destination: &str) -> Result<()> {
+        self.db()?.execute(
+            "DELETE FROM deliveries WHERE recording_id=? AND destination_id=?",
+            params![id, destination],
+        )?;
         Ok(())
     }
     pub fn delete(&self, id: &str) -> Result<()> {

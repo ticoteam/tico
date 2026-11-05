@@ -1,85 +1,56 @@
-/* ui/app/growth-channels.js — The Channels section of the Growth page: one row each with its stage, owner and the picked
-   month's New, CAC and LTV:CAC, Unknown last. Choosing a row opens it in place: a larger chart with that channel's task
-   ticks, retention, where its numbers come from (its source, GET /api/v2/growth/sources, and the month's notes), its open
-   tasks (GET /api/v2/growth/channels/{slug}) and its months (GET /api/v2/growth/cohorts?channel=). Whoever may edit adds,
-   edits and retires a channel (/api/v2/growth/channels), corrects a month (PUT /api/v2/growth/cohorts) and keeps the
-   settings the maths uses (PUT /api/v2/growth/settings).
+/* ui/app/growth-channels.js — The Growth page's Settings (ui/app/growth-page.js): the numbers the maths uses (PUT
+   /api/v2/growth/settings), the channels (/api/v2/growth/channels: add, edit, retire) and each channel's months, where
+   a month is corrected or added by hand (GET|PUT /api/v2/growth/cohorts), and the link to Sources. The owner or an admin
+   changes them; the cards read again after a save.
    Classic script: its globals are shared with the other files under ui/app/, loaded in the order index.html lists them. */
 'use strict';
 
 const GC_KEPT = [['kept_d30', '30'], ['kept_d90', '90'], ['kept_d180', '180']];
-const GC_SHOWN = 10;      // rows before All, when there are clearly more
 const gcQuality = q => q ? `<span class="pill ${q === 'actual' ? 'ok' : 'waiting'}">${q === 'actual' ? 'Actual' : 'Estimate'}</span>` : '';
-const gcCell = (key, v, fmt, from = '') => `<span class="gc-m${from ? ' gc-old' : ''}" data-m="${key}"${from ? ` title="${esc(grMonthShort(from))}"` : ''}>${v == null ? '' : esc(fmt(v))}</span>`;
-// LTV needs retention, which a new cohort has yet to show: the row keeps the channel's last, dimmed.
-const gcLastLtv = (c, month) => [...c.series].reverse().find(x => x.month <= month && x.ltv_cac != null);
-const gcBreached = state => new Set((state.econ?.guardrails || []).filter(g => g.breached).map(g => g.channel || 'unknown'));
+const GC_UNKNOWN = {slug: 'unknown', name: 'Unknown'};
 
-function gcDraw(state) {
-  const box = $('#gr-channels'), d = state.data;
-  if (!box) return;
-  const list = d.channels, many = list.length > GC_SHOWN + 2 && !state.showAll;
-  // An open row stays shown when the list folds.
-  const shown = many ? list.filter((c, i) => i < GC_SHOWN || c.slug === state.pick) : list;
-  const breached = gcBreached(state);
-  const row = c => {
-    const on = state.pick === c.slug, r = c.series.find(x => x.month === state.month) || {}, ltv = gcLastLtv(c, state.month);
-    const meta = [GR_CH_STAGE[c.stage] || c.stage, grWho(c.owner_ref)].filter(Boolean).join(' · ');
-    return `<li class="gc-li${on ? ' gc-on' : ''}"><button type="button" class="gc-row" data-gc-row="${esc(c.slug)}" aria-expanded="${on}">
-      <span class="gc-name"><span class="gc-n">${esc(c.name)}${breached.has(c.slug) ? '<i class="gc-flag" aria-label="Over its guardrail"></i>' : ''}</span>${meta ? `<span class="gc-meta">${esc(meta)}</span>` : ''}</span>
-      ${gcCell('new', r.new_customers, v => grX(v, 0))}${gcCell('cac', r.cac, grUsd)}${gcCell('ltv_cac', ltv?.ltv_cac, grRatio, ltv && ltv.month !== state.month ? ltv.month : '')}</button>
-      ${on ? '<div class="gc-detail" id="gc-detail"></div>' : ''}</li>`;
-  };
-  box.innerHTML = `<h2 class="gr-k">Channels</h2><div class="card gr-list gc-list"><div class="gc-row gc-headrow" aria-hidden="true"><span></span><span>New</span><span>CAC</span><span>LTV:CAC</span></div>
-    <ul class="gr-ul">${shown.map(row).join('')}</ul>${many ? '<button class="ghost gr-more" type="button" data-gc-all>All</button>' : ''}</div>`;
-  box.querySelectorAll('[data-gc-row]').forEach(b => { b.onclick = () => { state.pick = state.pick === b.dataset.gcRow ? null : b.dataset.gcRow; gcDraw(state); }; });
-  const all = box.querySelector('[data-gc-all]');
-  if (all) all.onclick = () => { state.showAll = true; gcDraw(state); };
-  if (state.pick) void gcDetail(state);
+// Settings: the numbers, then each channel with its Months and Edit, + Channel, and where the numbers come from.
+async function gcSettings(state) {
+  const [st, list] = await Promise.all([get('/v2/growth/settings', {fresh: true}).catch(() => ({})),
+    get('/v2/growth/channels', {fresh: true}).then(r => r.channels || []).catch(() => [])]);
+  if (GR !== state) return;
+  const row = (c, edit) => `<div class="gr-row gs-ch" data-gs-channel="${esc(c.slug)}"><span class="gr-row-t">${esc(c.name)}</span>
+      ${edit ? `<span class="muted">${esc([GR_CH_STAGE[c.stage] || c.stage, grWho(c.owner_ref)].filter(Boolean).join(' · '))}</span>` : ''}
+      <button class="ghost small" type="button" data-gs-months="${esc(c.slug)}">Months</button>${edit ? `<button class="ghost small" type="button" data-gs-edit="${esc(c.slug)}">Edit</button>` : ''}</div>`;
+  const dlg = grDialog('Settings', `<fieldset class="gr-fs"><legend class="gr-k">Numbers</legend><div class="gr-form">
+      ${grField('Counted in', `<input name="unit" maxlength="40" value="${esc(st.unit || '')}">`)}
+      <div class="gr-pair">${grField('Revenue / customer', `<input name="revenue_month" inputmode="decimal" value="${esc(st.revenue_month ?? '')}">`)}
+      ${grField('Margin %', `<input name="margin_pct" inputmode="decimal" value="${esc(st.margin_pct ?? '')}">`)}</div></div></fieldset>
+    <section class="gr-sec gs-sec" aria-label="Channels"><h3 class="gr-k">Channels</h3>${list.map(c => row(c, true)).join('')}${row(GC_UNKNOWN, false)}
+      <button class="ghost small gs-add" type="button" data-ch-add>+ Channel</button></section>
+    <a class="gs-src" href="${GR_SOURCES}" data-gr-sources>Where numbers come from</a>`, 'Save', async form => {
+    const v = n => form.elements[n].value;
+    const body = {revenue_month: grNum(v('revenue_month')), margin_pct: grNum(v('margin_pct'))};
+    if (v('unit').trim()) body.unit = v('unit').trim();
+    await put('/v2/growth/settings', body);
+    toast('Saved'); grReload(state);
+  });
+  dlg.querySelector('[data-gr-sources]').onclick = () => dlg.close();
+  dlg.querySelector('[data-ch-add]').onclick = () => void gcChannelDialog(state);
+  dlg.querySelectorAll('[data-gs-edit]').forEach(b => { b.onclick = () => void gcChannelDialog(state, list.find(c => c.slug === b.dataset.gsEdit)); });
+  dlg.querySelectorAll('[data-gs-months]').forEach(b => { b.onclick = () => void gcMonths(state, list.find(c => c.slug === b.dataset.gsMonths) || GC_UNKNOWN); });
 }
 
-async function gcDetail(state) {
-  const k = state.pick, box = $('#gc-detail'), d = state.data, ch = d.channels.find(c => c.slug === k);
-  if (!box || !ch) return;
-  box.innerHTML = skelRows(3, {dot: false});
-  let cohorts = [], full = null, sources = [];
-  try {
-    [cohorts, full, sources] = await Promise.all([
-      get('/v2/growth/cohorts?channel=' + encodeURIComponent(k), {fresh: true}).then(r => r.cohorts || []),
-      k === 'unknown' ? null : get('/v2/growth/channels/' + encodeURIComponent(k), {fresh: true}),
-      get('/v2/growth/sources').then(r => r.sources || []).catch(() => [])]);
-  } catch (e) { if (GR === state && state.pick === k) box.innerHTML = grFail(e); return; }
-  if (GR !== state || state.pick !== k || !box.isConnected) return;
+// A channel's months, newest first, each with its retention and an Edit; + Month adds one.
+async function gcMonths(state, ch) {
+  let cohorts;
+  try { cohorts = await get('/v2/growth/cohorts?channel=' + encodeURIComponent(ch.slug), {fresh: true}).then(r => r.cohorts || []); }
+  catch (e) { toast(e.message || 'Did not load', true); return; }
+  if (GR !== state) return;
   cohorts.sort((a, b) => String(b.month).localeCompare(String(a.month)));
-  const may = !!d.may_edit, cal = grCalendar(d.months);
-  const guards = (state.econ?.guardrails || []).filter(g => (g.channel || 'unknown') === k && g.breached);
-  const banner = guards.map(g => `<div class="gr-banner gr-amber">${esc(g.kpi_name || 'Guardrail')} ${esc(grX(g.value))} · max ${esc(grX(g.max))}</div>`).join('');
-  const hasChart = ch.series.filter(r => r.new_customers != null).length > 1;
-  const kept = GR_RETENTION.map(s => grSeriesStat(s, ch.series, cal, state.month)).join('');
-  const notes = cohorts.find(c => c.month === state.month)?.sources || {}, src = sources.find(s => s.id === full?.source_id);
-  const from = Object.entries(notes).filter(([, v]) => v);
-  const where = src || from.length ? `<section class="gr-sec" data-gc-from><h3 class="gr-k">Numbers from</h3>
-      ${src ? `<div class="gr-row"><span class="gr-row-t">${esc(src.truth_for)}</span><a href="${GR_SOURCES}">${esc(src.system)}</a></div>` : ''}
-      ${from.map(([f, v]) => `<div class="gr-row"><span class="gr-row-t">${esc(f[0].toUpperCase() + f.slice(1).replace(/_/g, ' '))}</span><span class="muted">${esc(v)}</span></div>`).join('')}</section>` : '';
-  const tasks = full?.tasks || [];
-  const open = tasks.length ? `<section class="gr-sec" data-gc-tasks><h3 class="gr-k">Open tasks</h3>${tasks.map(t =>
-    `<a class="gr-row" href="${grTaskHref(t.task_id)}"><span class="gr-row-t">${esc(t.title)}</span>${t.assignee ? `<span class="muted">${esc(grWho(t.assignee))}</span>` : ''}</a>`).join('')}</section>` : '';
   const cell = (c, f, dd) => `<span class="gc-h" title="${dd} days"${c[f] == null ? '' : ` style="--k:${Math.max(0, Math.min(100, Number(c[f])))}"`}>${c[f] == null ? '' : esc(grPct(c[f]))}</span>`;
-  const months = cohorts.length || may ? `<details class="gc-months"><summary>Months</summary>${cohorts.map((c, n) =>
+  const dlg = grDialog(`${ch.name} · Months`, `<div class="gr-sec gc-months">${cohorts.map((c, n) =>
     `<div class="gr-row gc-coh"><span class="gr-row-t">${esc(grMonth(c.month))}</span>${c.new_customers == null ? '' : `<span class="gr-num">${esc(grX(c.new_customers, 0))} new</span>`}
-      <span class="gc-kept">${GC_KEPT.map(([f, dd]) => cell(c, f, dd)).join('')}</span>${gcQuality(c.quality)}${may ? `<button class="ghost small" type="button" data-gc-edit="${n}">Edit</button>` : ''}</div>`).join('')}
-      ${may ? '<button class="ghost small gc-add" type="button" data-gc-month-add>+ Month</button>' : ''}</details>` : '';
-  box.innerHTML = `${banner}${hasChart ? `<div class="gr-sec"><h3 class="gr-k">New customers</h3><div class="gr-chart" data-gc-chart tabindex="0" role="img" aria-label="${esc(ch.name)}"></div></div>` : ''}
-    ${kept ? `<div class="gr-sec" data-gc-kept><h3 class="gr-k">Retention</h3><div class="gr-stats">${kept}</div></div>` : ''}
-    ${where || open ? `<div class="gc-dcols">${where}${open}</div>` : ''}${months}
-    ${may && full ? '<div class="gc-dh"><button class="ghost small" type="button" data-ch-edit>Edit channel</button></div>' : ''}`;
-  const host = box.querySelector('[data-gc-chart]');
-  if (host) grMonthChart(host, ch.series, cal, state.month, GR_NEW, d.markers.filter(m => (m.channels || []).includes(k)));
-  box.querySelectorAll('[data-gc-edit]').forEach(b => { b.onclick = () => gcCohortDialog(state, ch, cohorts[Number(b.dataset.gcEdit)]); });
-  const addM = box.querySelector('[data-gc-month-add]');
-  if (addM) addM.onclick = () => gcCohortDialog(state, ch, {month: state.month || new Date().toISOString().slice(0, 7)}, true);
-  const edit = box.querySelector('[data-ch-edit]');
-  if (edit) edit.onclick = () => void gcChannelDialog(state, full);
+      <span class="gc-kept">${GC_KEPT.map(([f, dd]) => cell(c, f, dd)).join('')}</span>${gcQuality(c.quality)}<button class="ghost small" type="button" data-gc-edit="${n}">Edit</button></div>`).join('')
+    || '<p class="muted gr-note">No months yet</p>'}</div>
+    <button class="ghost small gc-add" type="button" data-gc-month-add>+ Month</button>`, '', null);
+  dlg.querySelectorAll('[data-gc-edit]').forEach(b => { b.onclick = () => gcCohortDialog(state, ch, cohorts[Number(b.dataset.gcEdit)]); });
+  dlg.querySelector('[data-gc-month-add]').onclick = () => gcCohortDialog(state, ch, {month: state.month || new Date().toISOString().slice(0, 7)}, true);
 }
 
 // One month's numbers for a channel; `fresh` picks the month in the form.
@@ -103,22 +74,8 @@ function gcCohortDialog(state, ch, c, fresh = false) {
         kept_d30: grNum(v('kept_d30')), kept_d90: grNum(v('kept_d90')), kept_d180: grNum(v('kept_d180')), revenue_month: grNum(v('revenue_month')),
         margin_pct: grNum(v('margin_pct')), quality: v('quality'), sources});
       toast('Saved');
-      void grRead(state);
+      grReload(state);
     });
-}
-
-async function gcSettings(state) {
-  const st = await get('/v2/growth/settings', {fresh: true}).catch(() => ({}));
-  if (GR !== state) return;
-  grDialog('Settings', `${grField('Counted in', `<input name="unit" maxlength="40" value="${esc(st.unit || '')}">`)}
-    <div class="gr-pair">${grField('Revenue / customer', `<input name="revenue_month" inputmode="decimal" value="${esc(st.revenue_month ?? '')}">`)}
-    ${grField('Margin %', `<input name="margin_pct" inputmode="decimal" value="${esc(st.margin_pct ?? '')}">`)}</div>`, 'Save', async form => {
-    const v = n => form.elements[n].value;
-    const body = {revenue_month: grNum(v('revenue_month')), margin_pct: grNum(v('margin_pct'))};
-    if (v('unit').trim()) body.unit = v('unit').trim();
-    await put('/v2/growth/settings', body);
-    toast('Saved'); void grRead(state);
-  });
 }
 
 // Add or edit a channel; editing also retires it.
@@ -149,7 +106,7 @@ async function gcChannelDialog(state, c = null) {
       if (!/^[a-z0-9][a-z0-9-]{0,39}$/.test(out.slug)) throw new Error('Slug: lowercase letters, digits and -');
       await post('/v2/growth/channels', out);
     }
-    toast('Saved'); void grRead(state);
+    toast('Saved'); grReload(state);
   });
   if (!c) {
     const name = dlg.querySelector('[name=name]'), slug = dlg.querySelector('[name=slug]');
@@ -157,5 +114,5 @@ async function gcChannelDialog(state, c = null) {
     slug.oninput = () => { slug.dataset.touched = '1'; };
   }
   const retire = dlg.querySelector('[data-retire]');
-  if (retire) grRetireButton(retire, dlg, `/v2/growth/channels/${encodeURIComponent(c.slug)}/retire`, () => { state.pick = null; void grRead(state); });
+  if (retire) grRetireButton(retire, dlg, `/v2/growth/channels/${encodeURIComponent(c.slug)}/retire`, () => grReload(state));
 }

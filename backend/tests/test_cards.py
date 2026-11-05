@@ -3,7 +3,11 @@ rule (a bot pins only its own pages and cards to its own sidebar or task, a pers
 Dashboard and team pages); a page pinned there by a person is readable by the place's audience, never a private
 task's file; a team page's audience; and pages and cards as bot sidebar widgets."""
 
+import re
 import uuid
+from types import SimpleNamespace
+
+import pytest
 
 from backend.store import H
 from backend.tests.test_api import api, as_member, get, headers, post, put, restrict, setup_attempt  # noqa: F401
@@ -65,6 +69,76 @@ def test_the_dashboard_starts_with_its_defaults_and_counts_only_what_each_reader
     saved = put(api, "places/dashboard", {})
     assert saved["saved"] is True and all(p["id"] for p in saved["pins"])
     assert [p["item"].startswith("card:") for p in saved["pins"]] == [True] * 4
+
+
+def test_place_server_timing_names_only_card_kinds(api):
+    response = api.get("/api/v2/places/person%3Ame", headers=headers())
+    assert response.status_code == 200, response.text
+    entries = response.headers["Server-Timing"].split(", ")
+    assert all(re.fullmatch(r"[a-z0-9-]+;dur=\d+\.\d", entry) for entry in entries)
+    names = [entry.split(";", 1)[0] for entry in entries]
+    kinds = {"card-" + pin["card"]["template"].replace("_", "-") for pin in response.json()["pins"]}
+    assert kinds and set(names) == {"auth", "app", "prep", "cards"} | kinds
+    assert len(names) == len(set(names))
+    response = api.get("/api/v2/health", headers=headers())
+    assert response.status_code == 200, response.text
+    assert re.fullmatch(r"auth;dur=\d+\.\d, app;dur=\d+\.\d", response.headers["Server-Timing"])
+
+
+@pytest.mark.parametrize("scale", [1, 1000])
+def test_place_server_timing_sums_kinds_and_bounds_the_slowest_entries(api, monkeypatch, scale):
+    from backend import cards
+
+    clock = [0]
+    seconds = {kind: (i + 1) * scale for i, kind in enumerate(cards.TEMPLATES)}
+    kinds = [*seconds, "updates"]
+    monkeypatch.setitem(cards.DEFAULTS, "person", [(kind, "medium") for kind in kinds])
+    monkeypatch.setattr(cards, "time", SimpleNamespace(perf_counter=lambda: clock[0]))
+
+    def build(ctx, pin, cache):
+        template = pin["card"]["template"]
+        clock[0] += seconds[template]
+        return {"card": {"template": template}}
+
+    monkeypatch.setattr(cards, "pin_view", build)
+    response = api.get("/api/v2/places/person%3Ame", headers=headers())
+    assert response.status_code == 200, response.text
+    added = response.headers["Server-Timing"].split(", ")[2:]
+    assert len((", " + ", ".join(added)).encode("ascii")) <= 300
+    durations = {name: float(ms) for name, ms in (entry.split(";dur=") for entry in added)}
+    expected = {"card-" + kind.replace("_", "-"): ms * 1000 for kind, ms in seconds.items()}
+    expected["card-updates"] *= 2
+    assert durations["prep"] == 0 and durations["cards"] == sum(expected.values())
+    measured = [(name, ms) for name, ms in durations.items() if name.startswith("card-")]
+    assert 0 < len(measured) <= 8
+    if scale == 1:
+        assert len(measured) == 8
+    assert measured == sorted(expected.items(), key=lambda item: -item[1])[:len(measured)]
+
+
+def test_place_server_timing_keeps_access_cost_without_naming_hidden_pins(api, monkeypatch):
+    from backend import cards
+
+    clock = [0]
+    monkeypatch.setitem(cards.DEFAULTS, "person", [("updates", "medium"), ("updates", "medium")])
+    monkeypatch.setattr(cards, "time", SimpleNamespace(perf_counter=lambda: clock[0]))
+    calls = []
+
+    def build(ctx, pin, cache):
+        calls.append(pin)
+        clock[0] += 2
+        return None if len(calls) == 1 else {"card": {"template": pin["card"]["template"]}}
+
+    monkeypatch.setattr(cards, "pin_view", build)
+    response = api.get("/api/v2/places/person%3Ame", headers=headers())
+    assert response.status_code == 200, response.text
+    durations = {name: float(ms) for name, ms in
+                 (entry.split(";dur=") for entry in response.headers["Server-Timing"].split(", ")[2:])}
+    assert "card-hidden" not in durations
+    assert durations["card-updates"] == 2000
+    assert durations["cards"] == 4000
+    assert len(response.json()["pins"]) == 1
+    assert response.json()["pins"][0]["position"] == 0
 
 
 def test_card_settings_are_checked_and_never_a_query(api):

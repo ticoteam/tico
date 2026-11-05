@@ -2,7 +2,7 @@
 
 The owner registers the app with GitHub's manifest flow (nothing to copy by hand), installs it on the
 org, and from then on the hub mints short-lived installation tokens scoped to one bot repository.
-Runners fetch that token per turn (runner/git_credentials.py); no long-lived personal token is used.
+Runners fetch that token per turn (runner_support/git_credentials.py); no long-lived personal token is used.
 
 The app's private key and secrets are encrypted at rest and are never returned by any endpoint or
 written to a log. See docs/github-app.md.
@@ -34,6 +34,7 @@ from . import hubdb as H, task_privacy
 from .auth import validate_identity
 from .health import GITHUB_HEALTH, note_github_token
 from .store import Problem, digest, encode
+from . import bot_settings as BS
 
 log = logging.getLogger("tico.github_app")
 
@@ -109,17 +110,6 @@ CREATE TABLE IF NOT EXISTS github_app(
 CREATE TABLE IF NOT EXISTS github_app_states(
  nonce TEXT PRIMARY KEY, actor TEXT NOT NULL, org TEXT NOT NULL, administration INTEGER NOT NULL,
  created_at REAL NOT NULL);
--- Unlike the short-lived generic idempotency cache, these operation bindings are retained so an
--- ambiguous external create can never be retried as a fresh repository write after a timeout/restart.
-CREATE TABLE IF NOT EXISTS github_product_repo_operations(
- actor TEXT NOT NULL, operation TEXT NOT NULL, key TEXT NOT NULL,
- request_hash TEXT NOT NULL, target_org TEXT NOT NULL, target_name TEXT NOT NULL,
- state TEXT NOT NULL CHECK(state IN ('pending','completed','rejected')),
- response TEXT, error_code TEXT, error_detail TEXT, error_status INTEGER,
- created_at TEXT NOT NULL, updated_at TEXT NOT NULL,
- PRIMARY KEY(actor,operation,key),
- CHECK(state!='completed' OR response IS NOT NULL),
- CHECK(state!='rejected' OR (error_code IS NOT NULL AND error_detail IS NOT NULL AND error_status IS NOT NULL)));
 """
 
 
@@ -383,7 +373,10 @@ class GitHubApp:
 
     def live_permissions(self, refresh=False):
         """The installation's permissions as GitHub reports them now, cached briefly; None when they
-        cannot be learned (not installed, GitHub unreachable or silent), so callers keep what is stored."""
+        cannot be learned (not installed, GitHub unreachable or silent, a stored key that will not sign, or a demo,
+        which never asks GitHub), so callers keep what is stored."""
+        if self.settings.demo:
+            return None
         with self.lock:
             hit = self.live.get("permissions")
             if hit and hit[0] > time.time() and not refresh:
@@ -395,7 +388,7 @@ class GitHubApp:
                 return None
             r = self._call("GET", f"/app/installations/{installation}", headers={"Authorization": "Bearer " + token})
             permissions = r.json().get("permissions") if r.status_code < 300 else None
-        except (Problem, ValueError):
+        except (Problem, ValueError, jwt.PyJWTError):
             return None
         if not isinstance(permissions, dict):
             return None
@@ -920,6 +913,7 @@ def save_extra_repos(c, bot, repos):
 
 def install_github_app(app, settings, store):
     service = app.state.github_app = GitHubApp(settings, store, getattr(app.state, "vault", None))
+    store.github_app = service      # the Check health step reads the App's health for the Health page (no network)
 
     from . import repositories as R
     R.install(app, store, service)
@@ -1498,7 +1492,7 @@ def install_github_app(app, settings, store):
             access, moved = "none", None
         others = []
         if access != "none":
-            for r in c.execute("SELECT bc.bot,bc.config,b.slug FROM bot_config bc JOIN bots b ON b.id=bc.bot "
+            for r in c.execute(f"SELECT bc.bot,{BS.CONFIG} AS config,b.slug FROM bot_config bc {BS.JOIN} JOIN bots b ON b.id=bc.bot "
                                "WHERE b.state<>'archived' AND bc.bot<>? ORDER BY bc.bot", (bot,)).fetchall():
                 if json.loads(r["config"] or "{}").get("repo_access_mode") == "all":
                     others.append((H.bot(c, r["bot"]) or {}).get("display_name") or r["slug"])
@@ -1551,42 +1545,26 @@ def install_github_app(app, settings, store):
         request_hash = digest(encode(request_body))
 
         def existing_operation(c, *, bind=False):
-            """Replay a durable result, reject a reused key, or bind it before the GitHub POST."""
-            previous = c.execute("SELECT * FROM github_product_repo_operations "
-                                 "WHERE actor=? AND operation=? AND key=?",
+            """Replay a durable result, reject a reused key, or bind it before the GitHub POST. The binding is a row of
+            `idempotency` (binding 'github_product_repo', subject org/name), retained: the retention sweep never takes it."""
+            previous = c.execute("SELECT * FROM idempotency WHERE binding='github_product_repo' "
+                                 "AND actor=? AND operation=? AND key=?",
                                  (who.actor, operation, key)).fetchone()
             if previous:
                 if previous["request_hash"] != request_hash:
                     raise Problem("idempotency_conflict", "This key was used for different content", 409)
                 if previous["state"] == "pending":
                     raise Problem("github_create_outcome_unknown",
-                                  f"The result for {previous['target_org']}/{previous['target_name']} is unresolved. Tico will not repeat this operation automatically; check GitHub before taking another action.", 409)
-                if previous["state"] == "rejected":
+                                  f"The result for {previous['subject']} is unresolved. Tico will not repeat this operation automatically; check GitHub before taking another action.", 409)
+                if previous["state"] == "refused":
                     raise Problem(previous["error_code"], previous["error_detail"], previous["error_status"])
                 return json.loads(previous["response"])
 
-            # Migrate an unexpired receipt from the earlier implementation. It was written only
-            # after the external create returned, so it is complete proof and can be retained here.
-            legacy = c.execute("SELECT request_hash,response FROM idempotency "
-                               "WHERE actor=? AND operation=? AND key=?",
-                               (who.actor, operation, key)).fetchone()
-            if legacy:
-                if legacy["request_hash"] != request_hash:
-                    raise Problem("idempotency_conflict", "This key was used for different content", 409)
-                result = json.loads(legacy["response"])
-                c.execute("INSERT INTO github_product_repo_operations "
-                          "(actor,operation,key,request_hash,target_org,target_name,state,response,created_at,updated_at) "
-                          "VALUES(?,?,?,?,?,?,'completed',?,?,?)",
-                          (who.actor, operation, key, request_hash, body.org, name,
-                           encode(result), H.now(), H.now()))
-                return result
-
             if bind:
                 stamp = H.now()
-                c.execute("INSERT INTO github_product_repo_operations "
-                          "(actor,operation,key,request_hash,target_org,target_name,state,created_at,updated_at) "
-                          "VALUES(?,?,?,?,?,?,'pending',?,?)",
-                          (who.actor, operation, key, request_hash, body.org, name, stamp, stamp))
+                c.execute("INSERT INTO idempotency(actor,operation,key,request_hash,response,created_at,updated_at,"
+                          "binding,subject,state) VALUES(?,?,?,?,NULL,?,?,'github_product_repo',?,'pending')",
+                          (who.actor, operation, key, request_hash, stamp, stamp, f"{body.org}/{name}"))
             return None
 
         with service.product_repo_create_lock:
@@ -1622,9 +1600,10 @@ def install_github_app(app, settings, store):
                     # A definite GitHub rejection is replayable. If this write fails, the operation
                     # remains pending and future requests fail closed instead of issuing another POST.
                     with store.transaction() as c:
-                        c.execute("UPDATE github_product_repo_operations "
-                                  "SET state='rejected',error_code=?,error_detail=?,error_status=?,updated_at=? "
-                                  "WHERE actor=? AND operation=? AND key=? AND request_hash=? AND state='pending'",
+                        c.execute("UPDATE idempotency "
+                                  "SET state='refused',error_code=?,error_detail=?,error_status=?,updated_at=? "
+                                  "WHERE binding='github_product_repo' AND actor=? AND operation=? AND key=? "
+                                  "AND request_hash=? AND state='pending'",
                                   (problem.code, problem.detail, problem.status, H.now(),
                                    who.actor, operation, key, request_hash))
                 raise
@@ -1635,8 +1614,8 @@ def install_github_app(app, settings, store):
             try:
                 with store.transaction() as c:
                     validate_identity(c, who)
-                    current = c.execute("SELECT state,request_hash,response FROM github_product_repo_operations "
-                                        "WHERE actor=? AND operation=? AND key=?",
+                    current = c.execute("SELECT state,request_hash,response FROM idempotency "
+                                        "WHERE binding='github_product_repo' AND actor=? AND operation=? AND key=?",
                                         (who.actor, operation, key)).fetchone()
                     if not current or current["request_hash"] != request_hash:
                         raise Problem("idempotency_conflict", "The product-repository operation binding changed", 409)
@@ -1644,10 +1623,6 @@ def install_github_app(app, settings, store):
                         return json.loads(current["response"])
                     if current["state"] != "pending":
                         raise Problem("github_create_outcome_unknown", "The product-repository operation is no longer pending; no second create was attempted", 409)
-                    previous = c.execute("SELECT request_hash FROM idempotency WHERE actor=? AND operation=? AND key=?",
-                                         (who.actor, operation, key)).fetchone()
-                    if previous and previous["request_hash"] != request_hash:
-                        raise Problem("idempotency_conflict", "This key was used for different content", 409)
                     if who.role == "bot":
                         result = bot_created(c, who, result)
                     H.event(c, who.actor, "github.product_repo_created", result["repository"],
@@ -1655,12 +1630,9 @@ def install_github_app(app, settings, store):
                              "installation_access": result["installation_access"],
                              **({"bot_access": result["bot_access"], "owner_notified": result.pop("_notified"),
                                  "moved_to_chosen": result.pop("_moved")} if who.role == "bot" else {})})
-                    if not previous:
-                        c.execute("INSERT INTO idempotency VALUES(?,?,?,?,?,?)",
-                                  (who.actor, operation, key, request_hash, encode(result), H.now()))
-                    c.execute("UPDATE github_product_repo_operations "
-                              "SET state='completed',response=?,updated_at=? "
-                              "WHERE actor=? AND operation=? AND key=? AND state='pending'",
+                    c.execute("UPDATE idempotency SET state='completed',response=?,updated_at=? "
+                              "WHERE binding='github_product_repo' AND actor=? AND operation=? AND key=? "
+                              "AND state='pending'",
                               (encode(result), H.now(), who.actor, operation, key))
             except Problem:
                 raise

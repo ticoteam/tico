@@ -17,10 +17,12 @@ the file was deleted, by whom and when, without its title or content. Bytes anot
 import asyncio
 import base64
 import binascii
+import hashlib
 import csv
 import io
 import json
 import logging
+import secrets
 import sqlite3
 from html.parser import HTMLParser
 
@@ -28,6 +30,7 @@ from fastapi import Request
 
 from . import manual
 from . import names
+from . import visuals
 from .store import H, Problem
 
 LOG = logging.getLogger("tico.files")
@@ -65,7 +68,8 @@ PURGE_ATTEMPTS = 10
 # What holds a blob apart from a message or a file (`release_message_files`): a task's attachment, one in the trash, a
 # meeting's media, a scanned letter, a piece of market evidence.
 BLOB_HOLDERS = (("message_assets", "blob_id"), ("task_assets", "blob_id"), ("task_trash_assets", "blob_id"),
-                ("media_assets", "blob_id"), ("mail_items", "blob_id"), ("market_evidence", "blob_id"))
+                ("media_assets", "blob_id"), ("mail_items", "blob_id"), ("market_evidence", "blob_id"),
+                ("letters", "source_blob_id"), ("letters", "original_blob_id"), ("letter_proofs", "blob_id"))
 TEXT_TYPES = ("text/markdown", "text/plain", "application/json", "text/yaml")
 TABLE_TYPES = {"text/csv": ",", "text/tab-separated-values": "\t"}
 
@@ -74,6 +78,18 @@ KINDS = {"page": "Pages", "document": "Documents", "image": "Images", "data": "D
          "other": "Other"}
 STORED = {"document": ("document", "slides", "design"), "image": ("image",), "data": ("spreadsheet", "data"),
           "media": ("video", "audio")}
+
+
+def kind_filter(kind):
+    if not kind:
+        return "1", []
+    if kind not in KINDS:
+        raise Problem("validation", "kind is " + ", ".join(KINDS), 422)
+    if kind == "page":
+        return "p.file_id IS NOT NULL", []
+    stored = [k for group in STORED.values() for k in group] if kind == "other" else list(STORED[kind])
+    return ("p.file_id IS NULL AND f.kind " + ("NOT IN" if kind == "other" else "IN")
+            + " (%s)" % ",".join("?" * len(stored))), stored
 
 
 def ensure(c):
@@ -102,28 +118,38 @@ def has_pins(c):
 
 
 # ---------------------------------------------------------------------------------------------- cursors and scans
-def encode_cursor(stamp, ident):
-    return base64.urlsafe_b64encode(f"{stamp}|{ident}".encode()).decode()
+def cursor_cipher(key):
+    from cryptography.hazmat.primitives.ciphers.aead import AESGCM
+    return AESGCM(hashlib.sha256(b"tico.file-cursor.v1\0" + key).digest())
 
 
-def decode_cursor(cursor):
+def encode_cursor(stamp, ident, key):
+    # Only a random nonce is public: both the row identity and its timestamp are authenticated ciphertext.
+    nonce = secrets.token_bytes(12)
+    sealed = cursor_cipher(key).encrypt(nonce, json.dumps([stamp, ident]).encode(), b"file-cursor-v1")
+    return base64.urlsafe_b64encode(nonce + sealed).decode()
+
+
+def decode_cursor(cursor, key):
+    from cryptography.exceptions import InvalidTag
     try:
-        stamp, _, ident = base64.urlsafe_b64decode(cursor.encode()).decode().partition("|")
-    except (ValueError, binascii.Error, UnicodeError) as exc:
+        sealed = base64.urlsafe_b64decode(cursor.encode())
+        stamp, ident = json.loads(cursor_cipher(key).decrypt(sealed[:12], sealed[12:], b"file-cursor-v1"))
+        if not isinstance(stamp, str) or not isinstance(ident, str) or not stamp or not ident:
+            raise ValueError()
+        return stamp, ident
+    except (InvalidTag, ValueError, TypeError, binascii.Error, UnicodeError) as exc:
         raise Problem("validation", "That cursor is not valid", 422) from exc
-    if not stamp or not ident:
-        raise Problem("validation", "That cursor is not valid", 422)
-    return stamp, ident
 
 
-def scan(c, select, where, params, limit, cursor, keep, budget=None):
+def scan(c, select, where, params, limit, cursor, keep, budget=None, *, cursor_key):
     """(rows, next cursor): the newest `bot_files` rows (aliased `f`) matching `where` that `keep` accepts, at most
     `limit`, looked at in chunks. After SCAN_MAX rows it answers with what it has and a cursor where it stopped, so a
     list of files the viewer mostly may not see stays bounded and still pages on. `budget(row)` may stop a page early
     (bytes), returning False for the row that would not fit."""
     from .files import prime_visible
     out, last, scanned = [], None, 0
-    position = decode_cursor(cursor) if cursor else None
+    position = decode_cursor(cursor, cursor_key) if cursor else None
     while True:
         clauses = list(where)
         args = list(params)
@@ -137,15 +163,15 @@ def scan(c, select, where, params, limit, cursor, keep, budget=None):
         for r in batch:
             if keep(r):
                 if len(out) == limit or (budget and not budget(r)):
-                    return out, encode_cursor(out[-1]["last_activity_at"], out[-1]["id"]) if out else \
-                        encode_cursor(last["last_activity_at"], last["id"]) if last else None
+                    return out, encode_cursor(out[-1]["last_activity_at"], out[-1]["id"], cursor_key) if out else \
+                        encode_cursor(last["last_activity_at"], last["id"], cursor_key) if last else None
                 out.append(r)
             last = r
         scanned += len(batch)
         if len(batch) < SCAN_CHUNK:
             return out, None
         if scanned >= SCAN_MAX:
-            return out, encode_cursor(last["last_activity_at"], last["id"])
+            return out, encode_cursor(last["last_activity_at"], last["id"], cursor_key)
         position = (last["last_activity_at"], last["id"])
 
 
@@ -349,17 +375,9 @@ class Library:
         params = []
         where.append("(f.archived=1 OR p.archived=1)" if archived else "f.archived=0 AND COALESCE(p.archived,0)=0")
         if kind:
-            if kind not in KINDS:
-                raise Problem("validation", "kind is " + ", ".join(KINDS), 422)
-            if kind == "page":
-                where.append("p.file_id IS NOT NULL")
-            elif kind == "other":
-                known = [k for group in STORED.values() for k in group]
-                where.append("p.file_id IS NULL AND f.kind NOT IN (%s)" % ",".join("?" * len(known)))
-                params += known
-            else:
-                where.append("p.file_id IS NULL AND f.kind IN (%s)" % ",".join("?" * len(STORED[kind])))
-                params += list(STORED[kind])
+            sql, args = kind_filter(kind)
+            where.append(sql)
+            params += args
         if bot:
             with self.store.read() as c:
                 bot = (H.resolve_bot(c, bot) or {}).get("id", H.actor_id(bot))
@@ -393,7 +411,8 @@ class Library:
                 return spent[0] <= LIST_BYTES
             rows, nxt = scan(c, "SELECT f.*,p.cadence AS page_cadence,p.archived AS page_archived FROM bot_files f "
                                 "LEFT JOIN pages p ON p.file_id=f.id", where, params, limit, cursor,
-                             lambda r: self.files.visible(c, who, r, cache), budget)
+                             lambda r: self.files.visible(c, who, r, cache), budget,
+                             cursor_key=visuals.key_for(self.app, self.store.settings))
             known = names.lookup(c, {"bot:" + r["bot_id"] for r in rows})
             files = [self.row_view(c, who, r, caches, known) for r in rows]
             known.update(names.lookup(c, {f["actor"] for f in files if f.get("actor")}))
@@ -401,16 +420,17 @@ class Library:
                 f["actor_name"] = known.get(f.get("actor") or "", "")
         return {"files": files, "has_more": nxt is not None, "next_cursor": nxt}
 
-    def search(self, who, q, limit=20):
+    def search(self, who, q, limit=20, *, kind=""):
         """Files `who` may read whose title or text matches, best first, each with an excerpt. Archived and deleted
         files are left out, as Docs leaves out archived docs."""
         if who.role not in ("owner", "human", "bot"):
             raise Problem("forbidden", "People and bots search files", 403)
+        kind_sql, kind_args = kind_filter(kind)
         tokens = manual.query_words(q)
         if not tokens:
             raise Problem("query", "Search needs at least one word", 422)
         with self.store.read() as c:
-            candidates = self._candidates(c, tokens)
+            candidates = self._candidates(c, tokens, kind_sql, kind_args)
             from .files import prime_visible
             cache, out = {}, []
             weights = {t: 1.0 for t in tokens}
@@ -444,12 +464,12 @@ class Library:
                                  "excerpt": excerpt(r["text"] or "", tokens), "score": round(score, 3)}
                                 for score, r in out]}
 
-    def _candidates(self, c, tokens):
+    def _candidates(self, c, tokens, kind_sql="1", kind_args=()):
         """Rows whose title or text match, best match first, at most SCAN_MAX: FTS5 when the build has it, else
         titles alone."""
         select = ("SELECT f.*,p.cadence AS page_cadence,{text} AS text FROM bot_files f "
                   "LEFT JOIN pages p ON p.file_id=f.id {join} WHERE f.state<>'deleted' AND f.archived=0 "
-                  "AND COALESCE(p.archived,0)=0 {match} LIMIT ?")
+                  "AND COALESCE(p.archived,0)=0 AND (" + kind_sql + ") {match} LIMIT ?")
         if has_fts(c):
             from .docs import Docs
             query = select.format(text="file_text.text", join="JOIN file_text_state s ON s.file_id=f.id "
@@ -459,7 +479,7 @@ class Library:
             stemmed = [manual._stem(t) for t in tokens]
             for expression in Docs.expressions(stemmed):
                 try:
-                    found = c.execute(query, (expression, SCAN_MAX)).fetchall()
+                    found = c.execute(query, (*kind_args, expression, SCAN_MAX)).fetchall()
                 except sqlite3.OperationalError:
                     continue
                 rows += [r for r in found if r["id"] not in seen]
@@ -469,7 +489,7 @@ class Library:
             return rows
         like = " AND ".join("f.title LIKE ?" for _ in tokens)
         return c.execute(select.format(text="''", join="", match="AND " + like + " ORDER BY f.last_activity_at DESC"),
-                         (*["%" + t + "%" for t in tokens], SCAN_MAX)).fetchall()
+                         (*kind_args, *["%" + t + "%" for t in tokens], SCAN_MAX)).fetchall()
 
     # ------------------------------------------------------------------ hard delete
     def delete(self, request, fid):
@@ -531,19 +551,28 @@ def still_used(c, digest):
 
 def purge_rows(c, actor, row):
     """In one write: the deletion record, every version row, the blob rows only this file used and their links, the
-    file's search text and page row; the file row becomes a tombstone. Bytes no row needs any more are queued."""
+    file's search text; file and page rows retain authorization tombstones. Bytes no row needs any more are queued."""
     fid, now = row["id"], H.now()
     versions = c.execute("SELECT * FROM bot_file_versions WHERE file_id=?", (fid,)).fetchall()
     c.execute("INSERT INTO file_deletions(file_id,actor,versions,created_at) VALUES(?,?,?,?)",
               (fid, actor, len(versions), now))
     blob_ids = {b for v in versions for b in (v["blob_id"], v["poster_blob_id"], v["thumb_blob_id"]) if b}
+    if c.execute("SELECT 1 FROM pages WHERE file_id=?", (fid,)).fetchone():
+        from .files import retain_page_label_sources
+        retain_page_label_sources(c, row)
+        for v in versions:
+            for key in ("blob_id", "poster_blob_id", "thumb_blob_id", "digest", "source_digest"):
+                if v[key]:
+                    c.execute("INSERT OR IGNORE INTO page_identities(identity,file_id) VALUES(?,?)", (v[key], fid))
+        c.execute("UPDATE pages SET deleted_at=?,archived=1,as_of=NULL,replaced_by_id=NULL WHERE file_id=?", (now, fid))
     c.execute("DELETE FROM bot_file_versions WHERE file_id=?", (fid,))
     c.execute("UPDATE bot_files SET title='Deleted file',state='deleted',archived=1,url=NULL,current_version=0,"
               "identity=?,last_activity_at=? WHERE id=?", ("deleted:" + fid, now, fid))
     release_blobs(c, blob_ids, now)
     unindex(c, fid)
     c.execute("UPDATE pages SET replaced_by_id=NULL WHERE replaced_by_id=?", (fid,))
-    c.execute("DELETE FROM pages WHERE file_id=?", (fid,))
+    from . import counsel
+    counsel.revoke_page_copies(c, None, fid)
     if has_pins(c):
         c.execute("DELETE FROM pins WHERE item=?", ("page:" + fid,))
     c.execute("INSERT INTO bot_file_activity(file_id,actor,action,task_id,created_at,detail) VALUES(?,?,?,?,?,?)",
@@ -676,9 +705,9 @@ def install_library(app, store, auth, files):
                                cursor=cursor)
 
     @app.get("/api/v2/files/search")
-    def search(request: Request, q: str = "", limit: int = 20):
-        """Search the files the caller may read by title and text, best first, each with an excerpt."""
-        return library.search(request.state.identity, q[:500], max(1, min(limit, SEARCH_MAX)))
+    def search(request: Request, q: str = "", limit: int = 20, kind: str = ""):
+        """Search the files the caller may read by title and text, filtered by kind, best first with an excerpt."""
+        return library.search(request.state.identity, q[:500], max(1, min(limit, SEARCH_MAX)), kind=kind)
 
     @app.delete("/api/v2/files/{fid}")
     async def delete(request: Request, fid: str):

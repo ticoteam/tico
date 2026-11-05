@@ -4,6 +4,8 @@ import pytest
 
 from backend import hubdb as H, rules, verdict_moves as V
 from backend.tests.test_github import PR, _status, _suite, api, hook, post, pr_event  # noqa: F401
+from backend.tests.usage_rows import segment
+from backend import bot_settings as BS
 
 HEAD, NEW, BASE = "a" * 40, "d" * 40, "c" * 40
 STEPS = [("On Deck", "open"), ("In Progress", "doing"), ("Review 1", "review"), ("Review 1 Fixes", "doing"),
@@ -16,14 +18,13 @@ def receipt(api, task, head=HEAD):
         c.execute("UPDATE tasks SET note=? WHERE id=?", (f"Tests: base {BASE} head {head}: 9 passed, 0 failed", task["id"]))
 
 
-def usage(c, task_id, bot, model="claude-sonnet-5-5", provider="anthropic"):
+def usage(c, task_id, bot, model="claude-sonnet-5-5", provider="anthropic", runtime=None):
     turn = H.new_id()
-    c.execute("INSERT INTO turns(id,bot,started_at,finished_at,task_id) VALUES(?,?,?,?,?)",
+    c.execute("INSERT INTO attempts(id,bot_id,created_at,settled_at,task_id) VALUES(?,?,?,?,?)",
               (turn, bot, H.now(), H.now(), task_id))
-    c.execute("INSERT INTO turn_usage_segments(turn_id,position,input_tokens,output_tokens,model,provider,runtime,"
-              "harness,effort) VALUES(?,0,20,20,?,?,? ,?,'high')",
-              (turn, model, provider, "claude" if provider == "anthropic" else "codex",
-               "claude" if provider == "anthropic" else "codex"))
+    runtime = runtime or ("claude" if provider == "anthropic" else "codex")
+    segment(c, turn, input_tokens=20, output_tokens=20, model=model, provider=provider, runtime=runtime,
+            harness=runtime, effort="high")
     return turn
 
 
@@ -44,10 +45,11 @@ def ticket(api, step="Review 1", labels=()):
     return task
 
 
-def check(api, task, title="Review 1: PR #412", owner="bot:cmo"):
+def check(api, task, title="Review 1: PR #412", owner="bot:cmo", **ran):
+    """A check `owner` ran on the ticket; `ran` names the model it ran on (usage's model, provider, runtime)."""
     with api.app.state.store.transaction() as c:
         row = H.task_create(c, "bot:cpo", title, f"Check PR #412 head {HEAD}", owner, parent_id=task["id"], lint=False)
-        turn = usage(c, row["id"], H.actor_id(owner))
+        turn = usage(c, row["id"], H.actor_id(owner), **ran)
         from backend.check_independence import capture_attempt
         capture_attempt(c, task["id"], row["id"], HEAD, turn)
         c.execute("DELETE FROM jobs")
@@ -57,7 +59,7 @@ def check(api, task, title="Review 1: PR #412", owner="bot:cmo"):
 def verdict(api, row, value, head=HEAD):
     with api.app.state.store.transaction() as c:
         H.task_update(c, row["owner_id"], row["id"], status="done", note="Reviewed.", verdict=value, verdict_head=head)
-        turn = c.execute("SELECT id FROM turns WHERE task_id=? ORDER BY started_at DESC,id DESC LIMIT 1",
+        turn = c.execute("SELECT id FROM attempts WHERE task_id=? ORDER BY created_at DESC,id DESC LIMIT 1",
                          (row["id"],)).fetchone()
         if turn:
             V.after_capture(c, row["id"], head, turn["id"])
@@ -92,7 +94,7 @@ def builder_jobs(api):
 def step_events(api, task):
     with api.app.state.store.read() as c:
         return [(r["actor"], r["new"]) for r in c.execute(
-            "SELECT actor,new FROM task_events WHERE task_id=? AND field='step' ORDER BY rowid", (task["id"],))]
+            "SELECT actor_id AS actor,new FROM history_events WHERE subject_type='task' AND subject_id=? AND kind='step' ORDER BY rowid", (task["id"],))]
 
 
 def test_a_review_is_feedback_its_approval_goes_back_to_the_builder_once(api):
@@ -156,15 +158,7 @@ def test_duplicate_delivery_of_the_same_eligible_verdict_moves_only_once(api):
 
 def test_configured_other_family_checker_fallback_verdict_still_moves(api):
     task = ticket(api)
-    review = check(api, task)
-    with api.app.state.store.transaction() as c:
-        c.execute("DELETE FROM turn_usage_segments WHERE turn_id IN (SELECT id FROM turns WHERE task_id=?)",
-                  (review["id"],))
-        turn = c.execute("SELECT id FROM turns WHERE task_id=?", (review["id"],)).fetchone()[0]
-        c.execute("INSERT INTO turn_usage_segments(turn_id,position,input_tokens,output_tokens,model,provider,runtime,"
-                  "harness,effort) VALUES(?,0,20,20,'gpt-6.1-sol','openai','codex','codex','high')", (turn,))
-        from backend.check_independence import capture_attempt
-        capture_attempt(c, task["id"], review["id"], HEAD, turn)
+    review = check(api, task, model="gpt-6.1-sol", provider="openai")
     verdict(api, review, "approve")
     assert step(api, task) == "Review 1 Fixes"
     with api.app.state.store.read() as c:
@@ -174,19 +168,13 @@ def test_configured_other_family_checker_fallback_verdict_still_moves(api):
         assert not eligibility["eligible"] and eligibility["known"]
         assert eligibility["builder_families"] == ["openai"]
         assert eligibility["checker_families"] == ["openai"]
-        assert c.execute("SELECT count(*) FROM task_events WHERE task_id=? AND field='verdict_wait'",
+        assert c.execute("SELECT count(*) FROM history_events WHERE subject_type='task' AND subject_id=? AND kind='verdict_wait'",
                          (task["id"],)).fetchone()[0] == 1
 
 
 def test_unknown_executed_checker_family_is_recorded_but_does_not_block_verdict(api):
     task = ticket(api)
-    review = check(api, task)
-    with api.app.state.store.transaction() as c:
-        turn = c.execute("SELECT id FROM turns WHERE task_id=?", (review["id"],)).fetchone()[0]
-        c.execute("UPDATE turn_usage_segments SET model='synthetic-unknown-model',provider='unknown' WHERE turn_id=?",
-                  (turn,))
-        from backend.check_independence import capture_attempt
-        capture_attempt(c, task["id"], review["id"], HEAD, turn)
+    review = check(api, task, model="synthetic-unknown-model", provider="unknown", runtime="claude")
     verdict(api, review, "approve")
     assert step(api, task) == "Review 1 Fixes"
     with api.app.state.store.read() as c:
@@ -201,11 +189,11 @@ def test_verdict_waits_for_its_exact_attempt_capture_then_moves_once(api):
     task = ticket(api)
     review = check(api, task)
     with api.app.state.store.transaction() as c:
-        turn = c.execute("SELECT id FROM turns WHERE task_id=?", (review["id"],)).fetchone()[0]
+        turn = c.execute("SELECT id FROM attempts WHERE task_id=?", (review["id"],)).fetchone()[0]
         c.execute("DELETE FROM check_head_provenance WHERE check_id=?", (review["id"],))
         H.task_update(c, review["owner_id"], review["id"], status="done", note="Reviewed.",
                       verdict="approve", verdict_head=HEAD)
-        marker = c.execute("SELECT new FROM task_events WHERE task_id=? AND field='verdict_wait' "
+        marker = c.execute("SELECT new FROM history_events WHERE subject_type='task' AND subject_id=? AND kind='verdict_wait' "
                            "ORDER BY rowid DESC LIMIT 1", (task["id"],)).fetchone()
         assert H._json(marker["new"], {})["attempt_id"] == turn
         assert V.step_of(c, H.task(c, task["id"])) == "Review 1"
@@ -221,7 +209,7 @@ def test_post_capture_callback_ignores_a_different_or_obsolete_attempt(api):
     task = ticket(api)
     review = check(api, task)
     with api.app.state.store.transaction() as c:
-        turn = c.execute("SELECT id FROM turns WHERE task_id=?", (review["id"],)).fetchone()[0]
+        turn = c.execute("SELECT id FROM attempts WHERE task_id=?", (review["id"],)).fetchone()[0]
         H.task_update(c, review["owner_id"], review["id"], status="done", note="Reviewed.",
                       verdict="approve", verdict_head=HEAD)
         assert V.after_capture(c, review["id"], "b" * 40, turn) is None
@@ -301,7 +289,7 @@ def test_a_ticket_tagged_with_a_steps_skip_tag_passes_it_by_and_the_skip_is_reco
     assert not checks_of(api, task), "a skipped step files no check"
     assert [m["refs"].get(V.HANDOFF) for m in builder_jobs(api)] == ["merge"]
     with api.app.state.store.read() as c:
-        assert c.execute("SELECT new FROM task_events WHERE task_id=? AND field='step_skipped'",
+        assert c.execute("SELECT new FROM history_events WHERE subject_type='task' AND subject_id=? AND kind='step_skipped'",
                          (task["id"],)).fetchone()[0] == "In QA"
 
 
@@ -321,6 +309,40 @@ def test_a_green_new_head_at_a_step_with_after_green_moves_on_to_the_next_check(
     assert step_events(api, task)[-1][0] == H.KEEPER
 
 
+@pytest.mark.parametrize('target', ['merge', 'In QA'])
+def test_shared_fixes_waits_for_a_head_newer_than_the_review_that_returned_it(api, target):
+    from backend import step_flow as F
+    task = ticket(api)
+    flow(api, task, 'Review 2', on_pass='Review 1 Fixes', on_fail='Review 1 Fixes')
+    flow(api, task, 'Review 1 Fixes', after_green=target)
+    verdict(api, check(api, task), 'approve')
+    assert step(api, task) == 'Review 1 Fixes'
+    hook(api, 'pull_request', pr_event('synchronize', head={'sha': NEW}))
+    receipt(api, task, NEW)
+    with api.app.state.store.transaction() as c:
+        H.task_update(c, 'bot:cpo', task['id'], step='Review 2')
+    verdict(api, check(api, task, title='Review 2: PR #412'), 'changes', head=NEW)
+    assert step(api, task) == 'Review 1 Fixes'
+    with api.app.state.store.transaction() as c:
+        current = H.task(c, task['id'])
+        assert V._judged_by(c, current, F.step(c, current['step_id'])) == NEW
+        assert V.merge_ready(c, current) is None
+        c.execute('DELETE FROM jobs')
+    _suite(api, 'github-actions', 'completed', 'success', sha=NEW)
+    assert step(api, task) == 'Review 1 Fixes'
+    assert not builder_jobs(api), 'green CI on the returned head must not skip its changes'
+
+    fixed = 'e' * 40
+    hook(api, 'pull_request', pr_event('synchronize', head={'sha': fixed}))
+    receipt(api, task, fixed)
+    _suite(api, 'github-actions', 'completed', 'success', sha=fixed)
+    if target == 'merge':
+        assert step(api, task) == 'Review 1 Fixes'
+        assert [m['refs'].get(V.HANDOFF) for m in builder_jobs(api)] == ['merge']
+    else:
+        assert step(api, task) == 'In QA'
+
+
 def test_on_the_dev_board_the_builder_moves_on_from_fixes_not_ci(api):
     task = ticket(api)
     verdict(api, check(api, task), "changes")
@@ -336,7 +358,7 @@ def test_a_check_finished_with_no_verdict_is_feedback_and_goes_to_on_fail(api):
     with api.app.state.store.transaction() as c:
         H.task_update(c, qa["owner_id"], qa["id"], status="done", note="Looked at it; the login form is odd.")
         from backend import check_pools
-        turn = c.execute("SELECT id FROM turns WHERE task_id=?", (qa["id"],)).fetchone()[0]
+        turn = c.execute("SELECT id FROM attempts WHERE task_id=?", (qa["id"],)).fetchone()[0]
         check_pools.capture_attempt(c, turn)
     assert step(api, task) == "QA Fixes"
     assert [m["refs"].get(V.HANDOFF) for m in builder_jobs(api)] == ["verdict"], [(m["refs"], m["body"][:200]) for m in builder_jobs(api)]
@@ -396,9 +418,8 @@ def test_allocator_skips_inactive_pool_members_and_assigns_remaining_checks(api,
             c.execute("UPDATE bot_config SET onboarding_state=? WHERE bot='cmo'", (unavailable["onboarding_state"],))
         if legacy:
             c.execute("PRAGMA ignore_check_constraints=OFF")
-        for key, value in unavailable.get("config", {}).items():
-            c.execute("UPDATE bot_config SET config=json_set(config, ?, ?) WHERE bot='cmo'",
-                      ("$." + key, value))
+        if unavailable.get("config"):
+            BS.update(c, "cmo", unavailable["config"])
 
         assert task_allocator.allocate(c) == [(check["id"], "cpo") for check in checks]
         assert all(H.task(c, check["id"])["owner_id"] == "bot:cpo" for check in checks)
@@ -665,7 +686,7 @@ def test_a_round_timed_out_after_a_pass_at_the_head_says_it_passed(api):
     task = _passed_at_head_behind_a_stuck_suite(api)
     with api.app.state.store.transaction() as c:
         assert V.timeouts(c, H.shift(H.now(), hours=3)) == [task["id"]]
-        note = c.execute("SELECT note FROM task_events WHERE task_id=? AND field='round_skipped'",
+        note = c.execute("SELECT note FROM history_events WHERE subject_type='task' AND subject_id=? AND kind='round_skipped'",
                          (task["id"],)).fetchone()[0]
     assert "no usable verdict" not in note and f"pass at head {HEAD[:12]}" in note, note
 
@@ -687,6 +708,36 @@ def test_a_round_timed_out_after_a_fail_at_the_head_goes_to_on_fail_and_never_to
     handoffs = [m for m in builder_jobs(api) if m["refs"].get(V.HANDOFF)]
     assert [m["refs"][V.HANDOFF] for m in handoffs] == ["verdict"], handoffs
     assert handoffs[0]["refs"]["verdict"] == "fail" and "QA Fixes" in handoffs[0]["body"], handoffs[0]
+
+
+def test_timeout_keeps_the_private_qa_verdict_source(api):
+    import json
+    from backend import task_privacy
+    from backend.tests.test_api import unrelated_task_managers
+
+    task = ticket(api, step="In QA")
+    with api.app.state.store.transaction() as c:
+        unrelated_task_managers(c)
+        qa = H.task_create(c, "bot:cpo", "QA: PR #412", f"Check head {HEAD}", "bot:cmo",
+                           parent_id=task["id"], private=True, lint=False)
+        usage(c, qa["id"], "cmo")
+    verdict(api, qa, "fail")
+    with api.app.state.store.transaction() as c:
+        H.task_update(c, "bot:cpo", task["id"], step="In QA")
+        c.execute("DELETE FROM jobs")
+    check(api, task, "QA: PR #412")
+    with api.app.state.store.transaction() as c:
+        assert V.timeouts(c, H.shift(H.now(), hours=24 * 7)) == [task["id"]]
+        [msg] = [H.message(c, r[0]) for r in c.execute(
+            "SELECT m.id FROM jobs j JOIN messages m ON m.id=j.message_id WHERE j.bot_id='cpo' "
+            "AND j.state='queued' AND json_extract(m.refs,'$.handoff') IS NOT NULL")]
+        assert msg["refs"]["trigger_source"] == qa["id"]
+        assert not task_privacy.message_readable(c, "bot:unrelated", msg)
+        assert task_privacy.message_readable(c, "bot:cpo", msg)
+        event = dict(c.execute("SELECT old,new,note FROM history_events WHERE subject_id=? AND kind='round_skipped'",
+                               (task["id"],)).fetchone())
+        assert json.loads(event["old"])["source_tasks"] == [qa["id"]]
+        assert not task_privacy.content_readable(c, "bot:unrelated", event)
 
 
 def test_a_later_pass_at_a_failed_head_does_not_let_a_timed_out_round_clear_the_merge(api):

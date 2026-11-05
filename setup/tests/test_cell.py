@@ -1231,6 +1231,71 @@ def test_without_a_tunnel_the_routes_are_written_but_nothing_restarts(ready):
     assert restarts(ready, 0) == 0
 
 
+# routes: a service on the host that is not a company (the public demo)
+
+DEMO = ["route", "set", "--name", "demo", "--host", "demo.tico.team", "--host", "demo.tico.dev",
+        "--port", "19081", "--port", "19082", "--noindex", "--json"]
+
+
+def test_a_route_goes_to_its_first_healthy_port_and_is_never_indexed():
+    route = {"name": "demo", "hosts": ["demo.tico.team", "demo.tico.dev"], "ports": [19081, 19082], "noindex": True}
+    plain = cell.router_config([{"domain": "a.tico.team", "port": 20000}])
+    text = cell.router_config([{"domain": "a.tico.team", "port": 20000}], [route])
+    block = text[text.index("http://demo.tico.team:8080, http://demo.tico.dev:8080 {"):text.index("http://:8080 {")]
+    assert text.replace(block, "") == plain                       # the companies' blocks are untouched
+    assert "reverse_proxy 127.0.0.1:19081 127.0.0.1:19082 {" in block and "lb_policy first" in block
+    assert "health_uri /healthz" in block and "lb_try_duration 30s" in block
+    assert block.count('header X-Robots-Tag "noindex, nofollow"') == 2          # answers and the hold's 503
+    assert 'respond "User-agent: *\nDisallow: /\n" 200' in block
+    one = cell.router_config([], [{**route, "ports": [19081], "noindex": False}])
+    assert "lb_policy" not in one and "X-Robots-Tag" not in one and "robots.txt" not in one
+
+
+def test_route_set_is_kept_by_every_later_router_write_and_remove_drops_it(tunneled):
+    routes = tunneled.root / "tunnel" / "cloudflared.yml"
+    plain = routes.read_text()
+    n = len(tunneled.system.calls)
+    answer = tunneled(*DEMO[:-1], "--router-only", "--json")
+    assert answer == {"ok": True, "route": "demo", "changed": True, "router": True, "tunnel": False,
+                      "tunnel_pending": True}
+    assert routes.read_text() == plain and restarts(tunneled, n) == 0     # --router-only: no tunnel restart
+    caddy = tunneled.root / "router" / "Caddyfile"
+    assert "http://demo.tico.team:8080, http://demo.tico.dev:8080" in caddy.read_text()
+    tunneled(*add_args(tunneled, "alpha"))                                 # a company's add keeps the route
+    assert "demo.tico.dev" in caddy.read_text() and '"demo.tico.dev"' in routes.read_text()
+    assert tunneled("route", "list", "--json")["routes"][0]["ports"] == [19081, 19082]
+    n = len(tunneled.system.calls)
+    assert tunneled(*DEMO)["changed"] is False and restarts(tunneled, n) == 0
+    answer = tunneled("route", "remove", "--name", "demo", "--json")
+    assert answer["changed"] and answer["tunnel"] and restarts(tunneled, n) == 1
+    assert "demo.tico" not in caddy.read_text() and routes.read_text() == plain
+
+
+def test_route_and_company_hosts_never_overlap(ready):
+    ready(*add_args(ready, "alpha"))
+    assert ready("route", "set", "--name", "demo", "--host", "alpha.tico.team", "--port", "19081",
+                 "--json")["error"] == "domain_taken"
+    assert ready(*DEMO)["ok"]
+    args = add_args(ready, "demo")
+    assert ready(*args)["error"] == "domain_taken"                         # demo.tico.team is the route's
+
+
+def test_if_router_current_refuses_a_router_this_checkout_did_not_write(ready):
+    ready(*add_args(ready, "alpha"))
+    assert ready(*DEMO, "--if-router-current")["ok"]                     # this checkout's file, with or without routes
+    path = ready.root / "router" / "Caddyfile"
+    newer = path.read_text() + "# a newer core's block\n"
+    path.write_text(newer)
+    assert ready(*DEMO, "--if-router-current")["error"] == "router_changed"
+    assert path.read_text() == newer
+
+
+@pytest.mark.parametrize("extra", [["--port", "8080"], ["--port", "20001"], ["--port", "80"], []])
+def test_route_ports_stay_clear_of_the_cells_own(ready, extra):
+    answer = ready("route", "set", "--name", "demo", "--host", "demo.tico.team", *extra, "--json")
+    assert answer["error"] == "bad_args"
+
+
 # carried settings
 
 CARRIED = ("# from hub.tico.team's .env\n"
@@ -2365,6 +2430,68 @@ def test_adding_again_keeps_the_page_host_unless_the_flag_is_given(ready):
     assert ready(*add_args(ready, "acme"))["ok"]
     assert record(ready, "acme")["page_host"] == "acme.tico.page"
     assert "TICO_READER_ORIGIN=https://acme.tico.page" in (ready.root / "companies" / "acme" / ".env").read_text()
+
+
+def test_set_page_host_turns_the_page_on_for_a_running_company_and_keeps_its_other_settings(ready):
+    ready(*add_args(ready, "acme"))
+    env_dir = ready.root / "companies" / "acme"
+    before = (env_dir / ".env").read_text()
+    answer = ready("set-page-host", "--company", "acme", "--host", "acme.tico.page")
+    assert answer["ok"] and answer["changed"] and answer["page_host"] == "acme.tico.page"
+    assert record(ready, "acme")["page_host"] == "acme.tico.page"
+    env = (env_dir / ".env").read_text()
+    assert "TICO_READER_ORIGIN=https://acme.tico.page\n" in env and "TICO_COMPANY_PAGE_DIR=/company-page-public\n" in env
+    kept = [line for line in before.splitlines() if not line.startswith("#")]
+    assert all(line in env.splitlines() for line in kept)            # sign-in, backups and the rest are untouched
+    folder = ready.root / "pages" / "acme"
+    assert stat.S_IMODE(folder.stat().st_mode) == 0o755
+    assert f"      - {folder}:/company-page-public\n" in (env_dir / "compose.cell.yaml").read_text()
+    assert "acme.tico.page" in caddyfile(ready) and "/pages/acme/current" in caddyfile(ready)
+
+
+def test_set_page_host_again_is_a_no_op_and_an_empty_host_clears_it(ready):
+    ready(*add_args(ready, "acme"))
+    ready("set-page-host", "--company", "acme", "--host", "acme.tico.page")
+    assert ready("set-page-host", "--company", "acme", "--host", "acme.tico.page")["changed"] is False
+    assert ready("set-page-host", "--company", "acme", "--host", "")["changed"]
+    assert "page_host" not in record(ready, "acme")
+    assert "TICO_READER_ORIGIN" not in (ready.root / "companies" / "acme" / ".env").read_text()
+    assert "/pages/" not in caddyfile(ready) and (ready.root / "pages" / "acme").exists()
+
+
+def test_set_page_host_that_failed_to_start_is_redone_in_full_when_given_again(ready, monkeypatch):
+    ready(*add_args(ready, "acme"))
+    real_up = cell.Cell.up
+
+    def broken(self, *a, **k):
+        raise cell.CellError("compose_failed", "up failed")
+    monkeypatch.setattr(cell.Cell, "up", broken)
+    assert ready("set-page-host", "--company", "acme", "--host", "acme.tico.page")["ok"] is False
+    assert record(ready, "acme")["page_pending"] is True
+    monkeypatch.setattr(cell.Cell, "up", real_up)
+    again = ready("set-page-host", "--company", "acme", "--host", "acme.tico.page")
+    assert again["ok"] and again["changed"]
+    assert "page_pending" not in record(ready, "acme")
+    assert "acme.tico.page" in caddyfile(ready)
+
+
+def test_a_page_host_that_is_the_companys_visual_or_runner_host_is_refused(ready):
+    ready(*add_args(ready, "acme"))
+    env = ready.root / "companies" / "acme" / ".env"
+    env.write_text(env.read_text() + "TICO_VISUAL_ORIGIN=https://vis.acme.example\nTICO_RUNNER_URL=https://run.acme.example/x\nTICO_PUBLIC_URL=//app.acme.example\n")
+    for taken in ("vis.acme.example", "run.acme.example", "app.acme.example"):
+        assert ready("set-page-host", "--company", "acme", "--host", taken)["error"] == "bad_domain"
+    assert "page_host" not in record(ready, "acme")
+
+
+def test_set_page_host_refuses_a_host_that_is_taken_or_the_companys_own(ready):
+    ready(*add_args(ready, "alpha", "--page-host", "alpha.tico.page"))
+    ready(*add_args(ready, "bravo"))
+    assert ready("set-page-host", "--company", "bravo", "--host", "alpha.tico.page")["error"] == "domain_taken"
+    assert ready("set-page-host", "--company", "bravo", "--host", "bravo.tico.team")["error"] == "bad_domain"
+    assert ready("set-page-host", "--company", "bravo", "--host", "tico.team")["error"] == "bad_domain"
+    assert ready("set-page-host", "--company", "nobody", "--host", "nobody.tico.page")["error"] == "not_found"
+    assert "page_host" not in record(ready, "bravo")
 
 
 def test_clearing_the_page_host_drops_its_route_and_keeps_the_folder(ready):

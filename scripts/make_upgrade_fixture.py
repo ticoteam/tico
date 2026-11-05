@@ -44,9 +44,11 @@ def seed(c, bots="INSERT"):
             if slug == "coo":
                 coo = f"bot:{have[0]}"
             continue
-        names = _cols(c, "bots", *(["id"] if keyed else []), "slug", "display_name", "runtime", "state", created)
+        # a release before migration 0043 has bots.runtime (its value moves into the bot's config); later ones do not
+        runtime = ["runtime"] if "runtime" in {row[1] for row in c.execute("PRAGMA table_info(bots)")} else []
+        names = _cols(c, "bots", *(["id"] if keyed else []), "slug", "display_name", *runtime, "state", created)
         # a bot's id is its slug (hubdb.new_bot_id for product bots), and actors are `bot:<id>`, so `bot:coo` resolves
-        values = ([slug] if keyed else []) + [slug, slug.upper(), "codex", "active", TS]
+        values = ([slug] if keyed else []) + [slug, slug.upper(), *(["codex"] if runtime else []), "active", TS]
         c.execute(f"{bots} INTO bots({names}) VALUES({','.join('?' * len(values))})", values)
     names = _cols(c, "conversations", "id", "kind", "subject", ("participants", "participants_json"), created,
                   "last_message_at")
@@ -57,6 +59,12 @@ def seed(c, bots="INSERT"):
     for n in (1, 2):
         c.execute(f"INSERT INTO messages({names}) VALUES(?,?,?,?,?,?,?)",
                   (f"m{n}", "c1", "human:ana", coo, "message", f"hello {n}", TS))
+    # The job each message to the bot queued: an older release's trigger made it, and a database that still has the
+    # trigger makes its own. On one without it (a fresh build), backend/enqueue.py makes them, as the writers do.
+    if not c.execute("SELECT 1 FROM sqlite_master WHERE type='trigger' AND name='queue_bot_message'").fetchone():
+        from backend.enqueue import enqueue_stored
+        for n in (1, 2):
+            enqueue_stored(c, f"m{n}")
     names = _cols(c, "tasks", "id", "title", "body", ("requester_id", "requester"), ("owner_id", "owner"), "status",
                   "conversation_id", created, ("updated_at", "updated"))
     for n in (1, 2, 3):

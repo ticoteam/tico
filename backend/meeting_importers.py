@@ -1,7 +1,7 @@
 """Which computer runs each meeting importer, and how each one is doing.
 
 The owner turns an importer on in Settings and picks the enrolled computer that holds its
-credentials. That computer's `python -m runner importers` job asks `GET /api/v2/runners/importers`
+credentials. That computer's `python -m runner_support importers` job asks `GET /api/v2/runners/importers`
 what to run and reports through `POST /api/v2/imports/sources/{source}/status`. Credentials are never
 stored here: they live in `secrets/<file>` on the computer (docs/meetings.md).
 """
@@ -70,7 +70,7 @@ def install_meeting_importers(app, store, auth, execution, mutate, importer):
         return [{"id": r["id"], "label": r["label"], "platform": r["platform"] or "",
                  "online": bool(r["last_seen_at"] and r["last_seen_at"] >= H.shift(now, minutes=-5)),
                  "last_seen_at": r["last_seen_at"]}
-                for r in c.execute("SELECT id,label,platform,last_seen_at,owner_id FROM runners "
+                for r in c.execute("SELECT id,label,platform,last_seen_at,owner_id FROM runners_with_state "
                                    "WHERE revoked_at IS NULL ORDER BY label") if r["owner_id"] in allowed]
 
     def configured(c):
