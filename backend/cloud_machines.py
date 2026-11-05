@@ -92,7 +92,7 @@ import re
 import secrets
 import threading
 import time
-from datetime import timezone
+from datetime import datetime, timezone
 
 import httpx
 
@@ -357,7 +357,7 @@ def replacement_runner(c, key, old_id):
     """A fresh attempt can enroll before HQ's create reply arrives, including after a lost reply."""
     found = c.execute(
         "SELECT e.runner_id FROM enrollments e JOIN cloud_machine_codes m USING(code_hash) "
-        "WHERE m.bot=? AND m.replacement_for=? AND e.runner_id IS NOT NULL "
+        "WHERE m.bot=? AND m.replacement_for IS ? AND e.runner_id IS NOT NULL "
         "ORDER BY e.consumed_at DESC,e.code_hash LIMIT 1", (key, old_id)).fetchone()
     return found["runner_id"] if found else None
 
@@ -541,23 +541,23 @@ def mint(c, key, owner=None):
     if not operator or not H.human(c, operator):
         raise Problem("operator", "Nobody on the roster to own this cloud machine's computer", 409)
     code = secrets.token_urlsafe(32)
+    made_at = datetime.fromtimestamp(now(), timezone.utc).strftime("%Y-%m-%dT%H:%M:%S.%f") + "Z"
     c.execute("INSERT INTO enrollments(code_hash,owner_id,expires_at) VALUES(?,?,?)",
-              (digest(code), operator, H.shift(H.now(), minutes=ENROLL_MINUTES)))
+              (digest(code), operator, H.shift(made_at, minutes=ENROLL_MINUTES)))
     current = row(c, key)
     replacement_for = current["machine_id"] if current and (current["deleting"] or current["state"] in DEAD) else None
     c.execute("INSERT INTO cloud_machine_codes(code_hash,bot,created_at,replacement_for) VALUES(?,?,?,?)",
-              (digest(code), key, H.now(), replacement_for))
+              (digest(code), key, made_at, replacement_for))
     return code
 
 
-def awaiting(c, key, at):
-    """A code was just minted for machine `key` at `at`: the machine HQ is making must enroll by that code's expiry.
-    `enroll_by` is that deadline while a machine is being made, 0 once it has enrolled, and NULL when the row's machine
-    is gone (deleted here or at HQ, or never made). A create retried after a lost answer mints another code but gets
-    the same machine back (HQ is idempotent on key): one that enrolled meanwhile stays enrolled (0), and one still
-    booting may use either code, so the newer expiry counts."""
-    if row(c, key)["enroll_by"] != 0:
-        save(c, key, enroll_by=at + ENROLL_MINUTES * 60 + ENROLL_GRACE)
+def enrollment_deadline(c, key, at):
+    """The current attempt's codes own its deadline, even before HQ has returned a machine id.
+    With no unused code left it needs replacement now; a resume cannot give it another code."""
+    expires = c.execute(
+        "SELECT max(e.expires_at) FROM enrollments e JOIN cloud_machine_codes m USING(code_hash) "
+        "WHERE m.bot=? AND e.consumed_at IS NULL", (key,)).fetchone()[0]
+    return epoch(expires) + ENROLL_GRACE if expires else at
 
 
 def enrolling(c, code_hash):
@@ -1066,22 +1066,21 @@ class Manager:
                     continue                                # a superseded id cannot become another row's machine
                 if current and current["problem"] == "replacing" and (current["stop_until"] or 0) > now():
                     continue                                # an HQ list cannot release a replacement's claim fence
-                if current and current["deleting"]:
-                    continue                                # reconcile its exact id, even if HQ changed its key
                 if current and current["state"] == "deleted" and current["machine_id"] == machine["id"]:
                     continue                                # deleted here: live at HQ only until boat confirms
                 if current and (current["machine_id"] in (None, machine["id"]) or (
-                        current["state"] in DEAD and machine["id"] != current["machine_id"])):
+                        (current["state"] in DEAD or current["deleting"]) and machine["id"] != current["machine_id"])):
+                    if current["machine_id"] != machine["id"]:
+                        self.adopt(c, current, machine, at)
+                        continue
                     gone = {"enroll_by": None, "start_asked_at": None} if machine["state"] == "deleted" else {}
-                    if machine["state"] == "failed" and (current["machine_id"], current["state"]) != (
-                            machine["id"], "failed"):
+                    if machine["state"] == "failed" and current["state"] != "failed":
                         # HQ never got it a computer: it counts like one that never enrolled, so a boat that keeps
                         # failing stops being asked (no_enroll), and the work it was woken for may wake a new one.
                         # Only HQ's list says so: a refused or unanswered create may be a passing outage.
                         gone.update(enroll_by=None, enroll_fails=current["enroll_fails"] + 1, wake_key=None,
                                     start_asked_at=None)
-                    elif machine["state"] in ON and (current["machine_id"] != machine["id"]
-                                                      or current["start_asked_at"] is not None):
+                    elif machine["state"] in ON and current["start_asked_at"] is not None:
                         # Only an unanswered start can be a recovered resume: a stop may still list as running.
                         # Give the start its idle window and spend a new wake, keeping the old guard if none remains.
                         woke_for = wake_for(current, facts(c, self.settings, current, at))[0]
@@ -1177,6 +1176,28 @@ class Manager:
                 "cost_month_usd": machine["cost_month_usd"], "starts_month": machine["starts_month"],
                 "last_error": machine["last_error"]}
 
+    def adopt(self, c, current, machine, at):
+        """A new id gets only its own attempt's codes, runner, deadline and wake state, from create or from a list."""
+        key, old_id = current["bot"], current["machine_id"]
+        fresh_runner = replacement_runner(c, key, old_id)
+        if current["runner_id"] and current["runner_id"] != fresh_runner:
+            c.execute("UPDATE runners SET revoked_at=? WHERE id=? AND revoked_at IS NULL",
+                      (H.now(), current["runner_id"]))
+            c.execute("UPDATE cloud_machine_deletions SET runner_id=? WHERE machine_id=?",
+                      (current["runner_id"], old_id))
+        c.execute("DELETE FROM enrollments WHERE code_hash IN (SELECT code_hash FROM cloud_machine_codes "
+                  "WHERE bot=? AND replacement_for IS NOT ?)", (key, old_id))
+        c.execute("DELETE FROM cloud_machine_codes WHERE bot=? AND replacement_for IS NOT ?", (key, old_id))
+        dead = machine["state"] in DEAD
+        fresh = {**current, **self.described(machine), "runner_id": fresh_runner, "deleting": False}
+        woke_for = wake_for({**fresh, "state": "deleted"}, facts(c, self.settings, fresh, at))[0]
+        save(c, key, **self.described(machine), runner_id=fresh_runner,
+             enroll_by=None if dead else (0 if fresh_runner else enrollment_deadline(c, key, at)),
+             enroll_fails=0 if fresh_runner else current["enroll_fails"] + (machine["state"] == "failed"),
+             active_at=None if dead else at, heartbeat_at=None if dead else at, ttl_s=None,
+             wake_key=None if dead else woke_for, woke_at=None if dead else at,
+             failures=0, next_try_at=None, problem="", problem_at=None, stop_until=None, start_asked_at=None)
+
     def step(self, hq, key, at):
         """One machine's look. A bot's own row also binds that bot to its machine, own or shared, once it has one."""
         if key != SHARED:
@@ -1189,6 +1210,16 @@ class Manager:
             current = row(c, key)
             if not current:
                 return None
+        if current["machine_id"] and current["state"] not in DEAD and not current["deleting"] \
+                and not current["runner_id"] and not current["enroll_by"]:
+            # Repair a recovered id saved without its deadline by an older server. Expired or missing codes take
+            # the normal never-enrolled deletion path, even when its old wake already says stuck.
+            with self.store.transaction() as c:
+                live = row(c, key)
+                if live["machine_id"] == current["machine_id"] and not live["runner_id"] and not live["enroll_by"]:
+                    save(c, key, enroll_by=enrollment_deadline(c, key, at))
+                current = row(c, key)
+        with self.store.read() as c:
             found = facts(c, self.settings, current, at)
         action, problem = decide(current, found, at, pause_after(current))
         if problem is not None and problem != current["problem"] and not action:
@@ -1232,7 +1263,6 @@ class Manager:
                     c.execute("DELETE FROM cloud_machine_codes WHERE bot=? AND code_hash NOT IN "
                               "(SELECT code_hash FROM enrollments)", (key,))
                 code = mint(c, key, self.execution.auth.owner_id(c) if key == SHARED else None)
-                awaiting(c, key, at)
                 save(c, key, start_asked_at=None)
         elif action == "start":
             # Persist before HQ is asked: a restart can recover the start even if its answer never arrives.
@@ -1283,31 +1313,17 @@ class Manager:
                 save(c, key, next_try_at=at + BACKOFF, enroll_by=None)     # the code it took for that goes unused
             return
         fields = self.described(machine)
-        if action == "create" and machine["state"] == "failed":
-            fields.update(enroll_by=None, enroll_fails=current["enroll_fails"] + 1)   # as when HQ's list says so
-        elif action in ("create", "start"):
+        if action == "start":
             woke_for = wake_for(current, found)[0]
             fields.update(active_at=at, heartbeat_at=at, wake_key=woke_for, woke_at=at)
         with self.store.transaction() as c:
-            if action == "create" and replacing:
-                # Enrollment can beat recovery of a lost create reply. Fresh attempts' codes belong to the new id;
-                # settling the old intent later must neither revoke this runner nor remove its codes.
-                fresh_runner = replacement_runner(c, key, current["machine_id"])
+            if action == "create":
+                # Enrollment may have arrived while HQ answered. Both recovery paths read it under the write lock.
                 live = row(c, key)
-                if live["runner_id"] and live["runner_id"] != fresh_runner:
-                    c.execute("UPDATE runners SET revoked_at=? WHERE id=? AND revoked_at IS NULL",
-                              (H.now(), live["runner_id"]))
-                    c.execute("UPDATE cloud_machine_deletions SET runner_id=? WHERE machine_id=?",
-                              (live["runner_id"], current["machine_id"]))
-                c.execute("DELETE FROM enrollments WHERE code_hash IN (SELECT code_hash FROM cloud_machine_codes "
-                          "WHERE bot=? AND replacement_for IS NOT ?)", (key, current["machine_id"]))
-                c.execute("DELETE FROM cloud_machine_codes WHERE bot=? AND replacement_for IS NOT ?",
-                          (key, current["machine_id"]))
-                fields.update(runner_id=fresh_runner,
-                              enroll_by=None if machine["state"] == "failed" else
-                              (0 if fresh_runner else at + ENROLL_MINUTES * 60 + ENROLL_GRACE))
-            save(c, key, **fields, failures=0, next_try_at=None, problem="", problem_at=None, stop_until=None,
-                 start_asked_at=None)
+                self.adopt(c, live, machine, at)
+            else:
+                save(c, key, **fields, failures=0, next_try_at=None, problem="", problem_at=None, stop_until=None,
+                     start_asked_at=None)
             H.event(c, H.KEEPER, "cloud_machine." + {"create": "created", "start": "started", "stop": "stopped"}[action],
                     key, {"size": machine["size"], "machine": machine["id"]})
 
@@ -1333,8 +1349,10 @@ class Manager:
         elif refused.status == 409 and refused.code == "sandbox_stopping":
             fields = {"next_try_at": at + STOPPING_RETRY}
         elif refused.status == 404 and action != "create":
-            # HQ has no such machine (its disk was deleted): the next want makes a new one.
-            fields = {"machine_id": None, "state": "deleted", "next_try_at": None, "enroll_by": None}
+            # Keep the old id so its runner and codes cannot become the next attempt's initial enrollment.
+            with self.store.transaction() as c:
+                deleted(c, row(c, key), H.KEEPER)
+            return
         else:
             failures = current["failures"] + 1
             fields = {"failures": failures, "next_try_at": at + min(BACKOFF_MAX, BACKOFF * 2 ** (failures - 1))}
@@ -1595,7 +1613,7 @@ def present(current):
 def deleted(c, current, actor, changed_by=None, details=None):
     """Finish a deletion under the write lock, revoking the old computer and its codes while keeping fresh attempts."""
     key = current["bot"]
-    fresh_runner = replacement_runner(c, key, current["machine_id"])
+    fresh_runner = replacement_runner(c, key, current["machine_id"]) if current["machine_id"] else None
     if current["runner_id"] and current["runner_id"] != fresh_runner:
         c.execute("UPDATE runners SET revoked_at=? WHERE id=? AND revoked_at IS NULL", (H.now(), current["runner_id"]))
     c.execute("DELETE FROM enrollments WHERE code_hash IN (SELECT code_hash FROM cloud_machine_codes "

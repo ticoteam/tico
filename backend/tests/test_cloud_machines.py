@@ -117,7 +117,7 @@ def cloud(api, monkeypatch):  # noqa: F811
     # The finished setup's bots go on cloud machines when HQ first lists sizes (test_a_setup_finished_before_...);
     # here each test places its own.
     monkeypatch.setattr(manager, "on_offered", None)
-    at = [time.time()]
+    at = [CM.epoch(H.now())]
     monkeypatch.setattr(CM, "now", lambda: at[0])
     # These tests time a pause in seconds: 5 minutes (the least a person can set) keeps them at 300 s. The 30-minute
     # default is tested on its own, in test_the_default_pause_is_30_minutes_of_idle_and_not_before.
@@ -926,13 +926,16 @@ def test_a_real_change_of_placement_still_clears_the_refusal_and_its_wake_guard(
 
 def test_a_machine_hq_no_longer_has_is_made_again_and_replaces_the_old_computer(cloud):
     first = enrolled(cloud)
+    first_code = cloud.hq.calls[-1][3]
     cloud.tick(400)
     work(cloud, text="More")
     cloud.hq.fail["start"] = [CM.Refused("not_found", 404)]
     cloud.hq.machines["m1"]["state"] = "deleted"
     cloud.hq.calls.clear()
-    assert cloud.tick(10) == ["start"] and cloud.row()["machine_id"] is None
+    assert cloud.tick(10) == ["start"] and cloud.row()["machine_id"] == "m1" and cloud.row()["state"] == "deleted"
     assert cloud.tick(10) == ["start", "create"]
+    assert cloud.row()["runner_id"] is None and cloud.row()["enroll_by"] > cloud.at[0]
+    assert cloud.api.post("/api/v2/runners/enroll", json={"code": first_code, "label": "boat-vm"}).status_code == 401
     code = cloud.hq.calls[-1][3]
     second = post(cloud.api, "runners/enroll", {"code": code, "label": "boat-vm", "platform": "linux"})
     with cloud.store.read() as c:
@@ -1201,6 +1204,108 @@ def test_a_fresh_machine_can_enroll_after_its_create_reply_is_lost_while_the_old
         assert bool(CM.held(c, target.computer["runner_id"])) == (not old_settles)
         assert c.execute("SELECT revoked_at FROM runners WHERE id=?", (target.computer["runner_id"],)).fetchone()[0]
         assert not CM.held(c, fresh["runner_id"])
+
+
+def lost_replacement(cloud, monkeypatch, kind="replace"):
+    """HQ makes a fresh id after an uncertain delete, but the server never receives its create reply."""
+    target = deletion_target(cloud, kind)
+    old_id = cloud.row(target.key)["machine_id"]
+    cloud.hq.fail["delete"] = CM.Refused("unreachable")
+    assert delete_target(cloud, target).status_code == 502
+    cloud.hq.machines[old_id].update(key=f"{target.key}:superseded:{old_id}", pending="delete")
+    create = cloud.hq.create
+
+    def lost(*args):
+        create(*args)
+        raise CM.Refused("unreachable")
+
+    with monkeypatch.context() as pending:
+        pending.setattr(cloud.hq, "create", lost)
+        cloud.tick(CM.TICK)
+    fresh_id = next(mid for mid in cloud.hq.machines if mid != old_id)
+    code = next(call[3] for call in reversed(cloud.hq.calls) if call[0] == "create")
+    with cloud.store.read() as c:
+        expires = c.execute("SELECT expires_at FROM enrollments WHERE code_hash=?", (CM.digest(code),)).fetchone()[0]
+    assert cloud.row(target.key)["machine_id"] == old_id
+    return target, old_id, fresh_id, code, CM.epoch(expires) + CM.ENROLL_GRACE
+
+
+@pytest.mark.parametrize("kind", ["replace", "shared"])
+@pytest.mark.parametrize("old_settles", [False, True])
+def test_sync_adopts_a_lost_create_with_its_own_deadline_and_codes(cloud, monkeypatch, kind, old_settles):
+    target, old_id, fresh_id, code, deadline = lost_replacement(cloud, monkeypatch, kind)
+    if old_settles:
+        cloud.hq.machines[old_id]["state"] = "deleted"
+    # A restart has only the saved codes to recover the fresh attempt's deadline, not the old row's deadline.
+    manager = CM.Manager(cloud.store, cloud.store.settings, cloud.api.app.state.execution, client=cloud.hq)
+    manager.sync(cloud.hq, cloud.at[0])
+    current = cloud.row(target.key)
+    assert (current["machine_id"], current["state"], current["runner_id"]) == (fresh_id, "starting", None)
+    assert current["enroll_by"] == deadline > cloud.at[0]
+    assert current["problem"] == "" and current["wake_key"]
+    with cloud.store.read() as c:
+        assert CM.deleting(c, old_id) == (not old_settles)
+        assert [r[0] for r in c.execute("SELECT code_hash FROM cloud_machine_codes WHERE bot=?", (target.key,))] == [CM.digest(code)]
+        assert c.execute("SELECT revoked_at FROM runners WHERE id=?", (target.computer["runner_id"],)).fetchone()[0]
+    # Old-id settlement after adoption must leave all of the new id's data intact too.
+    cloud.hq.machines[old_id]["state"] = "deleted"
+    manager.sync(cloud.hq, cloud.at[0])
+    fields = ("machine_id", "state", "runner_id", "enroll_by", "wake_key", "woke_at", "problem")
+    assert {k: cloud.row(target.key)[k] for k in fields} == {k: current[k] for k in fields}
+    assert cloud.api.post("/api/v2/runners/enroll", json={"code": target.code, "label": "boat-vm"}).status_code == 401
+    fresh = post(cloud.api, "runners/enroll", {"code": code, "label": "boat-vm", "platform": "linux"})
+    assert cloud.row(target.key)["enroll_by"] == 0
+    ready(cloud.api, fresh, ["ops"])
+    assert claim_on(cloud, fresh, "ops")["attempt"]
+    assert cloud.hq.actions().count("create") == 2              # the original machine and its lost fresh reply
+
+
+@pytest.mark.parametrize("expire_before_sync", [False, True])
+def test_a_lost_replacement_code_expires_into_a_fresh_machine_instead_of_staying_stuck(cloud, monkeypatch, expire_before_sync):
+    target, old_id, fresh_id, code, deadline = lost_replacement(cloud, monkeypatch)
+    cloud.hq.machines[old_id]["state"] = "deleted"
+    cloud.hq.fail.pop("delete")
+    if expire_before_sync:
+        cloud.at[0] = deadline + 1
+    cloud.manager.sync(cloud.hq, cloud.at[0])
+    assert cloud.row()["machine_id"] == fresh_id and cloud.row()["enroll_by"] == deadline
+    manager = CM.Manager(cloud.store, cloud.store.settings, cloud.api.app.state.execution, client=cloud.hq)
+    if not expire_before_sync:
+        cloud.at[0] = deadline - 1
+        manager.tick()
+        assert cloud.row()["machine_id"] == fresh_id and cloud.row()["state"] in CM.ON
+        assert ("stop", fresh_id) not in cloud.hq.calls and ("delete", fresh_id) not in cloud.hq.calls
+        cloud.at[0] = deadline
+    manager.tick()
+    assert ("delete", fresh_id) in cloud.hq.calls
+    assert cloud.row()["state"] == "deleted" and cloud.row()["enroll_fails"] == 1
+    assert cloud.api.post("/api/v2/runners/enroll", json={"code": code, "label": "boat-vm"}).status_code == 401
+    cloud.at[0] += CM.TICK
+    manager.tick()
+    retry = cloud.row()
+    new_code = next(call[3] for call in reversed(cloud.hq.calls) if call[0] == "create")
+    assert retry["machine_id"] not in (old_id, fresh_id) and new_code not in (target.code, code)
+    assert retry["enroll_by"] > cloud.at[0] and retry["problem"] == ""
+    fresh = post(cloud.api, "runners/enroll", {"code": new_code, "label": "boat-vm", "platform": "linux"})
+    ready(cloud.api, fresh, ["ops"])
+    assert claim_on(cloud, fresh, "ops")["attempt"]
+
+
+def test_an_unenrolled_machine_already_stuck_without_a_deadline_can_recover(cloud):
+    adopt(cloud)
+    work(cloud)
+    cloud.tick()
+    current = cloud.row()
+    cloud.hq.machines[current["machine_id"]]["state"] = "stopped"
+    with cloud.store.transaction() as c:
+        CM.save(c, "ops", state="stopped", enroll_by=None, problem="stuck")
+    cloud.at[0] = current["enroll_by"] + 1
+    assert cloud.manager.step(cloud.hq, "ops", cloud.at[0]) == "delete"
+    cloud.tick(CM.TICK)
+    assert cloud.row()["machine_id"] != current["machine_id"] and cloud.row()["problem"] == ""
+    code = next(call[3] for call in reversed(cloud.hq.calls) if call[0] == "create")
+    fresh = post(cloud.api, "runners/enroll", {"code": code, "label": "boat-vm", "platform": "linux"})
+    assert cloud.row()["runner_id"] == fresh["runner_id"] and cloud.row()["enroll_by"] == 0
 
 
 @pytest.mark.parametrize("settled", [False, "404", "deleted"])

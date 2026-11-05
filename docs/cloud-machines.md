@@ -103,6 +103,9 @@ settles. A create that returns a fenced id is refused as a replacement and tried
 belong to the fresh request; unused old codes cannot enroll its runner. Settling the old id leaves the new runner
 and its codes intact. The codes' `replacement_for` marker keeps fresh attempts together across a lost create reply,
 so a machine that enrolls before the reply is recovered keeps its runner and code, even if the old id settles first.
+Each new id gets its own state and enrollment deadline, whether a create reply or HQ's list first returns it.
+The deadline comes from that attempt's saved code expiry; settling the old id cannot clear it. A late list does not
+extend an expired code: that machine is deleted and the next work makes a fresh one with a new code.
 
 ## How a machine becomes the bot's runner
 
@@ -126,6 +129,11 @@ server deletes it and the next work makes a new one with a fresh code; after thr
 more ("Made, but it never connected to this server", in Health) until one enrolls or a person changes the machine's
 settings. Without the marker `/etc/tico/cloud-machine.json` the
 boot step does nothing, and without a code it does nothing either: that is the base sandbox itself.
+
+If an older server saved an unenrolled machine without a deadline, the next look restores it from its code.
+An expired or missing code takes the same delete-and-replace path, even if the machine already says it is stuck.
+For an enrolled machine stuck on work it never took, **Replace machine** makes a fresh one; a new task can wake the
+same machine too.
 
 The code never reaches a log or a command line. The enroll reads it from a 0600 file that is removed right after;
 printed lines have it masked; the runner's own commands start with a clean environment; and once the runner is
