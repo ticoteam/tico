@@ -148,7 +148,7 @@ def test_retained_daily_cap_counts_the_union_of_history_and_queue(inbox, synced,
         assert post(inbox, "connectors/email/sends/" + third["id"] + "/dispatch", {"mailbox": BOX}, token=machine["token"])["send"]
 
 
-@pytest.mark.parametrize("scenario", ["cancel_twice", "conference_twice", "legacy_duplicates", "changed_hold", "moved_hold", "unrelated"])
+@pytest.mark.parametrize("scenario", ["cancel_twice", "conference_twice", "conference_failure_twice", "legacy_duplicates", "changed_hold", "moved_hold", "unrelated"])
 def test_standing_booking_retries_reuse_one_verified_silent_hold(inbox, scenario):
     from contextlib import nullcontext
     from connectors.mail import __main__ as cli, scheduling, calendar as cal
@@ -159,7 +159,8 @@ def test_standing_booking_retries_reuse_one_verified_silent_hold(inbox, scenario
                            slot="2030-01-08T10:00:00-08:00", acceptance_message="inbound")
     service = FakeCalendarService(calendars=["primary"])
     calendar = cal.Calendar(service, BOX)
-    original_query, original_insert, original_exec = service.query, service.insert, calendar._exec
+    original_query, original_insert, original_exec, original_patch = service.query, service.insert, calendar._exec, service.patch
+    conference_requests = []
     def execute(request, what):
         if scenario == "conference_twice" and what == "events.get conference":
             raise cal.Failure("Transient conference read failure", status=503)
@@ -173,10 +174,23 @@ def test_standing_booking_retries_reuse_one_verified_silent_hold(inbox, scenario
         def pending():
             event = execute()
             event.pop("hangoutLink", None)
-            event["conferenceData"]["createRequest"]["status"] = {"statusCode": "pending"}
+            event["conferenceData"]["createRequest"]["status"] = {"statusCode": "failure" if scenario == "conference_failure_twice" else "pending"}
+            conference_requests.append(event["conferenceData"]["createRequest"]["requestId"])
             return event
-        if scenario == "conference_twice":
+        if scenario in ("conference_twice", "conference_failure_twice"):
             request.execute = pending
+        return request
+    def retry_conference(**kwargs):
+        request = original_patch(**kwargs)
+        execute = request.execute
+        def finish():
+            event = execute()
+            conference_requests.append(event["conferenceData"]["createRequest"]["requestId"])
+            if len(conference_requests) < 3:
+                event.pop("hangoutLink", None)
+                event["conferenceData"]["createRequest"]["status"] = {"statusCode": "failure"}
+            return event
+        request.execute = finish
         return request
     with closing(sqlite3.connect(":memory:")) as connection:
         ctx = SimpleNamespace(conn=connection, mailbox=BOX, dry=False, calendar=calendar, gmail=mock.MagicMock(), audit=mock.MagicMock(),
@@ -193,16 +207,18 @@ def test_standing_booking_retries_reuse_one_verified_silent_hold(inbox, scenario
                 mock.patch.object(scheduling.pl, "queue_send", side_effect=submit) as enqueue, \
                 mock.patch.object(scheduling.pl, "HUB_GET", side_effect=read), \
                 mock.patch.object(service, "query", side_effect=query), mock.patch.object(service, "insert", side_effect=insert), \
+                mock.patch.object(service, "patch", side_effect=retry_conference), \
                 mock.patch.object(calendar, "_exec", side_effect=execute), mock.patch.object(cal.time, "sleep"):
             first = scheduling.run(ctx, args)
-            if scenario == "conference_twice":
+            if scenario in ("conference_twice", "conference_failure_twice"):
                 assert first["retry"] and not first["queued"]
                 second = scheduling.run(ctx, args)
                 assert second["retry"] and not second["queued"]
                 enqueue.assert_not_called()
-                event = next(iter(service.created_events.values()))
-                event["hangoutLink"] = "https://meet.google.com/abc-defg-hij"
-                event["conferenceData"]["createRequest"]["status"] = {"statusCode": "success"}
+                if scenario == "conference_twice":
+                    event = next(iter(service.created_events.values()))
+                    event["hangoutLink"] = "https://meet.google.com/abc-defg-hij"
+                    event["conferenceData"]["createRequest"]["status"] = {"statusCode": "success"}
             else:
                 post(inbox, "email/sends/" + first["send_id"] + "/cancel", {})
                 if scenario in ("changed_hold", "moved_hold", "unrelated"):
@@ -241,6 +257,9 @@ def test_standing_booking_retries_reuse_one_verified_silent_hold(inbox, scenario
             assert len(service.created_events) == len(service.events_by_calendar["primary"]) == 1
             assert all(event["sendUpdates"] == "none" for event in service.created_events.values() if "sendUpdates" in event)
             assert len(service.deleted) == int(scenario == "legacy_duplicates")
+            assert service.insert.call_count == (2 if scenario == "legacy_duplicates" else 1)
+            if scenario == "conference_failure_twice":
+                assert service.patch.call_count == 2 and len(set(conference_requests)) == 3
             assert scheduling.run(ctx, args)["send_id"] == third["send_id"]
 
 

@@ -16,6 +16,7 @@ import copy
 import hashlib
 import re
 import time
+import uuid
 
 from . import DEFAULT_TZ, Failure, zone
 from .gmail import gmail_hint
@@ -252,6 +253,22 @@ class Calendar:
         event = self._exec(self.service.events().get(calendarId="primary", eventId=snapshot["id"]), "events.get reused hold")
         if not unchanged_hold(event, snapshot):
             raise Failure("The calendar hold changed; review it before rescheduling.")
+        request = (event.get("conferenceData") or {}).get("createRequest") or {}
+        if (request.get("status") or {}).get("statusCode") == "failure":
+            if not event.get("etag"):
+                raise Failure("The calendar hold has no version; review it before retrying its conference.")
+            snapshot = copy.deepcopy(event)
+            snapshot.pop("hangoutLink", None)
+            snapshot["conferenceData"] = {"createRequest": {"requestId": uuid.uuid4().hex,
+                "conferenceSolutionKey": {"type": "hangoutsMeet"}, "status": {"statusCode": "pending"}}}
+            body = copy.deepcopy(snapshot["conferenceData"])
+            body["createRequest"].pop("status")
+            patch = self.service.events().patch(calendarId="primary", eventId=event["id"],
+                body={"conferenceData": body}, sendUpdates="none", conferenceDataVersion=1)
+            patch.headers["If-Match"] = event["etag"]
+            event = self._exec(patch, "events.patch retry conference")
+            if not unchanged_hold(event, snapshot):
+                raise Failure("The calendar hold changed while retrying its conference.")
         ready = self.ready_conference(event)
         if not unchanged_hold(ready, snapshot):
             raise Failure("The calendar hold changed during conference preparation.")

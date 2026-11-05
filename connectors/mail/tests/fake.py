@@ -429,6 +429,23 @@ class FakeCalendarService:
             return self.created_events[eventId]
         return _Req(go)
 
+    def patch(self, calendarId="primary", eventId=None, body=None, sendUpdates="none", **kwargs):
+        def go():
+            event = self.created_events.get(eventId)
+            if event is None:
+                raise Boom(404, "calendar event not found")
+            if request.headers.get("If-Match") != event.get("etag"):
+                raise Boom(412, "calendar event changed")
+            event.update(body or {})
+            event.update(sendUpdates=sendUpdates, **kwargs)
+            event["etag"] += "-patched"
+            if event.get("conferenceData"):
+                event["hangoutLink"] = "https://meet.google.com/abc-defg-hij"
+                event["conferenceData"]["createRequest"]["status"] = {"statusCode": "success"}
+            return event
+        request = _Req(go)
+        return request
+
     def delete(self, calendarId="primary", eventId=None, sendUpdates="none"):
         def go():
             if request.headers.get("If-Match") and request.headers["If-Match"] != self.created_events.get(eventId, {}).get("etag"):
