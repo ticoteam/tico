@@ -106,6 +106,16 @@ def test_administration_uses_the_cloud_company_page_and_hides_in_rehearsal(api, 
     assert api.get('/api/v2/config', headers=headers()).json()['administration_url'] == ''
 
 
+def test_administration_opens_only_portal_pages_and_drops_queries():
+    """A custom Gateway can name any https address, and a query or fragment could carry a token."""
+    assert CS._admin_destination('https://app.tico.dev/billing/acme') == 'https://app.tico.dev/billing/acme'
+    for value in ('https://login.acme.example/admin', 'http://app.tico.dev/billing', 'https://app.tico.dev.acme.example/',
+                  'https://user@app.tico.dev/', 'https://app.tico.dev:8443/', None, '', 42):
+        assert CS._admin_destination(value) == CS.PORTAL_HOME, value
+    assert CS._admin_destination('https://app.tico.dev/billing?token=synthetic-secret#access_token=x') == \
+        'https://app.tico.dev/billing'
+
+
 def test_preview_then_connect_proves_the_address_and_seals_the_key(api, hq):
     assert api.get(CS.PROOF_PATH).status_code == 404       # nothing pending: no proof, and no sign-in asked
     hq.answers[("POST", "/v1/portal/server-connection")] = lambda request: (

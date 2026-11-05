@@ -148,21 +148,24 @@ def administration_url(c, settings):
         return ""
     record = _row(c)
     if record.get("key"):
-        try:
-            return _portal_url(record.get("portal_url") or PORTAL_HOME)
-        except ValueError:
-            return PORTAL_HOME
+        return _admin_destination(record.get("portal_url"))
     from . import cloud_access
     cloud = cloud_access.state(c)
     if cloud:
-        try:
-            return _portal_url(cloud.get("billing_url") or PORTAL_HOME)
-        except ValueError:
-            return PORTAL_HOME
+        return _admin_destination(cloud.get("billing_url"))
     # Hosting alone says nothing about a portal account; the configured Tico issuer does.
     tico_signin = (settings.proxy_kind == "oidc" and settings.oidc_client_id
                    and settings.oidc_issuer.rstrip("/") in TICO_ISSUERS)
     return PORTAL_HOME if tico_signin else ""
+
+
+def _admin_destination(value):
+    """A page on the portal itself, path only: a custom Gateway can name any https address, and a query or fragment
+    could carry a token, so anything else is the portal home."""
+    parsed = urlparse(value) if isinstance(value, str) and _text(value, 2048) else None
+    if not parsed or parsed.scheme != "https" or parsed.netloc != urlparse(PORTAL_HOME).netloc:
+        return PORTAL_HOME
+    return f"{PORTAL_HOME.rstrip('/')}{parsed.path or '/'}"
 
 
 def manager(auth, who):
