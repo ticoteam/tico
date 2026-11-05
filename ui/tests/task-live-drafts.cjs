@@ -20,7 +20,7 @@ const init = () => {
    const task = {...data.tasks[0], title: 'Review launch', body: 'Original details', links: [], children_summary: undefined};
    const writes = []; let hold, offline = false;
    await page.locator('#task-modal[open] textarea[aria-label="Message"]').waitFor();
-   await page.evaluate(() => taskLiveStop(taskModal()));
+   await page.evaluate(() => { taskLiveStop(taskModal()); taskModal().taskRail = null; });
    await page.evaluate(init); await page.addInitScript(init);
    await page.route('**/api/v2/tasks/' + task.id, async route => {
     if (route.request().method() === 'GET') return route.fulfill({json: {task, comments: [], children: [], events: []}});
@@ -142,6 +142,11 @@ const init = () => {
    await page.evaluate(() => { SESSION.seen = true; signedOut('/auth/login'); });
    assert.equal(await page.evaluate(() => Object.keys(localStorage).some(key => key.startsWith(TASK_EDIT_STORAGE))), false);
    assert.equal(await page.evaluate(() => JSON.parse(sessionStorage.getItem(SESSION_RETURN)).fields.find(f => f.key === 'Title').value), 'Sign-in title to keep');
+   offline = false;
+   await page.reload();
+   await page.waitForFunction(() => document.querySelector('#task-modal[open] .tmodal-title')?.textContent === 'Sign-in title to keep');
+   await page.waitForFunction(() => !taskModal().taskLive.draft.flight && !Object.keys(taskModal().taskLive.draft.patch).length);
+   assert.equal(task.title, 'Sign-in title to keep');
    assert.deepEqual(errors, []);
    await page.close();
   }

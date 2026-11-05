@@ -163,8 +163,9 @@ function sessionKeep() {
   for (const el of sessionBoxes()) {
     const key = sessionKey(el), scope = sessionScope(el);
     const value = sessionBoxValue(el), live = el.closest('dialog')?.taskLive, field = el.dataset.taskField;
+    if (field && !(field in (live?.draft.dirty || {}))) continue;
     const base = field && live ? live.draft.bases[field] || live.fields[field] : undefined;
-    if (key && value.trim()) fields.set(scope + '\n' + key, {scope, key, value, ...(base ? {base} : {})});
+    if (key && (value.trim() || field)) fields.set(scope + '\n' + key, {scope, key, value, ...(base ? {base} : {})});
   }
   // The task open in full, to open again on return (sessionResume).
   const d = document.getElementById('task-modal');
