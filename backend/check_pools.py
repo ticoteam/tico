@@ -491,8 +491,8 @@ def has_open_check(c, ticket, step, heads, pr=None):
         if not child or child["status"] not in H.ACTIVE_STATUSES:
             continue
         if pr is not None:
-            from .verdict_moves import for_pr
-            if not for_pr(child, pr):
+            from .review_gate import existing_for_pr
+            if not existing_for_pr(c, ticket, child, pr):
                 continue
         found = step_flow.child_check(c, child, ticket)
         if not found or found["id"] != step["id"]:
@@ -540,6 +540,11 @@ def _drop(c, ticket_id, keep_step=None, why="the ticket moved on"):
 def _file(c, ticket, step, slug, title, heads, snapshots, why):
     """File the check to `slug` as the ticket's owner would; the child, or None when a rule refused it (the refusal is
     rolled back and the check keeps waiting)."""
+    from . import review_gate
+    actor = H.KEEPER if step.get("detached") and not H.task_private(c, ticket) else ticket["owner_id"]
+    audience = {"id": "", "private": True, "owner_id": "bot:" + slug, "requester_id": actor, "guest": None}
+    if not review_gate.can_copy_prs(c, ticket, audience):
+        return None
     body = (f"{kind(step)} of {title.split(':', 1)[-1].strip()}"
             + (f" at head {', '.join(heads)}" if heads else "")
             + f". Tico gave it to you from the {step['name']} pool ({why}). End with your VERDICT line for that head.")
@@ -547,7 +552,6 @@ def _file(c, ticket, step, slug, title, heads, snapshots, why):
         body += "\n" + step["pr"]["url"]
     c.execute("SAVEPOINT check_pool_file")
     try:
-        actor = H.KEEPER if step.get("detached") and not H.task_private(c, ticket) else ticket["owner_id"]
         child = H.task_create(c, actor, title, body, "bot:" + slug, parent_id=ticket["id"],
                               review_prs=snapshots, wake_refs={"check_pool": step["name"]})
     except H.Refused as exc:
@@ -556,7 +560,7 @@ def _file(c, ticket, step, slug, title, heads, snapshots, why):
         H._task_event(c, ticket["id"], H.KEEPER, "check_not_filed", None, slug, f"{title}: {exc.detail}"[:500])
         return None
     c.execute("RELEASE check_pool_file")
-    if heads:
+    if heads and review_gate.can_copy_prs(c, ticket, child):
         recorded = c.execute("SELECT new FROM history_events WHERE subject_type='task' AND subject_id=? AND kind='review_head' "
                              "ORDER BY created_at DESC,rowid DESC LIMIT 1", (child["id"],)).fetchone()
         if not recorded or set(filter(None, recorded["new"].split(","))) < set(heads):

@@ -58,7 +58,32 @@ def heads(c, parent, snapshots=None, *, prs=None):
     return out
 
 
-def bind_prs(c, actor, parent, title, body):
+def can_copy_prs(c, parent, child):
+    """Parent PR data may reach a child only when every child reader can read the parent."""
+    from . import hubdb as H
+    if not H.task_private(c, parent):
+        return True
+    if not H.task_private(c, child):
+        return False
+    readers = {child.get(k) for k in ("owner_id", "requester_id", "guest")} - {None, ""}
+    readers.update("human:" + r[0] for r in c.execute("SELECT id FROM humans"))
+    readers.update("bot:" + r[0] for r in c.execute("SELECT id FROM bots"))
+    return all(not H.task_private_readable(c, reader, child) or H.task_private_readable(c, reader, parent)
+               for reader in readers)
+
+
+def existing_for_pr(c, parent, child, pr):
+    """A wider legacy child still occupies its review slot without receiving private PR data."""
+    if PR.matches(child, pr):
+        return True
+    if PR.references(child) or not re.search(r"#\d+\b", child.get("title") or "") or can_copy_prs(c, parent, child):
+        return False
+    from . import hubdb as H
+    selected = PR.requested(child, [p for p in H.task_links(c, parent["id"]) if p["kind"] == "pr"])
+    return len(selected) == 1 and PR.same(selected[0], pr)
+
+
+def bind_prs(c, actor, parent, title, body, *, child):
     """Save full references on hand-filed checks so later routing never guesses from a PR number."""
     step = check_of(c, parent, title)
     prs = links(c, parent) if step else []
@@ -68,6 +93,8 @@ def bind_prs(c, actor, parent, title, body):
     if step.get("detached") and not selected:
         from . import hubdb as H
         H.refuse(c, actor, "kind", "Include the full PR link so Tico knows which PR to review.")
+    if not can_copy_prs(c, parent, child):
+        return body
     return str(body or "") + "".join("\n" + p["url"] for p in selected
                                      if not PR.matches({"title": title, "body": body}, p))
 
@@ -89,6 +116,8 @@ def bind_existing_prs(c, parent):
         if len(selected) != 1:
             log.warning("Legacy review PR reference is not unique: task=%s child=%s", parent["id"], child_id)
             continue
+        if not can_copy_prs(c, parent, child):
+            continue
         body = str(child.get("body") or "") + "\n" + selected[0]["url"]
         c.execute("UPDATE tasks SET body=?,updated_at=?,version=version+1 WHERE id=?", (body, H.now(), child_id))
         H._task_event(c, child_id, H.KEEPER, "review_pr", None, selected[0]["url"], "")
@@ -98,7 +127,7 @@ def request_prs(c, parent, title, body):
     """A detached check judges its own PR; a board check still judges the whole ticket."""
     step = check_of(c, parent, title)
     if step and step.get("detached"):
-        return [p for p in links(c, parent) if PR.matches({"title": title, "body": body}, p)]
+        return PR.requested({"title": title, "body": body}, links(c, parent))
     return None
 
 
@@ -117,12 +146,12 @@ def refuse_second(c, actor, parent, title, snapshots=None, *, body=""):
     kind = step_flow.label(step)
     requested = {"title": title, "body": body}
     prs = links(c, parent) if step.get("detached") else []
-    wanted = heads(c, parent, snapshots, prs=[p for p in prs if PR.matches(requested, p)]
-                   if step.get("detached") else None)
+    selected = PR.requested(requested, prs)
+    wanted = heads(c, parent, snapshots, prs=selected if step.get("detached") else None)
     from . import check_pools
     for wait in check_pools.waiting(c, parent["id"], step["id"]):
         if step.get("detached"):
-            if not any(PR.matches(requested, p) and check_pools.wait_for_pr(c, wait, p) for p in prs):
+            if not any(check_pools.wait_for_pr(c, wait, p) for p in selected):
                 continue
         judged = set(filter(None, wait["heads"].split(",")))
         if wanted and judged and not wanted & judged:
@@ -137,7 +166,7 @@ def refuse_second(c, actor, parent, title, snapshots=None, *, body=""):
         if not other_step or other_step["id"] != step["id"] or other["status"] not in H.ACTIVE_STATUSES:
             continue
         if step.get("detached"):
-            if not any(PR.matches(requested, p) and PR.matches(other, p) for p in prs):
+            if not any(existing_for_pr(c, parent, other, p) for p in selected):
                 continue
         seen = c.execute("SELECT new FROM history_events WHERE subject_type='task' AND subject_id=? AND kind='review_head' "
                          "ORDER BY created_at DESC, rowid DESC LIMIT 1", (child_id,)).fetchone()
@@ -155,6 +184,8 @@ def remember_heads(c, actor, child_id, parent, snapshots=None):
     """Record the heads a check was asked for, so a later request for the same head finds it (refuse_second)."""
     from . import hubdb as H
     child = H.task(c, child_id)
+    if not can_copy_prs(c, parent, child):
+        return
     step = check_of(c, parent, child["title"])
     prs = [p for p in links(c, parent) if PR.matches(child, p)] if step and step.get("detached") else None
     seen = heads(c, parent, snapshots, prs=prs)

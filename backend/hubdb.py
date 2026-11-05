@@ -6415,13 +6415,6 @@ def task_create(conn, actor, title, body, owner, due=None, parent_id=None, *, de
             return _reuse_occurrence(conn, actor, target, again["id"], title, wake_refs, trigger, trigger_source)
     parent = _task_parent(conn, actor, None, parent_id) if parent_id else None
     from . import review_gate
-    if parent:
-        body = review_gate.bind_prs(conn, actor, parent, title, body)
-    if parent and review_gate.is_review(conn, parent, title):
-        review_gate.check(conn, actor, parent, review_prs, require_pr=True, receipt_owner=receipt_owner,
-                          prs=review_gate.request_prs(conn, parent, title, body))
-    if parent:
-        review_gate.refuse_second(conn, actor, parent, title, review_prs, body=body)
     # Whoever files a subtask asked for it: it shows them as asking and their notices reach them.
     requester = actor
     if private is False and (not is_human(actor) or VIA.get()):
@@ -6450,6 +6443,13 @@ def task_create(conn, actor, title, body, owner, due=None, parent_id=None, *, de
         if not is_human(requester_actor) or (actor != KEEPER and target != actor) or not human(conn, requester_actor):
             refuse(conn, actor, "identity", "Human requester attribution requires the bot's own verified work")
         requester = requester_actor
+    if parent:
+        audience = {"id": "", "private": private, "owner_id": target, "requester_id": requester, "guest": None}
+        body = review_gate.bind_prs(conn, actor, parent, title, body, child=audience)
+        if review_gate.is_review(conn, parent, title):
+            review_gate.check(conn, actor, parent, review_prs, require_pr=True, receipt_owner=receipt_owner,
+                              prs=review_gate.request_prs(conn, parent, title, body))
+        review_gate.refuse_second(conn, actor, parent, title, review_prs, body=body)
     title = str(title or "").strip()
     body = str(body or "")
     severity = classify(f"{title}\n{body}", to_actor=target, actor=actor, conn=conn)

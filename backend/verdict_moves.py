@@ -183,7 +183,8 @@ def after_verdict(c, check):
     ticket = _ticket(c, H.task(c, TR.parent_of(c, check["id"]) or ""))
     step = ticket and F.check_step(c, check, ticket)
     head = str(check.get("verdict_head") or _judged_head(c, check) or "").lower()
-    if (not verdict or not step or (not step.get("detached") and ticket.get("step_id") != step["id"])
+    if (not verdict or not step or not review_gate.can_copy_prs(c, ticket, check)
+            or (not step.get("detached") and ticket.get("step_id") != step["id"])
             or not at_head(c, ticket, head, check if step.get("detached") else None)):
         return None
     name = step["name"]
@@ -230,7 +231,7 @@ def after_capture(c, check_id, head, attempt_id, *, snapshots=None):
         return None
     ticket = _ticket(c, H.task(c, TR.parent_of(c, check_id) or ""))
     step = ticket and F.check_step(c, check, ticket)
-    if not step:
+    if not step or not review_gate.can_copy_prs(c, ticket, check):
         return None
     marker = c.execute("SELECT rowid,new FROM history_events WHERE subject_type='task' AND subject_id=? AND kind='verdict_wait' "
                        "AND json_extract(new,'$.check_id')=? ORDER BY rowid DESC LIMIT 1", (ticket["id"], check_id)).fetchone()

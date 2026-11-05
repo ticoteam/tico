@@ -406,7 +406,7 @@ def engineering_pr_pair(api):
 
 @pytest.mark.parametrize("queued", [False, True], ids=["direct", "queued"])
 def test_engineering_without_check_steps_reviews_each_green_pr_once(api, monkeypatch, queued):
-    from backend import review_gate
+    from backend import review_gate, step_flow
     task, prs = engineering_pr_pair(api)
     snapshots = {p["id"]: {**H._json(p["detail"], {}), "at": H.now()} for p in prs}
     monkeypatch.setattr(review_gate, "snapshot", lambda service, links: snapshots)
@@ -477,6 +477,91 @@ def test_legacy_number_only_review_is_bound_before_backfill_or_hand_filing(api):
         c.execute("UPDATE tasks SET body=? WHERE id=?", (body, bound["id"]))
         with pytest.raises(H.Refused, match="already open"):
             H.task_create(c, "human:ana", "Review 1: PR #12", body, "bot:rev-b", parent_id=task["id"])
+
+
+@pytest.mark.parametrize("private", [False, True], ids=["company-child", "private-child-with-more-readers"])
+def test_private_parent_pr_binding_never_widens_the_audience_or_files_a_duplicate(api, private):
+    from backend import review_gate
+    from backend.auth import Identity
+
+    setup(api)
+    task = task_pr(api, private=True)
+    observer = "rev-a" if private else "rev-c"
+    api.app.state.auth.settings.test_identities["observer-test"] = Identity("bot:" + observer, "bot", agent="test")
+    auth = {"Authorization": "Bearer observer-test"}
+    body = "Check the diff."
+    with api.app.state.store.transaction() as c:
+        c.execute("INSERT INTO agents(bot,harness,token_hash,created_at,created_by) VALUES(?,?,?,?,?)",
+                  (observer, "test", "observer-credential", H.now(), "human:ana"))
+        legacy = H.task_create(c, "human:ana", "Review 1: PR #12", body, "bot:rev-a", parent_id=task["id"],
+                               from_private=not private)
+        pr = H.task_links(c, task["id"])[0]
+        assert bool(legacy["private"]) is private
+        assert legacy["body"] == body
+        assert not H.task_private_readable(c, "bot:" + observer, task)
+        assert H.task_private_readable(c, "bot:" + observer, legacy)
+        before = dict(c.execute("SELECT * FROM tasks WHERE id=?", (legacy["id"],)).fetchone())
+        events = [dict(r) for r in c.execute("SELECT * FROM history_events WHERE subject_id=?", (legacy["id"],))]
+        assert not any(e["kind"] in ("review_pr", "review_head") for e in events)
+        # Legacy backfill, admission and head recording share the same audience boundary.
+        review_gate.bind_existing_prs(c, task)
+        review_gate.remember_heads(c, "human:ana", legacy["id"], task)
+        step = {**step_flow.pr_checks(c, task)[0], "pr": pr}
+        P._wait(c, task, step, legacy["title"], [HEAD], "waiting for a reviewer")
+    assert dispatch(api) == []
+    assert dispatch(api) == []
+    assert [r["id"] for r in children(api, task)] == [legacy["id"]]
+    with api.app.state.store.transaction() as c:
+        assert not P.waiting(c, task["id"])
+        with pytest.raises(H.Refused, match="already open"):
+            H.task_create(c, "human:ana", "Review 1: PR #12", body, "bot:rev-b", parent_id=task["id"],
+                          from_private=not private)
+        assert dict(c.execute("SELECT * FROM tasks WHERE id=?", (legacy["id"],)).fetchone()) == before
+        assert [dict(r) for r in c.execute("SELECT * FROM history_events WHERE subject_id=?", (legacy["id"],))] == events
+    response = api.get("/api/v2/tasks/" + task["id"], headers=auth)
+    assert response.status_code == 404, response.text
+    for path in ("tasks/" + legacy["id"], "tasks/" + legacy["id"] + "/comments", "tasks/" + legacy["id"] + "/links",
+                 "tasks/" + legacy["id"] + "/tree", "tasks"):
+        response = api.get("/api/v2/" + path, headers=auth)
+        assert response.status_code == 200, response.text
+        assert pr["url"] not in response.text and HEAD not in response.text
+    for table in ("tasks", "history_events", "messages", "task_links", "events"):
+        response = api.post("/api/v2/sql", json={"sql": f"SELECT * FROM {table} LIMIT 100"}, headers=auth)
+        assert response.status_code == 200, response.text
+        assert pr["url"] not in response.text and HEAD not in response.text
+
+
+def test_private_pool_request_does_not_copy_parent_pr_data_to_a_wider_child(api):
+    from backend import review_gate, step_flow
+
+    setup(api)
+    task = task_pr(api, private=True)
+    with api.app.state.store.transaction() as c:
+        pr = H.task_links(c, task["id"])[0]
+        step = {**step_flow.pr_checks(c, task)[0], "pr": pr}
+        assert P._file(c, task, step, "rev-a", "Review 1: PR #12", [HEAD], None, "free") is None
+        assert not H.TR.child_ids(c, task["id"])
+        # A private child with the same readers still receives its link and head.
+        child = H.task_create(c, "human:ana", "Review 1: PR #12", "Check the diff.", "bot:cpo", parent_id=task["id"])
+        assert review_gate.can_copy_prs(c, task, child)
+        assert PR.matches(child, pr)
+        assert c.execute("SELECT new FROM history_events WHERE subject_id=? AND kind='review_head'",
+                         (child["id"],)).fetchone()[0] == HEAD
+
+
+def test_wider_review_cannot_save_parent_data_in_its_verdict_result(api):
+    setup(api)
+    task = task_pr(api, private=True)
+    with api.app.state.store.transaction() as c:
+        pr = H.task_links(c, task["id"])[0]
+        # An existing explicit link cannot authorize more parent data in the child's saved result.
+        child = H.task_create(c, "human:ana", "Review 1: PR #12", pr["url"], "bot:rev-a",
+                              parent_id=task["id"], from_private=True)
+    finish(api, child)
+    with api.app.state.store.read() as c:
+        assert not c.execute("SELECT 1 FROM history_events WHERE subject_id=? AND kind='verdict_move'",
+                             (child["id"],)).fetchone()
+        assert not (V.delivery(c, H.task(c, child["id"])) or {}).get("consumed")
 
 
 def test_ambiguous_legacy_number_is_logged_and_bound_review_is_reused(api, caplog):
