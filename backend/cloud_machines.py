@@ -781,6 +781,8 @@ def decide(current, found, at, idle_s):
     machine that never enrolled, made again at the next want); problem is what its bots' queued work waits on when
     nothing is done ("stuck", "no_enroll"), or None to leave the row's as it is. Pure: the clock is `at`. `found` is
     `facts`: on the shared machine every member's at once, so any want wakes it and only all idle stop it."""
+    if current["problem"] == "delete_unknown":
+        return None, None                                   # HQ's next list resolves the unanswered deletion first
     if current["problem"] == "replacing" and (current.get("stop_until") or 0) > at:
         return None, None                                   # a person's replacement is already at HQ
     on = current["state"] in ON and current["machine_id"]
@@ -847,9 +849,11 @@ def reserve(c, settings, key, action, machine_id):
 
 def held(c, runner_id):
     """Why the claim gives computer `runner_id` no new turn, or "": it is a cloud machine reserved for a stop
-    (`reserve`, until its reservation lapses) or one HQ says is stopping or stopped. Any other computer: ""."""
-    found = c.execute("SELECT state,stop_until FROM cloud_machines WHERE runner_id=? LIMIT 1", (runner_id,)).fetchone()
-    if not found or not (found["state"] in GOING or (found["stop_until"] or 0) > now()):
+    (`reserve`, until its reservation lapses), awaiting reconciliation of an unanswered manual deletion, or one HQ
+    says is stopping or stopped. Any other computer: ""."""
+    found = c.execute("SELECT state,stop_until,problem FROM cloud_machines WHERE runner_id=? LIMIT 1", (runner_id,)).fetchone()
+    if not found or not (found["state"] in GOING or (found["stop_until"] or 0) > now()
+                         or found["problem"] == "delete_unknown"):
         return ""
     return "This cloud machine is stopping. Its bots' work waits for it to start again."
 
@@ -978,6 +982,15 @@ class Manager:
                 current = mine.get(key)
                 if current and current["problem"] == "replacing" and (current["stop_until"] or 0) > now():
                     continue                                # an HQ list cannot release a replacement's claim fence
+                if current and current["problem"] == "delete_unknown" and current["machine_id"] == machine["id"]:
+                    if machine["state"] in DEAD:
+                        deleted(c, current, H.KEEPER)
+                    else:
+                        # As with an unanswered stop, HQ's state takes over, but a running report keeps the rest of
+                        # the hold. Do not send a resume or another stop before that hold has passed either.
+                        save(c, key, **self.described(machine), problem="", problem_at=None, start_asked_at=None,
+                             next_try_at=current["stop_until"])
+                    continue
                 if current and current["state"] == "deleted" and current["machine_id"] == machine["id"]:
                     continue                                # deleted here: live at HQ only until boat confirms
                 if current and (current["machine_id"] in (None, machine["id"]) or (
@@ -1177,7 +1190,8 @@ class Manager:
 
 
 # ----------------------------------------------------------------------------- what people see
-PROBLEMS = {"out_of_credit": "Out of credit", "replacing": "Replacing machine", "stuck": "Started, but its work did not run there",
+PROBLEMS = {"out_of_credit": "Out of credit", "replacing": "Replacing machine", "delete_unknown": "Checking machine deletion",
+            "stuck": "Started, but its work did not run there",
             "no_enroll": "Made, but it never connected to this server"}
 ASLEEP = "asleep; starts when work can run"
 
@@ -1391,11 +1405,36 @@ def present(current):
     return bool(current["machine_id"]) and current["state"] != "deleted"
 
 
-def remove(store, hq, who, auth, key, request, mutate, replace=False):
+def deleted(c, current, actor, changed_by=None):
+    """Finish a deletion under the write lock: revoke the computer and every code that could enroll another one."""
+    key = current["bot"]
+    if current["runner_id"]:
+        c.execute("UPDATE runners SET revoked_at=? WHERE id=? AND revoked_at IS NULL", (H.now(), current["runner_id"]))
+    c.execute("DELETE FROM enrollments WHERE code_hash IN (SELECT code_hash FROM cloud_machine_codes WHERE bot=?)", (key,))
+    c.execute("DELETE FROM cloud_machine_codes WHERE bot=?", (key,))
+    # Keep the choices and old id: a create before boat confirms gets this same doomed machine from HQ, which act
+    # takes for no new one. The next work gets a fresh machine once HQ has finished deleting this disk.
+    save(c, key, runner_id=None, state="deleted", machine_size=None, started_at=None,
+         stopped_at=None, cost_month_usd=0, starts_month=0, last_error="", active_at=None, heartbeat_at=None,
+         ttl_s=None, next_try_at=None, failures=0, problem="", problem_at=None, wake_key=None, woke_at=None,
+         enroll_by=None, enroll_fails=0, stop_until=None, start_asked_at=None,
+         changed_by=current["changed_by"] if changed_by is None else changed_by)
+    H.event(c, actor, "cloud_machine.deleted", key, {"machine": current["machine_id"]})
+
+
+def remove(service, who, auth, key, request, mutate, replace=False):
     """Delete machine `key` at HQ (its disk; the month's cost stays billed) and the computer it was: a bot's own once
     the bot runs elsewhere (the bot keeps where it runs now), or the shared one (its members' next work makes a new
-    one), or an own machine replaced in place. HQ first: a failure there leaves everything as it was, to try again.
-    The successful local deletion and its retry receipt commit together."""
+    one), or an own machine replaced in place. Serialize with the manager's whole look, including its HQ calls and
+    completion writes: a start or stop already in flight finishes before the deletion reserves the machine."""
+    with service.lock:
+        return _remove(service, who, auth, key, request, mutate, replace)
+
+
+def _remove(service, who, auth, key, request, mutate, replace):
+    """The successful local deletion and its retry receipt commit together. An uncertain HQ answer holds claims
+    until the manager reads HQ's list; only a clear refusal restores the machine's previous reservation."""
+    store = service.store
     token = request.headers.get("idempotency-key")
     if not token or len(token) > 200:
         raise Problem("idempotency_key", "Provide an Idempotency-Key of 1–200 characters", 422)
@@ -1416,38 +1455,40 @@ def remove(store, hq, who, auth, key, request, mutate, replace=False):
 
     def finish(c):
         from . import model_subscriptions as MS
-        if row(c, key)["machine_id"] != current["machine_id"]:
+        live = row(c, key)
+        if not live or live["machine_id"] != current["machine_id"]:
             raise Problem("changed", "The cloud machine changed. Try again", 409)
-        if current["runner_id"]:
-            c.execute("UPDATE runners SET revoked_at=? WHERE id=? AND revoked_at IS NULL", (H.now(), current["runner_id"]))
-        # The machine goes; the choices stay (size, Always on, Pause after, where the bot runs): a bot's own is not made
-        # again unless it is still chosen, and the shared one is made again at a member's next work (or at once if Always on). Its id
-        # stays, as deleted, as never_enrolled leaves it: a create before boat confirms the delete gets this machine
-        # back from HQ (idempotent on key), which `act` takes for no new one and tries again later.
-        save(c, key, runner_id=None, state="deleted", machine_size=None, started_at=None,
-             stopped_at=None, cost_month_usd=0, starts_month=0, last_error="", active_at=None, heartbeat_at=None,
-             ttl_s=None, next_try_at=None, failures=0, problem="", problem_at=None, wake_key=None, woke_at=None,
-             enroll_by=None, enroll_fails=0, stop_until=None, start_asked_at=None,
-             # A manager's repair preserves an admin's placement for the new computer's first-enrollment plan rule.
-             changed_by=current["changed_by"] if replace and not MS.may_grant(c, auth, who.actor) else who.actor)
-        H.event(c, who.actor, "cloud_machine.deleted", key, {"machine": current["machine_id"]})
+        # Enrollment can finish during HQ's call. Revoke the runner found here, under the same lock enrollment takes.
+        # A manager's repair preserves an admin's placement for the new computer's first-enrollment plan rule.
+        deleted(c, live, who.actor, live["changed_by"] if replace and not MS.may_grant(c, auth, who.actor) else who.actor)
         return {"ok": True}
 
+    keep_hold = False
     try:
         if present(current):
+            with store.read() as c:
+                hq = service.hq(c)
             if hq is None:
                 raise Problem("gateway", "Connect Tico Gateway first", 409)
+            keep_hold = True                                 # even a lost answer or failed local commit may follow deletion
             try:
                 hq.delete(current["machine_id"])
             except Refused as refused:
                 if refused.status != 404:
+                    keep_hold = stopped_unknown(refused)
                     raise Problem("gateway", "Tico did not answer. Try again in a minute." if refused.status == 0
                                   else f"Tico refused this ({refused.code}).", 502) from None
         return mutate(request, Empty(), finish)
     finally:
         with store.transaction() as c:
-            c.execute("UPDATE cloud_machines SET stop_until=?,problem=? WHERE bot=? AND machine_id=? AND stop_until=?",
-                      (current["stop_until"], current["problem"], key, current["machine_id"], hold))
+            if keep_hold:
+                c.execute("UPDATE cloud_machines SET stop_until=?,problem='delete_unknown',problem_at=? "
+                          "WHERE bot=? AND machine_id=? AND stop_until=?",
+                          (now() + STOP_HOLD, H.now(), key, current["machine_id"], hold))
+                service.synced = None                        # HQ's list first, including after a server restart
+            else:
+                c.execute("UPDATE cloud_machines SET stop_until=?,problem=? WHERE bot=? AND machine_id=? AND stop_until=?",
+                          (current["stop_until"], current["problem"], key, current["machine_id"], hold))
 
 
 def health(c, settings=None):
@@ -1540,8 +1581,7 @@ def install(app, settings, store, auth, execution, mutate):
                 raise Problem("forbidden", "Only owners and admins delete the shared cloud machine", 403)
             if not offered(c, settings):
                 raise Problem("not_cloud", "Cloud machines are for Tico Cloud companies", 409)
-            hq = service.hq(c)
-        return remove(store, hq, who, auth, SHARED, request, mutate)
+        return remove(service, who, auth, SHARED, request, mutate)
 
     @app.post("/api/v2/bots/{bot}/cloud-machine")
     def cloud_machine_set(bot: str, request: Request, body: Change):
@@ -1563,8 +1603,7 @@ def install(app, settings, store, auth, execution, mutate):
             bot = _known(c, bot)
             if not (auth.bot_admin(who) or auth.bot_manager(c, who, bot)):
                 raise Problem("forbidden", "You do not manage this bot's computer", 403)
-            hq = service.hq(c)
-        return remove(store, hq, who, auth, bot, request, mutate)
+        return remove(service, who, auth, bot, request, mutate)
 
     @app.post("/api/v2/bots/{bot}/cloud-machine/replace")
     def cloud_machine_replace(bot: str, request: Request):
@@ -1577,8 +1616,7 @@ def install(app, settings, store, auth, execution, mutate):
             manage(c, auth, who, bot)
             if not offered(c, settings):
                 raise Problem("not_cloud", "Cloud machines are for Tico Cloud companies", 409)
-            hq = service.hq(c)
-        return remove(store, hq, who, auth, bot, request, mutate, replace=True)
+        return remove(service, who, auth, bot, request, mutate, replace=True)
 
 
 def _known(c, bot):

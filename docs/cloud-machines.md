@@ -73,6 +73,19 @@ answer, one that cannot be read, a 5xx, 402, or 409 `sandbox_stopping`) keeps it
 at the next look: stopping or stopped there holds the claim from then on, running lets it lapse. A server that died
 mid-stop lets it lapse, and a start clears it.
 
+All three manual deletion routes use the same path. A deletion waits for the manager's current look, including any
+start or stop awaiting HQ and its final write, before it reserves the machine. While it asks HQ, the manager cannot
+start or stop that machine. The final write revokes the runner on the row at that moment, including one that enrolled
+during the request, and invalidates all of the machine's enrollment codes. A code cannot enroll another runner after
+the disk is deleted.
+
+An unanswered delete, a 5xx, or another uncertain reply keeps claims paused and asks for HQ's list at the next look.
+The stored hold survives a server restart and stays while the list cannot be read. If the list says the machine is
+deleted or failed, the server finishes the same local deletion and revokes its runner and codes. A running report
+keeps the rest of the two-minute hold before work can resume; stopping or stopped keeps claims paused by state.
+A clear 4xx refusal releases the deletion reservation at once; 404 finishes deletion because the machine is already
+gone. Out of credit (402) and already stopping (409 `sandbox_stopping`) remain uncertain, as for a scheduled stop.
+
 ## How a machine becomes the bot's runner
 
 1. The server mints a one-time enrollment code for the machine (15 minutes, single use; only its digest is kept, in
