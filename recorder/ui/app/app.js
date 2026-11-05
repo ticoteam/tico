@@ -394,6 +394,33 @@
     if (!sharedDrafts.has(key)) sharedDrafts.set(key, {patch: {}, dirty: {}, flight: null, error: '', timer: 0, version:null, current:null});
     return sharedDrafts.get(key);
   }
+  // The inline title is contenteditable; a refresh's fresh copy is not in the page, so read the attribute.
+  const fieldValue = f => f.hasAttribute('contenteditable') ? f.textContent : f.value;
+  /** A field takes the server's value in place; a focused one keeps its caret. */
+  function setFieldValue(field, value) {
+    if (!field.hasAttribute('contenteditable')) {
+      const selection = field === document.activeElement && typeof field.selectionStart === 'number' ? [field.selectionStart, field.selectionEnd] : null;
+      field.value = value;
+      if (selection) field.setSelectionRange(...selection);
+      return;
+    }
+    const sel = getSelection(), range = field === document.activeElement && sel.rangeCount ? sel.getRangeAt(0) : null;
+    const at = range && field.contains(range.startContainer) ? [range.startOffset, range.endOffset] : null;
+    field.textContent = value;
+    if (!at || !field.firstChild) return;
+    const next = document.createRange(), node = field.firstChild;
+    next.setStart(node, Math.min(at[0], node.length)); next.setEnd(node, Math.min(at[1], node.length));
+    sel.removeAllRanges(); sel.addRange(next);
+  }
+  /** A shared item's details as people read them: names for owners, a date for due. */
+  function sharedDetailParts(detail, a) {
+    return Object.entries(detail || {}).map(([key, value]) => {
+      if (!value) return '';
+      if (key === 'owner') return a.owners.find(o => o.actor === value)?.name || value;
+      if (key === 'due') { const when = new Date(value); return Number.isNaN(when.getTime()) ? value : when.toLocaleDateString(); }
+      return value;
+    }).filter(Boolean);
+  }
   const mergeShared = (a, b) => ({...a, ...b, ...((a.detail || b.detail) ? {detail: {...a.detail, ...b.detail}} : {})});
   const sharedValue = (item, key) => (key === 'text' ? item?.text : item?.detail?.[key]) || '';
   function sharedAccepted(draft, patch, item) {
@@ -418,7 +445,7 @@
   function sharedClosedCard(it, draft, a) {
     clearTimeout(draft.timer);
     draft.closed ||= mergeShared(mergeShared(draft.base || it, draft.inflightPatch || {}), draft.patch);
-    const text = [draft.closed.text, ...Object.values(draft.closed.detail || {})].filter(Boolean).join('\n\n');
+    const text = [draft.closed.text, ...sharedDetailParts(draft.closed.detail, a)].filter(Boolean).join('\n\n');
     const name = a.owners.find(o => o.actor === it.updated_by)?.name || it.updated_by;
     return `<div class="shared-item" data-shared-row="${esc(it.id)}"><div>${it.status === 'pushed' ? 'Sent by ' : it.status === 'dismissed' ? 'Dismissed by ' : 'Changed by '}${esc(name)}</div><pre class="selectable" style="white-space:pre-wrap;overflow-wrap:anywhere">${esc(text)}</pre><div class="actions"><button class="btn small" data-act="shared-copy" data-id="${esc(it.id)}">Copy</button><button class="btn small" data-act="shared-close" data-id="${esc(it.id)}">Close</button></div></div>`;
   }
@@ -436,7 +463,7 @@
     const extras = `<div data-shared-row="local-tasks"><ul class="items">${local.map(it => it.sent ? task(it) : proposal(it)).join('')}</ul></div>` +
       `<div data-shared-row="linked-tasks"><ul class="items tasks">${(a.linked?.tasks || []).map(it => task({...it,id:`server:${it.task_id}`,kind:'link',task_url:`${a.linked_browser}/#/task/${it.task_id}`})).join('')}</ul>${a.linked?.next_cursor ? '<button class="link" data-act="more-task-links">More</button>' : ''}</div>` +
       `<div data-shared-row="add-task">${S.ui.adding ? '<div class="add-item"><input data-model="addItem" data-enter="add-item" data-blur="add-close" placeholder="Add a task" aria-label="Add a task"></div>' : ''}${a.skipped_links ? `<div class="notice inline">${a.skipped_links} links skipped</div>` : ''}</div>`;
-    return `<section class="section" data-shared-panel><div class="section-head"><h2>Tasks</h2><span class="grow"></span>${a.can_link ? '<button class="btn small" data-act="task-picker-open">Link</button>' : ''}<button class="btn small" data-act="add-open">${icon('plus',12)}Add</button><span class="aside">${here.length ? esc(here.join(', ') + (here.length === 1 ? ' is here' : ' are here')) : ''}</span></div>` +
+    return `<section class="section" data-shared-panel><div class="label head section-head">Tasks<span class="aside">${here.length ? esc(here.join(', ') + (here.length === 1 ? ' is here' : ' are here')) : ''}</span><span class="grow"></span>${a.can_link ? '<button class="btn small" data-act="task-picker-open">Link</button>' : ''}<button class="btn small" data-act="add-open">${icon('plus',12)}Add</button></div>` +
       [...rows.values()].map(it => {
         const draft = sharedDraft(it.id);
         if ((draft.nativeRecovery && draft.closed) || (it.status !== 'proposed' && !(draft.sending && it.updated_by === a.actor) && !draft.closedAcknowledged && (draft.closed || draft.flight || Object.keys(draft.dirty).length))) {
@@ -448,16 +475,27 @@
         const server = draft.base?.version > it.version ? draft.base : it;
         const current = mergeShared(mergeShared(server, draft.inflightPatch || {}), draft.patch), detail = current.detail || {};
         if (!draft.flight && !draft.sending && !Object.keys(draft.dirty).length) { draft.version = server.version; draft.base = server; }
-        const fields = it.section === 'task' ? ['owner', 'due', 'body'] : it.section === 'doc' ? ['document', 'change', 'why'] : ['side', 'app', 'area'];
+        // A task card is Title and Owner (below); a due date or details it already holds go out on Send.
+        const fields = it.section === 'doc' ? ['document', 'change', 'why'] : ['side', 'app', 'area'];
         const owners = a.owners.filter(o => !data.audience || data.audience.includes(o.actor));
+        const edited = it.updated_by ? esc((a.owners.find(o => o.actor === it.updated_by)?.name || it.updated_by) + ' edited') : '';
+        const notSaved = `<div class="error" data-shared-error ${draft.error ? '' : 'hidden'}>Not saved · <button class="link" data-act="shared-retry" data-id="${esc(it.id)}">Retry</button></div>`;
+        const currentLine = `<div class="error" data-shared-current ${draft.current ? '' : 'hidden'}>${draft.current ? `Current: ${esc([draft.current.text, ...sharedDetailParts(draft.current.detail, a)].filter(Boolean).join(' · '))}` : ''}</div>`;
+        if (it.section === 'task') {
+          // Like a suggestion row: the title edits in place, then time · owner, with Send and × on the right.
+          const ownerName = owners.find(o => o.actor === detail.owner)?.name || '';
+          const at = it.quote && it.at_ms != null ? `<span class="at" title="${esc(it.quote)}">${clock(it.at_ms)}</span><span>·</span>` : '';
+          const owner = `<span class="owner-pick"><span class="owner ${ownerName ? '' : 'empty'}" data-shared-owner>${esc(ownerName || 'Owner')}</span><select data-defer data-shared-field="owner" aria-label="Owner"><option value="">Owner</option>${owners.map(o => `<option value="${esc(o.actor)}" ${o.actor === detail.owner ? 'selected' : ''}>${esc(o.name)}</option>`).join('')}</select></span>`;
+          const go = it.proposed_task_id
+            ? `<button class="btn small" data-act="shared-link" data-id="${esc(it.id)}" ${draft.sending || !data.can_send ? 'disabled' : ''}>Link${it.proposed_number ? ' #' + esc(it.proposed_number) : ''}</button>`
+            : `<button class="btn small" data-act="shared-send" data-id="${esc(it.id)}" ${draft.sending || !data.can_send ? 'disabled' : ''}>Send</button>`;
+          return `<div class="item proposal live" data-shared-row="${esc(it.id)}" data-shared-item="${esc(it.id)}"><span class="check dashed"></span>
+            <div class="content"><span class="title" contenteditable="true" data-defer data-shared-field="text" spellcheck="false" role="textbox" aria-label="Title">${esc(current.text)}</span><div class="sub">${at}${owner}<span data-shared-edited>${edited ? '· ' + edited : ''}</span></div>${notSaved}${currentLine}</div>
+            <div class="item-tail actions">${go}<button class="icon-btn tiny" data-act="shared-dismiss" data-id="${esc(it.id)}" title="Dismiss" aria-label="Dismiss">${icon('close', 12)}</button></div></div>`;
+        }
         return `<div class="shared-item" data-shared-row="${esc(it.id)}" data-shared-item="${esc(it.id)}"><label>Title<textarea data-defer data-shared-field="text" aria-label="Title">${esc(current.text)}</textarea></label>` + fields.map(key => {
-          const label = ({body:'Details', owner:'Owner', due:'Due'})[key] || key;
-          if (key === 'owner') return `<label>Owner<select data-defer data-shared-field="owner" aria-label="Owner"><option value="">Choose</option>${owners.map(o => `<option value="${esc(o.actor)}" ${o.actor === detail.owner ? 'selected' : ''}>${esc(o.name)}</option>`).join('')}</select></label>`;
-          const value = key === 'due' ? String(detail[key] || '').slice(0, 10) : detail[key] || '';
-          return `<label>${label}<${key === 'body' ? 'textarea' : 'input'} data-defer data-shared-field="${key}" aria-label="${label}" ${key === 'due' ? 'type="date"' : ''} ${key === 'body' ? '' : `value="${esc(value)}"`}>${key === 'body' ? esc(detail.body || '') + '</textarea>' : ''}</label>`;
-        }).join('') + `<div class="aside" data-shared-edited>${it.updated_by ? esc((a.owners.find(o => o.actor === it.updated_by)?.name || it.updated_by) + ' edited · just now') : ''}</div>
-          <span class="error" data-shared-error ${draft.error ? '' : 'hidden'}>Not saved · <button class="link" data-act="shared-retry" data-id="${esc(it.id)}">Retry</button></span>
-          <div class="aside" data-shared-current ${draft.current ? '' : 'hidden'}>${draft.current ? `Current: ${esc(draft.current.text)} · ${esc(Object.values(draft.current.detail || {}).join(' · '))}` : ''}</div>
+          return `<label>${key}<input data-defer data-shared-field="${key}" aria-label="${key}" value="${esc(detail[key] || '')}"></label>`;
+        }).join('') + `<div class="aside" data-shared-edited>${edited}</div>${notSaved}${currentLine}
           <div class="actions"><button class="btn small" data-act="shared-dismiss" data-id="${esc(it.id)}">Dismiss</button>${it.proposed_task_id ? `<button class="btn small primary" data-act="shared-link" data-id="${esc(it.id)}" ${draft.sending || !data.can_send ? 'disabled' : ''}>Link${it.proposed_number ? ' #' + esc(it.proposed_number) : ''}</button>` : `<button class="btn small primary" data-act="shared-send" data-id="${esc(it.id)}" ${draft.sending || !data.can_send ? 'disabled' : ''}>Send${detail.owner ? ' to ' + esc(owners.find(o => o.actor === detail.owner)?.name || detail.owner) : ''}</button>`}</div></div>`;
       }).join('') + extras + '</section>';
   }
@@ -482,24 +520,22 @@
       for (const field of old.querySelectorAll('[data-shared-field]')) {
         const value = row.querySelector(`[data-shared-field="${field.dataset.sharedField}"]`);
         if (field.tagName === 'SELECT' && field.innerHTML !== value.innerHTML) field.innerHTML = value.innerHTML;
-        if (field.value !== value.value) {
-          const selection = field === document.activeElement && typeof field.selectionStart === 'number' ? [field.selectionStart, field.selectionEnd] : null;
-          field.value = value.value;
-          if (selection) field.setSelectionRange(...selection);
-        }
+        if (fieldValue(field) !== fieldValue(value)) setFieldValue(field, fieldValue(value));
       }
-      for (const selector of ['[data-shared-edited]', '[data-shared-error]', '[data-shared-current]', '.actions']) {
+      for (const selector of ['[data-shared-edited]', '[data-shared-error]', '[data-shared-current]', '[data-shared-owner]', '.actions']) {
         const target = old.querySelector(selector), value = row.querySelector(selector);
-        target.innerHTML = value.innerHTML; target.hidden = value.hidden;
+        if (!target || !value) continue;
+        target.innerHTML = value.innerHTML; target.hidden = value.hidden; target.className = value.className;
       }
     }
   }
-  const sharedFieldValue = field => field.dataset.sharedField === 'due' && field.value ? new Date(field.value + 'T12:00:00').toISOString() : field.value;
   function sharedChanged(field) {
     const id = field.closest('[data-shared-item]').dataset.sharedItem, draft = sharedDraft(id), key = field.dataset.sharedField;
     if (!(key in draft.dirty)) draft.dirty[key] = sharedValue(draft.base, key);
-    if (key === 'text') draft.patch.text = field.value;
-    else (draft.patch.detail ||= {})[key] = sharedFieldValue(field);
+    if (key === 'text') draft.patch.text = fieldValue(field);
+    else (draft.patch.detail ||= {})[key] = field.value;
+    const shown = key === 'owner' && field.closest('.owner-pick')?.querySelector('[data-shared-owner]');
+    if (shown) { shown.textContent = field.value ? field.selectedOptions[0].textContent : 'Owner'; shown.classList.toggle('empty', !field.value); }
     clearTimeout(draft.timer);
     if (!draft.error) draft.timer = setTimeout(() => sharedSave(id), 700);
   }
@@ -522,7 +558,7 @@
   async function sharedFinish(button, send) {
     const id = button.dataset.id, draft = sharedDraft(id), node = button.closest('[data-shared-item]');
     if (draft.sending) return;
-    draft.sending = true; clearTimeout(draft.timer); node.querySelectorAll('button,input,textarea,select').forEach(f => f.disabled = true);
+    draft.sending = true; clearTimeout(draft.timer); node.querySelectorAll('button,input,textarea,select').forEach(f => f.disabled = true); node.querySelectorAll('[contenteditable]').forEach(f => f.contentEditable = 'false');
     try {
       if (draft.flight) { try { await draft.flight; } catch {} if(draft.error) throw new Error(draft.error); }
       if (send === 'link' && Object.keys(draft.patch).length) {
@@ -538,13 +574,13 @@
         draft.patch = {}; draft.dirty = {}; draft.error = ''; draft.current=null; draft.closed=null;
       }
     } catch (e) { draft.error = String(e); }
-    finally { draft.sending = false; node.querySelectorAll('button,input,textarea,select').forEach(f => f.disabled = false); }
+    finally { draft.sending = false; node.querySelectorAll('button,input,textarea,select').forEach(f => f.disabled = false); node.querySelectorAll('[contenteditable]').forEach(f => f.contentEditable = 'true'); }
     await poll(); render();
   }
   async function sharedClose(id, copy) {
     const draft = sharedDraft(id);
     if (!draft.closed) return;
-    if (copy) await copyText([draft.closed.text, ...Object.values(draft.closed.detail || {})].filter(Boolean).join('\n\n'));
+    if (copy) await copyText([draft.closed.text, ...sharedDetailParts(draft.closed.detail, S.meeting.actions)].filter(Boolean).join('\n\n'));
     if (draft.nativeRecovery) nativeDraftAcknowledged.add(draft.nativeRecovery);
     draft.closedAcknowledged = true; draft.closed = null; draft.patch = {}; draft.dirty = {};
     render();
@@ -1366,7 +1402,7 @@
   const roster = () => S.meeting?.actions?.owners || [];
   /** The field the open mention list types into: Notes, Add a task, or a shared task's title. */
   let mentionField = null;
-  const mentionable = (el) => el?.dataset && (el.dataset.model === 'notes' || el.dataset.model === 'addItem' || el.dataset.sharedField === 'text');
+  const mentionable = (el) => el?.dataset && (el.dataset.model === 'notes' || el.dataset.model === 'addItem');
   function paintMentions(area) {
     const back = area.previousElementSibling;
     if (!back?.classList.contains('notes-backdrop')) return;
