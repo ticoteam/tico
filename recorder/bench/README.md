@@ -214,3 +214,7 @@ TICO_RECORDER_ASSIST_KEY=<model key> cargo test --manifest-path recorder/Cargo.t
 Tico recorder relay; defaults match Settings. `TICO_RECORDER_ASSIST_REPEATS` defaults to 3 and must be
 at least 3. This is a paid, manual eval, excluded from ordinary test runs. Never put a provider key
 in a workflow command or its logs.
+
+Drafting reserves up to 2,400 completion tokens for model reasoning plus the JSON reply; private
+answers retain 1,200. The five-item review limit is unchanged. The repeated eval exposed truncated
+replies at the earlier 1,200-token draft budget.

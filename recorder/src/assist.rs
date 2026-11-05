@@ -135,8 +135,11 @@ No detailed plan is needed. \
 \"Let's sync later\" alone is not an item. Sending a concrete deliverable is real work. \
 quote: the exact words, copied character for \
 character from one NEW line, that the item comes from (at most 25 words). \
-Apply the ownership rules below only to retained work; rewriting a title never transfers \
-ownership to the person being contacted. Bare-ping ownership examples do not make them items. \
+Before rewriting a retained ping or reminder, assign owner from the original speech: the \
+speaker committing to contact someone, or the person directly asked to contact them, owns \
+obtaining the outcome. Keep that owner after rewriting, even if the recipient performs the \
+fix. Do not clear it because the underlying doer is uncertain. Apply the ownership rules \
+below only to retained work; bare-ping ownership examples do not make them items. \
 Unclear ownership does not exclude real work: keep the item with owner \"\". \
 PEOPLE lists the org's people and bots (with jobs when known). ME identifies the signed-in \
 person; transcript speaker Me means ME. Keep named speakers and unknown Speaker N distinct. \
@@ -209,7 +212,9 @@ fn complete(
         "{}/chat/completions",
         settings::safe_url(&config.transcription_url)?
     );
-    let mut body = json!({"model":config.assist_model,"messages":messages,"temperature":0.2,"max_tokens":1200});
+    // Structured drafts need room for model reasoning and several items in the same reply.
+    let max_tokens = if json_reply { 2400 } else { 1200 };
+    let mut body = json!({"model":config.assist_model,"messages":messages,"temperature":0.2,"max_tokens":max_tokens});
     if json_reply {
         body["response_format"] = json!({"type":"json_object"});
     }
