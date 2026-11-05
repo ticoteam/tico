@@ -29,7 +29,7 @@ Task rules, the built-in switches, schedules and run records described here are 
 
 A run that failed shows **Failed:** and a plain reason in red, for example "Failed: the database was busy". The reason names the kind of failure, never the error text, because error text can hold people's data.
 
-A job that wakes every few seconds and finds nothing to do does not add a row each time. A quiet run with the same result as the last one moves that row's times forward, at most once a minute. Built-ins and task rules share these run records. Tico keeps the last 50 records for each job or rule. Task-rule results include "2 tasks closed" or "No eligible done tasks".
+A job that wakes every few seconds and finds nothing to do does not add a row each time. A quiet run with the same result as the last one moves that row's times forward, at most once every 5 minutes, so a 10-second job's last run can read up to 5 minutes ago. A failure with the same reason as the last row folds the same way: the row keeps the time of the first failure and counts the repeats. A job that does not apply here writes nothing when it has nothing to do. Built-ins and task rules share these run records. Tico keeps the last 50 records for each job or rule. Task-rule results include "2 tasks closed" or "No eligible done tasks".
 
 The list refreshes when you open the tab and at most once a minute while it stays open.
 

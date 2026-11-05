@@ -191,9 +191,10 @@ def test_an_expired_go_live_is_recorded_as_ended_not_as_nothing(api):
     assert jobs["go_live_expiry"]["last"]["result"] == "1 go-live ended"
 
 
-def test_a_quiet_repeat_moves_its_row_after_a_minute_and_a_busy_run_starts_a_new_one(api):
+def test_a_quiet_repeat_moves_its_row_after_the_write_interval_and_a_busy_run_starts_a_new_one(api):
     store = api.app.state.store
-    first = SR.Run("snooze_ends", started=H.shift(H.now(), seconds=-200)).did("Nothing due", quiet=True)
+    long_ago = H.shift(H.now(), seconds=-(SR.QUIET_WRITE_SECONDS + 60))
+    first = SR.Run("snooze_ends", started=long_ago).did("Nothing due", quiet=True)
     with store.transaction() as c:
         rid = SR.save(c, first, finished=first.started)
         moved = SR.Run("snooze_ends").did("Nothing due", quiet=True)

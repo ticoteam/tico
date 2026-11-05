@@ -426,12 +426,13 @@ class Scheduler:
             with self.store.read_transaction() as c:
                 observations = queue_refusals.pending(c, self.store.settings, stamp(at), failures)
             # Each observation is its own short write: the writer gate is not reentrant, so one inside "deferred" would wait out its timeout.
+            # Only a new, changed or cleared hold counts; the minutely refresh of the same one is a quiet run.
+            changed = 0
             for change in observations:
                 with locked("queue_refusals:" + change[0]) as c:
                     with isolated(c, "queue_refusals", change[0], failures):
-                        queue_refusals.apply(c, change)
-            run.did(SR.words_of(observations, "bot's queue noted", "Nothing new", "bots' queues noted"),
-                    quiet=not observations)
+                        changed += bool(queue_refusals.apply(c, change))
+            run.did(SR.words_of(changed, "bot's queue noted", "Nothing new", "bots' queues noted"), quiet=not changed)
         # A running turn's step the bot status throttle held back is sent now (backend/thread_bot_status.py).
         from . import thread_bot_status
         with self.store.read() as c:
@@ -534,13 +535,14 @@ class Scheduler:
         with SR.recording(self.store, "company_page", failures) as run:
             from .company_page import schedule as company_page_schedule
             begun = company_page_schedule.start(self.store, at)
-            # Reader notices a restart or the issuer's limit left waiting; the mail goes on a thread of its own.
-            try:
-                from .company_page import readers as company_page_readers
-                company_page_readers.tick(self.store)
-            except Exception as exc:
-                failures.append({"company_page_readers": type(exc).__name__})
             run.did("Editions started" if begun else "Nothing due", quiet=not begun)
+        # Reader notices a restart or the issuer's limit left waiting; the mail goes on a thread of its own. Its own
+        # guard, so a failed edition start never holds the notices back.
+        try:
+            from .company_page import readers as company_page_readers
+            company_page_readers.tick(self.store)
+        except Exception as exc:
+            failures.append({"company_page_readers": type(exc).__name__})
         # Maintenance (backend/maintenance.py): the run starts when its schedule says it is due; its steps run on a thread.
         from . import maintenance
         maintenance.tick(self.store, self.execution.auth, at, failures)
@@ -675,8 +677,10 @@ class Scheduler:
         # Tico file hosting's keys last an hour: HQ is asked again every 5 minutes while the company has it, and
         # before they end (backend/tico_storage.py `_plan`). On its own thread; nothing at all without it.
         from . import tico_storage
+        # The outcome lands on its thread, after this run is written: the run says only that HQ was asked, in the access
+        # check's words, so the two fold into one row.
         if tico_storage.sync_later(self.store, due_only=True):
-            SR.write(self.store, SR.Run("cloud_access").did("File hosting keys renewed"))
+            SR.write(self.store, SR.Run("cloud_access").did("Asked HQ", quiet=True))
         if self.billing_checked is None or at - self.billing_checked >= timedelta(hours=1):
             # Every hour, while this server holds HQ's read-only staff key (the Tico team's own install only): HQ's
             # nightly billing check for the owner's Health page (backend/billing_check.py). On its own thread.

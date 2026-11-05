@@ -49,7 +49,9 @@ def ensure(c):
         c.execute("ALTER TABLE system_runs ADD COLUMN first_started_at TEXT")
 
 KEEP = 50                   # rows per job
-QUIET_WRITE_SECONDS = 60    # a repeated quiet run moves its row at most this often
+# A repeat (a quiet run with the same words, or a failure with the same reason) moves the job's last row at most this
+# often. Nothing times a job by a quiet repeat's start: a controlled job's shortest preset is 15 minutes.
+QUIET_WRITE_SECONDS = 300
 
 CHECKS, LEARNING, REMINDERS, HOUSEKEEPING, CHAT = "checks", "learning", "reminders", "housekeeping", "chat"
 GROUPS = [(CHECKS, "Checks that suggest"), (LEARNING, "Learning"), (REMINDERS, "Reminders and deadlines"),
@@ -803,15 +805,31 @@ def words_of(found, one="change", none="Nothing to do", many=None):
 
 
 def _repeat(c, run, finished):
-    """(the job's last row, whether it was moved under a minute ago) when `run` is a quiet repeat of it, else None."""
-    if not run.quiet or run.error is not None or run.route is not None:
+    """(the job's last row, whether it was moved under QUIET_WRITE_SECONDS ago) when `run` repeats it, else None: a
+    quiet run with the last row's words, or a failure with the last row's reason. A failure every tick is one row that
+    keeps its first time (`first_started_at`) and counts the repeats (`runs`)."""
+    failed = run.error is not None
+    if run.route is not None or not (run.quiet or failed):
         return None
     last = c.execute("SELECT id,ok,result,route,finished_at FROM system_runs WHERE job=? ORDER BY started_at DESC LIMIT 1",
                      (run.job,)).fetchone()
-    if not last or not last["ok"] or last["route"] is not None or last["result"] != run.result:
+    if not last or last["route"] is not None or bool(last["ok"]) == failed \
+            or last["result"] != (run.error if failed else run.result):
         return None
     moved = H.parse_ts(last["finished_at"])
     return last, bool(moved and H.parse_ts(finished) - moved < timedelta(seconds=QUIET_WRITE_SECONDS))
+
+
+def _unseen(c, settings, run):
+    """A quiet run of a job that does not apply here (`applies`): its row would be hidden and nothing reads it, so it
+    is not written. A failure is always written, and so is a job whose last start times its next run (CONTROLS,
+    QUICK_KEYS), or it would run every tick."""
+    job = BY_KEY.get(run.job)
+    if job is None or job.applies is None or not run.quiet or run.error is not None or run.route is not None:
+        return False
+    if job.key in CONTROLS or job.key in QUICK_KEYS:
+        return False
+    return not applies(c, settings, job)
 
 
 def save(c, run, finished=None):
@@ -840,10 +858,12 @@ def keep(c, run):
 
 
 def write(store, run):
-    """`save` in its own short transaction; a failure to record never fails the job. A quiet repeat moved under a
-    minute ago takes no write lock at all."""
+    """`save` in its own short transaction; a failure to record never fails the job. A repeat moved under
+    QUIET_WRITE_SECONDS ago, or a quiet run of a job that does not apply here (`_unseen`), takes no write lock at all."""
     try:
         with store.read() as c:
+            if _unseen(c, getattr(store, "settings", None), run):
+                return
             repeat = _repeat(c, run, H.now())
         if repeat and repeat[1]:
             return

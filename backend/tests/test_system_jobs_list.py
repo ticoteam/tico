@@ -3,6 +3,7 @@ automations tick (automations `sync_system_mirrors`), a job that cannot run on t
 (`Job.applies`), every job records its runs, and every key a block records under is a JOBS job."""
 import dataclasses
 import json
+import logging
 import pathlib
 import re
 from datetime import datetime, timedelta, timezone
@@ -106,6 +107,76 @@ def test_a_task_rule_mirror_whose_rule_is_gone_is_retired(api):
     assert mirrors(api)[gone][2]
 
 
+def test_a_task_rule_mirror_takes_its_rules_name_and_switch(api):
+    sync(api)
+    rid = "task-rule-close-after-done"
+    (aid,) = [a for a, (t, src, deleted, _) in mirrors(api).items() if t == "tico.builtin.task_rule" and src == rid
+              and not deleted]
+    with db(api).transaction() as c:
+        c.execute("UPDATE task_rules SET name='Close finished work', enabled=0 WHERE id=?", (rid,))
+    assert sync(api)["renamed"] == [aid]
+    with db(api).read() as c:
+        row = c.execute("SELECT name, enabled, flow FROM automations WHERE id=?", (aid,)).fetchone()
+    assert (row["name"], row["enabled"], json.loads(row["flow"])["controls"]["on"]) == ("Close finished work", 0, False)
+    assert sync(api)["renamed"] == []
+
+
+def test_the_health_monitor_mirror_comes_back_with_its_bot_and_follows_its_switch(api):
+    sync(api)
+    with db(api).transaction() as c:                             # restored in Settings > Bots
+        if H.bot(c, H.HEALTH_MONITOR):
+            c.execute("UPDATE bots SET state='active' WHERE id=?", (H.HEALTH_MONITOR,))
+        else:
+            c.execute("INSERT INTO bots(id,slug,display_name,state) VALUES(?,?,'Health Monitor','active')",
+                      (H.HEALTH_MONITOR, H.HEALTH_MONITOR))
+    (made,) = sync(api)["made"]
+    assert live(api, "tico.builtin.health") == [made]
+    with db(api).read() as c:
+        mark = c.execute("SELECT automation FROM redesign_migrated WHERE kind='health_monitor' "
+                         "AND id='bot:health-monitor'").fetchone()
+    assert mark["automation"] == made
+    with db(api).transaction() as c:
+        c.execute("UPDATE bots SET state='paused' WHERE id=?", (H.HEALTH_MONITOR,))
+    assert sync(api)["renamed"] == [made] and mirrors(api)[made][3] == 0
+    with db(api).transaction() as c:
+        c.execute("UPDATE bots SET state='archived' WHERE id=?", (H.HEALTH_MONITOR,))
+    assert sync(api)["retired"] == [made]
+
+
+def test_retiring_a_twin_points_the_cutover_mark_at_the_mirror_kept(api):
+    sync(api)
+    (kept,) = live(api, "tico.builtin.job.goal_colours")
+    twin = dead_mirror(api, "Goal colours", "job.goal_colours", {"kind": "system_job", "id": "job:goal_colours"})
+    with db(api).transaction() as c:
+        c.execute("UPDATE redesign_migrated SET automation=? WHERE kind='system_job' AND id='job:goal_colours'", (twin,))
+    assert sync(api)["retired"] == [twin]
+    with db(api).read() as c:
+        mark = c.execute("SELECT automation FROM redesign_migrated WHERE kind='system_job' AND id='job:goal_colours'")
+        report = {(i["kind"], i["id"]): i for i in M.inventory(c)}
+        assert mark.fetchone()["automation"] == kept
+    assert report[("system_job", "job:goal_colours")]["state"] == "on", "the report names the live mirror"
+
+
+def test_a_mirror_that_cannot_be_written_waits_an_hour_and_warns_once(api, monkeypatch, caplog):
+    sync(api)
+    gone = dead_mirror(api, "Old rule", "task_rule", {"kind": "task_rule", "id": "task-rule-gone"})
+    clock, real = [1000.0], automations.remove
+
+    def broken(*a, **k):
+        raise RuntimeError("bad row")
+    monkeypatch.setattr(automations, "_monotonic", lambda: clock[0])
+    monkeypatch.setattr(automations, "remove", broken)
+    with caplog.at_level(logging.WARNING, logger="backend.automations"):
+        for _ in range(3):
+            assert sync(api)["retired"] == []
+    assert sum("could not be synced" in r.getMessage() for r in caplog.records) == 1
+    monkeypatch.setattr(automations, "remove", real)
+    clock[0] += automations.MIRROR_RETRY_SECONDS - 1
+    assert sync(api)["retired"] == [], "not tried again inside the hour"
+    clock[0] += 1
+    assert sync(api)["retired"] == [gone]
+
+
 def test_nothing_is_made_before_the_cutover_is_done(api):
     with db(api).transaction() as c:
         c.execute("DELETE FROM automations WHERE json_extract(flow,'$.trigger.name')='tico.builtin.job.thread_rank'")
@@ -154,7 +225,13 @@ def test_a_job_whose_check_fails_stays_listed(api, monkeypatch):
         assert "kpi_asks" not in SR.not_applying(c, db(api).settings)
 
 
-def test_on_a_plain_install_the_feature_jobs_are_hidden_and_the_rest_listed(api):
+def test_on_a_plain_install_the_feature_jobs_are_hidden_and_the_rest_listed(api, monkeypatch):
+    from backend import billing_check
+    settings = db(api).settings
+    monkeypatch.delenv(billing_check.ENV_KEY, raising=False)    # no HQ staff key
+    monkeypatch.setattr(settings, "hq_staff_read_key", "", raising=False)
+    monkeypatch.setattr(settings, "hosted", "", raising=False)  # not a hosted install
+    monkeypatch.delenv("TICO_CELL", raising=False)
     keys = {j["key"] for j in get(api, "system-routines")["jobs"]}
     for hidden in ("directory_sync", "meeting_sync", "doc_sync", "billing_check", "hosted_update", "cloud_machines",
                    "letters", "physical_mail"):
@@ -170,9 +247,9 @@ def runs_of(api, key):
 
 
 SCHEDULER_JOBS = ("stall_marks", "run_housekeeping", "ship_deployed", "task_loops", "queue_check", "milestone_waits",
-                  "company_page", "screening", "finance_upkeep", "hourly_deadlines", "thread_loop_guard", "snooze_ends")
+                  "screening", "finance_upkeep", "hourly_deadlines", "thread_loop_guard", "snooze_ends")
 # Quiet on an install with nothing waiting, so four ticks keep one row each.
-QUIET_JOBS = ("run_housekeeping", "ship_deployed", "task_loops", "milestone_waits", "company_page", "screening",
+QUIET_JOBS = ("run_housekeeping", "ship_deployed", "task_loops", "milestone_waits", "screening",
               "thread_loop_guard", "snooze_ends", "hourly_deadlines")
 
 
@@ -187,6 +264,8 @@ def test_a_tick_records_each_scheduler_job_and_quiet_repeats_fold(api):
         assert found and all(r["ok"] and r["result"] for r in found), (key, found)
     for key in QUIET_JOBS:
         assert len(runs_of(api, key)) == 1, (key, runs_of(api, key))
+    # The Company page is closed on a new install: its job does not apply, and a pass with nothing due writes nothing.
+    assert runs_of(api, "company_page") == []
 
 
 def test_a_failing_block_records_its_failure(api, monkeypatch):
@@ -214,7 +293,17 @@ def test_a_background_pass_records_one_run_and_quiet_passes_fold(api):
     assert runs_of(api, "letters")[-1]["ok"] == 0
 
 
-def test_document_and_meeting_sync_record_each_pass(api):
+def applying(monkeypatch, *keys):
+    """These jobs apply here, as once their feature is set up."""
+    for key in keys:
+        monkeypatch.setitem(SR.BY_KEY, key, dataclasses.replace(SR.BY_KEY[key], applies=None))
+
+
+def test_document_and_meeting_sync_record_each_pass(api, monkeypatch):
+    api.app.state.doc_sources.tick()
+    api.app.state.granola.record(0, 0)
+    assert runs_of(api, "doc_sync") == runs_of(api, "meeting_sync") == [], "not set up here: a quiet pass writes nothing"
+    applying(monkeypatch, "doc_sync", "meeting_sync")
     for _ in range(3):
         api.app.state.doc_sources.tick()
     (run,) = runs_of(api, "doc_sync")
@@ -225,6 +314,37 @@ def test_document_and_meeting_sync_record_each_pass(api):
     assert [r["result"] for r in runs_of(api, "meeting_sync")] == ["Nothing due"]
     granola.record(2, 1)
     assert runs_of(api, "meeting_sync")[-1]["result"] == "2 syncs started, 1 connection could not be read"
+
+
+def test_a_job_that_does_not_apply_writes_its_failures_but_not_its_quiet_passes(api, monkeypatch):
+    store = db(api)
+    for key in ("letters", "bookkeeper_check"):
+        monkeypatch.setitem(SR.BY_KEY, key, dataclasses.replace(SR.BY_KEY[key], applies=lambda c, s: False))
+    SR.pass_of(store, "letters", lambda: None)
+    assert runs_of(api, "letters") == []
+    with pytest.raises(ValueError):
+        SR.pass_of(store, "letters", lambda: int("x"))
+    assert [r["ok"] for r in runs_of(api, "letters")] == [0], "a failure always shows"
+    # A controlled job's last start says when it runs next: it is written even where it does not apply.
+    SR.write(store, SR.Run("bookkeeper_check").did("Nothing new", quiet=True))
+    assert len(runs_of(api, "bookkeeper_check")) == 1
+
+
+def test_a_failure_that_repeats_folds_into_the_first_and_counts_the_repeats(api):
+    store = db(api)
+    long_ago = H.shift(H.now(), seconds=-(SR.QUIET_WRITE_SECONDS + 60))
+    with store.transaction() as c:
+        first = SR.save(c, SR.Run("snooze_ends", started=long_ago, error="Failed: the database was busy"), finished=long_ago)
+    for _ in range(3):                           # once more after the interval, then twice inside it: no write
+        SR.write(store, SR.Run("snooze_ends", error="Failed: the database was busy"))
+    (row,) = runs_of(api, "snooze_ends")
+    assert row["id"] == first and row["runs"] == 2 and row["first_started_at"] == long_ago and not row["ok"]
+    SR.write(store, SR.Run("snooze_ends", error="Failed: Tico refused it"))
+    SR.write(store, SR.Run("snooze_ends").did("Nothing due", quiet=True))
+    SR.write(store, SR.Run("snooze_ends", error="Failed: Tico refused it"))
+    assert [(r["ok"], r["result"]) for r in runs_of(api, "snooze_ends")] == [
+        (0, "Failed: the database was busy"), (0, "Failed: Tico refused it"), (1, "Nothing due"),
+        (0, "Failed: Tico refused it")], "another reason, or a success between, is a new row"
 
 
 def test_a_topic_check_records_a_fresh_start_and_folds_kept_chats(api):
