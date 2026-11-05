@@ -401,6 +401,40 @@ def test_external_rule_hold_mutations_check_the_stored_review_task(api, external
     post(api, f"rule-holds/{ids[0]}/{mutation}", body, token)
 
 
+@pytest.mark.parametrize("mutation", ["moderate", "file_ask"])
+def test_external_comment_and_file_question_changes_check_the_stored_native_thread(api, external_work, mutation):
+    from backend.tests.test_task_review import ask
+
+    token, task, other = external_work
+    # Older tasks can share a room; the message's refs and the room's native task must both be checked.
+    with api.app.state.store.transaction() as c:
+        c.execute("UPDATE tasks SET conversation_id=? WHERE id=?", (task["conversation_id"], other["id"]))
+    if mutation == "moderate":
+        msg = post(api, f"tasks/{other['id']}/comments", {"text": "Review this report."})["comment"]
+        with api.app.state.store.transaction() as c:
+            c.execute("UPDATE messages SET public=1 WHERE id=?", (msg["id"],))
+        path, body, method = f"tasks/{other['id']}/comments/{msg['id']}/moderate", {"action": "hide"}, "post"
+    else:
+        file = post(api, f"tasks/{other['id']}/files", {"name": "report.txt", "text": "Checked.", "ask": ask("ana")}, token)
+        with api.app.state.store.read() as c:
+            ident = c.execute("SELECT ask_message_id FROM task_file_reviews WHERE file_id=?", (file["file_id"],)).fetchone()[0]
+            msg = H.message(c, ident)
+        updated = ask("ana")
+        updated["questions"][0]["question"] = "Is the report ready?"
+        path, body, method = f"files/{file['file_id']}/versions/1", {"ask": updated}, "patch"
+    hold_external(api, task)
+    with api.app.state.store.read() as c:
+        before = dict(c.execute("SELECT * FROM messages WHERE id=?", (msg["id"],)).fetchone())
+    result = api.request(method, "/api/v2/" + path, json=body, headers=headers(token))
+    assert result.status_code == 403, result.text
+    assert result.json()["error"]["code"] == "quarantined"
+    with api.app.state.store.read() as c:
+        assert dict(c.execute("SELECT * FROM messages WHERE id=?", (msg["id"],)).fetchone()) == before
+    post(api, "bots/scout/quarantine/clear", {})
+    result = api.request(method, "/api/v2/" + path, json=body, headers=headers(token))
+    assert result.status_code == 200, result.text
+
+
 def test_one_tasks_refusals_stop_only_its_turn_and_other_work_claims_and_runs(api):
     botops(api)
     machine = task_bot(api, lanes=True)

@@ -177,6 +177,7 @@ def edit_version(c, auth, who, task_id, fid, number, body):
             if H.answers_to(c, [existing]):
                 raise Problem("validation", "This version's question was answered; attach a new version for another review", 422)
             asked = H.message(c, existing)
+            H._message_writer(c, who.actor, asked, H.conversation(c, asked["conversation_id"]))
             row = H.task(c, task_id)
             recipient = H.task_ask_recipient(c, who.actor, row, value)
             c.execute("UPDATE messages SET refs=?,recipient_id=? WHERE id=?",

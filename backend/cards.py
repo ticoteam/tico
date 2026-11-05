@@ -1332,7 +1332,7 @@ def edit_card(ctx, cid, title=None, settings=None):
     if not may_edit_card(ctx, row):
         raise Problem("forbidden", "Whoever arranges the places it is pinned to changes a card", 403)
     for place in card_places(ctx, row):
-        kind, ident = parse(ctx, place)
+        kind, _, ident = place.partition(":")
         if kind == "task":
             H._writer(ctx.c, ctx.who.actor, task_id=ident)
     fields = {}
@@ -1354,7 +1354,7 @@ def remove_card(ctx, cid):
     if not may_edit_card(ctx, row):
         raise Problem("forbidden", "Whoever arranges the places it is pinned to removes a card", 403)
     for place in card_places(ctx, row):
-        kind, ident = parse(ctx, place)
+        kind, _, ident = place.partition(":")
         if kind == "task":
             H._writer(ctx.c, ctx.who.actor, task_id=ident)
     private = on_person_place(card_places(ctx, row))
