@@ -1332,7 +1332,7 @@ function meetPendingRender(state, rec, data) {
     conflict.textContent = draft.current ? 'Current: ' + draft.current.text + ' · ' + Object.values(draft.current.detail || {}).join(' · ') : '';
     const owner = displayed.detail.owner;
     const proposal = item.section === 'task' && item.proposed_task_id;
-    node.querySelector('[data-send]').textContent = proposal ? 'Link' : owner ? `Send to ${actorLabel(owner)}` : 'Send';
+    node.querySelector('[data-send]').textContent = proposal ? 'Link' : item.section === 'task' ? 'Create' : owner ? `Send to ${actorLabel(owner)}` : 'Send';
     node.querySelector('[data-send]').disabled = draft.sending || !(data.can_send ?? data.can_push) || (!proposal && item.section === 'task' && !owner);
   }
 }

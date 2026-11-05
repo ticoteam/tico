@@ -139,10 +139,13 @@ pub fn run(store: &Store, base: &str) -> Result<()> {
             .any(|chunk| chunk.text == "I will send the proposal"),
         "This Mac retains the local transcript"
     );
-    ensure!(
-        !store.get(&local)?.chunks.is_empty(),
-        "This Mac retains the local recording"
-    );
+    for chunk in &store.get(&local)?.chunks {
+        ensure!(
+            store.audio_path(chunk)?.is_file(),
+            "This Mac retains saved audio"
+        );
+    }
+
     let retry = recording(store, "Item replay synthetic")?;
     store.update_context(&retry, |c| {
         c.items.push(Item {

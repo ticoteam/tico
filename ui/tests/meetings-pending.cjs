@@ -113,12 +113,12 @@ function pauseWrite() { hold = new Promise(resolve => { release=resolve; }); }
     await a.waitForFunction(()=>!!meetPendingDraft(MEET,'i1').flight);
     await title.fill('Final words');
     item.detail.body='B saved before Send'; item.version++;
-    await a.getByRole('button',{name:'Send to Sam',exact:true}).click();
+    await a.getByRole('button',{name:'Create',exact:true}).click();
     release();
     await a.getByText(/Current:.*B saved before Send/).waitFor();
     assert.equal(sent,0,'a conflicted autosave prevents Send');
     assert.equal(await title.inputValue(),'Final words');
-    await a.getByRole('button',{name:'Send to Sam',exact:true}).click();
+    await a.getByRole('button',{name:'Create',exact:true}).click();
     await a.locator('[data-pending="i1"]').waitFor({state:'detached'});
     assert.equal(item.text,'Final words'); assert.equal(sent,1);
     assert.equal(item.detail.body,'B saved before Send');
@@ -139,13 +139,13 @@ function pauseWrite() { hold = new Promise(resolve => { release=resolve; }); }
     assert.deepEqual(await details.evaluate(el=>[document.activeElement===el,el.selectionStart,el.selectionEnd]),[true,2,4]);
     assert.equal(await a.evaluate(()=>meetPendingDraft(MEET,'i1').dirty.text),'Final words');
     const version=item.version;
-    await a.getByRole('button',{name:'Send to Sam',exact:true}).evaluate(el=>el.click());
+    await a.getByRole('button',{name:'Create',exact:true}).evaluate(el=>el.click());
     await a.locator('[data-pending="i1"]').waitFor({state:'detached'});
     assert.deepEqual(lastSend,{text:'Title only',force:false,version});
     assert.equal(item.detail.body,'B saved focused Details');
     assert.equal(item.version,version+1);
     assert.equal(sent,2);
-    for (const [action, inFlight] of [['Send to Sam', true], ['Dismiss', false]]) {
+    for (const [action, inFlight] of [['Create', true], ['Dismiss', false]]) {
       for (const page of [a,b]) await page.evaluate(()=>MEET.pendingDrafts.clear());
       item.status='proposed'; item.version++; emit('meeting_items',{meeting_id:'m1',kind:'items'});
       await a.locator('[data-pending="i1"] [data-send]').waitFor();
@@ -181,14 +181,14 @@ function pauseWrite() { hold = new Promise(resolve => { release=resolve; }); }
     const proposal=a.locator('[data-pending="i1"]');
     const link=proposal.getByRole('button',{name:'Link',exact:true});
     await link.waitFor(); assert.equal(await link.isEnabled(),true);
-    assert.equal(await proposal.getByRole('button',{name:/^Send/}).count(),0);
+    assert.equal(await proposal.getByRole('button',{name:/^(Send|Create)/}).count(),0);
     const before=sent;
     await link.click(); await proposal.waitFor({state:'detached'});
     assert.equal(linked,1); assert.equal(sent,before); assert.equal(item.result_ref,'existing-task');
     // Redaction removes the pointer, so a later render offers ordinary task creation.
     item.status='proposed'; item.proposed_task_id=null; item.detail.owner='human:ben'; item.version++;
     emit('meeting_items',{meeting_id:'m1',kind:'items'});
-    await proposal.getByRole('button',{name:'Send to Sam',exact:true}).waitFor();
+    await proposal.getByRole('button',{name:'Create',exact:true}).waitFor();
     assert.equal(await proposal.getByRole('button',{name:'Link',exact:true}).count(),0);
     emit('meeting_items',{meeting_id:'m1',gone:true});
     await b.waitForFunction(()=>MEET.open===false);
