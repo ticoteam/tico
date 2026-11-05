@@ -76,6 +76,15 @@ The Rust runner releases its Git gate and task lock directly when the operation 
 
 On a Computer that does not run bots as a separate user, such as a Mac, a folder already at `<workspace>/repos/<owner>__<repo>` is taken over when it is a Git checkout of that repository: its `origin` is GitHub's HTTPS or SSH address for it, it belongs to the user the runner runs as, and it does not share objects with another repository or keep its work tree elsewhere. Tico adds the `tico-mirror` remote and updates the tracking refs. It leaves `origin`, branch settings, files and local work as they are. When no bot needs the repository any more, Tico stops managing the folder but never deletes it. Any other folder is left alone, and the error says why.
 
+A bot's repo, shared or named checkout, task and private meeting worktrees, managed bases, and scratch folders
+must stay outside the Tico installation running the Computer. Both runners check the final path before making
+a folder, reusing it, or running Git there. Tico follows links in the path, including linked parent folders. If a missing
+folder leaves a `..` part unresolved, Tico refuses the path rather than risk hiding a later link. A refused path
+is named in the error and stops the turn; it cannot become a sync warning or a fallback to another checkout.
+Template refresh also refuses destination links outside the bot's repo and writes new
+files by rename inside a checked folder. These checks prevent mistakes; a bot with full local access can still
+write the install directly.
+
 Bots on one Computer can read each other’s base clones until per-subscription Unix users exist. Same-user computers, including Macs, also allow inspecting processes owned by that user; repository grants restrict issued tokens, not local files. Full object stores let task worktrees commit offline.
 
 Clone and fetch operations check a free-space floor of 5 GB plus twice the repository's known size. They have at least 15 minutes to complete, and allow up to two hours based on repository size. A failure is retried after 5 minutes, then the wait doubles up to six hours. The error keeps Git's own reason, such as `Repository not found`, `RPC failed; HTTP 500`, `Filename too long`, an LFS error or a timeout. Credentials are masked, and the error says when the next try is. It shows on the Computer, and Health lists it under Repository copies. To retry now, restart that Computer's runner: Restart is on its line in the account menu (or on a hover over the status dot) and in Settings > System checks whenever a Tico update is waiting on that Computer; otherwise BotOps run `hub api POST /api/v2/runners/<computer id>/restart`. A restart clears the wait for every failed repository. Unused base clones and their mirrors are removed after 30 days when no live task worktrees, unpublished commits or local-only branches remain. Worktree bases share the managed marker, so clones created during bot runs are also refreshed and retired. Restarting or stopping a Computer interrupts in-flight Git and its children; stalled processes cannot interrupt the remaining shutdown cleanup.

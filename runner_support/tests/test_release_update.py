@@ -12,6 +12,7 @@ from types import SimpleNamespace
 import pytest
 
 from runner_support import release_update as ru
+from runner_support import checkout_links
 
 
 @pytest.fixture
@@ -617,6 +618,285 @@ def test_a_renamed_file_is_named_with_both_paths(repos):
     sh(checkout, "git", "mv", "app.py", "renamed.py")
     result, _ = run_apply(checkout, state)
     assert result["state"] == "blocked" and "app.py -> renamed.py" in result["error"]
+
+
+@pytest.fixture
+def link_repos(repos):
+    public, checkout, state = repos
+    commit(public, "CLAUDE.md", "# Rules\n\nKeep work.\n")
+    (public / "AGENTS.md").symlink_to("CLAUDE.md")
+    commit(public, "templates/employee-repo/AGENT.md", "# Bot rules\n")
+    for name in ("AGENTS.md", "CLAUDE.md"):
+        (public / "templates/employee-repo" / name).symlink_to("AGENT.md")
+    commit(public, "note.txt", "before")
+    sh(public, "git", "tag", "v0.3.0")
+    sh(checkout, "git", "fetch", "-q", "origin", "tag", "v0.3.0")
+    sh(checkout, "git", "reset", "-q", "--hard", "v0.3.0")
+    commit(public, "app.py", "new release")
+    sh(public, "git", "tag", "v0.4.0")
+    return public, checkout, state
+
+
+def flatten(checkout, name="AGENTS.md"):
+    path = checkout / name
+    content = path.read_bytes()
+    path.unlink()
+    path.write_bytes(content)
+
+
+@pytest.mark.slow
+@pytest.mark.parametrize("symlinks", ["true", "false"])
+def test_only_exact_copies_of_link_targets_are_restored_under_the_update_lock(link_repos, symlinks, capsys, monkeypatch):
+    _, checkout, state = link_repos
+    sh(checkout, "git", "config", "core.symlinks", symlinks)
+    names = ["AGENTS.md", "templates/employee-repo/AGENTS.md", "templates/employee-repo/CLAUDE.md"]
+    for name in names:
+        flatten(checkout, name)
+    before = {name: (checkout / name).read_bytes() for name in names}
+    assert checkout_links.inspect(checkout)["only_flattened"]
+
+    symlink = checkout_links.os.symlink
+    swapped = []
+
+    def locked_symlink(source, destination):
+        with ru.lock_path(checkout).open("a") as handle:
+            with pytest.raises(BlockingIOError):
+                fcntl.flock(handle, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        swapped.append(destination.relative_to(checkout).as_posix())
+        return symlink(source, destination)
+
+    monkeypatch.setattr(checkout_links.os, "symlink", locked_symlink)
+    result, _ = run_apply(checkout, state, "0.4.0")
+    assert result["state"] == "healthy" and ru.checkout_release(checkout) == "0.4.0"
+    assert result["note"] == ru.read_status(state)["note"]
+    prefix = "restored 3 flattened links; originals kept in "
+    assert result["note"].startswith(prefix)
+    backup = Path(result["note"].removeprefix(prefix))
+    assert backup.parent == checkout / ".git/tico-flattened-links"
+    assert all((backup / name).read_bytes() == before[name] for name in names)
+    assert result["note"] in capsys.readouterr().out
+    assert all((checkout / name).is_symlink() and (checkout / name).read_bytes() == before[name] for name in names)
+    assert not sh(checkout, "git", "status", "--porcelain", "--untracked-files=no")
+    assert sh(checkout, "git", "config", "core.symlinks") == symlinks
+    assert swapped == names
+    assert not list(checkout.rglob(".*.tico-link-*"))
+
+
+@pytest.mark.slow
+@pytest.mark.parametrize("policy,paused", [("short", "idle"), ("legacy", "failed")])
+def test_link_repair_keeps_the_existing_busy_work_deferrals(link_repos, monkeypatch, policy, paused):
+    _, checkout, state = link_repos
+    monkeypatch.setenv("TICO_UPDATE_RETRY", policy)
+    before = head(checkout)
+    now = 1_800_000_000.0
+    for attempt in range(1, 4):
+        flatten(checkout)
+        result, calls = run_apply(checkout, state, "0.4.0", busy=lambda: True, clock=lambda: now)
+        status = ru.read_status(state)
+        assert result["state"] == status["state"] == paused
+        assert status["deferrals"] == attempt and status["cause_count"] == 0
+        assert "this computer still has work running" in result["error"]
+        if policy == "short":
+            assert status["not_before"] == now + ru.DEFERRAL_DELAYS_S[attempt - 1]
+        else:
+            assert "not_before" not in status
+        assert head(checkout) == before and (checkout / "AGENTS.md").is_symlink()
+        assert not sh(checkout, "git", "status", "--porcelain", "--untracked-files=no")
+        assert calls.restarts == 0 and calls.installs == calls.prepared == []
+        now += 6 * 3600
+    result, _ = run_apply(checkout, state, "0.4.0")
+    assert result["state"] == "healthy" and "deferrals" not in ru.read_status(state)
+
+
+@pytest.mark.slow
+@pytest.mark.parametrize("point,action", [
+    ("inspected", "edit"), ("inspected", "stage"), ("inspected", "edit and stage"),
+    ("renamed", "edit"), ("renamed", "stage"), ("renamed", "replace"),
+    ("linked", "edit"), ("linked", "stage"), ("linked", "replace"),
+    ("index", "edit"), ("index", "stage"),
+])
+def test_link_repair_keeps_edits_and_staging_at_each_swap_step(link_repos, monkeypatch, point, action):
+    _, checkout, state = link_repos
+    names = ["AGENTS.md", "templates/employee-repo/CLAUDE.md"]
+    for name in names:
+        flatten(checkout, name)
+    path = checkout / names[-1]
+    original = path.read_bytes()
+    inode = path.stat().st_ino
+    before = head(checkout)
+    edited, staged = b"new local rules\n", b"staged local rules\n"
+    oid = subprocess.run(["git", "-C", str(checkout), "hash-object", "-w", "--stdin"],
+                         input=staged, capture_output=True, check=True).stdout.decode().strip()
+    fired = False
+    index = b""
+    inspect, set_aside, symlink = checkout_links._inspect, checkout_links._set_aside, checkout_links.os.symlink
+
+    def cached():
+        return subprocess.run(["git", "-C", str(checkout), "diff", "--cached", "--binary"],
+                              capture_output=True, check=True).stdout
+
+    with path.open("r+b", buffering=0) as editor:
+        def inject(step):
+            nonlocal fired, index
+            if step != point or fired:
+                return
+            fired = True
+            if "edit" in action:
+                editor.seek(0)
+                editor.write(edited)
+                editor.truncate()
+            if action == "replace":
+                path.unlink(missing_ok=True)
+                path.write_bytes(edited)
+            if action == "stage":
+                # Stage the regular file even while its worktree name is absent or now a symlink.
+                sh(checkout, "git", "update-index", "--cacheinfo", f"100644,{oid},{names[-1]}")
+            elif action == "edit and stage":
+                sh(checkout, "git", "add", names[-1])
+            index = cached()
+
+        def inspected(*args):
+            found = inspect(*args)
+            inject("inspected")
+            return found
+
+        def renamed(destination, saved):
+            backup = set_aside(destination, saved)
+            if destination == path:
+                inject("renamed")
+            return backup
+
+        def linked(source, destination):
+            symlink(source, destination)
+            if destination == path:
+                inject("linked")
+
+        def run(args, **kw):
+            if "--cached" in args and path.is_symlink():
+                inject("index")
+            return subprocess.run(args, **kw)
+
+        monkeypatch.setattr(checkout_links, "_inspect", inspected)
+        monkeypatch.setattr(checkout_links, "_set_aside", renamed)
+        monkeypatch.setattr(checkout_links.os, "symlink", linked)
+        result, calls = run_apply(checkout, state, "0.4.0", run=run)
+
+    assert fired and result["state"] == "blocked" and calls.restarts == 0
+    assert "note" not in result and head(checkout) == before and cached() == index
+    assert not path.is_symlink() and path.stat().st_ino == inode
+    assert path.read_bytes() == (edited if "edit" in action else original)
+    assert not (checkout / names[0]).is_symlink()
+    assert (checkout / names[0]).read_bytes() == (checkout / "CLAUDE.md").read_bytes()
+    folder, = (checkout / ".git/tico-flattened-links").iterdir()
+    backup = folder / names[-1]
+    assert backup.stat().st_ino == inode and backup.read_bytes() == path.read_bytes()
+    replacements = list(folder.rglob(".tico-link-replacement-*"))
+    if action == "replace":
+        assert len(replacements) == 1 and replacements[0].read_bytes() == edited
+    else:
+        assert replacements == []
+
+
+@pytest.mark.slow
+def test_link_repair_keeps_writes_after_an_original_passes_validation(link_repos, monkeypatch):
+    _, checkout, state = link_repos
+    first, second = "AGENTS.md", "templates/employee-repo/CLAUDE.md"
+    for name in (first, second):
+        flatten(checkout, name)
+    path = checkout / first
+    inode = path.stat().st_ino
+    read_bytes = Path.read_bytes
+    backups = checkout / ".git/tico-flattened-links"
+    edited = b"edited after validation\n"
+    fired = False
+
+    with path.open("r+b", buffering=0) as editor:
+        def read(saved):
+            nonlocal fired
+            content = read_bytes(saved)
+            if backups in saved.parents and saved.as_posix().endswith(second) and not fired:
+                # The first backup already passed its check. Its inode is still open in an editor.
+                fired = True
+                editor.seek(0)
+                editor.write(edited)
+                editor.truncate()
+            return content
+
+        monkeypatch.setattr(Path, "read_bytes", read)
+        result, _ = run_apply(checkout, state, "0.4.0")
+        assert fired and result["state"] == "healthy"
+        folder = Path(result["note"].split("originals kept in ", 1)[1])
+        saved = folder / first
+        assert saved.stat().st_ino == inode and saved.read_bytes() == edited
+        assert path.is_symlink() and not sh(checkout, "git", "status", "--porcelain")
+        editor.seek(0, 2)
+        editor.write(b"and after the repair\n")
+        assert saved.read_bytes() == edited + b"and after the repair\n"
+
+
+@pytest.mark.slow
+def test_link_backups_use_the_worktrees_git_directory_and_keep_the_newest_five(link_repos):
+    _, checkout, _ = link_repos
+    worktree = checkout.parent / "linked worktree"
+    sh(checkout, "git", "worktree", "add", "-q", "-b", "linked", str(worktree))
+    git_dir = Path(sh(worktree, "git", "rev-parse", "--absolute-git-dir"))
+    assert (worktree / ".git").is_file()
+    folders = []
+    for _ in range(6):
+        flatten(worktree)
+        with ru.lock_path(worktree).open("a") as handle:
+            fcntl.flock(handle, fcntl.LOCK_EX)
+            found = checkout_links.restore(worktree)
+        assert found["restored"] == ["AGENTS.md"]
+        folder = Path(found["backup"])
+        assert folder.parent == git_dir / "tico-flattened-links"
+        folders.append(folder)
+    assert set(folders[-5:]) == set((git_dir / "tico-flattened-links").iterdir())
+    assert not folders[0].exists()
+    assert all((folder / "AGENTS.md").read_bytes() == (worktree / "CLAUDE.md").read_bytes()
+               for folder in folders[-5:])
+    assert not sh(worktree, "git", "status", "--porcelain")
+
+
+@pytest.mark.slow
+@pytest.mark.parametrize("change", ["link text", "target", "staged link", "staged other", "partial", "other edit"])
+def test_any_other_change_blocks_every_link_repair(link_repos, change):
+    _, checkout, state = link_repos
+    flatten(checkout)
+    if change == "link text":
+        (checkout / "AGENTS.md").write_text("my own rules\n")
+    elif change == "target":
+        (checkout / "CLAUDE.md").write_text("changed target\n")
+    elif change == "staged link":
+        sh(checkout, "git", "add", "AGENTS.md")
+    elif change == "staged other":
+        (checkout / "note.txt").write_text("staged")
+        sh(checkout, "git", "add", "note.txt")
+    elif change == "partial":
+        flatten(checkout, "templates/employee-repo/AGENTS.md")
+        (checkout / "templates/employee-repo/AGENTS.md").write_text("different")
+    else:
+        (checkout / "note.txt").write_text("unfinished")
+    before = head(checkout)
+    index = sh(checkout, "git", "diff", "--cached", "--raw")
+    contents = (checkout / "AGENTS.md").read_bytes()
+    result, calls = run_apply(checkout, state, "0.4.0")
+    assert result["state"] == "blocked" and "commit or stash" in result["error"]
+    assert calls.restarts == 0 and head(checkout) == before
+    assert not (checkout / "AGENTS.md").is_symlink() and (checkout / "AGENTS.md").read_bytes() == contents
+    assert sh(checkout, "git", "diff", "--cached", "--raw") == index
+    if change in ("staged other", "partial", "other edit"):
+        assert "AGENTS.md (flattened link)" in result["error"]
+
+
+@pytest.mark.slow
+def test_a_target_hidden_from_git_status_still_blocks_repair(link_repos):
+    _, checkout, state = link_repos
+    flatten(checkout)
+    sh(checkout, "git", "update-index", "--assume-unchanged", "CLAUDE.md")
+    (checkout / "CLAUDE.md").write_text("changed target")
+    result, _ = run_apply(checkout, state, "0.4.0")
+    assert result["state"] == "blocked" and not (checkout / "AGENTS.md").is_symlink()
 
 
 @pytest.mark.slow
