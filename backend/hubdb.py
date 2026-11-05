@@ -3778,6 +3778,11 @@ def task_private_readable(conn, actor, row):
     if not row:
         return False
     row = dict(row)
+    from . import counsel, teammate_access
+    copied = counsel.page_copies(conn).get(row["id"])
+    if (copied and copied["body"] != counsel.REMOVED_PAGE and
+            not counsel.page_copy_readable(conn, copied, teammate_access._viewer_for(conn, actor))):
+        return False
     if not task_private(conn, row):
         return True
     if "owner_id" not in row or "requester_id" not in row:

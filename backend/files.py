@@ -14,6 +14,7 @@ import hashlib
 import json
 import re
 import secrets
+import sqlite3
 import tempfile
 from collections import namedtuple
 from contextlib import ExitStack
@@ -166,19 +167,38 @@ def asked_to_read(c, who, file_id, version=None, cache=None):
         read = counsel.run_read(c, who)
         if cache is not None:
             cache[key] = read
-    return bool(read) and read["file_id"] == file_id and (version is None or int(version) == read["version"])
+    if not read or read["file_id"] != file_id or (version is not None and int(version) != read["version"]):
+        return False
+    from . import counsel
+    return counsel.page_copy_readable(c, read, who)
 
 
 PAGE_AUDIENCE_SQL = "SELECT audience FROM pages WHERE file_id=?"
 
 
+def restricted_pages(c):
+    """The restricted set is neutral input, read once in this snapshot, including for SQL callbacks."""
+    privacy.snapshot(c)
+    def build():
+        try:
+            return {r["id"]: dict(r) for r in c.execute(
+                "SELECT f.*,p.audience FROM pages p JOIN bot_files f ON f.id=p.file_id WHERE p.audience IS NOT NULL")}
+        except sqlite3.OperationalError as exc:
+            if "no such table" not in str(exc):
+                raise
+            return {}                     # standalone hubdb and pre-pages migration databases
+    return read_cache.value(c, ("restricted_pages",), build, shared=True)
+
+
 def page_audience_visible(c, auth, who, row, cache):
     """A page only narrows its inherited visibility, with management kept outside its audience."""
     privacy.snapshot(c)
-    page = read_cache.one(c, PAGE_AUDIENCE_SQL, (row["id"],))
-    if page and page["audience"] is not None:
+    page = restricted_pages(c).get(row["id"])
+    if page:
         from . import pages, teammate_access
-        key = ("page_audience", row["id"])
+        cache = read_cache.value(c, ("page_audience_answers", who.actor, who.role,
+                                     getattr(who, "task_actor", ""), auth is not None), dict, shared=True)
+        key = ("page_audience", row["id"], who.actor, getattr(who, "task_actor", ""))
         if key not in cache:
             cache[key] = (pages.may_manage(c, auth, who, row) or
                           teammate_access.in_audience(c, who, H._json(page["audience"], {}), auth))
@@ -236,9 +256,16 @@ def file_visible(c, auth, who, row, cache):
 
 def page_blobs(c, bid):
     """The pages whose bytes or previews this blob holds; attachment ownership never bypasses them."""
-    return c.execute("SELECT f.* FROM bot_files f JOIN pages p ON p.file_id=f.id "
-                     "JOIN bot_file_versions v ON v.file_id=f.id WHERE v.blob_id=? OR "
-                     "v.thumb_blob_id=? OR v.poster_blob_id=?", (bid, bid, bid)).fetchall()
+    privacy.snapshot(c)
+    def build():
+        found = {}
+        for row in c.execute("SELECT f.*,v.blob_id,v.thumb_blob_id,v.poster_blob_id FROM bot_files f "
+                             "JOIN pages p ON p.file_id=f.id JOIN bot_file_versions v ON v.file_id=f.id"):
+            for blob in (row["blob_id"], row["thumb_blob_id"], row["poster_blob_id"]):
+                if blob:
+                    found.setdefault(blob, []).append(dict(row))
+        return found
+    return read_cache.value(c, ("page_blobs",), build, shared=True).get(bid, ())
 
 
 def page_blob_visible(c, auth, who, bid):
@@ -251,14 +278,59 @@ def page_event_readable(c, auth, who, target, detail):
     # Hard delete keeps the file tombstone and activity, while removing the page's row.
     row = c.execute("SELECT f.* FROM bot_files f LEFT JOIN pages p ON p.file_id=f.id "
                     "WHERE f.id=? AND (p.file_id IS NOT NULL OR ?)", (target, int(names_audience))).fetchone()
-    if not row:
-        return True
-    if not (file_visible(c, auth, who, row, {}) if auth else page_audience_visible(c, auth, who, row, {})):
-        return False
-    if names_audience:
+    cache = {}
+    candidates = page_references(data) | ({target} if isinstance(target, str) else set())
+    for fid in candidates:
+        page = restricted_pages(c).get(fid)
+        if page and not (file_visible(c, auth, who, page, cache) if auth else
+                         page_audience_visible(c, auth, who, page, cache)):
+            return False
+    if row and names_audience:
         from . import pages
         return pages.may_manage(c, auth, who, row)
     return True
+
+
+def page_references(value):
+    """Structured refs use file/file_id, page/page_id, item=page:<id>, and lists of those shapes."""
+    found = set()
+    if isinstance(value, str):
+        fid = value.removeprefix("page:").split("@", 1)[0]
+        if is_file_id(fid):
+            found.add(fid)
+    elif isinstance(value, dict):
+        for child in value.values():
+            found.update(page_references(child))
+    elif isinstance(value, (list, tuple)):
+        for child in value:
+            found.update(page_references(child))
+    return found
+
+
+def readable_page_refs(c, auth, who, refs):
+    """Remove the entire metadata object of a denied page, even on undecorated message transports."""
+    original = refs
+    refs = H._json(refs, {}) if isinstance(refs, str) else refs
+    pages, cache = restricted_pages(c), {}
+    denied = {fid for fid in page_references(refs) if fid in pages
+              and not (file_visible(c, auth, who, pages[fid], cache) if auth else
+                       page_audience_visible(c, auth, who, pages[fid], cache))}
+    if not denied:
+        return original
+
+    def clean(value):
+        if isinstance(value, dict):
+            if any(isinstance(v, str) and page_references(v) & denied for v in value.values()):
+                return {"removed": True, "label": "A page you can't open"}
+            return {k: clean(v) for k, v in value.items()}
+        if isinstance(value, list):
+            return [clean(v) for v in value]
+        if isinstance(value, str) and page_references(value) & denied:
+            return {"removed": True, "label": "A page you can't open"}
+        return value
+
+    shown = clean(refs)
+    return encode(shown) if isinstance(original, str) else shown
 
 
 class Files:

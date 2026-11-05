@@ -30,12 +30,15 @@ class ReadIndex:
         # (one bot owns most). Ask once per distinct set rather than once per task.
         answers = {}
         self.denied = set()
+        from . import counsel
+        page_copies = counsel.page_copies(c)
         for tid, row in self.private.items():
-            key = (row["owner_id"], row["requester_id"], row["guest"], row["private"])
+            key = (row["owner_id"], row["requester_id"], row["guest"], row["private"], tid if tid in page_copies else None)
             if key not in answers:
                 answers[key] = privacy.task_readable(c, who, row)
             if not answers[key]:
                 self.denied.add(tid)
+        self.denied.update(counsel.denied_page_copies(c, who))
         self._attempts = self._attachments = self._tags = self._intervals = None
         # Each instance belongs to one consistent read transaction.
         self.message_sources = lru_cache(maxsize=4096)(self._message_sources)

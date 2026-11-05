@@ -123,6 +123,8 @@ def forget_group(c, actor, gid):
     """A deleted group's access goes with it, and no other teammate's audience names it any more: a group made later
     with the same id starts from the defaults. What it was stays in the audit log."""
     from . import audit_log
+    from . import pages
+    pages.forget_audience_member(c, actor, "teams", gid)
     for row in list(stored_rows(c).values()):
         kind, ident = row["target_type"], row["target_id"]
         before = _complete(row["access"], kind, ident)
@@ -847,6 +849,11 @@ class Known:
         return [a for a in actors if a not in self.strangers]
 
     def message(self, message):
+        if isinstance(message, dict) and message.get("refs"):
+            from .files import readable_page_refs
+            refs = readable_page_refs(self.c, self.auth, self.viewer, message["refs"])
+            if refs != message["refs"]:
+                message = {**message, "refs": refs}
         if not self.people or not isinstance(message, dict):
             return message
         named = [key for key in ("sender_id", "recipient_id") if message.get(key) in self.people]
@@ -855,7 +862,7 @@ class Known:
         return {**message, **{key: "" for key in named}}
 
     def messages(self, messages):
-        return [self.message(m) for m in messages] if self.people else messages
+        return [self.message(m) for m in messages]
 
     def conversation(self, conversation):
         if not self.people or not isinstance(conversation, dict) or self.me in (conversation.get("participants") or []):

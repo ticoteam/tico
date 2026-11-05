@@ -769,6 +769,10 @@ class Auth:
             actor = A.q(who.task_actor)
             carried = A.qlist(sorted(private_subjects(c, who.task_actor)))
             audience += f" AND (coalesce(private,1)=0 OR owner_id IN {carried} OR requester_id IN {carried} OR guest={actor})"
+        from . import counsel
+        denied = counsel.denied_page_copies(c, who)
+        if denied:
+            audience += " AND id NOT IN " + A.qlist(sorted(denied))
         return audience
 
     def operator(self, c, who, bot):

@@ -528,7 +528,8 @@ def guarded(c, auth, who, inner, function, columns=None, unseen=None):
         "market_pages": "1",
         "docs": "id IS NOT NULL", "doc_versions": "doc_id IN (SELECT id FROM docs)",
         "linked_docs": "id IS NOT NULL",
-        "bot_files": (function("file") + "(id) AND " + file_gate + " AND " + (f"bot_id={q(H.actor_id(who.actor))} AND " if bot else "")
+        "bot_files": (f"CASE WHEN id IN (SELECT file_id FROM {inner('pages')} WHERE audience IS NOT NULL) "
+                      "THEN " + function("file") + "(id) ELSE 1 END AND " + file_gate + " AND " + (f"bot_id={q(H.actor_id(who.actor))} AND " if bot else "")
                       + f"(CASE WHEN scope LIKE 'task:%' THEN substr(scope,6) IN (SELECT id FROM tasks) "
                         "WHEN scope LIKE 'conversation:%' THEN substr(scope,14) IN (SELECT id FROM conversations) "
                         f"ELSE {bots_visible('bot_id')} END)"),
@@ -790,17 +791,19 @@ def connect(path, c, auth, who, trace=None, seconds=None):
                 finally:
                     trusted[0] = False
         index = ReadIndex(Source(), who, rooms=True)
-        from .files import page_audience_visible, page_event_readable, page_blob_visible
+        from .files import page_audience_visible, page_event_readable, page_blob_visible, restricted_pages, readable_page_refs
         from .pages import may_manage as page_manager
         source = index.c
+        audience_cache = {}
         def visible_file(fid):
-            row = source.execute("SELECT * FROM bot_files WHERE id=?", (fid,)).fetchone()
+            row = restricted_pages(source).get(fid)
             # SQL already enforces inherited scope/provenance below; only add the common narrowing.
-            return bool(row) and page_audience_visible(source, auth, who, row, {})
+            return not row or page_audience_visible(source, auth, who, row, audience_cache)
         def manages_page(fid):
             row = source.execute("SELECT * FROM bot_files WHERE id=?", (fid,)).fetchone()
             return bool(row) and page_manager(source, auth, who, row)
-        functions = {"file": (1, visible_file), "page_manager": (1, manages_page), "message": (4, index.message), "attempt": (1, index.attempt),
+        functions = {"page_refs": (1, lambda refs: readable_page_refs(source, auth, who, refs)),
+                     "file": (1, visible_file), "page_manager": (1, manages_page), "message": (4, index.message), "attempt": (1, index.attempt),
                      "conversation": (1, index.conversation), "meeting_room": (1, index.meeting_room),
                      "event": (4, lambda target, actor, ts, detail:
                                     page_event_readable(source, auth, who, target, detail) and
@@ -823,11 +826,13 @@ def connect(path, c, auth, who, trace=None, seconds=None):
                 raise Problem("schema", f"Table {table} is missing from this database", 500)
             names = ",".join(f'"{column}"' for column in exposed[table])
             conn.execute(f'CREATE TEMP VIEW {inner(table)} AS SELECT {names} FROM main."{table}"')
+        conn.execute(f'CREATE TEMP VIEW {inner("pages")} AS SELECT file_id,audience FROM main.pages')
         if deadline is not None:
             conn.set_progress_handler(lambda: int(time.monotonic() > deadline), 2000)
         tables = materialize(conn, index, tables, inner, function, private)
         conn.set_progress_handler(None, 0)
         masks = {**MASKED, **live_masks(unsettled_watched(conn, inner))}
+        masks["messages"] = {**masks.get("messages", {}), "refs": function("page_refs") + "(source.refs)"}
         from . import threads
         names = qlist(threads.Viewer(auth, who).member_names(conn))
         bots = TA.hidden(conn, who, "see", ("bot",), auth)
@@ -866,7 +871,7 @@ def connect(path, c, auth, who, trace=None, seconds=None):
     except BaseException:
         conn.close()
         raise
-    inner_names = {prefix + table for table in set(tables) | sources}
+    inner_names = {prefix + table for table in set(tables) | sources | {"pages"}}
     sets = {private(name) for name in SETS}
 
     def fts_parent(name):
@@ -903,7 +908,7 @@ def connect(path, c, auth, who, trace=None, seconds=None):
                          "market_figures", "market_sources", "listen_runs", "task_types", "task_steps"}:
                 return sqlite3.SQLITE_OK
             # A base table is read only by its own inner view, whose name is this connection's secret.
-            if (table in tables or table in sources) and context == prefix + table:
+            if (table in tables or table in sources or table == "pages") and context == prefix + table:
                 return sqlite3.SQLITE_OK
             # FTS5 reads the virtual table and its shadow tables with no view
             # context. Allow that only for the owner: mail_fts is owner-only.

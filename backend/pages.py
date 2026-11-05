@@ -138,6 +138,35 @@ def checked_audience(c, value):
     return None if level["everyone"] else json.dumps(level, sort_keys=True, separators=(",", ":"))
 
 
+def access_reset(c):
+    """Group changes can revoke a page just as an edit to its audience can."""
+    c.execute("INSERT INTO changes(topic,kind,ref,created_at) VALUES('tasks','bulk','page_access',?)", (H.now(),))
+
+
+def group_access_changed(c):
+    from . import files, counsel
+    if any(H._json(row["audience"], {}).get("teams") for row in files.restricted_pages(c).values()):
+        counsel.revoke_page_copies(c, None)
+        access_reset(c)
+
+
+def forget_audience_member(c, actor, field, ident):
+    """Deletion never leaves a grant for a later teammate or group that reuses this identifier."""
+    from . import audit_log, counsel, files
+    changed = False
+    for row in list(files.restricted_pages(c).values()):
+        before = H._json(row["audience"], {})
+        if ident not in before.get(field, []):
+            continue
+        after = {**before, field: [v for v in before[field] if v != ident]}
+        c.execute("UPDATE pages SET audience=?,updated_at=? WHERE file_id=?", (json.dumps(after), H.now(), row["id"]))
+        audit_log.write(c, actor, "page:" + row["id"] + ":access", before, after, "teammate-removed")
+        changed = True
+    if changed:
+        counsel.revoke_page_copies(c, None)
+        access_reset(c)
+
+
 class Pages:
     def __init__(self, app, store, auth, files):
         self.app, self.store, self.auth, self.files = app, store, auth, files
@@ -326,13 +355,15 @@ class Pages:
             return
         now = H.now()
         c.execute("UPDATE pages SET audience=?,updated_at=? WHERE file_id=?", (value, now, row["id"]))
+        from . import counsel
+        counsel.revoke_page_copies(c, self.auth, row["id"])
         detail = {"before": H._json(before, None), "after": H._json(value, None)}
         self.files.activity(c, row["id"], who.actor, "page.access_changed", now=now, detail=detail)
         H.event(c, who.actor, "page.access_changed", row["id"], detail)
         # Task readers receive refreshed files; all open surfaces receive the existing reset invalidation.
         if row["task_id"]:
             c.execute("UPDATE tasks SET updated_at=? WHERE id=?", (now, row["task_id"]))
-        c.execute("INSERT INTO changes(topic,kind,ref,created_at) VALUES('tasks','bulk','page_access',?)", (now,))
+        access_reset(c)
 
     def edit(self, request, fid, body):
         who = request.state.identity
