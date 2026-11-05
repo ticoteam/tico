@@ -1739,6 +1739,9 @@ def _carrier(c, thread, message, bot, reason, rule, wake="thread", body=None, wa
         return None
     cid = _new_id()
     refs = {"carries": message["id"], "wake": wake, "reason": reason, "from": message.get("sender_id")}
+    from .turn_scope import message_view
+    message = message_view(c, message)
+    refs["body_sources"] = [H._json(message.get("refs"), {}) or {}]
     if rule:
         refs["rule"] = rule
     if way == "queue":
@@ -1760,6 +1763,8 @@ def _carrier(c, thread, message, bot, reason, rule, wake="thread", body=None, wa
 
 def _defer_note(c, message, bot):
     """A deferred delivery rides to the bot's next run as a quiet note, as bot_to_bot.hold leaves one."""
+    from .turn_scope import message_view
+    message = message_view(c, message)
     try:
         c.execute("INSERT INTO notes(id,from_actor,to_actor,body,created_at,message_id) VALUES(?,?,?,?,?,?)",
                   (_new_id(), message.get("sender_id") or H.KEEPER, bot,
@@ -2462,7 +2467,9 @@ def _shown_title(c, v, row):
     parent = H.message(c, parent_id, include_deleted=True)
     if v is None or not parent or not message_readable(c, v, parent):
         return ""
-    return title or sub_thread_title(parent.get("body"))
+    from .turn_scope import message_view
+    shown = message_view(c, parent, who=v.who, auth=v.auth)
+    return title if title and shown.get("body") == parent.get("body") else sub_thread_title(shown.get("body"))
 
 
 def _neutral_titles(c):
@@ -2720,20 +2727,23 @@ def members(c, v, thread_id, *, cursor=None, limit=100):
     row = require(c, v, thread_id)
     root = root_of(c, row)
     limit = max(1, min(int(limit or 100), MAX_PAGE))
+    known = v.known(c)
+    hidden = set() if known.member(root["id"]) else known.strangers
     rows = [dict(r) for r in c.execute("SELECT actor, role, added_by, created_at FROM thread_members WHERE thread_id=? "
-                                       "AND actor>? ORDER BY actor LIMIT ?", (root["id"], cursor or "", limit + 1))]
+                                       f"AND actor>? AND actor NOT IN {_qlist(sorted(hidden))} ORDER BY actor LIMIT ?",
+                                       (root["id"], cursor or "", limit + 1))]
     participant = lambda a: {"actor": a, "role": "member", "added_by": None, "created_at": root.get("created_at")}
     if audience_of(root) in PUBLIC_AUDIENCES:
         have = {r["actor"] for r in rows}
         rows += [participant(a) for a in root.get("participants") or []
-                 if _public_member(c, a) and a > (cursor or "") and a not in have]
+                 if _public_member(c, a) and a > (cursor or "") and a not in have and a not in hidden]
         rows = sorted(rows, key=lambda r: r["actor"])[:limit + 1]
+    if audience_of(root) == "participants" and not rows and not cursor:
+        rows = [participant(a) for a in root.get("participants") or [] if a not in hidden]
+    rows = known.members(rows, root["id"])
     page = rows[:limit]
-    if audience_of(root) == "participants" and not page and not cursor:
-        page = [participant(a) for a in root.get("participants") or []][:limit]
-    # The cursor keeps to the stored rows, so what this viewer may not be told does not move it.
     next_cursor = page[-1]["actor"] if len(rows) > limit else None
-    return {"members": v.known(c).members(page, root["id"]), "next_cursor": next_cursor}
+    return {"members": page, "next_cursor": next_cursor}
 
 
 def follow(c, v, thread_id, *, notify="live"):
@@ -3426,6 +3436,8 @@ def reply_quotes(c, v, items):
             out[item_id] = {"id": (found.get(target) or {}).get("id") or target, "hidden": True}
             continue
         author = known.name(m.get("sender_id") or "", m["conversation_id"])
+        from .turn_scope import message_view
+        m = message_view(c, m, who=v.who, auth=v.auth)
         out[item_id] = {"id": m["id"], "author": author, "author_name": names.get(author, ""),
                         "excerpt": reply_excerpt(m.get("body"))}
     return out

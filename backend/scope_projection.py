@@ -15,6 +15,23 @@ REF_FIELDS = frozenset({"file", "file_id", "page", "page_id", "blob_id", "meetin
 SOURCE_LISTS = frozenset({"files", "attachments", "pages", "meetings", "reviewed", "citations", "body_sources"})
 
 
+def body_sources(value, parent=""):
+    """Keep structured source refs beside generated prose, without duplicating the payload's ordinary text."""
+    if isinstance(value, dict):
+        out = {}
+        for key, item in value.items():
+            if key in REF_FIELDS or key == "id" and parent in SOURCE_LISTS:
+                out[key] = item
+            elif isinstance(item, (dict, list)):
+                refs = body_sources(item, key)
+                if refs:
+                    out[key] = refs
+        return out
+    if isinstance(value, list):
+        return [refs for item in value if (refs := body_sources(item, parent))]
+    return value if parent in SOURCE_LISTS and isinstance(value, str) else None
+
+
 def project(c, scoped, payload, *, auth=None):
     from . import turn_scope, context_search
     from .files import file_visible, prime_visible
@@ -191,7 +208,8 @@ def project(c, scoped, payload, *, auth=None):
         if isinstance(value, list):
             return any(has_denied(item) for item in value)
         if isinstance(value, dict):
-            return any(has_denied(item) for key, item in value.items() if key in REF_FIELDS or key == 'id')
+            return any(has_denied(item) for key, item in value.items()
+                       if key in REF_FIELDS or key == 'id' or isinstance(item, (dict, list)))
         return False
 
     def walk(value, parent='', legacy_titles=None):

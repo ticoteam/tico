@@ -445,8 +445,9 @@ The JSON `text`/`content_base64` route still accepts files up to 10 MB for older
 
 `hub task attach <id> cut.mp4 --poster poster.jpg --note "Rough cut"` streams from disk when
 `/api/v2/config` advertises `features.task_files_multipart`. An older server receives the existing
-JSON upload; the client refuses files over 10 MB before reading them. The Computer's automatic
-file publishing also hashes and uploads from disk. Video and audio extensions are accepted
+JSON upload; the client refuses files over 10 MB before reading them. Task-scoped turns receive
+only `features` and `upload_max_bytes` from config; streaming works with their turn token.
+The Computer's automatic file publishing also hashes and uploads from disk. Video and audio extensions are accepted
 alongside the existing document and image types. The local MCP adapter can use `hub_task_attach`
 with `path` and optional `poster`; server MCP calls keep using text/base64 and cannot read server paths.
 

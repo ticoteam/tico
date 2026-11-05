@@ -6665,8 +6665,12 @@ def _same_title(conn, sql, args, title, keep=None):
     """The first row `sql` reads (id, title) whose title is `title` by title_key, or None. `keep(conn, task_id)`, when
     given, also has to say it is the same work: a file review asks the same words about other versions."""
     key = title_key(title)
+    from . import turn_scope, views
+    scoped = turn_scope.scope(conn)
+    visible = turn_scope.AUTH.get().task_sql(conn, scoped.who) if scoped else None
     return next((r for r in _rows(conn.execute(sql, args))
-                 if title_key(r["title"]) == key and (keep is None or keep(conn, r["id"]))), None)
+                 if title_key(r["title"]) == key and (visible is None or views._readable_task_ids(conn, visible, [r["id"]]))
+                 and (keep is None or keep(conn, r["id"]))), None)
 
 
 AUTOMATION_TURN = ("automation_run", "automation_step", "automation_key")   # what names an automation's turn
@@ -7440,7 +7444,8 @@ def fold_question(conn, actor, found, question, ask, *, title=None, body=None):
     latest wording and options, and the earlier asks listed under it. The ask is rewritten in place, so nothing new is
     sent: no second Needs-you item, no Slack or mail line, no run. Its clock restarts (ask_clock), so the person gets
     the team's days from the latest wording before a default goes ahead. Returns the ask as it now reads."""
-    card, asked = found["task"], found["ask"]
+    from .turn_scope import message_view
+    card, asked = found["task"], message_view(conn, found["ask"])
     old = asked.get("refs") or {}
     was = ((old.get("questions") or [{}])[0].get("question") or asked.get("body") or "").strip()
     earlier = [*(old.get("earlier") or []), {"question": was, "at": ask_clock(asked)}][-EARLIER_ASKS_KEPT:]
@@ -8857,7 +8862,12 @@ def approval_request(conn, actor, kind, payload, task_id=None, supersedes=None, 
         refuse(conn, actor, "lint", "the text doesn't match content_sha256; send the exact text that will be published",
                severity)
     digest = payload_hash(payload)
-    dup = _one(conn, "SELECT id FROM approvals WHERE payload_hash=? AND decision IS NULL", (digest,))
+    from . import turn_scope
+    from .why_here import approval_readable
+    scoped = turn_scope.scope(conn)
+    dup = next((dict(r) for r in conn.execute("SELECT * FROM approvals WHERE payload_hash=? AND decision IS NULL",
+                                             (digest,))
+                if scoped is None or approval_readable(conn, turn_scope.AUTH.get(), scoped.who, dict(r))), None)
     if dup:
         refuse(conn, actor, "duplicate", f"{dup['id']} already asks for exactly this")
     if supersedes:
@@ -8882,11 +8892,14 @@ def approval_request(conn, actor, kind, payload, task_id=None, supersedes=None, 
         owner = actor
     owner = to or owner or human_actor(default_human(conn))     # `to`: a redesign proposal's decider
     ts = now()
-    ask = ("Send this to Tico support? " + _clip(payload["message"], 200) if kind == "support"
-           else f"Approve this {kind}: " + _clip(text, 200))
+    shown = turn_scope.project(conn, scoped, payload)
+    ask = ("Send this to Tico support? " + _clip(shown.get("message", ""), 200) if kind == "support"
+           else f"Approve this {kind}: " + _clip(json.dumps(shown, sort_keys=True, default=str), 200))
+    from .scope_projection import body_sources
+    notice_refs = {"approval": "pending", "task": task_id, "body_sources": [body_sources(shown)]}
     msg = _write_message(conn, actor, owner, ask,
                          _pair_conversation(conn, actor, owner, "notice"), "notice",
-                         {"approval": "pending", "task": task_id}, None, None)
+                         notice_refs, None, None)
     row = {"id": new_id(), "kind": kind, "task_id": task_id, "message_id": msg["id"],
            "payload": _dump(payload), "payload_hash": digest, "requested_by_id": actor,
            "decided_by_id": None, "decision": None, "decided_at": None, "consumed_at": None,
@@ -8897,7 +8910,7 @@ def approval_request(conn, actor, kind, payload, task_id=None, supersedes=None, 
                  "VALUES (:id, :kind, :task_id, :message_id, :payload, :payload_hash, :requested_by_id, "
                  ":decided_by_id, :decision, :decided_at, :consumed_at, :created_at, :ready_since, :decision_owner)", row)
     conn.execute("UPDATE messages SET refs=? WHERE id=?",
-                 (_dump({"approval": row["id"], "task": task_id}), msg["id"]))
+                 (_dump({**notice_refs, "approval": row["id"]}), msg["id"]))
     event(conn, actor, "approval.request", row["id"], {"kind": kind, "to": owner})
     replaced = {supersedes} if supersedes else set()
     target = approval_target(kind, payload)

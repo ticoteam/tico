@@ -12,6 +12,8 @@ from .store import Problem
 ALLOWLIST = (
     # CLI/MCP discover the effective identity before choosing tools.
     ("GET", r"/api/v2/me", True),
+    # Scoped clients negotiate uploads without reading org configuration.
+    ("GET", r"/api/v2/config", True),
     # The Rust runner's env::environment fetches this turn's granted credentials before starting its harness.
     ("GET", r"/api/v2/credential-runtime", True),
     # MCP dispatches through HTTP again, so every tool's underlying route passes this policy too.

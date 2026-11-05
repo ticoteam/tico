@@ -13,6 +13,7 @@ from .store import H, Problem
 
 READS = ContextVar("attempt_reads", default=None)
 AUTH = ContextVar("turn_scope_auth", default=None)
+WHO = ContextVar("turn_scope_who", default=None)
 
 
 @dataclass(frozen=True)
@@ -24,9 +25,10 @@ class Scope:
     who: Identity | None = None
 
 
-def scope(c, who):
+def scope(c, who=None):
     """None for an ordinary turn; a malformed make-page reference instead gets an empty, closed scope."""
-    if not who.attempt_id:
+    who = who or WHO.get()
+    if who is None or not who.attempt_id:
         return None
     privacy.snapshot(c)
 
@@ -54,6 +56,19 @@ def project(c, scoped, payload, *, auth=None):
     """Project the reviewed task/source schemas; ordinary text and unknown references stay opaque."""
     from .scope_projection import project as project_sources
     return project_sources(c, scoped, payload, auth=auth)
+
+
+def message_view(c, message, *, who=None, auth=None):
+    """A message's content before copying any of it into prose or another stored record.
+
+    Use the same structured scrubber as the message read route, while refs still describe the body.
+    Stored rows and decorated messages both occur here; never change the source row in place.
+    """
+    scoped = scope(c, who)
+    if message is None or scoped is None:
+        return message
+    message = {**message, "refs": H._json(message.get("refs"), {}) or {}}
+    return project(c, scoped, message, auth=auth)
 
 
 def project_attempt(c, auth, aid, payload):

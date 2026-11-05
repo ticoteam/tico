@@ -257,6 +257,8 @@ def answer_task(c, auth, who, task_id, body, wake, warn=""):
     if not asked or asked["kind"] != "ask" or not asked["refs"].get("questions"):
         raise Problem("validation", "The target has no structured question", 422)
     privacy.require_message(c, who, asked)
+    from .turn_scope import message_view
+    asked = message_view(c, asked, who=who, auth=auth)
     H._message_writer(c, who.actor, asked, H.conversation(c, asked["conversation_id"]))
     if asked["sender_id"] == who.actor:
         raise Problem("forbidden", "The asker cannot answer their own question", 403)

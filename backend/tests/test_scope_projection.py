@@ -538,3 +538,187 @@ def test_passed_labels_also_remove_the_generated_answer_body(api, legacy):
     shown = get(api, "messages/" + answered["comment"]["id"], attempt["token"])
     no_sources(shown, secrets(data))
     assert shown["refs"]["answer"]["answers"]["decision"] == ["Allowed source"]
+
+
+def test_derived_message_text_uses_one_scoped_view(api, monkeypatch):
+    from backend import threads
+    data = sources(api)
+    _, attempt = scoped(api, data, False)
+    token, mid = attempt['token'], data['answered']['comment']['id']
+    before = post(api, 'threads', {'parent_message_id': mid}, token)
+    assert data['source_label'] in before['title']
+    narrow(api, data)
+
+    def check():
+        made = post(api, 'threads', {'parent_message_id': mid}, token)
+        assert made['title'] == ''
+        no_sources(get(api, 'threads/' + made['id'], token), secrets(data))
+        assert get(api, 'origins/' + mid, token)['title'] == ''
+        # The quote service feeds thread replies; use the same reader as the real task token.
+        with api.app.state.store.read() as c:
+            who = api.app.state.auth.authenticate({'authorization': 'Bearer ' + token})
+            message = H.message(c, mid)
+            quote = threads.reply_quotes(c, threads.viewer(api.app.state.auth, who), [
+                {'id': 'reply', 'conversation_id': message['conversation_id'], 'in_reply_to': mid}])
+            no_sources(quote, secrets(data))
+    check()
+    with monkeypatch.context() as patch:
+        patch.setattr(turn_scope, 'message_view', lambda c, message, **kw: message)
+        with pytest.raises(AssertionError):
+            check()
+    assert data['source_label'] in get(api, 'threads/' + before['id'])['title']
+
+
+def test_approval_notice_keeps_payload_provenance_and_projects_before_serializing(api, monkeypatch):
+    from backend import scope_projection
+    data = sources(api)
+    _, attempt = scoped(api, data, False)
+    token, tid = attempt['token'], data['task']['id']
+    payload = {'url': '/api/v2/files/' + data['hidden'], 'content_sha256': data['version']['digest']}
+    made = post(api, 'approvals', {'kind': 'publish', 'payload': payload, 'task_id': tid}, token)
+    mid = made['message_id']
+    assert data['hidden'] in get(api, 'messages/' + mid, token)['body']
+    with api.app.state.store.read() as c:
+        assert H.message(c, mid)['refs']['body_sources'] == [{'url': payload['url']}]
+    with monkeypatch.context() as patch:
+        patch.setattr(scope_projection, 'body_sources', lambda *a: {})
+        bare = post(api, 'approvals', {'kind': 'publish', 'payload': {**payload, 'reason': 'Missing refs'},
+                                      'task_id': tid}, token)
+    narrow(api, data)
+    with pytest.raises(AssertionError):
+        no_sources(get(api, 'messages/' + bare['message_id'], token), secrets(data))
+    no_sources(get(api, 'messages/' + mid, token), secrets(data))
+    no_sources(get(api, 'origins/' + mid, token), secrets(data))
+    with monkeypatch.context() as patch:
+        original = turn_scope.project
+        patch.setattr(turn_scope, 'project', lambda c, scoped, value, **kw:
+                      value if isinstance(value, dict) and value.get('id') == mid else original(c, scoped, value, **kw))
+        with pytest.raises(AssertionError):
+            no_sources(get(api, 'messages/' + mid, token), secrets(data))
+    # A new notice cannot store a rejected reference as opaque prose, even if later read unscoped.
+    payload = {**payload, 'reason': 'A fresh request'}
+    projected = post(api, 'approvals', {'kind': 'publish', 'payload': payload, 'task_id': tid}, token)
+    no_sources(get(api, 'messages/' + projected['message_id']), secrets(data))
+    with monkeypatch.context() as patch:
+        payload = {**payload, 'reason': 'Serialization guard mutation'}
+        original = turn_scope.project
+        patch.setattr(turn_scope, 'project', lambda c, scoped, value, **kw:
+                      value if value == payload else original(c, scoped, value, **kw))
+        unguarded = post(api, 'approvals', {'kind': 'publish', 'payload': payload, 'task_id': tid}, token)
+        with pytest.raises(AssertionError):
+            no_sources(get(api, 'messages/' + unguarded['message_id']), secrets(data))
+
+
+def test_embedded_members_filter_before_paging_and_cursor(api, monkeypatch):
+    from backend import teammate_access
+    from backend.tests.test_bot_access import bot
+    from backend.tests.test_teammate_access import set_access
+    _, attempt = task_turn(api)
+    from backend.tests.test_bot_access import bot_id
+    for i in range(51):
+        bot(api, f'cursor-member-{i:02}')
+    actors = ['bot:' + bot_id(api, f'cursor-member-{i:02}') for i in range(51)]
+    thread = post(api, 'threads', {'title': 'Shared membership', 'audience': 'company', 'members': actors})
+    # The starter is also stored; choose the row that used to end the embedded 50-row page.
+    with api.app.state.store.read() as c:
+        hidden = c.execute('SELECT actor FROM thread_members WHERE thread_id=? ORDER BY actor LIMIT 1 OFFSET 49',
+                           (thread['id'],)).fetchone()[0]
+    assert hidden.startswith('bot:')
+    set_access(api, 'bots/' + H.actor_id(hidden), see={'people': ['ana']}, read={'people': ['ana']},
+               write={'people': ['ana']})
+
+    def check():
+        shown = get(api, 'threads/' + thread['id'], attempt['token'])['members']
+        assert len(shown['members']) == 50
+        no_sources(shown, (hidden,))
+        assert shown['next_cursor'] == shown['members'][-1]['actor']
+    check()
+    # Disabling Known's visibility also disables its SQL prefilter and must expose the rejected actor.
+    with monkeypatch.context() as patch:
+        patch.setattr(teammate_access.Known, 'strangers', property(lambda self: set()))
+        with pytest.raises(AssertionError):
+            check()
+
+
+def test_origins_counts_only_readable_siblings(api, monkeypatch):
+    from backend import why_here
+    t, attempt = task_turn(api)
+    private = post(api, 'tasks', {'owner': 'human:ben', 'title': t['title'], 'body': 'Private sibling', 'private': True})
+    get(api, 'origins/' + private['id'], attempt['token'], expected=404)
+    path = 'origins/' + t['id']
+    baseline = get(api, path, attempt['token'])['siblings']
+    assert baseline['made'] == baseline['open'] == 1
+    post(api, 'tasks/' + private['id'] + '/close', {})
+    assert get(api, path, attempt['token'])['siblings'] == baseline
+    with monkeypatch.context() as patch:
+        original = why_here.siblings_and_stops
+        patch.setattr(why_here, 'siblings_and_stops', lambda c, task, cause, **kw: original(c, task, cause))
+        with pytest.raises(AssertionError):
+            assert get(api, path, attempt['token'])['siblings'] == baseline
+
+
+def test_unreadable_approval_is_not_a_duplicate(api, monkeypatch):
+    from backend import why_here
+    t, attempt = task_turn(api)
+    private = post(api, 'tasks', {'owner': 'human:ben', 'title': 'Private spend decision', 'body': 'Private', 'private': True})
+    payload = {'amount': '10', 'account': 'default', 'what': 'Render'}
+    hidden = post(api, 'approvals', {'kind': 'spend', 'payload': payload, 'task_id': private['id']})
+    get(api, 'origins/' + hidden['id'], attempt['token'], expected=404)
+    request = {'kind': 'spend', 'payload': payload, 'task_id': t['id']}
+    with monkeypatch.context() as patch:
+        patch.setattr(why_here, 'approval_readable', lambda *a: True)
+        with pytest.raises(AssertionError):
+            no_sources(post(api, 'approvals', request, attempt['token'], expected=422), (hidden['id'],))
+    made = post(api, 'approvals', request, attempt['token'])
+    assert made['id'] != hidden['id']
+    duplicate = post(api, 'approvals', request, attempt['token'], expected=422)
+    no_sources(duplicate, (hidden['id'],))
+    assert made['id'] in json.dumps(duplicate)
+
+
+def test_scoped_hub_task_attach_streams_twelve_mb(api, tmp_path, monkeypatch):
+    import io
+    from urllib.parse import urlsplit
+    from urllib.error import HTTPError
+    from clients import hubcli, hubtools, remotecli
+    from clients.tico import Client
+    from clients import bot_files
+    t, attempt = task_turn(api)
+    token = attempt['token']
+    config = get(api, 'config', token)
+    assert set(config) == {'features', 'upload_max_bytes'}
+    assert config['features']['task_files_multipart'] and config['upload_max_bytes'] >= 12 * 1024 * 1024
+    path = tmp_path / 'report.pdf'
+    with path.open('wb') as stream:
+        stream.write(b'%PDF-1.4\n')
+        stream.truncate(12 * 1024 * 1024)
+    calls = []
+    class Opener:
+        def open(self, request, timeout=None):
+            parts = urlsplit(request.full_url)
+            data = request.data
+            if data is not None and not isinstance(data, bytes):
+                data = b''.join(data)
+            response = api.request(request.method, parts.path, content=data,
+                                   headers=dict(request.header_items()))
+            calls.append((request.method, parts.path, request.get_header('Content-type')))
+            if response.status_code >= 400:
+                raise HTTPError(request.full_url, response.status_code, 'Rejected', response.headers,
+                                io.BytesIO(response.content))
+            out = io.BytesIO(response.content)
+            out.headers = response.headers
+            return out
+    client = Client('http://testserver', token, retries=0)
+    client.opener = Opener()
+    monkeypatch.setattr(remotecli, 'Client', lambda *a, **kw: client)
+    monkeypatch.setenv('HUB_API_URL', 'http://testserver')
+    args = hubcli.parser().parse_args(['task', 'attach', t['id'], str(path)])
+    uploaded = remotecli.run(args)
+    assert uploaded['file']['size'] == path.stat().st_size
+    assert any(method == 'POST' and content_type.startswith('multipart/form-data')
+               for method, _, content_type in calls)
+    # The local MCP tool shares feature negotiation and streaming, through the same authenticated API.
+    monkeypatch.setattr(bot_files, 'checkout_root', lambda: tmp_path)
+    second = hubtools.task_attach(client, {'id': t['id'], 'name': 'mcp-report.pdf', 'path': str(path)})
+    assert second['file']['size'] == path.stat().st_size
+    assert get(api, 'config')['company_name']
