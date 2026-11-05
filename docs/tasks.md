@@ -1288,7 +1288,7 @@ this task, as `/goal` does in a thread (no files, not public; [chat goals](chat-
 owner, requester or a mover) may steer, queue or set the goal; anyone else may defer. Send's icon shows the way, and the caret
 (or a right-click or long press on Send) opens the ways. The web always sends the shown way: your kept way
 (`compose.send_way`, [Steer, queue or defer](using-tico.md#steer-queue-or-defer)), or the nearest one you may use
-here (Steer becomes Queue; otherwise Defer). Set as goal is for one comment. A comment that names no way (the API, CLI
+here (Steer becomes Queue; otherwise Defer with the comment's default 24-hour deadline; a reader who may not wake the bot defers with no deadline). Set as goal is for one comment. A comment that names no way (the API, CLI
 or MCP) goes the way the paragraph on comments above says. Before you send, the box says what the chosen way does, and after, if the server
 sent it another way (a defer that rode along). With no bot on the task (everyone on it is a person) the send is a plain arrow, and the box says no bot gets the
 message. `GET /v2/tasks/{id}` carries
