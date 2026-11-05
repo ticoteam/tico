@@ -376,9 +376,12 @@ jobs:
             | while read -r tag; do git merge-base --is-ancestor "$tag" "$GITHUB_SHA" && { echo "$tag"; break; }; done)"
           echo "previous=$previous" >> "$GITHUB_OUTPUT"
           build=true
+          # Tests, fixtures and Markdown docs do not enter the desktop bundle.
           if [ "$FORCE" != true ] && [ -n "$previous" ] \
              && git diff --quiet "$previous" "$GITHUB_SHA" -- app scripts/app_release.py scripts/company_apps.py \
                   .github/workflows/app.yml .github/workflows/company-app.yml \
+                  ':!app/tests/**' ':!app/src/testdata/**' ':!app/vendor/glib/tests/**' \
+                  ':!app/vendor/glib/benches/**' ':!app/*.md' \
              && gh release view "$previous" --json assets -q '.assets[].name' | grep -qx latest.json; then
             build=false
           fi
@@ -481,8 +484,13 @@ jobs:
             | while read -r tag; do git merge-base --is-ancestor "$tag" "$GITHUB_SHA" && { echo "$tag"; break; }; done)"
           echo "previous=$previous" >> "$GITHUB_OUTPUT"
           build=true
+          # These Rust modules are cfg(test)-only; preview assets are outside the bundled ui/app.
+          # Check CHANGES.md separately because it feeds updater notes and must survive the Markdown exclusion.
           if [ "$FORCE" != true ] && [ -n "$previous" ] \
              && git diff --quiet "$previous" "$GITHUB_SHA" -- recorder scripts/app_release.py .github/workflows/recorder.yml \
+                  ':!recorder/tests/**' ':!recorder/bench/**' ':!recorder/ui/preview/**' ':!recorder/*.md' \
+                  ':!recorder/src/network_tests.rs' ':!recorder/src/stream_tests.rs' ':!recorder/src/app/tests.rs' \
+             && git diff --quiet "$previous" "$GITHUB_SHA" -- recorder/CHANGES.md \
              && gh release view "$previous" --json assets -q '.assets[].name' | grep -qx recorder-latest.json; then
             build=false
           fi
