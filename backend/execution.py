@@ -3393,9 +3393,12 @@ class Execution:
 
     def held_starts(self, c, runner_id):
         """(people_only, answer) for a computer that holds new starts: overloaded, not reporting, memory high, or with turns already waiting
-        to start there. Only a person's own message is handed out then (start_places.from_person); with none queued,
-        `answer` is the claim's answer at once. Capacity still applies to that message."""
-        if not start_places.computer_hold(c, runner_id) and not start_places.ready_waiting(c, runner_id):
+        to start there. A person's own message passes CPU overload and stale reports; only Linux memory holds it;
+        with none eligible, `answer` is the claim's answer at once. Capacity still applies to that message."""
+        hold = start_places.computer_hold(c, runner_id)
+        if hold and (person_hold := start_places.computer_hold(c, runner_id, person=True)):
+            return False, {"attempt": None, "waiting": person_hold[1]}
+        if not hold and not start_places.ready_waiting(c, runner_id):
             return False, None
         return True, (None if start_places.person_queued(c, runner_id) else self.held_answer(c, runner_id))
 
@@ -4437,7 +4440,7 @@ class Execution:
             return {"reserved": False, "stop": True}
         if body.waiting:
             return {"reserved": False, **({"stop": True} if row["stop_requested_at"] else {})}
-        return start_places.reserve(c, row, self.store.settings)
+        return start_places.reserve(c, row, self.store.settings, harness_allocated=body.harness_allocated)
 
     def started(self, c, who, aid, body):
         row = self.attempt(c, who, aid)
@@ -4446,7 +4449,7 @@ class Execution:
         # Older workers did not negotiate a short start; their in-flight delivery lease stays valid.
         if start_places.is_waiting(c, aid) and finished_before_start(c, row):
             raise Problem("start_wait", "Task finished while this turn was waiting", 409)
-        reserved = start_places.reserve(c, row, self.store.settings) if start_places.managed(c, aid) else {"reserved": not row["stop_requested_at"]}
+        reserved = start_places.reserve(c, row, self.store.settings, harness_allocated=body.harness_allocated) if start_places.managed(c, aid) else {"reserved": not row["stop_requested_at"]}
         if not reserved["reserved"]:
             raise Problem("start_wait", reserved.get("waiting", "Start reservation expired or stopped"), 409)
         c.execute("UPDATE attempts SET state='running',started_at=? WHERE id=?", (H.now(), aid))
