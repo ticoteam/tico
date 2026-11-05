@@ -454,8 +454,9 @@ def page_copies(c):
                                      "requested_by": r["requested_by"], "removed": r["copy_removed"], "page": dict(r)}
                     for r in c.execute(
                         "SELECT r.task_id AS read_task,r.requested_by,r.version,t.body=? AS copy_removed,f.* "
-                        "FROM rule_reads r JOIN pages p ON p.file_id=r.file_id JOIN bot_files f ON f.id=p.file_id "
-                        "JOIN tasks t ON t.id=r.task_id", (REMOVED_PAGE,))}
+                        "FROM rule_reads r JOIN bot_files f ON f.id=r.file_id LEFT JOIN pages p ON p.file_id=f.id "
+                        "JOIN tasks t ON t.id=r.task_id WHERE p.file_id IS NOT NULL "
+                        "OR (f.state='deleted' AND lower(f.mime) LIKE 'text/html%')", (REMOVED_PAGE,))}
         except sqlite3.OperationalError as exc:
             if "no such table" not in str(exc):
                 raise

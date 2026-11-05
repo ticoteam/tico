@@ -318,3 +318,26 @@ def test_same_name_upload_never_adopts_deleted_page_bytes_retained_by_a_meeting(
     with api.app.state.store.read() as c:
         versions = c.execute("SELECT blob_id FROM bot_file_versions WHERE file_id=?", (made["file_id"],)).fetchall()
         assert len(versions) == 1 and versions[0][0] != bid
+
+
+def test_pre_tombstone_deleted_html_never_reopens_saved_copies_or_citations(api):
+    org(api)
+    counsel_on(api)
+    fid, _ = promoted(api)
+    edit(api, fid, {"people": ["cara"], "bots": [H.COUNSEL]})
+    tid = post(api, "rules/read", {"file_id": fid, "source_id": source(api)}, token="cara-test")["task_id"]
+    with api.app.state.store.read() as c:
+        original = H.task(c, tid)["body"]
+    assert api.delete("/api/v2/files/" + fid, headers=headers()).status_code == 200
+    # The shape left by releases that removed the pages row and retained the copied task body.
+    with api.app.state.store.transaction() as c:
+        c.execute("DELETE FROM page_identities WHERE file_id=?", (fid,))
+        c.execute("DELETE FROM pages WHERE file_id=?", (fid,))
+        c.execute("UPDATE tasks SET body=? WHERE id=?", (original, tid))
+    assert api.get("/api/v2/tasks/" + tid, headers=headers("cara-test")).status_code == 404
+    with api.app.state.store.read() as c:
+        assert not H.task_private_readable(c, "bot:finance", H.task(c, tid))
+        cite = {"file_id": fid, "version": 1, "quote": "Pipeline grew to 42 deals."}
+        for viewer in (Identity("human:cara", "human"), Identity("human:ana", "owner")):
+            assert org_rules._cite(c, api.app.state.auth, viewer, cite) == {"removed": True, "label": "A deleted page"}
+            assert files.readable_page_refs(c, api.app.state.auth, viewer, cite) == {"removed": True, "label": "A deleted page"}

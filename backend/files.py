@@ -365,7 +365,8 @@ def page_ref_denials(c, auth, who, refs):
     # Retained page tombstones deny every saved reference, even for managers.
     def tombstones():
         try:
-            return {r[0] for r in c.execute("SELECT file_id FROM pages WHERE deleted_at IS NOT NULL")}
+            return {r[0] for r in c.execute("SELECT file_id FROM pages WHERE deleted_at IS NOT NULL "
+                                            "UNION SELECT id FROM bot_files WHERE state='deleted' AND lower(mime) LIKE 'text/html%'")}
         except sqlite3.OperationalError as exc:
             if "no such table" not in str(exc) and "no such column" not in str(exc):
                 raise
