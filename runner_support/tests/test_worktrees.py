@@ -250,11 +250,16 @@ def test_failed_push_keeps_tree_and_retry_preserves_saved_branch(trees):
 def test_restore_remote_branch_then_default(trees):
     workspace, base, remote, row, client = trees
     path = Path(W.command(client, 'add', 'org/product')['workspace_path'])
+    (path / 'file').write_text('published task work')
+    git(path, 'commit', '-am', 'Task work')
+    published = git(path, 'rev-parse', 'HEAD')
     git(path, 'push', 'origin', row['branch'])
     git(base, 'worktree', 'remove', '--force', str(path))
     git(base, 'branch', '-D', row['branch'])
     W.act(workspace, row, 'restore', os.environ.copy())
     assert git(path, 'symbolic-ref', '--short', 'HEAD') == row['branch']
+    assert git(path, 'rev-parse', 'HEAD') == published
+    assert (path / 'file').read_text() == 'published task work'
     git(base, 'worktree', 'remove', '--force', str(path))
     git(base, 'branch', '-D', row['branch'])
     git(base, 'push', 'origin', '--delete', row['branch'])

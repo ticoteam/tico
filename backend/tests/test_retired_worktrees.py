@@ -187,6 +187,9 @@ def test_recovered_tree_restores_after_cleanup_when_its_task_reopens(prepared, t
     downgraded = post(api, 'runners/heartbeat', {**beat, 'readiness': {**READY, 'worktree_recovery': False}}, 'runner-test')
     assert downgraded.status_code == 200, downgraded.text
     assert downgraded.json()['worktree_actions'] == []
+    preparing = post(api, 'runners/heartbeat', beat, 'runner-test')
+    assert preparing.status_code == 200, preparing.text
+    assert [(a['link_id'], a['action']) for a in preparing.json()['worktree_actions']] == [(old['link_id'], 'prepare')]
     assert mark_ready(api, tid, old['link_id']).status_code == 200
     with api.app_state.store.transaction() as c:
         c.execute("UPDATE tasks SET status='closed' WHERE id=?", (tid,))

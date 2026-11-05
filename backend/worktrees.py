@@ -664,10 +664,11 @@ def heartbeat(c, who, reports, capable, default_org="", live_tasks=None):
         # Only worktrees that actually existed when closed are eligible on reopening.
         if closed and row['state'] == 'present' and not detail.get('delete_requested'):
             detail['restore_on_reopen'] = True
+        # Ordinary waits restore saved history before setup; prepare alone can start from the default branch.
         action = ('remove' if (closed and (finished or detail.get('delete_requested')) or released) and row['state'] != 'removed'
-                  else 'prepare' if not closed and preparable(c, row, detail)
                   else 'restore' if not closed and restore_requested(row, detail)
-                  and (row['state'] == 'removed' or not detail.get('recovery')) else None)
+                  and (row['state'] == 'removed' or not detail.get('recovery'))
+                  else 'prepare' if not closed and preparable(c, row, detail) else None)
         if action == 'restore' and row['state'] == 'removed':
             # Cleanup on this computer restores local history; the earlier remote recovery is over.
             detail.pop('recovery', None)

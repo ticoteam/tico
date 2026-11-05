@@ -386,6 +386,43 @@ def test_a_reserved_worktree_whose_task_closes_is_canceled_once_and_never_prepar
     assert not wakes(api, tid)
 
 
+def test_served_wait_restores_a_removed_human_link_before_preparing(prepared):
+    api, tid, _ = prepared
+    link = post(api, f'tasks/{tid}/worktrees', {'repo': 'Acme/product'}).json()
+    assert finish_setup(api, tid, link['link_id']).status_code == 200
+    assert runner_patch(api, tid, link['link_id'], state='removed', cleanup=True).status_code == 200
+    with api.app_state.store.transaction() as c:
+        # The bot moved to r1; its removed link came from another computer that is still live.
+        old = dict(c.execute("SELECT * FROM runners WHERE id='r1'").fetchone())
+        old.update(id='old', token_hash='old-token')
+        c.execute(f"INSERT INTO runners({','.join(old)}) VALUES({','.join('?' * len(old))})", tuple(old.values()))
+        c.execute("UPDATE task_links SET computer_id='old' WHERE id=?", (link['link_id'],))
+    filler, links = setup_wait(api, tid)
+    refusal = post(api, f'tasks/{tid}/worktrees', {'repo': 'Acme/product'}, 'bot-test')
+    assert refusal.status_code == 409 and refusal.json()['error']['wait']['state'] == 'waiting'
+    with api.app_state.store.transaction() as c:
+        c.execute("UPDATE attempts SET state='completed' WHERE id='a1'")
+    actions = free(api, filler, links[0])
+    assert [(a['link_id'], a['action']) for a in actions] == [(link['link_id'], 'restore')]
+    reserved = rows(api, 'SELECT * FROM worktree_waits')[0]
+    assert reserved['state'] == 'reserved' and reserved['link_id'] == link['link_id']
+    reused = rows(api, 'SELECT * FROM task_links WHERE id=?', (link['link_id'],))[0]
+    assert reused['computer_id'] == 'r1' and reused['branch'] == link['branch']
+    assert reused['added_by'].startswith('human:') and 'recovery' not in json.loads(reused['detail'])
+    assert not wakes(api, tid)
+    # Restore fetches task history and snapshots before setup can mark this allocation ready.
+    assert [(a['link_id'], a['action']) for a in beat(api)] == [(link['link_id'], 'restore')]
+    assert runner_patch(api, tid, link['link_id'], state='pending', checkout_state='checkout_ready',
+                        setup_pending=True, expected_head='c' * 40,
+                        checkout_target='refs/heads/' + link['branch'], expected_base='b' * 64).status_code == 200
+    assert [(a['link_id'], a['action']) for a in beat(api)] == [(link['link_id'], 'prepare')]
+    assert not wakes(api, tid)
+    assert runner_patch(api, tid, link['link_id'], state='present', checkout_state='ready',
+                        setup_pending=False).status_code == 200
+    assert len(wakes(api, tid)) == 1 and rows(api, 'SELECT state FROM worktree_waits')[0]['state'] == 'woken'
+    assert beat(api) == [] and len(wakes(api, tid)) == 1
+
+
 def test_served_wait_reuses_removed_link_without_old_cleanup_intent(prepared):
     api, tid, _ = prepared
     filler, links = setup_wait(api, tid)
