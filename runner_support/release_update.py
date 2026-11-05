@@ -29,6 +29,7 @@ STATUS_FILE = "update-status.json"
 HEALTH_S = 180
 LOCK_WAIT_S = 10 * 60        # for another environment's update of the same checkout; under follow.rs STALE_UPDATING_S
 LOCK_FILE = "tico-update.lock"
+PROCESS_LOCK = "update-process.lock"  # follow.rs probes this before starting an updater or declaring one stale
 BINARY_WAIT_S = 3600         # for a release's runner binary published after it (binary_pending), then a failed update
 KINDS = ("mac", "linux", "docker")
 HELPERS = ("connectors", "close-calls", "importers")   # scripts/tico installs these as launchd jobs (systemd user units on Linux) beside the bot job
@@ -579,6 +580,21 @@ def update(root, version, directory, *, run=subprocess.run, install=pip_install,
     return result
 
 
+@contextlib.contextmanager
+def updater_lock(directory):
+    """One updater per runner, including its drain and checkout-lock waits; a duplicate leaves its status alone."""
+    with open(Path(directory) / PROCESS_LOCK, "a") as handle:
+        try:
+            fcntl.flock(handle, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except BlockingIOError:
+            yield False
+            return
+        try:
+            yield True
+        finally:
+            fcntl.flock(handle, fcntl.LOCK_UN)
+
+
 def main(argv=None):
     parser = argparse.ArgumentParser(prog="python -m runner_support.release_update")
     parser.add_argument("--root", default=str(ROOT))
@@ -590,6 +606,14 @@ def main(argv=None):
     args = parser.parse_args(argv)
     from . import git_locks
     git_locks.OWNED_ROOTS = (Path(args.state_dir), *map(Path, args.owned_root))
+    with updater_lock(args.state_dir) as acquired:
+        if not acquired:
+            print("Tico update: an updater is already running for this computer", flush=True)
+            return 0
+        return run_update(args)
+
+
+def run_update(args):
     deadline = time.time() + 600
     while in_flight(args.state_dir) and time.time() < deadline:   # the runner waits for quiet first; this is the second look
         time.sleep(10)
