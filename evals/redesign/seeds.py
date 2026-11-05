@@ -180,6 +180,7 @@ def pages(world):
     made = _ok(world.api("post", "/api/v2/tasks", {"title": "Q3 launch", "body": "Plan the Q3 launch.",
                                                     "owner": "engineering-lead"}, who=DANA), "task")
     task = (made.get("task") or made)["id"]
+    promote = []
 
     def act(token, attempt):
         def page(name, title, text, bar, **fields):
@@ -187,14 +188,17 @@ def pages(world):
             return _ok(world.api("post", "/api/v2/pages", body, who=token), name)["page"]["file_id"]
         old = page("weekly-old.html", "Engineering weekly (old)", "Last month's numbers.", 90, task=task,
                    cadence="weekly")
-        page("weekly.html", "Engineering weekly", "Shipped 14 changes; review time fell to 6 hours.", 240,
-             scope="bot", cadence="weekly", as_of="2026-10-27", replaces=old)
+        promote.append(page("weekly.html", "Engineering weekly", "Shipped 14 changes; review time fell to 6 hours.", 240,
+                            cadence="weekly", as_of="2026-10-27", replaces=old))
         page("launch.html", "Launch plan", "Beta on Nov 3, general release on Nov 17.", 160, task=task)
-        _ok(world.api("post", "/api/v2/files/uploads", {
-            "name": "funnel.csv", "title": "Signup funnel", "scope": "bot",
-            "text": "stage,visitors\nlanding,1200\nsignup,310\nactivated,140\n"}, who=token), "funnel.csv")
+        promote.append(_ok(world.api("post", "/api/v2/files/uploads", {
+            "name": "funnel.csv", "title": "Signup funnel",
+            "text": "stage,visitors\nlanding,1200\nsignup,310\nactivated,140\n"}, who=token), "funnel.csv")["file"]["id"])
     if world.turn("engineering-lead", act=act) is None:
         raise RuntimeError("the Engineering Lead's turn did not run")
+    # The task turn reads only its own scope; the owner promotes these outputs after it finishes.
+    for fid in promote:
+        _ok(world.api("patch", "/api/v2/files/" + fid, {"promote": True}, who=DANA), "promote page seed")
 
 
 COUNSEL = "counsel-test"
