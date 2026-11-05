@@ -461,7 +461,7 @@ def test_notes_from_held_sources_stay_pending_and_unread_until_release(api, sour
             if source != "task":
                 refs = {k: v for k, v in message["refs"].items() if k != "task"}
                 if source == "task_id":
-                    refs["task_id"] = "task:" + task["id"]
+                    refs["task_id"] = task["id"]
                 c.execute("UPDATE messages SET refs=? WHERE id=?", (H._dump(refs), message["id"]))
         Q.hold(c, "ops", scope, "Repeated refusals", {"rule": "identity"})
         pending = H._one(c, "SELECT * FROM notes WHERE message_id=?", (message["id"],))
