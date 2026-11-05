@@ -85,6 +85,8 @@ mod tests {
             stopped: AtomicBool::new(false),
             stop_reason: Mutex::new(None),
             done: AtomicBool::new(false),
+            harness_allocated: Arc::new(AtomicBool::new(false)),
+            start_acknowledged: AtomicBool::new(false),
             done_notify: Notify::new(),
             deadline: Mutex::new(Instant::now()),
         })
