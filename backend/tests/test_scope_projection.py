@@ -1255,14 +1255,16 @@ def test_stored_task_copies_and_deferred_notes_keep_the_message_sources(api, mon
 
 def test_legacy_dependency_reasons_rebuild_from_the_scoped_question(api, monkeypatch):
     from backend import task_holds
+    from backend.tests.test_org_rules import as_bot
     from backend.tests.test_task_review import ask as version_ask
     t, attempt = task_turn(api)
+    as_bot(api, 'ops', 'source-publisher')
     filename = 'confidential-hold.html'
     fid = published(api, attempt, task=t['id'], name=filename)
     with monkeypatch.context() as patch:
         patch.setattr(H, 'remember_sourced_text', lambda c, kind, rid, field, text, sources: text)
         response = api.patch(f'/api/v2/files/{fid}/versions/1', json={'ask': version_ask('ana')},
-                             headers=headers(attempt['token']))
+                             headers=headers('source-publisher'))
         assert response.status_code == 200, response.text
         post(api, 'tasks/' + t['id'], {'version': get(api, 'tasks/' + t['id'])['task']['version'],
                                      'status': 'waiting', 'on': 'ana'}, attempt['token'])

@@ -336,16 +336,17 @@ def project(c, scoped, payload, *, auth=None):
             H.clear_sourced_text(value, out, has_denied, hidden=bool(direct_denied))
             dependency = value.get('blocked_kind') == 'dependency' or any(
                 hold.get('kind') == 'blocked' and hold.get('cause') == 'dependency' for hold in value.get('holds') or [])
-            if dependency and value.get('id') in tasks:
+            record_id = value.get('id') if isinstance(value.get('id'), str) else None
+            if dependency and record_id in tasks:
                 from . import task_holds
-                row = H.task(c, value['id'])
+                row = H.task(c, record_id)
                 reason = task_holds.words(c, task_holds.holds(c, row, who=scoped.who, auth=auth))
                 if 'blocked_reason' in out:
                     out['blocked_reason'] = reason
                 for hold in out.get('holds') or []:
                     if hold.get('kind') == 'blocked' and hold.get('cause') == 'dependency':
                         hold['reason'] = reason
-            for field, provenance in stored_text.get(value.get('id'), {}).items():
+            for field, provenance in stored_text.get(record_id, {}).items():
                 if field in out:
                     copied = {field: out[field], **provenance}
                     out[field] = H.clear_sourced_text(copied, dict(copied), has_denied)[field]
