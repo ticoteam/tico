@@ -185,7 +185,7 @@ async fn self_update(root: &Path, running: &str) -> (bool, String) {
         let found = checkout_links(root, true).await;
         let restored = found["restored"].as_array().map_or(0, Vec::len);
         if restored > 0 {
-            repair_note = format!("restored {restored} flattened links");
+            repair_note = found["note"].as_str().unwrap_or_default().to_string();
             log(&format!("Tico update: {repair_note}"));
         }
         if restored == 0 || !out(git_in(root, &["status", "--porcelain", "--untracked-files=no"], 30).await).is_empty() {
@@ -1380,6 +1380,11 @@ mod tests {
         let stands = checkout_status(&here, &first).await.unwrap();
         assert_eq!((stands["ahead"].as_u64(), stands["behind"].as_u64()), (Some(0), Some(0)));
         assert!(stands["checked_at"].as_str().unwrap().ends_with('Z'));
+        let check_backup = |note: &str| {
+            let backup = Path::new(note.strip_prefix("restored 1 flattened links; originals kept in ").unwrap());
+            assert_eq!(backup.parent().unwrap(), here.join(".git/tico-flattened-links"));
+            assert_eq!(std::fs::read_to_string(backup.join("AGENTS.md")).unwrap(), "# Rules\n");
+        };
 
         // The same check serves release Health and the main follower, including core.symlinks=false clones.
         for symlinks in ["true", "false"] {
@@ -1391,7 +1396,7 @@ mod tests {
             assert!(flattened_note(&found).contains("repaired automatically on the next update"));
             let (restart, note) = self_update(&here, &first).await;
             assert!(!restart);
-            assert_eq!(note, "restored 1 flattened links");
+            check_backup(&note);
             assert!(here.join("AGENTS.md").is_symlink());
         }
 
@@ -1411,7 +1416,9 @@ mod tests {
         sh(&origin, &["add", "."]);
         sh(&origin, &["commit", "-qm", "docs"]);
         assert_eq!(checkout_status(&here, &first).await.unwrap()["behind"], 1);
-        assert_eq!(self_update(&here, &first).await, (true, "restored 1 flattened links".into()));
+        let (restart, note) = self_update(&here, &first).await;
+        assert!(restart);
+        check_backup(&note);
         let head = checkout_commit(&here);
         assert!(!runner_code_changed(&here, &first, &head).await);
         std::fs::write(origin.join("runner_support/a.py"), "2").unwrap();

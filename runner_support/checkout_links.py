@@ -1,12 +1,15 @@
 """Recognize copies of HEAD's link targets without treating local edits as disposable."""
 import argparse
+from datetime import datetime, timezone
 import fcntl
 import json
 import os
 from pathlib import Path
 import posixpath
+import shutil
 import subprocess
 import tempfile
+import uuid
 
 
 def _git(root, run, *args):
@@ -76,42 +79,57 @@ def inspect(root, run=subprocess.run):
     return _inspect(root, run)[0]
 
 
-def _set_aside(path):
-    with tempfile.NamedTemporaryFile(prefix=f".{path.name}.tico-link-", dir=path.parent, delete=False) as handle:
-        saved = Path(handle.name)
-    try:
-        os.replace(path, saved)
-    except OSError:
-        saved.unlink()
-        raise
+def _set_aside(path, saved):
+    saved.parent.mkdir(parents=True, exist_ok=True)
+    os.rename(path, saved)
     return saved
 
 
 def _put_back(path, saved, link):
     # Keep an editor's replacement too; only our unchanged link can be discarded on rollback.
     try:
-        displaced = _set_aside(path)
+        displaced = _set_aside(path, saved.parent / f".tico-link-replacement-{uuid.uuid4().hex}")
     except FileNotFoundError:
         displaced = None
     try:
         os.link(saved, path, follow_symlinks=False)
-        saved.unlink()
     finally:
         if displaced is not None and displaced.is_symlink() and os.readlink(displaced) == link:
             displaced.unlink()
 
 
+def _backup_folder(root, run):
+    git_dir = Path(os.fsdecode(_git(root, run, "rev-parse", "--absolute-git-dir")).rstrip("\n"))
+    parent = git_dir / "tico-flattened-links"
+    parent.mkdir(parents=True, exist_ok=True)
+    stamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%S.%fZ-")
+    return Path(tempfile.mkdtemp(prefix=stamp, dir=parent))
+
+
+def _prune_backups(current):
+    # Keep this repair and the four newest older batches. Never prune the originals just validated.
+    try:
+        older = sorted((p for p in current.parent.iterdir()
+                        if p != current and not p.is_symlink() and p.is_dir()), reverse=True)
+    except OSError:
+        return
+    for old in older[4:]:
+        shutil.rmtree(old, ignore_errors=True)
+
+
 def restore(root, run=subprocess.run):
-    """Caller holds tico-update.lock. Keep each original inode until the swapped set passes its checks."""
+    """Caller holds tico-update.lock. Retain originals so later writes through open handles stay recoverable."""
     root = Path(root).resolve()
     found, repairs = _inspect(root, run)
     found["restored"] = []
     saved = []
     if found["only_flattened"]:
         try:
+            folder = _backup_folder(root, run)
+            found["backup"] = str(folder)
             for name, link, content in repairs:
                 path = root / name
-                backup = _set_aside(path)
+                backup = _set_aside(path, folder / name)
                 saved.append((path, backup, link, content))
                 os.symlink(link, path)
             # Git never writes the worktree or index here. Check staging after the swap, then the saved bytes,
@@ -130,14 +148,14 @@ def restore(root, run=subprocess.run):
                 except OSError:
                     pass  # A failed rollback keeps the saved file, never deletes its bytes.
             return found
-        for _, backup, _, _ in saved:
-            backup.unlink()
         found["restored"] = found["flattened"]
+        _prune_backups(folder)
     return found
 
 
 def note(found):
-    return f"restored {len(found['restored'])} flattened links" if found.get("restored") else ""
+    return (f"restored {len(found['restored'])} flattened links; originals kept in {found['backup']}"
+            if found.get("restored") else "")
 
 
 def main():

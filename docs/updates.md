@@ -211,13 +211,18 @@ or any staged change blocks the whole repair. The blocked message marks any matc
 Health and BotOps say when only flattened Tico links remain: they are repaired on the next update and need no
 decision about local work. The same check applies on Mac and Linux, including `core.symlinks=false`; the repair
 uses real links without changing that Git setting.
-Both runners use the same repair: move each file to a unique name in its folder, create the HEAD link, then
-check the saved bytes and index again. If an edit or staged change arrived during the swap, put the saved files
-back and block the update. The repair never writes the index. If an editor also replaced the new link, keep
-that replacement beside the restored file under a `.NAME.tico-link-...` name.
+Both runners use the same repair: move each original into the checkout's Git directory under
+`tico-flattened-links/<UTC timestamp>/<path>`, create the HEAD link, then check the saved bytes and index again.
+The originals stay there, so an editor with an open file can still write to them after the checks. The newest
+five repair backups are kept; older ones are removed after a successful repair. In a linked worktree the backups
+live in its Git directory, not in the worktree's `.git` file.
+If an edit or staged change arrives during the swap, restore the saved files and block the update, keeping the
+backups too. The repair never writes the index. If an editor also replaces the new link, keep that replacement
+in the same backup folder under a `.tico-link-replacement-...` name.
 
 The update process logs to `state-<runner id>/update.log`; the outcome is in `update-status.json` next to it.
-A repair records "restored N flattened links" in both. No other local work is stashed, reset or discarded.
+A repair records "restored N flattened links; originals kept in ..." with the full backup path in both.
+No other local work is stashed, reset or discarded.
 Bot repositories and shared or named checkouts must resolve outside the active Tico install, including through
 linked parents. Template refresh also refuses file or folder links that lead outside the bot's repo; it writes
 through a new file and rename in a checked folder.

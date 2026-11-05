@@ -8,7 +8,7 @@ def _resolve(path):
     path = Path(path).expanduser().absolute()
     try:
         return path.resolve(strict=True)
-    except FileNotFoundError:
+    except FileNotFoundError as err:
         tail = []
         parent = path
         while True:
@@ -20,7 +20,7 @@ def _resolve(path):
                 parent = parent.parent
         # An unresolved '..' can hide a later link into the install; do not append it unchecked.
         if ".." in tail:
-            raise ValueError(f"Cannot check repository path: {path}")
+            raise ValueError(f"Cannot check repository path: {path}") from err
         real = _resolve(parent.parent / parent.readlink()) if parent.is_symlink() else parent.resolve(strict=True)
         return real.joinpath(*reversed(tail))
 

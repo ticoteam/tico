@@ -1,5 +1,6 @@
 """A checkout follows its server's release: the update process (python -m runner_support.release_update) against a temp repository."""
 import fcntl
+from pathlib import Path
 import subprocess
 import threading
 import time
@@ -206,8 +207,13 @@ def test_only_exact_copies_of_link_targets_are_restored_under_the_update_lock(li
     monkeypatch.setattr(checkout_links.os, "symlink", locked_symlink)
     result, _ = run_apply(checkout, state, "0.4.0")
     assert result["state"] == "healthy" and ru.checkout_release(checkout) == "0.4.0"
-    assert result["note"] == ru.read_status(state)["note"] == "restored 3 flattened links"
-    assert "restored 3 flattened links" in capsys.readouterr().out
+    assert result["note"] == ru.read_status(state)["note"]
+    prefix = "restored 3 flattened links; originals kept in "
+    assert result["note"].startswith(prefix)
+    backup = Path(result["note"].removeprefix(prefix))
+    assert backup.parent == checkout / ".git/tico-flattened-links"
+    assert all((backup / name).read_bytes() == before[name] for name in names)
+    assert result["note"] in capsys.readouterr().out
     assert all((checkout / name).is_symlink() and (checkout / name).read_bytes() == before[name] for name in names)
     assert not sh(checkout, "git", "status", "--porcelain", "--untracked-files=no")
     assert sh(checkout, "git", "config", "core.symlinks") == symlinks
@@ -267,8 +273,8 @@ def test_link_repair_keeps_edits_and_staging_at_each_swap_step(link_repos, monke
             inject("inspected")
             return found
 
-        def renamed(destination):
-            backup = set_aside(destination)
+        def renamed(destination, saved):
+            backup = set_aside(destination, saved)
             if destination == path:
                 inject("renamed")
             return backup
@@ -294,11 +300,75 @@ def test_link_repair_keeps_edits_and_staging_at_each_swap_step(link_repos, monke
     assert path.read_bytes() == (edited if "edit" in action else original)
     assert not (checkout / names[0]).is_symlink()
     assert (checkout / names[0]).read_bytes() == (checkout / "CLAUDE.md").read_bytes()
-    backups = list(checkout.rglob(".*.tico-link-*"))
+    folder, = (checkout / ".git/tico-flattened-links").iterdir()
+    backup = folder / names[-1]
+    assert backup.stat().st_ino == inode and backup.read_bytes() == path.read_bytes()
+    replacements = list(folder.rglob(".tico-link-replacement-*"))
     if action == "replace":
-        assert len(backups) == 1 and backups[0].read_bytes() == edited
+        assert len(replacements) == 1 and replacements[0].read_bytes() == edited
     else:
-        assert backups == []
+        assert replacements == []
+
+
+@pytest.mark.slow
+def test_link_repair_keeps_writes_after_an_original_passes_validation(link_repos, monkeypatch):
+    _, checkout, state = link_repos
+    first, second = "AGENTS.md", "templates/employee-repo/CLAUDE.md"
+    for name in (first, second):
+        flatten(checkout, name)
+    path = checkout / first
+    inode = path.stat().st_ino
+    read_bytes = Path.read_bytes
+    backups = checkout / ".git/tico-flattened-links"
+    edited = b"edited after validation\n"
+    fired = False
+
+    with path.open("r+b", buffering=0) as editor:
+        def read(saved):
+            nonlocal fired
+            content = read_bytes(saved)
+            if backups in saved.parents and saved.as_posix().endswith(second) and not fired:
+                # The first backup already passed its check. Its inode is still open in an editor.
+                fired = True
+                editor.seek(0)
+                editor.write(edited)
+                editor.truncate()
+            return content
+
+        monkeypatch.setattr(Path, "read_bytes", read)
+        result, _ = run_apply(checkout, state, "0.4.0")
+        assert fired and result["state"] == "healthy"
+        folder = Path(result["note"].split("originals kept in ", 1)[1])
+        saved = folder / first
+        assert saved.stat().st_ino == inode and saved.read_bytes() == edited
+        assert path.is_symlink() and not sh(checkout, "git", "status", "--porcelain")
+        editor.seek(0, 2)
+        editor.write(b"and after the repair\n")
+        assert saved.read_bytes() == edited + b"and after the repair\n"
+
+
+@pytest.mark.slow
+def test_link_backups_use_the_worktrees_git_directory_and_keep_the_newest_five(link_repos):
+    _, checkout, _ = link_repos
+    worktree = checkout.parent / "linked worktree"
+    sh(checkout, "git", "worktree", "add", "-q", "-b", "linked", str(worktree))
+    git_dir = Path(sh(worktree, "git", "rev-parse", "--absolute-git-dir"))
+    assert (worktree / ".git").is_file()
+    folders = []
+    for _ in range(6):
+        flatten(worktree)
+        with ru.lock_path(worktree).open("a") as handle:
+            fcntl.flock(handle, fcntl.LOCK_EX)
+            found = checkout_links.restore(worktree)
+        assert found["restored"] == ["AGENTS.md"]
+        folder = Path(found["backup"])
+        assert folder.parent == git_dir / "tico-flattened-links"
+        folders.append(folder)
+    assert set(folders[-5:]) == set((git_dir / "tico-flattened-links").iterdir())
+    assert not folders[0].exists()
+    assert all((folder / "AGENTS.md").read_bytes() == (worktree / "CLAUDE.md").read_bytes()
+               for folder in folders[-5:])
+    assert not sh(worktree, "git", "status", "--porcelain")
 
 
 @pytest.mark.slow
