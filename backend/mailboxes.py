@@ -1,7 +1,8 @@
-"""Settings > Mailboxes: which inboxes Tico uses and who may use each (ui/app/mailboxes.js, ui/app/mailbox.js).
+"""Settings > Inboxes, Google mailboxes: which mailboxes Tico uses and who may use each (ui/app/inboxes-email.js).
 
 GET /api/v2/mailboxes is the page: for an admin every mailbox with its person, status and routines; for everyone their
-own mailbox and the ones shared with them. One mailbox's page lists who can use it (Read / Read and write) and its
+own mailbox and the ones shared with them. Each row also says who uses it (`used_by`: people, bots, the first names)
+and how its last sync went (`synced_at`, `sync`: '' or why it is failing, `sync_error`). One mailbox's page lists who can use it (Read / Read and write) and its
 routines (message automations whose trigger inbox is this address; they are switched on and off with the automation
 routes). Who holds what, and who may grant, revoke, share and stop, is backend/mailbox_access.py's rule, which also
 writes those changes' events; this module reads it and calls it. Every write is a person acting as themselves: never a
@@ -20,6 +21,7 @@ from .store import Problem
 PATH = "/api/v2/mailboxes"
 PROVIDER = "google_workspace"
 ADDRESS = re.compile(r"^[a-z0-9._%+'-]+@[a-z0-9-]+(\.[a-z0-9-]+)+$")
+USED_BY_NAMES = 3
 
 
 def _person(who):
@@ -72,6 +74,28 @@ def _routines(c):
     return out
 
 
+def _table(c, name):
+    return bool(c.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name=?", (name,)).fetchone())
+
+
+def _failing(c):
+    """{address: {reason, error}} for each mailbox a computer reports it cannot read (google_rights.counted)."""
+    from . import google_rights
+    out = {}
+    if not _table(c, "connector_reports"):
+        return out
+    for row in google_rights.counted(c, "mail", H.now()):
+        try:
+            reason = json.loads(row["failing"] or "{}").get("reason") or ""
+        except ValueError:
+            reason = ""
+        address = row["account"].lower()
+        # One computer refusing the sign-in outranks another's passing network error: only a person fixes it.
+        if address not in out or reason == "signin":
+            out[address] = {"reason": "signin" if reason == "signin" else "failed", "error": row["error"][:300]}
+    return out
+
+
 def _state(c, box, live):
     from .google_workspace import active
     if box["status"] != "active":
@@ -92,6 +116,38 @@ class _Reader:
         self.c, self.who, self.roster = c, who, roster(c)
         self.live, self.routines = _live_mailboxes(c), _routines(c)
         self.facts, self.principal = MA._Facts(c), MA.principal(c, who)
+        self.synced = {r["address"]: r for r in c.execute(
+            "SELECT address, synced_at, newest_epoch FROM mail_mailboxes")} if _table(c, "mail_mailboxes") else {}
+        self.failing = _failing(c)
+        self.grants = {}
+        for row in c.execute("SELECT mailbox_id, grantee_type, grantee_id FROM mailbox_accesses ORDER BY created_at"):
+            self.grants.setdefault(row["mailbox_id"], []).append((row["grantee_type"], row["grantee_id"]))
+        self._bot_names = None
+
+    def bot_name(self, bid):
+        if self._bot_names is None:
+            self._bot_names = {b["id"]: b.get("display_name") or b["slug"] for b in H.bots(self.c)}
+        return self._bot_names.get(bid, bid)
+
+    def used_by(self, box):
+        """Who may use `box` beside admins: its person and every grant, counted, with the first few names."""
+        people, bots = [], []
+        if box["kind"] == "personal" and box["person_id"]:
+            people.append(self.person_name(box["person_id"]))
+        for kind, gid in self.grants.get(box["id"], []):
+            (people if kind == "person" else bots).append(
+                self.person_name(gid) if kind == "person" else self.bot_name(gid))
+        return {"people": len(people), "bots": len(bots), "names": (people + bots)[:USED_BY_NAMES]}
+
+    def sync(self, box):
+        """The last successful read of `box` and, while a computer reports it failing, why: `signin` when Google
+        refused the sign-in (only a person signing in again fixes it), else `failed`."""
+        seen = self.synced.get(box["address"])
+        failing = self.failing.get(box["address"])
+        return {"synced_at": seen["synced_at"] if seen else None,
+                "newest_epoch": seen["newest_epoch"] if seen else None,
+                "sync": (failing or {}).get("reason") or "",
+                "sync_error": (failing or {}).get("error") or ""}
 
     def level(self, box):
         """What the viewer holds on `box` (MA.level, with the roster and admins read once for the page)."""
@@ -110,7 +166,8 @@ class _Reader:
                 "connection": "workspace" if covers(self.c, box["address"]) else "personal", "status": box["status"],
                 "state": _state(self.c, box, self.live),
                 "level": self.level(box),
-                "routines": [{"id": r["id"], "name": r["name"]} for r in self.routines.get(box["address"], [])]}
+                "routines": [{"id": r["id"], "name": r["name"]} for r in self.routines.get(box["address"], [])],
+                "used_by": self.used_by(box), **self.sync(box)}
 
 
 def _company(c):
@@ -190,7 +247,7 @@ def install(app, store):
 
     @app.get(PATH)
     def list_mailboxes(request: Request):
-        """Settings > Mailboxes for whoever is signed in: the admin's table, or your own mailbox and what is shared
+        """Settings > Inboxes for whoever is signed in: the admin's table, or your own mailbox and what is shared
         with you."""
         with store.read() as c:
             return listing(c, request.state.identity)

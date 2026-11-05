@@ -1,0 +1,110 @@
+/* Settings > Inboxes (ui/app/inboxes.js and one file a kind). One commented block a file; colours are theme tokens only,
+   so light and dark follow the theme. At phone width the list's rows become cards and nothing scrolls sideways. */
+
+/* The list, first run, Settings and an inbox's page (ui/app/inboxes.js) */
+.ib-head{display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:8px 12px;margin:0 0 12px}
+.ib-head h2{margin:0;font-size:var(--t-lg, 1.15rem)}
+.ib-head h2 .muted{font-weight:500;margin-left:4px}
+.ib-head-act{display:flex;align-items:center;gap:8px;flex-wrap:wrap;margin-left:auto}
+.ib-add{position:relative}
+.ib-add>summary{list-style:none;cursor:pointer;display:inline-flex;align-items:center;min-height:var(--ctl-sm, 32px);padding:0 12px;border-radius:8px;background:var(--accent);color:var(--surface);font-weight:600;font-size:var(--t-sm)}
+.ib-add>summary::-webkit-details-marker{display:none}
+.ib-add-menu{position:absolute;right:0;top:calc(100% + 4px);z-index:5;display:grid;min-width:200px;max-width:calc(100vw - 32px);padding:4px;border:1px solid var(--line);border-radius:10px;background:var(--surface);box-shadow:0 8px 24px color-mix(in srgb,var(--ink) 14%,transparent)}
+.ib-add-menu button{all:unset;cursor:pointer;padding:8px 10px;border-radius:6px;font-size:var(--t-sm);color:var(--ink)}
+.ib-add-menu button:hover,.ib-add-menu button:focus-visible{background:var(--surface2)}
+.ib-filters{display:grid;grid-template-columns:minmax(200px,1fr) repeat(3,minmax(0,auto));gap:8px;margin:0 0 12px;min-width:0}
+.ib-filters input,.ib-filters select{min-width:0;width:100%}
+.ib-scroll{overflow-x:auto;max-width:100%}
+.ib-table td{vertical-align:middle}
+.ib-table .ib-name{min-width:0;overflow-wrap:anywhere}
+.ib-table .ib-name a{font-weight:600;color:var(--ink);text-decoration:none}
+.ib-table .ib-name a:hover{text-decoration:underline}
+.ib-table .ib-name .muted{display:block;font-size:var(--t-sm);margin-top:2px}
+.ib-table .ib-kind,.ib-table .ib-latest{white-space:nowrap}
+.ib-table .ib-chev{width:16px;text-align:right}
+.ib-table .ib-chev a{color:var(--muted);text-decoration:none}
+.ib-more{margin:10px 0 0;font-size:var(--t-sm)}
+.ib-first .ib-steps{list-style:none;margin:0;padding:0;display:grid;gap:0}
+.ib-step{padding:14px 0;border-top:1px solid var(--line);min-width:0}
+.ib-step:first-child{border-top:0;padding-top:4px}
+.ib-step-head{display:flex;align-items:center;gap:10px;flex-wrap:wrap}
+.ib-step-head h3{margin:0;font-size:var(--t-base);flex:1 1 auto;min-width:0}
+.ib-step-n{display:inline-grid;place-items:center;width:22px;height:22px;border-radius:50%;background:var(--surface2);color:var(--muted);font-size:var(--t-sm);font-weight:600;flex:none}
+.ib-step.done .ib-step-n{background:var(--ok-bg);color:var(--ok)}
+.ib-dismiss{min-height:0;padding:0 6px;line-height:1.4}
+.ib-step-body{margin:8px 0 0 32px;min-width:0}
+.ib-step-body p{margin:0 0 6px}
+.ib-first-foot{display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:8px;border-top:1px solid var(--line);padding-top:12px;margin-top:4px;font-size:var(--t-sm)}
+.ib-crumb{font-size:var(--t-sm);color:var(--muted);margin:0 0 10px;overflow-wrap:anywhere}
+.ib-crumb a{color:var(--muted)}
+.ib-jump{display:flex;flex-wrap:wrap;gap:4px 16px;margin:0 0 12px;position:sticky;top:0;z-index:2;padding:6px 0;background:var(--bg, var(--surface))}
+.ib-section{scroll-margin-top:48px;margin:0 0 20px;min-width:0}
+.ib-section>h2{font-size:var(--t-base);margin:0 0 8px;color:var(--muted);text-transform:uppercase;letter-spacing:var(--track-caps);font-size:var(--t-label)}
+.ib-card header{flex-wrap:wrap;gap:4px 12px}
+.ib-card>header:last-child{margin-bottom:0}
+.ib-title{display:flex;align-items:flex-start;justify-content:space-between;flex-wrap:wrap;gap:8px 16px;margin:0 0 12px}
+.ib-title-text{min-width:0;flex:1 1 260px}
+.ib-title h2{margin:0 0 4px;overflow-wrap:anywhere}
+.ib-title-sub{margin:0;display:flex;align-items:center;flex-wrap:wrap;gap:4px 8px;font-size:var(--t-sm)}
+.ib-actions{display:flex;flex-wrap:wrap;gap:8px}
+.ib-autos{list-style:none;margin:0;padding:0}
+.ib-autos li{padding:8px 0;border-top:1px solid var(--line);overflow-wrap:anywhere}
+.ib-autos li:first-child{border-top:0}
+.ib-recent{list-style:none;margin:0;padding:0}
+.ib-recent li{display:grid;grid-template-columns:minmax(0,1fr) auto;gap:2px 12px;padding:8px 0;border-top:1px solid var(--line);min-width:0}
+.ib-recent li:first-child{border-top:0}
+.ib-recent .ib-recent-what{min-width:0;overflow-wrap:anywhere}
+.ib-recent .ib-recent-what .muted{display:block;font-size:var(--t-sm)}
+.ib-recent .ib-recent-when{font-size:var(--t-sm);color:var(--muted);white-space:nowrap}
+.ib-field{display:grid;grid-template-columns:minmax(180px,260px) minmax(0,1fr);gap:8px 16px;align-items:start;padding:10px 0;border-top:1px solid var(--line);min-width:0}
+.ib-field:first-of-type{border-top:0}
+.ib-field>.ib-field-label{font-weight:600;font-size:var(--t-sm)}
+[data-ib-setting]:empty,[data-ib-panel]:empty{display:none}
+.ib-settings [data-ib-setting]+[data-ib-setting]{margin-top:12px}
+.ib-detail .card+.card,.ib-detail [data-ib-panels]>div{margin-top:12px}
+@media (max-width:760px){
+  .ib-filters{grid-template-columns:1fr 1fr}
+  .ib-filters input{grid-column:1/-1}
+  .ib-field{grid-template-columns:1fr}
+  .ib-table thead{display:none}
+  .ib-table,.ib-table tbody{display:block}
+  .ib-table tr{display:grid;grid-template-columns:minmax(0,1fr) auto;gap:4px 8px;padding:10px 0;border-bottom:1px solid var(--line)}
+  .ib-table td{display:block;padding:0;border:0}
+  .ib-table .ib-name{grid-column:1/2}
+  .ib-table .ib-status{grid-column:2/3;grid-row:1;text-align:right}
+  .ib-table .ib-kind{grid-column:1/2;font-size:var(--t-sm);color:var(--muted)}
+  .ib-table .ib-latest{grid-column:2/3;text-align:right;font-size:var(--t-sm)}
+  .ib-table .ib-chev{display:none}
+  .ib-step-body{margin-left:0}
+}
+
+/* Email: Google mailboxes (ui/app/inboxes-email.js) */
+.mb-line{margin:-6px 0 12px;font-size:var(--t-sm);overflow-wrap:anywhere}
+.mb-dialog .task-rule-form>label:not(.mb-check){display:grid;gap:4px}
+
+/* Tico addresses and Texts in (ui/app/inboxes-texts.js) */
+#inbox-recent .inbound-filters,#inbox-messages .inbound-filters{margin-bottom:8px}
+#inbox-messages .inbound-filters label{min-width:0}
+.wh-dialog .task-rule-form>label{display:grid;gap:4px}
+
+/* Letters in (ui/app/inboxes-letters.js) */
+.pm-steps{list-style:none;margin:0 0 8px;padding:0;display:flex;flex-wrap:wrap;gap:6px 18px;font-size:var(--t-sm);color:var(--muted)}
+.pm-steps li{display:flex;align-items:center;gap:6px}
+.pm-steps li::before{content:'';width:10px;height:10px;border-radius:50%;border:2px solid var(--line)}
+.pm-steps li.done::before{background:var(--ok);border-color:var(--ok)}
+.pm-steps li.cur{color:var(--ink);font-weight:600}
+.pm-steps li.cur::before{border-color:var(--wait, var(--accent))}
+.pm-scan-cell{white-space:nowrap}
+@media (max-width:640px){.pm-letters .pm-scan-cell{grid-column:3;grid-row:2;text-align:right}}
+.pm-grants{max-width:480px;min-width:0}
+.pm-grant{justify-content:space-between;flex-wrap:wrap;gap:4px 12px;margin:6px 0;overflow-wrap:anywhere}
+.pm-grant-form{display:flex;flex-wrap:wrap;align-items:flex-end;gap:8px;margin:10px 0 0}
+.pm-grant-form label,.pm-pick{display:grid;gap:4px;flex:1 1 220px;min-width:0}
+.pm-pick{max-width:480px;margin:0 0 6px}
+.pm-grant-form select,.pm-pick select{width:100%;min-width:0}
+
+/* Sending (ui/app/inboxes-sending.js) */
+
+/* Alerts (ui/app/inboxes-alerts.js) */
+
+/* Letters out (ui/app/inboxes-outbox.js) */
