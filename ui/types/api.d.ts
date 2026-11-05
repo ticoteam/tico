@@ -3405,6 +3405,7 @@ export type Message = {
   run_id?: string;
   state?: "started_run" | "added_to_run";
 };
+  sender_can_approve_send?: boolean;
   sender_id: string;
   sender_name?: string;
   sent_as?: SentAs;
