@@ -23,6 +23,7 @@ bot's queued jobs a claim hands out (HANDOFF_FIRST_SQL). Each wakes the turn of 
 """
 import json
 import logging
+import re
 
 from . import hubdb as H
 from . import review_gate
@@ -74,10 +75,11 @@ def _head(pr):
     return str((H._json(pr.get("detail"), {}) or {}).get("head_sha") or "").lower()
 
 
-def at_head(c, row, head):
+def at_head(c, row, head, check=None):
     """Whether `head` (7 to 40 characters) is the head a pull request on this ticket is at now."""
     head = str(head or "").lower()
-    return bool(head) and any(_head(pr).startswith(head) for pr in _prs(c, row) if _head(pr))
+    return bool(head) and any(_head(pr).startswith(head) for pr in _prs(c, row)
+                              if _head(pr) and (check is None or for_pr(check, pr)))
 
 
 def _full_head(c, row, head, *, evidence=None):
@@ -111,10 +113,16 @@ def review_checks(c, row, *, evidence=None):
     return sorted(out, key=lambda t: (t.get("created_at") or "", t["id"]))
 
 
-def _checks(c, row, step, *, evidence=None):
+def for_pr(check, pr):
+    """Keep separate PRs separate even when they point at the same commit."""
+    return pr["url"] in (check.get("body") or "") or bool(re.search(r"#" + str(pr.get("number")) + r"\b", check.get("title") or ""))
+
+
+def _checks(c, row, step, *, evidence=None, pr=None):
     """The ticket's checks filed at check step `step`, newest last. A person's own subtask filed there is ordinary
     work, never a check, whatever its title: finished with no verdict, it is not a check's comments."""
-    return [t for t in review_checks(c, row, evidence=evidence) if (t["check_step"] or {}).get("id") == step["id"]]
+    return [t for t in review_checks(c, row, evidence=evidence) if (t["check_step"] or {}).get("id") == step["id"]
+            and (pr is None or for_pr(t, pr))]
 
 
 def _verdict(check):
@@ -162,7 +170,8 @@ def after_verdict(c, check):
     ticket = _ticket(c, H.task(c, TR.parent_of(c, check["id"]) or ""))
     step = ticket and F.check_step(c, check, ticket)
     head = str(check.get("verdict_head") or _judged_head(c, check) or "").lower()
-    if not verdict or not step or (not step.get("detached") and ticket.get("step_id") != step["id"]) or not at_head(c, ticket, head):
+    if (not verdict or not step or (not step.get("detached") and ticket.get("step_id") != step["id"])
+            or not at_head(c, ticket, head, check if step.get("detached") else None)):
         return None
     name = step["name"]
     # Verdicts are commonly written inside the checker turn's final tool call. The executed
@@ -216,7 +225,8 @@ def after_capture(c, check_id, head, attempt_id):
     if (pending.get("check_id"), pending.get("attempt_id"), pending.get("head"), pending.get("verdict")) != \
             (check_id, attempt_id, str(head or "").lower(), verdict):
         return None
-    if (not step.get("detached") and ticket.get("step_id") != step["id"]) or not at_head(c, ticket, head):
+    if ((not step.get("detached") and ticket.get("step_id") != step["id"])
+            or not at_head(c, ticket, head, check if step.get("detached") else None)):
         return None
     prior = delivery(c, check)
     if prior and prior.get("consumed"):
@@ -226,7 +236,8 @@ def after_capture(c, check_id, head, attempt_id):
                                    check_id=check["id"], attempt_id=attempt_id)
     # Model company is a routing preference, never a verdict gate. Keep actual builder/checker families
     # alongside the verdict for audit, including fallback runs and unknown provenance.
-    route = verdict_route(c, ticket, head, step=step)
+    pr = next((p for p in _prs(c, ticket) if for_pr(check, p) and _head(p).startswith(head)), None) if step.get("detached") else None
+    route = verdict_route(c, ticket, head, step=step, pr=pr)
     standing = verdict if verdict not in GOOD else route["verdict"]
     if standing not in GOOD:
         out = _failed(c, ticket, step, standing, head, passed=verdict if verdict in GOOD else None)
@@ -338,21 +349,21 @@ def delivery(c, check):
     return None
 
 
-def _verdict_at(c, row, step, head, *, evidence=None):
+def _verdict_at(c, row, step, head, *, evidence=None, pr=None):
     """The verdict the checks at `step` hold against `head` (lowered), or None when none judged that head. A fail,
     changes or comments wins over any pass on the same head, newer or not: a failed head is cleared by a fix at a new
     head, not by a later round at the same one, as a failed CI attempt or test receipt is (docs/tasks.md)."""
     head = _full_head(c, row, head, evidence=evidence)
-    return verdict_at(_checks(c, row, step, evidence=evidence), head)
+    return verdict_at(_checks(c, row, step, evidence=evidence, pr=pr), head)
 
 
-def verdict_route(c, row, head, *, step=None, evidence=None):
+def verdict_route(c, row, head, *, step=None, evidence=None, pr=None):
     """The standing verdict and its flow target, at the check or the work step it sent the ticket to."""
     if step is None:
         step = evidence["step"] if evidence is not None else F.step(c, row.get("step_id"))
         if step and not F.is_check(step):
             step = F.fixes_for(c, step, row, evidence=evidence)
-    verdict = _verdict_at(c, row, step, head, evidence=evidence) if step else None
+    verdict = _verdict_at(c, row, step, head, evidence=evidence, pr=pr) if step else None
     if not verdict:
         return None
     return {"verdict": verdict, "target": F.of(step).get("on_pass" if verdict in GOOD else "on_fail")}
@@ -405,7 +416,7 @@ def merge_ready(c, row, *, evidence=None, pr=None):
                 or ("qa" in H.task_labels(row) and not any(F.check_kind(s) == "qa" for s in detached))):
             return None
         for required in detached:
-            checks = _checks(c, row, required)
+            checks = _checks(c, row, required, pr=pr)
             consumed = [t for t in checks if (delivery(c, t) or {}).get("consumed")]
             if verdict_at(checks, head) not in GOOD or verdict_at(consumed, head) not in GOOD:
                 return None
@@ -443,23 +454,37 @@ def merge_text(c, row, pr, head):
             + (f"; Tico then moves this ticket to {landing['name']}." if landing else "."))
 
 
-def _merge_woken(c, row, head):
+def _merge_woken(c, row, head, pr=None):
     """Record the merge wake for this head; False when one was already sent for it."""
+    key = f"{pr['url']}@{head}" if pr else head
     if c.execute("SELECT 1 FROM history_events WHERE subject_type='task' AND subject_id=? AND kind='merge_wake' "
                  "AND new=? LIMIT 1",
-                 (row["id"], head)).fetchone():
+                 (row["id"], key)).fetchone():
         return False
-    H._task_event(c, row["id"], H.KEEPER, "merge_wake", None, head, "")
+    H._task_event(c, row["id"], H.KEEPER, "merge_wake", None, key, "")
     return True
 
 
-def merge_wake(c, row):
+def merge_wake(c, row, snapshots=None):
     """Wake the builder to merge when the ticket is ready (merge_ready), once per head."""
     row = _ticket(c, row)
     if row and F.pr_checks(c, row):
-        ready = next((ready for pr in _prs(c, row) if (ready := merge_ready(c, row, pr=pr))
+        prs = _prs(c, row)
+        if snapshots is not None:
+            verified = []
+            for pr in prs:
+                fresh = snapshots.get(pr["id"]) or {}
+                checks = fresh.get("checks") or {}
+                if (fresh.get("error") or fresh.get("head_sha") != _head(pr) or fresh.get("state") == "closed"
+                        or fresh.get("draft") or fresh.get("mergeable") is False):
+                    continue
+                green = bool(checks) and "passing" in checks.values() and all(v in ("passing", "skipped") for v in checks.values())
+                detail = {**(H._json(pr.get("detail"), {}) or {}), **fresh}
+                verified.append({**pr, "checks": "passing" if green else "pending", "detail": json.dumps(detail)})
+            prs = verified
+        ready = next((ready for pr in prs if (ready := merge_ready(c, row, pr=pr))
                       and not c.execute("SELECT 1 FROM history_events WHERE subject_id=? AND kind='merge_wake' AND new=?",
-                                        (row["id"], ready[1])).fetchone()), None)
+                                        (row["id"], f"{pr['url']}@{ready[1]}")).fetchone()), None)
     else:
         ready = row and merge_ready(c, row)
     if ready and F.pr_checks(c, row):
@@ -467,13 +492,12 @@ def merge_wake(c, row):
         if not recipient:
             return False
         if recipient != row["owner_id"]:
-            if not _merge_woken(c, row, ready[1]):
-                return False
             H.task_create(c, H.KEEPER, f"Merge PR #{ready[0]['number']} at {ready[1][:12]}",
                           merge_text(c, row, *ready), recipient, parent_id=row["id"],
                           wake_refs={HANDOFF: "merge", "pr_head": ready[1]})
+            _merge_woken(c, row, ready[1], ready[0])
             return True
-    if ready and _merge_woken(c, row, ready[1]):
+    if ready and _merge_woken(c, row, ready[1], ready[0] if F.pr_checks(c, row) else None):
         H._wake(c, row, row["owner_id"], merge_text(c, row, *ready), {HANDOFF: "merge", "pr_head": ready[1]},
                 trigger="pr_checks")
         return True

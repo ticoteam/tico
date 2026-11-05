@@ -173,7 +173,7 @@ def test_conflicting_or_behind_pr_returns_to_owner_once(api, conflict, stale):
 def test_role_review_without_check_model_is_normal_child(api):
     setup(api)
     task = task_pr(api)
-    result = api.post("/api/v2/tasks", headers=headers(), json={"owner": "rev-a", "title": "PR #12",
+    result = api.post("/api/v2/tasks", headers=headers(), json={"owner": "rev-a", "title": "PR #12", "body": "Review the PR.",
                       "check_role": "review", "relations": [{"task": task["id"], "kind": "parent"}]})
     assert result.status_code == 200, result.text
     [child] = children(api, task)
@@ -208,6 +208,40 @@ def test_done_task_with_open_pr_returns_to_review_and_human_pr_is_skipped(api):
     assert len(children(api, task)) == 1 and children(api, human) == []
     with api.app.state.store.read() as c:
         assert H.task(c, task["id"])["status"] == "review"
+
+
+def test_two_prs_at_same_head_each_need_their_own_review(api):
+    setup(api)
+    task = task_pr(api)
+    with api.app.state.store.transaction() as c:
+        second = H.task_link(c, "human:ana", task["id"], "https://github.com/Acme/atlas/pull/13")
+        first = next(p for p in H.task_links(c, task["id"]) if p["number"] == 12)
+        c.execute("UPDATE task_links SET state='open',repo='Acme/atlas',checks='passing',mergeable='clean',detail=? WHERE id=?",
+                  (first["detail"], second["id"]))
+    dispatch(api)
+    dispatch(api)
+    reviews = children(api, task)
+    assert {r["title"] for r in reviews} == {"Review 1: PR #12", "Review 1: PR #13"}
+    finish(api, next(r for r in reviews if "#12" in r["title"]))
+    assert all("merge PR #13" not in m["body"] for m in handoffs(api, task, "merge"))
+    finish(api, next(r for r in reviews if "#13" in r["title"]))
+    assert any("merge PR #13" in m["body"] for m in handoffs(api, task, "merge"))
+
+
+def test_fresh_failed_checks_do_not_allow_merge_from_a_green_cache(api, monkeypatch):
+    setup(api)
+    task = task_pr(api)
+    dispatch(api)
+    with api.app.state.store.transaction() as c:
+        c.execute("UPDATE task_links SET checks='pending' WHERE task_id=?", (task["id"],))
+    finish(api, children(api, task)[0])
+    with api.app.state.store.transaction() as c:
+        c.execute("UPDATE task_links SET checks='passing' WHERE task_id=?", (task["id"],))
+    from backend import review_gate
+    monkeypatch.setattr(review_gate, "snapshot", lambda service, prs: {
+        p["id"]: {"head_sha": HEAD, "checks": {"required": "failing"}} for p in prs})
+    P.retry_prs(api.app.state.store, service=api.app.state.github_app)
+    assert not handoffs(api, task, "merge")
 
 
 def test_health_names_unfiled_pr_after_a_day_without_disclosing_private_task(api):

@@ -364,6 +364,10 @@ def _earlier_reviewers(c, ticket, step):
     out = set()
     for child_id in TR.child_ids(c, ticket["id"]) if before else ():
         child = H.task(c, child_id)
+        if step.get("pr"):
+            from .verdict_moves import for_pr
+            if not for_pr(child or {}, step["pr"]):
+                continue
         found = step_flow.child_check(c, child, ticket) if child else None
         if found and found["id"] in before and H.is_bot(child["owner_id"]):
             out.add(H.actor_id(child["owner_id"]))
@@ -475,7 +479,7 @@ def _title(step, prs):
     return f"{kind(step)}: PR {', '.join(numbers)}" if numbers else f"{kind(step)}: {step['name']}"
 
 
-def has_open_check(c, ticket, step, heads):
+def has_open_check(c, ticket, step, heads, pr=None):
     """The open check request on this ticket for this step's kind and head (or an unknown head), else None."""
     from . import step_flow
     from . import task_relations as TR
@@ -483,6 +487,10 @@ def has_open_check(c, ticket, step, heads):
         child = H.task(c, child_id)
         if not child or child["status"] not in H.ACTIVE_STATUSES:
             continue
+        if pr is not None:
+            from .verdict_moves import for_pr
+            if not for_pr(child, pr):
+                continue
         found = step_flow.child_check(c, child, ticket)
         if not found or found["id"] != step["id"]:
             continue
@@ -533,7 +541,10 @@ def _file(c, ticket, step, slug, title, heads, snapshots, why):
             + (f" at head {', '.join(heads)}" if heads else "")
             + f". Tico gave it to you from the {step['name']} pool ({why}). End with your VERDICT line for that head.")
     if step.get("detached"):
-        body += "\n" + "\n".join(p["url"] for p in _prs(c, ticket, step) if set(_heads([p], snapshots)) & set(heads))
+        body += "\n" + step["pr"]["url"]
+        selected = {p["id"]: {"error": True} for p in _prs(c, ticket, step)}
+        selected[step["pr"]["id"]] = (snapshots or {}).get(step["pr"]["id"]) or H._json(step["pr"].get("detail"), {}) or {}
+        snapshots = selected
     c.execute("SAVEPOINT check_pool_file")
     try:
         actor = H.KEEPER if step.get("detached") and not H.task_private(c, ticket) else ticket["owner_id"]
@@ -604,7 +615,7 @@ def _dispatch(c, ticket, step, slugs, limit, prs, snapshots):
         return None          # nothing to judge at a head: a board-only move files no check
     heads = _heads(prs, snapshots)
     title = _title(step, prs)
-    if has_open_check(c, ticket, step, heads):
+    if has_open_check(c, ticket, step, heads, prs[0] if step.get("detached") else None):
         return None
     for r in waiting(c, ticket["id"]):
         if r["step_id"] == step["id"]:
@@ -630,8 +641,7 @@ def bot_pr(c, ticket, pr):
     if author and app and author == (str(app[0]) + "[bot]").lower():
         return True
     return bool(author and c.execute(f"SELECT 1 FROM bot_config bc {BS.JOIN} JOIN bots b ON b.id=bc.bot "
-                                    "WHERE lower(s.github_login)=? "
-                                    "AND coalesce(b.state,'')<>'archived' LIMIT 1", (author,)).fetchone())
+                                    "WHERE lower(s.github_login)=? LIMIT 1", (author,)).fetchone())
 
 
 def _unboard(c, ticket, snapshots=None):
@@ -642,14 +652,24 @@ def _unboard(c, ticket, snapshots=None):
     for pr in sorted(_prs(c, ticket, board[0]), key=lambda p: (p["created_at"], p["id"])):
         if pr.get("state") != "open" or not bot_pr(c, ticket, pr):
             continue
+        canonical = c.execute("SELECT l.task_id FROM task_links l JOIN tasks t ON t.id=l.task_id "
+                              "WHERE l.url=? AND l.kind='pr' AND l.state='open' AND t.status NOT IN ('closed','declined') "
+                              "ORDER BY l.created_at,l.id LIMIT 1", (pr["url"],)).fetchone()
+        if canonical and canonical["task_id"] != ticket["id"]:
+            continue
         detail = H._json(pr.get("detail"), {}) or {}
         head = V._head(pr)
         if not _heads([pr], snapshots) or snapshots is not None and _heads([pr], snapshots) != [head]:
             continue
-        if pr.get("mergeable") == "conflict" or detail.get("mergeable_state") == "behind":
+        fresh = (snapshots or {}).get(pr["id"]) or {}
+        if fresh.get("state") == "closed" or fresh.get("draft"):
+            continue
+        if (pr.get("mergeable") == "conflict" or detail.get("mergeable_state") == "behind"
+                or fresh.get("mergeable") is False or fresh.get("mergeable_state") in ("dirty", "behind")):
+            key = f"{pr['url']}@{head}"
             if not c.execute("SELECT 1 FROM history_events WHERE subject_id=? AND kind='pr_rebase' AND new=?",
-                             (ticket["id"], head)).fetchone():
-                H._task_event(c, ticket["id"], H.KEEPER, "pr_rebase", None, head, "")
+                             (ticket["id"], key)).fetchone():
+                H._task_event(c, ticket["id"], H.KEEPER, "pr_rebase", None, key, "")
                 H._wake(c, ticket, ticket["owner_id"], f"PR #{pr['number']}: rebase on main and push.",
                         {V.HANDOFF: "merge_conflict", "pr_head": head})
             continue
@@ -659,12 +679,13 @@ def _unboard(c, ticket, snapshots=None):
                     child["judged_head"] != head and pr["url"] in (child.get("body") or ""):
                 H.task_close(c, H.KEEPER, child["id"], note="Superseded by a new PR head.", strict=False)
         for step in board:
-            verdict = V._verdict_at(c, ticket, step, head)
+            step = {**step, "pr": pr}
+            verdict = V._verdict_at(c, ticket, step, head, pr=pr)
             if verdict:
                 if verdict not in V.GOOD:
                     break
                 if not any(V.verdict_at([t], head) in V.GOOD and (V.delivery(c, t) or {}).get("consumed")
-                           for t in V._checks(c, ticket, step)):
+                           for t in V._checks(c, ticket, step, pr=pr)):
                     break
                 continue
             found = pool(c, step["id"])
@@ -679,7 +700,7 @@ def _unboard(c, ticket, snapshots=None):
             if result:
                 return result
             break
-        V.merge_wake(c, ticket)
+        V.merge_wake(c, ticket, snapshots=snapshots)
     return None
 
 
@@ -719,6 +740,15 @@ def _take_plan(c, wait, only=None, snapshots=None):
         prs = [p for p in prs if _title(step, [p]) == wait["title"]]
         if not prs or not all(bot_pr(c, ticket, p) for p in prs):
             return {"drop": "the PR is no longer open"}
+        step = {**step, "pr": prs[0]}
+        if any(p.get("mergeable") == "conflict" or
+               (H._json(p.get("detail"), {}) or {}).get("mergeable_state") == "behind" for p in prs):
+            return {"drop": "the PR needs a rebase"}
+        if any(((snapshots or {}).get(p["id"]) or {}).get("state") == "closed" or
+               ((snapshots or {}).get(p["id"]) or {}).get("draft") or
+               ((snapshots or {}).get(p["id"]) or {}).get("mergeable") is False or
+               ((snapshots or {}).get(p["id"]) or {}).get("mergeable_state") in ("dirty", "behind") for p in prs):
+            return {"drop": "the PR needs a fresh review route"}
     heads = _heads(prs, None)
     waited = set(filter(None, wait["heads"].split(",")))
     head_problem = bool(waited and waited != set(heads) and
@@ -727,7 +757,7 @@ def _take_plan(c, wait, only=None, snapshots=None):
         head_problem = any((snapshots.get(pr["id"]) or {}).get("error") or
                            _heads([pr], snapshots) != _heads([pr], None) or
                            not (snapshots.get(pr["id"]) or {}).get("head_sha") for pr in prs)
-    if not head_problem and has_open_check(c, ticket, step, heads):
+    if not head_problem and has_open_check(c, ticket, step, heads, prs[0] if detached else None):
         return {"drop": "a check was filed"}
     free, reason = ranked(c, ticket, step, slugs, limit)
     if only is not None:

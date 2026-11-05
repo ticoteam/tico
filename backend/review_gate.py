@@ -68,6 +68,11 @@ def refuse_second(c, actor, parent, title, snapshots=None):
     wanted = heads(c, parent, snapshots)
     from . import check_pools
     for wait in check_pools.waiting(c, parent["id"], step["id"]):
+        if step.get("detached"):
+            numbers = set(re.findall(r"#\d+\b", str(title)))
+            waited_numbers = set(re.findall(r"#\d+\b", wait["title"]))
+            if numbers and waited_numbers and not numbers & waited_numbers:
+                continue
         judged = set(filter(None, wait["heads"].split(",")))
         if wanted and judged and not wanted & judged:
             continue
@@ -80,6 +85,11 @@ def refuse_second(c, actor, parent, title, snapshots=None):
         other_step = check_of(c, parent, other.get("title"))
         if not other_step or other_step["id"] != step["id"] or other["status"] not in H.ACTIVE_STATUSES:
             continue
+        if step.get("detached"):
+            numbers = set(re.findall(r"#\d+\b", str(title)))
+            other_numbers = set(re.findall(r"#\d+\b", str(other.get("title"))))
+            if numbers and other_numbers and not numbers & other_numbers:
+                continue
         seen = c.execute("SELECT new FROM history_events WHERE subject_type='task' AND subject_id=? AND kind='review_head' "
                          "ORDER BY created_at DESC, rowid DESC LIMIT 1", (child_id,)).fetchone()
         judged = set(filter(None, (seen[0] if seen else "").split(",")))
@@ -236,7 +246,9 @@ def snapshot(service, prs):
             # Detect a push while collecting, rather than blessing a now-stale head.
             if read(f"/pulls/{pr['number']}")["head"]["sha"] != head:
                 raise ValueError("head changed during collection")
-            out[pr["id"]] = {"head_sha": head, "checks": checks, "at": H.now()}
+            out[pr["id"]] = {"head_sha": head, "checks": checks, "at": H.now(),
+                             "state": data.get("state"), "draft": data.get("draft"),
+                             "mergeable": data.get("mergeable"), "mergeable_state": data.get("mergeable_state")}
         except ValueError as exc:
             # An unresolved link is Tico's own record, not GitHub's answer: relinking clears it, not access help.
             out[pr["id"]] = {"error": True, "why": str(exc), **answered_cause(str(exc)),
