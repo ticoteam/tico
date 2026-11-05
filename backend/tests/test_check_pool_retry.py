@@ -255,6 +255,66 @@ def test_scheduler_files_a_review_admitted_by_fresh_ci_without_a_receipt(api, mo
                              (task['id'],)).fetchone()
 
 
+@pytest.mark.parametrize('ci', ['success', 'failure', 'unavailable'])
+def test_retry_keeps_a_new_heads_wait_while_the_cached_heads_check_is_open(api, monkeypatch, ci):
+    team(api)
+    task = ticket(api)
+    set_pool(api, task, 'Review 1', ['rev-a'], limit=2)
+    github(api, monkeypatch, {'python': 'success'})
+    response = move(api, task)
+    assert response.status_code == 200, response.text
+    [old_check] = checks(api, task)
+    response = move(api, task, 'In Progress')
+    assert response.status_code == 200, response.text
+    store, service = api.app.state.store, api.app.state.github_app
+    with store.transaction() as c:
+        c.execute("UPDATE runner_states SET last_seen_at=? WHERE runner_id='r1'", (H.shift(H.now(), minutes=-10),))
+
+    # GitHub has J, but its webhook has not replaced cached H. H's review stays open across re-entry.
+    github(api, monkeypatch, {'python': 'success'}, head=OLD)
+    response = move(api, task)
+    assert response.status_code == 200, response.text
+    assert [check['id'] for check in checks(api, task)] == [old_check['id']]
+    with store.transaction() as c:
+        [wait] = P.waiting(c, task['id'])
+        assert wait['heads'] == OLD
+        [pr] = review_gate.links(c, H.task(c, task['id']))
+        assert json.loads(pr['detail'])['head_sha'] == HEAD
+        assert c.execute("SELECT new FROM history_events WHERE subject_id=? AND kind='review_head'",
+                         (old_check['id'],)).fetchone()[0] == HEAD
+        c.execute("UPDATE runner_states SET last_seen_at=? WHERE runner_id='r1'", (H.now(),))
+
+    # Without fresh evidence the retry must keep J's wait, even though cached H already has a check.
+    assert P.retry(store) == []
+    with store.read_transaction() as c:
+        assert P.waiting(c, task['id']) == [wait]
+
+    with monkeypatch.context() as patched:
+        reads = github(api, patched, {'python': 'failure' if ci == 'failure' else 'success'}, head=OLD)
+        if ci == 'unavailable':
+            def unavailable(*args, **kwargs):
+                raise ConnectionError('GitHub unavailable')
+            patched.setattr(service, 'mint', unavailable)
+        filed = P.retry(store, service=service)
+    if ci != 'success':
+        assert filed == []
+        with store.read_transaction() as c:
+            assert P.waiting(c, task['id']) == [wait]
+        reads = github(api, monkeypatch, {'python': 'success'}, head=OLD)
+        filed = P.retry(store, service=service)
+
+    [cid] = filed
+    assert cid != old_check['id']
+    assert {check['id'] for check in checks(api, task)} == {old_check['id'], cid}
+    assert any('/commits/' + OLD + '/check-runs' in path for path in reads)
+    with store.read_transaction() as c:
+        assert c.execute('SELECT state,child_id,heads FROM check_waits WHERE id=?',
+                         (wait['id'],)).fetchone()[:] == ('filed', cid, OLD)
+        assert c.execute("SELECT new FROM history_events WHERE subject_id=? AND kind='review_head'",
+                         (cid,)).fetchone()[0] == OLD
+    assert P.retry(store, service=service) == []
+
+
 @pytest.mark.parametrize('conclusion', ['failure', None])
 def test_refused_ci_only_waits_need_no_writer_until_gate_inputs_change(api, monkeypatch, conclusion):
     task, wait, _ = ci_only_wait(api, monkeypatch)

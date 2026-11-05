@@ -614,7 +614,12 @@ def _take_plan(c, wait, only=None, snapshots=None):
     if not found:
         return {"drop": "the step has no pool"}
     step, slugs, limit = found
-    heads = _heads(_prs(c, ticket, step), snapshots)
+    # Entry can record a newer head than the webhook cache; only fresh CI may replace that head.
+    heads = [h for h in wait["heads"].split(",") if h]
+    if snapshots is not None:
+        prs = _prs(c, ticket, step)
+        if all((snapshots.get(pr["id"]) or {}).get("head_sha") for pr in prs):
+            heads = _heads(prs, snapshots) or heads
     if has_open_check(c, ticket, step, heads):
         return {"drop": "a check was filed"}
     free, reason = ranked(c, ticket, step, slugs, limit)
