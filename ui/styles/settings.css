@@ -66,7 +66,8 @@ input.people-switch:disabled{opacity:.45;cursor:not-allowed}
 .people-cell-recorder{font-size:var(--t-sm);color:var(--muted);white-space:nowrap}.people-cell-recorder.is-old{color:var(--wait-ink)}
 .people-recorder-label{display:none}
 .people-cell-more{position:relative;display:flex;justify-content:flex-end;gap:var(--s1)}
-.people-more{display:inline-flex;align-items:center;justify-content:center;width:32px;height:32px;overflow:hidden;border:0;border-radius:6px;background:none;color:var(--muted);cursor:pointer}
+.people-more{display:inline-flex;align-items:center;justify-content:center;width:32px;height:32px;padding:0;overflow:hidden;border:0;border-radius:6px;background:none;color:var(--muted);cursor:pointer}
+.people-more .nav-icon{width:20px;height:20px;font-size:20px}
 .people-more:hover,.people-more[aria-expanded=true]{background:var(--surface2);color:var(--ink)}
 .people-menu{position:absolute;right:0;top:calc(100% + 4px);z-index:30;min-width:180px;padding:var(--s1);background:var(--surface);border:1px solid var(--line);border-radius:var(--r-pop);box-shadow:0 8px 24px rgba(0,0,0,.16)}
 .people-menu[hidden]{display:none}
