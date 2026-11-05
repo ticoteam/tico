@@ -1261,13 +1261,14 @@ def test_legacy_dependency_reasons_rebuild_from_the_scoped_question(api, monkeyp
     as_bot(api, 'ops', 'source-publisher')
     filename = 'confidential-hold.html'
     fid = published(api, attempt, task=t['id'], name=filename)
-    with monkeypatch.context() as patch:
-        patch.setattr(H, 'remember_sourced_text', lambda c, kind, rid, field, text, sources: text)
-        response = api.patch(f'/api/v2/files/{fid}/versions/1', json={'ask': version_ask('ana')},
-                             headers=headers('source-publisher'))
-        assert response.status_code == 200, response.text
-        post(api, 'tasks/' + t['id'], {'version': get(api, 'tasks/' + t['id'])['task']['version'],
-                                     'status': 'waiting'}, attempt['token'])
+    response = api.patch(f'/api/v2/files/{fid}/versions/1', json={'ask': version_ask('ana')},
+                         headers=headers('source-publisher'))
+    assert response.status_code == 200, response.text
+    post(api, 'tasks/' + t['id'], {'version': get(api, 'tasks/' + t['id'])['task']['version'],
+                                 'status': 'waiting'}, attempt['token'])
+    with api.app.state.store.transaction() as c:
+        c.execute("DELETE FROM sourced_text_records WHERE kind='task' AND record_id=? AND field='blocked_reason'",
+                  (t['id'],))
     with api.app.state.store.read() as c:
         row = H.task(c, t['id'])
         assert filename in row['blocked_reason']
