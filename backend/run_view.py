@@ -13,7 +13,7 @@ from datetime import timezone
 from fastapi import Request
 
 from .store import H, Problem
-from . import login_holds, login_waits, run_diagnostics, runs, task_privacy as privacy
+from . import login_holds, login_waits, run_diagnostics, runs, start_places, task_privacy as privacy
 from .turns import TOOL_START, TOOL_BACKGROUNDED, clip, seconds
 
 ATTEMPT_LIMIT, NODE_LIMIT, SUMMARY_CHARS = 20, 50, 120
@@ -191,8 +191,9 @@ def run_view(c, auth, who, tid):
     turns = []
     for row in c.execute(
             "SELECT a.id,a.bot_id AS bot,a.exit,a.job_id,a.state,a.created_at,a.started_at,a.finished_at,a.lease_until,"
-            "a.result,a.stop_requested_at,a.wake,m.conversation_id FROM attempts a JOIN jobs j ON j.id=a.job_id "
-            "JOIN messages m ON m.id=j.message_id WHERE a.task_id=? ORDER BY a.created_at DESC LIMIT ?",
+            "a.result,a.stop_requested_at,a.wake,m.conversation_id,p.wait_reason FROM attempts a JOIN jobs j ON j.id=a.job_id "
+            "JOIN messages m ON m.id=j.message_id LEFT JOIN start_places p ON p.attempt_id=a.id "
+            "WHERE a.task_id=? ORDER BY a.created_at DESC LIMIT ?",
             (tid, SCAN_LIMIT)):
         r = dict(row)
         if readable(r):
@@ -249,8 +250,10 @@ def run_view(c, auth, who, tid):
             "finished_at": r["finished_at"], "took_s": seconds(r["started_at"], r["finished_at"]), "ran_on": made.get(r["id"]),
             "lease_until": r["lease_until"] if live else None, "lease": lease.get(r["id"], []),
             "reason": failure_reason(r["state"], r["result"], run_diagnostics.metadata(c, r["id"])["end_reason"]),
-            # Waiting for its ChatGPT login, or where it ran instead of its own harness and why (backend/login_waits.py).
-            "waiting": login_waits.waiting(c, r["id"], r["bot"], who, auth) if live else None,
+            # Memory and login waits, or where it ran instead of its own harness and why (backend/login_waits.py).
+            "waiting": ("Waiting: " + r["wait_reason"]
+                        if r["state"] == "leased" and (r["wait_reason"] or "").startswith(start_places.MEMORY_HOLD)
+                        else login_waits.waiting(c, r["id"], r["bot"], who, auth) if live else None),
             "moved": login_waits.moved(c, r["id"], r["bot"], who, auth),
             # Stopped to let another turn have the shared login; its job continues next.
             "paused": login_waits.paused(c, r["id"], r["state"], r["result"], r["stop_requested_at"]),

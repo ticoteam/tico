@@ -47,6 +47,7 @@ def ready_waiting(c, runner_id):
 
 MEMORY_HOLD = 'computer busy: memory'
 NOT_REPORTING = 'computer not reporting'
+ALLOCATION_REPORTING = 'harness_allocation_v1'
 
 
 def hold_rows(c, runner_ids):
@@ -60,7 +61,7 @@ def hold_rows(c, runner_ids):
     return out
 
 
-def computer_hold(c, runner_id, now=None, status=None, row=None):
+def computer_hold(c, runner_id, now=None, status=None, row=None, *, person=False, harness_allocated=False):
     """Why this computer holds a bot's new start, as (wait reason, words for people), or None. Diagnostics on only.
 
     - Sustained CPU or memory overload (performance.load_status): "computer busy", as before.
@@ -69,7 +70,8 @@ def computer_hold(c, runner_id, now=None, status=None, row=None):
       has never sampled is not held: older runners never sent samples.
     - Memory at 85% or more: "computer busy: memory N%". It is admitted again below 80%; between the two it keeps
       the state its newest sample set (performance.ingest), so the queue does not flap.
-    A person's own message skips this at each caller, as it skips the overload hold. `row` is the computer's runner
+    A person's own message skips CPU overload and stale reports; only Linux memory holds it. macOS Memory Used
+    includes reclaimable memory, so people on Macs and computers with an unknown platform pass. `row` is the computer's runner
     row from hold_rows when the caller has it: the same columns, read once for all its computers."""
     from .performance import load_status
 
@@ -82,20 +84,24 @@ def computer_hold(c, runner_id, now=None, status=None, row=None):
     def diagnostics_on():
         found = runner()
         return bool(found) and found['revoked_at'] is None and found['performance'] == 'on'
+    if person and (not runner() or runner()['platform'] != 'linux'):
+        return None
     if status is None:
         if not diagnostics_on():
             return None
-        status = load_status(c, runner_id, now)
+        status = load_status(c, runner_id, now, include_memory=not harness_allocated)
     latest = status['latest_sample']
     if latest is None:
         # Samples past retention are gone, but a computer that reported before still reports nothing now.
         if not diagnostics_on():
             return None
-        return (NOT_REPORTING, NOT_REPORTING) if runner()['last_sampled_at'] else None
+        return (NOT_REPORTING, NOT_REPORTING) if not person and runner()['last_sampled_at'] else None
     if latest['stale']:
-        return NOT_REPORTING, NOT_REPORTING
-    if status['overloaded']:
+        return None if person else (NOT_REPORTING, NOT_REPORTING)
+    if status['overloaded'] and not person:
         return 'computer busy', 'computer busy'
+    if harness_allocated:
+        return None
     mem = latest['mem_pct']
     if mem is None:
         return None
@@ -110,20 +116,6 @@ def memory_holds(mem, was_held):
     computer is already held (`runners.memory_hold`, set by performance.ingest in reading order)."""
     from .performance import MEM_HOLD_AT, MEM_HOLD_CLEAR
     return mem >= MEM_HOLD_AT or (mem >= MEM_HOLD_CLEAR and bool(was_held))
-
-
-def memory_held(c, runner_id, now=None):
-    """Whether this computer's memory alone holds new starts, whatever else computer_hold reports. Sustained memory over
-    90% also marks the computer overloaded, and computer_hold then names only the generic "computer busy": a caller that
-    gates on memory asks here. Computers that are off, revoked, silent or never sampled are not memory-held."""
-    from .performance import load_status
-    found = c.execute("SELECT memory_hold,performance,revoked_at FROM runners_with_state WHERE id=?", (runner_id,)).fetchone()
-    if not found or found['revoked_at'] is not None or found['performance'] != 'on':
-        return False
-    latest = load_status(c, runner_id, now)['latest_sample']
-    if latest is None or latest['stale'] or latest['mem_pct'] is None:
-        return False
-    return memory_holds(latest['mem_pct'], found['memory_hold'])
 
 
 def held(c, runner_id):
@@ -318,7 +310,7 @@ def overdue(c):
 
 def from_person(c, job_id):
     """Whether a job answers a person's own message to the bot: a chat, a message in its task, an answer to its ask.
-    Such a turn starts on an overloaded computer and ahead of the turns waiting there: the load is the bots' own work,
+    Such a turn passes CPU overload and runs ahead of the turns waiting there, when memory permits: the load is the bots' own work,
     and holding it left a person's message waiting behind a hundred bot turns. A keeper notice (a routine, a sweep,
     a rule's wake), or a bot's message, is not one, even when a person's act caused it; the keeper's carrier of a
     person's message is one (H.person_sent_sql). Two primary-key reads."""
@@ -333,17 +325,23 @@ def person_queued(c, runner_id):
                           "LIMIT 1", (runner_id,)).fetchone())
 
 
-def reserve(c, attempt, settings=None):
+def reserve(c, attempt, settings=None, *, harness_allocated=False):
     """Called inside the API writer transaction; two contenders cannot win the last place."""
     aid, rid = attempt['id'], attempt['runner_id']
     if attempt['stop_requested_at']:
         return {"reserved": False, "stop": True}
+    # Admission precedes allocation. A runner with a real process keeps its existing grant: revoking it here
+    # leaves that process alive and renewing, and its own memory can prevent the computer from ever recovering.
+    place = c.execute("SELECT * FROM start_places WHERE attempt_id=?", (aid,)).fetchone()
+    runner = c.execute("SELECT * FROM runners_with_state WHERE id=?", (rid,)).fetchone()
+    # An older runner cannot distinguish preparation from allocation, so memory cannot revoke its existing grant.
+    legacy_grant = bool(place and place['start_until'] and
+                        ALLOCATION_REPORTING not in (H._json(runner['capabilities'], []) or []))
     person = from_person(c, attempt['job_id'])
-    hold = None if person else computer_hold(c, rid)
+    hold = computer_hold(c, rid, row=runner, person=person, harness_allocated=harness_allocated or legacy_grant)
     if hold:
         waiting(c, aid, hold[0])
         return {"reserved": False, "waiting": hold[1]}
-    place = c.execute("SELECT * FROM start_places WHERE attempt_id=?", (aid,)).fetchone()
     if place and place['start_until']:
         return {"reserved": place['start_until'] > H.now(), "start_until": place['start_until']}
     from . import org_turns
@@ -361,7 +359,7 @@ def reserve(c, attempt, settings=None):
     if bot_cap is not None and bot_held(c, attempt['bot_id'], exclude=aid) >= bot_cap:
         waiting(c, aid, BOT_WAIT)
         return {'reserved': False, 'waiting': BOT_WAIT}
-    capacity = turn_limit(c.execute("SELECT * FROM runners_with_state WHERE id=?", (rid,)).fetchone())
+    capacity = turn_limit(runner)
     # Waiters ready to run take their turns by original claim order. Login/lane waiters are not ready yet.
     ahead = c.execute("SELECT 1 FROM start_places p JOIN attempts a ON a.id=p.attempt_id "
                       "WHERE a.runner_id=? AND a.state='leased' AND a.lease_until>? AND a.stop_requested_at IS NULL "
