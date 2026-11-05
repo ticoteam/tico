@@ -75,8 +75,9 @@ as `thread_id` and `scope`.
 
 Each daily update and each week in review keeps its own structure and its own page, as before. It also posts one card
 in its author's Home: a single line (for example "Daily update, 2026-11-01") that links back to the update. The
-update's body is never copied into the thread. The card follows the Home's audience: whoever can read the Home sees
-it, and nobody else. The Home itself does not show these cards; the update is read on the Updates page.
+update's body is never copied into the thread. The card is one message in that Home thread, so the Home's audience
+reads it. The API and MCP return it with the Home (`GET /api/v2/threads/home/{actor}`, `hub_thread_home`). The app's
+Home does not draw these cards; the update is read on the Updates page.
 
 The card is posted as the author, so a bot's card in its own Home does not wake that bot.
 
