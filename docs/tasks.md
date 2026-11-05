@@ -28,7 +28,8 @@ Posts in the task's native thread and file uploads, imports and links also respe
 files from a held attempt stays refused even when the bot is active. Updating an existing file checks its stored
 task too, even if the request omits the task.
 Messages, replies, acknowledgements and reactions check both the message's stored task reference and its thread's
-own task; naming a different task cannot bypass either hold. Thread changes and read marks, task-linked pages,
+own task; naming a different task cannot bypass either hold. The bot can still read feedback on the held task;
+these reads record no refusal. Thread changes and read marks, task-linked pages,
 file reviews, and pins or cards on the task also respect the hold. Approval requests, replacement of an existing
 request and consumption of an approved request check the approval's task before changing it. A status update that
 keeps its stored task checks that task; the bot may still switch its status to unrelated work.

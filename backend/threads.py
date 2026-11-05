@@ -2548,7 +2548,6 @@ def _reactable(c, principal, message_id):
     message = H.message(c, message_id)
     if not message or _carrier_message(message) or (v is not None and not message_readable(c, v, message)):
         raise Problem("not_found", "Message not found", 404)
-    H._message_writer(c, actor, message, thread_row(c, message["conversation_id"]))
     return actor, message
 
 
@@ -2561,6 +2560,7 @@ def react(c, principal, message_id, emoji):
     """Add the principal's reaction. Idempotent: the same emoji twice is one reaction. Returns the message's
     reactions."""
     actor, message = _reactable(c, principal, message_id)
+    H._message_writer(c, actor, message, thread_row(c, message["conversation_id"]))
     emoji = str(emoji or "").strip()
     if not emoji or len(emoji) > MAX_EMOJI or any(ch.isspace() for ch in emoji):
         raise Problem("emoji", "A reaction is one emoji or a short :name:", 422)
@@ -2579,6 +2579,7 @@ def react(c, principal, message_id, emoji):
 def unreact(c, principal, message_id, emoji):
     """Remove the principal's own reaction (a no-op when there is none). Returns the message's reactions."""
     actor, message = _reactable(c, principal, message_id)
+    H._message_writer(c, actor, message, thread_row(c, message["conversation_id"]))
     emoji = str(emoji or "").strip()
     gone = c.execute("DELETE FROM message_reactions WHERE message_id=? AND actor=? AND emoji=?",
                      (message["id"], actor, emoji)).rowcount

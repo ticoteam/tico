@@ -150,6 +150,24 @@ def test_external_message_mutations_check_the_stored_message_and_native_task(api
     assert result.status_code == 200, result.text
 
 
+def test_a_bot_reads_feedback_on_its_held_task_without_recording_refusals(api, external_work):
+    token, task, _ = external_work
+    message = post(api, f"tasks/{task['id']}/comments", {"text": "The export is ready."}, token)["comment"]
+    rated = post(api, "feedback", {"subject_type": "message", "subject_id": message["id"],
+                                   "rating": "down", "reason": "Missing totals"})
+    hold_external(api, task)
+    with api.app.state.store.read() as c:
+        before = {table: c.execute(f"SELECT count(*) FROM {table}").fetchone()[0]
+                  for table in ("refusals", "events")}
+    markers = get(api, f"feedback?subject_type=message&subject_ids={message['id']}", token)
+    assert markers["items"] == []
+    assert markers["counts"] == [{"subject_id": message["id"], "up": 0, "down": 1}]
+    listed = get(api, "feedback/list", token)
+    assert [item["id"] for item in listed["items"]] == [rated["id"]]
+    with api.app.state.store.read() as c:
+        assert {table: c.execute(f"SELECT count(*) FROM {table}").fetchone()[0] for table in before} == before
+
+
 @pytest.mark.parametrize("mutation", ["create", "subthread", "rename", "read", "read-all", "follow", "unfollow", "pin", "unpin"])
 def test_external_thread_mutations_check_the_stored_thread_task(api, external_work, mutation):
     token, task, other = external_work
@@ -761,16 +779,28 @@ def test_an_escape_over_a_task_hold_stays_bot_wide_and_needs_a_person(api, time_
         assert H.bot(c, "ops")["state"] == "active"
 
 
-def test_a_chat_loop_holds_its_chat_while_tasks_still_run(api):
+@pytest.mark.parametrize("task_ref", [None, "", " \t\u2003\n\u00a0"])
+def test_a_chat_loop_holds_its_chat_while_tasks_still_run(api, task_ref):
     machine = task_bot(api, lanes=True)
-    post(api, "chat/ops", {"text": "Check the export."})
+    message = post(api, "chat/ops", {"text": "Check the export."})
+    if task_ref is not None:
+        with api.app.state.store.transaction() as c:
+            refs = {**H.message(c, message["id"])["refs"], "task": task_ref}
+            c.execute("UPDATE messages SET refs=? WHERE id=?", (H._dump(refs), message["id"]))
     chat = started(api, machine)
+    assert not chat.get("task") and chat["lane"] == "main"
     target = new_task(api, "Check the archive")
     refusals(api, chat, target)
     [hold] = holds(api)
     assert hold["task_id"] is None and hold["conversation_id"] == chat["message"]["conversation_id"]
-    post(api, f"attempts/{chat['id']}/renew", {}, machine["token"])
+    with api.app.state.store.read() as c:
+        assert H.bot(c, "ops")["state"] == "active"
+    stopped = post(api, f"attempts/{chat['id']}/renew", {}, machine["token"])
+    assert stopped["stop"] and stopped["stop_reason"].startswith("Quarantined:")
+    refused = post(api, "messages", {"to": "finance", "text": "Keep trying."}, chat["token"], expected=403)
+    assert refused["error"]["code"] == "quarantined"
     post(api, f"attempts/{chat['id']}/complete", {"outcome": "interrupted", "last_seq": 0}, machine["token"])
+    assert job_state(api, chat["job_id"]) == "queued"
     post(api, "chat/ops", {"text": "Try again."})
     assert started(api, machine)["task"]["id"] == target["id"]
     assert claim(api, machine) is None

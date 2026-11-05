@@ -15,7 +15,8 @@ def source(c, actor, task_id=None):
     if not H.is_bot(actor):
         return None
     if H.RUN.get():
-        row = c.execute(f"SELECT coalesce(a.task_id,{H.MESSAGE_TASK_SQL}) AS task_id,m.conversation_id "
+        from .execution import queued_task_sql
+        row = c.execute(f"SELECT coalesce(a.task_id,{queued_task_sql()}) AS task_id,m.conversation_id "
                         "FROM attempts a JOIN jobs j ON j.id=a.job_id JOIN messages m ON m.id=j.message_id "
                         "JOIN conversations cv ON cv.id=m.conversation_id WHERE a.id=? AND a.bot_id=?",
                         (H.RUN.get(), H.actor_id(actor))).fetchone()
@@ -47,11 +48,13 @@ def for_task(c, bot, task_id):
 
 def for_attempt(c, row):
     """The open scoped quarantine of this attempt's work, or None."""
+    from .execution import queued_task_sql
+    task_sql = f"coalesce(a.task_id,{queued_task_sql()})"
     return c.execute(f"SELECT qh.* FROM attempts a JOIN jobs j ON j.id=a.job_id "
                      "JOIN messages m ON m.id=j.message_id JOIN conversations cv ON cv.id=m.conversation_id "
                      "JOIN quarantine_holds qh ON qh.bot_id=a.bot_id AND qh.released_at IS NULL "
-                     f"AND (qh.task_id=coalesce(a.task_id,{H.MESSAGE_TASK_SQL}) OR "
-                     f"(qh.conversation_id=m.conversation_id AND coalesce(a.task_id,{H.MESSAGE_TASK_SQL}) IS NULL)) "
+                     f"AND (qh.task_id={task_sql} OR "
+                     f"(qh.conversation_id=m.conversation_id AND {task_sql} IS NULL)) "
                      "WHERE a.id=?", (row["id"],)).fetchone()
 
 
