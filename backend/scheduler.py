@@ -221,6 +221,7 @@ class Scheduler:
         self.goals_checked = None
         self.go_lives_checked = None
         self.gateway_checked = None
+        self.tools_checked = None
         self.billing_checked = None
         self.cloud_checked = None
         self.stale_checked = None
@@ -608,6 +609,13 @@ class Scheduler:
         if self.invariants_checked is None or at - self.invariants_checked >= timedelta(minutes=15):
             self.invariants_checked = at
             run_invariants(self.store, self.execution.auth, at, failures)
+        if self.tools_checked is None or at - self.tools_checked >= timedelta(minutes=5):
+            # API tools on the proxy with a check path, each every 30 minutes (backend/api_tools.py): a real call with
+            # each key, on its own thread, so a slow vendor never holds a tick.
+            self.tools_checked = at
+            with SR.recording(self.store, "tool_checks", failures, "tools"):
+                from . import api_tools
+                api_tools.check_soon(self.store, self.store.settings)
         if self.gateway_checked is None or at - self.gateway_checked >= timedelta(hours=1):
             # Every hour, while a gateway key or an invite is set: the Tico AI Gateway's word on it (revoked, 80% of the month's cap,
             # the cap reached), for Settings and Health. On its own thread: a tick never waits on the Gateway.

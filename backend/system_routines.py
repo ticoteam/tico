@@ -159,6 +159,7 @@ ACTIONS = {
     "end_go_live": ("end a go-live waiting for a computer that never reports", ("go-live", "computer", "expire")),
     "goal_colours": ("work out every goal's colour again", ("goal", "colour", "color")),
     "check_gateway": ("check this server's Gateway key and the month's cap", ("gateway", "key", "cap")),
+    "check_tools": ("call each proxied API tool's check with its keys", ("tools", "keys", "check")),
     "read_billing": ("read HQ's nightly billing check", ("billing",)),
     "check_pages": ("read the watched competitor pages and file an insight for each that changed", ("market", "pages", "competitors", "librarian")),
     "send_heartbeat": ("tell app.tico.dev this server's version", ("company", "version", "portal")),
@@ -273,6 +274,10 @@ JOBS = [
     Job("gateway_check", "Gateway key check",
         "Asks the Tico AI Gateway whether this server's key still works and how much of the month's cap is used.",
         HOUSEKEEPING, "Hourly", 3600, then=("check_gateway",)),
+    Job("tool_checks", "Tool checks",
+        "Calls each API tool's check with its keys every 30 minutes, for the tools on the proxy, so Tools shows a "
+        "rejected key before a bot meets it.",
+        HOUSEKEEPING, "Every 5 minutes", 300, then=("check_tools",)),
     Job("billing_check", "Billing check", "Reads HQ's nightly billing check for the owner's Health page.",
         HOUSEKEEPING, "Hourly", 3600, then=("read_billing",)),
     Job("company_heartbeat", "Tico company heartbeat",

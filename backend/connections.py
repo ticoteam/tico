@@ -1,6 +1,7 @@
-"""Connections: every way the outside world reaches this company, in one list (Library › Connections).
+"""Connections: every way the outside world reaches this company, gathered for Tools (backend/api_tools.py
+`GET /api/v2/tool-index`, which replaced Library › Connections and its `/api/v2/connections`).
 
-`GET /api/v2/connections` gathers rows from where each connection already lives: the Slack app, the GitHub App, the
+The sources gather rows from where each connection already lives: the Slack app, the GitHub App, the
 mail bots' mailboxes, Tico addresses and numbers, the meeting importers, incoming webhooks (triggers), outgoing
 webhooks, the physical-mail intake and Listening. A row says what it is, whether it works, whose it is, who reads what
 it brings in, the bots on it and where to change it:
@@ -18,8 +19,6 @@ see. The list is paged (`limit`, `cursor`) and byte-capped like every list. Each
 order with the reader's visibility already applied, from where the cursor left off (`<source>` or `<source>:<key>`), so
 no row is lost past a page and no page is empty while more follow.
 """
-
-from fastapi import Query, Request
 
 from .store import H, Problem, encode
 
@@ -353,17 +352,4 @@ def page(v, limit, cursor):
             used += size
             last = key
     return {"connections": shown, "next": None}
-
-
-def install(app, store, auth, settings):
-    @app.get("/api/v2/connections")
-    def connections_list(request: Request, limit: int = Query(default=50, ge=1, le=LIMIT_MAX),
-                         cursor: str = Query(default="", max_length=400)):
-        """Every connection the caller may see: Slack, GitHub, mail bots' mailboxes, Tico addresses and numbers, meeting
-        importers, incoming and outgoing webhooks, physical mail and Listening. Each row: name, status, scope, who reads
-        it, its bots and where to configure it. The owner and admins see every row; anyone else their own and the
-        company's they may read. Follow `next` with `cursor`."""
-        who = request.state.identity
-        with store.read_transaction() as c:
-            return page(view(c, auth, who, settings), limit, cursor)
 

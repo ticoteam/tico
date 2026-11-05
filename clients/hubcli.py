@@ -169,8 +169,6 @@ the server (`backend/hubdb.py`), never here. A command is its tool's name (clien
                                            --place growth only; --metric and --channel are for growth_number
     hub card update <id> [--title T] [--team G] [--weeks N] [--count N] [--kpi ID] [--metric M] [--channel C] [--months N]
     hub card remove <id>
-    hub connections list [--cursor C] [--limit N]
-                                           every connection you may see: status, scope, who reads it, its bots
     hub email mailboxes                    your readable email mailboxes (hub mail is postal mail)
     hub email inbox <address> [--q Q] [--limit N] [--cursor C] [--json]
     hub email search <address> "<gmail query>" [--limit N] [--cursor C] [--json]
@@ -378,6 +376,11 @@ the server (`backend/hubdb.py`), never here. A command is its tool's name (clien
     hub tool list [--bot X] [--json]       the team's tools: how to reach each, credentials, counts; --bot: what
                                            that bot uses (model, repository, each declared tool)
     hub tool show <service> [--json]       the page, its query index and the learnings (plain text)
+    hub tool index [--cursor C] [--limit N] Tools: every API tool, mailbox, number and connection you may see,
+                                           its status and who can use it (`hub tools index` too)
+    hub tool check <id>                    check an API tool's keys now: Working, Key rejected or Check failed
+    hub tool call <tool> <METHOD> <path> [--data JSON] [--query k=v ...]
+                                           call a proxied API tool from a turn (Tico adds the real key)
     hub tool query-search <service> [term] [--id ID]   search a query catalog; --id prints the SQL and params
     hub tool learn <service> "<text>"      add a shared learning under a tool page
     hub tool add <bot> <service> --can read[,post] [--identity "..."] [--scope database=warehouse ...]
@@ -1056,10 +1059,6 @@ def parser():
         if action == 'read':
             item.add_argument('--offset', type=int); item.add_argument('--max-chars', type=int)
 
-
-    connections = sub.add_parser('connections', help='every connection in one list').add_subparsers(dest='sub')
-    item = connections.add_parser('list'); item.set_defaults(fn='connections list')
-    item.add_argument('--cursor'); item.add_argument('--limit', type=int)
 
     letters = sub.add_parser('letter', help='quote and send physical letters through the Gateway').add_subparsers(dest='sub')
     item = letters.add_parser('quote', help='quote a PDF or text; never prints until send and approval')
@@ -2852,6 +2851,19 @@ def parser():
     s.add_argument("service")
     s.add_argument("--json", action="store_true", help="print the API response as JSON")
     s.set_defaults(fn="tool show")
+    s = tools.add_parser("index", help="Tools: every API tool, mailbox, number and connection you may see")
+    s.add_argument("--cursor"); s.add_argument("--limit", type=int)
+    s.set_defaults(fn="tool index")
+    s = tools.add_parser("check", help="check an API tool's keys now")
+    s.add_argument("id", help="the API tool id (`hub tool index`)")
+    s.set_defaults(fn="tool check")
+    s = tools.add_parser("call", help="call a proxied API tool from a turn; Tico adds the real key")
+    s.add_argument("tool", help="the API tool id, e.g. close-crm (its TICO_TOOL_<ID>_URL)")
+    s.add_argument("method", type=str.upper, choices=("GET", "HEAD", "OPTIONS", "POST", "PUT", "PATCH", "DELETE"))
+    s.add_argument("path", help="the vendor API path, e.g. /api/v1/me/")
+    s.add_argument("--data", help="a JSON body")
+    s.add_argument("--query", action="append", default=[], help="a query parameter, key=value (repeatable)")
+    s.set_defaults(fn="tool call")
     s = tools.add_parser("query-search", help="search a tool's query catalog")
     s.add_argument("service")
     s.add_argument("term", nargs="?", default="", help="matched against id, title, description, tags and SQL")
@@ -4290,6 +4302,15 @@ def run(argv, who):
                 return 0
             except doc_fetch.FetchError as e:
                 print(json.dumps({"error": e.code, "detail": e.message}, indent=2))
+                return 1
+        if args.fn == "tool call":                 # runs here, through the tool proxy: no hub API, the run's token
+            from clients import tool_call
+            try:
+                data = json.loads(args.data) if args.data is not None else None
+                print(json.dumps(tool_call.call(args.tool, args.method, args.path, data, args.query), indent=2))
+                return 0
+            except (tool_call.CallError, ValueError) as e:
+                print(json.dumps({"error": str(e)}, indent=2))
                 return 1
         if not os.environ.get("HUB_API_URL"):
             local = args.fn in READ_OUTSIDE_A_TURN and not (args.fn == "tool list" and args.bot)

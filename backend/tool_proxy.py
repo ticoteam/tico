@@ -45,7 +45,6 @@ METHODS = ['GET', 'HEAD', 'OPTIONS', 'POST', 'PUT', 'PATCH', 'DELETE']
 MAX_BODY = 25 * 1024 * 1024
 TTL = 12 * 3600                 # a watcher's or an agent's token; a run's lasts exactly as long as its attempt
 TIMEOUT = httpx.Timeout(120.0, connect=10.0, pool=10.0)
-LEVELS = {'read': 'Read', 'read_write': 'Read and write'}
 # Never forwarded either way: hop-by-hop headers, the caller's own sign-in, and what a proxy in front of Tico added.
 HOP = frozenset(('connection', 'keep-alive', 'proxy-authenticate', 'proxy-authorization', 'te', 'trailer', 'trailers',
                  'transfer-encoding', 'upgrade', 'host', 'content-length'))
@@ -307,20 +306,17 @@ def install(app, store):
                         'A new run gets a new one.', None), None
             from . import api_tools
             name = tool['name'] or tool_id
-            who = (H.bot(c, subject) or {}).get('display_name') if subject.startswith('bot:') else None
-            who = who or (H.human(c, H.actor_id(subject)) or {}).get('name') or subject
-            level = api_tools.subject_level(c, tool_id, subject)
+            try:
+                # No level, or no stored key for it: refused with the setting that would allow it (api_tools).
+                credential, level = api_tools.key_for(c, tool_id, subject)
+            except Problem as exc:
+                return (exc.status, exc.code, exc.detail, (subject, '')), None
             log = (subject, level)
-            if not level:
-                return (403, 'forbidden', f"{who} has no level on {name}. Set Read or Read and write for {who} "
-                        f"on Tools > {name}.", log), None
             problem = address_problem(tool['base_url'] or '', name)
             if problem:
                 return (403, 'tool_address', problem, log), None
-            credential = api_tools.key_for(c, tool_id, subject)
-            if not credential:
-                return (403, 'no_key', f"{name} has no key for {LEVELS[level]}. Add one on Tools > {name}.", log), None
             if level == 'read' and credential['access_level'] != 'read' and method not in SAFE:
+                who = api_tools._label(c, subject)
                 return (403, 'forbidden', f"{who}'s level on {name} is Read: only GET calls. Add a read key or set "
                         "Read and write.", log), None
             key = vault.cipher.decrypt(c, credential)
