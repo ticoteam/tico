@@ -673,6 +673,8 @@ pub(crate) struct Flags {
     pub(crate) done: AtomicBool,
     /// A harness allocated for this turn must not park on the memory it just allocated.
     pub(crate) harness_allocated: Arc<AtomicBool>,
+    /// After the hub accepts /started, fallback admission checks only local memory.
+    pub(crate) start_acknowledged: AtomicBool,
     pub(crate) done_notify: Notify,
     pub(crate) deadline: Mutex<Instant>,
 }
@@ -794,9 +796,14 @@ impl Runner {
         };
         if memory_held {
             // The server's minute-old sample may still say there is room. Keep the delivery lease, but release
-            // the start place before allocating a harness, including for a person's message or a fallback.
-            self.wait_before_start(attempt, &format!("computer busy: memory {:.0}%", memory.unwrap())).await?;
+            // an unstarted place before allocating a harness. An acknowledged turn keeps its running place.
+            if !flags.start_acknowledged.load(Ordering::SeqCst) {
+                self.wait_before_start(attempt, &format!("computer busy: memory {:.0}%", memory.unwrap())).await?;
+            }
             return Ok(false);
+        }
+        if flags.start_acknowledged.load(Ordering::SeqCst) {
+            return Ok(true);
         }
         if attempt.get("start_reservation_seconds").is_none() {
             return Ok(true); // an older server still owns its original capacity gate
@@ -866,6 +873,9 @@ impl Runner {
 
     /// A fallback whose primary never started still waits for admission, including a hold that arrives after its grant.
     async fn start_fallback(&self, attempt: &Value, flags: &Flags, thread: &str) -> Result<(), Fail> {
+        if flags.start_acknowledged.load(Ordering::SeqCst) {
+            return self.wait_start_place(attempt, flags).await;
+        }
         let aid = text_of(&attempt["id"]);
         let mut tries = 0;
         loop {
@@ -875,7 +885,10 @@ impl Runner {
             if flags.harness_allocated.load(Ordering::SeqCst) { started["harness_allocated"] = json!(true); }
             let key = if tries == 0 { format!("started:{aid}") } else { format!("started:{aid}:{tries}") };
             match self.post_allocated(&format!("attempts/{aid}/started"), &started, Some(&key)).await {
-                Ok(_) => return Ok(()),
+                Ok(_) => {
+                    flags.start_acknowledged.store(true, Ordering::SeqCst);
+                    return Ok(());
+                },
                 Err(e) if e.code == "start_wait" => {
                     self.places.lock().unwrap().remove(&aid);
                     tries += 1;
@@ -1144,7 +1157,8 @@ impl Runner {
     /// server on the profile's CODEX_HOME, a bot delivered through a Mac app the app driver (`config`).
     fn make_host(&self, bot: &str, runtime: &str, config: &Value, env: &Env, profile: Option<&Profile>, tx: hosts::Events) -> Result<Host, Fail> {
         #[cfg(test)]
-        if let Some(command) = tests::HOST_COMMAND.with(|command| command.borrow().clone()) {
+        if let Some(command) = tests::HOST_COMMANDS.with(|commands| commands.borrow().get(runtime).cloned())
+            .or_else(|| tests::HOST_COMMAND.with(|command| command.borrow().clone())) {
             if runtime == "claude" || tests::HOST_CLAUDE.with(|claude| claude.get()) {
                 return Ok(Host::Claude(ClaudeHost::new(bot, command, tx)));
             }
@@ -1350,6 +1364,7 @@ impl Runner {
             stop_reason: Mutex::new(None),
             done: AtomicBool::new(false),
             harness_allocated: Arc::new(AtomicBool::new(false)),
+            start_acknowledged: AtomicBool::new(false),
             done_notify: Notify::new(),
             deadline: Mutex::new(Instant::now() + Duration::from_secs_f64((lease - 15.0).max(0.0))),
         });
@@ -1797,7 +1812,10 @@ impl Runner {
                 loop {
                     let key = if start_try == 0 { format!("started:{aid}") } else { format!("started:{aid}:{start_try}") };
                     match self.post_allocated(&format!("attempts/{aid}/started"), &started, Some(&key)).await {
-                        Ok(_) => break,
+                        Ok(_) => {
+                            flags.start_acknowledged.store(true, Ordering::SeqCst);
+                            break;
+                        },
                         Err(e) if e.code == "start_wait" => {
                             drop(cold_guard.take());
                             self.places.lock().unwrap().remove(&aid);
@@ -2875,6 +2893,7 @@ mod tests {
         pub(super) static RUN_CLOCK: RefCell<VecDeque<Instant>> = const { RefCell::new(VecDeque::new()) };
         pub(super) static RUN_RELAY: RefCell<Option<crate::gateway_relay::Relay>> = const { RefCell::new(None) };
         pub(super) static HOST_COMMAND: RefCell<Option<Vec<String>>> = const { RefCell::new(None) };
+        pub(super) static HOST_COMMANDS: RefCell<std::collections::HashMap<String, Vec<String>>> = RefCell::new(std::collections::HashMap::new());
         pub(super) static THREAD_UPDATES: std::cell::Cell<Option<bool>> = const { std::cell::Cell::new(None) };
         pub(super) static SOURCE_CONTINUE: std::cell::Cell<Option<bool>> = const { std::cell::Cell::new(None) };
         pub(super) static CAPACITY_CONTINUE: std::cell::Cell<Option<bool>> = const { std::cell::Cell::new(None) };
@@ -2892,6 +2911,7 @@ mod tests {
             RUN_CLOCK.with(|clock| clock.borrow_mut().clear());
             RUN_RELAY.with(|relay| relay.borrow_mut().take());
             HOST_COMMAND.with(|command| command.borrow_mut().take());
+            HOST_COMMANDS.with(|commands| commands.borrow_mut().clear());
             THREAD_UPDATES.with(|on| on.set(None));
             CAPACITY_CONTINUE.with(|on| on.set(None));
             SOURCE_CONTINUE.with(|on| on.set(None));
@@ -3077,7 +3097,7 @@ mod tests {
         let client = crate::client::Client::new(&config.url(), &config.token(), 5, 0).unwrap();
         let runner = Runner::new(config, client, crate::state::State::open(&dir.join("state")).unwrap());
         let turn = json!({"id": "a1", "start_reservation_seconds": 180});
-        let flags = Flags { lost: AtomicBool::new(false), stopped: AtomicBool::new(false), stop_reason: Mutex::new(None), done: AtomicBool::new(false), harness_allocated: Arc::new(AtomicBool::new(false)),
+        let flags = Flags { lost: AtomicBool::new(false), stopped: AtomicBool::new(false), stop_reason: Mutex::new(None), done: AtomicBool::new(false), harness_allocated: Arc::new(AtomicBool::new(false)), start_acknowledged: AtomicBool::new(false),
                             done_notify: Notify::new(), deadline: Mutex::new(Instant::now() + Duration::from_secs(30)) };
         runner.active.lock().unwrap().extend(["a1".into(), "another-waiter".into()]);
         runner.places.lock().unwrap().insert("a1".into());
@@ -3105,7 +3125,7 @@ mod tests {
     }
 
     fn lease_flags() -> Flags {
-        Flags { lost: AtomicBool::new(false), stopped: AtomicBool::new(false), stop_reason: Mutex::new(None), done: AtomicBool::new(false), harness_allocated: Arc::new(AtomicBool::new(false)),
+        Flags { lost: AtomicBool::new(false), stopped: AtomicBool::new(false), stop_reason: Mutex::new(None), done: AtomicBool::new(false), harness_allocated: Arc::new(AtomicBool::new(false)), start_acknowledged: AtomicBool::new(false),
                 done_notify: Notify::new(), deadline: Mutex::new(Instant::now() + Duration::from_secs(30)) }
     }
 
@@ -3168,6 +3188,30 @@ mod tests {
         assert_eq!(requests.len(), 4);
         assert!(requests[0].contains("harness_allocated") && requests[2].contains("harness_allocated"));
         assert!(!requests[1].contains("harness_allocated") && !requests[3].contains("harness_allocated"));
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[tokio::test]
+    async fn acknowledged_unallocated_fallback_waits_only_on_local_memory() {
+        let (url, seen) = crate::client::tests::serve(vec![
+            (200, r#"{"reserved":true}"#),
+            (200, r#"{"started":true}"#),
+        ]).await;
+        let (runner, dir) = lease_runner(&url, "acked-fallback-memory");
+        let turn = json!({"id": "a1", "start_reservation_seconds": 180});
+        let flags = lease_flags();
+        runner.start_fallback(&turn, &flags, "thread1").await.unwrap();
+        assert!(flags.start_acknowledged.load(Ordering::SeqCst));
+        assert!(!flags.harness_allocated.load(Ordering::SeqCst));
+        assert!(!runner.start_place_with_memory(&turn, &flags, Some(98.0), "linux").await.unwrap());
+        assert!(!runner.start_place_with_memory(&turn, &flags, Some(82.0), "linux").await.unwrap());
+        assert!(runner.start_place_with_memory(&turn, &flags, Some(79.0), "linux").await.unwrap());
+        assert!(runner.start_place_with_memory(&turn, &flags, Some(98.0), "darwin").await.unwrap());
+        runner.start_fallback(&turn, &flags, "thread2").await.unwrap();
+        assert!(runner.places.lock().unwrap().contains("a1"), "an acknowledged turn keeps its running place");
+        assert_eq!(seen.lock().unwrap().len(), 2, "no pre-start admission or duplicate acknowledgement after /started");
+        flags.stopped.store(true, Ordering::SeqCst);
+        assert!(runner.start_place_with_memory(&turn, &flags, Some(79.0), "linux").await.is_err());
         std::fs::remove_dir_all(dir).unwrap();
     }
 
@@ -3340,7 +3384,7 @@ mod tests {
         let client = crate::client::Client::new(&config.url(), &config.token(), 5, 0).unwrap();
         let runner = Runner::new(config, client, crate::state::State::open(&dir.join("state")).unwrap());
         let turn = json!({"id": "a1", "start_reservation_seconds": 180});
-        let flags = Flags { lost: AtomicBool::new(false), stopped: AtomicBool::new(false), stop_reason: Mutex::new(None), done: AtomicBool::new(false), harness_allocated: Arc::new(AtomicBool::new(false)),
+        let flags = Flags { lost: AtomicBool::new(false), stopped: AtomicBool::new(false), stop_reason: Mutex::new(None), done: AtomicBool::new(false), harness_allocated: Arc::new(AtomicBool::new(false)), start_acknowledged: AtomicBool::new(false),
                             done_notify: Notify::new(), deadline: Mutex::new(Instant::now() + Duration::from_secs(30)) };
         runner.places.lock().unwrap().insert("a1".into());
         runner.pre_start_lock(&turn, &flags, async { Ok(()) }).await.unwrap();
@@ -3536,7 +3580,7 @@ mod tests {
         *runner.runtime_rows.lock().unwrap() = Default::default();
 
         let login = crate::login_turns::Login::new("codex", "");
-        let flags = || Flags { lost: AtomicBool::new(false), stopped: AtomicBool::new(false), stop_reason: Mutex::new(None), done: AtomicBool::new(false), harness_allocated: Arc::new(AtomicBool::new(false)),
+        let flags = || Flags { lost: AtomicBool::new(false), stopped: AtomicBool::new(false), stop_reason: Mutex::new(None), done: AtomicBool::new(false), harness_allocated: Arc::new(AtomicBool::new(false)), start_acknowledged: AtomicBool::new(false),
                                done_notify: Notify::new(), deadline: Mutex::new(Instant::now() + Duration::from_secs(60)) };
         let over = |f: &Flags| runner.login_wait_over(f, &login).unwrap_or_default();
         assert_eq!(over(&flags()), "");
@@ -3635,6 +3679,9 @@ mod tests {
             }
             if self.expired {
                 return Some((true, json!({"error": {"code": "stale_lease", "detail": "Start reservation expired"}})));
+            }
+            if self.started && (path.ends_with("/start-place") || path.ends_with("/started")) {
+                return Some((true, json!({"error": {"code": "already_started", "detail": "This attempt was already started"}})));
             }
             if path.ends_with("/start-place") {
                 let waiting = body.get("waiting").is_some();
@@ -3781,6 +3828,36 @@ mod tests {
         execute_after_harness_memory_rises(true).await;
     }
 
+    #[tokio::test]
+    async fn lazy_claude_spawn_failure_after_start_acknowledgement_runs_the_fallback() {
+        let _controls = RunControls;
+        let window = Arc::new(Mutex::new(StartWindow { now: 0, until: Some(180), expired: false,
+            started: false, renewed_at: None, publish_repository: false }));
+        let (url, seen, server) = recording_server_start_window(None, None, Some(window)).await;
+        let (runner, dir) = runner_at(&url, "lazy-spawn-fallback");
+        std::fs::create_dir_all(dir.join("projects/bot-ops")).unwrap();
+        let fixture = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/pi/turn.jsonl");
+        HOST_COMMAND.with(|command| *command.borrow_mut() = Some(crate::hosts::pi::testing::fake(&dir, &fixture)));
+        HOST_COMMANDS.with(|commands| commands.borrow_mut().insert("claude".into(), vec![dir.join("missing-claude").display().to_string()]));
+        for runtime in ["claude", "pi"] {
+            runner.runtime_rows.lock().unwrap().insert(runtime.into(), json!({"installed": true, "authenticated": "ready"}));
+        }
+        let attempt = json!({"id": "lazy-1", "job_id": "j1", "bot": "ops", "token": "synthetic-turn",
+            "start_reservation_seconds": 180, "lease_seconds": 120, "conversation": {"id": "c1", "kind": "chat"},
+            "message": {"id": "m1", "from_actor": "human:ana@acme.example", "body": "Next", "refs": {}},
+            "history": [], "config": {"runtime": "claude", "harness": "claude", "model": "synthetic-primary",
+                "fallback": {"harness": "pi", "model": "synthetic-fallback"}}});
+        tokio::time::timeout(Duration::from_secs(30), runner.clone().execute(attempt)).await.unwrap().unwrap();
+        server.abort();
+        let requests = seen.lock().unwrap();
+        let started = requests.iter().position(|(_, path, _)| path.ends_with("/started")).unwrap();
+        assert_ne!(requests[started].2["harness_allocated"], true, "lazy Claude acknowledged before any process existed");
+        assert!(requests[started + 1..].iter().all(|(_, path, _)| !path.ends_with("/start-place") && !path.ends_with("/started")));
+        assert_eq!(hosts::TEST_STARTS.with(|starts| starts.get()), 2, "both primary and fallback hosts were reached");
+        assert!(requests.iter().any(|(_, path, body)| path.ends_with("/complete") && body["outcome"] == "completed" && body["fallback"] == "pi"), "{requests:?}");
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
     async fn expired_gateway_harness_is_not_started(fallback: bool) {
         let _controls = RunControls;
         let dir = std::env::temp_dir().join(format!("tico-gateway-deadline-{}", uuid::Uuid::new_v4().simple()));
@@ -3891,7 +3968,7 @@ for line in sys.stdin:
             tokio::time::sleep(Duration::from_millis(10)).await;
         }
         let t = host.start_turn("th1", "Write the release notes", None).await.unwrap();
-        let flags = Flags { lost: AtomicBool::new(false), stopped: AtomicBool::new(false), stop_reason: Mutex::new(None), done: AtomicBool::new(false), harness_allocated: Arc::new(AtomicBool::new(false)),
+        let flags = Flags { lost: AtomicBool::new(false), stopped: AtomicBool::new(false), stop_reason: Mutex::new(None), done: AtomicBool::new(false), harness_allocated: Arc::new(AtomicBool::new(false)), start_acknowledged: AtomicBool::new(false),
                             done_notify: Notify::new(), deadline: Mutex::new(Instant::now() + Duration::from_secs(60)) };
         let wake = Notify::new();
         let d = crate::drive::Drive { limit_name: "max_run_minutes (60 minutes)", aid: "a-ops", host: &host, thread: "th1", effort: None, limit: Instant::now() + Duration::from_secs(60), flags: &flags,
@@ -3967,7 +4044,7 @@ for line in sys.stdin:
             tokio::time::sleep(Duration::from_millis(10)).await;
         }
         let t = host.start_turn("th1", "Write the release notes", None).await.unwrap();
-        let flags = Flags { lost: AtomicBool::new(false), stopped: AtomicBool::new(false), stop_reason: Mutex::new(None), done: AtomicBool::new(false), harness_allocated: Arc::new(AtomicBool::new(false)),
+        let flags = Flags { lost: AtomicBool::new(false), stopped: AtomicBool::new(false), stop_reason: Mutex::new(None), done: AtomicBool::new(false), harness_allocated: Arc::new(AtomicBool::new(false)), start_acknowledged: AtomicBool::new(false),
                             done_notify: Notify::new(), deadline: Mutex::new(Instant::now() + Duration::from_secs(60)) };
         let wake = Notify::new();
         let d = crate::drive::Drive { limit_name: "max_run_minutes (60 minutes)", aid: "a-ops", host: &host, thread: "th1", effort: None, limit: Instant::now() + Duration::from_secs(60), flags: &flags,
@@ -4972,7 +5049,7 @@ for line in sys.stdin:
         let (runner, dir, server) = drain_test_runner(300).await;
         let login = Login::new("codex", &format!("drain-{}", uuid::Uuid::new_v4()));
         let held = crate::login_turns::try_take(&login.key, &Turn::new("holder", "", Class::Other)).unwrap();
-        let flags = Flags { lost: AtomicBool::new(false), stopped: AtomicBool::new(false), stop_reason: Mutex::new(None), done: AtomicBool::new(false), harness_allocated: Arc::new(AtomicBool::new(false)),
+        let flags = Flags { lost: AtomicBool::new(false), stopped: AtomicBool::new(false), stop_reason: Mutex::new(None), done: AtomicBool::new(false), harness_allocated: Arc::new(AtomicBool::new(false)), start_acknowledged: AtomicBool::new(false),
                             done_notify: Notify::new(), deadline: Mutex::new(Instant::now() + Duration::from_secs(60)) };
         let turns: Vec<_> = (0..3).map(|i| Turn::new(&format!("waiter{i}"), "", Class::Other).of(&format!("work{i}"), &format!("a{i}"))).collect();
         for turn in &turns { runner.state.record(&json!({"id": turn.attempt, "bot": turn.bot})).unwrap(); }
@@ -5018,7 +5095,7 @@ for line in sys.stdin:
         let th = host.start_thread("ops", &settings).await.unwrap();
         runner.state.save_session("ops", "c-cap", "pi", &th).unwrap();
         let t = host.start_turn(&th, "Wait", None).await.unwrap();
-        let flags = Flags { lost: AtomicBool::new(false), stopped: AtomicBool::new(false), stop_reason: Mutex::new(None), done: AtomicBool::new(false), harness_allocated: Arc::new(AtomicBool::new(false)),
+        let flags = Flags { lost: AtomicBool::new(false), stopped: AtomicBool::new(false), stop_reason: Mutex::new(None), done: AtomicBool::new(false), harness_allocated: Arc::new(AtomicBool::new(false)), start_acknowledged: AtomicBool::new(false),
                             done_notify: Notify::new(), deadline: Mutex::new(Instant::now() + Duration::from_secs(60)) };
         let wake = Notify::new();
         let d = Drive { aid: "a-cap", host: &host, thread: &th, effort: None, limit: Instant::now() + Duration::from_secs(60), limit_name: "synthetic drain", flags: &flags,

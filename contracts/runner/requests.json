@@ -932,11 +932,12 @@
        "model_subscription_activation_v1",
        "model_connect_v1",
        "threads_v1",
-       "memory_tidy_packets_v1"
+       "memory_tidy_packets_v1",
+       "harness_allocation_v1"
       ],
       "type": "string"
      },
-     "maxItems": 20,
+     "maxItems": 21,
      "title": "Capabilities",
      "type": "array"
     },

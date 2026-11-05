@@ -47,6 +47,7 @@ def ready_waiting(c, runner_id):
 
 MEMORY_HOLD = 'computer busy: memory'
 NOT_REPORTING = 'computer not reporting'
+ALLOCATION_REPORTING = 'harness_allocation_v1'
 
 
 def hold_rows(c, runner_ids):
@@ -331,12 +332,16 @@ def reserve(c, attempt, settings=None, *, harness_allocated=False):
         return {"reserved": False, "stop": True}
     # Admission precedes allocation. A runner with a real process keeps its existing grant: revoking it here
     # leaves that process alive and renewing, and its own memory can prevent the computer from ever recovering.
+    place = c.execute("SELECT * FROM start_places WHERE attempt_id=?", (aid,)).fetchone()
+    runner = c.execute("SELECT * FROM runners_with_state WHERE id=?", (rid,)).fetchone()
+    # An older runner cannot distinguish preparation from allocation, so memory cannot revoke its existing grant.
+    legacy_grant = bool(place and place['start_until'] and
+                        ALLOCATION_REPORTING not in (H._json(runner['capabilities'], []) or []))
     person = from_person(c, attempt['job_id'])
-    hold = computer_hold(c, rid, person=person, harness_allocated=harness_allocated)
+    hold = computer_hold(c, rid, row=runner, person=person, harness_allocated=harness_allocated or legacy_grant)
     if hold:
         waiting(c, aid, hold[0])
         return {"reserved": False, "waiting": hold[1]}
-    place = c.execute("SELECT * FROM start_places WHERE attempt_id=?", (aid,)).fetchone()
     if place and place['start_until']:
         return {"reserved": place['start_until'] > H.now(), "start_until": place['start_until']}
     from . import org_turns
@@ -354,7 +359,7 @@ def reserve(c, attempt, settings=None, *, harness_allocated=False):
     if bot_cap is not None and bot_held(c, attempt['bot_id'], exclude=aid) >= bot_cap:
         waiting(c, aid, BOT_WAIT)
         return {'reserved': False, 'waiting': BOT_WAIT}
-    capacity = turn_limit(c.execute("SELECT * FROM runners_with_state WHERE id=?", (rid,)).fetchone())
+    capacity = turn_limit(runner)
     # Waiters ready to run take their turns by original claim order. Login/lane waiters are not ready yet.
     ahead = c.execute("SELECT 1 FROM start_places p JOIN attempts a ON a.id=p.attempt_id "
                       "WHERE a.runner_id=? AND a.state='leased' AND a.lease_until>? AND a.stop_requested_at IS NULL "

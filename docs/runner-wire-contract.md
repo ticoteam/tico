@@ -11,9 +11,13 @@ renew, complete and the `GET runners/me/events` stream. Everything else a runner
 
 A runner reports `harness_allocated: true` on `start_place` and `started` only after a process actually launches for
 that turn, including a live process acquired from a pool. Host and thread preparation alone do not count. The hub
-retains an allocated turn's admission under memory pressure; omitted fields default to false for older runners.
-A 422 naming this field makes the runner retry the request without it for an older hub. The signal remains true
-through fallback within the same turn.
+retains an allocated turn's admission under memory pressure. The `harness_allocation_v1` heartbeat capability
+opts into memory rechecks on unallocated grants; without it, the hub preserves existing grants under memory
+pressure because the runner cannot report whether it already has a process. A 422 naming the field makes the
+runner retry the request without it for an older hub; a refused capability is dropped by `lanes::refused_field`.
+The allocation signal remains true through fallback within the same turn. Start acknowledgement is tracked
+separately: after `/started` succeeds, an unallocated fallback checks memory only locally and keeps its running
+place, without calling `/start-place` or acknowledging the same start again.
 
 ## Supported skew
 

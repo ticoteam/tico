@@ -27,6 +27,7 @@
     "heartbeat.request.capabilities[]=\"model_connect_v1\"": "runner-rs/src/lanes.rs refused_field: an older server's 422 on capabilities drops the newest one for ten minutes",
     "heartbeat.request.capabilities[]=\"memory_tidy_packets_v1\"": "runner-rs/src/lanes.rs refused_field: an older server's 422 drops this capability for ten minutes; ordinary work continues without packet admission",
     "heartbeat.request.capabilities[]=\"threads_v1\"": "runner-rs/src/lanes.rs refused_field: an older server's 422 on capabilities drops the newest one for ten minutes",
+    "heartbeat.request.capabilities[]=\"harness_allocation_v1\"": "runner-rs/src/lanes.rs refused_field drops it on an older server's 422; without allocation reporting the hub preserves existing grants under memory pressure",
     "heartbeat.request.readiness.trust": "runner-rs/src/readiness.rs trust_field: sent only once GET config says readiness_trust (fallback.rs server_takes_trust)",
     "heartbeat.request.readiness.runtimes.*.weekly": "runner-rs/src/profiles.rs for_server: a window's origin and subscription_id are sent only once the heartbeat answer says subscription_usage_sources (runner.rs)",
     "heartbeat.request.readiness.runtimes.*.five_hour": "runner-rs/src/profiles.rs for_server: a window's origin and subscription_id are sent only once the heartbeat answer says subscription_usage_sources (runner.rs)",

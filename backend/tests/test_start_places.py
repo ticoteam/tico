@@ -560,6 +560,7 @@ def test_memory_pressure_holds_a_persons_message_even_when_the_computer_is_overl
 def test_memory_pressure_revokes_only_a_persons_unallocated_start_place(api, allocated):
     """Memory holds an unused grant, while a real allocated process keeps its grant and starts."""
     computer = bot_waiting_for_finance(api, sender='human:ana')
+    ready(api, computer, ['ops', 'finance'], capabilities=['harness_allocation_v1'])
     with api.app.state.store.transaction() as c:
         c.execute("UPDATE runners SET platform='linux' WHERE id=?", (computer['runner_id'],))
     attempt = claim(api, computer, 'finance')
@@ -586,6 +587,25 @@ def test_memory_pressure_revokes_only_a_persons_unallocated_start_place(api, all
     memory(api, computer, .79)
     assert post(api, f'attempts/{aid}/start-place', {}, computer['token'])['reserved']
     assert post(api, f'attempts/{aid}/started', {'thread_id': 'synthetic-thread'}, computer['token'])['started']
+
+
+@pytest.mark.parametrize('sender,capabilities', [('human:ana', []), ('bot:ops', ['turns_at_once_v1'])])
+def test_memory_cannot_revoke_a_grant_without_negotiated_allocation_reporting(api, sender, capabilities):
+    """After a hub upgrade an older runner may already have a process but cannot report its allocation."""
+    computer = bot_waiting_for_finance(api, sender=sender)
+    ready(api, computer, ['ops', 'finance'], capabilities=capabilities)
+    with api.app.state.store.transaction() as c:
+        c.execute("UPDATE runners SET platform='linux' WHERE id=?", (computer['runner_id'],))
+    attempt = claim(api, computer, 'finance')
+    aid = attempt['id']
+    grant = post(api, f'attempts/{aid}/start-place', {}, computer['token'])
+    assert grant['reserved']
+    overload(api, computer, cpu=20, mem=.96)
+    assert post(api, f'attempts/{aid}/start-place', {}, computer['token']) == grant
+    assert post(api, f'attempts/{aid}/started', {'thread_id': 'older-runner-thread'}, computer['token'])['started']
+    with api.app.state.store.read() as c:
+        assert c.execute('SELECT state FROM attempts WHERE id=?', (aid,)).fetchone()[0] == 'running'
+        assert c.execute('SELECT start_until FROM start_places WHERE attempt_id=?', (aid,)).fetchone()[0] == grant['start_until']
 
 
 @pytest.mark.parametrize('cpu,held', [(0, False), (95, True)])

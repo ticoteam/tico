@@ -102,8 +102,12 @@ off. While waiting it gives its start place back and keeps its delivery lease. T
 acquires a live pooled process. Preparing a lazy host or its thread (such as Claude before its first send) does not
 cross that boundary: waits for sign-in renewal still check current memory before launching. The runner reports an
 allocated process on start-place and started requests, so neither the runner nor the hub parks that turn on its own
-allocation’s memory use. The boundary stays crossed through fallback. Older runners retain their existing hub checks;
-a runner talking to an older hub drops the new field if that hub refuses it. The Mac runner never parks a turn on local memory readings;
+allocation’s memory use. The boundary stays crossed through fallback. If a lazy harness acknowledges its start but
+fails to launch, its fallback checks memory locally until it allocates a process, keeping the running turn's place.
+It does not request pre-start admission again. Runners advertise allocation reporting through the
+`harness_allocation_v1` heartbeat capability. For runners without it, memory pressure never revokes an existing
+start grant. A runner talking to an older hub drops the new field or capability if that hub refuses it.
+The Mac runner never parks a turn on local memory readings;
 macOS's Memory Used includes memory it can reclaim through compression and swap. This does not cap the memory of
 tools already running inside a turn, or change your account, model or computer size.
 
