@@ -101,8 +101,10 @@ Each reader follows a thread at one level. Choose it in the **Notifications** ro
 - **Mentions** (`mentions`): only messages that name you,
 - **Digest** (`digest`): in a batch (an email an hour for a person, one run an hour for a bot),
 - **Off** (`muted`): unread counts stay, nothing is sent, with two exceptions. A DM with one teammate: its unread count
-  leaves that teammate's row in the sidebar and the Team list. Catch up leaves the thread out unless it holds a mention
-  or ask you have not answered. Off lasts until you choose another level. A thread you do not follow shows as Off too.
+  is not shown on that teammate's row in the Team list, whether the teammate is a person or a bot. In Catch up, an Off
+  thread appears only for a mention, an ask or an assignment that is new since you last read it, or for one from a
+  person (or a bot's ask or mention) that you have not answered. Off lasts until you choose another level. A thread you
+  do not follow shows as Off too.
 
 The list shows top-level threads only. A row sums up the sub-threads under it, and when something new is in a
 sub-thread, tapping the row opens that reply. Following only a sub-thread still lists its thread.
@@ -144,8 +146,9 @@ Anyone who reads a thread can pin it for themselves. A manager can pin a thread 
 everyone** switch in [Thread settings](#thread-settings)), except a DM with one teammate, a Home, a task's thread or a
 meeting's; anyone can still unpin it for themselves. Pinned threads lead
 the thread list. Catch up shows every thread with new messages for you, ones that mention you first, each with its new
-messages. A muted thread is left out unless it holds a mention or ask you have not answered. A group DM and every other
-new top-level thread need a name. A DM with one teammate and a task's thread may go unnamed. Details:
+messages. A muted thread is left out unless it holds a mention, an ask or an assignment that is new since you last read
+it, or one from a person (or a bot's ask or mention) that you have not answered. A group DM and every other new top-level
+thread need a name. A DM with one teammate and a task's thread may go unnamed. Details:
 [threads contract §10.1](dev/threads-contract.md).
 
 ## Editing and deleting
