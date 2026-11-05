@@ -1110,7 +1110,7 @@ def _dump(value):
 
 
 SOURCED_TEXT_FIELDS = ("title", "name", "filename", "label", "text", "body", "other", "summary", "description",
-                       "preview", "note", "old", "new", "field", "recommend", "question", "original_summary")
+                       "preview", "note", "old", "new", "field", "recommend", "question", "original_summary", "error")
 SOURCED_TEXT_SOURCES = ("body_sources", "sources")
 
 

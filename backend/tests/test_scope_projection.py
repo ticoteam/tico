@@ -1103,6 +1103,8 @@ def test_assistant_action_review_filename_clears_on_every_return(api, monkeypatc
     from backend import assistant, files
     from backend.tests.test_page_audience import edit
     from backend.tests.test_task_review import ask as version_ask
+    person = 'ana' if revocation == 'archive' else 'cara'
+    human = person + '-test'
     _, finance = turn(api, 'finance')
     machine = runner(api)
     assign(api, machine, 'coo')
@@ -1113,18 +1115,24 @@ def test_assistant_action_review_filename_clears_on_every_return(api, monkeypatc
     assert attempt and attempt['task']['id'] == t['id']
     filename = 'confidential-plan.html'
     fid = published(api, finance, task=t['id'], name=filename)
-    response = api.patch(f'/api/v2/files/{fid}/versions/1', json={'ask': version_ask('ana')},
+    response = api.patch(f'/api/v2/files/{fid}/versions/1', json={'ask': version_ask(person)},
                          headers=headers(finance['token']))
     assert response.status_code == 200, response.text
     with api.app.state.store.read() as c:
         qid = c.execute('SELECT ask_message_id FROM task_file_reviews WHERE file_id=? AND version=1', (fid,)).fetchone()[0]
         assert filename in H.message(c, qid)['body']
     request = {'summary': 'Answer about ' + filename, 'path': f'/api/v2/messages/{qid}/answer', 'body': {'text': 'Yes'}}
-    made = post(api, 'assistant/actions', request)
+    made = post(api, 'assistant/actions', request, human)
     aid = made['action']['id']
     assert filename in made['action']['description']
-    assert filename in get(api, 'assistant/actions/' + aid)['action']['description']
-    assert filename in json.dumps(get(api, 'assistant/proposals'))
+    assert filename in get(api, 'assistant/actions/' + aid, human)['action']['description']
+    assert filename in json.dumps(get(api, 'assistant/proposals', human))
+    batch = None
+    if not legacy and revocation == 'archive':
+        batch = {'summary': request['summary'], 'path': assistant.BATCH_PATH,
+                 'body': {'actions': [{'path': request['path'], 'body': request['body']}]}}
+        card = post(api, 'assistant/actions', batch, human)['action']
+        assert filename in json.dumps(card['diff'])
     with api.app.state.store.transaction() as c:
         row = dict(c.execute('SELECT * FROM assistant_actions WHERE id=?', (aid,)).fetchone())
         assert fid in row['refs']
@@ -1138,13 +1146,14 @@ def test_assistant_action_review_filename_clears_on_every_return(api, monkeypatc
         assert response.status_code == 200, response.text
     else:
         edit(api, fid, {'people': ['ben']})
-        # Ordinary get/list/chat returns also apply the shared clearer when Ana loses page access.
+        get(api, 'pages/' + fid, human, expected=404)
+        # Ordinary get/list/chat returns also apply the shared clearer when the person loses page access.
         for path in ('assistant/actions/' + aid, 'assistant/proposals', 'assistant'):
-            no_sources(get(api, path), (filename,))
+            no_sources(get(api, path, human), (filename,))
     token = attempt['token']
     get(api, 'files/' + fid, token, expected=403)
-    no_sources(get(api, 'messages/' + qid, token), (filename,))
-    proposed = {**request, 'for': 'human:ana'}
+    no_sources(get(api, 'messages/' + qid, token, expected=200 if revocation == 'archive' else 404), (filename,))
+    proposed = {**request, 'for': 'human:' + person}
 
     def check(key):
         repeated = post(api, 'assistant/actions', proposed, token, key=key)
@@ -1162,6 +1171,16 @@ def test_assistant_action_review_filename_clears_on_every_return(api, monkeypatc
             patch.setattr(H, 'SOURCED_TEXT_FIELDS', tuple(key for key in H.SOURCED_TEXT_FIELDS if key != field))
             with pytest.raises(AssertionError):
                 check('assistant-review-without-' + field)
+    if batch:
+        def check_batch(key):
+            repeated = post(api, 'assistant/actions', {**batch, 'for': 'human:' + person}, token, key=key)
+            assert repeated['repeated'] and repeated['action']['id'] == card['id']
+            no_sources(repeated, (filename,))
+        check_batch('assistant-batch-source')
+        with monkeypatch.context() as patch:
+            patch.setattr(H, 'SOURCED_TEXT_FIELDS', tuple(key for key in H.SOURCED_TEXT_FIELDS if key != 'field'))
+            with pytest.raises(AssertionError):
+                check_batch('assistant-batch-without-field')
     # The legacy recovery is independently necessary; it cannot infer provenance from display text.
     with api.app.state.store.transaction() as c:
         c.execute('UPDATE assistant_actions SET refs=NULL WHERE id=?', (aid,))
