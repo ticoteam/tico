@@ -3141,8 +3141,17 @@ impl Recorder {
             && !self.context.live_id.is_empty()
             && self.live["visibility"] != "team"
         {
+            let me = self
+                .config
+                .destinations
+                .iter()
+                .find(|d| d.id == self.router())
+                .map(|d| d.actor.as_str())
+                .unwrap_or_default();
+            // The person always sees themselves: they are in the meeting they are looking at.
             owners.retain(|row| {
-                self.live["owner_actor"] == row.0
+                row.0 == me
+                    || self.live["owner_actor"] == row.0
                     || self.live["access"]
                         .as_array()
                         .into_iter()

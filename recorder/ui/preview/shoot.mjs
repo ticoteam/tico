@@ -45,8 +45,10 @@ const scenes = {
   connect: [],
   demo: [],
   meeting: [open('m1')],
-  'task-picker': ['meeting', open('m1'), async (page) => { await page.click('[data-act="task-picker-open"]'); await page.waitForSelector('[data-act="task-pick"]'); await page.click('[data-id="t42"]'); }],
+  'task-picker': ['meeting', open('m1'), async (page) => { await page.click('[data-act="task-picker-open"]'); await page.waitForSelector('[data-act="task-pick"]'); await page.click('[data-id="t42"]'); await page.click('[data-id="t44"]'); }],
   owner: [open('m1'), async (page) => page.click('.owner.empty')],
+  'add-mention': ['meeting', open('m1'), async (page) => { await page.click('[data-act="add-open"]'); await page.keyboard.type('Send notes to @me'); }],
+  'stop-finish': ['recording', open('m0'), async (page) => { await page.click('[data-act="stop"]'); await page.waitForSelector('#sheet.finish'); }],
   recording: [open('m0')],
   retrying: [open('m0')],
   notice: [open('m0')],
@@ -273,7 +275,8 @@ if (!only.length || only.includes('checks')) {
     await go(page, 'recording');
     await open('m0')(page);
     const id = 'm0';
-    await page.click('.topbar [data-act="finish-open"]');
+    // Stop is the end action while recording: it stops and opens Finish.
+    await page.click('[data-act="stop"]');
     await page.click('[data-act="finish-ask-delete"]');
     await page.click('[data-act="finish-delete"]');
     await page.waitForTimeout(300);
