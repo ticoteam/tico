@@ -113,12 +113,33 @@ commands! {
     set_visible(visible: bool) => |app| app.visible = visible;
 }
 
-#[tauri::command(async)]
-fn task_picker(state: State<'_, Shared>, query: String, offset: usize) -> Result<Value, String> {
+#[tauri::command]
+async fn task_picker(
+    state: State<'_, Shared>,
+    query: String,
+    offset: usize,
+) -> Result<Value, String> {
     let (config, destination) = lock(&state).task_picker_context();
-    tico_recorder_native::network::Tico::saved(&config, &destination)
-        .and_then(|tico| tico.search_tasks(&query, offset))
-        .map_err(|e| e.to_string())
+    picker_search(
+        move || tico_recorder_native::network::Tico::saved(&config, &destination),
+        query,
+        offset,
+    )
+    .await
+}
+
+async fn picker_search(
+    connect: impl FnOnce() -> anyhow::Result<tico_recorder_native::network::Tico> + Send + 'static,
+    query: String,
+    offset: usize,
+) -> Result<Value, String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        connect()
+            .and_then(|tico| tico.search_tasks(&query, offset))
+            .map_err(|e| e.to_string())
+    })
+    .await
+    .map_err(|e| e.to_string())?
 }
 
 #[tauri::command(async)]

@@ -3037,3 +3037,175 @@ fn recorder_unlinks_a_remote_only_row_even_if_the_task_disappears() {
             .starts_with("DELETE /api/v2/meetings/saved/tasks/gone")
     );
 }
+
+fn pending_recorder_link(store: &Store) -> String {
+    let record = store.create("Interrupted link").unwrap();
+    store
+        .delivery(
+            &record.id,
+            &Delivery {
+                destination_id: "synthetic".into(),
+                meeting_id: "saved".into(),
+                status: "sent".into(),
+                error: String::new(),
+                receipt: json!({}),
+            },
+        )
+        .unwrap();
+    store
+        .update_context(&record.id, |c| {
+            c.live_destination = "synthetic".into();
+            c.items.push(crate::workspace::Item {
+                id: "local".into(),
+                kind: "link".into(),
+                task_id: "task".into(),
+                ..Default::default()
+            });
+            c.task_link_operations
+                .push(crate::workspace::TaskLinkOperation {
+                    id: "durable-action".into(),
+                    kind: "linked".into(),
+                    task_ids: vec!["task".into()],
+                });
+            Ok(())
+        })
+        .unwrap();
+    record.id
+}
+
+fn wait_recorder_links(store: &Store, id: &str) {
+    let deadline = std::time::Instant::now() + Duration::from_secs(8);
+    loop {
+        let mark = store.changes();
+        if store.context(id).unwrap().task_link_operations.is_empty() {
+            return;
+        }
+        let left = deadline.saturating_duration_since(std::time::Instant::now());
+        assert!(!left.is_zero(), "Link outbox did not drain");
+        store.wait_changes(mark, left);
+    }
+}
+
+#[test]
+fn recorder_link_worker_restarts_before_commit_and_links_once_without_another_action() {
+    let dir = tempfile::tempdir().unwrap();
+    let store = Store::open(dir.path()).unwrap();
+    let id = pending_recorder_link(&store);
+    let (tico, seen, server) = server(vec![None, Some(json!({"results":[{"status":200}]}))]);
+    // The process goes away after persisting the action, before the server commits it.
+    assert!(tico.flush_saved_links(&store, &id).is_err());
+    drop(store);
+    let reopened = Store::open(dir.path()).unwrap();
+    let destination = tico.destination.clone();
+    let sync = crate::task_links::TaskLinkSync::start_with(reopened.clone(), move |_, _| {
+        Tico::new(destination.clone(), "synthetic-token".into())
+    });
+    wait_recorder_links(&reopened, &id);
+    drop(sync);
+    server.join().unwrap();
+    let requests = seen.lock().unwrap();
+    assert_eq!(requests.len(), 2); // Only the second request commits a relationship.
+    assert_eq!(requests[0].1, requests[1].1);
+    assert_eq!(requests[0].2, requests[1].2);
+    assert!(!requests[1].2.is_empty());
+    assert_eq!(
+        reopened.get(&id).unwrap().deliveries[0].receipt["links"],
+        json!({"task":"linked"})
+    );
+}
+
+#[test]
+fn recorder_link_worker_reconnects_with_backoff_and_preserves_per_task_results() {
+    let dir = tempfile::tempdir().unwrap();
+    let store = Store::open(dir.path()).unwrap();
+    let id = pending_recorder_link(&store);
+    store
+        .update_context(&id, |c| {
+            c.task_link_operations[0].task_ids.push("gone".into());
+            c.items.push(crate::workspace::Item {
+                id: "unavailable".into(),
+                kind: "link".into(),
+                task_id: "gone".into(),
+                ..Default::default()
+            });
+            Ok(())
+        })
+        .unwrap();
+    let (tico, seen, server) = server(vec![
+        None,
+        None,
+        Some(json!({"results":[{"status":200},{"status":404}]})),
+    ]);
+    let attempts = Arc::new(Mutex::new(vec![]));
+    let tried = attempts.clone();
+    let destination = tico.destination.clone();
+    let sync = crate::task_links::TaskLinkSync::start_with(store.clone(), move |_, _| {
+        tried.lock().unwrap().push(std::time::Instant::now());
+        Tico::new(destination.clone(), "synthetic-token".into())
+    });
+    wait_recorder_links(&store, &id);
+    drop(sync);
+    server.join().unwrap();
+    let attempts = attempts.lock().unwrap();
+    assert_eq!(attempts.len(), 3);
+    assert!(attempts[1].duration_since(attempts[0]) >= Duration::from_secs(1));
+    assert!(attempts[2].duration_since(attempts[1]) >= Duration::from_secs(2));
+    let requests = seen.lock().unwrap();
+    assert!(
+        requests
+            .iter()
+            .all(|r| r.1 == requests[0].1 && r.2 == requests[0].2)
+    );
+    let context = store.context(&id).unwrap();
+    assert_eq!(context.skipped_task_links, 1);
+    assert_eq!(context.items.len(), 1);
+    assert_eq!(context.items[0].task_id, "task");
+    assert_eq!(
+        store.get(&id).unwrap().deliveries[0].receipt["links"],
+        json!({"task":"linked"})
+    );
+}
+
+#[test]
+fn recorder_link_drainers_serialize_and_reread_the_outbox() {
+    let dir = tempfile::tempdir().unwrap();
+    let store = Store::open(dir.path()).unwrap();
+    let id = pending_recorder_link(&store);
+    let (release, held) = std::sync::mpsc::channel();
+    let (tico, seen, server) = server_gated(
+        vec![Some(json!({"results":[{"status":200}]}))],
+        Some((0, held)),
+    );
+    let tico = Arc::new(tico);
+    let first_store = store.clone();
+    let first_tico = tico.clone();
+    let first_id = id.clone();
+    let first = std::thread::spawn(move || {
+        first_tico
+            .flush_saved_links(&first_store, &first_id)
+            .unwrap()
+    });
+    let deadline = std::time::Instant::now() + Duration::from_secs(8);
+    while seen.lock().unwrap().is_empty() {
+        assert!(std::time::Instant::now() < deadline);
+        std::thread::sleep(Duration::from_millis(5));
+    }
+    let second_store = store.clone();
+    let second_id = id.clone();
+    let (finished, completion) = std::sync::mpsc::channel();
+    let second = std::thread::spawn(move || {
+        tico.flush_saved_links(&second_store, &second_id).unwrap();
+        finished.send(()).unwrap();
+    });
+    // A second drainer waits for the held request, then sees the acknowledged operation is gone.
+    assert!(matches!(
+        completion.recv_timeout(Duration::from_millis(100)),
+        Err(std::sync::mpsc::RecvTimeoutError::Timeout)
+    ));
+    release.send(()).unwrap();
+    first.join().unwrap();
+    second.join().unwrap();
+    server.join().unwrap();
+    assert_eq!(seen.lock().unwrap().len(), 1);
+    assert!(store.context(&id).unwrap().task_link_operations.is_empty());
+}

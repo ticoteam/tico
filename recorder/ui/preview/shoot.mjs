@@ -155,6 +155,11 @@ if (!only.length || only.includes('checks')) {
     await page.click('[data-id="t42"]'); await page.click('[data-id="t43"]');
     await page.click('[data-act="task-picker-link"]');
     await page.waitForSelector('.item.task:has-text("Review pricing")');
+    await page.evaluate(() => { window.__PREVIEW__.state.meetings.m1.actions.items.find((it) => it.id === 't42').pending = true; });
+    await page.waitForSelector('.item.task:has-text("Review pricing") .sub:has-text("Pending")');
+    if (await page.locator('.item.task:has-text("Review pricing") .check.done').count()) throw Error('pending link shown as committed');
+    await page.evaluate(() => { window.__PREVIEW__.state.meetings.m1.actions.items.find((it) => it.id === 't42').pending = false; });
+    await page.waitForSelector('.item.task:has-text("Review pricing") .check.done');
     await page.click('.item.task:has-text("Review pricing") [data-act="unlink-item"]');
     await page.waitForSelector('.item.task:has-text("Review pricing")', { state: 'detached' });
     if (!(await page.locator('.item.task:has-text("Test recovery")').count())) throw Error('second link lost');

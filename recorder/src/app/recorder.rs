@@ -308,6 +308,7 @@ pub struct Recorder {
     _lock: Option<AppLock>,
     transcriber: Transcriber,
     pub live_sync: Option<LiveSync>,
+    _task_link_sync: Option<tico_recorder_native::task_links::TaskLinkSync>,
     pub config: Settings,
     pub records: Vec<Summary>,
     current: Option<Recording>,
@@ -421,12 +422,15 @@ impl Recorder {
         } else {
             String::new()
         };
+        let task_link_sync =
+            (!demo).then(|| tico_recorder_native::task_links::TaskLinkSync::start(store.clone()));
         let mut app = Self {
             screen: Default::default(),
             store,
             _lock: lock,
             transcriber,
             live_sync,
+            _task_link_sync: task_link_sync,
             destination: config
                 .destinations
                 .first()
@@ -613,6 +617,7 @@ impl Recorder {
         if !self.context.live_id.is_empty() && self.context.live_state != "ended" {
             self.last_sync = Instant::now() - Duration::from_secs(5);
         }
+        self.store.poke();
         Ok(())
     }
     pub fn close(&mut self) {
@@ -737,6 +742,14 @@ impl Recorder {
     }
     /// The open meeting refreshes often; the whole library only every few seconds.
     fn reload_open(&mut self) {
+        if let Some(id) = &self.meeting
+            && let Ok(stored) = self.store.context(id)
+            && stored.task_link_operations != self.context.task_link_operations
+        {
+            // Merge background link results without losing notes or unsent edits in the window.
+            self.save_context();
+            self.link_tasks_at = Instant::now() - Duration::from_secs(60);
+        }
         self.seen_open = self.store.version();
         if let Some(id) = &self.meeting {
             self.ui_version += 1;
@@ -961,6 +974,10 @@ impl Recorder {
                         .unwrap_or(Value::Null);
                 }
                 continue;
+            }
+            if reply.kind == "link" && here {
+                self.save_context();
+                self.link_tasks_at = Instant::now() - Duration::from_secs(60);
             }
             if reply.kind == "signin" {
                 self.signing_in = false;
@@ -2932,6 +2949,7 @@ impl Recorder {
                     "owner": chosen,
                     "owner_name": owner_name,
                     "sent": !item.task_id.is_empty(),
+                    "pending": self.pending_task_link(&item.task_id),
                     "sent_to": item.sent_to,
                     "task_id": if linked.is_some() { item.task_id.clone() } else { String::new() },
                     "task_url": if item.kind == "link" { self.link_tasks["browser"].as_str().map(|base| format!("{base}/#/task/{}", item.task_id)).unwrap_or_default() } else if linked.is_some() { item.task_url.clone() } else { String::new() },
@@ -2945,7 +2963,7 @@ impl Recorder {
             })
             .collect();
         json!({
-            "linked": if !self.context.kept_on_mac && self.link_tasks["scope"] == self.link_scope() { self.link_tasks["linked"].clone() } else { Value::Null },
+            "linked": self.linked_tasks_view(),
             "linked_browser": self.link_tasks["browser"],
             "link_scope": self.link_scope(),
             "can_link": mode == "ready" && !self.context.kept_on_mac,

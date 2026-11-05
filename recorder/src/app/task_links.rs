@@ -1,6 +1,29 @@
 use super::*;
 
 impl Recorder {
+    pub(super) fn pending_task_link(&self, task: &str) -> bool {
+        !task.is_empty()
+            && self
+                .context
+                .task_link_operations
+                .iter()
+                .any(|op| op.task_ids.iter().any(|id| id == task))
+    }
+
+    pub(super) fn linked_tasks_view(&self) -> Value {
+        if self.context.kept_on_mac || self.link_tasks["scope"] != self.link_scope() {
+            return Value::Null;
+        }
+        let mut linked = self.link_tasks["linked"].clone();
+        if let Some(tasks) = linked["tasks"].as_array_mut() {
+            for task in tasks {
+                task["pending"] =
+                    json!(self.pending_task_link(task["task_id"].as_str().unwrap_or("")));
+            }
+        }
+        linked
+    }
+
     pub(super) fn may_open_linked_task(&self, url: &str) -> bool {
         if self.link_tasks["scope"] != self.link_scope()
             || self.link_tasks_at.elapsed() > Duration::from_secs(60)
@@ -363,5 +386,47 @@ mod tests {
         assert!(stored.items.is_empty());
         assert_eq!(stored.skipped_task_links, 1);
         assert_eq!(stored.notes, "Notes after the skip");
+    }
+
+    #[test]
+    fn pending_link_rows_follow_durable_results_without_losing_window_edits() {
+        let (_dir, mut app, id) = local_app();
+        app.context.items.push(Item {
+            id: "link".into(),
+            kind: "link".into(),
+            task_id: "task".into(),
+            ..Default::default()
+        });
+        app.context
+            .task_link_operations
+            .push(tico_recorder_native::workspace::TaskLinkOperation {
+                id: "action".into(),
+                kind: "linked".into(),
+                task_ids: vec!["task".into()],
+            });
+        app.store.save_context(&id, &app.context).unwrap();
+        app.link_tasks = json!({"scope":app.link_scope(),"tasks":[{"id":"task","title":"Review pricing","number":42}],"linked":{"tasks":[]}});
+        app.link_tasks_at = Instant::now();
+        assert_eq!(app.actions_view("one")["items"][0]["pending"], true);
+        // Even a stale remote row must show pending while a later action is uncommitted.
+        app.link_tasks["linked"]["tasks"] = json!([{"task_id":"task","title":"Review pricing"}]);
+        assert_eq!(
+            app.actions_view("one")["linked"]["tasks"][0]["pending"],
+            true
+        );
+        app.context.notes = "Unsaved window notes".into();
+        app.store
+            .update_context(&id, |c| {
+                c.task_link_operations.clear();
+                Ok(())
+            })
+            .unwrap();
+        app.reload_open();
+        assert!(app.context.task_link_operations.is_empty());
+        assert_eq!(app.context.notes, "Unsaved window notes");
+        assert_eq!(
+            app.actions_view("one")["linked"]["tasks"][0]["pending"],
+            false
+        );
     }
 }

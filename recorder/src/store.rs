@@ -37,6 +37,7 @@ struct Shared {
     changes: Mutex<u64>,
     wake: Condvar,
     live: Mutex<()>,
+    task_links: Mutex<()>,
 }
 impl Shared {
     fn bump(&self, data: bool) {
@@ -204,6 +205,12 @@ fn read_chunk(db: &Connection, id: &str) -> Result<Chunk> {
     Ok(serde_json::from_str(&text)?)
 }
 impl Store {
+    pub(crate) fn task_links_lock(&self) -> std::sync::MutexGuard<'_, ()> {
+        self.shared
+            .task_links
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+    }
     /// Serialize network snapshots and controls, including delayed state replies.
     pub(crate) fn live_lock(&self) -> std::sync::MutexGuard<'_, ()> {
         self.shared.live.lock().unwrap_or_else(|e| e.into_inner())
@@ -218,6 +225,7 @@ impl Store {
                 changes: Mutex::new(0),
                 wake: Condvar::new(),
                 live: Mutex::new(()),
+                task_links: Mutex::new(()),
             }),
         };
         private_dir(&store.root)?;

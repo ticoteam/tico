@@ -43,7 +43,7 @@ pub struct Turn {
 pub const MAX_ITEMS: usize = 200;
 pub const MAX_TURNS: usize = 200;
 /// One person action, durable before its first request; retries retain its identity.
-#[derive(Clone, Debug, Serialize, Deserialize)]
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
 pub struct TaskLinkOperation {
     pub id: String,
     pub kind: String,

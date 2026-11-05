@@ -390,8 +390,8 @@
   function task(it) {
     const n = taskNumber(it);
     const open = it.task_url ? `<button class="link" data-act="open-url" data-url="${esc(it.task_url)}">Open</button>` : '';
-    const sub = [it.status, it.owner_name, it.sent_to].filter(Boolean).map(esc).join(' · ');
-    return `<li class="item task"><span class="check done">${icon(it.kind === 'link' ? 'link' : 'check', 11)}</span><div class="content"><div class="title selectable">${n ? `<span class="num">#${esc(n)}</span> ` : ''}${esc(it.title)}</div><div class="sub">${sub}${sub && open ? ' · ' : ''}${open}</div></div>${it.kind === 'link' ? `<button class="icon-btn tiny" data-act="unlink-item" data-id="${esc(it.id)}" aria-label="Unlink" title="Unlink">${icon('close', 12)}</button>` : ''}</li>`;
+    const sub = [it.pending ? 'Pending' : it.status, it.owner_name, it.sent_to].filter(Boolean).map(esc).join(' · ');
+    return `<li class="item task"><span class="check ${it.pending ? '' : 'done'}">${it.pending ? '<span class="spin"></span>' : icon(it.kind === 'link' ? 'link' : 'check', 11)}</span><div class="content"><div class="title selectable">${n ? `<span class="num">#${esc(n)}</span> ` : ''}${esc(it.title)}</div><div class="sub">${sub}${sub && open ? ' · ' : ''}${open}</div></div>${it.kind === 'link' ? `<button class="icon-btn tiny" data-act="unlink-item" data-id="${esc(it.id)}" aria-label="Unlink" title="Unlink">${icon('close', 12)}</button>` : ''}</li>`;
   }
   function proposal(it) {
     const id = esc(it.id);

@@ -7,6 +7,114 @@ use crate::{
 use anyhow::{Context, Result, ensure};
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
+use std::{
+    collections::BTreeMap,
+    sync::{
+        Arc,
+        atomic::{AtomicBool, Ordering},
+    },
+    time::{Duration, Instant},
+};
+
+/// The link outbox runs even when no recording is open. Network failures retain the action keys.
+pub struct TaskLinkSync {
+    stop: Arc<AtomicBool>,
+    store: Store,
+    worker: Option<std::thread::JoinHandle<()>>,
+}
+
+impl TaskLinkSync {
+    pub fn start(store: Store) -> Self {
+        Self::start_with(store, |store, destination| {
+            Tico::saved(&crate::settings::read(store.root())?, destination)
+        })
+    }
+
+    pub(crate) fn start_with(
+        store: Store,
+        connect: impl Fn(&Store, &str) -> Result<Tico> + Send + 'static,
+    ) -> Self {
+        let stop = Arc::new(AtomicBool::new(false));
+        let stopped = stop.clone();
+        let worker_store = store.clone();
+        let worker = std::thread::Builder::new()
+            .name("tico-task-links".into())
+            .spawn(move || {
+                crate::qos::utility();
+                let store = worker_store;
+                let mut retries = BTreeMap::<String, (Instant, Duration)>::new();
+                while !stopped.load(Ordering::Relaxed) {
+                    let mark = store.changes();
+                    if let Ok(pending) = store.pending_task_links() {
+                        retries.retain(|id, _| pending.iter().any(|(pending, _)| pending == id));
+                        for (id, destination) in pending {
+                            if stopped.load(Ordering::Relaxed) {
+                                break;
+                            }
+                            if retries.get(&id).is_some_and(|(at, _)| Instant::now() < *at) {
+                                continue;
+                            }
+                            let result = connect(&store, &destination)
+                                .and_then(|tico| tico.flush_saved_links(&store, &id));
+                            if let Err(error) = result {
+                                let delay = retries
+                                    .get(&id)
+                                    .map(|(_, delay)| (*delay * 2).min(Duration::from_secs(60)))
+                                    .unwrap_or(Duration::from_secs(1));
+                                retries.insert(id, (Instant::now() + delay, delay));
+                                eprintln!("Task links waiting: {error:#}");
+                            } else {
+                                retries.remove(&id);
+                            }
+                        }
+                    }
+                    // Reconnects need no user action; a failed request is tried within a minute.
+                    let wait = retries
+                        .values()
+                        .map(|(at, _)| at.saturating_duration_since(Instant::now()))
+                        .min()
+                        .unwrap_or(Duration::from_secs(60));
+                    store.wait_changes(mark, wait);
+                }
+            })
+            .expect("task link sync worker");
+        Self {
+            stop,
+            store,
+            worker: Some(worker),
+        }
+    }
+}
+
+impl Drop for TaskLinkSync {
+    fn drop(&mut self) {
+        self.stop.store(true, Ordering::Relaxed);
+        self.store.poke();
+        // A sleeping worker exits immediately; an in-flight HTTP request has the client timeout.
+        if let Some(worker) = self.worker.take() {
+            let _ = worker.join();
+        }
+    }
+}
+
+impl Store {
+    fn pending_task_links(&self) -> Result<Vec<(String, String)>> {
+        let db = self.db()?;
+        let mut query = db.prepare(
+            "SELECT w.recording_id,d.destination_id FROM workspace w JOIN deliveries d
+             ON d.recording_id=w.recording_id
+             AND d.destination_id=json_extract(w.document,'$.live_destination')
+             WHERE json_array_length(w.document,'$.task_link_operations')>0
+             AND COALESCE(json_extract(w.document,'$.kept_on_mac'),0)=0
+             AND json_extract(d.document,'$.status')!='sending'
+             AND (json_extract(d.document,'$.status')='sent'
+                  OR json_extract(d.document,'$.receipt.approved')=1)",
+        )?;
+        Ok(query
+            .query_map([], |row| Ok((row.get(0)?, row.get(1)?)))?
+            .collect::<std::result::Result<_, _>>()?)
+    }
+}
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
 pub struct Task {
@@ -203,13 +311,17 @@ impl Tico {
         self.flush_saved_links(store, id)
     }
 
-    fn flush_saved_links(&self, store: &Store, id: &str) -> Result<()> {
-        if let Some(mut delivery) = store
-            .get(id)?
-            .deliveries
-            .into_iter()
-            .find(|d| d.destination_id == self.destination.id && crate::live::saved_in_tico(d))
-        {
+    pub fn flush_saved_links(&self, store: &Store, id: &str) -> Result<()> {
+        let _drain = store.task_links_lock();
+        let context = store.context(id)?;
+        if context.kept_on_mac || context.live_destination != self.destination.id {
+            return Ok(());
+        }
+        if let Some(mut delivery) = store.get(id)?.deliveries.into_iter().find(|d| {
+            d.destination_id == self.destination.id
+                && d.status != "sending"
+                && crate::live::saved_in_tico(d)
+        }) {
             self.flush_link_operations(store, id, &mut delivery)?;
         }
         Ok(())
@@ -278,6 +390,7 @@ impl Tico {
         delivery: &mut Delivery,
     ) -> Result<()> {
         // Older local rows and tasks created before Save join the same durable outbox.
+        let _drain = store.task_links_lock();
         store.update_context(id, |c| {
             for kind in ["linked", "sent"] {
                 let mut ids: Vec<String> = context
