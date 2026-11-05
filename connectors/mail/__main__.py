@@ -1545,7 +1545,7 @@ def approval_request(ctx, draft_id, to, cc, subject, body, files, file_ids=None,
                                 **({"file_id": file_ids[a["sha256"]]} if a["sha256"] in file_ids
                                    else {})}
                                for a in files]}
-    command = ("mail send --as " + shlex.quote(ctx.slug) + " --draft " + shlex.quote(draft_id))
+    command = ("mail send --as " + shlex.quote(ctx.slug) + " --for " + shlex.quote(ctx.mailbox) + " --draft " + shlex.quote(draft_id))
     lines = [f"Send from {ctx.mailbox} to {', '.join(to)}" + (f", cc {', '.join(cc)}" if cc else ""),
              f"Subject: {subject}", f"Draft: {draft_id or '(dry run: no draft yet)'}"]
     lines += [f"Attach: {a['name']} ({a['size']} bytes, sha256 {a['sha256'][:12]})"

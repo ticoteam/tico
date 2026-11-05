@@ -141,8 +141,7 @@ command twice **updates the same Gmail draft** instead of leaving two. Change a 
 new draft. The thread gets `hub/drafted`, so Ana can see it in Gmail.
 
 `--attach <path>` adds a file; repeat it for several, up to 25 MB in all (Gmail's limit, checked
-from the file sizes before anything is read). Attachments use the same send permissions as the
-message without files; there is no separate attachment setting. Legacy `allow_attachments` keys
+from the file sizes before anything is read). Attachments use the shared sending policy, whose attachment prompt is on by default. Legacy `allow_attachments` keys
 in `registry/mail-policy.yaml` are accepted but do nothing. A file must be inside your own folder
 (`bot-<slug>`, or an older bot's `emp-<slug>`), after following symlinks; a relative path starts
 there, and `..` is refused. Files that look like keys or passwords are refused wherever they are: `.env*`, `*.pem`,
@@ -150,17 +149,13 @@ there, and `..` is refused. Files that look like keys or passwords are refused w
 `credentials*`, `*secret*`, `*token*`, and anything under `secrets/`, `private keys/`, `.ssh/`,
 `.aws/`, `.gnupg/` or `.config/gh/`. The type comes from the file's extension. Lint and the
 reviewer read the text, and the reviewer is told each file's name, type and size, not its
-contents. Attaching lifts nothing: the same send chain applies with or without files. If the
-plain message could send without a per-message approval, the attached message can too. An owner's
-Tico message telling the bot to send covers the files attached to that send, as does an otherwise
-valid GitHub Issue or Tico send approval that names no files.
+contents. Attaching lifts no permission. The server freezes and hashes every attachment, including unnamed inline parts. An approval binds that exact snapshot; changed files need a new send and approval.
 
 If a Tico send approval names files, that binding still applies: its payload carries `draft` and
 `attachments: [{name, size, sha256}]`. At send time the connector hashes the files as they stand
 in the Gmail draft and requires the exact approved set and draft id; changed, added, removed or
 swapped files need a new approval. `mail draft --attach --json` returns an optional
-`approval_request` payload with those fields for sends that need per-message approval under the
-usual rules. Attaching files does not make that request necessary. When the draft
+`approval_request` summary and a `mail send` command that freezes the draft through the shared queue. The generic approvals endpoint does not accept a new email approval. When the draft
 belongs to a Tico task (`--issue <task id>`, or the task the run is for), `mail draft` first attaches
 each file to it and adds its `file_id` to the request, so the approver can open the file from the
 approval card; the send ignores `file_id` and matches on name, size and sha256. The card links a
@@ -203,8 +198,7 @@ New email approvals are created by the frozen send queue. Use `mail send --draft
 The card binds the complete MIME and exact To, Cc and Bcc, and approval requires loading its authorized preview.
 Only old-format approvals created before the queue migration retain their original text-bound recipient scope.
 Finance also queues its exact invoice email for this preview; approving the finance action does not approve unseen MIME.
-The
-daily cap, the wait between messages to one person, the blocklist and the people the owner handles personally apply
+The daily cap, the wait between messages to one person, the blocklist and the people the owner handles personally apply
 to every send, the three kinds above included. `mail policy show` says which of these you have, which forward targets
 Tico holds, what bot.yaml asks, and which policy it is reading.
 

@@ -513,7 +513,7 @@ class Cli(Stage2):
         request = p["approval_request"]
         self.assertEqual(request["payload"]["attachments"],
                          [dict(file_meta("answer.pdf", data), file_id="f-answer-0001")])
-        self.assertEqual(request["command"], f"mail send --as inbox --draft {p['draft']}")
+        self.assertEqual(request["command"], f"mail send --as inbox --for ana@acme.example --draft {p['draft']}")
         # The approval matches on name, size and sha256: another file_id, or none, approves the same files.
         approved = dict(request["payload"], attachments=[dict(file_meta("answer.pdf", data), file_id="f-other")])
         hub(dict(send_approval([AVA], []), payload=approved))
