@@ -1615,7 +1615,8 @@ impl Recorder {
     pub fn recording(&self) -> bool {
         self.active.is_some()
     }
-    /// Why an app update waits right now: a recording runs, or a live meeting is connected.
+    /// Why an app update waits right now: a recording runs, a live meeting is connected (live or paused), or a
+    /// send is under way.
     pub fn update_hold(&self) -> Option<&'static str> {
         if self.deleting.is_some() {
             Some("After deletion finishes")
@@ -1626,7 +1627,7 @@ impl Recorder {
         } else if self
             .records
             .iter()
-            .any(|record| record.live_state == "live")
+            .any(|record| matches!(record.live_state.as_str(), "live" | "paused"))
         {
             Some("After the live meeting ends")
         } else if self.sending.is_some()
