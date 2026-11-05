@@ -375,7 +375,8 @@ def readable_page_refs(c, auth, who, refs):
     def clean(value):
         direct = page_references(value, c) & denied.keys() if isinstance(value, str) else set()
         if isinstance(value, dict):
-            direct = {fid for v in value.values() if isinstance(v, str) for fid in page_references(v, c) if fid in denied}
+            direct = {fid for v in value.values() if isinstance(v, str) and not v.startswith(("{", "["))
+                      for fid in page_references(v, c) if fid in denied}
             if direct:
                 return {"removed": True, "label": denied[sorted(direct)[0]]}
             return {k: clean(v) for k, v in value.items()}

@@ -3855,7 +3855,7 @@ def task_private_readable(conn, actor, row):
     row = dict(row)
     from . import counsel, teammate_access
     copied = counsel.page_copies(conn).get(row["id"])
-    if copied and not copied["removed"]:
+    if copied and (not copied["removed"] or copied["page"]["state"] == "deleted"):
         # Native hub connections autocommit. A read gate must not leave their later writes in a new transaction.
         outside = not conn.in_transaction
         try:

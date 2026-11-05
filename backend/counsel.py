@@ -486,7 +486,7 @@ def denied_page_copies(c, viewer, auth=None):
     from . import read_cache
     return read_cache.value(c, ("denied_page_copies", viewer.actor, getattr(viewer, "task_actor", ""), auth is not None), lambda: {
         tid for tid, read in page_copies(c).items()
-        if not read["removed"] and not page_copy_readable(c, read, viewer, auth)
+        if (not read["removed"] or read["page"]["state"] == "deleted") and not page_copy_readable(c, read, viewer, auth)
     }, shared=True)
 
 

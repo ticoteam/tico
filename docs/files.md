@@ -155,7 +155,8 @@ the bot's page, so a file you may not read adds no row, name or count.
   address (`#/library/files?kind=page&bot=…`). On a phone they scroll sideways.
 - **Rows:** title, kind, bot, last updated, and where a page is pinned. A page opens full size; another stored file
   opens in the file viewer; a link opens at its provider.
-- **Paging:** newest activity first, 50 rows at a time, each answer capped in bytes, with no total.
+- **Paging:** newest activity first, 50 rows at a time, each answer capped in bytes, with no total. Cursors are
+  encrypted and authenticated; a scan can return an empty page with a continuation past hidden rows.
 
 `GET /api/v2/files?kind=&bot=&team=&task=&since=&until=&pinned=&archived=&limit=&cursor=`.
 

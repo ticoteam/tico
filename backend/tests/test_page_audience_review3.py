@@ -37,11 +37,13 @@ def test_deletion_retains_denials_for_counsel_copies_and_citations(api):
         assert not c.execute("SELECT 1 FROM bot_file_versions WHERE file_id=?", (fid,)).fetchone()
         assert fid in {r["file_id"] for r in counsel.page_copies(c).values()}
         assert H.task(c, tid)["body"] == counsel.REMOVED_PAGE
+        assert not H.task_private_readable(c, outsider.actor, H.task(c, tid))
         for viewer in (outsider, Identity("human:cara", "human"), Identity("human:ana", "owner")):
             assert not counsel.page_copy_readable(c, counsel.page_copies(c)[tid], viewer)
             assert org_rules._cite(c, api.app.state.auth, viewer, cite) == {"removed": True, "label": "A deleted page"}
             assert files.readable_page_refs(c, api.app.state.auth, viewer, cite) == {"removed": True, "label": "A deleted page"}
-    assert "42 deals" not in json.dumps(get(api, "tasks/" + tid, token="cara-test"))
+    denied = api.get("/api/v2/tasks/" + tid, headers=headers("cara-test"))
+    assert denied.status_code == 404 and "42 deals" not in denied.text
 
 
 def test_native_and_runner_gate_recheck_askers_inherited_read(api):
@@ -101,7 +103,8 @@ def test_asks_raw_task_attachments_and_blob_history_are_scrubbed_after_narrowing
         assert not files.page_event_readable(c, api.app.state.auth, who, tid, record["detail"])
         assert not task_privacy.event_readable(c, who.actor, record)
         for identity in (blob["id"], blob["id"] + "@1", fid + "@1", "/api/v2/files/" + blob["id"],
-                         "/api/v2/files/" + fid + "/versions/1", version["digest"]):
+                         "/api/v2/files/" + fid + "/versions/1", "/api/v2/files/" + blob["id"] + "/thumb?v=1",
+                         "/api/v2/files/" + fid + "/poster?v=1", version["digest"]):
             assert files.page_references(identity, c) == {fid}
     query = "SELECT * FROM history_events WHERE subject_id='" + tid + "' AND kind='file'"
     assert post(api, "sql", {"sql": query}, token="cara-test")["rows"] == []
@@ -185,6 +188,7 @@ def test_restricted_page_leak_matrix_across_stored_shapes_transports_and_deletio
         H.event(c, "bot:ops", "message.visual", tid, {"visual": metadata})
         cid = H.task(c, tid)["conversation_id"]
         secrets = (fid, bid, title, name, str(version["size"]), fid + "@1", version["digest"], version["source_digest"])
+    api.app.state.store.settings.visual_origin = "https://visuals.acme.example"
     signed = get(api, "pages/" + fid, token="cara-test")["page"]["src"]
     assert api.get(signed).status_code == 200
     # Before restriction all these are ordinary task references, including the no-audience control page.
@@ -231,8 +235,14 @@ def test_restricted_page_leak_matrix_across_stored_shapes_transports_and_deletio
                            ("finance-test", Identity("bot:finance", "bot", agent="test"))):
             for path in common:
                 response(state + ":" + token + ":" + path, api.get("/api/v2/" + path, headers=headers(token)))
+            for ident in (fid, bid):
+                for suffix in ("", "/versions/1", "/thumb", "/poster"):
+                    result = api.head("/api/v2/files/" + ident + suffix, headers=headers(token))
+                    assert result.status_code in (403, 404, 405), result.status_code
+                    clean(state + ":HEAD:" + token + ":" + suffix, dict(result.headers))
             for query in sql_queries:
                 response(state + ":" + token + ":" + query, api.post("/api/v2/sql", json={"sql": query}, headers=headers(token)))
+            response(state + ":claim rejected:" + token, api.post("/api/v2/jobs/claim", json={}, headers=headers(token)))
             if token == "cara-test":
                 for path in ("assistant", "assistant/decisions", "threads/" + assistant_room + "/timeline"):
                     response(state + ":" + path, api.get("/api/v2/" + path, headers=headers(token)))
@@ -257,3 +267,23 @@ def test_restricted_page_leak_matrix_across_stored_shapes_transports_and_deletio
         response(state + ":signed visual", api.get(signed))
         clean(state + ":runner claim", claim(api, machine, "finance", key="matrix-claim"))
     assert not failures, failures
+
+
+def test_migration_links_name_only_history_before_page_content_is_purged(api):
+    import importlib
+    _, attempt = turn(api)
+    tid = post(api, "tasks", {"owner": "ops", "title": "Legacy review", "body": "Review", "private": False})["id"]
+    fid = page(api, attempt, task=tid).json()["page"]["file_id"]
+    with api.app.state.store.transaction() as c:
+        legacy = H.history_event(c, "task", tid, "bot:ops", "file", new="weekly.html")
+        migration = importlib.import_module("backend.migrations.20261105050905_page_tombstones")
+        migration.up(c)
+        migration.up(c)
+        data = json.loads(c.execute("SELECT data FROM history_events WHERE id=?", (legacy,)).fetchone()[0])
+        assert data["page_files"] == [fid]
+    edit(api, fid, {"people": ["ben"]})
+    for deleted in (False, True):
+        if deleted:
+            assert api.delete("/api/v2/files/" + fid, headers=headers()).status_code == 200
+        result = get(api, "tasks/" + tid, token="cara-test")
+        assert "weekly.html" not in json.dumps(result) and fid not in json.dumps(result)
