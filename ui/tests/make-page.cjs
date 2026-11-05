@@ -33,10 +33,18 @@ journey('make-page', async ({hub, browser, phone}) => {
   await section.waitFor({state: 'hidden', timeout: t(10000)});
   await go(page, '#/task/' + id);
   await card.filter({hasText: 'Making page…'}).waitFor({timeout: t(10000)});
+  await page.waitForFunction(cid => LIVE.es?.readyState === EventSource.OPEN &&
+    new URL(LIVE.es.url).searchParams.get('conversation')?.split(',').includes(cid),
+    status.conversation_id, {timeout: t(10000)});
   status.state = 'made';
   const published = await must(hub, 'engineering-lead', 'POST', 'pages', {name: 'alert-flow.html', title: 'Alert flow', task: id,
     text: '<h1>Alert flow</h1><p>Three scenarios.</p>'});
-  await section.locator('.pg-card[data-page="' + published.page.file_id + '"]').waitFor({timeout: t(15000)});
+  await section.locator('.pg-card[data-page="' + published.page.file_id + '"]').waitFor({timeout: t(15000)}).catch(async e => {
+    const state = await page.evaluate(() => ({route: location.hash, stream: LIVE.es?.url,
+      open: document.querySelector('#task-modal')?.open, section: document.querySelector('[data-task-pages]')?.innerText}));
+    assert.fail(e.message + '\n' + JSON.stringify({state, errors: page.watch.errors,
+      pins: await must(hub, 'priya', 'GET', 'places/task:' + id)}));
+  });
   await card.waitFor({state: 'hidden', timeout: t(10000)});
 
   await field.fill('A second page.');
