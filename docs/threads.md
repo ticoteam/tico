@@ -51,7 +51,7 @@ A thread's audience is one of these:
 Open **Thread settings** with the ⋯ button in a thread's header. The panel holds the thread's settings. Each row saves as
 you change it, so there is no Save button. A row you may not use is left out. On a phone the panel fills the screen.
 
-- **Name**: the thread's title. Press Enter to save. A manager sees it, except on a Home and in a DM with one teammate.
+- **Name**: the thread's title. Press Enter to save. A manager sees it, except on a Home and in a top-level DM with one teammate.
 - **Who can read**: **Only members**, **A team** or **Company**. Choosing **A team** saves once you pick the team. A
   manager sees it on a top-level thread that is not a DM or a Home.
 - **Members**: opens the Members list, with its count. Shown on a top-level thread whose audience is `company`, `team`,
@@ -100,8 +100,9 @@ Each reader follows a thread at one level. Choose it in the **Notifications** ro
 - **All** (`live`): every new message (the default),
 - **Mentions** (`mentions`): only messages that name you,
 - **Digest** (`digest`): in a batch (an email an hour for a person, one run an hour for a bot),
-- **Off** (`muted`): unread counts stay, nothing is sent. Off lasts until you choose another level. A thread you do not
-  follow shows as Off too.
+- **Off** (`muted`): unread counts stay, nothing is sent. The one exception is a DM with one teammate: its unread count
+  leaves that teammate's row in the sidebar and the Team list. Off lasts until you choose another level. A thread you do
+  not follow shows as Off too.
 
 The list shows top-level threads only. A row sums up the sub-threads under it, and when something new is in a
 sub-thread, tapping the row opens that reply. Following only a sub-thread still lists its thread.
