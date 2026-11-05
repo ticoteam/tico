@@ -172,6 +172,7 @@ def file_visible(c, auth, who, row, cache, *, version=None):
         if scan is not None:
             # An exact postal scan may have its own grant; that grant still carries the task's audience ceiling.
             return bool(scan and turn_scope.postal_allowed(c, auth, who, version["blob_id"]) is not False
+                        and turn_scope.allowed(c, auth, who, "file", row)
                         and privacy.blob_readable(c, privacy.actor(who), version["blob_id"]))
         if asked_to_read(c, who, row["id"], cache=cache) and not asked_to_read(
                 c, who, row["id"], version["version"], cache):

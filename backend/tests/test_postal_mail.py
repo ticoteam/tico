@@ -398,8 +398,12 @@ def test_claimed_builtin_counsel_can_read_granted_and_routed_mail_only(api, hq, 
     token = attempt["token"]
     assert {"hub_mail_list", "hub_mail_read"} <= {
         t["name"] for t in rpc(api, "tools/list", token=token)["result"]["tools"]}
-    assert {i["external_id"] for i in get(api, "postal/items", token)["items"]} == {"171", "172"}
-    for row in (routed, owner):
+    # The mailbox grant cannot widen a task turn to a different private letter's file.
+    assert {i["external_id"] for i in get(api, "postal/items", token)["items"]} == {"171"}
+    get(api, "postal/items/" + owner["id"], token, expected=404)
+    assert scan(api, owner, token) == 403
+    get(api, f"files/{owner['file_id']}/meta?v=1", token, expected=404)
+    for row in (routed,):
         assert call(api, "hub_mail_read", {"item_id": row["id"]}, token=token)[1]["item"]["summary"] == row["summary"]
         assert scan(api, row, token) == 200
         for path in (f"files/{row['file_id']}?v=1", f"files/{row['file_id']}/versions/1"):

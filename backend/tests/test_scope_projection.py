@@ -240,7 +240,7 @@ def postal_sources(api, hq):
     deliver(hq, "scope-arrival", checks=True)
     deliver(hq, "scope-failed")
     service(api).tick()
-    service(api).process(items(api)["scope-failed"]["id"])
+    api.app.state.postal_mail.process(items(api)["scope-failed"]["id"])
     return attempt["token"], items(api)
 
 
@@ -268,9 +268,50 @@ def test_postal_file_ids_and_unprocessed_arrivals_share_the_audience_ceiling(api
     assert get(api, "files/" + filed["file_id"] + "/meta?v=1", "ops-mail-reader")["id"] == filed["file_id"]
 
 
+def test_postal_cursors_scan_past_rejected_arrivals_without_naming_them(api, hq, mail, monkeypatch):
+    from backend import postal_mail
+    from backend.tests.test_api import put
+    t, attempt = task_turn(api, private=True)
+    token = attempt["token"]
+    put(api, "postal/addresses/all/grants/bot/ops", {})
+    with api.app.state.store.read() as c:
+        audience = turn_scope.readers(c, api.app.state.files.auth, H.task(c, t["id"]))
+    for reader in audience:
+        kind = "bot" if H.is_bot(reader.actor) else "person"
+        put(api, f"postal/addresses/shared/grants/{kind}/{H.actor_id(reader.actor)}", {})
+    for ident in ("cursor-hidden-1", "cursor-hidden-2", "cursor-shared"):
+        deliver(hq, ident, assignment_id="shared" if ident == "cursor-shared" else "restricted")
+    service(api).tick()
+    rows = items(api)
+    with api.app.state.store.transaction() as c:
+        for ident, stamp in (("cursor-hidden-1", "2099-01-01"), ("cursor-hidden-2", "2098-01-01"),
+                             ("cursor-shared", "2097-01-01")):
+            c.execute("UPDATE mail_items SET received_at=? WHERE id=?", (stamp, rows[ident]["id"]))
+    shown = get(api, "postal/items?limit=1", token)
+    assert [i["external_id"] for i in shown["items"]] == ["cursor-shared"] and shown["next"] is None
+    with monkeypatch.context() as patch:
+        patch.setattr(postal_mail, "SCAN_MAX", 1)
+        first = get(api, "postal/items?limit=1", token)
+        assert first["items"] == []
+        hidden = (rows["cursor-hidden-1"]["id"], rows["cursor-hidden-2"]["id"], "2099-01-01", "2098-01-01")
+        assert_cursor_hides_rejected_rows(first["next"], hidden)
+        second = get(api, "postal/items?limit=1&after=" + first["next"], token)
+        assert second["items"] == []
+        assert_cursor_hides_rejected_rows(second["next"], hidden)
+        third = get(api, "postal/items?limit=1&after=" + second["next"], token)
+        assert [i["external_id"] for i in third["items"]] == ["cursor-shared"]
+    with api.app.state.store.transaction() as c:
+        c.execute("UPDATE mail_items SET received_at='2100-01-01' WHERE id=?", (rows["cursor-shared"]["id"],))
+    with monkeypatch.context() as patch:
+        patch.setattr(postal_mail, "SCAN_MAX", 2)
+        mixed = get(api, "postal/items?limit=2", token)
+        assert [i["external_id"] for i in mixed["items"]] == ["cursor-shared"]
+        assert mixed["next"] == "2100-01-01|" + rows["cursor-shared"]["id"]
+
+
 def cursor_sources(api, count=5000):
     _, publisher = turn(api)
-    seed = published(api, publisher, name="bot-wide.html", scope="bot")
+    seed = published(api, publisher, name="bot-wide.html", botwide=True)
     # The large rejected prefix is the reviewer's seed; the page and its version start with a production write.
     with api.app.state.store.transaction() as c:
         source = dict(c.execute("SELECT * FROM bot_files WHERE id=?", (seed,)).fetchone())

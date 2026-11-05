@@ -200,7 +200,7 @@ def require_meeting(c, who, row, auth=None):
 
 
 def postal_allowed(c, auth, who, bid):
-    """A scan grant is an independent source right for every reader of every carried task."""
+    """An exact scan keeps its letter's audience ceiling as well as the principal's own read rights."""
     from . import postal_mail
     if not read_cache.rows(c, postal_mail.SCANS_SQL, (bid,)):
         return None
