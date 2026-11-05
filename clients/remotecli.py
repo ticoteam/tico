@@ -1387,7 +1387,7 @@ def email_text(result, action):
 def main(args, who=None):
     try:
         result = run(args, who)
-        if args.cmd == "email" and not args.json:
+        if args.cmd == "email" and args.sub in ("mailboxes", "inbox", "search", "thread", "message") and not args.json:
             print(email_text(result, args.sub))
         elif args.cmd == "sql" and not args.json:
             print(sql_csv(result) if args.csv else sql_table(result))

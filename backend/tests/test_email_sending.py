@@ -113,6 +113,22 @@ def test_known_correspondent_and_verified_reply_can_send(inbox):
     assert queued["decision"]["outcome"] == "allow"
 
 
+def test_cli_sending_controls_share_the_email_command_and_api(inbox, monkeypatch, capsys):
+    from backend.tests.test_automation_cli import Client
+    from clients import hubcli, remotecli
+
+    monkeypatch.setenv("HUB_API_URL", "https://tico.acme.example")
+    monkeypatch.setenv("HUB_TOKEN", "ana-test")
+    monkeypatch.setattr(remotecli, "Client", lambda url, token, **kwargs: Client(inbox, token))
+    assert hubcli.main(["email", "policy", "--settings", '{"mode":"ask_first"}']) == 0
+    assert json.loads(capsys.readouterr().out)["effective"]["mode"] == "ask_first"
+    queued = queue(inbox)
+    assert hubcli.main(["email", "sends", "--mailbox", BOX, "--pending"]) == 0
+    assert json.loads(capsys.readouterr().out)["sends"][0]["id"] == queued["id"]
+    assert hubcli.main(["email", "cancel", queued["id"]]) == 0
+    assert json.loads(capsys.readouterr().out)["send"]["state"] == "canceled"
+
+
 def test_never_blocks_an_approved_send_at_dispatch(inbox):
     queued = queue(inbox)
     approved(inbox, queued)
