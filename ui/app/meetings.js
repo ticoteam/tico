@@ -536,14 +536,14 @@ function meetVisibilityHTML(rec, mayEdit) {
 function meetShareHTML(rec, mayEdit) {
   const sent = rec.sent?.bot || rec.sent?.slug || rec.delivery?.destination || '';
   const bots = !mayEdit ? [] : sent ? [{id: sent}] : activeEmps();
-  return `<details class="mp-pop" id="meet-share"><summary class="mp-icon" aria-label="Share" title="Share">${meetIcon('person_add')}</summary>
+  return `<details class="mp-pop" id="meet-share"><summary class="mp-icon" role="button" aria-haspopup="menu" aria-label="Share" title="Share">${meetIcon('person_add')}</summary>
     <div class="mp-pop-list" role="menu">
       <button type="button" role="menuitem" data-share-copy>${meetIcon('link', 'Copy link')}</button>
       ${bots.length ? `<div class="mp-pop-h">Bots</div>${bots.length > 8 ? '<input type="search" class="mp-pop-find" data-share-find aria-label="Find a bot" placeholder="Find">' : ''}
       ${bots.map(b => `<button type="button" role="menuitemcheckbox" aria-checked="${sent === b.id}" data-share-bot="${esc(b.id)}"${sent ? ' disabled' : ''}>${botAvatar(b.id, 18)}<span>${esc(botDisplayName(b.id))}</span>${sent ? meetIcon('check') : ''}</button>`).join('')}` : ''}
     </div></details>`;
 }
-const meetMoreHTML = (state, rec) => `<details class="mp-pop" id="meet-more-menu"><summary class="mp-icon" aria-label="More" title="More">${meetIcon('more_horiz')}</summary>
+const meetMoreHTML = (state, rec) => `<details class="mp-pop" id="meet-more-menu"><summary class="mp-icon" role="button" aria-haspopup="menu" aria-label="More" title="More">${meetIcon('more_horiz')}</summary>
   <div class="mp-pop-list" role="menu"><button type="button" role="menuitem" class="danger" id="meet-del">${meetIcon('delete', state.confirmDelete === rec.id ? 'Really delete?' : 'Delete')}</button></div></details>`;
 function meetPaint(state, rec) {
   const el = $('#notes-detail'); if (!el) return;
