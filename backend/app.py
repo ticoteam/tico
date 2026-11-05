@@ -3287,7 +3287,7 @@ def create_app(settings=None):
             c, who, auth.target(c, who, body.to), "chat", conversation_id=body.conversation_id,
             task_id=H.refs_task_id(body.refs), in_reply_to=body.in_reply_to))
         rc = rule_check(who, operation, body.text, lambda c: rule_message_audience(c, who, body),
-                        place=place or rule_message_place(who, body), track_route=True)
+                        place=place or rule_message_place(who, body), track_route=body.kind == "ask")
         return rc, (None if org_rule_check.holds(rc) or retry else message_ingest(who, body))
 
     @app.post("/api/v2/messages")
