@@ -615,7 +615,7 @@ impl Store {
     #[cfg(feature = "diarize")]
     pub(crate) fn peek(&self, id: &str) -> Result<Recording> {
         clean_id(id)?;
-        read_record(&self.db()?, id, false)
+        read_record(&*self.db()?, id, false)
     }
     pub fn mutate(
         &self,
