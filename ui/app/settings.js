@@ -408,7 +408,7 @@ function settingsShow(tab) {
   const healthPane = $('#settings-health');
   if (healthPane) { healthPane.hidden = SETTINGS_TAB !== 'health'; if (SETTINGS_TAB === 'health') window.hlMount?.(); }
   const inboxesPane = $('#settings-inboxes');
-  if (inboxesPane) { inboxesPane.hidden = SETTINGS_TAB !== 'inboxes'; if (SETTINGS_TAB === 'inboxes' && !formBusy(inboxesPane)) void renderSettingsInboxes(); }
+  if (inboxesPane) { inboxesPane.hidden = SETTINGS_TAB !== 'inboxes'; if (SETTINGS_TAB === 'inboxes' && (inboxesMoved() || !formBusy(inboxesPane))) void renderSettingsInboxes(); }
   const reposPane = $('#settings-repos');
   if (reposPane) { reposPane.hidden = SETTINGS_TAB !== 'repos'; if (SETTINGS_TAB === 'repos' && !formBusy(reposPane)) void renderSettingsRepos(); }
   const system = $('#settings-system');
