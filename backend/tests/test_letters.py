@@ -8,6 +8,8 @@ from backend import hubdb as H, letters as L
 from backend.tests.test_api import api, get, post, put, headers  # noqa: F401
 from backend.tests.test_agents import hermes_bot, credential, bot_id
 from backend.tests.test_mcp import call
+from backend.tests.test_botops_parity import act
+from backend.tests.test_member_bots import botops, turn  # noqa: F401 (fixture)
 from clients import gateway as G
 
 ADDRESS = {"name": "Acme", "line1": "1 Main St", "city": "Dover", "state": "DE", "postal_code": "19901"}
@@ -90,6 +92,25 @@ def bot(api):
 
 def grant(api, ident):
     return put(api, "letters/outboxes/company/grants/bot/" + ident, {"level": "send"})
+
+
+def test_botops_policy_and_access_changes_wait_for_the_persons_tap(api, botops):
+    ana = turn(api, botops, person="ana-test", text="Let Ops send letters and set a cap")
+    path = "letters/outboxes/company/grants/bot/ops"
+    card = act(api, ana, "PUT", path, {"level": "send"}).json()
+    assert card["needs_confirm"] and get(api, "letters/outboxes/company/grants")["grants"] == []
+    confirm = "assistant/actions/" + card["action"]["id"] + "/confirm"
+    post(api, confirm, {}, token=ana["token"], expected=403)
+    post(api, confirm, {})
+    assert get(api, "letters/outboxes/company/grants")["grants"][0]["grantee_id"] == "ops"
+    card = act(api, ana, "PUT", "letters/settings", {"monthly_cap_micros": 5000000}).json()
+    assert card["needs_confirm"] and get(api, "letters/settings")["monthly_cap_micros"] is None
+    post(api, "assistant/actions/" + card["action"]["id"] + "/confirm", {})
+    assert get(api, "letters/settings")["monthly_cap_micros"] == 5000000
+    card = act(api, ana, "DELETE", path).json()
+    assert card["needs_confirm"] and get(api, "letters/outboxes/company/grants")["grants"]
+    post(api, "assistant/actions/" + card["action"]["id"] + "/confirm", {})
+    assert get(api, "letters/outboxes/company/grants")["grants"] == []
 
 
 def test_quote_ask_approve_requotes_same_hash_and_submits_once(api, hq):

@@ -658,6 +658,10 @@ def require_on_task(c, auth, who, path):
 # What may be proposed at all (method, normalized path). Anything else, and above all tokens, sign-in,
 # runner enrollment, this assistant and anything that hands back a secret, can never be proposed.
 _PROPOSABLE = [(m, re.compile(p)) for m, p in (
+    ("PUT", r"/api/v2/letters/settings"),
+    ("PUT", r"/api/v2/letters/outboxes/company/grants/(bot|person)/[^/]+"),
+    ("DELETE", r"/api/v2/letters/outboxes/company/grants/(bot|person)/[^/]+"),
+    ("PUT", r"/api/v2/letters/bots/[^/]+/settings"),
     ("POST", r"/api/v2/automations"), ("PATCH", r"/api/v2/automations/[^/]+"),
     ("POST", r"/api/v2/approvals/[^/]+"), ("POST", r"/api/v2/messages/[^/]+/answer"),
     ("POST", r"/api/v2/tasks"), ("POST", r"/api/v2/tasks/[^/]+"),

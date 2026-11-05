@@ -661,7 +661,8 @@ def install(app, config, store, auth, mutate):
         def work(c):
             if not H.bot(c, bot_id):
                 raise Problem("not_found", "Bot not found", 404)
-            if not auth.bot_manager(c, request.state.identity, bot_id) or request.state.identity.via:
+            if (not auth.bot_manager(c, request.state.identity, bot_id)
+                    or (request.state.identity.via and not request.state.identity.confirmed)):
                 raise Problem("forbidden", "Only this bot's manager changes its settings", 403)
             company = settings(c)
             if body.mode and MODES[body.mode] < MODES[company["mode"]]:
