@@ -16,17 +16,19 @@ CREATE TABLE IF NOT EXISTS letter_bot_settings (
 );
 CREATE TABLE IF NOT EXISTS letters (
   id TEXT PRIMARY KEY, outbox_id TEXT NOT NULL REFERENCES letter_outboxes(id),
-  requested_by TEXT NOT NULL, acting_bot_id TEXT, automation_id TEXT, task_id TEXT, thread_id TEXT,
+  requested_by TEXT NOT NULL, acting_bot_id TEXT, automation_id TEXT, task_id TEXT, thread_id TEXT, attempt_id TEXT,
   recipient TEXT NOT NULL, recipient_hash TEXT NOT NULL, return_address TEXT NOT NULL,
   mail_class TEXT NOT NULL, color INTEGER NOT NULL, duplex INTEGER NOT NULL,
-  source_blob_id TEXT NOT NULL REFERENCES blobs(id), proof_blob_id TEXT REFERENCES blobs(id),
+  source_blob_id TEXT NOT NULL REFERENCES blobs(id), original_blob_id TEXT REFERENCES blobs(id), proof_blob_id TEXT REFERENCES blobs(id),
+  source_provenance TEXT NOT NULL DEFAULT '{}',
   page_count INTEGER, quote_id TEXT, quote_expires_at TEXT, approval_hash TEXT,
   approval_id TEXT, approved_hash TEXT, submission_quote_id TEXT, hq_letter_id TEXT,
   total_micros INTEGER NOT NULL DEFAULT 0, currency TEXT NOT NULL DEFAULT 'USD',
   status TEXT NOT NULL DEFAULT 'quoted', tracking TEXT NOT NULL DEFAULT '[]',
-  cancel_possible INTEGER NOT NULL DEFAULT 0, always_ask INTEGER NOT NULL DEFAULT 1,
+  cancel_possible INTEGER NOT NULL DEFAULT 0, always_ask INTEGER NOT NULL DEFAULT 1, approval_reason TEXT NOT NULL DEFAULT '',
   error TEXT NOT NULL DEFAULT '', attempts INTEGER NOT NULL DEFAULT 0, next_sync_at TEXT,
-  submitted_at TEXT, accepted_at TEXT, created_at TEXT NOT NULL, updated_at TEXT NOT NULL
+  submitted_at TEXT, accepted_at TEXT, charged_micros INTEGER, spend_released INTEGER NOT NULL DEFAULT 0,
+  billing TEXT NOT NULL DEFAULT 'unknown', created_at TEXT NOT NULL, updated_at TEXT NOT NULL
 );
 CREATE INDEX IF NOT EXISTS letters_due ON letters(status,next_sync_at);
 CREATE INDEX IF NOT EXISTS letters_spend ON letters(submitted_at,acting_bot_id,status);

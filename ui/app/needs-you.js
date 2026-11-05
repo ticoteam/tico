@@ -233,6 +233,7 @@ function approvalFacts(what, p, it = {}) {
     rows = [['Proof', link], ['Recipient', address(p.recipient)], ['Return address', address(p.return_address)],
       ['Class', shown(p.mail_class).replaceAll('_', ' ')], ['Print', `${p.color ? 'Color' : 'Black and white'} · ${p.duplex ? 'Duplex' : 'Single sided'}`],
       ['Pages', shown(p.page_count)], ['Total', '$' + (Number(p.total_micros) / 1000000).toLocaleString('en-US', {minimumFractionDigits: 2, maximumFractionDigits: 6})]];
+    if (p.reason) rows.push(['Why an OK is needed', shown(p.reason)]);
     named = Object.keys(p);
   } else if (what === 'publish') {
     const text = p.text == null || (typeof p.text === 'string' && !p.text.trim()) ? null : p.text;

@@ -12,8 +12,11 @@ import json
 import logging
 import re
 import threading
+from dataclasses import replace
+from contextlib import suppress
 from types import SimpleNamespace
 from typing import Literal
+from urllib.parse import quote as quote_path
 from xml.sax.saxutils import escape
 
 from fastapi import Query, Request
@@ -31,6 +34,10 @@ FINAL = ("delivered", "returned", "failed", "cancelled", "declined")
 ACTIVE = ("submitting", "submitted", "printing", "mailed")
 MAX_PDF = 5 * 1024 * 1024
 BACKOFF = (60, 300, 900, 3600, 21600)
+
+
+class GatewayFailure(Problem):
+    """A refused or uncertain Gateway request, distinguished from local permission checks."""
 
 
 class Address(Contract):
@@ -135,23 +142,101 @@ def authorize(c, auth, who, *, deferred=False):
     return company, dict(own) if own else {}, mode
 
 
+def access(c, auth, who, row):
+    """A delegated read qualifies independently as the person and the actual bot."""
+    auth.task_snapshot(c)
+    other = who.task_actor
+    principals = (who,) if not other or other == who.actor else (
+        replace(who, task_actor=""), replace(who, actor=other, role="bot", email="", task_actor="", via=""))
+    levels = [_access(c, auth, principal, row) for principal in principals]
+    return None if None in levels else "full" if all(level == "full" for level in levels) else "status"
+
+
+def bot_reader(c, actor, row):
+    return actor == row["requested_by"] or H.actor_id(actor) == row["acting_bot_id"] or (
+        not row["task_id"] and bool(c.execute("SELECT 1 FROM letter_outbox_grants WHERE outbox_id='company' "
+            "AND grantee_type='bot' AND grantee_id=?", (H.actor_id(actor),)).fetchone()))
+
+
+def _access(c, auth, who, row):
+    from . import task_privacy as privacy
+    if who.role == "bot" and not bot_reader(c, who.actor, row):
+        return None
+    eligible = (admin(auth, who) or who.actor == row["requested_by"] or
+        (H.is_bot(who.actor) and H.actor_id(who.actor) == row["acting_bot_id"]) or
+        (row["acting_bot_id"] and auth.bot_manager(c, who, row["acting_bot_id"])) or
+        (not row["task_id"] and can_send(c, auth, who)))
+    if not eligible:
+        return None
+    try:
+        if row["task_id"]:
+            auth.task(c, who, row["task_id"])
+        if row["thread_id"]:
+            auth.conversation(c, who, row["thread_id"])
+        if not privacy.blob_readable(c, privacy.actor(who), row["source_blob_id"]):
+            raise Problem("privacy", "The letter's source is no longer readable", 403)
+    except Problem:
+        return "status" if admin(auth, who) else None
+    return "full"
+
+
+def provenance(c, who, body, original):
+    """Keep the source's task/run/thread identities even if its Library entry is later removed."""
+    from . import task_privacy as privacy
+    tasks, attempts, rooms = ({body.task_id} if body.task_id else set(),
+        {who.attempt_id} if who.attempt_id else set(), {body.thread_id} if body.thread_id else set())
+    pending, seen = [original] if original else [], set()
+    while pending:
+        bid = pending.pop()
+        if bid in seen:
+            continue
+        if len(seen) >= 100:
+            raise Problem("source_provenance", "The source has too many linked versions; upload a PDF", 422)
+        seen.add(bid)
+        tasks.update(row[0] for row in c.execute(privacy.BLOB_TASKS_SQL, (bid,)))
+        for row in c.execute(privacy.BLOB_FILES_SQL, (bid, bid, bid)):
+            if row["task_id"]:
+                tasks.add(row["task_id"])
+            if row["scope"].startswith("task:"):
+                tasks.add(row["scope"][5:])
+            if row["attempt_id"]:
+                attempts.add(row["attempt_id"])
+        for row in c.execute(privacy.BLOB_MESSAGES_SQL, (bid,)):
+            tasks.update(privacy.message_tasks(c, dict(row), current=True))
+            if row["conversation_id"]:
+                rooms.add(row["conversation_id"])
+        rooms.update(row[0] for row in c.execute("SELECT f.conversation_id FROM bot_files f JOIN bot_file_versions v "
+            "ON f.id=v.file_id WHERE f.conversation_id IS NOT NULL AND (v.blob_id=? OR v.poster_blob_id=? OR v.thumb_blob_id=?)",
+            (bid, bid, bid)))
+        for link in c.execute(privacy.LETTER_BLOBS_SQL, (bid, bid)):
+            frozen = H._json(link["source_provenance"], {}) or {}
+            tasks.update(frozen.get("tasks", []))
+            attempts.update(frozen.get("attempts", []))
+            rooms.update(frozen.get("threads", []))
+            if link["task_id"]:
+                tasks.add(link["task_id"])
+            if link["attempt_id"]:
+                attempts.add(link["attempt_id"])
+            if link["thread_id"]:
+                rooms.add(link["thread_id"])
+            if link["original_blob_id"]:
+                pending.append(link["original_blob_id"])
+        pending.extend(row[0] for row in c.execute(privacy.BLOB_PARENTS_SQL, (bid, bid)))
+    for attempt in attempts:
+        tasks.update(privacy.attempt_tasks(c, attempt))
+    return {"tasks": sorted(tasks), "attempts": sorted(attempts), "threads": sorted(rooms)}
+
+
 def readable(c, auth, who, row):
-    if admin(auth, who):
-        return True
-    if row["acting_bot_id"] and who.task_actor and H.actor_id(who.task_actor) != row["acting_bot_id"]:
-        return False
-    if who.actor == row["requested_by"] or (H.is_bot(who.actor) and H.actor_id(who.actor) == row["acting_bot_id"]):
-        return True
-    if row["acting_bot_id"] and auth.bot_manager(c, who, row["acting_bot_id"]):
-        return True
-    return False
+    return access(c, auth, who, row) == "full"
 
 
-def get(c, auth, who, ident):
+def get(c, auth, who, ident, *, metadata=False):
     row = c.execute("SELECT * FROM letters WHERE id=?", (ident,)).fetchone()
-    if row is None or not readable(c, auth, who, row):
+    level = access(c, auth, who, row) if row else None
+    if level is None or (level != "full" and not metadata):
         raise Problem("not_found", "Letter not found", 404)
-    return dict(row)
+    return dict(row) | {"_redacted": level != "full"}
 
 
 def blob_access(c, auth, who, bid):
@@ -161,16 +246,28 @@ def blob_access(c, auth, who, bid):
 
 
 def public(row):
+    row = dict(row)
+    if row.get("_redacted"):
+        return {k: row[k] for k in ("id", "acting_bot_id", "page_count", "mail_class", "total_micros", "currency",
+                "status", "billing", "charged_micros", "created_at", "updated_at")} | {"redacted": True, "can_cancel": cancellable(row)}
     out = {k: row[k] for k in ("id", "requested_by", "acting_bot_id", "automation_id", "task_id", "thread_id",
         "page_count", "mail_class", "color", "duplex", "quote_id", "quote_expires_at", "approval_id",
         "approval_hash", "hq_letter_id", "total_micros", "currency", "status", "cancel_possible", "error",
-        "created_at", "updated_at")}
+        "accepted_at", "charged_micros", "billing", "created_at", "updated_at")}
+    out["approval_reason"] = row["approval_reason"]
+    out["letter_id"] = row["id"]
+    out["redacted"] = False
+    out["can_cancel"] = cancellable(row)
     for key in ("recipient", "return_address", "tracking"):
         out[key] = H._json(row[key], [] if key == "tracking" else {})
     out["proof"] = "/api/v2/files/" + row["proof_blob_id"] if row["proof_blob_id"] else None
     for key in ("color", "duplex", "cancel_possible"):
         out[key] = bool(out[key])
     return out
+
+
+def cancellable(row):
+    return row["status"] != "cancelled" and (not row["hq_letter_id"] or bool(row["cancel_possible"]))
 
 
 def render(text):
@@ -201,7 +298,19 @@ def pdf_text(data):
         pdf = PdfReader(io.BytesIO(data))
         if pdf.is_encrypted or not 1 <= len(pdf.pages) <= 100:
             raise ValueError()
-        return "\n".join((page.extract_text() or "")[:6000] for page in pdf.pages)[:12000]
+        parts, complete = [], True
+        for page in pdf.pages:
+            text = None
+            # Any extraction failure requires an OK; parser errors never grant autonomous sending.
+            with suppress(Exception):
+                text = page.extract_text()
+            if not isinstance(text, str):
+                text, complete = "", False
+            if len(text.strip()) < 50 or len(text) > 6000:
+                complete = False
+            parts.append(text[:6000])
+        text = "\n".join(parts)
+        return text[:12000], complete and len(text) <= 12000
     except (PyPdfError, ValueError, TypeError, KeyError, IndexError, RecursionError, OverflowError):
         raise Problem("pdf", "Use an unencrypted PDF with 1 to 100 pages", 422) from None
 
@@ -218,14 +327,14 @@ class Letters:
         with self.store.read() as c:
             key, base, _ = gateway_connection.target(c, getattr(self.app.state, "vault", None), self.config)
         if not key:
-            raise Problem("unconfigured", "Letters out: Not set up", 503)
+            raise GatewayFailure("unconfigured", "Letters out: Not set up", 503)
         try:
             result = G.letters(key, base, path, **kwargs)
         except G.LettersError as exc:
             if exc.code == "unconfigured":
                 with self.store.transaction() as c:
                     c.execute("UPDATE letter_outboxes SET availability='unconfigured',checked_at=? WHERE id='company'", (H.now(),))
-            raise Problem(exc.code, "Letters out: Coming soon" if exc.code == "unconfigured" else
+            raise GatewayFailure(exc.code, "Letters out: Coming soon" if exc.code == "unconfigured" else
                           "Letters out: " + exc.code.replace("_", " "), exc.status) from None
         with self.store.transaction() as c:
             c.execute("UPDATE letter_outboxes SET availability='ready',checked_at=? WHERE id='company'", (H.now(),))
@@ -255,7 +364,7 @@ class Letters:
         if bool(body.text) == bool(body.file_id):
             raise Problem("source", "Provide either text or file_id", 422)
         if body.text:
-            return render(body.text)
+            return render(body.text), None
         from .media import blob_for
         from .files import is_file_id
         with self.store.read() as c:
@@ -275,7 +384,7 @@ class Letters:
             if blob["size"] > MAX_PDF:
                 raise Problem("pdf", "Use a PDF of at most 5 MiB", 422)
             digest = blob["digest"]
-        return self.app.state.blobs.get(digest)
+        return self.app.state.blobs.get(digest), blob["id"]
 
     def quote(self, who, body):
         with self.store.read() as c:
@@ -299,9 +408,19 @@ class Letters:
             task = H.task(c, body.task_id) if body.task_id else None
             origin = str((task or {}).get("trigger_source") or "")
             automation_id = origin.removeprefix("automation:") if origin.startswith("automation:") else None
-        data = self.source(who, body)
-        text = pdf_text(data)
-        must_ask = body.mail_class != "first_class" or self.triage(body.recipient.model_dump(), text)
+        data, original = self.source(who, body)
+        with self.store.read() as c:
+            sources = provenance(c, who, body, original)
+            if not body.task_id and len(sources["tasks"]) == 1:
+                body = body.model_copy(update={"task_id": sources["tasks"][0]})
+            for task_id in sources["tasks"]:
+                self.auth.task(c, who, task_id)
+        text, complete = pdf_text(data)
+        if body.text:
+            # Tico renders only this text: the original input covers every page without OCR or sampling loss.
+            text, complete = body.text[:12000], len(body.text) <= 12000
+        reason = "Couldn't read the whole letter, so it needs an OK" if not complete else ""
+        must_ask = not complete or body.mail_class != "first_class" or self.triage(body.recipient.model_dump(), text)
         source_digest = self.app.state.blobs.put(data, "application/pdf")
         recipient = body.recipient.model_dump()
         ident, now = H.new_id(), H.now()
@@ -309,11 +428,13 @@ class Letters:
             authorize(c, self.auth, who)
             source = blobs.register(c, who, source_digest, len(data), "letter.pdf", "application/pdf")
             c.execute("INSERT INTO letters(id,outbox_id,requested_by,acting_bot_id,automation_id,task_id,thread_id,recipient,"
-                "recipient_hash,return_address,mail_class,color,duplex,source_blob_id,always_ask,created_at,updated_at) "
-                "VALUES(?,'company',?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)", (ident, who.actor, acting_bot(who), automation_id, body.task_id,
+                "recipient_hash,return_address,mail_class,color,duplex,source_blob_id,original_blob_id,attempt_id,always_ask,"
+                "approval_reason,source_provenance,created_at,updated_at) VALUES(?,'company',?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+                (ident, who.actor, acting_bot(who), automation_id, body.task_id,
                 body.thread_id, dump(recipient), hashlib.sha256(dump(recipient).encode()).hexdigest(),
-                dump(company["return_address"]), body.mail_class, int(body.color), int(body.duplex), source["id"],
-                int(must_ask), now, now))
+                dump(company["return_address"]), body.mail_class, int(body.color), int(body.duplex), source["id"], original,
+                who.attempt_id or None, int(must_ask), reason, dump(sources), now, now))
+            get(c, self.auth, who, ident)
         try:
             self.requote(ident)
         except Problem as exc:
@@ -376,7 +497,7 @@ class Letters:
             "proof": "/api/v2/files/" + row["proof_blob_id"], "recipient": json.loads(row["recipient"]),
             "return_address": json.loads(row["return_address"]), "mail_class": row["mail_class"],
             "total_micros": row["total_micros"], "currency": "USD", "color": bool(row["color"]),
-            "duplex": bool(row["duplex"]), "page_count": row["page_count"]}
+            "duplex": bool(row["duplex"]), "page_count": row["page_count"], "reason": row["approval_reason"]}
         approval = H.approval_request(c, row["requested_by"], "letter", payload, row["task_id"], to=self.approver(c, row))
         c.execute("UPDATE letters SET approval_id=?,approved_hash=NULL,status='waiting_for_ok',error='',updated_at=? "
                   "WHERE id=?", (approval["id"], H.now(), row["id"]))
@@ -393,9 +514,9 @@ class Letters:
         for bot, limit in ((None, company["monthly_cap_micros"]), (row["acting_bot_id"], own.get("monthly_cap_micros"))):
             if limit is None:
                 continue
-            sql = "SELECT COALESCE(SUM(total_micros),0) FROM letters WHERE substr(submitted_at,1,7)=? "
-            sql += "AND (status IN ('submitting','submitted','printing','mailed','delivered','returned') "
-            sql += "OR (accepted_at IS NOT NULL AND status<>'cancelled')) AND id<>?"
+            sql = "SELECT COALESCE(SUM(CASE WHEN billing='reversed' AND charged_micros IS NOT NULL "
+            sql += "THEN charged_micros ELSE total_micros END),0) "
+            sql += "FROM letters WHERE substr(submitted_at,1,7)=? AND spend_released=0 AND id<>?"
             args = [month, row["id"]]
             if bot:
                 sql += " AND acting_bot_id=?"
@@ -405,12 +526,19 @@ class Letters:
 
     def send(self, who, ident):
         with self.lock:
+            with self.store.read() as c:
+                authorize(c, self.auth, who)
+                first = get(c, self.auth, who, ident)
+                if who.actor != first["requested_by"] and not admin(self.auth, who):
+                    raise Problem("forbidden", "Only the requester sends this letter", 403)
+            if first["status"] == "quoted" and (first["error"] or first["quote_expires_at"] <= H.now()):
+                self.requote(ident)
             with self.store.transaction() as c:
                 company, own, mode = authorize(c, self.auth, who)
                 row = get(c, self.auth, who, ident)
                 if who.actor != row["requested_by"] and not admin(self.auth, who):
                     raise Problem("forbidden", "Only the requester sends this letter", 403)
-                if row["status"] not in ("quoted", "waiting_for_ok", "ready", "submitting"):
+                if row["status"] not in ("quoted", "waiting_for_ok", "ready", "submitting", "needs_review"):
                     return public(row)
                 from . import task_privacy
                 task_privacy.guard_write(c, who, "/api/v2/letters/" + ident + "/send", self.auth)
@@ -435,7 +563,10 @@ class Letters:
         with self.store.read() as c:
             row = dict(c.execute("SELECT * FROM letters WHERE id=?", (ident,)).fetchone())
             approval = H.approval(c, row["approval_id"]) if row["approval_id"] else None
-        if row["status"] in FINAL or row["status"] == "quoted":
+        if (row["status"] in FINAL and not row["hq_letter_id"]) or row["status"] == "quoted":
+            return
+        if row["error"] == "cancel_requested" and not row["hq_letter_id"]:
+            self.resolve_claim(ident)
             return
         if row["status"] == "waiting_for_ok":
             if not approval or not approval["decision"]:
@@ -444,22 +575,20 @@ class Letters:
                 with self.store.transaction() as c:
                     c.execute("UPDATE letters SET status='declined',updated_at=? WHERE id=?", (H.now(), ident))
                 return
+        had_claim = bool(row["submission_quote_id"])
         try:
             if row["hq_letter_id"]:
                 self.update(ident, self.call("/" + row["hq_letter_id"]))
                 return
+            with self.store.read() as c:
+                self.check_sender(c, row)
             if not row["submission_quote_id"]:
                 # A long-lived approval always gets a fresh quote, including a new provider proof.
                 if approval or row["quote_expires_at"] <= H.now():
                     self.requote(ident)
-                with self.store.transaction() as c:
+                with self.store.transaction(durable=True) as c:
                     row = dict(c.execute("SELECT * FROM letters WHERE id=?", (ident,)).fetchone())
-                    who = (Identity(row["requested_by"], "bot") if H.is_bot(row["requested_by"]) else
-                           self.auth.identity_for_actor(c, row["requested_by"]))
-                    if row["acting_bot_id"] and not H.is_bot(who.actor):
-                        from dataclasses import replace
-                        who = replace(who, task_actor="bot:" + row["acting_bot_id"])
-                    company, own, mode = authorize(c, self.auth, who, deferred=True)
+                    mode = self.check_sender(c, row)
                     if approval:
                         approval = H.approval(c, row["approval_id"])
                         if not approval or approval["decision"] != "approved" or approval["consumed_at"]:
@@ -470,34 +599,60 @@ class Letters:
                             self.ask(c, row)
                             return
                         decider = self.auth.identity_for_actor(c, approval["decided_by_id"])
-                        if not (admin(self.auth, decider) or (row["acting_bot_id"] and
-                                self.auth.bot_manager(c, decider, row["acting_bot_id"])) or decider.actor == row["requested_by"]):
-                            raise Problem("forbidden", "The approver no longer manages this bot", 403)
+                        self.auth.approval(c, decider, approval["id"], decide=True)
                     elif self.needs_approval(c, row, mode):
                         self.ask(c, row)
                         return
-                    self.cap(c, row, company, own)
                     if approval:
                         H.approval_consume(c, row["requested_by"], approval["id"])
                     c.execute("UPDATE letters SET status='submitting',submission_quote_id=quote_id,approved_hash=?,"
+                        "billing='unknown',spend_released=0,charged_micros=NULL,accepted_at=NULL,"
                         "submitted_at=?,next_sync_at=?,updated_at=? WHERE id=?",
                         (row["approval_hash"] if approval else None, H.now(), H.now(), H.now(), ident))
                     row["submission_quote_id"] = row["quote_id"]
+            else:
+                with self.store.transaction(durable=True) as c:
+                    mode = self.check_sender(c, row)
+                    if not row["approved_hash"] and self.needs_approval(c, row, mode):
+                        raise Problem("approval_required", "The current policy requires an OK", 403)
+                    if row["approved_hash"]:
+                        approval = H.approval(c, row["approval_id"])
+                        if not approval or approval["decision"] != "approved":
+                            raise Problem("approval_required", "The approval is no longer valid", 403)
+                        decider = self.auth.identity_for_actor(c, approval["decided_by_id"])
+                        self.auth.approval(c, decider, approval["id"], decide=True)
             result = self.call(body={"quote_id": row["submission_quote_id"]}, idempotency_key="tico-letter:" + ident)
             self.update(ident, result)
         except Problem as exc:
+            if exc.code == "idempotency_key_abandoned" and not row["hq_letter_id"]:
+                self.abandoned(ident)
+                return
             if exc.code in ("quote_changed", "quote_expired") and not row["hq_letter_id"]:
                 # HQ refused before claiming the send. A new quote must receive a new approval.
-                with self.store.transaction() as c:
-                    c.execute("UPDATE letters SET submission_quote_id=NULL,approved_hash=NULL,submitted_at=NULL,"
-                              "status='quoted',error=?,updated_at=? WHERE id=?", (exc.code, H.now(), ident))
+                self.refused(ident, exc.code)
                 try:
+                    with self.store.read() as c:
+                        self.check_sender(c, row)
                     self.requote(ident)
                     with self.store.transaction() as c:
                         current = dict(c.execute("SELECT * FROM letters WHERE id=?", (ident,)).fetchone())
                         self.ask(c, current)
                 except Problem:
                     pass
+                return
+            preclaim = isinstance(exc, GatewayFailure) and (exc.code == "unconfigured" or (
+                400 <= exc.status < 500 and exc.code not in ("idempotency_conflict", "quote_already_used")))
+            if preclaim and not had_claim and not row["hq_letter_id"]:
+                self.refused(ident, exc.code)
+                return
+            if row["submission_quote_id"] and not row["hq_letter_id"] and (
+                    exc.code in ("idempotency_conflict", "quote_already_used") or
+                    had_claim and (not isinstance(exc, GatewayFailure) or preclaim)):
+                # Resolve never submits; old HQ versions retain the hold and require an admin's review.
+                if not self.resolve_claim(ident):
+                    with self.store.transaction(durable=True) as c:
+                        c.execute("UPDATE letters SET status='needs_review',error=?,next_sync_at=NULL,updated_at=? WHERE id=?",
+                                  (exc.code, H.now(), ident))
                 return
             # Setup and spend refusals need a person's action, so the sweep leaves them alone until a retry.
             with self.store.transaction() as c:
@@ -506,6 +661,55 @@ class Letters:
                                                    "letters_disabled", "forbidden", "letters_cap", "unstable_proof")
                      else later(BACKOFF[min(row["attempts"], len(BACKOFF)-1)]), H.now(), ident))
 
+    def check_sender(self, c, row):
+        who = (Identity(row["requested_by"], "bot") if H.is_bot(row["requested_by"]) else
+               self.auth.identity_for_actor(c, row["requested_by"]))
+        if row["acting_bot_id"] and not H.is_bot(who.actor):
+            who = replace(who, task_actor="bot:" + row["acting_bot_id"])
+        company, own, mode = authorize(c, self.auth, who, deferred=True)
+        if not readable(c, self.auth, who, row):
+            raise Problem("forbidden", "The sender can no longer read this letter's source", 403)
+        self.cap(c, row, company, own)
+        return mode
+
+    def refused(self, ident, code):
+        """A definite first-attempt refusal releases the unsent claim; a new send gets a new quote and OK."""
+        with self.store.transaction(durable=True) as c:
+            row = c.execute("SELECT * FROM letters WHERE id=?", (ident,)).fetchone()
+            approval = H.approval(c, row["approval_id"]) if row["approval_id"] else None
+            if approval and approval["decision"] == "approved" and not approval["consumed_at"]:
+                H.approval_consume(c, row["requested_by"], approval["id"])
+            c.execute("UPDATE letters SET submission_quote_id=NULL,approved_hash=NULL,submitted_at=NULL,approval_id=NULL,"
+                      "status='quoted',billing='none',charged_micros=0,accepted_at=NULL,spend_released=1,"
+                      "quote_expires_at=?,attempts=0,next_sync_at=NULL,error=?,updated_at=? WHERE id=?",
+                      (H.now(), code, H.now(), ident))
+
+    def abandoned(self, ident):
+        with self.store.transaction(durable=True) as c:
+            c.execute("UPDATE letters SET status='cancelled',billing='none',charged_micros=0,spend_released=1,"
+                      "next_sync_at=NULL,error='',updated_at=? WHERE id=?", (H.now(), ident))
+
+    def resolve_claim(self, ident):
+        """Resolve or abandon a key without asking HQ to submit anything; older HQ versions keep the hold."""
+        try:
+            result = self.call("/keys/" + quote_path("tico-letter:" + ident, safe="") + "/resolve", body={})
+        except Problem:
+            return False
+        if isinstance(result, dict) and isinstance(result.get("letter"), dict):
+            with self.store.read() as c:
+                row = c.execute("SELECT submission_quote_id FROM letters WHERE id=?", (ident,)).fetchone()
+            if result["letter"].get("quote_id") != row["submission_quote_id"]:
+                return False
+            try:
+                self.update(ident, result["letter"])
+            except Problem:
+                return False
+            return True
+        if isinstance(result, dict) and "letter" in result and result["letter"] is None and result.get("abandoned") is True:
+            self.abandoned(ident)
+            return True
+        return False
+
     def update(self, ident, result):
         status = result.get("status")
         if status not in ACTIVE + FINAL or not re.fullmatch(r"lt_[A-Za-z0-9_-]{1,150}", result.get("letter_id", "")):
@@ -513,32 +717,55 @@ class Letters:
         tracking = [{"barcode": str(t.get("barcode") or "")[:100], "status": t.get("status")
                      if t.get("status") in ACTIVE + FINAL else None} for t in result.get("tracking", [])[:20]]
         with self.store.transaction() as c:
-            previous = c.execute("SELECT accepted_at FROM letters WHERE id=?", (ident,)).fetchone()
-            accepted = previous[0] or (H.now() if status in ("submitted", "printing", "mailed", "delivered", "returned") else None)
+            previous = c.execute("SELECT * FROM letters WHERE id=?", (ident,)).fetchone()
+            accepted = result.get("accepted_at") or previous["accepted_at"]
+            charged = result.get("charged_micros", previous["charged_micros"])
+            charged = charged if isinstance(charged, int) and not isinstance(charged, bool) and charged >= 0 else previous["charged_micros"]
+            billing = result.get("billing", previous["billing"])
+            billing = billing if billing in ("none", "hold", "billed", "void", "reversed") else "unknown"
+            # A terminal delivery state does not say whether HQ still charges for the letter.
+            released = int(billing in ("none", "void") or (billing == "reversed" and charged == 0))
+            needs_billing = (billing in ("unknown", "hold") or (billing == "reversed" and charged is None)
+                             or (status == "cancelled" and not released))
             c.execute("UPDATE letters SET hq_letter_id=?,status=?,tracking=?,cancel_possible=?,error=?,attempts=0,"
-                "accepted_at=?,next_sync_at=?,updated_at=? WHERE id=?", (result["letter_id"], status, dump(tracking),
+                "accepted_at=?,charged_micros=?,spend_released=?,billing=?,"
+                "next_sync_at=?,updated_at=? WHERE id=?", (result["letter_id"], status, dump(tracking),
                 int(bool(result.get("cancel_possible"))), str(result.get("error") or "")[:100],
-                accepted, None if status in FINAL else later(600 if status != "mailed" else 86400), H.now(), ident))
+                accepted, charged, released, billing,
+                None if status in FINAL and not needs_billing else later(600 if status != "mailed" else 86400), H.now(), ident))
             H.event(c, H.KEEPER, "letter.updated", ident, {"status": status})
 
     def cancel(self, who, ident):
         with self.lock:
+            with self.store.read() as c:
+                first = get(c, self.auth, who, ident, metadata=True)
+                if not (admin(self.auth, who) or first["requested_by"] == who.actor or
+                        (first["acting_bot_id"] and self.auth.bot_manager(c, who, first["acting_bot_id"]))):
+                    raise Problem("forbidden", "Only the requester or its manager cancels a letter", 403)
+            if first["submission_quote_id"] and not first["hq_letter_id"]:
+                if not self.resolve_claim(ident):
+                    with self.store.transaction(durable=True) as c:
+                        c.execute("UPDATE letters SET status='needs_review',error='cancel_requested',next_sync_at=NULL,"
+                                  "updated_at=? WHERE id=?", (H.now(), ident))
             with self.store.transaction() as c:
-                row = get(c, self.auth, who, ident)
+                row = get(c, self.auth, who, ident, metadata=True)
                 if not (admin(self.auth, who) or row["requested_by"] == who.actor or
                         (row["acting_bot_id"] and self.auth.bot_manager(c, who, row["acting_bot_id"]))):
                     raise Problem("forbidden", "Only the requester or its manager cancels a letter", 403)
-                if row["status"] in ("quoted", "waiting_for_ok", "ready"):
+                if row["status"] == "cancelled":
+                    return public(row)
+                if not row["hq_letter_id"] and not row["submission_quote_id"]:
                     if row["approval_id"]:
                         H.approval_withdraw(c, row["approval_id"], "Letter cancelled")
-                    c.execute("UPDATE letters SET status='cancelled',updated_at=? WHERE id=?", (H.now(), ident))
-                    return public(get(c, self.auth, who, ident))
+                    c.execute("UPDATE letters SET status='cancelled',billing='none',charged_micros=0,spend_released=1,"
+                              "updated_at=? WHERE id=?", (H.now(), ident))
+                    return public(get(c, self.auth, who, ident, metadata=True))
                 if not row["hq_letter_id"]:
                     raise Problem("submission_unknown", "Submission is being reconciled; check status before cancelling", 409)
             # The provider's honest refusal is passed through, regardless of its cancel_possible hint.
             self.update(ident, self.call("/" + row["hq_letter_id"] + "/cancel", body={}))
             with self.store.read() as c:
-                return public(get(c, self.auth, who, ident))
+                return public(get(c, self.auth, who, ident, metadata=True))
 
     def drain(self):
         if self.config.demo or self.config.rehearsal or not self.lock.acquire(blocking=False):
@@ -547,8 +774,10 @@ class Letters:
             with self.store.read() as c:
                 due = [r[0] for r in c.execute("SELECT l.id FROM letters l LEFT JOIN approvals a ON a.id=l.approval_id "
                     "WHERE ((l.status='waiting_for_ok' AND a.decision IS NOT NULL AND (l.error='' OR l.next_sync_at<=?)) OR "
-                    "(l.status IN ('ready','submitting','submitted','printing','mailed') AND l.next_sync_at<=?)) "
-                    "ORDER BY l.updated_at LIMIT 10", (H.now(), H.now()))]
+                    "(l.status IN ('ready','submitting','submitted','printing','mailed') AND l.next_sync_at<=?) OR "
+                    "(l.hq_letter_id IS NOT NULL AND l.spend_released=0 AND l.status IN ('failed','cancelled','returned','delivered') "
+                    "AND l.next_sync_at<=?)) "
+                    "ORDER BY l.updated_at LIMIT 10", (H.now(), H.now(), H.now()))]
             for ident in due:
                 self.process(ident)
         finally:
@@ -676,12 +905,15 @@ def install(app, config, store, auth, mutate):
                     or (request.state.identity.via and not request.state.identity.confirmed)):
                 raise Problem("forbidden", "Only this bot's manager changes its settings", 403)
             company = settings(c)
-            if body.mode and MODES[body.mode] < MODES[company["mode"]]:
+            values = body.model_dump(exclude_unset=True)
+            if values.get("mode") and MODES[values["mode"]] < MODES[company["mode"]]:
                 raise Problem("policy", "A bot's setting cannot loosen the company setting", 422)
+            previous = c.execute("SELECT * FROM letter_bot_settings WHERE bot_id=?", (bot_id,)).fetchone()
+            merged = ({"mode": None, "monthly_cap_micros": None} if not previous else dict(previous)) | values
             c.execute("INSERT INTO letter_bot_settings VALUES(?,?,?,?,?) ON CONFLICT(bot_id) DO UPDATE SET "
                 "mode=excluded.mode,monthly_cap_micros=excluded.monthly_cap_micros,updated_by=excluded.updated_by,"
-                "updated_at=excluded.updated_at", (bot_id, body.mode, body.monthly_cap_micros, request.state.identity.actor, H.now()))
-            H.event(c, request.state.identity.actor, "letter.bot_settings", bot_id, body.model_dump())
+                "updated_at=excluded.updated_at", (bot_id, merged["mode"], merged["monthly_cap_micros"], request.state.identity.actor, H.now()))
+            H.event(c, request.state.identity.actor, "letter.bot_settings", bot_id, values)
             return dict(c.execute("SELECT * FROM letter_bot_settings WHERE bot_id=?", (bot_id,)).fetchone())
         return mutate(request, body, work)
 
@@ -698,9 +930,10 @@ def install(app, config, store, auth, mutate):
             shown, used, cursor = [], 0, None
             for row in rows:
                 cursor = row["id"]
-                if not readable(c, auth, request.state.identity, row):
+                level = access(c, auth, request.state.identity, row)
+                if level is None:
                     continue
-                entry = public(row)
+                entry = public(dict(row) | {"_redacted": level != "full"})
                 size = len(dump(entry).encode())
                 if shown and (len(shown) >= limit or used + size > 96 * 1024):
                     return {"items": shown, "next_before": shown[-1]["id"]}
@@ -711,7 +944,7 @@ def install(app, config, store, auth, mutate):
     @app.get("/api/v2/letters/{letter_id}")
     def detail(request: Request, letter_id: str):
         with store.read() as c:
-            return public(get(c, auth, request.state.identity, letter_id))
+            return public(get(c, auth, request.state.identity, letter_id, metadata=True))
 
     @app.post("/api/v2/letters/{letter_id}/send")
     def send(request: Request, letter_id: str):

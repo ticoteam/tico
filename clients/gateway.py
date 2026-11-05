@@ -208,7 +208,8 @@ def letters(key, base, path="", *, body=None, idempotency_key=None, pdf=False):
         code = _code(exc.read(4096))
         allowed = {"unconfigured", "cannot_cancel", "quote_changed", "quote_expired", "idempotency_conflict",
                    "quote_already_used", "invalid", "provider_rejected", "provider_error", "address_pending",
-                   "out_of_credit", "cap_reached", "billing_required", "rate_limited", "not_found", "revoked_key", "unknown_key"}
+                   "out_of_credit", "cap_reached", "billing_required", "rate_limited", "not_found", "revoked_key", "unknown_key",
+                   "idempotency_key_abandoned"}
         raise LettersError(exc.code, code if code in allowed else "gateway_error") from None
     except (OSError, ValueError, urllib.error.URLError):
         raise LettersError(502, "gateway_unavailable") from None

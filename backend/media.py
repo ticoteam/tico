@@ -434,15 +434,15 @@ def blob_for(c, auth, who, bid):
     row = c.execute("SELECT * FROM blobs WHERE id=?", (bid,)).fetchone()
     if not row:
         raise Problem("not_found", "File not found", 404)
-    from . import task_privacy as privacy
-    if not privacy.blob_readable(c, privacy.actor(who), bid):
-        raise Problem("not_found", "File not found", 404)
     from . import letters
     letter = letters.blob_access(c, auth, who, bid)
     if letter is not None:
         if not letter:
-            raise Problem("not_found", "File not found", 404)
+            raise Problem("forbidden", "You cannot read this letter's source or proof", 403)
         return row
+    from . import task_privacy as privacy
+    if not privacy.blob_readable(c, privacy.actor(who), bid):
+        raise Problem("not_found", "File not found", 404)
     # Scan grants are checked for the represented person and the actual bot independently.
     from . import postal_mail
     scan = postal_mail.scan_access(c, auth, who, bid)

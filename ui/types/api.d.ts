@@ -3095,12 +3095,19 @@ export type LetterBotSettings = {
   monthly_cap_micros: number | null;
 };
 
-export type LetterOut = {
+export type LetterOut = LetterOutContents | LetterOutMetadata;
+
+export type LetterOutContents = {
+  accepted_at: string | null;
   acting_bot_id: string | null;
   approval_hash: string | null;
   approval_id: string | null;
+  approval_reason: string;
   automation_id: string | null;
+  billing: string;
+  can_cancel: boolean;
   cancel_possible: boolean;
+  charged_micros: number | null;
   color: boolean;
   created_at: string;
   currency: string;
@@ -3108,12 +3115,14 @@ export type LetterOut = {
   error: string;
   hq_letter_id: string | null;
   id: string;
+  letter_id: string;
   mail_class: string;
   page_count: number | null;
   proof: string | null;
   quote_expires_at: string | null;
   quote_id: string | null;
   recipient: Record<string, unknown>;
+  redacted: false;
   requested_by: string;
   return_address: Record<string, unknown>;
   status: string;
@@ -3124,6 +3133,22 @@ export type LetterOut = {
   barcode: string;
   status: string | null;
 }>;
+  updated_at: string;
+};
+
+export type LetterOutMetadata = {
+  acting_bot_id: string | null;
+  billing: string;
+  can_cancel: boolean;
+  charged_micros: number | null;
+  created_at: string;
+  currency: string;
+  id: string;
+  mail_class: string;
+  page_count: number | null;
+  redacted: true;
+  status: string;
+  total_micros: number;
   updated_at: string;
 };
 
