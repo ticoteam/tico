@@ -373,7 +373,8 @@ def page_references(value, c=None, *, file_ids=None):
                 candidate = re.split(r"[/?@]", candidate, maxsplit=1)[0]
                 resolved = aliases.get(candidate, ())
                 # A structured live version identifies its own bytes; matching digests on unrelated pages do not.
-                if resolved and explicit and c is not None and re.fullmatch(r"[0-9a-f]{64}", candidate):
+                if (resolved and explicit and not set(resolved).issubset(explicit) and c is not None
+                        and re.fullmatch(r"[0-9a-f]{64}", candidate)):
                     live = {fid for fid in explicit if read_cache.one(c,
                         "SELECT 1 FROM bot_file_versions v JOIN bot_files f ON f.id=v.file_id "
                         "WHERE v.file_id=? AND f.state<>'deleted' AND (v.digest=? OR v.source_digest=?) LIMIT 1",
