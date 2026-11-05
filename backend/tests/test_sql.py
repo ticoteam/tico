@@ -555,9 +555,9 @@ def test_direct_refs_cannot_override_denied_conversation_task(api, world, unknow
         hidden = H.task_create(c, 'human:ben', 'Hidden conversation source', '', 'bot:finance', private=True, lint=False)
         c.execute('UPDATE conversations SET task_id=? WHERE id=?',
                   ('unknown-fixture-task' if unknown else hidden['id'], room))
-    # The attempt's room grant no longer opens a room of a task the bot may not read: SQL fences it as the API does
-    # (threads.readable_sql). ReadIndex below still checks the provenance denial on its own.
-    assert query(api, 'SELECT id FROM conversations WHERE id=?', world['attempt']['token'], params=[room])['rows'] == []
+    # A scoped turn cannot use SQL, including after its room points outside its readable task context.
+    # ReadIndex below still checks the provenance denial independently.
+    query(api, 'SELECT id FROM conversations WHERE id=?', world['attempt']['token'], params=[room], expected=403)
     with store.read() as c:
         who = Identity('bot:ops', 'bot', attempt_id=world['attempt']['id'])
         fast, recursive = ReadIndex(c, who), ReadIndex(c, who)

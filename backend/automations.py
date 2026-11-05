@@ -132,7 +132,6 @@ BOTOPS ="bot:botops"            # builds automations for whoever asks it, with t
 VERSIONED = ("trigger", "steps", "batch", "destinations")   # what the automation does; a change here is a new version
 # The automations a write in this context comes from: their own actions never start them again.
 CHAIN = contextvars.ContextVar("automation_chain", default=())
-_BELL = threading.Event()
 
 
 def ensure(c):
@@ -900,10 +899,13 @@ def _count(c, aid, field):
 
 
 def _ring(c):
+    bell = getattr(c, "automation_bell", None)
+    if bell is None:
+        return   # A standalone connection has no app to notify; the scheduler also reads queued runs.
     if hasattr(c, "after_commit"):
-        c.after_commit.append(_BELL.set)
+        c.after_commit.append(bell.set)
     else:
-        _BELL.set()
+        bell.set()
 
 
 def _guard(c, row):
@@ -2572,8 +2574,8 @@ def install(app, store, auth, mutate):
     @app.middleware("http")
     async def automation_doorbell(request, call_next):
         response = await call_next(request)
-        if _BELL.is_set():
-            _BELL.clear()
+        if store.automation_bell.is_set():
+            store.automation_bell.clear()
             await asyncio.to_thread(hub.drain)
         return response
 
