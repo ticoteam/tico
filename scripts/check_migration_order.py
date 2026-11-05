@@ -1,10 +1,11 @@
 #!/usr/bin/env python3
-"""Reject PR-added migrations that cannot follow the current base branch's migrations (stdlib and git only).
+"""Reject PR-added legacy migration names and duplicate versions (stdlib and git only).
 
 Fetch the base branch tip with full history before running this check; --head is the PR head, not its merge commit.
 """
 import argparse
 from collections import defaultdict
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 import re
 import subprocess
@@ -12,39 +13,40 @@ import subprocess
 ROOT = Path(__file__).resolve().parents[1]
 DIRECTORY = "backend/migrations"
 # Match the loader's numbered SQL and Python files without importing the server.
-NAME = re.compile(r"backend/migrations/(\d{4})_[a-z0-9_]+\.(sql|py)")
+NAME = re.compile(r"backend/migrations/(\d{4}|\d{14})_[a-z0-9_]+\.(sql|py)")
 
 
 def migrations(paths):
-    return {path: int(match.group(1)) for path in paths if (match := NAME.fullmatch(path))}
+    return {path: match.group(1) for path in paths if (match := NAME.fullmatch(path))}
 
 
-def errors(added, head, base, base_name):
-    """Only additions need new numbers; consider both trees when finding collisions and suggesting free numbers."""
+def errors(added, head, base, base_name, *, now=None):
+    """Only additions need timestamps; consider both trees for collisions and free rename suggestions."""
     added, head, base = migrations(added), migrations(head), migrations(base)
-    newest = max(base.values(), default=-1)
     by_number = defaultdict(set)
     for path, number in (base | head).items():
         by_number[number].add(path)
     used = set(by_number)
-    next_free = max(newest + 1, 1)
+    next_free = (now or datetime.now(timezone.utc)).astimezone(timezone.utc).replace(microsecond=0)
     found = []
     for path, number in sorted(added.items()):
         reasons = []
-        if number <= newest:
-            reasons.append(f"{base_name} already has {newest:04d}")
+        if len(number) == 4:
+            reasons.append("new migrations use YYYYMMDDHHMMSS UTC timestamps")
+        if path in base:
+            reasons.append(f"{base_name} already contains {path}")
         others = sorted(by_number[number] - {path})
         if others:
-            reasons.append("number also used by " + ", ".join(Path(other).name for other in others))
+            reasons.append("version also used by " + ", ".join(Path(other).name for other in others))
         if not reasons:
             continue
-        while next_free in used:
-            next_free += 1
-        if next_free > 9999:
-            raise ValueError("No free four-digit migration number remains")
-        name = Path(path).name
-        found.append(f"Renumber {name} to {next_free:04d}{name[4:]}: " + "; ".join(reasons))
-        used.add(next_free)
+        while next_free.strftime("%Y%m%d%H%M%S") in used:
+            next_free += timedelta(seconds=1)
+        timestamp = next_free.strftime("%Y%m%d%H%M%S")
+        suffix = Path(path).name.split("_", 1)[1]
+        target = f"{DIRECTORY}/{timestamp}_{suffix}"
+        found.append(f"{path}: " + "; ".join(reasons) + f". Rename with: git mv {path} {target}")
+        used.add(timestamp)
     return found
 
 
@@ -70,7 +72,7 @@ def main(argv=None):
     try:
         found = check(args.base, args.head, args.base_name)
     except (OSError, subprocess.CalledProcessError, ValueError) as exc:
-        print(f"::error::Cannot check migration order: {exc}")
+        print(f"::error::Cannot check migration names: {exc}")
         return 2
     for message in found:
         print(f"::error::{message}")

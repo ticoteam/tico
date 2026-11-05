@@ -1,11 +1,15 @@
 """The one migration authority for the hub database.
 
-A schema change that persists is a file in this directory, numbered: `NNNN_name.sql` (its statements) or `NNNN_name.py`
+A schema change that persists is a file in this directory: `YYYYMMDDHHMMSS_name.sql` (its statements, UTC) or `.py`
 (a module whose `up(conn)` makes the change, without committing). `apply` runs each file the database has not recorded,
 in order. Each one runs in its own transaction together with its `schema_migrations` row, so a failure leaves neither
 behind and the next start tries it again. An applied file is never edited: its checksum is recorded, and a start refuses
 a database whose recorded checksum no longer matches its file.
-CI requires each PR-added migration to have a unique number above the current base branch tip's newest migration.
+
+Create one with `python3 scripts/new_migration.py name` (add `--py` for `up(conn)`). Existing `NNNN_name` files keep
+their names and checksums. Versions sort as full strings, with legacy files before timestamp files. Every pending file
+runs, even if a newer version has already run. A migration must not depend on another unmerged migration's schema:
+each stands alone, so parallel PRs may merge in either order. CI requires new files to use unique UTC timestamps.
 
 `hubdb.migrate` (every hubdb.connect) calls `apply` right after hubdb's numbered steps and before its own startup schema
 code and the module schema code in `Store.initialize` (the SCHEMA scripts, ensure_schema and add_column calls), so a
@@ -52,7 +56,7 @@ CLOUD_VERSION = 77
 LEGACY = "legacy"
 TABLE = ("CREATE TABLE IF NOT EXISTS schema_migrations(version TEXT PRIMARY KEY, checksum TEXT NOT NULL, "
          "applied_at TEXT NOT NULL)")
-NAME = re.compile(r"(\d{4})_[a-z0-9_]+\.(sql|py)")
+NAME = re.compile(r"(\d{4}|\d{14})_[a-z0-9_]+\.(sql|py)")
 LEGACY_USER = re.compile(r"legacy_user_version_(\d+)")
 LEGACY_CLOUD = re.compile(r"legacy_cloud_(\d+)")
 
@@ -72,16 +76,17 @@ class Migration:
 
 
 def files(directory=None):
-    """The migration files in version order. A name that starts with a digit must match NNNN_name.sql or .py: a file
-    named like one but not matching is an error, not skipped. Only digit-led names are listed, so this module does not
+    """The migration files in full string version order. Digit-led names use NNNN_ or YYYYMMDDHHMMSS_ and .sql/.py.
+    A name that does not match is an error, not skipped. Only digit-led names are listed, so this module does not
     read every tracked file (a bare "*" listing makes the dependency map treat any change as its input)."""
     found = []
     for path in Path(directory or DIRECTORY).glob("[0-9]*"):
         if not NAME.fullmatch(path.name):
-            raise MigrationError(f"{path.name} is not a migration name: use NNNN_name.sql or NNNN_name.py")
+            raise MigrationError(f"{path.name} is not a migration name: use YYYYMMDDHHMMSS_name.sql or .py "
+                                 "(NNNN_name.sql or .py for existing legacy files)")
         found.append(Migration(path))
     found.sort(key=lambda migration: migration.version)
-    numbers = [migration.version[:4] for migration in found]
+    numbers = [migration.version.split("_", 1)[0] for migration in found]
     if len(set(numbers)) != len(numbers):
         raise MigrationError("Two migration files share a number: " + ", ".join(m.version for m in found))
     return found
@@ -229,11 +234,7 @@ def apply(conn, directory=None):
     recorded = conn.execute("SELECT version, checksum FROM schema_migrations").fetchall()
     _verify(recorded, known)
     applied = {version for version, _ in recorded}
-    newest = max((m.version for m in known if m.version in applied), default="")
     for migration in known:
         if migration.version in applied:
             continue
-        if migration.version < newest:
-            raise MigrationError(f"Migration {migration.version} sorts before {newest}, which this database has already "
-                                 "applied. Renumber it.")
         _run(conn, migration)

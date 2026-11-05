@@ -140,7 +140,7 @@ jobs:
 
   static:
     # Every PR: pinned ruff against its baseline (no new findings or suppressions), pyright on the boundary modules,
-    # migration order, the UI's generated API types and the runner wire contract. Seconds each; tools are pinned.
+    # migration names, the UI's generated API types and the runner wire contract. Seconds each; tools are pinned.
     name: static checks
     runs-on: ${{ (github.event_name != 'pull_request' || !github.event.pull_request.head.repo.fork) && format('runs-on={0}/runner=2cpu-linux-x64/extras=s3-cache', github.run_id) || 'ubuntu-24.04' }}
     timeout-minutes: 12
@@ -149,7 +149,7 @@ jobs:
         with:
           persist-credentials: false
           fetch-depth: 0
-      - name: New migrations follow the current base branch
+      - name: New migrations have unique UTC timestamps
         if: github.event_name == 'pull_request'
         env:
           BASE_BRANCH: ${{ github.base_ref }}

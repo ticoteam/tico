@@ -1,4 +1,5 @@
-"""New migrations must run after every migration the current base branch can already have applied."""
+"""Independent timestamped migrations can merge in either order; new legacy names and collisions cannot."""
+from datetime import datetime, timezone
 import os
 from pathlib import Path
 import subprocess
@@ -8,38 +9,51 @@ import pytest
 
 from scripts import check_migration_order as guard
 
+NOW = datetime(2026, 11, 4, 23, 59, 59, tzinfo=timezone.utc)
+
 
 def paths(*names):
     return [f"backend/migrations/{name}" for name in names]
 
 
-@pytest.mark.parametrize("number", [92, 96])
-def test_an_addition_must_be_strictly_newer_than_the_current_base_tip(number):
-    added = paths(f"{number:04d}_x.sql")
-    collision = "; number also used by 0096_main.py" if number == 96 else ""
-    assert guard.errors(added, added, paths("0096_main.py"), "main") == [
-        f"Renumber {number:04d}_x.sql to 0097_x.sql: main already has 0096{collision}"]
+def errors(added, head, base):
+    return guard.errors(added, head, base, "main", now=NOW)
 
 
-def test_duplicate_additions_across_sql_and_python_get_distinct_free_numbers():
-    added = paths("0097_a.sql", "0097_b.py", "0098_kept.sql")
-    assert guard.errors(added, added, paths("0096_main.sql"), "main") == [
-        "Renumber 0097_a.sql to 0099_a.sql: number also used by 0097_b.py",
-        "Renumber 0097_b.py to 0100_b.py: number also used by 0097_a.sql"]
+def test_a_new_legacy_name_gets_an_exact_timestamped_rename():
+    added = paths("0094_x.py")
+    assert errors(added, added, paths("0096_main.py")) == [
+        "backend/migrations/0094_x.py: new migrations use YYYYMMDDHHMMSS UTC timestamps. Rename with: "
+        "git mv backend/migrations/0094_x.py backend/migrations/20261104235959_x.py"]
 
 
-def test_an_addition_cannot_reuse_an_existing_heads_number():
-    added = paths("0097_new.py")
-    assert guard.errors(added, paths("0097_old.sql") + added, paths("0096_base.sql"), "main") == [
-        "Renumber 0097_new.py to 0098_new.py: number also used by 0097_old.sql"]
+def test_timestamp_additions_can_sort_before_the_base_tips_newest():
+    added = paths("20261103000000_first.sql", "20261104235958_second.py")
+    base = paths("0001_old.sql", "0096_base.py", "20261105000000_newer.py")
+    head = base + added + paths("__init__.py", "renames.py", "0097_notes.txt")
+    assert errors(added + head[-3:], head, base) == []
+    # Existing legacy names (and even existing duplicates) do not make an unrelated PR fail.
+    assert errors([], paths("0001_old.sql", "0001_duplicate.py"), base) == []
 
 
-def test_only_added_migrations_are_checked_and_gaps_and_other_files_are_allowed():
-    base = paths("0001_old.sql", "0096_base.py")
-    head = base + paths("0100_first.sql", "0102_second.py", "__init__.py", "renames.py", "0097_notes.txt")
-    assert guard.errors(head[2:], head, base, "main") == []
-    # Existing duplicates belong to the loader's check, not to an unrelated PR.
-    assert guard.errors([], paths("0001_old.sql", "0001_duplicate.py"), base, "main") == []
+def test_duplicate_additions_across_sql_and_python_get_distinct_free_timestamps():
+    added = paths("20261104235958_a.sql", "20261104235958_b.py", "20261104235959_kept.sql")
+    assert errors(added, added, paths("20261105000000_base.py")) == [
+        "backend/migrations/20261104235958_a.sql: version also used by 20261104235958_b.py. Rename with: "
+        "git mv backend/migrations/20261104235958_a.sql backend/migrations/20261105000001_a.sql",
+        "backend/migrations/20261104235958_b.py: version also used by 20261104235958_a.sql. Rename with: "
+        "git mv backend/migrations/20261104235958_b.py backend/migrations/20261105000002_b.py"]
+
+
+def test_an_addition_cannot_reuse_a_heads_or_base_tips_timestamp():
+    added = paths("20261104235958_new.py")
+    for head, base in [(paths("20261104235958_old.sql") + added, []),
+                       (added, paths("20261104235958_old.sql"))]:
+        assert errors(added, head, base) == [
+            "backend/migrations/20261104235958_new.py: version also used by 20261104235958_old.sql. Rename with: "
+            "git mv backend/migrations/20261104235958_new.py backend/migrations/20261104235959_new.py"]
+    # Independently adding the exact same filename on both branches also collides.
+    assert "main already contains backend/migrations/20261104235958_new.py" in errors(added, added, added)[0]
 
 
 @pytest.mark.slow
@@ -65,23 +79,33 @@ def test_git_diff_uses_the_merge_base_and_current_tip_and_checks_renamed_paths(t
     (directory / "0002_deleted.sql").unlink()
     (directory / "0091_renamed.sql").rename(directory / "0092_renamed.sql")
     commit()
-    pr_head = git("rev-parse", "HEAD").strip()
+    legacy_head = git("rev-parse", "HEAD").strip()
+    (directory / "0092_renamed.sql").rename(directory / "20261104000000_renamed.sql")
+    commit()
+    colliding_head = git("rev-parse", "HEAD").strip()
     git("checkout", "-q", "main")
     (directory / "0096_main.py").write_text("def up(conn): pass\n")
+    (directory / "20261104000000_main.py").write_text("def up(conn): pass\n")
+    (directory / "20261106000000_newer.sql").write_text("SELECT 6;\n")
     commit()
-    # The PR's old base had only 0091. The current tip's 0096 is not in its head tree.
-    assert guard.check("main", pr_head, root=tmp_path) == [
-        "Renumber 0092_renamed.sql to 0097_renamed.sql: main already has 0096"]
+    # Both a legacy rename and a timestamp collision fail against the advanced tip, absent from the PR tree.
+    assert "git mv backend/migrations/0092_renamed.sql backend/migrations/" in guard.check(
+        "main", legacy_head, root=tmp_path)[0]
+    assert "version also used by 20261104000000_main.py" in guard.check("main", colliding_head, root=tmp_path)[0]
     git("checkout", "-q", "feature")
-    (directory / "0092_renamed.sql").rename(directory / "0097_renamed.sql")
+    (directory / "20261104000000_renamed.sql").rename(directory / "20261105000000_renamed.sql")
     commit()
     assert guard.check("main", root=tmp_path) == []
+    git("-c", "commit.gpgsign=false", "merge", "--no-edit", "main")
+    # Legacy files inherited by merging main are allowed; the timestamp still sorts before main's newest.
+    assert guard.check("main", root=tmp_path) == []
 
-    # Exercise the CLI's actual exit status from an isolated checkout, including a missing base ref.
+    # Exercise actual CLI exit statuses from an isolated checkout, including a missing base ref.
     script = tmp_path / "scripts/check_migration_order.py"
     script.parent.mkdir()
     script.write_text(Path(guard.__file__).read_text())
-    for head, base, status in [(pr_head, "main", 1), ("HEAD", "main", 0), ("HEAD", "missing-base", 2)]:
+    for head, base, status in [(legacy_head, "main", 1), (colliding_head, "main", 1),
+                               ("HEAD", "main", 0), ("HEAD", "missing-base", 2)]:
         result = subprocess.run([sys.executable, str(script), "--base", base, "--head", head],
                                 cwd=tmp_path, capture_output=True, text=True)
         assert result.returncode == status, result.stdout + result.stderr
