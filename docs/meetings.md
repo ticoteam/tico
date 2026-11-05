@@ -211,7 +211,8 @@ format is a `422` that names the problem.
   `TICO_PROCESSING_OPERATORS`, else the owner's) files meetings for a roster human it names in
   `owner_email`. It cannot file for someone who is not on the roster.
 - **A bot** cannot import. Bots read: `hub_meeting_search` and `hub_meeting_read` give them
-  team meetings that are not private, never personal notes or private meetings.
+  Team meetings that are not private and filed meetings they were attached to, including Participants only.
+  Personal notes remain unavailable.
 - **Reading**: a team meeting is readable by everyone signed in. A private one is readable by its
   owner, its participants (matched by email, ignoring case) and the team owner.
 - `send_to` applies the ordinary Send rule: the caller must be allowed to hand that bot work.
