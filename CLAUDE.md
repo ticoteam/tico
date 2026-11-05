@@ -1,7 +1,7 @@
 # Tico
 
 Tico is a source-available operating system for a team of humans and bots (PolyForm Perimeter 1.0.1): a FastAPI
-server in `backend/`, the one-page web UI in `ui/` (`index.html`, `app/`, `styles/`; see ui/README.md), the runner in `runner/`, the `hub`
+server in `backend/`, the one-page web UI in `ui/` (`index.html`, `app/`, `styles/`; see ui/README.md), the runner in `runner-rs/` (Python helpers in `runner_support/`), the `hub`
 CLI and MCP tool table in `clients/`, and a Tauri desktop shell in `app/`. `README.md` says how to
 run it and `docs/how-it-works.md` describes the system.
 
@@ -46,8 +46,8 @@ The commonest defect in Tico is a change that works where it was tested and is m
 calling a change done, walk this list and say in the PR which entries applied:
 - **Clients**: the web app at desktop and phone widths, the Tauri app, Slack, the `hub` CLI and the MCP tool table
   (`clients/hubtools.py`), API v2 and `docs/openapi`.
-- **Runners**: the Rust runner, on a Mac and in the Docker image. The Python runner is deprecated; leave it alone.
-- **Harnesses**: every harness, through the capabilities in its `runner/harnesses/*.toml`, never by comparing names.
+- **Runners**: the Rust runner, on a Mac and in the Docker image.
+- **Harnesses**: every harness, through the capabilities in its `runner-rs/harnesses/*.toml`, never by comparing names.
   A capability is on only when the harness really does it; unknown is reported as unknown.
 - **Who acts**: a human, a bot, BotOps acting for a human, and an external agent over MCP.
 - **Reverse states**: a way in needs a way out and a way to see it. Snooze needs unsnooze, close needs reopen,
@@ -68,6 +68,9 @@ When the server is slow or stuck, read `python -m backend.flight summary --since
 flight file, not the database.
 
 ## Conventions
+- Create persistent schema changes with `python3 scripts/new_migration.py name` (`--py` for `up(conn)`):
+  `YYYYMMDDHHMMSS_name.sql|py`, UTC. Keep existing `NNNN_` files and applied checksums unchanged. Each migration
+  stands alone and must not depend on another unmerged migration's schema; pending files run even below applied ones.
 - Keep real team names, human names, domains, buckets and credentials out of the repository. Examples use
   the fictional team Acme (`acme.example`).
 - The UI has no build step and loads nothing from the network: vendored libraries live in

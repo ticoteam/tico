@@ -2432,6 +2432,68 @@ def test_adding_again_keeps_the_page_host_unless_the_flag_is_given(ready):
     assert "TICO_READER_ORIGIN=https://acme.tico.page" in (ready.root / "companies" / "acme" / ".env").read_text()
 
 
+def test_set_page_host_turns_the_page_on_for_a_running_company_and_keeps_its_other_settings(ready):
+    ready(*add_args(ready, "acme"))
+    env_dir = ready.root / "companies" / "acme"
+    before = (env_dir / ".env").read_text()
+    answer = ready("set-page-host", "--company", "acme", "--host", "acme.tico.page")
+    assert answer["ok"] and answer["changed"] and answer["page_host"] == "acme.tico.page"
+    assert record(ready, "acme")["page_host"] == "acme.tico.page"
+    env = (env_dir / ".env").read_text()
+    assert "TICO_READER_ORIGIN=https://acme.tico.page\n" in env and "TICO_COMPANY_PAGE_DIR=/company-page-public\n" in env
+    kept = [line for line in before.splitlines() if not line.startswith("#")]
+    assert all(line in env.splitlines() for line in kept)            # sign-in, backups and the rest are untouched
+    folder = ready.root / "pages" / "acme"
+    assert stat.S_IMODE(folder.stat().st_mode) == 0o755
+    assert f"      - {folder}:/company-page-public\n" in (env_dir / "compose.cell.yaml").read_text()
+    assert "acme.tico.page" in caddyfile(ready) and "/pages/acme/current" in caddyfile(ready)
+
+
+def test_set_page_host_again_is_a_no_op_and_an_empty_host_clears_it(ready):
+    ready(*add_args(ready, "acme"))
+    ready("set-page-host", "--company", "acme", "--host", "acme.tico.page")
+    assert ready("set-page-host", "--company", "acme", "--host", "acme.tico.page")["changed"] is False
+    assert ready("set-page-host", "--company", "acme", "--host", "")["changed"]
+    assert "page_host" not in record(ready, "acme")
+    assert "TICO_READER_ORIGIN" not in (ready.root / "companies" / "acme" / ".env").read_text()
+    assert "/pages/" not in caddyfile(ready) and (ready.root / "pages" / "acme").exists()
+
+
+def test_set_page_host_that_failed_to_start_is_redone_in_full_when_given_again(ready, monkeypatch):
+    ready(*add_args(ready, "acme"))
+    real_up = cell.Cell.up
+
+    def broken(self, *a, **k):
+        raise cell.CellError("compose_failed", "up failed")
+    monkeypatch.setattr(cell.Cell, "up", broken)
+    assert ready("set-page-host", "--company", "acme", "--host", "acme.tico.page")["ok"] is False
+    assert record(ready, "acme")["page_pending"] is True
+    monkeypatch.setattr(cell.Cell, "up", real_up)
+    again = ready("set-page-host", "--company", "acme", "--host", "acme.tico.page")
+    assert again["ok"] and again["changed"]
+    assert "page_pending" not in record(ready, "acme")
+    assert "acme.tico.page" in caddyfile(ready)
+
+
+def test_a_page_host_that_is_the_companys_visual_or_runner_host_is_refused(ready):
+    ready(*add_args(ready, "acme"))
+    env = ready.root / "companies" / "acme" / ".env"
+    env.write_text(env.read_text() + "TICO_VISUAL_ORIGIN=https://vis.acme.example\nTICO_RUNNER_URL=https://run.acme.example/x\nTICO_PUBLIC_URL=//app.acme.example\n")
+    for taken in ("vis.acme.example", "run.acme.example", "app.acme.example"):
+        assert ready("set-page-host", "--company", "acme", "--host", taken)["error"] == "bad_domain"
+    assert "page_host" not in record(ready, "acme")
+
+
+def test_set_page_host_refuses_a_host_that_is_taken_or_the_companys_own(ready):
+    ready(*add_args(ready, "alpha", "--page-host", "alpha.tico.page"))
+    ready(*add_args(ready, "bravo"))
+    assert ready("set-page-host", "--company", "bravo", "--host", "alpha.tico.page")["error"] == "domain_taken"
+    assert ready("set-page-host", "--company", "bravo", "--host", "bravo.tico.team")["error"] == "bad_domain"
+    assert ready("set-page-host", "--company", "bravo", "--host", "tico.team")["error"] == "bad_domain"
+    assert ready("set-page-host", "--company", "nobody", "--host", "nobody.tico.page")["error"] == "not_found"
+    assert "page_host" not in record(ready, "bravo")
+
+
 def test_clearing_the_page_host_drops_its_route_and_keeps_the_folder(ready):
     ready(*add_args(ready, "acme", "--page-host", "acme.tico.page"))
     (ready.root / "pages" / "acme" / "release.txt").write_text("kept")

@@ -5,8 +5,16 @@ The org: Ana owns it, Ben is an admin, Cara leads Support, Fay is in Support Tie
 Eve is on no team and owns the Helper bot."""
 import json
 
+from backend import bot_settings as BS
 from backend.store import encode
 from backend.tests.test_api import api, get, headers  # noqa: F401  (the api fixture)
+import pytest
+
+
+@pytest.fixture(autouse=True)
+def nearby_default(monkeypatch):
+    """conftest.py starts other tests' bots open; these test the shipped default."""
+    monkeypatch.delenv("TICO_REACH_DEFAULT", raising=False)
 
 
 def org(api):
@@ -24,10 +32,10 @@ def org(api):
         }),))
         for pid, name in (("ben", "Ben"), ("cara", "Cara"), ("eve", "Eve"), ("fay", "Fay")):
             c.execute("INSERT OR IGNORE INTO humans(id, name, email) VALUES(?,?,?)", (pid, name, pid + "@acme.example"))
-        c.execute("UPDATE bot_config SET team='support-tier-2', config=json_set(config, '$.team', 'support-tier-2') "
-                  "WHERE bot='finance'")
+        c.execute("UPDATE bot_config SET team='support-tier-2' WHERE bot='finance'")
+        BS.update(c, "finance", {"team": "support-tier-2"})
         c.execute("INSERT INTO bots(id, slug, display_name, state) VALUES('helper', 'helper', 'Helper', 'active')")
-        c.execute("INSERT INTO bot_config(bot, config, team, owner_id) VALUES('helper', '{}', '', 'eve')")
+        c.execute("INSERT INTO bot_config(bot, team, owner_id) VALUES('helper', '', 'eve')")
 
 
 def put_setting(api, party, body, token="ana-test", expected=200):
@@ -106,7 +114,7 @@ def test_the_map_has_the_contract_shape(api):
     made = add_line(api, {"sender": "bot:finance", "receiver": "human:eve", "per_day": 3})["line"]
     found = reach(api)
     assert {"defaults", "settings", "effective", "lines", "may_edit"} <= set(found)
-    assert found["defaults"] == {"mode": "open", "chats_per_day": 999, "tasks_per_day": 999}
+    assert found["defaults"] == {"mode": "nearby", "chats_per_day": 999, "tasks_per_day": 999, "person_mode": "open"}
     assert {"party", "mode", "chats_per_day", "tasks_per_day"} <= set(found["settings"][0])
     assert {"mode", "chats_per_day", "tasks_per_day", "from"} <= set(found["effective"]["*"])
     line = next(row for row in found["lines"] if row["id"] == made["id"])

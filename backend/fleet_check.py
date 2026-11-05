@@ -35,6 +35,8 @@ def prime_pause_reasons(c, bots):
 
 def check(c, who, auth, settings):
     online = {r["id"] for r in _online_runners(c)}
+    from .cloud_machines import resting as resting_machines
+    resting = resting_machines(c)            # a cloud machine stopped when idle starts for work: not offline
     seen = auth.bot_accesses(c, who)
     since = H.shift(H.now(), hours=-FAILING_HOURS)
     stuck_before = H.shift(H.now(), hours=-STUCK_SETUP_HOURS)
@@ -60,7 +62,6 @@ def check(c, who, auth, settings):
     ids = [bot["id"] for bot in bots]
     views.prime_machines(c, ids)
     events.prime_bot_rows(c, ids)
-    usage_limits.prime_own(c, ids)
     # The tool listing of every active or paused bot (bot_tools.listing) and each paused bot's last pause reason,
     # read together rather than once per bot.
     from .repositories import Reads
@@ -89,7 +90,7 @@ def check(c, who, auth, settings):
         elif state == "active":
             if not where and not external:
                 add(bot, "not_placed", HIGH, f"{name} is on, but no computer runs it.", f"hub bot place {slug}")
-            elif where and where[0] not in online:
+            elif where and where[0] not in online and where[0] not in resting:
                 add(bot, "computer_offline", HIGH, f"{name} cannot run: its computer, {where[1]}, is offline.", "hub computer list")
             if bid in lacking:
                 label, why = lacking[bid]

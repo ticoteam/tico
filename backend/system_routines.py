@@ -3,12 +3,12 @@ for the one flat, searchable list in Settings > Routines (`GET /api/v2/system-ro
 
 `JOBS` is every built-in job: its plain name, one line on what it does, its group (now a word search finds, not a
 heading), its schedule in words and in seconds, whether it asks Tico Decide, what it does as catalog actions (`then`,
-read as "WHEN <trigger> THEN <action>"), its one department tag, and whether it is one of the six a person switches and
-reschedules (`control`). The trigger/action catalog (TRIGGERS, ACTIONS) is shared with task rules, so they read and are
+read as "WHEN <trigger> THEN <action>"), its one department tag, and whether a person may switch and
+reschedule it (`control`). The trigger/action catalog (TRIGGERS, ACTIONS) is shared with task rules, so they read and are
 searched the same way.
 
-`CONTROLS` holds what a person may change: on/off and a schedule preset for the six jobs that use AI or reach people,
-and the Topic changed and Stalled task check switches. Stale ticket review, Topic changed and Stalled task check keep their on/off in the team rules
+`CONTROLS` holds what a person may change: on/off and a schedule preset for the jobs that use AI or reach people.
+Stale ticket review, Topic changed and Stalled task check keep their on/off in the team rules
 (backend/team_rules.py), so the value they had in Settings > General carries over; the rest live here in
 `registry_metadata` CONFIG_KEY. An owner or admin changes them; Health scan only the owner. `due` is when a job's
 preset says it runs again, read by the scheduler and the job's next run alike. Run now runs a job once, through the same
@@ -56,6 +56,7 @@ GROUPS = [(CHECKS, "Checks that suggest"), (LEARNING, "Learning"), (REMINDERS, "
           (HOUSEKEEPING, "Housekeeping"), (CHAT, "Chat")]
 GROUP_WORDS = dict(GROUPS)
 DEPARTMENT = "Engineering"  # a built-in's tag until departments are edited (a label only: it changes no permission)
+FINANCE = "Finance"         # the Bookkeeper's checks
 
 # Which route answered a Decide call, from the answering provider (judge.py's order: Gateway, own key, company AI).
 ROUTE_WORDS = {"gateway": "Gateway", "own_key": "Company key", "team_llm": "Company AI"}
@@ -76,7 +77,7 @@ class Job:
     schedule: str               # in words
     every: int | None = None    # seconds between runs, for the next run; None: `next_at` or unknown
     ai: bool = False            # asks Tico Decide
-    control: bool = False       # one of the six a person will switch and reschedule
+    control: bool = False       # a job a person will switch and reschedule
     labels: tuple = ()          # Decide question sets whose spend is this job's
     records: bool = True        # False: each connection keeps its own last run
     then: tuple = ()            # ACTIONS keys: what it does
@@ -99,8 +100,6 @@ ACTIONS = {
     "check_stale": ("check stale tickets", ("stale", "tasks", "finished", "forgotten", "done")),
     "suggest_owner": ("suggest to each owner: mark done, close or check it",
                       ("suggest", "done", "close", "owner", "decide")),
-    "ask_still_wanted": ("ask a task's person once whether a task idle for a week is still wanted",
-                         ("idle", "tasks", "ask", "remind")),
     "ask_kpi_keeper": ("ask a KPI's keeper for a reading when it goes out of date", ("kpi", "ask", "remind", "goal")),
     "ask_goal_owner": ("ask a goal's owner when a KPI goes off track", ("kpi", "goal", "ask", "remind")),
     "check_health": ("check Tico's health", ("health", "check")),
@@ -111,7 +110,6 @@ ACTIONS = {
                      ("tasks", "stalled", "overdue", "department", "report")),
     "wake_task_manager": ("open a Task check task for each department that has something to fix",
                           ("tasks", "wake", "task manager")),
-    "wake_health_monitor": ("wake the Health Monitor for a new finding", ("health", "wake")),
     "check_books": ("read the Bookkeeper's Finance work queue: rows to categorize, bills, payments due, overdue "
                     "invoices, receipts, failed syncs, months ready to close", ("finance", "books", "bills", "inbox")),
     "wake_bookkeeper": ("open or update one Books check task for the Bookkeeper only when the queue has something new",
@@ -124,10 +122,6 @@ ACTIONS = {
                            ("finance", "rules", "digest")),
     "wake_rules_digest": ("open the week's rules digest task for the Bookkeeper when there are new rules",
                           ("finance", "rules", "digest", "wake")),
-    "list_exceptions": ("list each engineering board's stuck tickets, failed runs, waiting checks, full builders, "
-                        "outages, refused moves and failed merges", ("engineering", "exceptions", "stuck", "tickets")),
-    "wake_type_manager": ("wake the board's manager only for an entry its last list did not have",
-                          ("engineering", "exceptions", "wake", "manager")),
     "read_activity": ("read yesterday's chats, tasks, Slack, mail and meetings",
                       ("learnings", "chat", "slack", "mail", "meetings")),
     "propose_memory_tidy": ("propose memory and knowledge edits for the pilot bots", ("memory", "tidy", "pilot")),
@@ -137,18 +131,20 @@ ACTIONS = {
                  ("ask", "question", "deadline", "expire")),
     "expire_approvals": ("take approvals and asks nobody will act on out of Needs you",
                          ("approval", "expire", "close", "done", "needs you")),
-    "resend_questions": ("send questions unanswered for two business days back to their bots",
-                         ("question", "remind", "unanswered")),
+    "resend_questions": ("record questions unanswered for two business days as lines on their bots' task roundup",
+                         ("question", "remind", "unanswered", "roundup")),
     "start_task": ("start the highest-ranked eligible assigned task in its own session", ("task", "start", "assigned", "On Deck", "prerequisite")),
-    "recover_assignment": ("wake an unattempted assignment once after one hour; show it in Health and its manager's Needs you two hours later",
-                           ("task", "assigned", "not started", "wake", "health", "manager")),
+    "recover_assignment": ("list an unattempted assignment once on its owner's task roundup after one hour; show it in Health and its manager's Needs you two hours later",
+                           ("task", "assigned", "not started", "roundup", "health", "manager")),
     "free_dead_starts": ("free turns proven dead: process gone and lease lost, or stopped before they started",
                          ("turn", "start", "dead", "stuck", "free", "busy")),
     "turns_finding": ("keep one Health finding per busy-turns incident and hand what it cannot fix to BotOps",
                       ("health", "turns", "incident", "botops", "busy")),
-    "wake_stalled": ("wake the bot on a task nothing is moving", ("stalled", "wake", "tasks")),
-    "nudge_asks": ("nudge a person once in their thread when a bot's ask to them stays unanswered for a day",
-                   ("ask", "follow up", "nudge", "remind", "thread", "unanswered")),
+    "send_task_roundup": ("send each bot one list of its tasks: a follow-up that came due, an unanswered question, an assignment "
+                          "not started, a restate, a late ticket, an exception, a backlog, a missed update or a quiet task",
+                         ("tasks", "roundup", "wake", "missed", "quiet", "update", "late", "backlog", "exceptions", "assigned")),
+    "tell_earlier_messages": ("tell each manager of a bot once when its Home still holds closed history",
+                              ("thread", "earlier", "closed", "history", "managers", "notice")),
     "wake_digest_bots": ("start one run for each bot with new messages in the threads it follows on digest",
                          ("bot", "digest", "thread", "wake", "batch")),
     "route_message": ("have Decide read a person's message that names nobody and wake the bots it is for, three at most",
@@ -160,13 +156,11 @@ ACTIONS = {
     "email_digest": ("email a person once an hour the threads they follow on digest that have new messages: titles, "
                      "unread counts and links, never the messages", ("email", "digest", "unread", "thread", "notify")),
     "drop_unreadable": ("drop queued work its bot can no longer read", ("queue", "drop")),
-    "unstrand": ("send bot tasks waiting on nothing back to work", ("waiting", "tasks")),
     "ask_to_task": ("turn a bot's plain ask to a person into a small task", ("ask", "tasks")),
     "end_snooze": ("bring snoozed tasks back when their date comes", ("snooze", "tasks")),
     "start_deferred": ("start deferred runs that are due", ("deferred", "runs")),
     "end_go_live": ("end a go-live waiting for a computer that never reports", ("go-live", "computer", "expire")),
     "goal_colours": ("work out every goal's colour again", ("goal", "colour", "color")),
-    "clean_up": ("clear old events, mail, retry keys and recorder data", ("cleanup", "delete", "old")),
     "check_gateway": ("check this server's Gateway key and the month's cap", ("gateway", "key", "cap")),
     "read_billing": ("read HQ's nightly billing check", ("billing",)),
     "check_pages": ("read the watched competitor pages and file an insight for each that changed", ("market", "pages", "competitors", "librarian")),
@@ -184,7 +178,7 @@ ACTIONS = {
     "sync_docs": ("refresh linked documents from their sources", ("documents", "docs")),
     "start_fresh": ("start a fresh session, like Clear", ("chat", "fresh", "clear", "session")),
     "rank_threads": ("rank each thread with new messages from 1 to 10", ("threads", "rank", "important", "decide")),
-    "triage_quiet": ("have Decide read its last messages: set the wait it names, close it if finished, or let one wake through",
+    "triage_quiet": ("not run any more: Decide no longer reads a quiet task (it used to set the wait it names, close it if finished, or let one wake through)",
                      ("decide", "stalled", "tasks", "wait", "close", "wake")),
 }
 
@@ -194,21 +188,15 @@ JOBS = [
         "Starts eligible assigned work on a free computer turn; respects task caps, usage holds and computer capacity.",
         HOUSEKEEPING, "When a turn is free", records=False, then=("start_task",), when="free_turn"),
     Job("assignment_recovery", "Recover unstarted assignments",
-        "One recovery wake after an hour without an attempt, including Leads; waits and snoozes stay parked. "
+        "One roundup line after an hour without an attempt, for managers and doers; waits and snoozes stay parked. "
         "Still unstarted two hours later appears in Health and the manager's Needs you. Execution gates still apply.",
         HOUSEKEEPING, "Every 10 seconds", 10, records=False, then=("recover_assignment",)),
     Job("stale_review", "Stale ticket review",
         "Finds open tasks that look finished or forgotten and suggests to each owner what to do.",
         CHECKS, "Hourly", 3600, ai=True, control=True, labels=("stale-review",), then=("check_stale", "suggest_owner")),
-    Job("still_wanted", "Still wanted?",
-        "Asks a task's person once whether a task idle for a week is still wanted.",
-        CHECKS, "Daily", 86400, control=True, then=("ask_still_wanted",)),
     Job("kpi_asks", "KPI stale asks",
         "Asks a KPI's keeper for a reading when it goes out of date, and a goal's owner when a KPI goes off track.",
         CHECKS, "Hourly", 3600, control=True, then=("ask_kpi_keeper", "ask_goal_owner")),
-    Job("health_scan", "Health scan",
-        "Checks Tico's health and wakes the Health Monitor only for a finding the last scan did not have.",
-        CHECKS, "Hourly", 3600, control=True, then=("check_health", "wake_health_monitor")),
     Job("task_manager_report", "Task Manager report",
         "Lists each department's quiet tasks, overdue asks, review tickets without a pull request, merged work that did "
         "not move and held bots in plain code, and opens one task for the Task Manager per department that has something.",
@@ -216,19 +204,15 @@ JOBS = [
     Job("bookkeeper_check", "Books check",
         "Reads the Bookkeeper's Finance work queue in plain code and opens one task for the Bookkeeper only when it has "
         "something new. Nothing new is a quiet run: no task, no model call.",
-        CHECKS, "Hourly", 3600, control=True, then=("check_books", "wake_bookkeeper")),
+        CHECKS, "Hourly", 3600, control=True, then=("check_books", "wake_bookkeeper"), department=FINANCE),
     Job("bookkeeper_watch", "Books watch",
         "Reads runway, unusual spend, duplicate charges and price increases in plain code, and opens one Watch task for "
         "the Bookkeeper only when a check finds something new. Nothing new is a quiet run: no task, no model call.",
-        CHECKS, "Daily", 86400, then=("check_watch", "wake_watch")),
+        CHECKS, "Daily", 86400, then=("check_watch", "wake_watch"), department=FINANCE),
     Job("bookkeeper_rules_digest", "Rules digest",
         "Once a week, lists the posting rules made that week and opens the Bookkeeper's digest task for them. No new "
         "rules is a quiet run.",
-        CHECKS, "Weekly", 7 * 86400, then=("check_rules_digest", "wake_rules_digest")),
-    Job("engineering_exceptions", "Engineering exceptions",
-        "Lists each engineering board's exceptions in plain code and wakes its manager (Manager profile) with them only "
-        "when the list has an entry the last one did not. Tickets that move on their own are not listed.",
-        CHECKS, "Hourly", 3600, control=True, then=("list_exceptions", "wake_type_manager")),
+        CHECKS, "Weekly", 7 * 86400, then=("check_rules_digest", "wake_rules_digest"), department=FINANCE),
     Job("memory_tidy", "Nightly memory tidy",
         "Proposes memory and knowledge edits for up to three pilot bots on their named models. Pilot stop: $50.",
         LEARNING, "Nightly at 03:30", control=True, then=("propose_memory_tidy",)),
@@ -242,10 +226,10 @@ JOBS = [
         REMINDERS, "Hourly", 3600, control=True, then=("go_ahead",)),
     Job("approval_expiry", "Approval expiry", "Takes approvals and asks nobody will act on out of Needs you.",
         REMINDERS, "Hourly", 3600, then=("expire_approvals",)),
-    Job("thread_followups", "Follow-ups",
-        "Nudges a person once, in their thread, when a bot's ask to them stays unanswered for a day. Plain code: no "
-        "model is called, and nothing to nudge is a quiet run.",
-        REMINDERS, "Every 15 minutes", 900, then=("nudge_asks",)),
+    Job("thread_followups", "Earlier messages",
+        "Tells each manager of a bot once, in a direct message, when the bot's Home still holds closed history. Plain code: "
+        "no model is called, and nothing new is a quiet run. Asks nobody answered are on the bot's task roundup.",
+        REMINDERS, "Every 15 minutes", 900, then=("tell_earlier_messages",)),
     Job("thread_digest", "Email digest",
         "Emails a person once an hour the threads they follow on digest that have new messages: each title, its unread "
         "count and a link, never the messages. Nothing unread is a quiet run.",
@@ -259,17 +243,21 @@ JOBS = [
         "at most. Below the confidence bar, or with Decide off, it wakes none.",
         REMINDERS, "As messages arrive", ai=True, labels=("slack-route",), records=False, then=("route_message",)),
     Job("still_needed", "Unanswered questions",
-        "On weekday mornings, sends questions unanswered for two business days back to their bots.",
+        "On weekday mornings, questions unanswered for two business days go back to their bots as lines on the bots' "
+        "task roundup, never as a wake.",
         REMINDERS, "Hourly", 3600, then=("resend_questions",)),
     Job("stall_checks", "Stall checks",
-        "Wakes the bot on a task nothing is moving, and drops queued work its bot can no longer read.",
-        HOUSEKEEPING, "Every minute", 60, then=("wake_stalled", "drop_unreadable")),
+        "Every minute: allocates waiting tickets, closes timed-out checks, drops queued work its bot can no longer read, and "
+        "alerts once when an Engineering task has been blocked over four hours. It wakes no bot about a quiet task: "
+        "the task roundup lists those.",
+        HOUSEKEEPING, "Every minute", 60, then=("drop_unreadable",)),
     Job("turn_fixer", "Turn fixer",
         "Frees turns proven dead, keeps one Health finding per busy-turns incident and hands what it cannot fix to "
         "BotOps.", HOUSEKEEPING, "Every 10 seconds", 10, then=("free_dead_starts", "turns_finding")),
     Job("waiting_checks", "Waiting checks",
-        "Sends bot tasks waiting on nothing back to work, and turns a bot's plain ask to a person into a small task.",
-        HOUSEKEEPING, "Hourly", 3600, then=("unstrand", "ask_to_task")),
+        "Turns a bot's plain ask to a person into a small task. It no longer sends a waiting task back to work; a "
+        "waiting task that waits on nothing is listed on the task roundup after a day.",
+        HOUSEKEEPING, "Hourly", 3600, then=("ask_to_task",)),
     Job("snooze_ends", "Snooze ends",
         "Brings snoozed tasks back when their date comes and starts deferred runs that are due.",
         HOUSEKEEPING, "Every 10 seconds", 10, then=("end_snooze", "start_deferred", "start_task")),
@@ -281,15 +269,13 @@ JOBS = [
         "code: nothing past its time is a quiet run.",
         HOUSEKEEPING, "Every 15 minutes", 900, then=("purge_thread_messages",)),
     Job("invariant_checks", "Production checks",
-        "Reads a few production invariants in plain code, shows each failing one on Health and raises one task for its "
-        "owner; the task is closed when the check passes.",
+        "Reads a few production invariants in plain code and shows each failing one on Health. Check health files each "
+        "one as a BotOps task, closed when the check passes.",
         HOUSEKEEPING, "Every 15 minutes", 900, then=("check_invariants",)),
     Job("go_live_expiry", "Go-live expiry", "Ends a go-live waiting for a computer that never reports.",
         HOUSEKEEPING, "Every 10 minutes", 600, then=("end_go_live",)),
     Job("goal_colours", "Goal colours", "Works out every goal's colour again as its data ages.",
         HOUSEKEEPING, "Hourly", 3600, then=("goal_colours",)),
-    Job("cleanup", "Cleanup", "Clears old events, mail, retry keys and recorder data.",
-        HOUSEKEEPING, "Hourly", 3600, then=("clean_up",)),
     Job("gateway_check", "Gateway key check",
         "Asks the Tico AI Gateway whether this server's key still works and how much of the month's cap is used.",
         HOUSEKEEPING, "Hourly", 3600, then=("check_gateway",)),
@@ -320,11 +306,6 @@ JOBS = [
         HOUSEKEEPING, "Every 30 seconds", 30, records=False, then=("sync_meetings",)),
     Job("doc_sync", "Document sync", "Refreshes linked documents from their sources.",
         HOUSEKEEPING, "Every few seconds", 5, records=False, then=("sync_docs",)),
-    Job("stall_triage", "Stalled task check",
-        "Before a stall check stays silent on a quiet task nothing has changed on, Decide reads its last messages: "
-        "if it waits on someone it sets that wait, if it is finished it closes it, if it is stuck one wake goes through.",
-        CHECKS, "When it happens", ai=True, control=True, labels=("stall-triage",), records=False, when="quiet_task",
-        then=("triage_quiet",)),
     Job("topic_fresh", "Start fresh when the topic changes",
         "In a direct chat, a message on a new topic starts a fresh session, like Clear.",
         CHAT, "When it happens", records=False, when="topic_changed", then=("start_fresh",)),
@@ -336,15 +317,21 @@ BY_KEY = {job.key: job for job in JOBS}
 
 
 # ----------------------------------------------------------------------------- what a person may change
-FIFTEEN, HOURLY, FOUR_HOURS, DAILY, BUSINESS, WEEKLY = "15m", "hourly", "4h", "daily", "business", "weekly"
+FIFTEEN, HOURLY, FOUR_HOURS, DAILY, BUSINESS, WEEKLY, THREE_DAILY = ("15m", "hourly", "4h", "daily", "business", "weekly",
+                                                                  "three_daily")
 PRESETS = {FIFTEEN: ("Every 15 minutes", 900), HOURLY: ("Hourly", 3600), FOUR_HOURS: ("Every 4 hours", 4 * 3600),
            DAILY: ("Daily at {at}", None), BUSINESS: ("Hourly on weekdays, 08:00 to 18:00", 3600),
-           WEEKLY: ("Weekly", 7 * 86400)}
+           WEEKLY: ("Weekly", 7 * 86400), THREE_DAILY: ("Three times a day (6am, noon, 6pm company time)", None)}
 BUSINESS_HOURS = (clock(8), clock(18))      # company time (updates.ZONE), Monday to Friday
 EVERY_PRESET = (FIFTEEN, HOURLY, FOUR_HOURS, DAILY)
+# The company-time times of a preset that runs more than once a day: a run is due at each of them (occurrence).
+RUN_TIMES = {THREE_DAILY: ((6, 0), (12, 0), (18, 0))}
+# A never-run job on one of these waits for its next time after the scheduler first sees it on, not a run at once.
+WAITS_FOR_ANCHOR = (THREE_DAILY,)
 AI_PRESETS = (HOURLY, FOUR_HOURS, DAILY)        # a job that asks Decide is never offered every 15 minutes
 CONFIG_KEY = "system_routines"
 AT_RE = re.compile(r"^([01]\d|2[0-3]):([0-5]\d)$")
+NIGHT_CLAIMS = ("learnings",)   # one run a night, claimed per company night (next_night reads the claim)
 
 
 @dataclass(frozen=True)
@@ -354,30 +341,27 @@ class Control:
     presets: tuple = ()         # the schedule presets offered; () is a switch only
     preset: str | None = None   # the default preset
     at: str | None = None       # the default "HH:MM" (company time, updates.ZONE) for DAILY
-    owner_only: bool = False    # only the owner changes it (Health scan, as in Settings > Health)
+    owner_only: bool = False    # only the owner changes it; no job uses that now
 
 
 CONTROLS = {
     "stale_review": Control(rule="stale_review", presets=AI_PRESETS, preset=HOURLY, at="09:00"),
-    "still_wanted": Control(presets=EVERY_PRESET, preset=DAILY, at="09:00"),
     "kpi_asks": Control(presets=EVERY_PRESET, preset=HOURLY, at="09:00"),
-    "health_scan": Control(presets=EVERY_PRESET, preset=HOURLY, at="09:00", owner_only=True),
     # One run a night reads the day before (backend/learnings.py claims one per night): the choice is its time.
     "learnings": Control(presets=(DAILY,), preset=DAILY, at="03:00"),
     "memory_tidy": Control(on=False, presets=(DAILY,), preset=DAILY, at="03:30"),
     "ask_deadlines": Control(presets=EVERY_PRESET, preset=HOURLY, at="09:00"),
     # Hourly while people are at work: a report outside business hours would wait on nobody to read it.
     "task_manager_report": Control(presets=(BUSINESS, HOURLY, FOUR_HOURS, DAILY), preset=BUSINESS, at="09:00"),
-    "engineering_exceptions": Control(presets=EVERY_PRESET, preset=HOURLY, at="09:00"),
     "bookkeeper_check": Control(presets=EVERY_PRESET, preset=HOURLY, at="09:00"),
     "topic_fresh": Control(rule="topic_fresh"),
-    "stall_triage": Control(rule="stall_triage"),
 }
 
 
-QUICK_KEYS = ("still_wanted", "kpi_asks", "health_scan", "ask_deadlines", "task_manager_report",
-              "engineering_exceptions", "bookkeeper_check", "bookkeeper_watch",
-              "bookkeeper_rules_digest", "thread_followups", "thread_digest", "thread_bot_digest", "thread_retention")   # last runs read by backend/scheduler.py (QUICK and FIXED)
+# Last runs read by backend/scheduler.py (QUICK and FIXED).
+QUICK_KEYS = ("kpi_asks", "ask_deadlines", "task_manager_report",
+              "bookkeeper_check", "bookkeeper_watch",
+              "bookkeeper_rules_digest", "thread_followups", "thread_digest", "thread_bot_digest", "thread_retention")
 
 
 def zone():
@@ -422,7 +406,7 @@ def schedule_words(key, cfg):
 
 
 def may_change(auth, who, key):
-    """An owner or an admin changes a job's switch, schedule and Run now; Health scan only the owner. Raises a 403."""
+    """An owner or an admin changes a job's switch, schedule and Run now. Raises a 403."""
     auth.domain(who)
     job = BY_KEY.get(key)
     if key not in CONTROLS or not job:
@@ -478,12 +462,28 @@ def save_config(c, actor, key, on=None, preset=None, at=None):
 
 
 # ----------------------------------------------------------------------------- when a job is due
-def _occurrence(cfg, at):
-    """The latest HH:MM (company time) at or before `at`."""
+def _times(cfg):
+    """The company-time (hour, minute) pairs a job runs at: its preset's (RUN_TIMES), else its own "at"."""
+    if cfg.get("preset") in RUN_TIMES:
+        return RUN_TIMES[cfg["preset"]]
     hour, minute = (int(x) for x in (cfg.get("at") or "00:00").split(":"))
+    return ((hour, minute),)
+
+
+def occurrence(cfg, at):
+    """The latest run time at or before `at`, in company time."""
     local = at.astimezone(zone())
-    point = local.replace(hour=hour, minute=minute, second=0, microsecond=0)
-    return point if point <= local else point - timedelta(days=1)
+    points = [datetime.combine(local.date() + timedelta(days=day), clock(hour, minute), zone())
+              for day in (-1, 0) for hour, minute in _times(cfg)]
+    return max(point for point in points if point <= local)
+
+
+def next_anchor(cfg, at):
+    """The first run time after `at`, in company time."""
+    local = at.astimezone(zone())
+    points = [datetime.combine(local.date() + timedelta(days=day), clock(hour, minute), zone())
+              for day in (0, 1) for hour, minute in _times(cfg)]
+    return min(point for point in points if point > local)
 
 
 def in_business_hours(at):
@@ -511,7 +511,7 @@ def due(cfg, at, last):
         return False
     if every:
         return last is None or at - last >= timedelta(seconds=every)
-    return last is None or last < _occurrence(cfg, at)
+    return last is None or last < occurrence(cfg, at)
 
 
 def next_due(cfg, last, now):
@@ -521,9 +521,12 @@ def next_due(cfg, last, now):
         return business_open(max(last + timedelta(seconds=every), now) if last else now)
     if every:
         return max(last + timedelta(seconds=every), now) if last else None
+    if last is None and cfg.get("preset") in WAITS_FOR_ANCHOR:
+        # Never run: its first run is its next time after the scheduler first sees it on (Scheduler.due), not now.
+        return next_anchor(cfg, now)
     if due(cfg, now, last):
         return now
-    return _occurrence(cfg, now) + timedelta(days=1)
+    return next_anchor(cfg, now)
 
 
 def last_started(c, keys):
@@ -689,8 +692,8 @@ def next_at(job, last, now, settings=None, c=None, cfg=None):
     if cfg is not None:
         if not cfg["on"]:
             return None
-        if job.key == "learnings" and c is not None:
-            return next_night(c, cfg, now)
+        if job.key in NIGHT_CLAIMS and c is not None:
+            return next_night(c, cfg, now, job.key)
         return next_due(cfg, H.parse_ts(last["started_at"]) if last else None, now)
     every = job.every
     if job.key == "directory_sync" and c is not None:
@@ -703,14 +706,17 @@ def next_at(job, last, now, settings=None, c=None, cfg=None):
     return max(started + timedelta(seconds=every), now)
 
 
-def next_night(c, cfg, now):
-    """Nightly learnings runs once per company night (backend/learnings.py `nightly`), not once after each time: tonight's
-    start while tonight has no run, else tomorrow's, whenever its last run started. The scheduled claim never retries a
-    night that has a row (only Run now does), so an unconfigured, capped or failed night also waits for tomorrow."""
+def next_night(c, cfg, now, key="learnings"):
+    """A nightly run (NIGHT_CLAIMS) runs once per company night (backend/learnings.py `nightly`, backend/dream_auto.py
+    `nightly`), not once after each time: tonight's start while tonight is unclaimed, else tomorrow's. The scheduled
+    claim never retries a night that is claimed (only Run now does), so an unconfigured, capped or failed night also
+    waits for tomorrow."""
     from . import learnings
     hour, minute = (int(x) for x in (cfg.get("at") or "03:00").split(":"))
     start = now.astimezone(zone()).replace(hour=hour, minute=minute, second=0, microsecond=0)
-    if c.execute("SELECT 1 FROM learning_runs WHERE night=?", (learnings.night_of(now),)).fetchone():
+    night = learnings.night_of(now)
+    claimed = c.execute("SELECT 1 FROM learning_runs WHERE night=?", (night,)).fetchone()
+    if claimed:
         return start + timedelta(days=1)
     return max(start, now)
 
@@ -804,7 +810,8 @@ def listing(c, settings, now=None, who=None, auth=None):
         then_words = [ACTIONS[key][0] for key in job.then]
         department = chart.get(job.department.lower(), job.department)
         item = {"key": job.key, "name": job.name, "what": job.what, "schedule": schedule, "ai": job.ai,
-                "controllable": job.control, "needed": job.group == HOUSEKEEPING, "records": job.records,
+                "controllable": job.control, "needed": job.group == HOUSEKEEPING and not job.control,
+                "records": job.records,
                 "group": job.group, "when": [when_words], "then": then_words,
                 "department": {"name": department, "in_chart": department.lower() in chart},
                 "switch": bool(ctl), "on": cfg["on"] if cfg else True,
@@ -824,10 +831,6 @@ def listing(c, settings, now=None, who=None, auth=None):
         if job.key in ("bookkeeper_check", "bookkeeper_watch", "bookkeeper_rules_digest"):
             from .bookkeeper import active as bookkeeper_active
             item["note"] = None if bookkeeper_active(c) else "Opens no tasks while the Bookkeeper is paused (Settings > Bots)"
-        if job.key == "health_scan":
-            # Its own switch only says whether it may run; it finds nothing while the Health Monitor itself is off.
-            from .health_monitor import active
-            item["note"] = None if active(c) else "Finds nothing while the Health Monitor is off (Settings > Health)"
         if row:
             item["last"] = {"started_at": row["started_at"], "finished_at": row["finished_at"], "ok": bool(row["ok"]),
                             "result": row["result"], "runs": row["runs"]}
@@ -867,8 +870,8 @@ def install(app, store, auth, mutate):
 
     @app.put("/api/v2/system-routines/{key}")
     def system_routine_save(key: str, request: Request, body: M.SystemRoutineUpdate):
-        """Switch a job on or off, or pick its schedule preset and daily time. An owner or an admin; Health scan only the
-        owner. Stale ticket review's and Topic changed's switch is their team rule (backend/team_rules.py)."""
+        """Switch a job on or off, or pick its schedule preset and daily time. An owner or an admin.
+        Stale ticket review's and Topic changed's switch is their team rule (backend/team_rules.py)."""
         who = request.state.identity
         may_change(auth, who, key)
         if body.pilots is not None and key != "memory_tidy":
@@ -885,10 +888,17 @@ def install(app, store, auth, mutate):
 
     @app.post("/api/v2/system-routines/{key}/run")
     def system_routine_run(key: str, request: Request, body: M.Empty):
-        """Run one of the six controlled jobs once, now, through the code and caps of its scheduled run (a stale ticket
+        """Run one of the controlled jobs once, now, through the code and caps of its scheduled run (a stale ticket
         review still makes at most its hourly Decide calls); its result lands on its row. `running` while a job that
-        asks Decide works on its own thread. 409 while it is off or already running."""
+        asks Decide works on its own thread. 409 while it is off or already running. The retired task_roundup runs
+        Maintenance Find stuck and returns {run, started}."""
         who = request.state.identity
+        if key == "task_roundup":
+            from . import maintenance
+            maintenance.may_change(auth, who)
+            run, started = maintenance.run_now(store, auth, who.actor, step="find_stuck",
+                                               key=request.headers.get("idempotency-key"))
+            return {"run": run, "started": started}
         may_change(auth, who, key)
         job = BY_KEY[key]
         if not job.control:

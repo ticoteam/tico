@@ -11,6 +11,7 @@ from pydantic import Field
 from . import hubdb as H
 from .models import Contract
 from .store import Problem
+from . import bot_settings as BS
 
 # Anonymous suggestions waiting at Suggested, across every visitor: the per-address limit alone lets many
 # addresses queue unbounded work for the bot that receives them (the same overall cap as waiting pairings).
@@ -44,7 +45,7 @@ def migrate(c):
     # Marked on every database, so a fresh one does not take its own second start for a first-version one. The marker
     # is new with the per-field decision: 'roadmaps_copies_cleared' marked databases that ran the per-task one.
     if c.execute("INSERT OR IGNORE INTO registry_metadata(key,value) VALUES('roadmaps_copies_cleared_by_field','true')").rowcount \
-            and ran_before and H._has_table(c, 'task_events'):
+            and ran_before and H._has_table(c, 'history_events'):
         clear_copies(c)
     c.execute('CREATE TABLE IF NOT EXISTS task_requesters('
               'id TEXT PRIMARY KEY,task_id TEXT NOT NULL REFERENCES tasks(id),actor TEXT,'
@@ -59,7 +60,8 @@ def migrate(c):
 # Public text someone wrote leaves a task event for its field (publication(), task_create); the first version's copies
 # left none.
 def written(field):
-    return f"EXISTS(SELECT 1 FROM task_events e WHERE e.task_id=tasks.id AND e.field='{field}')"
+    return (f"EXISTS(SELECT 1 FROM history_events e WHERE e.subject_type='task' AND e.subject_id=tasks.id "
+            f"AND e.kind='{field}')")
 
 
 def clear_copies(c):
@@ -109,8 +111,8 @@ def suggestions_receiver(c):
             return chosen, 'chosen'
         source = 'chosen_archived' if state == 'archived' else 'chosen_inactive'
     for template, states in (('product-manager', ('active', 'planned')), ('product-lead', ('active',))):
-        row = c.execute("SELECT bc.bot FROM bot_config bc JOIN bots b ON b.id=bc.bot "
-                        "WHERE json_extract(bc.config,'$.template')=? AND b.state IN (" + ','.join('?' * len(states)) + ") "
+        row = c.execute(f"SELECT bc.bot FROM bot_config bc {BS.JOIN} JOIN bots b ON b.id=bc.bot "
+                        f"WHERE s.template=? AND b.state IN (" + ','.join('?' * len(states)) + ") "
                         "ORDER BY bc.bot LIMIT 1", (template, *states)).fetchone()
         if row:
             return row[0], source
@@ -335,6 +337,14 @@ def install_internal(app, store, auth, mutate, mover):
                 actor = H.resolve_actor(c, body.actor)
                 if not actor or not (H.is_human(actor) or H.is_bot(actor)) or not H._actor_exists(c, actor):
                     raise Problem('identity', 'Teammate not found', 422)
+            if (actor != who.actor or not actor) and who.via == 'botops' and not who.confirmed:
+                # BotOps acting for a person adds a teammate or an outside contact only on that person's own tap.
+                made = getattr(request.app.state, 'botops_propose', None)
+                if made:
+                    name = H.human(c, H.actor_id(actor)) or {} if actor else {}
+                    who_is = name.get('name') or actor or body.name or body.email or 'a contact'
+                    return made(c, who, 'POST', '/api/v2/tasks/' + tid + '/requesters', body.model_dump(exclude_unset=True),
+                                'Add ' + who_is + ' as a requester on “' + row['title'] + '”')
             if actor != who.actor:
                 task(c, who, tid, True)
             return add_requester(c, row['id'], body.model_dump(), actor)
@@ -347,6 +357,10 @@ def install_internal(app, store, auth, mutate, mover):
             row = task(c, who, tid)
             own = c.execute('SELECT 1 FROM task_requesters WHERE task_id=? AND id=? AND actor=?',
                             (row['id'], rid, who.actor)).fetchone()
+            if not own and who.via == 'botops' and not who.confirmed:
+                return request.app.state.botops_propose(c, who, 'POST', '/api/v2/tasks/' + tid + '/requesters/' + rid
+                                                        + '/delete', body.model_dump(exclude_unset=True),
+                                                        'Remove a requester from “' + row['title'] + '”')
             if not own:
                 task(c, who, tid, True)
             return remove_requester(c, row['id'], ident=rid, actor=who.actor)
@@ -357,6 +371,10 @@ def install_internal(app, store, auth, mutate, mover):
         def work(c):
             who = request.state.identity
             row = task(c, who, tid, True)
+            if who.via == 'botops' and not who.confirmed:
+                return request.app.state.botops_propose(c, who, 'POST', '/api/v2/tasks/' + tid + '/requesters/' + rid,
+                                                        body.model_dump(exclude_unset=True),
+                                                        'Change a requester on “' + row['title'] + '”')
             values = body.model_dump(exclude_unset=True, exclude={'actor'})
             if not values:
                 raise Problem('requester', 'Provide at least one requester field', 422)

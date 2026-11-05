@@ -1,111 +1,18 @@
-"""Follow-ups on unanswered asks (the thread helper, spec 3.6).
+"""Earlier messages of a migrated bot (spec 4): one notice to each of its managers about its Home's closed history.
 
-An ask to a teammate, from a person or a bot, that stays unanswered in its thread for AFTER gets one nudge in that same
-thread: a keeper notice addressed to whoever was asked, quoting the ask. A bot takes its nudge on its next run: the
-notice starts none. Plain code on the scheduler's fixed cadence (backend/scheduler.py FIXED, the same shape as the
-Bookkeeper's watch): no model is called or woken here, and a run with nothing to nudge writes nothing. A nudge is
-recorded in `thread_followups` in the same transaction as the post, so one ask gets one nudge even when runs overlap or
-a restart replays the sweep.
+A bot's Home can still hold closed shared-room history after a migration. The same scheduler pass (backend/scheduler.py
+run_thread_followups) tells each of the bot's managers once, in their own DM with the bot because the Home's readers must
+not see it, with the one action that opens the history to Read. It is recorded per bot and manager, so whoever comes to
+manage the bot later hears once too, and once the history is open nobody more is told.
 
-An ask whose recipient can no longer read it is retired with no nudge, and so is one whose nudge fails: the row stays,
-so later runs do not reconsider it. Each ask runs in its own savepoint, so a failure rolls back only that ask.
-
-The same sweep tells a bot's managers about a migrated Home's closed history (spec 4): each gets one notice, in their
-own DM with the bot because the Home's readers must not see it, with the one action that opens the history to Read. It
-is recorded per bot and manager, so whoever comes to manage the bot later hears once too, and once the history is open
-nobody more is told.
+Asks that go unanswered get no nudge from Tico: an ask a bot is waiting on is listed on the bot's task roundup
+(backend/task_roundup.py) and an unanswered ask to a person goes back to its bot (backend/still_needed.py).
 """
 import logging
-from datetime import timedelta
 
 from . import hubdb as H
 
 LOG = logging.getLogger("tico.thread_followups")
-SCHEMA = [
-    "CREATE TABLE IF NOT EXISTS thread_followups (message_id TEXT PRIMARY KEY, conversation_id TEXT NOT NULL, "
-    "to_actor TEXT NOT NULL, nudge_message_id TEXT, created_at TEXT NOT NULL)",
-    "CREATE INDEX IF NOT EXISTS thread_followups_conversation ON thread_followups(conversation_id, created_at)",
-    "CREATE TABLE IF NOT EXISTS thread_earlier_notices (bot TEXT NOT NULL, actor TEXT NOT NULL, message_id TEXT, "
-    "created_at TEXT NOT NULL, PRIMARY KEY (bot, actor))",
-]
-AFTER = timedelta(hours=24)     # an ask unanswered this long gets its one nudge
-TOO_OLD = timedelta(days=7)     # an ask older than this when first seen is history, not something to nudge
-NUDGE_LIMIT = 50                # asks nudged per run; the rest wait for the next run
-QUOTE_CHARS = 160
-
-
-def ensure(c):
-    for statement in SCHEMA:
-        c.execute(statement)
-
-
-def _quote(body):
-    """The ask's first line, shortened, with no @ so the nudge names nobody (a mention would wake its bot)."""
-    line = (str(body or "").strip().splitlines() or [""])[0].replace("@", "")
-    return line if len(line) <= QUOTE_CHARS else line[:QUOTE_CHARS - 1].rstrip() + "..."
-
-
-def due(c, at, limit=NUDGE_LIMIT):
-    """Asks due a nudge, oldest first. An ask is due when a teammate asked another teammate of this install, it is still
-    open and not expired, whoever was asked has not answered or written in its thread since, the thread is not a task's
-    (a task's asks sit on its own Needs you card), and nothing has nudged it yet."""
-    cutoff = H.shift(at, seconds=-int(AFTER.total_seconds()))
-    oldest = H.shift(at, seconds=-int(TOO_OLD.total_seconds()))
-    return [dict(r) for r in c.execute(
-        "SELECT m.id, m.conversation_id, m.sender_id, m.recipient_id, m.body, m.created_at "
-        "FROM messages m JOIN conversations cv ON cv.id=m.conversation_id "
-        "WHERE m.kind='ask' AND (m.sender_id LIKE 'human:%' OR m.sender_id LIKE 'bot:%') "
-        "AND (m.recipient_id LIKE 'human:%' OR m.recipient_id LIKE 'bot:%') AND m.recipient_id NOT LIKE '%@%' "
-        "AND m.recipient_id<>m.sender_id "
-        "AND m.deleted_at IS NULL AND m.superseded_at IS NULL AND m.answered_by_id IS NULL "
-        "AND (m.expires_at IS NULL OR m.expires_at>?) AND m.created_at<=? AND m.created_at>? "
-        "AND cv.closed_at IS NULL AND cv.archived_at IS NULL AND cv.task_id IS NULL "
-        "AND NOT EXISTS (SELECT 1 FROM thread_followups f WHERE f.message_id=m.id) "
-        "AND NOT EXISTS (SELECT 1 FROM messages r WHERE r.conversation_id=m.conversation_id "
-        "AND r.sender_id=m.recipient_id AND r.created_at>m.created_at AND r.deleted_at IS NULL) "
-        "ORDER BY m.created_at LIMIT ?", (at, cutoff, oldest, limit)).fetchall()]
-
-
-def _nudge(c, ask):
-    """The nudge for one ask, or None when its recipient cannot read the ask now. The nudge takes the ask's restriction
-    and migrated audience, so a reader who cannot see the ask cannot see the nudge either; a restricted or migrated ask
-    is nudged without its quote."""
-    from . import threads
-    reader = threads.actor_viewer(c, ask["recipient_id"])
-    if reader is None or not threads.readable(c, reader, ask["id"]):
-        return None
-    source = c.execute("SELECT restricted, legacy_audience FROM messages WHERE id=?", (ask["id"],)).fetchone()
-    plain = not source["restricted"] and not source["legacy_audience"]
-    text = f'Still waiting on you: "{_quote(ask["body"])}"' if plain else "Still waiting on you."
-    posted = threads.post(c, H.KEEPER, ask["conversation_id"], text, kind="notice", refs={"follow_up": ask["id"]},
-                          to_actor=ask["recipient_id"])
-    c.execute("UPDATE messages SET restricted=?, legacy_audience=? WHERE id=?",
-              (source["restricted"], source["legacy_audience"], posted["id"]))
-    return posted
-
-
-def sweep(c, at, limit=NUDGE_LIMIT):
-    """Nudge each due ask once, in its thread. Returns the nudges written (a list of {"message", "thread", "to"})."""
-    done = []
-    for ask in due(c, at, limit):
-        c.execute("SAVEPOINT thread_followup")
-        try:
-            posted = _nudge(c, ask)
-            c.execute("INSERT INTO thread_followups(message_id, conversation_id, to_actor, nudge_message_id, created_at) "
-                      "VALUES(?,?,?,?,?)",
-                      (ask["id"], ask["conversation_id"], ask["recipient_id"], posted["id"] if posted else None, at))
-            c.execute("RELEASE thread_followup")
-        except Exception:  # noqa: BLE001 - a failed follow-up is rolled back and retired without a nudge
-            c.execute("ROLLBACK TO thread_followup")
-            c.execute("RELEASE thread_followup")
-            LOG.warning("follow-up for an ask failed; it is retired without a nudge", exc_info=True)
-            c.execute("INSERT INTO thread_followups(message_id, conversation_id, to_actor, nudge_message_id, created_at) "
-                      "VALUES(?,?,?,NULL,?)", (ask["id"], ask["conversation_id"], ask["recipient_id"], at))
-            continue
-        if posted:
-            H.event(c, H.KEEPER, "thread.follow_up", ask["id"], {"thread": ask["conversation_id"], "to": ask["recipient_id"]})
-            done.append({"message": ask["id"], "thread": ask["conversation_id"], "to": ask["recipient_id"]})
-    return done
 
 
 def _bot_managers(c, auth, slug):

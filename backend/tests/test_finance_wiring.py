@@ -21,7 +21,13 @@ NOON = datetime(2026, 10, 15, 12, tzinfo=timezone.utc)
 
 def _turn(c, bot, finished, cost, model="tico-medium", billing="api", tid=None):
     tid = tid or f"t{bot}{finished}{model}"
-    c.execute("INSERT INTO turns(id, bot, started_at, finished_at, model, est_cost_usd, billing) VALUES(?,?,?,?,?,?,?)",
+    if c.execute("SELECT 1 FROM attempts WHERE id=?", (tid,)).fetchone():
+        # A claimed run already has its attempts row: its run record is written onto that row.
+        c.execute("UPDATE attempts SET settled_at=?, usage_model=?, est_cost_usd=?, billing=?, trigger='message' WHERE id=?",
+                  (finished, model, cost, billing, tid))
+        return tid
+    c.execute("INSERT INTO attempts(id, bot_id, created_at, settled_at, trigger, usage_model, est_cost_usd, billing) "
+              "VALUES(?,?,?,?,'message',?,?,?)",
               (tid, bot, finished, finished, model, cost, billing))
     return tid
 
@@ -375,6 +381,11 @@ def test_a_raise_arms_warn_and_cutoff_again(books):
         assert sorted(_events(c, ai)) == ["finance.budget.cutoff"] * 2 + ["finance.budget.warn"] * 2
 
 
+def _shown(body):
+    """What a response shows without its action id: ids are random hex and can contain "1000" by chance."""
+    return json.dumps({k: v for k, v in body.items() if k != "action_id"})
+
+
 def test_a_retry_after_a_revoked_grant_shows_no_amount(api):
     store = api.app.state.store
     with store.transaction() as c:
@@ -390,13 +401,13 @@ def test_a_retry_after_a_revoked_grant_shows_no_amount(api):
     with store.transaction() as c:
         FA.act(c, "human:ana", "view_revoke", {"grant_id": grant.result["grant_id"]}, "revoke")
     again = api.post("/api/v2/finance/actions", json=body, headers=key).json()
-    assert again["action_id"] == first["action_id"] and "1000" not in json.dumps(again)
+    assert again["action_id"] == first["action_id"] and "1000" not in _shown(again)
     seen = get(api, "finance/actions/" + first["action_id"], token="ben-test")
-    assert seen["status"] == first["status"] and "1000" not in json.dumps(seen)
+    assert seen["status"] == first["status"] and "1000" not in _shown(seen)
     with store.transaction() as c:                      # the receipt lapses: Finance replays the action itself
         c.execute("DELETE FROM idempotency WHERE actor='human:ben'")
     lapsed = api.post("/api/v2/finance/actions", json=body, headers=key).json()
-    assert lapsed["action_id"] == first["action_id"] and "1000" not in json.dumps(lapsed)
+    assert lapsed["action_id"] == first["action_id"] and "1000" not in _shown(lapsed)
     get(api, "finance/actions/" + first["action_id"], token="cara-test", expected=404)
     with store.transaction() as c:                      # cara is named to decide it: she reads what she decides
         c.execute("UPDATE fin_actions SET approval_to='human:cara' WHERE id=?", (first["action_id"],))
@@ -575,8 +586,9 @@ def test_a_claim_fits_what_is_left_along_the_whole_budget_path(books):
         assert c.execute("SELECT amount FROM fin_holds WHERE id=?", (held.hold_id,)).fetchone()[0] == 2
 
 
-def test_a_quarter_budgets_gateway_cut_is_made_again_each_month(books):
+def test_a_quarter_budgets_gateway_cut_is_made_again_each_month(books, monkeypatch, caplog):
     from backend.finance import jobs
+    monkeypatch.setattr(usage_limits, "LOGGED", set())
     with books.transaction() as c:
         ai = budget(c, "AI services")
         c.execute("UPDATE fin_budgets SET period='quarter' WHERE id=?", (ai,))
@@ -584,6 +596,10 @@ def test_a_quarter_budgets_gateway_cut_is_made_again_each_month(books):
         spend(c, "5100", 100)
         assert jobs.cap_wanted(c, AT) == ("cut", "2026-10")
         assert jobs.cap_wanted(c, "2026-11-02T00:00:00Z") == ("cut", "2026-11")
+        assert usage_limits.blocked(c, "coder", at=NOON) == "quarterly"
+        assert usage_limits.blocked(c, "seller", at=NOON.replace(month=11)) == "quarterly"
+    logs = [r for r in caplog.records if r.name == "backend.usage_limits"]
+    assert len(logs) == 1 and logs[0].args[:3] == ("budget:" + ai, "quarterly", "2027-01-01T00:00:00Z")
 
 
 def test_a_one_time_budget_at_its_cutoff_pauses_its_bots_with_no_end(books):
@@ -592,7 +608,19 @@ def test_a_one_time_budget_at_its_cutoff_pauses_its_bots_with_no_end(books):
         c.execute("UPDATE fin_budgets SET period='once' WHERE id=?", (ai,))
         act(c, OWNER, "budget_update", {"budget_id": ai, "amount": 100})
         spend(c, "5100", 100, day="2026-10-15")
+        assert usage_limits.blocked(c, "coder", at=NOON) == "budget"
         met = usage_limits.over(c, "coder", at=NOON)
         assert met["scope"] == "budget" and met["until"] == ""
         assert usage_limits.why(met) == "Paused: AI services budget reached"
         assert "used up; it starts again when a person raises it" in usage_limits.warning(c, "bot:coder", at=NOON)
+
+
+def test_usage_facts_take_a_meter_read_only_when_finance_keeps_its_snapshot(books):
+    """A same-time read with a lower total is refused by Finance and changes no usage fact; a higher one replaces both."""
+    with books.transaction() as c:
+        assert FA.usage_snapshot(c, _meter("2026-10-15T16:00:00Z", **{"tico-medium": "0.60"}), fetched_at=AT)
+        assert finance_tico.usage_reconciled(c, "2026-10")["tico-medium"]["metered_nano"] == 600_000_000
+        assert FA.usage_snapshot(c, _meter("2026-10-15T16:00:00Z", **{"tico-medium": "0.55"}), fetched_at=AT) is None
+        assert finance_tico.usage_reconciled(c, "2026-10")["tico-medium"]["metered_nano"] == 600_000_000
+        assert FA.usage_snapshot(c, _meter("2026-10-15T16:00:00Z", **{"tico-medium": "0.65"}), fetched_at=AT)
+        assert finance_tico.usage_reconciled(c, "2026-10")["tico-medium"]["metered_nano"] == 650_000_000

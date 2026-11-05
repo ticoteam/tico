@@ -4,13 +4,14 @@ import pytest
 
 from backend.store import H, encode
 from backend.tests.test_api import api, assign, claim, get, post, ready, runner, restrict  # noqa: F401
+from backend import bot_settings as BS
 
 
 def setup(api, supported=True, runtime='codex'):
     machine = runner(api)
     assign(api, machine, 'ops')
     with api.app.state.store.transaction() as c:
-        c.execute('UPDATE bot_config SET config=? WHERE bot=?', (encode({'runtime': runtime}), 'ops'))
+        BS.write(c, 'ops', {'runtime': runtime})
     post(api, 'runners/heartbeat', {'version': 'test', 'platform': 'test', 'readiness': {
         'schema_version': 1, 'bots': {'ops': {'ready': True, 'runtime': runtime, 'goals': supported,
             'commands': [{'name': 'compact', 'help': 'Compact this conversation', 'kind': 'harness'},
@@ -133,7 +134,7 @@ def test_a_task_goal_is_set_by_the_keeper_and_meeting_it_marks_the_task_done(api
     machine = runner(api)
     assign(api, machine, 'ops')
     with api.app.state.store.transaction() as c:
-        c.execute('UPDATE bot_config SET config=? WHERE bot=?', (encode({'runtime': 'codex', 'task_goal': 'on'}), 'ops'))
+        BS.write(c, 'ops', {'runtime': 'codex', 'task_goal': 'on'})
     post(api, 'runners/heartbeat', {'version': 'test', 'platform': 'test',
          'capabilities': ['task_lanes_v2', 'session_roots_v1', 'task_goals_v1'], 'readiness': {
          'schema_version': 1, 'bots': {'ops': {'ready': True, 'runtime': 'codex', 'goals': True}}}}, machine['token'])
@@ -154,7 +155,7 @@ def task_goal_world(api):
     machine = runner(api)
     assign(api, machine, 'ops')
     with api.app.state.store.transaction() as c:
-        c.execute('UPDATE bot_config SET config=? WHERE bot=?', (encode({'runtime': 'codex', 'task_goal': 'on'}), 'ops'))
+        BS.write(c, 'ops', {'runtime': 'codex', 'task_goal': 'on'})
     post(api, 'runners/heartbeat', {'version': 'test', 'platform': 'test',
          'capabilities': ['task_lanes_v2', 'session_roots_v1', 'task_goals_v1'], 'readiness': {
          'schema_version': 1, 'bots': {'ops': {'ready': True, 'runtime': 'codex', 'goals': True}}}}, machine['token'])
@@ -169,7 +170,7 @@ def test_turning_a_task_goal_off_clears_it_natively_and_a_persons_goal_never_com
     goal_event(api, machine, first, 'paused', 'Waiting on: Ana')      # Codex blocked on a person: the goal pauses
     post(api, f"attempts/{first['id']}/complete", {'outcome': 'completed', 'last_seq': 1}, machine['token'])
     with api.app.state.store.transaction() as c:
-        c.execute('UPDATE bot_config SET config=? WHERE bot=?', (encode({'runtime': 'codex'}), 'ops'))
+        BS.write(c, 'ops', {'runtime': 'codex'})
         H.task_comment(c, 'human:ana', task['id'], 'Use the new numbers.')
     second = claim(api, machine)
     assert second['chat_goal']['status'] == 'cleared' and 'goal' not in second['task']
@@ -256,8 +257,46 @@ def test_a_persons_edit_of_a_task_goal_survives_task_goals_turning_off(api):
     assert edited['set_by'] == 'human:ana'
     finish(api, machine, claim(api, machine))           # the edit's control
     with api.app.state.store.transaction() as c:
-        c.execute('UPDATE bot_config SET config=? WHERE bot=?', (encode({'runtime': 'codex'}), 'ops'))
+        BS.write(c, 'ops', {'runtime': 'codex'})
         H.task_comment(c, 'human:ana', task['id'], 'Use the new numbers.')
     claim(api, machine)
     goal = get(api, f"conversations/{task['conversation_id']}/goal")['goal']
     assert goal['status'] == 'active' and goal['objective'] == 'Publish it and tell the board'
+
+
+@pytest.mark.parametrize('where', ['dm', 'home'])
+def test_a_bot_dm_or_home_thread_takes_a_goal(api, where):
+    # The bot page's Home and DM are threads (docs/dev/threads-contract.md): the goal route takes their id as the
+    # conversation, and a native DM names its bot only as a member, not on the participant list.
+    machine, old = setup(api)
+    with api.app.state.store.transaction() as c:      # not the legacy chat room: a DM made as threads make one
+        c.execute('UPDATE conversations SET closed_at=? WHERE id=?', (H.now(), old))
+    thread = post(api, 'threads/dm', {'members': ['bot:ops']}) if where == 'dm' else get(api, 'threads/home/bot:ops')
+    tid = thread['id']
+    assert tid != old
+    assert get(api, f'conversations/{tid}/goal')['supported'] is True
+    goal = action(api, tid, objective='Ship the Acme pricing page')['goal']
+    assert goal['status'] == 'active' and goal['conversation_id'] == tid
+    attempt = claim(api, machine)
+    assert attempt['message']['body'] == '/goal Ship the Acme pricing page'
+    assert attempt['message']['refs']['goal_action'] == 'set'
+
+
+@pytest.mark.parametrize('where', ['dm', 'home'])
+def test_a_bot_dm_or_home_thread_takes_a_harness_command_and_shows_its_run(api, where):
+    # The bot page's composer (ui/app/thread-view.js) sends a harness's own "/" command as the old chat did: a message
+    # marked as a command, to the bot, in the thread (POST /v2/messages with the thread as its conversation). Its Stop
+    # reads the thread's run from the thread's conversation snapshot.
+    machine, old = setup(api)
+    with api.app.state.store.transaction() as c:
+        c.execute('UPDATE conversations SET closed_at=? WHERE id=?', (H.now(), old))
+    thread = post(api, 'threads/dm', {'members': ['bot:ops']}) if where == 'dm' else get(api, 'threads/home/bot:ops')
+    tid = thread['id']
+    post(api, 'messages', {'to': 'bot:ops', 'text': '/compact', 'conversation_id': tid, 'command': True})
+    assert get(api, f'conversations/{tid}/snapshot?limit=1')['execution']['state'] == 'queued'
+    attempt = claim(api, machine)
+    assert attempt['message']['body'] == '/compact' and attempt['message']['refs']['command'] is True
+    post(api, f"attempts/{attempt['id']}/started", {'thread_id': 'fake-thread'}, machine['token'])
+    execution = get(api, f'conversations/{tid}/snapshot?limit=1')['execution']
+    assert execution['state'] == 'running' and execution['run_id'] == attempt['id']
+    assert post(api, 'bots/ops/stop', {'run_id': execution['run_id']})['stopping'] is True

@@ -210,8 +210,8 @@ def seed_identities(app, count):
             kind, name = actor.split(":")
             if kind == "bot":
                 settings.test_identities[token] = Identity(actor, "bot", agent="test")
-                c.execute("INSERT OR IGNORE INTO bots(slug,display_name,runtime,created_at) VALUES(?,?,'fake',?)",
-                          (name, name, H.now()))
+                c.execute("INSERT OR IGNORE INTO bots(id,slug,display_name,created_at) VALUES(?,?,?,?)",
+                          (name, name, name, H.now()))
                 c.execute("INSERT INTO agents(bot,harness,token_hash,created_at,created_by) VALUES(?,?,?,?,?)",
                           (name, "test", "x-" + name, H.now(), "human:ana"))
             else:

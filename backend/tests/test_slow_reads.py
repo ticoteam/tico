@@ -22,8 +22,8 @@ def seed_turns(c, start, end, parent=None, tag="t"):
                   ("job-" + key, reply["id"], H.now(), aid))
         c.execute("INSERT INTO attempts(id,job_id,bot_id,runner_id,generation,token_hash,state,lease_until,created_at) "
                   "VALUES(?,?,'ops','rn',0,?,'completed',?,?)", (aid, "job-" + key, aid, H.now(), H.now()))
-        c.execute("INSERT INTO turns(id,bot,started_at,message_id,task_id,exit) VALUES(?,'ops',?,?,?,'ok')",
-                  (aid, H.now(), reply["id"], parent["id"]))
+        c.execute("UPDATE attempts SET trigger='message',message_id=?,task_id=?,exit='ok' WHERE id=?",
+                  (reply["id"], parent["id"], aid))
     return parent
 
 
@@ -96,13 +96,14 @@ def test_covering_indexes_return_the_same_rows(tmp_path):
         hidden = H.task_create(conn, "human:ben", "Hidden", "Secret", "human:ben", private=True, lint=False)
         conn.commit()
         names = {row["name"] for row in conn.execute("SELECT name FROM sqlite_master WHERE type='index'")}
-        assert {"tasks_private_parties", "conversations_id_task"} <= names
+        assert {"tasks_private_status", "conversations_id_task"} <= names
+        assert "tasks_private_parties" not in names     # a prefix of tasks_private_status (migration 0042)
         id_plan = " ".join(row[3] for row in conn.execute("EXPLAIN QUERY PLAN SELECT id FROM tasks"))
         assert "COVERING INDEX" in id_plan
         plain = [tuple(row) for row in conn.execute(
             "SELECT id,requester_id,owner_id,guest,private FROM tasks WHERE private IS NOT 0 ORDER BY id")]
         covered = [tuple(row) for row in conn.execute(
-            "SELECT id,requester_id,owner_id,guest,private FROM tasks INDEXED BY tasks_private_parties "
+            "SELECT id,requester_id,owner_id,guest,private FROM tasks INDEXED BY tasks_private_status "
             "WHERE private IS NOT 0 ORDER BY id")]
         assert plain == covered
         assert {row[0] for row in plain} == {hidden["id"]}

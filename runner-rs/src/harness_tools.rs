@@ -1,6 +1,6 @@
 //! The model CLIs a runner uses, installed and kept current by the runner itself.
 //!
-//! Manifests are runner/harnesses/*.toml, read from the checkout (`crate::env::root()`), else the copies
+//! Manifests are runner-rs/harnesses/*.toml, read from the checkout (`crate::env::root()`), else the copies
 //! built into this binary. Installs go into the runner's own tools directory, never system-wide:
 //!
 //!     <tools>/<id>/<uid>/     one complete install (an npm prefix, a venv, or a binary)
@@ -41,13 +41,13 @@ const INSTALL_TIMEOUT_S: u64 = 900;
 pub const POLL_S: f64 = 5.0;
 
 const BUILT_IN: &[(&str, &str)] = &[
-    ("claude-code.toml", include_str!("../../runner/harnesses/claude-code.toml")),
-    ("codex.toml", include_str!("../../runner/harnesses/codex.toml")),
-    ("cursor-agent.toml", include_str!("../../runner/harnesses/cursor-agent.toml")),
-    ("gemini-cli.toml", include_str!("../../runner/harnesses/gemini-cli.toml")),
-    ("grok.toml", include_str!("../../runner/harnesses/grok.toml")),
-    ("muse-code.toml", include_str!("../../runner/harnesses/muse-code.toml")),
-    ("pi.toml", include_str!("../../runner/harnesses/pi.toml")),
+    ("claude-code.toml", include_str!("../harnesses/claude-code.toml")),
+    ("codex.toml", include_str!("../harnesses/codex.toml")),
+    ("cursor-agent.toml", include_str!("../harnesses/cursor-agent.toml")),
+    ("gemini-cli.toml", include_str!("../harnesses/gemini-cli.toml")),
+    ("grok.toml", include_str!("../harnesses/grok.toml")),
+    ("muse-code.toml", include_str!("../harnesses/muse-code.toml")),
+    ("pi.toml", include_str!("../harnesses/pi.toml")),
 ];
 
 fn re(p: &str) -> Regex {
@@ -600,9 +600,9 @@ pub fn load_from(files: &[(String, String)]) -> Result<BTreeMap<String, Manifest
     Ok(found)
 }
 
-/// The shipped manifests: the checkout's runner/harnesses/, else the copies built in.
+/// The shipped manifests: the checkout's runner-rs/harnesses/, else the copies built in.
 pub fn load_all() -> Result<BTreeMap<String, Manifest>, String> {
-    let dir = crate::env::root().join("runner").join("harnesses");
+    let dir = crate::env::root().join("runner-rs").join("harnesses");
     let mut files = vec![];
     if let Ok(entries) = std::fs::read_dir(&dir) {
         for e in entries.flatten() {
@@ -633,6 +633,11 @@ fn manifests() -> &'static BTreeMap<String, Manifest> {
 /// otherwise. For readiness and hosts to find the executable (the parent wires it).
 pub fn executable_for(runtime: &str) -> String {
     manifests().values().find(|m| m.host == runtime).map(|m| m.executable.clone()).unwrap_or_else(|| runtime.to_string())
+}
+
+/// The program of every harness manifest: the model CLIs that run turns on a computer (idle-load sampling leaves them out).
+pub fn turn_executables() -> Vec<String> {
+    manifests().values().map(|m| m.executable.clone()).collect()
 }
 
 /// The login command (argv after the executable) and whether it needs a terminal, per host (login.py COMMANDS).
@@ -1193,6 +1198,7 @@ impl Harnesses {
             self.section(key).remove(&m.id);
         }
         self.save();
+        crate::readiness::request_probe();
         log(&format!("Tico runner: removed {}; it is turned off on this computer", m.name));
     }
 
@@ -1236,6 +1242,7 @@ impl Harnesses {
             self.section("overrides").insert(m.id.clone(), json!({"policy": "pinned", "pin": version}));
         }
         self.save();
+        crate::readiness::request_probe();
         log(&if job.kind == "update" {
             format!("Tico runner: {} {}d to {version}", m.name, job.kind)
         } else {

@@ -97,9 +97,9 @@ report order, the bots' rows (`/api/employees`, `/api/v2/bots`, a bot's detail a
 users, team, department and who they report to), messages and tasks in answers and the event stream (`from_actor`,
 `to_actor`, a conversation's participants, a task's `owner`, `requester`, `closed_by`, `origin_actor` and
 `from_person`, which read `""`), the stream's actors, and `hub sql` (`humans` rows, `humans.teams`, `bot_config`'s
-`team`, `operator`, `reports_to`, owner lists, `created_by` and the same keys in `config`,
+`team`, `operator`, `reports_to`, owner lists, `created_by` and the same keys in `bot_settings.extra`,
 `conversations.participants`, `messages.sender_id` and `to_actor`, `tasks.owner_id`, `requester` and `closed_by`,
-and the `actor` of `events` and `task_events`, which read `''`), and their page, photo and access answer the same
+and the `actor` of `events` and of a task's `history_events` rows, which read `''`), and their page, photo and access answer the same
 `404` as someone who does not exist. A hidden group's people and bots are shown under the nearest group above it.
 Inside a conversation you are in, and on a task you own or asked for, everyone in it stays known to you. The owner,
 the admins and whoever manages them always see them.
@@ -176,8 +176,8 @@ Threads ([Threads](threads.md)) have their own audience, separate from a bot's t
   group or any group above it. **members**, **personal** and **participants** threads open to a bot only as a member (or
   a participant). An external agent (an agent token) gets no company or team reading: only the threads it is in.
   Posting in a Home takes **Write** on its owner, for bots as for people.
-- A thread can reach outside the company through a linked Slack channel or a shared install. Taking that away (unlink,
-  unshare) removes the outside readers at once ([Slack](slack.md), [Federation](federation.md)).
+- A thread can reach outside the company through a linked Slack channel. Unlinking it removes the outside readers at
+  once ([Slack](slack.md)).
 - A message the org rules hold writes nothing. The author may withdraw it, and so may the person a bot reports to; only
   the reviewer sends it anyway ([Rules](rules-plan.md)).
 
@@ -194,15 +194,23 @@ person pins to the Dashboard or a team page may be read by that place's audience
 pinned there ([Overview](overview.md), [Files](files.md)). BotOps does all of this with the rights of the person who
 asked (`hub card`, `hub pin`).
 
+## History's Log
+
+Settings > History > Log reads through the reader's own SQL rights ([Hub SQL](hub-sql.md)): a row shows when that
+person or bot could select it from `POST /api/v2/sql`, and never otherwise. A member sees their own rows and those of
+the tasks, chats and bots they may read. Not even the owner sees a decision made in someone else's personal chat. Filtering by a bot needs Read on that bot. A credential's name shows
+only to someone who may see the credential. A blocked send names its automation only while the reader may see that
+automation; otherwise it shows “An automation”. Export CSV (`GET /api/v2/history.csv`) is the owner's and the Admins'.
+
 ## Team rules
 
 The product favours getting going fast, and the owner tightens it later. Settings > People (owner only, saved as they change;
-`GET` and `PUT /api/v2/access/rules`) has eleven switches, all **on** by default:
+`GET` and `PUT /api/v2/access/rules`) has twelve switches, all **on** by default:
 
 | Rule | On (default) | Off |
 | --- | --- | --- |
-| **Assistant acts without asking** | the Assistant makes tasks for bots, comments on tasks no other human is on, and messages bots directly, and does the task actions the human asks for in their Assistant chat; a card is for anything else ([Assistant](assistant.md)) | the Assistant acts directly only on the human's own tasks; a task, message or comment involving a bot, and a task action they asked for, is a card |
-| **People may let their Assistant decide their approvals** | each person may turn on "My assistant can decide approvals for me" in Settings > General; their own Assistant then approves or declines approvals addressed to them on their words in its chat, recorded and undoable ([Assistant](assistant.md#letting-it-decide-your-approvals)) | approving is the person's click on a card again, whatever their own setting |
+| **Assistant acts without asking** | the Assistant does what the human asks for in their Assistant chat, as them, with their rights as the ceiling; only what it may never do there (credentials, sign-in, owner transfer, support reports, deleting people, the server connection or storage) is a card ([Assistant](assistant.md)) | the Assistant writes only the human's own tasks and changes to tasks that are theirs alone; everything else, including what they asked for in chat, is a card |
+| **People may let their Assistant decide their approvals** | each person's Assistant decides their approvals, on by default; a person turns "My assistant can decide approvals for me" off in Settings > General. Until then it approves or declines approvals addressed to them on their words in its chat, recorded and undoable ([Assistant](assistant.md#letting-it-decide-your-approvals)) | approving is the person's click on a card again, whatever their own setting |
 | **BotOps changes providers and limits without asking** (`botops_direct`) | BotOps changes the AI providers and raises spending limits for the person who asked, with their rights | a provider change, or a limit raised or removed, is a Confirm card in that person's BotOps chat; lowering a limit stays direct |
 | **BotOps manages every bot** (`botops_manages_bots`) | in its own runs (the daily update, or a routine the owner set for BotOps) BotOps manages every bot but the built-in ones: their Tools, repositories, contact and Instructions, with write access to each bot's repository in its GitHub token (below) | BotOps in its own runs changes only itself |
 | **Managers change their direct reports** (`managers_manage_reports`) | a bot changes its direct reports' model, task model, name and description, as itself, unless that manager's own switch is off; BotOps creates, archives and restores a report for it, within `report_creates_per_week` and `report_archives_per_week` ([Managers and their reports](#managers-and-their-reports)) | no bot changes a report's model, task model, name or description, or creates, archives or restores it, whatever the bots' own switches say |
@@ -211,6 +219,7 @@ The product favours getting going fast, and the owner tightens it later. Setting
 | **Admins see SQL** | Admins open the SQL page | the SQL page is the owner's |
 | **Members make personal tokens** | any human makes a personal API token, which sees what they see | the owner and the Admins do |
 | **Owners and admins may let Tico support in** (`support_access`) | an owner or admin may open a time-limited support session from their own request ([below](#tico-support)) | nobody can, and a live session ends |
+| **Bots send reports to the Tico team without asking** (`bot_reports_direct`, Settings > General > Team) | a bot's report to the Tico team is decided by this rule as the install's default person and sent at once, with the same checks and limits as a drafted one ([Support](support.md#a-bots-report)) | a bot's report is a `support` approval a person says yes to in Needs you first ([Support](support.md#a-bots-report)) |
 | **Bots go ahead on their recommendation** (`bots_go_ahead`, days in `go_ahead_days`, 3) | a bot's ask with a reversible, internal default goes ahead when nobody answers in that many days (or by the date the bot gave); sends, spending and deletes never go ahead: their question closes on its date and the bot decides without it ([Tasks](tasks.md#when-nobody-answers-a-bots-ask)) | no ask goes ahead on its own; one with a date still closes on it, and one without leaves **Needs you** after two business days |
 
 Only the Owner changes them, directly in Settings or by asking BotOps to act with the Owner's rights.
@@ -740,13 +749,32 @@ what `set` does when BotOps or the Assistant asks for a person (the same answer 
   a one-line reason and the card's link.
 
 The Assistant's Confirm card is in the person's own Assistant chat (the owner's Strategy Bot chat), and it may card every
-catalogue route BotOps may. A direct entry runs on the person's own words: the write cites their message in that chat
-(`--on-behalf-of turn`), as a task action does. Without it, or while the owner's "Assistant acts without asking" is off,
-a direct entry is a card too. A card or a cited write from the Assistant is exactly one entry's body: two settings at
-once, or a person-only one, is refused.
+catalogue route BotOps may. A direct or a confirm entry runs on the person's own words: the Assistant's run cites their
+message in that chat, as a task action does (its route checks who may change it). Without that, or while the owner's
+"Assistant acts without asking" is off, it is a card too. A card or a cited write from the Assistant is exactly one
+entry's body: two settings at once, or a person-only one, is refused.
 
 Someone without the rights is refused with who can change it ("Only the owner or an admin changes Release times").
-The route still makes its own check after the catalogue's. `backend/tests/test_settings_catalog.py` reads every write
+"Whose it is" is read from the thing itself: a trigger's or an outgoing webhook's maker (a bot that made an incoming
+trigger manages it too, as its route allows), a computer's operator, and the people who manage a wake rule's scope (the
+owner or an admin for a team rule); a person's role is the owner's alone.
+The route still makes its own check after the catalogue's, and when the route refuses a write BotOps or the Assistant
+made for a person (`hub api`), the refusal carries the same who-may line (`fix`, `who_may`).
+
+**Ask someone who can.** BotOps or the Assistant then offers "Shall I ask an admin?" ("the owner" for the owner's
+settings). On the person's yes, `hub settings ask <key> <value>` (`--to <person>` names one) sends one request to one
+person who may: the setting's Confirm card in their BotOps chat and a task on their list that the asker requested. Only
+their tap changes it, with their rights; their tap or cancel settles the task, done or declined, and the asker is told
+in the chat they asked from. A card nobody taps expires after a day (the hourly approval expiry sweep), which declines
+the task and tells the asker too; a confirm cut off before it finished (a restart) declines it and tells the asker it
+may or may not have changed, and nothing runs again. The Assistant cites the person's words for it; a bot on its own
+rights never asks, a person-only setting can't be asked for (it is typed in Settings, by someone who may or, for each
+person's own, by them), and someone who may change it is told to set it. A person has at most five asks waiting at once,
+one per setting and target (asking again for one that waits is refused, `already_asked`). The same ask again is the same
+request; one for exactly the change already waiting for that person on someone else's ask or on their own card is
+refused (`already_waiting`), so every accepted request has its own requester and is told once.
+
+`backend/tests/test_settings_catalog.py` reads every write
 the Settings pages make and fails when no entry covers one; a one-off action (check, replay, undo, run now) is listed
 in `NOT_SETTINGS` with the reason it needs none.
 
@@ -830,7 +858,7 @@ access you meant there; saving any bot's access, or dismissing the note, clears 
 ## In SQL
 
 `POST /api/v2/sql` is the one place a bot the caller may only see or write to does not appear: the
-`bots`, `bot_status`, `schedules`, `bot_config`, `turns`, `jobs` and related tables hold the bots the caller can read,
+`bots`, `bot_status`, `schedules`, `bot_config`, `bot_settings`, `attempts`, `jobs` and related tables hold the bots the caller can read,
 and tasks follow the rule above ([Tico SQL](hub-sql.md)).
 
 ## Tags

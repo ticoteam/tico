@@ -1,5 +1,5 @@
 //! Task lanes (task_lanes_v2): a task-keyed turn runs in its own lane beside the bot's other work, one turn at
-//! a time per (bot, lane) on this computer (sessions::Lanes; runner/worktrees.py lane_lock). The claim names
+//! a time per (bot, lane) on this computer (sessions::Lanes; runner_support/worktrees.py lane_lock). The claim names
 //! the lanes busy here (`busy_lanes`); the heartbeat advertises the capabilities, each dropped for ten minutes
 //! by a server that refuses it.
 
@@ -84,7 +84,7 @@ pub fn capabilities() -> Vec<&'static str> {
 }
 
 /// Root-level heartbeat fields an older server may refuse; each is left out for ten minutes after a refusal.
-const ROOT_FIELDS: &[&str] = &["worktrees", "profiles", "repositories", "restart"];
+const ROOT_FIELDS: &[&str] = &["worktrees", "profiles", "repositories", "restart", "device_id"];
 
 fn rows<'a>(body: &'a Value, key: &str) -> impl Iterator<Item = &'a Value> {
     body[key].as_array().into_iter().flatten()

@@ -22,6 +22,7 @@ from pydantic import Field
 from .batch_work import shared_check
 from .models import Contract
 from .store import H, Problem
+from . import bot_settings as BS
 
 MAX = 100_000
 KEYS = ("turns_per_hour", "turns_per_day")
@@ -125,7 +126,7 @@ def enforce(c, settings, job, message, now=None):
     state = get(c, bot)
     if state.get("held_at"):
         return True
-    row = c.execute("SELECT config FROM bot_config WHERE bot=?", (bot,)).fetchone()
+    row = c.execute(BS.ONE_SQL, (bot,)).fetchone()
     declared = _declared(row["config"] if row else None)
     # The team's defaults are read here: one failure there is every bot's, not this one's.
     with shared_check("team"):
@@ -230,7 +231,8 @@ def set_bot(admin, c, who, bot, body, undo_change_id=None):
             declared.pop(key, None)
         else:
             declared[key] = after[key]
-    c.execute("UPDATE bot_config SET config=?,revision=revision+1 WHERE bot=?", (encode(declared), bot))
+    BS.write(c, bot, declared)
+    c.execute("UPDATE bot_config SET revision=revision+1 WHERE bot=?", (bot,))
     admin.record(c, who.actor, bot, "turn_budget", before, after)
     if undo_change_id:
         c.execute("UPDATE settings_changes SET undone_by=?,undone_at=? WHERE id=? AND undone_at IS NULL",
@@ -267,7 +269,7 @@ def set_team(c, actor, body):
     if after != before:
         H.event(c, actor, "settings.turn_budgets", "team", {"before": before, "after": after})
         # A held bot that follows the team's budget is let go when the new one leaves it room, as its own would.
-        for row in c.execute("SELECT b.bot, g.config FROM bot_budget b JOIN bot_config g ON g.bot=b.bot "
+        for row in c.execute(f"SELECT b.bot, {BS.CONFIG} AS config FROM bot_budget b JOIN bot_config bc ON bc.bot=b.bot {BS.JOIN} "
                              "WHERE b.held_at IS NOT NULL").fetchall():
             if _release_if_room(c, actor, row["bot"], _declared(row["config"])):
                 freed.append(row["bot"])

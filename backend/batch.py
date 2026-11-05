@@ -9,8 +9,8 @@ item, comes back on those items the next time that bot comes up. Any front end r
 loop: the hub tools an outside agent (Grok Bot, Meta Muse) calls, a page.
 
 A batch is what bots are waiting on the person for, never anything else: the
-person's own tasks and other people's requests are on the Tasks page, not here, and nothing goes
-to an assistant in between. It is the whole list, or one bot's part of it (`scope`). "Who needs
+person's own tasks and other people's requests are on the Tasks page, not here. The person's Assistant may walk it for
+them, as them; it never approves on a walk (`_apply_decide`). It is the whole list, or one bot's part of it (`scope`). "Who needs
 me" starts the bot that most needs the person, and commit says who is next: the bots come to the
 person one at a time, most important first.
 """
@@ -52,7 +52,7 @@ def _snoozed(c, actor):
 
 
 def _children(c, task_id, owner):
-    return H._rows(c.execute("SELECT * FROM tasks WHERE id IN (SELECT from_task FROM task_relations WHERE kind='parent' AND to_task=?) AND owner_id=? AND status IN ('open','doing','waiting','review','ready') "
+    return H._rows(c.execute(f"SELECT * FROM {H.TASKS} tasks WHERE id IN (SELECT from_task FROM task_relations WHERE kind='parent' AND to_task=?) AND owner_id=? AND status IN ('open','doing','waiting','review','ready') "
                              "ORDER BY created_at", (task_id, owner)))
 
 
@@ -71,7 +71,7 @@ def _row(it, actor):
     if it.get("person_ask"):
         row["ask"] = it["person_ask"]
     if it.get("ask_missing"):
-        # Nothing to decide yet: the bot has been asked to say plainly what it needs (backend/restate_asks.py).
+        # Nothing to decide yet: the bot has not yet said plainly what it needs.
         row["ask_missing"] = True
     if (it.get("ask") or {}).get("body"):
         row["question"] = _clip(it["ask"]["body"], 1500)
@@ -207,8 +207,8 @@ def _sent(c, person, since):
     """The batch messages this person sent since `since`, each with the item keys it carried."""
     rows = c.execute("SELECT m.id, m.recipient_id, m.refs, b.id AS batch, b.items, b.report, "
                      "b.message_id AS first "
-                     "FROM messages m JOIN batches b ON b.id=json_extract(m.refs,'$.live.batch') "
-                     "WHERE m.sender_id=? AND json_extract(m.refs,'$.live.kind')='batch' "
+                     "FROM message_refs m JOIN batches b ON b.id=json_extract(m.refs,'$.live.batch') "
+                     "WHERE m.sender_id=? AND m.ref_live_kind='batch' "
                      "AND m.created_at>=? ORDER BY m.created_at DESC", (person, since)).fetchall()
     return [dict(r) for r in rows]
 
@@ -464,9 +464,15 @@ def _apply_decide(c, auth, who, item, r, boards):
     decision, text = r["decision"], r.get("text") or ""
     kind, ident = item["key"].split(":", 1)
     if kind == "approval":
+        if decision == "approve" and getattr(who, "via", "") == "assistant":
+            # The person's Assistant walks the batch for them, but an approve is never its to make on a walk: it stays
+            # the person's own click, or the Assistant's read-back and their yes (backend/assistant.py approval_words).
+            raise Problem("approve_not_asked", "Approving is the person's own decision: the Assistant can decline here, "
+                          "but the person approves it in Tico or with their yes to the Assistant's read-back", 403)
         row = auth.approval(c, who, ident, decide=True)
-        if row["kind"] == "support":
-            # As on the approve route: sending off the install is a person's own tap in Tico, not their token.
+        if row["kind"] == "support" and decision == "approve":
+            # As on the approve route: sending off the install is a person's own tap in Tico, not their token. A decline
+            # sends nothing, so it is anyone's who may decide it.
             from .support import require_person
             try:
                 require_person(who)

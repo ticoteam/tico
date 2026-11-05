@@ -7,6 +7,7 @@ from backend import usage_limits
 from backend.store import H
 from backend.tests.test_api import api, assign, claim, get, post, runner  # noqa: F401  (api is a fixture)
 from backend.tests.test_check_models import company, finish, heartbeat
+from backend import bot_settings as BS
 
 HAIKU = {"harness": "claude", "model": "claude-haiku-5-5", "effort": "low"}
 HAIKU_RAN = {"model": "claude-haiku-5-5", "runtime": "claude", "harness": "claude", "effort": "low", "billing": "api"}
@@ -25,9 +26,9 @@ def ops_on_sonnet(api):
     """ops on Claude Sonnet at high effort, on a computer signed in to Claude and Grok."""
     company(api, "anthropic", "xai")
     with api.app.state.store.transaction() as c:
-        config = json.loads(c.execute("SELECT config FROM bot_config WHERE bot='ops'").fetchone()[0])
+        config = BS.read(c, 'ops')
         config.update(runtime="claude", harness="claude", model="claude-sonnet-5-5", reasoning_effort="high")
-        c.execute("UPDATE bot_config SET config=? WHERE bot='ops'", (json.dumps(config),))
+        BS.write(c, 'ops', config)
     machine = runner(api)
     assign(api, machine, "ops")
     heartbeat(api, machine)
@@ -106,8 +107,8 @@ def test_session_bot_keeps_tasks_on_the_bots_model(api):
     """One provider thread for everything: a task cannot switch it to another model."""
     machine = ops_on_sonnet(api)
     with api.app.state.store.transaction() as c:
-        config = json.loads(c.execute("SELECT config FROM bot_config WHERE bot='ops'").fetchone()[0])
-        c.execute("UPDATE bot_config SET config=? WHERE bot='ops'", (json.dumps({**config, "session": "bot"}),))
+        config = BS.read(c, 'ops')
+        BS.write(c, 'ops', {**config, 'session': 'bot'})
     set_task_model(api, HAIKU)
     _, turn = task_turn(api, machine)
     assert turn["config"]["model"] == "claude-sonnet-5-5"
@@ -154,7 +155,7 @@ def test_a_task_model_that_cannot_run_falls_back_to_the_bots_model_and_says_why(
     assert ran["task_model"]["note"] == ("Ran on the bot's model claude-sonnet-5-5 at task effort low: task model "
                                          "grok-4.6 (low) could not run (grok is not signed in on Test Mac)")
     with api.app.state.store.read() as c:
-        events = c.execute("SELECT old,new,note FROM task_events WHERE task_id=? AND field='task_model'",
+        events = c.execute("SELECT old,new,note FROM history_events WHERE subject_type='task' AND subject_id=? AND kind='task_model'",
                            (task["id"],)).fetchall()
     assert [tuple(e) for e in events] == [("grok-4.6 (low)", "claude-sonnet-5-5 (low)", ran["task_model"]["note"])]
     # Its next turn says the same once more on the run, not again on the task.
@@ -162,7 +163,7 @@ def test_a_task_model_that_cannot_run_falls_back_to_the_bots_model_and_says_why(
     again = claim(api, machine)
     assert again["task"]["id"] == task["id"] and again["config"]["model"] == "claude-sonnet-5-5"
     with api.app.state.store.read() as c:
-        assert c.execute("SELECT count(*) FROM task_events WHERE task_id=? AND field='task_model'",
+        assert c.execute("SELECT count(*) FROM history_events WHERE subject_type='task' AND subject_id=? AND kind='task_model'",
                          (task["id"],)).fetchone()[0] == 1
     # Signed in again: the next task runs on the task model.
     finish(api, machine, again)
@@ -174,10 +175,10 @@ def test_a_task_model_that_cannot_run_falls_back_to_the_bots_model_and_says_why(
 def test_a_retired_or_switched_off_task_model_falls_back_too(api):
     machine = ops_on_sonnet(api)
     with api.app.state.store.transaction() as c:
-        config = json.loads(c.execute("SELECT config FROM bot_config WHERE bot='ops'").fetchone()[0])
+        config = BS.read(c, 'ops')
         config["task_model"] = {"harness": "claude", "model": "claude-opus-5", "reasoning_effort": "high",
                                 "runtime": "claude"}
-        c.execute("UPDATE bot_config SET config=? WHERE bot='ops'", (json.dumps(config),))
+        BS.write(c, 'ops', config)
     task, turn = task_turn(api, machine)
     assert turn["config"]["model"] == "claude-sonnet-5-5"
     finish(api, machine, turn)
@@ -215,7 +216,7 @@ def test_spend_caps_meter_what_the_task_model_ran(api):
     _, turn = task_turn(api, machine)
     finish(api, machine, turn, HAIKU_RAN)
     with api.app.state.store.read() as c:
-        rows = c.execute("SELECT model,effort,est_cost_usd FROM turn_usage_segments WHERE turn_id=?",
+        rows = c.execute("SELECT model,effort,cost_nano/1e9 AS est_cost_usd FROM usage_facts WHERE run_id=?",
                          (turn["id"],)).fetchall()
         assert [tuple(r)[:2] for r in rows] == [("claude-haiku-5-5", "low")]
         cost = rows[0]["est_cost_usd"]
@@ -283,10 +284,10 @@ def test_under_the_gateway_preset_a_task_model_not_signed_in_runs_on_the_bots_mo
     connected(api, monkeypatch)
     choose(api, models_preset.RECOMMENDED)
     with api.app.state.store.transaction() as c:
-        config = json.loads(c.execute("SELECT config FROM bot_config WHERE bot='ops'").fetchone()[0])
+        config = BS.read(c, 'ops')
         config = {k: v for k, v in config.items() if k != "fallback"}
         config.update(runtime="claude", harness="claude", model="claude-sonnet-5-5", reasoning_effort="high")
-        c.execute("UPDATE bot_config SET config=? WHERE bot='ops'", (json.dumps(config),))
+        BS.write(c, 'ops', config)
     machine = runner(api)
     assign(api, machine, "ops")
     rust_heartbeat(api, machine, {"claude": {"installed": True, "authenticated": "ready"},
@@ -306,7 +307,7 @@ def test_under_the_gateway_preset_a_task_model_not_signed_in_runs_on_the_bots_mo
 
 def test_a_task_model_whose_sign_in_cannot_be_checked_runs_rather_than_falling_back_for_good(api):
     """Grok's sign-in can't be checked without starting it, so the runner always reports it `unknown`
-    (runner/harnesses/grok.toml `check = "none"`): a "don't know" runs the task model, it is not a reason to fall back."""
+    (runner-rs/harnesses/grok.toml `check = "none"`): a "don't know" runs the task model, it is not a reason to fall back."""
     machine = ops_on_sonnet(api)
     rust_heartbeat(api, machine, {"claude": {"installed": True, "authenticated": "ready"},
                                   "grok": {"installed": True, "authenticated": "unknown"}})
@@ -366,16 +367,15 @@ def test_a_cheaper_task_model_on_a_bot_that_sends_warns_in_plain_words_and_still
     note = get(api, "tasks/" + task["id"])["runs"][0]["ran_on"]["task_model"]["note"]
     assert note.startswith("Ran on the bot's task model claude-haiku-5-5 (low), below the minimum for this bot")
     with api.app.state.store.read() as c:
-        assert [r[0] for r in c.execute("SELECT note FROM task_events WHERE task_id=? AND field='task_model'",
+        assert [r[0] for r in c.execute("SELECT note FROM history_events WHERE subject_type='task' AND subject_id=? AND kind='task_model'",
                                         (task["id"],))] == [note]
     # The bot view judges against the bot's model now: on Haiku itself, its Haiku tasks are not below it.
     with api.app.state.store.transaction() as c:
-        config = json.loads(c.execute("SELECT config FROM bot_config WHERE bot='ops'").fetchone()[0])
-        c.execute("UPDATE bot_config SET config=? WHERE bot='ops'",
-                  (json.dumps({**config, "model": "claude-haiku-5-5"}),))
+        config = BS.read(c, 'ops')
+        BS.write(c, 'ops', {**config, 'model': 'claude-haiku-5-5'})
     assert get(api, "bots/ops")["task_model_warning"] == ""
     with api.app.state.store.transaction() as c:
-        c.execute("UPDATE bot_config SET config=? WHERE bot='ops'", (json.dumps(config),))
+        BS.write(c, 'ops', config)
     # A pick of the same tier or dearer, or another provider's, is not below the minimum.
     set_task_model(api, None)
     assert set_task_model(api, {"harness": "claude", "model": "claude-opus-5-5", "effort": "high"})["warning"] == ""
@@ -407,9 +407,9 @@ def ops_on_grok(api):
     """ops on Grok at low effort, on a computer signed in to Claude and Grok, as a bot whose own model lacks max."""
     company(api, "anthropic", "xai")
     with api.app.state.store.transaction() as c:
-        config = json.loads(c.execute("SELECT config FROM bot_config WHERE bot='ops'").fetchone()[0])
+        config = BS.read(c, 'ops')
         config.update(runtime="grok", harness="grok", model="grok-4.6", reasoning_effort="low")
-        c.execute("UPDATE bot_config SET config=? WHERE bot='ops'", (json.dumps(config),))
+        BS.write(c, 'ops', config)
     machine = runner(api)
     assign(api, machine, "ops")
     heartbeat(api, machine)
@@ -512,10 +512,18 @@ def test_task_effort_and_context_length_set_and_clear_on_their_own(api):
 def test_an_old_task_model_record_runs_on_its_model_as_before(api):
     machine = ops_on_sonnet(api)
     with api.app.state.store.transaction() as c:
-        config = json.loads(c.execute("SELECT config FROM bot_config WHERE bot='ops'").fetchone()[0])
+        config = BS.read(c, 'ops')
         config["task_model"] = {"harness": "claude", "model": "claude-haiku-5-5", "reasoning_effort": "low",
                                 "runtime": "claude"}
-        c.execute("UPDATE bot_config SET config=? WHERE bot='ops'", (json.dumps(config),))
+        BS.write(c, 'ops', config)
     _, turn = task_turn(api, machine)
     assert (turn["config"]["model"], turn["config"]["reasoning_effort"]) == ("claude-haiku-5-5", "low")
     assert "compact_at" not in turn["config"]
+
+
+def test_a_task_context_length_of_100k_saves_and_reads_back(api):
+    ops_on_sonnet(api)
+    saved = set_task_model(api, {"effort": "high", "compact_at": 100000})
+    assert saved["task_model"] == {"harness": "", "model": "", "reasoning_effort": "high", "runtime": "",
+                                   "compact_at": 100000}
+    assert get(api, "bots/ops")["task_model"]["compact_at"] == 100000

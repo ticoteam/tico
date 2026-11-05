@@ -61,9 +61,9 @@ def test_the_every_computer_key_is_a_shared_connection_on_every_computer(environ
     own = computer(api, "Charlie", source="terminal")
     account = computer(api, "Delta", source="")   # signed in, but with no key: an account login
     with api.app.state.store.transaction() as c:
-        row = c.execute("SELECT readiness FROM runners WHERE id=?", (account["runner_id"],)).fetchone()
+        row = c.execute("SELECT readiness FROM runners_with_state WHERE id=?", (account["runner_id"],)).fetchone()
         assert '"authenticated": "missing"' in row[0] or '"authenticated":"missing"' in row[0]
-        c.execute("UPDATE runners SET readiness=replace(readiness, 'missing', 'ready') WHERE id=?",
+        c.execute("UPDATE runner_states SET readiness=replace(readiness, 'missing', 'ready') WHERE runner_id=?",
                   (account["runner_id"],))
     for machine in (ready, fresh):
         row = listed(api, machine)["shared_with"]["codex"]
@@ -198,7 +198,7 @@ def test_a_cleared_computer_given_a_shared_key_is_told_to_take_it_again(environm
     job = call(api, "POST", f"computers/{one['runner_id']}/keys/clear", {"runtime": "codex"})["computers"][0]["login"]
     report(api, one, job["id"], "signed_out")
     with api.app.state.store.transaction() as c:
-        c.execute("UPDATE runners SET last_seen_at=? WHERE id=?", (H.shift(H.now(), seconds=-3600), one["runner_id"]))
+        c.execute("UPDATE runner_states SET last_seen_at=? WHERE runner_id=?", (H.shift(H.now(), seconds=-3600), one["runner_id"]))
     refused = call(api, "POST", f"computers/{two['runner_id']}/keys",
                    {"runtime": "codex", "secret": "sk-proj-second-key-0123456789", "share": [one["runner_id"]]},
                    expected=409)

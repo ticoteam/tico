@@ -6,6 +6,7 @@ told him nobody but he could do it.
 Ana owns the company, Ben is an admin, Cara is a member (the base fixture). Everything here is synthetic: the test
 database, made-up bots and repositories, and no request leaves the test server.
 """
+import json
 import sqlite3
 from contextlib import closing
 
@@ -20,8 +21,8 @@ from backend.tests.test_member_bots import botops, finish, turn  # noqa: F401  (
 
 PEOPLE = {"owner": ("ana-test", "ana"), "admin": ("ben-test", "ben"), "member": ("cara-test", "cara")}
 # Cara neither runs nor owns finance, made nothing below and operates no computer: "the bot's owners", "the person who
-# made it" and "the computer's operator" are Ana's and Ben's (as an admin) here.
-MANAGERS = ("bot", "creator", "operator")
+# made it", "the computer's operator" and the managers of a team rule's scope are Ana's and Ben's (as an admin) here.
+MANAGERS = ("bot", "creator", "operator", "scope")
 
 # A value each entry's route takes. An entry left out sends `{}` (json) or the type's plain sample; a route that does
 # not take it says so with a 422, which the test reports as not proven rather than passing.
@@ -47,9 +48,9 @@ SAMPLES = {
     "bot.definition": {"description": "Keeps the books."},
     "bot.owners": "ben",
     "bot.co_owners": {"add": ["ben"]},
-    "bot.archive": {"expected_revision": 1},
-    "bot.access": {"see": {"everyone": True}, "read": {"everyone": True}, "write": {"everyone": False, "people": ["ana"]},
-                   "revision": 1},
+    "bot.archive": lambda o: {"expected_revision": o.get("bot-revision", 1)},
+    "bot.access": lambda o: {"see": {"everyone": True}, "read": {"everyone": True},
+                             "write": {"everyone": False, "people": ["ana"]}, "revision": o.get("bot-revision", 1)},
     "team.budget": {"turns_per_hour": 10},
     # Both providers stay on (saving the subscription in _objects turned Anthropic on, and turning it off would be
     # refused), at the revision _objects read.
@@ -74,7 +75,7 @@ SAMPLES = {
     "inbound.inbox.create": {"bot": "finance"},
     "inbound.inbox": {"enabled": True},
     "inbound.phone_request.cancel": {},
-    "bot.budget": {"turns_per_hour": 10, "expected_revision": 1},
+    "bot.budget": lambda o: {"turns_per_hour": 10, "expected_revision": o.get("bot-revision", 1)},
     "storage.move": {"expect_bytes": 0},
     # A computer given the subscription `_objects` made for it (a real computer and a real subscription, no run to stop).
     "models.computer_subscription": lambda o: {"runner_id": o.get("computers", ""), "runtime": "claude",
@@ -114,19 +115,10 @@ NOT_PROVEN = {
     "cloud.shared_machine": "tap 409: the fixture company is not on Tico Cloud",
     "mail.address.order": "422: the body shape (an address order with its Idempotency-Key)",
 }
-# Where the route and the catalogue disagree today, beyond this ticket (Bot repositories and Takes member bots are fixed
-# here): (entry, person) -> what the route does. Settings stage 2 takes these; the test fails when one is fixed (take it
-# out) or a new one appears.
-KNOWN_GAPS = {
-    # "The person who made it" / "the computer's operator": the catalogue leaves it to the route, so a member who made
-    # none of these gets a Confirm card, and the route refuses their tap.
-    ("computer.revoke", "member"): "card, then refused", ("webhooks.incoming.rotate", "member"): "card, then refused",
-    ("webhooks.incoming.delete", "member"): "card, then refused",
-    ("webhooks.gateway.wake", "member"): "card, then refused", ("webhooks.outgoing", "member"): "card, then refused",
-    # An admin changes a person's role, but only the owner makes or removes admins (Review 2 of PR #1700 had the sweep
-    # tap its cards, which found it).
-    ("people.person.role", "admin"): "card, then refused",
-}
+# Where the route and the catalogue disagree: (entry, person) -> what the route does. None now (settings stage 3 made
+# the who-may of creator and operator entries, wake rules and a person's role match their routes); the test fails when
+# a new one appears, or one here is fixed (take it out).
+KNOWN_GAPS = {}
 
 
 def _sample(e, objects=None):
@@ -217,6 +209,9 @@ def outcome(answer):
     return f"{answer.status_code} {((data or {}).get('error') or {}).get('code', '')}".strip()
 
 
+TAP_DETAIL = {}
+
+
 def tapped(api, card, token):
     """The person's own tap on a card: what the setting's route did with it (ran, refused, or the status it gave),
     with the test database put back as it was before the tap, so the next entry starts from the same fixture. The
@@ -228,11 +223,16 @@ def tapped(api, card, token):
         tap = post(api, f"assistant/actions/{card['action']['id']}/confirm", {}, token)["action"]
         with closing(sqlite3.connect(path)) as live:
             kept.backup(live)
+    TAP_DETAIL["detail"] = json.dumps(tap.get("result") or tap.get("error") or {})[:300]
     post(api, f"assistant/actions/{card['action']['id']}/cancel", {}, token)
     if tap["status"] == "done":
         return "ran"
     code = (tap.get("result") or {}).get("status_code")
     return "refused" if code == 403 else f"tap {code}"
+
+
+# What the last refused or unexpected answer of each entry said: status, error code and detail, for the assertion message.
+LAST = {}
 
 
 def ask(api, attempt, e, objects, person, token):
@@ -241,15 +241,28 @@ def ask(api, attempt, e, objects, person, token):
     until then, so this is where the route says whether that person may."""
     if e.route.startswith("model-subscriptions/") or e.route == "computer-subscriptions":
         _saved_subscription(api, objects)
+    # The bot's revision as it is now: an earlier entry may have changed it, and a stale one is a 409, not the setting.
+    objects["bot-revision"] = get(api, "bots/finance", token)["revision"]
+    if e.route.startswith("settings/transitions/"):
+        # The fixture change is prepared at the bot's revision now, and an apply consumes it, so each entry gets it fresh.
+        with api.app.state.store.transaction() as c:
+            c.execute("UPDATE bot_transitions SET state='prepared', expected_revision=? WHERE id=?",
+                      (objects["bot-revision"], objects["settings/transitions"]))
+    if "{computer}" in e.route or e.route == "computer-subscriptions":
+        # A computer an earlier entry revoked (computer.revoke) is not found by the next one: each gets its own.
+        objects["computers"] = runner(api)["runner_id"]
     target = _target(e, objects, person)
     planned = act(api, attempt, "POST", f"settings/catalog/{e.key}/plan", {"value": _sample(e, objects), **target})
     if planned.status_code == 200 and "run" in planned.json():
         run = planned.json()["run"]
         planned = act(api, attempt, run["method"], run["path"], run["body"])
     got = outcome(planned)
+    LAST[e.key] = f"{planned.status_code} {planned.text[:300]}"
     if got != "card":
         return got
     tap = tapped(api, planned.json(), token)
+    if tap != "ran":
+        LAST[e.key] = f"tap: {TAP_DETAIL.get('detail', '')}"
     return "card" if tap == "ran" else "card, then " + tap
 
 

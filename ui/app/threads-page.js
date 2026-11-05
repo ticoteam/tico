@@ -1,180 +1,7 @@
-/* ui/app/threads-page.js — The Threads page (#/threads, ?view=inbox, ?view=dms, ?with=<actor>), one thread's page (#/thread/<id>),
-   New thread, a thread's Members and menu, and Make task on a message.
+/* ui/app/threads-page.js — New thread and New DM, a thread's Members and settings, and Make task on a message. The Threads
+   page itself (the rail beside one thread) is ui/app/thread-rail.js.
    Classic script: its globals are shared with the other files under ui/app/, loaded in the order index.html lists them. */
 'use strict';
-
-let THREAD_PAGE = null;
-// `?m=<message id>` (a search hit) opens the thread at that message.
-function pageThread(id) {
-  const main = $('#main'), focus = new URLSearchParams(S.route.split('?')[1] || '').get('m') || '';
-  main.classList.add('chat-layout', 'thread-layout');
-  if (THREAD_PAGE?.id === id && THREAD_PAGE.host.isConnected) {
-    if (focus && THREAD_PAGE.view.state === 'loading') THREAD_PAGE.view.opts.focus = focus;
-    else if (focus) void thvFocus(THREAD_PAGE.view, focus);
-    return;
-  }
-  threadUnmount(THREAD_PAGE?.view);
-  main.innerHTML = '<div class="thread-page" id="thread-page"></div>';
-  const host = $('#thread-page');
-  THREAD_PAGE = {id, host, view: threadMount(host, {id, ...(focus ? {focus} : {})})};
-}
-
-// ----------------------------------------------------------------- the list
-async function pageThreads() {
-  const q = new URLSearchParams(S.route.split('?')[1] || '');
-  const withActor = q.get('with') || '', dms = q.get('view') === 'dms', inbox = !withActor && !dms && q.get('view') === 'inbox';
-  const title = dms ? 'DMs' : withActor ? `Threads with ${actorName(withActor)}` : inbox ? 'Inbox' : 'Threads';
-  const main = $('#main');
-  let sort = threadsSort();
-  main.innerHTML = `<div class="threads-page"><header class="threads-head"><h1>${esc(title)}</h1>${withActor || dms ? '' : threadsSortHTML(inbox ? 'inbox' : sort)}<span class="spacer"></span>
-      <button type="button" class="ghost thp-search" id="th-search" aria-label="Search" title="Search"><span class="nav-icon" aria-hidden="true">search</span></button>
-      <button type="button" class="primary" data-thp-new>${dms ? 'New DM' : 'New thread'}</button></header>
-    ${withActor ? `<p class="thp-filter"><a class="linkish" href="${THREADS_ROUTE}">All threads</a></p>` : ''}
-    <div class="thp-searchbar" hidden><input type="search" id="thp-q" placeholder="Search threads" aria-label="Search threads" autocomplete="off"></div>
-    <div id="thp-hits" hidden></div>
-    <div id="threads-all"><div class="muted">Loading…</div></div>
-    <button type="button" class="ghost small" id="threads-more" hidden>More</button></div>`;
-  threadSearchWire(main);
-  main.querySelector('[data-thp-new]').onclick = () => threadNewOpen({dm: dms, members: withActor ? [withActor] : []});
-  const route = S.route;
-  let st = {attention: [], threads: [], dms: [], next: null}, gen = 0;
-  const load = async cursor => {
-    const p = new URLSearchParams({limit: '50', sort});
-    if (cursor) p.set('cursor', cursor);
-    if (withActor) p.set('with', withActor);
-    // Each switch starts a new list: a page asked for before it is dropped, whatever order it was for, and so is its error.
-    const mine = gen;
-    let r;
-    try { r = await get('/v2/threads?' + p, {fresh: true}); }
-    catch (e) { if (S.route !== route || mine !== gen) return; throw e; }
-    if (S.route !== route || mine !== gen) return;
-    for (const key of ['attention', 'threads', 'dms']) {
-      const have = new Set(st[key].map(t => t.id));
-      st[key].push(...(r[key] || []).filter(t => !have.has(t.id)));
-    }
-    st.next = r.next_cursor || null;
-    st.lastAttention = (r.attention || []).length;
-    draw();
-  };
-  const section = (head, list, opts) => list.length ? `<section class="thp-sec">${head ? `<h2>${esc(head)}</h2>` : ''}<ul class="th-list thp-list">${
-    list.map(t => threadRowHTML(t, opts).replace('</a></li>', `<time class="muted thp-at">${esc(ago(t.last_message_at))}</time></a></li>`)).join('')}</ul></section>` : '';
-  const draw = () => {
-    if (inbox) {
-      // What waits on the viewer, newest first, then each held message with its review card (opened from its row).
-      const rows = st.attention.filter(t => t && !t.archived_at), holds = inboxHolds();
-      $('#threads-all').innerHTML = rows.length || holds.length
-        ? section('', rows) + (holds.length ? `<div class="thp-holds" role="list">${holds.map(it => needRowHTML(it)).join('')}</div>` : '')
-        : '<p class="empty">All caught up</p>';
-      // Needs attention ranks first on every page, so a page that ends in other rows has listed all of it.
-      $('#threads-more').hidden = !st.next || st.lastAttention < 50;
-      return;
-    }
-    const seen = new Set(st.attention.map(t => t.id));
-    // A DM with one bot is on that bot's page and counted on its row in Team; the list leaves it out.
-    const dmRows = threadsOrder(st.dms, seen, sort).filter(t => withActor || !threadIsBotDm(t));
-    const html = dms ? section('', threadsOrder(st.dms, new Set(), sort))
-      : section('Needs attention', st.attention, {attention: true}) + section(st.attention.length ? 'Threads' : '', threadsOrder(st.threads, seen, sort))
-        + section('DMs', dmRows);
-    $('#threads-all').innerHTML = html || `<p class="empty">${dms ? 'No DMs yet' : 'No threads yet'}</p>`;
-    $('#threads-more').hidden = !st.next;
-  };
-  // A new list from the top: after a switch, or when a thread's level moved while Important is shown.
-  const reload = (quiet = false) => {
-    gen++;
-    st = {attention: [], threads: [], dms: [], next: null};
-    if (!quiet) { $('#threads-all').innerHTML = '<div class="muted">Loading…</div>'; $('#threads-more').hidden = true; }
-    load('').catch(e => { if (S.route === route) $('#threads-all').innerHTML = `<p class="empty">${esc(e.message)}</p>`; });
-  };
-  main.querySelector('.thp-sort')?.addEventListener('click', ev => {
-    if (ev.target.closest('[data-th-view]')) { if (!inbox) location.hash = INBOX_ROUTE; return; }
-    const k = ev.target.closest('[data-th-sort]')?.dataset.thSort;
-    if (!k) return;
-    // From Inbox a sort opens the whole list in that order.
-    if (inbox) { threadsSortSet(k); if (k !== sort) void threadsLoad(); location.hash = THREADS_ROUTE; return; }
-    if (k === sort) return;
-    sort = k;
-    threadsSortSet(k);
-    main.querySelectorAll('[data-th-sort]').forEach(b => { const on = b.dataset.thSort === k; b.classList.toggle('cur', on); b.setAttribute('aria-selected', String(on)); });
-    // The sidebar follows the same choice.
-    void threadsLoad();
-    reload();
-  });
-  const off = liveOn('threads', d => {
-    if (S.route !== route) return off();
-    // Inbox is what waits on the viewer: it is read again whenever that moves, as the sidebar is.
-    if (inbox && d.kind !== 'activity') return liveThrottle('threads-page-inbox', () => { if (S.route === route) reload(true); }, 1500);
-    if (d.kind === 'ranked' && sort === 'important' && !withActor) liveSoon('threads-page-ranked', () => { if (S.route === route) reload(true); }, 1500);
-  });
-  if (inbox) {
-    // Its held messages come from Needs you, read a page at a time to the end so none is missed; the sidebar counts
-    // them too. Read again whenever Needs you moves; before its first read there is no next page to follow, so it is
-    // read here.
-    let paging = false;
-    const readHolds = async () => {
-      if (paging || typeof needsAll !== 'function') return;
-      paging = true;
-      try {
-        if (!S.v2.needsVersion && await v2NeedsRead() && S.route === route) {
-          draw();
-          if (typeof threadsSideRender === 'function') threadsSideRender();
-        }
-        while (S.route === route && !needsAll()) {
-          if (await v2NeedsMore() === false) break;
-          if (S.route !== route) break;
-          draw();
-          if (typeof threadsSideRender === 'function') threadsSideRender();
-        }
-      } finally { paging = false; }
-    };
-    // A hold kept or withdrawn moves Needs you and the thread's attention: draw the holds now, read the threads again.
-    const offNeeds = liveOn('needs-list', () => {
-      if (S.route !== route) return offNeeds();
-      draw(); void readHolds();
-      liveThrottle('threads-page-inbox', () => { if (S.route === route) reload(true); }, 1500);
-    });
-    void readHolds();
-  }
-  $('#threads-more').onclick = ev => { ev.currentTarget.disabled = true; load(st.next).finally(() => { ev.currentTarget.disabled = false; }); };
-  try { await load(''); }
-  catch (e) { if (S.route === route) $('#threads-all').innerHTML = `<p class="empty">${esc(e.status === 404 ? 'Threads are not on this server yet' : e.message)}</p>`; }
-}
-
-// ----------------------------------------------------------------- search
-// Words in the threads the viewer may read (GET /v2/threads/search); a hit opens its thread at that message.
-function threadSearchWire(main) {
-  const bar = main.querySelector('.thp-searchbar'), q = $('#thp-q'), hits = $('#thp-hits');
-  const route = S.route;
-  let n = 0, timer = 0, next = null;
-  const draw = (list, more, add) => {
-    const html = list.map(h => `<li><a class="thp-hit" href="${threadHref(h.thread_id)}?m=${encodeURIComponent(h.message_id)}">
-        <span class="thp-hit-head"><strong>${esc(h.title || 'Thread')}</strong><span class="muted">${esc(actorName(h.sender_id))}</span>
-        <time class="muted">${esc(ago(h.created_at))}</time></span><span class="thp-hit-x">${esc(h.excerpt || '')}</span></a></li>`).join('');
-    if (add) hits.querySelector('.thp-hits').insertAdjacentHTML('beforeend', html);
-    else hits.innerHTML = list.length ? `<ul class="thp-hits">${html}</ul>` : '<p class="empty">No matches</p>';
-    hits.querySelector('[data-thp-more]')?.remove();
-    if (more) hits.insertAdjacentHTML('beforeend', '<button type="button" class="ghost small" data-thp-more>More</button>');
-  };
-  const run = async (add = false) => {
-    const words = q.value.trim(), mine = ++n;
-    hits.hidden = !words; main.querySelector('.threads-page')?.classList.toggle('searching', !!words);
-    if (!words) return;
-    const p = new URLSearchParams({q: words, limit: '20'});
-    if (add && next) p.set('before', next);
-    try {
-      const r = await get('/v2/threads/search?' + p, {fresh: true});
-      if (mine !== n || S.route !== route) return;
-      next = r.next_cursor || null;
-      draw(r.hits || [], !!next, add);
-    } catch (e) { if (mine === n) hits.innerHTML = `<p class="empty">${esc(e.message)}</p>`; }
-  };
-  q.oninput = () => { clearTimeout(timer); timer = setTimeout(() => void run(), 250); };
-  q.onkeydown = ev => { if (ev.key === 'Escape') { q.value = ''; void run(); bar.hidden = true; } };
-  hits.onclick = ev => { if (ev.target.closest('[data-thp-more]')) void run(true); };
-  $('#th-search').onclick = () => {
-    bar.hidden = !bar.hidden;
-    if (bar.hidden) { q.value = ''; void run(); } else q.focus();
-  };
-}
 
 // ----------------------------------------------------------------- choosing teammates
 // Whom the viewer may add: a bot, a person or (except to a DM, which names its people) a group they may write to. The
@@ -211,7 +38,11 @@ function threadAudienceHTML(t = null, {titled = false} = {}) {
 }
 function threadDialog(id, label) {
   let dlg = document.getElementById(id);
-  if (!dlg) { dlg = document.createElement('dialog'); dlg.id = id; dlg.className = 'tmodal tmodal-shell dash-dialog thd-dialog'; document.body.append(dlg); }
+  if (!dlg) {
+    dlg = document.createElement('dialog'); dlg.id = id; dlg.className = 'tmodal tmodal-shell dash-dialog thd-dialog'; document.body.append(dlg);
+    // A route change (a link, the phone's Back) leaves the page the dialog was for.
+    addEventListener('hashchange', () => { if (dlg.open) dlg.close(); });
+  }
   dlg.setAttribute('aria-label', label);
   return dlg;
 }
@@ -222,17 +53,113 @@ const threadDialogFoot = action => `<footer class="dash-form-foot"><span class="
 function threadDialogWire(dlg) { dlg.querySelectorAll('[data-close]').forEach(b => { b.onclick = () => dlg.close(); }); }
 
 // ----------------------------------------------------------------- new thread
-// Private to the chosen members unless the starter opens it to a team or the company. A DM is two or more members,
-// always private.
+// A named thread: its members, who else sees it (only them, a group, everyone) and a pin for each member. Every thread
+// needs a name; a group chat (two or more others) says so. A DM (`dm`, from a teammate's page) is the DM form.
+const NT_X = '<svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" aria-hidden="true"><path d="M6 6l12 12M18 6L6 18"/></svg>';
 function threadNewOpen({dm = false, members = []} = {}) {
-  const dlg = threadDialog('thread-new', dm ? 'New DM' : 'New thread');
-  dlg.innerHTML = `<form>${threadDialogHead(dm ? 'New DM' : 'New thread')}
+  if (dm) return threadDmOpen(members);
+  const dlg = threadDialog('thread-new', 'New thread');
+  dlg.className = 'nt-dialog';
+  const groups = (S.orgGroups || []).filter(g => g.id);
+  const chosen = [...members];
+  let audience = 'members', hit = 0;
+  dlg.innerHTML = `<form class="nt" novalidate>
+    <div class="nt-head"><h2>New thread</h2><button type="button" class="nt-x" data-close aria-label="Close">${NT_X}</button></div>
+    <div class="nt-body">
+      <div class="nt-field"><label class="nt-lbl" for="nt-add">Members</label>
+        <div class="nt-chips"><span class="nt-chiplist"></span><input id="nt-add" type="text" placeholder="Add" autocomplete="off" role="combobox" aria-autocomplete="list" aria-expanded="false" aria-controls="nt-sugg"></div>
+        <ul class="nt-sugg" id="nt-sugg" role="listbox" aria-label="Teammates" hidden></ul></div>
+      <div class="nt-field"><label class="nt-lbl" for="nt-name">Name</label>
+        <div class="nt-name"><span aria-hidden="true">#</span><input id="nt-name" name="title" maxlength="200" placeholder="launch-plan" autocomplete="off" aria-describedby="nt-why"></div>
+        <span class="nt-why" id="nt-why" role="status"></span></div>
+      <fieldset class="nt-field"><legend class="nt-lbl">Who sees it</legend>
+        <div class="nt-seg">${[['members', 'Members'], groups.length && ['team', 'A group'], ['company', 'Everyone']].filter(Boolean).map(([k, label]) =>
+          `<button type="button" data-aud="${k}" aria-pressed="${k === audience}">${label}</button>`).join('')}</div>
+        ${groups.length ? `<select class="nt-group" name="group" aria-label="Group" hidden>${groups.map(g => `<option value="${esc(g.id)}">${esc(g.name || g.id)}</option>`).join('')}</select>` : ''}</fieldset>
+      <label class="nt-check"><input type="checkbox" name="pin" checked><span>Pin for members</span></label>
+    </div>
+    <div class="nt-foot"><span class="err" role="status" data-status></span><button type="button" class="ghost" data-close>Cancel</button><button type="submit" class="primary" disabled>Create</button></div></form>`;
+  threadDialogWire(dlg);
+  const form = dlg.querySelector('form'), add = form.querySelector('#nt-add'), sugg = form.querySelector('.nt-sugg');
+  const name = form.querySelector('#nt-name'), why = form.querySelector('.nt-why'), submit = form.querySelector('[type=submit]'), status = form.querySelector('[data-status]');
+  const label = a => threadAddable().find(t => t.actor === a)?.label || actorName(a);
+  const check = () => {
+    const title = name.value.trim().replace(/^#+/, '').trim();
+    why.textContent = !title && chosen.length >= 2 ? 'Group chats need a name.' : '';
+    submit.disabled = !title;
+  };
+  const drawChips = () => {
+    form.querySelector('.nt-chiplist').innerHTML = chosen.map(a => `<span class="nt-chip" data-actor="${esc(a)}">${actorAvatar(a, 18)}<span>${esc(label(a))}</span><button type="button" data-remove aria-label="Remove ${esc(label(a))}">×</button></span>`).join('');
+    check();
+  };
+  const options = () => {
+    const w = add.value.trim().toLowerCase();
+    return threadAddable().filter(t => !chosen.includes(t.actor) && (!w || t.label.toLowerCase().includes(w))).slice(0, 8);
+  };
+  const drawSugg = (open = true) => {
+    const list = open ? options() : [];
+    hit = Math.min(hit, Math.max(0, list.length - 1));
+    sugg.innerHTML = list.map((t, i) => `<li role="option" id="nt-opt-${i}" data-actor="${esc(t.actor)}" aria-selected="${i === hit}">${actorAvatar(t.actor, 20)}<span>${esc(t.label)}</span></li>`).join('');
+    sugg.hidden = !list.length;
+    add.setAttribute('aria-expanded', String(!!list.length));
+    if (list.length) add.setAttribute('aria-activedescendant', 'nt-opt-' + hit); else add.removeAttribute('aria-activedescendant');
+  };
+  const pick = actor => { if (actor && !chosen.includes(actor)) chosen.push(actor); add.value = ''; hit = 0; drawChips(); drawSugg(); add.focus(); };
+  add.oninput = () => { hit = 0; drawSugg(); };
+  add.onfocus = () => drawSugg();
+  add.onblur = () => setTimeout(() => drawSugg(false), 120);
+  add.onkeydown = ev => {
+    const n = sugg.querySelectorAll('li').length;
+    if (ev.key === 'ArrowDown' && n) { ev.preventDefault(); hit = (hit + 1) % n; drawSugg(); }
+    else if (ev.key === 'ArrowUp' && n) { ev.preventDefault(); hit = (hit - 1 + n) % n; drawSugg(); }
+    else if (ev.key === 'Enter') { ev.preventDefault(); if (n) pick(sugg.querySelectorAll('li')[hit]?.dataset.actor); }
+    else if (ev.key === 'Backspace' && !add.value && chosen.length) { chosen.pop(); drawChips(); drawSugg(); }
+    else if (ev.key === 'Escape' && !sugg.hidden) { ev.preventDefault(); ev.stopPropagation(); drawSugg(false); }
+  };
+  sugg.onmousedown = ev => { ev.preventDefault(); pick(ev.target.closest('[data-actor]')?.dataset.actor); };
+  form.querySelector('.nt-chips').onclick = ev => {
+    const b = ev.target.closest('[data-remove]');
+    if (b) { chosen.splice(chosen.indexOf(b.closest('[data-actor]').dataset.actor), 1); drawChips(); }
+    add.focus();
+  };
+  form.querySelector('.nt-seg').onclick = ev => {
+    const b = ev.target.closest('[data-aud]'); if (!b) return;
+    audience = b.dataset.aud;
+    form.querySelectorAll('[data-aud]').forEach(x => x.setAttribute('aria-pressed', String(x === b)));
+    const group = form.querySelector('.nt-group'); if (group) group.hidden = audience !== 'team';
+  };
+  name.oninput = check;
+  form.onsubmit = async ev => {
+    ev.preventDefault();
+    const title = name.value.trim().replace(/^#+/, '').trim();
+    if (!title) { check(); return; }
+    submit.disabled = true; status.textContent = '';
+    try {
+      const r = await post('/v2/threads', {title, audience, audience_group_id: audience === 'team' ? form.elements.namedItem('group')?.value || null : null,
+        members: chosen, pin_for_members: form.elements.namedItem('pin').checked});
+      const t = r?.thread || r;
+      dlg.close();
+      if (t?.id) { threadsPut(t); location.hash = threadHref(t); }
+    } catch (e) {
+      const code = e.body?.error?.code || e.body?.code;
+      if (code === 'name_required') why.textContent = 'Group chats need a name.';
+      else status.textContent = e.message;
+      submit.disabled = false;
+    }
+  };
+  drawChips();
+  dlg.showModal();
+  (chosen.length ? name : add).focus();
+}
+// A DM with the chosen teammates (always private), reusing the open one with exactly them.
+function threadDmOpen(members = []) {
+  const dlg = threadDialog('thread-new', 'New DM');
+  dlg.className = 'tmodal tmodal-shell dash-dialog thd-dialog';
+  dlg.innerHTML = `<form>${threadDialogHead('New DM')}
     <div class="dash-form">
-      ${dm ? '' : '<label>Title<input name="title" maxlength="200" autocomplete="off"></label>'}
-      <div class="thd-members"><span class="thd-lbl">${dm ? 'With' : 'Members'}</span>${threadPickerHTML(members, new Set(), {groups: !dm})}</div>
-      ${dm ? '' : threadAudienceHTML()}
+      <div class="thd-members"><span class="thd-lbl">With</span>${threadPickerHTML(members, new Set(), {groups: false})}</div>
       <label>Message<textarea name="body" rows="3"></textarea></label></div>
-    ${threadDialogFoot(dm ? 'Start' : 'Create')}</form>`;
+    ${threadDialogFoot('Start')}</form>`;
   threadDialogWire(dlg); threadPickerWire(dlg);
   const form = dlg.querySelector('form');
   form.onsubmit = async ev => {
@@ -240,13 +167,10 @@ function threadNewOpen({dm = false, members = []} = {}) {
     const status = form.querySelector('[data-status]');
     const chosen = [...form.querySelectorAll('[name=member]:checked')].map(i => i.value);
     const body = form.elements.namedItem('body').value.trim();
-    const audience = dm ? 'personal' : form.querySelector('[name=audience]:checked')?.value || 'members';
-    if (dm && !chosen.length) { status.textContent = 'Choose someone'; return; }
+    if (!chosen.length) { status.textContent = 'Choose someone'; return; }
     const submit = form.querySelector('[type=submit]'); submit.disabled = true; status.textContent = '';
     try {
-      const r = dm ? await post('/v2/threads/dm', {members: chosen, ...(body ? {body} : {})})
-        : await post('/v2/threads', {title: form.elements.namedItem('title').value.trim(), audience,
-          audience_group_id: audience === 'team' ? form.elements.namedItem('group')?.value || null : null, members: chosen, ...(body ? {body} : {})});
+      const r = await post('/v2/threads/dm', {members: chosen, ...(body ? {body} : {})});
       const t = r?.thread || r;
       if (r?.held) toast('Your first message was held by a rule', true);
       dlg.close();
@@ -254,7 +178,7 @@ function threadNewOpen({dm = false, members = []} = {}) {
     } catch (e) { status.textContent = e.message; submit.disabled = false; }
   };
   dlg.showModal();
-  (form.elements.namedItem('title') || form.querySelector('.thd-q'))?.focus();
+  form.querySelector('.thd-q')?.focus();
 }
 
 // ----------------------------------------------------------------- members
@@ -265,15 +189,15 @@ async function threadMembersOpen(view) {
   // On a public thread everyone reads already: its members are the bots added to it.
   const onlyBots = ['company', 'team'].includes(t.audience);
   dlg.innerHTML = `<form>${threadDialogHead('Members')}<div class="dash-form"><ul class="thd-list"><li class="muted">Loading…</li></ul>
-    ${t.me?.can_post ? '<details class="thd-add"><summary>Add</summary><div class="thd-add-body"></div></details>' : ''}</div>
+    ${t.me?.can_post ? `<details class="thd-add"><summary>${TL_ICON.plus}Add</summary><div class="thd-add-body"></div></details>` : ''}</div>
     <footer class="dash-form-foot"><span class="err" role="status" data-status></span><span class="spacer"></span><button type="button" class="ghost" data-close>Done</button>${
       t.me?.can_post ? '<button class="primary" type="submit" hidden>Add</button>' : ''}</footer></form>`;
   threadDialogWire(dlg);
   const form = dlg.querySelector('form'), status = form.querySelector('[data-status]');
   let members = [];
   const draw = () => {
-    form.querySelector('.thd-list').innerHTML = members.map(m => `<li>${actorAvatar(m.actor, 22)}<span>${esc(actorName(m.actor))}</span>${
-      m.role === 'owner' ? '<span class="muted">Owner</span>' : ''}<span class="spacer"></span>${
+    form.querySelector('.thd-list').innerHTML = members.map(m => `<li>${actorAvatar(m.actor, 22)}<span class="thd-name">${esc(actorName(m.actor))}</span>${
+      m.role === 'owner' ? '<span class="thd-tag">Owner</span>' : ''}${
       manage && m.actor !== myActor() && m.role !== 'owner' ? `<button type="button" class="ghost small" data-remove="${esc(m.actor)}">Remove</button>` : ''}</li>`).join('')
       || '<li class="muted">Nobody</li>';
     const add = form.querySelector('.thd-add-body');
@@ -304,60 +228,135 @@ async function threadMembersOpen(view) {
   try { await load(); } catch (e) { status.textContent = e.message; }
 }
 
-// ----------------------------------------------------------------- the thread menu
-function threadMenuOpen(view, button) {
-  const t = view.thread; if (!t) return;
-  const manage = !!t.me?.can_manage, root = !t.parent_id;
-  const items = [
-    manage && ['rename', 'Rename'],
-    manage && root && t.audience !== 'home' && !threadIsDm(t) && ['share', 'Who can read'],
-    manage && root && !['task', 'meeting'].includes(t.audience) && ['keep', 'Keep messages'],
-    t.me?.following ? ['unfollow', 'Unfollow'] : ['follow', 'Follow'],
-    ['notify', 'Notifications'],
-    ['catchup', 'Catch up'],
-    ['read', 'Mark all read'],
-    t.earlier && ['earlier', 'Open earlier messages to Read'],
-    manage && t.audience !== 'home' && [t.archived_at ? 'unarchive' : 'archive', t.archived_at ? 'Unarchive' : 'Archive'],
-  ].filter(Boolean);
-  thvMenuShow(button, items, async key => {
-    const path = thvPath(t.id);
-    try {
-      if (key === 'rename') {
-        const title = prompt('Title', threadTitle(t));
-        if (title == null || !title.trim()) return;
-        view.thread = {...t, ...(await patch(path, {title: title.trim()}))};
-      } else if (key === 'share') { threadShareOpen(view); return; }
-      else if (key === 'keep') { threadKeepOpen(view); return; }
-      else if (key === 'notify') { threadNotifyOpen(view, button); return; }
-      else if (key === 'catchup') { await threadCatchUp(t); return; }
-      else if (key === 'earlier') { await threadEarlierOpen(view, view.id); return; }
-      else if (key === 'follow') { await put(path + '/follow', {notify: 'live'}); view.thread = {...t, me: {...t.me, following: true}}; }
-      else if (key === 'unfollow') { await writeRequest('DELETE', path + '/follow'); view.thread = {...t, me: {...t.me, following: false}}; }
-      else if (key === 'read') { await post(path + '/read-all', {}); threadsMarkedRead(t.id, Number(t.last_seq) || 0); }
-      else if (key === 'archive' || key === 'unarchive') view.thread = {...t, ...(await patch(path, {archived: key === 'archive'}))};
-      threadsPut(view.thread);
-      thvDraw(view);
-    } catch (e) { toast(e.message, true); }
-  });
+// ----------------------------------------------------------------- thread settings
+// The ⋯ in a thread's header: one panel of rows, each saving as it changes, with nothing to Save. A row the viewer may not
+// use is left out.
+const THREAD_NOTIFY = [['live', 'All'], ['mentions', 'Mentions'], ['digest', 'Digest'], ['off', 'Off']];
+// Off is a lasting mute (an unfollow comes back on the next post or mention). Not following, or muted, reads as Off.
+const threadNotifyNow = t => !t.me?.following || t.me?.notify === 'muted' ? 'off' : t.me?.notify || 'live';
+function threadSettingsHTML(view) {
+  const t = view.thread, manage = !!t.me?.can_manage, root = !t.parent_id, dm = threadIsDm(t), home = t.audience === 'home';
+  const oneToOne = dm && root && !threadIsGroupDm(t);   // a group DM and a sub-thread keep their name
+  const members = root && ['members', 'personal', 'company', 'team'].includes(t.audience);
+  const n = view.memberList ? view.memberList.length + (view.memberMore ? '+' : '') : '';
+  const now = threadNotifyNow(t), days = t.retention_days ?? '';
+  const lengths = [['', 'Keep forever'], [30, '30 days'], [90, '90 days'], [365, '1 year']];
+  if (!lengths.some(([d]) => d === days)) lengths.push([days, `${days} days`]);
+  return [
+    manage && !oneToOne && !home && `<div class="ths-row ths-wide"><label class="ths-lbl" for="ths-name">Name</label>
+      <input id="ths-name" name="title" maxlength="200" autocomplete="off" value="${esc(threadTitle(t))}"></div>`,
+    manage && root && !home && !dm && `<div class="ths-row ths-wide"><span class="ths-lbl">Who can read</span>${threadAudienceHTML(t, {titled: true})}</div>
+      <div class="ths-row ths-wide tcn-host"></div>`,
+    members && `<button type="button" class="ths-row ths-link" data-ths="members"${n ? ` aria-label="Members, ${n}"` : ''}><span class="ths-lbl">Members</span>
+      <span class="ths-val">${n}<span aria-hidden="true">›</span></span></button>`,
+    `<div class="ths-row ths-wide"><span class="ths-lbl" id="ths-notify">Notifications</span><div class="nt-seg ths-seg" role="group" aria-labelledby="ths-notify">${
+      THREAD_NOTIFY.map(([k, label]) => `<button type="button" data-notify="${k}" aria-pressed="${k === now}">${label}</button>`).join('')}</div></div>`,
+    manage && 'pinned_for_everyone' in t && threadOnRail(t) && `<label class="ths-row" for="ths-pin"><span class="ths-lbl">Pin for everyone</span>
+      <input id="ths-pin" type="checkbox" role="switch" class="people-switch"${t.pinned_for_everyone ? ' checked' : ''}></label>`,
+    manage && root && !['task', 'meeting'].includes(t.audience) && `<div class="ths-row"><label class="ths-lbl" for="ths-keep">Keep messages</label>
+      <select id="ths-keep">${lengths.map(([d, label]) => `<option value="${d}"${d === days ? ' selected' : ''}>${label}</option>`).join('')}</select></div>`,
+    `<div class="ths-row ths-acts"><button type="button" class="ghost small" data-ths="catchup">Summarize</button>
+      <button type="button" class="ghost small" data-ths="read">Mark all read</button>${
+      t.earlier ? '<button type="button" class="ghost small" data-ths="earlier">Open earlier messages to Read</button>' : ''}${
+      manage && !home ? `<span class="spacer"></span><button type="button" class="ghost small" data-ths="archive">${t.archived_at ? 'Unarchive' : 'Archive'}</button>` : ''}</div>`,
+  ].filter(Boolean).join('');
 }
-// Per reader, this thread only: how much of it reaches them. Choosing one follows the thread.
-const THREAD_NOTIFY = [['live', 'Live'], ['mentions', 'Mentions'], ['digest', 'Digest'], ['muted', 'Muted']];
-function threadNotifyOpen(view, button) {
-  const now = view.thread?.me?.notify || 'live';
-  thvMenuShow(button, THREAD_NOTIFY.map(([k, label]) => [k, label, k === now]), async notify => {
-    const t = view.thread;
+function threadSettingsOpen(view) {
+  if (!view.thread) return;
+  const dlg = threadDialog('thread-settings', 'Thread settings');
+  dlg.className = 'tmodal tmodal-shell dash-dialog thd-dialog ths-dialog';
+  dlg.innerHTML = `<form>${threadDialogHead('Thread settings')}<div class="dash-form ths"></div>
+    <footer class="dash-form-foot"><span class="err" role="status" data-status></span><span class="spacer"></span><button type="button" class="primary" data-close>Done</button></footer></form>`;
+  threadDialogWire(dlg);
+  const form = dlg.querySelector('form'), box = form.querySelector('.ths'), status = form.querySelector('[data-status]');
+  const draw = () => {
+    box.innerHTML = threadSettingsHTML(view);
+    renderThreadConnect(view.thread, box.querySelector('.tcn-host'));   // Slack (ui/app/thread-connect.js)
+  };
+  // `send` answers only what changed (with `me` as its own part), merged into the thread as it is when the answer
+  // comes; saves go one at a time, so a slow one cannot put back what a later one changed. `rail`: the change shows on
+  // the rail too. A refused change puts the panel back as the server has it.
+  let queue = Promise.resolve();
+  const save = (send, {rail = true} = {}) => (queue = queue.then(async () => {
+    status.textContent = '';
     try {
-      const r = await put(thvPath(t.id) + '/follow', {notify});
-      view.thread = {...t, me: {...t.me, following: true, notify: r?.notify || notify}};
-      threadsPut(view.thread); thvDraw(view);
-    } catch (e) { toast(e.message, true); }
-  });
+      const {me, ...changed} = await send(thvPath(view.thread.id)) || {};
+      view.thread = {...view.thread, ...changed, me: {...view.thread.me, ...me}};
+      if (rail) threadsPut(view.thread);
+      thvDraw(view);
+      return true;
+    } catch (e) { status.textContent = e.message; draw(); return false; }
+  }));
+  form.onsubmit = ev => ev.preventDefault();
+  form.addEventListener('keydown', ev => { if (ev.key === 'Enter' && ev.target.id === 'ths-name') { ev.preventDefault(); ev.target.blur(); } });
+  form.onchange = ev => {
+    const el = ev.target;
+    if (el.id === 'ths-name') {
+      const title = el.value.trim();
+      if (!title || title === threadTitle(view.thread)) { el.value = threadTitle(view.thread); return; }
+      void save(async path => patch(path, {title}));
+    } else if (el.closest('.thd-aud')) {
+      const audience = box.querySelector('[name=audience]:checked')?.value || 'members', sel = box.querySelector('[name=group]');
+      if (el.name === 'group' && audience !== 'team') return;
+      // Switching to A team with more than one to choose from waits for the team, so history is never shared with
+      // one nobody picked.
+      if (el.name === 'audience' && audience === 'team' && view.thread.audience !== 'team' && sel && [...sel.options].filter(o => o.value).length > 1) {
+        if (!sel.querySelector('option[value=""]')) sel.insertAdjacentHTML('afterbegin', '<option value="">Choose a team</option>');
+        sel.value = ''; sel.focus();
+        return;
+      }
+      const group = audience === 'team' ? sel?.value || '' : null;
+      if (audience === 'team' && !group) return;
+      void save(async path => patch(path, {audience, audience_group_id: group})).then(ok => {
+        if (!ok) return;
+        if (box.querySelector('[name=group]')?.value) box.querySelector('[name=group] option[value=""]')?.remove();
+        // Only the Slack row goes with who can read: the other rows may hold changes still saving. A fresh host, so
+        // its listeners are not added twice.
+        const host = box.querySelector('.tcn-host'), fresh = host?.cloneNode(false);
+        if (host) { host.replaceWith(fresh); renderThreadConnect(view.thread, fresh); }
+      });
+    } else if (el.id === 'ths-pin') {
+      const on = el.checked;
+      void save(async path => patch(path, {pinned_for_everyone: on}));
+    } else if (el.id === 'ths-keep') {
+      const days = el.value ? Number(el.value) : null;
+      void save(async path => ({retention_days: days, ...(await patch(path, {retention_days: days}))}), {rail: false});
+    }
+  };
+  form.onclick = async ev => {
+    const seg = ev.target.closest('[data-notify]');
+    if (seg) {
+      const notify = seg.dataset.notify;
+      if (seg.getAttribute('aria-pressed') === 'true') return;
+      const level = notify === 'off' ? 'muted' : notify;
+      const ok = await save(async path => {
+        const r = await put(path + '/follow', {notify: level});
+        return {me: {following: true, notify: r?.notify || level}};
+      });
+      if (ok) box.querySelectorAll('[data-notify]').forEach(b => b.setAttribute('aria-pressed', String(b.dataset.notify === notify)));
+      return;
+    }
+    const b = ev.target.closest('[data-ths]'); if (!b) return;
+    const key = b.dataset.ths, t = view.thread;
+    if (key === 'members') { void threadMembersOpen(view); return; }
+    // The rest are one-off actions: each closes the panel, back to the thread its toast is about.
+    b.disabled = true; status.textContent = '';
+    try {
+      if (key === 'catchup') { dlg.close(); await threadCatchUp(t); return; }
+      if (key === 'earlier') { dlg.close(); await threadEarlierOpen(view, view.id); return; }
+      if (key === 'read') { await post(thvPath(t.id) + '/read-all', {}); threadsMarkedRead(t.id, Number(t.last_seq) || 0); dlg.close(); return; }
+      if (key === 'archive' && await save(async path => patch(path, {archived: !view.thread.archived_at}))) dlg.close();
+    } catch (e) { if (dlg.open) status.textContent = e.message; else toast(e.message, true); }
+    finally { b.disabled = false; }
+  };
+  draw();
+  dlg.showModal();
 }
 // A summary of what is new here and under it, in the viewer's own Assistant DM (backend/thread_catchup.py).
 async function threadCatchUp(t) {
-  toast('Catching up…');
+  toast('Summarizing…');
   const r = await post(thvPath(t.id) + '/catch-up', {scope: 'subtree'});
-  if (r?.posted) toast('Catch-up ready', false, {label: 'Open', run: () => { location.hash = ASSISTANT; }});
+  if (r?.posted) toast('Summary ready', false, {label: 'Open', run: () => { location.hash = ASSISTANT; }});
   else toast(r?.words || 'Nothing new');
 }
 // A bot's manager opens its Home's closed history to the Home's readers, from the Home or from the notice in a DM.
@@ -365,77 +364,4 @@ async function threadEarlierOpen(view, homeId) {
   await post(thvPath(homeId) + '/open-earlier', {});
   toast('Earlier messages open');
   if (homeId === view.id) await thvRefresh(view);
-}
-function threadShareOpen(view) {
-  const t = view.thread;
-  const dlg = threadDialog('thread-share', 'Who can read');
-  dlg.innerHTML = `<form>${threadDialogHead('Who can read')}<div class="dash-form">${threadAudienceHTML(t, {titled: true})}<div class="tcn-host"></div></div>${threadDialogFoot('Save')}</form>`;
-  threadDialogWire(dlg);
-  renderThreadConnect(t, dlg.querySelector('.tcn-host'));   // Slack and Shared with (ui/app/thread-connect.js)
-  const form = dlg.querySelector('form');
-  form.onsubmit = async ev => {
-    ev.preventDefault();
-    const audience = form.querySelector('[name=audience]:checked')?.value || 'members';
-    try {
-      const r = await patch(thvPath(t.id), {audience, audience_group_id: audience === 'team' ? form.elements.namedItem('group')?.value || null : null});
-      view.thread = {...t, ...r}; threadsPut(view.thread); thvDraw(view);
-      dlg.close();
-    } catch (e) { form.querySelector('[data-status]').textContent = e.message; }
-  };
-  dlg.showModal();
-}
-
-// How long a thread keeps its messages (PATCH retention_days; null keeps them). A length set some other way stays listed.
-function threadKeepOpen(view) {
-  const t = view.thread, now = t.retention_days ?? '';
-  const lengths = [['', 'Keep forever'], [30, '30 days'], [90, '90 days'], [365, '1 year']];
-  if (!lengths.some(([days]) => days === now)) lengths.push([now, `${now} days`]);
-  const dlg = threadDialog('thread-keep', 'Keep messages');
-  dlg.innerHTML = `<form>${threadDialogHead('Keep messages')}<div class="dash-form"><select name="days" aria-label="Keep messages">${
-    lengths.map(([days, label]) => `<option value="${days}"${days === now ? ' selected' : ''}>${label}</option>`).join('')}</select></div>${threadDialogFoot('Save')}</form>`;
-  threadDialogWire(dlg);
-  const form = dlg.querySelector('form');
-  form.onsubmit = async ev => {
-    ev.preventDefault();
-    const days = form.elements.namedItem('days').value;
-    try {
-      const r = await patch(thvPath(t.id), {retention_days: days ? Number(days) : null});
-      view.thread = {...t, retention_days: days ? Number(days) : null, ...r}; thvDraw(view);
-      dlg.close();
-    } catch (e) { form.querySelector('[data-status]').textContent = e.message; }
-  };
-  dlg.showModal();
-}
-
-// ----------------------------------------------------------------- make task
-// A task from a message: the server copies the message, keeps its privacy and links back; the viewer picks the title
-// and an owner they may give work to.
-function threadMakeTask(m, view) {
-  const dlg = threadDialog('thread-task', 'Make task');
-  const first = v2Firstline(m.body).slice(0, 120);
-  const owners = [['human:' + (S.me?.id || ''), 'Me'], ...shownEmps().filter(e => e.can_chat !== false && (!e.my_access || e.my_access.write))
-    .map(e => [e.name, e.display_name || e.name])];
-  dlg.innerHTML = `<form>${threadDialogHead('Make task')}<div class="dash-form">
-      <label>Title<input name="title" maxlength="300" required value="${esc(first)}"></label>
-      <label>Owner<select name="owner">${owners.map(([v, l]) => `<option value="${esc(v)}">${esc(l)}</option>`).join('')}</select></label></div>
-    ${threadDialogFoot('Make task')}</form>`;
-  threadDialogWire(dlg);
-  const form = dlg.querySelector('form');
-  form.onsubmit = async ev => {
-    ev.preventDefault();
-    const title = form.elements.namedItem('title').value.trim(); if (!title) return;
-    try {
-      const r = await post('/v2/threads/messages/' + encodeURIComponent(m.id) + '/task', {title, owner: form.elements.namedItem('owner').value});
-      dlg.close();
-      const id = r?.task?.id || r?.id;
-      toast('Task made', false, id ? {label: 'Open', run: () => { location.hash = '#/task/' + id; }} : undefined);
-    } catch (e) {
-      const status = form.querySelector('[data-status]'), dup = e.body?.error?.code === 'duplicate', twin = dup && e.body.error.task_id;
-      status.textContent = dup ? 'A task already asks for this' : e.message;
-      if (twin) status.innerHTML = `<a href="#/task/${encodeURIComponent(twin)}" data-close>A task already asks for this</a>`;
-      threadDialogWire(dlg);
-    }
-  };
-  dlg.showModal();
-  form.elements.namedItem('title').select();
 }

@@ -64,7 +64,12 @@ gets a different page.
   computer or a phone.
 - **The full view** has the page's versions (an older one opens in place) and, for whoever may manage it,
   **Archive**. The owner also has **Delete for good** ([Files](files.md#deleting-a-file-for-good)).
-- **A task** shows the pages pinned to it as cards at the top, a replaced page left out.
+- **A task** shows the pages pinned to it as cards at the top, a replaced page left out. **Link page** searches
+  existing pages and links the chosen one. Any person, or bot acting as itself, who can read the task may link a page
+  they can read; the link keeps the page's own access rules. Other task readers see only pages they can open, with no
+  count of hidden pages.
+  The task place's `can_link` controls linking; it grants no card editing or pin arranging rights (`can_edit`).
+  **Unlink** is available to whoever linked it, the task's owner or requester, and the org owner.
 - **Pinned** to the Dashboard, a team page or a bot's sidebar ([Overview](overview.md)), a page shows as a card there.
   The full view lists where it is pinned, among the places the reader may open.
 
@@ -87,12 +92,14 @@ Stable v2 (`docs/openapi/v2.json`, tag **Pages**):
 | `POST /api/v2/pages` | Publish: raw HTML with the fields in the query, or JSON with `name` and `text` or `content_base64` |
 | `GET /api/v2/pages/{file_id}` | `page`: `file_id, title, bot, bot_name, version, updated_at, updated_by, cadence, as_of, stale_days, replaced_by, archived, task_id, src`; `pinned`: where it is pinned |
 | `GET /api/v2/pages?ids=a,b` | Up to 50 pages in that order, leaving out any the caller may not read |
-| `GET /api/v2/pages?bot=&task=` | Pages newest first, paged with `limit` and `cursor` |
+| `GET /api/v2/pages?bot=&task=` | Pages newest first, paged with `limit` and `cursor`; `task` includes pages filed on or pinned to that task |
 | `PATCH /api/v2/pages/{file_id}` | `cadence`, `as_of`, `replaced_by`, `archived` |
 
 `src` is a fresh address to frame the current version, or `null` when this install cannot show pages inline. A page
 the caller may not read is a 404. `replaced_by` is `null` when the caller may not read the newer page. Lists carry no
 totals, so a count never says what a reader cannot see.
+
+`hub page list --task ID` and MCP's `hub_page_list` include both filed and linked pages with the same paging.
 
 **Who acts.** A bot publishes during its turn. People archive and restore. BotOps archives for a person with that
 person's rights, and asks before a hard delete, which only the owner may do.

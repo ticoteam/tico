@@ -158,7 +158,8 @@ async def keep_alive(store, stop, vault=None):
 def tick(store):
     with store.transaction() as c:
         now = H.now()
-        c.execute("UPDATE runners SET last_seen_at=? WHERE revoked_at IS NULL", (now,))
+        c.execute("UPDATE runner_states SET last_seen_at=? WHERE runner_id IN (SELECT id FROM runners WHERE revoked_at IS NULL)",
+                  (now,))
         c.execute("INSERT INTO service_health VALUES('scheduler',?,NULL,'{}') ON CONFLICT(service) DO UPDATE SET "
                   "last_succeeded_at=excluded.last_succeeded_at,last_error=NULL", (now,))
         for job in c.execute("SELECT j.id,j.bot_id,m.sender_id,m.conversation_id,m.id AS message FROM jobs j "
@@ -230,10 +231,6 @@ def install(app, auth, settings):
     if settings.demo_public:
         discard_read_writes(app.state.store)
 
-    # "Ask the librarian" answers from the graph alone: no model is called.
-    from . import market
-    market.complete = lambda question, excerpts: ""
-
     # The seeded Granola account holds no token and nothing leaves this computer: a sync answers "recent" (Sync now
     # takes the same answer, as the route passes `now` too).
     async def granola_recent(who, interval=0, now=False):
@@ -263,8 +260,7 @@ def install(app, auth, settings):
             if RUNS.match(path):
                 return problem(409, "demo", EXPLAIN)
             if settings.demo_public and not PUBLIC_WRITES.match(path):
-                return problem(403, "demo", "This public demo is read-only. Run your own with "
-                               "`docker run --rm -p 127.0.0.1:8765:8765 ghcr.io/ticoteam/tico demo`.")
+                return problem(403, "demo", "This public demo is read-only.")
         PUBLIC_READ.set(settings.demo_public and request.method in ("GET", "HEAD"))
         return await call_next(request)
 

@@ -2,7 +2,7 @@
 import pytest
 from fastapi.routing import APIRoute
 
-from backend import meetings
+from backend import meetings, threads
 from backend.store import H
 from backend.tests.test_api import api, headers, post  # noqa: F401
 
@@ -13,8 +13,9 @@ def named_data(api):
         c.execute("UPDATE humans SET name='Ana' WHERE id='ana'")
         c.execute("UPDATE bots SET display_name='Operations' WHERE slug='ops'")
         task = H.task_create(c, 'human:ana', 'Review the plan', 'Please review the plan.', 'bot:ops')
-        ask = H.say(c, 'bot:ops', 'human:ana', 'Please choose a review date.',
-                    conversation_id=task['conversation_id'], kind='ask', refs={'task': task['id']})
+        # A bot's ask in a task's thread reaches a person only by an @mention (hubdb.counts_for_person), so this one has it.
+        ask = threads.post(c, 'bot:ops', task['conversation_id'], '@ana Please choose a review date.', kind='ask',
+                           to_actor='human:ana', refs={'task': task['id']})
         notice = H.notice(c, 'bot:ops', 'human:ana', 'New task from bot:ops: Review the plan')
         meetings.snapshot({'id': 'review-meeting', 'title': 'Review the plan', 'kind': 'meeting',
                            'private': False, 'owner': 'ana@example.com', 'status': 'done'},

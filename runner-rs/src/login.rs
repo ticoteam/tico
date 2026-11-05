@@ -132,6 +132,10 @@ const MIN_TOKEN: usize = 90;
 const TOKEN_GRACE: Duration = Duration::from_secs(10);
 #[cfg(test)]
 const TOKEN_GRACE: Duration = Duration::from_millis(500);
+/// How long after the code Enter is typed. `claude setup-token` takes a code and Enter written together as a paste and
+/// waits for an Enter that never comes ("Code sent. Waiting for the computer to finish…", Nov 3): typed alone a moment
+/// later, it signs in at once.
+const ENTER_AFTER_CODE: Duration = Duration::from_millis(1200);
 
 /// The token `prefix` starts, from what a Connect's command has printed so far. Until the command has `ended` a token
 /// counts only once something follows it: the rest of it may still be arriving.
@@ -147,6 +151,27 @@ fn printed_token(raw: &str, prefix: &str, ended: bool) -> Option<String> {
         let token = &tail[..end.unwrap_or(tail.len())];
         (token.len() >= MIN_TOKEN && (end.is_some() || ended)).then(|| token.to_string())
     })
+}
+
+/// A CLI waiting for Enter after an OAuth error cannot finish without another interactive attempt. Never relay
+/// its text: a Connect's output can contain codes and credentials. Cursor movements and wrapping split words.
+fn oauth_retry(raw: &str) -> bool {
+    let text: String = plain(raw).chars().filter(|c| !c.is_whitespace()).flat_map(char::to_lowercase).collect();
+    text.contains("oautherror:") && text.contains("pressentertoretry")
+}
+
+/// Only an allowlisted category leaves the terminal. Provider errors can echo the code, URL or credential, and
+/// a rejected code's generic message does not distinguish expired, reused or incomplete codes.
+fn oauth_failure(raw: &str) -> &'static str {
+    let text: String = plain(raw).chars().filter(|c| !c.is_whitespace()).flat_map(char::to_lowercase).collect();
+    let Some((_, error)) = text.split_once("oautherror:") else { return "cli_stopped" };
+    if error.contains("thatcodewasn'taccepted") || error.contains("thatcodewasnotaccepted") {
+        "oauth_code_rejected"
+    } else if ["fetchfailed", "econnreset", "etimedout", "enotfound", "unabletoconnect", "requesttimedout"].iter().any(|s| error.contains(s)) {
+        "oauth_network_error"
+    } else {
+        "oauth_error"
+    }
 }
 
 /// What the login command has shown so far: {url, code, lines, prompt} (login.py `parse`). `hide` is a pasted
@@ -211,6 +236,9 @@ struct Inner {
     finished: bool,
     /// A Connect's result, until the server has taken it (`Logins::flush`).
     captured: Option<String>,
+    save_retry_logged: bool,
+    /// Every byte the command has printed, so the part after a typed code can be found once `raw` is trimmed.
+    seen: usize,
 }
 
 /// One login command, from start to a verdict.
@@ -224,6 +252,7 @@ pub struct Session {
     canceled: AtomicBool,
     /// The server took this switch's `finishing` report: it can no longer be canceled, so the new login goes in.
     confirmed: AtomicBool,
+    started: Instant,
 }
 
 impl Session {
@@ -236,7 +265,17 @@ impl Session {
             inner: Mutex::new(Inner { state: "starting".into(), dirty: true, ..Default::default() }),
             canceled: AtomicBool::new(false),
             confirmed: AtomicBool::new(false),
+            started: Instant::now(),
         })
+    }
+
+    /// Correlate the browser's login row with local stages. Only fixed phases, a CLI exit code, and server-owned
+    /// identifiers are logged; never the CLI's text, account details, URL, code or captured value.
+    fn trace(&self, phase: &'static str, exit_code: Option<i32>) {
+        if self.kind == "connect" {
+            log(&format!("Tico runner: model sign-in {}", json!({"login_id": self.id, "runtime": self.runtime,
+                "phase": phase, "elapsed_ms": self.started.elapsed().as_millis(), "exit_code": exit_code})));
+        }
     }
 
     fn live(&self) -> bool {
@@ -247,6 +286,7 @@ impl Session {
         let mut i = self.inner.lock().unwrap();
         if i.pending.is_none() && i.typed.is_none() {
             i.pending = Some(code.into());
+            self.trace("code_received", None);
         }
     }
 
@@ -274,6 +314,7 @@ impl Session {
             i.code.clear();
         }
         log(&format!("Tico runner: {} {} {state}", self.runtime, self.kind.replace('_', " ")));
+        self.trace(match state { "done" => "completed", "failed" => "failed", "cancelled" => "canceled", _ => "finished" }, None);
         // Whatever the verdict, the next heartbeat asks the profile's CLI again instead of a cached answer.
         crate::profiles::forget_report();
         if state == "signed_in" {
@@ -286,6 +327,9 @@ impl Session {
                 }
             }
         }
+        // Every finish is after its action (a sign-in, a sign-out's logout, a switch, a removal, or a failure that undid
+        // its marks), so the probe reads the result of that action, whatever the verdict.
+        crate::readiness::request_probe();
     }
 }
 
@@ -362,6 +406,60 @@ fn sign_in_status(runtime: &str, exe: &str, env: &Env) -> Option<(bool, String)>
         // No status command: the login file in this sign-in's config folder is the sign-in, as readiness checks it.
         "file" => crate::hosts::file_signed_in(runtime, env).map(|on| (on, if on { crate::hosts::file_sign_in_detail(runtime, env).map(String::from).unwrap_or(status.ready_detail) } else { String::new() })),
         _ => None,
+    }
+}
+
+/// A Connect's screen after the code went in, as one line for the runner's log: links, the typed code and anything
+/// token-shaped taken out (`redact`), the last 240 characters. A code that the CLI accepted but then stops on (a
+/// question, a choice, an error with no retry) shows here; before, the log went quiet between code_written and cancel.
+fn screen_digest(raw: &str, typed: &str) -> String {
+    let mut text = plain(raw);
+    if !typed.is_empty() {
+        text = text.replace(typed, "");
+    }
+    let text = squash(&redact(&patterns().link.replace_all(&text, "[link]")));
+    let skip = text.chars().count().saturating_sub(240);
+    text.chars().skip(skip).collect()
+}
+
+struct AfterCode {
+    seen_at: usize,
+    checked: Instant,
+    logged: Instant,
+    last: String,
+}
+
+impl AfterCode {
+    fn new(seen_at: usize) -> AfterCode {
+        let now = Instant::now();
+        AfterCode { seen_at, checked: now, logged: now, last: String::new() }
+    }
+
+    /// Every 2 s: a changed screen is logged; an unchanged one says it is still waiting every 20 s.
+    fn check(&mut self, s: &Session) {
+        if self.checked.elapsed() < Duration::from_secs(2) {
+            return;
+        }
+        self.checked = Instant::now();
+        let (since, digest) = {
+            let i = s.inner.lock().unwrap();
+            let since = i.seen.saturating_sub(self.seen_at);
+            let mut from = i.raw.len().saturating_sub(since);
+            while !i.raw.is_char_boundary(from) {
+                from += 1;
+            }
+            (since, screen_digest(&i.raw[from..], i.typed.as_deref().unwrap_or("")))
+        };
+        if digest != self.last {
+            log(&format!("Tico runner: model sign-in {}", json!({"login_id": s.id, "runtime": s.runtime,
+                "phase": "after_code_screen", "elapsed_ms": s.started.elapsed().as_millis(), "bytes": since, "screen": digest})));
+            self.last = digest;
+            self.logged = Instant::now();
+        } else if self.logged.elapsed() >= Duration::from_secs(20) {
+            log(&format!("Tico runner: model sign-in {}", json!({"login_id": s.id, "runtime": s.runtime,
+                "phase": "waiting_after_code", "elapsed_ms": s.started.elapsed().as_millis(), "bytes": since})));
+            self.logged = Instant::now();
+        }
     }
 }
 
@@ -680,6 +778,7 @@ fn run_session(s: Arc<Session>, runner: Arc<Runner>, config: Config, lifetime: D
             return fail("failed", &format!("The sign-in command could not start ({:?})", e.kind()));
         }
     };
+    s.trace("cli_started", None);
     let (done_tx, done_rx) = std::sync::mpsc::channel::<()>();
     let reader = {
         let s = s.clone();
@@ -694,6 +793,7 @@ fn run_session(s: Arc<Session>, runner: Arc<Runner>, config: Config, lifetime: D
                 let (raw, hide) = {
                     let mut i = s.inner.lock().unwrap();
                     i.raw.push_str(&String::from_utf8_lossy(&buf[..n]));
+                    i.seen += n;
                     if i.raw.len() > KEEP_RAW {
                         let mut cut = i.raw.len() - KEEP_RAW;
                         while !i.raw.is_char_boundary(cut) {
@@ -722,6 +822,7 @@ fn run_session(s: Arc<Session>, runner: Arc<Runner>, config: Config, lifetime: D
                 if i.state == "starting" && (!i.url.is_empty() || !i.code.is_empty()) {
                     i.state = "waiting".into();
                     i.dirty = true;
+                    s.trace("instructions_ready", None);
                 }
             }
             let _ = done_tx.send(());
@@ -731,6 +832,9 @@ fn run_session(s: Arc<Session>, runner: Arc<Runner>, config: Config, lifetime: D
     // A Connect's command that printed its token and then would not end: its token still counts.
     let mut token_at = None;
     let mut stopped_after_token = false;
+    // After a Connect's code is typed: what the command shows, as a scrubbed line, when it changes (`after_code`).
+    let mut watch: Option<AfterCode> = None;
+    let mut enter_at: Option<Instant> = None;
     let verdict: Option<(String, String)> = loop {
         match child.try_wait() {
             Ok(Some(_)) | Err(_) => break None,
@@ -741,8 +845,15 @@ fn run_session(s: Arc<Session>, runner: Arc<Runner>, config: Config, lifetime: D
             break Some(("cancelled".into(), "Canceled".into()));
         }
         if Instant::now() > deadline {
+            s.trace("timed_out", None);
             kill(&mut child);
             break Some(("failed".into(), "The sign-in was not finished in time".into()));
+        }
+        if connect && oauth_retry(&s.inner.lock().unwrap().raw) {
+            let reason = oauth_failure(&s.inner.lock().unwrap().raw);
+            s.trace(reason, None);
+            kill(&mut child);
+            break Some(("failed".into(), "The sign-in could not finish. Choose Try again and use the code from the new sign-in page.".into()));
         }
         // The token is all a Connect wants. The command gets to end by itself, so a failure it reports still counts.
         if !token_prefix.is_empty() && printed_token(&s.inner.lock().unwrap().raw, &token_prefix, false).is_some()
@@ -754,20 +865,44 @@ fn run_session(s: Arc<Session>, runner: Arc<Runner>, config: Config, lifetime: D
         if let Some(w) = &writer {
             let code = s.inner.lock().unwrap().pending.take();
             if let Some(code) = code {
-                let line = format!("{code}\r");
-                let wrote = unsafe { libc::write(w.as_raw_fd(), line.as_ptr() as *const _, line.len()) };
-                if wrote >= 0 {
+                // The code alone; Enter follows on its own write (ENTER_AFTER_CODE).
+                let wrote = unsafe { libc::write(w.as_raw_fd(), code.as_ptr() as *const _, code.len()) };
+                if wrote == code.len() as isize {
                     let mut i = s.inner.lock().unwrap();
                     i.typed = Some(code);
                     i.taken = true;
                     i.dirty = true;
+                    s.trace("code_written", None);
+                    watch = connect.then(|| AfterCode::new(i.seen));
+                    enter_at = Some(Instant::now() + ENTER_AFTER_CODE);
+                } else {
+                    s.trace("code_delivery_failed", None);
+                    kill(&mut child);
+                    break Some(("failed".into(), "The code could not reach the sign-in command. Choose Try again.".into()));
                 }
             }
+        }
+        if let (Some(w), Some(at)) = (&writer, enter_at) {
+            if Instant::now() >= at {
+                enter_at = None;
+                let wrote = unsafe { libc::write(w.as_raw_fd(), b"\r".as_ptr() as *const _, 1) };
+                if wrote == 1 {
+                    s.trace("enter_written", None);
+                } else {
+                    s.trace("code_delivery_failed", None);
+                    kill(&mut child);
+                    break Some(("failed".into(), "The code could not reach the sign-in command. Choose Try again.".into()));
+                }
+            }
+        }
+        if let Some(w) = watch.as_mut() {
+            w.check(&s);
         }
         std::thread::sleep(Duration::from_millis(100));
     };
     drop(writer); // the master closes, so the reader ends on a pty too
     let _ = done_rx.recv_timeout(Duration::from_secs(3));
+    s.trace("cli_exited", child.try_wait().ok().flatten().and_then(|status| status.code()));
     // Kept only when the old login's files are still in it, so a failed restore never deletes them.
     let mut keep_side = false;
     let mut captured = false;
@@ -785,9 +920,13 @@ fn run_session(s: Arc<Session>, runner: Arc<Runner>, config: Config, lifetime: D
                 Some(value) => {
                     s.inner.lock().unwrap().captured = Some(value);
                     captured = true;
+                    s.trace("credential_captured", None);
                     (String::new(), String::new())
                 }
-                None => ("failed".into(), "The sign-in command stopped without signing in".into()),
+                None => {
+                    s.trace(oauth_failure(&s.inner.lock().unwrap().raw), None);
+                    ("failed".into(), "The sign-in command stopped without signing in".into())
+                }
             }
         }
         None if !child.wait().map(|st| st.success()).unwrap_or(false) => ("failed".into(), "The sign-in command stopped without signing in".into()),
@@ -850,10 +989,15 @@ fn run_session(s: Arc<Session>, runner: Arc<Runner>, config: Config, lifetime: D
         if !keep_side {
             discard(side);
         }
-        if state == "signed_in" {
-            // The new account's email and plan are read afresh, not the old one's.
-            crate::accounts::forget(&profile.as_ref().map(|p| p.name.clone()).unwrap_or_default(), &s.runtime);
-        }
+    }
+    if state == "signed_in" {
+        // The new account's email, plan, usage windows and fallback hold are read afresh, not the old one's, after a
+        // switch or a plain sign-in alike; a read of the old account still running is then not kept
+        // (accounts::keep_if_current). With the account forgotten, remember() can no longer see the change of account,
+        // so the windows it would have dropped are dropped here.
+        let name = profile.as_ref().map(|p| p.name.clone()).unwrap_or_default();
+        crate::accounts::forget(&name, &s.runtime);
+        crate::profiles::forget_windows(&name, &s.runtime);
     }
     // A captured Connect ends once the server has taken it (`Logins::flush`).
     if !captured {
@@ -1558,8 +1702,18 @@ impl Logins {
         } else {
             match runner.client.post(&path, &json!({"value": value}), Some(&format!("connect:{}", s.id))).await {
                 Ok(reply) => (text_of(&reply["state"]), text_of(&reply["message"])),
-                Err(e) if e.retryable => return,
-                Err(e) => ("failed".to_string(), redact(&e.detail)),
+                Err(e) if e.retryable => {
+                    let mut i = s.inner.lock().unwrap();
+                    if !i.save_retry_logged {
+                        s.trace("save_temporarily_failed", None);
+                        i.save_retry_logged = true;
+                    }
+                    return;
+                }
+                Err(e) => {
+                    s.trace("save_failed", None);
+                    ("failed".to_string(), redact(&e.detail))
+                }
             }
         };
         s.inner.lock().unwrap().captured = None;
@@ -1578,6 +1732,20 @@ mod tests {
     use super::*;
 
     #[test]
+    fn the_screen_after_a_code_is_logged_without_its_link_code_or_token() {
+        let raw = "\x1b[2GSelect\x1b[9Gan\x1b[12Gorganization\r\n\x1b]8;;https://claude.com/cai/oauth/authorize?code=true\x07link\x1b]8;;\x07 \
+                   https://claude.com/x?state=abc \r\nsecretcode12345\r\nsk-ant-oat01-abcdefghijklmnopqrstuvwxyz0123456789\r\n> Acme\r\n";
+        let digest = screen_digest(raw, "secretcode12345");
+        assert!(digest.contains("Select an organization"), "{digest}");
+        assert!(digest.contains("> Acme"), "{digest}");
+        for leak in ["secretcode12345", "sk-ant-oat01", "abcdefghijklmnop", "https://", "state=abc"] {
+            assert!(!digest.contains(leak), "{leak} in {digest}");
+        }
+        let long = "word ".repeat(200);
+        assert!(screen_digest(&long, "").chars().count() <= 240);
+    }
+
+    #[test]
     fn connect_takes_a_printed_token_only_once_it_has_all_arrived() {
         let token = format!("sk-ant-oat01-{}", "a1_B-".repeat(20));
         let shown = format!("\x1b[1mYour token:\x1b[0m\r\n{token}\x1b[0m\r\nStore it safely.\r\n");
@@ -1590,6 +1758,19 @@ mod tests {
         assert_eq!(printed_token("no such thing\n", "sk-ant-oat", true), None);
         // Nor is a piece of one.
         assert_eq!(printed_token(&format!("{}\n", &token[..80]), "sk-ant-oat", true), None);
+    }
+
+    #[test]
+    fn oauth_retry_waits_for_the_blocked_state() {
+        let error = "\x1b[31mOAuth error:\x1b[0m That code was not accepted.\r\nPress\x1b[1GEnter to re";
+        assert!(!oauth_retry(error), "a partial prompt is still arriving");
+        assert!(oauth_retry(&format!("{error}try.")));
+        assert!(!oauth_retry("Paste code here if prompted >"));
+        assert!(!oauth_retry("Your OAuth token:\nvalid-token\nPress Enter to continue"));
+        assert!(!oauth_retry("Press Enter to retry"), "an unrelated retry is not an OAuth failure");
+        assert_eq!(oauth_failure("OAuth error: That code wasn't accepted. expired, reused or incomplete"), "oauth_code_rejected");
+        assert_eq!(oauth_failure("OAuth error: fetch failed https://private.example/?code=never-log-this"), "oauth_network_error");
+        assert_eq!(oauth_failure("OAuth error: secret response sk-ant-oat01-never-log-this"), "oauth_error");
     }
 
     /// A Connect relays the link, leaves the login it does not need alone, and holds its one result for the server.
@@ -1605,8 +1786,19 @@ case "$*" in
   setup-token)
     test -z "$ANTHROPIC_API_KEY" || exit 3
     echo 'Use the url below to sign in'; echo 'https://claude.example/authorize?x=1'; echo 'Paste code here if prompted >'
-    read code
+    # Like the real CLI: an Enter that arrives with the code is part of a paste, and the sign-in never finishes.
+    stty -icanon min 1 time 0
+    code=$(head -c 11)
+    stty min 0 time 5
+    test -z "$(head -c 1)" || exit 6
+    stty icanon min 1
+    read rest
     test "$code" = pasted-code || exit 4
+    if test -e "$HOME/rejects-code"; then
+      trap 'touch "$HOME/rejected-stopped"; exit 0' TERM
+      printf "\033[31mOAuth error:\033[0m That code wasn't accepted. %s {token}\r\nPress\033[1GEnter to retry." "$code"
+      while :; do sleep 0.1; done
+    fi
     echo 'Your OAuth token:'; echo '{token}'; echo 'Store it safely.'
     test ! -e "$HOME/fails-after-token" || exit 7
     sleep 30 ;;
@@ -1633,6 +1825,12 @@ esac
             let out = cmd.output().unwrap();
             std::fs::remove_dir_all(&root).ok();
             assert!(out.status.success(), "{}{}", String::from_utf8_lossy(&out.stdout), String::from_utf8_lossy(&out.stderr));
+            let diagnostics = String::from_utf8_lossy(&out.stdout);
+            for phase in ["cli_started", "instructions_ready", "code_received", "code_written", "enter_written", "oauth_code_rejected", "credential_captured", "cli_exited", "canceled"] {
+                assert!(diagnostics.contains(&format!("\"phase\":\"{phase}\"")), "missing {phase}: {diagnostics}");
+            }
+            assert!(!diagnostics.contains("pasted-code") && !diagnostics.contains("sk-ant-oat")
+                && !diagnostics.contains("https://claude.example"), "secret in diagnostics: {diagnostics}");
             return;
         };
         std::fs::create_dir_all(root.join("projects")).unwrap();
@@ -1683,6 +1881,27 @@ esac
             assert!(i.captured.is_none() && i.finished && i.state == "failed", "{runtime}: {}", i.state);
         }
         std::fs::remove_file(root.join("fails-after-token")).unwrap();
+
+        // A rejected code leaves the real CLI alive waiting for Enter. End it so the browser can offer a fresh
+        // attempt, without exposing even an error that echoes the code or includes a token.
+        std::fs::write(root.join("rejects-code"), "").unwrap();
+        let login = Session::new(&json!({"id": "rejected", "runtime": "claude", "kind": "connect"}));
+        let (s2, r2, c2) = (login.clone(), runner.clone(), config.clone());
+        let running = std::thread::spawn(move || run_session(s2, r2, c2, Duration::from_secs(20)));
+        wait_for(|| !login.inner.lock().unwrap().url.is_empty());
+        login.submit("pasted-code");
+        wait_for(|| login.inner.lock().unwrap().finished);
+        running.join().unwrap();
+        assert_eq!(state(&login).0, "failed");
+        assert!(root.join("rejected-stopped").exists(), "the blocked command was stopped");
+        {
+            let i = login.inner.lock().unwrap();
+            assert!(i.captured.is_none() && i.raw.is_empty() && i.lines.is_empty());
+        }
+        let shown = login.report().unwrap().to_string();
+        assert!(!shown.contains("pasted-code") && !shown.contains("sk-ant"), "{shown}");
+        assert!(!login.inner.lock().unwrap().message.is_empty());
+        std::fs::remove_file(root.join("rejects-code")).unwrap();
 
         // Cancelled: nothing is captured.
         let login = Session::new(&json!({"id": "c3", "runtime": "claude", "kind": "connect"}));
@@ -2167,6 +2386,7 @@ exit 2
 
     #[test]
     fn clear_and_replace_the_computers_own_codex_key() {
+        let _guard = crate::readiness::probe_tests::PATH_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         const CHILD: &str = "TICO_TEST_MODEL_KEYS";
         let Some(root) = std::env::var_os(CHILD).map(std::path::PathBuf::from) else {
             // A process of its own: PATH, HOME and CODEX_HOME point at a stand-in CLI and a scratch home.
@@ -3230,5 +3450,23 @@ esac
         assert_eq!(url, "https://claude.ai/oauth/authorize?code=true");
         assert!(prompt);
         assert!(!lines.iter().any(|l| l.contains("secretcode")));
+    }
+
+    /// A finished login asks for a probe, whatever its verdict, once its action has run (finding 1): a sign-out's logout
+    /// and a named profile's removal are read again after they finish, not before.
+    #[tokio::test]
+    async fn a_finished_login_asks_for_a_probe_whatever_the_verdict() {
+        let root = std::env::temp_dir().join(format!("tico-finish-{}", uuid::Uuid::new_v4().simple()));
+        std::fs::create_dir_all(root.join("projects")).unwrap();
+        let data = json!({"projects_dir": root.join("projects").display().to_string()}).as_object().unwrap().clone();
+        let config = Config { path: std::path::PathBuf::new(), data };
+        let client = crate::client::Client::new("http://127.0.0.1:9", "t", 1, 0).unwrap();
+        let runner = Runner::new(config, client, crate::state::State::open(&root.join("state")).unwrap());
+        for (state, message) in [("signed_out", "Signed out"), ("failed", "The logout did not finish")] {
+            let before = crate::readiness::requests();
+            session("sign_out").finish(state, message, &runner, "");
+            assert!(crate::readiness::requests() > before, "{state} asks for a probe");
+        }
+        std::fs::remove_dir_all(root).unwrap();
     }
 }

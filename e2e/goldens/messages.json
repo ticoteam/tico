@@ -28,6 +28,7 @@
         "bot:ops"
       ],
       "path": "/<conversation>/",
+      "pinned_for_everyone_at": null,
       "retention_days": null,
       "room_key": "ops",
       "root_id": "<conversation>",

@@ -129,6 +129,9 @@ def effective_kind(kind, slides, day=None):
 
 
 def settings(c, bot):
+    # Counsel speaks only on the private task it was asked to read; it cannot publish an update.
+    if bot == H.COUNSEL:
+        return {"daily": False, "weekly": False}
     row = c.execute("SELECT daily, weekly FROM update_settings WHERE bot=?", (bot,)).fetchone()
     return {"daily": bool(row["daily"]) if row else True, "weekly": bool(row["weekly"]) if row else True}
 
@@ -137,6 +140,8 @@ def set_settings(c, bot, daily=None, weekly=None):
     now = settings(c, bot)
     daily = now["daily"] if daily is None else bool(daily)
     weekly = now["weekly"] if weekly is None else bool(weekly)
+    if bot == H.COUNSEL and (daily or weekly):
+        raise Problem("updates_unavailable", "Counsel speaks only on its own task and cannot publish updates", 422)
     c.execute("INSERT INTO update_settings(bot,daily,weekly) VALUES(?,?,?) ON CONFLICT(bot) DO UPDATE SET "
               "daily=excluded.daily, weekly=excluded.weekly", (bot, int(daily), int(weekly)))
     return {"daily": daily, "weekly": weekly}
@@ -287,7 +292,8 @@ def build_queue(c, day, kind, assistant=None):
         "SELECT b.id, b.slug, (SELECT max(u.created_at) FROM updates u WHERE u.bot=b.id) last_update, "
         "(SELECT last_turn_at FROM bot_status s WHERE s.bot=b.id) last_turn "
         "FROM bots b LEFT JOIN update_settings us ON us.bot=b.id "
-        "WHERE b.state='active' AND coalesce(us." + ("daily" if kind == "daily" else "weekly") + ",1)=1").fetchall()
+        "WHERE b.state='active' AND b.id<>? AND coalesce(us." + ("daily" if kind == "daily" else "weekly") + ",1)=1",
+        (H.COUNSEL,)).fetchall()
     depth = depths(c, [r["id"] for r in rows])
     order = sorted(rows, key=lambda r: (-depth[r["id"]], r["last_update"] or "", r["last_turn"] or "", r["slug"]))
     for rank, row in enumerate(order):
@@ -585,16 +591,16 @@ def draft_facts(c, author, kind, day):
     goals = c.execute("SELECT title FROM goals WHERE owner_id=? AND (status IS NULL OR status NOT IN "
                       "('done','dropped')) ORDER BY rank LIMIT 5", (author,)).fetchall()
     # Their decisions in Needs you: what they moved a shared task to (approved, declined, done, closed)...
-    decided = c.execute(f"SELECT t.title, e.new FROM task_events e JOIN tasks t ON t.id=e.task_id WHERE e.actor=? "
-                        f"AND e.field='status' AND e.old IS NOT NULL AND e.created_at>=? AND {shared_tasks_sql(hidden, 't.')} "
+    decided = c.execute(f"SELECT t.title, e.new FROM history_events e JOIN tasks t ON e.subject_type='task' AND t.id=e.subject_id "
+                        f"WHERE e.actor_id=? AND e.kind='status' AND e.old IS NOT NULL AND e.created_at>=? AND {shared_tasks_sql(hidden, 't.')} "
                         "ORDER BY e.created_at DESC LIMIT ?", (author, since, DRAFT_LIST_MAX)).fetchall()
     # ...and their answers to asks, then their comments; a message counts only when every task it names is shared.
     said = lambda where: [(title, m["body"]) for m in c.execute(
-        "SELECT * FROM messages WHERE sender_id=? AND deleted_at IS NULL AND created_at>=? AND " + where
+        "SELECT * FROM message_refs WHERE sender_id=? AND deleted_at IS NULL AND created_at>=? AND " + where
         + " ORDER BY created_at DESC LIMIT ?", (author, since, DRAFT_SCAN_MAX)).fetchall()
         if (title := _shared_message(c, m, shared))][:DRAFT_LIST_MAX]
     answers = said("kind='answer'")
-    comments = said("kind IN ('say','ask') AND json_extract(refs,'$.task') IS NOT NULL "
+    comments = said("kind IN ('say','ask') AND ref_task_id IS NOT NULL "
                     "AND json_extract(refs,'$.comment')")
     # The shared meetings they owned or were in (media.shared_meeting; sql.py has the same rule): live,
     # not private, not deleted, with a summary.
@@ -797,7 +803,7 @@ def redo(c, kind, day, bots=None, managers=False):
     if when.isoformat() > today():
         raise Problem("day", "A redo is for today or an earlier day", 422)
     rows = c.execute("SELECT b.id FROM bots b LEFT JOIN update_settings us ON us.bot=b.id WHERE b.state='active' "
-                     "AND coalesce(us." + kind + ",1)=1 ORDER BY b.slug").fetchall()
+                     "AND b.id<>? AND coalesce(us." + kind + ",1)=1 ORDER BY b.slug", (H.COUNSEL,)).fetchall()
     ids = {b: (H.resolve_bot(c, b) or {}).get("id", b) for b in bots or ()}
     chosen = [r["id"] for r in rows if not bots or r["id"] in ids.values()]
     unknown = sorted(b for b, bid in ids.items() if bid not in chosen)
@@ -1175,12 +1181,13 @@ def _only(bots, column="u.bot"):
 
 
 def listing(c, actor, readable, kind=None, bot=None, unread=False, before=None, limit=40,
-            archive=False, include_archive=False, may_read=None, meetings=False):
+            archive=False, include_archive=False, may_read=None, meetings=False, brief=False):
     """The feed, newest first, with this person's read state, reply counts, and the requests that
     ended without an update (so a silent bot shows). `readable` is the set of bots to show; `may_read`,
     all the authors they may read, decides a card's links, so My bots or direct reports narrow the
     cards but not what a card was written from. Without `meetings` (`meeting_reader`), an update
-    flagged `meetings` is left out, and so is any link to one."""
+    flagged `meetings` is left out, and so is any link to one. `brief`: the updates with their read state and the
+    unread count only, as Home's Updates card shows them (no inputs, replies, missed requests or today's queue)."""
     where, args = [_kept(meetings)], []
     if not readable:
         where.append("0")
@@ -1208,12 +1215,18 @@ def listing(c, actor, readable, kind=None, bot=None, unread=False, before=None, 
         (actor, actor, *args, limit)).fetchall()
     items = []
     for row in rows:
-        item = with_inputs(c, _decode(row), readable if may_read is None else may_read, meetings)
+        item = _decode(row) if brief else with_inputs(c, _decode(row), readable if may_read is None else may_read, meetings)
         item["read"] = bool(item.pop("read_at"))
         item["archived"] = bool(row["archived"])
-        item["replies"] = c.execute("SELECT count(*) FROM messages WHERE json_extract(refs,'$.update')=?",
-                                    (row["id"],)).fetchone()[0]
         items.append(item)
+    if brief:
+        return {"updates": items, "unread": count_unread(c, actor, readable, kind, meetings)}
+    # Every row's replies in one pass over messages: a count a row read all of them once each, 40 times a page.
+    replies = dict(c.execute(
+        "SELECT json_extract(refs,'$.update') AS u, count(*) FROM messages WHERE json_extract(refs,'$.update') IN (%s) "
+        "GROUP BY u" % ",".join("?" * len(items)), [item["id"] for item in items]).fetchall()) if items else {}
+    for item in items:
+        item["replies"] = replies.get(item["id"], 0)
     missed = []
     if not unread and not before and not archive and not include_archive:
         for row in c.execute("SELECT bot, kind, day, reason, done_at FROM update_queue WHERE state='missed' "

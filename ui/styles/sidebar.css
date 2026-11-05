@@ -37,13 +37,20 @@
 .side-section{margin-top:6px}
 .section-toggle{width:100%;display:flex;align-items:center;gap:8px;background:none;border:0;border-radius:6px;padding:7px 8px 5px 10px;color:var(--muted);cursor:pointer;font-size:var(--t-label);font-weight:600;letter-spacing:var(--track-caps);text-align:left;text-transform:uppercase}
 .section-toggle:hover{background:var(--surface2);color:var(--ink)}
+/* A section header that is a link (Inbox): the same look, no chevron, the page's mark when it is open. */
+.section-head{width:100%;display:flex;align-items:center;gap:8px;border-radius:6px;padding:7px 8px 5px 10px;color:var(--muted);font-size:var(--t-label);font-weight:600;letter-spacing:var(--track-caps);text-transform:uppercase;text-decoration:none}
+.section-head:hover{background:var(--surface2);color:var(--ink);text-decoration:none}
+.section-head.cur{color:var(--ink)}
 .section-chev{margin-left:auto;font-size:16px;line-height:var(--lh-none);transform:var(--chev-open)}
 .section-toggle[aria-expanded="false"] .section-chev{transform:none}
 .section-body[hidden]{display:none}
+/* The Team fold before the app's code runs (ui/theme.js; sidebar.js renderNavSections keeps the mark after). */
+html.nav-team-shut #nav-organisation{display:none}
+html.nav-team-shut .section-toggle[data-section-toggle="organisation"] .section-chev{transform:none}
 .nav-row{display:flex;align-items:center;gap:2px}
 .nav-row>.nav-link{flex:1;min-width:0}
 #mobile-more{position:relative}
-.org-head>.section-toggle{flex:1;min-width:0}
+.org-head>.section-toggle,.org-head>.section-head{flex:1;min-width:0}
 .org-history{flex:none;width:28px;height:28px;display:inline-flex;align-items:center;justify-content:center;border:0;border-radius:6px;background:none;cursor:pointer;padding:0}
 .org-history:hover{background:var(--surface2)}
 a.org-history{color:var(--muted);text-decoration:none}a.org-history:hover{color:var(--ink)}
@@ -89,8 +96,8 @@ a.org-history{color:var(--muted);text-decoration:none}a.org-history:hover{color:
 #changelog-badge{margin-left:auto;font-size:var(--t-2xs)}
 /* The first-run wizard while setup is not done (renderOnboardingNav): Finish setup and the team, not the app's pages
    or What's new. */
-body.in-setup .side-scroll>.nav-link:not(#nav-welcome),body.in-setup .side-scroll>.nav-row,body.in-setup #nav-pins,
-body.in-setup #nav-inboxes-section,body.in-setup #gs-org-hint,body.in-setup #changelog-notice,body.in-setup #changelog-badge{display:none}
+html.in-setup .side-scroll>.nav-link:not(#nav-welcome),html.in-setup .side-scroll>.nav-row,html.in-setup #nav-pins,
+html.in-setup #nav-inboxes-section,html.in-setup #gs-org-hint,html.in-setup #changelog-notice,html.in-setup #changelog-badge{display:none}
 #new-version{display:flex;align-items:center;gap:8px;width:100%;padding:6px 8px;border:0;border-radius:6px;background:none;color:var(--muted);font:inherit;font-size:var(--t-sm);text-align:left;cursor:pointer}
 #new-version:hover,#new-version[aria-expanded="true"]{background:var(--surface2);color:var(--ink)}
 #new-version .nv-dot{width:7px;height:7px;flex:none;border-radius:50%;background:var(--ink)}

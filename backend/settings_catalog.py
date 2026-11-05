@@ -40,6 +40,7 @@ WHO = {
     "self": "each person, for themselves",
     "creator": "the person who made it, an admin or the owner",
     "operator": "the computer's operator, an admin or the owner",
+    "scope": "the people who manage the rule's scope (for a team rule, the owner or an admin)",
     "anyone": "anyone on the team",
 }
 TARGETS = ("bot", "computer", "person", "id")
@@ -260,14 +261,34 @@ def _bot_target(c, e, target):
     return found["bot"] if found else ""
 
 
+def _whose(c, e, target):
+    """Who made the object a creator or operator entry names (`human:<id>` or a bot), from the row its route reads;
+    None when the target names no row this knows (the route then decides, and says so itself)."""
+    target = target or {}
+    if e.target == "computer" and target.get("computer"):
+        row = c.execute("SELECT owner_id FROM runners WHERE id=?", (target["computer"],)).fetchone()
+        return ("human:" + row["owner_id"] if row["owner_id"] else "") if row else None
+    table = {"triggers/": "triggers", "webhooks/": "webhooks"}.get(e.route.split("{")[0])
+    if table and target.get("id"):
+        row = c.execute(f"SELECT created_by FROM {table} WHERE id=? AND deleted_at IS NULL", (target["id"],)).fetchone()
+        return row["created_by"] if row else None
+    return None
+
+
 def may(c, auth, who, e, target=None):
     """Whether `who` passes the entry's own check (the route still makes its own)."""
     if who.role == "owner":
         return True
     if e.who == "anyone":
         return who.role in ("human", "bot")
-    if e.who in ("creator", "operator"):             # whose it is: the route decides
-        return who.role == "human" or auth.bot_admin(who)
+    if e.who in ("creator", "operator"):             # an admin, or whoever made it (or runs the computer)
+        if auth.bot_admin(who):
+            return True
+        if who.role == "human":
+            made = _whose(c, e, target)
+            return made is None or made == who.actor
+        # A bot that made an incoming trigger manages it too (triggers.manages); a webhook's or computer's never.
+        return who.role == "bot" and e.route.startswith("triggers/") and _whose(c, e, target) == who.actor
     if e.who == "admin":
         return auth.bot_admin(who)
     if e.who == "mover":
@@ -286,8 +307,26 @@ def refusal(e, base=""):
                    f"({e.where}): ask one of them, or open {link}", 403, extra={"link": link, "who_may": who_text(e)})
 
 
+def raw_refusal(c, auth, who, method, path, body=None, base=""):
+    """For a person's own write that its route refused (403), as BotOps or the Assistant made it for them: the line
+    `hub settings` gives for that setting (`refusal`), as `{"fix", "link", "who_may"}`, when the request is one entry's
+    (or its route is only entries with the same who), that who is not everyone, and the entry's own check refuses this
+    person too (so a refusal for another reason keeps the route's words); else None."""
+    from .route_renames import new_path
+    path = new_path(path) or path                   # `/runners/<id>/revoke` is `computers/{computer}/revoke`
+    found = matched(method, path, body)
+    rows = [found[:2]] if found else routed(method, path)
+    if not rows or len({e.who for e, _ in rows}) != 1 or rows[0][0].who in ("anyone", "self"):
+        return None
+    e, target = rows[0]
+    if may(c, auth, who, e, target):
+        return None
+    said = refusal(e, base)
+    return {"fix": said.detail, "link": said.extra["link"], "who_may": said.extra["who_may"]}
+
+
 def plan(c, auth, who, e, value, target=None, base="", propose=None, card_direct=False,
-         can_card=None, card_words=None):
+         can_card=None, card_words=None, direct_ok=False):
     """The exact request that sets `e` to `value` for `target`, after the entry's own checks: `{"run": {...}}` to
     make with the caller's rights; for BotOps or the Assistant acting for a person, a confirm entry's Confirm card
     (`propose`) or a person-only entry's reason and link. `card_direct`: a direct entry is a card too (the Assistant,
@@ -297,6 +336,9 @@ def plan(c, auth, who, e, value, target=None, base="", propose=None, card_direct
     or the refusal that click would get (then no card is made); None for any other entry."""
     link = (base.rstrip("/") + "/" + e.card) if base else e.card
     acting_for = who.via in ACTING_FOR
+    # `direct_ok`: the Assistant's own turn cites the person's words and the owner's rule allows it, so a direct or a confirm
+    # entry runs here on that citation. A person-only entry is refused above; a change that needs a card by what it does to
+    # stored state (`card_words`) still gets one.
 
     def person_only():
         why = e.why or f"{e.name} is changed only by the person themselves"
@@ -327,10 +369,24 @@ def plan(c, auth, who, e, value, target=None, base="", propose=None, card_direct
         kind = e.when_held if tried[0] else "direct"
     # The plan is never what a card runs (the card runs the route itself), so BotOps acting for a person always gets
     # the card here, and with no way to make one it gets nothing it could run.
-    if acting_for and (kind == "confirm" or (kind == "direct" and card_direct)):
-        if propose is None or (can_card and not can_card(e.method, "/api/v2/" + request["path"])):
+    # A turn's direct change runs only where the gate would admit the run itself (the Assistant's own switches, a credential,
+    # SQL, token or support grant, a sign-in or a removal are the person's own tap): those stay Confirm cards.
+    if direct_ok:
+        from .assistant import admits_on_turn, needs_persons_tap
+        direct_ok = (admits_on_turn(e.method, "/api/v2/" + request["path"], body)
+                     and not needs_persons_tap(e.method, "/api/v2/" + request["path"]))
+        card_direct = not direct_ok
+    needs_card = kind == "confirm" or (kind == "direct" and card_direct)
+    if direct_ok and not (tried and tried[0]):
+        needs_card = False
+    if acting_for and needs_card:
+        if propose is None:
             raise Problem("unavailable", f"{e.name} needs your yes on a Confirm card, which can't be made here: open "
                           + link, 503, extra={"link": link})
+        if can_card and not can_card(e.method, "/api/v2/" + request["path"]):
+            # A route no card can carry (a NEVER route for the Assistant): refused plainly, not an outage.
+            raise Problem("forbidden", f"{e.name} can't be changed through a chat: open " + link, 403,
+                          extra={"link": link})
         words = tried and tried[1]
         if words:
             return propose(c, who, e.method, "/api/v2/" + request["path"], body, words[:300], what=words)
@@ -400,11 +456,14 @@ def matched(method, path, body):
     for e, target in routed(method, path):
         if not isinstance(body, dict):
             continue
+        # `expected_revision` is a guard the route checks against the bot's revision, not a second setting: it is ignored
+        # here unless the entry itself names it.
+        own = body if "expected_revision" in e.extra else {k: v for k, v in body.items() if k != "expected_revision"}
         if e.field:
-            rest = _without(body, e.field)
+            rest = _without(own, e.field)
             if rest is None or rest != e.extra:
                 continue
-        elif any(body.get(k) != v for k, v in e.extra.items()):
+        elif any(own.get(k) != v for k, v in e.extra.items()):
             continue
         if e.key == "bot.repositories":
             # Classed by what the change does to stored state, which this body alone does not show (`stored_class`):
@@ -453,6 +512,12 @@ def install(app, store, auth, settings):
             read = {"path": path_for(e, target, route), "pointer": path_for(e, target, pointer)}
         return {"setting": public(e, settings.public_url), "you_may": allowed, "read": read}
 
+    def words(c, auth, who, e, body, target):
+        if e.key == "bot.repositories":
+            from . import repositories
+            return repositories.card_words(c, settings, auth, who, target["bot"], body)
+        return None
+
     @app.post("/api/v2/settings/catalog/{key}/plan")
     def settings_plan(request: Request, key: str, body: M.SettingsPlan):
         """The request that sets this entry, checked against the caller first: `run` (make it with your rights), a Confirm
@@ -476,22 +541,73 @@ def install(app, store, auth, settings):
                                 made(c, who, method, path, data, summary[:300], what=what))
         with store.transaction() as c:
             card_direct = False
+            direct_ok = False
             if assistant:
                 from . import assistant as assistant_mod, team_rules
+                # The turn that asked is the citation when no header names one: a person's own turn cites its message.
                 try:
-                    cited = bool(asked) and bool(assistant_mod.instruction(c, who, asked))
+                    cited = bool(assistant_mod.instruction(c, who, asked or "turn"))
                 except Problem:
                     cited = False
-                card_direct = not (cited and team_rules.load(c)["assistant_direct"])
-
-            def words(c, auth, who, e, body, target):
-                if e.key == "bot.repositories":
-                    from . import repositories
-                    return repositories.card_words(c, settings, auth, who, target["bot"], body)
-                return None
+                direct_ok = cited and bool(team_rules.load(c)["assistant_direct"])
+                card_direct = not direct_ok
 
             return plan(c, auth, who, e, body.value, target, settings.public_url, propose=propose,
-                        card_direct=card_direct,
+                        card_direct=card_direct, direct_ok=direct_ok,
                         can_card=lambda method, path: valid_operation(method, path, settings,
                                                                       "assistant" if assistant else "botops"),
                         card_words=words)
+
+    @app.post("/api/v2/settings/catalog/{key}/ask")
+    def settings_ask(request: Request, key: str, body: M.SettingsAsk):
+        """Ask someone who can, for a person who may not change this entry (backend/settings_asks.py): one request to a
+        person who may (`to`, else an admin, or the owner for the owner's settings), as the entry's Confirm card in
+        their chat with BotOps and a task they own that the asker requested. Their tap runs it with their rights; their tap or
+        cancel settles the task, and the asker is told in the chat they asked from. BotOps asks on the person's yes; the
+        Assistant cites their words. Refused when the asker may change it (plan it), and for a person-only entry."""
+        from . import assistant as assistant_mod, rooms, settings_asks
+        from .assistant import valid_operation
+        who = request.state.identity
+        auth.domain(who)
+        e = entry(key)
+        target = {"bot": body.bot or "", "computer": body.computer or "", "person": body.person or "",
+                  "id": body.id or ""}
+        link = settings.public_url.rstrip("/") + "/" + e.card
+        made = getattr(app.state, "botops_propose", None)
+        if made is None:
+            raise Problem("unavailable", f"No one can be asked here: open {link}", 503)
+        with store.transaction() as c:
+            settings_asks.check_asker(c, who, request.headers.get("x-tico-on-behalf-of"), assistant_mod.instruction)
+            mine = may(c, auth, who, e, target)
+            if e.kind == "person":
+                why = (e.why or f"{e.name} is changed only by the person themselves") + ": "
+                if mine:
+                    why += "you change it yourself in Settings, at " + link
+                elif e.who == "self":
+                    why += "each person changes it for themselves in Settings, so no one can be asked for it"
+                else:
+                    why += (WHO[e.who] + " changes it in Settings, so no card can carry it; ask one of them to open "
+                            + link)
+                raise Problem("person_only", why, 422, extra={"link": link, "who_may": who_text(e)})
+            if mine:
+                raise Problem("may", f"You may change {e.name} yourself: set it (`hub settings set`)", 409)
+            chosen = settings_asks.who_to_ask(c, auth, settings, who, e, target, body.to or "")
+            asker = settings_asks._name(c, who.actor)
+            card = plan(c, auth, settings_asks.acting(chosen), e, body.value, target, settings.public_url,
+                        propose=lambda c, them, method, path, data, summary, what=None: made(
+                            c, them, method, path, data, (asker + " asks: " + summary)[:300], what=what),
+                        card_direct=True,
+                        can_card=lambda method, path: valid_operation(method, path, settings, "botops"),
+                        card_words=words)
+            if who.via == "assistant":
+                room = assistant_mod.chat_room(c, settings, who)
+                bot = assistant_mod.room_bot(settings, room)
+            else:
+                room, bot = rooms.chat_room(c, auth, who, settings_asks.BOTOPS), settings_asks.BOTOPS
+            task_id = settings_asks.file(c, auth, settings, who, chosen, e, card, room, bot, body.note or "",
+                                         target)
+            name = settings_asks._name(c, chosen.actor)
+            return {"asked": {"person": chosen.actor, "name": name}, "task": {"id": task_id},
+                    "action": card["action"], "setting": public(e, settings.public_url),
+                    "detail": f"Asked {name}: a Confirm card is in their chat with BotOps and the request is on their "
+                              "list. Nothing has changed yet; you'll be told in this chat when they confirm or say no."}

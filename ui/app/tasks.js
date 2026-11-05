@@ -179,14 +179,20 @@ function taskMatches(it, query) {
 // A task’s state is written in words; its owner and dependencies remain separate properties.
 // A question the server marks `older` no longer counts: it waits under Older questions. Since questions unanswered for two
 // business days go back to their bot instead (backend/still_needed.py), servers no longer mark any.
+// A declined task is on its requester's Needs you for DECLINED_NEEDS_HOURS after its last change (backend/hubdb.py
+// needs_you, the same number), and on no one's plate otherwise: its owner, its question and its waits do not hold it.
+const DECLINED_NEEDS_HOURS = 24;
+const taskDeclinedToWho = (t, pid) => t?.status === 'declined' && taskRequester(t) === pid && !actorPerson(t.owner_id)
+  && Date.now() - Date.parse(t.updated_at || '') < DECLINED_NEEDS_HOURS * 3600e3;
 function taskNeedsViewer(t) {
   const me = myActor();
-  return !!me && !!t && !taskFinished(t) && (t.owner_id === me || (t.ask?.recipient_id === me && !t.ask?.older) || taskWaitingOn(t) === me
-    || (t.status === 'declined' && taskRequester(t) === me && !actorPerson(t.owner_id)));
+  if (!me || !t || taskFinished(t)) return false;
+  if (t.status === 'declined') return taskDeclinedToWho(t, me);
+  return t.owner_id === me || (t.ask?.recipient_id === me && !t.ask?.older) || taskWaitingOn(t) === me;
 }
 function taskOlderAsk(t) {
   const me = myActor();
-  return !!me && !!t && !taskFinished(t) && t.ask?.recipient_id === me && !!t.ask?.older && !taskNeedsViewer(t);
+  return !!me && !!t && !taskFinished(t) && t.status !== 'declined' && t.ask?.recipient_id === me && !!t.ask?.older && !taskNeedsViewer(t);
 }
 // The person a bot's waiting task names (`hub task update --status waiting --on <person>`), or ''.
 // Who a waiting task waits on: the person it names, or the one its reconnect card is for (backend/reconnects.py).
@@ -271,6 +277,10 @@ function parseServerTime(value) {
 // An occurrence of a due routine (backend/automation_actions.py) is due at the last second of its due day in the
 // trigger's zone, and that day is the routine's due_on: it reads as that calendar day in any viewer's zone. A step that
 // set its own due keeps the instant, as any task does. Null for other tasks.
+// "Oct 20", with the year only when it isn't this one ("Oct 20, 2028"), so a far-off date can't pass for a past one.
+function shortDay(at) {
+  return at.toLocaleDateString(undefined, {month: 'short', day: 'numeric', ...(at.getFullYear() === new Date().getFullYear() ? {} : {year: 'numeric'})});
+}
 function occurrenceDay(t) {
   const m = /:(\d{4}-\d{2}-\d{2})$/.exec(t?.occurrence || ''), due = String(t?.due_at || '');
   if (!m || !due.startsWith(m[1] + 'T23:59:59')) return null;
@@ -281,7 +291,7 @@ function taskDueInfo(t) {
   if (!t?.due_at || taskFinished(t)) return null;
   const at = parseServerTime(t.due_at); if (!at) return null;
   const shown = occurrenceDay(t) || new Date(at);
-  const day = shown.toLocaleDateString(undefined, {month: 'short', day: 'numeric'});
+  const day = shortDay(shown);
   if (actorSlug(t.owner_id) && !t.occurrence) return {at, day, kind: 'wake', late: false, words: at > Date.now() ? `Wakes ${day}` : `Woke ${day}`};
   const late = at < Date.now();
   // Within the coming week a deadline reads as its weekday ("Due Wed"), further out as its date.
@@ -296,7 +306,7 @@ function taskSnoozed(t) {
   return !!until && !taskFinished(t) && parseServerTime(until) > Date.now();
 }
 function snoozeDay(t) {
-  return new Date(parseServerTime(taskHold(t, 'snoozed')?.until)).toLocaleDateString(undefined, {month: 'short', day: 'numeric'});
+  return shortDay(new Date(parseServerTime(taskHold(t, 'snoozed')?.until)));
 }
 function snoozeChip(t) {
   return taskSnoozed(t) ? `<span class="tl-due wake" title="Snoozed until ${esc(fmt(taskHold(t, 'snoozed').until))}">Snoozed to ${esc(snoozeDay(t))}</span>` : '';

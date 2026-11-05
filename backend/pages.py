@@ -18,6 +18,7 @@ from pydantic import Field
 from . import cards
 from . import models as M
 from . import names
+from . import read_cache
 from . import visuals
 from .store import H, Problem
 from clients import bot_files as BF
@@ -85,6 +86,25 @@ def stale_days(updated, cadence, now=None):
     return int(days) if days > period * STALE_FACTOR else None
 
 
+VIEW_VERSION_SQL = "SELECT version,actor,created_at FROM bot_file_versions WHERE file_id=? AND version=?"
+
+
+def prime_views(c, rows):
+    """Read the current version of each file in `rows` (bot_files rows), one query a chunk, and seed what
+    Pages.view reads for each, so a page list takes no version statement of its own."""
+    if read_cache.cache(c) is None or not rows:
+        return
+    current = {row["id"]: row["current_version"] for row in rows}
+    found = {}
+    for part in H.chunks(sorted(current)):
+        marks = ",".join("?" * len(part))
+        for v in c.execute("SELECT v.file_id,v.version,v.actor,v.created_at FROM bot_file_versions v JOIN bot_files f "
+                           "ON f.id=v.file_id AND f.current_version=v.version WHERE v.file_id IN (%s)" % marks, part):
+            found[v["file_id"]] = v
+    # The query joins each file to its current version only, so a file's row is its current_version's, or none.
+    read_cache.prime(c, VIEW_VERSION_SQL, {(fid, ver): found.get(fid) for fid, ver in current.items()})
+
+
 class Pages:
     def __init__(self, app, store, auth, files):
         self.app, self.store, self.auth, self.files = app, store, auth, files
@@ -100,8 +120,7 @@ class Pages:
 
     def view(self, c, who, row, page, cache, names_=None):
         """The contract's page read: what the status line and a card need."""
-        v = c.execute("SELECT version,actor,created_at FROM bot_file_versions WHERE file_id=? AND version=?",
-                      (row["id"], row["current_version"])).fetchone()
+        v = read_cache.one(c, VIEW_VERSION_SQL, (row["id"], row["current_version"]))
         updated = v["created_at"] if v else row["last_activity_at"]
         replaced, replaced_title = page["replaced_by_id"], None
         if replaced:
@@ -181,9 +200,11 @@ class Pages:
             where.append("f.bot_id=?")
             params.append(bot)
         if task:
-            where.append("f.task_id=?")
-            params.append(task)
+            where.append("(f.task_id=? OR EXISTS (SELECT 1 FROM pins WHERE place=? AND item='page:' || f.id))")
+            params += [task, "task:" + task]
         with self.store.read() as c:
+            if task:
+                self.auth.task(c, who, task)
             cache = {}
             found, nxt = scan(c, "SELECT f.*,p.cadence,p.as_of,p.replaced_by_id,p.archived AS page_archived FROM pages p "
                               "JOIN bot_files f ON f.id=p.file_id", where, params, limit, cursor,
@@ -322,7 +343,7 @@ def install_pages(app, store, auth, files):
     def listing(request: Request, ids: str = "", bot: str = "", task: str = "", archived: bool = False,
                 limit: int = 20, cursor: str = ""):
         """Pages the caller may read. `ids` (up to 50, comma-separated) reads those pages in that order and leaves out
-        the unreadable; otherwise the newest first, filtered by bot or task."""
+        the unreadable; otherwise the newest first, filtered by bot or task (filed or pinned there)."""
         who = request.state.identity
         if ids:
             return pages.many(who, [i.strip() for i in ids.split(",")])

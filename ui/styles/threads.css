@@ -1,40 +1,10 @@
-/* ui/styles/threads.css — Threads: the sidebar rows, the Threads page, one thread's timeline with its sub-threads, the
+/* ui/styles/threads.css — Threads: the sidebar rows, the Threads page, one thread's flat timeline and its bots' status, the
    composer under it, and the New thread / Members dialogs. Markup: ui/app/threads.js, thread-view.js, threads-page.js. */
 
-/* sidebar rows */
-.th-list{list-style:none;margin:0;padding:0}
-.th-row{display:flex;align-items:center;gap:var(--s2);min-width:0;padding:5px 10px;border-radius:6px;color:var(--ink);font-size:var(--t-base);line-height:var(--lh-tight)}
-.th-row:hover{background:var(--surface2);text-decoration:none}
-.th-row.cur{background:var(--surface2);font-weight:600}
-.th-row.unread .th-row-title{font-weight:600}
-.th-row-title{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
-.th-row .th-mark{width:18px;height:18px;font-size:17px}
-.th-row .av,.th-row .avatar{flex:none}
-.th-all .th-row-title{color:var(--muted)}
-.th-count{margin-left:0}
-/* Inbox: its count sits by its name, and an empty Inbox says so in one muted line. */
-#inbox-count{margin-left:2px;letter-spacing:var(--track-normal)}
-.th-done{padding:5px 10px;font-size:var(--t-sm)}
-.thp-holds{margin-top:var(--s2)}
-/* Activity: a lighter dot, never a count. */
-.th-activity{flex:none;width:7px;height:7px;border-radius:50%;background:var(--g4)}
-.th-attn{flex:none;width:7px;height:7px;border-radius:50%;background:var(--wait)}
+/* a thread's mark where it has no avatar (a Home or a DM shows a face) */
+.th-mark{width:18px;height:18px;font-size:17px}
 /* The bottom bar's Threads tab is shown only when the server has threads; the bar's flex rule would undo `hidden`. */
 .mobile-nav-item[hidden]{display:none}
-
-/* the Threads page */
-.threads-page{max-width:var(--read-width);margin:0 auto}
-.threads-head{display:flex;align-items:center;gap:var(--s2);margin:0 0 var(--s3)}
-.threads-head h1{margin:0;font-size:var(--t-xl)}
-.threads-head .spacer{flex:1}
-.thp-search .nav-icon{color:inherit}
-.thp-filter{margin:0 0 var(--s3)}
-.threads-head .tabs.thp-sort{margin:0 0 0 var(--s2);flex-wrap:nowrap}
-.thp-sort button{white-space:nowrap}
-.thp-sec{margin:0 0 var(--s4)}
-.thp-sec h2{margin:0 0 var(--s1);padding:0 10px;color:var(--muted);font-size:var(--t-label);font-weight:600;letter-spacing:var(--track-caps);text-transform:uppercase}
-.thp-list .th-row{padding:8px 10px}
-.thp-at{flex:none;font-size:var(--t-xs);font-weight:400}
 
 /* one thread: a column with the timeline scrolling and the composer under it */
 #main.thread-layout{max-width:none}
@@ -61,49 +31,71 @@
 .thv-menu-btn{flex:none}
 .thv-menu-btn .nav-icon{color:inherit}
 
-/* messages; each sub-thread is indented under its message (capped at three steps) and quieter */
+/* messages: flat, in time order; one author's run of messages shares one header */
 .thv-list{display:flex;flex-direction:column}
 .th-empty{padding:var(--s4) 0;text-align:center}
-.th-msg{--d:0;position:relative;display:flex;gap:10px;padding:6px 6px 6px calc(6px + var(--d) * 28px);border-radius:8px;font-size:var(--read-size,var(--t-base));line-height:var(--lh-read,1.5)}
+.th-msg{position:relative;display:flex;gap:10px;padding:6px;border-radius:8px;font-size:var(--read-size,var(--t-base));line-height:var(--lh-read,1.5)}
 .th-msg:hover{background:var(--hover,var(--surface2))}
-.th-av{flex:none;padding-top:2px}
+.th-msg.th-cont{padding-top:1px;padding-bottom:1px}
+.th-av{flex:none;width:32px;padding-top:2px}
+/* a message under its author's header: its time in the avatar's place, on hover */
+.th-cont-time{display:block;padding-top:3px;color:var(--muted);font-size:10px;line-height:var(--lh-none);text-align:right;white-space:nowrap;opacity:0}
+.th-msg:hover .th-cont-time,.th-msg:focus-within .th-cont-time{opacity:1}
 .th-main{flex:1;min-width:0}
 .th-head{display:flex;align-items:baseline;gap:var(--s2);min-width:0;font-size:var(--t-sm)}
 .th-who{font-weight:600;color:var(--ink)}
 a.th-who:hover{text-decoration:underline}
+.th-bot{align-self:center;padding:1px 5px;border-radius:4px;background:var(--surface2);color:var(--muted);font-size:10px;font-weight:700;letter-spacing:.04em;line-height:1.3}
 .th-head time,.th-edited{color:var(--muted);font-size:var(--t-xs)}
 .th-body{overflow-wrap:anywhere}
 .th-body.md>:first-child{margin-top:0}.th-body.md>:last-child{margin-bottom:0}
-.th-sub{font-size:var(--t-base)}
-.th-sub::before{content:"";position:absolute;top:4px;bottom:4px;left:calc(var(--d) * 28px - 8px);width:2px;border-radius:1px;background:var(--line)}
-.th-sub .th-body{color:var(--muted)}
-.th-sub .th-who{font-weight:500}
-.th-sub:hover .th-body{color:var(--ink)}
-.th-sub{cursor:pointer}
+.th-main>.run-did{margin:2px 0 4px}
 .th-deleted .th-body{font-style:italic}
-/* New since the last read: an accent edge; a bot post not addressed to you gets the lighter mark. */
-.th-new{box-shadow:inset 3px 0 0 var(--accent)}
-.th-new-quiet{box-shadow:inset 3px 0 0 var(--g4)}
-/* a sub-thread's header row: title, replies, new; quiet, one line, opens the sub-thread */
-.th-subhead{--d:1;display:flex;align-items:baseline;gap:var(--s2);min-width:0;margin:0 6px 2px calc(6px + var(--d) * 28px);padding:3px 8px;border-left:2px solid var(--line);color:var(--muted);font-size:var(--t-sm)}
-.th-subhead:hover{color:var(--ink);text-decoration:none;background:var(--surface2)}
-.th-subhead-title{min-width:0;overflow:hidden;color:var(--ink-2,var(--ink));font-weight:600;text-overflow:ellipsis;white-space:nowrap}
-.th-subhead-n{flex:none}
-.th-subhead .th-more-new{flex:none}
-.th-more-new{color:var(--accent);font-weight:600}
-.th-fold{--d:0;display:flex;align-items:center;gap:var(--s2);padding:6px 6px 6px calc(6px + var(--d) * 28px);color:var(--muted);font-size:var(--t-sm)}
+/* a quoted message, scrolled to */
+.th-flash,.th-flash:hover{background:var(--accent-quiet);transition:background .3s}
+/* .th-new / .th-new-quiet mark unread messages for read tracking; one "New" line goes above the first, never a bar per row. */
+.th-newline{display:flex;align-items:center;gap:10px;padding:10px 6px 4px;color:var(--fail);font-size:var(--t-xs);font-weight:600}
+.th-newline::before{content:"";flex:1;height:1px;background:var(--fail);opacity:.55}
+.th-fold{display:flex;align-items:center;gap:var(--s2);padding:6px;color:var(--muted);font-size:var(--t-sm)}
 .th-fold::before{content:"";width:18px;height:1px;background:var(--line)}
-.th-more{width:100%;border:0;background:none;text-align:left;cursor:pointer}
-.th-more:hover{color:var(--ink)}
+a.th-more:hover{color:var(--ink);text-decoration:none}
 
-/* the actions on a message show on hover or focus; on touch they are always there, small */
-.th-acts{position:absolute;top:2px;right:4px;display:flex;gap:2px;padding:2px;border:1px solid var(--line);border-radius:8px;background:var(--surface);opacity:0;pointer-events:none}
+/* a reply's quote: one line, who wrote what it answers and how that began */
+.th-quote{display:flex;align-items:center;gap:6px;max-width:100%;margin:2px 0 3px;padding:2px 8px 2px 6px;border:0;border-left:2px solid var(--line);border-radius:0 6px 6px 0;background:var(--surface2);color:var(--muted);font:inherit;font-size:var(--t-sm);line-height:1.4;text-align:left;cursor:pointer}
+button.th-quote:hover{color:var(--ink);border-left-color:var(--accent)}
+.th-quote svg{flex:none}
+/* a long name gives way to the words, cut short at 40% */
+.th-quote-who{flex:0 1 auto;min-width:0;max-width:40%;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:var(--ink);font-weight:600}
+.th-quote-text{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.th-quote-hidden{cursor:default;font-style:italic}
+/* under a person's message: which bots routing asked */
+.th-routed{margin-top:2px;color:var(--muted);font-size:var(--t-xs)}
+
+/* React, Reply and Copy show on hover or focus; touch has the long press instead */
+.th-acts{position:absolute;top:-10px;right:8px;z-index:1;display:flex;gap:2px;padding:2px;border:1px solid var(--line);border-radius:8px;background:var(--raised,var(--surface));box-shadow:0 2px 6px rgba(0,0,0,.08);opacity:0;pointer-events:none}
 .th-msg:hover .th-acts,.th-msg:focus-within .th-acts{opacity:1;pointer-events:auto}
-/* on touch only ⋯ shows, quiet; Acknowledge and the rest are in its menu */
-@media (hover:none){.th-acts{position:static;align-self:flex-start;opacity:.55;pointer-events:auto;border:0;background:none}.th-acts [data-th-ack]{display:none}}
-.th-act{display:inline-grid;place-items:center;width:28px;height:28px;padding:0;border:0;border-radius:6px;background:none;color:var(--muted);cursor:pointer;font-size:14px}
+@media (hover:none){.th-acts{display:none}.th-msg{-webkit-touch-callout:none}}
+.th-act{display:inline-grid;place-items:center;width:30px;height:30px;padding:0;border:0;border-radius:6px;background:none;color:var(--muted);cursor:pointer}
 .th-act:hover{background:var(--surface2);color:var(--ink)}
-.th-act .nav-icon{font-size:18px;width:18px;height:18px;color:inherit}
+/* the reaction picker: one row of emoji */
+.thv-pop.thv-emoji{display:flex;flex-wrap:wrap;gap:2px;min-width:0;max-width:260px}
+.thv-pop.thv-emoji button{width:36px;height:36px;padding:0;text-align:center;font-size:20px;line-height:1}
+/* the long press's sheet: the emoji, then Reply, Copy and (a bot's words) 👍 and 👎 */
+.thv-sheet-emoji{display:flex;justify-content:space-between;gap:4px;margin-bottom:8px}
+.thv-sheet-emoji button{flex:1;min-width:44px;height:48px;border:0;border-radius:10px;background:var(--surface2);font-size:22px;cursor:pointer}
+
+/* the bots' status, at the end: working on what, up next, or can't reply and where that is fixed */
+.th-status{display:flex;align-items:center;gap:10px;padding:6px;border-radius:8px;font-size:var(--t-sm)}
+.th-status .th-main{min-width:0}
+.th-status-word{color:var(--muted);font-size:var(--t-xs)}
+.th-status-detail{display:flex;align-items:center;gap:6px;min-width:0;overflow:hidden;color:var(--muted);text-overflow:ellipsis;white-space:nowrap}
+.th-status-dot{flex:none;width:6px;height:6px;border-radius:50%;background:var(--accent);animation:th-pulse 1.4s ease-in-out infinite}
+@keyframes th-pulse{50%{opacity:.3}}
+@media (prefers-reduced-motion:reduce){.th-status-dot{animation:none}}
+.th-status-act{flex:none;margin-left:auto}
+a.th-status-act:hover{text-decoration:none}
+.th-status-cant_reply{background:var(--wait-bg)}
+.th-status-cant_reply .th-status-word{color:var(--wait-ink);font-weight:600}
 
 .th-reacts{display:flex;flex-wrap:wrap;gap:4px;margin-top:4px}
 .th-react{display:inline-flex;align-items:center;gap:4px;height:24px;padding:0 8px;border:1px solid var(--line);border-radius:999px;background:var(--surface);color:var(--ink);font-size:var(--t-xs);cursor:pointer}
@@ -122,15 +114,40 @@ a.th-who:hover{text-decoration:underline}
 .th-held{background:var(--wait-bg)}
 .th-held:hover{background:var(--wait-bg)}
 .th-held-rule{margin-top:4px;padding-left:8px;border-left:2px solid var(--wait);color:var(--muted);font-size:var(--t-sm)}
-.th-held-acts,.th-edit-acts{display:flex;flex-wrap:wrap;gap:var(--s1);margin-top:6px}
-.th-edit-text,.th-reply-text{width:100%;min-height:36px;padding:6px 8px;border:1px solid var(--line);border-radius:8px;background:var(--surface);color:var(--ink);font:inherit;resize:vertical}
-.th-reply{--d:1;display:flex;align-items:flex-start;gap:var(--s1);padding:4px 6px 8px calc(6px + var(--d) * 28px)}
-.th-reply .th-reply-text{flex:1}
+.th-held-acts{display:flex;flex-wrap:wrap;gap:var(--s1);margin-top:6px}
+
+/* above the composer, each its own row: the Ask's question, then the message being answered */
+.thv-peek-slot{margin-bottom:6px}
+.thv-peek-slot:not(:has(.ask-on)){display:none}
+.thv-replying{display:flex;align-items:center;gap:6px;margin-bottom:6px;padding:4px 4px 4px 10px;border-left:2px solid var(--accent);border-radius:0 8px 8px 0;background:var(--surface2);color:var(--muted);font-size:var(--t-sm)}
+.thv-replying[hidden]{display:none}
+.thv-replying-q{display:flex;flex:1;align-items:center;gap:6px;min-width:0}
+.thv-replying-q svg{flex:none}
+.thv-replying-q b{flex:0 1 auto;min-width:0;max-width:40%;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:var(--ink)}
+.thv-replying-x{flex:none;width:28px;height:28px;padding:0;font-size:16px;line-height:1}
 
 /* the composer: the shared pill, with an attach menu and the mention list above it */
 .thv-ask{position:relative}
 .thv-attach-wrap{position:relative;display:inline-flex}
 .thv-attach-menu{position:absolute;top:auto;bottom:calc(100% + 6px);right:0;z-index:5;min-width:140px}
+/* the bot chat's pill (meetings.css .p-pill): one frame, no margin under it; the goal's bar sits above the thread */
+.thv-composer .ask{margin:0}
+.thv-composer .p-chips:empty{display:none}
+.thv-goal{flex:none}
+/* "Message <bot>" stays on its one line, cut short */
+.thv-ask .p-text::placeholder{white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+/* a bot's Home or DM: the ways menu opens upward from Send's caret; goal mode shows a Goal chip before the words */
+.thv-ask .p-menu.p-ways{top:auto;bottom:calc(100% + 6px);right:0;left:auto}
+.thv-goal-chip{display:inline-flex;flex:none;align-items:center;gap:4px;align-self:center;padding:2px 4px 2px 10px;border:1px solid var(--line);border-radius:999px;color:var(--ink);font-size:var(--t-sm);white-space:nowrap}
+.thv-goal-chip[hidden]{display:none}
+.thv-goal-chip button{display:inline-flex;align-items:center;justify-content:center;width:22px;height:22px;padding:0;border:0;border-radius:50%;background:none;color:var(--muted);font-size:15px;line-height:1;cursor:pointer}
+.thv-goal-chip button:hover{background:var(--surface2);color:var(--ink)}
+.th-main .chat-goal-line{margin:2px 0}
+/* a phone's bot page has the composer on the bottom edge (ui/styles/chat.css): a little room under it. The bot being
+   talked to sits at the bar's left edge, before Attach; a tap opens the switcher (org-fan.js). A computer has none. */
+@media (max-width:760px){.thv-attach-menu{right:auto;left:0}#bot-thread .thv-composer{padding-bottom:max(6px,env(safe-area-inset-bottom))}
+  .pill-thread .p-pill>.p-bot{display:inline-flex;order:-2;flex:none;width:36px;height:36px;padding:0;border:0;background:none;border-radius:50%;align-items:center;justify-content:center;cursor:pointer;-webkit-tap-highlight-color:transparent}}
+.thv-composer .p-cmd[hidden]{display:none}
 .thv-mentions{position:absolute;top:auto;left:0;bottom:calc(100% + 6px);z-index:5;min-width:220px;max-height:240px;overflow-y:auto}
 .thv-mentions [aria-selected="true"]{background:var(--surface2)}
 .thv-lib{position:absolute;top:auto;left:0;right:0;bottom:calc(100% + 6px);z-index:5;max-height:300px;display:flex;flex-direction:column;padding:8px;border:1px solid var(--line);border-radius:var(--radius);background:var(--raised,var(--surface));box-shadow:0 8px 24px rgba(0,0,0,.12)}
@@ -140,26 +157,25 @@ a.th-who:hover{text-decoration:underline}
 .thv-lib-row{display:block;width:100%;padding:6px 8px;border:0;border-radius:6px;background:none;color:var(--ink);text-align:left;cursor:pointer}
 .thv-lib-row:hover{background:var(--surface2)}
 
-/* the menu on a message or a thread */
+/* the menu on a message, and a call's Add a bot */
 .thv-pop{position:fixed;z-index:60;min-width:160px;padding:4px;border:1px solid var(--line);border-radius:var(--radius);background:var(--raised,var(--surface));box-shadow:0 8px 24px rgba(0,0,0,.14)}
 .thv-pop button{display:block;width:100%;padding:7px 10px;border:0;border-radius:6px;background:none;color:var(--ink);text-align:left;font-size:var(--t-base);cursor:pointer}
 .thv-pop button:hover{background:var(--surface2)}
-.thv-pop button.danger{color:var(--fail)}
 
 /* the bot page: Home and DM fill the pane; the link to every thread with the bot sits quietly above */
 #main.bot-chat-layout #pane-chat>.bot-thread{display:flex;flex:1;flex-direction:column;min-height:0;width:100%;max-width:var(--read-width);margin:0 auto}
-.bot-talk-bar{display:flex;align-items:center;gap:8px;margin:0 0 4px}
-.bot-talk-bar .spacer{flex:1}
-.bot-talk-acts{display:inline-flex}
-.bot-talk-acts[hidden]{display:none}
-.bot-talk-acts .thv-titleline{gap:4px;padding:0}
+/* Home | DM above the thread on a desktop; narrower, the top line's tabs do it */
+.bot-talk-bar{display:none;align-items:center;gap:8px;margin:0 0 4px}
+/* the thread's call, Members and menu, in the page's top line */
+.bot-top-acts{order:3;flex:none;align-self:center;display:inline-flex}
+.bot-top-acts[hidden]{display:none}
+.bot-top-acts .thv-titleline{gap:4px;padding:0}
+@media (max-width:1099px){.bot-top-acts{order:2}}
 #main.bot-chat-layout #pane-chat>.bot-talk-bar{width:100%;max-width:var(--read-width);margin-left:auto;margin-right:auto}
 .bot-talk-switch{display:none;gap:2px;padding:2px;border:1px solid var(--line);border-radius:9px;background:var(--surface2)}
 .bot-talk-switch button{border:0;border-radius:7px;background:none;padding:3px 10px;color:var(--muted);font-weight:600;font-size:var(--t-sm);cursor:pointer}
 .bot-talk-switch button.cur{background:var(--raised);color:var(--ink);box-shadow:0 1px 3px rgba(0,0,0,.12)}
-@media (min-width:1100px){.bot-talk-switch{display:flex}}
-.bot-threads-link{color:var(--muted);font-size:var(--t-sm)}
-.bot-threads-link:hover{color:var(--ink)}
+@media (min-width:1100px){.bot-talk-bar,.bot-talk-switch{display:flex}}
 
 /* a person's or a team's Home */
 .home-card .thv-head{display:none}
@@ -168,8 +184,6 @@ a.th-who:hover{text-decoration:underline}
 .home-card-acts:empty{display:none}
 .thv-blank .thv-scroll{display:none}
 .th-earlier-open{margin-top:6px}
-.thv-pop [role="menuitemradio"][aria-checked="true"]{font-weight:600}
-.thv-pop [role="menuitemradio"][aria-checked="true"]::after{content:" ✓"}
 
 /* New thread and Members */
 .thd-members{display:flex;flex-direction:column;gap:6px}
@@ -190,9 +204,42 @@ a.th-who:hover{text-decoration:underline}
 .thd-dialog .dash-form-foot .err a{color:inherit;text-decoration:underline}
 .thd-list{list-style:none;margin:0;padding:0;display:flex;flex-direction:column;gap:2px}
 .thd-list li{display:flex;align-items:center;gap:var(--s2);padding:5px 4px}
-.thd-list li>span{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
-.thd-add summary{cursor:pointer;color:var(--link);margin-top:var(--s2)}
+/* avatar at its own size, the name takes the rest, then Owner or Remove at the end */
+.thd-list .thd-name{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.thd-list .thd-tag{flex:none;color:var(--muted);font-size:var(--t-sm)}
+.thd-list li>button{flex:none}
+.thd-add>summary{display:inline-flex;align-items:center;gap:4px;list-style:none;cursor:pointer;color:var(--link);margin-top:var(--s2)}
+.thd-add>summary::-webkit-details-marker{display:none}
 .thd-add-body{margin-top:var(--s2)}
+
+/* Thread settings: one flat list, a label on the left and its control on the right, thin lines between */
+.ths-dialog.dash-dialog{width:min(520px,calc(100vw - 32px))}
+/* Auto bases, as settings.css's model-login: in WebKit 26 (the macOS app, Safari 26) a 0 basis on the dialog's form left the
+   content-sized dialog 0px tall, so only the dimmed screen showed. The body grows the same way. */
+.ths-dialog>form{flex:1 1 auto;min-height:0}
+.ths.dash-form{flex:1 1 auto;min-height:0;gap:0;padding:4px 16px}
+.ths .ths-row{display:flex;flex-direction:row;align-items:center;gap:16px;min-height:52px;padding:10px 0;border:0;border-top:1px solid var(--line);color:var(--ink);font-size:var(--t-base)}
+.ths .ths-row:first-child{border-top:0}
+.ths .ths-row[hidden],.ths .tcn-host:not(:has(.tcn-sec:not([hidden]))){display:none}
+.ths .ths-lbl{flex:none;width:132px;color:var(--ink);font-size:var(--t-base);font-weight:500}
+.ths .ths-row>:not(.ths-lbl,.people-switch,.ths-val,button){flex:1;min-width:0}
+.ths .ths-wide{align-items:flex-start}
+.ths .ths-wide>.ths-lbl{padding-top:6px}
+.ths .thd-aud{gap:2px}
+.ths .thd-aud select{flex:1 1 0;min-width:0;width:auto}
+.ths .people-switch{margin-left:auto}
+label.ths-row{cursor:pointer}
+/* Slack's own section reads as a row: its name where the label goes */
+.ths .tcn-sec{display:flex;align-items:flex-start;gap:16px}
+.ths .tcn-sec>h3{flex:none;width:132px;margin:0;padding-top:6px;color:var(--ink);font-size:var(--t-base);font-weight:500}
+.ths .tcn-sec>.tcn-body{flex:1;min-width:0}
+button.ths-link{width:100%;background:none;text-align:left;cursor:pointer;font:inherit}
+button.ths-link:hover .ths-val{color:var(--ink)}
+.ths-val{display:inline-flex;align-items:center;gap:6px;margin-left:auto;color:var(--muted);font-variant-numeric:tabular-nums}
+.ths-val>span{font-size:18px;line-height:1}
+.ths-seg button{white-space:nowrap}
+.ths .ths-acts{flex-wrap:wrap;gap:8px}
+.ths-acts .spacer{flex:1}
 
 @media (max-width:760px){
   .thread-page{max-width:none}
@@ -201,16 +248,25 @@ a.th-who:hover{text-decoration:underline}
   /* no room beside the title and actions, so the audience takes a line of its own under them */
   .thv-titleline{flex-wrap:wrap}
   .thv-aud{order:1;flex:0 0 100%;font-size:var(--t-xs)}
-  .th-msg{padding-left:calc(4px + var(--d) * 16px)}
-  .th-sub::before{left:calc(var(--d) * 16px - 6px)}
-  .th-subhead{margin-left:calc(4px + var(--d) * 16px)}
-  .th-fold{padding-left:calc(4px + var(--d) * 16px)}
-  .th-reply{padding-left:calc(4px + var(--d) * 16px)}
-  .threads-head h1{font-size:var(--t-lg)}
-  /* Important / Recent on a row of its own under the title and actions */
-  .threads-head{flex-wrap:wrap}
-  .threads-head .tabs.thp-sort{order:1;flex:0 0 100%;margin:0}
-  .thp-list .th-row{padding:11px 10px}
+  .th-msg,.th-status,.th-fold{padding-left:4px;padding-right:4px}
+  /* a finger's room: the quote, the reactions, Stop and Fix, the × on a reply */
+  .th-quote{min-height:44px}
+  .th-react{height:36px;padding:0 10px}
+  .th-status-act{min-height:44px;display:inline-flex;align-items:center}
+  .thv-replying-x{width:44px;height:44px}
+  /* Thread settings takes the screen; each control its own line under its label, a finger's height */
+  .ths-dialog.dash-dialog[open]{width:100%;max-width:none;height:100%;max-height:none;margin:0;border-radius:0}
+  .ths-dialog .tmodal-head{padding-top:max(14px,env(safe-area-inset-top))}
+  .ths-dialog .tmodal-x{min-width:44px;height:44px}
+  .ths-dialog .dash-form-foot{padding-bottom:max(12px,env(safe-area-inset-bottom))}
+  .ths-dialog .dash-form-foot button{min-height:44px;min-width:88px}
+  .ths .ths-wide,.ths .tcn-sec{flex-direction:column;align-items:stretch;gap:8px}
+  .ths .ths-wide>.ths-lbl,.ths .tcn-sec>h3{width:auto;padding-top:0}
+  .ths .ths-row{min-height:56px}
+  .ths :is(input:not([type=checkbox],[type=radio]),select){min-height:44px}
+  .ths .thd-aud label.dash-pick-row{min-height:44px}
+  .ths .ths-seg button{height:44px}
+  .ths-acts button{min-height:44px}
 }
 
 /* calls: Start call / Join in the header, and the bar while in a call */
@@ -245,15 +301,3 @@ body.in-call #main.chat-layout{padding-bottom:72px}
 .thv-compact .thv-call-note{font-size:var(--t-sm)}
 /* a message opened from search */
 .th-msg.th-focus{background:var(--surface2);box-shadow:inset 2px 0 0 var(--accent,var(--ink))}
-
-/* search on the Threads page */
-.thp-searchbar{margin:0 0 var(--s2)}
-.thp-searchbar[hidden]{display:none}
-.threads-page.searching #threads-all,.threads-page.searching #threads-more{display:none}
-.thp-searchbar input{width:100%}
-.thp-hits{list-style:none;margin:0;padding:0}
-.thp-hit{display:block;padding:8px 10px;border-radius:8px;color:var(--ink);text-decoration:none}
-.thp-hit:hover{background:var(--surface2)}
-.thp-hit-head{display:flex;gap:var(--s1);align-items:baseline;font-size:var(--t-sm)}
-.thp-hit-head strong{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
-.thp-hit-x{color:var(--muted);font-size:var(--t-sm);overflow:hidden;text-overflow:ellipsis;display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical}

@@ -11,6 +11,7 @@ from backend.tests.test_api import api, claim, get, headers, post, ready, setup_
 from backend.tests.test_botops_parity import act
 from backend.tests.test_member_bots import botops, turn  # noqa: F401  (botops is a fixture)
 from backend.tests.test_task_lanes import new_task, task_bot
+from backend import bot_settings as BS
 
 PR = "https://github.com/ticoteam/tico/pull/412"
 
@@ -85,10 +86,10 @@ def test_existing_bots_use_performance_and_new_bots_start_as_doers(api):
 
 def test_legacy_wake_migration_is_idempotent_and_preserves_other_settings(api):
     with api.app.state.store.transaction() as c:
-        c.execute("UPDATE bot_config SET config=json_set(config,'$.wake_preset','current','$.compact_at',400000) WHERE bot='ops'")
+        BS.update(c, 'ops', {'wake_preset': 'current', 'compact_at': 400000})
         before = c.execute("SELECT revision FROM bot_config WHERE bot='ops'").fetchone()[0]
         W.ensure(c)
-        row = c.execute("SELECT config,revision FROM bot_config WHERE bot='ops'").fetchone()
+        row = c.execute(f"SELECT {BS.CONFIG} AS config,revision FROM bot_config bc {BS.JOIN} WHERE bot='ops'").fetchone()
         assert json.loads(row[0])["wake_preset"] == "performance"
         assert json.loads(row[0])["compact_at"] == 400000 and row[1] == before + 1
         W.ensure(c)
@@ -111,6 +112,27 @@ def test_immediate_wakes_are_never_held_and_a_duplicate_wakes_once(api, name):
     live = [j["body"] for j in rows if j["state"] == "queued"]
     assert len(live) == len(set(live)) == 5
     assert sum(j["wake_class"] == "duplicate" for j in rows) == 4
+
+
+def test_a_repeated_send_while_its_turn_runs_shows_that_turn_not_a_dismissal(api):
+    # The duplicate trigger dismisses a send repeated while its turn runs; the chat keeps showing the turn still going.
+    # A send dismissed for any other reason still reads "Delivery dismissed".
+    machine, first, attempt = setup_attempt(api, "ops")
+    start(api, machine, attempt)
+    text = "Please summarize the current work."
+    again = post(api, "chat/ops", {"text": text})                        # the same words, sent again while it runs
+    assert again["conversation_id"] == first["conversation_id"]
+    [run, duplicate] = [j for j in jobs(api) if j["body"] == text]
+    assert (run["state"], run["wake_class"]) == ("running", None)
+    assert (duplicate["state"], duplicate["wake_class"]) == ("canceled", "duplicate")
+    snapshot = f"conversations/{first['conversation_id']}/snapshot?limit=1"
+    execution = get(api, snapshot)["execution"]
+    assert (execution["state"], execution["label"]) == ("running", "Working")
+    assert execution["message_id"] == first["id"]
+    other = post(api, "chat/ops", {"text": "And one more thing."})
+    with api.app.state.store.transaction() as c:                         # dismissed for another reason
+        c.execute("UPDATE jobs SET state='canceled' WHERE message_id=?", (other["id"],))
+    assert get(api, snapshot)["execution"]["label"] == "Delivery dismissed"
 
 
 @pytest.mark.parametrize("name,window", [("token_saver", 1800), ("performance", 60)])
@@ -215,11 +237,11 @@ def test_an_enabled_sweep_runs_at_most_once_per_cap_from_its_actual_start(api, n
 
 def test_switching_presets_changes_only_the_preset(api):
     with api.app.state.store.transaction() as c:
-        c.execute("UPDATE bot_config SET config=json_set(config,'$.compact_at',400000) WHERE bot='ops'")
+        BS.update(c, 'ops', {'compact_at': 400000})
         tables = [t for t in ("schedules", "triggers", "credential_grants", "subscriptions")
                   if c.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name=?", (t,)).fetchone()]
         def state():
-            row = c.execute("SELECT config,access FROM bot_config WHERE bot='ops'").fetchone()
+            row = c.execute(f"SELECT {BS.CONFIG} AS config,access FROM bot_config bc {BS.JOIN} WHERE bot='ops'").fetchone()
             config = json.loads(row[0])
             config.pop("wake_preset", None)
             return config, row[1], [c.execute(f"SELECT count(*) FROM {t}").fetchone()[0] for t in tables]

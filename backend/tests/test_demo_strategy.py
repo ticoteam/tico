@@ -103,12 +103,15 @@ def test_this_weeks_briefing_is_posted_by_the_librarian(built):
 
 
 def test_the_same_now_builds_the_same_strategy_rows(built, tmp_path):
-    tables = ("strategy_versions", "strategy_bets", "strategy_events", "market_briefings", "goal_proposals",
+    tables = ("strategy_versions", "strategy_bets", "market_briefings", "goal_proposals",
               "market_sizes", "market_insights", "brand_versions")
 
     def rows(path):
         with sqlite3.connect(path) as db:
-            return {table: db.execute(f"SELECT * FROM {table} ORDER BY 1").fetchall() for table in tables}
+            out = {table: db.execute(f"SELECT * FROM {table} ORDER BY 1").fetchall() for table in tables}
+            out["strategy_events"] = db.execute("SELECT * FROM history_events WHERE subject_type='strategy' "
+                                                "ORDER BY 1").fetchall()
+            return out
 
     again = demo.build(tmp_path, now=NOW)
     assert rows(again.db_path) == rows(built.db_path)
