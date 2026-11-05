@@ -921,8 +921,8 @@ impl Tico {
                             ) {
                                 Ok(reply) => Some(reply["item"].clone()),
                                 Err(error)
-                                    if error.to_string().contains("(version_conflict)")
-                                        || error.to_string().contains("(status)") =>
+                                    if format!("{error:#}").contains("(version_conflict)")
+                                        || format!("{error:#}").contains("(status)") =>
                                 {
                                     None
                                 }

@@ -3629,7 +3629,7 @@ fn recorder_link_drainers_serialize_and_reread_the_outbox() {
 
 #[test]
 fn recorder_save_retry_reconciles_current_fields_or_keeps_a_closed_draft() {
-    for moved in ["", "pushed", "edited"] {
+    for moved in ["", "pushed", "edited", "dismissed", "raced"] {
         let dir = tempfile::tempdir().unwrap();
         let store = Store::open(dir.path()).unwrap();
         let record = transcript(&store, "Lost item upload");
@@ -3651,28 +3651,38 @@ fn recorder_save_retry_reconciles_current_fields_or_keeps_a_closed_draft() {
         if !moved.is_empty() {
             current["version"] = json!(2);
             current["updated_by"] = json!("human:other");
-            current["status"] = json!(if moved == "pushed" {
-                "pushed"
-            } else {
-                "proposed"
+            current["status"] = json!(match moved {
+                "pushed" => "pushed",
+                "dismissed" => "dismissed",
+                _ => "proposed",
             });
             current["text"] = json!("Someone else's title");
         }
         let edited = json!({"id":"server-a","version":2,"section":"task","status":"proposed","text":"Current title","detail":{"owner":"human:other","body":"Current details","due":"2026-12-01T12:00:00Z"}});
+        let replayed = if moved == "raced" {
+            original.clone()
+        } else {
+            current.clone()
+        };
         let mut steps = vec![
             Some(who.clone()),
             Some(json!({"id":"filed"})),
             Some(json!({"sections":{"task":[]}})),
             None,
             Some(who),
-            Some(json!({"sections":{"task":[current.clone()]}})),
-            Some(json!({"item":current.clone()})),
+            Some(json!({"sections":{"task":[replayed.clone()]}})),
+            Some(json!({"item":replayed})),
         ];
         steps.push(Some(if moved.is_empty() {
             json!({"item":edited})
+        } else if moved == "raced" {
+            json!({"status":409,"error":{"code":"version_conflict"}})
         } else {
-            json!({"sections":{"task":[current]}})
+            json!({"sections":{"task":[current.clone()]}})
         }));
+        if moved == "raced" {
+            steps.push(Some(json!({"sections":{"task":[current]}})));
+        }
         let (tico, seen, worker) = server(steps);
         assert!(tico.send(&store, &record.id, false).is_err());
         store
