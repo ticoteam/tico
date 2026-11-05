@@ -3,6 +3,7 @@
 const {chromium} = require('playwright');
 const assert = require('node:assert/strict');
 const {open} = require('./tasks-page.cjs');
+const {t} = require('./support/load.cjs');
 const now = new Date().toISOString();
 const task = (id, over = {}) => ({id, kind: 'task', title: 'Review the launch plan ' + id, body: 'Please review.',
   person_ask: 'Can you approve the launch plan?', owner_id: 'human:ana', requester_id: 'bot:writer', status: 'open',
@@ -36,7 +37,8 @@ const kinds = rows => rows.reduce((out, it) => { out[it.kind] = (out[it.kind] ||
 const foldedIds = rows => [...new Set(rows.flatMap(it => [...(it.folded || []).map(f => f.id), ...(it.merged || [])]))].sort();
 const types = ['general', 'dev', 'roadmap'].map(id => ({id, name: id, steps: []}));
 const count = page => page.locator('#task-tab-foryou .cnt').innerText();
-const badges = page => page.locator('[data-nav="tasks"] [data-needs-badge]').evaluateAll(bs => bs.map(b => ({text: b.textContent, hidden: b.hidden})));
+const badges = page => within(page.locator('[data-nav="tasks"] [data-needs-badge]')
+  .evaluateAll(bs => bs.map(b => ({text: b.textContent, hidden: b.hidden}))), 'Tasks navigation badges to be read');
 
 const plateCount = rows => {
   const folded = new Set(foldedIds(rows));
@@ -49,20 +51,67 @@ const snapshot = (rows, version, limit = 50) => ({items: rows.slice(0, limit), v
   plate_count: plateCount(rows), by_kind: kinds(rows), folded_task_ids: foldedIds(rows),
   next: rows.length > limit ? version + '.' + limit : null});
 
-// Hold one response after its request arrives, so each race has an explicit completion order.
-async function holdNeedsRead(page, snapshot, more = false) {
-  let arrived, release;
-  const started = new Promise(done => { arrived = done; });
-  const gate = new Promise(done => { release = done; });
-  const body = JSON.stringify(snapshot);
-  await page.route('**/api/v2/needs-you?*', async route => {
-    arrived();
-    await gate;
-    await route.fulfill({contentType: 'application/json', body});
-  }, {times: 1});
-  const read = page.evaluate(more => more ? v2NeedsMore() : v2NeedsRead(), more);
-  await started;
-  return async () => { release(); return read; };
+// page.evaluate and a manual gate have no Playwright timeout. Name what stalled before the CI script watchdog fires.
+async function within(promise, waitingFor) {
+  let timer;
+  try {
+    return await Promise.race([promise, new Promise((_, reject) => {
+      timer = setTimeout(() => {
+        const error = new Error(`Timed out waiting for ${waitingFor} (${t(10000)} ms)`);
+        console.error(error.message);   // report the first stall even if releasing a held browser read also stalls
+        reject(error);
+      }, t(10000));
+    })]);
+  } finally { clearTimeout(timer); }
+}
+const evaluate = (page, fn, arg) => within(page.evaluate(fn, arg), `page.evaluate: ${fn.toString()}`);
+const waitFor = (page, fn) => within(page.waitForFunction(fn, null, {timeout: t(10000)}), `page.waitForFunction: ${fn.toString()}`);
+
+// Each hold belongs to the fetch made synchronously by this invocation, with its real URL and GET dedupe intact.
+// Other requests fall through; even a background reader of the same URL cannot steal a hold.
+let readSequence = 0;
+async function withNeedsReads(page, run) {
+  const held = new Map(), pattern = '**/api/v2/needs-you?*';
+  const handler = route => {
+    const entry = held.get(route.request().headers()['x-tico-test-needs-read']);
+    if (!entry) return route.fallback();
+    assert.equal(entry.response, undefined, `${entry.label}: only one tagged request`);
+    entry.arrived();
+    return entry.response = (async () => {
+      await within(entry.gate, `${entry.label}: response gate to be released`);
+      await within(route.fulfill({contentType: 'application/json', body: entry.body}), `${entry.label}: route.fulfill`);
+    })();
+  };
+  await within(page.route(pattern, handler), 'installing held Needs you route');
+  try {
+    await run(async (label, snapshot, more = false) => {
+      let arrived, release;
+      const started = new Promise(done => { arrived = done; });
+      const gate = new Promise(done => { release = done; });
+      const token = String(++readSequence), entry = {label, body: JSON.stringify(snapshot), arrived, gate, release};
+      held.set(token, entry);
+      const read = entry.read = page.evaluate(({token, more, label}) => {
+        if (more && (NEEDS_MORE || needsAll())) throw new Error(`${label}: paging already in flight or no next cursor`);
+        const fetch = window.fetch;
+        window.fetch = (input, init = {}) => {
+          const headers = new Headers(init.headers);
+          headers.set('X-Tico-Test-Needs-Read', token);
+          return fetch(input, {...init, headers});
+        };
+        try { return more ? v2NeedsMore() : v2NeedsRead(); }
+        finally { window.fetch = fetch; }
+      }, {token, more, label});
+      await within(Promise.race([started, read.then(() => {
+        throw new Error(`${label}: read settled without sending its tagged Needs you request`);
+      })]), `${label}: tagged Needs you request to arrive`);
+      return () => { release(); return within(read, `${label}: read to settle after release`); };
+    });
+  } finally {
+    for (const entry of held.values()) entry.release();
+    try {
+      await within(Promise.allSettled([...held.values()].flatMap(entry => [entry.read, entry.response])), 'held Needs you reads to settle during cleanup');
+    } finally { await within(page.unroute(pattern, handler), 'removing held Needs you route'); }
+  }
 }
 
 (async () => {
@@ -73,6 +122,13 @@ async function holdNeedsRead(page, snapshot, more = false) {
       const {page, errors} = await open(browser, {viewport: {width, height: 844}, types,
         hash: '#/tasks?view=list&type=roadmap&tag=absent', baseTasks: [...tasks, foldedWait, mergedWait, unreadCard, wholeTask],
         beforeGoto: async page => {
+          page.setDefaultTimeout(t(10000));
+          page.setDefaultNavigationTimeout(t(10000));
+          await page.addInitScript(() => {
+            // This test drives reads and live mends itself; wall-clock polls and SSE reconnects cannot race them.
+            window.EventSource = undefined;
+            window.setInterval = () => 0;
+          });
           await page.route('**/api/v2/needs-you?*', route => {
             const q = new URL(route.request().url()).searchParams;
             const facts = {version, count: rows.length, plate_count: plateCount(rows)};
@@ -96,69 +152,78 @@ async function holdNeedsRead(page, snapshot, more = false) {
               next: end < rows.length ? version + '.' + end : null});
           });
         }});
-      await page.waitForFunction(() => S.v2.needsVersion === 'count-v1' && TASKS_ST.activeComplete);
-      await page.evaluate(() => tasksRender(TASKS_ST));
+      await evaluate(page, () => {
+        // A one-row fixture puts Show more in view. Redraws must not start an unasked-for page read.
+        NEEDS_IO?.disconnect();
+        needsMoreWatch = () => {};
+      });
+      await waitFor(page, () => S.v2.needsVersion === 'count-v1' && TASKS_ST.activeComplete);
+      await evaluate(page, () => tasksRender(TASKS_ST));
       assert.equal(cursorReads, 0, 'a refresh reads one bounded page, without walking the list');
-      assert.equal(await page.evaluate(() => S.v2.needs.length), 50);
-      assert.equal(await page.evaluate(() => needsAll()), false);
+      assert.equal(await evaluate(page, () => S.v2.needs.length), 50);
+      assert.equal(await evaluate(page, () => needsAll()), false);
       assert.equal(await count(page), '15', 'eleven tasks and four other plate items across all boards, before later pages load');
       assert.deepEqual(await badges(page), [{text: '15', hidden: false}, {text: '15', hidden: false}]);
-      assert.equal(await page.evaluate(() => needsQueueItems().some(it => it.id === 't-folded' || it.id === 't-merged')), false,
+      assert.equal(await evaluate(page, () => needsQueueItems().some(it => it.id === 't-folded' || it.id === 't-merged')), false,
         'folded tasks stay out even while their parent card is unread');
       assert.equal(await page.locator('#tasks-pane [data-go-through]:visible').count(), 0, 'Catch up is on Needs you');
       const beforeRefresh = wholeReads;
-      await page.evaluate(() => v2NeedsRead());
+      await evaluate(page, () => v2NeedsRead());
       assert.equal(wholeReads, beforeRefresh + 1);
       assert.equal(cursorReads, 0, 'an unchanged refresh never reads later pages');
       assert.equal(await count(page), '15');
 
       // A failed explicit page leaves the held rows and whole-list count intact.
       failCursor = true;
-      assert.equal(await page.evaluate(() => v2NeedsMore()), false);
-      assert.equal(await page.evaluate(() => S.v2.needs.length), 50);
+      assert.equal(await evaluate(page, () => v2NeedsMore()), false);
+      assert.equal(await evaluate(page, () => S.v2.needs.length), 50);
       assert.equal(await count(page), '15');
       failCursor = false;
 
       // A pending answer on a held plate item leaves every number immediately; Undo restores it.
-      await page.evaluate(() => { DEC_HANDLED.add('task:t-0'); needsListsRedraw(); });
+      await evaluate(page, () => { DEC_HANDLED.add('task:t-0'); needsListsRedraw(); });
       assert.equal(await count(page), '14');
       assert.deepEqual(await badges(page), [{text: '14', hidden: false}, {text: '14', hidden: false}]);
-      await page.evaluate(() => { DEC_HANDLED.delete('task:t-0'); needsListsRedraw(); });
+      await evaluate(page, () => { DEC_HANDLED.delete('task:t-0'); needsListsRedraw(); });
       assert.equal(await count(page), '15');
 
       // A decision on an unread page updates the number without rereading that page or the whole list.
       const base = version, before = wholeReads, beforeCursors = cursorReads;
       rows = rows.filter(it => it.id !== 'a-send'); version = 'count-v2';
-      await page.evaluate(d => v2NeedsChanged(d),
+      await evaluate(page, d => v2NeedsChanged(d),
         {base, version, count: rows.length, plate_count: 14, by_kind: kinds(rows), changed: [], removed: ['a-send']});
       assert.equal(wholeReads, before);
       assert.equal(cursorReads, beforeCursors);
       assert.equal(await count(page), '14');
-      assert.equal(await page.evaluate(() => S.v2.needs.length), 50);
+      assert.equal(await evaluate(page, () => S.v2.needs.length), 50);
 
       // A changed row is mended by id. The ids response carries the whole-list plate count too.
       const changedBase = version;
-      const beforeMend = await holdNeedsRead(page, snapshot(rows, version));
-      rows = rows.map(it => it.id === 't-1' ? {...it, title: 'Latest launch plan'} : it); version = 'count-v3';
-      await page.evaluate(d => v2NeedsChanged(d),
-        {base: changedBase, version, count: rows.length, plate_count: 14, by_kind: kinds(rows), changed: ['t-1'], removed: []});
-      assert.equal(await beforeMend(), null, 'a read started before a live mend cannot replace it');
+      await withNeedsReads(page, async hold => {
+        const beforeMend = await hold('read before live mend', snapshot(rows, version));
+        rows = rows.map(it => it.id === 't-1' ? {...it, title: 'Latest launch plan'} : it); version = 'count-v3';
+        await evaluate(page, d => v2NeedsChanged(d),
+          {base: changedBase, version, count: rows.length, plate_count: 14, by_kind: kinds(rows), changed: ['t-1'], removed: []});
+        assert.equal(await beforeMend(), null, 'a read started before a live mend cannot replace it');
+      });
       assert.equal(idsReads, 1);
       assert.equal(wholeReads, before);
-      assert.equal(await page.evaluate(() => needsItem('t-1').title), 'Latest launch plan');
+      assert.equal(await evaluate(page, () => needsItem('t-1').title), 'Latest launch plan');
       assert.equal(await count(page), '14');
 
       // Load later pages explicitly, keeping the same number throughout.
-      for (let n = 0; n < 10 && !await page.evaluate(() => needsAll()); n++) {
-        const beforePage = n === 0 ? await holdNeedsRead(page, snapshot(rows, version)) : null;
-        assert.equal(await page.evaluate(() => v2NeedsMore()), true);
-        if (beforePage) {
-          assert.equal(await beforePage(), null, 'a read started before paging cannot discard the added page');
-          assert.equal(await page.evaluate(() => S.v2.needs.length), 100);
+      await withNeedsReads(page, async hold => {
+        for (let n = 0; n < 10 && !await evaluate(page, () => needsAll()); n++) {
+          const beforePage = n === 0 ? await hold('read before added page', snapshot(rows, version)) : null;
+          assert.equal(await evaluate(page, () => v2NeedsMore()), true);
+          if (beforePage) {
+            assert.equal(await beforePage(), null, 'a read started before paging cannot discard the added page');
+            assert.equal(await evaluate(page, () => S.v2.needs.length), 100);
+          }
+          assert.equal(await count(page), '14');
         }
-        assert.equal(await count(page), '14');
-      }
-      assert.equal(await page.evaluate(() => needsAll()), true);
+      });
+      assert.equal(await evaluate(page, () => needsAll()), true);
       await page.locator('#task-tab-foryou').click();
       assert.equal(await page.locator('#task-group .v').innerText(), 'Asked by');
       const asks = page.locator('#task-body [data-group="asks"]');
@@ -171,7 +236,7 @@ async function holdNeedsRead(page, snapshot, more = false) {
       assert.equal(await declined.count(), 1, 'a recent decline stays on its requester\'s plate');
       assert.equal(await declined.getAttribute('data-need-card'), null, 'a decline opens the full task');
       const whole = page.locator('#task-body [data-task-key="tt-whole"]');
-      assert.equal(await page.evaluate(() => taskNeedsViewer(needsItem('t-whole'))), false,
+      assert.equal(await evaluate(page, () => taskNeedsViewer(needsItem('t-whole'))), false,
         'the escalation has no question, ownership or wait on the manager');
       assert.equal(await whole.count(), 1, 'Asked by includes the counted bot-owned escalation that opens the full task');
       assert.equal(await whole.getAttribute('data-need-card'), null);
@@ -183,31 +248,31 @@ async function holdNeedsRead(page, snapshot, more = false) {
       await page.locator('[data-pick-group="requester"]').click();
       assert.equal(await page.locator('.tl-type-search').isHidden(), true);
       assert.equal(await page.locator('.tl-filters').isHidden(), true);
-      assert.equal(await page.evaluate(() => TASKS_ST.type), 'roadmap');
+      assert.equal(await evaluate(page, () => TASKS_ST.type), 'roadmap');
       assert.deepEqual(await badges(page), [{text: '14', hidden: false}, {text: '14', hidden: false}]);
       const catchUp = page.locator('#tasks-pane [data-go-through]:visible');
       assert.equal(await catchUp.innerText(), 'Catch up');
       await catchUp.click();
-      assert.equal(await page.evaluate(() => decideLive(DEC).length), 12, 'Catch up skips the full-task rows');
-      assert.equal(await page.evaluate(() => decideLive(DEC).includes('task:t-whole')), false);
-      assert.equal(await page.evaluate(() => decideLive(DEC).includes('task:t-declined')), false);
+      assert.equal(await evaluate(page, () => decideLive(DEC).length), 12, 'Catch up skips the full-task rows');
+      assert.equal(await evaluate(page, () => decideLive(DEC).includes('task:t-whole')), false);
+      assert.equal(await evaluate(page, () => decideLive(DEC).includes('task:t-declined')), false);
       await page.keyboard.press('Escape');
-      await page.waitForFunction(() => !DEC && !history.state?.needCard);
+      await waitFor(page, () => !DEC && !history.state?.needCard);
 
       // Non-card items use the same immediate answer/Undo count adjustment.
-      await page.evaluate(() => { DEC_HANDLED.add('task:t-whole'); needsListsRedraw(); });
+      await evaluate(page, () => { DEC_HANDLED.add('task:t-whole'); needsListsRedraw(); });
       assert.equal(await count(page), '13');
       assert.equal(await asks.locator('.tl-gcount').innerText(), '3', 'a full-task change leaves the extras count alone');
       assert.equal(await page.locator('#task-body .tl-row').count(), 13);
       assert.deepEqual(await badges(page), [{text: '13', hidden: false}, {text: '13', hidden: false}]);
-      await page.evaluate(() => { DEC_HANDLED.delete('task:t-whole'); needsListsRedraw(); });
+      await evaluate(page, () => { DEC_HANDLED.delete('task:t-whole'); needsListsRedraw(); });
       assert.equal(await count(page), '14');
 
       for (const theme of ['light', 'dark']) {
-        await page.evaluate(theme => { document.documentElement.dataset.theme = theme; }, theme);
-        assert.equal(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth), true, theme + ': no sideways page scroll');
+        await evaluate(page, theme => { document.documentElement.dataset.theme = theme; }, theme);
+        assert.equal(await evaluate(page, () => document.documentElement.scrollWidth <= innerWidth), true, theme + ': no sideways page scroll');
         if (process.env.TICO_UI_SHOTS) {
-          await page.waitForFunction(() => {
+          await waitFor(page, () => {
             const count = document.querySelector('#task-tab-foryou .cnt');
             return count && !count.classList.contains('m-ticking') && !count.getAnimations({subtree: true}).length;
           });
@@ -215,27 +280,29 @@ async function holdNeedsRead(page, snapshot, more = false) {
             `needs-you-${width === 390 ? 'phone' : 'desktop'}-${theme}.png`)});
         }
       }
-      await page.setViewportSize({width: width === 390 ? 1440 : 390, height: 844});
+      await within(page.setViewportSize({width: width === 390 ? 1440 : 390, height: 844}), 'switching phone/desktop viewport');
       assert.equal(await count(page), '14');
 
       // Paging started before a save must not invalidate its refresh, even if the old page lands first.
       for (const newerFirst of [false, true]) {
         rows = [wholeTask, ...items.filter(it => threadKinds.includes(it.kind)).slice(0, 50)];
         version = 'count-page-base-' + newerFirst;
-        await page.evaluate(d => needsTake(d), snapshot(rows, version));
+        await evaluate(page, d => needsTake(d), snapshot(rows, version));
         assert.equal(await count(page), '1');
-        assert.equal(await page.evaluate(() => needsAll()), false);
-        const older = await holdNeedsRead(page, {...snapshot(rows, version), items: rows.slice(50), next: null}, true);
-        rows = rows.filter(it => it.id !== wholeTask.id); version = 'count-page-saved-' + newerFirst;
-        const newer = await holdNeedsRead(page, snapshot(rows, version));
-        if (newerFirst) {
-          assert.ok(await newer());
-          assert.equal(await older(), false);
-        } else {
-          assert.equal(await older(), false, 'an older page is discarded once the post-save read starts');
-          assert.ok(await newer(), 'the old page cannot invalidate the post-save read');
-        }
-        assert.equal(await page.evaluate(() => S.v2.needsVersion), version);
+        assert.equal(await evaluate(page, () => needsAll()), false);
+        await withNeedsReads(page, async hold => {
+          const older = await hold(`older page (newer first: ${newerFirst})`, {...snapshot(rows, version), items: rows.slice(50), next: null}, true);
+          rows = rows.filter(it => it.id !== wholeTask.id); version = 'count-page-saved-' + newerFirst;
+          const newer = await hold(`post-save read (newer first: ${newerFirst})`, snapshot(rows, version));
+          if (newerFirst) {
+            assert.ok(await newer());
+            assert.equal(await older(), false);
+          } else {
+            assert.equal(await older(), false, 'an older page is discarded once the post-save read starts');
+            assert.ok(await newer(), 'the old page cannot invalidate the post-save read');
+          }
+        });
+        assert.equal(await evaluate(page, () => S.v2.needsVersion), version);
         assert.equal(await count(page), '0');
         assert.equal(await page.locator('#task-body [data-task-key="tt-whole"]').count(), 0);
         assert.deepEqual(await badges(page), [{text: '0', hidden: true}, {text: '0', hidden: true}]);
@@ -244,19 +311,21 @@ async function holdNeedsRead(page, snapshot, more = false) {
       // With no live event, the newest overlapping read drops completed full-task work in either response order.
       for (const newerFirst of [false, true]) {
         rows = [wholeTask]; version = 'count-overlap-base-' + newerFirst;
-        await page.evaluate(() => v2Refresh());
+        await evaluate(page, () => v2Refresh());
         assert.equal(await count(page), '1');
-        const older = await holdNeedsRead(page, snapshot(rows, 'count-overlap-older-' + newerFirst));
-        rows = []; version = 'count-overlap-newer-' + newerFirst;
-        const newer = await holdNeedsRead(page, snapshot(rows, version));
-        if (newerFirst) {
-          assert.ok(await newer());
-          assert.equal(await older(), null, 'an older response cannot overwrite a newer successful read');
-        } else {
-          assert.ok(await older());
-          assert.ok(await newer(), 'an older successful read cannot invalidate the newer read');
-        }
-        assert.equal(await page.evaluate(() => S.v2.needsVersion), version);
+        await withNeedsReads(page, async hold => {
+          const older = await hold(`older read (newer first: ${newerFirst})`, snapshot(rows, 'count-overlap-older-' + newerFirst));
+          rows = []; version = 'count-overlap-newer-' + newerFirst;
+          const newer = await hold(`newer read (newer first: ${newerFirst})`, snapshot(rows, version));
+          if (newerFirst) {
+            assert.ok(await newer());
+            assert.equal(await older(), null, 'an older response cannot overwrite a newer successful read');
+          } else {
+            assert.ok(await older());
+            assert.ok(await newer(), 'an older successful read cannot invalidate the newer read');
+          }
+        });
+        assert.equal(await evaluate(page, () => S.v2.needsVersion), version);
         assert.equal(await count(page), '0');
         assert.equal(await page.locator('#task-body .tl-row').count(), 0, 'the completed full-task row leaves with its count');
         assert.deepEqual(await badges(page), [{text: '0', hidden: true}, {text: '0', hidden: true}]);
@@ -264,27 +333,27 @@ async function holdNeedsRead(page, snapshot, more = false) {
 
       // A list holding only full-task work has a row and count, but no Catch up button.
       rows = [wholeTask]; version = 'count-whole-task';
-      await page.evaluate(() => v2Refresh());
+      await evaluate(page, () => v2Refresh());
       assert.equal(await count(page), '1');
       assert.equal(await page.locator('#task-body .tl-row').count(), 1);
       assert.equal(await page.locator('#tasks-pane [data-go-through]:visible').count(), 0);
       assert.deepEqual(await badges(page), [{text: '1', hidden: false}, {text: '1', hidden: false}]);
 
       // The badges still update off Tasks; zero hides them and removes Catch up.
-      await page.evaluate(() => { location.hash = '#/updates'; });
-      await page.waitForFunction(() => S.route === '#/updates');
+      await evaluate(page, () => { location.hash = '#/updates'; });
+      await waitFor(page, () => S.route === '#/updates');
       rows = items.filter(it => threadKinds.includes(it.kind)); version = 'count-empty';
-      await page.evaluate(() => v2Refresh());
+      await evaluate(page, () => v2Refresh());
       assert.deepEqual(await badges(page), [{text: '0', hidden: true}, {text: '0', hidden: true}]);
-      await page.evaluate(() => { location.hash = '#/tasks?view=foryou'; });
-      await page.waitForFunction(() => TASKS_ST?.view === 'foryou' && !TASKS_ST.loading
+      await evaluate(page, () => { location.hash = '#/tasks?view=foryou'; });
+      await waitFor(page, () => TASKS_ST?.view === 'foryou' && !TASKS_ST.loading
         && document.querySelector('#task-tab-foryou .cnt')?.textContent === '0');
       assert.equal(await count(page), '0');
       assert.equal(await page.locator('#task-body .tl-row').count(), 0);
       assert.equal(await page.locator('#tasks-pane [data-go-through]:visible').count(), 0);
       assert.deepEqual(errors, []);
-      await page.close();
+      await within(page.close(), `${width}px page.close`);
     }
     console.log('Needs you: whole plate count before paging, requester escalations, full-task rows, ordered reads, live mending, Undo, desktop and phone badges, zero');
-  } finally { await browser.close(); }
+  } finally { await within(browser.close(), 'browser.close'); }
 })().catch(e => { console.error(e); process.exit(1); });

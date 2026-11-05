@@ -392,7 +392,7 @@ const tagHue = key => [...String(key)].reduce((h, c) => (h * 31 + c.charCodeAt(0
 const tasksById = state => {
   if (state.byIdFor !== state.tasks || state.byIdNeeds !== S.v2?.needs) {
     // A counted card can arrive before its task's page. Its own task data keeps its properties and selection usable.
-    const needs = (S.v2?.needs || []).filter(it => ['task', 'question', 'waiting'].includes(it.kind));
+    const needs = (S.v2?.needs || []).filter(it => NEEDS_TASK_KINDS.includes(it.kind));
     state.byId = new Map([...needs, ...(state.tasks || [])].map(t => [String(t.id), t]));
     state.byIdFor = state.tasks; state.byIdNeeds = S.v2?.needs;
   }
