@@ -199,6 +199,21 @@ def require_meeting(c, who, row, auth=None):
         raise Problem("not_found", "Meeting not found or unavailable", 404)
 
 
+def postal_allowed(c, auth, who, bid):
+    """A scan grant is an independent source right for every reader of every carried task."""
+    from . import postal_mail
+    if not read_cache.rows(c, postal_mail.SCANS_SQL, (bid,)):
+        return None
+    scoped = scope(c, who)
+    if scoped is None:
+        return None
+    carried = tasks(c, auth, who, scoped)
+    if scoped.make_page or not carried or postal_mail.scan_access(c, auth, who, bid) is not True:
+        return False
+    return all(postal_mail.scan_access(c, auth, who if reader.actor == who.actor else reader, bid) is True
+               for task in carried for reader in readers(c, auth, task))
+
+
 def blob_allowed(c, auth, who, bid):
     """None outside task turns; otherwise admit only an in-scope file, meeting or own task attachment."""
     scoped = scope(c, who)
@@ -209,6 +224,9 @@ def blob_allowed(c, auth, who, bid):
         return False
     if not all(privacy.blob_readable(c, reader.actor, bid) for task in carried for reader in readers(c, auth, task)):
         return False
+    scan = postal_allowed(c, auth, who, bid)
+    if scan is not None:
+        return scan
     from .files import file_visible
     for row in c.execute("SELECT DISTINCT f.* FROM bot_file_versions v JOIN bot_files f ON f.id=v.file_id "
                          "WHERE v.blob_id=? OR v.poster_blob_id=? OR v.thumb_blob_id=?", (bid, bid, bid)):

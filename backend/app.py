@@ -715,7 +715,7 @@ def create_app(settings=None):
                     def scoped_bearer_route():
                         from .scoped_routes import require_route
                         with store.read() as c:
-                            require_route(c, auth, bearer_identity, request.method, request.url.path)
+                            require_route(c, auth, bearer_identity, request.method, request.url.path, dict(request.query_params))
                     await asyncio.to_thread(scoped_bearer_route)
             if request.url.path.startswith('/public/roadmaps/'):
                 from .public_roadmaps import guard as public_roadmap_guard
@@ -815,7 +815,7 @@ def create_app(settings=None):
                     def scoped_route():
                         from .scoped_routes import require_route
                         with store.read() as c:
-                            require_route(c, auth, who, request.method, request.url.path)
+                            require_route(c, auth, who, request.method, request.url.path, dict(request.query_params))
                     await asyncio.to_thread(scoped_route)
                 app.state.sleep_idle.seen(who, request.url.path)
                 # A locked Tico Cloud company (backend/cloud_access.py): people reach only billing and the download.

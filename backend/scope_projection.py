@@ -11,7 +11,7 @@ from .store import H, Problem
 
 # These fields belong to source/reference schemas, never prose or arbitrary JSON strings.
 REF_FIELDS = frozenset({"file", "file_id", "page", "page_id", "blob_id", "meeting", "meeting_id",
-                        "digest", "source_digest", "ref", "item", "url", "href", "src", "path"})
+                        "digest", "source_digest", "ref", "item", "url", "file_url", "href", "src", "path"})
 SOURCE_LISTS = frozenset({"files", "attachments", "pages", "meetings", "reviewed", "citations", "body_sources"})
 
 
@@ -168,6 +168,15 @@ def project(c, scoped, payload, *, auth=None):
                     found.update(titles_by_source.get(reference(item), set()))
                 found.update(attached_titles(item, parent))
         return found
+    # A postal item's file id aliases the exact scan addressed by file_url, not other versions of that file.
+    def scan_alias(value):
+        if not {'external_id', 'address_id', 'file_url'}.issubset(value):
+            return False
+        bid = reference(value.get('file_url'))
+        return bool(bid in blobs and bid not in denied and c.execute(
+            "SELECT 1 FROM bot_file_versions WHERE file_id=? AND blob_id=?",
+            (value.get('file_id'), bid)).fetchone())
+
     gone = object()
 
     def rejected(value):
@@ -200,7 +209,8 @@ def project(c, scoped, payload, *, auth=None):
             if value.get('field') == 'file' and (has_denied(event_sources.get(value.get('id'))) or
                     value.get('id') not in event_sources and any(value.get(k) in legacy_titles for k in ('old', 'new'))):
                 return gone
-            if any(rejected(item) for key, item in value.items() if key in REF_FIELDS):
+            alias = scan_alias(value)
+            if any(rejected(item) for key, item in value.items() if key in REF_FIELDS and not (alias and key == 'file_id')):
                 return gone
             if parent in SOURCE_LISTS and rejected(value.get('id')):
                 return gone
