@@ -724,7 +724,10 @@ file, and every local ref has the same SHA on the remote. Unknown refs or an unr
 stop repair. One broken copy is retained for review; another repair waits for that review instead
 of deleting it. Refusals say `repository copy needs attention: <reason>` in Health. Retiring a
 repository keeps its mirror too. On a same-user computer, if a base clone's config cannot be written,
-the runner recreates that config from a fresh clone, keeping the old config as `.git/tico-config-backup-*`.
+the runner recreates that config from a fresh clone. It takes Git's exclusive `config.lock` and checks
+the old config again under that lock. A changed config or another writer's lock stops repair.
+It copies the old config to `.git/tico-config-backup-*`, keeps its permissions, then renames the
+completed lock file over the config in one step. The original stays readable until that rename.
 An adopted checkout requires a readable config with a verified GitHub `origin` that can be preserved;
 otherwise replacement is refused. Computers running bots as a separate user, including Docker runners,
 refuse automatic base config replacement because the scratch paths are bot-controlled. Health reports

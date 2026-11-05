@@ -1763,7 +1763,7 @@ impl Runner {
             let prompt_turn = !side_run && !truthy(refs.get("command")) && !truthy(refs.get("goal_action")) && h.reports_compaction();
             let last_context = self.state.repo_rules(&crate::continuity::context_key(&th), None)?.and_then(|c| c.parse::<i64>().ok());
             // A stateless bot gets its whole prompt each turn: the short form points at state.md, which it does not keep.
-            let seen = if !stateless && prompt_turn && resumed && last_context.is_some() && !compacted_first && !side_ran && !after_interrupt {
+            let mut seen = if !stateless && prompt_turn && resumed && last_context.is_some() && !compacted_first && !side_ran && !after_interrupt {
                 crate::prompt::Seen {
                     standing: self.state.repo_rules(&crate::continuity::standing_key(&th), None)?.unwrap_or_default(),
                     task: self.state.repo_rules(&crate::continuity::task_key(&th), None)?.unwrap_or_default(),
@@ -1776,7 +1776,14 @@ impl Runner {
                 self.state.repo_rules(&key, Some(""))?;
             }
             // What the standing lines tell the bot to read, and who reads them: a change to either sends them again.
-            let agent = crate::regular_file::read(execution_path.join("AGENT.md"), crate::regular_file::CONTENT).map(|b| crate::gitrun::sha256_hex(&b)).unwrap_or_default();
+            let agent = match crate::regular_file::read(execution_path.join("AGENT.md"), crate::regular_file::CONTENT) {
+                Ok(bytes) => crate::gitrun::sha256_hex(&bytes),
+                Err(_) => {
+                    // A failed hash (including a symlink) cannot establish that the rules are unchanged.
+                    seen.standing.clear();
+                    String::new()
+                }
+            };
             let context = format!("{runtime} {} {agent}", text_of(&config["model"]));
             // The first turn under a native-threads key (none saved, nothing to adopt, not a Clear): the old `bot` thread
             // is not carried into it, so it is given the conversation's latest messages instead.
@@ -3797,6 +3804,7 @@ for line in sys.stdin:
         RUN_SESSION.with(|on| on.set(Some(serves)));
         let dir = std::env::temp_dir().join(format!("tico-session-{}", uuid::Uuid::new_v4().simple()));
         std::fs::create_dir_all(dir.join("projects/bot-ops")).unwrap(); // the bot's checkout, where its harness starts
+        std::fs::write(dir.join("projects/bot-ops/AGENT.md"), "# Ops\n").unwrap();
         let fixture = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/pi/turn.jsonl");
         HOST_COMMAND.with(|command| *command.borrow_mut() = Some(crate::hosts::pi::testing::fake(&dir, &fixture)));
         let (url, seen, server) = recording_server().await;
@@ -3934,10 +3942,16 @@ for line in sys.stdin:
     /// `claude_rig`, keeping its folder for the caller to inspect (remove it when done), and returning every request the
     /// recording server saw, in order.
     async fn claude_rig_kept(turns: &[Value], compacting: &[usize], missing: &[usize], failing: &[usize], extra: Value, ready: impl Fn(&Path)) -> (Vec<String>, Vec<String>, Vec<Value>, Vec<String>, Vec<(String, String, Value)>, PathBuf) {
+        claude_rig_each_turn(turns, compacting, missing, failing, extra, ready, |_, _| ()).await
+    }
+
+    /// `claude_rig_kept`, with checkout changes applied before each turn's prompt is built.
+    async fn claude_rig_each_turn(turns: &[Value], compacting: &[usize], missing: &[usize], failing: &[usize], extra: Value, ready: impl Fn(&Path), before_turn: impl Fn(usize, &Path)) -> (Vec<String>, Vec<String>, Vec<Value>, Vec<String>, Vec<(String, String, Value)>, PathBuf) {
         let _controls = RunControls;
         RUN_SESSION.with(|on| on.set(Some(true)));
         let dir = std::env::temp_dir().join(format!("tico-claude-session-{}", uuid::Uuid::new_v4().simple()));
         std::fs::create_dir_all(dir.join("projects/bot-ops")).unwrap();
+        std::fs::write(dir.join("projects/bot-ops/AGENT.md"), "# Ops\n").unwrap();
         for n in compacting {
             // A process listed twice compacts twice.
             let mut marks = std::fs::read_to_string(dir.join(format!("compacts-{n}"))).unwrap_or_default();
@@ -3977,6 +3991,7 @@ for line in sys.stdin:
         let client = crate::client::Client::new(&config.url(), &config.token(), 5, 0).unwrap();
         let runner = Arc::new(Runner::new(config, client, crate::state::State::open(&dir.join("state")).unwrap()));
         for (n, turn) in turns.iter().enumerate() {
+            before_turn(n, &dir.join("projects"));
             let mut config = json!({"runtime": "claude", "harness": "claude", "model": "synthetic-primary", "session": "bot"});
             config.as_object_mut().unwrap().extend(turn.as_object().cloned().unwrap_or_default().into_iter().filter(|(k, _)| k != "attempt"));
             let mut attempt = json!({"id": format!("a-claude-{n}"), "job_id": format!("j{n}"), "bot": "ops", "token": "synthetic-turn", "lease_seconds": 120,
@@ -4029,6 +4044,50 @@ for line in sys.stdin:
         // One-shot: the next claim does not carry the flag.
         assert_eq!(session_of(&completions[2]), ("resumed".to_string(), Value::Null, Value::Null));
         assert!(!prompts[3].contains("/compact"));
+    }
+
+    #[tokio::test]
+    async fn symlinked_agent_rules_get_full_standing_prompts_after_target_changes() {
+        let (threads, prompts, completions, _, _, dir) = claude_rig_each_turn(
+            &[json!({}), json!({}), json!({})], &[], &[], &[], json!({}),
+            |projects| {
+                let checkout = projects.join("bot-ops");
+                std::fs::remove_file(checkout.join("AGENT.md")).unwrap();
+                std::fs::write(checkout.join("rules.md"), "Original rules\n").unwrap();
+                std::os::unix::fs::symlink("rules.md", checkout.join("AGENT.md")).unwrap();
+            },
+            |n, projects| {
+                if n == 2 { std::fs::write(projects.join("bot-ops/rules.md"), "Updated rules\n").unwrap(); }
+            },
+        ).await;
+        assert_eq!(prompts.len(), 3);
+        assert!(threads.iter().all(|t| *t == threads[0]), "{threads:?}");
+        for (n, prompt) in prompts.iter().enumerate() {
+            assert!(!prompt.contains(crate::prompt::STANDING_SEEN) && prompt.contains("Read AGENT.md and state.md"), "turn {n}: {prompt}");
+            assert_eq!(completions[n]["outcome"], "completed");
+            if n > 0 { assert_eq!(session_of(&completions[n]).0, "resumed"); }
+        }
+        assert_eq!(std::fs::read_to_string(dir.join("projects/bot-ops/AGENT.md")).unwrap(), "Updated rules\n");
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[tokio::test]
+    async fn failed_agent_hashes_disable_shortening_until_rules_are_readable_again() {
+        let turns = vec![json!({}); 6];
+        let (_, prompts, completions, _, _, dir) = claude_rig_each_turn(
+            &turns, &[], &[], &[], json!({}), |_| (),
+            |n, projects| {
+                let agent = projects.join("bot-ops/AGENT.md");
+                if n == 2 { std::fs::remove_file(&agent).unwrap(); }
+                if n == 4 { std::fs::write(&agent, "# Ops\n").unwrap(); }
+            },
+        ).await;
+        assert_eq!(prompts.len(), turns.len());
+        for (n, prompt) in prompts.iter().enumerate() {
+            assert_eq!(prompt.contains(crate::prompt::STANDING_SEEN), n == 1 || n == 5, "turn {n}: {prompt}");
+            assert_eq!(completions[n]["outcome"], "completed");
+        }
+        std::fs::remove_dir_all(dir).unwrap();
     }
 
     #[tokio::test]

@@ -1160,21 +1160,71 @@ async fn configure_base(
     }
     let done = configure(&scratch.0, settings, local, env).await?;
     if !done.ok() { return Err(msg(git_error("Configuring rebuilt base", full, &done, env))); }
-    let unchanged = match regular_file::read(&config, CONTENT) {
-        Ok(bytes) => old.as_ref() == Some(&bytes),
-        Err(e) => e.kind() == std::io::ErrorKind::NotFound && old.is_none(),
-    };
-    if !unchanged || !crate::gitlocks::idle(&git).await {
+    if !crate::gitlocks::idle(&git).await {
         return Err(msg(format!("{reason}; Git metadata changed during repair; left intact for the next retry")));
     }
-    let backup = git.join(format!("tico-config-backup-{}", uuid::Uuid::new_v4().simple()));
-    if config.exists() { std::fs::rename(&config, &backup)?; }
-    if let Err(e) = std::fs::rename(scratch.0.join(".git/config"), &config) {
-        if backup.exists() { let _ = std::fs::rename(&backup, &config); }
-        return Err(e.into());
+    // The idle check is only a snapshot: Git writers must share this lock through the atomic install.
+    let lock = BaseConfigLock::acquire(&config).map_err(|e| msg(format!("{reason}; could not lock base config for repair: {e}")))?;
+    lock.install(old.as_deref(), &scratch.0.join(".git/config"))
+}
+
+struct BaseConfigLock {
+    path: PathBuf,
+    file: std::fs::File,
+    committed: bool,
+}
+
+impl BaseConfigLock {
+    fn acquire(config: &Path) -> std::io::Result<Self> {
+        use std::os::unix::fs::OpenOptionsExt;
+        let path = config.with_file_name("config.lock");
+        let file = regular_file::open(&path, std::fs::OpenOptions::new().write(true).create_new(true).mode(0o600), CONTENT)?;
+        Ok(Self { path, file, committed: false })
     }
-    crate::isolation::chown(&config);
-    Ok(())
+
+    fn install(mut self, old: Option<&[u8]>, rebuilt: &Path) -> Result<(), Fail> {
+        use std::io::{Read, Write};
+        use std::os::unix::fs::{OpenOptionsExt, PermissionsExt};
+        let config = self.path.with_file_name("config");
+        let mut current = Vec::new();
+        let permissions = match regular_file::open(&config, std::fs::OpenOptions::new().read(true), CONTENT) {
+            Ok(mut file) => {
+                let permissions = file.metadata()?.permissions();
+                (&mut file).take(CONTENT + 1).read_to_end(&mut current)?;
+                if old != Some(current.as_slice()) {
+                    return Err(msg("Git config changed during repair; left intact for the next retry"));
+                }
+                permissions
+            }
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound && old.is_none() => std::fs::Permissions::from_mode(0o644),
+            _ => return Err(msg("Git config changed during repair; left intact for the next retry")),
+        };
+        let replacement = regular_file::read(rebuilt, CONTENT)?;
+        self.file.set_permissions(permissions.clone())?;
+        self.file.write_all(&replacement)?;
+        self.file.sync_all()?;
+        if old.is_some() {
+            let backup = config.with_file_name(format!("tico-config-backup-{}", uuid::Uuid::new_v4().simple()));
+            let mut saved = regular_file::open(&backup, std::fs::OpenOptions::new().write(true).create_new(true).mode(0o600), CONTENT)?;
+            saved.set_permissions(permissions)?;
+            saved.write_all(&current)?;
+            saved.sync_all()?;
+        }
+        // The original remains readable until Git's lock file takes its place in one rename.
+        std::fs::rename(&self.path, &config)?;
+        self.committed = true;
+        Ok(())
+    }
+}
+
+impl Drop for BaseConfigLock {
+    fn drop(&mut self) {
+        use std::os::unix::fs::MetadataExt;
+        if !self.committed && self.file.metadata().ok().zip(self.path.symlink_metadata().ok())
+            .is_some_and(|(held, current)| held.dev() == current.dev() && held.ino() == current.ino()) {
+            let _ = std::fs::remove_file(&self.path);
+        }
+    }
 }
 
 /// `-c key=value` overrides that neutralize any http.* setting in the mirror's own config; include files refused.
@@ -1820,6 +1870,69 @@ mod tests {
         let backups: Vec<_> = std::fs::read_dir(f.base.join(".git")).unwrap().flatten().filter(|e| e.file_name().to_string_lossy().starts_with("tico-config-backup-")).collect();
         assert_eq!(backups.len(), 1);
         assert_eq!(std::fs::read_to_string(backups[0].path()).unwrap(), "[broken\n");
+    }
+
+    #[tokio::test]
+    async fn base_config_repair_holds_gits_lock_until_atomic_install() {
+        use std::os::unix::fs::PermissionsExt;
+        let f = RepoFixture::new().await;
+        let config = f.base.join(".git/config");
+        set_mode(&config, 0o600);
+        let original = std::fs::read(&config).unwrap();
+        let rebuilt = f.root.join("rebuilt-config");
+        let mut replacement = original.clone();
+        replacement.extend_from_slice(b"\n[repair]\n\tinstalled = true\n");
+        std::fs::write(&rebuilt, &replacement).unwrap();
+
+        // A writer starting after the idle check must fail while repair holds config.lock.
+        let lock = BaseConfigLock::acquire(&config).unwrap();
+        let writer = run_as_bot(&[], &["-C", f.base.to_str().unwrap(), "config", "--local", "owner.edit", "concurrent"], &f.env, 10).await.ok().unwrap();
+        assert!(!writer.ok() && writer.stderr.contains("config.lock"), "{}", writer.stderr);
+        assert_eq!(std::fs::read(&config).unwrap(), original);
+        assert!(lock.install(Some(&original), &rebuilt).is_ok());
+        assert_eq!(std::fs::read(&config).unwrap(), replacement);
+        assert!(!config.with_file_name("config.lock").exists());
+        assert_eq!(config.metadata().unwrap().permissions().mode() & 0o777, 0o600);
+        let backups: Vec<_> = std::fs::read_dir(config.parent().unwrap()).unwrap().flatten()
+            .filter(|e| e.file_name().to_string_lossy().starts_with("tico-config-backup-")).collect();
+        assert_eq!(backups.len(), 1);
+        assert_eq!(std::fs::read(backups[0].path()).unwrap(), original);
+        assert_eq!(backups[0].metadata().unwrap().permissions().mode() & 0o777, 0o600);
+        sh(&f.base, &["config", "--local", "owner.edit", "after repair"]);
+        assert_eq!(sh(&f.base, &["config", "--get", "repair.installed"]), "true");
+        assert_eq!(sh(&f.base, &["config", "--get", "owner.edit"]), "after repair");
+    }
+
+    #[tokio::test]
+    async fn base_config_repair_preserves_late_git_locks_and_completed_edits() {
+        let f = RepoFixture::new().await;
+        let config = f.base.join(".git/config");
+        let original = std::fs::read(&config).unwrap();
+        let rebuilt = f.root.join("rebuilt-config");
+        std::fs::write(&rebuilt, &original).unwrap();
+        let pending = config.with_file_name("config.lock");
+        std::fs::write(&pending, "writer's pending config").unwrap();
+        assert!(BaseConfigLock::acquire(&config).is_err());
+        assert_eq!(std::fs::read_to_string(&pending).unwrap(), "writer's pending config");
+        assert_eq!(std::fs::read(&config).unwrap(), original);
+        std::fs::remove_file(&pending).unwrap();
+
+        // A writer that commits before repair acquires the lock invalidates its earlier snapshot.
+        sh(&f.base, &["config", "--local", "owner.edit", "saved during repair"]);
+        let edited = std::fs::read(&config).unwrap();
+        let result = BaseConfigLock::acquire(&config).unwrap().install(Some(&original), &rebuilt);
+        assert!(matches!(result, Err(Fail::Msg(m)) if m.contains("changed during repair")));
+        assert_eq!(std::fs::read(&config).unwrap(), edited);
+        assert!(!pending.exists());
+        assert!(!std::fs::read_dir(config.parent().unwrap()).unwrap().flatten()
+            .any(|e| e.file_name().to_string_lossy().starts_with("tico-config-backup-")));
+
+        // A failed staging read releases only repair's own lock and keeps the current config.
+        std::fs::remove_file(&rebuilt).unwrap();
+        assert!(BaseConfigLock::acquire(&config).unwrap().install(Some(&edited), &rebuilt).is_err());
+        assert!(!pending.exists());
+        assert_eq!(std::fs::read(&config).unwrap(), edited);
+        sh(&f.base, &["config", "--local", "owner.edit", "writer can continue"]);
     }
 
     #[cfg(target_os = "linux")]
