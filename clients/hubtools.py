@@ -7068,14 +7068,22 @@ def inbound_wait(api,args):
     return api.post('inbound/wait',body)
 
 
-# ----------------------------------------------------------------------------- connections (backend/connections.py)
-@tool('hub_connections_list','Every connection you may see: Slack, GitHub, mail bots, Tico addresses and numbers, meeting '
-      'importers, incoming and outgoing webhooks, physical mail and Listening. Each row: name, status, scope, who reads '
-      'it, its bots and where to configure it. Follow next with cursor.',
-      {'cursor':_s('The previous page\'s next'),'limit':{'type':'integer','minimum':1,'maximum':100}})
-def connections_list(api,args):
+# ----------------------------------------------------------------------------- tool index (backend/api_tools.py)
+@tool('hub_tool_index','Tools: every way you and your bots reach the outside world that you may see: API tools, mailboxes, '
+      'Tico addresses and numbers, mailing mail, Slack, GitHub, meeting importers, Listening, outgoing webhooks and tools '
+      'bots declare. Each row: kind, status, how it is reached (way), who can use it and whether it needs you. Follow '
+      'next with cursor.',
+      {'cursor':_s('The previous page\'s next'),'limit':{'type':'integer','minimum':1,'maximum':500}})
+def tool_index(api,args):
     page = dict(limit=args.get('limit'), cursor=args.get('cursor'))
-    return _as_person(api).get('connections', **{k: v for k, v in page.items() if v is not None})
+    return _as_person(api).get('tool-index', **{k: v for k, v in page.items() if v is not None})
+
+
+@tool('hub_tool_check','Check an API tool now: one authenticated GET per stored key. Working, Key rejected (401/403) or '
+      'Check failed, per key. Its id is the api row\'s id without `api:` in hub_tool_index.',
+      {'id':_s('The API tool id')}, required=('id',))
+def tool_check(api,args):
+    return _as_person(api).post('api-tools/'+quote(str(args['id']).removeprefix('api:'),safe='')+'/check',{})
 
 
 # ----------------------------------------------------------------------------- letters out (backend/letters.py)
