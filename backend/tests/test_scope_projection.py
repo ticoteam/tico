@@ -12,6 +12,7 @@ from backend.tests.test_files import turn
 from backend.tests.test_meeting_items import record
 from backend.tests.test_meeting_task_links import link, task
 from backend.tests.test_turn_scope import blob, make_scope, published, task_turn
+from backend.tests.test_pages import HTML
 
 
 def no_sources(value, secrets):
@@ -26,7 +27,8 @@ def sources(api):
     ready(api, machine, ["ops"])
     t = post(api, "tasks", {"owner": "ops", "title": "Review source context", "body": "Review the sources.", "private": False})
     publisher = claim(api, machine, "ops", key="source-publish")
-    hidden = published(api, publisher, task=t["id"], name="restricted.html", title="Restricted source")
+    hidden = published(api, publisher, task=t["id"], name="restricted.html", title="Restricted source",
+                       data=HTML + b"<p>Restricted source content</p>")
     allowed = published(api, publisher, task=t["id"], name="allowed.html", title="Allowed source")
     made = ask(api, publisher["token"], [{"file": hidden}, {"file": allowed}], pick=True,
                parent=t["id"], private=False)
