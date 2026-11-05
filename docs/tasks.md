@@ -501,13 +501,13 @@ asked about; an owner or admin sets the team default everyone starts from, and *
 it. A change applies to the next item; nothing already on a plate moves. It ships as **On**. Off makes no check. A
 stored Rehearsal reads as On. An old stored `chores_budget` is ignored.
 **Replay a day** judges one past day's existing bot items with your settings. Each item is judged against the tasks you
-own today that were created before it and were open at its time and not snoozed then. For a task item, that task is left
-out of the count; a question item leaves nothing out. Nothing moves. Refused writes have no saved item text to replay.
-Older items kept with a bot before refusals were introduced can still be replayed. A bot handing its own task to you
-(one or many) is judged like a task filed for you. A bot's handoff of a task to you is also listed when the filter was
-Off at the time, because no ask row was written. Replay reads it from the task's owner history. A handoff by a person is
-not listed. Each handoff appears once, on the day the bot handed it over. An owner or admin replaying someone else's day
-sees only the titles they may read.
+own today that were created before it, were open at its time, and are not snoozed today until after that time. For a
+task item, that task is left out of the count; a question item leaves nothing out. Nothing moves. Refused writes have no
+saved item text to replay. Older items kept with a bot before refusals were introduced can still be replayed. A bot
+handing its own task to you (one or many) is judged like a task filed for you. A bot's handoff of a task to you is also
+listed when the filter was Off at the time, because no ask row was written. Replay reads it from the task's owner
+history. A handoff by a person is not listed. Each handoff appears once, on the day the bot handed it over. An owner or
+admin replaying someone else's day sees only the titles they may read.
 
 API: `GET`/`PUT`/`DELETE /api/v2/ask-ingest/settings` (`mode` is `off` or `on`; a `rehearsal` sent is saved as `on`),
 `POST /api/v2/ask-ingest/replay` (`person`, `date`, `offset`, a page of up to 25; the person, or an owner or admin).
