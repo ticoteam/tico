@@ -18,7 +18,7 @@ from .. import automations, cloud_access, demo_content as D, judge, routines, st
 from .. import runner_states
 from ..scheduler import next_due
 from ..store import H
-from .automations_learnings import _hold_queued, _keep_focus, _release
+from .automations_learnings import _hold_queued, _keep_focus, _release_held
 
 WINDOW = timedelta(days=7)
 START_LAG = timedelta(seconds=12)  # a run's start after its time: the pass fires it and the run's step starts its turn
@@ -81,7 +81,7 @@ def seed(b):
             b.store.automations.drain()
     finally:
         b.store.settings.decisions_daily_calls_bot = cap
-    b.write(lambda c: _release(c, queued))
+    b.write(lambda c: _release_held(c, queued))
     b.write(lambda c: _contact_after(c, contact["saved"]))
     # The occurrences before now are played; each schedule's next time is its first one after now.
     b.write(lambda c: _set_next_due(c, box["rows"], b.now))

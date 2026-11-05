@@ -490,7 +490,7 @@ def _learn(b):
                 b.clock.at = run_at + work_after
                 _run(b, learned["bot"], dict(previous["deliveries"])[learned["bot"]], learned["summary"], learned)
     finally:
-        b.write(lambda c: _release(c, queued))
+        b.write(lambda c: _release_held(c, queued))
 
 
 def _hold_queued(c):
@@ -500,7 +500,7 @@ def _hold_queued(c):
     return ids
 
 
-def _release(c, ids):
+def _release_held(c, ids):
     c.executemany("UPDATE jobs SET held=0 WHERE id=?", [(job,) for job in ids])
 
 
