@@ -17,6 +17,8 @@ TABLES = {
     rows.LetterBotSettingRow: "letter_bot_settings",
     rows.LetterRow: "letters",
     rows.LetterProofRow: "letter_proofs",
+    rows.PostalMailGrantRow: "postal_mail_grants",
+    rows.PostalMailSettingsRow: "postal_mail_settings",
     rows.MeetingTaskLinkRow: "meeting_task_links",
     rows.SuggestionRow: "suggestions",
     rows.TaskRow: "tasks",

@@ -851,13 +851,22 @@ class Files:
     def serve(self, who, fid, version=None, meta=False, request=None, derivative=None):
         """The bytes of one version through Tico, never a storage address."""
         with self.store.read() as c:
-            row = self.visible_file(c, who, fid)
+            row = c.execute("SELECT * FROM bot_files WHERE id=?", (fid,)).fetchone()
+            if not row:
+                raise Problem("not_found", "File not found", 404)
             # Adopted legacy blob IDs keep their original bytes at an unversioned URL.
             number = (row["current_version"] if is_file_id(fid) else 1) if version is None else version
-            if asked_to_read(c, who, fid) and not asked_to_read(c, who, fid, number):
-                raise Problem("not_found", "File not found", 404)    # Counsel's read names one version of it
             v = c.execute("SELECT v.*,b.digest AS blob_digest,b.content_type FROM bot_file_versions v "
                           "JOIN blobs b ON b.id=v.blob_id WHERE v.file_id=? AND v.version=?", (fid, number)).fetchone()
+            from . import postal_mail
+            scan = postal_mail.scan_access(c, self.auth, who, v["blob_id"]) if v else None
+            if scan is not None:
+                if not scan or not privacy.blob_readable(c, privacy.actor(who), v["blob_id"]):
+                    raise Problem("not_found", "File not found", 404)
+            else:
+                self.visible_file(c, who, fid)
+                if asked_to_read(c, who, fid) and not asked_to_read(c, who, fid, number):
+                    raise Problem("not_found", "File not found", 404)    # Counsel's read names one version of it
             if not v or row["locator"] != "tico_blob":
                 raise Problem("not_found", "This file has no stored copy to open" if not v else "File not found", 404)
             if meta:

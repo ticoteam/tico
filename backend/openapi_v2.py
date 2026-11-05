@@ -3261,6 +3261,33 @@ _LETTERS_ANSWERS = {"listLetters": "LetterOutPage", "quoteLetter": "LetterOut", 
     "grantLettersAccess": "LettersGrant", "revokeLettersAccess": "LettersRevoked", "getBotLettersSettings": "LetterBotSettings",
     "setBotLettersSettings": "LetterBotSettings"}
 STABLE = [(*entry[:-1], _LETTERS_ANSWERS.get(entry[3], entry[-1])) for entry in STABLE]
+TAGS["Physical mail"] = "Company letters, explicit Read grants and legal mail routing (docs/physical-mail.md)."
+SCHEMAS.update({
+    "PostalMailGrant": obj({"id": "s", "address_id": "s", "grantee_type": {"enum": ["person", "bot"]},
+                            "grantee_id": "s", "level": {"enum": ["read"]}, "granted_by_id": "s",
+                            "created_at": "s", "updated_at": "s"}),
+    "PostalMailGrants": obj({"address_id": "s", "grants": items(ref("PostalMailGrant")), "next": "n"}),
+    "PostalMailGrantResult": obj({"grant": ref("PostalMailGrant")}),
+    "PostalMailRevoked": obj({"ok": "b"}),
+    "PostalMailBots": obj({"bots": items(obj({"id": "s", "slug": "s", "display_name": "s", "state": "s",
+                                            "read_error": "n", "routing_error": "n"})), "next": "n"}),
+    "PostalMailSettings": obj({"settings": obj({"id": "i", "legal_bot_id": "n", "updated_by_id": "n",
+                                               "created_at": "s", "updated_at": "s"})}),
+})
+STABLE.extend([
+    ("/api/v2/postal/bots", "get", "Physical mail", "listPostalMailBots",
+     "Mail picker bots and read/routing restrictions; paged and 64 KB capped; owner or admin", "PostalMailBots"),
+    ("/api/v2/postal/addresses/{address_id}/grants", "get", "Physical mail", "listPostalMailGrants",
+     "Read grants for one assignment, or all addresses (`all`); paged and 64 KB capped; owner or admin", "PostalMailGrants"),
+    ("/api/v2/postal/addresses/{address_id}/grants/{grantee_type}/{grantee_id}", "put", "Physical mail", "grantPostalMailRead",
+     "Give one person or bot Read, including private letters and scans; owner or admin", "PostalMailGrantResult"),
+    ("/api/v2/postal/addresses/{address_id}/grants/{grantee_type}/{grantee_id}", "delete", "Physical mail", "revokePostalMailRead",
+     "Revoke one Read grant; owner or admin", "PostalMailRevoked"),
+    ("/api/v2/postal/settings", "get", "Physical mail", "getPostalMailSettings",
+     "Legal mail routing; null legal_bot_id means owner", "PostalMailSettings"),
+    ("/api/v2/postal/settings", "put", "Physical mail", "setPostalMailSettings",
+     "Route future legal mail to an active bot or the owner (null), keeping the owner informed; owner or admin", "PostalMailSettings"),
+])
 
 
 def generate():
