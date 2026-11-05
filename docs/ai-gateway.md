@@ -265,8 +265,8 @@ The key and the connect controls stay in **Settings → Models**, one link away.
 
 Services today, by status:
 
-- **Live**: **Decide**, **Classify**, **Inbox · Email**, **Alerts**, **Search**, **Fetch**, **Images**, **Transcribe**,
-  and **Physical mail and registered agent**.
+- **Live**: **Decide**, **Classify**, **Inbox · Email**, **Alerts**, **Search**, **Fetch**, **Images**,
+  **Transcribe** ($0.33 per audio hour for recordings, $0.30 per audio hour for live text), and **Physical mail and registered agent**.
 - **On request**: **Inbox · Texts**.
 - **Coming soon**: **Send letters**, **Send email**, **Enrich**, **Voice**, **Object Storage**, **Accounting**, **Legal**,
   **CRM**, **Customer Support** and **Marketing**.
