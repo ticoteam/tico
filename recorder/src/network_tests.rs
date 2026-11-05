@@ -745,6 +745,35 @@ fn wait_settings_reload(what: &str, mut done: impl FnMut() -> bool) {
 }
 
 #[test]
+fn settings_reload_services_retry_cached_auth_failures_after_a_credential_save() {
+    if settings::tests::isolated(
+        "network::tests::settings_reload_services_retry_cached_auth_failures_after_a_credential_save",
+    ) {
+        return;
+    }
+    let (tico, seen, server) = server(vec![
+        Some(json!({"status":401,"error":"Sign in again"})),
+        Some(json!({"transcribe":true,"stream":true,"assist":true})),
+    ]);
+    settings::save_secret("tico:synthetic", "old-token").unwrap();
+    settings::save_secret("tico-grant:synthetic", "").unwrap();
+    assert!(crate::speech::refresh(&tico.destination).is_err());
+    assert!(crate::speech::current(&tico.destination).is_err());
+    assert_eq!(seen.lock().unwrap().len(), 1);
+    settings::save_secret("tico:synthetic", "new-token").unwrap();
+    assert!(
+        crate::speech::current(&tico.destination)
+            .unwrap()
+            .transcribe
+    );
+    server.join().unwrap();
+    assert_eq!(seen.lock().unwrap().len(), 2);
+    let mut changed = tico.destination.clone();
+    changed.base_url = "https://other.acme.example".into();
+    assert!(crate::speech::known(&changed).is_none());
+}
+
+#[test]
 fn settings_reload_live_worker_uses_a_connection_saved_after_startup_and_clears_status() {
     if settings::tests::isolated(
         "network::tests::settings_reload_live_worker_uses_a_connection_saved_after_startup_and_clears_status",
