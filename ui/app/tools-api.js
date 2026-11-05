@@ -5,13 +5,15 @@
    what every tool migrated from before was) until someone moves it to the proxy. A check is an authenticated GET to
    its check path every 30 minutes; the page shows the last 24. Limits per action are not built yet: the card says so.
    Reads GET /api/v2/api-tools/<id> ({tool, keys, access, checks, recent, status, can_manage}) and
-   GET …/activity?result=&cursor= (newest first, a page at a time). Revealing a key is the vault's own audited
+   GET …/activity?result=&cursor= ({rows, next}: newest first, a page at a time). A row is a call through the proxy
+   (kind 'call': method, path with query keys only, result sent | refused | failed) or, for a key on computers, the
+   newest time a run took it (kind 'use'); each has `at`. Revealing a key is the vault's own audited
    request (POST /api/v2/credentials/<id>/reveal). Styles: ui/styles/tools.css.
    Classic script: its globals are shared with the other files under ui/app/, loaded in the order index.html lists them. */
 'use strict';
 
 const TA_LEVELS = [['read', 'Read'], ['read_write', 'Read and write']];
-const TA_RESULTS = {sent: ['Sent', 'ok'], refused: ['Refused', 'fail'], failed: ['Failed', 'fail']};
+const TA_RESULTS = {sent: ['Sent', 'ok'], refused: ['Refused', 'fail'], failed: ['Failed', 'fail'], use: ['Used', '']};
 const TA_FILTERS = [['', 'All'], ['sent', 'Sent'], ['refused', 'Refused'], ['failed', 'Failed']];
 const TA_AUTH = [['bearer', 'Bearer token'], ['basic_user', 'Basic, key as user'], ['basic_password', 'Basic, key as password'],
   ['header', 'Header'], ['query', 'Query parameter']];
@@ -21,7 +23,9 @@ const taLevelName = level => (TA_LEVELS.find(([k]) => k === level) || [level, le
 const taPath = (id, rest = '') => `/v2/api-tools/${encodeURIComponent(id)}${rest}`;
 const taHost = url => { try { return new URL(url).host; } catch { return url || ''; } };
 const taResult = r => { const [word, tone] = TA_RESULTS[r] || [r || '', '']; return `<span class="pill${tone ? ' ' + tone : ''}" data-result="${esc(r || '')}">${esc(word)}</span>`; };
-const taWho = row => row.bot ? botDisplayName(row.bot) : row.actor_name || personDisplay(row.actor || '') || row.actor || '';
+// A row's caller: its bot, else the person its subject names (human:<id>).
+const taWho = row => row.bot ? botDisplayName(row.bot) : personDisplay(String(row.actor || '').replace(/^human:/, ''));
+const taCall = c => c.kind === 'use' ? 'Key taken by a run' : `${c.method || ''} ${c.path || ''}`.trim();
 const taFace = a => a.kind === 'bot' ? avatar(a.subject.slice(4), 22)
   : personAvatar((S.people || []).find(p => p.id === a.subject.split(':')[1]) || {name: a.name}, 22);
 
@@ -51,7 +55,8 @@ function taDrawHead() {
   const sub = ['API key', taHost(tool.base_url)].filter(Boolean).join(' · ');
   root.querySelector('[data-ta-head]').innerHTML = `<header class="tt-title"><span class="tt-tile lg" aria-hidden="true"><span class="nav-icon">api</span></span>
       <div class="tt-title-text"><h1>${esc(tool.name)}</h1><p class="muted">${esc(sub)}</p></div>
-      <div class="tt-title-act">${toolsPill(status)}${manage ? '<button type="button" class="ghost small" data-ta-check>Check now</button>' : ''}</div></header>
+      <div class="tt-title-act">${toolsPill(status)}${manage || tool.check_path ? '<button type="button" class="ghost small" data-ta-check>Check now</button>' : ''}${
+        manage ? '<button type="button" class="ghost small" data-ta-settings>Settings</button>' : ''}</div></header>
     <nav class="tt-tabs" aria-label="${esc(tool.name)}">${[['overview', base, 'Overview'], ['activity', base + '/activity', 'Activity']].map(([k, href, label]) =>
       `<a href="${href}" data-ta-tab="${k}"${(TA.tab || 'overview') === k ? ' class="cur" aria-current="page"' : ''}>${label}</a>`).join('')}</nav>`;
 }
@@ -85,8 +90,8 @@ function taWhoCard(d) {
 }
 function taRecentCard(d) {
   const base = '#/tools/api/' + encodeURIComponent(TA.id);
-  const rows = (d.recent || []).map(c => `<tr><td class="muted tnum" title="${esc(fmt(c.created_at))}">${esc(ago(c.created_at))}</td><td>${esc(taWho(c))}</td>
-      <td class="mono tt-call">${esc(c.method ? `${c.method} ${c.path || ''}` : 'Key read')}</td><td>${taResult(c.result)}</td></tr>`).join('');
+  const rows = (d.recent || []).map(c => `<tr><td class="muted tnum" title="${esc(fmt(c.at))}">${esc(ago(c.at))}</td><td>${esc(taWho(c))}</td>
+      <td class="mono tt-call">${esc(taCall(c))}</td><td>${taResult(c.result)}</td></tr>`).join('');
   return `<section class="card" id="tool-recent"><header><h2>Recent activity</h2><a class="ghost small settings-head-act" href="${base}/activity">See all</a></header>
     ${rows ? `<table class="tt-log tt-log-short"><tbody>${rows}</tbody></table>` : '<p class="muted">No calls yet.</p>'}</section>`;
 }
@@ -118,7 +123,7 @@ function taCheckCard(d) {
     : '<span class="tt-sq"></span>').join('');
   const line = tool.check_path ? `GET ${tool.check_path}${last ? ` → ${last.status_code || last.detail || ''}` : ''}` : 'No check path';
   return `<section class="card" id="tool-check"><header><h2>Check</h2></header>
-    <p class="muted">Every 30 min</p><p class="mono tt-check-line">${esc(line)}</p>
+    <p class="muted">${tool.delivery === 'proxy' ? 'Every 30 min' : 'On Check now'}</p><p class="mono tt-check-line">${esc(line)}</p>
     <div class="tt-squares" role="img" aria-label="${checks.filter(c => c.ok).length} of ${checks.length} checks worked">${squares}</div>
     <p class="muted tt-foot">Last 12 hours</p></section>`;
 }
@@ -142,12 +147,12 @@ async function taActivity(fresh) {
   try { d = await get(taPath(state.id, '/activity?' + q), {fresh: true}); }
   catch (e) { if (TA === state) body.querySelector('[data-ta-log]').innerHTML = `<div class="empty">${esc(e.message)}</div>`; return; }
   if (TA !== state || !body.isConnected) return;
-  state.act.rows = state.act.rows.concat(d.calls || d.activity || []);
-  state.act.cursor = d.next_cursor || '';
+  state.act.rows = state.act.rows.concat(d.rows || []);
+  state.act.cursor = d.next || '';
   const rows = state.act.rows;
   body.querySelector('[data-ta-log]').innerHTML = rows.length ? `<table class="tt-log"><thead><tr><th>Time</th><th>Who</th><th>Call</th><th>Level</th><th>Result</th></tr></thead>
-    <tbody>${rows.map(c => `<tr data-ta-call="${esc(c.id || '')}"><td class="tnum" title="${esc(fmt(c.created_at))}">${esc(ago(c.created_at))}</td><td>${esc(taWho(c))}</td>
-      <td class="mono tt-call">${esc(c.method ? `${c.method} ${c.path || ''}` : 'Key read')}${c.status_code ? ` <span class="muted">→ ${esc(c.status_code)}</span>` : ''}</td>
+    <tbody>${rows.map(c => `<tr data-ta-call="${esc(c.id || '')}"><td class="tnum" title="${esc(fmt(c.at))}">${esc(ago(c.at))}</td><td>${esc(taWho(c))}</td>
+      <td class="mono tt-call">${esc(taCall(c))}${c.status_code ? ` <span class="muted">→ ${esc(c.status_code)}</span>` : ''}</td>
       <td>${esc(taLevelName(c.access_level))}</td><td>${taResult(c.result)}${c.detail && c.result !== 'sent' ? `<span class="muted tt-log-why">${esc(c.detail)}</span>` : ''}</td></tr>`).join('')}</tbody></table>`
     : '<div class="empty" data-ta-none>Nothing yet.</div>';
   body.querySelector('[data-ta-more]').hidden = !state.act.cursor;
@@ -187,6 +192,7 @@ async function taClick(ev) {
     if (!await settingsConfirm({title: 'Move to proxy?', text: 'Calls go through Tico and are logged. The key leaves the computers on their next run.', ok: 'Move to proxy', danger: false})) return;
     return write(() => patch(taPath(id), {delivery: 'proxy'}));
   }
+  if (b.hasAttribute('data-ta-settings')) return taSettingsDialog();
   if (b.dataset.taReveal) return taReveal(b.dataset.taReveal);
   if (b.dataset.taRotate) return taKeyDialog(TA.data.keys.find(k => k.id === b.dataset.taRotate));
   if (b.hasAttribute('data-ta-key-add')) return taKeyDialog(null);
@@ -249,28 +255,50 @@ async function taReveal(cid) {
   } catch (e) { if (dialog.open) dialog.querySelector('[data-ta-reveal-wait]').textContent = e.message; }
 }
 
-// ----------------------------------------------------------------- Add tool › API
-function toolsApiCreate() {
-  const dialog = whDialog('Add API', `<label>Name<input name="name" maxlength="120" required autocomplete="off" placeholder="Acme CRM"></label>
-    <label>Base URL<input name="base_url" type="url" maxlength="500" autocomplete="off" spellcheck="false" placeholder="https://api.acme.example"></label>
-    <label>Key goes in<select name="auth_scheme">${TA_AUTH.map(([k, label]) => `<option value="${k}">${label}</option>`).join('')}</select></label>
-    <label data-ta-auth-name hidden>Header or parameter name<input name="auth_name" maxlength="100" autocomplete="off" spellcheck="false" placeholder="X-Api-Key"></label>
-    <label>Check path<input name="check_path" maxlength="300" autocomplete="off" spellcheck="false" placeholder="/v1/me"></label>`,
-    '<button class="primary" type="submit">Add</button>');
+// ----------------------------------------------------------------- Add tool › API, and a tool's Settings
+// One form for both: name, address, where the key goes and the check path. Settings sends only what changed.
+function taToolForm(tool) {
+  const t = tool || {}, scheme = String(t.auth_scheme || 'bearer'), [kind, named = ''] = scheme.split(/:(.*)/s);
+  const auth = TA_AUTH.some(([k]) => k === kind) ? kind : 'bearer';
+  return `<label>Name<input name="name" maxlength="80" required autocomplete="off" placeholder="Acme CRM" value="${esc(t.name || '')}"></label>
+    <label>Base URL<input name="base_url" type="url" maxlength="300" autocomplete="off" spellcheck="false" placeholder="https://api.acme.example" value="${esc(t.base_url || '')}"></label>
+    <label>Key goes in<select name="auth_scheme">${TA_AUTH.map(([k, label]) => `<option value="${k}"${k === auth ? ' selected' : ''}>${label}</option>`).join('')}</select></label>
+    <label data-ta-auth-name${['header', 'query'].includes(auth) ? '' : ' hidden'}>Header or parameter name<input name="auth_name" maxlength="100" autocomplete="off" spellcheck="false" placeholder="X-Api-Key" value="${esc(named)}"></label>
+    <label>Check path<input name="check_path" maxlength="300" autocomplete="off" spellcheck="false" placeholder="/v1/me" value="${esc(t.check_path || '')}"></label>`;
+}
+function taToolFields(dialog, data) {
+  let auth = data.get('auth_scheme');
+  if (['header', 'query'].includes(auth)) {
+    const name = String(data.get('auth_name') || '').trim();
+    if (!name) throw new Error('Name the header or parameter.');
+    auth += ':' + name;
+  }
+  return {name: String(data.get('name') || '').trim(), base_url: String(data.get('base_url') || '').trim(), auth_scheme: auth,
+    check_path: String(data.get('check_path') || '').trim()};
+}
+function taToolDialog(tool) {
+  const dialog = whDialog(tool ? 'Settings' : 'Add API', taToolForm(tool), `<button class="primary" type="submit">${tool ? 'Save' : 'Add'}</button>`);
   const scheme = dialog.querySelector('[name=auth_scheme]'), named = dialog.querySelector('[data-ta-auth-name]');
   scheme.onchange = () => { named.hidden = !['header', 'query'].includes(scheme.value); };
+  return dialog;
+}
+function toolsApiCreate() {
+  const dialog = taToolDialog(null);
   whSubmit(dialog, async data => {
-    let auth = data.get('auth_scheme');
-    if (['header', 'query'].includes(auth)) {
-      const name = String(data.get('auth_name') || '').trim();
-      if (!name) throw new Error('Name the header or parameter.');
-      auth += ':' + name;
-    }
-    const made = await post('/v2/api-tools', {name: data.get('name'), base_url: data.get('base_url') || undefined, auth_scheme: auth,
-      check_path: data.get('check_path') || undefined});
+    const f = taToolFields(dialog, data);
+    const made = await post('/v2/api-tools', {name: f.name, base_url: f.base_url || undefined, auth_scheme: f.auth_scheme,
+      check_path: f.check_path || undefined});
     dialog.close(); toast('Added');
-    const id = made?.tool?.id || made?.id;
-    location.hash = id ? '#/tools/api/' + encodeURIComponent(id) : TOOLS_ROUTE;
+    location.hash = made?.id ? '#/tools/api/' + encodeURIComponent(made.id) : TOOLS_ROUTE;   // the tool, as POST /api-tools answers it
+  });
+}
+function taSettingsDialog() {
+  const state = TA, tool = state.data.tool, dialog = taToolDialog(tool);
+  whSubmit(dialog, async data => {
+    const f = taToolFields(dialog, data), changed = Object.fromEntries(Object.entries(f).filter(([k, v]) => v !== (tool[k] || '')));
+    if (Object.keys(changed).length) await patch(taPath(state.id), changed);
+    dialog.close(); toast('Saved');
+    await taLoad(); if (TA === state) { taDrawHead(); if (state.tab !== 'activity') taDrawOverview(); }
   });
 }
 

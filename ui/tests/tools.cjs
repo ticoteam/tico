@@ -1,4 +1,4 @@
-// Tools (ui/app/tools.js, tools-api.js and the inbox pages under it) over a contract-shaped fake API: GET
+// Tools (ui/app/tools.js, tools-api.js and the inbox pages under it) over a fake API in backend/api_tools.py's shapes: GET
 // /api/v2/tool-index (rows, counts), one API tool (GET/PATCH /api/v2/api-tools/<id>, PUT …/access/<subject>, POST
 // …/check, GET …/activity) and the mailboxes fake (support/mailboxes-fake.cjs) for a mailbox's page and its Limits.
 // Covers: the list, its filters and Needs you; an API tool's level change, Check now and Move to proxy; the Activity
@@ -12,48 +12,56 @@ const {mailboxesFake, open} = require('./support/mailboxes-fake.cjs');
 const {googleFake} = require('./support/google-fake.cjs');
 
 const at = mins => new Date(Date.UTC(2026, 10, 5, 12, 0) - mins * 60000).toISOString();
-const who = (kind, id, name) => ({kind, id, name, initials: name.split(' ').map(w => w[0]).join('').slice(0, 2)});
+// Rows as backend/api_tools.py index_page sends them: `who` is {kind: 'bot'|'person', id, name, initials}.
+const who = (kind, id, name) => ({kind, id, name, initials: name.split(' ').map(w => w[0]).join('').slice(0, 2).toUpperCase()});
 const ROWS = [
-  {id: 'api:t-crm', kind: 'api', name: 'Acme CRM', detail: 'api.crm.acme.example', way: 'API key', status: {tone: 'ok', text: 'Working'},
-    who: [who('human', 'ana', 'Ana'), who('bot', 'support-bot', 'Support bot'), who('bot', 'sales', 'Sales'), who('bot', 'ops', 'Ops'), who('bot', 'books', 'Books')],
-    who_total: 7, needs_you: false, href: '#/tools/api/t-crm'},
-  {id: 'api:t-billing', kind: 'api', name: 'Acme Billing', detail: 'billing.acme.example', way: 'API key', status: {tone: 'fail', text: 'Key rejected'},
-    who: [who('bot', 'books', 'Books')], who_total: 1, needs_you: true, href: '#/tools/api/t-billing'},
-  {id: 'mailbox:mb-support', kind: 'mailbox', name: 'support@acme.example', detail: 'Shared inbox', way: 'Google', status: {tone: 'ok', text: 'Connected'},
-    who: [who('human', 'cara', 'Cara'), who('bot', 'support-bot', 'Support bot')], who_total: 2, needs_you: false, href: '#/tools/mailbox/support@acme.example'},
-  {id: 'number:ibx-1', kind: 'number', name: '+1 555 0100', detail: 'Texts', way: 'Tico number', status: {tone: 'ok', text: 'On'},
+  {id: 'api:t-crm', kind: 'api', name: 'Acme CRM', detail: 'api.crm.acme.example', way: 'Proxy', status: {tone: 'ok', text: 'Working'},
+    who: [who('person', 'ana', 'Ana'), who('bot', 'support-bot', 'Support bot'), who('bot', 'sales', 'Sales'), who('bot', 'ops', 'Ops'), who('bot', 'books', 'Books')],
+    who_total: 7, needs_you: false, href: '#/tools/api/t-crm', service: 'acme-crm'},
+  {id: 'api:t-billing', kind: 'api', name: 'Acme Billing', detail: 'billing.acme.example', way: 'On computers', status: {tone: 'fail', text: 'Key rejected'},
+    who: [who('bot', 'books', 'Books')], who_total: 1, needs_you: true, href: '#/tools/api/t-billing', service: 'acme-billing'},
+  {id: 'mailbox:support@acme.example', kind: 'mailbox', name: 'support@acme.example', detail: '', way: 'Google', status: {tone: 'ok', text: 'Connected'},
+    who: [who('person', 'cara', 'Cara'), who('bot', 'support-bot', 'Support bot')], who_total: 2, needs_you: false,
+    href: '#/tools/mailbox/support@acme.example', mailbox_id: 'mb-support'},
+  {id: 'number:ibx-1', kind: 'number', name: 'Mobile number', detail: '+1 555 0100', way: 'Tico', status: {tone: 'ok', text: 'On'},
     who: [], who_total: 0, needs_you: false, href: '#/tools/number/ibx-1'},
-  {id: 'slack', kind: 'slack', name: 'Slack', detail: 'acme.slack.com', way: 'Slack app', status: {tone: 'wait', text: 'Waiting for OK'},
-    who: [who('human', 'ana', 'Ana')], who_total: 12, needs_you: true, href: '#/tools/slack'},
+  {id: 'slack', kind: 'slack', name: 'Slack', detail: 'acme.slack.com', way: 'Slack app', status: {tone: 'wait', text: 'Waiting'},
+    who: [who('bot', 'support-bot', 'Support bot')], who_total: 12, needs_you: true, href: '#/tools/slack'},
   {id: 'github', kind: 'github', name: 'GitHub', detail: '', way: 'GitHub App', status: {tone: 'idle', text: 'Off'},
     who: [], who_total: 0, needs_you: false, href: '#/tools/github'},
 ];
 const COUNTS = {all: 6, needs_you: 2, api: 2, mail: 2, websites: 0};
 
-// One API tool's document as GET /api/v2/api-tools/<id> sends it, and the writes that change it.
+// One API tool's document as GET /api/v2/api-tools/<id> sends it (backend/api_tools.py detail), and the writes that
+// change it, answered as the hub answers them. A logged path keeps the query's keys only.
 function apiFake() {
-  const checks = n => Array.from({length: n}, (_, i) => ({ok: i !== 3, status_code: i === 3 ? 401 : 200, detail: i === 3 ? 'Key rejected' : '', checked_at: at(i * 30)}));
-  const call = (i, result, extra = {}) => ({id: 'c' + i, tool_id: 't-crm', credential_id: 'k-read', actor: 'bot:support-bot', bot: 'support-bot', access_level: 'read',
-    method: 'GET', path: '/v1/leads?q=acme', status_code: result === 'sent' ? 200 : null, result, detail: result === 'sent' ? '' : 'Write needs Read and write',
-    duration_ms: 120, created_at: at(i * 7), ...extra});
+  const checks = (n, key) => Array.from({length: n}, (_, i) => ({ok: i !== 3, status_code: i === 3 ? 401 : 200,
+    detail: i === 3 ? 'Key rejected' : 'Working', checked_at: at(i * 30), credential_id: key}));
+  const call = (i, result, extra = {}) => ({id: 'c' + i, kind: 'call', actor: 'bot:support-bot', bot: 'support-bot', access_level: 'read',
+    method: 'GET', path: '/v1/leads?q=', status_code: result === 'sent' ? 200 : null, result, detail: '', duration_ms: 120, at: at(i * 7), ...extra});
+  const refused = i => call(i, 'refused', {actor: 'bot:ops', bot: 'ops', access_level: '', method: 'POST', path: '/v1/leads', status_code: 403,
+    detail: 'Ops has no access to Acme CRM. Set a level in Tools > Acme CRM > Who can use it'});
+  const key = (id, name, preview, level, extra) => ({id, name, preview, access_level: level, expires_on: null, env: 'ACME_CRM_API_KEY', username: '',
+    stored: true, created_by: 'human:ana', created_at: at(60 * 24 * 30), last_used_at: null, last_used_by: '', ...extra});
   const tools = {
     't-crm': {tool: {id: 't-crm', name: 'Acme CRM', service: 'acme-crm', base_url: 'https://api.crm.acme.example', auth_scheme: 'bearer', check_path: '/v1/me', delivery: 'proxy'},
-      keys: [{id: 'k-read', name: 'Read key', preview: 'sk_…4f2a', access_level: 'read', expires_on: '2027-01-31', created_by: 'ana', created_at: at(60 * 24 * 30), last_used_at: at(4), last_used_by: 'support-bot'},
-        {id: 'k-write', name: 'Write key', preview: 'sk_…9c1d', access_level: 'read_write', expires_on: null, created_by: 'ana', created_at: at(60 * 24 * 20), last_used_at: at(90), last_used_by: 'sales'}],
-      access: [{subject: 'human:ana', kind: 'human', name: 'Ana', initials: 'A', level: 'read_write', last_used_at: at(200)},
-        {subject: 'bot:support-bot', kind: 'bot', name: 'Support bot', initials: 'SB', level: 'read', last_used_at: at(4)},
-        {subject: 'bot:sales', kind: 'bot', name: 'Sales', initials: 'S', level: 'read_write', last_used_at: at(90)}],
-      checks: checks(24), recent: [call(1, 'sent'), call(2, 'refused', {method: 'POST', path: '/v1/leads'}), call(3, 'sent')],
-      status: {tone: 'ok', text: 'Working'}, can_manage: true},
+      keys: [key('k-read', 'Read key', 'sk_…4f2a', 'read', {expires_on: '2027-01-31', last_used_at: at(4), last_used_by: 'support-bot'}),
+        key('k-write', 'Write key', 'sk_…9c1d', 'read_write', {created_at: at(60 * 24 * 20), last_used_at: at(90), last_used_by: 'sales'})],
+      access: [{subject: 'human:ana', kind: 'person', id: 'ana', name: 'Ana', initials: 'A', level: 'read_write', last_used_at: at(200)},
+        {subject: 'bot:support-bot', kind: 'bot', id: 'support-bot', name: 'Support bot', initials: 'SB', level: 'read', last_used_at: at(4)},
+        {subject: 'bot:sales', kind: 'bot', id: 'sales', name: 'Sales', initials: 'S', level: 'read_write', last_used_at: at(90)}],
+      checks: checks(24, 'k-read'), recent: [call(1, 'sent'), refused(2), call(3, 'sent')],
+      status: {tone: 'ok', text: 'Working'}, needs_you: false, can_manage: true},
     't-billing': {tool: {id: 't-billing', name: 'Acme Billing', service: 'acme-billing', base_url: 'https://billing.acme.example', auth_scheme: 'header:X-Api-Key', check_path: '/status', delivery: 'computer'},
-      keys: [{id: 'k-bill', name: 'Key', preview: 'ak_…77e0', access_level: 'read_write', expires_on: null, created_by: 'ana', created_at: at(60 * 24 * 90), last_used_at: null, last_used_by: null}],
-      access: [{subject: 'bot:books', kind: 'bot', name: 'Books', initials: 'B', level: 'read_write', last_used_at: null}],
-      checks: checks(5).map(c => ({...c, ok: false, status_code: 401, detail: 'Key rejected'})), recent: [], status: {tone: 'fail', text: 'Key rejected'}, can_manage: true},
+      keys: [key('k-bill', 'Key', 'ak_…77e0', 'read_write', {env: 'ACME_BILLING_API_KEY', created_at: at(60 * 24 * 90)})],
+      access: [{subject: 'bot:books', kind: 'bot', id: 'books', name: 'Books', initials: 'B', level: 'read_write', last_used_at: null}],
+      checks: checks(5, 'k-bill').map(c => ({...c, ok: false, status_code: 401, detail: 'Key rejected'})), recent: [],
+      status: {tone: 'fail', text: 'Key rejected'}, needs_you: true, can_manage: true},
   };
-  const calls = [call(1, 'sent'), call(2, 'refused', {method: 'POST', path: '/v1/leads'}), call(3, 'sent'), call(4, 'failed', {status_code: 502, detail: 'Upstream 502'})];
+  const calls = [call(1, 'sent'), refused(2), call(3, 'sent'), call(4, 'failed', {status_code: null, detail: 'ConnectTimeout: timed out'})];
   const fake = {tools, writes: [], reads: []};
   fake.answer = (p, method, body, url) => {
-    if (p === '/api/v2/tool-index') return {rows: structuredClone(ROWS), counts: COUNTS};
+    if (p === '/api/v2/tool-index') return {rows: structuredClone(ROWS), counts: COUNTS, next: null};
     if (p === '/api/v2/tools') return {integrations: []};
     if (p.startsWith('/api/v2/tools/')) return {service: decodeURIComponent(p.split('/').pop()), title: 'GitHub', access: '', writes: 'read', owner: 'tico', declared_as: '', body: '', queries: [], learnings: [], read_only: true};
     const m = p.match(/^\/api\/v2\/api-tools\/([^/]+)(\/.*)?$/);
@@ -62,18 +70,22 @@ function apiFake() {
     const t = tools[decodeURIComponent(m[1])], rest = m[2] || '';
     if (!t) return {status: 404, body: {error: {code: 'not_found', detail: 'No such tool', retryable: false}}};
     if (!rest && method === 'GET') return structuredClone(t);
-    if (!rest && method === 'PATCH') { Object.assign(t.tool, body); return structuredClone(t); }
+    if (!rest && method === 'PATCH') { Object.assign(t.tool, body); return structuredClone(t.tool); }
     const acc = rest.match(/^\/access\/(.+)$/);
     if (acc && method === 'PUT') {
       const subject = decodeURIComponent(acc[1]), row = t.access.find(a => a.subject === subject);
       if (body.level === 'none') t.access = t.access.filter(a => a !== row); else if (row) row.level = body.level;
-      return {access: t.access};
+      return {subject, level: body.level === 'none' ? null : body.level};
     }
-    if (rest === '/check' && method === 'POST') { t.checks.unshift({ok: true, status_code: 200, detail: 'Checked now', checked_at: at(0)}); return t.checks[0]; }
+    if (rest === '/check' && method === 'POST') {
+      const rows = t.keys.map(k => ({credential_id: k.id, ok: true, status_code: 200, detail: 'Working', checked_at: at(-5)}));
+      t.checks.unshift(...rows);
+      return {ok: true, status_code: 200, detail: 'Working', checked_at: at(-5), rows};
+    }
     if (rest === '/activity') {
       fake.reads.push(url.search);
       const result = url.searchParams.get('result');
-      return {calls: calls.filter(c => !result || c.result === result), next_cursor: null};
+      return {rows: calls.filter(c => !result || c.result === result), next: null};
     }
     return undefined;
   };
@@ -146,9 +158,10 @@ async function start(browser, hash, {width = 1440, ready} = {}) {
         await page.locator('[data-ta-subject="bot:support-bot"][data-ta-level="read_write"]').click();
         await page.locator('[data-ta-subject="bot:support-bot"][data-ta-level="read_write"][aria-checked="true"]').waitFor();
         assert.deepEqual(api.writes.at(-1), {method: 'PUT', path: '/api/v2/api-tools/t-crm/access/bot%3Asupport-bot', body: {level: 'read_write'}}, `${tag}: level write`);
-        // Check now posts and redraws the squares with the new one last.
+        // Check now posts and redraws the squares with the new ones last.
+        const before = await page.locator('#tool-check .tt-squares > :last-child').getAttribute('title');
         await page.locator('[data-ta-check]').click();
-        await page.waitForFunction(() => document.querySelector('#tool-check .tt-squares')?.lastElementChild?.title.includes('Checked now'));
+        await page.waitForFunction(t => document.querySelector('#tool-check .tt-squares')?.lastElementChild?.title !== t, before);
         assert.equal(api.writes.at(-1).path, '/api/v2/api-tools/t-crm/check', `${tag}: check write`);
         assert.equal(await page.locator('#tool-check .tt-sq.fail').count(), 1, `${tag}: still 24 squares, one failed`);
         assert.equal(await sideways(page), false, `${tag}: the API page has no sideways scroll`);

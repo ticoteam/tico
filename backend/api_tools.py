@@ -308,9 +308,11 @@ def detail(c, who, tool_id, admins, auth=None):
 
 
 def activity(c, who, tool_id, admins, auth, cursor="", limit=50, result=""):
-    """Calls through the proxy and uses of the tool's keys by runs, newest first. `cursor` is the last row's
-    `<at>|<id>`."""
+    """Calls through the proxy and, for a tool whose key goes to computers, the newest time each caller's run took a
+    key (credential_uses keeps one row a caller), newest first. A proxied tool's uses are its calls, already listed, so
+    its use rows are left out. `cursor` is the last row's `<at>|<id>`."""
     _readable(c, who, tool_id, admins)
+    proxied = tool_row(c, tool_id)["delivery"] == "proxy"
     admin = _admin(c, who, admins)
     at, _, last = str(cursor or "").partition("|")
     if cursor and not last:
@@ -328,7 +330,7 @@ def activity(c, who, tool_id, admins, auth, cursor="", limit=50, result=""):
         for row in c.execute(sql + " ORDER BY created_at DESC, id DESC LIMIT ?", (*args, ACTIVITY_MAX * 2)):
             if _call_visible(c, who, auth, admin, row):
                 rows.append(_call_view(row))
-    if result in ("", "use"):
+    if result in ("", "use") and not proxied:
         keys = {k["id"]: k for k in _keys(c, tool_id)}
         if keys:
             marks = ",".join("?" * len(keys))
@@ -838,7 +840,7 @@ def _connection_rows(view):
     from . import connections as CN
     out = []
     for key, row in CN.inboxes(view, None, INDEX_LIMIT_MAX):
-        number = row["configure"].startswith("#/settings/inboxes/number/")
+        number = row.get("channel") == "sms"
         tone, text = CONNECTION_STATUS.get(row["status"], ("idle", row["status"]))
         out.append(_index_row(("number:" if number else "tico:") + key, "number" if number else "mailbox", row["name"],
                               {"tone": tone, "text": text}, "#/tools/number/" + key, detail=row["detail"],

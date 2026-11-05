@@ -9,7 +9,8 @@ it brings in, the bots on it and where to change it:
     {id, kind, name, detail, status, scope, readers, bots: [{slug, name}], more_bots, configure, can_configure}
 
 `scope` is `company`, `team` or `person`; `readers` is who reads what comes in, in words. `status` is `on`, `off`,
-`waiting`, `error` or `paused`. `configure` is the app address of the existing card that changes it.
+`waiting`, `error` or `paused`. `configure` is the app address of the existing card that changes it. A Tico address
+or number's row also says its `channel` (`email` or `sms`): both open the same page under Tools.
 
 Who sees which rows: the owner and admins see every row; anyone else sees their own (their mailbox, the webhooks they
 made) and the company's rows they may read: Slack and GitHub once connected, a Tico address or number in their audience
@@ -107,7 +108,7 @@ def slack_rows(v):
             readers += [str(r).removeprefix("bot:") for r in (H._json(raw, []) or []) if isinstance(r, str)]
     bots, more = v.bots(readers)
     status = {"off": "off", "waiting": "waiting", "connected": "on"}.get(state["state"], "error")
-    return [row("slack", "", "Slack", status, "company", "Everyone", "#/library/tools/slack",
+    return [row("slack", "", "Slack", status, "company", "Everyone", "#/tools/slack",
                 detail=state["message"] if status == "error" else "", bots=bots, more=more, can=v.who.role == "owner")]
 
 
@@ -124,7 +125,7 @@ def github_rows(v):
         if app_row and table(v.c, "bot_repo_access") else []
     bots, more = v.bots(slugs)
     status = "off" if not app_row else "on" if app_row["installation_id"] else "waiting"
-    return [row("github", "", "GitHub", status, "company", "Bots with repository access", "#/library/tools/github",
+    return [row("github", "", "GitHub", status, "company", "Bots with repository access", "#/tools/github",
                 detail=app_row["org"] if app_row else "", bots=bots, more=more, can=v.who.role == "owner")]
 
 
@@ -149,13 +150,14 @@ def mailbox_rows(v):
         status = "error" if state and state["error"] else "on" if state and state["synced_at"] else "waiting"
         bots, more = v.bots([box["bot"]])
         out.append(row("mailbox", address, address, status, "person", v.name("human:" + box["person_id"]),
-                       "#/settings/inboxes", detail=state["error"] or "" if state else "", bots=bots, more=more,
+                       "#/tools/mailbox/" + address, detail=state["error"] or "" if state else "", bots=bots, more=more,
                        can=v.admin or v.who.actor == "human:" + box["person_id"]))
     return out
 
 
 def inboxes(v, after, n):
-    """Tico addresses and numbers the reader is in the audience of; each links to its page in Settings > Inboxes."""
+    """Tico addresses and numbers the reader is in the audience of; each links to its page under Tools (one page for
+    both, #/tools/number/<id>)."""
     from . import groups as G
     from . import inbound
     if not table(v.c, "inbound_inboxes"):
@@ -168,9 +170,9 @@ def inboxes(v, after, n):
         team = r["audience"] == "team" and r["group_id"]
         readers = (groups.get(team) or {}).get("name") or team if team else "Everyone"
         status = "on" if r["state"] == "active" else r["state"] if r["state"] in ("off", "error", "paused") else "waiting"
-        page = "#/settings/inboxes/" + ("number/" if r["kind"] == "sms" else "tico/") + r["inbox_id"]
+        page = "#/tools/number/" + r["inbox_id"]
         out.append((r["inbox_id"], row("inbox", r["inbox_id"], r["name"], status, "team" if team else "company",
-                                       readers, page, detail=r["address"], can=v.admin)))
+                                       readers, page, detail=r["address"], can=v.admin) | {"channel": r["kind"]}))
     return out
 
 
@@ -247,7 +249,7 @@ def postal_rows(v):
     if not intake and not letters:
         return []
     return [row("postal", "", "Physical mail", "on", "company", "Read grants and each letter's task readers",
-                "#/settings/inboxes/settings/letters-in",
+                "#/tools/address/intake",
                 detail=(intake["address"] or "") if intake else "", can=v.admin)]
 
 
