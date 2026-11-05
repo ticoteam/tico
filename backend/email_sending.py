@@ -463,7 +463,7 @@ def decision(c, auth, row, *, dispatch=False):
             blocked.append("automation_revoked")
     if row["calendar_action_id"]:
         action = c.execute("SELECT * FROM calendar_actions WHERE id=?", (row["calendar_action_id"],)).fetchone()
-        if not action or action["requested_by"] != row["actor"] or action["status"] not in ("running", "done"):
+        if not action or action["requested_by"] != row["actor"] or action["status"] not in ("running", "succeeded"):
             blocked.append("calendar_revoked")
     if c.execute("SELECT 1 FROM email_suppressed_recipients WHERE mailbox=? AND address IN ("
                  + ",".join("?" for _ in recipients) + ") LIMIT 1", (row["mailbox"], *recipients)).fetchone():

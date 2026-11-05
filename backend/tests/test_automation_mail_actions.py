@@ -893,3 +893,18 @@ def test_the_runner_s_own_commands_need_no_owner_proof_wherever_its_registration
     assert len(computer.calendar.created_events) == 1
     with api.app.state.store.read() as c:
         assert c.execute("SELECT status FROM calendar_actions WHERE id=?", (queued["id"],)).fetchone()[0] == "succeeded"
+
+
+def test_completed_silent_calendar_hold_does_not_revoke_its_approved_invitation(api, computer):
+    booking = {"calendar": BOX, "title": "Planning", "start": "2099-01-01T09:00:00+00:00",
+               "end": "2099-01-01T09:30:00+00:00", "attendees": ["ben@acme.example"]}
+    queued = post(api, "calendar/appointments", booking)["action"]
+    assert computer.worker.calendar_action_tick() == 1
+    assert computer.gmail.sent == []
+    with api.app.state.store.read() as c:
+        assert c.execute("SELECT status FROM calendar_actions WHERE id=?", (queued["id"],)).fetchone()[0] == "succeeded"
+        send = c.execute("SELECT * FROM email_sends WHERE calendar_action_id=?", (queued["id"],)).fetchone()
+        assert send is not None and send["state"] == "waiting_approval"
+    approve_and_dispatch(api, computer, send["id"])
+    assert len(computer.gmail.sent) == 1
+    assert "text/calendar" in str(computer.sent()[0])
