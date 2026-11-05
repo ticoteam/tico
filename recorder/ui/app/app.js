@@ -421,8 +421,12 @@
     if (data?.gone) return '';
     if ((!data || !data.sections) && !recovered.length) return '<section class="section"><h2>Tasks</h2>' + (data?.gone ? '' : '<span>Loading…</span>') + '</section>';
     const here = (data?.presence?.actors || []).filter(p => p.actor !== a.actor).map(p => p.name);
+    const rows = new Map(Object.values(data?.sections || {}).flat().map(it => [it.id, it]));
+    for (const it of recovered) {
+      if (!rows.has(it.id) || it.version >= rows.get(it.id).version) rows.set(it.id, it);
+    }
     return `<section class="section" data-shared-panel><div class="section-head"><h2>Tasks</h2><span class="aside">${here.length ? esc(here.join(', ') + (here.length === 1 ? ' is here' : ' are here')) : ''}</span></div>` +
-      [...Object.values(data?.sections || {}).flat(), ...recovered.filter(it => !Object.values(data?.sections || {}).flat().some(row => row.id === it.id))].map(it => {
+      [...rows.values()].map(it => {
         const draft = sharedDraft(it.id);
         if (it.status !== 'proposed' && !(draft.sending && it.updated_by === a.actor) && !draft.closedAcknowledged && (draft.closed || draft.flight || Object.keys(draft.dirty).length)) {
           return sharedClosedCard(it, draft, a);

@@ -174,10 +174,11 @@ const path = require('node:path');
       await page.evaluate(() => {
         const f=window.pendingFixture;
         f.a.saved=true; f.a.shared_scope+='-saved';
-        f.a.shared={can_send:true,sections:{task:[f.adopted]}};
+        f.a.shared={can_send:true,sections:{task:[{...f.adopted,version:1,status:'proposed'}]}};
       });
       await closed.getByText('Sent by Sam Okafor',{exact:true}).waitFor();
       assert.match(await closed.locator('pre').textContent(),/My native unsaved title/);
+      await page.evaluate(()=>window.pendingFixture.a.shared.sections.task=[window.pendingFixture.adopted]);
       await closed.getByRole('button',{name:close,exact:true}).click();
       await closed.locator('pre').waitFor({state:'detached'});
       if(close==='Copy') assert.match(await page.evaluate(()=>window.copiedText),/My native unsaved title/);
