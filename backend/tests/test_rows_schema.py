@@ -17,6 +17,7 @@ TABLES = {
     rows.LetterBotSettingRow: "letter_bot_settings",
     rows.LetterRow: "letters",
     rows.LetterProofRow: "letter_proofs",
+    rows.LetterSourceRow: "letter_sources",
     rows.AlertPreferenceRow: "alert_preferences",
     rows.AlertCompanySettingRow: "alert_company_settings",
     rows.PersonalAlertRow: "personal_alerts",

@@ -38,7 +38,7 @@ from .hubdb import now, shift
 # Emptied, never pruned: one surviving row is one thing the copy could do.
 EMPTY = (
     # Provider jobs and send grants never become actionable in a rehearsal copy.
-    "letter_proofs", "letters", "letter_outbox_grants",
+    "letter_sources", "letter_proofs", "letters", "letter_outbox_grants",
     # Maintenance's working state: its listings, its handoffs, and the Idempotency-Key receipts of its runs
     "maintenance_listings", "maintenance_handoffs", "maintenance_requests",
     # queued work

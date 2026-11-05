@@ -123,7 +123,9 @@ class, pages, cost, date and sending bot) and may cancel; recipients, contents a
 a task follow their sender, manager and outbox grants. HQ keeps no letter contents.
 
 External agents keep their narrower thread access rules when Tico checks a saved proof or an approved send.
-Changes to a source task's privacy or parties update open outbox rows through the live stream.
+Changes to a source task's privacy or parties, or a source thread's audience or members, update open outbox rows
+through the live stream. A row disappears when the viewer loses all access. Large source changes coalesce into one
+outbox invalidation; other changes replace only the affected rows.
 
 Submission durably commits its quote, approval consumption and a key derived from the Tico letter id before the
 HTTP call. A known pre-claim refusal releases the hold and remains cancellable; a later attempt gets a new quote

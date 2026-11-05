@@ -605,6 +605,12 @@ class LetterRow(TypedDict):
     updated_at: str
 
 
+class LetterSourceRow(TypedDict):
+    letter_id: str
+    source_type: str
+    source_id: str
+
+
 class LetterProofRow(TypedDict):
     letter_id: str
     blob_id: str

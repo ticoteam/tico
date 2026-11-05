@@ -785,6 +785,7 @@ def test_real_source_task_privacy_and_party_changes_patch_finished_letter_rows(a
         with api.app.state.store.transaction() as c:
             c.execute("UPDATE letters SET task_id=?,thread_id=?,source_provenance=? WHERE id=?",
                       (columns.get("task_id"), columns.get("thread_id"), json.dumps(frozen), row["id"]))
+            L.freeze_sources(c, row["id"])
     assert all(not fetch(api, row)["redacted"] for row in rows)
     with api.app.state.store.read() as c:
         before = events.latest(c)
