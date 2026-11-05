@@ -245,13 +245,14 @@ def test_page_audience_and_task_ceiling_intersect_on_real_paths(api, monkeypatch
     paths = ["tasks", "tasks/" + tid, "tasks/" + tid + "/context", "tasks/" + tid + "/files",
              "tasks/" + data["made"]["task"]["id"] + "/comments",
              "tasks/" + data["made"]["task"]["id"] + "/answers",
-             "messages/" + data["made"]["question"]["id"],
-             "messages/" + data["answered"]["comment"]["id"],
-             "origins/" + data["answered"]["comment"]["id"],
              "pages", "pages?task=" + tid, "files/search?q=source", "bots/finance/files"]
     page_secrets = tuple(x for x in secrets(data) if x not in (data["meeting"], "Restricted meeting"))
     for path in paths:
         no_sources(get(api, path, token), page_secrets)
+    # Main denies the entire generated review message when the principal loses its page audience.
+    for mid in (data["made"]["question"]["id"], data["answered"]["comment"]["id"]):
+        for route in ("messages/", "origins/"):
+            no_sources(get(api, route + mid, token, expected=404 if excluded == "bot" else 200), page_secrets)
     get(api, "pages/" + fid, token, expected=404)
     assert api.get(page["src"]).status_code == 404
     assert_file_metadata_hidden(api, fid, token)
