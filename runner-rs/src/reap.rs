@@ -49,7 +49,11 @@ pub fn main(args: &[String]) -> i32 {
             return 2;
         }
     };
-    let mut status = match std::fs::OpenOptions::new().create(true).append(true).open(path) {
+    let mut status = match std::fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(path)
+    {
         Ok(f) => f,
         Err(e) => {
             eprintln!("tico-runner {FLAG}: {path}: {e}");
@@ -63,9 +67,18 @@ pub fn main(args: &[String]) -> i32 {
     }
     // SAFETY: handlers only touch atomics and call kill.
     unsafe {
-        libc::signal(libc::SIGTERM, pass_on as extern "C" fn(libc::c_int) as libc::sighandler_t);
-        libc::signal(libc::SIGINT, pass_on as extern "C" fn(libc::c_int) as libc::sighandler_t);
-        libc::signal(KEEP, keep as extern "C" fn(libc::c_int) as libc::sighandler_t);
+        libc::signal(
+            libc::SIGTERM,
+            pass_on as extern "C" fn(libc::c_int) as libc::sighandler_t,
+        );
+        libc::signal(
+            libc::SIGINT,
+            pass_on as extern "C" fn(libc::c_int) as libc::sighandler_t,
+        );
+        libc::signal(
+            KEEP,
+            keep as extern "C" fn(libc::c_int) as libc::sighandler_t,
+        );
     }
     let mut command = std::process::Command::new(&argv[0]);
     command.args(&argv[1..]);
@@ -76,7 +89,13 @@ pub fn main(args: &[String]) -> i32 {
         unsafe {
             command.pre_exec(|| {
                 // Claude dies with this process, so a stop that has to kill it leaves nothing behind.
-                libc::prctl(libc::PR_SET_PDEATHSIG, libc::SIGKILL as libc::c_ulong, 0, 0, 0);
+                libc::prctl(
+                    libc::PR_SET_PDEATHSIG,
+                    libc::SIGKILL as libc::c_ulong,
+                    0,
+                    0,
+                    0,
+                );
                 libc::signal(libc::SIGTERM, libc::SIG_DFL);
                 libc::signal(libc::SIGINT, libc::SIG_DFL);
                 libc::signal(KEEP, libc::SIG_DFL);
@@ -98,7 +117,11 @@ pub fn main(args: &[String]) -> i32 {
     let _ = status.flush();
     // Claude's pipes are Claude's: the runner reads its end of the turn from their closing, which must not wait for
     // this parent.
-    if let Ok(null) = std::fs::OpenOptions::new().read(true).write(true).open("/dev/null") {
+    if let Ok(null) = std::fs::OpenOptions::new()
+        .read(true)
+        .write(true)
+        .open("/dev/null")
+    {
         use std::os::fd::AsRawFd;
         // SAFETY: dup2 onto this process's own standard input and output.
         unsafe {
@@ -136,7 +159,10 @@ pub fn main(args: &[String]) -> i32 {
 
 /// Claude's pid, from its parent's status file.
 pub fn claude(path: &std::path::Path) -> Option<u32> {
-    std::fs::read_to_string(path).ok()?.lines().find_map(|l| l.strip_prefix("claude ")?.trim().parse().ok())
+    std::fs::read_to_string(path)
+        .ok()?
+        .lines()
+        .find_map(|l| l.strip_prefix("claude ")?.trim().parse().ok())
 }
 
 /// The exit codes in a status file, by pid.
@@ -144,7 +170,10 @@ pub fn statuses(path: &std::path::Path) -> std::collections::HashMap<u32, i32> {
     std::fs::read_to_string(path)
         .unwrap_or_default()
         .lines()
-        .filter_map(|l| l.split_once(' ').and_then(|(p, c)| Some((p.parse().ok()?, c.trim().parse().ok()?))))
+        .filter_map(|l| {
+            l.split_once(' ')
+                .and_then(|(p, c)| Some((p.parse().ok()?, c.trim().parse().ok()?)))
+        })
         .collect()
 }
 
@@ -157,10 +186,20 @@ pub mod tests {
     pub const ARGS: &str = "TICO_REAP_TEST_ARGS";
 
     /// This test binary run as the parent of `script`: it runs only `as_parent`, which runs `main`.
-    fn parent(status: &std::path::Path, dir: &std::path::Path, script: &str) -> std::process::Child {
+    fn parent(
+        status: &std::path::Path,
+        dir: &std::path::Path,
+        script: &str,
+    ) -> std::process::Child {
         let args = serde_json::json!([status, "--", "sh", "-c", script]);
         std::process::Command::new(std::env::current_exe().unwrap())
-            .args(["reap::tests::as_parent", "--exact", "--test-threads=1", "--nocapture", "-q"])
+            .args([
+                "reap::tests::as_parent",
+                "--exact",
+                "--test-threads=1",
+                "--nocapture",
+                "-q",
+            ])
             .env(ARGS, args.to_string())
             .current_dir(dir)
             .stdout(std::process::Stdio::null())
@@ -170,7 +209,9 @@ pub mod tests {
 
     #[test]
     fn as_parent() {
-        let Ok(args) = std::env::var(ARGS) else { return };
+        let Ok(args) = std::env::var(ARGS) else {
+            return;
+        };
         let args: Vec<String> = serde_json::from_str(&args).unwrap();
         std::process::exit(main(&args));
     }
@@ -190,14 +231,22 @@ pub mod tests {
             std::thread::sleep(Duration::from_millis(20));
         }
         std::thread::sleep(Duration::from_millis(100));
-        let shell: u32 = std::fs::read_to_string(dir.join("shell.pid")).unwrap().trim().parse().unwrap();
+        let shell: u32 = std::fs::read_to_string(dir.join("shell.pid"))
+            .unwrap()
+            .trim()
+            .parse()
+            .unwrap();
         // SAFETY: the parent this test started.
         unsafe { libc::kill(parent.id() as i32, KEEP) };
         let done = parent.wait().unwrap();
         let codes = statuses(&status);
         std::fs::remove_dir_all(&dir).unwrap();
         assert_eq!(codes.get(&shell), Some(&7), "{codes:?}");
-        assert_eq!(codes.values().filter(|c| **c == -libc::SIGKILL).count(), 1, "{codes:?}");
+        assert_eq!(
+            codes.values().filter(|c| **c == -libc::SIGKILL).count(),
+            1,
+            "{codes:?}"
+        );
         assert_eq!(done.code(), Some(128 + libc::SIGKILL));
     }
 

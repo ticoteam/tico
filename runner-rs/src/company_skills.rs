@@ -43,16 +43,25 @@ const DEADLINE: Duration = Duration::from_secs(30);
 
 pub fn name_ok(name: &str) -> bool {
     static RE: OnceLock<Regex> = OnceLock::new();
-    RE.get_or_init(|| Regex::new(r"^[a-z0-9][a-z0-9._-]{0,79}$").unwrap()).is_match(name)
+    RE.get_or_init(|| Regex::new(r"^[a-z0-9][a-z0-9._-]{0,79}$").unwrap())
+        .is_match(name)
 }
 
 pub fn sha_ok(sha: &str) -> bool {
-    sha.len() == 64 && sha.bytes().all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b))
+    sha.len() == 64
+        && sha
+            .bytes()
+            .all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b))
 }
 
 /// An id that is safe as one file name: an attempt id or a bot id.
 fn id_ok(id: &str) -> bool {
-    !id.is_empty() && id.len() <= 200 && !id.starts_with('.') && id.bytes().all(|b| b.is_ascii_alphanumeric() || b"._-".contains(&b))
+    !id.is_empty()
+        && id.len() <= 200
+        && !id.starts_with('.')
+        && id
+            .bytes()
+            .all(|b| b.is_ascii_alphanumeric() || b"._-".contains(&b))
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -66,9 +75,16 @@ pub struct File {
 pub fn canonical(files: &[File]) -> String {
     let mut sorted: Vec<&File> = files.iter().collect();
     sorted.sort_by(|a, b| a.path.cmp(&b.path));
-    let items: Vec<String> = sorted.iter().map(|f| {
-        format!("{{\"content\":{},\"path\":{}}}", serde_json::to_string(&f.content).unwrap(), serde_json::to_string(&f.path).unwrap())
-    }).collect();
+    let items: Vec<String> = sorted
+        .iter()
+        .map(|f| {
+            format!(
+                "{{\"content\":{},\"path\":{}}}",
+                serde_json::to_string(&f.content).unwrap(),
+                serde_json::to_string(&f.path).unwrap()
+            )
+        })
+        .collect();
     format!("[{}]", items.join(","))
 }
 
@@ -78,8 +94,14 @@ pub fn bundle_sha(files: &[File]) -> String {
 
 /// A bundle path the contract allows: relative, `/`-separated, no empty, `.` or `..` segment, no backslash or NUL.
 pub fn path_ok(path: &str) -> bool {
-    !path.is_empty() && path.chars().count() <= MAX_PATH_CHARS && !path.starts_with('/') && !path.contains('\\')
-        && !path.contains('\0') && path.split('/').all(|s| !s.is_empty() && s != "." && s != "..")
+    !path.is_empty()
+        && path.chars().count() <= MAX_PATH_CHARS
+        && !path.starts_with('/')
+        && !path.contains('\\')
+        && !path.contains('\0')
+        && path
+            .split('/')
+            .all(|s| !s.is_empty() && s != "." && s != "..")
 }
 
 /// A bundle's files, refused whole when any file breaks the contract's rules.
@@ -105,7 +127,10 @@ pub fn parse_files(value: &Value) -> Result<Vec<File>, String> {
         if total > MAX_CHARS {
             return Err(format!("the bundle is over {MAX_CHARS} characters"));
         }
-        files.push(File { path: path.into(), content: content.into() });
+        files.push(File {
+            path: path.into(),
+            content: content.into(),
+        });
     }
     if !files.iter().any(|f| f.path == "SKILL.md") {
         return Err("the bundle has no SKILL.md".into());
@@ -151,9 +176,14 @@ pub fn write_skill(skills: &Path, name: &str, files: &[File]) -> Result<(), Stri
             }
         }
         let target = dir.join(parts[parts.len() - 1]);
-        let mut out = std::fs::OpenOptions::new().write(true).create_new(true).mode(0o644).open(&target)
+        let mut out = std::fs::OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .mode(0o644)
+            .open(&target)
             .map_err(|e| format!("cannot write a file: {e}"))?;
-        out.write_all(file.content.as_bytes()).map_err(|e| format!("cannot write a file: {e}"))?;
+        out.write_all(file.content.as_bytes())
+            .map_err(|e| format!("cannot write a file: {e}"))?;
         let _ = std::fs::set_permissions(&target, std::fs::Permissions::from_mode(0o644));
     }
     Ok(())
@@ -175,7 +205,10 @@ fn cached(state_dir: &Path, sha: &str) -> Option<Vec<File>> {
 fn keep(state_dir: &Path, sha: &str, files: &[File]) -> std::io::Result<()> {
     let dir = state_dir.join(BUNDLES);
     std::fs::create_dir_all(&dir)?;
-    let value: Vec<Value> = files.iter().map(|f| json!({"path": f.path, "content": f.content})).collect();
+    let value: Vec<Value> = files
+        .iter()
+        .map(|f| json!({"path": f.path, "content": f.content}))
+        .collect();
     let temp = dir.join(format!(".{sha}.{}", uuid::Uuid::new_v4().simple()));
     std::fs::write(&temp, serde_json::to_vec(&value)?)?;
     std::fs::rename(&temp, dir.join(format!("{sha}.json")))
@@ -183,12 +216,24 @@ fn keep(state_dir: &Path, sha: &str, files: &[File]) -> std::io::Result<()> {
 
 /// Removes staged folders older than KEEP_SESSION.
 fn prune(sessions: &Path) {
-    let Ok(entries) = std::fs::read_dir(sessions) else { return };
+    let Ok(entries) = std::fs::read_dir(sessions) else {
+        return;
+    };
     for entry in entries.flatten() {
-        let Ok(meta) = std::fs::symlink_metadata(entry.path()) else { continue };
-        let old = meta.modified().ok().and_then(|m| m.elapsed().ok()).is_some_and(|age| age > KEEP_SESSION);
+        let Ok(meta) = std::fs::symlink_metadata(entry.path()) else {
+            continue;
+        };
+        let old = meta
+            .modified()
+            .ok()
+            .and_then(|m| m.elapsed().ok())
+            .is_some_and(|age| age > KEEP_SESSION);
         if old {
-            let _ = if meta.is_dir() { std::fs::remove_dir_all(entry.path()) } else { std::fs::remove_file(entry.path()) };
+            let _ = if meta.is_dir() {
+                std::fs::remove_dir_all(entry.path())
+            } else {
+                std::fs::remove_file(entry.path())
+            };
         }
     }
 }
@@ -200,13 +245,20 @@ pub fn skills_root(staged: &Path) -> PathBuf {
 
 /// A fresh `<state>/skill-sessions/<aid>` with `.claude/skills/<name>/...` for each bundle that writes whole; the
 /// folder and the (name, sha) of what it holds. None when nothing could be staged.
-pub fn stage(state_dir: &Path, aid: &str, bundles: &[(String, String, Vec<File>)]) -> Option<(PathBuf, Vec<(String, String)>)> {
+pub fn stage(
+    state_dir: &Path,
+    aid: &str,
+    bundles: &[(String, String, Vec<File>)],
+) -> Option<(PathBuf, Vec<(String, String)>)> {
     if !id_ok(aid) || bundles.is_empty() {
         return None;
     }
     let sessions = state_dir.join(SESSIONS);
     if let Err(e) = std::fs::create_dir_all(&sessions) {
-        log(&format!("Tico runner: company skills: cannot make {}: {e}", sessions.display()));
+        log(&format!(
+            "Tico runner: company skills: cannot make {}: {e}",
+            sessions.display()
+        ));
         return None;
     }
     // Others may pass through to a turn's folder by name but not list them; the runner's restart narrows it again.
@@ -214,12 +266,15 @@ pub fn stage(state_dir: &Path, aid: &str, bundles: &[(String, String, Vec<File>)
     prune(&sessions);
     let dir = sessions.join(aid);
     if std::fs::symlink_metadata(&dir).is_ok() {
-        let _ = std::fs::remove_dir_all(&dir).or_else(|_| std::fs::remove_file(&dir)); // a retried start stages again
+        let _ = std::fs::remove_dir_all(&dir).or_else(|_| std::fs::remove_file(&dir));
+        // a retried start stages again
     }
     let skills = skills_root(&dir);
     for d in [&dir, &dir.join(".claude"), &skills] {
         if let Err(e) = make_dir(d) {
-            log(&format!("Tico runner: company skills: cannot make the turn's folder: {e}"));
+            log(&format!(
+                "Tico runner: company skills: cannot make the turn's folder: {e}"
+            ));
             return None;
         }
     }
@@ -228,7 +283,9 @@ pub fn stage(state_dir: &Path, aid: &str, bundles: &[(String, String, Vec<File>)
         match write_skill(&skills, name, files) {
             Ok(()) => staged.push((name.clone(), sha.clone())),
             Err(e) => {
-                log(&format!("Tico runner: company skills: left out {name}: {e}"));
+                log(&format!(
+                    "Tico runner: company skills: left out {name}: {e}"
+                ));
                 let _ = std::fs::remove_dir_all(skills.join(name));
             }
         }
@@ -256,7 +313,8 @@ pub fn menu(state_dir: &Path, bot: &str) -> Vec<Value> {
     if !id_ok(bot) {
         return vec![];
     }
-    std::fs::read(state_dir.join(MENUS).join(format!("{bot}.json"))).ok()
+    std::fs::read(state_dir.join(MENUS).join(format!("{bot}.json")))
+        .ok()
         .and_then(|b| serde_json::from_slice::<Vec<Value>>(&b).ok())
         .unwrap_or_default()
 }
@@ -278,7 +336,9 @@ fn remember_menu(state_dir: &Path, bot: &str, staged: Option<&Path>) {
         .and_then(|_| std::fs::rename(&temp, &path));
     if let Err(e) = written {
         let _ = std::fs::remove_file(&temp);
-        log(&format!("Tico runner: company skills: cannot keep {bot}'s menu: {e}"));
+        log(&format!(
+            "Tico runner: company skills: cannot keep {bot}'s menu: {e}"
+        ));
     }
 }
 
@@ -286,8 +346,15 @@ fn remember_menu(state_dir: &Path, bot: &str, staged: Option<&Path>) {
 fn wanted(listing: &Value) -> Vec<(String, String)> {
     let mut out: Vec<(String, String)> = vec![];
     for item in listing["skills"].as_array().into_iter().flatten() {
-        let (name, sha) = (item["name"].as_str().unwrap_or_default(), item["sha256"].as_str().unwrap_or_default());
-        if name_ok(name) && sha_ok(sha) && !out.iter().any(|(n, _)| n == name) && out.len() < MAX_SKILLS {
+        let (name, sha) = (
+            item["name"].as_str().unwrap_or_default(),
+            item["sha256"].as_str().unwrap_or_default(),
+        );
+        if name_ok(name)
+            && sha_ok(sha)
+            && !out.iter().any(|(n, _)| n == name)
+            && out.len() < MAX_SKILLS
+        {
             out.push((name.into(), sha.into()));
         }
     }
@@ -299,17 +366,27 @@ pub async fn prepare(client: &Client, state_dir: &Path, aid: &str, bot: &str) ->
     match tokio::time::timeout(DEADLINE, prepare_within(client, state_dir, aid, bot)).await {
         Ok(Ok(dir)) => dir,
         Ok(Err(e)) => {
-            log(&format!("Tico runner: {bot}: running without company skills: {e}"));
+            log(&format!(
+                "Tico runner: {bot}: running without company skills: {e}"
+            ));
             None
         }
         Err(_) => {
-            log(&format!("Tico runner: {bot}: running without company skills: staging took over {}s", DEADLINE.as_secs()));
+            log(&format!(
+                "Tico runner: {bot}: running without company skills: staging took over {}s",
+                DEADLINE.as_secs()
+            ));
             None
         }
     }
 }
 
-async fn prepare_within(client: &Client, state_dir: &Path, aid: &str, bot: &str) -> Result<Option<PathBuf>, String> {
+async fn prepare_within(
+    client: &Client,
+    state_dir: &Path,
+    aid: &str,
+    bot: &str,
+) -> Result<Option<PathBuf>, String> {
     if !id_ok(aid) {
         return Ok(None);
     }
@@ -324,18 +401,24 @@ async fn prepare_within(client: &Client, state_dir: &Path, aid: &str, bot: &str)
         let files = match cached(state_dir, &sha) {
             Some(files) => files,
             None => {
-                let fetched = client.get(&format!("skills/bundles/{sha}")).await
+                let fetched = client
+                    .get(&format!("skills/bundles/{sha}"))
+                    .await
                     .map_err(|e| e.to_string())
                     .and_then(|v| verified(&v["files"], &sha));
                 match fetched {
                     Ok(files) => {
                         if let Err(e) = keep(state_dir, &sha, &files) {
-                            log(&format!("Tico runner: company skills: cannot cache {name}: {e}"));
+                            log(&format!(
+                                "Tico runner: company skills: cannot cache {name}: {e}"
+                            ));
                         }
                         files
                     }
                     Err(e) => {
-                        log(&format!("Tico runner: {bot}: left out company skill {name}: {e}"));
+                        log(&format!(
+                            "Tico runner: {bot}: left out company skill {name}: {e}"
+                        ));
                         continue;
                     }
                 }
@@ -344,12 +427,26 @@ async fn prepare_within(client: &Client, state_dir: &Path, aid: &str, bot: &str)
         bundles.push((name, sha, files));
     }
     let staged = stage(state_dir, aid, &bundles);
-    remember_menu(state_dir, bot, staged.as_ref().map(|(dir, _)| dir.as_path()));
-    let Some((dir, names)) = staged else { return Ok(None) };
+    remember_menu(
+        state_dir,
+        bot,
+        staged.as_ref().map(|(dir, _)| dir.as_path()),
+    );
+    let Some((dir, names)) = staged else {
+        return Ok(None);
+    };
     let body = json!({"staged": names.iter().map(|(n, s)| json!({"name": n, "sha256": s})).collect::<Vec<_>>()});
-    let key = format!("skills-receipt:{aid}:{}", &hex::encode(Sha256::digest(body.to_string().as_bytes()))[..16]);
-    if let Err(e) = client.post(&format!("attempts/{aid}/skills/receipt"), &body, Some(&key)).await {
-        log(&format!("Tico runner: {bot}: could not report its staged company skills: {e}"));
+    let key = format!(
+        "skills-receipt:{aid}:{}",
+        &hex::encode(Sha256::digest(body.to_string().as_bytes()))[..16]
+    );
+    if let Err(e) = client
+        .post(&format!("attempts/{aid}/skills/receipt"), &body, Some(&key))
+        .await
+    {
+        log(&format!(
+            "Tico runner: {bot}: could not report its staged company skills: {e}"
+        ));
     }
     Ok(Some(dir))
 }
@@ -359,29 +456,57 @@ mod tests {
     use super::*;
 
     fn temp(name: &str) -> PathBuf {
-        let dir = std::env::temp_dir().join(format!("tico-company-skills-{name}-{}", uuid::Uuid::new_v4().simple()));
+        let dir = std::env::temp_dir().join(format!(
+            "tico-company-skills-{name}-{}",
+            uuid::Uuid::new_v4().simple()
+        ));
         std::fs::create_dir_all(&dir).unwrap();
         dir
     }
 
     fn brief() -> Vec<File> {
         vec![
-            File { path: "SKILL.md".into(), content: "---\nname: acme-brief\ndescription: Write the Acme brief\n---\nWrite it.\n".into() },
-            File { path: "notes/style.md".into(), content: "Plain words.\n".into() },
+            File {
+                path: "SKILL.md".into(),
+                content:
+                    "---\nname: acme-brief\ndescription: Write the Acme brief\n---\nWrite it.\n"
+                        .into(),
+            },
+            File {
+                path: "notes/style.md".into(),
+                content: "Plain words.\n".into(),
+            },
         ]
     }
 
     fn as_json(files: &[File]) -> Value {
-        Value::Array(files.iter().map(|f| json!({"path": f.path, "content": f.content})).collect())
+        Value::Array(
+            files
+                .iter()
+                .map(|f| json!({"path": f.path, "content": f.content}))
+                .collect(),
+        )
     }
 
     #[test]
     fn the_sha_matches_the_servers_canonical_json() {
         // The same vector as backend/tests/test_skill_runtime.py.
-        let files = vec![File { path: "b.md".into(), content: "é\n\"q\"\t\u{1}".into() }, File { path: "SKILL.md".into(), content: "x".into() }];
+        let files = vec![
+            File {
+                path: "b.md".into(),
+                content: "é\n\"q\"\t\u{1}".into(),
+            },
+            File {
+                path: "SKILL.md".into(),
+                content: "x".into(),
+            },
+        ];
         let text = "[{\"content\":\"x\",\"path\":\"SKILL.md\"},{\"content\":\"é\\n\\\"q\\\"\\t\\u0001\",\"path\":\"b.md\"}]";
         assert_eq!(canonical(&files), text);
-        assert_eq!(bundle_sha(&files), hex::encode(Sha256::digest(text.as_bytes())));
+        assert_eq!(
+            bundle_sha(&files),
+            hex::encode(Sha256::digest(text.as_bytes()))
+        );
     }
 
     #[test]
@@ -396,23 +521,59 @@ mod tests {
 
     #[test]
     fn unsafe_paths_and_bundles_are_refused() {
-        for bad in ["/etc/passwd", "../x", "a/../../x", "a//b", "./a", "a\\b", "a\0b", ""] {
+        for bad in [
+            "/etc/passwd",
+            "../x",
+            "a/../../x",
+            "a//b",
+            "./a",
+            "a\\b",
+            "a\0b",
+            "",
+        ] {
             assert!(!path_ok(bad), "{bad:?}");
         }
         assert!(path_ok("notes/style.md") && path_ok("SKILL.md"));
         let with = |path: &str| json!([{"path": "SKILL.md", "content": "x"}, {"path": path, "content": "y"}]);
         assert!(parse_files(&with("../escape.md")).is_err());
         assert!(parse_files(&with("SKILL.md")).is_err(), "a repeated path");
-        assert!(parse_files(&json!([{"path": "other.md", "content": "x"}])).is_err(), "no SKILL.md");
-        assert!(parse_files(&json!([{"path": "SKILL.md", "content": "a\0b"}])).is_err(), "binary");
-        assert!(parse_files(&json!([{"path": "SKILL.md", "content": "x".repeat(MAX_CHARS + 1)}])).is_err(), "oversize");
+        assert!(
+            parse_files(&json!([{"path": "other.md", "content": "x"}])).is_err(),
+            "no SKILL.md"
+        );
+        assert!(
+            parse_files(&json!([{"path": "SKILL.md", "content": "a\0b"}])).is_err(),
+            "binary"
+        );
+        assert!(
+            parse_files(&json!([{"path": "SKILL.md", "content": "x".repeat(MAX_CHARS + 1)}]))
+                .is_err(),
+            "oversize"
+        );
         // Written anyway, a file path never leaves the skill's folder, and a name is checked too.
         let dir = temp("unsafe");
-        assert!(write_skill(&dir, "acme", &[File { path: "../out.md".into(), content: "x".into() }]).is_err());
+        assert!(write_skill(
+            &dir,
+            "acme",
+            &[File {
+                path: "../out.md".into(),
+                content: "x".into()
+            }]
+        )
+        .is_err());
         assert!(!dir.join("out.md").exists());
         assert!(write_skill(&dir, "../acme", &brief()).is_err());
         // A file and a folder of the same name: refused, nothing written through it.
-        let clash = [File { path: "a".into(), content: "x".into() }, File { path: "a/b".into(), content: "y".into() }];
+        let clash = [
+            File {
+                path: "a".into(),
+                content: "x".into(),
+            },
+            File {
+                path: "a/b".into(),
+                content: "y".into(),
+            },
+        ];
         assert!(write_skill(&dir, "clash", &clash).is_err());
         std::fs::remove_dir_all(dir).unwrap();
     }
@@ -435,27 +596,63 @@ mod tests {
         let state = temp("stage");
         let files = brief();
         let sha = bundle_sha(&files);
-        let bad = vec![File { path: "SKILL.md".into(), content: "x".into() }, File { path: "SKILL.md/x".into(), content: "y".into() }];
-        let (dir, staged) = stage(&state, "a-1", &[("acme-brief".into(), sha.clone(), files.clone()), ("acme-bad".into(), "0".repeat(64), bad)]).unwrap();
+        let bad = vec![
+            File {
+                path: "SKILL.md".into(),
+                content: "x".into(),
+            },
+            File {
+                path: "SKILL.md/x".into(),
+                content: "y".into(),
+            },
+        ];
+        let (dir, staged) = stage(
+            &state,
+            "a-1",
+            &[
+                ("acme-brief".into(), sha.clone(), files.clone()),
+                ("acme-bad".into(), "0".repeat(64), bad),
+            ],
+        )
+        .unwrap();
         assert_eq!(dir, state.join("skill-sessions").join("a-1"));
-        assert_eq!(staged, vec![("acme-brief".to_string(), sha.clone())], "a skill that fails alone is left out");
+        assert_eq!(
+            staged,
+            vec![("acme-brief".to_string(), sha.clone())],
+            "a skill that fails alone is left out"
+        );
         let root = dir.join(".claude").join("skills");
-        assert_eq!(std::fs::read_to_string(root.join("acme-brief").join("SKILL.md")).unwrap(), files[0].content);
-        assert_eq!(std::fs::read_to_string(root.join("acme-brief").join("notes").join("style.md")).unwrap(), files[1].content);
+        assert_eq!(
+            std::fs::read_to_string(root.join("acme-brief").join("SKILL.md")).unwrap(),
+            files[0].content
+        );
+        assert_eq!(
+            std::fs::read_to_string(root.join("acme-brief").join("notes").join("style.md"))
+                .unwrap(),
+            files[1].content
+        );
         assert!(!root.join("acme-bad").exists());
         let mode = |p: &Path| std::fs::metadata(p).unwrap().permissions().mode() & 0o777;
         assert_eq!(mode(&root.join("acme-brief").join("SKILL.md")), 0o644);
         assert_eq!(mode(&root.join("acme-brief")), 0o755);
         // A retried start stages again from nothing: a file left from before is gone.
         std::fs::write(root.join("acme-brief").join("stale.md"), "old").unwrap();
-        let (again, _) = stage(&state, "a-1", &[("acme-brief".into(), sha.clone(), files.clone())]).unwrap();
+        let (again, _) = stage(
+            &state,
+            "a-1",
+            &[("acme-brief".into(), sha.clone(), files.clone())],
+        )
+        .unwrap();
         assert!(!again.join(".claude/skills/acme-brief/stale.md").exists());
         // The bot's menu reads the staged folder as Claude does.
         remember_menu(&state, "ops", Some(&again));
         let offered = menu(&state, "ops");
         assert_eq!(offered.len(), 1);
         assert_eq!(offered[0]["name"], "acme-brief");
-        assert_eq!(with_dir(vec!["/work/other".into()], Some(&again)), vec!["/work/other".to_string(), again.display().to_string()]);
+        assert_eq!(
+            with_dir(vec!["/work/other".into()], Some(&again)),
+            vec!["/work/other".to_string(), again.display().to_string()]
+        );
         remember_menu(&state, "ops", None);
         assert!(menu(&state, "ops").is_empty());
         assert!(stage(&state, "../a", &[("acme-brief".into(), sha, files)]).is_none());
@@ -469,22 +666,49 @@ mod tests {
         let sha = bundle_sha(&files);
         let listing: &'static str = Box::leak(json!({"skills": [{"name": "acme-brief", "version": 2, "sha256": sha, "description": ""},
                                                                {"name": "../bad", "version": 1, "sha256": sha}]}).to_string().into_boxed_str());
-        let bundle: &'static str = Box::leak(json!({"name": "acme-brief", "version": 2, "sha256": sha, "files": as_json(&files)}).to_string().into_boxed_str());
-        let (url, seen) = crate::client::tests::serve(vec![(200, listing), (200, bundle), (200, "{\"kept\":1}"), (200, listing), (200, "{\"kept\":1}")]).await;
+        let bundle: &'static str = Box::leak(
+            json!({"name": "acme-brief", "version": 2, "sha256": sha, "files": as_json(&files)})
+                .to_string()
+                .into_boxed_str(),
+        );
+        let (url, seen) = crate::client::tests::serve(vec![
+            (200, listing),
+            (200, bundle),
+            (200, "{\"kept\":1}"),
+            (200, listing),
+            (200, "{\"kept\":1}"),
+        ])
+        .await;
         let client = Client::new(&url, "runner-token", 5, 0).unwrap();
         let dir = prepare(&client, &state, "a-7", "ops").await.unwrap();
         assert!(dir.join(".claude/skills/acme-brief/SKILL.md").is_file());
-        assert!(state.join("skill-bundles").join(format!("{sha}.json")).is_file());
+        assert!(state
+            .join("skill-bundles")
+            .join(format!("{sha}.json"))
+            .is_file());
         // The next turn reads the bundle from the cache: no second bundle fetch.
         let again = prepare(&client, &state, "a-8", "ops").await.unwrap();
         assert!(again.join(".claude/skills/acme-brief/SKILL.md").is_file());
         let seen = seen.lock().unwrap();
         let heads: Vec<&str> = seen.iter().map(|r| r.lines().next().unwrap()).collect();
         let bundle_head = format!("GET /api/v2/skills/bundles/{sha} HTTP/1.1");
-        assert_eq!(heads, vec!["GET /api/v2/attempts/a-7/skills HTTP/1.1", bundle_head.as_str(),
-                               "POST /api/v2/attempts/a-7/skills/receipt HTTP/1.1", "GET /api/v2/attempts/a-8/skills HTTP/1.1",
-                               "POST /api/v2/attempts/a-8/skills/receipt HTTP/1.1"]);
-        assert!(seen[2].ends_with(&format!("{{\"staged\":[{{\"name\":\"acme-brief\",\"sha256\":\"{sha}\"}}]}}")), "{}", seen[2]);
+        assert_eq!(
+            heads,
+            vec![
+                "GET /api/v2/attempts/a-7/skills HTTP/1.1",
+                bundle_head.as_str(),
+                "POST /api/v2/attempts/a-7/skills/receipt HTTP/1.1",
+                "GET /api/v2/attempts/a-8/skills HTTP/1.1",
+                "POST /api/v2/attempts/a-8/skills/receipt HTTP/1.1"
+            ]
+        );
+        assert!(
+            seen[2].ends_with(&format!(
+                "{{\"staged\":[{{\"name\":\"acme-brief\",\"sha256\":\"{sha}\"}}]}}"
+            )),
+            "{}",
+            seen[2]
+        );
         drop(seen);
         std::fs::remove_dir_all(state).unwrap();
     }
@@ -494,26 +718,49 @@ mod tests {
         let state = temp("fail");
         let files = brief();
         let sha = bundle_sha(&files);
-        let listing: &'static str = Box::leak(json!({"skills": [{"name": "acme-brief", "version": 1, "sha256": sha}]}).to_string().into_boxed_str());
+        let listing: &'static str = Box::leak(
+            json!({"skills": [{"name": "acme-brief", "version": 1, "sha256": sha}]})
+                .to_string()
+                .into_boxed_str(),
+        );
         // A bundle whose files are not what its sha says.
         let mut changed = files.clone();
         changed[0].content = "tampered".into();
-        let tampered: &'static str = Box::leak(json!({"files": as_json(&changed)}).to_string().into_boxed_str());
+        let tampered: &'static str = Box::leak(
+            json!({"files": as_json(&changed)})
+                .to_string()
+                .into_boxed_str(),
+        );
         let (url, seen) = crate::client::tests::serve(vec![
-            (404, "{\"detail\":\"Not Found\"}"),                                    // a server without company skills
-            (500, "{\"error\":{\"code\":\"boom\",\"detail\":\"Synthetic\",\"retryable\":false}}"),
-            (200, listing), (200, tampered),
-            (200, "{}"),                                                             // nothing listed
-        ]).await;
+            (404, "{\"detail\":\"Not Found\"}"), // a server without company skills
+            (
+                500,
+                "{\"error\":{\"code\":\"boom\",\"detail\":\"Synthetic\",\"retryable\":false}}",
+            ),
+            (200, listing),
+            (200, tampered),
+            (200, "{}"), // nothing listed
+        ])
+        .await;
         let client = Client::new(&url, "runner-token", 5, 0).unwrap();
         for aid in ["a-1", "a-2", "a-3", "a-4"] {
             let staged = prepare(&client, &state, aid, "ops").await;
             assert!(staged.is_none(), "{aid}");
             assert_eq!(with_dir(vec![], staged.as_deref()), Vec::<String>::new());
         }
-        assert!(!state.join("skill-bundles").join(format!("{sha}.json")).exists(), "a bad bundle is never cached");
+        assert!(
+            !state
+                .join("skill-bundles")
+                .join(format!("{sha}.json"))
+                .exists(),
+            "a bad bundle is never cached"
+        );
         assert!(menu(&state, "ops").is_empty());
-        assert_eq!(seen.lock().unwrap().len(), 5, "no receipt for nothing staged");
+        assert_eq!(
+            seen.lock().unwrap().len(),
+            5,
+            "no receipt for nothing staged"
+        );
         std::fs::remove_dir_all(state).unwrap();
     }
 }

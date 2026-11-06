@@ -97,6 +97,36 @@ jobs:
       - if: steps.cache.outputs.cache-hit != 'true'
         run: bash scripts/rust_checks.sh
 
+  desktop-app:
+    # The desktop app's compiled dependencies: what the desktop app PR job's clippy and test steps restore.
+    runs-on: runs-on=${{ github.run_id }}/volume=30gb:gp3:125mbs:3000iops/runner=4cpu-linux-x64/extras=s3-cache
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          persist-credentials: false
+      - id: cache
+        uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+        with:
+          workspaces: app -> target
+          shared-key: pr-desktop
+          cache-on-failure: true
+          lookup-only: true
+      - if: steps.cache.outputs.cache-hit != 'true'
+        name: Rust 1.92.0 and the Linux build dependencies (as the desktop app PR job installs them)
+        run: |
+          rustup toolchain install 1.92.0 --profile minimal --component clippy,rustfmt
+          sudo sed -i \
+            -e 's|mirror+file:/etc/apt/apt-mirrors.txt|https://archive.ubuntu.com/ubuntu/|g' \
+            -e 's|http://azure\.archive\.ubuntu\.com/ubuntu/|https://archive.ubuntu.com/ubuntu/|g' \
+            /etc/apt/sources.list.d/ubuntu.sources
+          sudo apt-get update
+          sudo apt-get install -y libwebkit2gtk-4.1-dev libappindicator3-dev librsvg2-dev patchelf libpulse-dev
+      - if: steps.cache.outputs.cache-hit != 'true'
+        working-directory: app
+        # Builds what the PR job's clippy and test steps build, so their caches are saved.
+        run: cargo +1.92.0 clippy --locked --all-targets && cargo +1.92.0 test --locked --no-run
+
   conformance:
     runs-on: runs-on=${{ github.run_id }}/volume=30gb:gp3:125mbs:3000iops/runner=4cpu-linux-x64/extras=s3-cache
     timeout-minutes: 30
