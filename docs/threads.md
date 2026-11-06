@@ -100,10 +100,11 @@ Each reader follows a thread at one level. Choose it in the **Notifications** ro
 - **All** (`live`): every new message (the default),
 - **Mentions** (`mentions`): only messages that name you,
 - **Digest** (`digest`): in a batch (an email an hour for a person, one run an hour for a bot),
-- **Off** (`muted`): unread counts stay, nothing is sent, with two exceptions. A DM with one teammate: its unread count
-  is not shown on that teammate's row in the Team list, whether the teammate is a person or a bot. In Catch up, an Off
-  thread appears only for a mention, an ask or an assignment that is new since you last read it, or for one from a
-  person (or a bot's ask or mention) that you have not answered. Catch up reads only a limited number of these messages,
+- **Off** (`muted`): unread counts stay, nothing is sent, with two exceptions. A DM with one teammate: once the page reloads,
+  its unread count is not shown on that teammate's row in the Team list, whether the teammate is a person or a bot. On a
+  page that is already open, the count can stay after you turn Off, and a new message in that DM can raise it until you
+  reload. In Catch up, an Off thread appears only for a mention, an ask or an assignment that is new since you last read
+  it, or for one from a person (or a bot's ask or mention) that you have not answered. Catch up reads only a limited number of these messages,
   so a muted thread can stay out even when one of them matches. Off lasts until you choose another level. A thread you
   do not follow shows as Off too.
 
