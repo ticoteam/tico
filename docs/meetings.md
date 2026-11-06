@@ -245,9 +245,12 @@ format is a `422` that names the problem.
   only while its live meeting is live or paused.
 - **Tasks.** The meeting page shows one list: proposed tasks (**Create** or **Dismiss**), tasks made from the
   meeting (created items, the task it was shared to a bot as, and that task's follow-ups) and tasks linked with
-  `POST /api/v2/meetings/{id}/tasks`, each once; dismissed proposals sit behind **Dismissed (n)**. The page does not
-  show doc updates or feature requests, but the API still accepts them as the older `doc` and `feature` sections. A
-  human adds items (with the quote and time they came from if they like), and the readers edit, Create or Dismiss them
+  `POST /api/v2/meetings/{id}/tasks`, each once; dismissed proposals sit behind **Dismissed (n)**. The proposal list
+  shows only tasks, so a proposed doc update or feature request has no row to act on there. A meeting row still counts
+  proposed doc updates and feature requests in a **N proposed** count, which shows only while nothing has been made from
+  the meeting and nothing is in progress, and it shows pushed ones as **N doc updates** or **N feature requests** chips.
+  The API still accepts both as `doc` and `feature` sections. A human adds items (with the quote and time they came
+  from if they like), and the readers edit, Create or Dismiss them
   once the meeting is shared. Create makes ordinary Tico tasks, never a card in another tool: a task item becomes a
   task for its named owner, so Create needs an owner first. A doc update pushed through the API
   (`POST /api/v2/meetings/{id}/items/{iid}/push`) becomes a task for the owner it names, or for `doc-updater` when it
