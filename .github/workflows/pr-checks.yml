@@ -356,7 +356,7 @@ jobs:
     needs: plan
     if: needs.plan.outputs.caddy == 'true'
     name: caddy-linux-${{ matrix.arch }}
-    runs-on: ${{ (github.event_name != 'pull_request' || !github.event.pull_request.head.repo.fork) && format('runs-on={0}/volume=30gb:gp3:125mbs:3000iops/runner=4cpu-linux-{1}{2}/extras=s3-cache', github.run_id, matrix.arch == 'arm64' && 'arm64' || 'x64', matrix.arch == 'x64' && '/family=m8+m7+m6+c8+c7+c6+r8+r7' || '') || matrix.runner }}
+    runs-on: ${{ (github.event_name != 'pull_request' || !github.event.pull_request.head.repo.fork) && format('runs-on={0}/volume=30gb:gp3:125mbs:3000iops/runner=4cpu-linux-{1}{2}/extras=s3-cache', github.run_id, matrix.arch == 'arm64' && 'arm64' || 'x64', matrix.arch != 'arm64' && '/family=m8+m7+m6+c8+c7+c6+r8+r7' || '') || matrix.runner }}
     timeout-minutes: 35
     strategy:
       fail-fast: false

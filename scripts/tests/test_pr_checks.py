@@ -637,10 +637,10 @@ def test_groups_are_sized_to_the_job_target_and_browser_scripts_split_by_measure
     assert checks.job_count(per_python, "python") == 1 and checks.job_count(per_python + 1, "python") == 2
     assert checks.job_count(10**9, "python") == checks.MAX_JOBS
     # The cap only stops a runaway plan: Nov 5's default suite (40,000 one-worker seconds in 936 files) held at 16 VMs
-    # ran 11-14 minutes per shard. It now splits into VMs of at most four minutes, setup included.
+    # ran 11-14 minutes per shard. It now splits into VMs of at most TICO_CI_JOB_SECONDS, setup included.
     suite = Counter({f"backend/tests/test_{i}.py": 1 for i in range(936)})
     split, loads = checks.groups(suite, {name: 40000 / 936 for name in suite})
-    assert len(split) > 16 and max(loads) / checks.WORKERS + checks.SETUP_SECONDS["python"] <= 240
+    assert len(split) > 16 and max(loads) / checks.WORKERS + checks.SETUP_SECONDS["python"] <= checks.JOB_SECONDS
     # A small selection still takes one VM.
     assert len(checks.groups(Counter({"a.py": 3}), {"a.py": 200})[0]) == 1
     counts = Counter({f"t{i}.py": 1 for i in range(30)})
