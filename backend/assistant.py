@@ -258,6 +258,8 @@ NEVER = [(m, re.compile(p)) for m, p in (
     # tests/test_assistant_acts_as_you.py walks app.routes so a new one cannot slip past.
     ("POST", r"/api/v2/me/tokens(/[^/]+/revoke)?"),
     ("POST", r"/api/v2/service-keys(/[^/]+/revoke)?"),
+    # A person's skills helper token (backend/skill_devices.py): connecting, revoking and its reporting are the person's.
+    (None, r"/api/v2/skills/devices(/.*)?"),
     (None, r"/api/v2/credentials(/.*)?"), (None, r"/api/v2/credential-set"),
     # An API tool's keys and levels are credentials and grants; its address and auth scheme decide where a key is sent,
     # so changing, adding or deleting a tool is the person's tap too (backend/api_tools.py). Its check only reads.

@@ -1050,3 +1050,10 @@ section.card>header .settings-head-act{margin-left:auto}
 .mb-back{margin:0 0 8px}
 .mb-stop{margin-top:4px}
 @media (max-width:760px){.mb-form select{max-width:none}.mb-table .theme-seg{flex-wrap:wrap}}
+/* The skills helper's approve page (ui/app/skills-connect.js). */
+.skills-connect{max-width:420px;margin:0 auto;padding:16px 0;display:grid;gap:16px;min-width:0}
+.skills-connect h1{font-size:var(--t-lg);margin:0}
+.skills-connect-form{display:grid;gap:12px;min-width:0}
+.skills-connect-form p{margin:0;overflow-wrap:anywhere}
+.skills-connect-check{display:flex;align-items:center;gap:8px}
+.skills-connect-form .row{flex-wrap:wrap;gap:8px}

@@ -1,0 +1,77 @@
+# Company skills in your own Claude Code
+
+The skills installed for you in Library › Skills also reach the Claude Code on your own computer. A small helper
+connects it once; after that Claude Code keeps your skills up to date by itself, and, if you choose, tells Tico
+which skills you use.
+
+Needs Claude Code 2.1.238 or later, Node 18 or later, and Tico on an `https://` address (Claude Code sends the
+sign-in header only to an https marketplace).
+
+## Connect
+
+```sh
+mkdir -p ~/.tico && curl -fsSL https://tico.acme.example/api/v2/skills/helper.mjs -o ~/.tico/skills-helper.mjs \
+  && node ~/.tico/skills-helper.mjs setup
+```
+
+Setup prints an address and a code and opens your browser. Check the code, tick **Share which skills I use** if you
+want to, and press **Approve**. Setup then:
+
+- keeps the device token in `~/.tico/skills.json` (mode 0600);
+- adds a marketplace named `tico` to `~/.claude/settings.json` (`extraKnownMarketplaces.tico`, a `url` source with a
+  `headersHelper` that runs `skills-helper.mjs auth-header`, and `autoUpdate: true`), leaving your other settings as
+  they are;
+- installs `tico-skills@tico` and each of your skills (`claude plugin install <name>@tico --scope user`).
+
+A skill named `deploy` runs as `/deploy:deploy`, since Claude Code names a plugin's skills after the plugin.
+
+| Command | Does |
+|---|---|
+| `setup [--server URL]` | Connect this computer |
+| `sync` | Install, update and remove skills to match Tico, then tell Tico what is staged |
+| `status` | Server, device, reporting, Claude Code version, skills |
+| `remove` | Remove the marketplace and its plugins, the settings entry, and revoke the device |
+
+## What keeps it current
+
+The `tico-skills` plugin holds the helper and three hooks:
+
+| Hook | Runs |
+|---|---|
+| `SessionStart` (startup) | `sync --quiet`, in the background |
+| `PostToolUse` on `Skill` | `report --trigger model` |
+| `UserPromptExpansion` | `report --trigger person` (you typed `/name`) |
+
+Each skill is an `archive` plugin pinned to its zip's sha256 and declares no version, so an approved update or a new
+pin reaches you at the next marketplace refresh. The marketplace sets `forceRemoveDeletedPlugins`, so a removed
+install is uninstalled at the next session start even without the helper.
+
+## Usage reports
+
+Only when you ticked **Share which skills I use** (change it in Tico: `PATCH /api/v2/skills/devices/{id}`). A report
+holds the skill name, a sha256 of the Claude Code session id, the tool use or prompt id, and the time. Never the prompt,
+the skill's arguments, or any file. The helper reports only names from your last sync, waits at most 2 seconds, and
+never fails or changes a session. Tico drops names it does not know and ignores a repeat of one session and tool use.
+
+## Routes
+
+All under `/api/v2`. The device token (`tico_sd_`, stored as a sha256) is you, but reaches only the routes marked
+*device*; anything else answers 403, and a revoked token 401.
+
+| Route | Who |
+|---|---|
+| `POST skills/devices/codes` `{label}` → `{device_code, user_code, verification_url, expires_in: 600, interval: 5}` | No sign-in; 10 an hour per address, 50 waiting in all (429) |
+| `POST skills/devices/token` `{device_code}` → 428 waiting, 200 `{token, device_id, reporting_enabled}` once, 410 expired, denied or used, 404 unknown | No sign-in |
+| `GET skills/devices/codes/{user_code}` → `{user_code, label, expires_at}` | A signed-in person |
+| `POST skills/devices/codes/{user_code}/approve` `{reporting_enabled}`, `/deny` | A signed-in person, in the browser (not a token) |
+| `GET skills/devices`, `PATCH skills/devices/{id}` `{reporting_enabled}` | The person |
+| `DELETE skills/devices/{id}` | The person, an admin, or the device itself (*device*) |
+| `GET skills/marketplace.json` | The person or *device*; a device also gets `X-Tico-Reporting: on\|off` |
+| `GET skills/plugins/{name}/{bundle_sha}.zip` | Any signed-in caller or *device* |
+| `GET skills/bundles/{...}` | *device* (served by the skills runtime) |
+| `POST skills/devices/receipt` `{staged: [{name, sha256}], claude_version}` | *device* |
+| `POST skills/usage` `{events: [{name, trigger: model\|person, session_key, tool_use_id, used_at}]}` | *device*, reporting on (else 403 `reporting_off`); 100 events a call |
+| `GET skills/helper.mjs` | No sign-in |
+
+The Assistant and Tico support never connect, change or revoke a device, and Query Tico data shows neither
+`skill_devices` nor `skill_device_codes`.
