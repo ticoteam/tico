@@ -16,7 +16,8 @@ from backend import org_rule_check as K
 from backend import threads
 from backend import updates
 from backend.auth import Identity
-from backend.store import H
+from backend.names import SUPPORT_ACTOR, SUPPORT_NAME
+from backend.store import H, Problem
 from backend.tests.test_api import claim, get, headers, post, setup_attempt  # noqa: F401
 from backend.tests.test_org_rules import api, as_bot, edit, org, rule  # noqa: F401
 from backend import bot_settings as BS
@@ -484,6 +485,114 @@ def test_a_hold_with_no_reviewer_is_a_block_the_owner_or_an_admin_releases(ruled
     view = get(api, f"rule-holds/{again['id']}")  # the owner sends one anyway
     assert post(api, f"rule-holds/{again['id']}/send", {"nonce": view["nonce"]})["hold"]["state"] == "sent"
     assert len(bodies(api, "favorite color is teal")) == 1
+
+
+def _hire(api, pid):
+    with api.app.state.store.transaction() as c:
+        c.execute("INSERT INTO humans(id, name, email) VALUES(?, ?, ?)", (pid, pid.title(), f"{pid}@acme.example"))
+        raw = json.loads(c.execute("SELECT value FROM registry_metadata WHERE key='people'").fetchone()[0])
+        raw["people"].append({"id": pid, "email": f"{pid}@acme.example"})
+        c.execute("UPDATE registry_metadata SET value=? WHERE key='people'", (json.dumps(raw),))
+
+
+def _leave(api, pid):
+    """The person's sign-in is turned off: they no longer count as a reviewer who is present."""
+    with api.app.state.store.transaction() as c:
+        raw = json.loads(c.execute("SELECT value FROM registry_metadata WHERE key='people'").fetchone()[0])
+        next(p for p in raw["people"] if p["id"] == pid)["sign_in"] = False
+        c.execute("UPDATE registry_metadata SET value=? WHERE key='people'", (json.dumps(raw),))
+
+
+def _app_support():
+    """Tico support in an app-only session: a human with no roster row, reading as an Admin does everywhere else."""
+    return Identity(SUPPORT_ACTOR, "human", via_token=True, token_label=SUPPORT_NAME, token_id="sa_test", support="app")
+
+
+def test_with_the_reviewer_gone_app_only_tico_support_reads_no_bot_hold_and_the_owner_and_admin_do(ruled):
+    api, _ = ruled
+    _hire(api, "dan")
+    color_rule(api, if_broken="escalate", reviewer="dan")
+    held = say(api, "Our favorite color is gold")["held"]
+    assert hold_row(api, held["id"])["reviewer"] == "human:dan"
+    _leave(api, "dan")
+    app, auth = _app_support(), api.app.state.auth
+    with api.app.state.store.read() as c:
+        hold = K._hold(c, held["id"])
+        assert not K._is_reviewer(app, hold, c, auth)
+        assert K.held_for(c, app, ("message",)) == []
+        assert K.holds_listed(c, app, auth=auth) == ([], None)
+        with pytest.raises(Problem) as seen:
+            K.view_hold(c, app, hold, auth=auth)
+        assert seen.value.status == 404
+    with api.app.state.store.transaction() as c:
+        with pytest.raises(Problem) as kept:
+            K.keep(c, app, held["id"], auth)
+        assert kept.value.status == 404
+    with api.app.state.store.transaction() as c:
+        with pytest.raises(Problem) as sent:
+            K.send(c, app, held["id"], hold_row(api, held["id"])["nonce"], auth=auth)
+        assert sent.value.status == 404
+    assert hold_row(api, held["id"])["state"] == "held" and bodies(api, "favorite color is gold") == []
+    get(api, f"rule-holds/{held['id']}", token="cara-test", expected=404)
+    listed = get(api, "rule-holds", token="ben-test")["holds"]  # an Admin reads it, the reviewer being gone
+    assert [h["id"] for h in listed] == [held["id"]]
+    view = get(api, f"rule-holds/{held['id']}", token="ana-test")  # the owner too
+    assert view["can_send"]
+    assert post(api, f"rule-holds/{held['id']}/keep", {}, token="ben-test")["state"] == "kept"
+
+
+def test_with_the_reviewer_gone_app_only_tico_support_reads_no_person_hold_and_the_owner_and_admin_do(ruled):
+    api, _ = ruled
+    _hire(api, "dan")
+    made = color_rule(api, reviewer="dan")
+    with api.app.state.store.transaction() as c:  # a person's held post, held by a rule whose editors can release it
+        c.execute(
+            "INSERT INTO org_rule_holds(id, operation, payload, author, destinations, rule_ids, "
+            "verdict, nonce, state, reviewer, task_id, created_at) VALUES(?,?,?,?,?,?,?,?,?,?,?,?)",
+            (
+                "h-cara-app",
+                "message",
+                json.dumps({"text": "Our favorite color is gold", "replay": {}}),
+                "human:cara",
+                "[]",
+                json.dumps([made["id"]]),
+                "{}",
+                "n-cara-app",
+                "held",
+                "human:dan",
+                None,
+                H.now(),
+            ),
+        )
+    _leave(api, "dan")
+    app, auth = _app_support(), api.app.state.auth
+    with api.app.state.store.read() as c:
+        hold = K._hold(c, "h-cara-app")
+        assert not K._is_reviewer(app, hold, c, auth)
+        assert K.holds_listed(c, app, auth=auth) == ([], None)
+        with pytest.raises(Problem) as seen:
+            K.view_hold(c, app, hold, auth=auth)
+        assert seen.value.status == 404
+    with api.app.state.store.transaction() as c:
+        with pytest.raises(Problem) as kept:
+            K.keep(c, app, "h-cara-app", auth)
+        assert kept.value.status == 404
+    assert hold_row(api, "h-cara-app")["state"] == "held"
+    assert "nonce" in get(api, "rule-holds/h-cara-app", token="ben-test")  # an Admin reads and releases it
+    assert "nonce" in get(api, "rule-holds/h-cara-app", token="ana-test")  # the owner too
+    kept = post(api, "rule-holds/h-cara-app/keep", {}, token="ben-test")
+    assert kept["state"] == "kept" and kept["decided_by"] == "human:ben"
+
+
+def test_with_the_reviewer_present_a_bot_hold_is_not_read_by_app_only_tico_support(ruled):
+    api, _ = ruled
+    color_rule(api, reviewer="ben")
+    held = say(api, "Our favorite color is gold")["held"]
+    app, auth = _app_support(), api.app.state.auth
+    with api.app.state.store.read() as c:
+        assert not K._is_reviewer(app, K._hold(c, held["id"]), c, auth)
+    assert "nonce" in get(api, f"rule-holds/{held['id']}", token="ben-test")  # the reviewer reads it as before
+    assert post(api, f"rule-holds/{held['id']}/keep", {}, token="ben-test")["state"] == "kept"
 
 
 def test_keep_blocked_and_only_the_reviewer_author_or_owner_reads_a_hold(ruled):

@@ -491,7 +491,9 @@ one more identity, `human:tico-support`, named **Tico support** wherever names s
 exists only while its session is live, through a token the server keeps in memory, and every request it makes is checked
 against the session again.
 
-- **App only** (`support: app`) reads as an Admin does, except a run's raw provider stream, and writes only the setup routes
+- **App only** (`support: app`) reads as an Admin does, except a run's raw provider stream and a held outbound message
+  (rules hold) whose reviewer has left or lost sign-in: the owner and Admins read and decide that one, not app-only support.
+  It writes only the setup routes
   `backend/support_access.py` lists (`APP_WRITES`): a bot's model, fallback and context size; a computer's restart; a
   subscription allowance read (no model sign-in, and no reading of one's link and code: whoever enters the code first chooses the account a computer
   runs on). Everything else, approvals, messages, tasks, runs, people, access and
