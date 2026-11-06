@@ -229,10 +229,11 @@ def test_reader_cookie_and_reader_routes_do_nothing_on_the_app_host(site):
     cookie = client.cookies["__Host-tico_reader"]
     token = R.unsubscribe_token(site.store.settings, "any-edition")
     bare = TestClient(site.app, follow_redirects=False)
-    assert bare.get("/api/v2/readers", cookies={"__Host-tico_reader": cookie, "tico_reader": cookie}).status_code in (401, 403)
+    # The cookies go in the header: httpx deprecates per-request cookies=, and the header is what the server reads.
+    assert bare.get("/api/v2/readers", headers={"Cookie": f"__Host-tico_reader={cookie}; tico_reader={cookie}"}).status_code in (401, 403)
     assert not bare.post("/unsubscribe", data={"token": token, "email": "pat@other.example"}).is_success
     assert not bare.post("/reply", data={"anchor": "x", "body": "hi"}).is_success
-    assert "PAGE" not in bare.get("/", cookies={"__Host-tico_reader": cookie}).text[:10]
+    assert "PAGE" not in bare.get("/", headers={"Cookie": f"__Host-tico_reader={cookie}"}).text[:10]
     assert site.rows("SELECT notify FROM readers")[0]["notify"] == 1
 
 
