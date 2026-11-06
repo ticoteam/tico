@@ -79,6 +79,9 @@ the server (`backend/hubdb.py`), never here. A command is its tool's name (clien
                     [--private [--reader X ...]]  private: only its requester, owner and readers (people, bots,
                                            group:<id>) see it
     hub task readers list|add|remove <id> [X ...]   who can see a private task besides its requester and owner
+    hub task followers <id>                who follows a task, each at their level
+    hub task follow|unfollow <id> [--level live|mentions|digest|muted] [--who X]   follow a task or stop; --who: for
+                                           someone else who sees it, when you may change the task
     hub task model <id> [<model>] [--effort E] [--harness H] [--clear]
                                            the model this task's runs use; --clear puts it back on the bot's task model
                     [--defer [24h|2d|never]]  for a bot: a deferred task, no wake; its next run carries it, and
@@ -219,6 +222,10 @@ the server (`backend/hubdb.py`), never here. A command is its tool's name (clien
                                            Several actions: ONE card, --path /api/v2/assistant/batch
                                            --body '{"actions": [{"path": "/api/v2/tasks/<id>", "body": {...}}, ...]}'
                                            (task actions, approval decisions, answers to bots' questions)
+    hub assistant morning --for human:<id> --body "<text>"
+                                           the Assistant's background run only: the person's one morning message in
+                                           their own Assistant chat, as the Assistant (no card); a second one that
+                                           company day is refused
     hub assistant learn "<line>" [--company]
                                            in a person's own chat: save what they taught you, in their own
                                            layer (--company: the Strategy Bot, about the company, owner's chat only)
@@ -1626,6 +1633,10 @@ def parser():
     s.add_argument("--for", dest="for_person", default=None,
                    help="the Assistant's own background run only: the person (human:<id>) whose chat gets the card")
     s.set_defaults(fn="assistant propose")
+    s = assistant.add_parser("morning", help="the Assistant's one morning message to a person (background run only)")
+    s.add_argument("--for", dest="for_person", required=True, help="the person (human:<id>) whose chat gets it")
+    s.add_argument("--body", required=True, help="the message, in Markdown, at most 2000 characters")
+    s.set_defaults(fn="assistant morning")
     s = assistant.add_parser("learn", help="save one thing the person taught you (What it has learned)")
     s.add_argument("text", help="one short line, in their words")
     s.add_argument("--company", dest="layer", action="store_const", const="company", default="personal",
@@ -1720,6 +1731,8 @@ def parser():
                    help="only its requester, owner and readers see it")
     s.add_argument("--reader", dest="readers", action="append",
                    help="with --private: someone else who sees it, a person, bot or group:<id> (repeat for more)")
+    s.add_argument("--follow", action="store_true", default=None,
+                   help="follow the task you file (its owner follows anyway)")
     s.add_argument("--from-private", dest="from_private", action="store_true",
                    help="from a run on your private task: a company-visible task for a bot, in your own words (no "
                         "12 words copied from the private work, no secret-shaped value, no file or link of it)")
@@ -1971,6 +1984,16 @@ def parser():
         s.add_argument("id")
         s.add_argument("readers", nargs="+", metavar="X", help="human:<id>, bot:<slug> or group:<id>")
         s.set_defaults(fn="task readers " + change)
+    s = task.add_parser("followers", help="who follows a task, each at their level")
+    s.add_argument("id")
+    s.set_defaults(fn="task followers")
+    for change, words in (("follow", "follow a task, or set your level"), ("unfollow", "stop following a task")):
+        s = task.add_parser(change, help=words)
+        s.add_argument("id")
+        if change == "follow":
+            s.add_argument("--level", choices=("live", "mentions", "digest", "muted"))
+        s.add_argument("--who", help="someone else who sees it (human:<id> or bot:<slug>), when you may change the task")
+        s.set_defaults(fn="task follow", **({"unfollow": True} if change == "unfollow" else {}))   # one tool: hub_task_follow
     s = task.add_parser("relate", help="relate another task to this one: <id> <kind> <task>")
     s.add_argument("id")
     s.add_argument("task")
@@ -4163,6 +4186,13 @@ NOTICE_COMMANDS = ("list",)                             # the subcommands `hub n
 
 
 MARKETING_TYPE = "idea"     # the marketing task type's id (backend/marketing_tasks.py TYPE_ID); its name is a team's to set
+# The old status words of the growth idea lines, and the step each one is now (backend/marketing_tasks.py).
+LEGACY_IDEA_STEP = {"idea": "On deck", "testing": "Live", "scaling": "Working", "won": "Succeeded", "lost": "Failed"}
+
+
+def legacy_idea_step(word):
+    """The step a legacy status word names: the new step name for an old one, else the word capitalized (Paused)."""
+    return LEGACY_IDEA_STEP.get(word.lower(), word.capitalize())
 LEGACY_IDEA_FLAGS = ("--title", "--hypothesis", "--prediction", "--bet", "--kpi", "--segment", "--source-kind",
                      "--source-ref", "--i", "--c", "--e", "--follow-up-of", "--assignee", "--body", "--status", "--q",
                      "--limit", "--result", "--learning", "--bet-effect", "--confidence")
@@ -4200,7 +4230,7 @@ def legacy_idea(argv):
     if old.verb == "list":
         line = ["task", "list", "--type", MARKETING_TYPE]
         if old.status:
-            line += ["--step", old.status.capitalize()]
+            line += ["--step", legacy_idea_step(old.status)]
         if old.channel:
             line += ["--label", f"channel:{old.channel[0]}"]
         return f'"hub growth idea list" is now "hub task list --type {MARKETING_TYPE}"', [line + json_out]
@@ -4208,7 +4238,7 @@ def legacy_idea(argv):
         p.error("verdict needs --status won|lost|inconclusive|dropped|paused")
     if not old.id:
         p.error("verdict needs the idea's task id")
-    update = ["task", "update", old.id, "--step", old.status.capitalize()]
+    update = ["task", "update", old.id, "--step", legacy_idea_step(old.status)]
     found = "\n".join(f"{label}: {value}" for label, value in (("Result", old.result), ("Learning", old.learning)) if value)
     if not found and old.status == "paused":
         found = "Test paused"           # a pause needs a note; with no result or learning, the note says only that

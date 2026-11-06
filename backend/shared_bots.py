@@ -333,6 +333,7 @@ def retire_assignments(c):
                 except H.Refused:
                     pass
             c.execute("UPDATE tasks SET owner_id=?,updated_at=? WHERE id=?", (owner, H.now(), task_id))
-            from . import task_run_models
+            from . import task_followers, task_run_models
             task_run_models.moved(c, H.KEEPER, task_id)
+            task_followers.owner_moved(c, H.task(c, task_id), "bot:" + bot, owner)
             H._wake(c, H.task(c, task_id), owner, f"Open: {title}", {"news": "assignment"})

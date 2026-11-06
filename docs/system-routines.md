@@ -63,6 +63,8 @@ Task roundup is now [Maintenance's Find stuck step](maintenance.md). Its old swi
 
 The retired `learnings` Run now endpoint starts Maintenance's Learn step and returns `{run, started}`. Learn is off by default; its switch stays in effect for Run now.
 
+**Auto dream** is not a System routine. It is Maintenance's Dream step, once a day, for up to "Most bots per run" bots (three by default). Its switch and "Most bots per run" are in Automations › Maintenance. See [Learnings](learnings.md#dream).
+
 ## Task rules
 
 The list starts with one enabled task rule: **Close 24h after done**, tagged **Engineering**. Its row reads **WHEN a task has been done and untouched for 24 hours THEN close it**. It checks every 15 minutes by default.
@@ -160,7 +162,7 @@ Check health runs as a [Maintenance](maintenance.md) step. It has no separate Sy
 | **Thread retention** | Deletes messages past the time their thread keeps them, in short batches. | Every 15 minutes | |
 | **Production checks** | Reads a few production invariants in plain code and shows each failing one on Health. | Every 15 minutes | |
 | **Thread routing** (AI) | Wakes the bots a person's unaddressed thread message is for, three at most. | As messages arrive | |
-| **Thread ranking** (AI) | Ranks threads with new messages from 1 to 10 for the Important view. | Every 5 minutes | |
+| **Thread ranking** (AI) | Gives each thread with new messages in the last 14 days a level from 1 to 10, for the threads API's `sort=important` order. In that order a thread that needs attention comes first, whatever its level. A thread is ranked at most once an hour, and at most 20 threads a pass and 40 an hour. A thread never ranked sits at 5; a failed call keeps its last level. That order otherwise leaves out level 1 threads, threads of finished tasks, and task threads no person owns or asked for. It also stops for the day once the server's Decide calls reach 80% of the bots' daily call budget, so the checks that act on tasks keep room. | Every 5 minutes | |
 | **Bot thread digest** | Starts one run an hour for each bot with new messages in the threads it follows on digest. | Hourly | |
 | **Nightly memory tidy** | Proposes memory and knowledge edits for the pilot bots. | Nightly at 03:30 | |
 | **Tico company heartbeat** | Tells app.tico.dev this server's version once a day. | Daily | a linked Tico company |
@@ -198,4 +200,4 @@ Not listed, because they are not timed jobs of their own: the automations engine
 - **Failed in red.** Read the reason. A busy database clears on the next run. A repeated "Tico refused it" or "Decide did not answer" means the job is failing each time; tell your Tico admin.
 - **Uses AI with no route.** The job has not asked Decide yet, for example because nothing needed a decision.
 
-<!-- Sources checked 2026-10-24 at PR #1293 head f0fcafdf65c082a408f4524e379cc091109a2b3c: ui/app/settings-recurring.js; backend/task_rules.py; backend/system_routines.py; backend/models.py (TaskRuleUpdate). Task-rules spec v1, acceptance 11. -->
+<!-- Sources checked 2026-11-05 at main 1ed46c055: docs/maintenance.md; backend/maintenance_steps/dream.py; backend/dream_auto.py; ui/app/automations-maintenance.js (Auto dream). Earlier, 2026-10-24 at PR #1293 head f0fcafdf65c082a408f4524e379cc091109a2b3c: ui/app/settings-recurring.js; backend/task_rules.py; backend/system_routines.py; backend/models.py (TaskRuleUpdate). Task-rules spec v1, acceptance 11. -->

@@ -240,6 +240,8 @@ class TaskCreate(Contract):
     roles: dict[str, list[str]] | None = None
     # Who else sees a private task: people, bots and group:<id>s (hubdb.set_task_readers).
     readers: list[ReaderName] = Field(default_factory=list, max_length=50)
+    # The filer follows it too (backend/task_followers.py); its owner follows anyway.
+    follow: StrictBool = False
     # With a model, the bot's own check session; review alone is a normal review child.
     check_model: str | None = Field(default=None, max_length=120)
     check_role: Literal["review", "check"] | None = None
@@ -591,6 +593,13 @@ class TaskReaders(Contract):
 class TaskReaderList(Contract):
     """The whole reader list of a private task, replacing what it had."""
     readers: list[ReaderName] = Field(default_factory=list, max_length=50)
+
+
+class TaskFollower(Contract):
+    """Follow or unfollow a task (backend/task_followers.py): yourself, or `actor` when you may change the task."""
+    actor: ReaderName | None = None
+    following: StrictBool = True
+    notify: Literal["live", "mentions", "digest", "muted"] | None = None
 
 
 class TaskLink(Contract):
@@ -2733,6 +2742,12 @@ class AssistantAction(Contract):
     body: dict = Field(default_factory=dict)
     # The Assistant's own background run puts the card in this person's Assistant chat (`for`); otherwise it is the caller's.
     for_person: Annotated[str, Field(min_length=1, max_length=200)] | None = Field(default=None, alias="for")
+
+
+class AssistantMorning(Contract):
+    """The Assistant's one morning message to a person, in their own Assistant chat (backend/assistant.py morning)."""
+    for_person: Annotated[str, Field(min_length=1, max_length=200)] = Field(alias="for")
+    body: Annotated[str, Field(min_length=1, max_length=2000)]
 
 
 class InboxOnly(Contract):

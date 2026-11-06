@@ -65,6 +65,7 @@ CLI_TOOL_ALIASES = {
     "hub_rules_due_list": ("hub_rules_due",), "hub_rules_due_add": ("hub_rules_due_set",),
     "hub_rules_read": ("hub_rules_get", "hub_rules_read"),   # `hub rules read <id>` or, with --from, a document
     "hub_task_child": ("hub_task_child_create",),
+    "hub_task_unfollow": ("hub_task_follow",),    # `hub task unfollow` is hub_task_follow with unfollow
     "hub_automation_show": ("hub_automation_get",), "hub_automation_inbox": ("hub_inbox_send",),
     "hub_repo_tick": ("hub_repo_update",), "hub_repo_untick": ("hub_repo_update",),
     "hub_bot_repos": ("hub_bot_repos_get", "hub_bot_repos_set"),
@@ -84,7 +85,8 @@ def _s(description, **extra):
 
 
 
-TASK_ID = {"type": "string", "description": "Task id: the full id, or its first 8 or more characters (`short_id` in hub_task_list)"}
+TASK_ID = {"type": "string",
+           "description": "Task id: the full id, or 8+ leading characters (`short_id` in hub_task_list)"}
 # How a send reaches its bot (backend/delivery.py), the same words on every send.
 DELIVERY = {"type": "string", "enum": ["steer", "queue", "defer"],
             "description": "To a bot: steer goes into its running turn now (right after it if its harness can't "
@@ -111,7 +113,7 @@ def tool(name, description, properties, required=(), *, writes=False, local=Fals
         schema["required"] = list(required)
     if writes:
         schema["properties"]["operation_id"] = _s(
-            "A stable id for this write so a retried call lands once. " +
+            "Stable id so a retry lands once. " +
             ("This tool requires the id." if "operation_id" in schema.get("required", []) else
              "Omit for a fresh id."))
 
@@ -503,8 +505,8 @@ def ask_wait(api, pending, wait, args):
 
 
 # The Assistant, citing the person's message for something they asked for (`_asked`).
-ASKED = _s("Assistant: the person asked for exactly this in their own Assistant chat: `turn` (their message that started "
-           "this run) or that message's id. Leave it out when they did not clearly ask, and propose instead")
+ASKED = _s("Assistant only: the person asked for this in their Assistant chat: `turn` (the message that started "
+           "this run) or its id. Omit unless they clearly asked; propose instead")
 
 
 @tool("hub_question_answer", "Answer a question another bot asked you. The Assistant answers a bot's question to its "
@@ -702,6 +704,7 @@ def tag_update(api, args):
        "due": _s("ISO-8601 date-time with timezone"),
        "private": {"type": "boolean", "description": "Only its requester, owner and readers see it; bot defaults also apply"},
        "readers": {"type": "array", "items": {"type": "string"}, "description": "Private: who else sees it: human:<id>, bot:<slug> or group:<id>"},
+        "follow": {"type": "boolean"},   # the filer follows it too (docs/tasks.md, Followers)
        "from_private": {"type": "boolean", "default": False,
                         "description": "From a run on your own private task with no person on it: a company-visible "
                                        "task for a bot, carrying only its own words (no 12 words copied from the private "
@@ -755,7 +758,7 @@ def task_create(api, args):
         body["relations"] = [{"task": args["parent"], "kind": "parent"}]
     for field in ("labels", "top", "links", "next_run", "request_id", "type", "step", "number", "check_model",
                   "check_role", "visibility", "public_title", "public_summary", "from_private", "model", "effort",
-                  "harness", "check_back_at", "check_back_note", "readers"):
+                  "harness", "check_back_at", "check_back_note", "readers", "follow"):
         if args.get(field) not in (None, "", [], False):
             body[field] = args[field]
     for field in ("qa", "change_paths", "qa_not_checkable_live", "blocker"):
@@ -1085,10 +1088,9 @@ BRIEF_OLD = {"type": "boolean", "description": "Older name for brief"}
        "check_back_note": _s("What result or handoff to inspect, at most 500 characters"),
        "due": _s("ISO-8601 date-time with timezone"),
        "labels": {"type": "array", "items": {"type": "string"}, "description": "Replace the labels"},
-       "waiting_on": _s("With status waiting: the person you need (their id). The note is your ask to them: one or two "
-                        "plain sentences saying what you need and what happens after, at most 40 words, no ids, hashes, "
-                        "file paths, s3:// links or tool names (\"PR #1555\" is fine; refused otherwise), e.g. \"Approve the video tool trial "
-                        "for Thursday? If yes, I'll send the invite.\" It becomes one small task for them; this task "
+       "waiting_on": _s("With status waiting: the person you need (their id). The note is your ask to them, under the "
+                        "same rules as hub_task_create's body (its first paragraph). It becomes one small task for "
+                        "them; this task "
                         "stays yours, blocked on it, and opens again with their answer. Or bot:<slug>: an active team bot "
                         "owning the first open linked blocked_by task. Link that prerequisite with hub_task_relate first; "
                         "the note is then the reason displayed beside the bot. The existing relation holds the work and "
@@ -1415,12 +1417,29 @@ def task_readers_remove(api, args):
     return api.post(f"tasks/{args['id']}/readers", {"remove": list(args["readers"])}, key=_key(args))
 
 
+FOLLOW_LEVEL = {"type": "string", "enum": ["live", "mentions", "digest", "muted"]}
+
+
+@tool("hub_task_followers", "Who follows a task, at what level.", {"id": TASK_ID}, required=("id",))
+def task_followers(api, args):
+    return api.get(f"tasks/{args['id']}/followers")
+
+
+@tool("hub_task_follow", "Follow a task, set your level, or unfollow. `who`: someone else, if you may change the task.",
+      {"id": TASK_ID, "level": FOLLOW_LEVEL, "who": _s("human:<id> or bot:<slug>"), "unfollow": {"type": "boolean"}},
+      required=("id",), writes=True)
+def task_follow(api, args):
+    body = {"following": not args.get("unfollow"), **({"notify": args["level"]} if args.get("level") else {}),
+            **({"actor": args["who"]} if args.get("who") else {})}
+    return api.call("PUT", f"tasks/{args['id']}/followers", body, key=_key(args))
+
+
 @tool("hub_task_relate", "Relate another task to this one, read as `id kind task`: parent (task is its "
       "parent; moves it and its subtree), blocks, blocked_by (it waits on task; several are allowed), "
       "related (they belong together, the default), duplicate_of, follow_up (it was split off or followed "
       "up from task). `remove` takes the relation off. The reply's `readback` says what was stored, both ends "
       "(\"#237 waits for #233\" / \"#233 blocks #237\"): check it before reporting the link as fixed.",
-      {"id": TASK_ID, "task": {**TASK_ID, "description": "The other task: its id or first 8 or more characters"},
+      {"id": TASK_ID, "task": {**TASK_ID, "description": "The other task: its id or 8+ leading characters"},
        "kind": {"type": "string", "enum": ["parent", "blocks", "blocked_by", "related", "duplicate_of", "follow_up"], "default": "related"},
        "remove": {"type": "boolean", "default": False}},
       required=("id", "task"), writes=True)
@@ -4266,7 +4285,7 @@ def _asked(api, args):
     return _Requester(api.api if isinstance(api, _Requester) else api, args["on_behalf_of"])
 
 
-ON_BEHALF_OF = _s("BotOps, following through on a person's request in a run something else started (a daily update, "
+ON_BEHALF_OF = _s("BotOps, following a person's request in a run something else started (a daily update, "
                   "a notice): the id of the open task they asked you for. Default: the request that started this run")
 
 
@@ -6264,6 +6283,15 @@ def assistant_propose(api, args):
     return api.post("assistant/actions", sent, key=_key(args))
 
 
+@tool("hub_assistant_morning", "The Assistant's one morning message to a person's Assistant chat, from its background "
+      "run only (once a company day).",
+      {"for_person": _s("The person (human:<id>) whose Assistant chat gets it"),
+       "body": _s("The message, in Markdown, at most 2000 characters")},
+      required=("for_person", "body"), writes=True)
+def assistant_morning(api, args):
+    return api.post("assistant/morning", {"for": args["for_person"], "body": args["body"]}, key=_key(args))
+
+
 @tool("hub_assistant_withdraw", "Take back a Confirm card that still waits for the person (its id from "
       "hub_assistant_proposals): it is marked withdrawn and never runs, and the card owner's chat says who withdrew it, "
       "with the reason if you give one. Any teammate may withdraw; only the card's owner can confirm it.",
@@ -6831,7 +6859,7 @@ def needs_you_show(api, args):
       "Answers who made it, its cause (the automation that opened it, the org rule that asked for it, the parent task, or "
       "the bot that filed it), how many items that cause made this week and how many are still open, and up to three "
       "ready-to-run commands that would stop the source. Read-only; a ref the person cannot read is not found.",
-      {"ref": _s("A task id (or its first 8 or more characters), a message id (a bot's question) or an approval id")},
+      {"ref": _s("A task id (or 8+ leading characters), a message id (a bot's question) or an approval id")},
       required=("ref",))
 def origin_show(api, args):
     return api.get("origins/" + args["ref"])
@@ -7215,7 +7243,7 @@ def _register_email_organize(action):
 
     @tool('hub_email_' + action, 'Organize live Gmail: ' + action.replace('_', ' ') +
           '. Supply ids or query, up to 500 messages. Needs your organize access and the company switch. '
-          'Never deletes or trashes. Returns count, ids and the inverse action for undo.',
+          'Never deletes or trashes. Returns count, ids and the undo action.',
           properties, required=required, writes=True)
     def organize_email(api, args):
         body = {k: args[k] for k in ('mailbox', 'query', 'limit', 'label') if args.get(k) is not None}
@@ -7984,6 +8012,9 @@ AUDIENCE = {
     # The Assistant bot's own background run (a routine, kind `bot`) proposes a card for its person too; the server admits
     # only the Assistant bot, and only with `for` naming an active person (backend/app.py propose).
     "hub_assistant_propose": ("assistant", "bot"), "hub_approval_read_back": ("assistant",),
+    # The morning message: the server admits only the Assistant bot's background run, once a company day per person
+    # (backend/assistant.py morning). The Assistant's routine calls it, so its listing carries it too.
+    "hub_assistant_morning": ("assistant", "bot"),
     # Any teammate may withdraw a waiting card or find one (backend/assistant.py teammate); confirming stays the owner's.
     "hub_assistant_withdraw": KINDS, "hub_assistant_proposals": KINDS,
     # A bot's add is a suggestion; the Assistant's is an org rule the person asked for in their own chat, citing their words.
@@ -8060,6 +8091,7 @@ ASSISTANT_HIDDEN = frozenset({
     "hub_credential_grant", "hub_credential_revoke", "hub_credential_delete", "hub_credential_set", "hub_credential_import",
     "hub_agent_pair_approve", "hub_agent_pair_decline", "hub_call_token",
     "hub_sql", "hub_support_file", "hub_support_report", "hub_support_send", "hub_trigger_sign", "hub_message_redact",
+    "hub_task_followers",   # task show carries followers
     "hub_tool_call",
     "hub_task_readers_list",  # hub_task_show has the readers; the Assistant's listing is near its size cliff
     "hub_tool_check",         # hub_tool_index has each tool's status; Check now is on the tool's page. Same cliff.

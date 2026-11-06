@@ -37,7 +37,7 @@ For example, Repositories says **Ask Ana Rivera to connect GitHub** when Ana own
 | Connect your External agent | Connect an external agent beside your email |
 | Review message work | Message bots → mailbox or channel |
 | Read or write team knowledge | Docs → Internal docs; outside sources are Linked docs |
-| Find a bot, human or page | ⌘K, or the search icon at the end of the sidebar's **Tico Assistant** row (phone: the Search tab) |
+| Find a bot, human or page | ⌘K, or Search in the sidebar: its icon at the end of the **Tico Assistant** row, or its own row on the Assistant page, during setup and where no person has loaded (phone: the Search tab while Threads is off, else in More) |
 | Find a file or page any bot made | Library → Files (`#/library/files`); search finds text inside ([Files](files.md#library--files)) |
 | See every tool and connection, who uses it and its status | Tools (`#/tools`) ([Connect tools](connect-tools.md#tools-list)) |
 | Arrange your own landing page | Overview → Mine (`#/home`) ([Overview](overview.md#my-dashboard)) |
@@ -52,7 +52,7 @@ For example, Repositories says **Ask Ana Rivera to connect GitHub** when Ana own
 | Message the Tico team | **?** beside Search (phone: More drawer, beside Search), or any `#/support` link |
 
 All four system bots appear as **Built-in** in Settings > Bots. Neither Assistant nor BotOps has a rail entry: **Tico Assistant**
-(the sidebar's bottom row, ⌘J; **Assistant**, the phone's middle tab) opens your Assistant over any page, `#/assistant`
+(the sidebar's bottom row, ⌘J; **Assistant**, the phone's middle tab) opens your Assistant over any page except the Assistant page and setup, even while the signed-out banner shows, `#/assistant`
 opens it full page, and the Assistant hands BotOps what needs BotOps;
 the Strategy Bot is on Goals and proposes Strategy, and Ask the Librarian is on Docs and on Strategy's Market tab. The Strategy Bot is at the top of the team chart; the other three stay out of it.
 Inbox Manager and other repeating message work appear under **Message bots**.

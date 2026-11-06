@@ -177,6 +177,11 @@ export type AssistantMessage = {
   text: string;
 };
 
+export type AssistantMorning = {
+  body: string;
+  for: string;
+};
+
 export type AssistantPage = {
   path: string;
   title?: string;
@@ -5536,6 +5541,7 @@ export type TaskCreate = {
   delivery?: "steer" | "queue" | "defer" | null;
   due?: string | null;
   effort?: string | null;
+  follow?: boolean;
   from_private?: boolean;
   goal_id?: string | null;
   harness?: string | null;
@@ -10992,6 +10998,13 @@ export type SendAssistantMessageParams = {
 };
 export type SendAssistantMessageBody = AssistantMessage;
 export type SendAssistantMessageResponse = AssistantSent;
+
+/** POST /api/v2/assistant/morning */
+export type SendAssistantMorningParams = {
+  "Idempotency-Key": string;
+};
+export type SendAssistantMorningBody = AssistantMorning;
+export type SendAssistantMorningResponse = unknown;
 
 /** POST /api/v2/letters/{letter_id}/send */
 export type SendLetterParams = {

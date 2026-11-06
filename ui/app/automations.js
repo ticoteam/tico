@@ -179,8 +179,9 @@ function auShell() {
     sessionStorage.removeItem('tico.automations.legacy-filter-note');
   } catch { /* the legacy address still opens Automations */ }
   $('#main').innerHTML = `<div class="au" id="au-root">
-    <header class="au-ph"><h1>Automations</h1><div class="au-seg au-range" role="group" aria-label="Time range"></div><span class="au-sp"></span><button class="docs-ask" type="button" data-ask-open aria-label="Ask" title="Ask">${ldotHTML({state: 'still', size: 16})}<span class="docs-ask-word">Ask</span></button><span class="au-newbox"><button class="primary au-new" type="button" aria-haspopup="menu" aria-expanded="false">+ New</button>
-      <div class="au-newm" role="menu" hidden><button type="button" role="menuitem" data-new="inbox"><span class="nav-icon" aria-hidden="true">mail</span>New inbox</button>${AU_WHEN.map(([k, l]) => `<button type="button" role="menuitem" data-new="${k}"><span class="nav-icon" aria-hidden="true">${AU_TRIGGER_ICONS[k]}</span>${l}</button>`).join('')}</div></span></header>
+    <header class="au-ph"><div class="au-hrow"><h1>Automations</h1><div class="au-seg au-range" role="group" aria-label="Time range"></div></div><span class="au-sp"></span><button class="docs-ask" type="button" data-ask-open aria-label="Ask" title="Ask">${ldotHTML({state: 'still', size: 16})}<span class="docs-ask-word">Ask</span></button>
+      <div class="au-hrow"><button type="button" class="au-fbtn" data-filters aria-label="Filters" aria-expanded="false">${auIcon('filter_alt')}<span class="au-fbn" hidden></span></button><span class="au-newbox"><button class="primary au-new" type="button" aria-label="New automation" aria-haspopup="menu" aria-expanded="false"><span class="nav-icon" aria-hidden="true">add</span><span class="au-new-w">+ New</span></button>
+      <div class="au-newm" role="menu" hidden><button type="button" role="menuitem" data-new="inbox"><span class="nav-icon" aria-hidden="true">mail</span>New inbox</button>${AU_WHEN.map(([k, l]) => `<button type="button" role="menuitem" data-new="${k}"><span class="nav-icon" aria-hidden="true">${AU_TRIGGER_ICONS[k]}</span>${l}</button>`).join('')}</div></span></div></header>
     ${legacyFilterNote ? '<p class="settings-legacy-filter-note" role="status">The filter from the old Rules link did not carry over. Search or pick below.</p>' : ''}
     <div class="au-body">
       <aside class="au-rail" aria-label="Filters">
@@ -188,13 +189,16 @@ function auShell() {
         <div class="au-facets"></div>
       </aside>
       <section class="au-c" aria-live="polite">
-        <div class="au-ov"><div class="au-ctl"></div><div class="au-tbl"></div></div>
+        <div class="au-ov"><div class="au-ctl"><div class="au-tabs" role="tablist" aria-label="View">
+          <button type="button" role="tab" data-tab="list" aria-selected="true">Automations</button>
+          <button type="button" role="tab" data-tab="runs" aria-selected="false">Runs</button></div><span class="au-sp"></span><span class="au-sels"></span></div><div class="au-tbl"></div></div>
         <div class="au-crumb"></div><div class="au-hd"></div><div class="au-pane"></div><div class="au-menu" role="menu" hidden></div></section>
       <aside class="au-side"><div class="au-ed" hidden></div></aside>
       <div class="au-scrim" hidden></div>
     </div>
   </div>`;
   const root = AU.root = $('#au-root');
+  auPlace();
   auOverviewWire(root);
   root.querySelector('.au-new').onclick = () => auNewMenu(root.querySelector('.au-newm').hidden);
   root.querySelector('.au-newm').onclick = e => {

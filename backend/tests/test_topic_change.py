@@ -497,7 +497,8 @@ def test_sends_at_the_same_moment_cannot_pass_the_daily_call_limit_together(chat
         post(api, "chat/ops", {"text": "Plan the offsite agenda"})
     finally:
         model.hold.set()
-        first.join(5)
+        first.join(30)                            # a loaded runner can take past 5 s; a silent timeout lost its row
+    assert not first.is_alive(), "the first send returned"
     assert len(model.calls) == 1, "the second send found no call free and asked nothing"
     errors = [r.get("error") for r in checks(api)]   # each row lands once its send returns, in either order
     assert len(errors) == 2 and errors.count("budget") == 1, "the second asked nothing; the first asked with the call"

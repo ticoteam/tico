@@ -269,8 +269,9 @@ A task's own model ([Choosing the model a task runs on](tasks.md#choosing-the-mo
 bot's task model first, then to the bot's own model. A review or check subtask keeps its check model.
 
 A bot whose **Task model** is not offered yet keeps that model, and its tasks still run on it, when you change
-**Task context length** or save the same model again. Settings lists no **Task effort** choices for such a model,
-so that field is disabled there; a save that sends only an effort or a context length keeps the model too.
+**Task context length** or save the same model again. Settings lists a held model's **Task effort** choices only
+while a bot's own model or the team default is that model. Otherwise that field is disabled for a bot whose
+**Task model** it is. A save that sends only an effort or a context length keeps the model too.
 Terra 6.1 (`gpt-6.1-terra`) is one such model. Choosing it for a bot that does not have it saved is refused, and
 so is choosing another model that is not offered yet.
 
