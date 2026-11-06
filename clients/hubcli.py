@@ -219,6 +219,10 @@ the server (`backend/hubdb.py`), never here. A command is its tool's name (clien
                                            Several actions: ONE card, --path /api/v2/assistant/batch
                                            --body '{"actions": [{"path": "/api/v2/tasks/<id>", "body": {...}}, ...]}'
                                            (task actions, approval decisions, answers to bots' questions)
+    hub assistant morning --for human:<id> --body "<text>"
+                                           the Assistant's background run only: the person's one morning message in
+                                           their own Assistant chat, as the Assistant (no card); a second one that
+                                           company day is refused
     hub assistant learn "<line>" [--company]
                                            in a person's own chat: save what they taught you, in their own
                                            layer (--company: the Strategy Bot, about the company, owner's chat only)
@@ -1626,6 +1630,10 @@ def parser():
     s.add_argument("--for", dest="for_person", default=None,
                    help="the Assistant's own background run only: the person (human:<id>) whose chat gets the card")
     s.set_defaults(fn="assistant propose")
+    s = assistant.add_parser("morning", help="the Assistant's one morning message to a person (background run only)")
+    s.add_argument("--for", dest="for_person", required=True, help="the person (human:<id>) whose chat gets it")
+    s.add_argument("--body", required=True, help="the message, in Markdown, at most 2000 characters")
+    s.set_defaults(fn="assistant morning")
     s = assistant.add_parser("learn", help="save one thing the person taught you (What it has learned)")
     s.add_argument("text", help="one short line, in their words")
     s.add_argument("--company", dest="layer", action="store_const", const="company", default="personal",
