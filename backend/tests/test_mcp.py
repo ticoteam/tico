@@ -357,7 +357,7 @@ def test_a_bot_puts_one_decision_to_a_person_in_one_call(api):
     r = api.post("/api/v2/task-questions", json=picture, headers=headers(attempt["token"]))
     assert r.status_code == 403 and not any(api.app.state.blobs.directory.rglob(hashlib.sha256(b"\x89PNG never stored").hexdigest()))
     r = api.post("/api/v2/task-questions", json={**picture, "on": "ana"}, headers=headers(attempt["token"], "pic-1"))
-    assert r.status_code == 200 and r.json()["question"]["ask"]["questions"][0]["options"][0]["file"]
+    assert r.status_code == 200 and r.json()["question"]["refs"]["questions"][0]["options"][0]["file"]
     again = api.post("/api/v2/task-questions", json={**picture, "on": "ana"}, headers=headers(attempt["token"], "pic-1"))
     assert again.status_code == 200 and again.json()["task"]["id"] == r.json()["task"]["id"]
     # A private question refused in the write's checks stores no bytes either.
@@ -374,8 +374,9 @@ def test_a_bot_puts_one_decision_to_a_person_in_one_call(api):
         assert c.execute("SELECT count(*) FROM tasks WHERE title LIKE 'Sign the settlement%' "
                          "OR title LIKE 'Renew the vendor%'").fetchone()[0] == 0
     made = out["task"]
-    assert (made["owner_id"], made["requester_id"], made["status"], made["waiting_on"]) == ("bot:ops", "bot:ops", "waiting", "human:ana")
-    assert [o["label"] for o in out["question"]["ask"]["questions"][0]["options"]] == ["Yes", "No"]
+    # A question task: the person owns it, the bot asked it (backend/question_tasks.py).
+    assert (made["owner_id"], made["requester_id"]) == ("human:ana", "bot:ops")
+    assert [o["label"] for o in out["question"]["refs"]["questions"][0]["options"]] == ["Yes", "No"]
     item = next(i for i in get(api, "needs-you")["items"] if i["id"] == made["id"])
     assert item["kind"] == "question" and item["ask"]["sender_id"] == "bot:ops"
 
@@ -392,7 +393,7 @@ def test_a_private_question_goes_to_any_person_and_only_they_and_the_bot_read_it
     r = api.post("/api/v2/task-questions", json=ask, headers=headers(attempt["token"], "private-ben"))
     assert r.status_code == 200, r.text
     made = r.json()["task"]
-    assert made["private"] and (made["owner_id"], made["requester_id"], made["waiting_on"]) == ("bot:ops", "human:ben", "human:ben")
+    assert made["private"] and (made["owner_id"], made["requester_id"]) == ("human:ben", "bot:ops")
     assert get(api, f"tasks/{made['id']}", token="ben-test")["task"]["id"] == made["id"]
     get(api, f"tasks/{made['id']}", token="cara-test", expected=404)
     get(api, f"tasks/{made['id']}", token="ana-test", expected=404)    # who started the run is not a party

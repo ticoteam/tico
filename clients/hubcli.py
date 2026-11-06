@@ -93,7 +93,8 @@ the server (`backend/hubdb.py`), never here. A command is its tool's name (clien
                                            ask a person on your task: one small subtask for them, yours stays blocked
     hub task question "<question>" --on <person> [--why "<why it matters>"]
                     [--option "A -> what happens" --option "B=<file> -> what happens"] [--multi --recommend A]
-                                           one decision under your task, waiting on them; none for Yes / No.
+                                           one decision as a task they own, under your task; none for Yes / No.
+                                           Their answer closes it. Never to a bot: DM a bot instead.
                                            Every option says what happens (->); several picks (--multi) mark
                                            the recommended ones; no ids, paths or errors above --body
                     [--if-no-answer "Yes" --default-kind reversible|send|spend|delete] [--by D]
@@ -1811,7 +1812,8 @@ def parser():
     s.add_argument("id")
     s.add_argument("text")
     s.set_defaults(fn="task ask")
-    s = task.add_parser("question", help="put one decision to a person as its own task: a pick or Yes / No")
+    s = task.add_parser("question", help="put one decision to a person as a task they own: a pick or Yes / No; "
+                        "their answer closes it")
     s.add_argument("question")
     s.add_argument("--on", required=True, help="the person who decides")
     s.add_argument("--option", action="append",

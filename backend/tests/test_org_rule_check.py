@@ -1533,9 +1533,10 @@ def test_chat_updates_and_task_questions_carry_a_warn_rules_line(ruled, monkeypa
     assert update["rule_warning"] and update["update"]["body"].startswith("Warning:")
     asked = ask(api, "Ship it?", title="Palette", body="Our favorite color is blue.")
     assert asked["rule_warning"] and asked["question"]["body"].startswith("Warning:")
-    row = sql(api, "SELECT body, note, waiting_on FROM tasks WHERE id=?", (asked["task"]["id"],))[0]
+    row = sql(api, "SELECT body, owner_id, questions FROM tasks WHERE id=?", (asked["task"]["id"],))[0]
     assert row["body"].startswith("Warning:") and row["body"].count("Warning:") == 1
-    assert row["note"].startswith("Warning:") and row["waiting_on"] == "human:ana"
+    # A question task: Ana owns it, and its question leads with the line as the card shows it.
+    assert row["owner_id"] == "human:ana" and json.loads(row["questions"])[0]["question"].startswith("Warning:")
 
 
 def test_send_anyway_delivers_a_held_chat_update_and_task_question_once(ruled, monkeypatch):
@@ -1550,8 +1551,8 @@ def test_send_anyway_delivers_a_held_chat_update_and_task_question_once(ruled, m
     assert len(bodies(api, "favorite color is blue")) == 1           # the chat message
     assert [r["body"] for r in sql(api, "SELECT body FROM updates WHERE bot='ops'")] == \
         ["- Our favorite color is blue."]
-    [task] = sql(api, "SELECT id, waiting_on FROM tasks WHERE title='Palette'")
-    assert task["waiting_on"] == "human:ana"
+    [task] = sql(api, "SELECT id, owner_id FROM tasks WHERE title='Palette' AND questions IS NOT NULL")
+    assert task["owner_id"] == "human:ana"
     assert len([call for call in judge.calls if call["label"].startswith("rule-check")]) == 3
 
 
@@ -1646,11 +1647,10 @@ def test_a_question_sent_anyway_under_a_new_warn_rule_leads_its_card_with_the_li
     rule(api, {"kind": "internal", "text": LAUNCH, "who": {"bots": ["ops"]}, "if_broken": "warn"})
     judge.needles[LAUNCH] = "launch is"
     send_anyway(api, hold["held"]["id"])
-    [task] = sql(api, "SELECT id FROM tasks WHERE title='Palette'")
-    [refs] = [json.loads(r["refs"]) for r in sql(api, "SELECT refs FROM messages WHERE kind='ask' AND "
-                                                         "json_extract(refs,'$.task')=?", (task["id"],))]
-    assert refs["questions"][0]["question"].startswith("Warning:")
-    assert refs["questions"][0]["question"].endswith("Ship the palette?")
+    # A question task writes no ask message: the question rides on the task (question_tasks.store).
+    [task] = sql(api, "SELECT id, questions FROM tasks WHERE title='Palette' AND questions IS NOT NULL")
+    [question] = json.loads(task["questions"])
+    assert question["question"].startswith("Warning:") and question["question"].endswith("Ship the palette?")
 
 
 def public_output(api, task_id):
