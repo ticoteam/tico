@@ -1135,6 +1135,28 @@ def propose(conn, actor, kind, goal_id=None, kpi_id=None, payload=None, reason="
     return proposal(conn, row["id"])
 
 
+def subject(payload):
+    """What a suggestion is about, whatever its words: the KPI it links or the measure it names. Two suggestions for
+    different measures on one goal are different subjects."""
+    payload = payload if isinstance(payload, dict) else {}
+    kpi_part = payload.get("kpi") if isinstance(payload.get("kpi"), dict) else {}
+    return str(payload.get("kpi_id") or kpi_part.get("name") or "").strip().lower()
+
+
+def pending_like(conn, kind, goal_id, kpi_id, payload):
+    """The pending suggestions about the same subject as this one (same kind, goal and KPI), newest first: the cards a
+    "no" to it refers to. Another measure's card on the same goal is not one of them."""
+    want = subject(payload)
+    cards = H._rows(
+        conn.execute(
+            "SELECT * FROM goal_proposals WHERE status='pending' AND kind=? AND coalesce(goal_id,'')=? "
+            "AND coalesce(kpi_id,'')=? ORDER BY proposed_at DESC",
+            (kind, goal_id or "", kpi_id or ""),
+        )
+    )
+    return [_proposal_view(r, conn) for r in cards if subject(H._json(r["payload"], {})) == want]
+
+
 def proposal(conn, proposal_id):
     return _proposal_view(H._one(conn, "SELECT * FROM goal_proposals WHERE id=?", (proposal_id,)), conn)
 

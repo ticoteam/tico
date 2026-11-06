@@ -6666,12 +6666,17 @@ class Execution:
                 target = source["sender_id"]
                 # A bot is answered only when it asked (a message flagged needs_action; an ask before step 6c), except
                 # where the thread's wake rule chose to start this run for its message (a carrier): the loop guard,
-                # not this rule, bounds bots answering bots there. The reply itself asks nothing back.
+                # not this rule, bounds bots answering bots there. The reply itself asks nothing back. A bot's
+                # needs-action comment on a task only wakes the owner: the work on the task answers it, and posting
+                # the run's text back would wake the commenter (bot_to_bot WAKES) on every nudge, a scheduled-only
+                # lead included (Dev 606). Bots ask bots in a DM.
+                source_refs = H._json(source.get("refs"), {})
+                source_refs = source_refs if isinstance(source_refs, dict) else {}
                 replyable = (
                     not str(target).startswith("bot:")
                     or source["kind"] == "ask"
                     or carried
-                    or bool(H._json(source.get("refs"), {}).get("needs_action"))
+                    or (bool(source_refs.get("needs_action")) and not source_refs.get("comment"))
                 )
                 if target == H.KEEPER and task:
                     target = reply_target(source, conv, task)
