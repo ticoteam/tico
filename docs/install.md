@@ -138,7 +138,7 @@ a Claude sign-in for Claude Code, or an API key ([Harnesses](harnesses.md)). No 
    Content Marketer's page, press **Start onboarding**. Paste the [sample answers](#sample-answers-for-content-marketer)
    and answer anything else it asks. It posts a first draft in the same DM, labelled "First draft, not yet reviewed".
    Outbound sending stays off until you turn it on for that bot.
-3. **Give it one task.** On **Tasks > New task**, assign Content Marketer: “Draft a 200-word blog post introducing our example app to project teams from these facts:
+3. **Give it one task.** On **Tasks**, press **+** (New task) and assign Content Marketer: “Draft a 200-word blog post introducing our example app to project teams from these facts:
    our example app keeps tasks and meeting notes together; readers can try it locally; use a plain, friendly voice and invent
    no claims. Return a draft on this task.”
 4. **Review the draft.** When it finishes, the bot marks the task **Done** with a note, and the draft file (`post.md`, from its

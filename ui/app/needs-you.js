@@ -5,8 +5,7 @@
 // ---- Needs you: hub.db items, rendered as the same request rows the Issues use ----
 // What a card takes, in the order Needs you lists the groups (the server sets each card's `need`, backend/views.py
 // NEED_GROUPS): all the yes/no and pick cards can be cleared in one sitting.
-const NEED_GROUPS = [['decide', 'Answer'], ['pay', 'Pay'], ['connect', 'Sign in or connect'], ['review', 'Review and send'],
-  ['do', 'Do']];
+const NEED_GROUPS = [['decide', 'Answer'], ['pay', 'Pay'], ['connect', 'Connect'], ['review', 'Review'], ['do', 'Do']];
 const NEED_RANK = Object.fromEntries(NEED_GROUPS.map(([k], i) => [k, i]));
 const needLabel = need => (NEED_GROUPS.find(([k]) => k === need) || NEED_GROUPS.at(-1))[1];
 let NEEDS_MEMO = null;
@@ -72,7 +71,7 @@ async function needsRecommend(button, ask, version) {
 }
 // One line in Needs you for an item outside any task (an approval, a question, the Stale tickets card): who asks, what,
 // and its kind. A click opens its card (decide.js); nothing unfolds in the list. Its key is the card's. It keeps the
-// task rows' columns (task-list.js taskListRowHTML), with nothing to select and no status.
+// You list's task rows' columns (task-list.js taskListRowHTML), with nothing to select and no status.
 // The thread items (backend/thread_attention.py): each names its kind, and opens its thread rather than a decide card.
 const THREAD_NEED_KINDS = {thread_ask: 'Question', thread_mention: 'Mention', thread_dm: 'Direct message',
                            thread_held: 'Held', thread_capped: 'Paused'};
@@ -93,7 +92,6 @@ function needRowHTML(it, ctx = {}) {
     ${open}
     <span class="tl-fill"></span>
     <span class="tl-chips"><span class="pill needs">${esc(kind)}</span>${stale && (it.rows || []).length ? `<span class="tl-folded tnum">${(it.rows || []).length}</span>` : ''}</span>
-    ${ctx.by === 'status' ? '' : '<span class="tl-status-pad"></span>'}
     <span class="tl-people"><span class="tl-face" title="${esc(name)}">${face}</span></span>
     <time class="tl-age tnum" datetime="${esc(it.ready_since || it.created_at || '')}" title="${esc(fmt(it.ready_since || it.created_at))}">${esc(ageShort(it.ready_since || it.created_at))}</time>
   </div>`);

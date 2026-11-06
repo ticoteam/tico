@@ -3,7 +3,7 @@
 'use strict';
 
 // ----------------------------------------------------------------- tasks (#/tasks)
-// One page for every piece of work the team owes: Tico's tasks, shown as **Needs you**, **Open** (a list),
+// One page for every piece of work the team owes: Tico's tasks, shown as **You** (what needs you), **Open** (a list),
 // a **Board** and **Done**. `#/board` and `#/issues` open the matching view; scheduled work is Automations.
 // No priority: every task has a rank in its owner's queue. Labels stand in for projects.
 // A task's thread is comments, not chat: one flat list with the author on every line.
@@ -17,8 +17,10 @@ const COMPANY_COLS = [
 ];
 const STATUS_WORD = {open: 'Open', doing: 'Doing', waiting: 'Waiting', review: 'In review', ready: 'Ready to ship',
                      done: 'Done', closed: 'Closed', declined: 'Declined'};
-// The view tabs: labelled, with counts. The keys are the routes' and the saved preference's.
-const TASK_VIEWS = [['foryou', 'Needs you'], ['list', 'Open'], ['board', 'Board'], ['snoozed', 'Snoozed'], ['done', 'Done'], ['closed', 'Closed']];
+// The views: labelled, with counts. The keys are the routes' and the saved preference's. The first three are tabs;
+// the rest are in the tab row's More menu, with any tab the row has no room for (task-list.js tasksTabsFit).
+const TASK_VIEWS = [['foryou', 'You'], ['list', 'Open'], ['board', 'Board'], ['snoozed', 'Snoozed'], ['done', 'Done'], ['closed', 'Closed']];
+const TASK_TAB_VIEWS = ['foryou', 'list', 'board'];
 // Done and Closed share one feed of finished tasks, newest first; each shows its own status.
 const tasksFinishedView = view => view === 'done' || view === 'closed';
 const DONE_CAP = 20;                // The Done list shows 20 at a time
