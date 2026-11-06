@@ -13,3 +13,5 @@ One file per recurring kind of work. A playbook is the checklist you would hand 
 - `urgent-market-insight.md`: one urgent insight, curated now.
 - `customer-themes.md`: a team meeting just became ready; add what customers raised to the customer themes page, with a count and short quotes.
 - `research-a-section.md`: a person's research request on a doc, a market page or a market entry: research the web, add what was found to that one place, cited.
+
+Deep research ("Deep research: <question>") is a skill, not a playbook: `skills/deep-market-research/SKILL.md`.

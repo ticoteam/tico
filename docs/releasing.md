@@ -44,7 +44,7 @@ Private tickets are counted but not named. The writer skips them; their owners h
 The writer links its open PR on that General task. Tico sends it through the company's ticket review pools
 (Review 1, then Review 2 if configured), recording each verdict at the PR head. A push needs a new review.
 Current-head approvals and green checks wake the writer to merge under the repo's rules, or send the merge to
-an existing repo writer when the writer lacks access. Changes and a needed rebase return to the writer.
+an existing repo writer when the writer lacks access. Changes and a conflict return to the writer.
 Older open bot PRs enter this same route at a limited rate; Health names PRs waiting over 24 hours without a review.
 It is separate from the release command's "Release notes for vX.Y.Z" task. Docs and release notes are not part of
 the pre-release checklist. Only the owner, a person who moves Dev tickets, the Release Manager and the bot that
@@ -348,8 +348,8 @@ slow tests and every browser script, and release candidate validation covers tha
 
 ## Merge queue
 
-Main takes changes only through its merge queue. Mark the pull request ready for review, then run `gh pr merge <N> --merge`
-(`--squash` and `--auto` also enqueue). The queue adds the pull request to a group, merges the group onto the current main, runs the selected
+Main takes changes only through its merge queue. Mark the pull request ready for review, then enqueue it with
+`gh pr merge <N> --merge`. The queue adds the pull request to a group, merges the group onto the current main, runs the selected
 checks on that merge commit, and moves main only when they pass.
 
 - **Each push to a pull request** (GitHub-hosted, free): plan, static checks, recorder change detection, and the `checks`
@@ -362,8 +362,11 @@ checks on that merge commit, and moves main only when they pass.
 Agents run the tests they touched with `scripts/remote.py` before they mark a PR ready; the queue runs the selected set
 once per group.
 
+**Enqueue once.** A pull request needs no rebase to be current: the queue merges it onto the current main. Rebase only when
+GitHub reports a conflict. `--admin` and the REST merge endpoint skip the queue; do not use them.
+
 **A red queue run** removes the failing pull request from the queue, and the queue retests the entries behind it. Fix the
-failure on the branch, push, mark the PR ready again if it went back to draft, and merge again. The red run is the first
+failure on the branch, push, mark the PR ready again if it went back to draft, and enqueue it again. The red run is the first
 place a test failure shows, because a push to a pull request runs only lint.
 
 **Hotfixes do not bypass the queue.** Land the fix through the queue like any change, then dispatch `hotfix.yml` once it
@@ -777,8 +780,12 @@ The URL must be reachable without authentication from GitHub's build runners and
 of at most 1 MiB. If it is `/api/v2/team/icon`, the owner must upload a team icon on that server
 (Settings > Team, or `POST /api/v2/team/icon`); the endpoint returns 404 until one is set.
 Builds retry transient icon download errors up to eight times, waiting 30, 60, 90, then at most 120 seconds between
-attempts, so a server restarting for the update can recover. Permanent HTTP errors and invalid or oversized PNGs fail
-immediately; retry logs contain no company URL or remote error text.
+attempts, so a server restarting for the update can recover. Permanent HTTP errors and TLS certificate verification
+failures are not retried, because waiting does not change them. Invalid or oversized PNGs fail the run at once. If the
+download still fails after the retries (network, DNS, timeout or HTTP status), or fails on a certificate, the `icon`
+check skips that company's build and publish with a `::warning::` and a job summary line, and the run stays green. The
+public release and other companies are unaffected. The company's bucket manifest is not replaced, so its installed app
+keeps its current version. Retry logs contain no company URL or remote error text.
 The UUID must remain stable across renames to preserve installed preferences and login state.
 
 Company apps put nothing in the macOS menu bar; the Dock shows the company logo with the
@@ -837,7 +844,10 @@ and icon fetching run before installing build dependencies. An icon download err
 status or DNS/TLS/timeout category and names `TICO_COMPANY_APPS.icon_url`; it does not indicate a
 signing or publishing failure. For a 404, verify the icon exists; for 401/403, allow unauthenticated
 icon access. Correct the entry's `icon_url` (and `url` for a relative path) in the repository's
-Settings > Secrets and variables > Actions > `TICO_COMPANY_APPS` if the address is wrong.
+Settings > Secrets and variables > Actions > `TICO_COMPANY_APPS` if the address is wrong. A TLS error means the
+icon host's certificate fails verification from GitHub's runners (expired, incomplete chain or wrong name); fix the
+certificate on that host. The skip warning names the same category. After the fix, run the Release workflow from the
+current tag with `desktop` checked to build and publish that company again.
 Missing configuration fields and required environment variables are named explicitly. Icon generation,
 bundling, Apple certificate import, artifact encryption/decryption and publication have separate
 failure labels; private tool output and raw exception text remain suppressed. An old catch-all

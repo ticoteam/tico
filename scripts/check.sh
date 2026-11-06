@@ -5,7 +5,8 @@
 #   scripts/check.sh --all    every tracked file, every check (CI runs these too)
 # Checks: lint.sh (Python baseline), ruff format (once ruff.toml has a [format] section), shell_lint.sh (shellcheck),
 # actionlint (workflows), cargo fmt (the Rust crates scripts/rust_checks.sh formats), migration order,
-# check_ui_types.sh and check_types.sh (the pyright boundary modules). Each runs only when its inputs changed.
+# check_ui_types.sh and check_types.sh (basedpyright on the backend against its baseline), and the OpenAPI document's
+# drift check. Each runs only when its inputs changed.
 set -uo pipefail
 cd "$(dirname "$0")/.." || exit 2
 
@@ -166,11 +167,19 @@ else
   skip "migration order" "no migration changed"
 fi
 
-# 7. The UI's generated API types and the type-checked UI files.
-if [ "$ALL" = 1 ] || changed_matches '^ui/|^backend/openapi_v2\.py$|^scripts/(gen_ui_types\.py|check_ui_types\.sh)$'; then
+# 7. The UI's generated API types and the type-checked UI files. The types come from the whole API, so any backend route
+# or schema change reaches them.
+if [ "$ALL" = 1 ] || changed_matches '^ui/|^backend/.*\.py$|^scripts/(gen_ui_types\.py|check_ui_types\.sh)$'; then
   run "ui types (tsc, API types)" bash scripts/check_ui_types.sh
 else
-  skip "ui types (tsc, API types)" "no UI or API schema changed"
+  skip "ui types (tsc, API types)" "no UI or backend Python changed"
+fi
+
+# 7a. docs/openapi/v2.json is what the generator writes from the app's routes: any backend change can make it stale.
+if [ "$ALL" = 1 ] || changed_matches '^backend/.*\.py$|^docs/openapi/|^scripts/json_merge\.py$'; then
+  run "openapi document (v2.json)" python3 -m backend.openapi_v2 --check
+else
+  skip "openapi document (v2.json)" "no backend Python or OpenAPI file changed"
 fi
 
 # 7b. Every API path the UI calls is a route the backend serves (the app is imported, not run: seconds).
@@ -180,14 +189,14 @@ else
   skip "ui routes (API paths)" "no UI or backend Python changed"
 fi
 
-# 8. Python types on the boundary modules in pyrightconfig.json's include list (files or folders).
+# 8. Python types: basedpyright on pyrightconfig.json's include list, against its baseline and the strict-module ratchet.
 include_regex=$(python3 -c '
 import json, re
 print("|".join("^" + re.escape(entry) + "(/|$)" for entry in json.load(open("pyrightconfig.json"))["include"]))')
-if [ "$ALL" = 1 ] || changed_matches "$include_regex|^pyrightconfig\.json$|^scripts/check_types\.sh$"; then
-  run "boundary types (pyright)" bash scripts/check_types.sh
+if [ "$ALL" = 1 ] || changed_matches "$include_regex|^pyrightconfig\.json$|^scripts/check_types\.sh$|^scripts/check_pyright_ratchet\.py$|^scripts/pyright-legacy-modules\.txt$|^\.basedpyright/"; then
+  run "types (basedpyright baseline)" bash scripts/check_types.sh
 else
-  skip "boundary types (pyright)" "no typed boundary module changed"
+  skip "types (basedpyright baseline)" "no backend Python or type config changed"
 fi
 
 echo "check: $passed passed, $failed failed, $skipped skipped in $(elapsed "$T0" "$(now)")"
