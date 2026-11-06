@@ -84,8 +84,9 @@ anyone. It removes only what nothing can still need, in this order, and stops on
    unpushed work and no ignored files outside build folders.
 3. On Linux: top-level entries of the temp folder untouched for 24 hours that no process holds open and that hold no
    git checkout (never the runner's own `tico*` files, sockets or another user's files).
-4. `git worktree prune` and `git gc --auto` (in the foreground) in Tico's own base clones under `repos/`, one at a
-   time and only while no fetch holds that clone.
+4. `git worktree prune` in Tico's own base clones under `repos/`, one at a time and only while no fetch holds that
+   clone. It never runs `git gc`: repacking a large clone takes longer than the computer's Git time limit, leaves
+   partial packs when stopped, and holds the clone while other bots' worktree steps wait.
 
 It never touches an open task's folder, package caches in the home folder, a git checkout itself, a bot's repository,
 credentials, the runner's state or configuration, or Docker images and volumes. It never follows a symlink, never

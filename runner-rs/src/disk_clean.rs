@@ -9,7 +9,9 @@
 //!    person and not in use, and never one Git tracks or a checkout holding anything unsaved;
 //! 3. on Linux, top-level entries of the temp folder untouched for a day that no process holds open and that hold
 //!    no Git checkout;
-//! 4. `git worktree prune` and `git gc --auto` in Tico's base clones, one at a time under the lock fetches take.
+//! 4. `git worktree prune` in Tico's base clones, one at a time under the lock fetches take. Never `git gc`: a
+//!    repack of a large clone outlives the runner's Git time limit, leaves partial packs when stopped, and holds
+//!    the clone's lock while other bots' worktree steps wait.
 //!
 //! Never touched: an open task's folder, a folder the server lists nothing for, package caches in the home folder,
 //! a git checkout itself, bot repositories, the runner's state and configuration, credentials, Docker, and
@@ -38,13 +40,11 @@ pub const CLEAN_EVERY: Duration = Duration::from_secs(30 * 60);
 const OLD_S: f64 = 24.0 * 3600.0;
 /// Free space the clean-up aims for above the low mark, so it does not run again an hour later.
 const HEADROOM: u64 = 5 * (GB as u64);
-/// `git gc` writes new packs before it drops old ones.
-const GC_FLOOR: u64 = 2 * (GB as u64);
 /// How long the clean-up waits for a worktree pass, before and after asking for finished trees to go.
 const PASS_WAIT: Duration = Duration::from_secs(10 * 60);
-/// `gc` stays in the foreground, so the base clone's lock covers all of it and a detached repack does not keep
-/// writing after the clean-up measured what it freed.
-pub const GC_ARGS: &[&str] = &["-c", "gc.autoDetach=false", "gc", "--auto", "--quiet"];
+/// The only Git maintenance the clean-up runs: dropping registrations of worktrees whose folders are gone is quick
+/// and writes nothing large.
+pub const MAINTENANCE: &[&str] = &["worktree", "prune"];
 
 /// Free bytes under which the clean-up runs: 15% of the volume or 10 GB, whichever is larger, but never above a
 /// quarter of a small volume or 40 GB of a large one.
@@ -527,7 +527,7 @@ fn hold_folder(folder: &Folder, workspace: &Path, host: &Arc<dyn Host>, trees: &
         if trees.maintaining.lock().unwrap().insert(bot.clone()) {
             marked.push(bot.clone());
         }
-        if !host.idle(bot, task) || host.task_busy(task) {
+        if !owners_free(std::slice::from_ref(&(bot.clone(), task.clone())), host.as_ref()) {
             release(&marked);
             return None;
         }
@@ -537,6 +537,11 @@ fn hold_folder(folder: &Folder, workspace: &Path, host: &Arc<dyn Host>, trees: &
         return None;
     };
     Some((guards, task_locks, marked))
+}
+
+/// Whether no owner of a folder has a turn in its main lane or on its task, and no bot has one on any of its tasks.
+pub fn owners_free(owners: &[(String, String)], host: &dyn Host) -> bool {
+    owners.iter().all(|(bot, task)| host.idle(bot, task) && !host.task_busy(task))
 }
 
 /// One clean-up; its report.
@@ -587,8 +592,10 @@ async fn run(workspace: &Path, keep: Vec<PathBuf>, client: &Client, host: Arc<dy
             None => None,
         };
         let freed = if git_clear(&c, &env).await {
-            let (s, cand) = (scope.clone(), c.clone());
-            tokio::task::spawn_blocking(move || remove(&cand, &s)).await.unwrap_or(0)
+            let (s, cand, h) = (scope.clone(), c.clone(), host.clone());
+            let owners = folder.map(|f| f.owners.clone()).unwrap_or_default();
+            // Git took a while: a turn that started meanwhile (a claim already on its way) keeps the folder.
+            tokio::task::spawn_blocking(move || if owners_free(&owners, h.as_ref()) { remove(&cand, &s) } else { 0 }).await.unwrap_or(0)
         } else {
             0
         };
@@ -636,17 +643,14 @@ pub fn base_clones(workspace: &Path) -> Vec<(String, PathBuf)> {
     bases
 }
 
-/// `git worktree prune` and `git gc --auto` (gc only with room to repack) in each base clone, one at a time, each
-/// under the lock its fetches take; a clone whose fetch is running is left for the next clean-up.
+/// `git worktree prune` in each base clone, one at a time, each under the lock its fetches take; a clone whose fetch
+/// is running is left for the next clean-up.
 async fn git_maintenance(workspace: &Path, repositories: Option<Arc<crate::repositories::Repositories>>, env: &Env, tally: &mut Tally) {
     let Some(repositories) = repositories else { return };
     for (folder, base) in base_clones(workspace) {
         let Some(_sync) = repositories.try_sync_guard(&folder) else { continue };
         let before = free(workspace);
-        let _ = worktrees::git(&base, env, &["worktree", "prune"], false).await;
-        if free(workspace) > GC_FLOOR {
-            let _ = worktrees::git(&base, env, GC_ARGS, false).await;
-        }
+        let _ = worktrees::git(&base, env, MAINTENANCE, false).await;
         let gained = free(workspace).saturating_sub(before);
         if gained > 0 {
             tally.add(Class::Git, gained);
@@ -1035,6 +1039,22 @@ mod tests {
         assert!(plan(&s).iter().all(|c| !c.path.starts_with(&state) && !state.starts_with(&c.path)));
     }
 
+    #[test]
+    fn a_turn_that_starts_after_the_folder_was_locked_stops_its_removal() {
+        let (_g, root) = temp("late");
+        let client = Client::new("http://127.0.0.1:9", "t", 1, 0).unwrap();
+        let lanes = crate::sessions::Lanes::new(Arc::new(crate::repositories::Repositories::new(&root, &root, client)));
+        let owners = vec![("dev".to_string(), "t2".to_string())];
+        assert!(owners_free(&owners, &lanes));
+        // A claim that was on its way registers its turn on the subtask, in its parent's lane.
+        lanes.attempts.lock().unwrap().insert("a1".into(), crate::sessions::LiveTurn::of(&json!({"bot": "bot:dev", "lane": "task:t1", "task": {"id": "t2"}})));
+        assert!(!owners_free(&owners, &lanes));
+        // So does another bot's turn on the task (a reviewer's).
+        lanes.attempts.lock().unwrap().clear();
+        lanes.attempts.lock().unwrap().insert("a2".into(), crate::sessions::LiveTurn::of(&json!({"bot": "bot:qa", "lane": "task:t2", "task": {"id": "t2"}})));
+        assert!(!owners_free(&owners, &lanes));
+    }
+
     #[tokio::test]
     async fn a_hub_cli_step_on_any_link_in_the_folder_keeps_it() {
         let (_g, root) = temp("tasklock");
@@ -1053,8 +1073,9 @@ mod tests {
     }
 
     #[test]
-    fn git_maintenance_runs_gc_in_the_foreground_and_only_in_tico_base_clones() {
-        assert_eq!(&GC_ARGS[..2], &["-c", "gc.autoDetach=false"]);
+    fn git_maintenance_only_prunes_and_only_in_tico_base_clones() {
+        assert_eq!(MAINTENANCE, &["worktree", "prune"]);
+        assert!(!MAINTENANCE.contains(&"gc") && !MAINTENANCE.contains(&"repack"));
         let (_g, root) = temp("bases");
         let repos = root.join("ws/repos");
         file(&repos.join("acme__app/.git/tico-managed"), 0);
