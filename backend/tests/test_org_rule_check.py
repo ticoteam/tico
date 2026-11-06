@@ -13,6 +13,7 @@ import pytest
 from backend import call_slots as CS
 from backend import org_rule_check as K
 from backend import threads
+from backend import updates
 from backend.auth import Identity
 from backend.store import H
 from backend.tests.test_api import claim, get, headers, post, setup_attempt  # noqa: F401
