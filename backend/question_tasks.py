@@ -150,14 +150,17 @@ def view_fields(row):
 
 @contextmanager
 def sourced(conn, sources):
-    """Stamp `sources` on every history event and message the close inside writes (its note, the bot's wake, the
-    parent's note): each copies the answer's words, so each is redacted for a reader who may not open those pages."""
-    hist = conn.execute("SELECT coalesce(max(rowid), 0) FROM history_events").fetchone()[0]
-    msgs = conn.execute("SELECT coalesce(max(rowid), 0) FROM messages").fetchone()[0]
+    """Stamp `sources` on every history event, audit event and message the close inside writes (its note, the bot's
+    wake, the parent's note): each copies the answer's words, so each is redacted for a reader who may not open those
+    pages."""
+    marks = [
+        (table, column, conn.execute(f"SELECT coalesce(max(rowid), 0) FROM {table}").fetchone()[0])
+        for table, column in (("history_events", "data"), ("messages", "refs"), ("events", "detail"))
+    ]
     yield
     if not sources:
         return
-    for table, column, mark in (("history_events", "data", hist), ("messages", "refs", msgs)):
+    for table, column, mark in marks:
         for rid, value in conn.execute(f"SELECT rowid, {column} FROM {table} WHERE rowid>?", (mark,)).fetchall():
             value = H._json(value, {}) or {}
             if isinstance(value, dict):
@@ -431,6 +434,24 @@ def close_by_label(c, auth, who, row, note):
     return answer(c, auth, who, row["id"], M.TaskAnswer(target={"task": row["id"]}, answers=answers, other=other))
 
 
+def with_pick_sources(asked):
+    """A pick's options name their files only through the review's entries (file_reviews.options gives each entry its
+    label and no file), so each option takes its entry's file as its source. A close that copies a picked label then
+    carries that page's source too (task_review.answer_text), and a reader who may not open the page sees none of it."""
+    refs = asked["refs"]
+    review = refs.get("review") or {}
+    questions = refs.get("questions") or []
+    if not review.get("pick") or not questions:
+        return asked
+    by_label = {e["label"]: {"file": e["file"]} for e in review.get("files") or [] if e.get("label") and e.get("file")}
+    first = questions[0]
+    options = [
+        {**o, "source": by_label[o["label"]]} if o.get("label") in by_label and not o.get("source") else o
+        for o in first.get("options") or []
+    ]
+    return {**asked, "refs": {**refs, "questions": [{**first, "options": options}, *questions[1:]]}}
+
+
 def answer(c, auth, who, task_id, body, warn=""):
     """A structured answer to a question task (POST /tasks/{id}/answers with target {task}): checked as a comment
     ask's is (task_review.checked_answers), recorded as `answer`, and the task closed with it as the note: done, or
@@ -448,7 +469,7 @@ def answer(c, auth, who, task_id, body, warn=""):
         raise Problem("forbidden", "The asker cannot answer their own question", 403)
     if not may_answer(c, auth, who, row):
         raise Problem("forbidden", "Only the person it asks, or someone acting for them, answers this question", 403)
-    asked = as_ask(row)
+    asked = with_pick_sources(as_ask(row))
     questions = {q["id"]: q for q in asked["refs"]["questions"]}
     body, passed = checked_answers(questions, asked["refs"], body)
     given = {
