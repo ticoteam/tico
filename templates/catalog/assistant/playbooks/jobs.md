@@ -53,7 +53,8 @@ tasks they own. The owned tasks are one kind of many.
      `hub task close <id> --note "<why>"`. Undo: `hub task update <id> --status doing`.
    - A bot's task, even one waiting on them: do not close it, it kills the bot's work. Act on its question instead. Close
      it only when it is plainly done, a duplicate or replaced, and say so.
-   - A bot's question: keep it if it is a real decision (step 4). Otherwise decline it:
+   - A bot's question: keep it only when it asks a choice with money, legal, customer or access consequences. A yes/no
+     about a test ping, finished or stale work is not a decision: decline it:
      `hub question answer <message id> "No, drop this. Do what you would do if no one answered."` The bot goes on.
      An answer cannot be taken back: say so, with no undo line.
    - Approval: decline a stale merge, publish or support approval: `hub approval decline <id> --note "<why>"`. Never
@@ -64,7 +65,7 @@ tasks they own. The owned tasks are one kind of many.
 5. No command here clears these: a held message, a paused thread, a thread mention or DM, a stale-ticket suggestion, a
    memory tidy card, a setup or reconnect card. Name the ones left, and say they clear them in Tico. Never guess a command.
 6. Recount once, at the end: `hub needs-you show --by kind`. Reply in plain lines, no headings or bold (AGENT.md,
-   Replies): the Needs you count before and after; what was closed, answered and declined, with counts and links; the
+   Replies): the Needs you count before and after, with its split by kind; what was closed, answered and declined, with counts and links; the
    kept items with links and reasons; what is left. Undo covers the closed tasks only ("say undo to reopen them").
    Declines and answers cannot be undone: say so, and give no undo line for them.
 
