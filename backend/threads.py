@@ -2910,8 +2910,8 @@ def _joined(c, root_id, actor):
     now = _now()
     c.execute("INSERT INTO thread_followers(id,thread_id,actor,following,notify,reason,last_read_seq,created_at,"
               "updated_at) SELECT lower(hex(randomblob(16))), id, ?, "
-              "CASE WHEN id=? AND COALESCE(audience,'')<>'task' THEN 1 ELSE 0 END, ?, 'joined', last_seq, ?, ? "
-              "FROM conversations WHERE root_id=? ON CONFLICT(thread_id,actor) DO UPDATE SET "
+              "CASE WHEN id=? AND task_id IS NULL AND COALESCE(audience,'')<>'task' THEN 1 ELSE 0 END, ?, 'joined', "
+              "last_seq, ?, ? FROM conversations WHERE root_id=? ON CONFLICT(thread_id,actor) DO UPDATE SET "
               "last_read_seq=MAX(last_read_seq,excluded.last_read_seq), following=MAX(following,excluded.following), "
               "updated_at=excluded.updated_at",
               # A bot follows a chat at `mentions` (D14): it is reached by what addresses it.

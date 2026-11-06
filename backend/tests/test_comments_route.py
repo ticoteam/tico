@@ -292,6 +292,7 @@ def test_an_ask_on_a_task_reaches_only_whom_it_asks(api):
 
 def test_joining_a_tasks_thread_follows_nobody(api):
     row = post(api, "tasks", {"owner": "ops", "title": "Close the month", "body": "Reconcile and close May."})
+    assert follows(api, row["id"], "human:cara") is None
     with api.app.state.store.transaction() as c:
         threads._joined(c, row["conversation_id"], "human:cara")
-    assert follows(api, row["id"], "human:cara")[0] == 0
+    assert follows(api, row["id"], "human:cara")[:3] == (0, "live", "joined")
