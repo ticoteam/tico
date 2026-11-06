@@ -3276,7 +3276,7 @@ class Execution:
         # Set by create_app: onboarding gives a newly enrolled machine the bots nobody placed.
         self.runner_enrolled = None
         # Set by create_app: a readiness report finishes the go-lives that were waiting for this computer to get a
-        # bot's repository (backend/app.py finish_pending_go_live).
+        # bot's repository (backend/go_live_routes.py finish_pending_go_live).
         self.readiness_reported = None
         self.served_at = None  # when this process last answered a runner (heartbeat, claim, attempt call)
         # Bot -> (when its claim check may run again, failed checks in a row), for a bot whose check raised. Kept in
@@ -3598,7 +3598,7 @@ class Execution:
         ).fetchone()
         if restart and restart["restart_requested_at"]:
             c.execute("UPDATE runners SET restart_requested_at=NULL WHERE id=?", (who.runner_id,))
-        # The assignments are read after the commit (app.py heartbeat route), off the write lock.
+        # The assignments are read after the commit (computers_routes.py heartbeat route), off the write lock.
         return {
             "server_time": H.now(),
             "start_places": True,

@@ -2114,7 +2114,7 @@ class BotDefinitionUpdate(Contract):
     update_subscriptions: list[Literal["templates", "tico"]] | None = Field(default=None, max_length=2)
     expected_revision: int = Field(ge=1)
     # BotOps applying a person's own request: the id of that person's message to BotOps. The
-    # change is checked as that person, never as BotOps (backend/app.py update_bot).
+    # change is checked as that person, never as BotOps (backend/bot_status_routes.py update_bot).
     on_behalf_of: ID | None = None
 
     @model_validator(mode="after")

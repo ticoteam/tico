@@ -52,7 +52,7 @@ SEE_ONLY = (
 def per_bot_view(c, settings, auth, bot, level, access, registry_roster, registry_entries, who):
     """The bot list's row as it was read before backend/bot_rows.py: one bot at a time."""
     row = dict(bot)
-    # runtime, model and host are the bot's declaration (bot_settings), as backend/app.py bot_view reads them.
+    # runtime, model and host are the bot's declaration (bot_settings), as backend/org_routes.py bot_view reads them.
     row.update({"model": "", "runtime": "", "host": "keeper"})
     config = c.execute(
         "SELECT team,owner_id,owner_ids,revision,description,reports_to,repo,"
