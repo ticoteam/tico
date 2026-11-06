@@ -9,7 +9,6 @@
 #   B008         1   owner: engineering
 #   B018         8   owner: engineering
 #   B023        78   owner: engineering
-#   B034         4   owner: engineering
 #   B904       131   owner: engineering
 #   B905        33   owner: engineering
 #   BLE001     363   owner: engineering
@@ -79,7 +78,7 @@
 "backend/health.py" = ["BLE001"]
 "backend/hook_relay.py" = ["B018", "BLE001", "S110"]
 "backend/hosted_updates.py" = ["BLE001", "S110"]
-"backend/hubdb.py" = ["B034", "B905", "BLE001", "S110"]
+"backend/hubdb.py" = ["B905", "BLE001", "S110"]
 "backend/idea_triage.py" = ["BLE001"]
 "backend/idempotency_messages.py" = ["B023", "BLE001"]
 "backend/inbound.py" = ["B023", "BLE001", "S110"]

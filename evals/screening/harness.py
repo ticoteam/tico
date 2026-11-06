@@ -31,7 +31,7 @@ async def _no_sync(self, stop):
 _inbound.Inbound.loop = _no_sync
 
 from ..redesign.fakes import MissingRecording, ReplayJudge, hook
-from ..redesign.harness import (
+from ..redesign.harness import (  # noqa: F401
     CLAUDE_ID,
     DANA,
     DANA_ID,
@@ -39,7 +39,7 @@ from ..redesign.harness import (
     LEAD_ID,
     OMAR,
     OPENAI_ID,
-    Org,  # noqa: F401
+    Org,
     Reply,
 )
 

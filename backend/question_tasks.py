@@ -673,7 +673,7 @@ def move_waits(conn):
         conn.execute("SAVEPOINT move_wait")
         try:
             _move_wait(conn, task_id, on)
-        except Exception:  # noqa: BLE001 - one task's old wait never stops a start
+        except Exception:  # one task's old wait never stops a start
             conn.execute("ROLLBACK TO move_wait")
             logging.getLogger(__name__).exception("waiting_on of task %s not moved", task_id)
         conn.execute("RELEASE move_wait")
