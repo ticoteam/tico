@@ -492,3 +492,46 @@ def test_a_default_on_a_restricted_page_title_leaves_no_event_naming_it_to_outsi
     sql = api.post("/api/v2/sql", json={"sql": "SELECT * FROM events"}, headers=headers("cara-test"))
     assert sql.status_code == 200, sql.text
     assert title not in json.dumps(sql.json()["rows"]), "an event naming the restricted page reached an outsider"
+
+
+def test_answer_and_file_reviews_filter_each_source_page_for_a_reader_who_cannot_open_it(api):
+    """The question-task form of the nested case: a question with review files, one of them a page the person asked
+    may open and an outsider may not. The answer copies that page's title (the pick's label), so the answer, the file
+    verdicts and the receipts (comments, events) show the outsider none of it, and the person still sees all of it."""
+    from backend.tests.test_file_reviews import answer as review_answer, ask as review_ask
+    from backend.tests.test_page_audience import edit
+    from backend.tests.test_pages import HTML, page
+    from backend.tests.test_files import turn
+
+    secret = "Quarterly forecast draft"
+    tid = post(api, "tasks", {"owner": "ops", "title": "Review folios", "body": "Review", "private": False})["id"]
+    _, attempt = turn(api)
+    fid = page(api, attempt, task=tid, name="forecast.html", title=secret).json()["page"]["file_id"]
+    ordinary = page(api, attempt, task=tid, name="ordinary.html", title="Ordinary folio", data=HTML).json()["page"][
+        "file_id"
+    ]
+    made = review_ask(
+        api,
+        attempt["token"],
+        [{"file": fid}, {"file": ordinary}],
+        on="ana",
+        private=False,
+        pick=True,
+        question="Which folio should ship?",
+    )
+    card = made["task"]
+    review_answer(api, made, [secret], other="Restricted review")
+    shown = get(api, f"tasks/{card['id']}", "ana-test")["task"]
+    assert shown["answer"]["answers"] == {"decision": [secret]} and shown["answer"]["reviewed"]
+    assert secret in json.dumps(shown["answer"]) and "Restricted review" in json.dumps(shown["answer"])
+    # The page turns private to the person it asks after the answer: the words it copied are its readers' only.
+    edit(api, fid, {"people": ["ana"]})
+    outsider = get(api, f"tasks/{card['id']}", "cara-test")["task"]
+    assert secret not in json.dumps(outsider.get("answer")), "the answer copies the restricted page's title"
+    assert secret not in json.dumps(outsider.get("answer", {}).get("reviewed")), "a file verdict names the page"
+    for path in (f"tasks/{card['id']}/comments", f"tasks/{card['id']}/answers"):
+        assert secret not in json.dumps(get(api, path, "cara-test")), path
+    assert secret in json.dumps(get(api, f"tasks/{card['id']}", "ana-test")), "the person asked still reads it"
+    sql = api.post("/api/v2/sql", json={"sql": "SELECT * FROM events"}, headers=headers("cara-test"))
+    assert sql.status_code == 200, sql.text
+    assert secret not in json.dumps(sql.json()["rows"]), "an event naming the restricted page reached an outsider"
