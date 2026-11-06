@@ -83,8 +83,8 @@ const QUESTIONS = 'Two things only you can settle.\n1. Should weekly reports go 
       // One numbered reply to the question itself; then the done view with this dream's commit only.
       await page.locator('[data-dream-wake]').waitFor();
       const answer = await page.evaluate(() => state.posts.find(p => p.url.includes('/answer')));
-      assert.equal(answer.url, '/v2/messages/m1/answer');
-      assert.equal(answer.body.text, '1. the whole team\n2. No, keep it');
+      assert.equal(answer.url, '/v2/tasks/q1/answers');
+      assert.equal(answer.body.other, '1. the whole team\n2. No, keep it');
       assert.equal(await page.locator('.learn-panel .dream-line').innerText(), 'Awake');
       assert.ok((await page.locator('.dream-summary').innerText()).includes('Merged two report rules'));
       assert.deepEqual(await page.locator('.dream-commits .lr-subject').allInnerTexts(), ['Dream: merged report rules']);
