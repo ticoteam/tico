@@ -75794,7 +75794,7 @@
               "string",
               "null"
             ],
-            "description": "The person a waiting task waits on; the task is in their Needs you"
+            "description": "Read only, derived: the person a waiting task waits on, the owner of its oldest open question task (a subtask or a blocker). Null when a private question task's words do not reach this task's readers"
           },
           "readers": {
             "type": "array",
