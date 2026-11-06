@@ -168,8 +168,8 @@ function auWarn(a) {
 }
 function auPill(a) {
   const st = auState(a);
-  // The built-ins with screens of their own (automations-maintenance.js, settings-webhooks.js) say so.
-  return ([AU_MAINT, AU_SYSJOBS, AU_HOOKS].includes(a.id) ? AU_BUILTIN_PILL : '') + (a.pending ? '<span class="pill">Pending</span>' : '')
+  // The built-ins with screens of their own (automations-maintenance.js, automations-heartbeat.js, settings-webhooks.js) say so.
+  return ([AU_MAINT, AU_HEART, AU_SYSJOBS, AU_HOOKS].includes(a.id) ? AU_BUILTIN_PILL : '') + (a.pending ? '<span class="pill">Pending</span>' : '')
     + (st === 'paused' ? '<span class="pill waiting">Paused</span>' : st === 'off' ? '<span class="pill">Off</span>'
       : st === 'hold' ? '<span class="pill waiting">On hold</span>' : '');
 }
@@ -340,7 +340,7 @@ function auOverviewClick(t) {
   if ((m = t.closest('tr[data-arun]'))) {
     const id = m.dataset.arun;
     if (id.startsWith('mnt_')) AU.mtOpenRun = id.slice(4);
-    else if (!id.startsWith('sys_')) AU.openRun = id;
+    else if (!id.startsWith('sys_') && !id.startsWith('hb_')) AU.openRun = id;   // a Heartbeat run opens its log
     location.hash = auHref(m.dataset.aid, 'runs');
     return true;
   }

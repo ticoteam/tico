@@ -39,6 +39,7 @@ up to 30 minutes for an update under way and its listeners face the companies' o
 router, must come back within a second when it stops, and a flood of visitors here must not hold up an update there.
 It runs as root because the work is `wake` (Docker, the company's folder, the router's reload), as staff's commands do.
 """
+
 from __future__ import annotations
 
 import argparse
@@ -54,21 +55,34 @@ from pathlib import Path
 
 from . import cell as C, contract, envfile
 
-WAKE_HOLD = 30.0                 # how long a request waits for its company to wake
-WAKE_START = 300                 # how long the start itself may take (a pending update's migration); later requests join
-WAKE_LOCK_WAIT = 300.0           # for the company's lock, held by another cell command (an update, `sleep`)
-FAILED_FOR = 10.0                # a failed wake is answered 503 at once this long, so a flood is not a start loop
-WAKE_SWEEP = 20.0                # how often the timed wakes are checked
-WAKE_AHEAD = 60.0                # a timed wake starts this long before its time, so the server is up when it is due
+WAKE_HOLD = 30.0  # how long a request waits for its company to wake
+WAKE_START = 300  # how long the start itself may take (a pending update's migration); later requests join
+WAKE_LOCK_WAIT = 300.0  # for the company's lock, held by another cell command (an update, `sleep`)
+FAILED_FOR = 10.0  # a failed wake is answered 503 at once this long, so a flood is not a start loop
+WAKE_SWEEP = 20.0  # how often the timed wakes are checked
+WAKE_AHEAD = 60.0  # a timed wake starts this long before its time, so the server is up when it is due
 MAX_CONNECTIONS = 512
 MAX_HELD = 256
 MAX_HELD_PER_COMPANY = 64
-UPLOAD_DEFAULT = 2 * 1024 ** 3   # the server's own default (backend/config.py upload_max_bytes)
-UPLOAD_MARGIN = 11_000_000       # the multipart margin it allows on top (backend/app.py)
-PROXY_TIMEOUT = 330.0            # the longest quiet gap in an answer (an SSE stream sends a keepalive every 15 s)
+UPLOAD_DEFAULT = 2 * 1024**3  # the server's own default (backend/config.py upload_max_bytes)
+UPLOAD_MARGIN = 11_000_000  # the multipart margin it allows on top (backend/app.py)
+PROXY_TIMEOUT = 330.0  # the longest quiet gap in an answer (an SSE stream sends a keepalive every 15 s)
 CHUNK = 64 * 1024
-HOP = frozenset({"connection", "keep-alive", "proxy-connection", "te", "trailer", "transfer-encoding", "upgrade",
-                 "proxy-authorization", "proxy-authenticate", "expect", "content-length"})
+HOP = frozenset(
+    {
+        "connection",
+        "keep-alive",
+        "proxy-connection",
+        "te",
+        "trailer",
+        "transfer-encoding",
+        "upgrade",
+        "proxy-authorization",
+        "proxy-authenticate",
+        "expect",
+        "content-length",
+    }
+)
 
 
 def log(text: str) -> None:
@@ -84,18 +98,28 @@ class Attempt:
         self.port = 0
         self.error = ""
         self.finished = 0.0
-        self.timed = timed              # begun by a sweep: starts only while the record's wake_at is due
-        self.asked = not timed          # a request wants it (under Service.guard): it starts whatever wake_at says
-        self.skipped = False            # a timed start that was no longer due: nothing ran, nobody joins it
+        self.timed = timed  # begun by a sweep: starts only while the record's wake_at is due
+        self.asked = not timed  # a request wants it (under Service.guard): it starts whatever wake_at says
+        self.skipped = False  # a timed start that was no longer due: nothing ran, nobody joins it
 
 
 class Service:
     """The wakes under way, the held counts, and the work. `make_cell` gives a fresh setup/cell.py Cell per use (tests
     pass one on a fake System); `upstream` is where a company's server is reached (tests point it at a fake server)."""
 
-    def __init__(self, root: Path, system: C.System | None = None, *, make_cell=None, upstream=None,
-                 hold: float = WAKE_HOLD, start: int = WAKE_START, failed_for: float = FAILED_FOR,
-                 max_held: int = MAX_HELD, max_held_per_company: int = MAX_HELD_PER_COMPANY):
+    def __init__(
+        self,
+        root: Path,
+        system: C.System | None = None,
+        *,
+        make_cell=None,
+        upstream=None,
+        hold: float = WAKE_HOLD,
+        start: int = WAKE_START,
+        failed_for: float = FAILED_FOR,
+        max_held: int = MAX_HELD,
+        max_held_per_company: int = MAX_HELD_PER_COMPANY,
+    ):
         self.root, self.system = Path(root), system or C.System()
         self.make_cell = make_cell or (lambda: C.Cell(self.root, self.system))
         self.upstream = upstream or (lambda c: (C.ROUTER_ADDRESS, int(c["port"])))
@@ -105,7 +129,7 @@ class Service:
         self.attempts: dict[str, Attempt] = {}
         self.held: dict[str, int] = {}
         self.workers: set[threading.Thread] = set()
-        self.starts = 0                 # wakes begun, for the tests and the log
+        self.starts = 0  # wakes begun, for the tests and the log
 
     def company(self, slug: str, host: str) -> dict | None:
         """The record the route named, only when it is not removed and the request's Host is one of its own."""
@@ -208,8 +232,9 @@ class Service:
         began = time.monotonic()
         try:
             try:
-                c, ready, _ = cell.wake_company(slug, self.start,
-                                                due=(lambda c: a.asked or self.due(c)) if a.timed else None)
+                c, ready, _ = cell.wake_company(
+                    slug, self.start, due=(lambda c: a.asked or self.due(c)) if a.timed else None
+                )
             except C.CellError as e:
                 if e.code != "not_due":
                     raise
@@ -224,7 +249,7 @@ class Service:
             log(f"{slug}: awake in {ready} ms")
         except C.CellError as e:
             c = cell.load(slug) or {}
-            if c.get("state") == "running":         # awake, though the router's reload or an update's release failed
+            if c.get("state") == "running":  # awake, though the router's reload or an update's release failed
                 a.ok, a.port = True, int(c["port"])
             a.error = cell.scrub(e.detail)[:300]
             log(f"{slug}: wake: {e.code}: {a.error}")
@@ -275,8 +300,13 @@ def plain(code: int, text: str, retry: int | None = None) -> bytes:
     """A whole short plain-text answer, as bytes."""
     body = (text + "\n").encode()
     reason = http.client.responses.get(code, "")
-    head = [f"HTTP/1.0 {code} {reason}", "Content-Type: text/plain; charset=utf-8", f"Content-Length: {len(body)}",
-            "Cache-Control: no-store", "Connection: close"] + ([f"Retry-After: {retry}"] if retry is not None else [])
+    head = [
+        f"HTTP/1.0 {code} {reason}",
+        "Content-Type: text/plain; charset=utf-8",
+        f"Content-Length: {len(body)}",
+        "Cache-Control: no-store",
+        "Connection: close",
+    ] + ([f"Retry-After: {retry}"] if retry is not None else [])
     return ("\r\n".join(head) + "\r\n\r\n").encode() + body
 
 
@@ -286,7 +316,7 @@ class TooLarge(Exception):
 
 class Handler(BaseHTTPRequestHandler):
     server_version = "tico-cell-wake"
-    timeout = 60                        # a client that sends nothing does not keep a thread
+    timeout = 60  # a client that sends nothing does not keep a thread
 
     def answer(self, code: int, text: str, retry: int | None = None) -> None:
         with contextlib.suppress(OSError):
@@ -357,7 +387,7 @@ class Handler(BaseHTTPRequestHandler):
                 size = int(line.split(b";", 1)[0].strip() or b"x", 16)
                 if size == 0:
                     while self.rfile.readline(1024) not in (b"\r\n", b"\n", b""):
-                        pass                # trailers: not passed on
+                        pass  # trailers: not passed on
                     return
                 total += size
                 if total > limit:
@@ -395,8 +425,11 @@ class Handler(BaseHTTPRequestHandler):
                 conn.endheaders()
             except OSError:
                 return self.answer(503, C.HOLD_BODY, 5)
-            if self.request_version == "HTTP/1.1" and \
-                    self.headers.get("Expect", "").lower() == "100-continue" and (chunked or length):
+            if (
+                self.request_version == "HTTP/1.1"
+                and self.headers.get("Expect", "").lower() == "100-continue"
+                and (chunked or length)
+            ):
                 with contextlib.suppress(OSError):  # the body comes now, not after the client's own wait
                     self.wfile.write(b"HTTP/1.1 100 Continue\r\n\r\n")
                     self.wfile.flush()
@@ -409,7 +442,7 @@ class Handler(BaseHTTPRequestHandler):
                 return self.answer(413, "The request is too large.")
             except ValueError:
                 return self.answer(400, "Bad chunked request body.")
-            except OSError:             # the server went away mid-body (or the visitor did: then nobody reads this)
+            except OSError:  # the server went away mid-body (or the visitor did: then nobody reads this)
                 return self.answer(503, C.HOLD_BODY, 5)
             try:
                 resp = conn.getresponse()
@@ -445,22 +478,25 @@ class Handler(BaseHTTPRequestHandler):
                 self.wfile.write(data)
                 self.wfile.flush()
         except (OSError, http.client.HTTPException):
-            pass                        # the visitor left, or the server cut its answer: nothing more to send
+            pass  # the visitor left, or the server cut its answer: nothing more to send
 
     def log_message(self, *args):
-        pass                            # request lines are not kept: nothing here needs them
+        pass  # request lines are not kept: nothing here needs them
 
 
-def serve(service: Service, address: tuple[str, int] = (C.WAKE_ADDRESS, C.WAKE_PORT),
-          max_connections: int = MAX_CONNECTIONS) -> Listener:
+def serve(
+    service: Service, address: tuple[str, int] = (C.WAKE_ADDRESS, C.WAKE_PORT), max_connections: int = MAX_CONNECTIONS
+) -> Listener:
     listener = Listener(service, address, max_connections)
     threading.Thread(target=listener.serve_forever, args=(0.1,), daemon=True, name="wake-listener").start()
     return listener
 
 
 def main(argv: list[str] | None = None) -> int:
-    p = argparse.ArgumentParser(prog="python3 -m setup.cell_wake",
-                                description="Wakes a sleeping cell company on its first request (docs/cell.md).")
+    p = argparse.ArgumentParser(
+        prog="python3 -m setup.cell_wake",
+        description="Wakes a sleeping cell company on its first request (docs/cell.md).",
+    )
     p.add_argument("--root", default=os.environ.get("TICO_CELL_ROOT") or C.ROOT)
     p.add_argument("--port", type=int, default=C.WAKE_PORT)
     args = p.parse_args(argv)
@@ -480,7 +516,7 @@ def main(argv: list[str] | None = None) -> int:
     listener.server_close()
     with service.guard:
         running = list(service.workers)
-    for worker in running:              # a start under way finishes, within the unit's TimeoutStopSec
+    for worker in running:  # a start under way finishes, within the unit's TimeoutStopSec
         worker.join(50)
     return 0
 

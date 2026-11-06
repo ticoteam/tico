@@ -1,5 +1,6 @@
 """A waiting task's Blocked reason names what really holds it, and follows every change to its holds; a question to a
 person is a question task that lives and dies with the task it was asked under (backend/task_holds.py, Dev 627)."""
+
 from backend.tests.test_api import api, post  # noqa: F401
 from backend.store import H
 from backend import question_tasks as QT, still_needed, task_holds
@@ -21,8 +22,11 @@ def wait(c, tid, owner="bot:ops", note=None):
 
 
 def notices(c, to, news):
-    return [m for m in H._rows(c.execute("SELECT body, refs FROM messages WHERE recipient_id=? ORDER BY created_at", (to,)))
-            if (H._json(m["refs"], {}) or {}).get("news") == news]
+    return [
+        m
+        for m in H._rows(c.execute("SELECT body, refs FROM messages WHERE recipient_id=? ORDER BY created_at", (to,)))
+        if (H._json(m["refs"], {}) or {}).get("news") == news
+    ]
 
 
 def test_finishing_parent_closes_its_subtask_and_its_question(api):
@@ -72,7 +76,9 @@ def test_an_answer_or_a_decided_approval_clears_its_hold(api):
         ana = task_holds.name(c, "human:ana")
         tid = bot_task(c, "Choose a vendor")
         question = ask(c, tid, "Vendor A or B?")
-        approval = H.approval_request(c, "bot:ops", "spend", {"amount": 120, "account": "card", "what": "Vendor A"}, task_id=tid)
+        approval = H.approval_request(
+            c, "bot:ops", "spend", {"amount": 120, "account": "card", "what": "Vendor A"}, task_id=tid
+        )
         row = wait(c, tid)
         assert row["blocked_reason"] == f"Waiting on {ana}: Vendor A or B? (and 1 more)"
         H.task_update(c, "human:ana", question["id"], status="done", note="A")
@@ -127,8 +133,9 @@ def test_a_private_child_is_never_named_in_its_parent_s_reason(api):
     """The reason is shown to everyone who reads the parent; the private child's title stays off it."""
     with api.app.state.store.transaction() as c:
         mine = bot_task(c, "Plan the audit", owner="human:ana", actor="human:ana")
-        secret = H.task_create(c, "human:ana", "Vendor breach review", "x", "bot:ops", parent_id=mine,
-                               private=True, lint=False)["id"]
+        secret = H.task_create(
+            c, "human:ana", "Vendor breach review", "x", "bot:ops", parent_id=mine, private=True, lint=False
+        )["id"]
         assert wait(c, mine, owner="human:ana")["blocked_reason"] == "Waiting on a private task"
         H.task_update(c, "bot:ops", secret, status="done", note="Reviewed")
         assert H.task(c, mine)["blocked_reason"] == "Nothing left to wait on: A private task is done"
@@ -136,6 +143,7 @@ def test_a_private_child_is_never_named_in_its_parent_s_reason(api):
 
 def test_removing_the_last_blocker_reopens_a_bot_task_and_words_a_person_s(api):
     from backend import task_relations as TR
+
     with api.app.state.store.transaction() as c:
         for owner, actor, what in (("bot:ops", "human:ben", "form"), ("human:ana", "human:ana", "menu")):
             tid = bot_task(c, f"Ship the {what}", owner=owner, actor=actor)
@@ -155,6 +163,7 @@ def test_removing_the_last_blocker_reopens_a_bot_task_and_words_a_person_s(api):
 
 def test_moving_a_child_in_or_out_recomputes_both_parents(api):
     from backend import task_relations as TR
+
     with api.app.state.store.transaction() as c:
         mine = bot_task(c, "Plan the party", owner="human:ana", actor="human:ana")
         child = bot_task(c, "Book the band", parent=mine, actor="human:ana")
@@ -179,6 +188,7 @@ def test_moving_a_child_in_or_out_recomputes_both_parents(api):
 
 def test_deleting_the_only_child_clears_the_parent_s_hold(api):
     from backend.task_delete import delete_tasks
+
     with api.app.state.store.transaction() as c:
         mine = bot_task(c, "Plan the trip", owner="human:ana", actor="human:ana")
         # A person's subtask: a bot's would carry its queued wake, and a task carrying work is not deleted.
@@ -195,8 +205,14 @@ def test_a_note_only_edit_keeps_a_recorded_person_wait(api):
         ana = task_holds.name(c, "human:ana")
         # Their open question task holds it (derived): a note edit leaves it, and who it waits on, as they were.
         card = bot_task(c, "Sign the lease")
-        H.task_update(c, "bot:ops", card, status="waiting", waiting_on="human:ana",
-                      note="Sign the lease today? I'll send it to the landlord after.")
+        H.task_update(
+            c,
+            "bot:ops",
+            card,
+            status="waiting",
+            waiting_on="human:ana",
+            note="Sign the lease today? I'll send it to the landlord after.",
+        )
         H.task_update(c, "bot:ops", card, note="waiting on Engineering")
         row = H.task(c, card)
         assert row["status"] == "waiting" and row["note"] == "waiting on Engineering"
@@ -219,6 +235,7 @@ def test_a_child_reopened_or_renamed_is_named_again_by_its_waiting_parent(api):
 
 def test_an_answer_ends_the_wait_but_an_unmatched_note_keeps_it(api):
     """Answering the question task clears the wait; a note on the waiting task preserves it."""
+
     def asked(c, title):
         tid = bot_task(c, title)
         card = ask(c, tid, "Which month should the report use?")
@@ -248,6 +265,7 @@ def test_an_answer_ends_the_wait_but_an_unmatched_note_keeps_it(api):
 
 def test_a_person_s_task_distinguishes_an_answer_from_a_note(api):
     """An answer clears the question without moving a person's task; a note leaves it open."""
+
     def asked(c, title):
         tid = H.task_create(c, "bot:ops", title, "x", "human:ana")["id"]
         card = ask(c, tid, "Which month for the review?")
@@ -276,6 +294,7 @@ def test_a_person_s_task_distinguishes_an_answer_from_a_note(api):
 def test_taking_off_a_stale_finished_blocker_releases_nothing(api):
     """A finished blocker held nothing: removing a stale relation must not send a stranded bot task back to work."""
     from backend import task_relations as TR
+
     with api.app.state.store.transaction() as c:
         tid = bot_task(c, "Ship the form")
         blocker = bot_task(c, "Pick the form vendor", owner="bot:cpo")

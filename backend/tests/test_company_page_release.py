@@ -1,4 +1,5 @@
 """The Company page's template and public releases: what reaches a reader, and that taking something back removes it."""
+
 import hashlib
 import json
 import os
@@ -25,17 +26,47 @@ PAYLOAD = """<script>alert(1)</script>"'><img src=x onerror=alert(1)>&lt;b&gt;""
 
 
 def view_model(**over):
-    stat = {"id": "s1", "label": "Revenue", "definition": "Money in.", "chart": "bars", "period": "2026-10",
-            "as_of": "2026-11-01", "display": "$118k", "stale": False,
-            "series": [{"period": "2026-09", "value": 104, "display": "$104k"},
-                       {"period": "2026-10", "value": 118, "display": "$118k"}]}
-    update = {"anchor": "2026-10", "title": "October", "author": {"name": "Maya R.", "kind": "person"}, "period": "2026-10",
-              "published_at": "2026-11-01T12:00:00Z", "version": 1, "correction_note": None,
-              "sections": [{"key": "highlights", "items": [{"body": "Revenue grew.", "ask_id": None}]},
-                           {"key": "asks", "items": [{"body": "Intros please.", "ask_id": "ask-1"}]}]}
-    view = {"company": {"name": "Acme", "logo_url": "", "mission": "Quotes in seconds.", "badge": "public",
-                        "accent": "#1E4FD8", "updated_at": "2026-11-01T12:00:00Z"},
-            "audience": {"kind": "public", "name": "Public"}, "stats": [stat], "updates": [update], "next_before": None}
+    stat = {
+        "id": "s1",
+        "label": "Revenue",
+        "definition": "Money in.",
+        "chart": "bars",
+        "period": "2026-10",
+        "as_of": "2026-11-01",
+        "display": "$118k",
+        "stale": False,
+        "series": [
+            {"period": "2026-09", "value": 104, "display": "$104k"},
+            {"period": "2026-10", "value": 118, "display": "$118k"},
+        ],
+    }
+    update = {
+        "anchor": "2026-10",
+        "title": "October",
+        "author": {"name": "Maya R.", "kind": "person"},
+        "period": "2026-10",
+        "published_at": "2026-11-01T12:00:00Z",
+        "version": 1,
+        "correction_note": None,
+        "sections": [
+            {"key": "highlights", "items": [{"body": "Revenue grew.", "ask_id": None}]},
+            {"key": "asks", "items": [{"body": "Intros please.", "ask_id": "ask-1"}]},
+        ],
+    }
+    view = {
+        "company": {
+            "name": "Acme",
+            "logo_url": "",
+            "mission": "Quotes in seconds.",
+            "badge": "public",
+            "accent": "#1E4FD8",
+            "updated_at": "2026-11-01T12:00:00Z",
+        },
+        "audience": {"kind": "public", "name": "Public"},
+        "stats": [stat],
+        "updates": [update],
+        "next_before": None,
+    }
     view.update(over)
     return view
 
@@ -70,6 +101,7 @@ class Doc(HTMLParser):
 
 def every_string_is(value, payload):
     """The view model with every string replaced, keeping only the values that pick a branch."""
+
     def walk(node, key=None):
         if isinstance(node, dict):
             return {k: walk(v, k) for k, v in node.items()}
@@ -78,6 +110,7 @@ def every_string_is(value, payload):
         if isinstance(node, str) and key not in ("kind", "badge", "chart", "key"):
             return payload
         return node
+
     return walk(value)
 
 
@@ -104,13 +137,27 @@ def test_anchor_and_author_cannot_break_their_attributes():
     doc = Doc(render.page(view))
     assert not [a for _, a, _ in doc.attrs if a.startswith("on")]
     assert ("article", "id", "x-onclick-alert-1") in doc.attrs
-    assert any(PAYLOAD in t for t in doc.text)      # shown, as words
+    assert any(PAYLOAD in t for t in doc.text)  # shown, as words
 
 
-@pytest.mark.parametrize("text", ["[x](javascript:alert(1))", "[x](JaVaScRiPt:alert(1))", "[x](data:text/html,hi)",
-                                  "[x](http://acme.example/)", "[x](//acme.example/)", "[x](/local)",
-                                  "[x](https://user:pw@acme.example/)", "[x](https://)", "<a href='https://acme.example'>x</a>",
-                                  "![x](https://acme.example/a.png)", "<b>bold</b>", "# heading", "`code`"])
+@pytest.mark.parametrize(
+    "text",
+    [
+        "[x](javascript:alert(1))",
+        "[x](JaVaScRiPt:alert(1))",
+        "[x](data:text/html,hi)",
+        "[x](http://acme.example/)",
+        "[x](//acme.example/)",
+        "[x](/local)",
+        "[x](https://user:pw@acme.example/)",
+        "[x](https://)",
+        "<a href='https://acme.example'>x</a>",
+        "![x](https://acme.example/a.png)",
+        "<b>bold</b>",
+        "# heading",
+        "`code`",
+    ],
+)
 def test_only_https_links_and_the_subset_become_markup(text):
     rendered = render.markdown(text)
     doc = Doc(rendered)
@@ -124,7 +171,9 @@ def test_markdown_subset():
     assert ("a", "rel", "noopener noreferrer nofollow") in doc.attrs
 
 
-@pytest.mark.parametrize("accent", ["red", "#12345g", "#1E4FD8;}body{display:none}", "#1E4FD8\n", "", None, 5, "url(x)", "#12345"])
+@pytest.mark.parametrize(
+    "accent", ["red", "#12345g", "#1E4FD8;}body{display:none}", "#1E4FD8\n", "", None, 5, "url(x)", "#12345"]
+)
 def test_a_bad_accent_takes_the_default(accent):
     view = view_model()
     view["company"]["accent"] = accent
@@ -132,8 +181,22 @@ def test_a_bad_accent_takes_the_default(accent):
     assert theme.startswith(f":root{{--accent:{render.DEFAULT_ACCENT};")
 
 
-@pytest.mark.parametrize("logo", ["https://evil.example/x.png", "//evil.example/x.png", "/x.png", "../x.png", "a/../../x.png",
-                                  "javascript:alert(1)", "assets/x.svg", "x.png?y", 'x.png"', "data:image/png;base64,AA", None])
+@pytest.mark.parametrize(
+    "logo",
+    [
+        "https://evil.example/x.png",
+        "//evil.example/x.png",
+        "/x.png",
+        "../x.png",
+        "a/../../x.png",
+        "javascript:alert(1)",
+        "assets/x.svg",
+        "x.png?y",
+        'x.png"',
+        "data:image/png;base64,AA",
+        None,
+    ],
+)
 def test_a_logo_off_the_release_is_dropped(logo):
     view = view_model()
     view["company"]["logo_url"] = logo
@@ -146,9 +209,11 @@ def test_a_logo_in_the_release_shows():
     assert ("img", "src", "assets/logo-ab12.png") in Doc(render.page(view)).attrs
 
 
-TEMPLATE_WORDS = set("""stats updates highlights lowlights numbers asks next link show older rss runs on tico updated as of out date
+TEMPLATE_WORDS = set(
+    """stats updates highlights lowlights numbers asks next link show older rss runs on tico updated as of out date
 vs in open company public private corrected reply to i can help send sign out p l jan feb mar apr may jun jul aug sep oct nov dec
-bot no yet""".split())
+bot no yet""".split()
+)
 
 
 def words(*texts):
@@ -181,11 +246,16 @@ def test_render_shows_nothing_outside_the_view_model():
 
     clean = view_model()
     doc = Doc(render.page(clean))
-    allowed = words(*strings_in(clean)) | TEMPLATE_WORDS | {"a", "mr"}      # the logo letter and the author's initials
+    allowed = words(*strings_in(clean)) | TEMPLATE_WORDS | {"a", "mr"}  # the logo letter and the author's initials
     allowed |= {str(int(w)) for w in allowed if w.isdigit()}
     assert words(*doc.text) <= allowed
-    labels = [v for _, k, v in doc.attrs if k in ("aria-label", "title", "alt", "content", "value", "placeholder")
-              and not (v or "").startswith("default-src") and v not in ("width=device-width,initial-scale=1", "strict-origin-when-cross-origin")]
+    labels = [
+        v
+        for _, k, v in doc.attrs
+        if k in ("aria-label", "title", "alt", "content", "value", "placeholder")
+        and not (v or "").startswith("default-src")
+        and v not in ("width=device-width,initial-scale=1", "strict-origin-when-cross-origin")
+    ]
     assert words(*labels) <= allowed
 
 
@@ -229,12 +299,13 @@ def test_policy_covers_exactly_what_the_page_inlines():
         assert digest(block) in policy
     assert "'unsafe-inline'" not in policy and "default-src 'none'" in policy and "base-uri 'none'" in policy
     assert not [a for _, a, _ in doc.attrs if a == "style"]
-    assert not re.search(r"https?://", doc.styles[1])       # nothing loads from the network
+    assert not re.search(r"https?://", doc.styles[1])  # nothing loads from the network
 
 
 def test_older_updates_work_without_a_script():
     def update(n):
         return {**view_model()["updates"][0], "anchor": f"u{n}", "title": f"Title {n}"}
+
     paged = render.page(view_model(updates=[update(1), update(2)], next_before="2026-10-01T00:00:00Z&x=<1>"))
     doc = Doc(paged)
     assert "?before=2026-10-01T00%3A00%3A00Z%26x%3D%3C1%3E" in doc.links()
@@ -244,15 +315,21 @@ def test_older_updates_work_without_a_script():
     assert "?before=" not in whole
 
 
-@pytest.mark.parametrize("values", [[0, 0], [5, 5], [-3, 4, None, 9], [-2, -1], [1, None], [None, None], [1e308, -1e308, float("nan"), float("inf")]])
+@pytest.mark.parametrize(
+    "values",
+    [[0, 0], [5, 5], [-3, 4, None, 9], [-2, -1], [1, None], [None, None], [1e308, -1e308, float("nan"), float("inf")]],
+)
 @pytest.mark.parametrize("chart", ["number", "line", "bars"])
 def test_charts_take_any_series_and_keep_the_text(chart, values):
     view = view_model()
-    view["stats"][0].update(chart=chart, series=[{"period": f"2026-{i + 1:02d}", "value": v, "display": f"D{i}"} for i, v in enumerate(values)])
+    view["stats"][0].update(
+        chart=chart,
+        series=[{"period": f"2026-{i + 1:02d}", "value": v, "display": f"D{i}"} for i, v in enumerate(values)],
+    )
     text = render.page(view)
     for tag, name, value in Doc(text).attrs:
         if name in ("points", "height", "cx", "cy") and value != "100%":
-            assert re.fullmatch(r"[-\d., e+]*", value), (tag, name, value)      # never nan or inf in a coordinate
+            assert re.fullmatch(r"[-\d., e+]*", value), (tag, name, value)  # never nan or inf in a coordinate
     assert view["stats"][0]["display"] in text
 
 
@@ -279,47 +356,88 @@ def world(tmp_path, monkeypatch):
     settings = Settings(db_path=tmp_path / "hub.db", company_name="Acme")
     store = Store(settings)
     store.initialize()
-    state = SimpleNamespace(store=store, settings=settings, approved=True, stats=[], held=[], root=tmp_path / "company-page-public")
+    state = SimpleNamespace(
+        store=store, settings=settings, approved=True, stats=[], held=[], root=tmp_path / "company-page-public"
+    )
 
     def stream(c, audience_ids, before=None, limit=10, company_name=""):
-        rows = c.execute("SELECT * FROM editions WHERE audience_id=? AND status='published' AND (? IS NULL OR published_at<?) "
-                         "ORDER BY published_at DESC LIMIT ?", (audience_ids[0], before, before, limit)).fetchall()
-        return [{"anchor": r["id"], "title": r["title"], "author": {"name": r["author"], "kind": "bot"}, "period": r["period_start"],
-                 "published_at": r["published_at"], "version": r["version"], "correction_note": r["correction_note"],
-                 "edition_source": "SECRETSOURCE", "sections": json.loads(r["body"])} for r in rows]
+        rows = c.execute(
+            "SELECT * FROM editions WHERE audience_id=? AND status='published' AND (? IS NULL OR published_at<?) "
+            "ORDER BY published_at DESC LIMIT ?",
+            (audience_ids[0], before, before, limit),
+        ).fetchall()
+        return [
+            {
+                "anchor": r["id"],
+                "title": r["title"],
+                "author": {"name": r["author"], "kind": "bot"},
+                "period": r["period_start"],
+                "published_at": r["published_at"],
+                "version": r["version"],
+                "correction_note": r["correction_note"],
+                "edition_source": "SECRETSOURCE",
+                "sections": json.loads(r["body"]),
+            }
+            for r in rows
+        ]
 
     monkeypatch.setattr(package, "editions", SimpleNamespace(stream=stream), raising=False)
-    monkeypatch.setattr(package, "stats", SimpleNamespace(
-        board_approved=lambda c, audience: state.approved,
-        project=lambda c, audience, at: {"stats": list(state.stats), "held": list(state.held)}), raising=False)
+    monkeypatch.setattr(
+        package,
+        "stats",
+        SimpleNamespace(
+            board_approved=lambda c, audience: state.approved,
+            project=lambda c, audience, at: {"stats": list(state.stats), "held": list(state.held)},
+        ),
+        raising=False,
+    )
     return state
 
 
 def open_page(state, transparency="open", enabled=1):
     with state.store.transaction() as c:
-        c.execute("INSERT INTO company_page_settings (id, transparency, accent) VALUES ('company',?,'#0F7A5A') "
-                  "ON CONFLICT(id) DO UPDATE SET transparency=excluded.transparency", (transparency,))
-        c.execute("INSERT OR IGNORE INTO audiences (id, name, kind, enabled, created_at, updated_at) "
-                  "VALUES ('pub','Public','public',?,?,?)", (enabled, H.now(), H.now()))
+        c.execute(
+            "INSERT INTO company_page_settings (id, transparency, accent) VALUES ('company',?,'#0F7A5A') "
+            "ON CONFLICT(id) DO UPDATE SET transparency=excluded.transparency",
+            (transparency,),
+        )
+        c.execute(
+            "INSERT OR IGNORE INTO audiences (id, name, kind, enabled, created_at, updated_at) "
+            "VALUES ('pub','Public','public',?,?,?)",
+            (enabled, H.now(), H.now()),
+        )
         c.execute("UPDATE audiences SET enabled=?", (enabled,))
 
 
 def publish(state, edition_id, title, published_at="2026-10-30T00:00:00Z"):
     body = json.dumps([{"key": "highlights", "items": [{"body": f"Body of {title}", "ask_id": None}]}])
     with state.store.transaction() as c:
-        c.execute("INSERT INTO editions (id, audience_id, author, period_start, period_end, status, title, body, published_at, "
-                  "created_at, updated_at) VALUES (?,'pub','Head of Support',?,?,'published',?,?,?,?,?)",
-                  (edition_id, edition_id, edition_id, title, body, published_at, H.now(), H.now()))
+        c.execute(
+            "INSERT INTO editions (id, audience_id, author, period_start, period_end, status, title, body, published_at, "
+            "created_at, updated_at) VALUES (?,'pub','Head of Support',?,?,'published',?,?,?,?,?)",
+            (edition_id, edition_id, edition_id, title, body, published_at, H.now(), H.now()),
+        )
 
 
 def stat(display="$118k", **extra):
-    return {"id": "s1", "label": "Revenue", "definition": "Money in.", "chart": "number", "period": "2026-10", "as_of": "2026-11-01",
-            "display": display, "stale": False, "series": [{"period": "2026-10", "value": 118, "display": display}], **extra}
+    return {
+        "id": "s1",
+        "label": "Revenue",
+        "definition": "Money in.",
+        "chart": "number",
+        "period": "2026-10",
+        "as_of": "2026-11-01",
+        "display": display,
+        "stale": False,
+        "series": [{"period": "2026-10", "value": 118, "display": display}],
+        **extra,
+    }
 
 
 def test_a_stat_says_as_of_only_when_the_header_does_not_already_say_it():
     def shows(**extra):
         return 'class="as-of"' in render.page(view_model(stats=[stat(**extra)]))
+
     assert not shows(period="2026-10", as_of="2026-10-31")
     assert not shows(period="Oct 2026", as_of="2026-10-31")
     assert not shows(period="Nov 1, 2026", as_of="2026-11-01")
@@ -351,7 +469,7 @@ def on_disk(state):
 
 def test_nothing_is_public_unless_open_and_enabled(world):
     with world.store.read() as c:
-        assert release.public_view(c, AT, world.settings) == {}     # no settings row, no audience
+        assert release.public_view(c, AT, world.settings) == {}  # no settings row, no audience
     open_page(world, "closed")
     publish(world, "e1", "First")
     with world.store.read() as c:
@@ -374,9 +492,12 @@ def test_an_unapproved_board_shows_no_stats_but_updates_stay(world):
     world.approved = False
     result = release.rebuild(world.store, "test", at=AT)
     assert not result["empty"]
-    assert "$777k" not in (served(world) / "index.html").read_text() and "First" in (served(world) / "index.html").read_text()
+    assert (
+        "$777k" not in (served(world) / "index.html").read_text()
+        and "First" in (served(world) / "index.html").read_text()
+    )
     assert json.loads((served(world) / "data.json").read_text())["stats"] == []
-    world.approved = "yes"      # only a real True counts
+    world.approved = "yes"  # only a real True counts
     with world.store.read() as c:
         assert release.public_view(c, AT, world.settings)["stats"] == []
     world.approved = True
@@ -401,8 +522,27 @@ def test_data_json_is_exactly_the_view_and_extras_never_leave(world):
     with world.store.read() as c:
         assert data == release.public_view(c, AT, world.settings)
     assert set(data) == {"company", "audience", "stats", "updates", "next_before"}
-    assert set(data["stats"][0]) == {"id", "label", "definition", "chart", "period", "as_of", "display", "stale", "series"}
-    assert set(data["updates"][0]) == {"anchor", "title", "author", "period", "published_at", "version", "correction_note", "sections"}
+    assert set(data["stats"][0]) == {
+        "id",
+        "label",
+        "definition",
+        "chart",
+        "period",
+        "as_of",
+        "display",
+        "stale",
+        "series",
+    }
+    assert set(data["updates"][0]) == {
+        "anchor",
+        "title",
+        "author",
+        "period",
+        "published_at",
+        "version",
+        "correction_note",
+        "sections",
+    }
     assert data["next_before"] is None
     blob = on_disk(world)
     for secret in (b"SECRET", b"123456", b"monthly_burn", b"accounts"):
@@ -416,13 +556,18 @@ def test_public_history_walks_every_page_of_the_stream(world, monkeypatch):
         publish(world, f"e{n}", f"Title {n}", f"2026-10-{n + 10}T00:00:00Z")
     with world.store.read() as c:
         view = release.public_view(c, AT, world.settings)
-    assert [u["title"] for u in view["updates"]] == [f"Title {n}" for n in (4, 3, 2, 1, 0)] and view["next_before"] is None
+    assert [u["title"] for u in view["updates"]] == [f"Title {n}" for n in (4, 3, 2, 1, 0)] and view[
+        "next_before"
+    ] is None
 
 
 def test_finance_stats_earn_the_open_badge_and_lines_go_in_the_table(world):
     open_page(world)
     with world.store.transaction() as c:
-        c.execute("INSERT INTO page_stats (id, source_kind, ref_id, data_class, created_at) VALUES ('s1','kpi','k','customers',?)", (H.now(),))
+        c.execute(
+            "INSERT INTO page_stats (id, source_kind, ref_id, data_class, created_at) VALUES ('s1','kpi','k','customers',?)",
+            (H.now(),),
+        )
     world.stats = [stat()]
     with world.store.read() as c:
         assert release.public_view(c, AT, world.settings)["company"]["badge"] == "public"
@@ -443,7 +588,7 @@ def test_files_are_readable_by_another_container_whatever_the_umask(world):
     finally:
         os.umask(old)
     link = world.root / "current"
-    assert os.readlink(link) == os.path.join("releases", result["id"])      # relative: the router mounts it elsewhere
+    assert os.readlink(link) == os.path.join("releases", result["id"])  # relative: the router mounts it elsewhere
     mode = lambda p: stat_module.S_IMODE(os.stat(p).st_mode)
     assert mode(world.root) == mode(world.root / "releases") == mode(link) == 0o755
     for path in link.resolve().rglob("*"):
@@ -464,7 +609,7 @@ def test_closed_removes_every_path_and_the_old_folder(world, through_connection)
         with world.store.transaction() as c:
             c.execute("UPDATE company_page_settings SET transparency='closed'")
             assert release.rebuild(c, "closed", at=AT)["empty"]
-            assert not (world.root / "current" / "index.html").exists()     # in the same step, before commit
+            assert not (world.root / "current" / "index.html").exists()  # in the same step, before commit
     else:
         open_page(world, "closed")
         assert release.rebuild(world.store, "closed", at=AT)["empty"]
@@ -529,16 +674,20 @@ def test_current_is_valid_at_every_step_of_a_swap(world, monkeypatch):
 
     real = {"replace": os.replace, "rename": os.rename, "symlink": os.symlink, "rmtree": shutil.rmtree}
     for name in ("replace", "rename", "symlink"):
+
         def wrapped(*args, name=name, **kwargs):
             check(f"before {name}")
             out = real[name](*args, **kwargs)
             check(f"after {name}")
             return out
+
         monkeypatch.setattr(os, name, wrapped)
+
     def rmtree(path, *args, **kwargs):
         check("before rmtree")
         real["rmtree"](path, *args, **kwargs)
         check("after rmtree")
+
     monkeypatch.setattr(shutil, "rmtree", rmtree)
     publish(world, "e2", "Second")
     release.rebuild(world.store, "second", at=AT)
@@ -556,7 +705,9 @@ def test_a_failed_swap_tells_the_caller_and_leaves_the_old_release_whole(world, 
         release.rebuild(world.store, "second", at=AT)
     assert (world.root / "current").resolve() == old and "First" in (old / "index.html").read_text()
     with world.store.read() as c:
-        assert [r["reason"] for r in c.execute("SELECT reason FROM page_releases")] == ["first"]    # no record of a swap that failed
+        assert [r["reason"] for r in c.execute("SELECT reason FROM page_releases")] == [
+            "first"
+        ]  # no record of a swap that failed
 
 
 def test_a_read_that_loses_to_a_close_never_reopens_the_page(world, monkeypatch):
@@ -590,7 +741,7 @@ def test_a_failure_while_rendering_closes_the_page(world, monkeypatch):
     assert result == {"id": result["id"], "empty": True, "failed": True}
     assert not (served(world) / "index.html").exists() and b"Secretish" not in on_disk(world)
     with world.store.transaction() as c:
-        assert release.rebuild(c, "third", at=AT)["failed"]     # the same on a connection
+        assert release.rebuild(c, "third", at=AT)["failed"]  # the same on a connection
     assert not (served(world) / "data.json").exists()
 
 
@@ -626,7 +777,7 @@ def test_concurrent_rebuilds_do_not_interleave(world):
             for i in range(6):
                 publish(world, f"e{n}-{i}", f"Title {n} {i}", f"2026-10-{(n % 9) + 10}T00:00:{i:02d}Z")
                 release.rebuild(world.store, f"r{n}", at=AT)
-        except Exception as exc:    # noqa: BLE001  anything at all fails the test below
+        except Exception as exc:  # noqa: BLE001  anything at all fails the test below
             failures.append(exc)
 
     def reader():
@@ -659,7 +810,7 @@ def test_concurrent_rebuilds_do_not_interleave(world):
 
 
 def test_refresh_only_writes_when_the_page_would_change(world):
-    assert release.refresh(world.store, AT) is None and served(world) is None      # never public: no folder at all
+    assert release.refresh(world.store, AT) is None and served(world) is None  # never public: no folder at all
     open_page(world)
     world.stats = [stat("$118k")]
     publish(world, "e1", "First")
@@ -685,13 +836,16 @@ def test_a_logo_is_read_through_the_servers_file_reader_with_the_company_places_
     """The server's file reader is pointed at the company's own bucket and the places before it (backend/company_storage.py),
     so a logo saved there is found only through that reader, not through a fresh one that knows the server's storage."""
     import backend.blobs as blobs
+
     open_page(world)
     publish(world, "e1", "First")
     png = b"\x89PNG\r\n\x1a\n" + b"x" * 20
     digest = hashlib.sha256(png).hexdigest()
     with world.store.transaction() as c:
-        c.execute("INSERT INTO blobs (id, owner, digest, size, name, content_type, created_at) VALUES (?,?,?,?,?,?,?)",
-                  ("good", "human:o", digest, len(png), "logo", "image/png", H.now()))
+        c.execute(
+            "INSERT INTO blobs (id, owner, digest, size, name, content_type, created_at) VALUES (?,?,?,?,?,?,?)",
+            ("good", "human:o", digest, len(png), "logo", "image/png", H.now()),
+        )
         c.execute("UPDATE company_page_settings SET logo_file_id='good'")
     configured = blobs.Blobs(world.settings)
     world.store.blobs = configured
@@ -714,10 +868,13 @@ def test_logo_is_copied_when_its_bytes_are_an_image_and_dropped_otherwise(world,
     digest = hashlib.sha256(png).hexdigest()
     with world.store.transaction() as c:
         for blob, content_type in (("good", "image/png"), ("svg", "image/svg+xml")):
-            c.execute("INSERT INTO blobs (id, owner, digest, size, name, content_type, created_at) VALUES (?,?,?,?,?,?,?)",
-                      (blob, "human:o", digest, len(png), "logo", content_type, H.now()))
+            c.execute(
+                "INSERT INTO blobs (id, owner, digest, size, name, content_type, created_at) VALUES (?,?,?,?,?,?,?)",
+                (blob, "human:o", digest, len(png), "logo", content_type, H.now()),
+            )
         c.execute("UPDATE company_page_settings SET logo_file_id='good'")
     import backend.blobs as blobs
+
     monkeypatch.setattr(blobs.Blobs, "get", lambda self, d: png)
     release.rebuild(world.store, "logo", at=AT)
     data = json.loads((served(world) / "data.json").read_text())
@@ -726,7 +883,7 @@ def test_logo_is_copied_when_its_bytes_are_an_image_and_dropped_otherwise(world,
     assert data["company"]["logo_url"] in (served(world) / "index.html").read_text()
     assert release.refresh(world.store, AT) is None
 
-    monkeypatch.setattr(blobs.Blobs, "get", lambda self, d: b"<svg onload=alert(1)>")   # a type that lies
+    monkeypatch.setattr(blobs.Blobs, "get", lambda self, d: b"<svg onload=alert(1)>")  # a type that lies
     release.rebuild(world.store, "logo", at=AT)
     assert json.loads((served(world) / "data.json").read_text())["company"]["logo_url"] == ""
     assert not list(served(world).glob("assets/logo-*"))
@@ -751,7 +908,12 @@ class References(HTMLParser):
         assert not (tag == "script" and "src" in attrs) and not (tag == "link" and attrs.get("rel") == "stylesheet")
         for name in ("src", "href", "poster", "data"):
             value = attrs.get(name)
-            if value and tag != "article" and not (tag == "link" and attrs.get("rel") == "canonical") and not value.startswith(("#", "?", "https://")):
+            if (
+                value
+                and tag != "article"
+                and not (tag == "link" and attrs.get("rel") == "canonical")
+                and not value.startswith(("#", "?", "https://"))
+            ):
                 self.found.add(value)
 
     def handle_data(self, data):
@@ -762,10 +924,13 @@ class References(HTMLParser):
 def with_logo(world, monkeypatch):
     png = b"\x89PNG\r\n\x1a\n" + b"x" * 20
     with world.store.transaction() as c:
-        c.execute("INSERT INTO blobs (id, owner, digest, size, name, content_type, created_at) VALUES ('good','human:o',?,?,'logo','image/png',?)",
-                  (hashlib.sha256(png).hexdigest(), len(png), H.now()))
+        c.execute(
+            "INSERT INTO blobs (id, owner, digest, size, name, content_type, created_at) VALUES ('good','human:o',?,?,'logo','image/png',?)",
+            (hashlib.sha256(png).hexdigest(), len(png), H.now()),
+        )
         c.execute("UPDATE company_page_settings SET logo_file_id='good'")
     import backend.blobs as blobs
+
     monkeypatch.setattr(blobs.Blobs, "get", lambda self, d: png)
 
 
@@ -794,8 +959,11 @@ def test_a_release_with_nothing_public_holds_no_assets(world, monkeypatch, way_o
     old = (world.root / "current").resolve()
     wanted = References((old / "index.html").read_text()).found
     with world.store.transaction() as c:
-        c.execute("UPDATE company_page_settings SET transparency='closed'" if way_out == "closed"
-                  else "UPDATE editions SET status='retracted'")
+        c.execute(
+            "UPDATE company_page_settings SET transparency='closed'"
+            if way_out == "closed"
+            else "UPDATE editions SET status='retracted'"
+        )
         release.rebuild(c, way_out, at=AT)
     assert not old.exists() and list(served(world).iterdir()) == []
     for name in wanted:
@@ -830,7 +998,7 @@ def test_the_router_needs_only_the_folder_it_mounts(world, monkeypatch, tmp_path
     finally:
         os.umask(old)
     assert not (tmp_path / "company-page-public").exists()
-    assert stat_module.S_IMODE(os.stat(tmp_path / "cell").st_mode) == 0o755     # folders it had to make on the way
+    assert stat_module.S_IMODE(os.stat(tmp_path / "cell").st_mode) == 0o755  # folders it had to make on the way
     for path in world.root.rglob("*"):
         if path.is_symlink():
             assert path.name == "current" and not os.path.isabs(os.readlink(path))
@@ -848,10 +1016,18 @@ def test_a_preview_follows_the_apps_theme_and_a_release_never_does():
     assert "prefers-color-scheme:dark" in follows and "color-scheme:light dark" in follows
     assert render.page(view, preview=True, theme="nonsense") == follows
     dark = render.page(view, preview=True, theme="dark")
-    assert "prefers-color-scheme" not in dark and "@media all{:root{--bg:#0f1217" in dark and "color-scheme:dark;" in dark
+    assert (
+        "prefers-color-scheme" not in dark and "@media all{:root{--bg:#0f1217" in dark and "color-scheme:dark;" in dark
+    )
     light = render.page(view, preview=True, theme="light")
-    assert "prefers-color-scheme" not in light and "@media not all{:root{--bg:#0f1217" in light and "color-scheme:light dark" not in light
-    assert "prefers-color-scheme:dark" in render.page(view, theme="dark"), "a reader's page follows the reader's computer"
+    assert (
+        "prefers-color-scheme" not in light
+        and "@media not all{:root{--bg:#0f1217" in light
+        and "color-scheme:light dark" not in light
+    )
+    assert "prefers-color-scheme:dark" in render.page(view, theme="dark"), (
+        "a reader's page follows the reader's computer"
+    )
 
 
 def test_a_preview_keeps_its_links_in_the_page_and_a_release_does_not():

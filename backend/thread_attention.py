@@ -17,6 +17,7 @@ before step 6c is history and not listed.
 Every item is listed. The caller pages the whole list (views.needs_items), so nothing is cut here. A person the reader
 may not see is named only to someone in the same thread (`teammate_access.Known`), as everywhere a thread is read.
 """
+
 from . import hubdb as H
 
 ADDRESSED = ("mention", "ask", "assign", "addressed", "reply")
@@ -26,14 +27,26 @@ HELD_OPERATIONS = ("message", "reply", "threads", "threads_edit")
 
 def _clip(text, n=160):
     text = str(text or "").strip()
-    return text if len(text) <= n else text[:n - 1].rstrip() + "..."
+    return text if len(text) <= n else text[: n - 1].rstrip() + "..."
 
 
 def _item(kind, item_id, thread_id, title, created, requester=None, message_id=None, first_line=""):
-    return {"kind": kind, "id": item_id, "message_id": message_id, "conversation_id": thread_id, "title": title,
-            "first_line": first_line, "created_at": created, "requester_id": requester, "origin_actor": requester,
-            "from_person": requester if H.is_human(requester) else None, "ask": None, "recommend": None,
-            "person_ask": None, "ask_missing": False}
+    return {
+        "kind": kind,
+        "id": item_id,
+        "message_id": message_id,
+        "conversation_id": thread_id,
+        "title": title,
+        "first_line": first_line,
+        "created_at": created,
+        "requester_id": requester,
+        "origin_actor": requester,
+        "from_person": requester if H.is_human(requester) else None,
+        "ask": None,
+        "recommend": None,
+        "person_ask": None,
+        "ask_missing": False,
+    }
 
 
 def items(c, auth, who, skip=(), with_capped=True):
@@ -43,6 +56,7 @@ def items(c, auth, who, skip=(), with_capped=True):
     who reads that thread."""
     from . import threads
     from . import read_cache
+
     viewer = threads.viewer(auth, who)
     # Home's Needs you and unread cards ask with different skip/capped rules. Build their common list once in this
     # snapshot, keyed by the whole identity and Auth; writes and returning the connection discard it (read_cache).
@@ -53,13 +67,21 @@ def items(c, auth, who, skip=(), with_capped=True):
     for row in _capped(c) if with_capped else ():
         root = c.execute("SELECT * FROM conversations WHERE id=?", (row["root_id"],)).fetchone()
         if root and threads.readable(c, viewer, dict(root)) and threads.can_manage(c, viewer, dict(root)):
-            out.append(_item("thread_capped", row["root_id"], row["root_id"],
-                             _clip(root["subject"] or "Thread") + ": bot replies paused", row["since"]))
+            out.append(
+                _item(
+                    "thread_capped",
+                    row["root_id"],
+                    row["root_id"],
+                    _clip(root["subject"] or "Thread") + ": bot replies paused",
+                    row["since"],
+                )
+            )
     return sorted(out, key=lambda it: str(it["created_at"] or ""))
 
 
 def _items(c, viewer):
     from . import threads
+
     me = viewer.actor
     known = viewer.known(c)
     seen, out = set(), []
@@ -67,6 +89,7 @@ def _items(c, viewer):
     # Each message, its thread and the viewer's standing there are read together (a query a chunk), not once an item:
     # a person named in a thousand open threads took ~2,300 statements here, on every Home and Needs you read.
     from . import task_privacy
+
     task_privacy.prime_messages(c, H.prime_messages(c, [row["id"] for row in addressed]).values())
     found, _ = threads.read_threads(c, viewer, [row["conversation_id"] for row in addressed])
     for thread in found.values():
@@ -80,17 +103,38 @@ def _items(c, viewer):
         seen.add(row["id"])
         kind = "thread_mention"
         first = _clip((row["body"] or "").strip().splitlines()[0] if (row["body"] or "").strip() else "")
-        out.append(_item(kind, row["id"], row["conversation_id"], first or _clip(row["subject"] or "Thread"),
-                         row["created_at"], known.name(row["sender_id"], row["conversation_id"]), message_id=row["id"],
-                         first_line=first))
+        out.append(
+            _item(
+                kind,
+                row["id"],
+                row["conversation_id"],
+                first or _clip(row["subject"] or "Thread"),
+                row["created_at"],
+                known.name(row["sender_id"], row["conversation_id"]),
+                message_id=row["id"],
+                first_line=first,
+            )
+        )
     for row in _unread_dms(c, viewer, me):
-        out.append(_item("thread_dm", row["id"], row["id"], _clip(row["subject"] or "Direct message"),
-                         row["created_at"], known.name(row["sender_id"], row["id"])))
+        out.append(
+            _item(
+                "thread_dm",
+                row["id"],
+                row["id"],
+                _clip(row["subject"] or "Direct message"),
+                row["created_at"],
+                known.name(row["sender_id"], row["id"]),
+            )
+        )
     for row in _holds(c, viewer):
         title = "A message is held for your review" if row["role"] == "reviewer" else "A message of yours is held"
         # A hold has no thread here: the list names its author only to someone who may see them.
-        out.append({**_item("thread_held", row["id"], None, title, row["created_at"], known.name(row["author"], None)),
-                    "thread_id": _held_thread(c, viewer, row["id"])})
+        out.append(
+            {
+                **_item("thread_held", row["id"], None, title, row["created_at"], known.name(row["author"], None)),
+                "thread_id": _held_thread(c, viewer, row["id"]),
+            }
+        )
     return out
 
 
@@ -98,21 +142,26 @@ def _addressed(c, me):
     """Messages a person may have to answer: a person's, or a message that names or replies to this
     person, that they have not answered since in the same thread. A bot's plain post, one that names nobody, is not
     theirs to answer."""
-    return [dict(r) for r in c.execute(
-        "SELECT m.id, m.conversation_id, m.sender_id, m.kind, m.body, m.created_at, cv.subject FROM message_deliveries d "
-        # Pin the partial index so the general recipient index cannot expand this to all of the person's deliveries.
-        # CROSS JOIN keeps deliveries first whatever sqlite_stat1 says, then each message and conversation by key.
-        "INDEXED BY message_deliveries_addressed "
-        "CROSS JOIN messages m ON m.id=d.message_id CROSS JOIN conversations cv ON cv.id=m.conversation_id "
-        "WHERE d.recipient=? AND d.reason IN ('mention','ask','assign','addressed','reply') "
-        "AND d.state IN ('pending','delivered','read') AND m.sender_id<>? "
-        f"AND {H.delivery_counts_sql('m', 'd.recipient', 'd.reason')} "
-        "AND (m.sender_id LIKE 'human:%' OR d.reason IN ('mention','reply')) "
-        "AND m.deleted_at IS NULL AND m.superseded_at IS NULL "
-        "AND cv.task_id IS NULL AND cv.closed_at IS NULL AND cv.archived_at IS NULL "
-        "AND NOT EXISTS (SELECT 1 FROM messages r WHERE r.conversation_id=m.conversation_id AND r.sender_id=? "
-        "AND r.created_at>m.created_at AND r.deleted_at IS NULL) "
-        "ORDER BY m.created_at", (me, me, me)).fetchall()]
+    return [
+        dict(r)
+        for r in c.execute(
+            "SELECT m.id, m.conversation_id, m.sender_id, m.kind, m.body, m.created_at, cv.subject FROM message_deliveries d "
+            # Pin the partial index so the general recipient index cannot expand this to all of the person's deliveries.
+            # CROSS JOIN keeps deliveries first whatever sqlite_stat1 says, then each message and conversation by key.
+            "INDEXED BY message_deliveries_addressed "
+            "CROSS JOIN messages m ON m.id=d.message_id CROSS JOIN conversations cv ON cv.id=m.conversation_id "
+            "WHERE d.recipient=? AND d.reason IN ('mention','ask','assign','addressed','reply') "
+            "AND d.state IN ('pending','delivered','read') AND m.sender_id<>? "
+            f"AND {H.delivery_counts_sql('m', 'd.recipient', 'd.reason')} "
+            "AND (m.sender_id LIKE 'human:%' OR d.reason IN ('mention','reply')) "
+            "AND m.deleted_at IS NULL AND m.superseded_at IS NULL "
+            "AND cv.task_id IS NULL AND cv.closed_at IS NULL AND cv.archived_at IS NULL "
+            "AND NOT EXISTS (SELECT 1 FROM messages r WHERE r.conversation_id=m.conversation_id AND r.sender_id=? "
+            "AND r.created_at>m.created_at AND r.deleted_at IS NULL) "
+            "ORDER BY m.created_at",
+            (me, me, me),
+        ).fetchall()
+    ]
 
 
 def _unread_dms(c, viewer, me):
@@ -120,13 +169,16 @@ def _unread_dms(c, viewer, me):
     (threads.unread_message_sql: a group DM's bot post reaches each member by a delivery, with no `to_actor`). The item
     takes that message's sender and time: a later message they cannot read sets neither."""
     from . import threads
+
     out = []
     found = c.execute(
         "SELECT cv.id, cv.subject, f.last_read_seq FROM thread_followers f JOIN conversations cv ON cv.id=f.thread_id "
         "WHERE f.actor=? AND f.following=1 AND f.notify<>'muted' "
         "AND (cv.audience='personal' OR (cv.audience='participants' AND cv.parent_id IS NULL)) "
         "AND cv.closed_at IS NULL AND cv.archived_at IS NULL AND cv.last_unread_seq>f.last_read_seq "
-        "ORDER BY cv.last_unread_seq DESC", (me,)).fetchall()
+        "ORDER BY cv.last_unread_seq DESC",
+        (me,),
+    ).fetchall()
     # Each DM's row and members are read together (threads.read_threads), not once per DM.
     rows, members = threads.read_threads(c, viewer, [cv["id"] for cv in found])
     for cv in found:
@@ -134,13 +186,21 @@ def _unread_dms(c, viewer, me):
             continue
         others = [a for a in threads._dm_members(c, rows[cv["id"]], rows=members[cv["id"]]) if a != me]
         if len(others) == 1 and others[0].startswith("bot:"):
-            continue                                    # its bot's row in Team counts it (threads.bot_dm_unread)
+            continue  # its bot's row in Team counts it (threads.bot_dm_unread)
         for m in c.execute(
-                f"SELECT m.* FROM messages m WHERE m.conversation_id=? AND m.seq>? AND {threads.unread_message_sql()} "
-                "ORDER BY m.seq DESC", (cv["id"], cv["last_read_seq"], me, me)):
+            f"SELECT m.* FROM messages m WHERE m.conversation_id=? AND m.seq>? AND {threads.unread_message_sql()} "
+            "ORDER BY m.seq DESC",
+            (cv["id"], cv["last_read_seq"], me, me),
+        ):
             if threads.readable(c, viewer, dict(m)):
-                out.append({"id": cv["id"], "subject": cv["subject"], "sender_id": m["sender_id"],
-                            "created_at": m["created_at"]})
+                out.append(
+                    {
+                        "id": cv["id"],
+                        "subject": cv["subject"],
+                        "sender_id": m["sender_id"],
+                        "created_at": m["created_at"],
+                    }
+                )
                 break
     return out
 
@@ -150,6 +210,7 @@ def _holds(c, viewer, limit=None, operations=HELD_OPERATIONS):
     person their bot reports up to, org_rule_check.represented), the oldest `limit`. The item clears when the hold is
     decided."""
     from . import org_rule_check
+
     return org_rule_check.held_for(c, viewer.who, operations, limit) if viewer.is_person else []
 
 
@@ -157,9 +218,13 @@ def _held_thread(c, viewer, hold_id):
     """The thread a held native post or edit would land in, when this person reads it; None for any other hold and for
     a post that would start its thread."""
     from . import threads
-    row = c.execute("SELECT json_extract(payload,'$.replay.thread_id') AS thread, "
-                    "json_extract(payload,'$.replay.message_id') AS message FROM org_rule_holds "
-                    "WHERE id=? AND operation IN ('threads','threads_edit')", (hold_id,)).fetchone()
+
+    row = c.execute(
+        "SELECT json_extract(payload,'$.replay.thread_id') AS thread, "
+        "json_extract(payload,'$.replay.message_id') AS message FROM org_rule_holds "
+        "WHERE id=? AND operation IN ('threads','threads_edit')",
+        (hold_id,),
+    ).fetchone()
     if row is None:
         return None
     message = H.message(c, row["message"]) if row["message"] and not row["thread"] else None
@@ -169,6 +234,10 @@ def _held_thread(c, viewer, hold_id):
 
 def _capped(c):
     """Threads whose bot wakes the loop guard held back, one row per thread (its oldest held wake)."""
-    return [dict(r) for r in c.execute(
-        "SELECT d.root_id, MIN(d.created_at) AS since FROM message_deliveries d WHERE d.state='capped' "
-        "AND d.root_id IS NOT NULL GROUP BY d.root_id ORDER BY since").fetchall()]
+    return [
+        dict(r)
+        for r in c.execute(
+            "SELECT d.root_id, MIN(d.created_at) AS since FROM message_deliveries d WHERE d.state='capped' "
+            "AND d.root_id IS NOT NULL GROUP BY d.root_id ORDER BY since"
+        ).fetchall()
+    ]

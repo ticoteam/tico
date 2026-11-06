@@ -1,4 +1,5 @@
 """In-process release contract: streamed versions, previews, reviews and the next turn."""
+
 import hashlib
 from pathlib import Path
 import struct
@@ -12,8 +13,13 @@ from backend.tests.test_task_review import get, task
 def png(color):
     def chunk(kind, data):
         return struct.pack('>I', len(data)) + kind + data + struct.pack('>I', zlib.crc32(kind + data))
-    return (b'\x89PNG\r\n\x1a\n' + chunk(b'IHDR', struct.pack('>IIBBBBB', 16, 8, 8, 2, 0, 0, 0))
-            + chunk(b'IDAT', zlib.compress((b'\x00' + bytes(color) * 16) * 8)) + chunk(b'IEND', b''))
+
+    return (
+        b'\x89PNG\r\n\x1a\n'
+        + chunk(b'IHDR', struct.pack('>IIBBBBB', 16, 8, 8, 2, 0, 0, 0))
+        + chunk(b'IDAT', zlib.compress((b'\x00' + bytes(color) * 16) * 8))
+        + chunk(b'IEND', b'')
+    )
 
 
 def task_row(api, tid):
@@ -63,15 +69,30 @@ def test_streamed_task_versions_review_and_next_wake(api, monkeypatch):
             assert replay.json() == result
             # Exercise the real derivation code, deterministically outside the background loop.
             with api.app.state.store.read() as c:
-                row = dict(c.execute('SELECT b.*,m.poster_blob_id FROM blobs b JOIN blob_media m '
-                                     'ON m.blob_id=b.id WHERE b.id=?', (result['file']['id'],)).fetchone())
+                row = dict(
+                    c.execute(
+                        'SELECT b.*,m.poster_blob_id FROM blobs b JOIN blob_media m ON m.blob_id=b.id WHERE b.id=?',
+                        (result['file']['id'],),
+                    ).fetchone()
+                )
             worker.process(row)
     # The bot asks the person about the second script version: a question task under its task, with that version
     # under review (hub task question --review).
-    asked = api.post('/api/v2/task-questions', headers=headers(token), json={
-        'on': 'human:ana', 'parent': tid, 'question': 'Is this ready?', 'why': '',
-        'review': [{'file': ids['script.md'], 'version': 2}],
-        'options': [{'label': 'Approve', 'then': 'Go with Approve'}, {'label': 'Request changes', 'then': 'Go with Request changes'}]})
+    asked = api.post(
+        '/api/v2/task-questions',
+        headers=headers(token),
+        json={
+            'on': 'human:ana',
+            'parent': tid,
+            'question': 'Is this ready?',
+            'why': '',
+            'review': [{'file': ids['script.md'], 'version': 2}],
+            'options': [
+                {'label': 'Approve', 'then': 'Go with Approve'},
+                {'label': 'Request changes', 'then': 'Go with Request changes'},
+            ],
+        },
+    )
     assert asked.status_code == 200, asked.text
     question = asked.json()['task']['id']
     before = task_row(api, tid)
@@ -108,18 +129,27 @@ def test_streamed_task_versions_review_and_next_wake(api, monkeypatch):
                 poster = api.head(v['poster_url'], headers=headers())
                 assert poster.status_code == 200 and poster.headers['content-length'] == str(len(second_image))
     for number, data in enumerate(contents['video.mp4'], 1):
-        partial = api.get(f"/api/v2/files/{ids['video.mp4']}?v={number}",
-                          headers={**headers(), 'Range': 'bytes=2-12'})
+        partial = api.get(f"/api/v2/files/{ids['video.mp4']}?v={number}", headers={**headers(), 'Range': 'bytes=2-12'})
         assert partial.status_code == 206 and partial.content == data[2:13]
         assert partial.headers['content-range'] == f'bytes 2-12/{len(data)}'
         assert partial.headers['cache-control'] == 'private, no-store'
-    comment = post(api, f'tasks/{tid}/comments', {'text': 'Review the second script.',
-                   'attachments': [ids['script.md'] + '@2']}, token)['comment']
+    comment = post(
+        api,
+        f'tasks/{tid}/comments',
+        {'text': 'Review the second script.', 'attachments': [ids['script.md'] + '@2']},
+        token,
+    )['comment']
     attached = comment['refs']['attachments'][0]
     assert (attached['id'], attached['name'], attached['version']) == (ids['script.md'], 'script.md', 2)
-    post(api, f"attempts/{attempt['id']}/complete", {'outcome': 'completed', 'text': 'Ready for review.', 'last_seq': 0}, machine['token'])
-    answer = post(api, f'tasks/{question}/answers', {
-        'target': {'task': question}, 'answers': {'decision': ['Approve']}})
+    post(
+        api,
+        f"attempts/{attempt['id']}/complete",
+        {'outcome': 'completed', 'text': 'Ready for review.', 'last_seq': 0},
+        machine['token'],
+    )
+    answer = post(
+        api, f'tasks/{question}/answers', {'target': {'task': question}, 'answers': {'decision': ['Approve']}}
+    )
     assert answer['answer']['by'] == 'human:ana'
     assert task_row(api, question)['open_asks'] == 0
     assert task_row(api, tid)['cover'] == before['cover']

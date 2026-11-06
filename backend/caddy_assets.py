@@ -13,6 +13,7 @@ so the request waits and gets its normal answer. Only a dial is retried for ever
 Caddy's default, so a write is never sent twice. What still fails is answered with a plain 503
 and Retry-After, never a 502. compose.yaml's `hold` service does the same for the tunnel.
 """
+
 import hashlib
 import ipaddress
 import json
@@ -31,13 +32,24 @@ MARKER_PREFIX = "tico-caddy-generation:"
 TOKEN_PATH = r"^/visuals/[A-Za-z0-9_-]+[.][A-Za-z0-9_-]{43}$"
 RAW_TOKEN_PATH = r"^/visuals/[A-Za-z0-9_-]+[.][A-Za-z0-9_-]+$"
 AUTH_HEADERS = ["Cookie", "Authorization", "Proxy-Authorization", "Cf-Access-*", "X-Amzn-Oidc-*", "X-Tico-*"]
-SIGNAL_PATHS = ["/rtc", "/rtc/*"]     # LiveKit's websocket signal, which clients reach at <TICO_MEET_URL>/rtc
+SIGNAL_PATHS = ["/rtc", "/rtc/*"]  # LiveKit's websocket signal, which clients reach at <TICO_MEET_URL>/rtc
 # The Company page's own origin (docs/company-page.md) is a reader's site: it keeps the reader's cookie, the only one
 # it is for, and only these paths reach the server (the paths backend/company_page/reader_app.py answers). Everything
 # else on it is a 404, never the app. The page's own CSP is a meta tag; this header only stops framing, and it keeps
 # the base-uri rule reader_app.py sends too.
-READER_PATHS = ["/", "/data.json", "/feed.xml", "/assets/*", "/auth/callback", "/sign-in", "/sign-out", "/reply", "/can-help",
-                "/unsubscribe", "/invite/*"]
+READER_PATHS = [
+    "/",
+    "/data.json",
+    "/feed.xml",
+    "/assets/*",
+    "/auth/callback",
+    "/sign-in",
+    "/sign-out",
+    "/reply",
+    "/can-help",
+    "/unsubscribe",
+    "/invite/*",
+]
 READER_STRIP = ["Authorization", "Proxy-Authorization", "Cf-Access-*", "X-Amzn-Oidc-*", "X-Tico-*"]
 READER_CSP = "frame-ancestors 'none'; base-uri 'none'"
 LOG = logging.getLogger("tico.caddy")
@@ -46,10 +58,13 @@ HOLD_BODY = "Tico is starting. Try again in a few seconds."
 
 
 def _hostname(value, *, allow_ip=False):
-    if (not isinstance(value, str) or not 0 < len(value) <= 253
-            or not value.isascii() or (not allow_ip and not re.search(r"[A-Za-z]", value))
-            or not all(re.fullmatch(r"[A-Za-z0-9](?:[A-Za-z0-9-]{0,61}[A-Za-z0-9])?", part)
-                       for part in value.split("."))):
+    if (
+        not isinstance(value, str)
+        or not 0 < len(value) <= 253
+        or not value.isascii()
+        or (not allow_ip and not re.search(r"[A-Za-z]", value))
+        or not all(re.fullmatch(r"[A-Za-z0-9](?:[A-Za-z0-9-]{0,61}[A-Za-z0-9])?", part) for part in value.split("."))
+    ):
         raise ValueError("hostname_invalid")
     try:
         ipaddress.ip_address(value)
@@ -74,10 +89,18 @@ def _origin_host(origin, label, taken):
         host = _hostname(parsed.hostname)
         if "." not in host:
             return "", f"{label}_origin_not_dns_host"
-        if (parsed.scheme != "https" or parsed.username is not None or parsed.password is not None
-                or parsed.port not in (None, 443) or parsed.path not in ("", "/")
-                or parsed.query or parsed.fragment or "?" in value or "#" in value
-                or parsed.netloc.lower() not in (host, host + ":443")):
+        if (
+            parsed.scheme != "https"
+            or parsed.username is not None
+            or parsed.password is not None
+            or parsed.port not in (None, 443)
+            or parsed.path not in ("", "/")
+            or parsed.query
+            or parsed.fragment
+            or "?" in value
+            or "#" in value
+            or parsed.netloc.lower() not in (host, host + ":443")
+        ):
             return "", f"{label}_origin_not_https_origin"
     except (ValueError, TypeError):
         return "", f"{label}_origin_invalid"
@@ -94,8 +117,9 @@ def _encoded(config):
     return json.dumps(config, sort_keys=True, separators=(",", ":"), ensure_ascii=True).encode("ascii")
 
 
-def _configuration(app_hostname, visual_origin, runner_hostname, serve_visuals, reader_origin="", serve_reader=False,
-                   signal=None):
+def _configuration(
+    app_hostname, visual_origin, runner_hostname, serve_visuals, reader_origin="", serve_reader=False, signal=None
+):
     if type(serve_visuals) is not bool or type(serve_reader) is not bool:
         raise ValueError("serve_visuals_invalid")
     app = _hostname(app_hostname, allow_ip=True) if app_hostname else ""
@@ -117,58 +141,139 @@ def _configuration(app_hostname, visual_origin, runner_hostname, serve_visuals, 
     # Caddy's HTTP error logger includes request.uri even without access logs.
     # Remove the whole request object: headers can contain token-bearing Referer
     # values as well. Keep structured fault diagnostics at INFO and above.
-    config = {"admin": {"disabled": True}, "logging": {"logs": {"default": {
-        "level": "INFO", "encoder": {"format": "filter", "wrap": {"format": "json"},
-                                      "fields": {"request": {"filter": "delete"}}}}}},
-        "apps": {"http": {"servers": {}}}}
+    config = {
+        "admin": {"disabled": True},
+        "logging": {
+            "logs": {
+                "default": {
+                    "level": "INFO",
+                    "encoder": {
+                        "format": "filter",
+                        "wrap": {"format": "json"},
+                        "fields": {"request": {"filter": "delete"}},
+                    },
+                }
+            }
+        },
+        "apps": {"http": {"servers": {}}},
+    }
     if app:
         hold = {"try_duration": HOLD_FOR, "try_interval": HOLD_EVERY}
         proxy = {"handler": "reverse_proxy", "upstreams": [{"dial": "server:8765"}], "load_balancing": hold}
         routes = [{"match": [{"host": [app]}], "handle": [proxy], "terminal": True}]
         if signal:
             # Tico Meet's signal goes through the app's own address, so browsers need no port of their own.
-            routes.insert(0, {"match": [{"host": [app], "path": SIGNAL_PATHS}],
-                              "handle": [{"handler": "reverse_proxy", "upstreams": [{"dial": signal}]}],
-                              "terminal": True})
+            routes.insert(
+                0,
+                {
+                    "match": [{"host": [app], "path": SIGNAL_PATHS}],
+                    "handle": [{"handler": "reverse_proxy", "upstreams": [{"dial": signal}]}],
+                    "terminal": True,
+                },
+            )
         if visual:
-            asset_proxy = {"handler": "reverse_proxy", "upstreams": [{"dial": "server:8765"}], "load_balancing": dict(hold),
-                           "headers": {"request": {"delete": list(AUTH_HEADERS)},
-                                       "response": {"delete": ["Set-Cookie"]}}}
-            routes.append({"match": [{"host": [visual], "method": ["GET", "HEAD"],
-                "path_regexp": {"name": "signed_visual", "pattern": TOKEN_PATH},
-                # PathRegexp cleans decoded paths. The original target must
-                # independently match and equal the unchanged decoded path.
-                "expression": "{http.request.orig_uri}.matches('" + RAW_TOKEN_PATH
-                              + "') && {http.request.orig_uri} == {http.request.uri.path}"}],
-                "handle": [asset_proxy], "terminal": True})
+            asset_proxy = {
+                "handler": "reverse_proxy",
+                "upstreams": [{"dial": "server:8765"}],
+                "load_balancing": dict(hold),
+                "headers": {"request": {"delete": list(AUTH_HEADERS)}, "response": {"delete": ["Set-Cookie"]}},
+            }
+            routes.append(
+                {
+                    "match": [
+                        {
+                            "host": [visual],
+                            "method": ["GET", "HEAD"],
+                            "path_regexp": {"name": "signed_visual", "pattern": TOKEN_PATH},
+                            # PathRegexp cleans decoded paths. The original target must
+                            # independently match and equal the unchanged decoded path.
+                            "expression": "{http.request.orig_uri}.matches('"
+                            + RAW_TOKEN_PATH
+                            + "') && {http.request.orig_uri} == {http.request.uri.path}",
+                        }
+                    ],
+                    "handle": [asset_proxy],
+                    "terminal": True,
+                }
+            )
         if reader:
             # The reader's paths only, exact: a decoded path that cleaning changed (`/%2e/`) is refused, not served as `/`.
-            reader_proxy = {"handler": "reverse_proxy", "upstreams": [{"dial": "server:8765"}], "load_balancing": dict(hold),
-                            "headers": {"request": {"delete": list(READER_STRIP)},
-                                        "response": {"set": {"Content-Security-Policy": [READER_CSP]}}}}
-            routes.append({"match": [{"host": [reader], "path": list(READER_PATHS),
-                                      "expression": "{http.request.orig_uri.path} == {http.request.uri.path}"}],
-                           "handle": [reader_proxy], "terminal": True})
+            reader_proxy = {
+                "handler": "reverse_proxy",
+                "upstreams": [{"dial": "server:8765"}],
+                "load_balancing": dict(hold),
+                "headers": {
+                    "request": {"delete": list(READER_STRIP)},
+                    "response": {"set": {"Content-Security-Policy": [READER_CSP]}},
+                },
+            }
+            routes.append(
+                {
+                    "match": [
+                        {
+                            "host": [reader],
+                            "path": list(READER_PATHS),
+                            "expression": "{http.request.orig_uri.path} == {http.request.uri.path}",
+                        }
+                    ],
+                    "handle": [reader_proxy],
+                    "terminal": True,
+                }
+            )
         routes.append({"handle": [{"handler": "static_response", "status_code": 404}], "terminal": True})
         config["apps"]["http"]["servers"]["tico"] = {
-            "listen": [":443"], "tls_connection_policies": [{}], "routes": routes,
-            "errors": {"routes": [{"handle": [{"handler": "static_response", "status_code": 503,
-                                               "headers": {"Retry-After": ["5"]}, "body": HOLD_BODY}]}]}}
+            "listen": [":443"],
+            "tls_connection_policies": [{}],
+            "routes": routes,
+            "errors": {
+                "routes": [
+                    {
+                        "handle": [
+                            {
+                                "handler": "static_response",
+                                "status_code": 503,
+                                "headers": {"Retry-After": ["5"]},
+                                "body": HOLD_BODY,
+                            }
+                        ]
+                    }
+                ]
+            },
+        }
     # Hash the canonical base before inserting the entire readiness server, so
     # the marker is deterministic and occurs exactly once without self-reference.
     generation = hashlib.sha256(_encoded(config)).hexdigest()
     config["apps"]["http"]["servers"][READY_SERVER] = {
-        "listen": [READY_ADDRESS], "automatic_https": {"disable": True}, "routes": [
-            {"match": [{"method": ["GET"], "path": [READY_PATH],
-                        "expression": "{http.request.orig_uri} == '" + READY_PATH + "'"}],
-             "handle": [{"handler": "static_response", "status_code": 200,
-                         "body": MARKER_PREFIX + generation}], "terminal": True},
-            {"handle": [{"handler": "static_response", "status_code": 404}], "terminal": True}]}
+        "listen": [READY_ADDRESS],
+        "automatic_https": {"disable": True},
+        "routes": [
+            {
+                "match": [
+                    {
+                        "method": ["GET"],
+                        "path": [READY_PATH],
+                        "expression": "{http.request.orig_uri} == '" + READY_PATH + "'",
+                    }
+                ],
+                "handle": [{"handler": "static_response", "status_code": 200, "body": MARKER_PREFIX + generation}],
+                "terminal": True,
+            },
+            {"handle": [{"handler": "static_response", "status_code": 404}], "terminal": True},
+        ],
+    }
     return config, generation, bool(visual), reason, bool(reader), reader_reason
 
 
-def render(app_hostname, visual_origin="", runner_hostname="", *, serve_visuals=False, reader_origin="", serve_reader=False,
-           signal=None):
+def render(
+    app_hostname,
+    visual_origin="",
+    runner_hostname="",
+    *,
+    serve_visuals=False,
+    reader_origin="",
+    serve_reader=False,
+    signal=None,
+):
     """Return deterministic JSON data; an empty app while off removes public sites.
 
     Invalid required app/runner names raise reason-only ValueError. An invalid
@@ -177,7 +282,9 @@ def render(app_hostname, visual_origin="", runner_hostname="", *, serve_visuals=
     The reader origin is served only when serve_reader is True and it is a valid
     host of its own; otherwise the reader site is absent.
     """
-    return _configuration(app_hostname, visual_origin, runner_hostname, serve_visuals, reader_origin, serve_reader, signal=signal)[0]
+    return _configuration(
+        app_hostname, visual_origin, runner_hostname, serve_visuals, reader_origin, serve_reader, signal=signal
+    )[0]
 
 
 def _runner_host(value, app):
@@ -197,11 +304,18 @@ def _runner_host(value, app):
             host = _hostname(host)
             is_ip = False
         authority = "[" + host + "]" if ":" in host else host
-        if (parsed.scheme not in ("https", "http") or parsed.username is not None
-                or parsed.password is not None or parsed.port == 0
-                or parsed.path not in ("", "/") or parsed.query or parsed.fragment
-                or "?" in value or "#" in value
-                or parsed.netloc.lower() != (authority if parsed.port is None else authority + ":" + str(parsed.port))):
+        if (
+            parsed.scheme not in ("https", "http")
+            or parsed.username is not None
+            or parsed.password is not None
+            or parsed.port == 0
+            or parsed.path not in ("", "/")
+            or parsed.query
+            or parsed.fragment
+            or "?" in value
+            or "#" in value
+            or parsed.netloc.lower() != (authority if parsed.port is None else authority + ":" + str(parsed.port))
+        ):
             raise ValueError("runner_url_invalid")
     except (ValueError, TypeError):
         raise ValueError("runner_url_invalid") from None
@@ -225,6 +339,7 @@ def _signal_dial(environ):
     """LiveKit's address for the /rtc signal route (TICO_MEET_INTERNAL_URL's host and port), or None while calls are not
     set up. Browsers reach LiveKit's signal through this app host, so no signal port is published."""
     from . import call_media
+
     config = call_media.config_from_env(environ)
     if config is None:
         return None
@@ -249,8 +364,14 @@ def prepare(environ=os.environ):
     """
     directory = Path(environ.get("TICO_CADDY_DIR", "/caddy-generated"))
     enabled = environ.get("TICO_CADDY_VISUALS") == "1"
-    inert = {"written": False, "path": None, "generation": None, "serve_visuals": False, "reason": None,
-             "serve_reader": False}
+    inert = {
+        "written": False,
+        "path": None,
+        "generation": None,
+        "serve_visuals": False,
+        "reason": None,
+        "serve_reader": False,
+    }
     if not _present(directory):
         if enabled:
             raise ValueError("caddy_config_directory_missing")
@@ -275,9 +396,14 @@ def prepare(environ=os.environ):
         except ValueError:
             runner_reason = "runner_url_invalid"
     config, generation, serving, reason, reading, reader_reason = _configuration(
-        app, environ.get("TICO_VISUAL_ORIGIN", ""), runner if runner_reason is None else "",
-        enabled and runner_reason is None, reader_origin, serve_reader=bool(reader_origin.strip()) and runner_reason is None,
-        signal=_signal_dial(environ))
+        app,
+        environ.get("TICO_VISUAL_ORIGIN", ""),
+        runner if runner_reason is None else "",
+        enabled and runner_reason is None,
+        reader_origin,
+        serve_reader=bool(reader_origin.strip()) and runner_reason is None,
+        signal=_signal_dial(environ),
+    )
     if enabled:
         reason = runner_reason or reason
     if reason:
@@ -307,5 +433,11 @@ def prepare(environ=os.environ):
                 os.unlink(temporary)
             except FileNotFoundError:
                 pass
-    return {"written": True, "path": str(path), "generation": generation,
-            "serve_visuals": serving, "reason": reason, "serve_reader": reading}
+    return {
+        "written": True,
+        "path": str(path),
+        "generation": generation,
+        "serve_visuals": serving,
+        "reason": reason,
+        "serve_reader": reading,
+    }

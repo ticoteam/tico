@@ -1,4 +1,5 @@
 """Completion delivers new input answers without repeating this attempt's tool sends."""
+
 import json
 
 import pytest
@@ -32,14 +33,29 @@ def test_equal_answers_to_distinct_inputs_are_delivered_once(api, kind):
     if kind == "task":
         task = post(api, "tasks", {"owner": "ops", "title": "Check the second folder", "body": "Check its contents"})
         with api.app.state.store.read() as c:
-            second = H.message(c, c.execute("SELECT message_id FROM jobs WHERE state='queued' AND bot_id='ops'").fetchone()[0])
+            second = H.message(
+                c, c.execute("SELECT message_id FROM jobs WHERE state='queued' AND bot_id='ops'").fetchone()[0]
+            )
     else:
-        second = post(api, "messages", {"to": "ops", "kind": "say",
-                      "text": "Check the second folder", "conversation_id": first["conversation_id"]})
+        second = post(
+            api,
+            "messages",
+            {
+                "to": "ops",
+                "kind": "say",
+                "text": "Check the second folder",
+                "conversation_id": first["conversation_id"],
+            },
+        )
     attempt = claim(api, runner)
     start(api, runner, attempt)
     if kind == "task":
-        post(api, "tasks/" + task["id"], {"version": attempt["task"]["version"], "status": "done", "quiet": True}, attempt["token"])
+        post(
+            api,
+            "tasks/" + task["id"],
+            {"version": attempt["task"]["version"], "status": "done", "quiet": True},
+            attempt["token"],
+        )
     if kind == "folded":
         folded = post(api, "chat/ops", {"text": "Include the archive"})
         inputs = post(api, f"attempts/{attempt['id']}/inputs", {}, runner["token"])["messages"]
@@ -48,7 +64,12 @@ def test_equal_answers_to_distinct_inputs_are_delivered_once(api, kind):
     reply = finish(api, runner, attempt)
     assert reply and reply["in_reply_to"] == second["id"]
     with api.app.state.store.read() as c:
-        assert c.execute("SELECT count(*) FROM messages WHERE sender_id='bot:ops' AND in_reply_to=?", (second["id"],)).fetchone()[0] == 1
+        assert (
+            c.execute(
+                "SELECT count(*) FROM messages WHERE sender_id='bot:ops' AND in_reply_to=?", (second["id"],)
+            ).fetchone()[0]
+            == 1
+        )
         if kind == "folded":
             assert H.message(c, reply["id"])["refs"]["answers"] == [second["id"], folded["id"]]
 
@@ -104,10 +125,17 @@ def test_task_completion_replay_requires_current_runner_ownership_and_private_ac
     machine = runner(api)
     assign(api, machine, "ops")
     ready(api, machine, ["ops"])
-    task = post(api, "tasks", {"owner": "ops", "title": "Check the packet", "body": "Check the fixture packet", "private": True})
+    task = post(
+        api, "tasks", {"owner": "ops", "title": "Check the packet", "body": "Check the fixture packet", "private": True}
+    )
     attempt = claim(api, machine)
     start(api, machine, attempt)
-    task = post(api, "tasks/" + task["id"], {"version": attempt["task"]["version"], "status": "done", "quiet": True}, attempt["token"])
+    task = post(
+        api,
+        "tasks/" + task["id"],
+        {"version": attempt["task"]["version"], "status": "done", "quiet": True},
+        attempt["token"],
+    )
     reply = finish(api, machine, attempt, "Fixture task result")
     assert reply and reply["refs"]["task"] == task["id"]
     # A replay identity is only for reading this receipt; the runner gains no domain credentials.
@@ -122,13 +150,20 @@ def test_task_completion_replay_requires_current_runner_ownership_and_private_ac
     else:
         with api.app.state.store.transaction() as c:
             c.execute("UPDATE bots SET state='paused' WHERE slug='ops'")
-    result = api.post(f"/api/v2/attempts/{attempt['id']}/complete",
-                     json={"outcome": "completed", "last_seq": 0, "text": "Fixture task result"},
-                     headers=headers(machine["token"], "completion"))
+    result = api.post(
+        f"/api/v2/attempts/{attempt['id']}/complete",
+        json={"outcome": "completed", "last_seq": 0, "text": "Fixture task result"},
+        headers=headers(machine["token"], "completion"),
+    )
     assert result.status_code in (401, 403, 404), result.text
     assert "Fixture task result" not in result.text
     with api.app.state.store.read() as c:
-        assert c.execute("SELECT count(*) FROM messages WHERE sender_id='bot:ops' AND body='Fixture task result'").fetchone()[0] == 1
+        assert (
+            c.execute(
+                "SELECT count(*) FROM messages WHERE sender_id='bot:ops' AND body='Fixture task result'"
+            ).fetchone()[0]
+            == 1
+        )
 
 
 @pytest.mark.parametrize("notice", ["current", "listed-private"])
@@ -140,14 +175,24 @@ def test_routine_reply_in_a_personal_room_is_not_lost_to_an_unrelated_private_ta
     start(api, runner, attempt)
     finish(api, runner, attempt)
     from backend.tests.test_api import unrelated_task_managers
+
     with api.app.state.store.transaction() as c:
         unrelated_task_managers(c)
     with api.app.state.store.transaction() as c:
         hidden = H.task_create(c, H.KEEPER, "Nightly learnings", "Read the day's runs", "bot:ops", private=True)
         c.execute("UPDATE jobs SET state='completed' WHERE state='queued'")
-        task = H.task_create(c, H.KEEPER, "Refresh the map of the docs", "Refresh it", "bot:ops",
-                             deduplicate=False, conversation_id=origin["conversation_id"])
-        wake = c.execute("SELECT m.* FROM jobs j JOIN messages m ON m.id=j.message_id WHERE j.state='queued'").fetchone()
+        task = H.task_create(
+            c,
+            H.KEEPER,
+            "Refresh the map of the docs",
+            "Refresh it",
+            "bot:ops",
+            deduplicate=False,
+            conversation_id=origin["conversation_id"],
+        )
+        wake = c.execute(
+            "SELECT m.* FROM jobs j JOIN messages m ON m.id=j.message_id WHERE j.state='queued'"
+        ).fetchone()
         assert hidden["id"] not in (wake["refs"] or "")
         if notice == "listed-private":
             # What the server wrote before: the private task listed in the room's notice.
@@ -158,10 +203,17 @@ def test_routine_reply_in_a_personal_room_is_not_lost_to_an_unrelated_private_ta
     start(api, runner, attempt)
     reply = finish(api, runner, attempt, "Map refreshed.")
     with api.app.state.store.read() as c:
-        assert tuple(c.execute("SELECT state,final_text FROM attempts WHERE id=?", (attempt["id"],)).fetchone()) == ("completed", "Map refreshed.")
+        assert tuple(c.execute("SELECT state,final_text FROM attempts WHERE id=?", (attempt["id"],)).fetchone()) == (
+            "completed",
+            "Map refreshed.",
+        )
         room = H.task(c, task["id"])["conversation_id"]
     # The task has its own room; the person's room got only the "Started task" line.
-    started = [m for m in get(api, f"conversations/{origin['conversation_id']}/messages") if m["created_at"] > task["created_at"]]
+    started = [
+        m
+        for m in get(api, f"conversations/{origin['conversation_id']}/messages")
+        if m["created_at"] > task["created_at"]
+    ]
     assert [(m["refs"] or {}).get("task_started") for m in started] == [True]
     shown = get(api, f"conversations/{room}/messages")
     if notice == "current":
@@ -174,20 +226,26 @@ def test_routine_reply_in_a_personal_room_is_not_lost_to_an_unrelated_private_ta
         assert not any("Map refreshed." in m["body"] or "Nightly" in m["body"] for m in shown)
 
 
-
 def test_a_task_session_becomes_the_tasks_one_primary_session_and_a_shared_thread_does_not(api):
     r = runner(api, "ana")
     assign(api, r, "ops")
 
     def turn(task, thread):
-        post(api, "runners/heartbeat", {"version": "test", "platform": "test", "readiness": {"ops": True},
-                                        "capabilities": ["task_lanes_v2"]}, token=r["token"])
+        post(
+            api,
+            "runners/heartbeat",
+            {"version": "test", "platform": "test", "readiness": {"ops": True}, "capabilities": ["task_lanes_v2"]},
+            token=r["token"],
+        )
         attempt = claim(api, r)
         post(api, f"attempts/{attempt['id']}/started", {"thread_id": thread}, r["token"])
         finish(api, r, attempt)
         with api.app.state.store.read() as c:
-            return {link["url"]: json.loads(link["detail"])["primary"]
-                    for link in H.task_links(c, task["id"]) if link["kind"] == "session"}
+            return {
+                link["url"]: json.loads(link["detail"])["primary"]
+                for link in H.task_links(c, task["id"])
+                if link["kind"] == "session"
+            }
 
     # A bot set to one shared thread carries its other conversations there too: no task's session.
     with api.app.state.store.transaction() as c:
@@ -211,8 +269,12 @@ def test_a_runs_confirmed_thread_replaces_the_one_it_started_on_and_only_while_i
     # (runner-rs execute.rs Fresh): the run, the bot's session and the task's primary session all move to it.
     r = runner(api, "ana")
     assign(api, r, "ops")
-    post(api, "runners/heartbeat", {"version": "test", "platform": "test", "readiness": {"ops": True},
-                                    "capabilities": ["task_lanes_v2"]}, token=r["token"])
+    post(
+        api,
+        "runners/heartbeat",
+        {"version": "test", "platform": "test", "readiness": {"ops": True}, "capabilities": ["task_lanes_v2"]},
+        token=r["token"],
+    )
     task = post(api, "tasks", {"owner": "ops", "title": "Watch the Acme release", "body": "Watch build 41"})
     attempt = claim(api, r)
     path = f"attempts/{attempt['id']}/"
@@ -220,15 +282,22 @@ def test_a_runs_confirmed_thread_replaces_the_one_it_started_on_and_only_while_i
 
     def threads():
         with api.app.state.store.read() as c:
-            links = {link["url"]: json.loads(link["detail"])["primary"]
-                     for link in H.task_links(c, task["id"]) if link["kind"] == "session"}
-            ran = (c.execute("SELECT thread_id FROM attempts WHERE id=?", (attempt["id"],)).fetchone()[0],
-                   H.turn(c, attempt["id"])["thread_id"])
+            links = {
+                link["url"]: json.loads(link["detail"])["primary"]
+                for link in H.task_links(c, task["id"])
+                if link["kind"] == "session"
+            }
+            ran = (
+                c.execute("SELECT thread_id FROM attempts WHERE id=?", (attempt["id"],)).fetchone()[0],
+                H.turn(c, attempt["id"])["thread_id"],
+            )
             session = c.execute("SELECT thread_id FROM bot_sessions WHERE bot='ops'").fetchone()
             return links, tuple(ran), session[0]
 
     assert threads() == ({"session:ops/old-thread": True}, ("old-thread", "old-thread"), "old-thread")
-    assert post(api, path + "thread", {"thread_id": "new-thread"}, r["token"], key="thread") == {"thread_id": "new-thread"}
+    assert post(api, path + "thread", {"thread_id": "new-thread"}, r["token"], key="thread") == {
+        "thread_id": "new-thread"
+    }
     assert threads() == ({"session:ops/new-thread": True}, ("new-thread", "new-thread"), "new-thread")
     # Another computer cannot move it, and a finished run keeps the thread it ended on.
     other = runner(api, "ana", label="Other Mac")
@@ -259,9 +328,13 @@ def test_a_reply_under_a_named_parent_lands_in_its_sub_thread_and_the_parent_row
         threads.post(c, "human:ana", root["id"], "Pick the date", to_actor="bot:ops")
     attempt = claim(api, r)
     start(api, r, attempt)
-    done = post(api, f"attempts/{attempt['id']}/complete",
-                {"outcome": "completed", "last_seq": 0, "text": "Oct 20.", "parent_message_id": parent["id"]},
-                r["token"], key="completion")
+    done = post(
+        api,
+        f"attempts/{attempt['id']}/complete",
+        {"outcome": "completed", "last_seq": 0, "text": "Oct 20.", "parent_message_id": parent["id"]},
+        r["token"],
+        key="completion",
+    )
     reply = done["message"]
     with api.app.state.store.read() as c:
         sub = H.conversation(c, reply["conversation_id"])
@@ -286,9 +359,13 @@ def test_a_parent_the_attempt_cannot_reach_leaves_the_reply_in_its_thread(api, p
     attempt = claim(api, r)
     start(api, r, attempt)
     named = outside["id"] if parent == "other-thread" else "unknown-message"
-    done = post(api, f"attempts/{attempt['id']}/complete",
-                {"outcome": "completed", "last_seq": 0, "text": "Oct 20.", "parent_message_id": named},
-                r["token"], key="completion")
+    done = post(
+        api,
+        f"attempts/{attempt['id']}/complete",
+        {"outcome": "completed", "last_seq": 0, "text": "Oct 20.", "parent_message_id": named},
+        r["token"],
+        key="completion",
+    )
     assert done["message"]["conversation_id"] == root["id"]
     with api.app.state.store.read() as c:
         timeline = threads.timeline(c, threads.actor_viewer(c, "human:ana"), root["id"])["messages"]

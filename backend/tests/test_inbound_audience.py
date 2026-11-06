@@ -11,8 +11,12 @@ from backend.tests.test_inbound import page, seed
 
 def narrow(api):
     doc = roster_of(api)
-    doc["org_groups"] = {**(doc.get("org_groups") or {}), "sales": {"name": "Sales"},
-                         "east": {"name": "East", "parent": "sales"}, "ops-team": {"name": "Operations"}}
+    doc["org_groups"] = {
+        **(doc.get("org_groups") or {}),
+        "sales": {"name": "Sales"},
+        "east": {"name": "East", "parent": "sales"},
+        "ops-team": {"name": "Operations"},
+    }
     for person in doc["people"]:
         if person["id"] == "cara":
             person["team"] = "east"
@@ -30,12 +34,16 @@ def reads(api, token):
     listed = [m["message_id"] for m in api.get("/api/v2/inbound/messages", headers=h).json()["messages"]]
     found = [m["message_id"] for m in api.get("/api/v2/inbound/messages?q=verification", headers=h).json()["messages"]]
     waited = api.post("/api/v2/inbound/wait", headers=h, json={"after": 0, "timeout": 0}).json()["messages"]
-    return {"inboxes": "ibx_b" in inboxes, "messages": "ses:msg:ibx_b" in listed, "search": "ses:msg:ibx_b" in found,
-            "wait": "ses:msg:ibx_b" in [m["message_id"] for m in waited],
-            "scoped": api.get("/api/v2/inbound/messages?inbox_ids=ibx_b", headers=h).status_code,
-            "read": api.get("/api/v2/inbound/messages/ses:msg:ibx_b", headers=h).status_code,
-            "code": api.get("/api/v2/inbound/messages/ses:msg:ibx_b/code", headers=h).status_code,
-            "cursor": api.get("/api/v2/inbound/cursor", headers=h).json()["cursor"]}
+    return {
+        "inboxes": "ibx_b" in inboxes,
+        "messages": "ses:msg:ibx_b" in listed,
+        "search": "ses:msg:ibx_b" in found,
+        "wait": "ses:msg:ibx_b" in [m["message_id"] for m in waited],
+        "scoped": api.get("/api/v2/inbound/messages?inbox_ids=ibx_b", headers=h).status_code,
+        "read": api.get("/api/v2/inbound/messages/ses:msg:ibx_b", headers=h).status_code,
+        "code": api.get("/api/v2/inbound/messages/ses:msg:ibx_b/code", headers=h).status_code,
+        "cursor": api.get("/api/v2/inbound/cursor", headers=h).json()["cursor"],
+    }
 
 
 OPEN = {"inboxes": True, "messages": True, "search": True, "wait": True, "scoped": 200, "read": 200, "code": 200}
@@ -58,16 +66,20 @@ def test_an_inbox_is_the_companys_until_an_admin_narrows_it(api):
     with api.app.state.store.read() as c:
         audit = c.execute("SELECT actor FROM audit_log WHERE object='inbound_inbox:ibx_b'").fetchall()
         assert [r["actor"] for r in audit] == ["human:ana"]
-        assert c.execute("SELECT count(*) FROM events WHERE action='inbound.inbox_audience' AND target='ibx_b'"
-                         ).fetchone()[0] == 1
+        assert (
+            c.execute(
+                "SELECT count(*) FROM events WHERE action='inbound.inbox_audience' AND target='ibx_b'"
+            ).fetchone()[0]
+            == 1
+        )
 
 
 def test_a_narrowed_inbox_is_gone_on_every_read_path_outside_its_group(api):
     narrow(api)
     put(api, "inbound/inboxes/ibx_b/audience", {"audience": "team", "group_id": "sales"})
-    as_member(api, "ben@acme.example")                     # a member in no group
-    assert {k: v for k, v in reads(api, "ana-test").items() if k != "cursor"} == OPEN     # the owner
-    assert {k: v for k, v in reads(api, "cara-test").items() if k != "cursor"} == OPEN    # East is under Sales
+    as_member(api, "ben@acme.example")  # a member in no group
+    assert {k: v for k, v in reads(api, "ana-test").items() if k != "cursor"} == OPEN  # the owner
+    assert {k: v for k, v in reads(api, "cara-test").items() if k != "cursor"} == OPEN  # East is under Sales
     ben = reads(api, "ben-test")
     assert {k: v for k, v in ben.items() if k != "cursor"} == SHUT
     assert ben["cursor"] == 2 and reads(api, "ana-test")["cursor"] == 2
@@ -92,9 +104,13 @@ def test_the_cursor_does_not_count_a_hidden_inboxs_messages(api):
 
 def test_sync_gaps_name_only_inboxes_the_reader_may_read(api):
     import json
+
     narrow(api)
     put(api, "inbound/inboxes/ibx_b/audience", {"audience": "team", "group_id": "ops-team"})
-    gaps = [{"inbox_id": "ibx_a", "from": 1, "to": 2, "count": 1}, {"inbox_id": "ibx_b", "from": 3, "to": 4, "count": 2}]
+    gaps = [
+        {"inbox_id": "ibx_a", "from": 1, "to": 2, "count": 1},
+        {"inbox_id": "ibx_b", "from": 3, "to": 4, "count": 2},
+    ]
     with api.app.state.store.transaction() as c:
         c.execute("UPDATE inbound_sync SET gaps=? WHERE singleton=1", (json.dumps(gaps),))
     assert [g["inbox_id"] for g in get(api, "inbound/inboxes", "cara-test")["gaps"]] == ["ibx_a"]
@@ -103,6 +119,7 @@ def test_sync_gaps_name_only_inboxes_the_reader_may_read(api):
 
 def test_who_reads_an_inbox_is_a_catalogue_setting_botops_and_the_assistant_may_card():
     from backend import assistant, settings_catalog
+
     path = "/api/v2/inbound/inboxes/ibx_b/audience"
     found = [e for e, _ in settings_catalog.routed("PUT", path)]
     assert [(e.key, e.kind, e.who) for e in found] == [("inbound.inbox.audience", "confirm", "admin")]

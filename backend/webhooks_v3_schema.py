@@ -5,6 +5,7 @@
 answer and by turning the endpoint on. `trigger_relays.wake` is HQ's `wake` switch for the relay as last listed
 (1, 0, or NULL while HQ has not said).
 """
+
 SCHEMA = """
 ALTER TABLE webhooks ADD COLUMN failing_since TEXT;
 ALTER TABLE trigger_relays ADD COLUMN wake INTEGER;

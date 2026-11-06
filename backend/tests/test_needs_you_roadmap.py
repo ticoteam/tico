@@ -19,8 +19,9 @@ def test_needs_you_lists_every_owned_active_task_past_five_hundred(api):
 
 def test_a_declined_roadmap_item_stays_off_its_requesters_list(api):
     with api.app.state.store.transaction() as c:
-        idea = H.task_create(c, ANA, "Dark mode for the public roadmap", "x", OPS, type="product-roadmap",
-                             step="Suggested")
+        idea = H.task_create(
+            c, ANA, "Dark mode for the public roadmap", "x", OPS, type="product-roadmap", step="Suggested"
+        )
         plain = H.task_create(c, ANA, "Book the venue", "x", OPS)
         H.task_update(c, OPS, plain["id"], status="declined", note="No budget.")
         H.task_update(c, H.KEEPER, idea["id"], step="Declined")

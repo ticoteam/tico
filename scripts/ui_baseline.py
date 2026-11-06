@@ -13,6 +13,7 @@ A file missing from a baseline must have no findings, and a count may only shrin
 The first run with no baseline file writes it. Findings under ui/vendor/ are third-party code that a type-checked
 module imports (ui/overview/building.js imports three.js); tsc reads them, so they are dropped here, not counted.
 """
+
 import argparse
 import collections
 import json
@@ -67,7 +68,9 @@ def biome_command():
     pinned = json.loads((ROOT / "package.json").read_text())["devDependencies"]["@biomejs/biome"]
     local = ROOT / "node_modules" / ".bin" / "biome"
     if local.exists():
-        version = subprocess.run([str(local), "--version"], cwd=ROOT, capture_output=True, text=True, check=False).stdout
+        version = subprocess.run(
+            [str(local), "--version"], cwd=ROOT, capture_output=True, text=True, check=False
+        ).stdout
         if pinned in version:
             return [str(local)], pinned
     # No install in this checkout: fetch the pinned version (the same one package.json pins).
@@ -76,8 +79,13 @@ def biome_command():
 
 def run_biome():
     cmd, pinned = biome_command()
-    done = subprocess.run([*cmd, "lint", "--reporter=json", "--max-diagnostics=none", "ui"],
-                          cwd=ROOT, capture_output=True, text=True, check=False)
+    done = subprocess.run(
+        [*cmd, "lint", "--reporter=json", "--max-diagnostics=none", "ui"],
+        cwd=ROOT,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
     try:
         report = json.loads(done.stdout)
     except json.JSONDecodeError:
@@ -104,8 +112,12 @@ def load_baseline(path):
 
 
 def baseline_at(ref, rel):
-    if subprocess.run(["git", "rev-parse", "--verify", "--quiet", f"{ref}^{{commit}}"],
-                      cwd=ROOT, capture_output=True, check=False).returncode != 0:
+    if (
+        subprocess.run(
+            ["git", "rev-parse", "--verify", "--quiet", f"{ref}^{{commit}}"], cwd=ROOT, capture_output=True, check=False
+        ).returncode
+        != 0
+    ):
         fail(f"--base {ref}: no such commit in this checkout (fetch it first)")
     shown = subprocess.run(["git", "show", f"{ref}:{rel}"], cwd=ROOT, capture_output=True, text=True, check=False)
     if shown.returncode != 0:
@@ -154,11 +166,15 @@ def check(findings, label, baseline_path, base_ref, rel):
             for file in sorted(baseline):
                 if baseline[file] > old.get(file, 0):
                     problems += 1
-                    print(f"GREW {file}: {old.get(file, 0)} at {base_ref}, now {baseline[file]} in {rel}; "
-                          "baselines only shrink, so fix the findings instead")
+                    print(
+                        f"GREW {file}: {old.get(file, 0)} at {base_ref}, now {baseline[file]} in {rel}; "
+                        "baselines only shrink, so fix the findings instead"
+                    )
 
-    print(f"{label}: {total} findings in {len(counts)} files; baseline {sum(baseline.values())} "
-          f"in {len(baseline)} files; {'ok' if not problems else f'{problems} problem(s)'}")
+    print(
+        f"{label}: {total} findings in {len(counts)} files; baseline {sum(baseline.values())} "
+        f"in {len(baseline)} files; {'ok' if not problems else f'{problems} problem(s)'}"
+    )
     print_top(counts, len(counts))
     return problems
 

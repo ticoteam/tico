@@ -1,5 +1,6 @@
 """The factory's board judge (evals/factory/scenarios.py board_keeps_moving): what it counts on the claim rounds it
 is given, and a real run whose server passes over ready work, which the judge must fail."""
+
 from types import SimpleNamespace
 
 from evals.factory.cases.freezes import spend_under
@@ -12,8 +13,17 @@ from backend import execution
 def round_at(hour, free, ready, started, fallback=0, why=None):
     """One claim round as sim.Run.runner_round marks it: `ready` are the bots the records say can run, `started_at` the
     turns the round's claims started."""
-    mark = {"at": START + at(hour), "free": free, "held": 0, "started_at": started, "fallback": fallback,
-            "queued": len(ready), "slugs": list(ready), "ready": list(ready), "blocked": {}}
+    mark = {
+        "at": START + at(hour),
+        "free": free,
+        "held": 0,
+        "started_at": started,
+        "fallback": fallback,
+        "queued": len(ready),
+        "slugs": list(ready),
+        "ready": list(ready),
+        "blocked": {},
+    }
     if why:
         mark["why"] = why
     return mark
@@ -35,8 +45,8 @@ def test_a_free_slot_and_a_ready_bot_that_start_nothing_fail_with_the_round_name
 
 
 def test_a_round_starts_the_smaller_of_its_free_slots_and_its_ready_bots():
-    assert judge([round_at(1, 3, ["a", "b"], 2)])[0]          # two ready bots fill two of three free slots
-    assert not judge([round_at(1, 3, ["a", "b"], 1)])[0]      # a second ready bot went unstarted
+    assert judge([round_at(1, 3, ["a", "b"], 2)])[0]  # two ready bots fill two of three free slots
+    assert not judge([round_at(1, 3, ["a", "b"], 1)])[0]  # a second ready bot went unstarted
     assert not judge([round_at(1, 1, ["a", "b", "c"], 0)])[0]
 
 
@@ -85,9 +95,16 @@ def test_a_bot_is_ready_by_its_logins_as_the_claim_decides():
 
 def stall_run(seed=1):
     """A two-hour run with two tickets, claimed the way a runner claims: small enough for the default suite."""
-    scenario = Scenario("judge_stall", "Two tickets on a two-slot computer.",
-                        setup=lambda run, w, team: tickets(run, w, 2), claim="runner", capacity=2, hours=2,
-                        drain_hours=0.5, checks=[("the board keeps moving", None, board_keeps_moving(at(0)))])
+    scenario = Scenario(
+        "judge_stall",
+        "Two tickets on a two-slot computer.",
+        setup=lambda run, w, team: tickets(run, w, 2),
+        claim="runner",
+        capacity=2,
+        hours=2,
+        drain_hours=0.5,
+        checks=[("the board keeps moving", None, board_keeps_moving(at(0)))],
+    )
     return Run(scenario, seed).go(), scenario
 
 
@@ -115,6 +132,7 @@ def test_the_world_runs_maintenance_inline_so_its_roundup_lands_before_the_round
     from evals.factory.sim import TEAM
     from evals.factory.world import World
     from backend import maintenance
+
     calls = []
     monkeypatch.setattr(maintenance, "_start", lambda store, auth, run_id, only, wait: calls.append(wait))
     with World(dev_board(), TEAM):
@@ -125,8 +143,12 @@ def test_the_world_runs_maintenance_inline_so_its_roundup_lands_before_the_round
 def turn(started, finished, cost, bot="fleet-01"):
     """A turn row as the sim reads it: start and finish clock offsets, and its estimated cost."""
     text = lambda offset: (START + offset).strftime("%Y-%m-%dT%H:%M:%S.000000Z")
-    return {"bot": bot, "started_at": text(started), "finished_at": text(finished) if finished is not None else None,
-            "est_cost_usd": cost}
+    return {
+        "bot": bot,
+        "started_at": text(started),
+        "finished_at": text(finished) if finished is not None else None,
+        "est_cost_usd": cost,
+    }
 
 
 def turns_run(turns):
@@ -150,4 +172,3 @@ def test_a_turn_that_starts_after_the_half_hour_reached_its_cap_fails():
 def test_a_window_that_never_reached_the_cap_fails_so_the_check_cannot_pass_on_nothing():
     passed, detail = spend_under(3, at(1, 30), at(1, 42))(turns_run([turn(at(1, 30), at(1, 35), 0.5)]))
     assert not passed and "short of the $1.5 window cap" in detail, detail
-

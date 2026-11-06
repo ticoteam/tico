@@ -16,7 +16,7 @@ from .batch_work import isolated
 from .updates import ZONE
 
 BUSINESS_DAYS = 2
-MORNING = time(8)           # the batch runs at the first hourly sweep after this, Monday to Friday
+MORNING = time(8)  # the batch runs at the first hourly sweep after this, Monday to Friday
 ACTION = "ask.still_needed"
 
 
@@ -58,6 +58,7 @@ def crossed_tasks(conn, at):
     """Open question tasks (backend/question_tasks.py) with no fallback date that crossed the line by `at`: their due
     date when they have one, else two business days after they were asked. Oldest first."""
     from . import question_tasks
+
     rules = team_rules.load(conn)
     limit = _local(at)
     out = []
@@ -65,8 +66,11 @@ def crossed_tasks(conn, at):
         if ask_deadlines.fallback_at(question_tasks.as_ask(row), rules):
             continue
         due = H.parse_ts(row.get("due_at")) if row.get("due_at") else None
-        line = (due if due.tzinfo else due.replace(tzinfo=timezone.utc)) if due else crossed_at(
-            question_tasks.asked_at(row))
+        line = (
+            (due if due.tzinfo else due.replace(tzinfo=timezone.utc))
+            if due
+            else crossed_at(question_tasks.asked_at(row))
+        )
         if line <= limit:
             out.append(row)
     return out
@@ -76,11 +80,13 @@ def send_back(conn, bot, tasks):
     """Take question `tasks` off their people's lists and record them for `bot`'s task roundup (no wake: the roundup
     lists them). Each closes; the bot's task blocked on it goes on without a wake."""
     from . import question_tasks
+
     people = set()
     for row in tasks:
         people.add(row["owner_id"])
-        question_tasks.send_back(conn, row, "No answer in two business days: back to the bot that asked, as still "
-                                 "needed?")
+        question_tasks.send_back(
+            conn, row, "No answer in two business days: back to the bot that asked, as still needed?"
+        )
     for person in people:
         H._recount(conn, person)
     H._recount(conn, bot)
@@ -101,6 +107,11 @@ def sweep(conn, at=None):
         with isolated(conn, "still_needed", bot):
             send_back(conn, bot, tasks)
             sent[bot] = [row["id"] for row in tasks]
-    H.event(conn, H.KEEPER, ACTION + ".batch", _local(at).date().isoformat(),
-            {"bots": len(sent), "asks": sum(len(v) for v in sent.values())})
+    H.event(
+        conn,
+        H.KEEPER,
+        ACTION + ".batch",
+        _local(at).date().isoformat(),
+        {"bots": len(sent), "asks": sum(len(v) for v in sent.values())},
+    )
     return sent

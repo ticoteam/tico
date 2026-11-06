@@ -1,7 +1,12 @@
 """Question tasks (backend/question_tasks.py, spec D8): `hub task question` files a task the person owns with the
 question on its fields and no ask message; answering closes it and the bot hears it once."""
 
+import json
+
+import pytest
+
 from backend import ask_deadlines, still_needed, hubdb as H, task_relations as TR
+
 from backend.tests.test_api import api, assign, claim, get, headers, post, ready, runner, setup_attempt  # noqa: F401
 from backend.tests.test_mcp import call
 
@@ -17,8 +22,24 @@ def _work(api, title="Pick a launch date", **extra):
     r = runner(api, "ana")
     assign(api, r, "ops")
     ready(api, r, ["ops"])
-    work = post(api, "tasks", {"owner": "ops", "title": title, "body": "Choose when the Acme launch goes out.", **extra})
+    work = post(
+        api, "tasks", {"owner": "ops", "title": title, "body": "Choose when the Acme launch goes out.", **extra}
+    )
     return work, claim(api, r)
+
+
+def strip_sources(conn, tid):
+    """A question as stored before its options and default named their pages: the close must still find the source
+    from the review's entries, not from the stored options."""
+    questions, default = conn.execute("SELECT questions, if_no_answer FROM tasks WHERE id=?", (tid,)).fetchone()
+    questions, default = json.loads(questions), json.loads(default)
+    for q in questions:
+        for o in q.get("options") or []:
+            o.pop("source", None)
+    default.pop("source", None)
+    conn.execute(
+        "UPDATE tasks SET questions=?, if_no_answer=? WHERE id=?", (json.dumps(questions), json.dumps(default), tid)
+    )
 
 
 def _read(api, sql, args=()):
@@ -31,8 +52,12 @@ def _mark(api):
 
 
 def _to_ops(api, since):
-    return [r[0] for r in _read(api, "SELECT body FROM messages WHERE recipient_id='bot:ops' AND rowid>? ORDER BY rowid",
-                                (since,))]
+    return [
+        r[0]
+        for r in _read(
+            api, "SELECT body FROM messages WHERE recipient_id='bot:ops' AND rowid>? ORDER BY rowid", (since,)
+        )
+    ]
 
 
 def _answer(api, task_id, body, token="ana-test", expected=200):
@@ -45,9 +70,16 @@ def _cards(api, token="ana-test"):
 
 def test_a_question_from_a_run_is_a_subtask_the_person_owns_with_no_ask_message(api):
     work, attempt = _work(api)
-    out = _ask(api, attempt["token"], "Launch on Tuesday or Thursday?", why="The press list needs a date",
-               options=[{"label": "Tuesday", "then": "Launch Tuesday", "recommended": True},
-                        {"label": "Thursday", "then": "Launch Thursday"}])
+    out = _ask(
+        api,
+        attempt["token"],
+        "Launch on Tuesday or Thursday?",
+        why="The press list needs a date",
+        options=[
+            {"label": "Tuesday", "then": "Launch Tuesday", "recommended": True},
+            {"label": "Thursday", "then": "Launch Thursday"},
+        ],
+    )
     card = out["task"]
     assert card["owner_id"] == "human:ana" and card["requester_id"] == "bot:ops" and not out["folded"]
     assert card["questions"][0]["question"] == "Launch on Tuesday or Thursday?"
@@ -82,9 +114,12 @@ def test_a_bot_never_files_a_question_task_for_another_bot(api):
 
 def test_a_pick_closes_it_done_with_the_answer_and_wakes_the_parent_once(api):
     work, attempt = _work(api)
-    card = _ask(api, attempt["token"], "Launch on Tuesday or Thursday?",
-                options=[{"label": "Tuesday", "then": "Launch Tuesday"}, {"label": "Thursday", "then": "Launch Thursday"}]
-                )["task"]
+    card = _ask(
+        api,
+        attempt["token"],
+        "Launch on Tuesday or Thursday?",
+        options=[{"label": "Tuesday", "then": "Launch Tuesday"}, {"label": "Thursday", "then": "Launch Thursday"}],
+    )["task"]
     since = _mark(api)
     out = _answer(api, card["id"], {"answers": {"decision": ["Thursday"]}, "other": "after the newsletter"})
     assert out["answer"]["answers"] == {"decision": ["Thursday"]} and out["answer"]["by"] == "human:ana"
@@ -96,8 +131,10 @@ def test_a_pick_closes_it_done_with_the_answer_and_wakes_the_parent_once(api):
     with api.app.state.store.read() as c:
         assert card["id"] not in TR.blocker_ids(c, work["id"])
     # The same answer again (a retry) records nothing new; another one is late.
-    assert _answer(api, card["id"], {"answers": {"decision": ["Thursday"]}, "other": "after the newsletter"}
-                   )["answer"] == out["answer"]
+    assert (
+        _answer(api, card["id"], {"answers": {"decision": ["Thursday"]}, "other": "after the newsletter"})["answer"]
+        == out["answer"]
+    )
     _answer(api, card["id"], {"answers": {"decision": ["Tuesday"]}}, expected=409)
     assert len(_to_ops(api, since)) == 1
 
@@ -106,9 +143,11 @@ def test_the_asker_cannot_answer_and_a_label_must_be_one_of_its_options(api):
     _, attempt = _work(api)
     card = _ask(api, attempt["token"], "Ship the Acme banner?")["task"]
     _answer(api, card["id"], {"answers": {"decision": ["Maybe"]}}, expected=422)
-    r = api.post(f"/api/v2/tasks/{card['id']}/answers", json={"target": {"task": card["id"]},
-                                                             "answers": {"decision": ["Yes"]}},
-                 headers=headers(attempt["token"]))
+    r = api.post(
+        f"/api/v2/tasks/{card['id']}/answers",
+        json={"target": {"task": card["id"]}, "answers": {"decision": ["Yes"]}},
+        headers=headers(attempt["token"]),
+    )
     assert r.status_code == 403, r.text
 
 
@@ -136,8 +175,13 @@ def test_one_open_question_task_per_topic(api):
     work, attempt = _work(api)
     first = _ask(api, attempt["token"], "Give Builder a backup model?", topic="Backup model")
     since = _mark(api)
-    again = _ask(api, attempt["token"], "Give Builder and Analyst a backup model?", topic="backup-model",
-                 options=[{"label": "Both", "then": "Set both"}, {"label": "Builder only", "then": "Set Builder"}])
+    again = _ask(
+        api,
+        attempt["token"],
+        "Give Builder and Analyst a backup model?",
+        topic="backup-model",
+        options=[{"label": "Both", "then": "Set both"}, {"label": "Builder only", "then": "Set Builder"}],
+    )
     assert again["folded"] and again["task"]["id"] == first["task"]["id"]
     assert _read(api, "SELECT count(*) FROM messages WHERE rowid>? AND recipient_id='human:ana'", (since,))[0][0] == 0
     card = again["task"]
@@ -156,8 +200,12 @@ def test_one_open_question_task_per_topic(api):
 def test_the_if_no_answer_default_goes_ahead_at_by(api):
     work, attempt = _work(api)
     by = H.shift(H.now(), days=4)
-    card = _ask(api, attempt["token"], "Send the Acme recap on Friday?",
-                if_no_answer={"do": "Yes", "kind": "reversible", "by": by})["task"]
+    card = _ask(
+        api,
+        attempt["token"],
+        "Send the Acme recap on Friday?",
+        if_no_answer={"do": "Yes", "kind": "reversible", "by": by},
+    )["task"]
     assert card["if_no_answer"]["kind"] == "reversible"
     item = next(i for i in _cards(api) if i["id"] == card["id"])
     assert item["ask"]["goes_ahead_at"] and item["recommend"]["option"] == "Yes"
@@ -175,8 +223,12 @@ def test_the_if_no_answer_default_goes_ahead_at_by(api):
 def test_a_send_default_never_goes_ahead_and_the_question_closes_at_by(api):
     _, _, attempt = setup_attempt(api)
     by = H.shift(H.now(), days=4)
-    card = _ask(api, attempt["token"], "Email the vendor the Acme quote?",
-                if_no_answer={"do": "Send the quote", "kind": "send", "by": by})["task"]
+    card = _ask(
+        api,
+        attempt["token"],
+        "Email the vendor the Acme quote?",
+        if_no_answer={"do": "Send the quote", "kind": "send", "by": by},
+    )["task"]
     with api.app.state.store.transaction() as c:
         assert ask_deadlines.sweep(c, H.shift(by, hours=1))["expired"] == [card["id"]]
     done = get(api, f"tasks/{card['id']}")["task"]
@@ -201,9 +253,12 @@ def test_with_no_date_it_goes_back_to_the_bot_after_two_business_days(api):
 
 def test_needs_you_and_decide_count_a_question_task_once(api):
     _, attempt = _work(api)
-    card = _ask(api, attempt["token"], "Launch on Tuesday or Thursday?",
-                options=[{"label": "Tuesday", "then": "Launch Tuesday"}, {"label": "Thursday", "then": "Launch Thursday"}]
-                )["task"]
+    card = _ask(
+        api,
+        attempt["token"],
+        "Launch on Tuesday or Thursday?",
+        options=[{"label": "Tuesday", "then": "Launch Tuesday"}, {"label": "Thursday", "then": "Launch Thursday"}],
+    )["task"]
     items = [i for i in get(api, "needs-you")["items"] if i["id"] == card["id"]]
     assert len(items) == 1 and items[0]["kind"] == "question"
     ask = items[0]["ask"]
@@ -231,10 +286,12 @@ def test_a_private_parents_question_task_is_only_for_its_readers(api):
 
 # ---- review fixes ------------------------------------------------------------------------------------------------
 
+
 def _bot_only_private_parent(api):
     """A private task with no person on it, another bot's request of ops, and an ops run on it."""
     from backend.tests.test_api import unrelated_task_managers
     from backend.tests.test_task_readers import run_on, task
+
     with api.app.state.store.transaction() as c:
         unrelated_task_managers(c)
     parent = task(api, "bot:cpo", "bot:ops", "Zip triage")
@@ -242,14 +299,20 @@ def _bot_only_private_parent(api):
 
 
 def _to(api, who, since):
-    return [r[0] for r in _read(api, "SELECT body FROM messages WHERE recipient_id=? AND rowid>? ORDER BY rowid",
-                                (who, since))]
+    return [
+        r[0]
+        for r in _read(api, "SELECT body FROM messages WHERE recipient_id=? AND rowid>? ORDER BY rowid", (who, since))
+    ]
 
 
 def test_a_private_bot_parents_question_makes_the_person_its_reader_and_wakes_its_bot_once(api):
     parent, attempt = _bot_only_private_parent(api)
-    card = post(api, "task-questions", {"question": "Ship the zip fix in the next release?", "on": "ben",
-                                        "parent": parent["id"]}, attempt["token"])["task"]
+    card = post(
+        api,
+        "task-questions",
+        {"question": "Ship the zip fix in the next release?", "on": "ben", "parent": parent["id"]},
+        attempt["token"],
+    )["task"]
     assert card["private"] and card["owner_id"] == "human:ben"
     # Ben reads the task it was asked for, so his answer may come back to it (hubdb.subtask_flows_up).
     assert api.get(f"/api/v2/tasks/{parent['id']}", headers=headers("ben-test")).status_code == 200
@@ -264,8 +327,12 @@ def test_an_answer_that_may_not_flow_up_stays_off_the_private_parent(api):
     """Ben no longer reads the parent: his answer wakes the bot once, on the question task, and the parent's note and
     thread, which its other readers see, never copy it."""
     parent, attempt = _bot_only_private_parent(api)
-    card = post(api, "task-questions", {"question": "Ship the zip fix in the next release?", "on": "ben",
-                                        "parent": parent["id"]}, attempt["token"])["task"]
+    card = post(
+        api,
+        "task-questions",
+        {"question": "Ship the zip fix in the next release?", "on": "ben", "parent": parent["id"]},
+        attempt["token"],
+    )["task"]
     with api.app.state.store.transaction() as c:
         c.execute("UPDATE tasks SET readers=NULL WHERE id=?", (parent["id"],))
         note = H.task(c, parent["id"])["note"]
@@ -276,8 +343,10 @@ def test_an_answer_that_may_not_flow_up_stays_off_the_private_parent(api):
     with api.app.state.store.read() as c:
         row = H.task(c, parent["id"])
         assert row["note"] == note
-        copied = c.execute("SELECT body FROM messages WHERE conversation_id=? AND rowid>? AND body LIKE '%audit%'",
-                           (row["conversation_id"], since)).fetchall()
+        copied = c.execute(
+            "SELECT body FROM messages WHERE conversation_id=? AND rowid>? AND body LIKE '%audit%'",
+            (row["conversation_id"], since),
+        ).fetchall()
     assert not copied and _to(api, "bot:cpo", since) == []
 
 
@@ -285,9 +354,11 @@ def test_only_the_person_asked_or_someone_acting_for_them_answers(api):
     _, _, attempt = setup_attempt(api)
     card = _ask(api, attempt["token"], "Archive the September drafts?", on="ben")["task"]
     _, _, coo = setup_attempt(api, "coo")
-    r = api.post(f"/api/v2/tasks/{card['id']}/answers", json={"target": {"task": card["id"]},
-                                                             "answers": {"decision": ["Yes"]}},
-                 headers=headers(coo["token"]))
+    r = api.post(
+        f"/api/v2/tasks/{card['id']}/answers",
+        json={"target": {"task": card["id"]}, "answers": {"decision": ["Yes"]}},
+        headers=headers(coo["token"]),
+    )
     assert r.status_code == 403, r.text
     _answer(api, card["id"], {"answers": {"decision": ["Yes"]}}, token="cara-test", expected=403)
     # An admin acts for anyone.
@@ -304,16 +375,23 @@ def test_a_question_task_never_moves_to_a_bot(api):
     # It stays on the deadline sweeps.
     with api.app.state.store.read() as c:
         from backend import question_tasks
+
         assert card["id"] in [r["id"] for r in question_tasks.open_rows(c)]
 
 
 def test_a_done_naming_an_option_is_the_pick_with_its_spend_and_file_verdicts(api):
     from backend.tests.test_file_reviews import approved, ask as review_ask, publish
+
     _, _, attempt = setup_attempt(api)
     bot = attempt["token"]
     a, b = publish(api, bot, "# A", "teaser-a.md"), publish(api, bot, "# B", "teaser-b.md")
-    made = review_ask(api, bot, [{"file": a["id"]}, {"file": b["id"]}], pick=True,
-                      spend={"label": "teaser a", "amount": "12.50", "what": "Render the final cut"})
+    made = review_ask(
+        api,
+        bot,
+        [{"file": a["id"]}, {"file": b["id"]}],
+        pick=True,
+        spend={"label": "teaser a", "amount": "12.50", "what": "Render the final cut"},
+    )
     card = made["task"]
     post(api, f"tasks/{card['id']}", {"status": "done", "note": "teaser a. Ship it", "version": card["version"]})
     done = get(api, f"tasks/{card['id']}")["task"]
@@ -325,8 +403,12 @@ def test_a_done_naming_an_option_is_the_pick_with_its_spend_and_file_verdicts(ap
 
 def test_decides_yes_on_a_question_task_approves_its_spend(api):
     _, _, attempt = setup_attempt(api)
-    card = _ask(api, attempt["token"], "Boost the Acme post?",
-                spend={"label": "Yes", "amount": "20", "what": "Boost the Acme post"})["task"]
+    card = _ask(
+        api,
+        attempt["token"],
+        "Boost the Acme post?",
+        spend={"label": "Yes", "amount": "20", "what": "Boost the Acme post"},
+    )["task"]
     bid = post(api, "batch", {})["id"]
     post(api, f"batch/{bid}/respond", {"kind": "decide", "decision": "answer", "text": "Yes."})
     assert post(api, f"batch/{bid}/commit", {})["errors"] == []
@@ -347,6 +429,7 @@ def test_a_reopened_question_task_asks_again(api):
     assert [c for c in _cards(api) if c["id"] == card["id"]]
     with api.app.state.store.read() as c:
         from backend import question_tasks
+
         assert card["id"] in [r["id"] for r in question_tasks.open_rows(c)]
     _answer(api, card["id"], {"answers": {"decision": ["No"]}})
     assert get(api, f"tasks/{card['id']}")["task"]["answer"]["answers"] == {"decision": ["No"]}
@@ -354,6 +437,7 @@ def test_a_reopened_question_task_asks_again(api):
 
 def test_the_open_questions_index_reads_the_open_predicate(api):
     from backend import question_tasks
+
     sql = _read(api, "SELECT sql FROM sqlite_master WHERE name='tasks_open_questions'")[0][0]
     assert sql.endswith("WHERE " + question_tasks.OPEN_SQL)
 
@@ -362,3 +446,49 @@ def test_a_board_row_carries_no_empty_question_fields(api):
     plain = post(api, "tasks", {"owner": "human:ana", "title": "Sign the lease", "body": "Ready"})
     row = get(api, f"tasks/{plain['id']}")["task"]
     assert not {"questions", "answer", "if_no_answer", "review", "spend", "asked_at", "question_topic"} & set(row)
+
+
+@pytest.mark.parametrize("kind", ["reversible", "send"])
+def test_a_default_on_a_restricted_page_title_leaves_no_event_naming_it_to_outsiders(api, kind):
+    """A date-driven close copies its default's words: the picked page's title goes ahead (or the question expires,
+    naming it), and the events that close writes stay redacted for a person outside the page's audience."""
+    from backend.auth import Identity
+    from backend.tests.test_file_reviews import ask as review_ask
+    from backend.tests.test_files import turn
+    from backend.tests.test_page_audience import edit
+    from backend.tests.test_pages import HTML, page
+
+    reader = post(api, "access/people", {"name": "Reader", "email": "reader@acme.example"})
+    assert reader["person"] == "reader"
+    api.app.state.store.settings.test_identities["reader-test"] = Identity(
+        "human:reader", "human", "reader@acme.example"
+    )
+    _, attempt = turn(api)
+    tid = post(api, "tasks", {"owner": "ops", "title": "Review folios", "body": "Review", "private": False})["id"]
+    title = "Audience secret"
+    fid = page(api, attempt, task=tid, name="folio.html", title=title).json()["page"]["file_id"]
+    ordinary = page(api, attempt, task=tid, name="ordinary.html", title="Ordinary folio", data=HTML).json()["page"][
+        "file_id"
+    ]
+    by = H.shift(H.now(), days=4)
+    card = review_ask(
+        api,
+        attempt["token"],
+        [{"file": fid}, {"file": ordinary}],
+        on="reader",
+        private=False,
+        pick=True,
+        question="Which folio should ship?",
+        if_no_answer={"do": title, "kind": kind, "by": by},
+    )["task"]
+    with api.app.state.store.transaction() as c:
+        strip_sources(c, card["id"])
+    edit(api, fid, {"people": ["reader"]})
+    with api.app.state.store.transaction() as c:
+        done = ask_deadlines.sweep(c, H.shift(by, hours=1))
+    assert card["id"] in done["went_ahead"] + done["expired"]
+    rows = _read(api, "SELECT detail FROM events WHERE target=? OR detail LIKE ?", (card["id"], f"%{title}%"))
+    assert any(title in r[0] for r in rows), "the close should have written the title somewhere"
+    sql = api.post("/api/v2/sql", json={"sql": "SELECT * FROM events"}, headers=headers("cara-test"))
+    assert sql.status_code == 200, sql.text
+    assert title not in json.dumps(sql.json()["rows"]), "an event naming the restricted page reached an outsider"

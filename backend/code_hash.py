@@ -4,6 +4,7 @@ The image build stores it in release-manifest.json (`code`); the flight recorder
 again at start and records the image as `modified` when they differ. Standard library only: the build runs it before the
 dependencies are installed (`python -m backend.code_hash`).
 """
+
 import hashlib
 import sys
 from pathlib import Path

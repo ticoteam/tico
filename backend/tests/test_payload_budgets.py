@@ -16,7 +16,7 @@ from backend.tests.hold_rows import set_holds
 
 KB = 1024
 MARKER = "TOOL-OUTPUT-MARKER-7f3a"
-BODY = "A long reply with a table and notes. " * 160            # about 6 KB a message
+BODY = "A long reply with a table and notes. " * 160  # about 6 KB a message
 
 
 def clone(c, table, row, n, **changes):
@@ -35,9 +35,11 @@ def waits_on_keys(c, task_ids, person="human:ana"):
     wait that is still an item of theirs, now that a wait on a person is their question task (step 6b). A task's
     status says whether its wait stands: an open one is not in their Needs you."""
     reconnects.ensure(c)
-    c.executemany("INSERT INTO task_reconnects(task_id,key,bot,owner,service,label,person,fix,created_at) "
-                  "VALUES(?,?,'ops','bot:ops','secret',?,?,'{}',?)",
-                  [(tid, f"secret:ops:{tid}", f"KEY_{n}", person, H.now()) for n, tid in enumerate(task_ids)])
+    c.executemany(
+        "INSERT INTO task_reconnects(task_id,key,bot,owner,service,label,person,fix,created_at) "
+        "VALUES(?,?,'ops','bot:ops','secret',?,?,'{}',?)",
+        [(tid, f"secret:ops:{tid}", f"KEY_{n}", person, H.now()) for n, tid in enumerate(task_ids)],
+    )
 
 
 def size(value):
@@ -47,13 +49,21 @@ def size(value):
 def test_folded_needs_changes_stay_under_the_live_event_budget(api):
     store, auth, view = api.app.state.store, api.app.state.auth, api.app.state.task_view
     _, _, attempt = setup_attempt(api, "ops")
-    approvals = [approval_for_ana(api, bot="ops", token=attempt["token"],
-                                 payload={"amount": 1200 + i, "account": "ads", "what": f"Offsite ads {i}"})
-                 for i in range(2)]
+    approvals = [
+        approval_for_ana(
+            api,
+            bot="ops",
+            token=attempt["token"],
+            payload={"amount": 1200 + i, "account": "ads", "what": f"Offsite ads {i}"},
+        )
+        for i in range(2)
+    ]
     with store.transaction() as c:
         parent = H.task_create(c, "human:ana", "Prepare the offsite", "x", "bot:ops")
-        waits = [parent["id"]] + [H.task_create(c, "human:ana", f"Prepare offsite part {i}", "x", "bot:ops",
-                                              parent_id=parent["id"])["id"] for i in range(249)]
+        waits = [parent["id"]] + [
+            H.task_create(c, "human:ana", f"Prepare offsite part {i}", "x", "bot:ops", parent_id=parent["id"])["id"]
+            for i in range(249)
+        ]
         H.task_create(c, "bot:ops", "Pick the offsite venue", "x", "human:ana", parent_id=parent["id"])
         c.executemany("UPDATE tasks SET status='waiting' WHERE id=?", [(tid,) for tid in waits])
         waits_on_keys(c, waits)
@@ -100,8 +110,7 @@ def test_folded_needs_changes_stay_under_the_live_event_budget(api):
     for n in (E.NEEDS_CHANGES_MAX // 2, E.NEEDS_CHANGES_MAX + 1):
         with store.transaction() as c:
             c.executemany("UPDATE tasks SET status='open' WHERE id=?", [(tid,) for tid in waits])
-            c.executemany("UPDATE tasks SET status='waiting' WHERE id=?",
-                          [(tid,) for tid in waits[:n]])
+            c.executemany("UPDATE tasks SET status='waiting' WHERE id=?", [(tid,) for tid in waits[:n]])
         event = change()
         named = len(event["changed"] or []) + len(event["removed"] or [])
         assert named < E.NEEDS_CHANGES_MAX // 2
@@ -110,7 +119,7 @@ def test_folded_needs_changes_stay_under_the_live_event_budget(api):
 
 def test_payloads_stay_under_their_budgets(api):
     store, auth = api.app.state.store, api.app.state.auth
-    _, msg, attempt = setup_attempt(api)               # ana's chat with ops, its run under way
+    _, msg, attempt = setup_attempt(api)  # ana's chat with ops, its run under way
     cid = msg["conversation_id"]
     task = post(api, "tasks", {"owner": "human:ana", "title": "Review the plan", "body": BODY})["task"]
     with store.transaction() as c:
@@ -118,28 +127,67 @@ def test_payloads_stay_under_their_budgets(api):
         # 2,000 tasks: 500 on ana (her Needs you), the rest on bots.
         clone(c, "tasks", row, 499, title=lambda i: f"Review plan {i}")
         clone(c, "tasks", row, 1500, owner_id=lambda i: "bot:ops", title=lambda i: f"Bot work {i}")
-        c.execute("UPDATE tasks SET check_back_at=?,check_back_note=? WHERE owner_id LIKE 'bot:%'",
-                  (H.shift(H.now(), hours=1), "Inspect the next result. " * 20))
-        first = dict(c.execute("SELECT * FROM messages WHERE conversation_id=? ORDER BY rowid LIMIT 1", (cid,)).fetchone())
+        c.execute(
+            "UPDATE tasks SET check_back_at=?,check_back_note=? WHERE owner_id LIKE 'bot:%'",
+            (H.shift(H.now(), hours=1), "Inspect the next result. " * 20),
+        )
+        first = dict(
+            c.execute("SELECT * FROM messages WHERE conversation_id=? ORDER BY rowid LIMIT 1", (cid,)).fetchone()
+        )
         # 1,000 long replies before it; a person's message would queue a run of its own.
-        clone(c, "messages", {**first, "body": BODY, "sender_id": "bot:ops", "recipient_id": "human:ana"}, 1000,
-              created_at=lambda i: H.shift(first["created_at"], seconds=-i - 1), origin_id=lambda i: uuid.uuid4().hex, seq=lambda i: None)
+        clone(
+            c,
+            "messages",
+            {**first, "body": BODY, "sender_id": "bot:ops", "recipient_id": "human:ana"},
+            1000,
+            created_at=lambda i: H.shift(first["created_at"], seconds=-i - 1),
+            origin_id=lambda i: uuid.uuid4().hex,
+            seq=lambda i: None,
+        )
         # 60 bots at work, each with a status line as a busy team's are (focus, task, last result, counts).
         bot = dict(c.execute("SELECT * FROM bots WHERE slug='ops'").fetchone())
-        c.executemany(f"INSERT INTO bots({','.join(bot)}) VALUES({','.join('?' * len(bot))})",
-                      [[f"bot-{i}" if k in ("id", "slug") else f"Bot {i}" if k == "display_name" else v for k, v in bot.items()]
-                       for i in range(53)])
-        c.executemany("INSERT OR REPLACE INTO bot_status(bot,state,focus,task_id,changed_at,last_turn_at,last_result,next_due_at,"
-                      "open_tasks,needs_human,updated_at) VALUES(?,?,?,?,?,?,?,?,?,?,?)",
-                      [(slug, "running", "Drafting the weekly report for the launch review and checking the numbers",
-                        task["id"], H.now(), H.now(), "Filed the summary and asked finance to confirm the totals. " * 3,
-                        H.now(), 12, 1, H.now())
-                       for slug in [f"bot-{i}" for i in range(53)] + ["coo", "ops", "cpo", "product-design", "finance",
-                                                                       "inbox", "doc-updater"]])
+        c.executemany(
+            f"INSERT INTO bots({','.join(bot)}) VALUES({','.join('?' * len(bot))})",
+            [
+                [
+                    f"bot-{i}" if k in ("id", "slug") else f"Bot {i}" if k == "display_name" else v
+                    for k, v in bot.items()
+                ]
+                for i in range(53)
+            ],
+        )
+        c.executemany(
+            "INSERT OR REPLACE INTO bot_status(bot,state,focus,task_id,changed_at,last_turn_at,last_result,next_due_at,"
+            "open_tasks,needs_human,updated_at) VALUES(?,?,?,?,?,?,?,?,?,?,?)",
+            [
+                (
+                    slug,
+                    "running",
+                    "Drafting the weekly report for the launch review and checking the numbers",
+                    task["id"],
+                    H.now(),
+                    H.now(),
+                    "Filed the summary and asked finance to confirm the totals. " * 3,
+                    H.now(),
+                    12,
+                    1,
+                    H.now(),
+                )
+                for slug in [f"bot-{i}" for i in range(53)]
+                + ["coo", "ops", "cpo", "product-design", "finance", "inbox", "doc-updater"]
+            ],
+        )
         for seq in range(200):
-            c.execute("INSERT INTO attempt_events(attempt_id,seq,kind,payload,created_at) VALUES(?,?,?,?,?)",
-                      (attempt["id"], 1000 + seq, "tool" if seq % 2 else "message",
-                       json.dumps({"name": "shell", "output": MARKER * 50, "text": f"Step {seq} done. " * 40}), H.now()))
+            c.execute(
+                "INSERT INTO attempt_events(attempt_id,seq,kind,payload,created_at) VALUES(?,?,?,?,?)",
+                (
+                    attempt["id"],
+                    1000 + seq,
+                    "tool" if seq % 2 else "message",
+                    json.dumps({"name": "shell", "output": MARKER * 50, "text": f"Step {seq} done. " * 40}),
+                    H.now(),
+                ),
+            )
 
     # Needs you, on the live stream: a change to one item sends ids, not the 500-item list.
     who = auth.authenticate({"authorization": "Bearer ana-test"})
@@ -151,11 +199,13 @@ def test_payloads_stay_under_their_budgets(api):
     with store.read() as c:
         whole = E.read(c, auth, who, after, topics=("needs",), task_view=api.app.state.task_view)[0]
         changes = E.read(c, auth, who, after, topics=("needs",), task_view=api.app.state.task_view, needs_held=held)[0]
-    assert whole and size(whole[-1][2]) > 1024 * KB                     # what an older page still gets: the whole list
+    assert whole and size(whole[-1][2]) > 1024 * KB  # what an older page still gets: the whole list
     event = changes[-1][2]
     assert size(event) <= 8 * KB and event["changed"] == [task["id"]] and event["base"] == base
     mended = get(api, f"needs-you?ids={task['id']}")
-    assert mended["version"] == event["version"] and [x["id"] for x in mended["items"]] == list(mended["positions"]) == [task["id"]]
+    assert mended["version"] == event["version"] and [x["id"] for x in mended["items"]] == list(
+        mended["positions"]
+    ) == [task["id"]]
 
     # Opening a chat as the web app does: 50 messages at most, under 160 KB of them, the run's output capped.
     opened = api.get(f"/api/v2/conversations/{cid}/snapshot?limit=50&max_bytes=163840", headers=headers())
@@ -168,7 +218,9 @@ def test_payloads_stay_under_their_budgets(api):
     inbox = api.get("/api/v2/messages?unread=1", headers=headers())
     unread = inbox.json()
     assert len(unread["messages"]) == len(unread["tasks"]) == 100 and unread["more_messages"] and unread["more_tasks"]
-    assert unread["messages"][-1]["created_at"] >= unread["messages"][0]["created_at"] and len(inbox.content) <= 1400 * KB
+    assert (
+        unread["messages"][-1]["created_at"] >= unread["messages"][0]["created_at"] and len(inbox.content) <= 1400 * KB
+    )
 
     # The task board's brief list and the status line.
     board = api.get("/api/v2/tasks?brief=1&limit=500", headers=headers())
@@ -200,7 +252,7 @@ def test_a_thread_timeline_reads_its_branches_in_a_query_count_that_ignores_how_
 
     def statements(tid):
         with api.app.state.store.read_transaction() as c:
-            threads.timeline(c, threads.actor_viewer(c, "human:ana"), tid, limit=100)     # warms the per-snapshot caches
+            threads.timeline(c, threads.actor_viewer(c, "human:ana"), tid, limit=100)  # warms the per-snapshot caches
             seen = []
             c.set_trace_callback(seen.append)
             page = threads.timeline(c, threads.actor_viewer(c, "human:ana"), tid, limit=100)
@@ -215,6 +267,7 @@ def test_a_thread_timeline_reads_its_branches_in_a_query_count_that_ignores_how_
 
 def test_a_thread_timeline_stays_within_its_bytes_and_a_branch_too_big_for_a_page_is_one_more_row(api):
     from backend import threads
+
     with api.app.state.store.transaction() as c:
         owner = threads.actor_viewer(c, "human:ana")
         tid = threads.create(c, owner, title="Budget", audience="company")["id"]
@@ -239,10 +292,24 @@ def _a_settings_history_page_is_byte_capped(api):
     # 200 changes each carrying a 38 KB description: the page stops at its byte budget and names the next page.
     text = {"display_name": "Ops", "description": "A long description. " * 2000}
     with api.app.state.store.transaction() as c:
-        c.executemany("INSERT INTO settings_changes(id,bot,field,before,after,actor,transition_id,created_at,"
-                      "via) VALUES(?,?,?,?,?,?,?,?,?)",
-                      [(H.new_id(), "ops", "definition", encode(text), encode(text), "human:ana", None,
-                        H.shift(H.now(), seconds=i), None) for i in range(200)])
+        c.executemany(
+            "INSERT INTO settings_changes(id,bot,field,before,after,actor,transition_id,created_at,"
+            "via) VALUES(?,?,?,?,?,?,?,?,?)",
+            [
+                (
+                    H.new_id(),
+                    "ops",
+                    "definition",
+                    encode(text),
+                    encode(text),
+                    "human:ana",
+                    None,
+                    H.shift(H.now(), seconds=i),
+                    None,
+                )
+                for i in range(200)
+            ],
+        )
     opened = api.get("/api/v2/settings/history?limit=200", headers=headers())
     page = opened.json()
     assert 0 < len(page["changes"]) < 200 and page["next_before"]
@@ -254,10 +321,24 @@ def _a_settings_history_page_counts_utf8_bytes_not_characters(api):
     # a page counted in characters would send four times its budget.
     text = {"display_name": "Ops", "description": "🙂" * 2000}
     with api.app.state.store.transaction() as c:
-        c.executemany("INSERT INTO settings_changes(id,bot,field,before,after,actor,transition_id,created_at,"
-                      "via) VALUES(?,?,?,?,?,?,?,?,?)",
-                      [(H.new_id(), "ops", "definition", encode(text), encode(text), "human:ana", None,
-                        H.shift(H.now(), seconds=i), None) for i in range(200)])
+        c.executemany(
+            "INSERT INTO settings_changes(id,bot,field,before,after,actor,transition_id,created_at,"
+            "via) VALUES(?,?,?,?,?,?,?,?,?)",
+            [
+                (
+                    H.new_id(),
+                    "ops",
+                    "definition",
+                    encode(text),
+                    encode(text),
+                    "human:ana",
+                    None,
+                    H.shift(H.now(), seconds=i),
+                    None,
+                )
+                for i in range(200)
+            ],
+        )
     opened = api.get("/api/v2/settings/history?limit=200", headers=headers())
     page = opened.json()
     assert 0 < len(page["changes"]) < 200 and page["next_before"]
@@ -270,10 +351,24 @@ def _a_settings_change_bigger_than_a_page_comes_without_its_values_and_paging_pa
     people = [f"human:person-{i:05d}" for i in range(40000)]
     values = [(["human:ana"], ["human:ana", "human:ben"]), ([], people), ([], ["human:ana"])]
     with api.app.state.store.transaction() as c:
-        c.executemany("INSERT INTO settings_changes(id,bot,field,before,after,actor,transition_id,created_at,"
-                      "via) VALUES(?,?,?,?,?,?,?,?,?)",
-                      [(ids[i], "ops", "owners", encode(before), encode(after), "human:ana", None,
-                        H.shift(H.now(), seconds=-i), None) for i, (before, after) in enumerate(values)])
+        c.executemany(
+            "INSERT INTO settings_changes(id,bot,field,before,after,actor,transition_id,created_at,"
+            "via) VALUES(?,?,?,?,?,?,?,?,?)",
+            [
+                (
+                    ids[i],
+                    "ops",
+                    "owners",
+                    encode(before),
+                    encode(after),
+                    "human:ana",
+                    None,
+                    H.shift(H.now(), seconds=-i),
+                    None,
+                )
+                for i, (before, after) in enumerate(values)
+            ],
+        )
     first = api.get("/api/v2/settings/history?limit=2", headers=headers()).json()
     assert [row["id"] for row in first["changes"]] == ids[:2] and first["next_before"] == ids[1]
     big = first["changes"][1]
@@ -294,23 +389,52 @@ def prepared_transitions(api, cid, count, text):
     gives every checkpoint a message of its own, so each one is a copy of the chat's first message)."""
     stamp = H.now()
     with api.app.state.store.transaction() as c:
-        first = dict(c.execute(
-            "SELECT * FROM messages WHERE conversation_id=? ORDER BY rowid LIMIT 1", (cid,)).fetchone())
-        clone(c, "messages", {**first, "sender_id": "bot:ops", "recipient_id": "human:ana"}, count,
-              created_at=lambda i: H.shift(first["created_at"], seconds=-i - 1), origin_id=lambda i: uuid.uuid4().hex, seq=lambda i: None)
-        messages = [row[0] for row in c.execute(
-            "SELECT id FROM messages WHERE conversation_id=? ORDER BY rowid DESC LIMIT ?", (cid, count)).fetchall()]
+        first = dict(
+            c.execute("SELECT * FROM messages WHERE conversation_id=? ORDER BY rowid LIMIT 1", (cid,)).fetchone()
+        )
+        clone(
+            c,
+            "messages",
+            {**first, "sender_id": "bot:ops", "recipient_id": "human:ana"},
+            count,
+            created_at=lambda i: H.shift(first["created_at"], seconds=-i - 1),
+            origin_id=lambda i: uuid.uuid4().hex,
+            seq=lambda i: None,
+        )
+        messages = [
+            row[0]
+            for row in c.execute(
+                "SELECT id FROM messages WHERE conversation_id=? ORDER BY rowid DESC LIMIT ?", (cid, count)
+            ).fetchall()
+        ]
         for i, message in enumerate(messages):
             tid = H.new_id()
-            c.execute("INSERT INTO bot_transitions(id,bot,kind,target,requested_by,expected_revision,state,"
-                      "created_at,updated_at) VALUES(?,?,?,?,?,?,?,?,?)",
-                      (tid, "ops", "model", encode({"model": "fake-model"}), "human:ana", 1, "prepared",
-                       H.shift(stamp, seconds=-i), stamp))
-            c.execute("INSERT INTO bot_transition_checkpoints(transition_id,conversation_id,message_id,state,"
-                      "checkpoint) VALUES(?,?,?,?,?)",
-                      (tid, cid, message, "prepared",
-                       encode({"current_objective": text,
-                               "next_recommended_action": "Ask Ana", "open_decisions": []})))
+            c.execute(
+                "INSERT INTO bot_transitions(id,bot,kind,target,requested_by,expected_revision,state,"
+                "created_at,updated_at) VALUES(?,?,?,?,?,?,?,?,?)",
+                (
+                    tid,
+                    "ops",
+                    "model",
+                    encode({"model": "fake-model"}),
+                    "human:ana",
+                    1,
+                    "prepared",
+                    H.shift(stamp, seconds=-i),
+                    stamp,
+                ),
+            )
+            c.execute(
+                "INSERT INTO bot_transition_checkpoints(transition_id,conversation_id,message_id,state,"
+                "checkpoint) VALUES(?,?,?,?,?)",
+                (
+                    tid,
+                    cid,
+                    message,
+                    "prepared",
+                    encode({"current_objective": text, "next_recommended_action": "Ask Ana", "open_decisions": []}),
+                ),
+            )
 
 
 def _a_settings_history_first_page_with_transitions_stays_within_its_bytes(api, msg):
@@ -319,13 +443,28 @@ def _a_settings_history_first_page_with_transitions_stays_within_its_bytes(api, 
     prepared_transitions(api, msg["conversation_id"], 3, "A checkpoint of the chat's objective. " * 550)
     text = {"display_name": "Ops", "description": "A long description. " * 80}
     with api.app.state.store.transaction() as c:
-        c.executemany("INSERT INTO humans(id,name,email,slack_id,teams) VALUES(?,?,?,?,?)",
-                      [(f"person-{i:03d}", f"Person {i:03d} " + "with a long name " * 6, None, None, None)
-                       for i in range(120)])
-        c.executemany("INSERT INTO settings_changes(id,bot,field,before,after,actor,transition_id,created_at,"
-                      "via) VALUES(?,?,?,?,?,?,?,?,?)",
-                      [(H.new_id(), "ops", "definition", encode(text), encode(text), f"human:person-{i:03d}", None,
-                        H.shift(H.now(), seconds=-i), None) for i in range(120)])
+        c.executemany(
+            "INSERT INTO humans(id,name,email,slack_id,teams) VALUES(?,?,?,?,?)",
+            [(f"person-{i:03d}", f"Person {i:03d} " + "with a long name " * 6, None, None, None) for i in range(120)],
+        )
+        c.executemany(
+            "INSERT INTO settings_changes(id,bot,field,before,after,actor,transition_id,created_at,"
+            "via) VALUES(?,?,?,?,?,?,?,?,?)",
+            [
+                (
+                    H.new_id(),
+                    "ops",
+                    "definition",
+                    encode(text),
+                    encode(text),
+                    f"human:person-{i:03d}",
+                    None,
+                    H.shift(H.now(), seconds=-i),
+                    None,
+                )
+                for i in range(120)
+            ],
+        )
     opened = api.get("/api/v2/settings/history?limit=100", headers=headers())
     page = opened.json()
     assert len(opened.content) <= 256 * KB
@@ -339,17 +478,31 @@ def _a_settings_history_first_page_leaves_out_the_oldest_transitions_its_bytes_c
     prepared_transitions(api, msg["conversation_id"], 12, "A checkpoint of the chat's objective. " * 1200)
     text = {"display_name": "Ops", "description": "A long description. " * 80}
     with api.app.state.store.transaction() as c:
-        c.executemany("INSERT INTO settings_changes(id,bot,field,before,after,actor,transition_id,created_at,"
-                      "via) VALUES(?,?,?,?,?,?,?,?,?)",
-                      [(H.new_id(), "ops", "definition", encode(text), encode(text), "human:ana", None,
-                        H.shift(H.now(), seconds=-i), None) for i in range(5)])
+        c.executemany(
+            "INSERT INTO settings_changes(id,bot,field,before,after,actor,transition_id,created_at,"
+            "via) VALUES(?,?,?,?,?,?,?,?,?)",
+            [
+                (
+                    H.new_id(),
+                    "ops",
+                    "definition",
+                    encode(text),
+                    encode(text),
+                    "human:ana",
+                    None,
+                    H.shift(H.now(), seconds=-i),
+                    None,
+                )
+                for i in range(5)
+            ],
+        )
     opened = api.get("/api/v2/settings/history?limit=100", headers=headers())
     page = opened.json()
     assert len(opened.content) <= 256 * KB
     with api.app.state.store.read() as c:
         newest = [row[0] for row in c.execute("SELECT id FROM bot_transitions ORDER BY created_at DESC")]
     kept = [row["id"] for row in page["transitions"]]
-    assert page["transitions_truncated"] is True and 0 < len(kept) < 12 and kept == newest[:len(kept)]
+    assert page["transitions_truncated"] is True and 0 < len(kept) < 12 and kept == newest[: len(kept)]
     assert len(page["changes"]) >= 1
 
 
@@ -371,13 +524,19 @@ def test_settings_history_pages_stay_within_their_bytes_and_flag_what_they_leave
         with api.app.state.store.transaction() as c:
             for table in ("bot_transition_checkpoints", "bot_transitions", "settings_changes"):
                 c.execute(f"DELETE FROM {table}")
-    for story in (_a_settings_history_page_is_byte_capped, _a_settings_history_page_counts_utf8_bytes_not_characters,
-                  _a_settings_change_bigger_than_a_page_comes_without_its_values_and_paging_passes_it):
+
+    for story in (
+        _a_settings_history_page_is_byte_capped,
+        _a_settings_history_page_counts_utf8_bytes_not_characters,
+        _a_settings_change_bigger_than_a_page_comes_without_its_values_and_paging_passes_it,
+    ):
         clear()
         story(api)
-    for story in (_a_settings_history_first_page_with_transitions_stays_within_its_bytes,
-                  _a_settings_history_first_page_leaves_out_the_oldest_transitions_its_bytes_cannot_hold,
-                  _a_settings_history_first_page_flags_the_transitions_past_its_limit):
+    for story in (
+        _a_settings_history_first_page_with_transitions_stays_within_its_bytes,
+        _a_settings_history_first_page_leaves_out_the_oldest_transitions_its_bytes_cannot_hold,
+        _a_settings_history_first_page_flags_the_transitions_past_its_limit,
+    ):
         clear()
         story(api, msg["conversation_id"] and msg)
 
@@ -385,7 +544,7 @@ def test_settings_history_pages_stay_within_their_bytes_and_flag_what_they_leave
 def test_snoozed_notes_stay_out_of_the_board_and_the_task_keeps_its_note(api):
     store = api.app.state.store
     task = post(api, "tasks", {"owner": "human:ana", "title": "Snoozed 0", "body": "x"})
-    note = "🔔" * 500                                   # 500 characters, 2,000 bytes each
+    note = "🔔" * 500  # 500 characters, 2,000 bytes each
     with store.transaction() as c:
         row = dict(c.execute("SELECT * FROM tasks WHERE id=?", (task["id"],)).fetchone())
         clone(c, "tasks", row, 499, title=lambda i: f"Snoozed {i}")
@@ -397,4 +556,3 @@ def test_snoozed_notes_stay_out_of_the_board_and_the_task_keeps_its_note(api):
     assert all("reason" not in h for r in rows for h in r["holds"]), "a list row carries no snooze note"
     whole = get(api, "tasks/" + task["id"])["task"]
     assert whole["holds"][0]["reason"] == note, "the task's own view keeps the note whole"
-

@@ -19,7 +19,10 @@ def test_one_thread_at_a_time_the_sse_rendering_agrees_with_c1_for_every_teammat
     with store.transaction() as c:
         made = made_threads(c, auth, people)
     with store.read_transaction() as c:
-        ids = [r[0] for r in c.execute("SELECT id FROM conversations WHERE COALESCE(room_key,'') NOT LIKE 'live-meeting:%'")]
+        ids = [
+            r[0]
+            for r in c.execute("SELECT id FROM conversations WHERE COALESCE(room_key,'') NOT LIKE 'live-meeting:%'")
+        ]
         assert set(made.values()) <= set(ids)
         checked = set()
         for actor, identity in people.items():
@@ -29,8 +32,13 @@ def test_one_thread_at_a_time_the_sse_rendering_agrees_with_c1_for_every_teammat
                 # Every person is checked. Bots alike in group chain and in the threads they read give the one-by-one
                 # rendering the same input, so the first of each class stands for it.
                 names = sorted(v.member_names(c))
-                members = frozenset(r[0] for r in c.execute("SELECT thread_id FROM thread_members WHERE actor IN ({})".format(
-                    ",".join("?" * len(names))), names))
+                members = frozenset(
+                    r[0]
+                    for r in c.execute(
+                        "SELECT thread_id FROM thread_members WHERE actor IN ({})".format(",".join("?" * len(names))),
+                        names,
+                    )
+                )
                 kind = (tuple(v.chain(c)), frozenset(python), members, tuple(sorted(v.hidden_read(c) or ())))
                 if kind in checked:
                     continue
@@ -42,8 +50,17 @@ def test_one_thread_at_a_time_the_sse_rendering_agrees_with_c1_for_every_teammat
 def read_shared(api, person, after, shared, threads_scope=()):
     auth = api.app.state.auth
     with api.app.state.store.read() as c:
-        events, _, _, _ = E.read(c, auth, person, after, topics=("messages",), threads_scope=threads_scope,
-                                 task_views=lambda rows, c, who, visible_sql="1": [], task_view=None, shared=shared)
+        events, _, _, _ = E.read(
+            c,
+            auth,
+            person,
+            after,
+            topics=("messages",),
+            threads_scope=threads_scope,
+            task_views=lambda rows, c, who, visible_sql="1": [],
+            task_view=None,
+            shared=shared,
+        )
     return {d["id"] for _, topic, d in events if topic == "messages"}
 
 
@@ -61,12 +78,22 @@ def test_a_message_hydrated_once_for_every_stream_is_sent_only_to_its_readers(ap
     assert secret["id"] in read_shared(api, who(api, "ben-test"), after, shared)
     # An edit is a new change, so it is hydrated again rather than served stale.
     edited_after = cursor(api)
-    response = api.patch(f"/api/v2/messages/{secret['id']}", json={"text": "Edited by Ana"}, headers=headers("ana-test"))
+    response = api.patch(
+        f"/api/v2/messages/{secret['id']}", json={"text": "Edited by Ana"}, headers=headers("ana-test")
+    )
     assert response.status_code == 200, response.text
     auth = api.app.state.auth
     with api.app.state.store.read() as c:
-        events, _, _, _ = E.read(c, auth, who(api, "ben-test"), edited_after, topics=("messages",),
-                                 task_views=lambda rows, c, who, visible_sql="1": [], task_view=None, shared=shared)
+        events, _, _, _ = E.read(
+            c,
+            auth,
+            who(api, "ben-test"),
+            edited_after,
+            topics=("messages",),
+            task_views=lambda rows, c, who, visible_sql="1": [],
+            task_view=None,
+            shared=shared,
+        )
     bodies = [d.get("body") or (d.get("message") or {}).get("body") for _, topic, d in events if topic == "messages"]
     assert "Edited by Ana" in bodies
 
@@ -94,21 +121,40 @@ def round_of(api, *polls):
 
     def step(person, arguments):
         def run(c, snapshot, after):
-            return E.read_in(c, snapshot, auth, person, after, task_views=lambda rows, c, who, visible_sql="1": [],
-                             task_view=None, **arguments)
+            return E.read_in(
+                c,
+                snapshot,
+                auth,
+                person,
+                after,
+                task_views=lambda rows, c, who, visible_sql="1": [],
+                task_view=None,
+                **arguments,
+            )
+
         return run
 
     async def together():
-        waits = [served.poll(check, step(person, arguments), after, arguments.get("threads_scope", ()))
-                 for person, after, arguments, check in polls]
+        waits = [
+            served.poll(check, step(person, arguments), after, arguments.get("threads_scope", ()))
+            for person, after, arguments, check in polls
+        ]
         return await asyncio.gather(*waits, return_exceptions=True)
+
     return asyncio.run(together())
 
 
 def lone_read(api, person, after, **arguments):
     with api.app.state.store.read() as c:
-        return E.read(c, api.app.state.auth, person, after, task_views=lambda rows, c, who, visible_sql="1": [],
-                      task_view=None, **arguments)
+        return E.read(
+            c,
+            api.app.state.auth,
+            person,
+            after,
+            task_views=lambda rows, c, who, visible_sql="1": [],
+            task_view=None,
+            **arguments,
+        )
 
 
 def test_a_round_reads_for_each_stream_what_its_own_read_would_for_every_filter(api):  # noqa: F811
@@ -123,15 +169,23 @@ def test_a_round_reads_for_each_stream_what_its_own_read_would_for_every_filter(
     say(api, prefix["id"], "Not in the launch thread")
     with api.app.state.store.transaction() as c:
         c.execute("UPDATE conversations SET path=? WHERE id=?", ("/" + root["id"] + "x/", prefix["id"]))
-    filters = [{}, {"topics": ("messages",)}, {"topics": ("threads", "needs", "tasks")}, {"limit": 2},
-               {"threads_scope": (root["id"],)}, {"threads_scope": (sub["id"], private["id"])},
-               {"conversations": (private["id"],)}, {"conversations": (root["id"],), "threads_scope": (root["id"],)},
-               {"bots": ("no-such-bot",)}, {"tasks": ("no-such-task",)},
-               {"tasks": ("no-such-task",), "parties": ("human:ana",)}]
+    filters = [
+        {},
+        {"topics": ("messages",)},
+        {"topics": ("threads", "needs", "tasks")},
+        {"limit": 2},
+        {"threads_scope": (root["id"],)},
+        {"threads_scope": (sub["id"], private["id"])},
+        {"conversations": (private["id"],)},
+        {"conversations": (root["id"],), "threads_scope": (root["id"],)},
+        {"bots": ("no-such-bot",)},
+        {"tasks": ("no-such-task",)},
+        {"tasks": ("no-such-task",), "parties": ("human:ana",)},
+    ]
     for token in ("ana-test", "ben-test", "cara-test"):
         person = who(api, token)
         check = lambda: None
-        hydrated = E.Hydrated()              # shared text, here and in the round before: it must read the same
+        hydrated = E.Hydrated()  # shared text, here and in the round before: it must read the same
         polls = [(person, after, {**arguments, "shared": hydrated}, check) for arguments in filters]
         for arguments, got in zip(filters, round_of(api, *polls)):
             assert not isinstance(got, Exception), got
@@ -146,9 +200,12 @@ def test_a_stream_far_behind_reads_its_own_changes_and_a_stream_past_the_backlog
     room = new_thread(api, title="Launch")
     said = {say(api, room["id"], f"Message {n}")["id"] for n in range(3)}
     person = who(api, "ben-test")
-    behind, caught_up, past = round_of(api, (person, after, {"topics": ("messages",)}, lambda: None),
-                                       (person, cursor(api), {"topics": ("messages",)}, lambda: None),
-                                       (person, cursor(api) + 5, {"topics": ("messages",)}, lambda: None))
+    behind, caught_up, past = round_of(
+        api,
+        (person, after, {"topics": ("messages",)}, lambda: None),
+        (person, cursor(api), {"topics": ("messages",)}, lambda: None),
+        (person, cursor(api) + 5, {"topics": ("messages",)}, lambda: None),
+    )
     assert said <= {d["id"] for _, _, d in behind[0]} and not behind[2]
     assert caught_up[0] == [] and not caught_up[2]
     assert past[2] is True
@@ -199,10 +256,12 @@ def test_a_refused_sign_in_ends_only_that_stream_and_a_stream_that_left_is_skipp
 
     def refused():
         raise Problem("unauthenticated", "Sign in again", 401)
+
     topics = {"topics": ("messages",)}
     ana, ben = who(api, "ana-test"), who(api, "ben-test")
-    first, second, third = round_of(api, (ana, after, topics, refused), (ben, after, topics, lambda: None),
-                                    (ana, after, topics, lambda: None))
+    first, second, third = round_of(
+        api, (ana, after, topics, refused), (ben, after, topics, lambda: None), (ana, after, topics, lambda: None)
+    )
     assert isinstance(first, Problem)
     assert said in {d["id"] for _, _, d in second[0]} and said in {d["id"] for _, _, d in third[0]}
 
@@ -216,8 +275,9 @@ def test_shared_event_text_keeps_each_readers_own_actor_and_address(api):  # noq
         c.execute("UPDATE messages SET refs=? WHERE id=?", ('{"attachments":[{"name":"plan.txt"}]}', carrying))
     seen = []
 
-    def visuals(c, who, messages):               # what gets each reader's own address: only a message with a file
+    def visuals(c, who, messages):  # what gets each reader's own address: only a message with a file
         seen.extend(m["id"] for m in messages)
+
     shared = E.Hydrated()
     got = lone_read(api, who(api, "ben-test"), after, topics=("messages",), visuals=visuals, shared=shared)
     assert {d["id"] for _, _, d in got[0]} >= {plain, carrying}
@@ -231,15 +291,22 @@ def test_shared_event_text_keeps_each_readers_own_actor_and_address(api):  # noq
 
 def test_shared_event_text_never_names_someone_this_reader_may_not_see(api, monkeypatch):  # noqa: F811
     from backend import teammate_access
+
     after = cursor(api)
     made = api.post("/api/v2/threads", json={"title": "Launch", "audience": "company"}, headers=headers("ana-test"))
     room = made.json()
     message = say(api, room["id"], "The date moved")
     said, author = message["id"], message["sender_id"]
     real = teammate_access.unseen
-    monkeypatch.setattr(teammate_access, "unseen", lambda c, viewer, auth=None: (
-        {author.split(":", 1)[1]} if viewer.actor == "human:cara" else real(c, viewer, auth)[0], set()))
-    shared = E.Hydrated()                        # Ben reads first, so his text is the one a shortcut would reuse
+    monkeypatch.setattr(
+        teammate_access,
+        "unseen",
+        lambda c, viewer, auth=None: (
+            {author.split(":", 1)[1]} if viewer.actor == "human:cara" else real(c, viewer, auth)[0],
+            set(),
+        ),
+    )
+    shared = E.Hydrated()  # Ben reads first, so his text is the one a shortcut would reuse
     seen = {}
     for token in ("ben-test", "cara-test"):
         events = lone_read(api, who(api, token), after, topics=("messages",), shared=shared)[0]

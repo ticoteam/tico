@@ -52,11 +52,19 @@ def last_word(conn, person, asked, task):
     """When `person` last said or did anything on this question: asked it, wrote in its conversation, or changed its
     task."""
     clock = H.ask_clock(asked)
-    said = conn.execute("SELECT max(created_at) FROM messages WHERE conversation_id=? AND sender_id=? AND created_at>?",
-                        (asked["conversation_id"], person, clock)).fetchone()[0]
-    did = conn.execute("SELECT max(created_at) FROM history_events WHERE subject_type='task' AND subject_id=? AND actor_id=? "
-                       "AND created_at>?",
-                       (task["id"], person, clock)).fetchone()[0] if task else None
+    said = conn.execute(
+        "SELECT max(created_at) FROM messages WHERE conversation_id=? AND sender_id=? AND created_at>?",
+        (asked["conversation_id"], person, clock),
+    ).fetchone()[0]
+    did = (
+        conn.execute(
+            "SELECT max(created_at) FROM history_events WHERE subject_type='task' AND subject_id=? AND actor_id=? "
+            "AND created_at>?",
+            (task["id"], person, clock),
+        ).fetchone()[0]
+        if task
+        else None
+    )
     return max(x for x in (clock, said, did) if x)
 
 
@@ -107,10 +115,11 @@ def sweep(conn, at=None):
     rules = team_rules.load(conn)
     expiry = H.shift(at, days=-EXPIRE_DAYS)
     done = {"went_ahead": [], "expired": [], "closed": []}
-    settled = lambda: sum(len(v) for v in done.values())     # noqa: E731
+    settled = lambda: sum(len(v) for v in done.values())
     # A question task closes on its date: the default goes ahead as the keeper's answer, or the question closes and
     # the bot hears why.
     from . import question_tasks
+
     for row in question_tasks.open_rows(conn):
         if settled() >= BATCH:
             return done
@@ -118,27 +127,37 @@ def sweep(conn, at=None):
         default = asked["refs"].get("if_no_answer") or {}
         closes = fallback_at(asked, rules)
         if not closes or closes > at:
-            continue                     # no date: still_needed sends it back in the weekday batch
+            continue  # no date: still_needed sends it back in the weekday batch
         person, bot = row["owner_id"], row["requester_id"]
         spoke = last_word(conn, person, asked, row)
         with isolated(conn, "ask_deadlines", row["id"]):
             if deadline(asked, rules) and spoke == H.ask_clock(asked):
-                question_tasks.settle(conn, row, f"No answer from {_name(conn, person)} by {_day(closes)}, so "
-                                      f"{_name(conn, bot)} goes ahead with what it said it would do: {default['do']}",
-                                      answers=_picked(asked, default))
+                question_tasks.settle(
+                    conn,
+                    row,
+                    f"No answer from {_name(conn, person)} by {_day(closes)}, so "
+                    f"{_name(conn, bot)} goes ahead with what it said it would do: {default['do']}",
+                    answers=_picked(asked, default),
+                )
                 done["went_ahead"].append(row["id"])
                 continue
-            question_tasks.expire(conn, row, f"No answer from {_name(conn, person)} by {_day(closes)}, so this "
-                                  f"question closed. What {_name(conn, bot)} said it would do: "
-                                  f"{_not_ahead(conn, person, default, spoke != H.ask_clock(asked))}. Drop the work "
-                                  "it was for, or ask again if it still matters.")
+            question_tasks.expire(
+                conn,
+                row,
+                f"No answer from {_name(conn, person)} by {_day(closes)}, so this "
+                f"question closed. What {_name(conn, bot)} said it would do: "
+                f"{_not_ahead(conn, person, default, spoke != H.ask_clock(asked))}. Drop the work "
+                "it was for, or ask again if it still matters.",
+            )
             done["expired"].append(row["id"])
     for task in handed_to_people(conn, expiry, at):
         if settled() >= BATCH:
             break
         with isolated(conn, "ask_deadlines", task["id"]):
-            note = (f"No answer from {_name(conn, task['owner_id'])} in {EXPIRE_DAYS} days, so this ask expired and "
-                    f"closed. {_name(conn, task['requester_id'])}: drop the work it was for, or ask again if it still matters.")
+            note = (
+                f"No answer from {_name(conn, task['owner_id'])} in {EXPIRE_DAYS} days, so this ask expired and "
+                f"closed. {_name(conn, task['requester_id'])}: drop the work it was for, or ask again if it still matters."
+            )
             H.task_close(conn, H.KEEPER, task["id"], note, strict=False)
             H.event(conn, H.KEEPER, "ask.expired", task["id"], {"to": task["owner_id"], "bot": task["requester_id"]})
             done["closed"].append(task["id"])
@@ -150,22 +169,31 @@ def handed_to_people(conn, expiry, at=None):
     still open or waiting (on nobody or that bot), not due later, not on a numbered board, not set aside until a date, and
     not a due-date routine's occurrence (its day is its deadline, whoever owns it now), and not a question task."""
     marks = ",".join("?" * len(ASKED_STATUSES))
-    rows = H._rows(conn.execute(
-        f"SELECT t.* FROM {H.TASKS} t LEFT JOIN task_types y ON y.id=t.type_id WHERE t.status IN ({marks}) "
-        "AND t.owner_id LIKE 'human:%' AND t.requester_id LIKE 'bot:%' AND t.created_at<? AND coalesce(y.numbered,0)=0 "
-        "AND t.occurrence IS NULL AND t.questions IS NULL "        # a question task closes on its own dates, above
-        "ORDER BY t.created_at", (*ASKED_STATUSES, expiry)))
+    rows = H._rows(
+        conn.execute(
+            f"SELECT t.* FROM {H.TASKS} t LEFT JOIN task_types y ON y.id=t.type_id WHERE t.status IN ({marks}) "
+            "AND t.owner_id LIKE 'human:%' AND t.requester_id LIKE 'bot:%' AND t.created_at<? AND coalesce(y.numbered,0)=0 "
+            "AND t.occurrence IS NULL AND t.questions IS NULL "  # a question task closes on its own dates, above
+            "ORDER BY t.created_at",
+            (*ASKED_STATUSES, expiry),
+        )
+    )
     out = []
     for row in rows:
-        if (H.TS.snoozed(row, at or H.now()) or (row.get("due_at") and str(row["due_at"])[:10] >= (at or H.now())[:10])
-                or row["status"] == "waiting" and QT.waiting_on(conn, row)):
+        if (
+            H.TS.snoozed(row, at or H.now())
+            or (row.get("due_at") and str(row["due_at"])[:10] >= (at or H.now())[:10])
+            or row["status"] == "waiting"
+            and QT.waiting_on(conn, row)
+        ):
             continue
         person = row["owner_id"]
         touched = conn.execute(
             "SELECT max(created_at) FROM (SELECT max(created_at) AS created_at FROM history_events WHERE subject_type='task' "
             "AND subject_id=? AND actor_id=? "
             "UNION ALL SELECT max(created_at) FROM messages WHERE conversation_id=? AND sender_id=?)",
-            (row["id"], person, row["conversation_id"], person)).fetchone()[0]
+            (row["id"], person, row["conversation_id"], person),
+        ).fetchone()[0]
         if not touched or touched < expiry:
             out.append(row)
     return out

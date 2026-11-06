@@ -21,6 +21,7 @@ server container, never on the host) run at most every 15 minutes (cached). The 
 Stdlib only: the host's python3 runs this from the core release folder (/opt/tico-cell/stats-core, a link `push` keeps
 on the newest /opt/tico-cell/core-v*). Every outside call is an argument list, never a shell string.
 """
+
 from __future__ import annotations
 
 import argparse
@@ -49,12 +50,12 @@ from . import cell, contract
 from .cell import Result
 
 FORMAT = 1
-CONFIG = "etc/tico-cell/stats.json"                 # under the host root: {"hq", "host_id", "key"}, 0600
+CONFIG = "etc/tico-cell/stats.json"  # under the host root: {"hq", "host_id", "key"}, 0600
 STATE_DIR = "var/lib/tico-cell"
-CACHE = STATE_DIR + "/stats-cache.json"             # the slow numbers between their refreshes
-QUEUE = STATE_DIR + "/stats-debug.json"             # debug requests handed out but not run yet (the tick ran out)
+CACHE = STATE_DIR + "/stats-cache.json"  # the slow numbers between their refreshes
+QUEUE = STATE_DIR + "/stats-debug.json"  # debug requests handed out but not run yet (the tick ran out)
 CORE_ROOT = "opt/tico-cell"
-CORE_LINK = CORE_ROOT + "/stats-core"               # the units' WorkingDirectory
+CORE_LINK = CORE_ROOT + "/stats-core"  # the units' WorkingDirectory
 UNIT_DIR = "etc/systemd/system"
 SERVICE, TIMER = "tico-cell-stats.service", "tico-cell-stats.timer"
 
@@ -63,38 +64,43 @@ HOST_ID_RE = re.compile(r"[a-z0-9](?:[a-z0-9-]{0,62}[a-z0-9])?")
 DEBUG_ID_RE = re.compile(r"dbg_[0-9a-f]{16}")
 VERSION_DIR_RE = re.compile(r"core-(v\d+\.\d+\.\d+)")
 
-MAX_BODY = 512 * 1024           # the snapshot, uncompressed
-MAX_OUTPUT = 256 * 1024         # one debug result
-WINDOW_S = 300                  # the flight window
-ERROR_SINCE_S = 70              # log lines this recent (a push a minute, with some overlap)
+MAX_BODY = 512 * 1024  # the snapshot, uncompressed
+MAX_OUTPUT = 256 * 1024  # one debug result
+WINDOW_S = 300  # the flight window
+ERROR_SINCE_S = 70  # log lines this recent (a push a minute, with some overlap)
 ERRORS_MAX, ERROR_CHARS = 20, 300
-SLOW_EVERY = 15 * 60            # docker system df, top SQL shapes, attachment sizes
+SLOW_EVERY = 15 * 60  # docker system df, top SQL shapes, attachment sizes
 SLOW_ROUTE_P95_MS, SLOW_ROUTE_MAX_MS = 500, 1000
 SQL_TOP = 10
 HEALTH_TIMEOUT = 3
 PUSH_TIMEOUT = 15
-TICK_BUDGET = 45                # seconds of debug tools per tick (TimeoutStartSec is 50)
-TOOL_MIN = 5                    # a tool is not started with less than this left; it waits for the next tick
+TICK_BUDGET = 45  # seconds of debug tools per tick (TimeoutStartSec is 50)
+TOOL_MIN = 5  # a tool is not started with less than this left; it waits for the next tick
 TUNNEL_CONTAINER, TUNNEL_METRICS = "tico-cell-tunnel", 8081
 ERROR_RE = re.compile(r"ERROR|CRITICAL|Traceback|Exception")
-STATUS_FILE = "tmp/tico-backup-status.json"         # inside the server container (backend/replication.py)
+STATUS_FILE = "tmp/tico-backup-status.json"  # inside the server container (backend/replication.py)
 DOCKER_TIMEOUT = 20
 
 # Only these fields of `docker inspect`: never Config.Env, never the mounts (the `containers` tool asks for those).
-INSPECT_FORMAT = ('{"id":{{json .Id}},"name":{{json .Name}},"state":{{json .State}},"restarts":{{json .RestartCount}},'
-                  '"memory":{{json .HostConfig.Memory}},"log":{{json .LogPath}},"labels":{{json .Config.Labels}}}')
-DEBUG_INSPECT_FORMAT = ('{"name":{{json .Name}},"image":{{json .Config.Image}},"created":{{json .Created}},'
-                        '"state":{{json .State}},"restarts":{{json .RestartCount}},'
-                        '"host_config":{"memory":{{json .HostConfig.Memory}},"nano_cpus":{{json .HostConfig.NanoCpus}},'
-                        '"pids_limit":{{json .HostConfig.PidsLimit}},"restart":{{json .HostConfig.RestartPolicy}},'
-                        '"read_only":{{json .HostConfig.ReadonlyRootfs}},"cap_drop":{{json .HostConfig.CapDrop}},'
-                        '"cap_add":{{json .HostConfig.CapAdd}}},"labels":{{json .Config.Labels}},'
-                        '"mounts":{{json .Mounts}}}')
+INSPECT_FORMAT = (
+    '{"id":{{json .Id}},"name":{{json .Name}},"state":{{json .State}},"restarts":{{json .RestartCount}},'
+    '"memory":{{json .HostConfig.Memory}},"log":{{json .LogPath}},"labels":{{json .Config.Labels}}}'
+)
+DEBUG_INSPECT_FORMAT = (
+    '{"name":{{json .Name}},"image":{{json .Config.Image}},"created":{{json .Created}},'
+    '"state":{{json .State}},"restarts":{{json .RestartCount}},'
+    '"host_config":{"memory":{{json .HostConfig.Memory}},"nano_cpus":{{json .HostConfig.NanoCpus}},'
+    '"pids_limit":{{json .HostConfig.PidsLimit}},"restart":{{json .HostConfig.RestartPolicy}},'
+    '"read_only":{{json .HostConfig.ReadonlyRootfs}},"cap_drop":{{json .HostConfig.CapDrop}},'
+    '"cap_add":{{json .HostConfig.CapAdd}}},"labels":{{json .Config.Labels}},'
+    '"mounts":{{json .Mounts}}}'
+)
 LABELS_KEPT = ("com.docker.compose.project", "com.docker.compose.service", cell.LABEL)
 MOUNT_SOURCES = ("/srv/", "/var/lib/docker/")
 
 
 # --- the scrubber ---------------------------------------------------------------------------------------------------
+
 
 def _long_run(m: re.Match) -> str:
     s = m.group(0)
@@ -107,8 +113,13 @@ _SCRUB = [
     # A secret's name and its separator: the rest of that line goes, whatever it holds. No try at finding where the
     # value ends: it may be quoted, escaped once (\") or more (\\\") inside JSON a log line carries, and hold escaped
     # quotes itself. Losing the rest of a line that names a secret is the price.
-    (re.compile(r"(?i)\b((?:set-)?cookie|authorization|[\w-]*(?:key|token|secret|password|passwd|session))"
-                r"((?:\\*[\"'])?\s*[=:]\s*)[^\r\n]+"), r"\1\2[redacted]"),
+    (
+        re.compile(
+            r"(?i)\b((?:set-)?cookie|authorization|[\w-]*(?:key|token|secret|password|passwd|session))"
+            r"((?:\\*[\"'])?\s*[=:]\s*)[^\r\n]+"
+        ),
+        r"\1\2[redacted]",
+    ),
     (re.compile(r"(?i)\bbearer\s+\S+"), "Bearer [redacted]"),
     (re.compile(r"\b(?:tch|tcs|tgi)_[A-Za-z0-9_-]{8,}"), "[redacted]"),
     (re.compile(r"\btico_[A-Za-z0-9_-]{16,}"), "[redacted]"),
@@ -142,9 +153,11 @@ def scrub(text) -> str:
 # the cell root, or /proc/<pid>/root as the kernel resolves it), walk down one name at a time without following any
 # symlink, and take only a regular file of a bounded size. A path string is never handed to open() below that root.
 
-FILE_CAP = 64 * 1024 * 1024     # the largest company-written file read (a flight file rotates at 10 MB)
+FILE_CAP = 64 * 1024 * 1024  # the largest company-written file read (a flight file rotates at 10 MB)
 _DIR_FLAGS = os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW | getattr(os, "O_CLOEXEC", 0)
-_FILE_FLAGS = os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK | getattr(os, "O_CLOEXEC", 0)   # NONBLOCK: a FIFO can't hang us
+_FILE_FLAGS = (
+    os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK | getattr(os, "O_CLOEXEC", 0)
+)  # NONBLOCK: a FIFO can't hang us
 
 
 class Unsafe(OSError):
@@ -228,8 +241,9 @@ def flight_opener(root: str | Path, rel: str | Path):
 
 # --- the box: every call outside this process (the tests replace it) ---------------------------------------------
 
+
 class _NoRedirect(urllib.request.HTTPRedirectHandler):
-    def redirect_request(self, *args, **kwargs):      # never carry the key to another address
+    def redirect_request(self, *args, **kwargs):  # never carry the key to another address
         return None
 
 
@@ -248,16 +262,26 @@ class Box:
     def run(self, argv: list[str], timeout: float = DOCKER_TIMEOUT, cwd: str | None = None) -> Result:
         env = {k: v for k, v in os.environ.items() if not k.startswith(("COMPOSE_", "TICO_"))}
         try:
-            p = subprocess.run(argv, capture_output=True, text=True, errors="replace", timeout=timeout, env=env,
-                               check=False, stdin=subprocess.DEVNULL, cwd=cwd)
+            p = subprocess.run(
+                argv,
+                capture_output=True,
+                text=True,
+                errors="replace",
+                timeout=timeout,
+                env=env,
+                check=False,
+                stdin=subprocess.DEVNULL,
+                cwd=cwd,
+            )
         except FileNotFoundError:
             return Result(127, "", f"{argv[0]}: not found")
         except subprocess.TimeoutExpired:
             return Result(124, "", f"{argv[0]}: timed out after {timeout:.0f}s")
         return Result(p.returncode, p.stdout, p.stderr)
 
-    def http_get(self, host: str, path: str, port: int = cell.ROUTER_PORT,
-                 timeout: float = HEALTH_TIMEOUT) -> tuple[int | None, int | None, bytes]:
+    def http_get(
+        self, host: str, path: str, port: int = cell.ROUTER_PORT, timeout: float = HEALTH_TIMEOUT
+    ) -> tuple[int | None, int | None, bytes]:
         """(status, ms, the first 4 KB of the body) from 127.0.0.1:port with this Host header; (None, None, b"") when
         nothing answers in time."""
         t = time.monotonic()
@@ -309,6 +333,7 @@ class Box:
 
 # --- small helpers --------------------------------------------------------------------------------------------------
 
+
 def iso(ts: float | None) -> str | None:
     if ts is None:
         return None
@@ -326,8 +351,17 @@ def parse_iso(text) -> float | None:
         return None
 
 
-_UNITS = {"b": 1, "kb": 1e3, "mb": 1e6, "gb": 1e9, "tb": 1e12, "kib": 1024, "mib": 1024 ** 2, "gib": 1024 ** 3,
-          "tib": 1024 ** 4}
+_UNITS = {
+    "b": 1,
+    "kb": 1e3,
+    "mb": 1e6,
+    "gb": 1e9,
+    "tb": 1e12,
+    "kib": 1024,
+    "mib": 1024**2,
+    "gib": 1024**3,
+    "tib": 1024**4,
+}
 
 
 def size_bytes(text) -> float | None:
@@ -372,7 +406,7 @@ def _cut(text: str, limit: int) -> str:
     data = text.encode()
     if len(data) <= limit:
         return text
-    return data[:limit - 80].decode("utf-8", "ignore") + f"\n… [cut: {len(data) - limit + 80} more bytes]"
+    return data[: limit - 80].decode("utf-8", "ignore") + f"\n… [cut: {len(data) - limit + 80} more bytes]"
 
 
 def _read_json(path: Path) -> dict:
@@ -451,6 +485,7 @@ def point_core_link(box: Box, fallback: Path | None = None) -> Path | None:
 
 # --- docker, once for all containers ------------------------------------------------------------------------------
 
+
 def docker_ps(box: Box) -> list[dict]:
     r = box.run(["docker", "ps", "-a", "--no-trunc", "--format", "{{json .}}"])
     rows = []
@@ -468,7 +503,7 @@ def docker_ps(box: Box) -> list[dict]:
 def docker_inspect(box: Box, ids: list[str], fmt: str = INSPECT_FORMAT) -> list[dict]:
     if not ids:
         return []
-    r = box.run(["docker", "inspect", "--format", fmt, *ids])     # a container gone since ps: the rest still print
+    r = box.run(["docker", "inspect", "--format", fmt, *ids])  # a container gone since ps: the rest still print
     out = []
     for line in r.stdout.splitlines():
         try:
@@ -503,10 +538,15 @@ def docker_stats(box: Box, names: list[str] | None = None) -> dict[str, dict]:
         except (TypeError, ValueError):
             pids = None
         out[str(row.get("Name", "")).lstrip("/")] = {
-            "cpu_pct": _r(cpu), "mem_mb": None if mem is None else round(mem / 2 ** 20),
-            "mem_limit_mb": None if limit is None else round(limit / 2 ** 20), "pids": pids,
-            "net_rx_mb": _r(rx and rx / 1e6), "net_tx_mb": _r(tx and tx / 1e6),
-            "blk_read_mb": _r(rd and rd / 1e6), "blk_write_mb": _r(wr and wr / 1e6)}
+            "cpu_pct": _r(cpu),
+            "mem_mb": None if mem is None else round(mem / 2**20),
+            "mem_limit_mb": None if limit is None else round(limit / 2**20),
+            "pids": pids,
+            "net_rx_mb": _r(rx and rx / 1e6),
+            "net_tx_mb": _r(tx and tx / 1e6),
+            "blk_read_mb": _r(rd and rd / 1e6),
+            "blk_write_mb": _r(wr and wr / 1e6),
+        }
     return out
 
 
@@ -527,6 +567,7 @@ def docker_disk(box: Box) -> tuple[float | None, str | None]:
 
 # --- the host -------------------------------------------------------------------------------------------------------
 
+
 def cpu_times(box: Box) -> list[int] | None:
     try:
         first = box.read("proc/stat", 4096).splitlines()[0].split()
@@ -543,8 +584,11 @@ def cpu_share(a: list[int] | None, b: list[int] | None) -> dict:
     total = sum(d)
     if total <= 0:
         return {"cpu_pct": None, "iowait_pct": None, "steal_pct": None}
-    return {"cpu_pct": round(100 * (total - d[3] - d[4]) / total, 1), "iowait_pct": round(100 * d[4] / total, 1),
-            "steal_pct": round(100 * d[7] / total, 1)}
+    return {
+        "cpu_pct": round(100 * (total - d[3] - d[4]) / total, 1),
+        "iowait_pct": round(100 * d[4] / total, 1),
+        "steal_pct": round(100 * d[7] / total, 1),
+    }
 
 
 def _meminfo(box: Box) -> dict:
@@ -554,7 +598,7 @@ def _meminfo(box: Box) -> dict:
             k, _, v = line.partition(":")
             parts = v.split()
             if parts:
-                out[k.strip()] = int(parts[0])      # kB
+                out[k.strip()] = int(parts[0])  # kB
     except (OSError, ValueError):
         pass
     return out
@@ -577,16 +621,26 @@ def host_block(box: Box, cache: dict, df: tuple, stat_a, stat_b) -> dict:
     disk = {"disk_total_gb": None, "disk_free_gb": None, "inodes_free_pct": None}
     try:
         v = box.statvfs("/")
-        disk = {"disk_total_gb": round(v.f_blocks * v.f_frsize / 1e9, 1),
-                "disk_free_gb": round(v.f_bavail * v.f_frsize / 1e9, 1),
-                "inodes_free_pct": round(100 * v.f_favail / v.f_files, 1) if v.f_files else None}
+        disk = {
+            "disk_total_gb": round(v.f_blocks * v.f_frsize / 1e9, 1),
+            "disk_free_gb": round(v.f_bavail * v.f_frsize / 1e9, 1),
+            "inodes_free_pct": round(100 * v.f_favail / v.f_files, 1) if v.f_files else None,
+        }
     except OSError:
         pass
-    out = {"cpus": _cpus(box), "load": load, **cpu_share(stat_a, stat_b),
-           "mem_total_mb": mem.get("MemTotal") and round(mem["MemTotal"] / 1024),
-           "mem_avail_mb": mem.get("MemAvailable") and round(mem["MemAvailable"] / 1024),
-           "swap_used_mb": round((mem["SwapTotal"] - mem.get("SwapFree", 0)) / 1024) if "SwapTotal" in mem else None,
-           **disk, "docker_disk_gb": df[0], "uptime_s": uptime, "kernel": kernel, "oom_kills_1h": oom_kills(box, cache)}
+    out = {
+        "cpus": _cpus(box),
+        "load": load,
+        **cpu_share(stat_a, stat_b),
+        "mem_total_mb": mem.get("MemTotal") and round(mem["MemTotal"] / 1024),
+        "mem_avail_mb": mem.get("MemAvailable") and round(mem["MemAvailable"] / 1024),
+        "swap_used_mb": round((mem["SwapTotal"] - mem.get("SwapFree", 0)) / 1024) if "SwapTotal" in mem else None,
+        **disk,
+        "docker_disk_gb": df[0],
+        "uptime_s": uptime,
+        "kernel": kernel,
+        "oom_kills_1h": oom_kills(box, cache),
+    }
     root = df[1]
     if root and root != "/":
         try:
@@ -608,8 +662,11 @@ def _cpus(box: Box) -> int | None:
 def oom_kills(box: Box, cache: dict) -> int | None:
     """OOM kills in the last hour, from the kernel's counter (/proc/vmstat oom_kill) and the samples kept in the cache."""
     try:
-        count = next(int(line.split()[1]) for line in box.read("proc/vmstat", 1 << 16).splitlines()
-                     if line.startswith("oom_kill "))
+        count = next(
+            int(line.split()[1])
+            for line in box.read("proc/vmstat", 1 << 16).splitlines()
+            if line.startswith("oom_kill ")
+        )
     except (OSError, StopIteration, ValueError, IndexError):
         return None
     now = box.time()
@@ -617,16 +674,17 @@ def oom_kills(box: Box, cache: dict) -> int | None:
     samples.append([now, count])
     cache["oom"] = samples[-70:]
     base = next((c for t, c in samples if now - t >= 3540), samples[0][1])
-    return max(0, count - base) if count >= base else count       # a reboot started the counter again
+    return max(0, count - base) if count >= base else count  # a reboot started the counter again
 
 
 # --- one company -----------------------------------------------------------------------------------------------------
+
 
 def _stale(entry, now: float) -> bool:
     return not isinstance(entry, dict) or now - (entry.get("at") or 0) >= SLOW_EVERY
 
 
-DB = "data/hub.sqlite"      # under the company's folder
+DB = "data/hub.sqlite"  # under the company's folder
 
 
 def parse_header(head: bytes, size: int) -> dict | None:
@@ -735,10 +793,15 @@ def sql_top(box: Box, name: str | None, now: float) -> list | None:
         return None
     top = []
     for r in rows[:SQL_TOP]:
-        if (isinstance(r, list) and len(r) == 4 and isinstance(r[0], str)
-                and all(isinstance(x, (int, float)) or x is None for x in r[1:])):
-            top.append({"shape": scrub(r[0])[:200], "count": r[1], "total_ms": round(r[2] or 0),
-                        "max_ms": round(r[3] or 0)})
+        if (
+            isinstance(r, list)
+            and len(r) == 4
+            and isinstance(r[0], str)
+            and all(isinstance(x, (int, float)) or x is None for x in r[1:])
+        ):
+            top.append(
+                {"shape": scrub(r[0])[:200], "count": r[1], "total_ms": round(r[2] or 0), "max_ms": round(r[3] or 0)}
+            )
     return top
 
 
@@ -784,11 +847,17 @@ def db_block(box: Box, root: Path, slug: str, cache: dict, now: float, server: s
     blobs = cache.setdefault("files", {}).get(slug)
     if _stale(blobs, now):
         blobs = cache["files"][slug] = {"at": now, "mb": files_mb(root, "data/blobs")}
-    mb = (lambda b: round(b / 1e6, 1) if isinstance(b, int) else None)
+    mb = lambda b: round(b / 1e6, 1) if isinstance(b, int) else None
     pages, free = (h or {}).get("page_count"), (h or {}).get("freelist_count")
-    return ({"size_mb": mb((h or {}).get("size")), "wal_mb": mb((h or {}).get("wal")),
-             "freelist_pct": round(100 * free / pages, 1) if pages and free is not None else None,
-             "files_mb": blobs.get("mb")}, (slow or {}).get("sql_top") if server else None)
+    return (
+        {
+            "size_mb": mb((h or {}).get("size")),
+            "wal_mb": mb((h or {}).get("wal")),
+            "freelist_pct": round(100 * free / pages, 1) if pages and free is not None else None,
+            "files_mb": blobs.get("mb"),
+        },
+        (slow or {}).get("sql_top") if server else None,
+    )
 
 
 def backup_block(box: Box, pid: int | None, now: float) -> dict | None:
@@ -814,11 +883,17 @@ def backup_block(box: Box, pid: int | None, now: float) -> dict | None:
     checked = parse_iso(saved.get("checked_at"))
     checked_s = None if checked is None else max(0, int(now - checked))
     stale = (behind is not None and behind > warn_after) or (checked_s is not None and checked_s > warn_after)
-    return {"age_s": None if at is None else max(0, int(now - at)), "behind_s": behind, "checked_s": checked_s,
-            "stale": stale, "unsent_files": unsent, "detail": "litestream"}
+    return {
+        "age_s": None if at is None else max(0, int(now - at)),
+        "behind_s": behind,
+        "checked_s": checked_s,
+        "stale": stale,
+        "unsent_files": unsent,
+        "detail": "litestream",
+    }
 
 
-FLIGHT = "data/flight"      # under the company's folder
+FLIGHT = "data/flight"  # under the company's folder
 
 
 def flight_summary(root: Path, since_s: float, now: float, **kw) -> dict | None:
@@ -837,23 +912,52 @@ def flight_block(root: Path, now: float, top) -> dict | None:
     minutes = s["minutes"]
     last = minutes[-1] if minutes else {}
     req = s.get("requests") or {}
-    slow = [{"route": scrub(r["route"]), "count": r["n"], "p95_ms": round(r["p95"]), "max_ms": round(r["max_ms"]),
-             "total_ms": round(r["total_ms"])}
-            for r in s["routes"] if r["p95"] >= SLOW_ROUTE_P95_MS or r["max_ms"] >= SLOW_ROUTE_MAX_MS][:10]
+    slow = [
+        {
+            "route": scrub(r["route"]),
+            "count": r["n"],
+            "p95_ms": round(r["p95"]),
+            "max_ms": round(r["max_ms"]),
+            "total_ms": round(r["total_ms"]),
+        }
+        for r in s["routes"]
+        if r["p95"] >= SLOW_ROUTE_P95_MS or r["max_ms"] >= SLOW_ROUTE_MAX_MS
+    ][:10]
     stall = s["stalls"][-1] if s["stalls"] else None
     return {
         "window_s": WINDOW_S,
-        "requests": {"count": req.get("count"), "p50_ms": req.get("p50"), "p95_ms": req.get("p95"),
-                     "p99_ms": req.get("p99"), "errors_5xx": req.get("errors")},
+        "requests": {
+            "count": req.get("count"),
+            "p50_ms": req.get("p50"),
+            "p95_ms": req.get("p95"),
+            "p99_ms": req.get("p99"),
+            "errors_5xx": req.get("errors"),
+        },
         "slow_routes": slow,
-        "sql": {"total_ms": round(sum(m.get("sql_ms") or 0 for m in minutes)) if minutes else None,
-                "lock_wait_ms": s["lock_waits"]["wait_ms"], "lock_hold_ms_max": s["peaks"]["hold_max"],
-                "locked_errors": s["lock_waits"]["locked"], "top": top},
-        "process": {"cpu_pct": last.get("cpu"), "rss_mb": round(last["rss"] / 2 ** 20) if last.get("rss") else None,
-                    "loop_lag_ms_max": s["peaks"]["lag_max"], "threads": last.get("threads")},
-        "stalls": {"count": s["stalls_total"],
-                   "last": {"at": iso(stall["ts"]), "seconds": stall["seconds"], "class": stall["class"],
-                            "ongoing": stall["ongoing"]} if stall else None},
+        "sql": {
+            "total_ms": round(sum(m.get("sql_ms") or 0 for m in minutes)) if minutes else None,
+            "lock_wait_ms": s["lock_waits"]["wait_ms"],
+            "lock_hold_ms_max": s["peaks"]["hold_max"],
+            "locked_errors": s["lock_waits"]["locked"],
+            "top": top,
+        },
+        "process": {
+            "cpu_pct": last.get("cpu"),
+            "rss_mb": round(last["rss"] / 2**20) if last.get("rss") else None,
+            "loop_lag_ms_max": s["peaks"]["lag_max"],
+            "threads": last.get("threads"),
+        },
+        "stalls": {
+            "count": s["stalls_total"],
+            "last": {
+                "at": iso(stall["ts"]),
+                "seconds": stall["seconds"],
+                "class": stall["class"],
+                "ongoing": stall["ongoing"],
+            }
+            if stall
+            else None,
+        },
     }
 
 
@@ -865,7 +969,7 @@ def log_lines(box: Box, log_path: str | None, since: float, name: str, running: 
     text = None
     if log_path:
         try:
-            p = Path(log_path)                      # <docker root>/containers/<id>/<id>-json.log
+            p = Path(log_path)  # <docker root>/containers/<id>/<id>-json.log
             with safe_open(box.path(p.parent.parent), f"{p.parent.name}/{p.name}", None) as f:
                 f.seek(max(0, os.fstat(f.fileno()).st_size - 256 * 1024))
                 text = f.read(256 * 1024).decode("utf-8", "replace")
@@ -876,7 +980,7 @@ def log_lines(box: Box, log_path: str | None, since: float, name: str, running: 
     if text is not None:
         floor = iso(since)
         for line in text.splitlines():
-            if not ERROR_RE.search(line):           # cheap first: most lines are not errors
+            if not ERROR_RE.search(line):  # cheap first: most lines are not errors
                 continue
             try:
                 r = json.loads(line)
@@ -900,13 +1004,23 @@ def container_row(i: dict, stats: dict) -> dict:
     health = st.get("Health") if isinstance(st.get("Health"), dict) else {}
     s = stats.get(i["name"], {})
     mem = i.get("memory")
-    return {"role": labels.get("com.docker.compose.service") or None, "name": i["name"], "state": st.get("Status"),
-            "health": health.get("Status") or None, "restarts": i.get("restarts"), "oom_killed": bool(st.get("OOMKilled")),
-            "started_at": iso(parse_iso(st.get("StartedAt"))),
-            "cpu_pct": s.get("cpu_pct"), "mem_mb": s.get("mem_mb"),
-            "mem_limit_mb": round(mem / 2 ** 20) if isinstance(mem, int) and mem > 0 else s.get("mem_limit_mb"),
-            "pids": s.get("pids"), "net_rx_mb": s.get("net_rx_mb"), "net_tx_mb": s.get("net_tx_mb"),
-            "blk_read_mb": s.get("blk_read_mb"), "blk_write_mb": s.get("blk_write_mb")}
+    return {
+        "role": labels.get("com.docker.compose.service") or None,
+        "name": i["name"],
+        "state": st.get("Status"),
+        "health": health.get("Status") or None,
+        "restarts": i.get("restarts"),
+        "oom_killed": bool(st.get("OOMKilled")),
+        "started_at": iso(parse_iso(st.get("StartedAt"))),
+        "cpu_pct": s.get("cpu_pct"),
+        "mem_mb": s.get("mem_mb"),
+        "mem_limit_mb": round(mem / 2**20) if isinstance(mem, int) and mem > 0 else s.get("mem_limit_mb"),
+        "pids": s.get("pids"),
+        "net_rx_mb": s.get("net_rx_mb"),
+        "net_tx_mb": s.get("net_tx_mb"),
+        "blk_read_mb": s.get("blk_read_mb"),
+        "blk_write_mb": s.get("blk_write_mb"),
+    }
 
 
 def ps_states(rows: list[dict]) -> dict[str, dict]:
@@ -915,8 +1029,15 @@ def ps_states(rows: list[dict]) -> dict[str, dict]:
     for row in rows:
         slug = row["_labels"].get(cell.LABEL, "")
         status = str(row.get("Status", ""))
-        health = ("unhealthy" if "(unhealthy)" in status else "healthy" if "(healthy)" in status
-                  else "starting" if "health: starting" in status else "")
+        health = (
+            "unhealthy"
+            if "(unhealthy)" in status
+            else "healthy"
+            if "(healthy)" in status
+            else "starting"
+            if "health: starting" in status
+            else ""
+        )
         if slug:
             out[slug] = {"state": str(row.get("State", "")), "health": health}
     return out
@@ -924,12 +1045,13 @@ def ps_states(rows: list[dict]) -> dict[str, dict]:
 
 # --- the snapshot ------------------------------------------------------------------------------------------------------
 
+
 class View:
     """The cell's companies and their containers, from one `docker ps` and one `docker inspect`."""
 
     def __init__(self, box: Box, ps: list[dict] | None = None):
         self.box = box
-        self.cell = cell.Cell(box.cell_root, None, box.host)     # only its record readers; it runs nothing here
+        self.cell = cell.Cell(box.cell_root, None, box.host)  # only its record readers; it runs nothing here
         self.records = [c for c in self.cell.companies() if c.get("state") != "removed"]
         self.ps = docker_ps(box) if ps is None else ps
 
@@ -938,16 +1060,20 @@ class View:
 
     def containers_of(self, slug: str) -> list[dict]:
         proj = cell.project(slug)
-        return [r for r in self.ps if r["_labels"].get("com.docker.compose.project") == proj
-                or r["_labels"].get(cell.LABEL) == slug]
+        return [
+            r
+            for r in self.ps
+            if r["_labels"].get("com.docker.compose.project") == proj or r["_labels"].get(cell.LABEL) == slug
+        ]
 
     def root(self, slug: str) -> Path:
         """The company's folder: made by the host, so the walk into what the company writes (data/) starts here."""
         return self.cell.dir(slug)
 
     def container(self, slug: str, role: str = "server") -> dict | None:
-        return next((r for r in self.containers_of(slug)
-                     if r["_labels"].get("com.docker.compose.service") == role), None)
+        return next(
+            (r for r in self.containers_of(slug) if r["_labels"].get("com.docker.compose.service") == role), None
+        )
 
 
 def collect(box: Box, cache: dict, *, company: str | None = None, host_id: str | None = None) -> dict:
@@ -974,31 +1100,56 @@ def collect(box: Box, cache: dict, *, company: str | None = None, host_id: str |
             names = sorted(str(r.get("Names", "")).lstrip("/") for r in view.containers_of(slug))
             rows = [inspected[n] for n in names if n in inspected]
             root = view.root(slug)
-            server = next((i for i in rows if (i.get("labels") or {}).get("com.docker.compose.service") == "server"), None)
+            server = next(
+                (i for i in rows if (i.get("labels") or {}).get("com.docker.compose.service") == "server"), None
+            )
             pid = ((server or {}).get("state") or {}).get("Pid") if server else None
             running = server and ((server.get("state") or {}).get("Status")) == "running"
             db, top = db_block(box, root, slug, cache, now, server["name"].lstrip("/") if running else None)
             errors = []
             for i in rows:
                 if (i.get("labels") or {}).get("com.docker.compose.service") in ("server", "updater"):
-                    errors += log_lines(box, i.get("log"), now - ERROR_SINCE_S, i["name"],
-                                        ((i.get("state") or {}).get("Status")) == "running")
+                    errors += log_lines(
+                        box,
+                        i.get("log"),
+                        now - ERROR_SINCE_S,
+                        i["name"],
+                        ((i.get("state") or {}).get("Status")) == "running",
+                    )
             errors.sort(key=lambda e: e["at"] or "")
             try:
                 flight = flight_block(root, now, top)
             except Exception as e:  # noqa: BLE001  a bad flight file must not cost the rest of the snapshot
                 flight = {"window_s": WINDOW_S, "error": scrub(f"{type(e).__name__}: {e}")[:200]}
-            return {"slug": slug, "version": c.get("version"), "state": view.cell.state_of(c, states),
-                    "memory_limit_mb": memory_mb(c.get("memory")), "healthz": None, "containers": rows,
-                    "db": db, "backup": backup_block(box, pid, now), "flight": flight, "errors": errors[-ERRORS_MAX:]}
+            return {
+                "slug": slug,
+                "version": c.get("version"),
+                "state": view.cell.state_of(c, states),
+                "memory_limit_mb": memory_mb(c.get("memory")),
+                "healthz": None,
+                "containers": rows,
+                "db": db,
+                "backup": backup_block(box, pid, now),
+                "flight": flight,
+                "errors": errors[-ERRORS_MAX:],
+            }
 
         def safe(c: dict) -> dict:
             try:
                 return one(c)
             except Exception as e:  # noqa: BLE001  one company's odd state must not cost the others their numbers
-                return {"slug": c["slug"], "version": c.get("version"), "state": None, "healthz": None,
-                        "containers": [], "db": None, "backup": None, "flight": None, "errors": [],
-                        "error": scrub(f"{type(e).__name__}: {e}")[:200]}
+                return {
+                    "slug": c["slug"],
+                    "version": c.get("version"),
+                    "state": None,
+                    "healthz": None,
+                    "containers": [],
+                    "db": None,
+                    "backup": None,
+                    "flight": None,
+                    "errors": [],
+                    "error": scrub(f"{type(e).__name__}: {e}")[:200],
+                }
 
         blocks = list(pool.map(safe, records))
         stats = f_stats.result()
@@ -1015,10 +1166,19 @@ def collect(box: Box, cache: dict, *, company: str | None = None, host_id: str |
         box.sleep(0.5 - (box.monotonic() - started))
     stat_b = cpu_times(box)
     host = host_block(box, cache, ((df_entry or {}).get("gb"), (df_entry or {}).get("root")), stat_a, stat_b)
-    snap = {"format": FORMAT, "host_id": host_id, "at": iso(now), "collect_ms": None, "trimmed": False,
-            "core_version": core_version(box), "collector_version": own_version(),
-            "host": host, "router": {"up": rcode == 200, "ms": rms}, "tunnel": tunnel(tunnel_row, ready),
-            "companies": blocks}
+    snap = {
+        "format": FORMAT,
+        "host_id": host_id,
+        "at": iso(now),
+        "collect_ms": None,
+        "trimmed": False,
+        "core_version": core_version(box),
+        "collector_version": own_version(),
+        "host": host,
+        "router": {"up": rcode == 200, "ms": rms},
+        "tunnel": tunnel(tunnel_row, ready),
+        "companies": blocks,
+    }
     snap["collect_ms"] = int((box.monotonic() - started) * 1000)
     return snap
 
@@ -1041,17 +1201,22 @@ def tunnel(row: dict | None, ready: tuple) -> dict:
 def fit(snap: dict, cap: int = MAX_BODY) -> bytes:
     """The snapshot as compact JSON within `cap` bytes: error lines go first, then flight detail (slow routes, SQL
     shapes), then the whole flight block, then companies from the end; `trimmed` says it happened."""
+
     def dump() -> bytes:
         return json.dumps(snap, separators=(",", ":")).encode()
+
     body = dump()
     if len(body) <= cap:
         return body
     snap["trimmed"] = True
     companies = snap.get("companies") or []
-    steps = [lambda c: c.update(errors=c.get("errors", [])[-3:]), lambda c: c.update(errors=[]),
-             lambda c: c["flight"] and c["flight"].update(slow_routes=[]),
-             lambda c: c["flight"] and isinstance(c["flight"].get("sql"), dict) and c["flight"]["sql"].update(top=[]),
-             lambda c: c.update(flight=None)]
+    steps = [
+        lambda c: c.update(errors=c.get("errors", [])[-3:]),
+        lambda c: c.update(errors=[]),
+        lambda c: c["flight"] and c["flight"].update(slow_routes=[]),
+        lambda c: c["flight"] and isinstance(c["flight"].get("sql"), dict) and c["flight"]["sql"].update(top=[]),
+        lambda c: c.update(flight=None),
+    ]
     for step in steps:
         for c in companies:
             step(c)
@@ -1069,6 +1234,7 @@ def fit(snap: dict, cap: int = MAX_BODY) -> bytes:
 
 # --- debug tools -------------------------------------------------------------------------------------------------------
 
+
 class Refused(Exception):
     pass
 
@@ -1079,16 +1245,29 @@ TOOLS: dict[str, dict] = {
     "host_top": {},
     "cell_status": {},
     "containers": {"company": ("company", False)},
-    "logs": {"company": ("company", True), "role": (("server", "updater"), True), "minutes": ((1, 60), True),
-             "lines": ((1, 1000), True)},
+    "logs": {
+        "company": ("company", True),
+        "role": (("server", "updater"), True),
+        "minutes": ((1, 60), True),
+        "lines": ((1, 1000), True),
+    },
     "flight": {"company": ("company", True), "minutes": ((1, 1440), True)},
     "db": {"company": ("company", True)},
     "stacks": {"company": ("company", True)},
     "tracemalloc": {"company": ("company", True), "action": (("start", "dump"), True)},
     "journal": {"unit": ("unit", True), "minutes": ((1, 60), True)},
 }
-TIMEOUTS = {"host_top": 15, "cell_status": 30, "containers": 40, "logs": 20, "flight": 30, "db": 60, "stacks": 8,
-            "tracemalloc": 20, "journal": 20}
+TIMEOUTS = {
+    "host_top": 15,
+    "cell_status": 30,
+    "containers": 40,
+    "logs": 20,
+    "flight": 30,
+    "db": 60,
+    "stacks": 8,
+    "tracemalloc": 20,
+    "journal": 20,
+}
 
 
 def validate(tool, args, slugs) -> dict:
@@ -1133,9 +1312,13 @@ def _out(r: Result) -> str:
 
 def t_host_top(box: Box, view: View, a: dict, timeout: float) -> tuple[bool, str]:
     parts, ok = [], True
-    for title, argv, head in (("top", ["top", "-b", "-n1"], 40), ("free -m", ["free", "-m"], 0),
-                              ("df -h", ["df", "-h"], 0), ("uptime", ["uptime"], 0),
-                              ("docker system df", ["docker", "system", "df"], 0)):
+    for title, argv, head in (
+        ("top", ["top", "-b", "-n1"], 40),
+        ("free -m", ["free", "-m"], 0),
+        ("df -h", ["df", "-h"], 0),
+        ("uptime", ["uptime"], 0),
+        ("docker system df", ["docker", "system", "df"], 0),
+    ):
         r = box.run(argv, timeout=max(1.0, min(timeout / 3, 15)))
         ok = ok and r.returncode == 0
         text = _out(r)
@@ -1146,8 +1329,11 @@ def t_host_top(box: Box, view: View, a: dict, timeout: float) -> tuple[bool, str
 
 
 def t_cell_status(box: Box, view: View, a: dict, timeout: float) -> tuple[bool, str]:
-    r = box.run([sys.executable, "-m", "setup", "cell", "list", "--json"], timeout=timeout,
-                cwd=str(Path(__file__).resolve().parent.parent))
+    r = box.run(
+        [sys.executable, "-m", "setup", "cell", "list", "--json"],
+        timeout=timeout,
+        cwd=str(Path(__file__).resolve().parent.parent),
+    )
     return r.returncode == 0, _out(r)
 
 
@@ -1166,8 +1352,14 @@ def t_containers(box: Box, view: View, a: dict, timeout: float) -> tuple[bool, s
         mounts = []
         for m in i.get("mounts") or []:
             src = str(m.get("Source") or "")
-            mounts.append({"type": m.get("Type"), "destination": m.get("Destination"), "rw": m.get("RW"),
-                           "source": src if src.startswith(MOUNT_SOURCES) else "[outside /srv and /var/lib/docker]"})
+            mounts.append(
+                {
+                    "type": m.get("Type"),
+                    "destination": m.get("Destination"),
+                    "rw": m.get("RW"),
+                    "source": src if src.startswith(MOUNT_SOURCES) else "[outside /srv and /var/lib/docker]",
+                }
+            )
         i["mounts"] = mounts
         found.append(i)
     stats = docker_stats(box, names) if names else {}
@@ -1179,8 +1371,10 @@ def t_logs(box: Box, view: View, a: dict, timeout: float) -> tuple[bool, str]:
     if not row:
         return False, f"{a['company']} has no {a['role']} container"
     name = str(row.get("Names", "")).lstrip("/")
-    r = box.run(["docker", "logs", "--since", f"{a['minutes']}m", "--tail", str(a["lines"]), "--timestamps", name],
-                timeout=timeout)
+    r = box.run(
+        ["docker", "logs", "--since", f"{a['minutes']}m", "--tail", str(a["lines"]), "--timestamps", name],
+        timeout=timeout,
+    )
     return r.returncode == 0, _out(r)
 
 
@@ -1197,8 +1391,11 @@ def t_db(box: Box, view: View, a: dict, timeout: float) -> tuple[bool, str]:
     h = db_header(view.root(a["company"]))
     if h is None:
         return False, f"no database for {a['company']} (or not a plain file)"
-    out = {"size_mb": round(h["size"] / 1e6, 1), "wal_mb": round(h["wal"] / 1e6, 1) if h["wal"] is not None else None,
-           "header": {k: h.get(k) for k in ("page_size", "page_count", "freelist_count")}}
+    out = {
+        "size_mb": round(h["size"] / 1e6, 1),
+        "wal_mb": round(h["wal"] / 1e6, 1) if h["wal"] is not None else None,
+        "header": {k: h.get(k) for k in ("page_size", "page_count", "freelist_count")},
+    }
     row = view.container(a["company"], "server")
     if not row or row.get("State") != "running":
         out["sqlite"] = "server not running"
@@ -1266,7 +1463,7 @@ def t_stacks(box: Box, view: View, a: dict, timeout: float) -> tuple[bool, str]:
         except OSError:
             continue
         if size > before:
-            box.sleep(0.3)          # faulthandler writes thread by thread
+            box.sleep(0.3)  # faulthandler writes thread by thread
             break
     if size <= before:
         return False, "the server wrote no stacks (is the flight recorder on?)"
@@ -1297,11 +1494,13 @@ def t_tracemalloc(box: Box, view: View, a: dict, timeout: float) -> tuple[bool, 
     pid, why = server_pid(box, view, a["company"])
     if not pid:
         return False, why
+
     def dumps() -> set[str]:
         try:
             return {n for n in safe_listdir(root, FLIGHT) if n.startswith("memory-") and n.endswith(".txt")}
         except OSError:
             return set()
+
     before = dumps()
     box.kill(pid, signal.SIGUSR2)
     if a["action"] == "start":
@@ -1320,13 +1519,35 @@ def t_tracemalloc(box: Box, view: View, a: dict, timeout: float) -> tuple[bool, 
 
 
 def t_journal(box: Box, view: View, a: dict, timeout: float) -> tuple[bool, str]:
-    r = box.run(["journalctl", "-u", a["unit"], "--since", f"{a['minutes']} min ago", "--no-pager", "-o",
-                 "short-iso", "-n", "5000"], timeout=timeout)
+    r = box.run(
+        [
+            "journalctl",
+            "-u",
+            a["unit"],
+            "--since",
+            f"{a['minutes']} min ago",
+            "--no-pager",
+            "-o",
+            "short-iso",
+            "-n",
+            "5000",
+        ],
+        timeout=timeout,
+    )
     return r.returncode == 0, _out(r)
 
 
-RUNNERS = {"host_top": t_host_top, "cell_status": t_cell_status, "containers": t_containers, "logs": t_logs,
-           "flight": t_flight, "db": t_db, "stacks": t_stacks, "tracemalloc": t_tracemalloc, "journal": t_journal}
+RUNNERS = {
+    "host_top": t_host_top,
+    "cell_status": t_cell_status,
+    "containers": t_containers,
+    "logs": t_logs,
+    "flight": t_flight,
+    "db": t_db,
+    "stacks": t_stacks,
+    "tracemalloc": t_tracemalloc,
+    "journal": t_journal,
+}
 
 
 def run_tool(box: Box, tool, args, timeout: float | None = None, view: View | None = None) -> dict:
@@ -1345,10 +1566,17 @@ def run_tool(box: Box, tool, args, timeout: float | None = None, view: View | No
 
 # --- push ---------------------------------------------------------------------------------------------------------------
 
+
 def load_config(box: Box) -> dict:
     c = _read_json(box.path(CONFIG))
-    if not (isinstance(c.get("hq"), str) and check_hq(c["hq"]) and isinstance(c.get("host_id"), str)
-            and HOST_ID_RE.fullmatch(c["host_id"]) and isinstance(c.get("key"), str) and KEY_RE.fullmatch(c["key"])):
+    if not (
+        isinstance(c.get("hq"), str)
+        and check_hq(c["hq"])
+        and isinstance(c.get("host_id"), str)
+        and HOST_ID_RE.fullmatch(c["host_id"])
+        and isinstance(c.get("key"), str)
+        and KEY_RE.fullmatch(c["key"])
+    ):
         raise SystemExit(f"not enrolled: no valid /{CONFIG} (run `python3 -m setup.cell_stats enroll`)")
     return c
 
@@ -1357,15 +1585,25 @@ def check_hq(url: str) -> str | None:
     """HQ's base address: https (http only to this machine, for tests), no path, query or credentials."""
     u = urllib.parse.urlsplit(url.strip().rstrip("/"))
     local = u.hostname in ("127.0.0.1", "localhost", "::1")
-    if (u.scheme == "https" or (u.scheme == "http" and local)) and u.hostname and not u.username and not u.password \
-            and u.path in ("", "/") and not u.query and not u.fragment:
+    if (
+        (u.scheme == "https" or (u.scheme == "http" and local))
+        and u.hostname
+        and not u.username
+        and not u.password
+        and u.path in ("", "/")
+        and not u.query
+        and not u.fragment
+    ):
         return f"{u.scheme}://{u.netloc}"
     return None
 
 
 def _headers(cfg: dict, gz: bool) -> dict:
-    h = {"Authorization": f"Bearer {cfg['key']}", "Content-Type": "application/json",
-         "User-Agent": "tico-cell-stats"}     # the snapshot carries collector_version
+    h = {
+        "Authorization": f"Bearer {cfg['key']}",
+        "Content-Type": "application/json",
+        "User-Agent": "tico-cell-stats",
+    }  # the snapshot carries collector_version
     if gz:
         h["Content-Encoding"] = "gzip"
     return h
@@ -1389,10 +1627,16 @@ def push(box: Box, out=None) -> int:
     snap = collect(box, cache, host_id=cfg["host_id"])
     body = fit(snap)
     _write_private(cache_path, cache)
-    status, headers, answer = box.post(f"{cfg['hq']}/v1/cells/{cfg['host_id']}/stats", gzip.compress(body, 5),
-                                       _headers(cfg, True))
-    report = {"ok": status == 200, "status": status, "collect_ms": snap["collect_ms"], "bytes": len(body),
-              "trimmed": snap["trimmed"]}
+    status, headers, answer = box.post(
+        f"{cfg['hq']}/v1/cells/{cfg['host_id']}/stats", gzip.compress(body, 5), _headers(cfg, True)
+    )
+    report = {
+        "ok": status == 200,
+        "status": status,
+        "collect_ms": snap["collect_ms"],
+        "bytes": len(body),
+        "trimmed": snap["trimmed"],
+    }
     items = []
     if status == 200:
         try:
@@ -1402,8 +1646,11 @@ def push(box: Box, out=None) -> int:
     elif status == 429:
         report["detail"] = f"too soon (Retry-After {headers.get('Retry-After') or headers.get('retry-after') or '?'})"
     elif status in (401, 403):
-        report["detail"] = "HQ refused the key: rotate it and run enroll again" if status == 401 else \
-            "HQ refused this host (revoked, or another host's key)"
+        report["detail"] = (
+            "HQ refused the key: rotate it and run enroll again"
+            if status == 401
+            else "HQ refused this host (revoked, or another host's key)"
+        )
     elif status == 0:
         report["detail"] = "HQ could not be reached: " + scrub(answer.decode("utf-8", "replace"))[:200]
     else:
@@ -1423,7 +1670,7 @@ def run_debug(box: Box, cfg: dict, pending: list[dict], started: float, queue_pa
     for item in pending:
         item_id = item.get("id")
         if not isinstance(item_id, str) or not DEBUG_ID_RE.fullmatch(item_id) or item_id in seen:
-            continue                                    # no address to answer at
+            continue  # no address to answer at
         seen.add(item_id)
         remaining = started + TICK_BUDGET - box.monotonic()
         if remaining < TOOL_MIN:
@@ -1440,20 +1687,46 @@ def run_debug(box: Box, cfg: dict, pending: list[dict], started: float, queue_pa
 
 # --- enroll -------------------------------------------------------------------------------------------------------------
 
+
 def units(core_link: Path) -> dict[str, str]:
     return {
-        SERVICE: "\n".join([
-            "# Written by `python3 -m setup.cell_stats enroll` (docs/cell-stats.md). Do not edit.",
-            "[Unit]", "Description=Tico cell stats: this host's numbers to HQ, and staff's debug requests",
-            "After=docker.service network-online.target", "Wants=network-online.target", "",
-            "[Service]", "Type=oneshot", f"WorkingDirectory={core_link}",
-            "ExecStart=/usr/bin/python3 -m setup.cell_stats push", "TimeoutStartSec=50", "Nice=10",
-            "IOSchedulingClass=idle", "Environment=PYTHONDONTWRITEBYTECODE=1", ""]),
-        TIMER: "\n".join([
-            "# Written by `python3 -m setup.cell_stats enroll` (docs/cell-stats.md). Do not edit.",
-            "[Unit]", "Description=Tico cell stats every 60 seconds", "",
-            "[Timer]", "OnActiveSec=10s", "OnUnitActiveSec=60s", "AccuracySec=5s", "Persistent=false",
-            f"Unit={SERVICE}", "", "[Install]", "WantedBy=timers.target", ""]),
+        SERVICE: "\n".join(
+            [
+                "# Written by `python3 -m setup.cell_stats enroll` (docs/cell-stats.md). Do not edit.",
+                "[Unit]",
+                "Description=Tico cell stats: this host's numbers to HQ, and staff's debug requests",
+                "After=docker.service network-online.target",
+                "Wants=network-online.target",
+                "",
+                "[Service]",
+                "Type=oneshot",
+                f"WorkingDirectory={core_link}",
+                "ExecStart=/usr/bin/python3 -m setup.cell_stats push",
+                "TimeoutStartSec=50",
+                "Nice=10",
+                "IOSchedulingClass=idle",
+                "Environment=PYTHONDONTWRITEBYTECODE=1",
+                "",
+            ]
+        ),
+        TIMER: "\n".join(
+            [
+                "# Written by `python3 -m setup.cell_stats enroll` (docs/cell-stats.md). Do not edit.",
+                "[Unit]",
+                "Description=Tico cell stats every 60 seconds",
+                "",
+                "[Timer]",
+                "OnActiveSec=10s",
+                "OnUnitActiveSec=60s",
+                "AccuracySec=5s",
+                "Persistent=false",
+                f"Unit={SERVICE}",
+                "",
+                "[Install]",
+                "WantedBy=timers.target",
+                "",
+            ]
+        ),
     }
 
 
@@ -1463,6 +1736,7 @@ def enroll(box: Box, args, stdin=None, out=None) -> int:
     def answer(d: dict) -> int:
         out.write(json.dumps(d) + "\n")
         return 0 if d.get("ok") else 1
+
     if box.euid() != 0:
         return answer({"ok": False, "error": "not_root", "detail": "run enroll as root"})
     unit_dir = box.path(UNIT_DIR)
@@ -1470,8 +1744,14 @@ def enroll(box: Box, args, stdin=None, out=None) -> int:
         box.run(["systemctl", "disable", "--now", TIMER])
         box.run(["systemctl", "stop", SERVICE])
         removed = []
-        for p in (unit_dir / TIMER, unit_dir / SERVICE, box.path(CONFIG), box.path(CACHE), box.path(QUEUE),
-                  box.path(CORE_LINK)):
+        for p in (
+            unit_dir / TIMER,
+            unit_dir / SERVICE,
+            box.path(CONFIG),
+            box.path(CACHE),
+            box.path(QUEUE),
+            box.path(CORE_LINK),
+        ):
             if p.is_symlink() or p.exists():
                 p.unlink()
                 removed.append("/" + str(p.relative_to(box.host)))
@@ -1495,34 +1775,43 @@ def enroll(box: Box, args, stdin=None, out=None) -> int:
     failed = next((r for r in steps if r.returncode), None)
     if failed:
         return answer({"ok": False, "error": "systemd", "detail": scrub((failed.stderr or failed.stdout)[-400:])})
-    return answer({"ok": True, "host_id": args.host_id, "hq": hq, "config": "/" + CONFIG, "core": str(target),
-                   "timer": TIMER})
+    return answer(
+        {"ok": True, "host_id": args.host_id, "hq": hq, "config": "/" + CONFIG, "core": str(target), "timer": TIMER}
+    )
 
 
 # --- show --------------------------------------------------------------------------------------------------------------
 
+
 def render(snap: dict) -> str:
     h = snap["host"]
-    lines = [f"{snap.get('host_id') or '(not enrolled)'} at {snap['at']}, collected in {snap['collect_ms']} ms"
-             f" (core {snap.get('core_version') or '?'}, collector {snap.get('collector_version') or '?'})",
-             f"  cpu {h['cpu_pct']}% iowait {h['iowait_pct']}% steal {h['steal_pct']}% load {h['load']} on {h['cpus']} cpus",
-             f"  memory {h['mem_avail_mb']} of {h['mem_total_mb']} MB free, swap used {h['swap_used_mb']} MB, "
-             f"OOM kills in the last hour {h['oom_kills_1h']}",
-             f"  disk {h['disk_free_gb']} of {h['disk_total_gb']} GB free, inodes {h['inodes_free_pct']}% free, "
-             f"docker {h['docker_disk_gb']} GB",
-             f"  router {'up' if snap['router']['up'] else 'DOWN'} ({snap['router']['ms']} ms), "
-             f"tunnel {snap['tunnel']['detail']}", ""]
-    lines.append(f"  {'company':<20} {'state':<10} {'healthz':>8} {'cpu%':>6} {'mem MB':>8} {'db MB':>8} "
-                 f"{'wal MB':>7} {'backup s':>8} {'p95 ms':>7} {'lock ms':>8} {'stalls':>6} {'errors':>6}")
+    lines = [
+        f"{snap.get('host_id') or '(not enrolled)'} at {snap['at']}, collected in {snap['collect_ms']} ms"
+        f" (core {snap.get('core_version') or '?'}, collector {snap.get('collector_version') or '?'})",
+        f"  cpu {h['cpu_pct']}% iowait {h['iowait_pct']}% steal {h['steal_pct']}% load {h['load']} on {h['cpus']} cpus",
+        f"  memory {h['mem_avail_mb']} of {h['mem_total_mb']} MB free, swap used {h['swap_used_mb']} MB, "
+        f"OOM kills in the last hour {h['oom_kills_1h']}",
+        f"  disk {h['disk_free_gb']} of {h['disk_total_gb']} GB free, inodes {h['inodes_free_pct']}% free, "
+        f"docker {h['docker_disk_gb']} GB",
+        f"  router {'up' if snap['router']['up'] else 'DOWN'} ({snap['router']['ms']} ms), "
+        f"tunnel {snap['tunnel']['detail']}",
+        "",
+    ]
+    lines.append(
+        f"  {'company':<20} {'state':<10} {'healthz':>8} {'cpu%':>6} {'mem MB':>8} {'db MB':>8} "
+        f"{'wal MB':>7} {'backup s':>8} {'p95 ms':>7} {'lock ms':>8} {'stalls':>6} {'errors':>6}"
+    )
     for c in snap["companies"]:
         server = next((x for x in c["containers"] if x["role"] == "server"), {})
         f = c.get("flight") or {}
         req, sql, stalls = f.get("requests") or {}, f.get("sql") or {}, f.get("stalls") or {}
-        lines.append(f"  {c['slug']:<20} {c['state']:<10} {str(c['healthz']['code']):>8} "
-                     f"{str(server.get('cpu_pct')):>6} {str(server.get('mem_mb')):>8} {str(c['db']['size_mb']):>8} "
-                     f"{str(c['db']['wal_mb']):>7} {str((c.get('backup') or {}).get('age_s')):>8} "
-                     f"{str(req.get('p95_ms')):>7} {str(sql.get('lock_wait_ms')):>8} {str(stalls.get('count')):>6} "
-                     f"{len(c['errors']):>6}")
+        lines.append(
+            f"  {c['slug']:<20} {c['state']:<10} {str(c['healthz']['code']):>8} "
+            f"{str(server.get('cpu_pct')):>6} {str(server.get('mem_mb')):>8} {str(c['db']['size_mb']):>8} "
+            f"{str(c['db']['wal_mb']):>7} {str((c.get('backup') or {}).get('age_s')):>8} "
+            f"{str(req.get('p95_ms')):>7} {str(sql.get('lock_wait_ms')):>8} {str(stalls.get('count')):>6} "
+            f"{len(c['errors']):>6}"
+        )
     return "\n".join(lines)
 
 
@@ -1559,9 +1848,10 @@ def debug_run(box: Box, args, out=None) -> int:
 
 
 def parser() -> argparse.ArgumentParser:
-    p = argparse.ArgumentParser(prog="python3 -m setup.cell_stats",
-                                description="This cell's numbers to HQ each minute, and staff's debug tools "
-                                            "(docs/cell-stats.md).")
+    p = argparse.ArgumentParser(
+        prog="python3 -m setup.cell_stats",
+        description="This cell's numbers to HQ each minute, and staff's debug tools (docs/cell-stats.md).",
+    )
     sub = p.add_subparsers(dest="action", required=True)
     e = sub.add_parser("enroll", help="as root: save HQ's key (from stdin) and start the timer")
     e.add_argument("--hq", help="HQ's address, e.g. https://updates.tico.team")

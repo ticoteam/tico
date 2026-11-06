@@ -1,5 +1,6 @@
 """A bot's unread backlog (GET /api/v2/messages): it is paged newest first through its own index, each message once,
 and a backlog in rooms the turn was never handed is not walked message by message."""
+
 import uuid
 
 from backend import task_privacy
@@ -10,8 +11,12 @@ from backend.tests.test_payload_budgets import clone
 
 def test_the_unread_page_reads_its_index_without_a_sort_or_a_table_scan(api):
     with api.app.state.store.read() as c:
-        plan = " ".join(row[3] for row in c.execute("EXPLAIN QUERY PLAN " + H.UNREAD_PAGE_SQL,
-                                                     ("bot:ops", H.now(), "￿", "￿", 1 << 62, 100)))
+        plan = " ".join(
+            row[3]
+            for row in c.execute(
+                "EXPLAIN QUERY PLAN " + H.UNREAD_PAGE_SQL, ("bot:ops", H.now(), "￿", "￿", 1 << 62, 100)
+            )
+        )
     assert "USING INDEX message_deliveries_waiting" in plan and "TEMP B-TREE" not in plan and "SCAN" not in plan, plan
 
 
@@ -25,15 +30,26 @@ def test_pages_return_every_waiting_message_once_through_ties(api):
         base = {**first, "sender_id": "human:ana", "recipient_id": "bot:ops", "read_at": None, "delivered_at": None}
         c.execute("UPDATE messages SET read_at=?, delivered_at=? WHERE recipient_id='bot:ops'", (H.now(), H.now()))
         # 40 waiting messages in 8 instants of 5 each, then the ones that are not waiting.
-        clone(c, "messages", base, 40, created_at=lambda i: H.shift(first["created_at"], seconds=-(i // 5)),
-              delivered_at=lambda i: H.now() if i % 2 else None, body=lambda i: f"waiting {i}")
+        clone(
+            c,
+            "messages",
+            base,
+            40,
+            created_at=lambda i: H.shift(first["created_at"], seconds=-(i // 5)),
+            delivered_at=lambda i: H.now() if i % 2 else None,
+            body=lambda i: f"waiting {i}",
+        )
         clone(c, "messages", base, 3, read_at=lambda i: H.now(), delivered_at=lambda i: H.now(), body=lambda i: "read")
         clone(c, "messages", base, 3, deleted_at=lambda i: H.now(), body=lambda i: "deleted")
         clone(c, "messages", base, 3, expires_at=lambda i: H.shift(H.now(), seconds=-60), body=lambda i: "expired")
         clone(c, "messages", base, 3, recipient_id=lambda i: "bot:coo", body=lambda i: "someone else's")
     with store.read() as c:
-        expected = [r["id"] for r in c.execute(
-            "SELECT id FROM messages WHERE recipient_id='bot:ops' AND body LIKE 'waiting %' ORDER BY created_at DESC, rowid DESC")]
+        expected = [
+            r["id"]
+            for r in c.execute(
+                "SELECT id FROM messages WHERE recipient_id='bot:ops' AND body LIKE 'waiting %' ORDER BY created_at DESC, rowid DESC"
+            )
+        ]
         for size in (1, 3, 5, 7, 40, 41, 500):
             pages = list(H.inbox_pages(c, "bot:ops", size=size))
             assert all(0 < len(p) <= size for p in pages)
@@ -51,13 +67,33 @@ def test_a_backlog_in_rooms_the_turn_was_not_handed_is_not_walked(api, monkeypat
     with store.transaction() as c:
         conv = dict(c.execute("SELECT * FROM conversations WHERE id=?", (msg["conversation_id"],)).fetchone())
         rooms = [uuid.uuid4().hex for _ in range(60)]
-        clone(c, "conversations", conv, 60, id=lambda i: rooms[i], room_key=lambda i: "room-" + rooms[i],
-              root_id=lambda i: rooms[i], path=lambda i: f"/{rooms[i]}/")     # each its own thread tree
+        clone(
+            c,
+            "conversations",
+            conv,
+            60,
+            id=lambda i: rooms[i],
+            room_key=lambda i: "room-" + rooms[i],
+            root_id=lambda i: rooms[i],
+            path=lambda i: f"/{rooms[i]}/",
+        )  # each its own thread tree
         first = dict(c.execute("SELECT * FROM messages WHERE id=?", (msg["id"],)).fetchone())
-        clone(c, "messages", {**first, "sender_id": "keeper", "recipient_id": "bot:ops", "kind": "notice",
-                              "delivered_at": H.now(), "read_at": None}, 300,
-              created_at=lambda i: H.shift(first["created_at"], seconds=i + 1), conversation_id=lambda i: rooms[i % 60],
-              body=lambda i: f"notice {i}")
+        clone(
+            c,
+            "messages",
+            {
+                **first,
+                "sender_id": "keeper",
+                "recipient_id": "bot:ops",
+                "kind": "notice",
+                "delivered_at": H.now(),
+                "read_at": None,
+            },
+            300,
+            created_at=lambda i: H.shift(first["created_at"], seconds=i + 1),
+            conversation_id=lambda i: rooms[i % 60],
+            body=lambda i: f"notice {i}",
+        )
         c.execute("UPDATE messages SET read_at=NULL WHERE id=?", (msg["id"],))
     walked = []
     readable = task_privacy.message_readable
@@ -65,10 +101,11 @@ def test_a_backlog_in_rooms_the_turn_was_not_handed_is_not_walked(api, monkeypat
     def counting(c, actor, message, current=False):
         walked.append(message["id"])
         return readable(c, actor, message, current)
+
     monkeypatch.setattr(task_privacy, "message_readable", counting)
     inbox = api.get("/api/v2/messages?unread=1", headers=headers(attempt["token"])).json()
     assert [m["id"] for m in inbox["messages"]] == [msg["id"]] and inbox["more_messages"] is False
-    assert walked == [msg["id"]], len(walked)        # before: every one of the 301 messages
+    assert walked == [msg["id"]], len(walked)  # before: every one of the 301 messages
 
 
 def test_readable_messages_split_by_hidden_pages_are_found_across_them(api, monkeypatch):
@@ -76,29 +113,66 @@ def test_readable_messages_split_by_hidden_pages_are_found_across_them(api, monk
     in rooms it was never handed. The newest INBOX_LIMIT come through and `more_messages` is set by the one on the
     third page; once those are read, that one arrives alone. Only readable messages get the privacy walk."""
     from backend.app import INBOX_LIMIT, INBOX_PAGE
+
     store = api.app.state.store
     _, msg, attempt = setup_attempt(api)
-    hidden = 2 * INBOX_PAGE - INBOX_LIMIT                # with INBOX_LIMIT readable ones, fills the first two pages
-    order = ["readable"] + ["hidden"] * (INBOX_PAGE - 1) + ["readable"] * (INBOX_LIMIT - 1) \
-        + ["hidden"] * (hidden - INBOX_PAGE + 1)         # then `msg` itself, the oldest, opens the third page
+    hidden = 2 * INBOX_PAGE - INBOX_LIMIT  # with INBOX_LIMIT readable ones, fills the first two pages
+    order = (
+        ["readable"]
+        + ["hidden"] * (INBOX_PAGE - 1)
+        + ["readable"] * (INBOX_LIMIT - 1)
+        + ["hidden"] * (hidden - INBOX_PAGE + 1)
+    )  # then `msg` itself, the oldest, opens the third page
     with store.transaction() as c:
         conv = dict(c.execute("SELECT * FROM conversations WHERE id=?", (msg["conversation_id"],)).fetchone())
         rooms = [uuid.uuid4().hex for _ in range(40)]
-        clone(c, "conversations", conv, 40, id=lambda i: rooms[i], room_key=lambda i: "room-" + rooms[i],
-              root_id=lambda i: rooms[i], path=lambda i: f"/{rooms[i]}/")     # each its own thread tree
+        clone(
+            c,
+            "conversations",
+            conv,
+            40,
+            id=lambda i: rooms[i],
+            room_key=lambda i: "room-" + rooms[i],
+            root_id=lambda i: rooms[i],
+            path=lambda i: f"/{rooms[i]}/",
+        )  # each its own thread tree
         first = dict(c.execute("SELECT * FROM messages WHERE id=?", (msg["id"],)).fetchone())
-        newer = lambda p: H.shift(first["created_at"], seconds=len(order) - p)   # noqa: E731
+        newer = lambda p: H.shift(first["created_at"], seconds=len(order) - p)  # noqa: E731
         spots = [p for p, kind in enumerate(order) if kind == "readable"]
-        clone(c, "messages", {**first, "read_at": None}, len(spots), created_at=lambda i: newer(spots[i]),
-              body=lambda i: f"readable {i}")
+        clone(
+            c,
+            "messages",
+            {**first, "read_at": None},
+            len(spots),
+            created_at=lambda i: newer(spots[i]),
+            body=lambda i: f"readable {i}",
+        )
         holes = [p for p, kind in enumerate(order) if kind == "hidden"]
-        clone(c, "messages", {**first, "sender_id": "keeper", "recipient_id": "bot:ops", "kind": "notice",
-                              "delivered_at": H.now(), "read_at": None}, len(holes),
-              created_at=lambda i: newer(holes[i]), conversation_id=lambda i: rooms[i % 40], body=lambda i: f"notice {i}")
+        clone(
+            c,
+            "messages",
+            {
+                **first,
+                "sender_id": "keeper",
+                "recipient_id": "bot:ops",
+                "kind": "notice",
+                "delivered_at": H.now(),
+                "read_at": None,
+            },
+            len(holes),
+            created_at=lambda i: newer(holes[i]),
+            conversation_id=lambda i: rooms[i % 40],
+            body=lambda i: f"notice {i}",
+        )
         c.execute("UPDATE messages SET read_at=NULL WHERE id=?", (msg["id"],))
-        readable = [r["id"] for r in c.execute(
-            "SELECT id FROM messages WHERE conversation_id=? AND recipient_id='bot:ops' AND read_at IS NULL "
-            "ORDER BY created_at DESC, rowid DESC", (msg["conversation_id"],))]
+        readable = [
+            r["id"]
+            for r in c.execute(
+                "SELECT id FROM messages WHERE conversation_id=? AND recipient_id='bot:ops' AND read_at IS NULL "
+                "ORDER BY created_at DESC, rowid DESC",
+                (msg["conversation_id"],),
+            )
+        ]
     assert len(readable) == INBOX_LIMIT + 1 and readable[-1] == msg["id"]
     walked = []
     message_readable = task_privacy.message_readable
@@ -106,13 +180,16 @@ def test_readable_messages_split_by_hidden_pages_are_found_across_them(api, monk
     def counting(c, actor, message, current=False):
         walked.append(message["id"])
         return message_readable(c, actor, message, current)
+
     monkeypatch.setattr(task_privacy, "message_readable", counting)
     inbox = api.get("/api/v2/messages?unread=1", headers=headers(attempt["token"])).json()
     assert [m["id"] for m in inbox["messages"]] == readable[:INBOX_LIMIT][::-1] and inbox["more_messages"] is True
     assert walked == readable, len(walked)
     with store.transaction() as c:
-        c.executemany("UPDATE messages SET read_at=?, delivered_at=? WHERE id=?",
-                      [(H.now(), H.now(), mid) for mid in readable[:INBOX_LIMIT]])
+        c.executemany(
+            "UPDATE messages SET read_at=?, delivered_at=? WHERE id=?",
+            [(H.now(), H.now(), mid) for mid in readable[:INBOX_LIMIT]],
+        )
     inbox = api.get("/api/v2/messages?unread=1", headers=headers(attempt["token"])).json()
     assert [m["id"] for m in inbox["messages"]] == [msg["id"]] and inbox["more_messages"] is False
 
@@ -121,15 +198,28 @@ def test_the_newest_hundred_readable_arrive_oldest_first(api):
     """What the inbox sends is unchanged: the newest INBOX_LIMIT readable messages, oldest first, `more_messages` when
     one more readable message waits, and none says it was answered (nothing asks in a message now)."""
     from backend.app import INBOX_LIMIT
+
     store = api.app.state.store
     msg = post(api, "chat/ops", {"text": "Hello"})
     with store.transaction() as c:
         first = dict(c.execute("SELECT * FROM messages WHERE id=?", (msg["id"],)).fetchone())
         base = {**first, "sender_id": "bot:ops", "recipient_id": "human:ana", "read_at": None}
-        clone(c, "messages", base, INBOX_LIMIT + 50, created_at=lambda i: H.shift(first["created_at"], seconds=-i - 1),
-              kind=lambda i: "say", body=lambda i: f"reply {i}")
-        newest = [r["id"] for r in c.execute("SELECT id FROM messages WHERE recipient_id='human:ana' AND read_at IS NULL "
-                                             "AND deleted_at IS NULL ORDER BY created_at DESC, rowid DESC")][:INBOX_LIMIT]
+        clone(
+            c,
+            "messages",
+            base,
+            INBOX_LIMIT + 50,
+            created_at=lambda i: H.shift(first["created_at"], seconds=-i - 1),
+            kind=lambda i: "say",
+            body=lambda i: f"reply {i}",
+        )
+        newest = [
+            r["id"]
+            for r in c.execute(
+                "SELECT id FROM messages WHERE recipient_id='human:ana' AND read_at IS NULL "
+                "AND deleted_at IS NULL ORDER BY created_at DESC, rowid DESC"
+            )
+        ][:INBOX_LIMIT]
     inbox = api.get("/api/v2/messages?unread=1", headers=headers()).json()
     assert [m["id"] for m in inbox["messages"]] == newest[::-1] and inbox["more_messages"] is True
     assert all(m["answered_at"] is None for m in inbox["messages"])
@@ -141,12 +231,25 @@ def test_a_persons_inbox_leaves_out_threads_they_cannot_read(api):
     store = api.app.state.store
     with store.transaction() as c:
         mine = H.open_conversation(c, "human:ana", ["human:ana", "human:ben"], kind="chat", subject="Ana and Ben")
-        theirs = H.open_conversation(c, "human:cara", ["human:cara", "bot:ops"], kind="chat", subject="Cara's",
-                                     scope="personal", owner_actor="human:cara", room_key="ops")
+        theirs = H.open_conversation(
+            c,
+            "human:cara",
+            ["human:cara", "bot:ops"],
+            kind="chat",
+            subject="Cara's",
+            scope="personal",
+            owner_actor="human:cara",
+            room_key="ops",
+        )
         seen = H.say(c, "human:ana", "human:ben", "For Ben", conversation_id=mine["id"])
         base = dict(c.execute("SELECT * FROM messages WHERE id=?", (seen["id"],)).fetchone())
-        clone(c, "messages", {**base, "conversation_id": theirs["id"], "sender_id": "human:cara"}, 1,
-              body=lambda i: "Cara's private words")
+        clone(
+            c,
+            "messages",
+            {**base, "conversation_id": theirs["id"], "sender_id": "human:cara"},
+            1,
+            body=lambda i: "Cara's private words",
+        )
     inbox = api.get("/api/v2/inbox", headers=headers("ben-test")).json()
     bodies = [m["body"] for m in inbox["messages"]]
     assert "For Ben" in bodies and "Cara's private words" not in bodies

@@ -9,14 +9,15 @@ from backend.maintenance_steps import clean_up
 from backend.tests.test_api import api  # noqa: F401  (api is a fixture)
 from backend.tests.test_profiles import add_bot, put
 
-NOW = "2026-11-06T15:00:00Z"            # Nov 6 in the team's zone
-ENDED = "2026-11-03T12:00:00Z"          # Nov 3: an earlier night
-TODAY = "2026-11-06T13:00:00Z"          # the same night as NOW
+NOW = "2026-11-06T15:00:00Z"  # Nov 6 in the team's zone
+ENDED = "2026-11-03T12:00:00Z"  # Nov 3: an earlier night
+TODAY = "2026-11-06T13:00:00Z"  # the same night as NOW
 
 
 def packet(c, bot, created, status):
-    task = H.task_create(c, H.KEEPER, "Nightly learnings: Nov 3", "x", "bot:" + bot, deduplicate=False, lint=False,
-                         private=True)
+    task = H.task_create(
+        c, H.KEEPER, "Nightly learnings: Nov 3", "x", "bot:" + bot, deduplicate=False, lint=False, private=True
+    )
     c.execute("UPDATE tasks SET created_at=?, status=? WHERE id=?", (created, status, task["id"]))
     return task["id"]
 
@@ -50,8 +51,11 @@ def test_an_ordinary_active_task_still_counts_and_todays_packet_is_kept(api):
     with api.app.state.store.transaction() as c:
         add_bot(c, "checker")
         put(c, "checker", P.REVIEWER)
-        c.execute("INSERT INTO tasks(id,title,body,owner_id,requester_id,status,created_at,updated_at) "
-                  "VALUES('t-odd','Odd job','x','bot:checker','human:ana','doing',?,?)", (ENDED, ENDED))
+        c.execute(
+            "INSERT INTO tasks(id,title,body,owner_id,requester_id,status,created_at,updated_at) "
+            "VALUES('t-odd','Odd job','x','bot:checker','human:ana','doing',?,?)",
+            (ENDED, ENDED),
+        )
         today = packet(c, "checker", TODAY, "open")
         assert learnings.close_finished_packets(c, NOW) == {"closed": [], "kept": []}
         assert H.task(c, today)["status"] == "open"
@@ -66,7 +70,9 @@ def test_a_finished_packet_with_an_open_child_stays_open_and_the_child_is_left_a
         task = packet(c, "checker", ENDED, "doing")
         child = H.task_create(c, H.KEEPER, "Route decision", "x", "bot:lead", parent_id=task)
         assert learnings.close_finished_packets(c, NOW) == {
-            "closed": [], "kept": [{"id": task, "reason": "open subtask " + child["id"]}]}
+            "closed": [],
+            "kept": [{"id": task, "reason": "open subtask " + child["id"]}],
+        }
         assert H.task(c, task)["status"] == "doing"
         assert H.task(c, child["id"])["status"] == "open"
         assert holds(c) == [("reviewer_holds_tasks", "checker", 1)]

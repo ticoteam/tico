@@ -1,4 +1,5 @@
 """hcloud / doctl are replaced by a recorder: no test here can create anything."""
+
 import json
 
 import pytest
@@ -10,8 +11,23 @@ from setup.tests import fakes
 from setup.tests.fakes import CaptureIO
 
 SECRET = "GOCSPX-supersecret"
-BASE = ["--non-interactive", "--yes", "--domain", "tico.example.com", "--auth", "google", "--client-id", "cid.apps.googleusercontent.com",
-        "--company", "Acme", "--owner-email", "me@example.com", "--tico-version", "v1.2.3", "--skip-dns-wait"]
+BASE = [
+    "--non-interactive",
+    "--yes",
+    "--domain",
+    "tico.example.com",
+    "--auth",
+    "google",
+    "--client-id",
+    "cid.apps.googleusercontent.com",
+    "--company",
+    "Acme",
+    "--owner-email",
+    "me@example.com",
+    "--tico-version",
+    "v1.2.3",
+    "--skip-dns-wait",
+]
 
 
 class FakeCli:
@@ -26,6 +42,7 @@ class FakeCli:
         for flag in ("--user-data-from-file", "--user-data-file"):
             if flag in argv:
                 import os
+
                 path = argv[argv.index(flag) + 1]
                 with open(path) as f:
                     self.user_data = f.read()
@@ -33,7 +50,7 @@ class FakeCli:
         if "--rules-file" in argv:
             with open(argv[argv.index("--rules-file") + 1]) as f:
                 self.rules = json.load(f)
-        best = max((k for k in self.replies if argv[:len(k)] == list(k)), key=len, default=None)
+        best = max((k for k in self.replies if argv[: len(k)] == list(k)), key=len, default=None)
         return self.replies[best] if best else Cli(0, "")
 
     def verbs(self):
@@ -41,21 +58,31 @@ class FakeCli:
 
 
 def hz(over=None):
-    r = {("hcloud", "server", "describe"): Cli(1, "", "not found"), ("hcloud", "primary-ip", "describe"): Cli(1, "", "not found"),
-         ("hcloud", "firewall", "describe"): Cli(1, "", "not found"),
-         ("hcloud", "primary-ip", "create"): Cli(0, json.dumps({"primary_ip": {"id": 7, "ip": "203.0.113.9"}})),
-         ("hcloud", "server", "create"): Cli(0, json.dumps({"server": {"id": 42, "public_net": {"ipv4": {"ip": "203.0.113.9"}}},
-                                                            "root_password": "ROOTPW-leak"})),
-         ("hcloud", "ssh-key", "list"): Cli(0, "laptop\n")}
+    r = {
+        ("hcloud", "server", "describe"): Cli(1, "", "not found"),
+        ("hcloud", "primary-ip", "describe"): Cli(1, "", "not found"),
+        ("hcloud", "firewall", "describe"): Cli(1, "", "not found"),
+        ("hcloud", "primary-ip", "create"): Cli(0, json.dumps({"primary_ip": {"id": 7, "ip": "203.0.113.9"}})),
+        ("hcloud", "server", "create"): Cli(
+            0,
+            json.dumps(
+                {"server": {"id": 42, "public_net": {"ipv4": {"ip": "203.0.113.9"}}}, "root_password": "ROOTPW-leak"}
+            ),
+        ),
+        ("hcloud", "ssh-key", "list"): Cli(0, "laptop\n"),
+    }
     r.update(over or {})
     return FakeCli(r)
 
 
 def do(over=None):
-    r = {("doctl", "compute", "droplet", "list"): Cli(0, ""), ("doctl", "compute", "firewall", "list"): Cli(0, ""),
-         ("doctl", "compute", "reserved-ip", "create"): Cli(0, "198.51.100.5\n"),
-         ("doctl", "compute", "droplet", "create"): Cli(0, "999 192.0.2.44\n"),
-         ("doctl", "compute", "ssh-key", "list"): Cli(0, "123\n")}
+    r = {
+        ("doctl", "compute", "droplet", "list"): Cli(0, ""),
+        ("doctl", "compute", "firewall", "list"): Cli(0, ""),
+        ("doctl", "compute", "reserved-ip", "create"): Cli(0, "198.51.100.5\n"),
+        ("doctl", "compute", "droplet", "create"): Cli(0, "999 192.0.2.44\n"),
+        ("doctl", "compute", "ssh-key", "list"): Cli(0, "123\n"),
+    }
     r.update(over or {})
     return FakeCli(r)
 
@@ -78,20 +105,46 @@ def test_hetzner_creates_ip_firewall_then_server_with_the_right_argv_and_private
     f = hz()
     code, out = go(["--cloud", "hetzner", *BASE], f)
     assert code == 0, out
-    assert f.verbs() == ["hcloud location list", "hcloud ssh-key list", "hcloud server describe", "hcloud primary-ip describe",
-                         "hcloud primary-ip create", "hcloud firewall describe", "hcloud firewall create", "hcloud server create"]
+    assert f.verbs() == [
+        "hcloud location list",
+        "hcloud ssh-key list",
+        "hcloud server describe",
+        "hcloud primary-ip describe",
+        "hcloud primary-ip create",
+        "hcloud firewall describe",
+        "hcloud firewall create",
+        "hcloud server create",
+    ]
     n = "tico-tico-example-com"
     create = next(a for a in f.calls if a[:3] == ["hcloud", "server", "create"])
-    for pair in (["--name", n], ["--type", "cax11"], ["--image", "ubuntu-24.04"], ["--location", "nbg1"], ["--primary-ipv4", n],
-                 ["--firewall", n], ["--ssh-key", "laptop"], ["--label", "ManagedBy=tico-setup"], ["--label", f"tico-setup-name={n}"]):
+    for pair in (
+        ["--name", n],
+        ["--type", "cax11"],
+        ["--image", "ubuntu-24.04"],
+        ["--location", "nbg1"],
+        ["--primary-ipv4", n],
+        ["--firewall", n],
+        ["--ssh-key", "laptop"],
+        ["--label", "ManagedBy=tico-setup"],
+        ["--label", f"tico-setup-name={n}"],
+    ):
         i = create.index(pair[0])
-        assert create[i:i + 2] == pair or pair in [create[j:j + 2] for j in range(len(create) - 1)], pair
+        assert create[i : i + 2] == pair or pair in [create[j : j + 2] for j in range(len(create) - 1)], pair
     ip_create = next(a for a in f.calls if a[:3] == ["hcloud", "primary-ip", "create"])
     assert "--auto-delete=false" in ip_create and ip_create[ip_create.index("--type") + 1] == "ipv4"
-    assert {(r["protocol"], r["port"]) for r in f.rules} == {("tcp", "22"), ("tcp", "80"), ("tcp", "443"), ("udp", "443")}
+    assert {(r["protocol"], r["port"]) for r in f.rules} == {
+        ("tcp", "22"),
+        ("tcp", "80"),
+        ("tcp", "443"),
+        ("udp", "443"),
+    }
     assert f.mode == 0o600
     env = yaml.safe_load(f.user_data)["write_files"][0]["content"]
-    assert "TICO_CLOUD_SERVER_IP=203.0.113.9" in env and "TICO_CLOUD_VERSION=v1.2.3" in env and "TICO_CLOUD_ALLOW_SSH=1" in env
+    assert (
+        "TICO_CLOUD_SERVER_IP=203.0.113.9" in env
+        and "TICO_CLOUD_VERSION=v1.2.3" in env
+        and "TICO_CLOUD_ALLOW_SSH=1" in env
+    )
     assert not any(SECRET in " ".join(a) for a in f.calls)  # secrets travel in the file, never in argv
     assert SECRET not in out and "ROOTPW-leak" not in out
     assert "A tico.example.com 203.0.113.9" in out or "203.0.113.9" in out
@@ -118,4 +171,3 @@ def test_state_is_saved_without_secrets(tmp_path):
     assert SECRET not in saved and '"target": "hetzner"' in saved and "203.0.113.9" in saved
     code, out = go(["destroy", "--domain", "tico.example.com"], FakeCli())
     assert code == 0 and "hcloud server delete tico-tico-example-com" in out
-

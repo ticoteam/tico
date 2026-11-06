@@ -24,6 +24,7 @@ started_s, outcome, message, reported, checked_s}. It survives the update's own 
 the record. HQ's answers are read raw, capped at MAX_ANSWER bytes, with no redirects, and must have exactly the fields
 the contract names. The key goes only in the request's header, only to a URL `clients/gateway.py safe_base` allows.
 """
+
 import json
 import re
 import threading
@@ -41,15 +42,15 @@ KEY = "hosted-update"
 ACTOR = "system:hosting"
 PATH = "/servers/update"
 HOSTED = ("own", "invited")
-CHECK_S = 15 * 60            # HQ is asked this often; at once after an outcome
-IDLE_WAIT_S = 2 * 3600       # a busy server updates anyway after this long, as Update now would
-SETTLE_S = 45 * 60           # an update with no final state from the updater after this long is reported timed_out
+CHECK_S = 15 * 60  # HQ is asked this often; at once after an outcome
+IDLE_WAIT_S = 2 * 3600  # a busy server updates anyway after this long, as Update now would
+SETTLE_S = 45 * 60  # an update with no final state from the updater after this long is reported timed_out
 # The pre-update copy's allowance scales with the database, so its time is not counted against SETTLE_S. A copy that
 # reports snapshotting for longer than this is no longer excused: the updater bounds it, and this guards a stuck status.
 SNAPSHOT_GUARD_S = 6 * 3600
-WAIT = 10                    # seconds for HQ's answer
+WAIT = 10  # seconds for HQ's answer
 MAX_ANSWER = 4096
-OPENER = None                # tests replace it with a function (request, timeout) -> response: nothing leaves the test
+OPENER = None  # tests replace it with a function (request, timeout) -> response: nothing leaves the test
 REQUEST_ID = re.compile(r"hu_[0-9a-f]{16}")
 STABLE = re.compile(r"[0-9]{1,4}\.[0-9]{1,4}\.[0-9]{1,4}")
 UNDER_WAY = ("pulling", "snapshotting", "restarting", "uncertain")
@@ -59,8 +60,13 @@ _ticking = threading.Lock()
 def on(settings):
     """A hosted install that is not a demo or a rehearsal (a copy of real data never updates for HQ), and that Tico does
     not update from outside (TICO_UPDATES=tico). A cell company has an updater of its own (docs/cell.md) and asks."""
-    return getattr(settings, "hosted", "") in HOSTED and not getattr(settings, "demo", False) \
-        and not getattr(settings, "rehearsal", False) and not rehearsal_on() and not releases.managed()
+    return (
+        getattr(settings, "hosted", "") in HOSTED
+        and not getattr(settings, "demo", False)
+        and not getattr(settings, "rehearsal", False)
+        and not rehearsal_on()
+        and not releases.managed()
+    )
 
 
 def load(c):
@@ -73,8 +79,10 @@ def load(c):
 
 
 def save(c, record):
-    c.execute("INSERT INTO registry_metadata VALUES(?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value",
-              (KEY, json.dumps(record, sort_keys=True)))
+    c.execute(
+        "INSERT INTO registry_metadata VALUES(?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value",
+        (KEY, json.dumps(record, sort_keys=True)),
+    )
 
 
 def scheduled(c, settings):
@@ -103,6 +111,7 @@ def busy(c):
     if c.execute("SELECT 1 FROM attempts WHERE state IN ('leased','running') LIMIT 1").fetchone():
         return True
     from .execution import CLAIMED_BUSY, claimed_busy
+
     return any(claimed_busy(runner)[0] for runner in list(CLAIMED_BUSY))
 
 
@@ -117,9 +126,18 @@ def record_outcome(c, result):
     if result.get("to") and str(result["to"]).lstrip("v") != pending["to"]:
         return False
     c.execute("DELETE FROM registry_metadata WHERE key='update-pending'")
-    H.event(c, pending["actor"], "system.update.finished", pending["to"],
-            {"outcome": result["state"], "from": pending["from"], "to": pending["to"],
-             "message": result.get("message", "")})
+    H.event(
+        c,
+        pending["actor"],
+        "system.update.finished",
+        pending["to"],
+        {
+            "outcome": result["state"],
+            "from": pending["from"],
+            "to": pending["to"],
+            "message": result.get("message", ""),
+        },
+    )
     return True
 
 
@@ -130,8 +148,12 @@ def _ask(key, base, body):
         base = G.safe_base(base)
     except ValueError:
         return 0, None
-    request = urllib.request.Request(base + PATH, method="POST", data=json.dumps(body).encode(), headers={
-        "Authorization": "Bearer " + key, "Content-Type": "application/json", "Accept": "application/json"})
+    request = urllib.request.Request(
+        base + PATH,
+        method="POST",
+        data=json.dumps(body).encode(),
+        headers={"Authorization": "Bearer " + key, "Content-Type": "application/json", "Accept": "application/json"},
+    )
     try:
         with (OPENER or G._send)(request, timeout=WAIT) as response:
             raw, status = response.read(MAX_ANSWER + 1), getattr(response, "status", 200)
@@ -156,9 +178,14 @@ def _target(answer):
     target = answer["target"]
     if target is None:
         return None
-    if not isinstance(target, dict) or set(target) != {"version", "request_id"} \
-            or not isinstance(target["version"], str) or not STABLE.fullmatch(target["version"]) \
-            or not isinstance(target["request_id"], str) or not REQUEST_ID.fullmatch(target["request_id"]):
+    if (
+        not isinstance(target, dict)
+        or set(target) != {"version", "request_id"}
+        or not isinstance(target["version"], str)
+        or not STABLE.fullmatch(target["version"])
+        or not isinstance(target["request_id"], str)
+        or not REQUEST_ID.fullmatch(target["request_id"])
+    ):
         raise ValueError("target")
     return target["version"], target["request_id"]
 
@@ -179,13 +206,13 @@ def check_in(store, key, base, now):
             target = _target(answer) if status == 200 else ValueError
         except ValueError:
             target = ValueError
-        if target is ValueError:                   # not reached, refused or not hosted: ask again next time
+        if target is ValueError:  # not reached, refused or not hosted: ask again next time
             save(c, record)
             return
         if told and record.get("request_id") == told:
             record["reported"] = True
         if target is None:
-            if record.get("state") == "waiting":   # staff took it back before it started
+            if record.get("state") == "waiting":  # staff took it back before it started
                 H.event(c, ACTOR, "system.update.unscheduled", record["target"], {"to": record["target"]})
                 record.update(state="done", outcome="", message="", reported=True)
         elif target[1] != record.get("request_id") and record.get("state") != "updating":
@@ -214,7 +241,7 @@ def _finish(store, request_id, outcome, message):
 def _status():
     try:
         return releases.status()
-    except Problem:                                # the updater not answering, as while it restarts the server
+    except Problem:  # the updater not answering, as while it restarts the server
         return {"state": "unanswered"}
 
 
@@ -247,10 +274,10 @@ def advance(store, now):
         return state
     current = releases.version()
     if state == "waiting":
-        if reached(current, target):               # the owner updated meanwhile
+        if reached(current, target):  # the owner updated meanwhile
             _finish(store, request_id, "updated", "")
             return "done"
-        if _status().get("state") in UNDER_WAY:    # another update (the owner's) is under way: it finishes first
+        if _status().get("state") in UNDER_WAY:  # another update (the owner's) is under way: it finishes first
             return state
         with store.transaction() as c:
             record = load(c)
@@ -262,12 +289,15 @@ def advance(store, now):
             record.pop("snapshot_s", None)
             record.pop("snapshot_since_s", None)
             save(c, record)
-            c.execute("INSERT INTO registry_metadata VALUES('update-pending',?) "
-                      "ON CONFLICT(key) DO UPDATE SET value=excluded.value",
-                      (json.dumps({"actor": ACTOR, "from": current, "to": target}),))
+            c.execute(
+                "INSERT INTO registry_metadata VALUES('update-pending',?) "
+                "ON CONFLICT(key) DO UPDATE SET value=excluded.value",
+                (json.dumps({"actor": ACTOR, "from": current, "to": target}),),
+            )
             H.event(c, ACTOR, "system.update.started", target, {"from": current, "to": target})
             from .execution import flag_cut
-            flag_cut(c, "update", target)    # the runs it cuts resume after it (execution.cut_by_update)
+
+            flag_cut(c, "update", target)  # the runs it cuts resume after it (execution.cut_by_update)
         try:
             releases.start(target)
         except Problem as problem:
@@ -279,7 +309,7 @@ def advance(store, now):
     with store.transaction() as c:
         fresh = load(c)
         if fresh.get("request_id") == request_id and fresh.get("state") == "updating":
-            record = _track_snapshot(fresh, final, now)   # from the stored record, so the copy's start is kept
+            record = _track_snapshot(fresh, final, now)  # from the stored record, so the copy's start is kept
             save(c, record)
     if final == "healthy" and reached(current, target):
         _finish(store, request_id, "updated", "")
@@ -299,8 +329,11 @@ def due(store, now=None):
     with store.read() as c:
         record = load(c)
     now = now or time.time()
-    return record.get("state") in ("waiting", "updating") or now - record.get("checked_s", 0) >= CHECK_S \
+    return (
+        record.get("state") in ("waiting", "updating")
+        or now - record.get("checked_s", 0) >= CHECK_S
         or bool(record.get("outcome") and not record.get("reported"))
+    )
 
 
 def tick(store, vault, now=None):
@@ -309,11 +342,14 @@ def tick(store, vault, now=None):
         return ""
     try:
         from . import gateway_connection
+
         now = now or time.time()
         with store.read() as c:
             record = load(c)
             key, base, _ = gateway_connection.target(c, vault, store.settings)
-        if key and (now - record.get("checked_s", 0) >= CHECK_S or (record.get("outcome") and not record.get("reported"))):
+        if key and (
+            now - record.get("checked_s", 0) >= CHECK_S or (record.get("outcome") and not record.get("reported"))
+        ):
             check_in(store, key, base, now)
         return advance(store, now)
     finally:
@@ -328,7 +364,8 @@ def tick_later(store):
         try:
             tick(store, Vault(store))
         except Exception:
-            pass                                   # the next minute tries again
+            pass  # the next minute tries again
+
     thread = threading.Thread(target=run, name="hosted-update", daemon=True)
     thread.start()
     return thread

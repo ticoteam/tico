@@ -102,7 +102,7 @@ const items = [
     const rows = await page.locator('#task-body .tl-row[data-task-key^="t"]').evaluateAll(els => Object.fromEntries(els
       .filter(el => /^t-(ask|stale|plain|blank|person)$/.test(el.dataset.taskKey.slice(1))).map(el => [el.dataset.taskKey.slice(1), el.dataset.needCard || ''])));
     assert.deepEqual(rows, {'t-ask': '', 't-stale': 'task:t-stale', 't-plain': 'task:t-plain', 't-blank': '', 't-person': ''});
-    assert.equal(await page.locator('#task-tab-foryou .cnt').innerText(), '5');
+    assert.equal(await page.locator('#task-scope .cnt').innerText(), '5');
     assert.deepEqual(await page.locator('[data-needs-badge]').allTextContents(), ['5', '5']);
     assert.equal(await page.locator('#task-body details').count(), 0, 'nothing in the list unfolds');
 
@@ -159,10 +159,10 @@ const items = [
     const go = page.locator('#tasks-pane [data-go-through]:visible');
     assert.equal(await go.count(), 0, 'nothing waits on a card: no Catch up');
     assert.equal(await page.locator('#task-body .tl-row').count(), 3, 'full-task rows still need the person');
-    assert.equal(await page.locator('#task-tab-foryou .cnt').innerText(), '3');
+    assert.equal(await page.locator('#task-scope .cnt').innerText(), '3');
     await page.evaluate(() => { DEC_HANDLED.delete('task:t-stale'); needsListsRedraw(); });
     assert.equal((await go.textContent()).trim(), 'Catch up');
-    assert.equal(await go.evaluate(el => el.classList.contains('tl-decide-head')), true);
+    assert.equal(await go.evaluate(el => !!el.closest('.tl-head')), true, 'Catch up sits in the header row');
     await go.click();
     await read('t-stale');
     // Closed and opened again at once: the close's Back lands after the new card opened, and leaves it open with a

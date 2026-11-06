@@ -15,10 +15,12 @@ def _columns(conn, table):
 
 def up(conn):
     if not {"kind", "answered_by_id", "superseded_at", "deleted_at", "in_reply_to"} <= _columns(conn, "messages"):
-        return                      # a new file: its messages table comes later, and has no asks
-    staged = ("FROM messages m WHERE m.kind='ask' AND m.deleted_at IS NULL AND m.answered_by_id IS NULL "
-              "AND m.superseded_at IS NULL AND NOT EXISTS (SELECT 1 FROM messages a WHERE a.in_reply_to=m.id "
-              "AND a.kind='answer' AND a.deleted_at IS NULL)")
+        return  # a new file: its messages table comes later, and has no asks
+    staged = (
+        "FROM messages m WHERE m.kind='ask' AND m.deleted_at IS NULL AND m.answered_by_id IS NULL "
+        "AND m.superseded_at IS NULL AND NOT EXISTS (SELECT 1 FROM messages a WHERE a.in_reply_to=m.id "
+        "AND a.kind='answer' AND a.deleted_at IS NULL)"
+    )
     # Only a file with asks to move gets the staging table: move_asks drops it once they are moved.
     if conn.execute(f"SELECT 1 {staged} LIMIT 1").fetchone():
         conn.execute("CREATE TABLE IF NOT EXISTS asks_moved(message_id TEXT PRIMARY KEY, created_at TEXT NOT NULL)")

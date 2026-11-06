@@ -1,5 +1,6 @@
 """Apps built in one process share their routes' field validators (backend/route_memo.py), never their handlers,
 state or each other's types."""
+
 import subprocess
 import sys
 from pathlib import Path
@@ -30,7 +31,7 @@ def build(store):
     """An app the way create_app builds one: handlers and models made inside a function, over its own state."""
     app = FastAPI()
 
-    class Note(BaseModel):      # one class per app
+    class Note(BaseModel):  # one class per app
         text: str
 
     @app.get("/items/{item_id}")
@@ -40,6 +41,7 @@ def build(store):
     @app.post("/notes")
     def note(body: Note):
         return {"store": store, "text": body.text}
+
     return app
 
 
@@ -94,6 +96,7 @@ def test_keys_tell_apart_values_that_compare_equal():
 
     class Local(BaseModel):
         x: int
+
     for made_here in (Local, list[Local], lambda: 1, object()):
         with pytest.raises(RM.Uncacheable):
             RM.frozen(made_here)
@@ -101,13 +104,16 @@ def test_keys_tell_apart_values_that_compare_equal():
 
 def test_a_signature_differing_only_in_what_get_dependant_reads_is_not_shared():
     """Header(None) and Header(None, convert_underscores=False) build the same validator but different aliases."""
+
     def header_app(convert):
         app = FastAPI()
 
         @app.get("/h")
         def read(x_token: str | None = Header(None, convert_underscores=convert)):
             return {"token": x_token}
+
         return app
+
     converted, kept = header_app(True), header_app(False)
     assert dependant(converted, "/h").header_params[0].alias == "x-token"
     assert dependant(kept, "/h").header_params[0].alias == "x_token"
@@ -119,7 +125,8 @@ def test_route_building_is_still_the_reviewed_version():
     found = {"fastapi": fastapi.__version__, "starlette": starlette.__version__, "pydantic": pydantic.VERSION}
     assert found == REVIEWED, (
         "FastAPI, Starlette or pydantic changed: re-review backend/route_memo.py's keys (what get_dependant, "
-        "ModelField.__post_init__ and compile_path read) against the new version, then update REVIEWED.")
+        "ModelField.__post_init__ and compile_path read) against the new version, then update REVIEWED."
+    )
 
 
 def test_paths_compile_once_into_their_own_convertor_dicts():
@@ -131,13 +138,21 @@ def test_only_test_processes_patch_fastapi():
     """The root conftest.py installs the memo in every test process; a server process importing the app keeps
     FastAPI's own route building."""
     import fastapi.routing
+
     assert fastapi.routing.get_dependant is RM.get_dependant and fastapi.routing.compile_path is RM.compile_path
-    check = ("import backend.app, fastapi.routing as r, fastapi.dependencies.utils as u, starlette.routing as s\n"
-             "from fastapi._compat import v2\n"
-             "from backend import route_memo as RM\n"
-             "assert r.get_dependant is u.get_dependant is RM._get_dependant\n"
-             "assert r.compile_path is s.compile_path is RM._compile_path\n"
-             "assert v2.ModelField.__post_init__ is RM._build_adapter\n")
-    result = subprocess.run([sys.executable, "-c", check], cwd=Path(__file__).resolve().parents[2],
-                            capture_output=True, text=True, timeout=60)
+    check = (
+        "import backend.app, fastapi.routing as r, fastapi.dependencies.utils as u, starlette.routing as s\n"
+        "from fastapi._compat import v2\n"
+        "from backend import route_memo as RM\n"
+        "assert r.get_dependant is u.get_dependant is RM._get_dependant\n"
+        "assert r.compile_path is s.compile_path is RM._compile_path\n"
+        "assert v2.ModelField.__post_init__ is RM._build_adapter\n"
+    )
+    result = subprocess.run(
+        [sys.executable, "-c", check],
+        cwd=Path(__file__).resolve().parents[2],
+        capture_output=True,
+        text=True,
+        timeout=60,
+    )
     assert result.returncode == 0, result.stderr[-2000:]

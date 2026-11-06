@@ -17,6 +17,7 @@ rebuilt every time, but three things are pure functions of their inputs and are 
 Only tests install it (the root conftest.py, in every pytest process, xdist workers included): a test process builds
 an app per test, a server builds one. Production imports never patch FastAPI (backend/tests/test_route_memo.py).
 """
+
 import dataclasses
 import enum
 import functools
@@ -37,7 +38,7 @@ ADAPTER_LIMIT = 20_000
 ADAPTERS = {}
 DEPENDANTS = {}
 _SCALARS = (str, int, float, bool, bytes, complex, type(None))
-_ATTRS = tuple(fastapi_v2._Attrs)     # the FieldInfo attributes FastAPI copies into a field's adapter
+_ATTRS = tuple(fastapi_v2._Attrs)  # the FieldInfo attributes FastAPI copies into a field's adapter
 
 
 class Uncacheable(Exception):
@@ -46,6 +47,7 @@ class Uncacheable(Exception):
 
 class _Same:
     """An object compared by identity in a key; it holds its object, so its id is never reused while the key lives."""
+
     __slots__ = ("obj",)
 
     def __init__(self, obj):
@@ -110,12 +112,16 @@ def frozen(value, depth=0):
     if isinstance(value, FieldInfo):
         # A FieldInfo named in a signature (a default, or Annotated metadata) is copied whole: get_dependant reads
         # more than the validator does (Header's convert_underscores, Body's embed and media_type, in_, ...).
-        return ("field", kind, tuple((name, frozen(getattr(value, name), depth + 1)) for name in _field_names(value)
-                                     if hasattr(value, name)))
+        return (
+            "field",
+            kind,
+            tuple(
+                (name, frozen(getattr(value, name), depth + 1)) for name in _field_names(value) if hasattr(value, name)
+            ),
+        )
     if dataclasses.is_dataclass(value) and _module_level(kind):
-        return ("dataclass", kind, tuple(frozen(getattr(value, f.name), depth + 1)
-                                         for f in dataclasses.fields(value)))
-    if kind is DefaultPlaceholder:      # FastAPI's "not given" marker (a Param's deprecated `example`): its value
+        return ("dataclass", kind, tuple(frozen(getattr(value, f.name), depth + 1) for f in dataclasses.fields(value)))
+    if kind is DefaultPlaceholder:  # FastAPI's "not given" marker (a Param's deprecated `example`): its value
         return ("placeholder", frozen(value.value, depth + 1))
     if isinstance(value, annotated_types.BaseMetadata) and hasattr(value, "__dict__"):
         # pydantic's general metadata (a pattern, max_digits): one cached class, holding only its __dict__.
@@ -132,15 +138,26 @@ def _field_names(field_info):
 
 @functools.cache
 def _slot_names(kind):
-    return tuple(sorted({name for cls in kind.__mro__ for name in getattr(cls, "__slots__", ())
-                         if name not in ("__dict__", "__weakref__")}))
+    return tuple(
+        sorted(
+            {
+                name
+                for cls in kind.__mro__
+                for name in getattr(cls, "__slots__", ())
+                if name not in ("__dict__", "__weakref__")
+            }
+        )
+    )
 
 
 def _field_parts(field_info, depth):
     """What FastAPI builds a field's adapter from (fastapi._compat.v2.ModelField): its annotation, metadata and set
     attributes: exactly the attributes it passes on (fastapi._compat.v2.asdict)."""
-    attributes = tuple((name, frozen(value, depth + 1)) for name in _ATTRS
-                       if (value := getattr(field_info, name, PydanticUndefined)) is not PydanticUndefined)
+    attributes = tuple(
+        (name, frozen(value, depth + 1))
+        for name in _ATTRS
+        if (value := getattr(field_info, name, PydanticUndefined)) is not PydanticUndefined
+    )
     return (frozen(field_info.annotation, depth + 1), frozen(list(field_info.metadata), depth + 1), attributes)
 
 
@@ -173,18 +190,27 @@ def dependant_key(path, call, name, own_oauth_scopes, parent_oauth_scopes, use_c
     """What get_dependant reads: the path, the options and the handler's typed signature (names, kinds, annotations
     and defaults by value, a FieldInfo with every attribute it holds). The handler itself is not in it: each app's
     Dependant gets its own."""
-    parameters = tuple((p.name, p.kind, frozen(p.annotation), frozen(p.default))
-                       for p in fastapi_dependencies.get_typed_signature(call).parameters.values())
+    parameters = tuple(
+        (p.name, p.kind, frozen(p.annotation), frozen(p.default))
+        for p in fastapi_dependencies.get_typed_signature(call).parameters.values()
+    )
     return (path, name, frozen(own_oauth_scopes), frozen(parent_oauth_scopes), use_cache, scope, parameters)
 
 
 _get_dependant = fastapi_dependencies.get_dependant
 
 
-def get_dependant(*, path, call, name=None, own_oauth_scopes=None, parent_oauth_scopes=None, use_cache=True,
-                  scope=None):
-    options = dict(path=path, name=name, own_oauth_scopes=own_oauth_scopes, parent_oauth_scopes=parent_oauth_scopes,
-                   use_cache=use_cache, scope=scope)
+def get_dependant(
+    *, path, call, name=None, own_oauth_scopes=None, parent_oauth_scopes=None, use_cache=True, scope=None
+):
+    options = dict(
+        path=path,
+        name=name,
+        own_oauth_scopes=own_oauth_scopes,
+        parent_oauth_scopes=parent_oauth_scopes,
+        use_cache=use_cache,
+        scope=scope,
+    )
     try:
         key = dependant_key(call=call, **options)
         hash(key)
@@ -193,11 +219,11 @@ def get_dependant(*, path, call, name=None, own_oauth_scopes=None, parent_oauth_
     template = DEPENDANTS.get(key)
     if template is None:
         dependant = _get_dependant(call=call, **options)
-        if dependant.dependencies:      # a Depends: its own handler, compared by identity; none in Tico
+        if dependant.dependencies:  # a Depends: its own handler, compared by identity; none in Tico
             return dependant
         if len(DEPENDANTS) >= ADAPTER_LIMIT:
             DEPENDANTS.clear()
-        DEPENDANTS[key] = _copy_dependant(dependant, None)     # never an app's handler
+        DEPENDANTS[key] = _copy_dependant(dependant, None)  # never an app's handler
         return dependant
     return _copy_dependant(template, call, own_oauth_scopes=own_oauth_scopes, parent_oauth_scopes=parent_oauth_scopes)
 
@@ -205,8 +231,9 @@ def get_dependant(*, path, call, name=None, own_oauth_scopes=None, parent_oauth_
 def _copy_dependant(dependant, call, **options):
     """`dependant` for `call`, in lists of its own (FastAPI inserts a route's own dependencies into them). The fields
     are shared: each holds a validator and a default that pydantic copies on every use."""
-    return dataclasses.replace(dependant, call=call, **{kind: list(getattr(dependant, kind)) for kind in _PARAM_LISTS},
-                               **options)
+    return dataclasses.replace(
+        dependant, call=call, **{kind: list(getattr(dependant, kind)) for kind in _PARAM_LISTS}, **options
+    )
 
 
 _PARAM_LISTS = ("path_params", "query_params", "header_params", "cookie_params", "body_params", "dependencies")

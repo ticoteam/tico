@@ -46,8 +46,9 @@ Run scripts/check.sh before pushing; `git config core.hooksPath .githooks` runs 
 
 ## How we work
 Trunk-based: branches are `<who>/<topic>`, one ticket per PR. Draft PRs run no CI. The author merges when checks are
-green and the PR is reviewed. A red release candidate caused by your merge is your top priority. Releases ship from two
-windows a day (14:30 and 22:00 UTC, docs/releasing.md#release-windows); never tag. Hotfixes (`hotfix.yml`) are for
+green and the PR is reviewed. A red release candidate caused by your merge is your top priority. Releases ship from
+release windows (weekdays 07:30, 14:00 and 20:30 Los Angeles time, weekends 07:30 and 15:00;
+docs/releasing.md#release-windows); never tag. Hotfixes (`hotfix.yml`) are for
 major production issues only. The Release Manager bot no longer tags or rolls out Tico releases; it only monitors.
 
 ## Hit every surface
@@ -80,6 +81,7 @@ flight file, not the database.
 - Create persistent schema changes with `python3 scripts/new_migration.py name` (`--py` for `up(conn)`):
   `YYYYMMDDHHMMSS_name.sql|py`, UTC. Keep existing `NNNN_` files and applied checksums unchanged. Each migration
   stands alone and must not depend on another unmerged migration's schema; pending files run even below applied ones.
+- Format the Python files you change with `uvx ruff@0.15.9 format <files>` before committing; `scripts/lint.sh` fails on unformatted code. Branches older than the format commit: `scripts/format_rebase.sh`.
 - Keep real team names, human names, domains, buckets and credentials out of the repository. Examples use
   the fictional team Acme (`acme.example`).
 - The UI loads nothing from the network: vendored libraries live in `ui/vendor/` with their licenses. Write a new

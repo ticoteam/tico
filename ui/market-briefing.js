@@ -1,5 +1,5 @@
 /* The weekly market briefing read in full, in a side panel: the bets it touches, then the briefing's page
-   (backend/market_briefing.py, docs/market-briefing.md). Strategy › Market › Briefing's Read opens it (ui/app/redesign-market.js). */
+   (backend/market_briefing.py, docs/market-briefing.md). Read under Market's What changed? opens it (ui/app/redesign-market.js). */
 'use strict';
 const briefingStyle = document.createElement('style');
 briefingStyle.textContent = `.brief-panel .brief-touch{margin:0 0 10px;padding:0;list-style:none;display:grid;gap:4px;font-size:var(--t-sm)}

@@ -53,7 +53,7 @@ MODEL_PREFIX = "tico-"
 INVITE_ENV = "TICO_GATEWAY_INVITE"
 INSTALL_CONTEXT = "gateway-connection:install"
 AUTOMATIC = "automatic"
-COMPANY = "company"                                       # `via`: the key and identity came from the company link
+COMPANY = "company"  # `via`: the key and identity came from the company link
 SYSTEM = "system:gateway"
 # What Health says once Tico has turned this install off: it then never asks again under the same invite.
 STOPPED = "Tico AI Gateway was turned off for this install by Tico. Contact support."
@@ -62,13 +62,13 @@ ENROLL_AGAIN = (G.REVOKED_KEY, G.UNKNOWN_KEY, "already_rotated", "not_enrolled")
 # Why an enroll did not work, for the owner on Health; anything else is a plain "try again later".
 AUTO_MESSAGES = {
     "invalid_invite": "Tico AI Gateway could not connect automatically: the invite code in the install command is not "
-                      "one Tico made. Ask Tico Team for a new one, or paste a gateway key here.",
+    "one Tico made. Ask Tico Team for a new one, or paste a gateway key here.",
     "invite_expired": "Tico AI Gateway could not connect automatically: the invite code has expired. Ask Tico Team for a "
-                      "new one, or paste a gateway key here.",
+    "new one, or paste a gateway key here.",
     "invite_used_up": "Tico AI Gateway could not connect automatically: the invite code has been used by all the "
-                      "installs it allows. Ask Tico Team for a new one, or paste a gateway key here.",
+    "installs it allows. Ask Tico Team for a new one, or paste a gateway key here.",
     "invite_revoked": "Tico AI Gateway could not connect automatically: Tico canceled the invite code. Ask Tico Team "
-                      "for a new one, or paste a gateway key here.",
+    "for a new one, or paste a gateway key here.",
 }
 AUTO_LATER = "Tico AI Gateway could not connect automatically yet. Tico tries again every hour."
 _auto_lock = threading.Lock()
@@ -104,8 +104,10 @@ def _row(c):
 
 
 def _write(c, record):
-    c.execute("INSERT INTO registry_metadata VALUES(?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value",
-              (KEY, json.dumps(record, sort_keys=True)))
+    c.execute(
+        "INSERT INTO registry_metadata VALUES(?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value",
+        (KEY, json.dumps(record, sort_keys=True)),
+    )
 
 
 def revision(c):
@@ -116,7 +118,9 @@ def revision(c):
 def source(c, settings=None, record=None):
     """Where the key comes from: "environment", "settings" or "" when there is none. `record`: the saved connection
     already read (`target`)."""
-    return "environment" if env_key(settings) else "settings" if (_row(c) if record is None else record).get("key") else ""
+    return (
+        "environment" if env_key(settings) else "settings" if (_row(c) if record is None else record).get("key") else ""
+    )
 
 
 def connected(c, settings=None):
@@ -158,27 +162,41 @@ def view(c, settings=None, *, manage=False):
     """What Settings > Computers shows. Never the key; its preview and the Gateway's last word only to the people
     who manage the connection (`manage`: the owner)."""
     record, where = _row(c), source(c, settings)
-    out = {"label": G.LABEL, "connected": bool(where), "source": where, "url": url(c, settings),
-           "default_url": G.DEFAULT_BASE, "editable": where != "environment",
-           "automatic": where == "settings" and record.get("origin") == AUTOMATIC}
+    out = {
+        "label": G.LABEL,
+        "connected": bool(where),
+        "source": where,
+        "url": url(c, settings),
+        "default_url": G.DEFAULT_BASE,
+        "editable": where != "environment",
+        "automatic": where == "settings" and record.get("origin") == AUTOMATIC,
+    }
     if not manage:
         return out
     auto = record.get("auto") if isinstance(record.get("auto"), dict) else {}
     # Cleared by the owner, or turned off by Tico (and since turned back on there): the owner may try again.
-    out["auto_off"] = bool(auto.get("off") or auto.get("stopped")) and not where and (bool(invite(settings))
-                                                                         or _identity(record))
+    out["auto_off"] = (
+        bool(auto.get("off") or auto.get("stopped")) and not where and (bool(invite(settings)) or _identity(record))
+    )
     check = record.get("check") if isinstance(record.get("check"), dict) else {}
     # A check is about the key it was made with: one made before the key changed (or under the environment's) is none.
     fresh = check if check.get("for") == _fingerprint(c, settings) else {}
     state = fresh.get("state") or ("unchecked" if where else "none")
-    return {**out, "preview": record.get("preview", "") if where == "settings" else "",
-            "env": ENV_KEY if where == "environment" else "",
-            "revision": int(record.get("revision") or 0),
-            "updated_at": record.get("updated", ""), "updated_by": record.get("updated_by", ""),
-            "state": state, "working": state not in G.REFUSED,
-            "message": fresh.get("message") or ("Not checked yet." if where else "No gateway key saved."),
-            "used": fresh.get("used"), "spent_usd": fresh.get("spent_usd"), "cap_usd": fresh.get("cap_usd"),
-            "checked": fresh.get("at", "")}
+    return {
+        **out,
+        "preview": record.get("preview", "") if where == "settings" else "",
+        "env": ENV_KEY if where == "environment" else "",
+        "revision": int(record.get("revision") or 0),
+        "updated_at": record.get("updated", ""),
+        "updated_by": record.get("updated_by", ""),
+        "state": state,
+        "working": state not in G.REFUSED,
+        "message": fresh.get("message") or ("Not checked yet." if where else "No gateway key saved."),
+        "used": fresh.get("used"),
+        "spent_usd": fresh.get("spent_usd"),
+        "cap_usd": fresh.get("cap_usd"),
+        "checked": fresh.get("at", ""),
+    }
 
 
 def _fingerprint(c, settings=None, record=None):
@@ -220,8 +238,12 @@ def _clean_url(value):
     try:
         return G.safe_base(value)
     except ValueError:
-        raise Problem("url", "The Gateway URL starts with https:// (plain http:// only for localhost), with no spaces, "
-                      "query or password", 422) from None
+        raise Problem(
+            "url",
+            "The Gateway URL starts with https:// (plain http:// only for localhost), with no spaces, "
+            "query or password",
+            422,
+        ) from None
 
 
 LABEL_KEY = "Gateway key"
@@ -258,30 +280,53 @@ def save(c, vault, who, body, now, settings=None):
     if moved and not secret and not option:
         raise destinations.held("gateway", moved, [LABEL_KEY], before.get("revision"), G.LABEL)
     destinations.require_tap(who, moved)
-    after = {**before, "url": new_url if new_url != G.DEFAULT_BASE else "", "revision": int(before.get("revision") or 0) + 1,
-             "updated": now, "updated_by": who.actor}
+    after = {
+        **before,
+        "url": new_url if new_url != G.DEFAULT_BASE else "",
+        "revision": int(before.get("revision") or 0) + 1,
+        "updated": now,
+        "updated_by": who.actor,
+    }
     if secret:
         secret = _clean_key(secret)
         if not vault.configured:
-            raise Problem("vault_unavailable", "Credentials are not set up on this server, so a key cannot be stored", 503)
+            raise Problem(
+                "vault_unavailable", "Credentials are not set up on this server, so a key cannot be stored", 503
+            )
         after["key"] = vault.cipher.seal(c, CONTEXT, secret)
         after["preview"] = secret[:3] + "…" + secret[-3:] if len(secret) >= 12 else "••••••"
         for field in ("origin", "key_id", "rotate_after"):
-            after.pop(field, None)                        # a pasted key is the owner's: never rotated or replaced
+            after.pop(field, None)  # a pasted key is the owner's: never rotated or replaced
     elif moved and option == destinations.CLEAR:
         for field in ("key", "preview", "origin", "key_id", "rotate_after"):
             after.pop(field, None)
-        after["auto"] = {"off": True, "at": now}          # never enrolled again at the new address behind the owner's back
+        after["auto"] = {"off": True, "at": now}  # never enrolled again at the new address behind the owner's back
     elif not before.get("key"):
         raise Problem("key", "Paste the gateway key Tico gave you", 422)
     after.pop("check", None)
     _write(c, after)
-    H.event(c, who.actor, "gateway.connection.saved", PROVIDER,
-            {"key_changed": bool(secret), "destination": destinations.safe(G.base_url(after["url"])),
-             "revision": after["revision"]})
+    H.event(
+        c,
+        who.actor,
+        "gateway.connection.saved",
+        PROVIDER,
+        {
+            "key_changed": bool(secret),
+            "destination": destinations.safe(G.base_url(after["url"])),
+            "revision": after["revision"],
+        },
+    )
     if moved:
-        destinations.record(c, who, "gateway", PROVIDER, moved, [LABEL_KEY],
-                            destinations.REPLACED if secret else option, after["revision"])
+        destinations.record(
+            c,
+            who,
+            "gateway",
+            PROVIDER,
+            moved,
+            [LABEL_KEY],
+            destinations.REPLACED if secret else option,
+            after["revision"],
+        )
     return _public(before), _public(after)
 
 
@@ -293,13 +338,17 @@ def clear(c, who, now, settings=None):
     before = _row(c)
     if not before.get("key"):
         return _public(before), _public(before)
-    after = {"url": before.get("url", ""), "revision": int(before.get("revision") or 0) + 1, "updated": now,
-             "updated_by": who.actor}
+    after = {
+        "url": before.get("url", ""),
+        "revision": int(before.get("revision") or 0) + 1,
+        "updated": now,
+        "updated_by": who.actor,
+    }
     for field in ("install", "install_secret", "via"):
         if before.get(field):
-            after[field] = before[field]                  # the install stays itself if it connects again
+            after[field] = before[field]  # the install stays itself if it connects again
     if before.get("origin") == AUTOMATIC:
-        after["auto"] = {"off": True, "at": now}          # cleared on purpose: not enrolled again behind the owner's back
+        after["auto"] = {"off": True, "at": now}  # cleared on purpose: not enrolled again behind the owner's back
     _write(c, after)
     H.event(c, who.actor, "gateway.connection.cleared", PROVIDER, {"revision": after["revision"]})
     return _public(before), _public(after)
@@ -331,10 +380,16 @@ def record_check(c, result, fingerprint, now, settings=None):
     record = _row(c)
     known = record.get("check") if isinstance(record.get("check"), dict) else {}
     if result["state"] in G.TRANSIENT and known.get("for") == fingerprint and known.get("state") not in G.TRANSIENT:
-        return False                                  # a Gateway that was down or busy says nothing new about the key
-    record["check"] = {"state": result["state"], "message": result["message"], "used": result.get("used"),
-                       "spent_usd": result.get("spent_usd"), "cap_usd": result.get("cap_usd"),
-                       "at": now, "for": fingerprint}
+        return False  # a Gateway that was down or busy says nothing new about the key
+    record["check"] = {
+        "state": result["state"],
+        "message": result["message"],
+        "used": result.get("used"),
+        "spent_usd": result.get("spent_usd"),
+        "cap_usd": result.get("cap_usd"),
+        "at": now,
+        "for": fingerprint,
+    }
     _write(c, record)
     return True
 
@@ -365,9 +420,15 @@ def check_soon(store, vault, settings=None, opener=None):
         return None
     with store.read() as c:
         record = _row(c)
-        fingerprint = _fingerprint(c, settings) or ("invite:" + _invite_mark(invite(settings)) if invite(settings) else
-                                                    COMPANY if _linked(c, settings) else
-                                                    "install:" + record["install"] if _identity(record) else "")
+        fingerprint = _fingerprint(c, settings) or (
+            "invite:" + _invite_mark(invite(settings))
+            if invite(settings)
+            else COMPANY
+            if _linked(c, settings)
+            else "install:" + record["install"]
+            if _identity(record)
+            else ""
+        )
     if not fingerprint:
         return None
     now = time.monotonic()
@@ -382,11 +443,12 @@ def check_later(store, vault, settings=None, opener=None):
     """`check_now` on a background thread: the sweep and page loads never wait on the Gateway."""
     if _demo(settings):
         return None
+
     def run():
         try:
             check_now(store, vault, settings, opener)
         except Exception:
-            pass                                          # the next check tries again; the last answer stays
+            pass  # the next check tries again; the last answer stays
         try:
             with store.read() as c:
                 due = maintained(c, settings)
@@ -394,6 +456,7 @@ def check_later(store, vault, settings=None, opener=None):
                 auto_tick(store, vault, settings, opener)  # a refused automatic key is replaced, or the stop recorded
         except Exception:
             pass
+
     thread = threading.Thread(target=run, name="gateway-check", daemon=True)
     thread.start()
     return thread
@@ -415,17 +478,25 @@ def hand_out(c, attempt_id, config):
     """Remember the Tico models the claim handed this attempt out on (its model, and the fallback it names), when it has
     any. The key and the run's outcome follow what the run was given, never a setting changed while it runs."""
     from .repositories import save_metadata
+
     if not wanted(config):
         return
     fallback = config.get("fallback") if isinstance(config.get("fallback"), dict) else {}
-    save_metadata(c, HANDED + attempt_id, {"model": str(config.get("model") or ""), "fallback": {
-        "harness": str(fallback.get("harness") or ""), "model": str(fallback.get("model") or "")},
-        "gateway_fallback": str(config.get("gateway_fallback") or "")})
+    save_metadata(
+        c,
+        HANDED + attempt_id,
+        {
+            "model": str(config.get("model") or ""),
+            "fallback": {"harness": str(fallback.get("harness") or ""), "model": str(fallback.get("model") or "")},
+            "gateway_fallback": str(config.get("gateway_fallback") or ""),
+        },
+    )
 
 
 def handed(c, attempt_id):
     """What `hand_out` remembered for the attempt, or {} (a run that was given no Tico model)."""
     from .repositories import metadata
+
     return metadata(c, HANDED + attempt_id) if attempt_id else {}
 
 
@@ -448,6 +519,7 @@ def ran_tico(config, body):
             return fallback.get("harness") == body.fallback and is_tico(fallback.get("model"))
         # The harness the Gateway's own provider row runs on (providers.PROVIDERS), not a CLI name.
         from .providers import PROVIDER_BY_ID
+
         return body.fallback == PROVIDER_BY_ID[PROVIDER]["harness"] and is_tico(config.get("gateway_fallback"))
     return is_tico(config.get("model"))
 
@@ -461,19 +533,38 @@ def run_credentials_for(c, vault, settings, who, attempt_id):
     if not row or not wanted(config):
         return []
     fallback = config.get("fallback") if isinstance(config.get("fallback"), dict) else {}
-    items = run_credentials(c, vault, settings, config.get("model") if is_tico(config.get("model"))
-                            else fallback.get("model") if is_tico(fallback.get("model"))
-                            else config.get("gateway_fallback"))
+    items = run_credentials(
+        c,
+        vault,
+        settings,
+        config.get("model")
+        if is_tico(config.get("model"))
+        else fallback.get("model")
+        if is_tico(fallback.get("model"))
+        else config.get("gateway_fallback"),
+    )
     if items and (bot := bot_header(c, vault, row["bot_id"])):
         # The relay sends it on every model call of the turn, in place of anything the turn sends by that name.
-        items.append({"id": "gateway-bot", "name": G.LABEL + " bot", "env": RUN_BOT_ENV, "kind": "text",
-                      "value": bot[G.BOT_HEADER]})
+        items.append(
+            {
+                "id": "gateway-bot",
+                "name": G.LABEL + " bot",
+                "env": RUN_BOT_ENV,
+                "kind": "text",
+                "value": bot[G.BOT_HEADER],
+            }
+        )
     if items:
         # Which key paid is fixed now: the relay holds it for the turn (execution.run_usage). The runner's shared
         # primary/fallback deadline stays inside HQ's 24-hour rotation grace (runner-rs/src/gateway_relay.rs).
         c.execute("UPDATE attempts SET gateway_key_id=? WHERE id=?", (key_id(c, settings) or None, attempt_id))
-        H.event(c, who.actor, "gateway.key_sent", PROVIDER,
-                {"bot": row["bot_id"], "attempt": attempt_id, "runner": who.runner_id})
+        H.event(
+            c,
+            who.actor,
+            "gateway.key_sent",
+            PROVIDER,
+            {"bot": row["bot_id"], "attempt": attempt_id, "runner": who.runner_id},
+        )
     return items
 
 
@@ -486,12 +577,13 @@ def run_credentials(c, vault, settings, model):
     try:
         base = G.safe_base(base)
     except ValueError:
-        return []                                     # an environment URL the key may not go to (the page says so)
+        return []  # an environment URL the key may not go to (the page says so)
     if not secret:
         return []
-    return [{"id": "gateway-key", "name": G.LABEL, "env": RUN_KEY_ENV, "kind": "api_key", "value": secret},
-            {"id": "gateway-url", "name": G.LABEL + " URL", "env": RUN_URL_ENV, "kind": "text",
-             "value": G.chat_base(base)}]
+    return [
+        {"id": "gateway-key", "name": G.LABEL, "env": RUN_KEY_ENV, "kind": "api_key", "value": secret},
+        {"id": "gateway-url", "name": G.LABEL + " URL", "env": RUN_URL_ENV, "kind": "text", "value": G.chat_base(base)},
+    ]
 
 
 def health(c, settings=None):
@@ -542,6 +634,7 @@ def maintained(c, settings=None):
 def _linked(c, settings=None):
     """Whether this self-run server is linked to its Tico company (backend/company_server.py), which gives it its key."""
     from . import company_server
+
     return company_server.linked(c, settings)
 
 
@@ -551,12 +644,20 @@ def company_ended(c):
     record = _row(c)
     if record.get("via") != COMPANY or record.get("origin") != AUTOMATIC or not record.get("key"):
         return False
-    after = {k: v for k, v in record.items()
-             if k not in ("key", "preview", "origin", "key_id", "rotate_after", "check", "auto")}
+    after = {
+        k: v
+        for k, v in record.items()
+        if k not in ("key", "preview", "origin", "key_id", "rotate_after", "check", "auto")
+    }
     after.update(revision=int(record.get("revision") or 0) + 1, updated=H.now(), updated_by=SYSTEM)
     _write(c, after)
-    H.event(c, SYSTEM, "gateway.connection.company_ended", PROVIDER,
-            {"install": record.get("install", ""), "revision": after["revision"]})
+    H.event(
+        c,
+        SYSTEM,
+        "gateway.connection.company_ended",
+        PROVIDER,
+        {"install": record.get("install", ""), "revision": after["revision"]},
+    )
     return True
 
 
@@ -592,23 +693,23 @@ def _due(record, settings, now, linked=False):
     if env_key(settings) or getattr(settings, "rehearsal", False):
         return None
     if record.get("via") == COMPANY and not linked:
-        return None                                       # its company's identity: HQ holds it until it links again
+        return None  # its company's identity: HQ holds it until it links again
     if not invite(settings) and not _identity(record) and not linked:
-        return None                                       # the invite is only needed to make the identity
+        return None  # the invite is only needed to make the identity
     auto = record.get("auto") if isinstance(record.get("auto"), dict) else {}
     if auto.get("off") or _stopped(auto, settings):
         return None
     tried = _utc(auto.get("at")) if auto.get("code") else None
     if tried and now - tried < datetime.timedelta(hours=1):
-        return None                                       # a failed try waits an hour, however often the page is
-                                                          # opened: HQ allows an address 5 enrolls an hour
+        return None  # a failed try waits an hour, however often the page is
+        # opened: HQ allows an address 5 enrolls an hour
     if not record.get("key"):
         return "enroll"
     if record.get("origin") != AUTOMATIC:
-        return None                                       # the owner's pasted key wins
+        return None  # the owner's pasted key wins
     check = record.get("check") if isinstance(record.get("check"), dict) else {}
     if check.get("state") in ("revoked", "unknown") and check.get("for") == f"settings:{record.get('revision', 0)}":
-        return "enroll"                                   # the Gateway refused this key: enroll again by the secret
+        return "enroll"  # the Gateway refused this key: enroll again by the secret
     after = _utc(record.get("rotate_after"))
     return "rotate" if after and now >= after else None
 
@@ -631,15 +732,18 @@ def _auto_tick(store, vault, settings, opener, now):
         action = _due(record, settings, now, linked)
         if not action:
             return None
-        base = url(c, settings, record)                   # the address this record's key was kept for (`target`)
+        base = url(c, settings, record)  # the address this record's key was kept for (`target`)
         current = vault.cipher.unseal(c, CONTEXT, record["key"]) if action == "rotate" else ""
         install = str(record.get("install") or "")
-        secret = vault.cipher.unseal(c, INSTALL_CONTEXT, record["install_secret"]) if install and record.get(
-            "install_secret") else ""
+        secret = (
+            vault.cipher.unseal(c, INSTALL_CONTEXT, record["install_secret"])
+            if install and record.get("install_secret")
+            else ""
+        )
     try:
         G.safe_base(base)
     except ValueError:
-        return None                                       # Settings already says the URL is wrong
+        return None  # Settings already says the URL is wrong
     if action == "rotate":
         status, answer, code = G.rotate(base, current, opener=opener)
         if status == 201 and answer.get("key"):
@@ -652,12 +756,17 @@ def _auto_tick(store, vault, settings, opener, now):
         with store.transaction() as c:
             if not _unchanged(c, record):
                 return None
-            record = {**_row(c), "install": install, "install_secret": vault.cipher.seal(c, INSTALL_CONTEXT, secret),
-                      **({"via": COMPANY} if linked else {})}
+            record = {
+                **_row(c),
+                "install": install,
+                "install_secret": vault.cipher.seal(c, INSTALL_CONTEXT, secret),
+                **({"via": COMPANY} if linked else {}),
+            }
             _write(c, record)
     if linked:
         # The company's key, billed to its credit: HQ enrolls this install for it (backend/company_server.py).
         from . import company_server
+
         status, answer, code = company_server.gateway_key(store, vault, install, secret)
     else:
         status, answer, code = G.enroll(base, install, secret, invite(settings), opener=opener)
@@ -666,7 +775,11 @@ def _auto_tick(store, vault, settings, opener, now):
     if code == G.INSTALL_REVOKED:
         return _note(store, record, code, now, stopped=_invite_mark(invite(settings)))
     if code == "already_enrolled":
-        record = {**record, "install": "", "install_secret": ""}   # another install has this id: the next try makes a new one
+        record = {
+            **record,
+            "install": "",
+            "install_secret": "",
+        }  # another install has this id: the next try makes a new one
     return _note(store, record, code or "unreachable", now)
 
 
@@ -685,20 +798,32 @@ def _keep(store, vault, record, answer, now, install, secret, what, via=""):
     with store.transaction() as c:
         if not _unchanged(c, record):
             return None
-        after = {**{k: v for k, v in record.items() if k not in ("check", "auto")},
-                 "key": vault.cipher.seal(c, CONTEXT, key_value),
-                 "preview": key_value[:3] + "…" + key_value[-3:],
-                 "install": install, "install_secret": vault.cipher.seal(c, INSTALL_CONTEXT, secret),
-                 "origin": AUTOMATIC, "key_id": str(answer.get("key_id") or ""),
-                 "rotate_after": str(answer.get("rotate_after") or ""),
-                 "revision": int(record.get("revision") or 0) + 1, "updated": _stamp(now), "updated_by": SYSTEM,
-                 **({"via": via} if via else {})}
+        after = {
+            **{k: v for k, v in record.items() if k not in ("check", "auto")},
+            "key": vault.cipher.seal(c, CONTEXT, key_value),
+            "preview": key_value[:3] + "…" + key_value[-3:],
+            "install": install,
+            "install_secret": vault.cipher.seal(c, INSTALL_CONTEXT, secret),
+            "origin": AUTOMATIC,
+            "key_id": str(answer.get("key_id") or ""),
+            "rotate_after": str(answer.get("rotate_after") or ""),
+            "revision": int(record.get("revision") or 0) + 1,
+            "updated": _stamp(now),
+            "updated_by": SYSTEM,
+            **({"via": via} if via else {}),
+        }
         _write(c, after)
-        H.event(c, SYSTEM, f"gateway.connection.{what}", PROVIDER,
-                {"install": install, "key_id": after["key_id"], "revision": after["revision"]})
+        H.event(
+            c,
+            SYSTEM,
+            f"gateway.connection.{what}",
+            PROVIDER,
+            {"install": install, "key_id": after["key_id"], "revision": after["revision"]},
+        )
     check_later(store, vault, getattr(store, "settings", None))
     # A Tico Cloud cell's new key may be what HQ needs to answer about its access (backend/cloud_access.py): ask now.
     from . import cloud_access
+
     if cloud_access.cell():
         cloud_access.sync_later(store, vault, getattr(store, "settings", None))
     return what

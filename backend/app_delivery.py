@@ -37,18 +37,26 @@ from .store import H, Problem, readiness_document
 # The desktop apps a runner drives, and the synced harness each one answers for.
 APPS = {"grok": {"label": "Grok", "harness": "grokbot", "provider": "grok"}}
 HARNESS_APP = {meta["harness"]: app for app, meta in APPS.items()}
-SEEN_KEYS = 1000            # message keys remembered per bot: far more than one conversation page
-ECHO_HOURS = 24             # a reported message that matches what Tico already holds within this window is that one
-SEEN = "app-delivery-seen:"         # registry_metadata key per bot: {"after": key, "keys": [...]}
-ERRORS = "app-delivery-errors:"     # registry_metadata key per computer: {app: {code, detail, bot, at}}
+SEEN_KEYS = 1000  # message keys remembered per bot: far more than one conversation page
+ECHO_HOURS = 24  # a reported message that matches what Tico already holds within this window is that one
+SEEN = "app-delivery-seen:"  # registry_metadata key per bot: {"after": key, "keys": [...]}
+ERRORS = "app-delivery-errors:"  # registry_metadata key per computer: {app: {code, detail, bot, at}}
 # What a report's error says about the app itself; the computer's next readiness report saying it is ready clears it.
 APP_STATE_CODES = {"no_permission", "not_signed_in", "needs_foreground", "ui_changed", "not_installed", "not_running"}
-WORDS = {"no_permission": "Tico is not allowed to control it (System Settings > Privacy & Security)",
-         "not_signed_in": "not signed in", "needs_foreground": "it needs to be in front",
-         "ui_changed": "its screens changed, so Tico cannot read them", "not_installed": "not installed",
-         "not_running": "not running", "no_driver": "the app driver is not installed",
-         "bot_not_found": "the bot was not found in the app", "timeout": "it did not answer in time",
-         "send_failed": "a message could not be sent", "busy": "busy", "error": "not working"}
+WORDS = {
+    "no_permission": "Tico is not allowed to control it (System Settings > Privacy & Security)",
+    "not_signed_in": "not signed in",
+    "needs_foreground": "it needs to be in front",
+    "ui_changed": "its screens changed, so Tico cannot read them",
+    "not_installed": "not installed",
+    "not_running": "not running",
+    "no_driver": "the app driver is not installed",
+    "bot_not_found": "the bot was not found in the app",
+    "timeout": "it did not answer in time",
+    "send_failed": "a message could not be sent",
+    "busy": "busy",
+    "error": "not working",
+}
 
 
 def setting(config):
@@ -60,8 +68,9 @@ def setting(config):
 
 
 def _config(c, bot):
-    row = c.execute(f"SELECT {BS.CONFIG} AS config,bc.owner_id FROM bot_config bc {BS.JOIN} WHERE bc.bot=?",
-                    (bot,)).fetchone()
+    row = c.execute(
+        f"SELECT {BS.CONFIG} AS config,bc.owner_id FROM bot_config bc {BS.JOIN} WHERE bc.bot=?", (bot,)
+    ).fetchone()
     return (H._json(row["config"], {}) or {}, row["owner_id"]) if row else ({}, None)
 
 
@@ -70,7 +79,9 @@ def active(c, config):
     found = setting(config)
     if not found:
         return None
-    return c.execute("SELECT * FROM runners_with_state WHERE id=? AND revoked_at IS NULL", (found["computer"],)).fetchone()
+    return c.execute(
+        "SELECT * FROM runners_with_state WHERE id=? AND revoked_at IS NULL", (found["computer"],)
+    ).fetchone()
 
 
 def view(c, config):
@@ -79,8 +90,12 @@ def view(c, config):
     if not found:
         return None
     row = c.execute("SELECT label,revoked_at FROM runners WHERE id=?", (found["computer"],)).fetchone()
-    return {**found, "app_label": APPS[found["app"]]["label"], "computer_label": row["label"] if row else "",
-            "active": bool(row and not row["revoked_at"])}
+    return {
+        **found,
+        "app_label": APPS[found["app"]]["label"],
+        "computer_label": row["label"] if row else "",
+        "active": bool(row and not row["revoked_at"]),
+    }
 
 
 def app_report(runner, app):
@@ -109,17 +124,23 @@ def change(c, who, auth, bot, value, declared, operator):
     if value is None:
         if current:
             if who.actor != person and not (who.role == "owner" or auth.bot_admin(who)):
-                raise Problem("app_delivery", "Only the person who synced this bot, or an admin, can turn off its "
-                              "delivery through the app", 422)
+                raise Problem(
+                    "app_delivery",
+                    "Only the person who synced this bot, or an admin, can turn off its delivery through the app",
+                    422,
+                )
             turn_off(c, who.actor, bot, declared, "turned off")
         return
     meta = APPS[value.app]
     if harness != meta["harness"]:
         raise Problem("app_delivery", f"Only a {meta['label']} Bot is delivered through the {meta['label']} app", 422)
     if who.actor != person:
-        raise Problem("app_delivery", f"Only the person who synced this {meta['label']} Bot can choose where it is "
-                      "delivered", 422)
-    runner = c.execute("SELECT * FROM runners_with_state WHERE id=? AND revoked_at IS NULL", (value.computer,)).fetchone()
+        raise Problem(
+            "app_delivery", f"Only the person who synced this {meta['label']} Bot can choose where it is delivered", 422
+        )
+    runner = c.execute(
+        "SELECT * FROM runners_with_state WHERE id=? AND revoked_at IS NULL", (value.computer,)
+    ).fetchone()
     if not runner or runner["owner_id"] != operator:
         raise Problem("app_delivery", f"Choose one of your own computers to deliver this {meta['label']} Bot", 422)
     why = _not_ready(app_report(runner, value.app))
@@ -130,9 +151,11 @@ def change(c, who, auth, bot, value, declared, operator):
     if not old or old["runner_id"] != runner["id"]:
         # The computer's runner takes the bot's jobs from its assignment, as any bot's (Execution.candidate).
         generation = (old["generation"] if old else 0) + 1
-        c.execute("INSERT INTO assignments VALUES(?,?,?,?,?) ON CONFLICT(bot) DO UPDATE SET runner_id=excluded.runner_id,"
-                  "generation=excluded.generation,updated_at=excluded.updated_at,updated_by=excluded.updated_by",
-                  (bot, runner["id"], generation, H.now(), who.actor))
+        c.execute(
+            "INSERT INTO assignments VALUES(?,?,?,?,?) ON CONFLICT(bot) DO UPDATE SET runner_id=excluded.runner_id,"
+            "generation=excluded.generation,updated_at=excluded.updated_at,updated_by=excluded.updated_by",
+            (bot, runner["id"], generation, H.now(), who.actor),
+        )
         H.event(c, who.actor, "bot.assigned", bot, {"runner": runner["id"], "generation": generation})
     H.event(c, who.actor, "bot.app_delivery_on", bot, {"runner": runner["id"], "app": value.app})
 
@@ -150,8 +173,9 @@ def turn_off(c, actor, bot, declared, reason):
 
 def runner_revoked(c, actor, runner_id):
     """A removed computer delivers nothing: each bot delivered through it goes back to the daily sync."""
-    for row in c.execute("SELECT bot_id FROM bot_settings WHERE json_extract(app_delivery,'$.computer')=?",
-                         (runner_id,)).fetchall():
+    for row in c.execute(
+        "SELECT bot_id FROM bot_settings WHERE json_extract(app_delivery,'$.computer')=?", (runner_id,)
+    ).fetchall():
         declared = BS.read(c, row["bot_id"])
         turn_off(c, actor, row["bot_id"], declared, "computer removed")
         BS.write(c, row["bot_id"], declared)
@@ -202,11 +226,15 @@ def echoes(c, room_id, sender, text, any_source=True, at=None):
     # holds (the watch reading the same words doesn't post them again) and what the app brought (the turn's reply
     # and the sync don't either).
     which = "json_extract(refs,'$.app.key') IS NULL" if any_source else "json_extract(refs,'$.app') IS NOT NULL"
-    sql = (f"SELECT body FROM messages WHERE conversation_id=? AND sender_id=? AND {SAID_SQL} BETWEEN ? AND ? "
-           f"AND deleted_at IS NULL AND {which}")
+    sql = (
+        f"SELECT body FROM messages WHERE conversation_id=? AND sender_id=? AND {SAID_SQL} BETWEEN ? AND ? "
+        f"AND deleted_at IS NULL AND {which}"
+    )
     wanted = _norm(text)
-    return any(_norm(row[0]) == wanted for row in c.execute(
-        sql, (room_id, sender, H.shift(at, hours=-ECHO_HOURS), H.shift(at, hours=ECHO_HOURS))))
+    return any(
+        _norm(row[0]) == wanted
+        for row in c.execute(sql, (room_id, sender, H.shift(at, hours=-ECHO_HOURS), H.shift(at, hours=ECHO_HOURS)))
+    )
 
 
 def _seen(c, bot):
@@ -217,8 +245,10 @@ def _seen(c, bot):
 
 
 def _save(c, key, value):
-    c.execute("INSERT INTO registry_metadata VALUES(?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value",
-              (key, json.dumps(value)))
+    c.execute(
+        "INSERT INTO registry_metadata VALUES(?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value",
+        (key, json.dumps(value)),
+    )
 
 
 def _errors(c, runner_id):
@@ -231,6 +261,7 @@ def _ask(c, actor, person, text):
     """The bot's question to its person: a question task of its own in their Needs you (question_tasks.ask_alone),
     asked once while it is open. The turn's reply with the same words stays in the chat as it was."""
     from . import question_tasks
+
     return 1 if question_tasks.ask_alone(c, actor, person, text) else 0
 
 
@@ -238,16 +269,27 @@ def delivered(c, runner_id):
     """The bots delivered through an app on this computer, for GET /api/v2/runners/me/app-delivery. `error`: this
     computer's Health holds an error for the bot's app, which the next clean read clears."""
     out, errors = [], _errors(c, runner_id)
-    for row in c.execute(f"SELECT bc.bot,{BS.CONFIG} AS config,b.slug FROM bot_config bc JOIN bots b ON b.id=bc.bot "
-                         f"{BS.JOIN} WHERE b.state<>'archived' AND json_extract(s.app_delivery,'$.computer')=? "
-                         "ORDER BY bc.bot", (runner_id,)):
+    for row in c.execute(
+        f"SELECT bc.bot,{BS.CONFIG} AS config,b.slug FROM bot_config bc JOIN bots b ON b.id=bc.bot "
+        f"{BS.JOIN} WHERE b.state<>'archived' AND json_extract(s.app_delivery,'$.computer')=? "
+        "ORDER BY bc.bot",
+        (runner_id,),
+    ):
         config = H._json(row["config"], {}) or {}
         bot = app_bot(config)
         if bot:
             app = setting(config)["app"]
             # `id` is the bot the computer reports for (the path it posts to); `slug` its label for the log.
-            out.append({"id": row["bot"], "slug": row["slug"], "app": app, "bot": bot, "after": _seen(c, row["bot"])["after"],
-                        "error": app in errors})
+            out.append(
+                {
+                    "id": row["bot"],
+                    "slug": row["slug"],
+                    "app": app,
+                    "bot": bot,
+                    "after": _seen(c, row["bot"])["after"],
+                    "error": app in errors,
+                }
+            )
     return out
 
 
@@ -269,8 +311,13 @@ def report(c, runner_id, slug, body):
         after = msg.key
         # The newest SEEN_KEYS keys answer most reports; an older key the computer sends again (a lost cursor) is
         # found on the message it made.
-        if msg.key in known or c.execute("SELECT 1 FROM messages WHERE conversation_id=? AND "
-                                         "json_extract(refs,'$.app.key')=?", (room["id"], msg.key)).fetchone():
+        if (
+            msg.key in known
+            or c.execute(
+                "SELECT 1 FROM messages WHERE conversation_id=? AND json_extract(refs,'$.app.key')=?",
+                (room["id"], msg.key),
+            ).fetchone()
+        ):
             continue
         known.add(msg.key)
         keys.append(msg.key)
@@ -285,8 +332,19 @@ def report(c, runner_id, slug, body):
                 posted += _ask(c, actor, person, msg.text)
         elif not echoes(c, room["id"], person, msg.text, at=at):
             # Typed in the app itself: the person's own words, already read, and no job (`quiet`).
-            H._write_message(c, person, actor, msg.text, room, "say", {**refs, "quiet": True}, None, None,
-                             delivered_at=now, read_at=now)
+            H._write_message(
+                c,
+                person,
+                actor,
+                msg.text,
+                room,
+                "say",
+                {**refs, "quiet": True},
+                None,
+                None,
+                delivered_at=now,
+                read_at=now,
+            )
             posted += 1
     errors = _errors(c, runner_id)
     if body.error and body.error.code == "needs_human":
@@ -309,28 +367,42 @@ def health_problems(c, who, auth, online_ids):
     its readiness for the app. An administrator sees every computer; anyone else their own."""
     full = who.role == "owner" or auth.bot_admin(who)
     used = {}
-    for row in c.execute(f"SELECT bc.bot,{BS.CONFIG} AS config,b.slug FROM bot_config bc LEFT JOIN bots b ON b.id=bc.bot "
-                         f"{BS.JOIN} WHERE json_extract(s.app_delivery,'$.computer') IS NOT NULL"):
+    for row in c.execute(
+        f"SELECT bc.bot,{BS.CONFIG} AS config,b.slug FROM bot_config bc LEFT JOIN bots b ON b.id=bc.bot "
+        f"{BS.JOIN} WHERE json_extract(s.app_delivery,'$.computer') IS NOT NULL"
+    ):
         found = setting(H._json(row["config"], {}) or {})
         if found and found["computer"] in online_ids:
             used.setdefault((found["computer"], found["app"]), []).append(row["slug"] or row["bot"])
     out = []
     for (runner_id, app), bots in sorted(used.items()):
-        runner = c.execute("SELECT * FROM runners_with_state WHERE id=? AND revoked_at IS NULL", (runner_id,)).fetchone()
+        runner = c.execute(
+            "SELECT * FROM runners_with_state WHERE id=? AND revoked_at IS NULL", (runner_id,)
+        ).fetchone()
         if not runner or not (full or who.actor == "human:" + runner["owner_id"]):
             continue
         state = app_report(runner, app)
         error = _errors(c, runner_id).get(app)
-        cleared = (error and error.get("code") in APP_STATE_CODES and (state or {}).get("ready") is True
-                   and (runner["last_seen_at"] or "") > (error.get("at") or ""))
+        cleared = (
+            error
+            and error.get("code") in APP_STATE_CODES
+            and (state or {}).get("ready") is True
+            and (runner["last_seen_at"] or "") > (error.get("at") or "")
+        )
         if error and not cleared:
-            why = WORDS.get(error.get("code"), WORDS["error"]) + (f" ({error['detail']})" if error.get("detail") else "")
+            why = WORDS.get(error.get("code"), WORDS["error"]) + (
+                f" ({error['detail']})" if error.get("detail") else ""
+            )
         else:
             why = _not_ready(state)
         if why:
             label = APPS[app]["label"]
-            out.append((f"appdriver:{runner_id}:{app}",
-                        f"{label} on {runner['label']}: {why}. Messages to {', '.join(bots[:3])} wait until it works."))
+            out.append(
+                (
+                    f"appdriver:{runner_id}:{app}",
+                    f"{label} on {runner['label']}: {why}. Messages to {', '.join(bots[:3])} wait until it works.",
+                )
+            )
     return out
 
 
@@ -353,4 +425,5 @@ def install(app, store, execution, mutate):
             if not execution.runner(c, who):
                 raise Problem("identity", "A registered runner is required", 403)
             return report(c, who.runner_id, slug, body)
+
         return mutate(request, body, work)

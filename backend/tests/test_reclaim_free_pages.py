@@ -1,10 +1,11 @@
 """Returning freed pages to the disk (store.reclaim_free_pages): incremental mode only, bounded per step and per pass."""
+
 import sqlite3
 
 from backend.config import Settings
 from backend.store import Store, reclaim_free_pages
 
-ROW = b"x" * 4000     # one row is about one 4 KB page of its own
+ROW = b"x" * 4000  # one row is about one 4 KB page of its own
 
 
 def store(path):

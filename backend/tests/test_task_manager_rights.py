@@ -1,4 +1,5 @@
 """A manager inherits a party's task rights, with current chart and original attribution."""
+
 import json
 
 import pytest
@@ -40,8 +41,16 @@ def bot_manager(api):
 def make(api, *, owner='bot:ops', requester='human:ana', private=True, **kwargs):
     with api.app.state.store.transaction() as c:
         number = c.execute('SELECT count(*) FROM tasks').fetchone()[0]
-        return H.task_create(c, requester, f'Check the permission packet {number}', 'Review the packet.', owner,
-                             private=private, lint=False, **kwargs)
+        return H.task_create(
+            c,
+            requester,
+            f'Check the permission packet {number}',
+            'Review the packet.',
+            owner,
+            private=private,
+            lint=False,
+            **kwargs,
+        )
 
 
 def change(api, task, token, **fields):
@@ -51,26 +60,41 @@ def change(api, task, token, **fields):
 
 def test_manager_updates_every_field_and_is_named_in_history(api, manager):
     token, actor = manager
-    for fields, field in [({'status': 'doing'}, 'status'),
-    ({'due': '2027-01-01T00:00:00Z'}, 'due_at'), ({'owner': 'cpo'}, 'owner_id'),
-    ({'title': 'Check the revised packet'}, 'title'), ({'body': 'Review the revised packet.'}, 'body'),
-    ({'rank': 12}, 'rank'), ({'step_rank': 11}, 'step_rank')]:
+    for fields, field in [
+        ({'status': 'doing'}, 'status'),
+        ({'due': '2027-01-01T00:00:00Z'}, 'due_at'),
+        ({'owner': 'cpo'}, 'owner_id'),
+        ({'title': 'Check the revised packet'}, 'title'),
+        ({'body': 'Review the revised packet.'}, 'body'),
+        ({'rank': 12}, 'rank'),
+        ({'step_rank': 11}, 'step_rank'),
+    ]:
         task = make(api)
         changed = change(api, task, token, **fields)
         assert changed[field] != task.get(field), field
         with api.app.state.store.read() as c:
-            events = [e for e in H.task_history(c, task['id']) if e['field'] == {'due_at': 'due', 'owner_id': 'owner'}.get(field, field)]
+            events = [
+                e
+                for e in H.task_history(c, task['id'])
+                if e['field'] == {'due_at': 'due', 'owner_id': 'owner'}.get(field, field)
+            ]
             if field not in ('rank', 'step_rank'):
                 assert events[-1]['actor'] == actor, field
-            assert c.execute("SELECT actor FROM events WHERE action='task.update' AND target=? ORDER BY rowid DESC LIMIT 1",
-                             (task['id'],)).fetchone()[0] == actor, field
+            assert (
+                c.execute(
+                    "SELECT actor FROM events WHERE action='task.update' AND target=? ORDER BY rowid DESC LIMIT 1",
+                    (task['id'],),
+                ).fetchone()[0]
+                == actor
+            ), field
 
 
 def test_manager_changes_step_and_preserves_review_checks(api, bot_manager):
     token, actor = bot_manager
     with api.app.state.store.transaction() as c:
-        typ = H.type_create(c, H.KEEPER, 'Manager workflow', [
-            {'name': 'Todo', 'status': 'open'}, {'name': 'Build', 'status': 'doing'}])
+        typ = H.type_create(
+            c, H.KEEPER, 'Manager workflow', [{'name': 'Todo', 'status': 'open'}, {'name': 'Build', 'status': 'doing'}]
+        )
     task = make(api, type=typ['id'])
     assert change(api, task, token, step='Build')['status'] == 'doing'
     with api.app.state.store.read() as c:
@@ -144,7 +168,11 @@ def test_manager_blockers_stale_link_and_reparent(api, bot_manager):
     assert response.status_code == 200, response.text
     with api.app.state.store.read() as c:
         assert TR.blocker_ids(c, task['id']) == [] and TR.parent_of(c, task['id']) is None
-        assert all(e['actor'] == actor for e in H.task_history(c, task['id']) if e['field'] in ('blocked_by', 'parent_id', 'link'))
+        assert all(
+            e['actor'] == actor
+            for e in H.task_history(c, task['id'])
+            if e['field'] in ('blocked_by', 'parent_id', 'link')
+        )
 
 
 @pytest.mark.parametrize('descendant_blocked', [False, True])
@@ -155,8 +183,9 @@ def test_manager_reparent_preserves_ancestor_blocker_guard(api, bot_manager, des
     blocked = make(api, parent_id=child['id']) if descendant_blocked else child
     path = 'tasks/' + blocked['id'] + '/relations'
     post(api, path, {'task': parent['id'], 'kind': 'blocked_by'}, token=token)
-    response = post(api, 'tasks/' + child['id'] + '/relations',
-                    {'task': parent['id'], 'kind': 'parent'}, token=token, expected=422)
+    response = post(
+        api, 'tasks/' + child['id'] + '/relations', {'task': parent['id'], 'kind': 'parent'}, token=token, expected=422
+    )
     assert 'ancestor' in str(response)
     with api.app.state.store.read() as c:
         assert TR.parent_of(c, child['id']) is None
@@ -181,7 +210,13 @@ def test_requester_manager_closes_reopens_owner_manager_cannot_close(api, manage
     # A person's close (Ben's, above the requester) cannot be undone by the requester's bot manager.
     if actor.startswith('bot:'):
         closed = change(api, requested, 'ben-test', close=True)
-        post(api, 'tasks/' + requested['id'], {'version': closed['version'], 'status': 'doing'}, token=token, expected=403)
+        post(
+            api,
+            'tasks/' + requested['id'],
+            {'version': closed['version'], 'status': 'doing'},
+            token=token,
+            expected=403,
+        )
 
 
 def test_manager_snoozes_and_defers_its_reports_task(api, bot_manager):
@@ -209,16 +244,21 @@ def test_manager_finishing_report_subtask_returns_result_to_parent_once(api, bot
         notices = c.execute(
             "SELECT m.body,json_extract(m.refs,'$.task') AS parent_id FROM jobs j JOIN messages m ON m.id=j.message_id "
             "WHERE j.bot_id='cmo' AND j.state='queued' AND json_extract(m.refs,'$.subtask')=?",
-            (child['id'],)).fetchall()
+            (child['id'],),
+        ).fetchall()
         assert len(notices) == 1 and notices[0]['parent_id'] == parent['id']
         assert 'The packet is ready.' in notices[0]['body']
         assert [e for e in H.task_history(c, child['id']) if e['field'] == 'status'][-1]['actor'] == actor
     change(api, child, token, status='done', note='The packet is ready.')
     with api.app.state.store.read() as c:
-        assert c.execute(
-            "SELECT count(*) FROM jobs j JOIN messages m ON m.id=j.message_id "
-            "WHERE j.bot_id='cmo' AND j.state='queued' AND json_extract(m.refs,'$.subtask')=?",
-            (child['id'],)).fetchone()[0] == 1
+        assert (
+            c.execute(
+                "SELECT count(*) FROM jobs j JOIN messages m ON m.id=j.message_id "
+                "WHERE j.bot_id='cmo' AND j.state='queued' AND json_extract(m.refs,'$.subtask')=?",
+                (child['id'],),
+            ).fetchone()[0]
+            == 1
+        )
 
 
 def test_role_holder_keeps_snooze_right_without_lending_it_to_manager(api, bot_manager):
@@ -227,6 +267,7 @@ def test_role_holder_keeps_snooze_right_without_lending_it_to_manager(api, bot_m
     task = make(api, owner='bot:cmo', requester='human:priya', private=False)
     with api.app.state.store.transaction() as c:
         from backend.task_roles import set_roles
+
         set_roles(c, 'human:priya', task['id'], {'reviewer': ['bot:ops']})
     path = 'tasks/' + task['id']
     post(api, path + '/snooze', {'until': '2027-01-01T00:00:00Z'}, token=token, expected=403)
@@ -254,7 +295,9 @@ def test_nonmanager_unchanged_and_refusal_names_managers(api, manager):
     private = make(api)
     get(api, 'tasks/' + private['id'], token=outsider, expected=404)
     task = make(api, private=False)
-    refusal = post(api, 'tasks/' + task['id'], {'version': task['version'], 'status': 'doing'}, token=outsider, expected=403)
+    refusal = post(
+        api, 'tasks/' + task['id'], {'version': task['version'], 'status': 'doing'}, token=outsider, expected=403
+    )
     assert 'managers' in str(refusal) and 'owner' in str(refusal)
     post(api, 'tasks/' + task['id'] + '/comments', {'text': 'Unrelated comment.'}, token=outsider, expected=403)
 
@@ -288,7 +331,9 @@ def test_manager_classifies_labels_but_keeps_mover_and_publish_gates(api, manage
     assert labelled['labels'] == ['manager-check']
     for fields in ({'number': 999}, {'lane': 'company'}, {'private': False}):
         current = get(api, 'tasks/' + task['id'], token=token)['task']
-        response = api.post('/api/v2/tasks/' + task['id'], json={'version': current['version'], **fields}, headers=headers(token))
+        response = api.post(
+            '/api/v2/tasks/' + task['id'], json={'version': current['version'], **fields}, headers=headers(token)
+        )
         assert response.status_code in (403, 422), response.text
 
 
@@ -322,6 +367,6 @@ def test_person_report_task_changes_follow_chart_but_person_private_tasks_stay_p
 
 def test_archived_parent_cycle_terminates_without_a_task_grant():
     from backend import people
-    entries = {'worker': {'reports_to': 'old-a'}, 'old-a': {'reports_to': 'old-b'},
-               'old-b': {'reports_to': 'old-a'}}
+
+    entries = {'worker': {'reports_to': 'old-a'}, 'old-a': {'reports_to': 'old-b'}, 'old-b': {'reports_to': 'old-a'}}
     assert people.org_parent('bot', 'worker', {'people': []}, entries, {'old-a', 'old-b'}) == ''

@@ -18,6 +18,7 @@ overwrites. Rate limits back off and retry a few times. The worker sweeps every 
 since the last run, or asked for), then gives bots their budget warnings (ad_warnings.py). A rehearsal copy calls no
 platform. HTTP goes through an injectable opener; tests use fakes and never the network.
 """
+
 import http.client
 import json
 import logging
@@ -52,27 +53,46 @@ TOKEN_URL = "https://oauth2.googleapis.com/token"
 EVERY = timedelta(hours=4)
 SWEEP = 900.0
 RECENT_DAYS = 30
-META_WINDOW = 31                       # days per insights call (a long range per day per campaign is slow to answer)
+META_WINDOW = 31  # days per insights call (a long range per day per campaign is slow to answer)
 TIMEOUT = 30
 TRIES = 4
 MAX_WAIT = 60.0
-META_SESSION = {190}                   # the token is expired, revoked or wrong: only this asks for a reconnect
+META_SESSION = {190}  # the token is expired, revoked or wrong: only this asks for a reconnect
 META_THROTTLE = {4, 17, 32, 613, 80000, 80003, 80004, 80014}
 
 # Which stored keys hold each value, by variable name (compared loosely: case and punctuation do not matter).
 SLOTS: dict[str, dict[str, tuple[str, ...]]] = {
-    "google_ads": {"client_id": ("GOOGLE_ADS_CLIENT_ID",), "client_secret": ("GOOGLE_ADS_CLIENT_SECRET",),
-                   "refresh_token": ("GOOGLE_ADS_REFRESH_TOKEN",), "developer_token": ("GOOGLE_ADS_DEVELOPER_TOKEN",),
-                   "login_customer_id": ("GOOGLE_ADS_LOGIN_CUSTOMER_ID",),
-                   "customer_ids": ("GOOGLE_ADS_CUSTOMER_ID", "GOOGLE_ADS_CUSTOMER_IDS")},
-    "meta_ads": {"access_token": ("META_ACCESS_TOKEN", "META_ADS_ACCESS_TOKEN", "FACEBOOK_ACCESS_TOKEN",
-                                  "FACEBOOK_ADS_ACCESS_TOKEN", "FB_ACCESS_TOKEN")},
+    "google_ads": {
+        "client_id": ("GOOGLE_ADS_CLIENT_ID",),
+        "client_secret": ("GOOGLE_ADS_CLIENT_SECRET",),
+        "refresh_token": ("GOOGLE_ADS_REFRESH_TOKEN",),
+        "developer_token": ("GOOGLE_ADS_DEVELOPER_TOKEN",),
+        "login_customer_id": ("GOOGLE_ADS_LOGIN_CUSTOMER_ID",),
+        "customer_ids": ("GOOGLE_ADS_CUSTOMER_ID", "GOOGLE_ADS_CUSTOMER_IDS"),
+    },
+    "meta_ads": {
+        "access_token": (
+            "META_ACCESS_TOKEN",
+            "META_ADS_ACCESS_TOKEN",
+            "FACEBOOK_ACCESS_TOKEN",
+            "FACEBOOK_ADS_ACCESS_TOKEN",
+            "FB_ACCESS_TOKEN",
+        )
+    },
 }
-REQUIRED = {"google_ads": ("client_id", "client_secret", "refresh_token", "developer_token"),
-            "meta_ads": ("access_token",)}
-SLOT_LABEL = {"client_id": "Client ID", "client_secret": "Client secret", "refresh_token": "Refresh token",
-              "developer_token": "Developer token", "login_customer_id": "Login customer ID",
-              "customer_ids": "Customer IDs", "access_token": "Access token"}
+REQUIRED = {
+    "google_ads": ("client_id", "client_secret", "refresh_token", "developer_token"),
+    "meta_ads": ("access_token",),
+}
+SLOT_LABEL = {
+    "client_id": "Client ID",
+    "client_secret": "Client secret",
+    "refresh_token": "Refresh token",
+    "developer_token": "Developer token",
+    "login_customer_id": "Login customer ID",
+    "customer_ids": "Customer IDs",
+    "access_token": "Access token",
+}
 # Contacts the platforms' spend books under: a line or hold filed under either is the platform's (budgeting.py).
 VENDOR = SA.VENDOR
 
@@ -93,6 +113,7 @@ def _norm(text: str) -> str:
 @dataclass(frozen=True)
 class Candidate:
     """A stored credential that can hold a slot's value. `set_key` groups a set (a company's keys, one bot's copies)."""
+
     id: str
     name: str
     env: str
@@ -100,7 +121,7 @@ class Candidate:
     set_key: str
     tool_id: str
     created_at: str
-    var: str = ""                 # the variable it matched; "" for a key on the tool offered under every slot
+    var: str = ""  # the variable it matched; "" for a key on the tool offered under every slot
 
 
 def _slot_of(platform: str, env: str, name: str) -> tuple[str, str] | None:
@@ -131,21 +152,26 @@ def candidates(c: Any, platform: str, tool_id: str = "") -> list[Candidate]:
     under the slot its variable or name reads as, else under every slot. A key elsewhere whose variable is another one
     holds no slot, whatever its name says. Names and ids only; no value is read."""
     out: list[Candidate] = []
-    for r in c.execute("SELECT id, name, env, tool_id, created_at FROM credentials WHERE ciphertext IS NOT NULL "
-                       "AND source<>'finance' ORDER BY created_at, id"):
+    for r in c.execute(
+        "SELECT id, name, env, tool_id, created_at FROM credentials WHERE ciphertext IS NOT NULL "
+        "AND source<>'finance' ORDER BY created_at, id"
+    ):
         env, name, owner = str(r["env"] or ""), str(r["name"] or ""), str(r["tool_id"] or "")
         hit = _slot_of(platform, env, "")
         if hit is None and tool_id and owner == tool_id:
             hit = _slot_of(platform, env, name)
             if hit is None:
-                out += [Candidate(str(r["id"]), name, env, slot, _set_key(name, ""), owner, str(r["created_at"] or ""))
-                        for slot in SLOTS[platform]]
+                out += [
+                    Candidate(str(r["id"]), name, env, slot, _set_key(name, ""), owner, str(r["created_at"] or ""))
+                    for slot in SLOTS[platform]
+                ]
                 continue
         if hit is None:
             continue
         slot, var = hit
-        out.append(Candidate(str(r["id"]), name, env, slot, _set_key(name, var), owner, str(r["created_at"] or ""),
-                             var))
+        out.append(
+            Candidate(str(r["id"]), name, env, slot, _set_key(name, var), owner, str(r["created_at"] or ""), var)
+        )
     return out
 
 
@@ -163,13 +189,17 @@ def default_mapping(c: Any, platform: str, tool_id: str = "") -> dict[str, str]:
     def rank(key: str) -> tuple[int, int, int, int, str]:
         rows = sets[key]
         have = {r.slot for r in rows}
-        return (-int(any(r.tool_id == tool_id for r in rows) and bool(tool_id)),
-                -sum(s in have for s in REQUIRED[platform]), -len(have),
-                int(bool(re.fullmatch(r"\(.*\)", key))), min(r.created_at for r in rows))
+        return (
+            -int(any(r.tool_id == tool_id for r in rows) and bool(tool_id)),
+            -sum(s in have for s in REQUIRED[platform]),
+            -len(have),
+            int(bool(re.fullmatch(r"\(.*\)", key))),
+            min(r.created_at for r in rows),
+        )
 
     best = sorted(sets, key=rank)[0]
     out: dict[str, str] = {}
-    for cand in sets[best]:                                 # oldest first: the first per slot wins
+    for cand in sets[best]:  # oldest first: the first per slot wins
         out.setdefault(cand.slot, cand.id)
     return out
 
@@ -190,8 +220,9 @@ def _secrets(c: Any, vault: object, imp: SA.AdImport) -> dict[str, str]:
 class _NoRedirect(urllib.request.HTTPRedirectHandler):
     """Never follow a redirect: a token goes only to the host it was meant for."""
 
-    def redirect_request(self, req: urllib.request.Request, fp: Any, code: int, msg: str, headers: Any,
-                         newurl: str) -> urllib.request.Request | None:
+    def redirect_request(
+        self, req: urllib.request.Request, fp: Any, code: int, msg: str, headers: Any, newurl: str
+    ) -> urllib.request.Request | None:
         return None
 
 
@@ -200,8 +231,8 @@ _OPENER = urllib.request.build_opener(_NoRedirect())
 
 @dataclass(frozen=True)
 class Reply:
-    status: int | None                    # None: unreachable
-    body: Any                             # parsed JSON ({} when none)
+    status: int | None  # None: unreachable
+    body: Any  # parsed JSON ({} when none)
     retry_after: float | None = None
 
 
@@ -215,11 +246,20 @@ def _parse(raw: bytes) -> Any:
 @dataclass
 class Http:
     """One run's HTTP: no redirects, rate limits waited out a few times (`throttled` says which answers are one)."""
+
     opener: Opener | None = None
     sleep: Callable[[float], None] = time.sleep
 
-    def call(self, method: str, url: str, headers: Mapping[str, str], *, body: object = None,
-             form: Mapping[str, str] | None = None, throttled: Callable[[Reply], bool] | None = None) -> Reply:
+    def call(
+        self,
+        method: str,
+        url: str,
+        headers: Mapping[str, str],
+        *,
+        body: object = None,
+        form: Mapping[str, str] | None = None,
+        throttled: Callable[[Reply], bool] | None = None,
+    ) -> Reply:
         data: bytes | None = None
         sent = {"Accept": "application/json", **headers}
         if form is not None:
@@ -234,7 +274,7 @@ class Http:
             limited = reply.status == 429 or (throttled is not None and throttled(reply))
             if not limited or attempt == TRIES - 1:
                 return reply
-            wait = reply.retry_after if reply.retry_after is not None else 2.0 * 2 ** attempt
+            wait = reply.retry_after if reply.retry_after is not None else 2.0 * 2**attempt
             self.sleep(max(0.0, min(wait, MAX_WAIT)))
         return reply
 
@@ -252,8 +292,11 @@ class Http:
                     raw = b""
                 after: float | None = None
                 try:
-                    after = float(str(exc.headers.get("Retry-After"))) if exc.headers and exc.headers.get("Retry-After") \
+                    after = (
+                        float(str(exc.headers.get("Retry-After")))
+                        if exc.headers and exc.headers.get("Retry-After")
                         else None
+                    )
                 except ValueError:
                     after = None
                 return Reply(exc.code, _parse(raw), after)
@@ -291,7 +334,7 @@ class Account:
     external_id: str
     name: str
     currency: str
-    via: str = ""                         # Google: the manager to send as login-customer-id
+    via: str = ""  # Google: the manager to send as login-customer-id
 
 
 @dataclass
@@ -331,10 +374,17 @@ def _google_throttled(reply: Reply) -> bool:
 
 def google_token(http_: Http, secrets: Mapping[str, str]) -> str:
     """An access token for this run, from the stored refresh token. Never stored."""
-    reply = http_.call("POST", TOKEN_URL, {}, form={"client_id": secrets["client_id"],
-                                                    "client_secret": secrets["client_secret"],
-                                                    "refresh_token": secrets["refresh_token"],
-                                                    "grant_type": "refresh_token"})
+    reply = http_.call(
+        "POST",
+        TOKEN_URL,
+        {},
+        form={
+            "client_id": secrets["client_id"],
+            "client_secret": secrets["client_secret"],
+            "refresh_token": secrets["refresh_token"],
+            "grant_type": "refresh_token",
+        },
+    )
     token = str(_dict(reply.body).get("access_token") or "")
     if reply.status == 200 and token:
         return token
@@ -343,7 +393,7 @@ def google_token(http_: Http, secrets: Mapping[str, str]) -> str:
         raise Reconnect(f"Google refused the refresh token ({reason})")
     if reply.status is None:
         raise Failed("Google's sign-in could not be reached")
-    raise Failed(f"Google's sign-in did not answer ({reason})")      # a 5xx, a rate limit: the next pass tries again
+    raise Failed(f"Google's sign-in did not answer ({reason})")  # a 5xx, a rate limit: the next pass tries again
 
 
 class _Google:
@@ -363,8 +413,9 @@ class _Google:
             raise Failed("Google Ads could not be reached")
 
     def accessible(self) -> list[str]:
-        reply = self.http.call("GET", GOOGLE_ADS + "/customers:listAccessibleCustomers", self._headers(""),
-                               throttled=_google_throttled)
+        reply = self.http.call(
+            "GET", GOOGLE_ADS + "/customers:listAccessibleCustomers", self._headers(""), throttled=_google_throttled
+        )
         self._check(reply)
         if reply.status != 200:
             raise Failed("Google Ads: " + _google_error(reply))
@@ -378,8 +429,13 @@ class _Google:
             body: dict[str, object] = {"query": query}
             if token:
                 body["pageToken"] = token
-            reply = self.http.call("POST", f"{GOOGLE_ADS}/customers/{customer}/googleAds:search", self._headers(via),
-                                   body=body, throttled=_google_throttled)
+            reply = self.http.call(
+                "POST",
+                f"{GOOGLE_ADS}/customers/{customer}/googleAds:search",
+                self._headers(via),
+                body=body,
+                throttled=_google_throttled,
+            )
             self._check(reply)
             if reply.status != 200:
                 if reply.status in (400, 403, 404):
@@ -392,8 +448,13 @@ class _Google:
                 return rows
 
     def stream(self, customer: str, via: str, query: str) -> list[dict[str, Any]]:
-        reply = self.http.call("POST", f"{GOOGLE_ADS}/customers/{customer}/googleAds:searchStream", self._headers(via),
-                               body={"query": query}, throttled=_google_throttled)
+        reply = self.http.call(
+            "POST",
+            f"{GOOGLE_ADS}/customers/{customer}/googleAds:searchStream",
+            self._headers(via),
+            body={"query": query},
+            throttled=_google_throttled,
+        )
         self._check(reply)
         if reply.status != 200:
             raise Failed(f"Google Ads account {customer}: " + _google_error(reply))
@@ -401,8 +462,10 @@ class _Google:
         return [_dict(r) for b in batches for r in _list(_dict(b).get("results"))]
 
 
-CLIENTS = ("SELECT customer_client.id, customer_client.descriptive_name, customer_client.currency_code, "
-           "customer_client.manager FROM customer_client")
+CLIENTS = (
+    "SELECT customer_client.id, customer_client.descriptive_name, customer_client.currency_code, "
+    "customer_client.manager FROM customer_client"
+)
 
 
 def fetch_google(http_: Http, secrets: Mapping[str, str], start: str, end: str) -> Fetched:
@@ -426,8 +489,10 @@ def fetch_google(http_: Http, secrets: Mapping[str, str], start: str, end: str) 
             found[cid] = Account(cid, str(cc.get("descriptiveName") or cid), str(cc.get("currencyCode") or "USD"), via)
     if not found and roots:
         raise Failed("Google Ads: this login sees no ad accounts")
-    query = ("SELECT campaign.id, campaign.name, segments.date, metrics.cost_micros FROM campaign "
-             f"WHERE segments.date BETWEEN '{start}' AND '{end}' AND metrics.cost_micros > 0")
+    query = (
+        "SELECT campaign.id, campaign.name, segments.date, metrics.cost_micros FROM campaign "
+        f"WHERE segments.date BETWEEN '{start}' AND '{end}' AND metrics.cost_micros > 0"
+    )
     out = Fetched(accounts=list(found.values()))
     for acct in out.accounts:
         rows: list[SA.SpendRow] = []
@@ -436,8 +501,15 @@ def fetch_google(http_: Http, secrets: Mapping[str, str], start: str, end: str) 
             day = str(seg.get("date") or "")
             if not day:
                 continue
-            rows.append(SA.SpendRow(day, str(campaign.get("id") or ""), str(campaign.get("name") or ""),
-                                    _micros_cents(metrics.get("costMicros") or 0), acct.currency))
+            rows.append(
+                SA.SpendRow(
+                    day,
+                    str(campaign.get("id") or ""),
+                    str(campaign.get("name") or ""),
+                    _micros_cents(metrics.get("costMicros") or 0),
+                    acct.currency,
+                )
+            )
         out.spend[acct.external_id] = rows
     return out
 
@@ -501,20 +573,35 @@ def fetch_meta(http_: Http, secrets: Mapping[str, str], start: str, end: str) ->
     for acct in out.accounts:
         rows: list[SA.SpendRow] = []
         for a, z in _windows(start, end, META_WINDOW):
-            for r in api.pages(f"/act_{acct.external_id}/insights",
-                               {"level": "campaign", "time_increment": "1", "limit": "500",
-                                "fields": "campaign_id,campaign_name,spend,date_start",
-                                "time_range": json.dumps({"since": a, "until": z}, separators=(",", ":"))}):
+            for r in api.pages(
+                f"/act_{acct.external_id}/insights",
+                {
+                    "level": "campaign",
+                    "time_increment": "1",
+                    "limit": "500",
+                    "fields": "campaign_id,campaign_name,spend,date_start",
+                    "time_range": json.dumps({"since": a, "until": z}, separators=(",", ":")),
+                },
+            ):
                 day = str(r.get("date_start") or "")
                 if day:
-                    rows.append(SA.SpendRow(day, str(r.get("campaign_id") or ""), str(r.get("campaign_name") or ""),
-                                            _cents(r.get("spend") or "0"), acct.currency))
+                    rows.append(
+                        SA.SpendRow(
+                            day,
+                            str(r.get("campaign_id") or ""),
+                            str(r.get("campaign_name") or ""),
+                            _cents(r.get("spend") or "0"),
+                            acct.currency,
+                        )
+                    )
         out.spend[acct.external_id] = rows
     return out
 
 
 FETCH: dict[str, Callable[[Http, Mapping[str, str], str, str], Fetched]] = {
-    "google_ads": fetch_google, "meta_ads": fetch_meta}
+    "google_ads": fetch_google,
+    "meta_ads": fetch_meta,
+}
 
 
 # ------------------------------------------------------------------------------------------------ runs
@@ -555,12 +642,18 @@ def ensure_vendor(c: Any, platform: str, at: str) -> str:
     owner = SAP.alias_of(c, book.id, nk)
     if owner:
         return owner
-    row = c.execute("SELECT id FROM fin_contacts WHERE book_id=? AND kind IN ('vendor','both') AND lower(name)=? "
-                    "ORDER BY created_at LIMIT 1", (book.id, nk)).fetchone()
+    row = c.execute(
+        "SELECT id FROM fin_contacts WHERE book_id=? AND kind IN ('vendor','both') AND lower(name)=? "
+        "ORDER BY created_at LIMIT 1",
+        (book.id, nk),
+    ).fetchone()
     if row is not None:
         return str(row[0])
-    cid = SAP.insert(c, "fin_contacts", {"book_id": book.id, "name": name, "kind": "vendor", "created_at": at,
-                                         "created_by": SYSTEM, "updated_at": at})
+    cid = SAP.insert(
+        c,
+        "fin_contacts",
+        {"book_id": book.id, "name": name, "kind": "vendor", "created_at": at, "created_by": SYSTEM, "updated_at": at},
+    )
     SAP.alias_add(c, book.id, nk, cid, at)
     return cid
 
@@ -628,7 +721,7 @@ def pass_once(store: Any, vault: object, *, now: str | None = None, http_: Http 
     for imp in todo:
         try:
             done[imp.tool_id] = run(store, vault, imp.id, now=at, http_=http_)
-        except Exception:                                   # one platform's bug never stops the other's import
+        except Exception:  # one platform's bug never stops the other's import
             log.exception("Finance ad spend import failed")
             done[imp.tool_id] = Outcome("failed", error="the import stopped unexpectedly")
             with store.transaction() as c:
@@ -636,7 +729,7 @@ def pass_once(store: Any, vault: object, *, now: str | None = None, http_: Http 
     try:
         with store.transaction() as c:
             ad_warnings.run(c, at)
-    except Exception:                                       # a warning never stops the next import
+    except Exception:  # a warning never stops the next import
         log.exception("Finance ad budget warnings failed")
     return done
 

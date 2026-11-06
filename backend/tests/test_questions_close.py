@@ -9,8 +9,8 @@ from backend.store import H
 from backend.tests.test_tasks_board import api, get  # noqa: F401
 
 ANA, OPS, CPO = "human:ana", "bot:ops", "bot:cpo"
-NOON_WED = "2026-10-21T19:00:00.000000Z"       # Wed 12:00 Pacific: a task roundup run
-EVENING_WED = "2026-10-22T01:00:00.000000Z"    # Wed 18:00 Pacific: the next one
+NOON_WED = "2026-10-21T19:00:00.000000Z"  # Wed 12:00 Pacific: a task roundup run
+EVENING_WED = "2026-10-22T01:00:00.000000Z"  # Wed 18:00 Pacific: the next one
 
 
 def pick(c, task_id, text="Which month should the report use?", by=OPS):
@@ -44,8 +44,9 @@ def wakes(c, message_id):
 
 def roundup_messages(c, bot):
     """The task roundup lists sent to a bot, oldest first."""
-    return c.execute("SELECT id, body FROM messages WHERE recipient_id=? AND refs LIKE '%task_roundup%' "
-                     "ORDER BY created_at", (bot,)).fetchall()
+    return c.execute(
+        "SELECT id, body FROM messages WHERE recipient_id=? AND refs LIKE '%task_roundup%' ORDER BY created_at", (bot,)
+    ).fetchall()
 
 
 def gone_back_line(title):
@@ -61,37 +62,43 @@ def test_a_question_closes_with_the_task_it_was_asked_under_or_an_ancestor(api):
         other = H.task_create(c, OPS, "Pick the hotel", "x", OPS, parent_id=mid["id"])
         sub_q, deep_q = pick(c, sub["id"]), pick(c, other["id"])
         assert listed(c, sub_q["id"]) and listed(c, deep_q["id"])
-        H.task_close(c, ANA, sub["id"])                                 # its own task closed: it closes with it
+        H.task_close(c, ANA, sub["id"])  # its own task closed: it closes with it
         assert not QT.is_open(H.task(c, sub_q["id"])) and not listed(c, sub_q["id"])
         assert listed(c, deep_q["id"])
-        H.task_close(c, ANA, top["id"])                                 # the grandparent closes the open subtree
+        H.task_close(c, ANA, top["id"])  # the grandparent closes the open subtree
         assert not QT.is_open(H.task(c, deep_q["id"])) and not listed(c, deep_q["id"])
 
 
 def test_unanswered_questions_go_back_to_their_bot_in_one_weekday_morning_wake(api):
-    friday = "2026-10-16T17:00:00.000000Z"              # 10:00 Pacific
+    friday = "2026-10-16T17:00:00.000000Z"  # 10:00 Pacific
     with api.app.state.store.transaction() as c:
         tasks = [H.task_create(c, ANA, f"Pick a {what}", "x", OPS) for what in ("venue", "caterer", "date")]
         asks = [pick(c, t["id"], f"Which {t['title'][7:]}?") for t in tasks]
         for a in asks:
             age(c, a, friday)
-        assert still_needed.crossed_at(friday).isoformat().startswith("2026-10-20T10:00")    # the weekend skipped
-        monday, tuesday, wednesday = ("2026-10-19T17:00:00.000000Z", "2026-10-20T15:30:00.000000Z",
-                                      "2026-10-21T15:30:00.000000Z")      # Mon 10:00, Tue 8:30, Wed 8:30 Pacific
+        assert still_needed.crossed_at(friday).isoformat().startswith("2026-10-20T10:00")  # the weekend skipped
+        monday, tuesday, wednesday = (
+            "2026-10-19T17:00:00.000000Z",
+            "2026-10-20T15:30:00.000000Z",
+            "2026-10-21T15:30:00.000000Z",
+        )  # Mon 10:00, Tue 8:30, Wed 8:30 Pacific
         assert still_needed.sweep(c, monday) == {} and still_needed.sweep(c, tuesday) == {}
         assert all(listed(c, a["id"]) for a in asks)
         sent = still_needed.sweep(c, wednesday)
         assert list(sent) == [OPS] and set(sent[OPS]) == {a["id"] for a in asks}
         assert not any(listed(c, a["id"]) for a in asks)
-        assert still_needed.sweep(c, "2026-10-21T18:00:00.000000Z") == {}      # once a morning
+        assert still_needed.sweep(c, "2026-10-21T18:00:00.000000Z") == {}  # once a morning
         # No wake of their own: the bot's noon roundup names each one, once, in its single list.
-        c.execute("UPDATE jobs SET state='completed' WHERE bot_id='ops'")      # the creation wakes ran
+        c.execute("UPDATE jobs SET state='completed' WHERE bot_id='ops'")  # the creation wakes ran
         assert "ops" in task_roundup.run(c, NOON_WED)["woke"]
         found = roundup_messages(c, OPS)
         assert len(found) == 1 and wakes(c, found[0]["id"]) == 1
         assert all(found[0]["body"].count(gone_back_line(t["title"])) == 1 for t in tasks)
-        assert "ops" not in task_roundup.run(c, EVENING_WED)["woke"], ("not listed again", roundup_messages(c, OPS)[-1]["body"])
-        again = pick(c, tasks[0]["id"], "Which venue? The Hall or the Barn.")     # re-asked; the other two dropped
+        assert "ops" not in task_roundup.run(c, EVENING_WED)["woke"], (
+            "not listed again",
+            roundup_messages(c, OPS)[-1]["body"],
+        )
+        again = pick(c, tasks[0]["id"], "Which venue? The Hall or the Barn.")  # re-asked; the other two dropped
         assert [a["id"] for a in asks + [again] if listed(c, a["id"])] == [again["id"]]
         assert H.unanswered_ask(c, H.task(c, tasks[0]["id"]))["id"] == again["id"]
         assert QT.asked_at(H.task(c, again["id"])) > friday
@@ -102,17 +109,20 @@ def test_closing_a_parent_closes_the_questions_below_it(api):
         top = H.task_create(c, ANA, "Plan the launch", "x", OPS)
         now_ = H.task_create(c, OPS, "Pick the launch date", "x", OPS, parent_id=top["id"])
         asked = pick(c, now_["id"])
-        c.execute("INSERT INTO bot_status (bot, state, changed_at, updated_at) VALUES ('ops', 'idle', ?, ?)", (H.now(), H.now()))
+        c.execute(
+            "INSERT INTO bot_status (bot, state, changed_at, updated_at) VALUES ('ops', 'idle', ?, ?)",
+            (H.now(), H.now()),
+        )
         H._recount(c, OPS)
         assert H.status_counts(c, OPS)[1] and cached_matches(c)
     before, count = needs(api)
     assert asked["id"] in before and count == len(before)
     with api.app.state.store.transaction() as c:
-        H.task_close(c, ANA, top["id"])                         # its descendants and their questions close with it
+        H.task_close(c, ANA, top["id"])  # its descendants and their questions close with it
     after, count = needs(api)
     assert asked["id"] not in after and count == len(after)
     with api.app.state.store.transaction() as c:
-        assert H.task(c, now_["id"]).get("waiting_on") is None and cached_matches(c)    # the bot's count follows
+        assert H.task(c, now_["id"]).get("waiting_on") is None and cached_matches(c)  # the bot's count follows
 
 
 def test_old_undated_questions_go_back_only_in_the_weekday_batch_of_the_hourly_sweep(api):
@@ -120,7 +130,7 @@ def test_old_undated_questions_go_back_only_in_the_weekday_batch_of_the_hourly_s
     with store.transaction() as c:
         tasks = [H.task_create(c, ANA, f"Pick a {what}", "x", OPS) for what in ("venue", "caterer", "date")]
         asks = [pick(c, t["id"], f"Which {t['title'][7:]}?") for t in tasks]
-        old = "2026-09-24T17:00:00.000000Z"                                # weeks before, past the old 14-day expiry
+        old = "2026-09-24T17:00:00.000000Z"  # weeks before, past the old 14-day expiry
         for a in asks:
             age(c, a, old)
         c.execute("UPDATE history_events SET created_at=? WHERE subject_type='task'", (old,))
@@ -130,15 +140,17 @@ def test_old_undated_questions_go_back_only_in_the_weekday_batch_of_the_hourly_s
         with store.read() as c:
             return [a["id"] for a in asks if not QT.is_open(H.task(c, a["id"]))]
 
-    assert tick("2026-10-17T17:00:00") == []           # Saturday: no batch, and no question expires on its own
-    assert tick("2026-10-19T14:00:00") == []           # Monday 7:00 Pacific: before the batch
-    assert set(tick("2026-10-19T15:30:00")) == {a["id"] for a in asks}   # Monday 8:30 Pacific: all three go back
+    assert tick("2026-10-17T17:00:00") == []  # Saturday: no batch, and no question expires on its own
+    assert tick("2026-10-19T14:00:00") == []  # Monday 7:00 Pacific: before the batch
+    assert set(tick("2026-10-19T15:30:00")) == {a["id"] for a in asks}  # Monday 8:30 Pacific: all three go back
     with store.transaction() as c:
         assert not any(listed(c, a["id"]) for a in asks)
         c.execute("UPDATE jobs SET state='completed' WHERE bot_id='ops'")  # the creation wakes ran
-        task_roundup.run(c, "2026-10-19T19:00:00.000000Z")                 # Monday 12:00 Pacific: the roundup
+        task_roundup.run(c, "2026-10-19T19:00:00.000000Z")  # Monday 12:00 Pacific: the roundup
         found = roundup_messages(c, OPS)
-        assert all(sum(body.count(gone_back_line(t["title"])) for body in [r["body"] for r in found]) == 1 for t in tasks)
+        assert all(
+            sum(body.count(gone_back_line(t["title"])) for body in [r["body"] for r in found]) == 1 for t in tasks
+        )
 
 
 def asking(c):
@@ -156,9 +168,9 @@ def test_a_bulk_close_recounts_the_asking_bot(api):
         pick(c, sub["id"], by=CPO)
         H._recount(c, CPO)
         assert asking(c) == 1
-        H.task_close(c, ANA, top["id"])                                 # the cascade recounts the asking bot
+        H.task_close(c, ANA, top["id"])  # the cascade recounts the asking bot
         assert asking(c) == 0
-        H.task_close(c, ANA, sub["id"])                                 # an already closed subtask stays closed
+        H.task_close(c, ANA, sub["id"])  # an already closed subtask stays closed
         assert asking(c) == 0
 
 

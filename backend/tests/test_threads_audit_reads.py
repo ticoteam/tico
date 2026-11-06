@@ -24,8 +24,13 @@ def renderings(api, thread_id, identity):
     with api.app.state.store.read() as c:
         v = threads.Viewer(api.app.state.auth, identity)
         python = threads.readable(c, v, thread_id)
-        sql = c.execute("SELECT 1 FROM conversations WHERE id=? AND " + threads.readable_sql(c, v, "conversations"),
-                        (thread_id,)).fetchone() is not None
+        sql = (
+            c.execute(
+                "SELECT 1 FROM conversations WHERE id=? AND " + threads.readable_sql(c, v, "conversations"),
+                (thread_id,),
+            ).fetchone()
+            is not None
+        )
         sse = thread_id in threads.readable_ids(c, threads.Viewer(api.app.state.auth, identity), [thread_id])
     assert python == sql == sse, (python, sql, sse)
     return python
@@ -33,8 +38,16 @@ def renderings(api, thread_id, identity):
 
 def stream(api, identity, after, topics):
     with api.app.state.store.read() as c:
-        found, _, _, _ = E.read(c, api.app.state.auth, identity, after, topics=topics, threads_scope=(),
-                                task_views=lambda rows, c, who, visible_sql="1": [], task_view=None)
+        found, _, _, _ = E.read(
+            c,
+            api.app.state.auth,
+            identity,
+            after,
+            topics=topics,
+            threads_scope=(),
+            task_views=lambda rows, c, who, visible_sql="1": [],
+            task_view=None,
+        )
     return found
 
 
@@ -45,11 +58,13 @@ def latest(api):
 
 def task_thread(api, task):
     with api.app.state.store.read() as c:
-        return c.execute("SELECT conversation_id FROM tasks WHERE id=?", ((task.get("task") or task)["id"],)).fetchone()[0]
+        return c.execute(
+            "SELECT conversation_id FROM tasks WHERE id=?", ((task.get("task") or task)["id"],)
+        ).fetchone()[0]
 
 
 def dm(api, token, *members):
-    named = {"title": "Plans"} if len(members) > 1 else {}       # a group DM needs a name
+    named = {"title": "Plans"} if len(members) > 1 else {}  # a group DM needs a name
     return ok(call(api, "POST", "threads/dm", token, {"members": list(members), **named}))
 
 
@@ -70,8 +85,10 @@ def test_narrowed_write_keeps_an_existing_dm_open_and_gates_only_starting_one(ac
 
 def test_looking_for_a_dm_makes_none_and_answers_as_starting_one_would(acme):
     api, _ = acme
+
     def rows(token):
         return [t["id"] for t in ok(call(api, "GET", "threads", token))["dms"]]
+
     before = rows("cara-test")
     looked = call(api, "GET", "threads/dm?create=false&with=human:eve", "cara-test")
     assert looked.status_code == 404 and looked.json()["error"]["code"] == "no_dm"
@@ -200,7 +217,9 @@ def test_a_person_i_may_not_see_is_not_named_anywhere_a_public_thread_reads(acme
     assert sql_column(api, f"SELECT owner_id FROM conversations WHERE id={where}", "eve-test") == [""]
     assert sql_column(api, f"SELECT DISTINCT sender_id FROM messages WHERE conversation_id={where}", "eve-test") == [""]
     assert sql_column(api, f"SELECT actor FROM thread_members WHERE thread_id={where}", "eve-test") == ["", "human:ben"]
-    assert "human:cara" not in sql_column(api, f"SELECT actor FROM thread_followers WHERE thread_id={where}", "eve-test")
+    assert "human:cara" not in sql_column(
+        api, f"SELECT actor FROM thread_followers WHERE thread_id={where}", "eve-test"
+    )
 
     # So does the stream.
     eve = who(api, "eve")
@@ -217,12 +236,17 @@ def test_whoever_is_in_the_dm_with_a_hidden_person_is_told_who_it_is(acme):
     after = latest(api)
     said = say(api, "cara-test", thread["id"], "Hello Eve")
     assert ok(call(api, "GET", f"threads/{thread['id']}", "eve-test"))["owner_id"] == "human:cara"
-    assert next(m for m in timeline(api, "eve-test", thread["id"]) if m["id"] == said["id"])["sender_id"] == "human:cara"
+    assert (
+        next(m for m in timeline(api, "eve-test", thread["id"]) if m["id"] == said["id"])["sender_id"] == "human:cara"
+    )
     assert {m["actor"] for m in ok(call(api, "GET", f"threads/{thread['id']}/members", "eve-test"))["members"]} == {
-        "human:cara", "human:eve"}
+        "human:cara",
+        "human:eve",
+    }
     where = f"'{thread['id']}'"
     assert sql_column(api, f"SELECT DISTINCT sender_id FROM messages WHERE conversation_id={where}", "eve-test") == [
-        "human:cara"]
+        "human:cara"
+    ]
     sent = [d for _, topic, d in stream(api, who(api, "eve"), after, ("messages",)) if topic == "messages"]
     assert "human:cara" in str(sent)
 
@@ -239,8 +263,11 @@ def test_a_dm_opened_through_the_old_routes_is_private_to_its_members(acme):
     # The native route finds the same DM, both ways round.
     assert dm(api, "cara-test", "human:eve")["id"] == dm(api, "eve-test", "human:cara")["id"] == made["id"]
 
-    mixed = ok(call(api, "POST", "conversations", "cara-test", {"participants": ["bot:counsel", "bot:analyst"],
-                                                                "kind": "chat"}))
+    mixed = ok(
+        call(
+            api, "POST", "conversations", "cara-test", {"participants": ["bot:counsel", "bot:analyst"], "kind": "chat"}
+        )
+    )
     assert mixed["audience"] == "personal"
     assert not renderings(api, mixed["id"], who(api, "ana"))
 
@@ -323,8 +350,11 @@ def test_an_old_ask_in_a_thread_is_history_not_a_needs_you_item(acme):
 # ----------------------------------------------------------------------------- search (finding 30)
 def test_search_keeps_to_a_private_task_and_a_restricted_message(acme, monkeypatch):
     api, _ = acme
-    task = ok(call(api, "POST", "tasks", "cara-test", {"title": "Secret", "body": "Do", "owner": "human:cara",
-                                                       "private": True}))
+    task = ok(
+        call(
+            api, "POST", "tasks", "cara-test", {"title": "Secret", "body": "Do", "owner": "human:cara", "private": True}
+        )
+    )
     say(api, "cara-test", task_thread(api, task), "Quokka plans")
     open_thread = create_thread(api, "ana-test", audience="company")
     plain = say(api, "ana-test", open_thread["id"], "Quokka forecast")
@@ -340,7 +370,7 @@ def test_search_keeps_to_a_private_task_and_a_restricted_message(acme, monkeypat
     found = hits("eve-test")
     assert [h["message_id"] for h in found["hits"]] == [plain["id"]] and found["next_cursor"] is None
     assert {h["id"] for h in hits("eve-test", "context/search?q=quokka&source=threads")["results"]} == {plain["id"]}
-    assert len(hits("cara-test")["hits"]) == 2      # she reads her own task's discussion
+    assert len(hits("cara-test")["hits"]) == 2  # she reads her own task's discussion
 
 
 # ----------------------------------------------------------------------------- Needs you and Catch up name no one hidden
@@ -360,8 +390,11 @@ def test_needs_you_names_a_hidden_person_only_to_someone_in_the_thread_with_them
     assert item["first_line"] == "Can you check the lease?"
     assert (item["requester_id"], item["origin_actor"], item["from_person"]) == ("", "", None)
     # Eve is in the DM with her, so there she is told who it is.
-    item = next(i for i in needs(api, "eve-test", "thread_mention") + needs(api, "eve-test", "thread_dm")
-                if i["conversation_id"] == made["id"])
+    item = next(
+        i
+        for i in needs(api, "eve-test", "thread_mention") + needs(api, "eve-test", "thread_dm")
+        if i["conversation_id"] == made["id"]
+    )
     assert (item["requester_id"], item["from_person"]) == ("human:cara", "human:cara")
 
 

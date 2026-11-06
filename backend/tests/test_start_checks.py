@@ -1,5 +1,6 @@
 """A bot's start checks are read once for all its open tasks: counts() asks `waiting` only of the tasks a set
 query says might be waiting, and reads each step name once. The numbers match the one-task-at-a-time checks."""
+
 from backend import auto_tasks, hubdb as H, question_tasks as QT
 from backend.tests.test_api import api, post  # noqa: F401
 from backend.tests.test_status_reads import setup
@@ -8,8 +9,11 @@ from backend.tests.hold_rows import set_holds
 
 def open_tasks(store, slug="ops"):
     with store.read_transaction() as c:
-        return H._rows(c.execute("SELECT * FROM tasks WHERE owner_id=? AND status IN ('open','doing') ORDER BY rowid",
-                                 ("bot:" + slug,)))
+        return H._rows(
+            c.execute(
+                "SELECT * FROM tasks WHERE owner_id=? AND status IN ('open','doing') ORDER BY rowid", ("bot:" + slug,)
+            )
+        )
 
 
 def one_by_one(c, rows):
@@ -47,19 +51,30 @@ def test_batched_counts_match_each_tasks_own_checks(api, monkeypatch):
     store = api.app.state.store
     by_title = {r["title"]: r["id"] for r in open_tasks(store)}
     # A person it waits on is a question task under it (step 6b): the child of change 10 covers it.
-    flagged_titles = ("Review change 2", "Review change 3", "Review change 5",
-                      "Review change 7", "Review change 8", "Review change 9", "Review change 10")
+    flagged_titles = (
+        "Review change 2",
+        "Review change 3",
+        "Review change 5",
+        "Review change 7",
+        "Review change 8",
+        "Review change 9",
+        "Review change 10",
+    )
     with store.transaction() as c:
         t = {n: by_title[f"Review change {n}"] for n in range(16)}
         set_holds(c, t[2], snoozed_until=H.shift(H.now(), days=2))
         c.execute("UPDATE tasks SET next_run=1 WHERE id=?", (t[3],))
         set_holds(c, t[5], blocked_kind='manual', blocked_reason='Held for legal')
         c.execute("UPDATE tasks SET status='doing' WHERE id=?", (t[6],))
-        c.execute("INSERT INTO approvals(id,kind,task_id,decision,created_at) VALUES('ap-1','deploy',?,NULL,?)",
-                  (t[7], H.now()))
+        c.execute(
+            "INSERT INTO approvals(id,kind,task_id,decision,created_at) VALUES('ap-1','deploy',?,NULL,?)",
+            (t[7], H.now()),
+        )
         blocker = H.task_create(c, "human:ana", "Blocker", "Blocks it.", "human:ben")
-        c.execute("INSERT INTO task_relations(from_task,to_task,kind,created_at) VALUES(?,?,'blocks',?)",
-                  (blocker["id"], t[8], H.now()))
+        c.execute(
+            "INSERT INTO task_relations(from_task,to_task,kind,created_at) VALUES(?,?,'blocks',?)",
+            (blocker["id"], t[8], H.now()),
+        )
         QT.ask_plain(c, "bot:ops", "human:ana", "Which one?", parent=H.task(c, t[9]))
         H.task_create(c, "bot:ops", "Child", "Under it.", "human:ben", parent_id=t[10])
     rows = open_tasks(store)

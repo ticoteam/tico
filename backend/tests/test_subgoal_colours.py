@@ -35,9 +35,10 @@ def measure(c, goal, value):
 
 
 def checkin(c, goal, signal="at_risk", days=3):
-    c.execute("INSERT INTO goal_checkins(id, goal_id, created_at, author, sender_id, body, signal) "
-              "VALUES(?,?,?,?,?,?,?)", (H.new_id(), goal["id"], stamp(days), "human:ben", "human:ben",
-                                       "The dependency is late.", signal))
+    c.execute(
+        "INSERT INTO goal_checkins(id, goal_id, created_at, author, sender_id, body, signal) VALUES(?,?,?,?,?,?,?)",
+        (H.new_id(), goal["id"], stamp(days), "human:ben", "human:ben", "The dependency is late.", signal),
+    )
 
 
 def status_events(c, goal):
@@ -58,7 +59,9 @@ def test_new_subgoal_gets_its_measure_colour_on_the_next_pass(api, clock):
             pairs.append((child, unlinked, expected))
 
     result = post(api, "goals/refresh", {})
-    assert {r["goal"] for r in result["changed"]} == {g["id"] for child, unlinked, _ in pairs for g in (child, unlinked)}
+    assert {r["goal"] for r in result["changed"]} == {
+        g["id"] for child, unlinked, _ in pairs for g in (child, unlinked)
+    }
     with api.app.state.store.read() as c:
         for (child, unlinked, expected), (value, _) in zip(pairs, cases):
             coloured = G.goal(c, child["id"])

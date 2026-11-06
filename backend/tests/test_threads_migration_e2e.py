@@ -46,11 +46,11 @@ from backend.app import create_app
 from backend.auth import Auth, Identity, standing
 from backend.store import H, Problem, Store
 
-NOW = datetime(2026, 9, 25, 18, 30, tzinfo=timezone.utc)      # the instant test_demo.py builds the demo at
+NOW = datetime(2026, 9, 25, 18, 30, tzinfo=timezone.utc)  # the instant test_demo.py builds the demo at
 GOLDENS = Path(__file__).resolve().parent / "fixtures" / "threads"
 WRITE = os.environ.get("TICO_WRITE_READER_GOLDENS") == "1"
 WORLDS = ("demo", "devcopy")
-AGENT = "standing"          # the harness label of a bot's standing credential; Auth.conversation only checks it is set
+AGENT = "standing"  # the harness label of a bot's standing credential; Auth.conversation only checks it is set
 
 
 @pytest.fixture(scope="module", autouse=True)
@@ -70,9 +70,16 @@ def build(world, directory):
     dest = directory / "devcopy" / "hub.sqlite"
     # Keep the demo's whole history, including its older weeks, so the copy's messages are the ones the golden pins.
     devcopy.build(settings.db_path, dest, days=3650)
-    return dataclasses.replace(settings, db_path=dest, registry_dir=dest.parent / "registry",
-                               blob_dir=dest.parent / "blobs", demo=False, demo_public=False,
-                               local_owner_token_file=None, rehearsal=True)
+    return dataclasses.replace(
+        settings,
+        db_path=dest,
+        registry_dir=dest.parent / "registry",
+        blob_dir=dest.parent / "blobs",
+        demo=False,
+        demo_public=False,
+        local_owner_token_file=None,
+        rehearsal=True,
+    )
 
 
 def open_store(settings):
@@ -131,15 +138,18 @@ def today_sets(settings):
             for row in c.execute("SELECT id,audience FROM conversations ORDER BY id").fetchall():
                 # Every Home thread counts. (The demo patches uuid4 to a digest of its counter, so a Home thread's
                 # version nibble is chance: skipping "version 4" dropped real Home threads on some seeds.)
-                conversations[row["id"]] = {actor for actor, identity in who.items()
-                                            if can_read(auth, c, identity, row["id"])}
+                conversations[row["id"]] = {
+                    actor for actor, identity in who.items() if can_read(auth, c, identity, row["id"])
+                }
             messages = {}
             for row in c.execute("SELECT * FROM messages ORDER BY id").fetchall():
                 if row["conversation_id"] not in conversations:
                     continue
                 readers = conversations[row["conversation_id"]]
-                messages[row["id"]] = (row["conversation_id"], {
-                    actor for actor in readers if task_privacy.message_readable(c, actor, dict(row))})
+                messages[row["id"]] = (
+                    row["conversation_id"],
+                    {actor for actor in readers if task_privacy.message_readable(c, actor, dict(row))},
+                )
         return conversations, messages
     finally:
         close(store)
@@ -148,16 +158,22 @@ def today_sets(settings):
 # ----------------------------------------------------------------------------- the golden form
 def golden_form(conversations, messages):
     """The golden: each conversation's readers, and each message's only where they differ from its conversation's."""
-    return {"conversations": {cid: sorted(readers) for cid, readers in conversations.items()},
-            "messages": {mid: sorted(readers) for mid, (cid, readers) in messages.items()
-                         if readers != conversations.get(cid, set())}}
+    return {
+        "conversations": {cid: sorted(readers) for cid, readers in conversations.items()},
+        "messages": {
+            mid: sorted(readers) for mid, (cid, readers) in messages.items() if readers != conversations.get(cid, set())
+        },
+    }
 
 
 def full_from_golden(golden, owner_of):
     """The golden expanded back to every conversation and message of the world (`owner_of`, from the same world)."""
     conversations = {cid: set(readers) for cid, readers in golden["conversations"].items()}
-    messages = {mid: (cid, set(golden["messages"].get(mid, golden["conversations"].get(cid, []))))
-                for mid, cid in owner_of.items() if cid in conversations}   # a skipped Home's messages stay out too
+    messages = {
+        mid: (cid, set(golden["messages"].get(mid, golden["conversations"].get(cid, []))))
+        for mid, cid in owner_of.items()
+        if cid in conversations
+    }  # a skipped Home's messages stay out too
     return conversations, messages
 
 
@@ -171,8 +187,10 @@ def dump(golden):
     """The golden as JSON, one entry per line with keys and actors sorted, so two writer runs give the same bytes."""
     sections = []
     for name in ("conversations", "messages"):
-        entries = [f"{json.dumps(key)}:{json.dumps(readers, separators=(',', ':'))}"
-                   for key, readers in sorted(golden[name].items())]
+        entries = [
+            f"{json.dumps(key)}:{json.dumps(readers, separators=(',', ':'))}"
+            for key, readers in sorted(golden[name].items())
+        ]
         sections.append(f'"{name}":{{' + ("\n" + ",\n".join(entries) + "\n" if entries else "") + "}")
     return "{\n" + ",\n".join(sections) + "\n}\n"
 
@@ -187,8 +205,10 @@ def differences(expected, got):
     for row in sorted(set(expected) | set(got)):
         want, have = set(expected.get(row, ())), set(got.get(row, ()))
         for actor in sorted(want ^ have):
-            lines.append(f"{row}: {actor} expected {'readable' if actor in want else 'hidden'}, "
-                         f"got {'readable' if actor in have else 'hidden'}")
+            lines.append(
+                f"{row}: {actor} expected {'readable' if actor in want else 'hidden'}, "
+                f"got {'readable' if actor in have else 'hidden'}"
+            )
     return lines
 
 
@@ -207,7 +227,8 @@ def check_golden_is_todays(world, settings):
         golden_path(world).write_text(dump(now))
         return
     assert golden_path(world).exists(), (
-        f"no golden at {golden_path(world)}: regenerate with TICO_WRITE_READER_GOLDENS=1")
+        f"no golden at {golden_path(world)}: regenerate with TICO_WRITE_READER_GOLDENS=1"
+    )
     stored = json.loads(golden_path(world).read_text())
     lines = differences(labeled(*full_from_golden(stored, message_owners(settings))), labeled(conversations, messages))
     assert not lines, report(lines, world, "against today's predicates; regenerate with TICO_WRITE_READER_GOLDENS=1")
@@ -244,12 +265,21 @@ def threads_sets(threads, settings, expected):
             viewers = {actor: threads.viewer(auth, who) for actor, who in identities(c, auth).items()}
             for cid in expected[0]:
                 row = c.execute("SELECT * FROM conversations WHERE id=?", (cid,)).fetchone()
-                conversations[cid] = {actor for actor, viewer in viewers.items()
-                                      if row is not None and threads.readable(c, viewer, dict(row))}
+                conversations[cid] = {
+                    actor
+                    for actor, viewer in viewers.items()
+                    if row is not None and threads.readable(c, viewer, dict(row))
+                }
             for mid, (cid, _) in expected[1].items():
                 row = c.execute("SELECT * FROM messages WHERE id=?", (mid,)).fetchone()
-                messages[mid] = (cid, {actor for actor, viewer in viewers.items()
-                                       if row is not None and threads.readable(c, viewer, dict(row))})
+                messages[mid] = (
+                    cid,
+                    {
+                        actor
+                        for actor, viewer in viewers.items()
+                        if row is not None and threads.readable(c, viewer, dict(row))
+                    },
+                )
         return conversations, messages
     finally:
         close(store)
@@ -290,6 +320,7 @@ def test_the_demo_world_goldens_are_todays_and_the_migration_keeps_every_reader_
         close(store)
     after = threads_sets(threads, settings, expected)
     # Compared with the reader sets just before the removal, so only what the removal itself did is counted.
-    widened = [line for line in differences(labeled(*before), labeled(*after))
-               if "expected hidden, got readable" in line]
+    widened = [
+        line for line in differences(labeled(*before), labeled(*after)) if "expected hidden, got readable" in line
+    ]
     assert not widened, report(widened, "demo", "after a roster removal (each line: before, got after)")

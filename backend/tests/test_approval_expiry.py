@@ -1,4 +1,5 @@
 """Approvals nobody will act on leave Needs you: the task ended, a newer request replaced them, or they aged."""
+
 from backend import approval_expiry
 from backend import hubdb as H
 from backend import milestone_waits
@@ -19,8 +20,9 @@ class Withdrawn(HubCase):
         after = H.approval(self.conn, appr["id"])
         self.assertEqual((after["decision"], after["decided_by_id"]), ("withdrawn", H.KEEPER))
         self.assertEqual(self.pending(), [])
-        told = self.conn.execute("SELECT body, refs FROM messages WHERE recipient_id=? AND body LIKE 'Withdrawn:%'",
-                                 (CMO,)).fetchall()
+        told = self.conn.execute(
+            "SELECT body, refs FROM messages WHERE recipient_id=? AND body LIKE 'Withdrawn:%'", (CMO,)
+        ).fetchall()
         self.assertEqual(len(told), 1)
         self.assertIn('"quiet": true', told[0]["refs"])
         self.refused("duplicate", H.approval_decide, self.conn, ANA, appr["id"], "approved")
@@ -28,28 +30,45 @@ class Withdrawn(HubCase):
     def test_a_newer_request_for_the_same_target_or_one_naming_it_replaces_the_older(self):
         row = H.task_create(self.conn, ANA, "Release", "Cut it.", CMO, lint=False)
         # A release is asked for by its release page, so a re-cut of the same version replaces the first ask.
-        release = {"url": "https://github.com/acme/site/releases/tag/v1.2.0", "version": "1.2.0", "commit": "a1",
-                   "content_sha256": "a" * 64}
+        release = {
+            "url": "https://github.com/acme/site/releases/tag/v1.2.0",
+            "version": "1.2.0",
+            "commit": "a1",
+            "content_sha256": "a" * 64,
+        }
         self.refused("lint", H.approval_request, self.conn, CMO, "publish", {**release, "url": ""}, task_id=row["id"])
         first = H.approval_request(self.conn, CMO, "publish", release, task_id=row["id"])
-        recut = H.approval_request(self.conn, CMO, "publish", {**release, "commit": "b2", "content_sha256": "b" * 64},
-                                   task_id=row["id"])
-        other = H.approval_request(self.conn, CMO, "publish", {"url": "https://acme.example/blog",
-                                                               "content_sha256": "c" * 64}, task_id=row["id"])
+        recut = H.approval_request(
+            self.conn, CMO, "publish", {**release, "commit": "b2", "content_sha256": "b" * 64}, task_id=row["id"]
+        )
+        other = H.approval_request(
+            self.conn,
+            CMO,
+            "publish",
+            {"url": "https://acme.example/blog", "content_sha256": "c" * 64},
+            task_id=row["id"],
+        )
         loose = H.approval_request(self.conn, CMO, "spend", {"amount": 5, "account": "ads", "what": "a test"})
-        named = H.approval_request(self.conn, CMO, "spend", {"amount": 6, "account": "ads", "what": "a test"},
-                                   supersedes=loose["id"])
+        named = H.approval_request(
+            self.conn, CMO, "spend", {"amount": 6, "account": "ads", "what": "a test"}, supersedes=loose["id"]
+        )
         self.assertEqual(H.approval(self.conn, first["id"])["decision"], "withdrawn")
         self.assertEqual(H.approval(self.conn, loose["id"])["decision"], "withdrawn")
         self.assertEqual(sorted(self.pending()), sorted([recut["id"], other["id"], named["id"]]))
 
     def test_an_approval_records_when_it_was_ready_and_whose_decision_it_is(self):
         row = H.task_create(self.conn, ANA, "Release", "Cut it.", CMO, lint=False)
-        release = {"url": "https://github.com/acme/site/releases/tag/v1.2.0", "version": "1.2.0", "commit": "a1",
-                   "content_sha256": "a" * 64}
+        release = {
+            "url": "https://github.com/acme/site/releases/tag/v1.2.0",
+            "version": "1.2.0",
+            "commit": "a1",
+            "content_sha256": "a" * 64,
+        }
         appr = H.approval_request(self.conn, CMO, "publish", release, task_id=row["id"])
-        stored = self.conn.execute("SELECT ready_since, decision_owner FROM approvals WHERE id=?", (appr["id"],)).fetchone()
-        self.assertEqual(tuple(stored), (appr["created_at"], ANA))           # recorded, not only read back
+        stored = self.conn.execute(
+            "SELECT ready_since, decision_owner FROM approvals WHERE id=?", (appr["id"],)
+        ).fetchone()
+        self.assertEqual(tuple(stored), (appr["created_at"], ANA))  # recorded, not only read back
         self.assertEqual(appr["decision_owner_name"], H.person_name(self.conn, "ana"))
         self.assertTrue(H.is_release_approval("publish", appr["payload"]))
         self.assertFalse(H.is_release_approval("publish", {**release, "commit": ""}))
@@ -58,7 +77,9 @@ class Withdrawn(HubCase):
         self.conn.execute("UPDATE approvals SET ready_since=? WHERE id=?", (ready, appr["id"]))
         (pending,) = H.needs_you(self.conn, ANA)["approvals"]
         self.assertEqual(pending["age_s"] // 60, 130)
-        self.assertEqual(H.approval_wait_line(pending), f"Ready 2 h 10 min, waiting on {pending['decision_owner_name']}")
+        self.assertEqual(
+            H.approval_wait_line(pending), f"Ready 2 h 10 min, waiting on {pending['decision_owner_name']}"
+        )
         decided = H.approval_decide(self.conn, ANA, appr["id"], "approved")
         self.conn.execute("UPDATE approvals SET decided_at=? WHERE id=?", (H.shift(ready, minutes=30), appr["id"]))
         self.assertEqual(H.approval(self.conn, appr["id"])["age_s"], 30 * 60)
@@ -97,9 +118,13 @@ class SupersededReleases(HubCase):
 
     def ask(self, tag, repo="acme/site", commit=None):
         url = f"https://github.com/{repo}/releases/tag/{tag}"
-        return H.approval_request(self.conn, CMO, "publish", {"url": url, "version": tag.lstrip("v"),
-                                                              "commit": commit or tag, "content_sha256": "a" * 64},
-                                  task_id=self.task["id"])
+        return H.approval_request(
+            self.conn,
+            CMO,
+            "publish",
+            {"url": url, "version": tag.lstrip("v"), "commit": commit or tag, "content_sha256": "a" * 64},
+            task_id=self.task["id"],
+        )
 
     def decision(self, appr):
         return H.approval(self.conn, appr["id"])["decision"]
@@ -112,16 +137,33 @@ class SupersededReleases(HubCase):
         other_repo = self.ask("v0.1.0", repo="acme/other")
         prerelease = self.ask("v1.0.5-rc.1")
         # An ask from before the version and commit were recorded: only the release page's url and a digest.
-        url_only = H.approval_request(self.conn, CMO, "publish", {
-            "url": "https://github.com/acme/site/releases/tag/v0.4.17", "content_sha256": "e" * 64},
-            task_id=self.task["id"])
-        unreadable = H.approval_request(self.conn, CMO, "publish", {
-            "url": "https://github.com/acme/site/releases/tag/next", "version": "next", "commit": "z9",
-            "content_sha256": "d" * 64}, task_id=self.task["id"])
-        self.conn.execute("INSERT INTO milestones(kind,target,reached_at,source) VALUES('release_published',"
-                          "'acme/site@v1.0.0',?,'')", (H.now(),))
-        self.conn.execute("INSERT INTO milestones(kind,target,reached_at,source) VALUES('release_published',"
-                          "'acme/site@v0.9.0',?,'')", (H.now(),))
+        url_only = H.approval_request(
+            self.conn,
+            CMO,
+            "publish",
+            {"url": "https://github.com/acme/site/releases/tag/v0.4.17", "content_sha256": "e" * 64},
+            task_id=self.task["id"],
+        )
+        unreadable = H.approval_request(
+            self.conn,
+            CMO,
+            "publish",
+            {
+                "url": "https://github.com/acme/site/releases/tag/next",
+                "version": "next",
+                "commit": "z9",
+                "content_sha256": "d" * 64,
+            },
+            task_id=self.task["id"],
+        )
+        self.conn.execute(
+            "INSERT INTO milestones(kind,target,reached_at,source) VALUES('release_published','acme/site@v1.0.0',?,'')",
+            (H.now(),),
+        )
+        self.conn.execute(
+            "INSERT INTO milestones(kind,target,reached_at,source) VALUES('release_published','acme/site@v0.9.0',?,'')",
+            (H.now(),),
+        )
         out = approval_expiry.sweep(self.conn)
         self.assertEqual(sorted(out["superseded"]), sorted([old["id"], shipped["id"], url_only["id"]]))
         self.assertEqual([self.decision(a) for a in (newer, other_repo, prerelease, unreadable)], [None] * 4)

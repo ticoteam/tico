@@ -21,11 +21,19 @@ def test_messages_include_readable_tasks_created_during_the_turn(api, reader):
     with api.app.state.store.transaction() as c:
         visible = H.task_create(c, "bot:ops", "Draft the launch post", "For the team.", "bot:ops", lint=False)
         private = H.task_create(c, "bot:ops", "Review private mail", "Private.", "bot:inbox", lint=False)
-        child = H.task_create(c, "bot:ops", "Draft the budget", "For the launch.", "bot:finance",
-                              parent_id=visible["id"], lint=False)
+        child = H.task_create(
+            c, "bot:ops", "Draft the budget", "For the launch.", "bot:finance", parent_id=visible["id"], lint=False
+        )
         # A party files the subtask; ordinary read alone does not permit filing it.
-        H.say(c, "bot:ops", "human:ana", "Filed the work.", conversation_id=msg["conversation_id"],
-              in_reply_to=msg["id"], refs={"turn_id": attempt["id"], "tasks": [visible["id"], private["id"], child["id"]]})
+        H.say(
+            c,
+            "bot:ops",
+            "human:ana",
+            "Filed the work.",
+            conversation_id=msg["conversation_id"],
+            in_reply_to=msg["id"],
+            refs={"turn_id": attempt["id"], "tasks": [visible["id"], private["id"], child["id"]]},
+        )
     token = reader
     for path in ("messages", "snapshot"):
         result = get(api, f"conversations/{msg['conversation_id']}/{path}", token)
@@ -50,7 +58,9 @@ def test_a_loose_message_says_what_kind_of_sender_started_its_run(api):
     post(api, f"attempts/{attempt['id']}/started", {"thread_id": "relay"}, token=r["token"])
     with api.app.state.store.transaction() as c:
         relay = H.say(c, "bot:ops", "human:ana", "From Finance: the census is delivered.")
-    post(api, f"attempts/{attempt['id']}/complete", {"outcome": "completed", "text": "", "last_seq": 0}, token=r["token"])
+    post(
+        api, f"attempts/{attempt['id']}/complete", {"outcome": "completed", "text": "", "last_seq": 0}, token=r["token"]
+    )
     asked = post(api, "chat/ops", {"text": "What is next?"})
     attempt = claim(api, r)
     post(api, f"attempts/{attempt['id']}/started", {"thread_id": "own"}, token=r["token"])
@@ -109,19 +119,22 @@ def test_a_legacy_shell_summary_naming_a_file_or_arguments_is_never_shown():
     assert turns.tool_label({"tool": "Bash", "summary": "cd"}) == "Ran cd"
 
 
-@pytest.mark.parametrize("summary, label", [
-    ("cd hub task list", "Listing tasks"),
-    ("cd npm", "Ran npm"),
-    ("cd web hub task close", "Closing a task"),
-    ("cd web npm", "Ran npm"),
-    (". env.sh hub task close", "Closing a task"),
-    ("source env.sh npm", "Ran npm"),
-    ("export HUB_TOKEN=sk-live-1 npm", "Ran npm"),
-    ("export HUB_TOKEN=sk-live-1 hub task close", "Closing a task"),
-    ("env HUB_TOKEN=sk-live-1 hub task list", "Listing tasks"),
-    ("env HUB_TOKEN=sk-live-1 cargo", "Ran cargo"),
-    ("cd web export A=sk-live-1 cargo", "Ran cargo"),
-])
+@pytest.mark.parametrize(
+    "summary, label",
+    [
+        ("cd hub task list", "Listing tasks"),
+        ("cd npm", "Ran npm"),
+        ("cd web hub task close", "Closing a task"),
+        ("cd web npm", "Ran npm"),
+        (". env.sh hub task close", "Closing a task"),
+        ("source env.sh npm", "Ran npm"),
+        ("export HUB_TOKEN=sk-live-1 npm", "Ran npm"),
+        ("export HUB_TOKEN=sk-live-1 hub task close", "Closing a task"),
+        ("env HUB_TOKEN=sk-live-1 hub task list", "Listing tasks"),
+        ("env HUB_TOKEN=sk-live-1 cargo", "Ran cargo"),
+        ("cd web export A=sk-live-1 cargo", "Ran cargo"),
+    ],
+)
 def test_a_setup_prefix_is_skipped_and_the_work_after_it_is_named(summary, label):
     """A stored summary may start with the setup words a shell line ran first. They are skipped unread, so the label
     names the work and never a setup word's argument or a secret assignment."""
@@ -130,12 +143,15 @@ def test_a_setup_prefix_is_skipped_and_the_work_after_it_is_named(summary, label
     assert "sk-live-1" not in got and "env.sh" not in got
 
 
-@pytest.mark.parametrize("summary, label", [
-    ("cd", "Ran cd"),
-    ("export HUB_TOKEN=sk-live-1", "Ran Bash"),
-    ("cd customer-private.json", "Ran Bash"),
-    ("env HUB_TOKEN=sk-live-1", "Ran Bash"),
-])
+@pytest.mark.parametrize(
+    "summary, label",
+    [
+        ("cd", "Ran cd"),
+        ("export HUB_TOKEN=sk-live-1", "Ran Bash"),
+        ("cd customer-private.json", "Ran Bash"),
+        ("env HUB_TOKEN=sk-live-1", "Ran Bash"),
+    ],
+)
 def test_a_setup_prefix_with_no_work_after_it_names_nothing_it_should_not(summary, label):
     """A bare `cd` is the last resort (`Ran cd`). A setup prefix with no program after it names no program, so it reads
     as the tool itself."""
@@ -143,8 +159,10 @@ def test_a_setup_prefix_with_no_work_after_it_names_nothing_it_should_not(summar
 
 
 def test_a_folded_step_carries_its_label_and_keeps_its_tool_name():
-    rows = [("tool", {"tool": "Bash", "status": "started", "item_id": "b1", "summary": "npm"}, "t1"),
-            ("tool", {"tool": "Bash", "status": "completed", "item_id": "b1"}, "t2")]
+    rows = [
+        ("tool", {"tool": "Bash", "status": "started", "item_id": "b1", "summary": "npm"}, "t1"),
+        ("tool", {"tool": "Bash", "status": "completed", "item_id": "b1"}, "t2"),
+    ]
     [step] = turns.build_steps(rows)
     assert (step["tool"], step["label"], step["text"]) == ("Bash", "Ran npm", "")
 

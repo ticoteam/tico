@@ -16,8 +16,7 @@ def ticket(c, title="Fix the connection", owner="bot:cpo", manager="coo"):
         c.execute("UPDATE task_types SET manager=NULL WHERE id=?", (typ["id"],))
     else:
         c.execute("UPDATE task_types SET manager=? WHERE id=?", (manager, typ["id"]))
-    row = H.task_create(c, "bot:ops", title, "Build.", owner, type=typ["id"], step="In Progress",
-                        lint=False)
+    row = H.task_create(c, "bot:ops", title, "Build.", owner, type=typ["id"], step="In Progress", lint=False)
     return H.task(c, row["id"])
 
 
@@ -41,7 +40,9 @@ def test_a_working_ticket_is_late_once_past_four_hours_at_its_step_and_its_manag
 def test_time_away_from_work_restarts_the_clock(api):
     with api.app.state.store.transaction() as c:
         row = ticket(c)
-        for ts in c.execute("SELECT id FROM history_events WHERE subject_type='task' AND subject_id=?", (row["id"],)).fetchall():
+        for ts in c.execute(
+            "SELECT id FROM history_events WHERE subject_type='task' AND subject_id=?", (row["id"],)
+        ).fetchall():
             c.execute("UPDATE history_events SET created_at=? WHERE subject_type='task' AND id=?", (later(-6), ts[0]))
         c.execute("UPDATE tasks SET created_at=? WHERE id=?", (later(-6), row["id"]))
         H.task_update(c, "bot:cpo", row["id"], status="waiting", note="Held at the gate")
@@ -71,8 +72,9 @@ def test_a_manager_who_is_the_owner_is_never_late_for(api):
 def test_the_board_reads_when_a_working_ticket_entered_its_step(api):
     with api.app.state.store.transaction() as c:
         working = ticket(c)
-        queued = H.task_create(c, "bot:ops", "Next", "Later.", "bot:cpo", type=working["type_id"], step="In QA",
-                               lint=False)
+        queued = H.task_create(
+            c, "bot:ops", "Next", "Later.", "bot:cpo", type=working["type_id"], step="In QA", lint=False
+        )
     rows = {t["id"]: t for t in get(api, "tasks?status=all&brief=true")["tasks"]}
     assert rows[working["id"]]["step_since"]
     assert "step_since" not in rows[queued["id"]]
@@ -81,6 +83,7 @@ def test_the_board_reads_when_a_working_ticket_entered_its_step(api):
 
 def test_a_steps_own_hours_time_it_on_any_board_and_override_the_dev_default(api):
     from backend import step_flow
+
     with api.app.state.store.transaction() as c:
         row = ticket(c)
         c.execute("UPDATE task_steps SET flow=? WHERE id=?", ('{"status_hours": 6, "late_hours": 8}', row["step_id"]))
@@ -97,7 +100,10 @@ def test_a_manager_who_has_just_been_at_a_late_ticket_is_told_only_if_it_stays_l
     with api.app.state.store.transaction() as c:
         row = ticket(c)
         # The manager's own note on it just before it turned late.
-        c.execute("INSERT INTO history_events(subject_type,id,subject_id,created_at,actor_id,kind,old,new,note) VALUES('task','m1',?,?,'bot:coo','note','','',"
-                  "'What does this wait on?')", (row["id"], later(3.8)))
+        c.execute(
+            "INSERT INTO history_events(subject_type,id,subject_id,created_at,actor_id,kind,old,new,note) VALUES('task','m1',?,?,'bot:coo','note','','',"
+            "'What does this wait on?')",
+            (row["id"], later(3.8)),
+        )
         assert late_ids(c, 4.2) == [], "they know: no listing now"
         assert late_ids(c, 5) == [row["id"]], "an hour on and still late: now they hear"

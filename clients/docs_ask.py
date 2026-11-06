@@ -30,12 +30,23 @@ def parse_citations(text):
     for kind, title, target in CITATION.findall(str(text or "")):
         internal = kind == "Internal doc"
         if internal != target.startswith("doc:"):
-            continue                    # an internal citation is a doc id, a linked one is a web address
-        ref = target[len("doc:"):] if target.startswith("doc:") else target
+            continue  # an internal citation is a doc id, a linked one is a web address
+        ref = target[len("doc:") :] if target.startswith("doc:") else target
         if (internal, ref) not in seen:
             seen.add((internal, ref))
-            found.append({"type": "internal" if internal else "manual" if kind == "Tico manual" else "external" if kind == "External" else "linked",
-                          "title": title.strip(), "url_or_id": ref})
+            found.append(
+                {
+                    "type": "internal"
+                    if internal
+                    else "manual"
+                    if kind == "Tico manual"
+                    else "external"
+                    if kind == "External"
+                    else "linked",
+                    "title": title.strip(),
+                    "url_or_id": ref,
+                }
+            )
     return found
 
 
@@ -48,8 +59,11 @@ def result(text):
 
 
 def final_reply(snapshot, message_id):
-    replies = [message for message in snapshot.get("messages") or []
-               if message.get("in_reply_to") == message_id and message.get("sender_id") == "bot:" + LIBRARIAN]
+    replies = [
+        message
+        for message in snapshot.get("messages") or []
+        if message.get("in_reply_to") == message_id and message.get("sender_id") == "bot:" + LIBRARIAN
+    ]
     execution = snapshot.get("execution") or {}
     if execution.get("state") in ("queued", "leased", "running", "input", "uncertain"):
         return None
@@ -75,7 +89,9 @@ def ask(api, question, wait_s=120, key=None, sleep=time.sleep, clock=time.monoto
     wait = max(0, min(int(wait_s or 0), getattr(api, "docs_wait_max", WAIT_MAX)))
     ask_key = key + ":ask" if key else None
     if api.get("me").get("role") == "bot":
-        sent = api.post("messages", {"to": LIBRARIAN, "text": question, "needs_action": True, "wait_s": wait}, key=ask_key)
+        sent = api.post(
+            "messages", {"to": LIBRARIAN, "text": question, "needs_action": True, "wait_s": wait}, key=ask_key
+        )
         message_id = sent["id"]
     else:
         sent = api.post("docs/ask", {"question": question}, key=ask_key)

@@ -7,8 +7,7 @@ remote browser and runner journeys (scripts/remote.py --setup rust); these tests
 
 from backend.tests.slug_ids import bot_ids_are_their_slugs  # noqa: F401  (each bot's id is its slug)
 from backend.tests.test_api import api, claim, assign, post, ready, runner  # noqa: F401  (the api fixture)
-from backend.tests.threads_e2e import (call, create_thread, home_id, ok, read_status, require_threads_api,
-                                       say, timeline)
+from backend.tests.threads_e2e import call, create_thread, home_id, ok, read_status, require_threads_api, say, timeline
 
 
 def bot_runner(api, *bots):
@@ -52,12 +51,15 @@ def test_a_bot_answers_in_the_sub_thread_it_was_asked_in_and_nowhere_else(api):
     assert sub_id == asked["thread_id"], "the parent's summary points at the sub-thread the question went into"
     replies = timeline(api, "ana-test", sub_id)
     reply = next((row for row in replies if row.get("body") == "Risks: pricing, timing"), None)
-    assert reply is not None, ("the answer never reached the sub-thread; it holds "
-                               f"{[row.get('body') for row in replies]}")
+    assert reply is not None, (
+        f"the answer never reached the sub-thread; it holds {[row.get('body') for row in replies]}"
+    )
     assert reply["thread_id"] == sub_id, "the answer lands in the sub-thread that asked"
     assert "depth" in reply, "every timeline message carries depth (contract 10)"
     assert parent["sub_thread"]["count"] == len(replies), "the parent's summary counts the sub-thread's messages"
-    assert [row["body"] for row in rows] == ["Kickoff notes", "@cpo list the risks", "Risks: pricing, timing"], "the root shows its sub-thread inline, in tree order"
+    assert [row["body"] for row in rows] == ["Kickoff notes", "@cpo list the risks", "Risks: pricing, timing"], (
+        "the root shows its sub-thread inline, in tree order"
+    )
     assert [row["depth"] for row in rows] == [0, 1, 1]
 
 
@@ -78,6 +80,7 @@ def test_the_loop_guard_stops_bots_pinging_each_other_and_a_person_resumes_them(
     # A plain message from one bot to another waits for its next run (bot_to_bot): here each one wakes, as a flagged
     # message does, so the bots really do ping each other until the guard stops them.
     from backend import rules
+
     monkeypatch.setattr(rules, "bot_to_bot_decision", lambda *a, **k: None)
     monkeypatch.setattr(rules, "judge", lambda *a, **k: None)
     r = bot_runner(api, "cpo", "product-design")
@@ -98,8 +101,10 @@ def test_the_loop_guard_stops_bots_pinging_each_other_and_a_person_resumes_them(
     # The sidebar's `attention` holds each root with capped wakes (contract 4.5, 10), held here by hand: a bot's post that
     # names Ana is not attention by itself, and this loop may stop before the guard does.
     with api.app.state.store.transaction() as c:
-        c.execute("UPDATE message_deliveries SET state='capped' WHERE root_id=? AND recipient LIKE 'bot:%' AND state='pending'",
-                  (t["id"],))
+        c.execute(
+            "UPDATE message_deliveries SET state='capped' WHERE root_id=? AND recipient LIKE 'bot:%' AND state='pending'",
+            (t["id"],),
+        )
     attention = ok(call(api, "GET", "threads", "ana-test"))["attention"]
     assert [row["capped"] for row in attention if row.get("root_id") == t["id"]] == [1], attention
     say(api, "ana-test", t["id"], "@cpo carry on")
@@ -145,8 +150,9 @@ def test_a_public_thread_and_a_private_one_never_share_a_turn_context(api):
     second = claim(api, r, "cpo")
     conv_a, conv_b = first["conversation"], second["conversation"]
     assert conv_a["root_id"] == public["id"] and conv_b["root_id"] == private["id"]
-    assert (conv_a["audience_class"], conv_b["audience_class"]) == ("public", "private"), \
+    assert (conv_a["audience_class"], conv_b["audience_class"]) == ("public", "private"), (
         "the turn context says which class it runs in, so the runner keys its session by it (contract section 8)"
+    )
 
 
 def test_a_bot_post_is_activity_for_a_person_and_not_an_unread_count(api):
@@ -157,7 +163,8 @@ def test_a_bot_post_is_activity_for_a_person_and_not_an_unread_count(api):
     unread = ok(call(api, "GET", f"threads/{t['id']}", "ana-test"))["me"]["unread"]
     assert unread == 1, "a person's message is unread"
     from backend import threads
-    with api.app.state.store.transaction() as c:      # Ana started it (a live follow); she turns it to mentions only
+
+    with api.app.state.store.transaction() as c:  # Ana started it (a live follow); she turns it to mentions only
         threads.follow(c, threads.actor_viewer(c, "human:ana"), t["id"], notify="mentions")
     attempt = claim(api, r, "cpo")
     assert attempt is not None

@@ -67,11 +67,28 @@ def repo_bot(api, bot="ops"):
         BS.write(c, bot, {"name": bot, "runtime": "codex", "model": "gpt-6-luna", "reasoning_effort": "high"})
     machine = runner(api)
     assign(api, machine, bot)
-    row = {"ready": True, "runtime": "codex", "model": "gpt-6-luna", "repository_present": True,
-           "configuration_valid": True, "problems": []}
-    post(api, "runners/heartbeat", {"version": "test", "platform": "test",
-                                    "readiness": {"schema_version": 1, "runtimes": {"codex": {"installed": True, "authenticated": "ready"}},
-                                                  "bots": {bot: row}}}, token=machine["token"])
+    row = {
+        "ready": True,
+        "runtime": "codex",
+        "model": "gpt-6-luna",
+        "repository_present": True,
+        "configuration_valid": True,
+        "problems": [],
+    }
+    post(
+        api,
+        "runners/heartbeat",
+        {
+            "version": "test",
+            "platform": "test",
+            "readiness": {
+                "schema_version": 1,
+                "runtimes": {"codex": {"installed": True, "authenticated": "ready"}},
+                "bots": {bot: row},
+            },
+        },
+        token=machine["token"],
+    )
 
 
 def ana_task(api, owner="bot:ops", title="Send the invoice"):
@@ -115,8 +132,13 @@ def test_one_assistant_turn_makes_every_write_the_person_could_make_with_no_card
         # Under a shared task: a standalone question task is private to the bot and her, out of her Assistant's reach.
         tool = H.task_create(c, "human:ana", "Pick the outbound tool", "x", "bot:finance", lint=False)
         asked = QT.ask_plain(c, "bot:finance", "human:ana", "Close or Apollo?", parent=tool)
-    call(api, turn(api, "Apollo"), "POST", f"tasks/{asked['id']}/answers",
-         {"target": {"task": asked["id"]}, "answers": {}, "other": "Apollo"})
+    call(
+        api,
+        turn(api, "Apollo"),
+        "POST",
+        f"tasks/{asked['id']}/answers",
+        {"target": {"task": asked["id"]}, "answers": {}, "other": "Apollo"},
+    )
 
     # A turn sets a direct setting and a confirm setting.
     token = turn(api, "Turn off the stale review and the Apollo rule")
@@ -129,7 +151,7 @@ def test_one_assistant_turn_makes_every_write_the_person_could_make_with_no_card
     call(api, token, "PATCH", f"automations/{aid}", {"enabled": False})
     call(api, token, "PATCH", f"automations/{aid}", {"trigger": {"type": "schedule", "cron": "0 9 * * *", "tz": "UTC"}})
     aid = post(api, "automations", flow(owner="person:ana"))["id"]
-    call(api, "ana-test", "PATCH", f"automations/{aid}", {"name": "Renamed"})   # a second version to restore over
+    call(api, "ana-test", "PATCH", f"automations/{aid}", {"name": "Renamed"})  # a second version to restore over
     call(api, turn(api, "Put the first version back"), "POST", f"automations/{aid}/versions/1/restore", {})
 
     # A turn pauses and resumes a bot, and sets its model.
@@ -149,8 +171,9 @@ def test_one_assistant_turn_makes_every_write_the_person_could_make_with_no_card
 
     # A turn adds and retires a rule.
     token = turn(api, "Add the consent rule")
-    added = no_card(api, token, "POST", "rules", {"kind": "external", "text": "Keep a consent record.",
-                                                    "who": {"bots": ["ops"]}})
+    added = no_card(
+        api, token, "POST", "rules", {"kind": "external", "text": "Keep a consent record.", "who": {"bots": ["ops"]}}
+    )
     if added.status_code == 200 and added.json().get("id"):
         rule = added.json()
         call(api, turn(api, "Retire it"), "POST", f"rules/{rule['id']}/retire", {"version": rule.get("version", 1)})
@@ -158,7 +181,13 @@ def test_one_assistant_turn_makes_every_write_the_person_could_make_with_no_card
     # A turn messages a bot and asks it without waiting.
     token = turn(api, "Tell Ops the invoice is sent")
     call(api, token, "POST", "messages", {"to": "ops", "text": "The invoice is sent.", "kind": "say"})
-    call(api, token, "POST", "messages", {"to": "ops", "text": "Is it paid?", "kind": "say", "needs_action": True, "wait_s": 0})
+    call(
+        api,
+        token,
+        "POST",
+        "messages",
+        {"to": "ops", "text": "Is it paid?", "kind": "say", "needs_action": True, "wait_s": 0},
+    )
 
 
 def test_a_turn_approves_after_a_read_back_and_a_plain_yes_with_the_setting_on(api):
@@ -189,7 +218,16 @@ def test_the_person_alone_decides_these_on_the_turn(api):
 
 def test_the_background_run_puts_a_card_in_the_persons_chat(api):
     coo = setup_attempt(api, "coo")[2]["token"]
-    made = post(api, "assistant/actions", {"summary": "Archive the Ops bot", "method": "POST",
-                                           "path": "/api/v2/bots/ops/archive", "body": {"expected_revision": 1},
-                                           "for": "human:ana"}, token=coo)["action"]
+    made = post(
+        api,
+        "assistant/actions",
+        {
+            "summary": "Archive the Ops bot",
+            "method": "POST",
+            "path": "/api/v2/bots/ops/archive",
+            "body": {"expected_revision": 1},
+            "for": "human:ana",
+        },
+        token=coo,
+    )["action"]
     assert made["owner"] == "human:ana" and made["status"] == "pending"

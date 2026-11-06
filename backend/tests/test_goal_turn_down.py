@@ -1,6 +1,7 @@
 """The owner's "no" in their Assistant chat to a goal suggestion (backend/goal_routes.py `turned-down`; spec
 chat-first-goals.md, criterion 7): no read-back and no second yes. Tico stores it at once as a turned-down suggestion on
 the goal, with the owner's words as its reason, and changes nothing else."""
+
 from backend import goals as G
 from backend.store import H
 from backend.tests.test_api import api, get, headers, post  # noqa: F401
@@ -11,10 +12,16 @@ from backend.tests.test_strategy_bot_chat import strategy_bot, turn
 
 def suggestion(goal_id, **extra):
     """A number to aim for, recommended once in chat: a measure with a target on the goal."""
-    return {"kind": "goal_kpi", "goal_id": goal_id,
-            "payload": {"kpi": {"name": "Companies that tried Tico"},
-                        "target": {"kind": "improve", "target": 100, "deadline": "2026-11-28"}},
-            "reason": "A number to aim for, like 100 companies by Nov 28.", **extra}
+    return {
+        "kind": "goal_kpi",
+        "goal_id": goal_id,
+        "payload": {
+            "kpi": {"name": "Companies that tried Tico"},
+            "target": {"kind": "improve", "target": 100, "deadline": "2026-11-28"},
+        },
+        "reason": "A number to aim for, like 100 companies by Nov 28.",
+        **extra,
+    }
 
 
 def turn_down(api, attempt, body, expected=200):
@@ -76,9 +83,13 @@ def test_without_the_owners_cited_turn_the_write_is_a_card_as_before(api):
     g = goal(api, "Get 100 companies to try Tico", owner="ops")
     r, attempt = turn(api, "coo", "ana-test", "No, leave it.")
     with api.app.state.store.transaction() as c:
-        c.execute("UPDATE messages SET created_at=? WHERE id=?",
-                  (H.shift(H.now(), seconds=-31 * 60), turn_message(api, attempt)))
-    refused = api.post("/api/v2/goal-proposals/turned-down", json=suggestion(g["id"]), headers=headers(attempt["token"]))
+        c.execute(
+            "UPDATE messages SET created_at=? WHERE id=?",
+            (H.shift(H.now(), seconds=-31 * 60), turn_message(api, attempt)),
+        )
+    refused = api.post(
+        "/api/v2/goal-proposals/turned-down", json=suggestion(g["id"]), headers=headers(attempt["token"])
+    )
     assert refused.status_code == 403 and refused.json()["error"]["code"] == "confirm_required"
     assert proposals(api) == []
 
@@ -88,8 +99,10 @@ def test_a_no_cited_from_more_than_thirty_minutes_ago_is_refused(api):
     g = goal(api, "Get 100 companies to try Tico", owner="ops")
     r, attempt = turn(api, "coo", "ana-test", "No, leave it.")
     with api.app.state.store.transaction() as c:
-        c.execute("UPDATE messages SET created_at=? WHERE id=?",
-                  (H.shift(H.now(), seconds=-31 * 60), turn_message(api, attempt)))
+        c.execute(
+            "UPDATE messages SET created_at=? WHERE id=?",
+            (H.shift(H.now(), seconds=-31 * 60), turn_message(api, attempt)),
+        )
     refused = turn_down(api, attempt, suggestion(g["id"]), expected=403)["error"]
     assert refused["code"] == "on_behalf_of"
     assert proposals(api) == []
@@ -99,8 +112,17 @@ def test_a_why_is_not_turned_down_in_chat_so_a_waiting_one_is_left_alone(api):
     strategy_bot(api)
     g = goal(api, "Get 100 companies to try Tico", owner="ops")
     r, attempt = turn(api, "coo", "ana-test", "No.")
-    refused = turn_down(api, attempt, {"kind": "goal_why", "goal_id": g["id"], "payload": {"why": "Vision line."},
-                                       "reason": "How it serves the vision."}, expected=403)["error"]
+    refused = turn_down(
+        api,
+        attempt,
+        {
+            "kind": "goal_why",
+            "goal_id": g["id"],
+            "payload": {"why": "Vision line."},
+            "reason": "How it serves the vision.",
+        },
+        expected=403,
+    )["error"]
     assert refused["code"] == "forbidden"
     assert proposals(api) == []
 

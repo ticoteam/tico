@@ -24,8 +24,14 @@ everything on token saving 2/9's always-wake list never reach this rule: only bo
 KINDS = ("say", "notice")
 # The references a plain message carries. Anything else marks a message that is more than words.
 PLAIN_REFS = frozenset({"task", "comment", "attachments", "files", "unsolicited", "turn_id", "warnings", "via", "rule"})
-WAKES = ("flagged needs-action", "an ask, answer or steer", "references beyond a plain message",
-         "a reply the recipient waits on", "a gate verdict", "an @mention of the recipient")
+WAKES = (
+    "flagged needs-action",
+    "an ask, answer or steer",
+    "references beyond a plain message",
+    "a reply the recipient waits on",
+    "a gate verdict",
+    "an @mention of the recipient",
+)
 FLAG = "needs_action"
 MARK = "can_wait"
 RULE = "bot_to_bot"
@@ -41,12 +47,14 @@ def can_wait(conn, actor, target, kind, refs, body, in_reply_to=None):
         if not isinstance(refs, dict) or refs.get("quiet"):
             return False
         from . import wake_rules
+
         # The flag, the reply the recipient waits on and the verdict lines are on the always-wake list.
         if wake_rules.always_wakes(conn, actor, target, kind, refs, body, in_reply_to=in_reply_to):
             return False
         if set(refs) - PLAIN_REFS - {FLAG}:
             return False
         from . import threads
+
         return not threads.names(conn, target, body)
     except Exception:  # noqa: BLE001 - fail open: a message this cannot read wakes its bot
         return False
@@ -60,29 +68,41 @@ def held_reason(msg, conn=None):
     if refs.get(MARK) != RULE:
         return None
     from . import hubdb as H
+
     bot = H.actor_id(msg.get("recipient_id") or "")
     if conn is not None:
         bot = (H.bot(conn, bot) or {}).get("slug", bot)
-    return (f"held for {bot}'s next run; nothing runs it now. Add --needs-action (needs_action: true) to wake "
-            f"{bot} now.")
+    return f"held for {bot}'s next run; nothing runs it now. Add --needs-action (needs_action: true) to wake {bot} now."
 
 
 def hold(conn, msg, task_row=None):
     """The quiet note that takes a waiting message to the recipient's next run, whatever starts it."""
     from . import hubdb as H
+
     where = f"on task {task_row['title']} ({task_row['id']})" if task_row else "in a direct message"
     text = str(msg["body"] or "")
     if len(text) > H.NOTE_MAX - 400:
-        text = text[:H.NOTE_MAX - 400] + "... (the rest is in the message)"
+        text = text[: H.NOTE_MAX - 400] + "... (the rest is in the message)"
     sender = H.actor_id(msg["sender_id"])
     if H.is_bot(msg["sender_id"]):
         sender = (H.bot(conn, sender) or {}).get("slug", sender)
-    body = (f"Message from {sender} {where}, which could wait for this run "
-            f"(message {msg['id']}). Act on it if it asks for something.\n\n{text}")
-    row = {"id": H.new_id(), "from_actor": msg["sender_id"], "to_actor": msg["recipient_id"], "body": body,
-           "created_at": msg["created_at"], "message_id": msg["id"]}
-    conn.execute("INSERT INTO notes(id,from_actor,to_actor,body,created_at,message_id) VALUES "
-                 "(:id,:from_actor,:to_actor,:body,:created_at,:message_id)", row)
+    body = (
+        f"Message from {sender} {where}, which could wait for this run "
+        f"(message {msg['id']}). Act on it if it asks for something.\n\n{text}"
+    )
+    row = {
+        "id": H.new_id(),
+        "from_actor": msg["sender_id"],
+        "to_actor": msg["recipient_id"],
+        "body": body,
+        "created_at": msg["created_at"],
+        "message_id": msg["id"],
+    }
+    conn.execute(
+        "INSERT INTO notes(id,from_actor,to_actor,body,created_at,message_id) VALUES "
+        "(:id,:from_actor,:to_actor,:body,:created_at,:message_id)",
+        row,
+    )
     H.event(conn, msg["sender_id"], "message.can_wait", msg["id"], {"to": msg["recipient_id"], "note": row["id"]})
     return row
 
@@ -93,8 +113,10 @@ def carried(conn, notes, at):
     alone never proves the run saw it."""
     for item in notes:
         if item.get("message_id"):
-            conn.execute("UPDATE messages SET delivered_at=coalesce(delivered_at,?), read_at=coalesce(read_at,?) "
-                         "WHERE id=?", (at, at, item["message_id"]))
+            conn.execute(
+                "UPDATE messages SET delivered_at=coalesce(delivered_at,?), read_at=coalesce(read_at,?) WHERE id=?",
+                (at, at, item["message_id"]),
+            )
     return notes
 
 
@@ -105,16 +127,28 @@ def continue_backlog(conn, bot, skip=()):
     (threads.wake_note_threads), which another run here would not carry."""
     from . import hubdb as H
     from . import task_quarantine
+
     skip = list(skip)
     other = f"AND n.id NOT IN ({','.join('?' * len(skip))}) " if skip else ""
-    left = conn.execute(f"SELECT 1 FROM notes n WHERE n.to_actor=? AND n.message_id IS NOT NULL {other}AND "
-                        f"{H.NOTE_WAITING_SQL} AND {task_quarantine.notes_free_sql()} LIMIT 1", ("bot:" + bot, *skip)).fetchone()
+    left = conn.execute(
+        f"SELECT 1 FROM notes n WHERE n.to_actor=? AND n.message_id IS NOT NULL {other}AND "
+        f"{H.NOTE_WAITING_SQL} AND {task_quarantine.notes_free_sql()} LIMIT 1",
+        ("bot:" + bot, *skip),
+    ).fetchone()
     if not left:
         return None
-    pending = conn.execute("SELECT 1 FROM jobs j JOIN message_refs m ON m.id=j.message_id WHERE j.bot_id=? "
-                           "AND j.state IN ('queued','leased') AND m.ref_wake=?",
-                           (bot, BACKLOG)).fetchone()
+    pending = conn.execute(
+        "SELECT 1 FROM jobs j JOIN message_refs m ON m.id=j.message_id WHERE j.bot_id=? "
+        "AND j.state IN ('queued','leased') AND m.ref_wake=?",
+        (bot, BACKLOG),
+    ).fetchone()
     if pending:
         return None
-    return H.say(conn, H.KEEPER, "bot:" + bot, "More bot messages waited than one run carries; this run "
-                 "carries the next ones.", kind="notice", refs={"wake": BACKLOG, "trigger": "other"})
+    return H.say(
+        conn,
+        H.KEEPER,
+        "bot:" + bot,
+        "More bot messages waited than one run carries; this run carries the next ones.",
+        kind="notice",
+        refs={"wake": BACKLOG, "trigger": "other"},
+    )

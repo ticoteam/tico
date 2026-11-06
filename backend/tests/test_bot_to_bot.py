@@ -42,8 +42,7 @@ def message(api, mid):
 def test_a_bots_fyi_to_a_bot_starts_no_run_and_its_next_run_carries_it(api):
     r = setup(api)
     token = ops_token(api, r)
-    sent = post(api, "messages", {"to": "cpo", "text": "QA update: the release candidate passed group 3."},
-                token=token)
+    sent = post(api, "messages", {"to": "cpo", "text": "QA update: the release candidate passed group 3."}, token=token)
     assert jobs(api, "cpo") == 0
     assert sent["refs"].get(B.MARK) == B.RULE and message(api, sent["id"])["read_at"] is None
     # Any trigger: here a person's chat to cpo, in another room.
@@ -58,8 +57,12 @@ def test_a_bots_fyi_to_a_bot_starts_no_run_and_its_next_run_carries_it(api):
 def test_the_same_message_flagged_needs_action_wakes_the_bot_at_once(api):
     r = setup(api)
     token = ops_token(api, r)
-    sent = post(api, "messages", {"to": "cpo", "text": "QA update: the release candidate passed group 3.",
-                                  "needs_action": True}, token=token)
+    sent = post(
+        api,
+        "messages",
+        {"to": "cpo", "text": "QA update: the release candidate passed group 3.", "needs_action": True},
+        token=token,
+    )
     assert jobs(api, "cpo") == 1
     assert B.MARK not in sent["refs"] and sent["refs"]["needs_action"] is True
     attempt = claim(api, r, "cpo")
@@ -84,10 +87,12 @@ def test_a_quiet_message_is_never_lost_a_failed_run_hands_it_to_the_next_even_da
     first = claim(api, r, "cpo")
     assert [n["message"] for n in first["notes"] if n.get("message")] == [sent["id"]]
     post(api, f"attempts/{first['id']}/started", {"thread_id": "t1"}, token=r["token"])
-    post(api, f"attempts/{first['id']}/complete", {"outcome": "failed", "text": "boom", "last_seq": 0}, token=r["token"])
+    post(
+        api, f"attempts/{first['id']}/complete", {"outcome": "failed", "text": "boom", "last_seq": 0}, token=r["token"]
+    )
     with api.app.state.store.transaction() as c:
         c.execute("UPDATE jobs SET state='canceled' WHERE state='uncertain'")
-        c.execute("UPDATE run_backoff SET wait_until=NULL")        # the fast failure's wait is over
+        c.execute("UPDATE run_backoff SET wait_until=NULL")  # the fast failure's wait is over
     post(api, "chat/cpo", {"text": "Second"})
     second = claim(api, r, "cpo")
     carried = [n for n in second["notes"] if n.get("message")]
@@ -122,10 +127,15 @@ def test_a_bots_comment_to_a_bot_on_a_task_waits_and_that_tasks_fresh_session_ge
     assert message(api, msg["id"])["read_at"] is not None
     # That run fails; the retry, a fresh session in the same room again, gets the comment again.
     post(api, f"attempts/{attempt['id']}/started", {"thread_id": "t1"}, token=r["token"])
-    post(api, f"attempts/{attempt['id']}/complete", {"outcome": "failed", "text": "boom", "last_seq": 0}, token=r["token"])
+    post(
+        api,
+        f"attempts/{attempt['id']}/complete",
+        {"outcome": "failed", "text": "boom", "last_seq": 0},
+        token=r["token"],
+    )
     with api.app.state.store.transaction() as c:
         c.execute("UPDATE jobs SET state='queued',attempt_id=NULL WHERE state='uncertain'")
-        c.execute("UPDATE run_backoff SET wait_until=NULL")        # the fast failure's wait is over
+        c.execute("UPDATE run_backoff SET wait_until=NULL")  # the fast failure's wait is over
     retry = claim(api, r, "cpo")
     assert retry and [n["message"] for n in retry["notes"] if n.get("message")] == [msg["id"]]
 
@@ -136,7 +146,9 @@ def test_a_backlog_past_one_runs_notes_gets_the_next_run_and_nothing_is_left(api
         for i in range(3):
             H.note_create(c, "human:ana", "bot:cpo", f"Ordinary note {i}")
         # Three senders: one room takes at most 20 bot-to-bot messages an hour.
-        ids = [H.say(c, ("bot:ops", "bot:coo", "bot:finance")[i % 3], "bot:cpo", f"Update {i}")["id"] for i in range(55)]
+        ids = [
+            H.say(c, ("bot:ops", "bot:coo", "bot:finance")[i % 3], "bot:cpo", f"Update {i}")["id"] for i in range(55)
+        ]
     assert jobs(api, "cpo") == 0
     post(api, "chat/cpo", {"text": "Go"})
     seen, runs = [], 0
@@ -147,8 +159,12 @@ def test_a_backlog_past_one_runs_notes_gets_the_next_run_and_nothing_is_left(api
         runs += 1
         seen += [n["message"] for n in attempt["notes"] if n.get("message")]
         post(api, f"attempts/{attempt['id']}/started", {"thread_id": f"t{runs}"}, token=r["token"])
-        post(api, f"attempts/{attempt['id']}/complete", {"outcome": "completed", "text": "ok", "last_seq": 0},
-             token=r["token"])
+        post(
+            api,
+            f"attempts/{attempt['id']}/complete",
+            {"outcome": "completed", "text": "ok", "last_seq": 0},
+            token=r["token"],
+        )
         assert runs < 5
     assert seen == ids and runs == 2
     assert all(message(api, mid)["read_at"] for mid in ids)
@@ -185,6 +201,7 @@ def test_the_rule_fails_open_and_never_touches_a_persons_or_the_keepers_messages
     class Conn:
         def execute(self, *a):
             raise RuntimeError("no database")
+
     conn = Conn()
     assert B.can_wait(conn, "bot:a", "bot:b", "say", {}, "fyi") is True
     assert B.can_wait(conn, "bot:a", "bot:b", "say", None, "fyi") is False
@@ -206,12 +223,16 @@ def test_a_flagged_wake_counts_in_the_weekly_table_and_a_waiting_one_does_not(ap
     fyi = post(api, "messages", {"to": "cpo", "text": "FYI only"}, token=token)
     post(api, "messages", {"to": "cpo", "text": "Act now", "needs_action": True}, token=token)
     with api.app.state.store.read() as c:
-        queued = [dict(row) for row in c.execute(
-            "SELECT m.body FROM jobs j JOIN messages m ON m.id=j.message_id WHERE j.bot_id='cpo'")]
+        queued = [
+            dict(row)
+            for row in c.execute("SELECT m.body FROM jobs j JOIN messages m ON m.id=j.message_id WHERE j.bot_id='cpo'")
+        ]
     assert [row["body"] for row in queued] == ["Act now"]
     attempt = claim(api, r, "cpo")
     assert attempt["message"]["body"] == "Act now"
-    assert [n["message"] for n in attempt["notes"] if n.get("message")] == [fyi["id"]] and message(api, fyi["id"])["read_at"]
+    assert [n["message"] for n in attempt["notes"] if n.get("message")] == [fyi["id"]] and message(api, fyi["id"])[
+        "read_at"
+    ]
 
 
 def test_a_task_comment_says_whether_it_woke_the_bot(api):
@@ -255,26 +276,41 @@ def test_a_held_message_or_comment_tells_its_sender_how_to_wake_the_bot_now(api)
     flagged = post(api, "messages", {"to": "cpo", "text": "Deadline 14:10Z", "needs_action": True}, token=token)
     woke = post(api, f"tasks/{t['id']}/comments", {"text": "Deadline 14:10Z", "needs_action": True}, token=token)
     assert "held" not in flagged and "held" not in woke and woke["woke"] is True
-    assert "held" not in post(api, "messages", {"to": "cpo", "text": "Morning"})     # a person's always wakes
+    assert "held" not in post(api, "messages", {"to": "cpo", "text": "Morning"})  # a person's always wakes
 
 
 def test_a_held_message_with_a_file_keeps_its_hold_and_tells_its_sender(api):
     # Dev 328 Review 1: adding the file rewrote the message's references and dropped the hold mark.
     import base64
     from backend.tests.test_files import publish
+
     r = setup(api)
     token = ops_token(api, r)
     with api.app.state.store.transaction() as c:
         c.execute("DELETE FROM jobs WHERE bot_id='cpo'")
     first = post(api, "messages", {"to": "cpo", "text": "Chart follows"}, token=token)
-    made = publish(api, {"token": token}, name="chart.png", text=None,
-                   content_base64=base64.b64encode(b"\x89PNG\r\n\x1a\n" + b"\x00" * 64).decode())
+    made = publish(
+        api,
+        {"token": token},
+        name="chart.png",
+        text=None,
+        content_base64=base64.b64encode(b"\x89PNG\r\n\x1a\n" + b"\x00" * 64).decode(),
+    )
     assert made.status_code == 200, made.text
     fid = made.json()["file"]["id"]
-    with api.app.state.store.transaction() as c:   # a file of the ops-cpo conversation
+    with api.app.state.store.transaction() as c:  # a file of the ops-cpo conversation
         c.execute("UPDATE bot_files SET scope=? WHERE id=?", ("conversation:" + first["conversation_id"], fid))
-    sent = post(api, "messages", {"to": "cpo", "text": "Deadline 14:10Z", "conversation_id": first["conversation_id"],
-                                  "attachments": [{"ref": f"{fid}@1", "title": "Window"}]}, token=token)
+    sent = post(
+        api,
+        "messages",
+        {
+            "to": "cpo",
+            "text": "Deadline 14:10Z",
+            "conversation_id": first["conversation_id"],
+            "attachments": [{"ref": f"{fid}@1", "title": "Window"}],
+        },
+        token=token,
+    )
     assert sent["refs"]["attachments"] and jobs(api, "cpo") == 0
     assert sent["woke"] is False and "held for cpo's next run" in sent["held"] and "--needs-action" in sent["held"]
     assert sent["refs"].get(B.MARK) == B.RULE and sent["refs"].get("quiet") is True
@@ -283,6 +319,7 @@ def test_a_held_message_with_a_file_keeps_its_hold_and_tells_its_sender(api):
 def test_the_cli_prints_why_a_message_was_held(monkeypatch, capsys):
     from types import SimpleNamespace
     from clients import remotecli
+
     held = "held for cpo's next run; nothing runs it now. Add --needs-action ..."
     monkeypatch.setattr(remotecli, "run", lambda *_: {"id": "m1", "woke": False, "held": held})
     assert remotecli.main(SimpleNamespace(cmd="message", fn="message send")) == 0
@@ -316,6 +353,10 @@ def test_guard_needs_action_message_wakes_a_bot_waiting_on_a_blocked_by(api):
     r = setup(api)
     token = ops_token(api, r)
     t = waiting_on_a_hold(api)
-    post(api, "messages", {"to": "cpo", "text": "Deadline 14:10Z", "needs_action": True, "refs": {"task": t["id"]}},
-         token=token)
+    post(
+        api,
+        "messages",
+        {"to": "cpo", "text": "Deadline 14:10Z", "needs_action": True, "refs": {"task": t["id"]}},
+        token=token,
+    )
     assert jobs(api, "cpo") == 1 and claim(api, r, "cpo")

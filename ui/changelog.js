@@ -59,6 +59,17 @@ window.pageChangelog = async function () {
   const renderSummary = () => {
     summary.textContent = data.unread_count ? `${data.unread_count} product ${data.unread_count === 1 ? 'update' : 'updates'} you haven't read.` : 'You’re caught up on product updates.';
   };
+  // A release with its GitHub publish time shows that day and time in the viewer's own zone. Without one (no time
+  // known, or not a release) it shows the day of shipped_at in UTC, as before, and no time.
+  const releaseWhen = r => {
+    const published = r.published_at ? new Date(r.published_at) : null;
+    if (published && !Number.isNaN(published.getTime())) return {
+      day: published.toLocaleDateString(undefined, {month:'short', day:'numeric', year:'numeric'}),
+      time: new Intl.DateTimeFormat(undefined, {hour:'numeric', minute:'2-digit', timeZoneName:'short'}).format(published),
+    };
+    const date = r.shipped_at ? new Date(r.shipped_at) : null;
+    return {day: date && !Number.isNaN(date.getTime()) ? date.toLocaleDateString(undefined, {month:'short', day:'numeric', year:'numeric', timeZone:'UTC'}) : '', time: ''};
+  };
   const render = () => {
     if (!page.isConnected) return;
     const q = search.value.toLowerCase().trim(), words = q.split(/\s+/);
@@ -72,9 +83,9 @@ window.pageChangelog = async function () {
     add.hidden = !data.can_add;
     more.hidden = data.next_offset == null;
     list.innerHTML = shown.map(r => {
-      const date = r.shipped_at ? new Date(r.shipped_at) : null;
+      const when = releaseWhen(r);
       const safeUrl = /^https:\/\//.test(r.url || '') ? r.url : '';
-      return `<article class="release-entry${isNew(r) ? ' release-unread' : ''}"><div class="release-date"><time datetime="${esc(r.shipped_at || '')}">${date && !isNaN(date) ? esc(date.toLocaleDateString(undefined, {month:'short', day:'numeric', year:'numeric', timeZone:'UTC'})) : ''}</time><span class="release-dot" aria-hidden="true"></span></div><div class="release-card"><span class="release-area">${r.kind === 'activity' ? 'Bot activity' : r.source === 'release' ? 'Release' : 'Product'}</span>${isNew(r) ? '<span class="release-new">New</span>' : ''}<h2>${esc(r.title)}</h2><ul>${r.bullets.slice(0, 4).map(b => `<li>${bullet(b)}</li>`).join('')}</ul>${r.bullets.length > 4 ? `<details class="release-more"><summary>${r.bullets.length - 4} more ${r.bullets.length === 5 ? 'change' : 'changes'}</summary><ul>${r.bullets.slice(4).map(b => `<li>${bullet(b)}</li>`).join('')}</ul></details>` : ''}${safeUrl ? `<a class="release-source" href="${esc(safeUrl)}" target="_blank" rel="noopener noreferrer">Full release notes ↗</a>` : ''}${r.task_id ? `<button class="linkish release-source" data-activity-task="${esc(r.task_id)}">View outcome</button>` : ''}</div></article>`;
+      return `<article class="release-entry${isNew(r) ? ' release-unread' : ''}"><div class="release-date"><time datetime="${esc(r.published_at || r.shipped_at || '')}">${esc(when.day)}</time>${when.time ? `<span class="release-time">${esc(when.time)}</span>` : ''}<span class="release-dot" aria-hidden="true"></span></div><div class="release-card"><span class="release-area">${r.kind === 'activity' ? 'Bot activity' : r.source === 'release' ? 'Release' : 'Product'}</span>${isNew(r) ? '<span class="release-new">New</span>' : ''}<h2>${esc(r.title)}</h2><ul>${r.bullets.slice(0, 4).map(b => `<li>${bullet(b)}</li>`).join('')}</ul>${r.bullets.length > 4 ? `<details class="release-more"><summary>${r.bullets.length - 4} more ${r.bullets.length === 5 ? 'change' : 'changes'}</summary><ul>${r.bullets.slice(4).map(b => `<li>${bullet(b)}</li>`).join('')}</ul></details>` : ''}${safeUrl ? `<a class="release-source" href="${esc(safeUrl)}" target="_blank" rel="noopener noreferrer">Full release notes ↗</a>` : ''}${r.task_id ? `<button class="linkish release-source" data-activity-task="${esc(r.task_id)}">View outcome</button>` : ''}</div></article>`;
     }).join('') || `<div class="empty">${filter.value === 'unread' && !q ? 'You’re all caught up. Choose All product updates to browse earlier changes.' : 'No changes match this view.'}</div>`;
   };
   const load = async (initial = false) => {

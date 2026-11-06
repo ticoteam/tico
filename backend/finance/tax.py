@@ -4,6 +4,7 @@ is set up, and a remittance is a bill to the jurisdiction's tax authority contac
 someone who sees everything can read one, and it is refused whole rather than shown partial: to anyone who does not see
 everything, and to a viewer who lacks full detail on a private account that a line behind the workpaper sits on. A
 vendor's TIN is never read here, only whether one is on file (the vault holds it, see payments.py)."""
+
 import re
 import sqlite3
 from collections.abc import Iterable
@@ -37,14 +38,14 @@ _D: Any = _rule_due
 _RR: Any = _rule_due_routine
 
 Result = dict[str, object]
-ACTOR = "bot:bookkeeper"            # the Bookkeeper (backend/bookkeeper.py): it owns the due dates and their routines
-ACCOUNT_BASE = "2100"               # a jurisdiction's liability account takes the first free code from here
-DEFAULT_DUE_DAY = 20                # a sales tax return falls due on this day of the month after its quarter
-TASK_DAYS_SALES = 14                # a routine opens the task this many days before a sales tax due date
-TASK_DAYS_1099 = 30                 # and this many before the 1099-NEC due date
-FORM_KEY = "1099-nec"               # the seed key of the 1099-NEC due date (one for the company)
+ACTOR = "bot:bookkeeper"  # the Bookkeeper (backend/bookkeeper.py): it owns the due dates and their routines
+ACCOUNT_BASE = "2100"  # a jurisdiction's liability account takes the first free code from here
+DEFAULT_DUE_DAY = 20  # a sales tax return falls due on this day of the month after its quarter
+TASK_DAYS_SALES = 14  # a routine opens the task this many days before a sales tax due date
+TASK_DAYS_1099 = 30  # and this many before the 1099-NEC due date
+FORM_KEY = "1099-nec"  # the seed key of the 1099-NEC due date (one for the company)
 PERIOD = re.compile(r"^\d{4}-Q[1-4]$")
-LOOKAHEAD = 31                      # a return falls due in the month after its quarter, on a day up to the 28th
+LOOKAHEAD = 31  # a return falls due in the month after its quarter, on a day up to the 28th
 
 
 def _period(text: str) -> str:
@@ -89,11 +90,22 @@ def _sales_rows(ctx: Ctx, year: int, due: bool) -> list[T.SalesRow]:
     jurisdictions = ST.jurisdictions(c, ctx.book.id)
     accounts = [(str(j["account_id"]), str(j["code"]), str(j["name"])) for j in jurisdictions]
     account_ids = [account for account, _, _ in accounts]
-    lines = [(str(r["invoice_id"]), str(r["invoice_date"]), str(r["account_id"]), int(r["amount"]), str(r["type"]),
-              str(r["subtype"]), bool(r["taxable"]))
-             for r in ST.invoice_lines(c, ctx.book.id, f"{year}-01-01", f"{year}-12-31")]
-    remits = [(str(r["account_id"]), str(r["tags"]), int(r["amount"]), int(r["bill_total"]), int(r["bill_paid"]))
-              for r in ST.remittance_lines(c, ctx.book.id, account_ids)]
+    lines = [
+        (
+            str(r["invoice_id"]),
+            str(r["invoice_date"]),
+            str(r["account_id"]),
+            int(r["amount"]),
+            str(r["type"]),
+            str(r["subtype"]),
+            bool(r["taxable"]),
+        )
+        for r in ST.invoice_lines(c, ctx.book.id, f"{year}-01-01", f"{year}-12-31")
+    ]
+    remits = [
+        (str(r["account_id"]), str(r["tags"]), int(r["amount"]), int(r["bill_total"]), int(r["bill_paid"]))
+        for r in ST.remittance_lines(c, ctx.book.id, account_ids)
+    ]
     due_on: dict[tuple[str, str], str | None] = {}
     for j in jurisdictions:
         dues = _first_due(c, ST.seeded(c, f"sales-tax:{j['code']}")) if due else None
@@ -123,13 +135,28 @@ def tax_jurisdiction_add(ctx: Ctx, who: str, p: V.Payload) -> Plan:
     def apply(aid: str) -> Result:
         account = new_account(ctx, ACCOUNT_BASE, f"Sales tax payable - {name}", "liability", T.SALES_TAX, who)
         jid = SL.new_id()
-        ST.insert_jurisdiction(ctx.c, {"id": jid, "book_id": ctx.book.id, "code": code, "name": name,
-                                       "account_id": account.id, "authority_id": authority, "due_day": due_day,
-                                       "created_at": ctx.at, "created_by": who})
+        ST.insert_jurisdiction(
+            ctx.c,
+            {
+                "id": jid,
+                "book_id": ctx.book.id,
+                "code": code,
+                "name": name,
+                "account_id": account.id,
+                "authority_id": authority,
+                "due_day": due_day,
+                "created_at": ctx.at,
+                "created_by": who,
+            },
+        )
         seed_dues(ctx.c, ctx.at)
         return {"jurisdiction_id": jid, "account_id": account.id, "due_day": due_day}
-    return Plan(K.default_gate(ctx.org, who, "tax_jurisdiction_add"),
-                f"Add sales tax jurisdiction {name} ({code}), due on day {due_day} after each quarter", apply)
+
+    return Plan(
+        K.default_gate(ctx.org, who, "tax_jurisdiction_add"),
+        f"Add sales tax jurisdiction {name} ({code}), due on day {due_day} after each quarter",
+        apply,
+    )
 
 
 def tax_remit(ctx: Ctx, who: str, p: V.Payload) -> Plan:
@@ -144,29 +171,40 @@ def tax_remit(ctx: Ctx, who: str, p: V.Payload) -> Plan:
         amount = V.amount(p)
     else:
         year = int(period[:4])
-        _require_full(ctx, who, _sales_feeds(ctx, year, period))    # the amount owed is read off the workpaper
-        amount = next((r.due for r in _sales_rows(ctx, year, False)
-                       if r.code == j["code"] and r.period == period), 0)
+        _require_full(ctx, who, _sales_feeds(ctx, year, period))  # the amount owed is read off the workpaper
+        amount = next((r.due for r in _sales_rows(ctx, year, False) if r.code == j["code"] and r.period == period), 0)
     if amount <= 0:
         raise invalid(f"nothing is owed for {j['code']} {period}")
     payload: dict[str, object] = {
-        "vendor_id": j["authority_id"], "number": V.opt_text(p, "number", 80) or "",
+        "vendor_id": j["authority_id"],
+        "number": V.opt_text(p, "number", 80) or "",
         "bill_date": V.opt_day(p, "bill_date") or dates.day(ctx.today).isoformat(),
-        "lines": [{"account_id": j["account_id"], "amount": amount, "description": f"Sales tax {j['code']} {period}",
-                   "tags": {"custom": f"{T.REMIT_TAG}:{period}"}}]}
+        "lines": [
+            {
+                "account_id": j["account_id"],
+                "amount": amount,
+                "description": f"Sales tax {j['code']} {period}",
+                "tags": {"custom": f"{T.REMIT_TAG}:{period}"},
+            }
+        ],
+    }
     if V.opt_day(p, "due_date"):
         payload["due_date"] = V.opt_day(p, "due_date")
     plan = bill_create(ctx, who, payload)
-    return replace(plan, gate=K.default_gate(ctx.org, who, "tax_remit"),
-                   summary=f"Remit {_money(ctx, amount)} sales tax ({j['code']}, {period}) to the tax authority")
+    return replace(
+        plan,
+        gate=K.default_gate(ctx.org, who, "tax_remit"),
+        summary=f"Remit {_money(ctx, amount)} sales tax ({j['code']}, {period}) to the tax authority",
+    )
 
 
 PLANNERS = {"tax_jurisdiction_add": tax_jurisdiction_add, "tax_remit": tax_remit}
 
 
 # ------------------------------------------------------------------------------------------------ due dates
-def _seed(c: sqlite3.Connection, at: str, key: str, text: str, source: str, kind: str, repeats: str, first: date,
-          days: int) -> None:
+def _seed(
+    c: sqlite3.Connection, at: str, key: str, text: str, source: str, kind: str, repeats: str, first: date, days: int
+) -> None:
     """One outside obligation: its external rule, a due date owned by the Bookkeeper, and the routine that opens its task."""
     rule_id: str = _OR.seed_external(c, Identity(actor=ACTOR, role="bot"), text, source, kind)
     due_id: str = _D.add(c, ACTOR, rule_id, first.isoformat(), repeats, _D.default_zone(), ACTOR)
@@ -184,14 +222,32 @@ def seed_dues(c: sqlite3.Connection, at: str) -> list[str]:
     today = dates.day(at)
     made: list[str] = []
     if ST.seeded(c, FORM_KEY) is None:
-        _seed(c, at, FORM_KEY, "File a 1099-NEC for each vendor paid for services, by January 31", "IRS", "government",
-              "yearly", T.first_january(today), TASK_DAYS_1099)
+        _seed(
+            c,
+            at,
+            FORM_KEY,
+            "File a 1099-NEC for each vendor paid for services, by January 31",
+            "IRS",
+            "government",
+            "yearly",
+            T.first_january(today),
+            TASK_DAYS_1099,
+        )
         made.append(FORM_KEY)
     for j in ST.jurisdictions(c, book.id):
         key = f"sales-tax:{j['code']}"
         if ST.seeded(c, key) is None:
-            _seed(c, at, key, f"File and pay {j['name']} sales tax for each quarter", f"{j['name']} tax authority",
-                  "government", "quarterly", T.first_quarterly(today, int(j["due_day"])), TASK_DAYS_SALES)
+            _seed(
+                c,
+                at,
+                key,
+                f"File and pay {j['name']} sales tax for each quarter",
+                f"{j['name']} tax authority",
+                "government",
+                "quarterly",
+                T.first_quarterly(today, int(j["due_day"])),
+                TASK_DAYS_SALES,
+            )
             made.append(key)
     return made
 
@@ -202,7 +258,7 @@ def _remit_for(tags_json: str, year: int, period: str | None) -> bool:
     tag = T.tags_of(tags_json).get("custom", "")
     if not tag.startswith(T.REMIT_TAG + ":"):
         return False
-    key = tag[len(T.REMIT_TAG) + 1:]
+    key = tag[len(T.REMIT_TAG) + 1 :]
     return key == period if period else key.startswith(f"{year}-")
 
 
@@ -212,11 +268,19 @@ def _sales_feeds(ctx: Ctx, year: int, period: str | None = None) -> set[str]:
     of the remittance bills tagged for it."""
     c = ctx.c
     account_ids = [str(j["account_id"]) for j in ST.jurisdictions(c, ctx.book.id)]
-    bills = sorted({str(r["bill_id"]) for r in ST.remittance_lines(c, ctx.book.id, account_ids)
-                    if _remit_for(str(r["tags"]), year, period)})
+    bills = sorted(
+        {
+            str(r["bill_id"])
+            for r in ST.remittance_lines(c, ctx.book.id, account_ids)
+            if _remit_for(str(r["tags"]), year, period)
+        }
+    )
     invoices = ST.invoice_lines(c, ctx.book.id, f"{year}-01-01", f"{year}-12-31")
-    taxed = {str(r["invoice_id"]) for r in invoices if str(r["subtype"]) == T.SALES_TAX
-             and (period is None or T.quarter_key(str(r["invoice_date"])) == period)}
+    taxed = {
+        str(r["invoice_id"])
+        for r in invoices
+        if str(r["subtype"]) == T.SALES_TAX and (period is None or T.quarter_key(str(r["invoice_date"])) == period)
+    }
     lines = [*(r for r in invoices if str(r["invoice_id"]) in taxed), *ST.bill_lines(c, bills)]
     return {str(r["account_id"]) for r in lines}
 
@@ -267,9 +331,19 @@ def _form(c: sqlite3.Connection, viewer: str, year: int | None, at: str | None) 
     feeding |= {str(r["account_id"]) for r in ST.bill_lines(c, sorted({str(r["bill_id"]) for r in settled}))}
     _require_full(ctx, viewer, feeding)
     cash, card = T.paid_by_vendor(
-        [(str(r["vendor_id"]), str(r["from_kind"]), int(r["amount"]), str(r["money_kind"]), str(r["subtype"]),
-          bool(r["by_card"])) for r in settled],
-        [(owner[str(r["vendor_key"])], bool(r["by_card"]), int(r["amount"])) for r in expenses])
+        [
+            (
+                str(r["vendor_id"]),
+                str(r["from_kind"]),
+                int(r["amount"]),
+                str(r["money_kind"]),
+                str(r["subtype"]),
+                bool(r["by_card"]),
+            )
+            for r in settled
+        ],
+        [(owner[str(r["vendor_key"])], bool(r["by_card"]), int(r["amount"])) for r in expenses],
+    )
     rows = [(str(r["id"]), str(r["name"]), bool(r["tin_ref"])) for r in vendors]
     return ctx, y, T.form_rows(y, rows, cash, card)
 
@@ -281,10 +355,16 @@ def form_1099_report(c: sqlite3.Connection, viewer: str, year: int | None = None
     due = _first_due(c, ST.seeded(c, FORM_KEY))
     due_on = None
     if due:
-        due_on = next((d.isoformat() for d in _D.occurrences(due[0], due[1], date(y + 1, 12, 31))
-                       if d.year == y + 1), None)
-    return {"year": y, "currency": ctx.book.base_currency, "threshold": T.threshold(y), "due_on": due_on,
-            "rows": [asdict(r) for r in rows]}
+        due_on = next(
+            (d.isoformat() for d in _D.occurrences(due[0], due[1], date(y + 1, 12, 31)) if d.year == y + 1), None
+        )
+    return {
+        "year": y,
+        "currency": ctx.book.base_currency,
+        "threshold": T.threshold(y),
+        "due_on": due_on,
+        "rows": [asdict(r) for r in rows],
+    }
 
 
 def form_1099_csv(c: sqlite3.Connection, viewer: str, year: int | None = None, at: str | None = None) -> str:

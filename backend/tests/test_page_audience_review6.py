@@ -1,4 +1,5 @@
 """Held answer prose derives copied-label provenance from the question task it answers."""
+
 import json
 
 import pytest
@@ -16,12 +17,23 @@ from backend.tests.test_page_audience_review4 import public_page
 def held_answers(api, tid, fid, label):
     """Create a hold through the pick production route (a question task answered with a copied label)."""
     ordinary = post(api, f"tasks/{tid}/files", {"name": "held-public.txt", "text": "Public choice"})["file_id"]
-    pick = review_ask(api, "ops-test", [{"file": fid}, {"file": ordinary}], on="reader", parent=tid,
-                      topic="held-pick", private=False, pick=True, question="Which draft needs a held review?")
+    pick = review_ask(
+        api,
+        "ops-test",
+        [{"file": fid}, {"file": ordinary}],
+        on="reader",
+        parent=tid,
+        topic="held-pick",
+        private=False,
+        pick=True,
+        question="Which draft needs a held review?",
+    )
     text = "Never publish an unreviewed draft."
     api.app.state.judge = Judge(api.app.state.store, {text: label})
-    rule(api, {"kind": "internal", "text": text, "who": {"people": ["reader"]},
-               "if_broken": "escalate", "reviewer": "cara"})
+    rule(
+        api,
+        {"kind": "internal", "text": text, "who": {"people": ["reader"]}, "if_broken": "escalate", "reviewer": "cara"},
+    )
     cases = [(pick["task"]["id"], {"task": pick["task"]["id"]}, "decision")]
     holds = []
     for task, target, qid in cases:
@@ -43,7 +55,9 @@ def test_held_and_replayed_answers_revoke_question_option_labels(api, send):
     tid, _, fid = public_page(api)
     reader = post(api, "access/people", {"name": "Reader", "email": "reader@acme.example"})
     assert reader["person"] == "reader"
-    api.app.state.store.settings.test_identities["reader-test"] = Identity("human:reader", "human", "reader@acme.example")
+    api.app.state.store.settings.test_identities["reader-test"] = Identity(
+        "human:reader", "human", "reader@acme.example"
+    )
     label = "Confidential draft"
     holds = held_answers(api, tid, fid, label)
     if send:
@@ -60,6 +74,11 @@ def test_held_and_replayed_answers_revoke_question_option_labels(api, send):
         if deleted:
             assert api.delete("/api/v2/files/" + fid, headers=headers()).status_code == 200
         assert api.get("/api/v2/pages/" + fid, headers=headers("cara-test")).status_code == 404
-        for path in [*("rule-holds/" + hid for hid in holds), "rule-holds", f"tasks/{tid}/comments", f"tasks/{tid}/answers"]:
+        for path in [
+            *("rule-holds/" + hid for hid in holds),
+            "rule-holds",
+            f"tasks/{tid}/comments",
+            f"tasks/{tid}/answers",
+        ]:
             shown = json.dumps(get(api, path, token="cara-test"))
             assert label not in shown and fid not in shown, (path, shown)

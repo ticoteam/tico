@@ -16,6 +16,7 @@ They wait on the page rather than going out with the run's other suggestions: th
 Tico Gateway, report their outcomes back to it and reach a role's bot through its Update or the owner. These are about
 the company's own installs and bots, an admin decides each one, and nothing about them leaves this install.
 """
+
 import uuid
 from datetime import datetime, timedelta, timezone
 
@@ -29,8 +30,8 @@ from .store import Problem
 
 PROMOTE_BOTS = 2
 PROMOTE_USES = 10
-OPEN_DAYS = 30            # an open suggestion expires after this long
-AGAIN_DAYS = 30           # a closed one may come back after this long, if it still holds
+OPEN_DAYS = 30  # an open suggestion expires after this long
+AGAIN_DAYS = 30  # a closed one may come back after this long, if it still holds
 LIST_CAP = 50
 KINDS = ("remove", "promote")
 
@@ -45,8 +46,14 @@ def _id():
 
 def _listed(c, name):
     """Whether the name is in the directory now, or waits as a pending proposal: promoting it is moot."""
-    return c.execute("SELECT 1 FROM skills WHERE name=? AND deleted_at IS NULL UNION ALL "
-                     "SELECT 1 FROM skill_proposals WHERE name=? AND status='pending' LIMIT 1", (name, name)).fetchone() is not None
+    return (
+        c.execute(
+            "SELECT 1 FROM skills WHERE name=? AND deleted_at IS NULL UNION ALL "
+            "SELECT 1 FROM skill_proposals WHERE name=? AND status='pending' LIMIT 1",
+            (name, name),
+        ).fetchone()
+        is not None
+    )
 
 
 def _active_bots(c):
@@ -57,8 +64,13 @@ def candidates(c, at):
     """{(kind, subject): {name, target_type, target_id, uses_count, bots_count}} of what holds now."""
     out = {}
     for r in U.unused_installs(c, at):
-        out[("remove", r["id"])] = {"name": r["skill_name"], "target_type": r["target_type"], "target_id": r["target_id"],
-                                    "uses_count": 0, "bots_count": 0}
+        out[("remove", r["id"])] = {
+            "name": r["skill_name"],
+            "target_type": r["target_type"],
+            "target_id": r["target_id"],
+            "uses_count": 0,
+            "bots_count": 0,
+        }
     active = _active_bots(c)
     for r in U.unlisted_usage(c, at):
         if r["uses"] < PROMOTE_USES and len(r["bots"]) < PROMOTE_BOTS:
@@ -66,14 +78,21 @@ def candidates(c, at):
         asked = next((b for b, _ in r["bots"] if b in active), None)
         if not asked or _listed(c, r["name"]):
             continue
-        out[("promote", r["name"])] = {"name": r["name"], "target_type": "Bot", "target_id": asked,
-                                       "uses_count": r["uses"], "bots_count": len(r["bots"])}
+        out[("promote", r["name"])] = {
+            "name": r["name"],
+            "target_type": "Bot",
+            "target_id": asked,
+            "uses_count": r["uses"],
+            "bots_count": len(r["bots"]),
+        }
     return out
 
 
 def _close(c, row_id, status, now, by=None):
-    c.execute("UPDATE skill_suggestions SET status=?, closed_by_id=?, closed_at=?, updated_at=? WHERE id=? AND status='open'",
-              (status, by, now, now, row_id))
+    c.execute(
+        "UPDATE skill_suggestions SET status=?, closed_by_id=?, closed_at=?, updated_at=? WHERE id=? AND status='open'",
+        (status, by, now, now, row_id),
+    )
 
 
 def _resolved(c, row):
@@ -101,18 +120,34 @@ def refresh(c, at):
     for (kind, subject), v in found.items():
         row = c.execute("SELECT * FROM skill_suggestions WHERE kind=? AND subject=?", (kind, subject)).fetchone()
         if row is None:
-            c.execute("INSERT INTO skill_suggestions (id, kind, subject, name, target_type, target_id, uses_count, bots_count, "
-                      "status, created_at, updated_at) VALUES (?,?,?,?,?,?,?,?,'open',?,?)",
-                      (_id(), kind, subject, v["name"], v["target_type"], v["target_id"], v["uses_count"], v["bots_count"],
-                       now, now))
+            c.execute(
+                "INSERT INTO skill_suggestions (id, kind, subject, name, target_type, target_id, uses_count, bots_count, "
+                "status, created_at, updated_at) VALUES (?,?,?,?,?,?,?,?,'open',?,?)",
+                (
+                    _id(),
+                    kind,
+                    subject,
+                    v["name"],
+                    v["target_type"],
+                    v["target_id"],
+                    v["uses_count"],
+                    v["bots_count"],
+                    now,
+                    now,
+                ),
+            )
             made += 1
         elif row["status"] == "open":
-            c.execute("UPDATE skill_suggestions SET target_id=?, uses_count=?, bots_count=?, updated_at=? WHERE id=?",
-                      (v["target_id"], v["uses_count"], v["bots_count"], now, row["id"]))
+            c.execute(
+                "UPDATE skill_suggestions SET target_id=?, uses_count=?, bots_count=?, updated_at=? WHERE id=?",
+                (v["target_id"], v["uses_count"], v["bots_count"], now, row["id"]),
+            )
         elif (row["closed_at"] or row["updated_at"]) <= again:
-            c.execute("UPDATE skill_suggestions SET name=?, target_type=?, target_id=?, uses_count=?, bots_count=?, "
-                      "status='open', closed_by_id=NULL, closed_at=NULL, created_at=?, updated_at=? WHERE id=?",
-                      (v["name"], v["target_type"], v["target_id"], v["uses_count"], v["bots_count"], now, now, row["id"]))
+            c.execute(
+                "UPDATE skill_suggestions SET name=?, target_type=?, target_id=?, uses_count=?, bots_count=?, "
+                "status='open', closed_by_id=NULL, closed_at=NULL, created_at=?, updated_at=? WHERE id=?",
+                (v["name"], v["target_type"], v["target_id"], v["uses_count"], v["bots_count"], now, now, row["id"]),
+            )
             made += 1
     return {"made": made, "closed": closed}
 
@@ -127,16 +162,28 @@ def run(store, at=None):
 # ----------------------------------------------------------------------------- the page
 def _view(row, names):
     target = (row["target_type"], row["target_id"])
-    return {"id": row["id"], "kind": row["kind"], "name": row["name"],
-            "target": {"type": target[0], "id": target[1], "name": names.get(target, target[1])},
-            "install_id": row["subject"] if row["kind"] == "remove" else None,
-            "uses_30d": row["uses_count"], "bots": row["bots_count"], "created_at": row["created_at"]}
+    return {
+        "id": row["id"],
+        "kind": row["kind"],
+        "name": row["name"],
+        "target": {"type": target[0], "id": target[1], "name": names.get(target, target[1])},
+        "install_id": row["subject"] if row["kind"] == "remove" else None,
+        "uses_30d": row["uses_count"],
+        "bots": row["bots_count"],
+        "created_at": row["created_at"],
+    }
 
 
 def listing(c):
     """The open suggestions that still stand (the install is still there; the name is still outside the directory)."""
-    rows = [r for r in c.execute("SELECT * FROM skill_suggestions WHERE status='open' ORDER BY kind DESC, created_at, id "
-                                 "LIMIT ?", (LIST_CAP * 2,)).fetchall() if not _resolved(c, r)][:LIST_CAP]
+    rows = [
+        r
+        for r in c.execute(
+            "SELECT * FROM skill_suggestions WHERE status='open' ORDER BY kind DESC, created_at, id LIMIT ?",
+            (LIST_CAP * 2,),
+        ).fetchall()
+        if not _resolved(c, r)
+    ][:LIST_CAP]
     names = U._names(c, {(r["target_type"], r["target_id"]) for r in rows})
     return {"suggestions": [_view(r, names) for r in rows]}
 
@@ -157,8 +204,13 @@ def remove(c, auth, who, sid):
     if install:
         SK._target(c, auth, who, install["target_type"], install["target_id"])
         c.execute("DELETE FROM skill_installs WHERE id=?", (install["id"],))
-        H.event(c, who.actor, "skill.uninstalled", install["id"],
-                {"target_type": install["target_type"], "target_id": install["target_id"], "suggestion_id": sid})
+        H.event(
+            c,
+            who.actor,
+            "skill.uninstalled",
+            install["id"],
+            {"target_type": install["target_type"], "target_id": install["target_id"], "suggestion_id": sid},
+        )
     _close(c, sid, "acted", H.now(), H.actor_id(who.actor))
     return {"id": sid, "status": "acted", "removed": bool(install)}
 
@@ -173,6 +225,7 @@ def close(c, who, sid, status):
 
 def install(app, store, auth, mutate):
     """Admin routes. Installed before backend/skills.py's, so `skills/suggestions` is not read as a skill's name."""
+
     def admin(request):
         who = request.state.identity
         auth.domain(who)

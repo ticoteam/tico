@@ -1,4 +1,5 @@
 """Tests read the registry from a fictional company, never from a real environment's."""
+
 import os
 import sys
 from pathlib import Path
@@ -20,13 +21,20 @@ os.environ["TICO_REACH_DEFAULT"] = "open"
 # created a real bucket. Fake keys and no profile or config files make any real AWS call unauthorized.
 for _name in ("AWS_PROFILE", "AWS_DEFAULT_PROFILE", "AWS_SESSION_TOKEN", "AWS_ROLE_ARN", "AWS_WEB_IDENTITY_TOKEN_FILE"):
     os.environ.pop(_name, None)
-os.environ.update({"AWS_ACCESS_KEY_ID": "testing", "AWS_SECRET_ACCESS_KEY": "testing",
-                   "AWS_CONFIG_FILE": os.devnull, "AWS_SHARED_CREDENTIALS_FILE": os.devnull,
-                   "AWS_EC2_METADATA_DISABLED": "true"})
+os.environ.update(
+    {
+        "AWS_ACCESS_KEY_ID": "testing",
+        "AWS_SECRET_ACCESS_KEY": "testing",
+        "AWS_CONFIG_FILE": os.devnull,
+        "AWS_SHARED_CREDENTIALS_FILE": os.devnull,
+        "AWS_EC2_METADATA_DISABLED": "true",
+    }
+)
 
 # A test process builds an app per test: every one after the first reuses the route analysis and field validators the
 # first built (backend/route_memo.py). Tests only: a server builds one app, and production never patches FastAPI.
 from backend import route_memo  # noqa: E402
+
 route_memo.install()
 
 import re  # noqa: E402
@@ -34,10 +42,16 @@ import pytest  # noqa: E402
 
 
 def pytest_addoption(parser):
-    parser.addoption("--api-database-snapshots", action="store_true",
-                     help="Reuse a worker-local schema snapshot for the shared API fixture")
-    parser.addoption("--fresh-api-databases", action="store_true",
-                     help="Build API fixture databases from empty paths (migration checks and benchmarks)")
+    parser.addoption(
+        "--api-database-snapshots",
+        action="store_true",
+        help="Reuse a worker-local schema snapshot for the shared API fixture",
+    )
+    parser.addoption(
+        "--fresh-api-databases",
+        action="store_true",
+        help="Build API fixture databases from empty paths (migration checks and benchmarks)",
+    )
 
 
 def unix_socket_path_under_tmp_path(address, basetemp=None):
@@ -65,14 +79,17 @@ def _unix_socket_bind_outside_tmp_path(config):
     The patch covers every thread of this process and any child it forks; a subprocess that execs a new program (or
     Python) does not inherit it. It is removed when pytest unconfigures."""
     import socket
+
     bind = socket.socket.bind
 
     def checked_bind(self, address):
         if self.family == getattr(socket, "AF_UNIX", None):
             path = unix_socket_path_under_tmp_path(address, config.option.basetemp)
             if path:
-                raise OSError(f"Unix socket under pytest's tmp_path: {path}. Its length depends on TMPDIR and breaks "
-                              "the hosted release gate; bind it in tempfile.mkdtemp(dir='/tmp') instead.")
+                raise OSError(
+                    f"Unix socket under pytest's tmp_path: {path}. Its length depends on TMPDIR and breaks "
+                    "the hosted release gate; bind it in tempfile.mkdtemp(dir='/tmp') instead."
+                )
         return bind(self, address)
 
     socket.socket.bind = checked_bind
@@ -84,16 +101,18 @@ def pytest_configure(config):
     A test path that does not exist is an error. Under -n (on by default here) xdist drops it without a word,
     and the run ends as "no tests ran", which a reader piping the output can take for a pass."""
     import importlib.util
+
     spec = importlib.util.spec_from_file_location("tico_heavy_slot", Path(__file__).parent / "scripts/heavy_slot.py")
     heavy_slot = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(heavy_slot)
     heavy_slot.reexec()
     _unix_socket_bind_outside_tmp_path(config)
     if hasattr(config, "workerinput") or config.option.pyargs:
-        return          # --pyargs names modules, not paths
+        return  # --pyargs names modules, not paths
     # The page serves the UI's TypeScript as its compiled JavaScript: compiled here once when this checkout can
     # (Node and `npm ci`); otherwise the tests that load the page fail and say to run `npm run build:ui`.
     from backend import ui_build
+
     try:
         ui_build.prepare()
     except ui_build.StaleBuild:
@@ -123,7 +142,8 @@ def pytest_sessionfinish(session, exitstatus):
     """Zero collected tests is a failure (exit 5) and says so in an error line, not only in the exit code."""
     if exitstatus == pytest.ExitCode.NO_TESTS_COLLECTED and not hasattr(session.config, "workerinput"):
         session.config.get_terminal_writer().line(
-            "ERROR: no tests were collected; check the test paths and the -m / -k filters", red=True, bold=True)
+            "ERROR: no tests were collected; check the test paths and the -m / -k filters", red=True, bold=True
+        )
 
 
 @pytest.fixture(scope="session")
@@ -147,18 +167,26 @@ def api_database(tmp_path_factory, request):
     store.initialize()
     snapshot = settings.db_path.with_name("snapshot.db")
     with closing(sqlite3.connect(settings.db_path)) as source:
-        tables = [row[0] for row in source.execute("SELECT name FROM sqlite_master WHERE type='table'") if "_fts" not in row[0]]
+        tables = [
+            row[0]
+            for row in source.execute("SELECT name FROM sqlite_master WHERE type='table'")
+            if "_fts" not in row[0]
+        ]
         # initialize writes system rows (markers, clocks, built-in types and rules, keeper events) that every
         # fresh test database has too. What must never be shared between tests: a person, bot, credential,
         # session, key or computer, and this worker's temporary path.
-        identity = re.compile(r"human|person|people|bot|cred|secret|session|token|key|auth|member|user|account|"
-                              r"identit|device|machine|computer|grant|oauth|oidc")
+        identity = re.compile(
+            r"human|person|people|bot|cred|secret|session|token|key|auth|member|user|account|"
+            r"identit|device|machine|computer|grant|oauth|oidc"
+        )
         for table in tables:
             quoted = '"' + table.replace('"', '""') + '"'
             if identity.search(table):
                 assert not source.execute(f"SELECT 1 FROM {quoted} LIMIT 1").fetchone(), table
             else:
-                assert str(settings.db_path.parent) not in repr(source.execute(f"SELECT * FROM {quoted}").fetchall()), table
+                assert str(settings.db_path.parent) not in repr(source.execute(f"SELECT * FROM {quoted}").fetchall()), (
+                    table
+                )
         assert {row[0] for row in source.execute("SELECT kind FROM principals")} <= {"system"}
         with closing(sqlite3.connect(snapshot.with_suffix(".building"))) as target:
             source.backup(target)

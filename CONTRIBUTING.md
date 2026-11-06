@@ -142,7 +142,8 @@ company already owns, so their commits need no sign-off, and their pull requests
 
 Don't edit CHANGELOG.md in a PR. The Technical Writer writes each release's notes after it is published.
 
-A release is a version tag, and contributors do not tag. Tico releases from two windows a day (14:30 and 22:00 UTC):
+A release is a version tag, and contributors do not tag. Tico releases from release windows (weekdays 07:30, 14:00
+and 20:30 Los Angeles time, weekends 07:30 and 15:00):
 GitHub Actions validates main's head, ships the first green candidate to Tico Team's install, and promotes it to
 stable after it has baked. A hotfix is for major production issues only. The Release Manager bot no longer tags or
 rolls out Tico releases; it only monitors them. The details are in

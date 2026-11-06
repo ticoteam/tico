@@ -1,7 +1,7 @@
-"""Go-lives waiting for a computer to get a bot's repository (backend/app.py go_live).
+"""Go-lives waiting for a computer to get a bot's repository (backend/go_live_routes.py go_live).
 
 Each is one `registry_metadata` row, `go-live-pending:<bot>`: who asked, the options, the computer, and when it
-was asked. The computer's readiness report finishes it (app.py `finish_pending_go_live`). One that has not finished
+was asked. The computer's readiness report finishes it (go_live_routes.py `finish_pending_go_live`). One that has not finished
 within EXPIRY_DAYS is marked failed and the person who asked is told once; so is one that fails to finish. A failed
 row stays until the next go-live for that bot replaces it, so nothing is retried and nobody is told twice.
 """
@@ -16,9 +16,10 @@ EXPIRY_DAYS = 7
 
 def rows(c):
     """(key, bot, record) for every waiting or failed go-live: one range read on the primary key."""
-    found = c.execute("SELECT key,value FROM registry_metadata WHERE key>=? AND key<?",
-                      (PREFIX, PREFIX[:-1] + ";")).fetchall()
-    return [(key, key[len(PREFIX):], H._json(value, {}) or {}) for key, value in found]
+    found = c.execute(
+        "SELECT key,value FROM registry_metadata WHERE key>=? AND key<?", (PREFIX, PREFIX[:-1] + ";")
+    ).fetchall()
+    return [(key, key[len(PREFIX) :], H._json(value, {}) or {}) for key, value in found]
 
 
 def deadline(record):
@@ -36,22 +37,28 @@ def expired(record, now):
 def fail(c, key, bot, record, code, notice):
     """Mark the go-live failed with `code`, record it, and tell the person who asked: once, since a failed record
     is skipped from then on."""
-    c.execute("UPDATE registry_metadata SET value=? WHERE key=?",
-              (encode({**record, "failed": {"code": code, "at": H.now()}}), key))
+    c.execute(
+        "UPDATE registry_metadata SET value=? WHERE key=?",
+        (encode({**record, "failed": {"code": code, "at": H.now()}}), key),
+    )
     H.event(c, H.KEEPER, "bot.go_live_failed", bot, {"code": code})
     actor = str(record.get("actor") or "")
     if H.is_human(actor):
         try:
             label = (H.bot(c, bot) or {}).get("slug", bot)
-            H.say(c, H.KEEPER, actor, notice + f" Run `hub bot go-live {label}` again once that is fixed.", kind="notice")
+            H.say(
+                c, H.KEEPER, actor, notice + f" Run `hub bot go-live {label}` again once that is fixed.", kind="notice"
+            )
         except H.Refused as exc:
             H.event(c, H.KEEPER, "bot.go_live_notice_refused", bot, {"reason": str(exc)[:300]})
 
 
 def expire_notice(bot, record):
     computer = record.get("computer") or "its computer"
-    return (f"Going live for {bot} stopped: {computer} did not get its repository within {EXPIRY_DAYS} days. "
-            "Check that the repository exists on GitHub and that the computer is online and can reach it.")
+    return (
+        f"Going live for {bot} stopped: {computer} did not get its repository within {EXPIRY_DAYS} days. "
+        "Check that the repository exists on GitHub and that the computer is online and can reach it."
+    )
 
 
 def expire(c, now):

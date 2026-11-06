@@ -1,4 +1,5 @@
 """Task provenance and explicit lifecycle decisions survive secondary read/write paths."""
+
 import json
 
 from backend.store import H, encode
@@ -15,17 +16,32 @@ def test_cross_task_provenance_filters_comments_asks_answers_and_mutation_receip
     first = post(api, f"tasks/{source['id']}/comments", {'text': 'Source material'})['comment']
     derived = []
     for kind in ('say', 'notice'):
-        derived.append(post(api, 'messages', {'to': 'ops', 'kind': kind, 'text': 'Restricted derived message',
-            'conversation_id': target['conversation_id'], 'refs': {'task': target['id']}})['id'])
+        derived.append(
+            post(
+                api,
+                'messages',
+                {
+                    'to': 'ops',
+                    'kind': kind,
+                    'text': 'Restricted derived message',
+                    'conversation_id': target['conversation_id'],
+                    'refs': {'task': target['id']},
+                },
+            )['id']
+        )
     # The open ask is a question task under the target, private to the bot and Ana: Ben cannot read it.
-    question = post(api, 'task-questions', {'on': 'ana', 'question': 'Which packet is final?',
-                                            'parent': target['id'], 'private': True},
-                    token=bot_token(api, 'ops'))['task']
-    with api.app.state.store.transaction() as c:      # each task has its own room, so the cross-room reply is set here
+    question = post(
+        api,
+        'task-questions',
+        {'on': 'ana', 'question': 'Which packet is final?', 'parent': target['id'], 'private': True},
+        token=bot_token(api, 'ops'),
+    )['task']
+    with api.app.state.store.transaction() as c:  # each task has its own room, so the cross-room reply is set here
         for mid in derived:
             c.execute('UPDATE messages SET in_reply_to=? WHERE id=?', (first['id'], mid))
-        answer = H.task_comment(c, 'human:ana', target['id'], 'Restricted answer',
-                                extra_refs={'answer': {'text': 'Restricted answer'}})
+        answer = H.task_comment(
+            c, 'human:ana', target['id'], 'Restricted answer', extra_refs={'answer': {'text': 'Restricted answer'}}
+        )
         c.execute('UPDATE messages SET in_reply_to=? WHERE id=?', (first['id'], answer['id']))
         derived.append(answer['id'])
     # The comment above bumped the source's version, so the update names the version it reads now.
@@ -48,8 +64,11 @@ def test_cross_task_provenance_filters_comments_asks_answers_and_mutation_receip
     assert {say_id, answer_id} <= comment_ids and notice_id not in comment_ids
     added = post(api, f"tasks/{target['id']}/comments", {'text': 'Ordinary follow-up'}, 'ben-test')
     mid = added['comment']['id']
-    responses = [added, post(api, f"tasks/{target['id']}/comments/{mid}", {'text': 'Revised follow-up'}, 'ben-test'),
-                 post(api, f"tasks/{target['id']}/comments/{mid}/delete", {}, 'ben-test')]
+    responses = [
+        added,
+        post(api, f"tasks/{target['id']}/comments/{mid}", {'text': 'Revised follow-up'}, 'ben-test'),
+        post(api, f"tasks/{target['id']}/comments/{mid}/delete", {}, 'ben-test'),
+    ]
     # Filing the question, then the edit and delete, bumped the target's version: name the one Ben reads now.
     version = get(api, 'tasks/' + target['id'], 'ben-test')['task']['version']
     responses.append(post(api, f"tasks/{target['id']}", {'version': version, 'note': 'Still reviewing'}, 'ben-test'))
@@ -57,10 +76,17 @@ def test_cross_task_provenance_filters_comments_asks_answers_and_mutation_receip
 
 
 def test_pipeline_cannot_remap_hidden_done_task_but_names_and_order_are_editable(api):
-    typ = post(api, 'task-types', {'name': 'Reviews', 'steps': [{'name': 'Start', 'status': 'open'},
-                {'name': 'Finished', 'status': 'done'}]})['type']
-    row = post(api, 'tasks', {'owner': 'priya', 'title': 'Review private packet', 'body': 'Review it.',
-                'private': True, 'type': typ['id']}, 'ben-test')
+    typ = post(
+        api,
+        'task-types',
+        {'name': 'Reviews', 'steps': [{'name': 'Start', 'status': 'open'}, {'name': 'Finished', 'status': 'done'}]},
+    )['type']
+    row = post(
+        api,
+        'tasks',
+        {'owner': 'priya', 'title': 'Review private packet', 'body': 'Review it.', 'private': True, 'type': typ['id']},
+        'ben-test',
+    )
     done = post(api, 'tasks/' + row['id'], {'version': row['version'], 'step': 'Finished'}, 'priya-test')
     get(api, 'tasks/' + row['id'], expected=404)
     steps = [{k: s[k] for k in ('id', 'name', 'status', 'position')} for s in typ['steps']]

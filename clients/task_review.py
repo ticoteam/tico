@@ -1,4 +1,5 @@
 """Shared CLI attachment payloads (stdlib only)."""
+
 import base64
 from pathlib import Path
 

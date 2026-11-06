@@ -12,6 +12,7 @@ from backend.tests.test_api import api, get, headers, post  # noqa: F401  (the f
 @pytest.fixture(autouse=True)
 def private_tasks_have_an_unrelated_manager(api):
     from backend.tests.test_api import unrelated_task_managers
+
     with api.app.state.store.transaction() as c:
         unrelated_task_managers(c)
 
@@ -33,8 +34,9 @@ def bot_jobs(api, bot):
 def follows(api, tid, actor):
     with api.app.state.store.read() as c:
         thread = H.task(c, tid)["conversation_id"]
-        found = c.execute("SELECT following, notify, reason FROM thread_followers WHERE thread_id=? AND actor=?",
-                          (thread, actor)).fetchone()
+        found = c.execute(
+            "SELECT following, notify, reason FROM thread_followers WHERE thread_id=? AND actor=?", (thread, actor)
+        ).fetchone()
     return tuple(found) if found else None
 
 
@@ -45,15 +47,17 @@ def comment(api, tid, text, token="ana-test", expected=200, **more):
 
 
 def follow(api, tid, actor, notify="live"):
-    r = api.put(f"/api/v2/tasks/{tid}/followers", json={"following": True, "actor": actor, "notify": notify},
-                headers=headers())
+    r = api.put(
+        f"/api/v2/tasks/{tid}/followers", json={"following": True, "actor": actor, "notify": notify}, headers=headers()
+    )
     assert r.status_code == 200, r.text
 
 
 def filed_by_a_bot(api, owner="human:ben"):
     with api.app.state.store.transaction() as c:
-        row = H.task_create(c, "bot:cpo", "Reservation 42 is double booked", "Two stays overlap on May 3.", owner,
-                            lint=False)
+        row = H.task_create(
+            c, "bot:cpo", "Reservation 42 is double booked", "Two stays overlap on May 3.", owner, lint=False
+        )
         c.execute("UPDATE jobs SET state='completed' WHERE state='queued'")
     return row
 
@@ -134,11 +138,18 @@ def test_the_loop_guard_caps_bots_waking_each_other_on_a_task(api, monkeypatch):
     with api.app.state.store.transaction() as c:
         for n in range(4):
             H.task_comment(c, "bot:ops", row["id"], f"Step {n} done, over to you.", extra_refs={"needs_action": True})
-    capped = rows(api, "SELECT 1 FROM message_deliveries WHERE root_id=(SELECT conversation_id FROM tasks WHERE id=?) "
-                       "AND state='capped'", row["id"])
-    woke = rows(api, "SELECT 1 FROM message_deliveries WHERE root_id=(SELECT conversation_id FROM tasks WHERE id=?) "
-                     "AND cause='bot' AND recipient LIKE 'bot:%' AND mode IN ('steer','queue') AND state<>'capped'",
-                row["id"])
+    capped = rows(
+        api,
+        "SELECT 1 FROM message_deliveries WHERE root_id=(SELECT conversation_id FROM tasks WHERE id=?) "
+        "AND state='capped'",
+        row["id"],
+    )
+    woke = rows(
+        api,
+        "SELECT 1 FROM message_deliveries WHERE root_id=(SELECT conversation_id FROM tasks WHERE id=?) "
+        "AND cause='bot' AND recipient LIKE 'bot:%' AND mode IN ('steer','queue') AND state<>'capped'",
+        row["id"],
+    )
     assert capped and len(woke) <= 2
 
 
@@ -154,8 +165,10 @@ def test_a_bots_at_mention_of_a_bot_wakes_it_and_its_plain_post_to_a_bot_followe
     with api.app.state.store.transaction() as c:
         named = H.task_comment(c, "bot:ops", row["id"], "@coo can you sign off on the close?")
     jobs = bot_jobs(api, "coo")
-    assert len(jobs) == 1 and jobs[0]["message_id"] in (named["id"], (delivery(api, named["id"], "bot:coo") or {})
-                                                        .get("carrier_id")), "an @mention wakes by the way"
+    assert len(jobs) == 1 and jobs[0]["message_id"] in (
+        named["id"],
+        (delivery(api, named["id"], "bot:coo") or {}).get("carrier_id"),
+    ), "an @mention wakes by the way"
     assert follows(api, row["id"], "bot:coo")[:2] == (1, "live")
 
 
@@ -168,22 +181,31 @@ def test_the_loop_guard_caps_bots_at_mentioning_each_other(api, monkeypatch):
             H.task_comment(c, "bot:ops", row["id"], f"@coo round {n}, over to you.")
     root = "(SELECT conversation_id FROM tasks WHERE id=?)"
     capped = rows(api, f"SELECT 1 FROM message_deliveries WHERE root_id={root} AND state='capped'", row["id"])
-    woke = rows(api, f"SELECT 1 FROM message_deliveries WHERE root_id={root} AND cause='bot' AND recipient='bot:coo' "
-                     "AND mode IN ('steer','queue') AND state<>'capped'", row["id"])
+    woke = rows(
+        api,
+        f"SELECT 1 FROM message_deliveries WHERE root_id={root} AND cause='bot' AND recipient='bot:coo' "
+        "AND mode IN ('steer','queue') AND state<>'capped'",
+        row["id"],
+    )
     assert capped and len(woke) <= 2
 
 
 def test_a_bots_mention_on_a_private_task_adds_a_reader_only_within_its_reach(api):
     with api.app.state.store.transaction() as c:
-        row = H.task_create(c, "human:ana", "Payroll review", "Confidential: payroll.", "bot:ops", private=True,
-                            lint=False)
+        row = H.task_create(
+            c, "human:ana", "Payroll review", "Confidential: payroll.", "bot:ops", private=True, lint=False
+        )
     r = api.put("/api/v2/reach/settings/bot:ops", json={"mode": "closed"}, headers=headers())
     assert r.status_code == 200, r.text
     with api.app.state.store.transaction() as c:
         said = H.task_comment(c, "bot:ops", row["id"], "@ben can you check the totals?")
         assert "human:ben" not in H.task_readers(H.task(c, row["id"]))
-        assert c.execute("SELECT in_audience FROM message_mentions WHERE message_id=? AND actor='human:ben'",
-                         (said["id"],)).fetchone()[0] == 0
+        assert (
+            c.execute(
+                "SELECT in_audience FROM message_mentions WHERE message_id=? AND actor='human:ben'", (said["id"],)
+            ).fetchone()[0]
+            == 0
+        )
     assert delivery(api, said["id"], "human:ben") is None
     # A person who reads the task widens it with an @mention, and the mentioned reader follows it.
     sent = comment(api, row["id"], "@ben please check the totals.")["comment"]
@@ -202,11 +224,15 @@ def test_the_reach_preview_answers_who_a_message_would_reach(api):
         r = api.get(f"/api/v2/threads/{thread}/reach", params=params, headers=headers())
         assert r.status_code == 200, r.text
         return r.json()
+
     plain = preview(text="Status update")
     assert plain["way"] == "steer" and [(x["actor"], x["mode"]) for x in plain["reaches"]] == [("bot:ops", "steer")]
     named = preview(text="@coo and @ben, see this", delivery="defer", defer_for="never")
     assert {x["actor"]: (x["reason"], x["mode"]) for x in named["reaches"]} == {
-        "bot:coo": ("mention", "queue"), "human:ben": ("mention", "queue"), "bot:ops": ("follower", "defer")}
+        "bot:coo": ("mention", "queue"),
+        "human:ben": ("mention", "queue"),
+        "bot:ops": ("follower", "defer"),
+    }
     r = api.get(f"/api/v2/threads/{thread}/reach", params={"delivery": "steer", "defer_for": "4h"}, headers=headers())
     assert r.status_code == 422, r.text
     assert rows(api, "SELECT 1 FROM messages WHERE conversation_id=? AND body LIKE '%see this%'", thread) == []
@@ -237,19 +263,23 @@ def test_a_readers_mention_reaches_the_bot_but_delegates_nothing(api):
         c.execute("DELETE FROM task_delegations")
     sent = comment(api, row["id"], "@coo can you check the May totals?", token="ben-test")["comment"]
     assert sent["recipient_id"] == "bot:coo" and len(bot_jobs(api, "coo")) == 1, "the @mention is reached, queued"
-    assert rows(api, "SELECT delegate FROM task_delegations WHERE task_id=?", row["id"]) == [], \
+    assert rows(api, "SELECT delegate FROM task_delegations WHERE task_id=?", row["id"]) == [], (
         "only someone who may direct the task hands its bots party rights"
+    )
     comment(api, row["id"], "@finance please check them too.")
-    assert "bot:finance" in {r["delegate"] for r in rows(api, "SELECT delegate FROM task_delegations WHERE task_id=?",
-                                                          row["id"])}
+    assert "bot:finance" in {
+        r["delegate"] for r in rows(api, "SELECT delegate FROM task_delegations WHERE task_id=?", row["id"])
+    }
 
 
 def test_a_defer_on_a_task_filed_into_a_shared_chat_keeps_its_deadline(api):
     from backend.tests.threads_e2e import create_thread
+
     room = create_thread(api, title="Billing", members=["bot:ops"])["id"]
-    with api.app.state.store.transaction() as c:      # filed into the chat, with no task room of its own
-        legacy = H.task_create(c, "human:ana", "Plan the billing notes", "For the team.", "bot:ops",
-                               conversation_id=room, own_room=False)
+    with api.app.state.store.transaction() as c:  # filed into the chat, with no task room of its own
+        legacy = H.task_create(
+            c, "human:ana", "Plan the billing notes", "For the team.", "bot:ops", conversation_id=room, own_room=False
+        )
         c.execute("UPDATE jobs SET state='completed' WHERE state='queued'")
     assert legacy["conversation_id"] == room
     sent = comment(api, legacy["id"], "Whenever you get to it today.", delivery="defer", defer_for="4h")
@@ -262,18 +292,27 @@ def test_a_defer_on_a_task_filed_into_a_shared_chat_keeps_its_deadline(api):
 def test_a_reply_reaches_its_author_only_while_they_read_the_thread_and_asks_need_them(api):
     from backend.thread_attention import _addressed
     from backend.tests.threads_e2e import call, create_thread, ok, remove_member, say
+
     t = create_thread(api, title="Venue", members=["human:ben", "human:cara"])
     said = say(api, "cara-test", t["id"], "Friday or Saturday?")
     said = said.get("message", said)
-    reply = ok(call(api, "POST", f"threads/{t['id']}/messages", "ana-test",
-                    {"text": "Friday.", "in_reply_to": said["id"]}))
+    reply = ok(
+        call(api, "POST", f"threads/{t['id']}/messages", "ana-test", {"text": "Friday.", "in_reply_to": said["id"]})
+    )
     reply = reply.get("message", reply)
     assert delivery(api, reply["id"], "human:cara")["reason"] == "reply"
     with api.app.state.store.read() as c:
         assert reply["id"] in [m["id"] for m in _addressed(c, "human:cara")], "a reply to a person is in Needs you"
     ok(remove_member(api, "ana-test", t["id"], "human:cara"))
-    again = ok(call(api, "POST", f"threads/{t['id']}/messages", "ana-test",
-                    {"text": "Actually, Saturday.", "in_reply_to": said["id"]}))
+    again = ok(
+        call(
+            api,
+            "POST",
+            f"threads/{t['id']}/messages",
+            "ana-test",
+            {"text": "Actually, Saturday.", "in_reply_to": said["id"]},
+        )
+    )
     again = again.get("message", again)
     assert delivery(api, again["id"], "human:cara") is None, "a past reader is reached no more"
 
@@ -285,8 +324,10 @@ def test_an_ask_on_a_task_reaches_only_whom_it_asks(api):
     with api.app.state.store.transaction() as c:
         c.execute("UPDATE jobs SET state='completed' WHERE state='queued'")
         from backend import question_tasks
-        asked = question_tasks.ask_plain(c, "bot:ops", "human:ana", "Which bank feed should I trust?",
-                                         parent=H.task(c, row["id"]))
+
+        asked = question_tasks.ask_plain(
+            c, "bot:ops", "human:ana", "Which bank feed should I trust?", parent=H.task(c, row["id"])
+        )
     assert asked["owner_id"] == "human:ana"
     assert bot_jobs(api, "finance") == [], "a follower bot is not woken by a question put to a person"
 

@@ -1,5 +1,6 @@
 """GET /api/v2/bots/{bot}/turns reads each run, its message, its conversation's membership and its attempt details in
 batches, so the statements it takes do not grow with how many turns the bot has (or how many of them failed)."""
+
 import contextlib
 
 import pytest
@@ -33,16 +34,22 @@ def runs(api, count, room=False, failed=False, machine=None):
         rows = [{"seq": 1, "kind": "status", "payload": {"state": "active", "tool_events": True}}]
         for j in range(STEPS):
             call = {"tool": "Read", "item_id": f"r{k}-{j}"}
-            rows += [{"seq": 2 + 2 * j, "kind": "tool", "payload": {**call, "status": "started"}},
-                     {"seq": 3 + 2 * j, "kind": "tool", "payload": {**call, "status": "completed"}}]
+            rows += [
+                {"seq": 2 + 2 * j, "kind": "tool", "payload": {**call, "status": "started"}},
+                {"seq": 3 + 2 * j, "kind": "tool", "payload": {**call, "status": "completed"}},
+            ]
         post(api, f"attempts/{aid}/events", {"events": rows}, machine["token"])
         if failed:
             with api.app.state.store.transaction() as c:
                 # The run record goes (no trigger, so the attempt is no run); the failed attempt stays.
                 c.execute("UPDATE attempts SET state='failed',finished_at=?,trigger=NULL WHERE id=?", (H.now(), aid))
         else:
-            post(api, f"attempts/{aid}/complete", {"outcome": "completed", "text": f"Answer {k}.", "last_seq": len(rows)},
-                 machine["token"])
+            post(
+                api,
+                f"attempts/{aid}/complete",
+                {"outcome": "completed", "text": f"Answer {k}.", "last_seq": len(rows)},
+                machine["token"],
+            )
     return machine
 
 
@@ -62,7 +69,9 @@ def turns_statements(api, monkeypatch, path, token="ana-test"):
                     yield c
                 finally:
                     c.set_trace_callback(None)
+
         return borrowed
+
     with monkeypatch.context() as patched:
         for name in ("read", "read_transaction", "transaction"):
             patched.setattr(store, name, traced(getattr(store, name)))
@@ -90,7 +99,8 @@ def test_the_turns_list_takes_the_same_statements_however_many_turns_it_reads(tm
     assert few > 0 and many > 0, (few, many)
     assert many - few <= 4, (
         f"GET /api/v2/bots/ops/turns takes {many} statements with 20 turns of each shape against {few} with 3: a read "
-        "runs once per turn again instead of once for the whole list. Batch it (see threads.prime_members).")
+        "runs once per turn again instead of once for the whole list. Batch it (see threads.prime_members)."
+    )
 
 
 def test_priming_the_membership_reads_does_not_change_the_list(api, monkeypatch):

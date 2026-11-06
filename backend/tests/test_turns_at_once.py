@@ -1,4 +1,5 @@
 """A computer's and a bot's "Turns at once": the claim holds new turns at the limit, and says so."""
+
 from backend.store import H
 from backend.tests.test_api import api, as_member, claim, get, post, put, runner  # noqa: F401  (api is a fixture)
 from backend.tests.test_assistant import assistant_turn
@@ -14,14 +15,28 @@ def set_computer(api, machine, limit, expected=200):
 
 def set_bot(api, limit, expected=200, token="ana-test"):
     revision = get(api, "bots/ops")["revision"]
-    return post(api, "bots/ops/turns-at-once", {"turns_at_once": limit, "expected_revision": revision},
-                token=token, expected=expected)
+    return post(
+        api,
+        "bots/ops/turns-at-once",
+        {"turns_at_once": limit, "expected_revision": revision},
+        token=token,
+        expected=expected,
+    )
 
 
 def heartbeat(api, machine, capacity, capabilities):
-    return post(api, "runners/heartbeat", {"version": "test", "platform": "test", "capacity": capacity,
-                                           "readiness": {"ops": True}, "capabilities": capabilities},
-                token=machine["token"])
+    return post(
+        api,
+        "runners/heartbeat",
+        {
+            "version": "test",
+            "platform": "test",
+            "capacity": capacity,
+            "readiness": {"ops": True},
+            "capabilities": capabilities,
+        },
+        token=machine["token"],
+    )
 
 
 def test_a_lowered_computer_limit_holds_new_turns_at_once_and_clearing_it_restores_the_capacity(api):
@@ -142,9 +157,12 @@ def test_a_parked_turn_waits_for_its_bot_when_the_limit_drops_under_its_other_tu
     post(api, f"attempts/{parked['id']}/start-place", {"waiting": "pre-start requirements"}, machine["token"])
     assert set_bot(api, 1)["turns_at_once"] == 1
     assert post(api, f"attempts/{parked['id']}/start-place", {}, machine["token"]) == {
-        "reserved": False, "waiting": "at its turn limit"}
-    post(api, f"attempts/{other['id']}/complete", {"outcome": "interrupted", "text": "", "last_seq": 0},
-         machine["token"])
+        "reserved": False,
+        "waiting": "at its turn limit",
+    }
+    post(
+        api, f"attempts/{other['id']}/complete", {"outcome": "interrupted", "text": "", "last_seq": 0}, machine["token"]
+    )
     assert post(api, f"attempts/{parked['id']}/start-place", {}, machine["token"])["reserved"] is True
 
 
@@ -153,8 +171,13 @@ def test_omitting_the_turns_at_once_field_is_refused_and_an_explicit_null_clears
     assert set_computer(api, machine, 2)["turn_limit"] == 2
     assert set_bot(api, 1)["turns_at_once"] == 1
     post(api, f"computers/{machine['runner_id']}/turns-at-once", {}, expected=422)
-    post(api, "bots/ops/turns-at-once", {"expected_revision": get(api, "bots/ops")["revision"]},
-         token="ana-test", expected=422)
+    post(
+        api,
+        "bots/ops/turns-at-once",
+        {"expected_revision": get(api, "bots/ops")["revision"]},
+        token="ana-test",
+        expected=422,
+    )
     with api.app.state.store.read() as c:
         assert c.execute("SELECT turns_at_once FROM runners WHERE id=?", (machine["runner_id"],)).fetchone()[0] == 2
     assert get(api, "bots/ops")["turns_at_once"] == 1
@@ -166,8 +189,12 @@ def test_with_assistant_acts_without_asking_off_a_computer_limit_is_a_confirm_ca
     rid = runner(api, label="Test Mac")["runner_id"]
     put(api, "access/rules", {"assistant_direct": False})
     r, attempt = assistant_turn(api, "ana-test", "Let Test Mac run 3 turns at once")
-    err, card = mcp(api, "hub_settings_set", {"key": "computer.turns_at_once", "value": {"turns_at_once": 3},
-                                              "computer": rid, "on_behalf_of": "turn"}, attempt["token"])
+    err, card = mcp(
+        api,
+        "hub_settings_set",
+        {"key": "computer.turns_at_once", "value": {"turns_at_once": 3}, "computer": rid, "on_behalf_of": "turn"},
+        attempt["token"],
+    )
     assert not err and card["needs_confirm"] is True, card
     with api.app.state.store.read() as c:
         assert c.execute("SELECT turns_at_once FROM runners WHERE id=?", (rid,)).fetchone()[0] is None

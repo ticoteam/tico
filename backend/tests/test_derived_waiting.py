@@ -2,6 +2,7 @@
 question task with no options under the task, the task's `waiting_on` is that question task's owner while it is
 open, and answering it opens the task again with one wake. The migration's old rows become question tasks or the
 bot's blocker; a private parent names its person only where the question task's words may flow up."""
+
 import importlib.util
 from pathlib import Path
 
@@ -15,8 +16,13 @@ ASK = "Pick the launch date? I'll book the venue after."
 
 def _wait(api, task_id, token, on="ana", note=ASK, expected=200):
     version = get(api, f"tasks/{task_id}", token)["task"]["version"]
-    return post(api, f"tasks/{task_id}", {"version": version, "status": "waiting", "waiting_on": on, "note": note},
-                token, expected=expected)
+    return post(
+        api,
+        f"tasks/{task_id}",
+        {"version": version, "status": "waiting", "waiting_on": on, "note": note},
+        token,
+        expected=expected,
+    )
 
 
 def test_waiting_on_a_person_files_them_a_question_task_with_no_options(api):
@@ -29,7 +35,7 @@ def test_waiting_on_a_person_files_them_a_question_task_with_no_options(api):
         [question] = QT.fields(card)["questions"]
         assert question["question"] == ASK and question["options"] == []
         assert card_id in TR.blocker_ids(c, work["id"])
-        assert "waiting_on" not in H.task(c, work["id"])          # nothing stored on the task
+        assert "waiting_on" not in H.task(c, work["id"])  # nothing stored on the task
     view = get(api, f"tasks/{work['id']}", attempt["token"])["task"]
     assert (view["status"], view["waiting_on"]) == ("waiting", "human:ana")
     listed = next(t for t in get(api, "tasks", attempt["token"])["tasks"] if t["id"] == work["id"])
@@ -60,7 +66,9 @@ def test_holds_come_from_children_and_blockers(api):
         held = task_holds.holds(c, H.task(c, work["id"]))
         assert [(h["kind"], h["on"]) for h in held] == [("child", "human:ana"), ("blocker", "bot:finance")]
         H.task_update(c, "human:ana", card_id, status="done", note="Thursday.")
-        assert [(h["kind"], h["on"]) for h in task_holds.holds(c, H.task(c, work["id"]))] == [("blocker", "bot:finance")]
+        assert [(h["kind"], h["on"]) for h in task_holds.holds(c, H.task(c, work["id"]))] == [
+            ("blocker", "bot:finance")
+        ]
         assert QT.waiting_on(c, H.task(c, work["id"])) is None
 
 
@@ -70,7 +78,7 @@ def test_a_private_parents_waiting_names_its_person_only_where_the_answer_flows_
     assert get(api, f"tasks/{parent['id']}", attempt["token"])["task"]["waiting_on"] == "human:ben"
     assert get(api, f"tasks/{parent['id']}", "ben-test")["task"]["waiting_on"] == "human:ben"
     r = api.get(f"/api/v2/tasks/{parent['id']}", headers={"Authorization": "Bearer cara-test"})
-    assert r.status_code in (403, 404), r.text                 # not a reader: no task, no waiting
+    assert r.status_code in (403, 404), r.text  # not a reader: no task, no waiting
     with api.app.state.store.transaction() as c:
         H.set_task_readers(c, "bot:cpo", parent["id"], remove=["human:ben"])
     # Ben no longer reads the parent: his question task's words stay off it, and so does his name.
@@ -108,15 +116,27 @@ def test_the_migration_turns_old_waits_into_question_tasks_and_blockers(api):
         loose = H.task_create(c, "human:ana", "Plan the launch", "", "bot:cpo", lint=False, private=False)
         done = H.task_create(c, "human:ana", "Old one", "", "bot:ops", lint=False, private=False)
         c.execute("ALTER TABLE tasks ADD COLUMN waiting_on TEXT")
-        c.executemany("UPDATE tasks SET status=?, waiting_on=?, note=? WHERE id=?", [
-            ("waiting", "human:ana", "Blocked on Ana Rivera: Renew it for a year? I'll pay the invoice.", person["id"]),
-            ("waiting", "bot:ops", "Needs the review first.", blocked["id"]),
-            ("waiting", "bot:ops", "Needs the plan from ops.", loose["id"]),
-            ("done", "human:ana", "Finished.", done["id"])])
+        c.executemany(
+            "UPDATE tasks SET status=?, waiting_on=?, note=? WHERE id=?",
+            [
+                (
+                    "waiting",
+                    "human:ana",
+                    "Blocked on Ana Rivera: Renew it for a year? I'll pay the invoice.",
+                    person["id"],
+                ),
+                ("waiting", "bot:ops", "Needs the review first.", blocked["id"]),
+                ("waiting", "bot:ops", "Needs the plan from ops.", loose["id"]),
+                ("done", "human:ana", "Finished.", done["id"]),
+            ],
+        )
         up(c)
         assert "waiting_on" not in {r[1] for r in c.execute("PRAGMA table_info(tasks)")}
-        assert {r[0] for r in c.execute("SELECT task_id FROM task_waits_moved")} == \
-            {person["id"], blocked["id"], loose["id"]}
+        assert {r[0] for r in c.execute("SELECT task_id FROM task_waits_moved")} == {
+            person["id"],
+            blocked["id"],
+            loose["id"],
+        }
         QT.move_waits(c)
         assert not c.execute("SELECT 1 FROM sqlite_master WHERE name='task_waits_moved'").fetchone()
         # A person: one open question task for them under the task, the old note as its question.
@@ -140,23 +160,29 @@ def test_the_migration_turns_old_waits_into_question_tasks_and_blockers(api):
 
 def test_the_strategy_bots_merged_question_task_passes_its_answer_on_when_closed(api):
     from backend.tests.test_strategy_bot_suggests import OWNER, STRATEGY_BOT, ask_ana, level, with_strategy_bot
+
     token = with_strategy_bot(api)
     level(api, 2)
     first, second = ask_ana(api, "ops", "Ship the pricing page"), ask_ana(api, "coo", "Plan the launch")
-    item = post(api, "strategy-bot/merge", {"person": OWNER, "title": "Which pricing page first?",
-                                            "question": "Which one?", "tasks": [first, second]}, token=token)["task"]
+    item = post(
+        api,
+        "strategy-bot/merge",
+        {"person": OWNER, "title": "Which pricing page first?", "question": "Which one?", "tasks": [first, second]},
+        token=token,
+    )["task"]
     assert (item["owner_id"], item["requester_id"], item["questions"][0]["options"]) == (OWNER, STRATEGY_BOT, [])
     since = _mark(api)
     _answer(api, item["id"], {"answers": {}, "other": "The landlord page."})
     for bot in ("bot:ops", "bot:coo"):
         said = [m for m in _to(api, bot, since) if "The landlord page." in m]
-        assert len(said) == 1, (bot, _to(api, bot, since))         # each bot that asked hears it once
+        assert len(said) == 1, (bot, _to(api, bot, since))  # each bot that asked hears it once
     with api.app.state.store.read() as c:
         assert H.task(c, item["id"])["status"] == "done"
         for task_id in (first, second):
             assert not H.unanswered_ask(c, H.task(c, task_id))
-        assert {r[0] for r in c.execute("SELECT state FROM strategy_merges WHERE merged_into=?", (item["id"],))} == \
-            {"answered"}
+        assert {r[0] for r in c.execute("SELECT state FROM strategy_merges WHERE merged_into=?", (item["id"],))} == {
+            "answered"
+        }
 
 
 def _bot_task(c, title="Renew the domain", owner="bot:ops", **kw):
@@ -164,16 +190,24 @@ def _bot_task(c, title="Renew the domain", owner="bot:ops", **kw):
 
 
 def _stage(c, *pairs):
-    c.execute("CREATE TABLE IF NOT EXISTS task_waits_moved(task_id TEXT PRIMARY KEY, waiting_on TEXT NOT NULL, "
-              "created_at TEXT NOT NULL)")
+    c.execute(
+        "CREATE TABLE IF NOT EXISTS task_waits_moved(task_id TEXT PRIMARY KEY, waiting_on TEXT NOT NULL, "
+        "created_at TEXT NOT NULL)"
+    )
     for task_id, on, note in pairs:
         c.execute("UPDATE tasks SET status='waiting', note=? WHERE id=?", (note, task_id))
         c.execute("INSERT INTO task_waits_moved VALUES(?,?,?)", (task_id, on, H.now()))
 
 
 def _another_bots_ask(c, row):
-    old_ask(c, "bot:cpo", "human:ana", "Which registrar do we use?", conversation_id=row["conversation_id"],
-            refs={"task": row["id"]})
+    old_ask(
+        c,
+        "bot:cpo",
+        "human:ana",
+        "Which registrar do we use?",
+        conversation_id=row["conversation_id"],
+        refs={"task": row["id"]},
+    )
 
 
 def test_the_next_start_moves_the_staged_waits_once(api):
@@ -187,7 +221,7 @@ def test_the_next_start_moves_the_staged_waits_once(api):
         [card_id] = TR.child_ids(c, row["id"])
         assert QT.waiting_on(c, H.task(c, row["id"])) == "human:ana" and QT.is_open(H.task(c, card_id))
         before = c.execute("SELECT count(*) FROM tasks").fetchone()[0]
-    store.initialize(seed_market=False)             # every start calls it; with nothing staged it does nothing
+    store.initialize(seed_market=False)  # every start calls it; with nothing staged it does nothing
     with store.read() as c:
         assert c.execute("SELECT count(*) FROM tasks").fetchone()[0] == before
 
@@ -210,6 +244,7 @@ def test_another_bots_old_ask_does_not_stand_for_the_owners_wait(api):
 def test_a_refused_question_task_keeps_the_wait_as_a_note_line(api, monkeypatch):
     def refuse(*_a, **_k):
         raise H.Refused("caps", "Ana has too many open questions")
+
     with api.app.state.store.transaction() as c:
         row = _bot_task(c)
         _stage(c, (row["id"], "human:ana", "Blocked on Ana Rivera: Renew it for a year? I'll pay the invoice."))
@@ -231,7 +266,7 @@ def test_on_nobody_withdraws_the_question_task_quietly(api):
     with api.app.state.store.read() as c:
         assert H.task(c, card_id)["status"] == "closed"
         assert QT.waiting_on(c, H.task(c, work["id"])) is None
-    assert _to_ops(api, since) == []                    # taking it back wakes nobody
+    assert _to_ops(api, since) == []  # taking it back wakes nobody
     assert not [i for i in get(api, "needs-you")["items"] if i["id"] == card_id]
 
 
@@ -246,7 +281,7 @@ def test_the_person_a_bots_task_waits_on_cannot_close_the_bots_task(api):
         else:
             raise AssertionError("Ben closed the bot's task")
         [card_id] = TR.child_ids(c, work["id"])
-        assert H.task(c, card_id)["owner_id"] == "human:ben"       # his question task is his to answer or decline
+        assert H.task(c, card_id)["owner_id"] == "human:ben"  # his question task is his to answer or decline
 
 
 def test_a_board_reads_private_waits_in_the_same_statements_however_many(api):
@@ -259,13 +294,16 @@ def test_a_board_reads_private_waits_in_the_same_statements_however_many(api):
             finally:
                 c.set_trace_callback(None)
         return found, len(seen)
+
     with api.app.state.store.transaction() as c:
         ids = []
         for n in range(5):
             row = _bot_task(c, f"Plan launch {n}", private=True)
             H.task_update(c, "bot:ops", row["id"], status="waiting", waiting_on="human:ana", note=ASK)
-            c.execute("UPDATE tasks SET private=1 WHERE id IN (SELECT from_task FROM task_relations WHERE to_task=?)",
-                      (row["id"],))
+            c.execute(
+                "UPDATE tasks SET private=1 WHERE id IN (SELECT from_task FROM task_relations WHERE to_task=?)",
+                (row["id"],),
+            )
             ids.append(row["id"])
         rows = [H.task(c, i) for i in ids]
     one, few = statements(rows[:1]), statements(rows)
@@ -276,8 +314,11 @@ def test_a_board_reads_private_waits_in_the_same_statements_however_many(api):
 def test_hub_sql_reads_who_a_task_waits_on_from_task_waits(api):
     work, attempt = _work(api)
     _wait(api, work["id"], attempt["token"])
-    r = api.post("/api/v2/sql", json={"sql": "SELECT task_id, waiting_on FROM task_waits"},
-                 headers={"Authorization": "Bearer ana-test"})
+    r = api.post(
+        "/api/v2/sql",
+        json={"sql": "SELECT task_id, waiting_on FROM task_waits"},
+        headers={"Authorization": "Bearer ana-test"},
+    )
     assert r.status_code == 200, r.text
     assert [work["id"], "human:ana"] in r.json()["rows"]
 
@@ -296,11 +337,14 @@ def test_a_stalled_tasks_stand_keeps_the_slot_where_waiting_on_was(api, monkeypa
 
 def test_changing_a_groups_members_makes_a_private_waits_reason_again(api, monkeypatch):
     from backend import groups
+
     with api.app.state.store.transaction() as c:
         row = _bot_task(c, private=True)
         H.task_update(c, "bot:ops", row["id"], status="waiting", waiting_on="human:ana", note=ASK)
-        c.execute("UPDATE tasks SET private=1 WHERE id IN (SELECT from_task FROM task_relations WHERE to_task=?)",
-                  (row["id"],))
+        c.execute(
+            "UPDATE tasks SET private=1 WHERE id IN (SELECT from_task FROM task_relations WHERE to_task=?)",
+            (row["id"],),
+        )
         refreshed = []
         monkeypatch.setattr(task_holds, "refresh_many", lambda c, ids, cleared=None: refreshed.extend(ids))
         task_holds.refresh_private_names(c)

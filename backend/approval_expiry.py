@@ -24,19 +24,24 @@ def sweep(conn, at=None):
     cutoff = H.shift(at, days=-H.APPROVAL_STALE_DAYS)
     stale, ended = [], []
     marks = ",".join("?" * len(ENDED))
-    for row in H._rows(conn.execute(
+    for row in H._rows(
+        conn.execute(
             "SELECT a.id, a.created_at, t.status FROM approvals a LEFT JOIN tasks t ON t.id=a.task_id "
             f"WHERE a.decision IS NULL AND (a.created_at<? OR t.status IN ({marks})) ORDER BY a.created_at",
-            (cutoff, *ENDED))):
+            (cutoff, *ENDED),
+        )
+    ):
         with isolated(conn, "approval_expiry", row["id"]):
             if row["status"] in ENDED:
                 if H.approval_withdraw(conn, row["id"], f"Its task was {H.TASK_ENDED[row['status']]}."):
                     ended.append(row["id"])
-            elif H.approval_withdraw(conn, row["id"], f"No decision in {H.APPROVAL_STALE_DAYS} days. "
-                                                       "Ask again if it is still needed."):
+            elif H.approval_withdraw(
+                conn, row["id"], f"No decision in {H.APPROVAL_STALE_DAYS} days. Ask again if it is still needed."
+            ):
                 stale.append(row["id"])
     from . import release_flow
+
     superseded = release_flow.superseded_by_shipped(conn)
     from . import settings_asks
-    return {"stale": stale, "ended": ended, "superseded": superseded,
-            "cards": settings_asks.sweep(conn, at)}
+
+    return {"stale": stale, "ended": ended, "superseded": superseded, "cards": settings_asks.sweep(conn, at)}

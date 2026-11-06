@@ -40,7 +40,9 @@ def task_notice(api, thread_id, body="Started task: Budget review", kind="notice
 def test_a_task_notice_to_a_person_is_in_the_task_but_reaches_no_one(api):
     thread_id = budget_thread(api)
     notice = task_notice(api, thread_id)
-    assert rows(api, "SELECT conversation_id FROM messages WHERE id=?", notice["id"]) == [{"conversation_id": thread_id}]
+    assert rows(api, "SELECT conversation_id FROM messages WHERE id=?", notice["id"]) == [
+        {"conversation_id": thread_id}
+    ]
     assert delivery(api, notice["id"], "human:ben") is None
     assert unread_for(api, "human:ben", thread_id) == 0
 
@@ -48,8 +50,15 @@ def test_a_task_notice_to_a_person_is_in_the_task_but_reaches_no_one(api):
 def test_a_task_notice_still_wakes_its_bot_owner_as_before(api):
     with api.app.state.store.transaction() as c:
         direct = threads.dm(c, "human:ana", ["bot:ops"])
-        notice = H.say(c, H.KEEPER, "bot:ops", "New task from human:ana: Budget review",
-                       conversation_id=direct["id"], kind="notice", refs={"task": "tsk-budget"})
+        notice = H.say(
+            c,
+            H.KEEPER,
+            "bot:ops",
+            "New task from human:ana: Budget review",
+            conversation_id=direct["id"],
+            kind="notice",
+            refs={"task": "tsk-budget"},
+        )
     row = delivery(api, notice["id"], "bot:ops")
     assert row is not None and row["mode"] == "queue" and row["state"] == "pending"
 
@@ -57,8 +66,15 @@ def test_a_task_notice_still_wakes_its_bot_owner_as_before(api):
 def test_a_keeper_notice_without_a_task_still_reaches_the_person(api):
     thread_id = budget_thread(api)
     with api.app.state.store.transaction() as c:
-        alert = H.say(c, H.KEEPER, "human:ben", "The team is at 80% of its budget",
-                      conversation_id=thread_id, kind="notice", refs={"budget": "team"})
+        alert = H.say(
+            c,
+            H.KEEPER,
+            "human:ben",
+            "The team is at 80% of its budget",
+            conversation_id=thread_id,
+            kind="notice",
+            refs={"budget": "team"},
+        )
     assert delivery(api, alert["id"], "human:ben")["reason"] == "addressed"
     assert unread_for(api, "human:ben", thread_id) == 1
 
@@ -67,17 +83,29 @@ def test_an_old_task_delivery_to_a_person_no_longer_counts_as_unread(api):
     thread_id = budget_thread(api)
     with api.app.state.store.transaction() as c:
         # A notice written before the rule: its delivery row exists, as the old trigger made it.
-        notice = H.say(c, H.KEEPER, "human:ben", "Finished: Budget review", conversation_id=thread_id, kind="notice",
-                       refs={"task": "tsk-budget"})
-        c.execute("INSERT INTO message_deliveries(id,message_id,recipient,thread_id,root_id,mode,reason,cause,state,"
-                  "revision,created_at,updated_at) SELECT 'old-' || id, id, 'human:ben', conversation_id, "
-                  "conversation_id, 'queue', 'addressed', 'keeper', 'pending', 0, created_at, created_at "
-                  "FROM messages WHERE id=?", (notice["id"],))
+        notice = H.say(
+            c,
+            H.KEEPER,
+            "human:ben",
+            "Finished: Budget review",
+            conversation_id=thread_id,
+            kind="notice",
+            refs={"task": "tsk-budget"},
+        )
+        c.execute(
+            "INSERT INTO message_deliveries(id,message_id,recipient,thread_id,root_id,mode,reason,cause,state,"
+            "revision,created_at,updated_at) SELECT 'old-' || id, id, 'human:ben', conversation_id, "
+            "conversation_id, 'queue', 'addressed', 'keeper', 'pending', 0, created_at, created_at "
+            "FROM messages WHERE id=?",
+            (notice["id"],),
+        )
     assert delivery(api, notice["id"], "human:ben")["state"] == "pending"
     assert unread_for(api, "human:ben", thread_id) == 0
     with api.app.state.store.read() as c:
-        waiting = c.execute("SELECT COUNT(*) FROM messages m WHERE m.id=? AND " + threads.unread_message_sql("m"),
-                            (notice["id"], "human:ben", "human:ben")).fetchone()[0]
+        waiting = c.execute(
+            "SELECT COUNT(*) FROM messages m WHERE m.id=? AND " + threads.unread_message_sql("m"),
+            (notice["id"], "human:ben", "human:ben"),
+        ).fetchone()[0]
     assert waiting == 0
 
 

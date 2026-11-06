@@ -18,6 +18,7 @@ Every call also re-reads the subject's level, so taking a level away stops the n
 
 Refusals are the app's error envelope with a `detail` that names the one setting that would change it.
 """
+
 import asyncio
 import base64
 import hashlib
@@ -42,19 +43,34 @@ TOKEN_RE = re.compile(r'tpx1\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+')
 SAFE = frozenset(('GET', 'HEAD', 'OPTIONS'))
 METHODS = ['GET', 'HEAD', 'OPTIONS', 'POST', 'PUT', 'PATCH', 'DELETE']
 MAX_BODY = 25 * 1024 * 1024
-TTL = 12 * 3600                 # a watcher's or an agent's token; a run's lasts exactly as long as its attempt
+TTL = 12 * 3600  # a watcher's or an agent's token; a run's lasts exactly as long as its attempt
 TIMEOUT = httpx.Timeout(120.0, connect=10.0, pool=10.0)
 RESOLVE_BUDGET = 10.0
 # Never forwarded either way: hop-by-hop headers, the caller's own sign-in, and what a proxy in front of Tico added.
-HOP = frozenset(('connection', 'keep-alive', 'proxy-authenticate', 'proxy-authorization', 'te', 'trailer', 'trailers',
-                 'transfer-encoding', 'upgrade', 'host', 'content-length'))
+HOP = frozenset(
+    (
+        'connection',
+        'keep-alive',
+        'proxy-authenticate',
+        'proxy-authorization',
+        'te',
+        'trailer',
+        'trailers',
+        'transfer-encoding',
+        'upgrade',
+        'host',
+        'content-length',
+    )
+)
 # The answer is decoded here to scrub it, so only the encodings httpx decodes are asked for.
-REQUEST_DROP = frozenset(('authorization', 'cookie', 'forwarded', 'x-real-ip', 'true-client-ip', 'via',
-                          'accept-encoding'))
+REQUEST_DROP = frozenset(
+    ('authorization', 'cookie', 'forwarded', 'x-real-ip', 'true-client-ip', 'via', 'accept-encoding')
+)
 REQUEST_DROP_PREFIXES = ('x-forwarded-', 'cf-', 'x-tico-', 'x-amzn-')
 # The answer is served from Tico's own origin: nothing in it may set a cookie there, widen CORS or run as a page.
-RESPONSE_DROP = frozenset(('set-cookie', 'content-encoding', 'content-security-policy', 'strict-transport-security',
-                           'alt-svc'))
+RESPONSE_DROP = frozenset(
+    ('set-cookie', 'content-encoding', 'content-security-policy', 'strict-transport-security', 'alt-svc')
+)
 RESPONSE_DROP_PREFIXES = ('access-control-',)
 
 
@@ -101,20 +117,27 @@ def runtime_item(c, vault, settings, row, tool, subject, *, attempt='', runner='
     """What a run is handed for a held credential of a proxied tool: a proxy token where the key would be, and the
     proxy's address in `url_env`. Never the key."""
     token = mint(c, vault, tool['id'], subject, attempt=attempt, runner=runner, agent=agent)
-    return {'id': row['id'], 'name': row['name'], 'env': row['env'], 'kind': row['kind'], 'value': token,
-            'tool': tool['name'] or tool['id'], 'proxy_url': proxy_url(settings, tool['id']),
-            'url_env': url_env(tool['id'])}
+    return {
+        'id': row['id'],
+        'name': row['name'],
+        'env': row['env'],
+        'kind': row['kind'],
+        'value': token,
+        'tool': tool['name'] or tool['id'],
+        'proxy_url': proxy_url(settings, tool['id']),
+        'url_env': url_env(tool['id']),
+    }
 
 
 def claims_of(c, vault, token):
     """The claims of a token signed here, or None."""
     if not token or not token.startswith(TOKEN_PREFIX):
         return None
-    body, _, mac = token[len(TOKEN_PREFIX):].partition('.')
+    body, _, mac = token[len(TOKEN_PREFIX) :].partition('.')
     try:
         signing = _signing_key(c, vault)
     except (Problem, sqlite3.Error):
-        return None             # no data key yet (nothing was ever stored): nothing was ever signed either
+        return None  # no data key yet (nothing was ever stored): nothing was ever signed either
     good = _b64(hmac.new(signing, body.encode(), hashlib.sha256).digest())
     if not body or not hmac.compare_digest(mac.encode(), good.encode()):
         return None
@@ -138,9 +161,11 @@ def holder_live(c, claims, now=None):
                 return False
             validate_identity(c, Identity(subject, 'bot', runner_id=row['runner_id'] or '', attempt_id=row['id']))
         elif 'r' in claims:
-            if not c.execute("SELECT 1 FROM runners r JOIN assignments a ON a.runner_id=r.id JOIN bots b ON b.id=a.bot "
-                             "WHERE r.id=? AND r.revoked_at IS NULL AND 'bot:'||a.bot=? AND b.state='active'",
-                             (str(claims['r']), subject)).fetchone():
+            if not c.execute(
+                "SELECT 1 FROM runners r JOIN assignments a ON a.runner_id=r.id JOIN bots b ON b.id=a.bot "
+                "WHERE r.id=? AND r.revoked_at IS NULL AND 'bot:'||a.bot=? AND b.state='active'",
+                (str(claims['r']), subject),
+            ).fetchone():
                 return False
         else:
             validate_identity(c, Identity(subject, 'bot', agent='agent'))
@@ -234,8 +259,8 @@ class Scrubber:
         if self.keep <= 0 or len(data) <= self.keep:
             self.tail = data if self.keep > 0 else b''
             return b'' if self.keep > 0 else data
-        self.tail = data[-self.keep:]
-        return data[:-self.keep]
+        self.tail = data[-self.keep :]
+        return data[: -self.keep]
 
     def end(self):
         data, self.tail = self.tail, b''
@@ -273,14 +298,20 @@ def outgoing_query(query, tool, key):
     if not scheme.startswith('query:'):
         return query
     param = scheme[6:]
-    kept = [part for part in query.split('&') if part and part.split('=', 1)[0] != quote(param, safe='')
-            and part.split('=', 1)[0] != param]
+    kept = [
+        part
+        for part in query.split('&')
+        if part and part.split('=', 1)[0] != quote(param, safe='') and part.split('=', 1)[0] != param
+    ]
     return '&'.join(kept + [quote(param, safe='') + '=' + quote(key, safe='')])
 
 
 def refused(status, code, detail):
-    return JSONResponse({'error': {'code': code, 'detail': detail, 'retryable': False}}, status_code=status,
-                        headers={'x-content-type-options': 'nosniff'})
+    return JSONResponse(
+        {'error': {'code': code, 'detail': detail, 'retryable': False}},
+        status_code=status,
+        headers={'x-content-type-options': 'nosniff'},
+    )
 
 
 def install(app, store):
@@ -289,13 +320,28 @@ def install(app, store):
 
     def record(tool_id, credential_id, subject, level, method, path, status, result, detail, began):
         with store.transaction() as c:
-            c.execute('INSERT INTO tool_calls(id,tool_id,credential_id,actor,bot,access_level,method,path,status_code,'
-                      'result,detail,duration_ms,created_at) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?)',
-                      (H.new_id(), tool_id, credential_id, subject, subject[4:] if subject.startswith('bot:') else '',
-                       level or '', method, path, status, result, detail[:300],
-                       int((time.perf_counter() - began) * 1000), H.now()))
+            c.execute(
+                'INSERT INTO tool_calls(id,tool_id,credential_id,actor,bot,access_level,method,path,status_code,'
+                'result,detail,duration_ms,created_at) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?)',
+                (
+                    H.new_id(),
+                    tool_id,
+                    credential_id,
+                    subject,
+                    subject[4:] if subject.startswith('bot:') else '',
+                    level or '',
+                    method,
+                    path,
+                    status,
+                    result,
+                    detail[:300],
+                    int((time.perf_counter() - began) * 1000),
+                    H.now(),
+                ),
+            )
             if credential_id and result == 'sent':
                 from .credentials import record_use
+
                 record_use(c, subject, 'credential.proxied_call', credential_id, {'tool': tool_id}, windowed=True)
 
     def plan(request, tool_id, rest, method):
@@ -310,9 +356,14 @@ def install(app, store):
                 return (401, 'identity', 'Invalid tool token', None), None
             subject = str(claims['s'])
             if not holder_live(c, claims):
-                return (401, 'token_ended', 'This tool token has ended with the run it was made for. '
-                        'A new run gets a new one.', None), None
+                return (
+                    401,
+                    'token_ended',
+                    'This tool token has ended with the run it was made for. A new run gets a new one.',
+                    None,
+                ), None
             from . import api_tools
+
             name = tool['name'] or tool_id
             try:
                 # No level, or no stored key for it: refused with the setting that would allow it (api_tools).
@@ -325,11 +376,21 @@ def install(app, store):
                 return (403, 'tool_address', problem, log), None
             if level == 'read' and credential['access_level'] != 'read' and method not in SAFE:
                 who = api_tools._label(c, subject)
-                return (403, 'forbidden', f"{who}'s level on {name} is Read: only GET calls. Add a read key or set "
-                        "Read and write.", log), None
+                return (
+                    403,
+                    'forbidden',
+                    f"{who}'s level on {name} is Read: only GET calls. Add a read key or set Read and write.",
+                    log,
+                ), None
             key = vault.cipher.decrypt(c, credential)
-            return None, {'tool': dict(tool), 'credential': dict(credential), 'key': key, 'where': where,
-                          'subject': subject, 'level': level}
+            return None, {
+                'tool': dict(tool),
+                'credential': dict(credential),
+                'key': key,
+                'where': where,
+                'subject': subject,
+                'level': level,
+            }
 
     @app.api_route(PREFIX + '{tool_id}/{path:path}', methods=METHODS, include_in_schema=False)
     async def tool_proxy(request: Request, tool_id: str, path: str):
@@ -345,14 +406,26 @@ def install(app, store):
         if refusal:
             status, code, detail, log = refusal
             if log:
-                await loop().run_in_executor(None, record, tool_id, None, log[0], log[1], method, shown, status,
-                                             'refused', detail, began)
+                await loop().run_in_executor(
+                    None, record, tool_id, None, log[0], log[1], method, shown, status, 'refused', detail, began
+                )
             return refused(status, code, detail)
         tool, credential, key = ready['tool'], ready['credential'], ready['key']
         secrets = secrets_of(key, credential.get('username') or '')
-        log = lambda status, result, detail: loop().run_in_executor(  # noqa: E731
-            None, record, tool_id, credential['id'], ready['subject'], ready['level'], method, shown, status, result,
-            scrub_text(detail, secrets), began)
+        log = lambda status, result, detail: loop().run_in_executor(
+            None,
+            record,
+            tool_id,
+            credential['id'],
+            ready['subject'],
+            ready['level'],
+            method,
+            shown,
+            status,
+            result,
+            scrub_text(detail, secrets),
+            began,
+        )
         size = request.headers.get('content-length', '')
         if size.isdigit() and int(size) > MAX_BODY:
             await log(413, 'refused', 'Request body over 25 MB')
@@ -375,22 +448,37 @@ def install(app, store):
         except egress.Blocked as exc:
             await log(None, 'refused', exc.reason)
             return refused(403, 'tool_address', exc.reason)
-        client = httpx.AsyncClient(transport=getattr(app.state, 'tool_proxy_transport', None), timeout=TIMEOUT,
-                                   follow_redirects=False, trust_env=False,
-                                   verify=outbound_tls.context(trust_env=False))
+        client = httpx.AsyncClient(
+            transport=getattr(app.state, 'tool_proxy_transport', None),
+            timeout=TIMEOUT,
+            follow_redirects=False,
+            trust_env=False,
+            verify=outbound_tls.context(trust_env=False),
+        )
         try:
-            upstream = await client.send(client.build_request(
-                method, target, headers=[('Host', host), *outgoing_headers(request, tool, credential, key, ready['where'])],
-                content=b''.join(chunks), extensions={'sni_hostname': sni}), stream=True)
+            upstream = await client.send(
+                client.build_request(
+                    method,
+                    target,
+                    headers=[('Host', host), *outgoing_headers(request, tool, credential, key, ready['where'])],
+                    content=b''.join(chunks),
+                    extensions={'sni_hostname': sni},
+                ),
+                stream=True,
+            )
         except httpx.HTTPError as exc:
             await client.aclose()
             detail = scrub_text(f'{type(exc).__name__}: {exc}', secrets)[:200]
             await log(None, 'failed', detail)
             return refused(502, 'tool_unreachable', f"{tool['name'] or tool_id} did not answer: {detail}")
         await log(upstream.status_code, 'sent', '')
-        headers = [(name, scrub_text(value, secrets)) for name, value in upstream.headers.multi_items()
-                   if name.lower() not in HOP and name.lower() not in RESPONSE_DROP
-                   and not name.lower().startswith(RESPONSE_DROP_PREFIXES)]
+        headers = [
+            (name, scrub_text(value, secrets))
+            for name, value in upstream.headers.multi_items()
+            if name.lower() not in HOP
+            and name.lower() not in RESPONSE_DROP
+            and not name.lower().startswith(RESPONSE_DROP_PREFIXES)
+        ]
         scrubber = Scrubber(secrets)
 
         async def body():
@@ -408,5 +496,7 @@ def install(app, store):
 
         response = StreamingResponse(body(), status_code=upstream.status_code)
         response.raw_headers = [(k.lower().encode('latin-1'), v.encode('latin-1', 'replace')) for k, v in headers] + [
-            (b'x-content-type-options', b'nosniff'), (b'content-security-policy', b"sandbox; default-src 'none'")]
+            (b'x-content-type-options', b'nosniff'),
+            (b'content-security-policy', b"sandbox; default-src 'none'"),
+        ]
         return response
