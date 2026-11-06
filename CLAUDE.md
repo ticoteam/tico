@@ -26,7 +26,8 @@ CHANGELOG.md or GitHub file runs the tests that read it; dependency, conftest, p
 fall back to the full default Python and core browser suites. Draft pull requests run no checks until marked ready for
 review; a skipped run is not a pass. Main has no check run of its own: the queue tests each change before it lands, and
 Release validation tests each candidate. Agents run the tests they touched with `scripts/remote.py` before marking a PR
-ready. A newer push cancels a pull request's superseded run; a queue group is never canceled. Hosted PR runs cannot read
+ready. Before enqueueing, push and run `python3 scripts/remote.py --setup python --cpus 16 -- bash scripts/diff_coverage.sh`:
+the queue ejects a PR whose added backend/ and clients/ statements no test runs. A line opts out only with `# pragma: no cover - <reason>` on that line. A newer push cancels a pull request's superseded run; a queue group is never canceled. Hosted PR runs cannot read
 RunsOn's cache, so they start cold. Python and browser groups are sized from the latest successful Release validation
 run's per-file and per-script timings (collected counts until timings exist) so each VM finishes in about 5 minutes
 (`TICO_CI_JOB_SECONDS`, 300), and an interrupted Spot job is rerun automatically. Browser and system-package caches avoid apt
