@@ -111,7 +111,7 @@ def test_a_pr_naming_its_dev_ticket_links_itself_strictly(api):
     # Another PR naming it does not add a second open PR; a branch name works for another ticket.
     hook(api, 'pull_request', {'action': 'opened', 'pull_request': _branch_pr(11, 'fix/dev-665-again', title='Again')})
     assert set(_prs(api, task['id'])) == {10}
-    other = ticket(api, typ)
+    other = ticket(api, typ, title='Another ticket')
     set_number(api, other, 700)
     hook(api, 'pull_request', {'action': 'opened', 'pull_request': _branch_pr(12, 'fix/dev-700-thing', title='Thing')})
     assert set(_prs(api, other['id'])) == {12}
