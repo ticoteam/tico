@@ -277,8 +277,15 @@ jobs:
         working-directory: app
         run: cargo +1.92.0 clippy --locked --all-targets -- -D warnings
       - if: steps.changed.outputs.run == 'true'
+        name: Python for the updater test (the hub backend it serves from, installed as the Python suites install it)
+        run: |
+          python3 -m venv "$RUNNER_TEMP/venv"
+          "$RUNNER_TEMP/venv/bin/python" -m pip install --disable-pip-version-check --retries 1 --timeout 30 -r backend/requirements-dev.txt
+      - if: steps.changed.outputs.run == 'true'
         name: unit tests
         working-directory: app
+        env:
+          TICO_PYTHON: ${{ runner.temp }}/venv/bin/python
         run: cargo +1.92.0 test --locked
 
   recorder-changes:
