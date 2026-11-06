@@ -215,6 +215,7 @@ async function start(browser, hash, {width = 1440, ready, admin = true} = {}) {
         assert.equal(await page.locator('[data-sk-total]').innerText(), '74', `${tag}: 30-day total`);
         assert.equal(await page.locator('[data-sk-trigger="nested"]').innerText(), '11', `${tag}: by trigger`);
         assert.equal(await page.locator('[data-sk-actors] tr').count(), 2, `${tag}: by who`);
+        assert.equal(await page.locator('[data-sk-actor="b-support"] [data-sk-actor-uses]').innerText(), '46 uses', `${tag}: uses say so`);
         assert.equal(await page.locator('[data-sk-recent] a[href="#/task/T-9"]').count(), 1, `${tag}: a use links its task`);
         assert.deepEqual(await page.locator('[data-sk-coverage]').evaluateAll(r => r.map(x => x.dataset.skCoverage)), ['used', 'unused', 'unknown'], `${tag}: coverage`);
         assert.equal(await page.locator('#skill-versions [data-sk-v]').count(), 2, `${tag}: versions`);

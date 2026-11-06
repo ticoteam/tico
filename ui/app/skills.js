@@ -24,6 +24,7 @@ const skillsWho = a => a?.type !== 'Bot' && a?.id === S.me?.id ? 'You'
 const skillsErr = e => `<p class="err" data-sk-error>${esc(e?.message || String(e))}</p>`;
 const skillsLive = run => SKP && SKP.run === run;
 const skillsN = n => Number(n || 0).toLocaleString();
+const skillsUses = n => `${skillsN(n)} ${n === 1 ? 'use' : 'uses'}`;
 function skillsScreenPill(p, screen) {
   if (p.screen_status === 'screened') {
     const risk = screen?.risk || '', bad = risk === 'high' || screen?.verdict === 'unsafe';
@@ -219,7 +220,7 @@ function skillsUsageHTML(u) {
       <div class="sk-stat"><strong class="tnum">${skillsN(t.people)}</strong><span class="muted">People</span></div>
       <div class="sk-stat"><strong class="tnum">${skillsN(t.bots)}</strong><span class="muted">Bots</span></div></div>
     ${actors.length ? `<h3 class="sk-sub">${u.admin ? 'By who' : 'Mine'}</h3><table class="tt-who-table" data-sk-actors>${actors.map(a => `<tr data-sk-actor="${esc(a.id)}">
-      <td class="tt-who-name">${esc(skillsWho(a))}</td><td class="tnum">${skillsN(a.uses)}</td>
+      <td class="tt-who-name">${esc(skillsWho(a))}</td><td class="tnum tt-used" data-sk-actor-uses>${skillsUses(a.uses)}</td>
       <td class="tt-used muted">${a.last_used_at ? agoSpan(a.last_used_at) : ''}</td></tr>`).join('')}</table>` : ''}
     ${recent.length ? `<h3 class="sk-sub">Recent</h3><table class="tt-log tt-log-short" data-sk-recent><tbody>${recent.map(r => `<tr>
       <td class="tt-log-what"><strong>${esc(skillsWho(r.actor))}</strong>${r.requested_by ? `<span class="muted">for ${esc(skillsWho(r.requested_by))}</span>` : ''}</td>
@@ -231,7 +232,7 @@ function skillsCoverageHTML(installs) {
   if (!installs.length) return '<p class="muted">Not installed.</p>';
   const pill = c => c === 'used' ? '<span class="pill ok">Used</span>' : c === 'unused' ? '<span class="pill waiting">Unused</span>' : '<span class="pill">Unknown</span>';
   return `<table class="tt-who-table">${installs.map(i => `<tr data-sk-coverage="${esc(i.coverage)}"><td class="tt-who-name">${esc(skillsWho(i.target))}</td>
-    <td class="tnum tt-used">${skillsN(i.uses_30d)}</td><td>${pill(i.coverage)}</td></tr>`).join('')}</table>`;
+    <td class="tnum tt-used">${skillsUses(i.uses_30d)}</td><td>${pill(i.coverage)}</td></tr>`).join('')}</table>`;
 }
 async function skillsFiles(name, number, run) {
   const box = $('#skills-root [data-sk-files]'); if (!box) return;
