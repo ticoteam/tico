@@ -65,6 +65,7 @@ CLI_TOOL_ALIASES = {
     "hub_rules_due_list": ("hub_rules_due",), "hub_rules_due_add": ("hub_rules_due_set",),
     "hub_rules_read": ("hub_rules_get", "hub_rules_read"),   # `hub rules read <id>` or, with --from, a document
     "hub_task_child": ("hub_task_child_create",),
+    "hub_task_unfollow": ("hub_task_follow",),    # `hub task unfollow` is hub_task_follow with unfollow
     "hub_automation_show": ("hub_automation_get",), "hub_automation_inbox": ("hub_inbox_send",),
     "hub_repo_tick": ("hub_repo_update",), "hub_repo_untick": ("hub_repo_update",),
     "hub_bot_repos": ("hub_bot_repos_get", "hub_bot_repos_set"),

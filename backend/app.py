@@ -5583,8 +5583,9 @@ def create_app(settings=None):
             return None
         rows = task_followers.listed(c, row)
         known = teammate_access.Known(c, who, auth)
-        if not known.member(tid):
-            rows = [r for r in rows if r["actor"] not in known.strangers]
+        if rows and not known.member(tid):
+            unseen = known.unseen_of(r["actor"] for r in rows)
+            rows = [r for r in rows if r["actor"] not in unseen]
         return rows
 
     def followers_answer(c, who, task_id):
