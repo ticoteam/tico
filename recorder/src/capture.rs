@@ -149,6 +149,7 @@ pub fn sources() -> Result<Vec<String>> {
 /// Off: on a Nov 6 Meet call, starting macOS voice processing on the built-in mic silenced the
 /// mic for Chrome (people could not hear the speaker) and for Recorder's own raw capture.
 /// Transcript-level echo removal still runs; this was only a live-text aid.
+#[cfg(target_os = "macos")]
 const VOICE_PROCESSING: bool = false;
 
 /// Hardware-reference echo cancellation while recording meeting audio, when `VOICE_PROCESSING`

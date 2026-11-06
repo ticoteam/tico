@@ -457,6 +457,10 @@ impl Writer {
     /// Logs an input that delivers only exact zeros for 10 s, and when its signal returns.
     /// Real microphones always carry some noise, so this means the input was muted or seized.
     fn watch_silence(&mut self, samples: &[f32]) {
+        // Meeting audio is legitimately silent while nobody talks; only a mic never is.
+        if self.source.channel != Channel::Microphone || samples.is_empty() {
+            return;
+        }
         let channel = self.source.channel.as_str();
         if samples.iter().any(|sample| *sample != 0.) {
             if let Some(since) = self.silent_since.take()
