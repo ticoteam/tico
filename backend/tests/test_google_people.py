@@ -1,4 +1,4 @@
-"""Settings > Inboxes' team list (GET /api/v2/google/people, backend/google_workspace.py team_statuses): admins only,
+"""Tools' team list (GET /api/v2/google/people, backend/google_workspace.py team_statuses): admins only,
 people and never bots, and each mailbox's state by the same rule the server uses to pick a credential: a live personal
 grant, then the Workspace key's domain, then a Connect Google attempt. Google is never asked (`google_call` replaced);
 the key is a throwaway RSA key and the domain is acme.example."""

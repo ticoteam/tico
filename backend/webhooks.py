@@ -361,8 +361,8 @@ def _publish_only(c, type_, subject, data, actor, only, revision):
     if _is_strategy_bot(actor):
         raise Refused("The Strategy Bot does not send webhooks")
     if H.is_bot(actor):
-        from . import mail_settings
-        if not (mail_settings.stored(c, H.actor_id(actor)) or {}).get("outbound_send"):
+        from .email_sending import sends_on_own
+        if not sends_on_own(c, H.actor_id(actor)):
             raise Refused("This bot may not send outside: its send switch is off")
     name = canonical(type_)
     if not name:
@@ -591,8 +591,8 @@ def may_send(c, who, hook, name):
         return
     if who.role != "bot" or _is_strategy_bot(who.actor):
         raise Problem("forbidden", "Only people and bots with sending switched on send webhooks", 403)
-    from . import mail_settings
-    if not (mail_settings.stored(c, H.actor_id(who.actor)) or {}).get("outbound_send"):
+    from .email_sending import sends_on_own
+    if not sends_on_own(c, H.actor_id(who.actor)):
         raise Problem("forbidden", "Sending is off for this bot; a person turns it on in its mail settings", 403)
     if not subscribed(json.loads(hook["events"]), name):
         raise Problem("forbidden", "That endpoint does not listen for this event", 403)

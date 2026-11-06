@@ -55,6 +55,8 @@ impl Store {
                     deliveries: vec![],
                     speakers: String::new(),
                     speaker_labels: Default::default(),
+                    meeting_speakers: Default::default(),
+                    speaker_names: Default::default(),
                 };
                 self.db()?.execute(
                     "INSERT INTO recordings VALUES(?,?)",

@@ -297,7 +297,8 @@ CREATE TABLE IF NOT EXISTS credentials(
  kind TEXT NOT NULL, env TEXT NOT NULL DEFAULT '', preview TEXT NOT NULL DEFAULT '',
  ciphertext BLOB, nonce BLOB, source TEXT NOT NULL DEFAULT '',
  revision INTEGER NOT NULL DEFAULT 1, created_at TEXT NOT NULL, updated_at TEXT NOT NULL,
- updated_by TEXT NOT NULL, created_by TEXT, member_stored INTEGER NOT NULL DEFAULT 0);
+ updated_by TEXT NOT NULL, created_by TEXT, member_stored INTEGER NOT NULL DEFAULT 0,
+ tool_id TEXT REFERENCES tools(id), access_level TEXT NOT NULL DEFAULT 'read_write', expires_on TEXT);
 -- Person-owned remote MCP credentials use the same vault cipher, with no reveal/grant door.
 CREATE TABLE IF NOT EXISTS granola_connections(
  actor TEXT PRIMARY KEY, id TEXT NOT NULL, email TEXT NOT NULL,
@@ -305,7 +306,7 @@ CREATE TABLE IF NOT EXISTS granola_connections(
 CREATE TABLE IF NOT EXISTS credential_grants(
  id TEXT PRIMARY KEY, credential_id TEXT NOT NULL REFERENCES credentials(id),
  subject TEXT NOT NULL, granted_by TEXT NOT NULL, parent_id TEXT REFERENCES credential_grants(id),
- created_at TEXT NOT NULL, revoked_at TEXT, revoked_by TEXT);
+ created_at TEXT NOT NULL, revoked_at TEXT, revoked_by TEXT, access_level TEXT NOT NULL DEFAULT 'read_write');
 CREATE UNIQUE INDEX IF NOT EXISTS credential_grant_active ON credential_grants(credential_id,subject) WHERE revoked_at IS NULL;
 CREATE TABLE IF NOT EXISTS archives(
  source TEXT PRIMARY KEY, digest TEXT NOT NULL, imported_at TEXT NOT NULL,
@@ -1179,8 +1180,6 @@ class Store:
             _doc_sources.ensure_schema(c)
             from . import bot_tools as _bot_tools
             c.executescript(_bot_tools.SCHEMA)
-            from . import mail_settings as _mail_settings
-            c.executescript(_mail_settings.SCHEMA)
             from . import company_storage as _company_storage
             c.executescript(_company_storage.SCHEMA)
             from . import tico_storage as _tico_storage

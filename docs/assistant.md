@@ -1,11 +1,11 @@
 # The Assistant
 
 Every human has one private DM with the team's assistant (the `coo` bot; you may have renamed it): a personal
-bot that knows how Tico is laid out and does things in it on your behalf. **Ask Tico** opens it from any page: on a
+bot that knows how Tico is laid out and does things in it on your behalf. **Tico Assistant** opens it from any page: on a
 computer it is the sidebar's bottom row, above your account, with Search's icon (⌘K) and the Tico team's **?** at its end; it (or ⌘J / Ctrl+J)
 opens a small panel straight above that row, over the sidebar, and nothing floats over the page. On a phone the Liquid Dot in the
-middle of the tab bar opens it as a sheet. The panel names the page it sees, and a message sent from it carries that
-page, so "this" and "here" mean what you are looking at. The panel is called **Tico Assistant** (or the name your team
+middle of the tab bar (**Assistant**) opens it as a sheet. The panel names the page it sees, and a message sent from it carries that
+page, so "this" and "here" mean what you are looking at. The panel shows the same name (or the name your team
 gave the assistant); its header has the dot, the name and the page it sees. The DM is also a
 page of its own (`#/assistant`): the assistant's name, then the same thread and composer as a bot's Home, with a
 few things to ask while it is empty. The **Assistant** tab, first on your own page (`#/person/<you>`), opens the same
@@ -24,7 +24,7 @@ The Ask panel is only the Assistant. Talking to the people at Tico is a separate
 phone, beside Search in the More drawer), or any link to `#/support`, such as the Assistant's "Message the Tico team"
 reply, opens it ([Support](support.md)). Nothing from the DM goes to the Tico team.
 
-A **peek** is a few words beside the closed dot, just past the sidebar level with the Ask row (above the tab bar on a phone), Tico saying something waits on you:
+A **peek** is a few words beside the closed dot, just past the sidebar level with the Tico Assistant row (above the tab bar on a phone), Tico saying something waits on you:
 "Got a quick question for you", "3 questions are waiting on you", "Need your OK on something". Six words at most,
 never who asked. Tap it and the DM opens at that card; × dismisses it for good, for every item it spoke for. One at a time, none in the first
 few seconds after the page loads or while you are typing, each question at most once a day, and never a sound or a
@@ -290,6 +290,13 @@ when the card is made.
 `hub assistant propose --for human:<id>`. Only the Assistant bot may do this, for that person, at most five cards a day
 per person, and never with an approve step. The card is yours: it runs only on your tap, as you, and says the Assistant
 proposed it. Any other bot, or a person naming someone else, gets `403`.
+
+The same run may send you **one morning message a day**: `hub assistant morning --for human:<id> --body "<text>"` (`POST
+/api/v2/assistant/morning`, `hub_assistant_morning`). It is a plain message in your own Assistant DM, from the
+Assistant, with no card and nothing to confirm: what you can do today to move your goals. The server allows one per
+person per company day (the company's clock, not UTC); a second that day is `409 already_sent_today` and says when the
+next can go. Only the Assistant bot may send it, for an active person; other callers get `403`, and a person who is
+gone or signed out gets `404`.
 
 Any teammate, person or bot, can withdraw a Confirm card that still waits (`hub assistant withdraw <id>`, `POST
 /api/v2/assistant/actions/{aid}/withdraw`, or `hub_assistant_withdraw`; `hub assistant proposals` lists the waiting cards

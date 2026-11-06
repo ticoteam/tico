@@ -23,7 +23,7 @@ from clients import hubcli
 
 HUB = Path(__file__).resolve().parents[2] / "scripts" / "hub"
 ALIASES = {"approvals", "automations", "bots", "rule", "tasks"}
-SUBCOMMANDS = ["whoami", "alerts", "inbound", "connections", "letter", "mail", "email", "company-page", "audiences", "editions", "readers", "meeting", "message", "conversation", "thread", "question", "note", "feedback", "file", "page", "card", "pin", "doc", "chat", "assistant", "tag", "task", "replay", "goal", "kpi",
+SUBCOMMANDS = ["whoami", "alerts", "inbound", "letter", "mail", "email", "company-page", "audiences", "editions", "readers", "meeting", "message", "conversation", "thread", "question", "note", "feedback", "file", "page", "card", "pin", "doc", "chat", "assistant", "tag", "task", "replay", "goal", "kpi",
                "proposal", "rules", "strategy", "brand", "growth", "lens", "market", "listening", "tool", "automation", "audit", "event-types", "trigger", "relay", "call", "sleep", "notice", "settings", "release", "approval", "webhook", "pipeline", "brief", "mcp", "origin", "needs-you", "run", "team", "seat", "org", "health",
                "changelog", "update", "grokbot", "external", "calendar", "sql", "db", "classify", "gateway", "decision", "template", "bot", "repo", "skill", "agent", "human", "group", "api", "computer",
                "credential", "slack", "support", "finance", "task-manager", "maintenance", "roadmap", "service-key"]
@@ -1267,10 +1267,12 @@ def test_the_retired_gtm_and_growth_idea_lines_run_their_new_commands_with_a_not
                        "--label", "channel:referral", "--label", "channel:door"]
     assert '"hub growth idea create" is now "hub task create --type idea"' in capsys.readouterr().err
     assert hubcli.main(["growth", "idea", "list", "--status", "testing", "--channel", "referral"]) == 0
-    assert ran[-1] == ["task", "list", "--type", "idea", "--step", "Testing", "--label", "channel:referral"]
+    assert ran[-1] == ["task", "list", "--type", "idea", "--step", "Live", "--label", "channel:referral"]
     assert hubcli.main(["growth", "idea", "verdict", "t1", "--status", "won", "--result", "CPA 31",
                         "--learning", "Video works"]) == 0
-    assert ran[-1] == ["task", "update", "t1", "--step", "Won", "--note", "Result: CPA 31\nLearning: Video works"]
+    assert ran[-1] == ["task", "update", "t1", "--step", "Succeeded", "--note", "Result: CPA 31\nLearning: Video works"]
+    assert hubcli.main(["growth", "idea", "verdict", "t1", "--status", "lost", "--result", "CPA 80"]) == 0
+    assert ran[-1] == ["task", "update", "t1", "--step", "Failed", "--note", "Result: CPA 80"]
     assert hubcli.main(["growth", "idea", "verdict", "t1", "--status", "paused", "--result", "CPA 31 so far"]) == 0
     assert ran[-1] == ["task", "update", "t1", "--step", "Paused", "--note", "Result: CPA 31 so far"]
     assert hubcli.main(["growth", "idea", "verdict", "t1", "--status", "paused"]) == 0
@@ -1428,17 +1430,17 @@ def test_assistant_proposals_lists_the_callers_waiting_cards(monkeypatch):
     client.get.assert_called_with("assistant/proposals")
 
 
-def test_connection_list_reaches_the_connections_route_with_its_paging(monkeypatch):
-    """`hub connections list --limit 5 --cursor c2` runs `hub_connections_list`: GET connections with the page."""
+def test_tool_index_reaches_the_tool_index_route_with_its_paging(monkeypatch):
+    """`hub tool index --limit 5 --cursor c2` runs `hub_tool_index`: GET tool-index with the page."""
     from clients import remotecli
     from unittest.mock import Mock
     client = Mock()
     client.get.side_effect = lambda path, **kw: {"actor": "bot:ops"} if path == "me" else {"items": [], "next": None}
     monkeypatch.setenv("HUB_API_URL", "https://api.example.invalid")
     monkeypatch.setattr(remotecli, "Client", lambda *a, **kw: client)
-    remotecli.run(hubcli.parser().parse_args(["connections", "list", "--limit", "5", "--cursor", "c2"]))
+    remotecli.run(hubcli.parser().parse_args(["tool", "index", "--limit", "5", "--cursor", "c2"]))
     from unittest.mock import call
-    assert call("connections", limit=5, cursor="c2") in client.get.call_args_list
+    assert call("tool-index", limit=5, cursor="c2") in client.get.call_args_list
 
 
 def test_task_check_back_reaches_the_same_api_from_cli_and_mcp(monkeypatch):
@@ -1482,6 +1484,20 @@ def test_a_propose_without_for_sends_no_recipient(monkeypatch):
     monkeypatch.setattr(remotecli, "Client", lambda *a, **kw: client)
     remotecli.run(hubcli.parser().parse_args(["assistant", "propose", "--summary", "Archive", "--path", "/api/v2/bots/ops/archive"]))
     assert "for" not in client.post.call_args.args[1]
+
+
+def test_the_morning_message_posts_its_person_and_body_to_the_assistant(monkeypatch):
+    """`hub assistant morning --for human:<id> --body <text>` reaches the server as assistant/morning with both fields."""
+    from clients import hubcli, remotecli
+    client = mock.Mock()
+    client.post.return_value = {"message_id": "m1"}
+    monkeypatch.setenv("HUB_API_URL", "https://api.example.invalid")
+    monkeypatch.setattr(remotecli, "Client", lambda *a, **kw: client)
+    args = hubcli.parser().parse_args(["assistant", "morning", "--for", "human:ana", "--body", "Hi"])
+    assert args.fn == "assistant morning"
+    remotecli.run(args)
+    assert client.post.call_args.args[0] == "assistant/morning"
+    assert client.post.call_args.args[1] == {"for": "human:ana", "body": "Hi"}
 
 
 def test_approval_list_is_the_pending_default_and_the_mcp_tool_matches(monkeypatch):

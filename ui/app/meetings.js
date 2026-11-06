@@ -261,7 +261,7 @@ function meetTile(state, source) {
   const st = mine || (known ? meetSourceState(row, source.id) : {key: '', word: ''});
   const when = mine ? (mine.when ? ago(mine.when) : '') : st.key === 'on' ? ago(row.last_import || row.last_succeeded_at) : '';
   const label = `${source.name}: ${st.word || 'Connect'}${when ? (mine ? ', synced ' : ', last import ') + when : ''}`;
-  const attrs = source.id === 'close' ? `href="${INTEGRATIONS}/close-crm"` : `type="button" data-msrc="${esc(source.id)}"${S.me?.role === 'owner' || account ? '' : ' disabled title="The owner connects sources"'}`;
+  const attrs = source.id === 'close' ? `href="#/tools/close-crm"` : `type="button" data-msrc="${esc(source.id)}"${S.me?.role === 'owner' || account ? '' : ' disabled title="The owner connects sources"'}`;
   return `<${source.id === 'close' ? 'a' : 'button'} class="meet-tile big" data-state="${st.key}" ${attrs} aria-label="${esc(label)}">
       ${meetLogo(source.id, 40)}<span class="mt-text"><b>${esc(source.name)}</b><span class="mt-status">${st.key && st.key !== 'off' ? '<i class="dot" aria-hidden="true"></i>' : ''}${esc(st.word)}${when ? ` <span class="mt-when">${esc(when)}</span>` : ''}</span></span></${source.id === 'close' ? 'a' : 'button'}>`;
 }

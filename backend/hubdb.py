@@ -7862,10 +7862,11 @@ def _task_close_party(conn, actor, row):
 
 
 def _marketing_outcome(conn, actor, row, step, type=None):
-    """Whether the bot that owns a marketing idea finishes it on an outcome step (Won, Lost, Inconclusive, Dropped;
-    backend/marketing_tasks.py). Only the owner: its managers inherit no close from it (_task_close_party), and no
-    other bot closes it. The board it lands on is the marketing type too: a move to another board (`type`) is not an
-    outcome, whatever its step is called. The requester is told of the close as it is for any close."""
+    """Whether the bot that owns a marketing idea finishes it on an outcome step (Succeeded, Failed, Inconclusive,
+    Dropped; backend/marketing_tasks.py, matched by step id). Only the owner: its managers inherit no close from it
+    (_task_close_party), and no other bot closes it. The board it lands on is the marketing type too: a move to another
+    board (`type`) is not an outcome, whatever its step is called. The requester is told of the close as it is for any
+    close."""
     from . import marketing_tasks as MT
     if not step or not is_bot(actor) or actor != row["owner_id"]:
         return False

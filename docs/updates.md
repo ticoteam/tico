@@ -8,7 +8,7 @@ updated never drags its computers ahead of it.
 
 ## What changed since your last look
 
-The sidebar's version row (above Ask Tico, one row at a time) reads **Updated to v…** while product changes you have not
+The sidebar's version row (above Tico Assistant, one row at a time) reads **Updated to v…** while product changes you have not
 acknowledged are unread, and **Update to v…** while a newer release is on offer (it then wins the row; its pop-up links
 **What's new**). Clicking **Updated to** opens **What's new**, which shows the product changes you have not acknowledged; **Changelog**
 in the account menu lists the same changes. **Since last look** includes every unread release and team announcement;

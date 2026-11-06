@@ -1,11 +1,11 @@
-// Library › Tools (ui/app/redesign-library.js) against fixtures/redesign-tools.json (the Acme example, shaped as GET
+// Tools › Keys (ui/app/redesign-library.js) against fixtures/redesign-tools.json (the Acme example, shaped as GET
 // /api/v2/tools, /api/v2/tools/{service}, /api/v2/credentials and /api/v2/groups answer): one row per tool with its
 // kind, a red dot when it has an issue and how many teammates have it, grouped In use / Available / Credentials /
 // Removed; search, who has access (a bot, a person, or a team with the teams under it) and Issues narrow the list and
 // ride in the address. A row opens the tool: its issues, who has it (each with what they may change there), its
 // credentials (set or not, when a bot last used it, Rotate / Access / Add), then the page, its queries and learnings.
 // A credential no tool names has its own page. The old addresses (#/library/connections/<tool>, #/integrations, #/credentials)
-// lead here. A member who cannot open the vault never reads it. No secret value is ever on the page.
+// lead to Tools. A member who cannot open the vault never reads it. No secret value is ever on the page.
 // Phone first (390×844), then a computer. TICO_UI_SHOTS=<dir> saves screenshots.
 const {chromium} = require('playwright');
 const assert = require('node:assert/strict');
@@ -18,7 +18,7 @@ const fixture = name => JSON.parse(fs.readFileSync(path.join(__dirname, 'fixture
 const FX = fixture('redesign-tools.json');
 const roster = fixture('redesign-roster.json');
 const PHONE = {width: 390, height: 844}, DESKTOP = {width: 1440, height: 900};
-const LIST = '#/library/tools';
+const LIST = '#/tools/keys';
 const SECRET = 'ghp-secret-value-5c4b3a';
 const OWNER = {id: 'ana', name: 'Ana Silva', email: 'ana@acme.example', role: 'owner', company_role: 'owner', cloud: true, credential_access: true, bot_admin: true};
 const MEMBER = {id: 'cara', name: 'Cara Diaz', email: 'cara@acme.example', role: 'human', company_role: 'member', cloud: true, credential_access: false};
@@ -109,7 +109,7 @@ const noSecret = async (page, tag) => assert.ok(!(await page.content()).includes
       assert.deepEqual(await rows(page), ROWS, tag + ': one row each: kind, issue dot, how many have it');
       assert.deepEqual(await page.locator('.lc-gh').allInnerTexts(), ['IN USE\n3', 'AVAILABLE\n3', 'CREDENTIALS\n1', 'REMOVED\n1'], tag + ': grouped');
       assert.equal(await page.locator('#side a[data-nav="tools"].cur').count(), 1, tag + ': Tools is current');
-      assert.equal(await page.locator('#side a[data-nav="tools"]').innerText(), 'Tools', tag + ': the nav says Tools');
+      assert.match(await page.locator('#side a[data-nav="tools"]').innerText(), /^(api\s*)?Tools$/, tag + ': the nav says Tools');
       assert.equal(await page.locator('#account-menu [href="#/integrations"]').count(), 0, tag + ': no second Tools in the account menu');
       assert.equal(await page.locator('.rd-help').count(), 1, tag + ': one help bubble');
       assert.equal(await page.locator('.lc-pane').isVisible(), false, tag + ': the list alone');
@@ -161,7 +161,7 @@ const noSecret = async (page, tag) => assert.ok(!(await page.content()).includes
       assert.deepEqual(await page.locator('.lc-creds .lc-acts button').allInnerTexts(), ['Rotate', 'Access', 'Reveal'], tag + ': the vault\'s actions');
       assert.equal(await page.locator('[data-learning-count]').innerText(), '2', tag + ': the learnings counted');
       assert.equal(await page.locator('#int-learn-add').count(), 1, tag + ': a learning can be added');
-      assert.equal(await page.getAttribute('#int-body a[href^="#/"]', 'href'), LIST + '/postgres', tag + ': a sibling page stays in Library');
+      assert.equal(await page.getAttribute('#int-body a[href^="#/"]', 'href'), LIST + '/postgres', tag + ': a sibling page stays in Keys');
       assert.equal(await sideways(page), false, tag + ': the page fits');
       await shot(page, 'phone-tool');
 
@@ -262,8 +262,8 @@ const noSecret = async (page, tag) => assert.ok(!(await page.content()).includes
       await page.close();
     }
 
-    // The old addresses lead here: Connections, the old Tools page (with its tool), the old Credentials page.
-    for (const [from, want] of [['#/library/connections/postgres', LIST + '/postgres'], ['#/integrations/postgres', LIST + '/postgres'],
+    // The old addresses lead to Tools: Connections and the old Tools page to the tool's own page, the old Credentials page here.
+    for (const [from, want] of [['#/library/connections/postgres', '#/tools/postgres'], ['#/integrations/postgres', '#/tools/postgres'],
                                 ['#/credentials', LIST + '/credentials/c3']]) {
       const {page, seen} = await open(browser, {viewport: DESKTOP, hash: from});
       assert.ok(await hashSoon(page, want), `${from} leads to ${want}`);

@@ -85,7 +85,8 @@ def _s(description, **extra):
 
 
 
-TASK_ID = {"type": "string", "description": "Task id: the full id, or its first 8 or more characters (`short_id` in hub_task_list)"}
+TASK_ID = {"type": "string",
+           "description": "Task id: the full id, or 8+ leading characters (`short_id` in hub_task_list)"}
 # How a send reaches its bot (backend/delivery.py), the same words on every send.
 DELIVERY = {"type": "string", "enum": ["steer", "queue", "defer"],
             "description": "To a bot: steer goes into its running turn now (right after it if its harness can't "
@@ -112,7 +113,7 @@ def tool(name, description, properties, required=(), *, writes=False, local=Fals
         schema["required"] = list(required)
     if writes:
         schema["properties"]["operation_id"] = _s(
-            "A stable id for this write so a retried call lands once. " +
+            "Stable id so a retry lands once. " +
             ("This tool requires the id." if "operation_id" in schema.get("required", []) else
              "Omit for a fresh id."))
 
@@ -504,8 +505,8 @@ def ask_wait(api, pending, wait, args):
 
 
 # The Assistant, citing the person's message for something they asked for (`_asked`).
-ASKED = _s("Assistant: the person asked for exactly this in their own Assistant chat: `turn` (their message that started "
-           "this run) or that message's id. Leave it out when they did not clearly ask, and propose instead")
+ASKED = _s("Assistant only: the person asked for this in their Assistant chat: `turn` (the message that started "
+           "this run) or its id. Omit unless they clearly asked; propose instead")
 
 
 @tool("hub_question_answer", "Answer a question another bot asked you. The Assistant answers a bot's question to its "
@@ -1087,10 +1088,9 @@ BRIEF_OLD = {"type": "boolean", "description": "Older name for brief"}
        "check_back_note": _s("What result or handoff to inspect, at most 500 characters"),
        "due": _s("ISO-8601 date-time with timezone"),
        "labels": {"type": "array", "items": {"type": "string"}, "description": "Replace the labels"},
-       "waiting_on": _s("With status waiting: the person you need (their id). The note is your ask to them: one or two "
-                        "plain sentences saying what you need and what happens after, at most 40 words, no ids, hashes, "
-                        "file paths, s3:// links or tool names (\"PR #1555\" is fine; refused otherwise), e.g. \"Approve the video tool trial "
-                        "for Thursday? If yes, I'll send the invite.\" It becomes one small task for them; this task "
+       "waiting_on": _s("With status waiting: the person you need (their id). The note is your ask to them, under the "
+                        "same rules as hub_task_create's body (its first paragraph). It becomes one small task for "
+                        "them; this task "
                         "stays yours, blocked on it, and opens again with their answer. Or bot:<slug>: an active team bot "
                         "owning the first open linked blocked_by task. Link that prerequisite with hub_task_relate first; "
                         "the note is then the reason displayed beside the bot. The existing relation holds the work and "
@@ -1439,7 +1439,7 @@ def task_follow(api, args):
       "related (they belong together, the default), duplicate_of, follow_up (it was split off or followed "
       "up from task). `remove` takes the relation off. The reply's `readback` says what was stored, both ends "
       "(\"#237 waits for #233\" / \"#233 blocks #237\"): check it before reporting the link as fixed.",
-      {"id": TASK_ID, "task": {**TASK_ID, "description": "The other task: its id or first 8 or more characters"},
+      {"id": TASK_ID, "task": {**TASK_ID, "description": "The other task: its id or 8+ leading characters"},
        "kind": {"type": "string", "enum": ["parent", "blocks", "blocked_by", "related", "duplicate_of", "follow_up"], "default": "related"},
        "remove": {"type": "boolean", "default": False}},
       required=("id", "task"), writes=True)
@@ -4075,19 +4075,12 @@ def email_cancel(api, args):
     return api.post(f"email/sends/{quote(str(args['id']), safe='')}/cancel", {}, key=_key(args))
 
 
-@tool("hub_bot_mail", "Show, or set, whether a bot sends mail without a per-message approval and its forward targets. "
-      "Only a person who manages the bot sets it, as themselves; a bot, BotOps included, is refused. `outbound_send` and "
-      "`forward_to` in bot.yaml are only a request: this setting decides (docs/mail.md, \"Turning sending on\").",
-      {"slug": _s("The bot"), "outbound_send": {"type": "boolean", "description": "Send without approval: on or off"},
-       "forward_to": _s("Comma list of forward addresses; an empty string clears the list"),
-       "from_request": {"type": "boolean", "description": "Take what the bot's bot.yaml asks, as its computer reported it"}},
+@tool("hub_bot_mail", "Show or set whether a bot sends mail on its own or asks first. Only a person who manages the "
+      "bot sets it; bots are refused. Full policy: hub_email_policy.",
+      {"slug": _s("The bot"), "outbound_send": {"type": "boolean", "description": "On their own: on or off"}},
       required=("slug",), writes=True)
 def bot_mail(api, args):
     body = {k: args[k] for k in ("outbound_send",) if args.get(k) is not None}
-    if args.get("forward_to") is not None:
-        body["forward_to"] = [a.strip() for a in str(args["forward_to"]).replace(";", ",").split(",") if a.strip()]
-    if args.get("from_request"):
-        body["from_request"] = True
     if not body:
         return api.get(f"bots/{args['slug']}/mail-settings")
     return api.post(f"bots/{args['slug']}/mail-settings", body, key=_key(args))
@@ -4292,7 +4285,7 @@ def _asked(api, args):
     return _Requester(api.api if isinstance(api, _Requester) else api, args["on_behalf_of"])
 
 
-ON_BEHALF_OF = _s("BotOps, following through on a person's request in a run something else started (a daily update, "
+ON_BEHALF_OF = _s("BotOps, following a person's request in a run something else started (a daily update, "
                   "a notice): the id of the open task they asked you for. Default: the request that started this run")
 
 
@@ -6290,6 +6283,15 @@ def assistant_propose(api, args):
     return api.post("assistant/actions", sent, key=_key(args))
 
 
+@tool("hub_assistant_morning", "The Assistant's one morning message to a person's Assistant chat, from its background "
+      "run only (once a company day).",
+      {"for_person": _s("The person (human:<id>) whose Assistant chat gets it"),
+       "body": _s("The message, in Markdown, at most 2000 characters")},
+      required=("for_person", "body"), writes=True)
+def assistant_morning(api, args):
+    return api.post("assistant/morning", {"for": args["for_person"], "body": args["body"]}, key=_key(args))
+
+
 @tool("hub_assistant_withdraw", "Take back a Confirm card that still waits for the person (its id from "
       "hub_assistant_proposals): it is marked withdrawn and never runs, and the card owner's chat says who withdrew it, "
       "with the reason if you give one. Any teammate may withdraw; only the card's owner can confirm it.",
@@ -6857,7 +6859,7 @@ def needs_you_show(api, args):
       "Answers who made it, its cause (the automation that opened it, the org rule that asked for it, the parent task, or "
       "the bot that filed it), how many items that cause made this week and how many are still open, and up to three "
       "ready-to-run commands that would stop the source. Read-only; a ref the person cannot read is not found.",
-      {"ref": _s("A task id (or its first 8 or more characters), a message id (a bot's question) or an approval id")},
+      {"ref": _s("A task id (or 8+ leading characters), a message id (a bot's question) or an approval id")},
       required=("ref",))
 def origin_show(api, args):
     return api.get("origins/" + args["ref"])
@@ -7104,14 +7106,35 @@ def inbound_wait(api,args):
     return api.post('inbound/wait',body)
 
 
-# ----------------------------------------------------------------------------- connections (backend/connections.py)
-@tool('hub_connections_list','Every connection you may see: Slack, GitHub, mail bots, Tico addresses and numbers, meeting '
-      'importers, incoming and outgoing webhooks, physical mail and Listening. Each row: name, status, scope, who reads '
-      'it, its bots and where to configure it. Follow next with cursor.',
-      {'cursor':_s('The previous page\'s next'),'limit':{'type':'integer','minimum':1,'maximum':100}})
-def connections_list(api,args):
+# ----------------------------------------------------------------------------- tool index (backend/api_tools.py)
+@tool('hub_tool_index','The Tools you may see (API tools, mailboxes, numbers, Slack, GitHub, webhooks...): kind, '
+      'status, way, who can use it, needs you. Page with cursor.',
+      {'cursor':_s('The previous page\'s next'),'limit':{'type':'integer','minimum':1,'maximum':500}})
+def tool_index(api,args):
     page = dict(limit=args.get('limit'), cursor=args.get('cursor'))
-    return _as_person(api).get('connections', **{k: v for k, v in page.items() if v is not None})
+    return _as_person(api).get('tool-index', **{k: v for k, v in page.items() if v is not None})
+
+
+@tool('hub_tool_check','Check an API tool\'s keys now: Working, Key rejected or Check failed, per key.',
+      {'id':_s('Its hub_tool_index row id, without api:')}, required=('id',))
+def tool_check(api,args):
+    return _as_person(api).post('api-tools/'+quote(str(args['id']).removeprefix('api:'),safe='')+'/check',{})
+
+
+@tool('hub_tool_call','Call a proxied API tool: METHOD and vendor API path, through the Tico proxy (it adds the key '
+      'and logs the call). tool: the id in TICO_TOOL_<ID>_URL. Returns {status, content_type, body}.',
+      {'tool':_s('The API tool id, e.g. close-crm'),
+       'method':{'type':'string','enum':['GET','HEAD','OPTIONS','POST','PUT','PATCH','DELETE']},
+       'path':_s('The vendor API path, e.g. /api/v1/me/'),
+       'data':{'description':'A JSON body'},
+       'query':{'type':'array','items':{'type':'string'},'description':'Query parameters, each key=value'}},
+      required=('tool','method','path'), local=True)
+def tool_call(api,args):
+    from clients import tool_call as T
+    try:
+        return T.call(args['tool'], args['method'], args['path'], args.get('data'), args.get('query') or ())
+    except T.CallError as exc:
+        return {'error': str(exc)}
 
 
 # ----------------------------------------------------------------------------- letters out (backend/letters.py)
@@ -7220,7 +7243,7 @@ def _register_email_organize(action):
 
     @tool('hub_email_' + action, 'Organize live Gmail: ' + action.replace('_', ' ') +
           '. Supply ids or query, up to 500 messages. Needs your organize access and the company switch. '
-          'Never deletes or trashes. Returns count, ids and the inverse action for undo.',
+          'Never deletes or trashes. Returns count, ids and the undo action.',
           properties, required=required, writes=True)
     def organize_email(api, args):
         body = {k: args[k] for k in ('mailbox', 'query', 'limit', 'label') if args.get(k) is not None}
@@ -7989,6 +8012,9 @@ AUDIENCE = {
     # The Assistant bot's own background run (a routine, kind `bot`) proposes a card for its person too; the server admits
     # only the Assistant bot, and only with `for` naming an active person (backend/app.py propose).
     "hub_assistant_propose": ("assistant", "bot"), "hub_approval_read_back": ("assistant",),
+    # The morning message: the server admits only the Assistant bot's background run, once a company day per person
+    # (backend/assistant.py morning). The Assistant's routine calls it, so its listing carries it too.
+    "hub_assistant_morning": ("assistant", "bot"),
     # Any teammate may withdraw a waiting card or find one (backend/assistant.py teammate); confirming stays the owner's.
     "hub_assistant_withdraw": KINDS, "hub_assistant_proposals": KINDS,
     # A bot's add is a suggestion; the Assistant's is an org rule the person asked for in their own chat, citing their words.
@@ -8066,7 +8092,9 @@ ASSISTANT_HIDDEN = frozenset({
     "hub_agent_pair_approve", "hub_agent_pair_decline", "hub_call_token",
     "hub_sql", "hub_support_file", "hub_support_report", "hub_support_send", "hub_trigger_sign", "hub_message_redact",
     "hub_task_followers",   # task show carries followers
+    "hub_tool_call",
     "hub_task_readers_list",  # hub_task_show has the readers; the Assistant's listing is near its size cliff
+    "hub_tool_check",         # hub_tool_index has each tool's status; Check now is on the tool's page. Same cliff.
 })
 
 

@@ -238,8 +238,8 @@
         ? `<span class="bt-problem">${esc(tool.problem)}</span>`
         : `${statusPill(tool)}${shownDetail(tool) ? ` <span class="muted">${esc(shownDetail(tool))}</span>` : ''}`;
       rows.push(['Status', status]);
-      // Who else has it and its credentials live in Library › Tools (ui/app/redesign-library.js).
-      const open = tool.service ? `<a class="bt-open" href="#/library/tools/${encodeURIComponent(tool.service)}?who=bot:${encodeURIComponent(slug)}">Open in Tools</a>` : '';
+      // Who else has it and its credentials live in Tools (ui/app/redesign-library.js).
+      const open = tool.service ? `<a class="bt-open" href="#/tools/${encodeURIComponent(tool.service)}">Open in Tools</a>` : '';
       return `<div class="bt-body"><dl>${rows.map(([k, v]) => `<dt>${esc(k)}</dt><dd>${v}</dd>`).join('')}</dl>${open}</div>`;
     }
     // The line's key values: the model and effort for the model, access for a repository, otherwise who it acts

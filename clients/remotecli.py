@@ -249,7 +249,7 @@ def run(args, who=None):
         return via_tool(client,args)
     if args.cmd == "rules":
         return via_tool(client, _rules_args(args))
-    if args.cmd in ("mail", "email", "letter", "connections", "alerts"):
+    if args.cmd in ("mail", "email", "letter", "alerts") or fn in ("tool index", "tool check"):
         return via_tool(client, args)
     if args.cmd == "maintenance":
         return via_tool(client, args)
@@ -436,7 +436,7 @@ def run(args, who=None):
         return hubtools.BY_NAME[tool_name(fn)]["fn"](client, fields)
     if args.cmd == "assistant":
         from clients import hubtools
-        if args.sub in ("read", "send", "learn", "learned", "withdraw", "proposals", "change"):
+        if args.sub in ("read", "send", "learn", "learned", "withdraw", "proposals", "change", "morning"):
             return via_tool(client, args)
         try:
             body = json.loads(args.body or "{}")

@@ -53,7 +53,7 @@ grid is one column.
 | Growth funnel | The five funnel stages' KPIs, their conversion, and the North Star | none |
 | Growth channels | Each channel's new customers, CAC and LTV:CAC for the month, with its open tests | count (1 to 20) |
 | Growth retention | Cohort retention at 30, 90 and 180 days | months (3 to 12) |
-| Growth board | Open marketing tests by stage: Testing, Scaling, Idea | count per lane (1 to 5) |
+| Growth board | Open marketing tests by stage: Live, Working, In development, On deck | count per lane (1 to 5) |
 
 The growth cards go on the Growth page only; a growth card at any other place is refused.
 

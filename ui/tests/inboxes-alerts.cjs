@@ -56,7 +56,7 @@ const {unrouted} = require('./support/routes.cjs');
       let host = document.querySelector('#alerts-test-host');
       if (!host) { document.querySelector('#main').innerHTML = '<div id="alerts-test-host"></div>'; host = document.querySelector('#alerts-test-host'); }
       window.ALERT_CTX = {admin, me: S.me, live: () => true};
-      await INBOX_SETTINGS.find(s => s.key === 'texts-alerts').render(host, window.ALERT_CTX);
+      await inboxesAlerts(host, window.ALERT_CTX);
     }, admin);
     await draw(true);
     const card = page.locator('#inboxes-alerts');

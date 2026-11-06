@@ -222,7 +222,7 @@ async function navigation(browser) {
     assert.equal(await page.locator('#settings-tasks').isVisible(), true, `${alias} opens Tasks`);
   }
   for (const alias of ['credentials', 'cloud']) {
-    assert.equal(await page.evaluate(alias => { settingsShow(alias); return location.hash; }, alias), '#/integrations');
+    assert.equal(await page.evaluate(alias => { settingsShow(alias); return location.hash; }, alias), alias === 'credentials' ? '#/tools/keys?show=credentials' : '#/tools');
   }
   assert.deepEqual(errors, []);
   await page.close();

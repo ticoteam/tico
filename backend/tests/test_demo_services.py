@@ -120,9 +120,9 @@ def test_company_subscription_is_given_to_the_macbook(built):
 
 def test_github_and_slack_show_as_connected(built):
     with as_ana(built) as api:
-        rows = {row["kind"]: row for row in api.get("/api/v2/connections").json()["connections"]}
-        assert rows["github"]["status"] == "on"
-        assert rows["slack"]["status"] == "on"
+        rows = {row["kind"]: row for row in api.get("/api/v2/tool-index").json()["rows"]}
+        assert rows["github"]["status"] == {"tone": "ok", "text": "On"}
+        assert rows["slack"]["status"] == {"tone": "ok", "text": "On"}
 
 
 def test_bots_declare_their_mcp_tools_as_ready(built):

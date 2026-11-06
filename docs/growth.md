@@ -38,7 +38,7 @@ has one for the figures that carry back (retention, LTV, LTV:CAC), saying which 
 | Funnel | The five stages' KPIs, each reading (as of the picked month's end), conversion from the stage before, and the North Star | none |
 | Channels | Each channel's new customers and CAC for the month, LTV:CAC, six months of new customers, and up to three open tests | `count` (1 to 20, 10 by default) |
 | Retention | The newest cohort months' share kept at 30, 90 and 180 days | `months` (3 to 12, 6 by default) |
-| Growth board | Open tests in lanes: Testing, Scaling, Idea; each lane's count and its newest cards | `count` per lane (1 to 5, 3 by default) |
+| Growth board | Open tests in lanes: Live, Working, In development, On deck; each lane's count and its newest cards | `count` per lane (1 to 5, 3 by default) |
 
 Growth cards go on the Growth page only: a Number pinned to the Dashboard is refused. Any other card (a KPI, tasks, pages)
 may go on the Growth page as on any place.
@@ -92,8 +92,9 @@ for. The numbers are entered from them each week; the rows stay in those systems
 
 Marketing ideas are tasks of type **Marketing**. They live on the Tasks page, on its Marketing board.
 
-- **Steps.** Idea, then Testing, then Scaling. Paused sits to one side. A task finishes on Won, Lost, Inconclusive or
-  Dropped.
+- **Steps.** On deck, then In development, then Live (a test running), then Working (a test that worked, kept running).
+  Paused sits to one side. A task finishes on Succeeded, Failed, Inconclusive or Dropped. A Live task with no update for
+  two weeks is nudged to its owning bot by the Head of Marketing's weekly meeting; a person is never nudged for it.
 - **Channel.** A `channel:<slug>` label on the task or its subtask. The department is the task's team.
 - **Closing.** When a test ends, the task moves to its outcome, with a comment saying what was learned and the numbers
   behind it. A follow-up is a new Marketing task, linked to the one it follows.

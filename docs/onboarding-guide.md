@@ -51,8 +51,10 @@ If a bot gets it wrong twice, change its instructions, not your message: ask Bot
 
 ## Sending and access
 
-A bot drafts messages to outsiders until a person who manages it turns mail sending on in Tico (bot.yaml's `outbound_send` only asks). Once it is on, it sends
-within the requested work, its Instructions and granted Tools, with no approval for each message.
+Sending is set in Tico: a person who manages the bot picks **On their own**, **Ask first** or **Never** (Settings → Bots →
+<bot> → Email sending, or the company or inbox sending policy). Every send goes through Tico's send queue with an undo
+window. Under Ask first a person approves each one in Tico; under On their own the bot sends within the requested
+work, its Instructions and granted Tools, with no approval for each message.
 You may explicitly ask it to bring particular drafts to you for review.
 
 A Slack post needs the channel to allow posting, and the QA Engineer needs the corresponding GitHub write access
