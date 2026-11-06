@@ -11,6 +11,8 @@ human nobody is above follows as an ordinary row with their reports under them. 
 Librarian, the Strategy Bot) stay out of the chart and the Goals tree. Ask opens the Assistant from any page, and the Assistant hands BotOps what needs it;
 the Librarian is reached from Docs and Market, the Strategy Bot from its panel beside the Strategy tabs. Settings > Bots lists all four.
 
+Your unread messages in a one-to-one DM with a teammate show as a count on that teammate's row, for people as well as bots.
+
 A paused bot shows a pause icon and **Paused** badge in **Settings > Bots** and beside its Team chart node. The whole chart node is dimmed. Click the badge or node to open the bot's page.
 When bots' names start with the same words (the "Head of" in **Head of Product** and **Head of Sales**), those words are
 muted, and on a narrow sidebar they drop out whole so each row keeps the part that tells it apart. Hover a bot to see its
