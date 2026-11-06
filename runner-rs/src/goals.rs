@@ -139,9 +139,14 @@ pub fn repo_commands(root: &Path) -> Vec<Value> {
 
 /// The harness's own commands first, then the repository's, without repeating a name.
 pub fn with_repo_commands(builtins: &[Value], root: &Path) -> Vec<Value> {
-    let mut merged = builtins.to_vec();
-    let mut seen: std::collections::HashSet<String> = builtins.iter().map(|b| text_of(&b["name"])).collect();
-    for item in repo_commands(root) {
+    merge_commands(builtins, repo_commands(root))
+}
+
+/// `base`, then each of `more` whose name it does not have yet, up to MAX_COMMANDS.
+pub fn merge_commands(base: &[Value], more: Vec<Value>) -> Vec<Value> {
+    let mut merged = base.to_vec();
+    let mut seen: std::collections::HashSet<String> = base.iter().map(|b| text_of(&b["name"])).collect();
+    for item in more {
         let name = text_of(&item["name"]);
         if !seen.contains(&name) && merged.len() < MAX_COMMANDS {
             seen.insert(name);

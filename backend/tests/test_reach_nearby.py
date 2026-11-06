@@ -361,3 +361,19 @@ def test_a_message_task_ref_sent_as_a_list_is_checked_on_its_first_task_and_junk
     for ref in ({"id": shared["id"]}, [[shared["id"]]]):
         junk = message(api, "pd-test", "bot:finance", "Bad ref.", expected=422, refs={"task": ref})
         assert junk["error"]["code"] == "reference"
+
+
+def test_a_bots_task_comment_is_checked_against_its_reach_as_a_thread_post_is(api):
+    chart(api)
+    shared = task(api, "ana-test", "bot:product-design", title="Launch plan")
+    thread = get(api, "tasks/" + shared["id"])["task"]["conversation_id"]
+    text = "@cara can you check the launch dates?"
+    said = api.post(f"/api/v2/tasks/{shared['id']}/comments", json={"text": text}, headers=headers("pd-test"))
+    assert said.status_code == 409 and said.json()["error"]["code"] == "reach_closed", said.text
+    posted = api.post(f"/api/v2/threads/{thread}/messages", json={"text": text}, headers=headers("pd-test"))
+    assert posted.status_code == 409 and posted.json()["error"]["code"] == "reach_closed", posted.text
+    with api.app.state.store.read() as c:
+        assert c.execute("SELECT count(*) FROM messages WHERE body=?", (text,)).fetchone()[0] == 0
+    fine = api.post(f"/api/v2/tasks/{shared['id']}/comments", json={"text": "@finance can you check the budget?"},
+                    headers=headers("pd-test"))
+    assert fine.status_code == 200, fine.text

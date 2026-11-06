@@ -76,7 +76,7 @@ def _skill(c, name):
 
 
 def _skill_or_404(c, name):
-    skill = _skill(c, name)
+    skill = None if name in bundles.RESERVED else _skill(c, name)
     if not skill:
         raise Problem("not_found", f"No skill named {name}", 404)
     return skill

@@ -948,7 +948,7 @@ class WaitingWithDependency(HubCase):
         # A note naming what it waits on parks it, with a hint on recording the wait.
         parked = H.task_update(self.conn, CMO, task['id'], status='waiting', note='Waiting on the vendor reply')
         self.assertEqual(parked['status'], 'waiting')
-        self.assertIn('nothing will move it', parked['warnings'][0])
+        self.assertIn('goes back to open', parked['warnings'][0])
         self.assertIn('hub task create --parent', parked['warnings'][0])
 
     def test_a_note_only_wait_on_a_person_requested_task_warns(self):

@@ -187,7 +187,7 @@ def _pass_on(c, person, link, item, text, text_sources=()):
     if link["how"] == "asked":
         H.task_ask_resolve(c, STRATEGY_BOT, row["id"], link["ask_id"], quote=text, relay=True, text_sources=text_sources)
         return None
-    H.task_comment(c, STRATEGY_BOT, row["id"], said, extra_refs=refs)
+    H.task_comment(c, STRATEGY_BOT, row["id"], said, extra_refs=refs, to=link["asker"] if H.is_bot(link["asker"]) else None)
     if link["how"] == "waiting":
         # The person has answered: the next move is the bot's, as when they reply on its task themselves.
         c.execute("UPDATE tasks SET waiting_on=NULL WHERE id=?", (row["id"],))

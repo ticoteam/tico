@@ -51,7 +51,7 @@ def test_create_saves_off_with_a_card_and_only_its_person_can_turn_it_on(api):
     confirm(api, card, expected=409)
 
 
-@pytest.mark.parametrize("template", ["founder", "sales", "support", "blank"])
+@pytest.mark.parametrize("template", ["founder", "blank"])      # Draft and Sort; sales and support fill as founder does
 def test_existing_templates_save_off_and_get_readable_cards(api, template):
     token = turn(api)
     given = fill(api, template, "person:ana", "ana@acme.example", token)

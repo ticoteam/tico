@@ -481,9 +481,27 @@ another bot's home; all turns use the original login in its own home.
 | `readiness` | The runner reports install and sign-in for it | `true`; `false` reports nothing, so checks say unknown |
 | `repo_permission_lint` | Readiness warns about permission rules in the bot's repository | No lint |
 | `packet_only` | A tidy check runs from a supplied packet without Hub MCP or checkout tools; Codex also uses its read-only sandbox | The harness cannot run tidy packets |
-| `repo_commands` | The bot's repository skills and commands are offered as chat commands | Built-in commands only |
+| `repo_commands` | The bot's repository skills and commands, and the company skills staged for it, are offered as chat commands | Built-in commands only |
 
 Goals, chat commands and controls stay probed: the runner reports them per installed version in its heartbeat.
+
+### Company skills on a Claude Code turn
+
+At the start of each Claude Code turn the runner asks `GET /api/v2/attempts/{aid}/skills` for the skills installed for
+the bot (the latest approved version, or the pinned one). It fetches each bundle once by sha
+(`GET /api/v2/skills/bundles/{sha256}`) into `<state>/skill-bundles/<sha>.json`, checks the sha on every read, and
+writes the files under `<state>/skill-sessions/<attempt>/.claude/skills/<name>/`. That folder is added with
+`--add-dir`, so Claude Code loads the skills and its `/` menu lists them; readiness offers the last staged set as chat
+commands. The runner then reports what it staged (`POST /api/v2/attempts/{aid}/skills/receipt`). Only the attempt's
+runner, or the bot's own run of that attempt, may read its installs or post its receipt.
+
+A bundle that fails its sha, a path that leaves the skill folder, a link in the way, or any server error leaves that
+skill (or all of them) out and the turn runs on; the failure is logged without file contents. A server without these
+routes answers 404 and the runner stages nothing. Other harnesses stage no company skills yet.
+
+Each `Skill` tool call the runner reports carries the skill's name (`skill`) and nothing of its arguments. The server
+counts a call to a directory skill once per (attempt, tool id); a person's message to a bot that starts with `/name`
+counts as that person's use of the bot's installed skill. Usage rows hold the skill, who, where and when only.
 
 A runtime with a second host (Gemini's Antigravity) declares it as `[variants.<harness>]` in the runtime's manifest,
 with its own `name`, `host`, `executable` and capabilities. The runner never installs a variant.

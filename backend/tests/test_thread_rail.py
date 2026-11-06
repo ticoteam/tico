@@ -7,7 +7,6 @@ Fictional people only: ana (owner), ben (bot admin) and cara."""
 import importlib
 import json
 import sqlite3
-from pathlib import Path
 
 import pytest
 
@@ -17,8 +16,6 @@ from backend.tests.test_thread_events import cursor, read_as, who
 from backend import thread_rail, threads
 from backend.config import Settings
 from backend.store import H, Problem, Store
-
-FIXTURE = Path(__file__).parent / "fixtures" / "schema_old_main.sql"
 
 
 def new_thread(api, title="Budget", members=("human:ben",), audience="members", token="ana-test", **extra):
@@ -307,7 +304,7 @@ def test_subtree_unread_counts_a_delivery_in_any_state_once_and_leaves_out_bot_h
     root = new_thread(api, members=("human:ben", "bot:ops"))
     human = post_as(api, root["id"], "human:ana", "@ben please check.", to_actor="human:ben")
     bot = post_as(api, root["id"], "bot:ops", "Numbers are ready", to_actor="human:ben")
-    post_as(api, root["id"], "bot:ops", "Indexing finished")
+    post_as(api, root["id"], "bot:ops", "Indexing finished")     # his @mention made him a live follower: it counts
     post_as(api, root["id"], "human:ana", "Imported note", refs={"import": "history"})
     with api.app.state.store.transaction() as c:
         c.execute("UPDATE message_deliveries SET state='moot' WHERE message_id=? AND recipient='human:ben'",
@@ -315,8 +312,8 @@ def test_subtree_unread_counts_a_delivery_in_any_state_once_and_leaves_out_bot_h
     with api.app.state.store.read_transaction() as c:
         v = threads.viewer(api.app.state.auth, who(api, "ben-test"))
         summary = threads.subtree_summaries(c, v, [root["id"]])[root["id"]]
-        assert summary["unread"] == 2 and summary["new_at"] is None
-        assert thread_rail._readable_new(c, v, [root["id"]]) == {root["id"]: 2}
+        assert summary["unread"] == 3 and summary["new_at"] is None
+        assert thread_rail._readable_new(c, v, [root["id"]]) == {root["id"]: 3}
         assert c.execute("SELECT COUNT(*) FROM message_deliveries WHERE message_id=? AND recipient='human:ben'",
                          (human["id"],)).fetchone()[0] == 1  # the human half must not count its delivery again
 
@@ -339,25 +336,33 @@ def test_a_pin_event_goes_to_its_reader_and_a_pin_for_everyone_to_everyone_who_r
     assert [(d["thread_id"], d["pinned"], d["pinned_for_everyone"]) for d in sent] == [(thread["id"], True, True)]
 
 
-def test_the_migration_adds_pins_to_an_existing_database_once(tmp_path):
-    path = tmp_path / "old.sqlite"
-    conn = sqlite3.connect(path)
-    conn.executescript(FIXTURE.read_text())
-    conn.close()
+def test_the_pins_migration_run_once_more_changes_nothing(tmp_path):
+    """The upgrade itself (an old database gains thread_pins and the column) is pinned by test_schema_every_table's
+    upgraded-database test; this one checks that 0063 is repeatable on a database that already has it."""
+    path = tmp_path / "hub.sqlite"
     Store(Settings(db_path=path)).initialize()
     conn = sqlite3.connect(path)
     try:
-        assert {r[1] for r in conn.execute("PRAGMA table_info(thread_pins)")} >= {"thread_id", "actor", "pinned"}
-        assert "pinned_for_everyone_at" in {r[1] for r in conn.execute("PRAGMA table_info(conversations)")}
-        importlib.import_module("backend.migrations.0063_thread_pins").up(conn)       # once more changes nothing
+        def shape():
+            return ({r[1] for r in conn.execute("PRAGMA table_info(thread_pins)")},
+                    {r[1] for r in conn.execute("PRAGMA table_info(conversations)")})
+        before = shape()
+        assert {"thread_id", "actor", "pinned"} <= before[0] and "pinned_for_everyone_at" in before[1]
+        importlib.import_module("backend.migrations.0063_thread_pins").up(conn)
+        assert shape() == before
     finally:
         conn.close()
 
 
 def test_catch_up_leaves_out_bot_chatter_own_messages_and_muted_threads_and_a_task_needs_a_mention(api):
     with api.app.state.store.transaction() as c:
-        task = H.task_create(c, "human:ben", "Budget review", "Details.", "human:ben", requester_actor="human:ana",
-                             lint=False)["conversation_id"]
+        made = H.task_create(c, "human:ben", "Budget review", "Details.", "human:ben", requester_actor="human:ana",
+                             lint=False)
+    task = made["conversation_id"]
+    # Ben owns the task and follows it; at `mentions` a bot's post there reaches him only when it names him.
+    r = api.put(f"/api/v2/tasks/{made['id']}/followers", json={"following": True, "notify": "mentions"},
+                headers=headers("ben-test"))
+    assert r.status_code == 200, r.text
     post_as(api, task, "bot:ops", "The draft is in the doc.", to_actor="human:ben")
     chatter = new_thread(api, title="Chatter")
     post_as(api, chatter["id"], "bot:ops", "Indexing finished")
@@ -504,14 +509,14 @@ def test_an_activity_event_counts_every_unread_message_it_stands_for(api):
     after = cursor(api)
     say(api, thread["id"], "One")
     say(api, thread["id"], "Two")
-    post_as(api, thread["id"], "bot:ops", "Indexing finished")       # the newest is not unread for anyone
+    post_as(api, thread["id"], "bot:ops", "Indexing finished")       # a bot's post: unread only for its followers
 
     def activity(token):
         return [(d["unread"], d["unread_count"]) for _, topic, d in read_as(api, who(api, token), after, ("threads",))
                 if d.get("kind") == "activity" and d["thread_id"] == thread["id"]]
 
     assert activity("ben-test") == [(True, 2)]
-    assert activity("ana-test") == [(False, 0)]
+    assert activity("ana-test") == [(True, 1)], "Ana started the thread, so she follows it"
 
 
 def test_held_writes_are_read_from_the_readers_own_candidates_through_an_index(api):

@@ -44,7 +44,9 @@ Done when: the change is made as the requester and read back, or the refusal is 
 - `hub task list --stuck` (`--hours N`): open work untouched for N hours (default 24) that waits on nobody.
 - `hub task show <id>` (one or more ids): each task with its history and conversation.
 - `hub task run <id>`: start a bot's task now.
-- `hub task comment <id> "<text>"`: a comment on the task, with your name.
+- `hub task comment <id> "<text>"`: a comment on the task, with your name. Add `--defer never` for a quiet note that wakes nobody;
+  only whoever you @mention reaches it.
+- `hub task follow <id>` and `hub task unfollow <id>`: follow a task you care about, or stop when you are done with it.
 - `hub task ask <id> "<question>"`: a question on the task.
 - `hub task update <id> --status waiting --on <person> --note "<text>"`: set a task waiting on a person, with the one thing they
   must do.
@@ -102,7 +104,7 @@ Done when: the change is made as the requester and read back, or the refusal is 
 
 - `hub question ask <bot> "<question>"`: ask another bot and wait for its answer. An ask message gets your final answer automatically.
 - `hub message send <bot> "<reply>"`: an ordinary message does not deliver the recipient's final answer to you. When an incoming
-  ordinary bot message asks for a reply, send it this way, so that bot is not left waiting.
+  ordinary bot message asks for a reply, send it this way with `--needs-action`, so that bot wakes now and is not left waiting.
 
 ## Docs, people and support
 

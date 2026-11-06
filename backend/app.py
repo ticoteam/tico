@@ -756,6 +756,11 @@ def create_app(settings=None):
                     chunks.append(chunk)
                 request._body = b"".join(chunks)
                 return await call_next(request)
+            # A person's skills helper with no token yet (backend/skill_devices.py): it asks for a code and polls for its
+            # token with its own secret, and its source is served to anyone. The person's approval is the signed-in step.
+            from . import skill_devices
+            if skill_devices.public(request) or request.url.path == "/api/v2/skills/helper.mjs" and request.method == "GET":
+                return await call_next(request)
             agent_door = (request.url.path == "/api/v2/agents/pairings" and request.method == "POST"
                           or request.url.path.startswith("/api/v2/agents/pairings/") and request.method == "GET"
                           or request.url.path in ("/api/v2/agents/setup-script", "/api/v2/agents/sync-skill")
@@ -3004,9 +3009,11 @@ def create_app(settings=None):
             return H.resolve_actor(c, ref) or str(ref or "")
 
     def rule_task_audience(c, row, author, text="", *extra):
-        """A task write's audience: owner, requester, the people a comment @mentions, and anyone else named."""
-        people = H.mentioned_people(c, text, row, author) if text else []
-        return [a for a in (row["owner_id"], row["requester_id"], *people, *extra) if a]
+        """A task write's audience: owner, requester, the people a comment @mentions (each of whom it reaches and may
+        add to Who can see: threads.widen), and anyone else named."""
+        from . import threads as T
+        people = T.mentioned_people(c, text, author) if text else []
+        return [a for a in dict.fromkeys((row["owner_id"], row["requester_id"], *people, *extra)) if a]
 
     def rule_comment_audience(c, who, row, text, ask=None):
         target = [H.task_ask_route(c, who.actor, row, ask)[0]] if ask else []
@@ -3579,6 +3586,18 @@ def create_app(settings=None):
                                        suggestions_seen=body.suggestions_seen, delivery_batch_id=body.delivery_batch_id),
                 **org_rule_check.answer(rule)}
 
+    def update_skip(c, who, body):
+        """A bot's nothing-new answer for its request (`updates.skip`): nothing is posted and the request finishes skipped,
+        never retried. A person's draft is skipped by the server (`updates.write_draft`), not here."""
+        if who.role != "bot":
+            raise Problem("identity", "A bot skips its own update", 403)
+        bot = H.actor_id(who.actor)
+        day = body.day or updates.today()
+        updates.check_day(c, bot, day)
+        kind = updates.effective_kind(body.kind, None, day)
+        updates.skip(c, bot, kind, day)
+        return {"skipped": True, "kind": kind, "day": day, "reason": updates.NOTHING_NEW}
+
     def update_fixed(body):
         """The update a post means, its day and kind named, before anything is checked: a hold keeps them, so Send
         anyway posts that day's update of that kind, never today's or a week in review a Friday would make it."""
@@ -3593,6 +3612,8 @@ def create_app(settings=None):
     @app.post("/api/v2/updates")
     def update_post(request: Request, body: M.UpdatePost):
         who = request.state.identity
+        if body.skip:                 # nothing is posted, so there is nothing for the org rules to check
+            return mutate(request, body, lambda c: update_skip(c, who, body))
         fixed = update_fixed(body)
         rc = rule_check(who, "update", update_text(fixed), lambda c: org_rule_check.company(c))
         return mutate(request, body, lambda c: update_write(c, who, fixed, rc, named_day=body.day is not None))
@@ -4313,37 +4334,52 @@ def create_app(settings=None):
         return conversation_execution(c, cid, who, settings, bot=owner.removeprefix("bot:") if H.is_bot(owner) else None,
                                       auth=auth, people=True)
 
+    def comment_bot(c, row):
+        """The bot a plain comment on the task gives a turn first (threads._task_primary, with no @mention): its first
+        live bot follower who still reads it, or, for a task in a shared chat (no followers), its owner bot. One
+        read. None when there is none."""
+        from . import task_followers as TF
+        tid = TF.thread_id(c, row)
+        if not tid:
+            return row["owner_id"] if H.is_bot(row["owner_id"]) else None
+        bots = [r[0] for r in c.execute("SELECT actor FROM thread_followers WHERE thread_id=? AND following=1 AND "
+                                        "notify='live' AND actor LIKE 'bot:%' ORDER BY created_at, actor", (tid,))]
+        private = bots and H.task_private(c, row)
+        return next((b for b in bots if not private or H.task_private_readable(c, b, row)), None)
+
+    def comment_way_for(c, who, row):
+        """The way a reader's comment with none named goes: Steer (D13) for whoever may direct the task's bots
+        (chat_goals.may_direct), else Defer never, so a reader never spends a bot's turns on a task that isn't
+        theirs."""
+        from .chat_goals import may_direct
+        return ("steer", None) if who.role == "bot" or may_direct(c, who, row) else ("defer", delivery.NEVER)
+
     def comment_to(c, who, row):
-        """Who a plain comment from this reader reaches (H.task_comment, H.comment_way): `bot`, the bot it goes to,
-        or None when no bot will get it; `wakes`, whether it wakes that bot (queue) rather than waiting for its next
-        turn on the task (defer); `mention`, the @names that would queue it anyway for this reader, each checked
-        against the same rule. None for a bot reader."""
+        """Who a plain comment from this reader wakes first (comment_bot): `bot`, or None when no bot follows the
+        task; `wakes`, whether its default way wakes that bot (steer) rather than waiting for its next turn on the task
+        (defer); `mention`, kept empty: an @mention always reaches whoever it names. None for a bot reader."""
         if who.role == "bot":
             return None
-        target = H.comment_target(c, who.actor, row)
-        if not H.is_bot(target):
+        bot = comment_bot(c, row)
+        if not bot:
             return {"bot": None, "wakes": False, "mention": []}
-        moves = mover(c, who)
-        wakes = H.comment_wakes(c, who.actor, row, "", mover=moves)
-        mention = [] if wakes else [n for n in H.bot_handles(c, row)
-                                    if H.comment_wakes(c, who.actor, row, "@" + n, mover=moves)]
-        return {"bot": H.actor_id(target), "wakes": wakes, "mention": mention}
+        return {"bot": H.actor_id(bot), "wakes": comment_way_for(c, who, row)[0] != "defer", "mention": []}
 
     def delivery_choices(c, who, row):
-        """How this reader's comment can reach the task's bot (docs/tasks.md, backend/delivery.py): `default`, the way
-        a comment with none named goes (queue or defer; null when no bot is on the task) and `default_for`, a default
-        defer's deadline (24h, never); `steer` and `queue`, whether the reader may wake the bot (chat_goals.may_direct;
-        anyone may defer); `steers`, whether that bot's harness writes a steer into its running turn; `goal`, whether
-        the reader may set the task session's goal (chat_goals.own_room and chat_goals.may_set). None for a bot
-        reader."""
+        """How this reader's comment can reach the task's bots (docs/tasks.md, backend/delivery.py): `default`, the way
+        a comment with none named goes (steer or defer; null when no bot follows the task) and `default_for`, a default
+        defer's deadline (never); `steer` and `queue`, whether the reader may wake them (chat_goals.may_direct;
+        anyone may defer); `steers`, whether the first bot's harness writes a steer into its running turn; `goal`,
+        whether the reader may set the task session's goal (chat_goals.own_room and chat_goals.may_set). None for a
+        bot reader."""
         if who.role == "bot":
             return None
-        target = H.comment_target(c, who.actor, row)
-        if not H.is_bot(target):
+        bot = comment_bot(c, row)
+        if not bot:
             return {"default": None, "default_for": None, "steer": False, "queue": False, "steers": False,
                     "goal": False}
-        way, defer_for = H.comment_way(c, who.actor, row, "", mover=mover(c, who))
-        config = c.execute(BS.ONE_SQL, (H.actor_id(target),)).fetchone()
+        way, defer_for = comment_way_for(c, who, row)
+        config = c.execute(BS.ONE_SQL, (H.actor_id(bot),)).fetchone()
         config = json.loads(config[0] or "{}") if config else {}
         from .harnesses import steers
         from .chat_goals import may_direct, may_set, own_room
@@ -5343,19 +5379,13 @@ def create_app(settings=None):
         text = org_rule_check.warned_text(rule, body.text)
         attached, report = visuals.attach(c, who, app.state.files, app.state.blobs, body.attachments, task_id=task_id)
         moves = mover(c, who)
-        # A person @mentioned in a comment gets it as a question, so it reaches their Needs you.
-        # The comment itself is the question to the first one, unless it would wake a bot, which
-        # must hear it; everyone else mentioned gets their own copy. A task with no bot on it has
-        # no one else to hear the comment, so a copy there would only show it twice.
-        # A goal is the comment's text, so it is not turned into a question to anyone.
-        people = [] if ask or who.role == "bot" or body.delivery == "goal" \
-            else H.mentioned_people(c, body.text, row, who.actor)
-        # Steer and queue wake the bot on the task (a bot's is its needs_action); with no bot on the task the
-        # comment is plain. Defer and goal do not: a goal's own control does (set_goal below).
-        target = H.comment_target(c, who.actor, row)
-        to_bot = H.is_bot(target)
-        if body.delivery in ("steer", "queue") and to_bot and who.role != "bot" and not may_direct(c, who, row):
-            raise Problem("delivery", "Only someone on this task can wake its bot: send it with defer", 403)
+        # A comment reaches its @mentions, the author it replies to and the task's followers (threads.plan). Steer and
+        # queue wake the bots among them, so they take the right to direct the task (a bot's is its needs_action);
+        # anyone may defer. Defer and goal wake none: a goal's own control does (set_goal below).
+        bot = comment_bot(c, row)
+        directs = who.role == "bot" or may_direct(c, who, row)
+        if body.delivery in ("steer", "queue") and bot and not directs:
+            raise Problem("delivery", "Only someone on this task can wake its bots: send it with defer", 403)
         if body.delivery == "goal" and who.role != "bot" and not may_direct(c, who, row):
             raise Problem("delivery", "Only someone on this task can set its goal: send it with defer", 403)
         # A goal is set in the task's own room only. In a chat the task was filed into, the goal is the chat's
@@ -5366,44 +5396,47 @@ def create_app(settings=None):
         if body.delivery in ("steer", "queue", "defer"):
             way = body.delivery
         elif body.delivery == "goal":
-            way = None
+            way, defer_for = "defer", delivery.NEVER
         elif ask:
             way = "steer" if who.role == "bot" or H.task_participant(c, who.actor, row) or moves else "defer"
-        elif who.role == "bot" and body.needs_action:
-            way = "steer"
         else:
-            way, defer_for = H.comment_way(c, who.actor, row, body.text, mover=moves)
-        directs = who.role == "bot" or may_direct(c, who, row)
-        if way == "defer" and to_bot and not ask and not directs:
+            way, defer_for = comment_way_for(c, who, row)
+        # A Defer never the reader did not choose (none named, or a defer with no deadline) binds the bots only:
+        # people following are notified as their level says (threads.plan).
+        people = way == "defer" and not ask and not directs and body.defer_for is None
+        if way == "defer" and bot and not ask and not directs:
             # A deadline wakes the bot as a steer would, so it takes the same right. Someone off the task defers
-            # with none: their comment waits for the bot's next turn here.
+            # with none: their comment waits for the bots' next turn here.
             if body.defer_for not in (None, delivery.NEVER):
-                raise Problem("delivery", "Only someone on this task can give its bot a deadline: send it with "
+                raise Problem("delivery", "Only someone on this task can give its bots a deadline: send it with "
                               "defer and no defer_for", 403)
             defer_for = delivery.NEVER
         # Ride-along: a defer someone chose while the bot works this task goes in right after that turn, if they
-        # may wake it. A default defer (a plain comment on a bot-filed task, or from outside it) keeps its deadline.
-        rides = body.delivery == "defer" and directs
-        if way == "defer" and to_bot and not ask and rides and delivery.running_in_session(
-                c, H.actor_id(target), [row["conversation_id"]], task_id):
+        # may wake it.
+        if way == "defer" and bot and not ask and body.delivery == "defer" and directs and delivery.running_in_session(
+                c, H.actor_id(bot), [row["conversation_id"]], task_id):
             way = "queue"
-        if people and not (to_bot and way in ("steer", "queue")):
-            ask, people = H.mention_ask(body.text, people[0]), people[1:]
-        wake = way in ("steer", "queue")
         extra = {"attachments": attached, "files": [a["ref"] for a in attached]} if attached else {}
         if body.needs_action or (who.role == "bot" and body.delivery in ("steer", "queue")):
             extra["needs_action"] = True
-        if way == "queue" and to_bot:
-            extra["delivery"] = "queue"      # after the bot's running turn, not into it (execution.inputs)
         # Judged against the plate before the question is on it.
         gate = ask_ingest.apply(c, ingest) if ingest and ask and ask_ingest.matches(
             ingest, H.task_ask_recipient(c, who.actor, row, ask)) else None
-        msg = H.task_comment(c, who.actor, task_id, text, wake=wake, ask=ask, public=body.public, approval_id=body.approval_id,
-                             extra_refs=extra or None)
+        msg = H.task_comment(c, who.actor, task_id, text, wake=way != "defer", ask=ask, public=body.public,
+                             approval_id=body.approval_id, extra_refs=extra or None,
+                             way=None if ask else way, defer_for=defer_for, people_notified=people,
+                             delegate=directs and way != "defer", reach=who if who.role == "bot" else None)
         due = None
-        if way == "defer" and to_bot and not ask:
-            due = delivery.defer(c, target, "comment", msg["id"], conversation_id=msg["conversation_id"],
-                                 task_id=task_id, defer_for=defer_for)
+        # The bot the comment went to first: the follower it was for, or the bot its @mention reached.
+        reached = msg.get("recipient_id") if H.is_bot(msg.get("recipient_id")) else None
+        bot = bot or reached
+        if way == "defer" and not ask and reached and (msg.get("refs") or {}).get("delivery") == "queue":
+            way = "queue"           # Defer never with an @mention: the bot it names is reached, queued (D6)
+        if way == "defer" and not ask:
+            found = c.execute("SELECT due_at FROM deferrals WHERE item=? OR item IN (SELECT carrier_id FROM "
+                              "message_deliveries WHERE message_id=? AND carrier_id IS NOT NULL) LIMIT 1",
+                              (msg["id"], msg["id"])).fetchone()
+            due = found[0] if found else None
         goal = None
         if body.delivery == "goal":
             # The task session's goal, set as a chat's is (chat_goals.set_goal): its /goal control wakes the bot.
@@ -5417,8 +5450,6 @@ def create_app(settings=None):
             ask_ingest.record(c, ingest, gate, task_id, msg["id"])
             if gate["acts"]:
                 H.task_ask_resolve(c, who.actor, task_id, msg["id"])
-        copies = [H.task_comment(c, who.actor, task_id, body.text, wake=False, ask=H.mention_ask(body.text, person))
-                  for person in people]
         for item in attached:
             c.execute("INSERT OR IGNORE INTO task_file_reviews(file_id,version) VALUES(?,?)",
                       (item["id"], item["version"]))
@@ -5430,8 +5461,10 @@ def create_app(settings=None):
         waits = bot_to_bot.held_reason(msg)
         if bot_to_bot.held_reason(msg):
             way, due = "defer", None             # a bot's plain comment to a bot waits for its next run
-        return {"comment": msg, "comments": comments, **H.comment_delivery(c, msg, copies, since=mark),
-                **({"sent_as": delivery.sent_as(way, due)} if to_bot and way else {}),
+        if body.delivery == "goal":
+            way = None
+        return {"comment": msg, "comments": comments, **H.comment_delivery(c, msg, since=mark),
+                **({"sent_as": delivery.sent_as(way, due)} if bot and way else {}),
                 **({"warning": held} if held else {}), **({"held": waits} if waits else {}),
                 **({"visuals": report} if report else {}), **({"goal": goal} if goal else {}),
                 **ask_ingest.reply(gate), **org_rule_check.answer(rule)}
@@ -5456,7 +5489,9 @@ def create_app(settings=None):
     def task_comment(request: Request, tid: str, body: M.TaskComment):
         """A comment on a task. `delivery` says how it reaches the task's bot (backend/delivery.py): steer into its
         running turn, queue right after it, defer to its next turn on the task (at the latest `defer_for`, 24h), or
-        goal: the task session's goal becomes the text (chat_goals.set_goal). Omitted, H.comment_way decides. A bot's
+        goal: the task session's goal becomes the text (chat_goals.set_goal). Omitted, it steers (D13), or defers with no
+        deadline for a reader who may not direct the task's bots. It reaches the task's followers and whom it addresses
+        (threads.plan). A bot's
         question to a person passes ask ingest first (backend/ask_ingest.py): a refused write rolls back before it
         is asked."""
         who = request.state.identity
@@ -8390,7 +8425,13 @@ def create_app(settings=None):
             with store.read_transaction() as c:
                 if not store.saved(c, request.state.identity, request.url.path, request.headers.get("idempotency-key")):
                     execution.attempt(c, request.state.identity, aid, active=False)
-            return mutate(request, body, lambda c: execution.events(c, request.state.identity, aid, body))
+            from . import skill_runtime
+
+            def ingest(c):
+                acked = execution.events(c, request.state.identity, aid, body)
+                skill_runtime.record_runner_usage(c, aid, body.events)    # a Skill call's name, scrubbed above
+                return acked
+            return mutate(request, body, ingest)
 
     @app.post("/api/v2/attempts/{aid}/capture")
     def keep_capture(request: Request, aid: str, body: M.StreamCapture):
@@ -8587,6 +8628,10 @@ def create_app(settings=None):
     company_page_api.register(app, store, auth, mutate, settings)
     from .service_keys import install_service_keys
     install_service_keys(app, store, auth, mutate)
+    # People's own Claude Code (docs/skills.md, People's Claude Code): the helper's devices, then its marketplace.
+    from . import skill_devices, skill_marketplace
+    skill_devices.install(app, store, auth, mutate, settings)
+    skill_marketplace.install(app, store, auth, settings)
     install_views(app, store, auth, mutate, task_view)
     @app.get("/api/v2/attempts/{aid}/goal")
     def attempt_goal(request: Request, aid: str):
@@ -8596,6 +8641,8 @@ def create_app(settings=None):
             from .chat_goals import current
             return {"goal": current(c, msg["conversation_id"])}
 
+    from . import skill_runtime
+    skill_runtime.install(app, store, execution, mutate)    # company skills a runner stages, and their use
     from .chat_goals import install as install_chat_goals
     install_chat_goals(app, store, auth, mutate, send)
     from .bot_task_tabs import install as install_bot_task_tabs
