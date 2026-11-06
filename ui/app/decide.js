@@ -106,7 +106,7 @@ function decideFromPerson(it, shown) {
 // The Needs you list's way in: Catch up in the Tasks header, only on Needs you and only when there is a card.
 function decidePaintButton() {
   needsBadgePaint();
-  const links = document.querySelectorAll('[data-go-through]');
+  const links = /** @type {NodeListOf<HTMLElement>} */ (document.querySelectorAll('[data-go-through]'));
   if (!links.length) return;
   const n = S.me?.role !== 'bot' && TASKS_ST && tasksNeedsQueue(TASKS_ST)
     ? needsCards(S.v2?.needs).filter(c => !decideGone(c.key)).length : 0;

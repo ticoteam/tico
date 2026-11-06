@@ -670,7 +670,7 @@ function tasksScopeMenu(state, anchor) {
   const you = state.view === 'foryou', n = tasksCounts(state).foryou;
   const item = (attr, label, on, count = 0) => `<button type="button" role="menuitemradio" aria-checked="${on}" class="tl-mi" ${attr}><span>${esc(label)}</span>${count ? `<span class="tl-mi-n tnum">${count}</span>` : ''}${on ? '<span class="tl-mi-on" aria-hidden="true">✓</span>' : ''}</button>`;
   const sep = '<div class="tl-menu-sep" role="separator"></div>';
-  const types = taskPipelineScopeTypes();
+  const types = /** @type {{id: string, label: string, other?: boolean}[]} */ (taskPipelineScopeTypes());
   tasksMenu(state, anchor, `<div class="tl-menu" role="menu" aria-label="Show">
     ${item('data-scope="you"', tasksViewLabel(state, 'foryou'), you, n)}${sep}
     ${types.map((t, i) => (t.other && !types[i - 1]?.other ? sep : '') + item(`data-task-type="${esc(t.id)}"`, t.label, !you && state.type === t.id)).join('')}</div>`, pop => {
