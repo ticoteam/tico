@@ -6222,7 +6222,7 @@ export type ToolIndexRow = {
   kind: "api" | "mailbox" | "number" | "address" | "slack" | "github" | "meetings" | "listening" | "webhook" | "declared" | "website";
   name: string;
   needs_you: boolean;
-  private: boolean;
+  private?: boolean;
   status: {
   text: string;
   tone: "ok" | "wait" | "fail" | "run" | "idle";

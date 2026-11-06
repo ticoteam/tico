@@ -26,9 +26,20 @@ def patch(api, tid, body, token="ana-test", expected=200):
     return r.json()
 
 
+def eve(api):
+    """Eve, a member on the roster with no part in anything here."""
+    with api.app.state.store.transaction() as c:
+        roster = json.loads(c.execute("SELECT value FROM registry_metadata WHERE key='people'").fetchone()[0])
+        if not any(p["id"] == "eve" for p in roster["people"]):
+            roster["people"].append({"id": "eve", "email": "eve@acme.example"})
+        c.execute("INSERT OR IGNORE INTO humans(id,name,email) VALUES('eve','Eve','eve@acme.example')")
+        c.execute("UPDATE registry_metadata SET value=? WHERE key='people'", (json.dumps(roster),))
+
+
 def bank(api, audience=ONLY):
     """Ana's bank tool with a Read and write key and a Read key, Only listed (by default nobody but her)."""
     setup(api)
+    eve(api)
     tid = tool(api, "Acme Bank", base_url="https://api.bank.acme.example", check_path="/v1/me")["id"]
     rw = key(api, tid, SECRET)["id"]
     ro = key(api, tid, SECRET_R, "read")["id"]
@@ -86,7 +97,7 @@ def test_a_credential_admin_who_is_not_listed_gets_404_everywhere_and_never_sees
 def test_ben_cannot_find_it_through_sql_events_or_history(api):
     tid, rw, _ = bank(api)
     for sql in ("SELECT * FROM tools", "SELECT * FROM credentials", "SELECT * FROM tool_calls",
-                "SELECT target_id, payload FROM events"):
+                "SELECT target, detail FROM events"):
         r = api.post("/api/v2/sql", json={"sql": sql}, headers=headers("ben-test"))
         assert tid not in r.text and rw not in r.text and "Acme Bank" not in r.text, (sql, r.text[:300])
     r = api.get("/api/v2/history", headers=headers("ben-test"))
@@ -123,6 +134,7 @@ def test_an_audience_member_without_a_grant_sees_it_but_the_proxy_refuses(api):
 
 def test_a_listed_group_and_bot_see_it(api):
     setup(api)
+    eve(api)
     gid = post(api, "groups", {"name": "Treasury", "add": {"people": ["cara"]}})["id"]
     tid, _, _ = bank(api, {**ONLY, "teams": [gid], "bots": ["ops"]})
     assert "api:" + tid in index(api, "cara-test")
@@ -156,7 +168,7 @@ def test_an_admin_who_sets_only_listed_stays_listed_and_an_event_says_before_and
     patch(api, tid, {"audience": {**ONLY, "people": ["cara"]}}, "ben-test")
     assert sorted(get(api, f"api-tools/{tid}", "ben-test")["audience"]["people"]) == ["ben", "cara"]
     with api.app.state.store.read() as c:
-        rows = c.execute("SELECT actor_id, payload FROM events WHERE kind='tool.audience_changed' AND target_id=? "
+        rows = c.execute("SELECT actor, detail FROM events WHERE action='tool.audience_changed' AND target=? "
                          "ORDER BY rowid", (tid,)).fetchall()
     assert len(rows) == 1 and rows[0][0] == "human:ben"
     change = json.loads(rows[0][1])
@@ -184,7 +196,7 @@ def test_null_audience_keeps_the_old_rules(api):
 
 def test_a_bad_audience_is_refused_and_an_unreadable_stored_one_lists_nobody(api):
     tid, _, _ = bank(api, None)
-    patch(api, tid, {"audience": {**ONLY, "people": ["nobody-here"]}}, expected=422)
+    patch(api, tid, {"audience": {**ONLY, "people": ["nobody-here"]}}, expected=404)    # Unknown person
     patch(api, tid, {"audience": {"everyone": False, "people": "cara"}}, expected=422)
     with api.app.state.store.transaction() as c:
         c.execute("UPDATE tools SET audience='not json' WHERE id=?", (tid,))

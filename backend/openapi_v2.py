@@ -2253,7 +2253,9 @@ SCHEMAS['ToolIndexRow'] = obj({'id': 's', 'kind': {'enum': ['api', 'mailbox', 'n
                                                  'initials': 's'})),
                                'who_total': 'i', 'needs_you': 'b', 'href': 's',
                                'private': {'type': 'boolean', 'description': 'An API tool whose Who can see it is Only '
-                                           'listed'}})
+                                           'listed'}},
+                              required=['id', 'kind', 'name', 'detail', 'way', 'status', 'who', 'who_total', 'needs_you',
+                                        'href'])
 SCHEMAS['ToolIndex'] = obj({'rows': items(ref('ToolIndexRow')),
                             'counts': obj({'all': 'i', 'needs_you': 'i', 'api': 'i', 'mail': 'i', 'websites': 'i'}),
                             'next': 'n'})
