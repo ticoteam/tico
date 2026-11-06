@@ -11,6 +11,8 @@ a bot only for teammates in its reach. A task with no thread of its own (one fil
 followers.
 """
 
+import uuid
+
 from . import hubdb as H
 
 LEVELS = ("live", "mentions", "digest", "muted")
@@ -30,15 +32,16 @@ def thread_id(conn, row):
 def _upsert(conn, tid, actor, reason, notify=None):
     """`actor` follows thread `tid`. A row that was only a read mark (or unfollowed) takes the new reason; one already
     following keeps its own unless the new reason is a choice. `notify` sets the level; None keeps a follower's and
-    starts anyone else at `live`. The row id is SQLite's, so seeding a row draws no uuid4 (the demo's ids are a counter
-    of those: backend/demo.py)."""
+    starts anyone else at `live`. The row id comes from the thread and the actor, so seeding a row draws no uuid4 (the
+    demo's ids are a counter of those: backend/demo.py) and the same company builds the same ids."""
     now = H.now()
+    rid = uuid.uuid5(uuid.NAMESPACE_URL, f"thread-follower:{tid}:{actor}").hex
     conn.execute(
         "INSERT INTO thread_followers(id,thread_id,actor,following,notify,reason,last_read_seq,created_at,updated_at) "
-        "VALUES(lower(hex(randomblob(16))),?,?,1,?,?,0,?,?) ON CONFLICT(thread_id,actor) DO UPDATE SET "
+        "VALUES(?,?,?,1,?,?,0,?,?) ON CONFLICT(thread_id,actor) DO UPDATE SET "
         "reason=CASE WHEN following=0 OR excluded.reason=? THEN excluded.reason ELSE reason END, following=1, "
         "notify=COALESCE(?,CASE WHEN following=0 THEN 'live' ELSE notify END), updated_at=excluded.updated_at",
-        (tid, actor, notify or "live", reason, now, now, CHOSEN, notify))
+        (rid, tid, actor, notify or "live", reason, now, now, CHOSEN, notify))
 
 
 def seed_owner(conn, row, owner=None):
