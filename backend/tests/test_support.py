@@ -111,6 +111,11 @@ def test_submit_forwards_exactly_what_the_form_showed_and_keeps_the_secret_on_th
     assert json.loads(hq.seen[-1].content) == {"message": "The board will not load", "source": "person"}
     assert file(api, include_ids=False).json()["sent"] == {}
 
+    # Bad input never reaches HQ.
+    reached = len(hq.seen)
+    assert file(api, message="x" * 4001).status_code == 422
+    assert len(hq.seen) == reached
+
 
 def test_the_desktop_apps_version_goes_labelled_apart_and_an_older_hq_still_gets_the_ticket(environment, hq):
     api = environment()
@@ -136,13 +141,6 @@ def test_the_desktop_apps_version_goes_labelled_apart_and_an_older_hq_still_gets
         assert len(hq.seen) == before + asks
     assert "source" not in json.loads(hq.seen[-1].content)
     assert len(hq.tickets) == 3
-
-
-@pytest.mark.parametrize("bad", [{"message": "x" * 4001}])
-def test_bad_input_never_reaches_hq(environment, hq, bad):
-    api = environment()
-    assert file(api, **bad).status_code == 422
-    assert hq.seen == []
 
 
 def test_demo_mode_and_the_off_switch_refuse_everything(environment, hq, monkeypatch):
@@ -353,37 +351,14 @@ def test_the_ticket_secret_is_sealed_with_the_credential_vault_and_every_use_sti
     assert not hq.tickets
 
 
-def test_plaintext_ticket_secrets_from_before_are_sealed_once_on_start(environment, hq):
+def test_plaintext_ticket_secrets_from_before_are_sealed_once_on_start_and_a_vault_that_cannot_seal_still_fails(environment, hq, caplog):
     api = environment()
     ticket = file(api).json()
     (tid, held), = hq.tickets.items()
     with api.app.state.store.transaction() as c:       # as the release before this one kept it
         c.execute("UPDATE support_tickets SET hq_secret=? WHERE id=?", (held["secret"], ticket["id"]))
-    vault = api.app.state.vault
-    assert support.seal_plaintext_secrets(api.app.state.store, vault) == 1
-    sealed = stored_secret(api, ticket["id"])
-    assert sealed.startswith("sealed:v1:") and held["secret"] not in sealed
-    assert support.seal_plaintext_secrets(api.app.state.store, vault) == 0 and stored_secret(api, ticket["id"]) == sealed
-    hq.staff_replies(tid, "Fixed")
-    assert api.post("/api/v2/support/tickets/refresh", headers=signed_in()).json()["tickets"][0]["status"] == "answered"
 
-
-def test_no_ticket_table_yet_is_nothing_to_seal_and_not_a_warning(environment, caplog):
-    api = environment()
-    with api.app.state.store.transaction() as c:      # a fresh database: the seal runs before Store.initialize makes the table
-        c.execute("DROP TABLE support_tickets")
-    caplog.clear()
-    assert support.seal_plaintext_secrets(api.app.state.store, api.app.state.vault) == 0
-    assert not [r for r in caplog.records if r.name == "tico.support" and r.levelno >= logging.WARNING]
-
-
-def test_a_vault_that_cannot_seal_still_fails_so_startup_names_it(environment, hq):
-    api = environment()
-    ticket = file(api).json()
-    (tid, held), = hq.tickets.items()
-    with api.app.state.store.transaction() as c:
-        c.execute("UPDATE support_tickets SET hq_secret=? WHERE id=?", (held["secret"], ticket["id"]))
-
+    # A vault that cannot seal still fails, so startup names it, and the secret stays as it was.
     class KmsDown:
         class cipher:
             @staticmethod
@@ -392,7 +367,23 @@ def test_a_vault_that_cannot_seal_still_fails_so_startup_names_it(environment, h
 
     with pytest.raises(OSError):
         support.seal_plaintext_secrets(api.app.state.store, KmsDown)
-    assert stored_secret(api, ticket["id"]) == held["secret"]
+    assert stored_secret(api, ticket["id"]) == held["secret"], "a failed seal leaves the secret as it was"
+
+    # With the real vault it is sealed once, and every use still works.
+    vault = api.app.state.vault
+    assert support.seal_plaintext_secrets(api.app.state.store, vault) == 1
+    sealed = stored_secret(api, ticket["id"])
+    assert sealed.startswith("sealed:v1:") and held["secret"] not in sealed
+    assert support.seal_plaintext_secrets(api.app.state.store, vault) == 0 and stored_secret(api, ticket["id"]) == sealed
+    hq.staff_replies(tid, "Fixed")
+    assert api.post("/api/v2/support/tickets/refresh", headers=signed_in()).json()["tickets"][0]["status"] == "answered"
+
+    # No ticket table yet (a fresh database: the seal runs before Store.initialize makes it) is nothing to seal, and no warning.
+    with api.app.state.store.transaction() as c:
+        c.execute("DROP TABLE support_tickets")
+    caplog.clear()
+    assert support.seal_plaintext_secrets(api.app.state.store, vault) == 0
+    assert not [r for r in caplog.records if r.name == "tico.support" and r.levelno >= logging.WARNING]
 
 
 def test_a_vault_that_cannot_be_opened_refuses_a_ticket_before_anything_reaches_hq(environment, hq):
@@ -516,22 +507,25 @@ def test_a_report_is_refused_when_declined_sent_by_another_or_not_what_was_appro
     assert hq.seen == [] and not consumed(api, approval["id"])
 
 
-@pytest.mark.parametrize("payload, why", [
-    ({"message": REPORT, "content_sha256": "0" * 64}, "doesn't match"),
-    ({"message": REPORT, "content_sha256": "ABC"}, "64 lower-case hex"),
-    ({"message": REPORT}, "support needs content_sha256"),
-    ({"message": " padded ", "content_sha256": __import__("hashlib").sha256(b" padded ").hexdigest()}, "blank space"),
-    ({"message": "x" * 4001, "content_sha256": __import__("hashlib").sha256(b"x" * 4001).hexdigest()}, "4000"),
-    ({"message": REPORT, "content_sha256": __import__("hashlib").sha256(REPORT.encode()).hexdigest(),
-      "diagnostics": "abc"}, "not diagnostics"),
-    ({"message": REPORT, "content_sha256": __import__("hashlib").sha256(REPORT.encode()).hexdigest(),
-      "include_ids": "yes"}, "true or false"),
-])
-def test_a_draft_that_is_not_exactly_a_report_is_refused(environment, hq, payload, why):  # noqa: F811  (the fixture)
+def test_a_draft_that_is_not_exactly_a_report_is_refused(environment, hq):  # noqa: F811  (the fixture)
+    import hashlib
+    import uuid
+    sha = lambda text: hashlib.sha256(text.encode()).hexdigest()
     api = environment()
     drafts_only(api)
-    r = api.post("/api/v2/approvals", json={"kind": "support", "payload": payload}, headers=as_bot(api))
-    assert r.status_code >= 400 and why in r.text, r.text
+    bot = as_bot(api)
+    for payload, why in [
+        ({"message": REPORT, "content_sha256": "0" * 64}, "doesn't match"),
+        ({"message": REPORT, "content_sha256": "ABC"}, "64 lower-case hex"),
+        ({"message": REPORT}, "support needs content_sha256"),
+        ({"message": " padded ", "content_sha256": sha(" padded ")}, "blank space"),
+        ({"message": "x" * 4001, "content_sha256": sha("x" * 4001)}, "4000"),
+        ({"message": REPORT, "content_sha256": sha(REPORT), "diagnostics": "abc"}, "not diagnostics"),
+        ({"message": REPORT, "content_sha256": sha(REPORT), "include_ids": "yes"}, "true or false"),
+    ]:
+        r = api.post("/api/v2/approvals", json={"kind": "support", "payload": payload},
+                     headers={**bot, "Idempotency-Key": str(uuid.uuid4())})
+        assert r.status_code >= 400 and why in r.text, (why, r.status_code, r.text)
 
 
 def test_support_off_refuses_drafting_and_sending(environment, hq, monkeypatch):  # noqa: F811  (the fixture)

@@ -2,7 +2,8 @@
 
 > **Beta**: message bots (mail and calendar) work today and may still change. See [Beta features](support.md#beta-features).
 
-For how a message reaches a bot, see [Steer, queue or defer](using-tico.md#steer-queue-or-defer); for deferred
+For how a message reaches a bot, and whom it reaches (its @mentions, the author it replies to and the thread's
+followers), see [Steer, queue or defer](using-tico.md#steer-queue-or-defer); for deferred
 messages and tasks, [Leave work for the next run](using-tico.md#leave-work-for-the-next-run).
 
 The **Message bots** section in the sidebar is the directory for repeating email and Slack work;

@@ -232,8 +232,7 @@ def test_the_working_line_follows_whichever_bot_a_persons_message_went_to(api):
         enqueue_stored(c, 'msg-coo')
         assert c.execute("SELECT bot_id FROM jobs WHERE message_id='msg-coo'").fetchone()["bot_id"] == "coo"
     assert get(api, f"tasks/{tid}")["execution"]["run_id"] == attempt["id"], "a bot's message to a bot is not it"
-    # A person owns the task and the bot that asked it answers them. A plain comment there is deferred a day
-    # (backend/delivery.py); one that names the bot wakes it.
+    # A person owns the task and the bot still follows it: a comment that names the bot wakes it.
     with api.app.state.store.transaction() as c:
         c.execute("UPDATE tasks SET owner_id='human:ana', requester_id='bot:ops' WHERE id=?", (tid,))
     said = post(api, f"tasks/{tid}/comments", {"text": "@ops which app is still open?"})
@@ -245,22 +244,14 @@ def test_the_working_line_follows_whichever_bot_a_persons_message_went_to(api):
     post(api, f"attempts/{turn['id']}/started", {"thread_id": "answer"}, machine["token"])
     working = get(api, f"tasks/{tid}")["execution"]
     assert (working["run_id"], working["state"], working["bot_id"]) == (turn["id"], "running", "ops")
-    # The next plain comment waits for the bot; the box offers @ops to wake it.
-    assert get(api, f"tasks/{tid}")["comment_to"] == {"bot": "ops", "wakes": False, "mention": ["ops"]}
-    # Someone who neither owns, asked nor may move it is saved for the bot's next run, and no @mention changes that:
-    # the composer offers none, and one sent anyway wakes nobody.
+    # The next plain comment steers the following bot (D13); nothing is guessed from roles, so no @name is offered.
+    assert get(api, f"tasks/{tid}")["comment_to"] == {"bot": "ops", "wakes": True, "mention": []}
+    # Someone who neither owns, asked nor may move it defers with no deadline; an @mention still reaches the bot (D6).
     assert get(api, f"tasks/{tid}", token="cara-test")["comment_to"] == {"bot": "ops", "wakes": False, "mention": []}
-    assert post(api, f"tasks/{tid}/comments", {"text": "@ops is it billing?"}, token="cara-test")["woke"] is False
-    # A mover who does not own it is saved too, unless they @mention the bot that asked: the composer offers it and
-    # it wakes the bot.
+    assert post(api, f"tasks/{tid}/comments", {"text": "Is it billing?"}, token="cara-test")["woke"] is False
+    # With the bot no longer following, no bot gets a plain comment.
     with api.app.state.store.transaction() as c:
-        c.execute("UPDATE tasks SET owner_id='human:ben' WHERE id=?", (tid,))
-    to = get(api, f"tasks/{tid}")["comment_to"]
-    assert (to["bot"], to["wakes"], "ops" in to["mention"]) == ("ops", False, True)
-    assert post(api, f"tasks/{tid}/comments", {"text": "Noted."})["woke"] is False
-    assert post(api, f"tasks/{tid}/comments", {"text": "@ops is it billing?"})["woke"] is True
-    with api.app.state.store.transaction() as c:
-        c.execute("UPDATE tasks SET requester_id='human:ben' WHERE id=?", (tid,))
+        c.execute("UPDATE thread_followers SET following=0 WHERE thread_id=? AND actor='bot:ops'", (cid,))
     assert get(api, f"tasks/{tid}")["comment_to"] == {"bot": None, "wakes": False, "mention": []}, "no bot gets it"
 
 

@@ -61,7 +61,6 @@ def test_nothing_automatic_wakes_a_snoozed_task_but_a_person_still_reaches_it(ap
         assert "ops" not in task_roundup.run(c)["woke"], "a snooze in force is on no roundup list"
         H.task_update(c, H.human_actor("ana"), row["id"], status="open")
         assert notices(c, row["id"], "Open:") == 1 and jobs(c) == 0, "news about it waits for the bot's next run"
-        assert not H.comment_wakes(c, "bot:finance", H.task(c, row["id"]), "Any news?")
         H.task_comment(c, H.human_actor("ana"), row["id"], "Here is the venue list.")
         assert jobs(c) == 1
 

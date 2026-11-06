@@ -192,17 +192,17 @@ def test_a_routine_saved_without_the_new_fields_still_loads_and_runs(api):
 
 
 # ------------------------------------------------------------------------------------------- refusals
-@pytest.mark.parametrize("trigger", [
-    {"type": "due", "first_due": "2030-02-30", "repeats": "once"},
-    {"type": "due", "first_due": "2030-01-31", "repeats": "daily"},
-    {"type": "due", "first_due": "2030-01-31", "repeats": "monthly", "open_days": -1},
-    {"type": "due", "first_due": "2030-01-31", "repeats": "monthly", "open_days": 400},
-    {"type": "due", "first_due": "2030-01-31", "repeats": "monthly", "tz": "Mars/Olympus"},
-])
-def test_a_bad_due_trigger_is_refused_on_save(api, trigger):
-    body = post(api, "automations", {"name": "Bad", "owner": "person:ana", "trigger": trigger,
-                                     "steps": [OPEN]}, expected=422)
-    assert "trigger" in str(body)
+def test_a_bad_due_trigger_is_refused_on_save(api):
+    for trigger in [
+        {"type": "due", "first_due": "2030-02-30", "repeats": "once"},
+        {"type": "due", "first_due": "2030-01-31", "repeats": "daily"},
+        {"type": "due", "first_due": "2030-01-31", "repeats": "monthly", "open_days": -1},
+        {"type": "due", "first_due": "2030-01-31", "repeats": "monthly", "open_days": 400},
+        {"type": "due", "first_due": "2030-01-31", "repeats": "monthly", "tz": "Mars/Olympus"},
+    ]:
+        body = post(api, "automations", {"name": "Bad", "owner": "person:ana", "trigger": trigger,
+                                         "steps": [OPEN]}, expected=422)
+        assert "trigger" in str(body), trigger
 
 
 # ------------------------------------------------------------------------------------------- holds and retries

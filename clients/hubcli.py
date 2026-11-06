@@ -100,9 +100,10 @@ the server (`backend/hubdb.py`), never here. A command is its tool's name (clien
                                            what you do if they don't answer: a reversible step goes ahead
                                            after the team's days (3); asks expire after 14 days
     hub task comment <id> "<text>" [--steer | --queue | --defer [30m|4h|2d|never] | --goal]   on the record
-                                           with your name. --steer goes into its bot's running turn, --queue right
+                                           with your name; reaches the task's followers and whoever you @mention.
+                                           --steer (the default) goes into each bot's running turn, --queue right
                                            after it, --defer with its next turn on the task (at the latest 24h, or
-                                           the time given), --goal sets its goal
+                                           the time given; never notifies no follower), --goal sets its goal
     hub task comment-edit <id> <comment-id> "<text>"   change a comment you wrote; wakes nobody
     hub task comment-delete <id> <comment-id>          take back a comment you wrote
     hub task ask-resolve <id> <question-id> [--quote "<their words>"]

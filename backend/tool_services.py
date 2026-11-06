@@ -125,20 +125,24 @@ def slug(text):
     return re.sub(r"[^a-z0-9]+", "-", str(text or "").lower()).strip("-")[:48].strip("-") or "tool"
 
 
-def insert_tool(conn, service, name, delivery, created_by, created_at, updated_at=None):
+def insert_tool(conn, service, name, delivery, created_by, created_at, updated_at=None, tid=None, first=None):
     """A new tools row for a key's service (or its own name), its fields from SERVICES; the id is free in `tools`. The
     first tool of a known service takes the service's name, a second keeps its key's name so the two can be told
-    apart. Plain positional SQL, so it runs on a migration's raw connection too."""
+    apart. Plain positional SQL, so it runs on a migration's raw connection too. `tid` and `first` are a caller's own
+    free id and whether it counts as the first (backend/api_tools.py `ensure_tool`, around tools its caller may not
+    see)."""
     fields = defaults(service)
     base = slug(service or name)
-    tid, n = base, 1
-    while conn.execute("SELECT 1 FROM tools WHERE id=?", (tid,)).fetchone():
-        n += 1
-        tid = f"{base}-{n}"
+    if tid is None:
+        tid, n = base, 1
+        while conn.execute("SELECT 1 FROM tools WHERE id=?", (tid,)).fetchone():
+            n += 1
+            tid = f"{base}-{n}"
+    first = tid == base if first is None else first
     conn.execute(
         "INSERT INTO tools(id,name,service,base_url,auth_scheme,check_path,delivery,created_by,created_at,updated_at)"
         " VALUES(?,?,?,?,?,?,?,?,?,?)",
-        (tid, fields["name"] if service and tid == base else str(name or "").strip() or tid, service or "",
+        (tid, fields["name"] if service and first else str(name or "").strip() or tid, service or "",
          fields.get("base_url", ""), fields.get("auth_scheme", "bearer"), fields.get("check_path", ""), delivery,
          created_by or "", created_at, updated_at or created_at))
     return tid

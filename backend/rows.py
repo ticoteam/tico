@@ -420,8 +420,8 @@ class ThreadPinRow(TypedDict):
 
 
 class MessageRouteRow(TypedDict):
-    """Who routing asked for one person's message (backend/thread_routing.py): `bot_ids` is a JSON list of bot actors,
-    `[]` when it asked none."""
+    """Who routing asked for one person's message, kept as history (routing was retired: backend/threads.py `plan`):
+    `bot_ids` is a JSON list of bot actors, `[]` when it asked none."""
     message_id: str
     thread_id: str
     bot_ids: str
@@ -805,6 +805,7 @@ class ToolRow(TypedDict):
     created_by: str
     created_at: str
     updated_at: str
+    audience: str | None
 
 
 class ToolCheckRow(TypedDict):
@@ -977,3 +978,4 @@ class SkillDeviceCodeRow(TypedDict):
     expires_at: str
     created_at: str
     updated_at: str
+    client_hash: str | None

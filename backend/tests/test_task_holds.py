@@ -513,3 +513,54 @@ def test_a_teammate_withdrawing_its_question_leaves_the_bot_s_own_hold_and_its_r
         assert row["blocked_reason"] == before["blocked_reason"]
         assert row["note"] == before["note"]
         assert "withdrew" not in (row["note"] or "")
+
+
+def test_a_bot_task_waiting_on_nothing_goes_back_to_open_after_the_grace_with_one_wake_per_bot(api):
+    """Live: bot tasks parked "Nothing tracked to wait on" sat for a week, since nothing wakes them."""
+    with api.app.state.store.transaction() as c:
+        loose = [bot_task(c, f"Draft the launch post {n}") for n in range(2)]
+        for tid in loose:
+            assert wait(c, tid, note="Waiting on the vendor")["blocked_kind"] == "stranded"
+        before = len(notices(c, "bot:ops", news="assignment"))
+        assert task_holds.unstrand(c, H.shift(H.now(), hours=1))["opened"] == 0
+        assert all(H.task(c, tid)["status"] == "waiting" for tid in loose)
+        assert task_holds.unstrand(c, H.shift(H.now(), hours=3)) == {"opened": 2, "woken": 1, "told": 0}
+        for tid in loose:
+            row = H.task(c, tid)
+            assert row["status"] == "open" and not row["blocked_since"] and row["note"] == task_holds.REOPENED
+        assert len(notices(c, "bot:ops", news="assignment")) == before + 1
+
+
+def test_a_due_date_ahead_a_hand_hold_and_a_person_s_task_are_left_waiting(api):
+    with api.app.state.store.transaction() as c:
+        later = H.shift(H.now(), hours=3)
+        due = bot_task(c, "Check the vendor reply")
+        wait(c, due)
+        c.execute("UPDATE tasks SET due_at=? WHERE id=?", (H.shift(H.now(), hours=5), due))
+        manual = bot_task(c, "Hold the newsletter")
+        wait(c, manual)
+        set_holds(c, manual, blocked_kind="manual", blocked_reason="Held until the legal review")
+        person = bot_task(c, "Plan the offsite", owner="human:ana", actor="human:ana")
+        assert wait(c, person, owner="human:ana")["blocked_kind"] == "stranded"
+        assert task_holds.unstrand(c, later)["opened"] == 0
+        assert [H.task(c, t)["status"] for t in (due, manual, person)] == ["waiting"] * 3
+        # The due date passed: it was something to wait on, and now it is gone.
+        assert task_holds.unstrand(c, H.shift(H.now(), hours=6))["opened"] == 1
+        assert H.task(c, due)["status"] == "open"
+        assert [H.task(c, t)["status"] for t in (manual, person)] == ["waiting"] * 2
+
+
+def test_a_task_sent_back_three_times_in_a_day_stays_waiting_and_its_manager_bot_hears_once(api):
+    with api.app.state.store.transaction() as c:
+        c.execute("UPDATE bot_config SET reports_to='cpo' WHERE bot='ops'")
+        tid = bot_task(c, "Sync the price list")
+        for hours in (3, 6, 9):
+            wait(c, tid)
+            assert task_holds.unstrand(c, H.shift(H.now(), hours=hours))["opened"] == 1
+        wait(c, tid)
+        assert task_holds.unstrand(c, H.shift(H.now(), hours=12)) == {"opened": 0, "woken": 0, "told": 1}
+        assert H.task(c, tid)["status"] == "waiting"
+        told = notices(c, "bot:cpo", news="stranded_loop")
+        assert len(told) == 1 and "Sync the price list" in told[0]["body"]
+        assert task_holds.unstrand(c, H.shift(H.now(), hours=13))["told"] == 0
+        assert notices(c, "human:ana", news="stranded_loop") == [] == notices(c, "human:ben", news="stranded_loop")

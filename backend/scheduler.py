@@ -633,12 +633,6 @@ class Scheduler:
             skill_screening.kick(self.store)
         except Exception as exc:
             failures.append({"skill_screening": type(exc).__name__})
-        # Thread messages waiting to be routed: on their own thread, since a tick never waits on the decision model.
-        try:
-            from . import thread_routing
-            thread_routing.kick(self.store)
-        except Exception as exc:
-            failures.append({"thread_routing": type(exc).__name__})
         # Bot wakes the loop guard held: they go by themselves as their root's rolling hour reopens. Plain SQL, no model.
         with SR.recording(self.store, "thread_loop_guard", failures) as run:
             from . import threads
@@ -815,12 +809,19 @@ class Scheduler:
             except Exception as exc:
                 failures.append({"task_holds_backfill": type(exc).__name__})
             # ...bot tasks waiting on a person with a plain ask become the bot's task blocked on one small subtask
-            # the person owns (the waiting checks' whole job now: nothing is sent back to work here)...
+            # the person owns...
             with SR.recording(self.store, "waiting_checks", failures, "person_asks") as run:
                 from . import person_asks
                 with self.store.transaction() as c:
                     moved = person_asks.migrate(c)
-                run.did(SR.words_of(moved, "plain ask made a task", "No plain asks to a person", "plain asks made tasks"))
+                # ...and a bot's task waiting on nothing tracked goes back to open after a grace (task_holds.unstrand).
+                from . import task_holds
+                with self.store.transaction() as c:
+                    unstranded = task_holds.unstrand(c, stamp(at))
+                run.did(SR.words_of({"plain asks made tasks": moved,
+                                     "tasks waiting on nothing reopened": unstranded["opened"],
+                                     "stuck tasks handed to a manager": unstranded["told"]},
+                                    none="No plain asks to a person, nothing stranded"))
 
         if self.asks_checked is None or at - self.asks_checked >= timedelta(hours=1):
             self.asks_checked = at
