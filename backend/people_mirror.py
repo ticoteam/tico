@@ -19,13 +19,13 @@ DEBOUNCE_SECONDS = 10
 STARTUP_SECONDS = 60
 EVERY_SECONDS = 24 * 3600
 RETRY_MIN, RETRY_MAX = 60, 3600
-MAX_PEOPLE = 5000               # the account refuses more (PEOPLE-CONTRACT.md)
+MAX_PEOPLE = 5000  # the account refuses more (PEOPLE-CONTRACT.md)
 
-_lock = threading.Lock()        # guards the state below
-_send_lock = threading.Lock()   # one build-and-send at a time, so an older list never lands after a newer one
-_auth = None                    # the process's Auth, once start() found a Tico account sign-in
-_timer = None                   # the one pending send
-_next_allowed = 0.0             # monotonic time before which the account asked us not to send
+_lock = threading.Lock()  # guards the state below
+_send_lock = threading.Lock()  # one build-and-send at a time, so an older list never lands after a newer one
+_auth = None  # the process's Auth, once start() found a Tico account sign-in
+_timer = None  # the one pending send
+_next_allowed = 0.0  # monotonic time before which the account asked us not to send
 _looping = False
 
 
@@ -33,6 +33,7 @@ def start(auth):
     """Called at startup: with a Tico account sign-in, one push a minute on and then one a day."""
     global _auth, _looping
     from .oidc import Oidc
+
     if not isinstance(getattr(auth, "proxy", None), Oidc):
         return
     with _lock:
@@ -73,14 +74,21 @@ def payload(c, settings):
     """The people who may sign in to this install, with their role: no bots, nobody left or with sign-in off."""
     from . import access
     from .views import roster as load_roster
+
     roster = load_roster(c)
     owner = access.load_owner(c, settings)
     lists = access.load_access(c, settings)
     rows, seen, skipped = [], set(), 0
     for person in roster["people"]:
         email = str(person.get("email") or "").strip().lower()
-        if (not email or email in seen or person.get("bot") or person.get("hidden")
-                or person.get("directory_left") or not person.get("sign_in", True)):
+        if (
+            not email
+            or email in seen
+            or person.get("bot")
+            or person.get("hidden")
+            or person.get("directory_left")
+            or not person.get("sign_in", True)
+        ):
             continue
         # The account refuses the whole list over one bad address, so an address it would refuse is left out and counted.
         if not access._EMAIL.match(email):
@@ -104,9 +112,10 @@ def push_now(auth=None):
     if auth is None:
         return None
     from .oidc import Oidc
+
     if not isinstance(auth.proxy, Oidc):
         return None
-    with _send_lock:                # the list is built inside the lock: whatever is sent is the newest roster
+    with _send_lock:  # the list is built inside the lock: whatever is sent is the newest roster
         with auth.store.read() as c:
             rows = payload(c, auth.settings)
         return auth.proxy.push_people(rows)

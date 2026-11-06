@@ -1,7 +1,7 @@
 // The Meetings page (ui/app/meetings.js pageNotes, ui/meeting-importers.js): a header with search and one
-// "Add notes" button, a strip of source tiles (Granola, Zoom, Google Meet, Close) that each say
-// Connect or Connected, an empty state of those tiles alone, filters and rows only once there is a
-// meeting, setup in a dialog, and a transcript upload inside Add notes. Light and dark, desktop and phone.
+// "Add notes" button, an empty state of source tiles (Granola, Zoom, Google Meet, Close) alone, then a Sources
+// link (ui/app/meetings-sources.js) whose dialog lists every source with its status and error, Remove and Connect;
+// filters and rows only once there is a meeting, setup in a dialog, and a transcript upload inside Add notes.
 // Fixtures only, no network.
 const {chromium} = require('playwright');
 const assert = require('node:assert/strict');
@@ -30,7 +30,7 @@ const SOME = [{id: 'import', name: 'Import', status: 'available'},
   {id: 'close', name: 'Close', status: 'syncing', last_succeeded_at: ago(0.1), last_import: ago(3)},
   {id: 'granola', name: 'Granola', status: 'syncing', last_succeeded_at: ago(0.2), last_import: ago(26)},
   {id: 'fireflies', name: 'Fireflies', status: 'needs_setup'},
-  {id: 'zoom', name: 'Zoom', status: 'error', last_succeeded_at: ago(9)}];
+  {id: 'zoom', name: 'Zoom', status: 'error', last_succeeded_at: ago(9), error_code: 'auth_failed', error: 'The tool refused the credential.'}];
 
 async function open(browser, viewport, world, options = {}) {
   const context = await browser.newContext({viewport, serviceWorkers: 'block', hasTouch: viewport.width < 760, isMobile: viewport.width < 760, ...options});
@@ -49,7 +49,7 @@ async function open(browser, viewport, world, options = {}) {
     if (p === '/') return route.fulfill({contentType: 'text/html', body: html});
     if (p === '/api/me') return json({id: 'ana', role: world.role || 'owner', name: 'Ana', email: 'ana@example.test', cloud: true});
     if (p === '/api/humans') return json({people: [{id: 'ana', name: 'Ana', email: 'ana@acme.example'}, {id: 'ben', name: 'Ben'}]});
-    if (p === '/api/employees') return json([]);
+    if (p === '/api/employees') return json(world.employees || []);
     if (p === '/api/status') return json({cloud: true, active: [], queued: [], recent_runs: [], keeper_alive: true, health_issues: [], schedules: []});
     if (p === '/api/v2/status') return json({bots: []});
     if (p === '/api/v2/updates') return json({updates: [], missed: [], unread: 0, next_before: null, today: {}});
@@ -68,16 +68,36 @@ async function open(browser, viewport, world, options = {}) {
     }
     if (p === '/api/v2/meetings/import' && method === 'POST') { const body = JSON.parse(route.request().postData()); world.imported.push(body); return json({id: 'm9', existing: false}); }
     if (/^\/api\/meetings\/m\d$/.test(p)) return json({...world.meetings.find(m => p.endsWith(m.id)), turns: [], transcript_readable: '', outbox: {doc: [], task: [], feature: []}});
+    if (/^\/api\/meetings\/[^/]+\/items$/.test(p)) return json(world.items || {id: '', can_push: true, sections: {doc: [], task: [], feature: []}, counts: {proposed: 0}});
+    if (/^\/api\/meetings\/[^/]+\/items\/[^/]+\/push$/.test(p)) {
+      const body = JSON.parse(route.request().postData() || '{}');
+      world.pushes.push({path: p, body});
+      const item = Object.values(world.items?.sections || {}).flat().find(row => row.id === p.split('/').at(-2));
+      if (!item.detail.owner) {
+        const docBot = (world.employees || []).find(employee => employee.slug === 'doc-updater');
+        if (!docBot) return route.fulfill({status: 422, contentType: 'application/json', body: JSON.stringify({error: {code: 'owner', detail: 'Pick who this doc update is for, then push again.'}})});
+        item.detail.owner = 'bot:' + docBot.id;
+      }
+      item.status = 'pushed'; item.version += 1;
+      return json({pushed: true, item});
+    }
+    if (/^\/api\/meetings\/[^/]+\/items\/[^/]+$/.test(p) && method === 'POST') {
+      const body = JSON.parse(route.request().postData() || '{}');
+      const item = Object.values(world.items?.sections || {}).flat().find(row => row.id === p.split('/').at(-1));
+      Object.assign(item, body, {detail: {...item.detail, ...(body.detail || {})}, version: item.version + 1, updated_by: 'human:ana'});
+      world.itemEdits.push(body);
+      return json({item});
+    }
     if (p.endsWith('/watch')) return route.fulfill({contentType: 'text/event-stream', body: ': fixture\n\n'});
     return json(unrouted(p));
   });
   return {page, errors, context};
 }
-const world = (extra = {}) => ({role: 'owner', sources: NONE, meetings: [], importers: structuredClone(IMPORTERS), saved: [], imported: [], ...extra});
+const world = (extra = {}) => ({role: 'owner', sources: NONE, meetings: [], importers: structuredClone(IMPORTERS), saved: [], imported: [], pushes: [], itemEdits: [], ...extra});
 async function shot(page, name) {
   if (!process.env.TICO_MEETINGS_SCREENSHOTS) return;
   fs.mkdirSync(process.env.TICO_MEETINGS_SCREENSHOTS, {recursive: true});
-  await page.screenshot({path: path.join(process.env.TICO_MEETINGS_SCREENSHOTS, name + '.png'), fullPage: true});
+  await page.screenshot({path: path.join(process.env.TICO_MEETINGS_SCREENSHOTS, name + '.png'), fullPage: true, animations: 'disabled'});
 }
 
 (async () => {
@@ -108,9 +128,9 @@ async function shot(page, name) {
       await dialog.locator('select[name=runner]').selectOption('mac');
       w.sources = SOME;
       await dialog.locator('button[type=submit]').click();
-      // Once something is connected the large tiles give way to a plain line and the quiet Add source menu.
+      // Once something is connected the large tiles give way to a plain line and the quiet Sources link.
       await page.waitForFunction(() => !document.querySelector('.meet-blank') && /No shared meetings yet/.test(document.querySelector('#notes-rows')?.textContent || ''));
-      assert.equal(await page.locator('#meet-sources .meet-src-btn').isVisible(), true);
+      assert.equal(await page.locator('#meet-sources .meet-src-btn').innerText(), 'Sources');
       assert.deepEqual(w.saved, [{source: 'granola', enabled: true, runner_id: 'mac'}]);
       await page.keyboard.press('Escape');
       await dialog.waitFor({state: 'detached'});
@@ -135,7 +155,10 @@ async function shot(page, name) {
       await retired.waitFor({state: 'detached'});
 
       // Close goes to its integration page.
-      assert.equal(await page.locator('#meet-sources a[data-state]').first().getAttribute('href'), '#/integrations/close-crm');
+      await page.locator('#meet-sources .meet-src-btn').click();
+      assert.equal(await page.locator('#meet-src-dialog [data-src=close] a').getAttribute('href'), '#/tools/close-crm');
+      await page.keyboard.press('Escape');
+      await page.locator('#meet-src-dialog').waitFor({state: 'detached'});
 
       // Add notes: notes alone are filed as "manual"; a dropped or uploaded transcript files as an upload.
       await page.locator('#notes-manual').click();
@@ -194,12 +217,71 @@ async function shot(page, name) {
       assert.deepEqual(errors, []);
       await context.close();
 
-      // ---- not the owner: the tiles show status but do not open setup
+      // ---- Sources: a red dot while one fails; connected first with status, last sync and why; Remove; Connect
+      w = world({sources: SOME, meetings: MEETINGS});
+      ({page, errors, context} = await open(browser, {width: 1280, height: 900}, w, {colorScheme: scheme}));
+      await page.goto('https://tico-ui.test/#/meetings');
+      await page.locator('.meet-row').first().waitFor();
+      assert.equal(await page.locator('#meet-granola, .mg-row').count(), 0, 'no Granola row on the page');
+      const sourcesBtn = page.locator('#meet-sources .meet-src-btn');
+      await sourcesBtn.locator('.dot').waitFor();
+      await sourcesBtn.click();
+      const panel = page.locator('#meet-src-dialog');
+      await panel.locator('[data-src=zoom]').waitFor();
+      assert.deepEqual(await panel.locator('ul[aria-label=Connected] > li').evaluateAll(els => els.map(e => e.dataset.src)), ['granola', 'zoom', 'close']);
+      assert.deepEqual(await panel.locator('ul[aria-label="Not connected"] > li').evaluateAll(els => els.map(e => e.dataset.src)), ['google-meet']);
+      const zoom = panel.locator('[data-src=zoom]');
+      assert.equal(await zoom.getAttribute('data-state'), 'error');
+      assert.match(await zoom.locator('.msrc-line').innerText(), /Zoom[\s\S]*Error[\s\S]*Synced 9h ago/);
+      assert.equal(await zoom.locator('.msrc-err').innerText(), 'The tool refused the credential.');
+      assert.equal(await zoom.locator('[data-act=imp-connect]').innerText(), 'Reconnect');
+      await shot(page, 'sources-desktop-' + scheme);
+      // Remove asks first; a dismissed confirm changes nothing.
+      page.once('dialog', d => d.dismiss());
+      await zoom.locator('[data-act=imp-remove]').click();
+      assert.deepEqual(w.saved, []);
+      w.sources = SOME.filter(r => r.id !== 'zoom');
+      page.once('dialog', d => { assert.equal(d.message(), 'Remove Zoom?'); d.accept(); });
+      await zoom.locator('[data-act=imp-remove]').click();
+      await panel.locator('ul[aria-label="Not connected"] [data-src=zoom]').waitFor();
+      assert.deepEqual(w.saved, [{source: 'zoom', enabled: false, runner_id: ''}]);
+      await sourcesBtn.locator('.dot').waitFor({state: 'detached'});
+      // Connect opens that importer's setup over the panel.
+      await panel.locator('[data-src=google-meet] [data-act=imp-connect]').click();
+      await page.locator('dialog[aria-label="Connect Google Meet"] form[data-importer=google-meet]').waitFor();
+      assert.deepEqual(errors, []);
+      await context.close();
+
+      // ---- phone and desktop, both themes: the panel fits without sideways scroll
+      for (const [device, viewport, theme] of [['phone', {width: 390, height: 844}, 'dark'], ['phone', {width: 390, height: 844}, 'light'], ['desktop', {width: 1280, height: 900}, 'light']]) {
+        w = world({sources: SOME, meetings: MEETINGS});
+        ({page, errors, context} = await open(browser, viewport, w, {colorScheme: theme}));
+        await page.goto('https://tico-ui.test/#/meetings');
+        await page.locator('.meet-row').first().waitFor();
+        await page.locator('#meet-sources .meet-src-btn').click();
+        await page.locator('#meet-src-dialog [data-src=zoom] .msrc-err').waitFor();
+        assert(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth), theme + ': page fits');
+        const box = await page.locator('#meet-src-dialog').boundingBox();
+        assert(box.x >= 16 && box.x + box.width <= viewport.width - 16, theme + ': 16px gutter');
+        assert(await page.locator('#meet-src-dialog').evaluate(d => d.scrollWidth <= d.clientWidth), theme + ': panel fits');
+        for (const b of await page.locator('#meet-src-dialog .msrc-actions > *').all()) {
+          const r = await b.boundingBox();
+          assert(r.x + r.width <= box.x + box.width, theme + ': buttons on screen');
+        }
+        await shot(page, `sources-${device}-${theme}`);
+        assert.deepEqual(errors, []);
+        await context.close();
+      }
+
+      // ---- not the owner: Sources shows status but offers no setup or Remove
       w = world({role: 'member', sources: SOME, meetings: MEETINGS});
       ({page, context} = await open(browser, {width: 1280, height: 900}, w, {colorScheme: scheme}));
       await page.goto('https://tico-ui.test/#/meetings');
       await page.locator('.meet-row').first().waitFor();
-      assert.equal(await page.locator('#meet-sources [data-msrc=granola]').isDisabled(), true);
+      await page.locator('#meet-sources .meet-src-btn').click();
+      await page.locator('#meet-src-dialog [data-src=zoom]').waitFor();
+      assert.equal(await page.locator('#meet-src-dialog [data-src=google-meet] [data-act=imp-connect]').isDisabled(), true);
+      assert.equal(await page.locator('#meet-src-dialog [data-act=imp-remove], #meet-src-dialog [data-src=zoom] [data-act=imp-connect]').count(), 0);
       await context.close();
 
       // Historical source data and filtering survive retirement.
@@ -221,7 +303,7 @@ async function shot(page, name) {
     }
     // The native window's shared-meeting entry point belongs to this hosted meeting flow too.
     await recorderLiveSharing(browser);
-    console.log('meetings ok: 4 browser scenarios, including permissions, historical data and mixed-version setup');
+    console.log('meetings ok: 6 browser scenarios, including Sources, owner choice, permissions, and mixed-version setup');
   } finally {
     await browser.close();
   }

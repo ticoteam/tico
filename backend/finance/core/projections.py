@@ -1,11 +1,12 @@
 """Default projections for a P&L line, from its posted history (spec 4.4): `recurring` for subscriptions, payroll and
 scheduled bills, `trend` for revenue, `run_rate` for usage like AI services. A stored projection always wins; these
 only fill the months nobody projected. Pure: the caller reads the history and passes the totals in."""
+
 from collections.abc import Sequence
 from fractions import Fraction
 
-TREND_MONTHS = 6            # full months a trend is fitted to
-RATE_DAYS = 30              # days of posted spend a run rate averages
+TREND_MONTHS = 6  # full months a trend is fitted to
+RATE_DAYS = 30  # days of posted spend a run rate averages
 USAGE_SUBTYPES = ("ai", "video")
 
 

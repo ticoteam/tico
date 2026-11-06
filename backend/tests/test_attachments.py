@@ -12,17 +12,24 @@ from backend.tests.test_api import api, assign, claim, get, headers, post, ready
 
 
 def upload(api, path, fields, token="ana-test", key=None, data=b"Original material", expected=200):
-    response = api.post("/api/v2/uploads/" + path, data=fields,
-                        files={"files": ("../draft<one>.txt", data, "text/plain")}, headers=headers(token, key))
+    response = api.post(
+        "/api/v2/uploads/" + path,
+        data=fields,
+        files={"files": ("../draft<one>.txt", data, "text/plain")},
+        headers=headers(token, key),
+    )
     assert response.status_code == expected, response.text
     return response.json()
 
 
-@pytest.mark.parametrize("path,fields", [
-    ("tasks", {"title": "Private task", "body": "Private", "owner": "inbox"}),
-])
+@pytest.mark.parametrize(
+    "path,fields",
+    [
+        ("tasks", {"title": "Private task", "body": "Private", "owner": "inbox"}),
+    ],
+)
 def test_forbidden_upload_never_publishes_file_or_work(api, path, fields):
-    upload(api, path, fields, "cara-test", expected=404)      # a bot he cannot see
+    upload(api, path, fields, "cara-test", expected=404)  # a bot he cannot see
     with api.app.state.store.read() as c:
         for table in ("blobs", "messages", "tasks", "jobs", "message_assets", "task_assets"):
             assert c.execute("SELECT count(*) FROM " + table).fetchone()[0] == 0
@@ -36,7 +43,12 @@ def test_same_bot_other_conversation_cannot_download_private_attachment(api):
     ready(api, machine, ['product-design'])
     first = claim(api, machine)
     post(api, f"attempts/{first['id']}/started", {'thread_id': 'first'}, machine['token'])
-    post(api, f"attempts/{first['id']}/complete", {'outcome': 'completed', 'last_seq': 0, 'text': 'Read'}, machine['token'])
+    post(
+        api,
+        f"attempts/{first['id']}/complete",
+        {'outcome': 'completed', 'last_seq': 0, 'text': 'Read'},
+        machine['token'],
+    )
     post(api, 'chat/product-design', {'text': 'Different Ana conversation'})
     other = claim(api, machine)
     assert other['conversation']['id'] != result['conversation']['id']
@@ -47,8 +59,12 @@ def test_bot_downloads_a_chat_image_only_in_its_authorized_conversation(api):
     image = io.BytesIO()
     Image.new('RGB', (1, 1)).save(image, format='PNG')
     data = image.getvalue()
-    response = api.post('/api/v2/uploads/chat/ops', data={'text': 'Review this image'},
-                        files={'files': ('sample.png', data, 'image/png')}, headers=headers('ben-test'))
+    response = api.post(
+        '/api/v2/uploads/chat/ops',
+        data={'text': 'Review this image'},
+        files={'files': ('sample.png', data, 'image/png')},
+        headers=headers('ben-test'),
+    )
     assert response.status_code == 200, response.text
     chat = response.json()
     attachment = chat['message']['refs']['attachments'][0]
@@ -65,7 +81,12 @@ def test_bot_downloads_a_chat_image_only_in_its_authorized_conversation(api):
     assert downloaded.headers['x-content-sha256'] == hashlib.sha256(data).hexdigest()
     # A later turn of the same bot in somebody else's chat still cannot read this image.
     post(api, f"attempts/{attempt['id']}/started", {'thread_id': 'image'}, machine['token'])
-    post(api, f"attempts/{attempt['id']}/complete", {'outcome': 'completed', 'last_seq': 0, 'text': 'Read'}, machine['token'])
+    post(
+        api,
+        f"attempts/{attempt['id']}/complete",
+        {'outcome': 'completed', 'last_seq': 0, 'text': 'Read'},
+        machine['token'],
+    )
     post(api, 'chat/ops', {'text': 'A separate conversation'})
     other = claim(api, machine, 'ops')
     assert other['conversation']['id'] != chat['conversation']['id']
@@ -84,8 +105,11 @@ def test_chat_and_task_attachments_survive_full_backup_restore(api, tmp_path):
     from backend.app import create_app
     from backend.backup import restore_bundle
     from backend.tests.test_backup_bundle import ObjectStore, bundle, target
+
     chat = upload(api, 'chat/cpo', {'text': 'Private attachment'}, 'ben-test')
-    task = upload(api, 'tasks', {'title': 'Recover task file', 'body': 'Review', 'owner': 'cpo'}, 'ben-test', data=b'Task bytes')
+    task = upload(
+        api, 'tasks', {'title': 'Recover task file', 'body': 'Review', 'owner': 'cpo'}, 'ben-test', data=b'Task bytes'
+    )
     storage = ObjectStore()
     report = bundle(api, storage)
     assert report['objects'] == 2
@@ -140,7 +164,9 @@ def test_sharing_a_chat_file_into_a_private_task_leaves_the_chat_file_readable(a
     ready(api, machine, ['ops'])
     attempt = claim(api, machine, 'ops')
     assert attempt['conversation']['id'] == chat['conversation']['id']
-    tid = post(api, 'tasks', {'owner': 'cpo', 'title': 'Private', 'body': 'Read it.', 'private': True}, 'ben-test')['id']
+    tid = post(api, 'tasks', {'owner': 'cpo', 'title': 'Private', 'body': 'Read it.', 'private': True}, 'ben-test')[
+        'id'
+    ]
     post(api, f'tasks/{tid}/comments', {'text': 'The export', 'attachments': [attachment['id'] + '@1']}, 'ben-test')
     assert api.get(attachment['url'], headers=headers(attempt['token'])).status_code == 200
 
@@ -163,15 +189,23 @@ def test_a_shared_chat_file_records_what_an_upload_does(api, monkeypatch):
     tid = post(api, 'tasks', {'owner': 'ops', 'title': 'Use the export', 'body': 'Read it.'}, 'ben-test')['id']
     wake = CountedWake()
     monkeypatch.setattr(api.app.state.file_metadata, 'wake', wake)
-    forwarded = post(api, f'tasks/{tid}/comments', {'text': 'The export', 'attachments': [ref]},
-                     'ben-test')['comment']['refs']['attachments'][0]
+    forwarded = post(api, f'tasks/{tid}/comments', {'text': 'The export', 'attachments': [ref]}, 'ben-test')['comment'][
+        'refs'
+    ]['attachments'][0]
     assert wake.sets == 1
     with api.app.state.store.read() as c:
-        blob = c.execute("SELECT blob_id FROM bot_file_versions WHERE file_id=? AND version=?",
-                         (forwarded['id'], forwarded['version'])).fetchone()[0]
-        lines = c.execute("SELECT actor_id AS actor,new FROM history_events WHERE subject_type='task' AND subject_id=? AND kind='file'", (tid,)).fetchall()
-        audit = [json.loads(r[0]) for r in c.execute("SELECT detail FROM events WHERE action='task.file' AND target=?",
-                                                     (tid,))]
+        blob = c.execute(
+            "SELECT blob_id FROM bot_file_versions WHERE file_id=? AND version=?",
+            (forwarded['id'], forwarded['version']),
+        ).fetchone()[0]
+        lines = c.execute(
+            "SELECT actor_id AS actor,new FROM history_events WHERE subject_type='task' AND subject_id=? AND kind='file'",
+            (tid,),
+        ).fetchall()
+        audit = [
+            json.loads(r[0])
+            for r in c.execute("SELECT detail FROM events WHERE action='task.file' AND target=?", (tid,))
+        ]
         preview = c.execute("SELECT 1 FROM blob_media WHERE blob_id=?", (blob,)).fetchone()
     assert [tuple(r) for r in lines] == [('human:ben', forwarded['name'])]
     assert [a['file'] for a in audit] == [blob]
@@ -179,4 +213,9 @@ def test_a_shared_chat_file_records_what_an_upload_does(api, monkeypatch):
     # Sharing the same file again points at the copy already there: nothing new to record.
     post(api, f'tasks/{tid}/comments', {'text': 'Again', 'attachments': [ref]}, 'ben-test')
     with api.app.state.store.read() as c:
-        assert c.execute("SELECT count(*) FROM history_events WHERE subject_type='task' AND subject_id=? AND kind='file'", (tid,)).fetchone()[0] == 1
+        assert (
+            c.execute(
+                "SELECT count(*) FROM history_events WHERE subject_type='task' AND subject_id=? AND kind='file'", (tid,)
+            ).fetchone()[0]
+            == 1
+        )

@@ -1,4 +1,5 @@
 """Compress API JSON without buffering live streams or changing downloaded file bytes."""
+
 import asyncio
 import gzip
 import hashlib
@@ -43,13 +44,29 @@ def _gzip(data):
 # The reads every open page repeats on its refresh (ui/app/refresh.js, health.js, notices.js) and that carry no tag of
 # their own. Their answer is tagged by its bytes: one asked again with that tag and unchanged is a 304 with no body,
 # and the page reads its kept copy (ui/app/api.js). Only a few paths: the page keeps a few dozen tagged answers.
-TAGGED = frozenset({"/api/employees", "/api/people", "/api/humans", "/api/status", "/api/issues", "/api/v2/status",
-                    "/api/v2/task-types", "/api/v2/health", "/api/v2/config"})
+TAGGED = frozenset(
+    {
+        "/api/employees",
+        "/api/people",
+        "/api/humans",
+        "/api/status",
+        "/api/issues",
+        "/api/v2/status",
+        "/api/v2/task-types",
+        "/api/v2/health",
+        "/api/v2/config",
+    }
+)
 
 
 def unchanged(request, response):
-    if (request.method != "GET" or not isinstance(response, JSONResponse) or response.status_code != 200
-            or "etag" in response.headers or request.scope.get("path") not in TAGGED):
+    if (
+        request.method != "GET"
+        or not isinstance(response, JSONResponse)
+        or response.status_code != 200
+        or "etag" in response.headers
+        or request.scope.get("path") not in TAGGED
+    ):
         return response
     tag = '"j' + hashlib.blake2b(response.body, digest_size=12).hexdigest() + '"'
     if tag in [t.strip().removeprefix("W/") for t in request.headers.get("if-none-match", "").split(",")]:
@@ -61,10 +78,16 @@ def unchanged(request, response):
 async def compress(request, response):
     response = unchanged(request, response)
     # Behind Cloudflare (cf-ray) the edge compresses for the browser; doing it here too only spends this server's CPU.
-    if (not isinstance(response, JSONResponse) or request.method == "HEAD" or "cf-ray" in request.headers
-            or response.status_code != 200 or len(response.body) < 1024
-            or "content-encoding" in response.headers
-            or "content-disposition" in response.headers or "x-content-sha256" in response.headers):
+    if (
+        not isinstance(response, JSONResponse)
+        or request.method == "HEAD"
+        or "cf-ray" in request.headers
+        or response.status_code != 200
+        or len(response.body) < 1024
+        or "content-encoding" in response.headers
+        or "content-disposition" in response.headers
+        or "x-content-sha256" in response.headers
+    ):
         return response
     response.headers.add_vary_header("Accept-Encoding")
     accepted = accepted_encodings(request.headers)

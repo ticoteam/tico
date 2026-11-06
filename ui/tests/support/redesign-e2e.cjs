@@ -55,10 +55,12 @@ async function shot(page, name) {
 }
 
 // Runs `pass({hub, browser, phone, tag})` on a phone, then on a desktop, each on a fresh hub with these seeds.
-async function journey(name, seeds, pass) {
+// `only: 'phone' | 'desktop'` runs one viewport: for a journey whose two viewports draw the same thing, or whose other
+// viewport another script covers (say which, where it is set).
+async function journey(name, seeds, pass, {only = null} = {}) {
   const browser = await launch();
   try {
-    for (const phone of [true, false]) {
+    for (const phone of only ? [only === 'phone'] : [true, false]) {
       const hub = await startHub({seeds});
       try {
         assert.deepEqual(hub.skipped, [], 'every seed ran');
@@ -68,6 +70,6 @@ async function journey(name, seeds, pass) {
   } finally { await browser.close(); }
   console.log(name + ': ok');
 }
-const run = (name, seeds, pass) => journey(name, seeds, pass).catch(e => { console.error(e); process.exit(1); });
+const run = (name, seeds, pass, options) => journey(name, seeds, pass, options).catch(e => { console.error(e); process.exit(1); });
 
 module.exports = {run, open, go, api, ok, automationNamed, sideways, shot, t};

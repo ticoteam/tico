@@ -7,7 +7,7 @@ is sent and kept.
 
 ## For a human
 
-The **?** beside Search (on a computer, at the end of the sidebar's Ask row; on a phone, beside Search in the More
+The **?** beside Search (on a computer, at the end of the sidebar's Tico Assistant row; on a phone, beside Search in the More
 drawer) opens a chat with the **Tico team**. It is its own conversation, apart from the Assistant: on a computer a panel
 over the bottom left of the page, on a phone the whole screen above the tab bar. The **?** carries a dot when the team
 has replied to one of your requests and you haven't seen it.
@@ -168,7 +168,8 @@ start it, it always starts from your open conversation with the team, and it end
      What it changes the owner's way can outlast Stop, such as a webhook, a credential, the GitHub App, Slack's tokens,
      directory sync or a computer's model sign-in (which account its AI tool runs on), and it reads what the owner reads, mail and raw run streams included: give it only when you want
      support to have that.
-3. Choose how long: 1 hour, 4 hours, 24 hours (the default), 7 days, or any number of hours up to 30 days. Press **Start**.
+3. Choose how long: 1 hour, 4 hours, 24 hours, 3 days (the default), 7 days, 30 days, 90 days, 365 days, or any whole number of
+   hours from 1 to 8760 (365 days). Longer access can cover managed services. Press **Start**.
 
 While it lasts, everyone on your Tico sees a banner on every screen: "Tico team has access (App only), 23 h 12 min left ·
 Stop"; the chat says the same over the box, and the banner opens the chat. **Stop** (the person who started it, the owner or
@@ -269,7 +270,7 @@ Everything below is how the Tico project's own Support Agent works tickets at HQ
 3. **The bot drafts.** It works the task with `playbooks/tico-hq-tickets.md`: reads the diagnostics first (`software/hq-tickets show`
    prints a summary, then the whole bundle; only the staff routes return it), sorts the ticket, asks the Librarian what the docs say,
    hands bugs to engineering, and writes a reply file.
-4. **The bot posts when sending is on.** Once a person who manages the bot has turned its sending on in Tico (Settings > Bots > the bot > Mail sending, or `hub bot mail <slug> --send`; docs/mail.md, "Turning sending on"), the bot runs `software/hq-tickets reply <id> <file>` from its repository to post the requested reply. `outbound_send: true` in its bot.yaml is only a request: with no value in Tico, or no Tico reachable from the run, the reply stays a draft. If genuinely unsure, the bot may request an optional approval for that exact ticket and text and pass it with `--approval <id>`; this does not turn sending on. If the ticket has an email, HQ marks the reply "email pending" and the bot leaves an email-ready copy on the task or sends it with a connected mail Tool. HQ sends no email.
+4. **The bot posts as its sending policy allows.** A person who manages the bot sets it in Tico (Settings > Bots > the bot > Email sending; docs/mail.md, "Turning sending on"). The bot runs `software/hq-tickets reply <id> <file>` from its repository to post the requested reply. With **On their own** it posts. With **Ask first** it requests a publish approval for that exact ticket and text (`hq-tickets payload`) and passes it with `--approval <id>`. With **Never**, or no Tico reachable from the run, the reply stays a draft. `close-signature` posts only under On their own. If the ticket has an email, HQ marks the reply "email pending" and the bot leaves an email-ready copy on the task or sends it with a connected mail Tool. HQ sends no email.
 5. **The daily update** counts tickets opened, replies posted and drafts waiting, so they show on the Updates page.
 
 Ticket text is untrusted data from anyone on the internet. HQ stores it as plain text, the app and the staff tools escape or

@@ -3,25 +3,65 @@
 
 The documents are inline, in the shape `registry/people.yaml` and `registry/employees.yaml` use.
 """
+
 import unittest
 
 from backend import people as P
 
 DOC = {
     "default_user": "ana",
-    "teams": {"marketing": {"root": "cmo"}, "product": {"root": "cpo"},
-              "human-ops": {"root": "human-ops"}, "sales": {"root": "sales"}},
+    "teams": {
+        "marketing": {"root": "cmo"},
+        "product": {"root": "cpo"},
+        "human-ops": {"root": "human-ops"},
+        "sales": {"root": "sales"},
+    },
     "people": [
-        {"id": "ana", "name": "Ana Rivera", "email": "Ana@Acme.example", "title": "Founder",
-         "team": "leadership", "primary_for": ["marketing"], "bot": None},
-        {"id": "ben", "name": "Ben", "email": "ben@acme.example", "title": "Product",
-         "team": "product", "primary_for": ["product"], "bot": None},
-        {"id": "lena", "name": "Lena", "email": "lena@acme.example", "title": "Success",
-         "team": "success", "primary_for": ["human-ops"], "bot": "success"},
-        {"id": "priya", "name": "Priya", "email": "priya@acme.example", "title": "Sales",
-         "team": "sales", "primary_for": ["sales", "lead-research"], "bot": "sales"},
-        {"id": "omar", "name": "Omar", "email": "omar@acme.example", "title": "Sales",
-         "team": "sales", "primary_for": [], "bot": "sales"},
+        {
+            "id": "ana",
+            "name": "Ana Rivera",
+            "email": "Ana@Acme.example",
+            "title": "Founder",
+            "team": "leadership",
+            "primary_for": ["marketing"],
+            "bot": None,
+        },
+        {
+            "id": "ben",
+            "name": "Ben",
+            "email": "ben@acme.example",
+            "title": "Product",
+            "team": "product",
+            "primary_for": ["product"],
+            "bot": None,
+        },
+        {
+            "id": "lena",
+            "name": "Lena",
+            "email": "lena@acme.example",
+            "title": "Success",
+            "team": "success",
+            "primary_for": ["human-ops"],
+            "bot": "success",
+        },
+        {
+            "id": "priya",
+            "name": "Priya",
+            "email": "priya@acme.example",
+            "title": "Sales",
+            "team": "sales",
+            "primary_for": ["sales", "lead-research"],
+            "bot": "sales",
+        },
+        {
+            "id": "omar",
+            "name": "Omar",
+            "email": "omar@acme.example",
+            "title": "Sales",
+            "team": "sales",
+            "primary_for": [],
+            "bot": "sales",
+        },
     ],
 }
 OWNER = {"id": "ana", "email": "ana@acme.example"}
@@ -52,14 +92,16 @@ class Primary(unittest.TestCase):
 
     def test_signed_in_count_matches_turn_level_rules_without_building_groups(self):
         self.assertEqual(P.signed_in_count(DOC), 5)
-        mixed = {"people": [
-            {"id": "ana", "email": "ana@acme.example"},
-            {"id": "guest", "email": ""},
-            {"id": "left", "email": "left@acme.example", "hidden": True},
-            {"id": "off", "email": "off@acme.example", "sign_in": False},
-            {"id": "gone", "email": "gone@acme.example", "directory_left": True},
-            {"id": "ben", "email": "ben@acme.example"},
-        ]}
+        mixed = {
+            "people": [
+                {"id": "ana", "email": "ana@acme.example"},
+                {"id": "guest", "email": ""},
+                {"id": "left", "email": "left@acme.example", "hidden": True},
+                {"id": "off", "email": "off@acme.example", "sign_in": False},
+                {"id": "gone", "email": "gone@acme.example", "directory_left": True},
+                {"id": "ben", "email": "ben@acme.example"},
+            ]
+        }
         self.assertEqual(P.signed_in_count(mixed), 2)
         self.assertEqual(len(P.load(mixed)["people"]), 6)
 

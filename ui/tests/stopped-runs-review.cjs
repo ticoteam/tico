@@ -102,8 +102,9 @@ const {t} = (() => { try { return require('./support/load.cjs'); } catch { retur
 
     await page.goto('https://tico-ui.test/#/settings');
     // Settings' System checks card has none of these, since BotOps reviews them; Health lists each bot's as a note.
-    await page.locator('#settings-more > summary').click();
-    await page.locator('[data-settings-tab=health]').click();
+    // General's Health line counts the checks by severity and the two notes as FYI: none of them is a person's.
+    await page.waitForFunction(() => document.querySelector('#settings-health-line [data-hl-counts]')?.textContent === '1 urgent · 1 to fix · 2 FYI');
+    await page.locator('#settings-health-line [data-hl-details]').click();   // Health has no tab: General's Health line opens it
     const builderNote = page.locator('#hl-page .hl-notes [data-execution-review="builder"]');
     const writerNote = page.locator('#hl-page .hl-notes [data-execution-review="writer"]');
     await builderNote.waitFor({timeout: t(5000)});

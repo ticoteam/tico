@@ -31,9 +31,9 @@ class Granola(Importer):
     prefix = "GRANOLA"
     secret_file = "granola.env"
     required = ("GRANOLA_API_KEY",)
-    fallback = False                # a note shared by someone outside the roster is not the owner's to keep
-    private_by_default = True       # a person's notes stay theirs until the file says otherwise
-    pace = 0.25                     # the API allows 5 calls a second sustained
+    fallback = False  # a note shared by someone outside the roster is not the owner's to keep
+    private_by_default = True  # a person's notes stay theirs until the file says otherwise
+    pace = 0.25  # the API allows 5 calls a second sustained
 
     def get(self, key, path, /, **query):
         url = API + path + ("?" + urllib.parse.urlencode({k: v for k, v in query.items() if v}) if query else "")
@@ -46,9 +46,14 @@ class Granola(Importer):
     def notes(self, key, since, until):
         cursor, out = "", []
         for _ in range(PAGES):
-            page = self.get(key, "/notes", created_after=since.isoformat().replace("+00:00", "Z"),
-                            created_before=until.isoformat().replace("+00:00", "Z"),
-                            page_size=PAGE, cursor=cursor)
+            page = self.get(
+                key,
+                "/notes",
+                created_after=since.isoformat().replace("+00:00", "Z"),
+                created_before=until.isoformat().replace("+00:00", "Z"),
+                page_size=PAGE,
+                cursor=cursor,
+            )
             rows = page.get("notes") if isinstance(page, dict) else None
             if not isinstance(rows, list):
                 raise ProviderError("bad_response", "Granola returned no note list")
@@ -56,7 +61,9 @@ class Granola(Importer):
             cursor = page.get("cursor") or ""
             if not page.get("hasMore") or not cursor:
                 return out
-        raise ProviderError("provider_error", "Granola returned more notes than one pass reads; use a shorter --backfill-days")
+        raise ProviderError(
+            "provider_error", "Granola returned more notes than one pass reads; use a shorter --backfill-days"
+        )
 
     def fetch(self, scope, since, until):
         key = scope.data["key"]
@@ -107,10 +114,20 @@ class Granola(Importer):
                 continue
             end = moment(t.get("end_time"), when)
             speaker = t.get("speaker") if isinstance(t.get("speaker"), dict) else {}
-            who = speaker.get("name") or speaker.get("diarization_label") or (
-                (owner_name or "Note-taker") if speaker.get("attribution") == "me"
-                else "Others" if speaker.get("attribution") == "them" else "")
-            rows.append((who, (when - origin).total_seconds() * 1000, (end - origin).total_seconds() * 1000, t.get("text")))
+            who = (
+                speaker.get("name")
+                or speaker.get("diarization_label")
+                or (
+                    (owner_name or "Note-taker")
+                    if speaker.get("attribution") == "me"
+                    else "Others"
+                    if speaker.get("attribution") == "them"
+                    else ""
+                )
+            )
+            rows.append(
+                (who, (when - origin).total_seconds() * 1000, (end - origin).total_seconds() * 1000, t.get("text"))
+            )
         turns = turns_of(rows)
         notes = str(note.get("summary_markdown") or note.get("summary_text") or "").strip()[:200_000]
         if not turns and not notes:
@@ -120,11 +137,15 @@ class Granola(Importer):
         invitees = [i.get("email") for i in event.get("invitees") or [] if isinstance(i, dict)]
         planned = moment(event.get("scheduled_start_time"))
         started = planned or started
-        body = {"title": text(note.get("title") or event.get("event_title"), 300) or "Granola meeting",
-                "started_at": started.isoformat(),
-                "participants": people(*attendees, *invitees, (owner_name, (owner or {}).get("email"))),
-                "transcript": turns, "notes": notes, "media_url": https_url(note.get("web_url")),
-                "context": {k: v for k, v in {"calendar_event_id": text(event.get("calendar_event_id"))}.items() if v}}
+        body = {
+            "title": text(note.get("title") or event.get("event_title"), 300) or "Granola meeting",
+            "started_at": started.isoformat(),
+            "participants": people(*attendees, *invitees, (owner_name, (owner or {}).get("email"))),
+            "transcript": turns,
+            "notes": notes,
+            "media_url": https_url(note.get("web_url")),
+            "context": {k: v for k, v in {"calendar_event_id": text(event.get("calendar_event_id"))}.items() if v},
+        }
         if not turns:
             body["transcript"] = ""
         end = moment(event.get("scheduled_end_time"))

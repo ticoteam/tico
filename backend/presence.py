@@ -1,4 +1,5 @@
 """Presence belongs to a window, and is read as a list of people."""
+
 from datetime import timedelta
 
 from fastapi import Request
@@ -32,13 +33,21 @@ def cutoff(now=None):
 
 
 def sweep(c, now=None, limit=1000):
-    return c.execute('DELETE FROM presences WHERE id IN (SELECT id FROM presences WHERE seen_at<=? '
-                     'ORDER BY seen_at LIMIT ?)', (cutoff(now), limit)).rowcount
+    return c.execute(
+        'DELETE FROM presences WHERE id IN (SELECT id FROM presences WHERE seen_at<=? ORDER BY seen_at LIMIT ?)',
+        (cutoff(now), limit),
+    ).rowcount
 
 
 def listing(c, place):
-    return {'actors': [{'actor': row[0], 'name': H.actor_name(c, row[0])} for row in c.execute(
-        'SELECT DISTINCT actor FROM presences WHERE place=? AND seen_at>? ORDER BY actor', (place, cutoff()))]}
+    return {
+        'actors': [
+            {'actor': row[0], 'name': H.actor_name(c, row[0])}
+            for row in c.execute(
+                'SELECT DISTINCT actor FROM presences WHERE place=? AND seen_at>? ORDER BY actor', (place, cutoff())
+            )
+        ]
+    }
 
 
 def install(app, store, mutate, auth):
@@ -54,19 +63,26 @@ def install(app, store, mutate, auth):
     def post(request: Request, body: Heartbeat):
         who = request.state.identity
         human_only(who)
+
         def work(c):
             authorized(c, auth, who, body.place)
             c.execute('DELETE FROM presences WHERE place=? AND seen_at<=?', (body.place, cutoff()))
-            existing = c.execute('SELECT actor FROM presences WHERE place=? AND session_id=?',
-                                 (body.place, body.session_id)).fetchone()
+            existing = c.execute(
+                'SELECT actor FROM presences WHERE place=? AND session_id=?', (body.place, body.session_id)
+            ).fetchone()
             if existing and existing[0] != who.actor:
                 raise Problem('session', 'This session belongs to another person', 409)
             if body.gone:
-                c.execute('DELETE FROM presences WHERE place=? AND session_id=? AND actor=?',
-                          (body.place, body.session_id, who.actor))
+                c.execute(
+                    'DELETE FROM presences WHERE place=? AND session_id=? AND actor=?',
+                    (body.place, body.session_id, who.actor),
+                )
             else:
-                c.execute('INSERT INTO presences(id,place,actor,session_id,seen_at) VALUES(?,?,?,?,?) '
-                          'ON CONFLICT(place,session_id) DO UPDATE SET seen_at=excluded.seen_at',
-                          (H.new_id(), body.place, who.actor, body.session_id, H.now()))
+                c.execute(
+                    'INSERT INTO presences(id,place,actor,session_id,seen_at) VALUES(?,?,?,?,?) '
+                    'ON CONFLICT(place,session_id) DO UPDATE SET seen_at=excluded.seen_at',
+                    (H.new_id(), body.place, who.actor, body.session_id, H.now()),
+                )
             return listing(c, body.place)
+
         return mutate(request, body, work, check=lambda c: authorized(c, auth, who, body.place))

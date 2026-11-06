@@ -115,7 +115,7 @@ function botSidebarApply(slug) {
   const rail = $('#pane-tasks');
   if (!rail || BOT?.slug !== slug || !rail.querySelector('.bot-w')) return;
   const layout = botSidebarLayout(slug), editing = BOT_EDIT?.slug === slug;
-  rail.toggleAttribute('data-loading', !layout && isKeeper(slug));
+  rail.toggleAttribute('data-loading', !layout);
   const loading = rail.querySelector('.bot-rail-loading');
   if (loading) loading.hidden = !rail.hasAttribute('data-loading');
   const widgets = editing ? BOT_EDIT.widgets : layout?.widgets || BOT_WIDGET_DEFAULT;

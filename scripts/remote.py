@@ -7,6 +7,7 @@ It runs the pushed commit (HEAD by default), never this checkout's uncommitted f
 command's last lines and keeps the whole log under .remote-runs/. The exit code is the command's own. `gh` must be
 signed in with permission to dispatch workflows on the repository. scripts/heavy.sh calls it when TICO_HEAVY_REMOTE=1.
 """
+
 import argparse
 import json
 import os
@@ -26,8 +27,9 @@ TAIL = 200
 def rate_limit_wait():
     """Seconds until GitHub's core API limit resets: at most 15 minutes, and 60 when the reset is unknown or past (a
     secondary limit has no reset time of its own)."""
-    reset = subprocess.run(['gh', 'api', 'rate_limit', '--jq', '.resources.core.reset'], cwd=ROOT, capture_output=True,
-                           text=True).stdout.strip()
+    reset = subprocess.run(
+        ['gh', 'api', 'rate_limit', '--jq', '.resources.core.reset'], cwd=ROOT, capture_output=True, text=True
+    ).stdout.strip()
     seconds = int(reset) - int(time.time()) if reset.isdigit() else 0
     return min(seconds, 900) if seconds > 0 else 60
 
@@ -94,8 +96,21 @@ def find_run(run_id, deadline):
     title = f'Remote run {run_id}'
     time.sleep(5)  # the dispatched run takes a few seconds to reach the list
     while time.monotonic() < deadline:
-        runs = json.loads(gh('run', 'list', '--workflow', WORKFLOW, '--event', 'workflow_dispatch', '--limit', '30',
-                             '--json', 'databaseId,displayTitle,url', poll=True))
+        runs = json.loads(
+            gh(
+                'run',
+                'list',
+                '--workflow',
+                WORKFLOW,
+                '--event',
+                'workflow_dispatch',
+                '--limit',
+                '30',
+                '--json',
+                'databaseId,displayTitle,url',
+                poll=True,
+            )
+        )
         for run in runs:
             if run['displayTitle'] == title:
                 return run
@@ -125,22 +140,60 @@ def run(command, *, setup=None, cpus='4', minutes=50, ref=None, echo=True):
     command = portable(command)
     run_id = uuid.uuid4().hex[:12]
     setup = setup or setup_for(command)
-    print(f'remote: {shlex.join(command)} at {ref[:7]} on {cpus} vCPUs ({setup} setup), id {run_id}',
-          file=sys.stderr, flush=True)
+    print(
+        f'remote: {shlex.join(command)} at {ref[:7]} on {cpus} vCPUs ({setup} setup), id {run_id}',
+        file=sys.stderr,
+        flush=True,
+    )
     # The workflow comes from main, so a branch can't change what a remote run is allowed to do.
-    gh('workflow', 'run', WORKFLOW, '--ref', 'main', '-f', f'id={run_id}', '-f', f'ref={ref}',
-       '-f', f'command={shlex.join(command)}', '-f', f'setup={setup}', '-f', f'cpus={cpus}',
-       '-f', f'minutes={minutes}')
+    gh(
+        'workflow',
+        'run',
+        WORKFLOW,
+        '--ref',
+        'main',
+        '-f',
+        f'id={run_id}',
+        '-f',
+        f'ref={ref}',
+        '-f',
+        f'command={shlex.join(command)}',
+        '-f',
+        f'setup={setup}',
+        '-f',
+        f'cpus={cpus}',
+        '-f',
+        f'minutes={minutes}',
+    )
     found = find_run(run_id, time.monotonic() + 120)
     print(f'remote: {found["url"]}', file=sys.stderr, flush=True)
     conclusion = wait(found)
     logs = ROOT / '.remote-runs' / run_id
     logs.mkdir(parents=True, exist_ok=True)
     with tempfile.TemporaryDirectory() as scratch:
-        fetched = subprocess.run(['bash', 'scripts/ci/retry.sh', '--clear', scratch, '--permanent',
-                                  'HTTP (404|410)|no (valid )?artifacts? (match|found)', '--', 'gh', 'run', 'download',
-                                  str(found['databaseId']), '-n', f'remote-run-{run_id}', '-D', scratch],
-                                 cwd=ROOT).returncode == 0
+        fetched = (
+            subprocess.run(
+                [
+                    'bash',
+                    'scripts/ci/retry.sh',
+                    '--clear',
+                    scratch,
+                    '--permanent',
+                    'HTTP (404|410)|no (valid )?artifacts? (match|found)',
+                    '--',
+                    'gh',
+                    'run',
+                    'download',
+                    str(found['databaseId']),
+                    '-n',
+                    f'remote-run-{run_id}',
+                    '-D',
+                    scratch,
+                ],
+                cwd=ROOT,
+            ).returncode
+            == 0
+        )
         for name in ('command', 'output.log', 'exit-code'):
             if (Path(scratch) / name).is_file():
                 (logs / name).write_bytes((Path(scratch) / name).read_bytes())
@@ -158,8 +211,11 @@ def run(command, *, setup=None, cpus='4', minutes=50, ref=None, echo=True):
 
 def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__.split('\n')[0])
-    parser.add_argument('--setup', choices=('python', 'browser', 'rust', 'all'),
-                        help='what the VM installs first (default: guessed from the command)')
+    parser.add_argument(
+        '--setup',
+        choices=('python', 'browser', 'rust', 'all'),
+        help='what the VM installs first (default: guessed from the command)',
+    )
     parser.add_argument('--cpus', choices=('4', '8', '16'), default=os.environ.get('TICO_REMOTE_CPUS', '4'))
     # The whole default Python suite takes 25-28 minutes on 4 vCPUs; a 30-minute limit cut it off near the end.
     parser.add_argument('--minutes', type=int, default=50, help='time limit for the command (1 to 60)')

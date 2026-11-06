@@ -2,6 +2,7 @@
 
 conftest.py runs them before serving for every other test (TICO_START_JOBS=inline); this one checks the served way.
 """
+
 import sqlite3
 import threading
 from concurrent.futures import ThreadPoolExecutor
@@ -31,6 +32,7 @@ def test_a_server_answers_while_its_start_jobs_run_and_waits_for_them_to_stop(tm
                 entered.set()
                 release.wait()
             ran.append(name)
+
         return run
 
     monkeypatch.setattr(Onboarding, "ensure_librarian", job("librarian", wait=True))
@@ -69,8 +71,11 @@ def test_a_server_answers_while_its_start_jobs_run_and_waits_for_them_to_stop(tm
     assert captured == []
 
 
-@pytest.mark.parametrize("failure", [RuntimeError("synthetic"), sqlite3.OperationalError("database is locked")],
-                         ids=["job-failure", "job-busy"])
+@pytest.mark.parametrize(
+    "failure",
+    [RuntimeError("synthetic"), sqlite3.OperationalError("database is locked")],
+    ids=["job-failure", "job-busy"],
+)
 def test_a_failed_start_job_is_captured_and_the_next_one_still_runs(tmp_path, monkeypatch, failure):
     monkeypatch.delenv("TICO_START_JOBS", raising=False)
     ran, captured = [], []
@@ -100,10 +105,15 @@ def startup_jobs(tmp_path, monkeypatch):
         def run(c, *args):
             c.execute("INSERT INTO registry_metadata(key,value) VALUES(?, 'true')", ("start-test." + name,))
             ran.append(name)
+
         return run
 
-    onboarding = SimpleNamespace(**{name: job(name) for name in (
-        "ensure_librarian", "ensure_goal_manager", "ensure_task_manager", "ensure_counsel")})
+    onboarding = SimpleNamespace(
+        **{
+            name: job(name)
+            for name in ("ensure_librarian", "ensure_goal_manager", "ensure_task_manager", "ensure_counsel")
+        }
+    )
     monkeypatch.setattr(listening, "seed_market", job("market"))
     monkeypatch.setattr(message_bots, "backfill", job("message_bots"))
     monkeypatch.setattr(github, "ship_deployed", job("ship_deployed"))
@@ -155,12 +165,21 @@ def test_start_jobs_wait_for_write_admission_instead_of_skipping_jobs(startup_jo
         assert failures[0].sqlite_errorcode == sqlite3.SQLITE_BUSY
     else:
         assert str(failures[0]) == "database is locked"
-    expected = ["ensure_librarian", "ensure_goal_manager", "ensure_task_manager", "ensure_counsel",
-                "market", "message_bots", "ship_deployed"]
+    expected = [
+        "ensure_librarian",
+        "ensure_goal_manager",
+        "ensure_task_manager",
+        "ensure_counsel",
+        "market",
+        "message_bots",
+        "ship_deployed",
+    ]
     assert startup_jobs.ran == expected
     assert startup_jobs.captured == []
     with store.read() as c:
-        assert c.execute("SELECT count(*) FROM registry_metadata WHERE key LIKE 'start-test.%'").fetchone()[0] == len(expected)
+        assert c.execute("SELECT count(*) FROM registry_metadata WHERE key LIKE 'start-test.%'").fetchone()[0] == len(
+            expected
+        )
 
 
 def test_a_permanent_admission_failure_is_captured_and_the_next_job_still_runs(startup_jobs, monkeypatch):

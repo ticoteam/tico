@@ -16,7 +16,9 @@ from backend.files import series
 from backend.store import H, task_message_page
 from backend.tests.test_api import api, headers, post, restrict  # noqa: F401  (the fixture; post is a helper)
 from backend.tests.test_threads_private_execution import (  # noqa: F401  (the helper and the fixture it needs)
-    private_run, private_tasks_have_an_unrelated_manager)
+    private_run,
+    private_tasks_have_an_unrelated_manager,
+)
 
 PEOPLE = ("human:ana", "human:ben", "human:cara")
 
@@ -27,8 +29,17 @@ def store(api):
 
 def room(c, person, bot):
     """A person's personal room with a bot, as rooms.personal_room opened them before Homes (a legacy chat)."""
-    return H.open_conversation(c, person, [person, "bot:" + bot], kind="chat", subject="Chat with " + bot,
-                               scope=rooms.PERSONAL, owner_actor=person, room_key=bot, allow_held=True)["id"]
+    return H.open_conversation(
+        c,
+        person,
+        [person, "bot:" + bot],
+        kind="chat",
+        subject="Chat with " + bot,
+        scope=rooms.PERSONAL,
+        owner_actor=person,
+        room_key=bot,
+        allow_held=True,
+    )["id"]
 
 
 def say(c, sender, to, body, conversation_id, **kwargs):
@@ -73,8 +84,10 @@ def ops_rooms(api):
     with store(api).transaction() as c:
         home = threads.home(c, "bot:ops", create=True)["id"]
         ana, ben = room(c, "human:ana", "ops"), room(c, "human:ben", "ops")
-        written = [say(c, "human:ana", "bot:ops", "Ana one", ana)["id"],
-                   say(c, "human:ben", "bot:ops", "Ben one", ben)["id"]]
+        written = [
+            say(c, "human:ana", "bot:ops", "Ana one", ana)["id"],
+            say(c, "human:ben", "bot:ops", "Ben one", ben)["id"],
+        ]
         written.append(say(c, "bot:ops", "human:ana", "Reply to Ana", ana, in_reply_to=written[0])["id"])
         written.append(say(c, "human:ana", "bot:ops", "Ana two", ana)["id"])
         written.append(say(c, "bot:ops", "human:ben", "Reply to Ben", ben, in_reply_to=written[1])["id"])
@@ -83,10 +96,12 @@ def ops_rooms(api):
 
 def test_two_peoples_rooms_and_an_empty_home_become_one_home_in_order(api, ops_rooms):
     with store(api).read() as c:
-        before = {m: c.execute("SELECT seq FROM messages WHERE id=?", (m,)).fetchone()[0] for m in ops_rooms["messages"]}
+        before = {
+            m: c.execute("SELECT seq FROM messages WHERE id=?", (m,)).fetchone()[0] for m in ops_rooms["messages"]
+        }
         assert not threads.readable(c, threads.actor_viewer(c, "human:cara"), ops_rooms["ana"])
         had = {p: unread(c, "human:" + p, ops_rooms[p]) for p in ("ana", "ben")}
-        assert had["ben"] >= 1        # ops's reply to ben, not read yet
+        assert had["ben"] >= 1  # ops's reply to ben, not read yet
     summary = merge(api)
     assert summary["rooms"] == 2 and summary["messages"] == 5 and not summary["errors"], summary
     assert summary["homes_made"] == 0
@@ -94,8 +109,9 @@ def test_two_peoples_rooms_and_an_empty_home_become_one_home_in_order(api, ops_r
     with store(api).read() as c:
         # One Home, both histories, in the order they were written, each message keeping its id and seq.
         assert seqs(c, home) == ops_rooms["messages"]
-        assert {m: c.execute("SELECT seq FROM messages WHERE id=?", (m,)).fetchone()[0]
-                for m in ops_rooms["messages"]} == before
+        assert {
+            m: c.execute("SELECT seq FROM messages WHERE id=?", (m,)).fetchone()[0] for m in ops_rooms["messages"]
+        } == before
         row = threads.thread_row(c, home)
         assert row["last_seq"] == max(before.values())
         # Read by everyone who reads the bot's Home: cara reads ana's and ben's chats now.
@@ -119,20 +135,29 @@ def test_two_peoples_rooms_and_an_empty_home_become_one_home_in_order(api, ops_r
         # threads.home is the merged Home; the former owners follow it, and nobody wakes to a flood of unread.
         assert threads.home(c, "bot:ops", create=False)["id"] == home
         for person in ("human:ana", "human:ben"):
-            assert c.execute("SELECT following FROM thread_followers WHERE thread_id=? AND actor=?",
-                             (home, person)).fetchone()[0] == 1
+            assert (
+                c.execute(
+                    "SELECT following FROM thread_followers WHERE thread_id=? AND actor=?", (home, person)
+                ).fetchone()[0]
+                == 1
+            )
         # The moved history is read history for everyone who reads the Home, including ben's unread reply (owner
         # decision, Nov 3: old unread state is discarded, not carried over).
         assert {p: unread(c, "human:" + p, home) for p in ("ana", "ben", "cara")} == {"ana": 0, "ben": 0, "cara": 0}
-        assert not c.execute("SELECT 1 FROM message_deliveries WHERE thread_id IN (?,?)",
-                             (ops_rooms["ana"], ops_rooms["ben"])).fetchone()
+        assert not c.execute(
+            "SELECT 1 FROM message_deliveries WHERE thread_id IN (?,?)", (ops_rooms["ana"], ops_rooms["ben"])
+        ).fetchone()
     with store(api).read() as c:
         assert personal_rooms_left(c, "ops") == []
 
 
 def personal_rooms_left(c, bot):
-    return [r[0] for r in c.execute("SELECT id FROM conversations WHERE scope='personal' AND room_key=? "
-                                    "AND closed_at IS NULL", (bot,))]
+    return [
+        r[0]
+        for r in c.execute(
+            "SELECT id FROM conversations WHERE scope='personal' AND room_key=? AND closed_at IS NULL", (bot,)
+        )
+    ]
 
 
 def test_a_bot_without_a_home_gets_one_made(api):
@@ -177,9 +202,16 @@ def test_a_shared_room_home_keeps_its_legacy_readers(api):
 def test_assistant_rooms_and_other_rows_stay(api):
     with store(api).transaction() as c:
         coo = room(c, "human:ana", "coo")
-        assistant = H.open_conversation(c, "human:ana", ["human:ana", "bot:coo"], kind="chat", subject="Assistant",
-                                        scope=rooms.PERSONAL, owner_actor="human:ana",
-                                        room_key=rooms.ASSISTANT_ROOM)["id"]
+        assistant = H.open_conversation(
+            c,
+            "human:ana",
+            ["human:ana", "bot:coo"],
+            kind="chat",
+            subject="Assistant",
+            scope=rooms.PERSONAL,
+            owner_actor="human:ana",
+            room_key=rooms.ASSISTANT_ROOM,
+        )["id"]
         dm = H.open_conversation(c, "human:ana", ["human:ana", "bot:ops"], kind="chat", subject="Direct")["id"]
         closed = room(c, "human:cara", "ops")
         say(c, "human:cara", "bot:ops", "Old", closed)
@@ -198,8 +230,10 @@ def test_assistant_rooms_and_other_rows_stay(api):
 def test_a_second_run_changes_nothing(api, ops_rooms):
     merge(api)
     with store(api).read() as c:
-        first = {t: [tuple(r) for r in c.execute(f"SELECT * FROM {t} ORDER BY 1")]
-                 for t in ("messages", "home_merges", "thread_followers", "message_deliveries")}
+        first = {
+            t: [tuple(r) for r in c.execute(f"SELECT * FROM {t} ORDER BY 1")]
+            for t in ("messages", "home_merges", "thread_followers", "message_deliveries")
+        }
     again = merge(api)
     assert again["rooms"] == 0 and again["messages"] == 0 and not again["errors"], again
     with store(api).transaction() as c:
@@ -209,8 +243,10 @@ def test_a_second_run_changes_nothing(api, ops_rooms):
         assert bot_home_merge.done(c)
         assert bot_home_merge.run_once(c) is None
     with store(api).read() as c:
-        assert first == {t: [tuple(r) for r in c.execute(f"SELECT * FROM {t} ORDER BY 1")]
-                         for t in ("messages", "home_merges", "thread_followers", "message_deliveries")}
+        assert first == {
+            t: [tuple(r) for r in c.execute(f"SELECT * FROM {t} ORDER BY 1")]
+            for t in ("messages", "home_merges", "thread_followers", "message_deliveries")
+        }
 
 
 def test_a_write_that_names_an_old_room_lands_in_the_home(api, ops_rooms):
@@ -234,18 +270,26 @@ def test_the_api_puts_a_reply_to_an_old_room_in_the_home_and_refuses_a_private_r
     reply lands in the Home."""
     merge(api)
     home = ops_rooms["home"]
-    sent = api.post("/api/v2/messages", json={"to": "bot:ops", "text": "Ana, late", "conversation_id": ops_rooms["ana"]},
-                    headers=headers("ana-test"))
+    sent = api.post(
+        "/api/v2/messages",
+        json={"to": "bot:ops", "text": "Ana, late", "conversation_id": ops_rooms["ana"]},
+        headers=headers("ana-test"),
+    )
     assert sent.status_code == 200, sent.text
     with store(api).read() as c:
         assert c.execute("SELECT conversation_id FROM messages WHERE id=?", (sent.json()["id"],)).fetchone()[0] == home
     row, attempt = private_run(api, "ops")
-    refused = api.post("/api/v2/messages", json={"to": "human:ana", "text": "Confidential reply",
-                                                 "conversation_id": ops_rooms["ana"]},
-                       headers=headers(attempt["token"]))
+    refused = api.post(
+        "/api/v2/messages",
+        json={"to": "human:ana", "text": "Confidential reply", "conversation_id": ops_rooms["ana"]},
+        headers=headers(attempt["token"]),
+    )
     assert refused.status_code == 403, refused.text
-    refused = api.post("/api/v2/messages", json={"to": "human:ana", "text": "Confidential again", "conversation_id": home},
-                       headers=headers(attempt["token"]))
+    refused = api.post(
+        "/api/v2/messages",
+        json={"to": "human:ana", "text": "Confidential again", "conversation_id": home},
+        headers=headers(attempt["token"]),
+    )
     assert refused.status_code == 403, refused.text
     with store(api).read() as c:
         assert not c.execute("SELECT 1 FROM messages WHERE body LIKE 'Confidential%'").fetchone()
@@ -295,8 +339,7 @@ def test_chat_with_lists_a_moved_bots_readable_home_and_keeps_unmoved_dms(api, o
 
     # Cara may not read Ops's Home, so the lookup must not reveal it.
     with store(api).transaction() as c:
-        restrict(c, "ops", see={"people": ["ana", "cara"]}, read={"people": ["ana"]},
-                 write={"people": ["ana"]})
+        restrict(c, "ops", see={"people": ["ana", "cara"]}, read={"people": ["ana"]}, write={"people": ["ana"]})
     hidden = api.get("/api/v2/conversations", params={"chat_with": "ops"}, headers=headers("cara-test"))
     assert hidden.status_code == 200 and hidden.json()["conversations"] == []
 
@@ -344,12 +387,14 @@ def test_a_tasks_history_is_read_from_its_room_and_the_homes_it_is_in(api, ops_r
     """Finding 5: a task whose messages were written in a room reads them from the room, the Home they moved into, and the
     Home it is in now, even after that Home is archived and a new one takes the writes."""
     from backend.tests.test_api import post
+
     task = post(api, "tasks", {"owner": "ops", "title": "Summarize", "body": "Please summarize the current work."})
     task_id = task["id"] if "id" in task else task["task"]["id"]
     with store(api).transaction() as c:
         c.execute("UPDATE tasks SET conversation_id=? WHERE id=?", (ops_rooms["ana"], task_id))
-        note = say(c, "human:ana", "bot:ops", "A note on it", ops_rooms["ana"],
-                   refs={"task": task_id, "comment": True})["id"]
+        note = say(
+            c, "human:ana", "bot:ops", "A note on it", ops_rooms["ana"], refs={"task": task_id, "comment": True}
+        )["id"]
     merge(api)
     with store(api).transaction() as c:
         c.execute("UPDATE conversations SET archived_at=? WHERE id=?", (H.now(), ops_rooms["home"]))
@@ -413,9 +458,10 @@ def test_a_private_runs_message_to_its_requester_with_no_room_named_is_refused(a
     Home once the chats have moved. A private run's words cannot go there: the destination is named before the checks,
     and the named-room check refuses it, so nothing is written."""
     merge(api)
-    _row, attempt = private_run(api, "ops")          # the run's requester is ben
-    refused = api.post("/api/v2/messages", json={"to": "human:ben", "text": "Implicit confidential"},
-                       headers=headers(attempt["token"]))
+    _row, attempt = private_run(api, "ops")  # the run's requester is ben
+    refused = api.post(
+        "/api/v2/messages", json={"to": "human:ben", "text": "Implicit confidential"}, headers=headers(attempt["token"])
+    )
     assert refused.status_code == 403, refused.text
     with store(api).read() as c:
         assert not c.execute("SELECT 1 FROM messages WHERE body LIKE 'Implicit confidential%'").fetchone()
@@ -446,6 +492,7 @@ def test_a_tasks_history_keeps_every_home_through_two_archives(api, ops_rooms):
     """Finding 3 (P2): a task's history reads every Home its bot has had, archived ones included. Each comment written
     through the old room after its Home was archived lands in the next Home, and all three stay in the task's history."""
     from backend.tests.test_api import post
+
     task = post(api, "tasks", {"owner": "ops", "title": "Summarize", "body": "Please summarize the current work."})
     task_id = task["id"] if "id" in task else task["task"]["id"]
     ana = ops_rooms["ana"]
@@ -459,9 +506,13 @@ def test_a_tasks_history_keeps_every_home_through_two_archives(api, ops_rooms):
             c.execute("UPDATE conversations SET archived_at=? WHERE id=?", (H.now(), open_home))
             notes.append(say(c, "human:ana", "bot:ops", text, ana, refs={"task": task_id, "comment": True})["id"])
     with store(api).read() as c:
-        landed = {r[0] for r in c.execute(
-            "SELECT conversation_id FROM messages WHERE id IN (%s)" % ",".join("?" * len(notes)), notes)}
-        assert len(landed) == 3, landed                       # one Home each, the first merged one included
+        landed = {
+            r[0]
+            for r in c.execute(
+                "SELECT conversation_id FROM messages WHERE id IN (%s)" % ",".join("?" * len(notes)), notes
+            )
+        }
+        assert len(landed) == 3, landed  # one Home each, the first merged one included
         ids = [m["id"] for m in H.task_comments(c, task_id)]
         assert [i for i in ids if i in notes] == notes, ids
         page = task_message_page(c, H.task(c, task_id), limit=50)
@@ -493,13 +544,17 @@ def test_an_explicit_reply_to_a_moved_room_with_an_archived_home_is_checked_in_t
     with store(api).transaction() as c:
         c.execute("UPDATE conversations SET archived_at=? WHERE id=?", (H.now(), ops_rooms["home"]))
     _row, attempt = private_run(api, "ops")
-    refused = api.post("/api/v2/messages", json={"to": "human:ana", "text": "Confidential after the archive",
-                                                 "conversation_id": ops_rooms["ana"]},
-                       headers=headers(attempt["token"]))
+    refused = api.post(
+        "/api/v2/messages",
+        json={"to": "human:ana", "text": "Confidential after the archive", "conversation_id": ops_rooms["ana"]},
+        headers=headers(attempt["token"]),
+    )
     assert refused.status_code == 403, refused.text
-    sent = api.post("/api/v2/messages", json={"to": "bot:ops", "text": "Ana, after the archive",
-                                              "conversation_id": ops_rooms["ana"]},
-                    headers=headers("ana-test"))
+    sent = api.post(
+        "/api/v2/messages",
+        json={"to": "bot:ops", "text": "Ana, after the archive", "conversation_id": ops_rooms["ana"]},
+        headers=headers("ana-test"),
+    )
     assert sent.status_code == 200, sent.text
     with store(api).read() as c:
         assert not c.execute("SELECT 1 FROM messages WHERE body LIKE 'Confidential after the archive%'").fetchone()
@@ -536,8 +591,9 @@ def test_a_task_comment_on_a_moved_room_is_edited_and_deleted_by_its_author(api,
     task_id = post(api, "tasks", {"owner": "ops", "title": "Summarize", "body": "Please summarize the work."})["id"]
     with store(api).transaction() as c:
         c.execute("UPDATE tasks SET conversation_id=? WHERE id=?", (ops_rooms["ana"], task_id))
-        old = say(c, "human:ana", "bot:ops", "An old note", ops_rooms["ana"],
-                  refs={"task": task_id, "comment": True})["id"]
+        old = say(c, "human:ana", "bot:ops", "An old note", ops_rooms["ana"], refs={"task": task_id, "comment": True})[
+            "id"
+        ]
     merge(api)
     post(api, f"tasks/{task_id}/comments", {"text": "A note after the move"})
     new = body_id(api, "A note after the move")
@@ -565,14 +621,35 @@ def test_a_question_on_a_moved_task_is_read_across_the_move_and_replaced_by_a_ne
     with store(api).transaction() as c:
         c.execute("UPDATE tasks SET conversation_id=? WHERE id=?", (ops_rooms["ana"], first))
         c.execute("UPDATE tasks SET conversation_id=? WHERE id=?", (ops_rooms["ben"], second))
-        before = say(c, "bot:ops", "human:ana", "Which one for the first?", ops_rooms["ana"], kind="ask",
-                     refs={"task": first, "questions": questions})["id"]
-        other = say(c, "bot:ops", "human:ben", "Which one for the second?", ops_rooms["ben"], kind="ask",
-                    refs={"task": second, "questions": questions})["id"]
+        before = say(
+            c,
+            "bot:ops",
+            "human:ana",
+            "Which one for the first?",
+            ops_rooms["ana"],
+            kind="ask",
+            refs={"task": first, "questions": questions},
+        )["id"]
+        other = say(
+            c,
+            "bot:ops",
+            "human:ben",
+            "Which one for the second?",
+            ops_rooms["ben"],
+            kind="ask",
+            refs={"task": second, "questions": questions},
+        )["id"]
     merge(api)
     with store(api).transaction() as c:
-        after = say(c, "bot:ops", "human:ana", "Which one for the first, again?", ops_rooms["ana"], kind="ask",
-                    refs={"task": first, "questions": questions})["id"]
+        after = say(
+            c,
+            "bot:ops",
+            "human:ana",
+            "Which one for the first, again?",
+            ops_rooms["ana"],
+            kind="ask",
+            refs={"task": first, "questions": questions},
+        )["id"]
         assert H.message(c, after)["conversation_id"] == ops_rooms["home"]
     with store(api).read() as c:
         row_first, row_second = H.task(c, first), H.task(c, second)
@@ -583,8 +660,9 @@ def test_a_question_on_a_moved_task_is_read_across_the_move_and_replaced_by_a_ne
         for actor in ("human:ana", "human:ben"):
             batch = H.open_tasks_asks(c, [row_first, row_second], actor=actor)
             for row in (row_first, row_second):
-                assert [a["id"] for a in batch[row["id"]]] == \
-                    [a["id"] for a in H.open_task_asks(c, row, actor=actor)], (actor, row["id"])
+                assert [a["id"] for a in batch[row["id"]]] == [
+                    a["id"] for a in H.open_task_asks(c, row, actor=actor)
+                ], (actor, row["id"])
         assert {a["id"] for a in H.open_tasks_asks(c, [row_first], actor="human:ana")[first]} == {after}
 
 
@@ -599,14 +677,35 @@ def test_a_question_asked_before_its_task_room_moved_still_lists_the_task_in_nee
     with store(api).transaction() as c:
         c.execute("UPDATE tasks SET conversation_id=? WHERE id=?", (ops_rooms["ana"], first))
         c.execute("UPDATE tasks SET conversation_id=? WHERE id=?", (ops_rooms["ben"], second))
-        say(c, "bot:ops", "human:ana", "Which one for the first?", ops_rooms["ana"], kind="ask",
-            refs={"task": first, "questions": QUESTIONS})
-        say(c, "bot:ops", "human:ben", "Which one for the second?", ops_rooms["ben"], kind="ask",
-            refs={"task": second, "questions": QUESTIONS})
+        say(
+            c,
+            "bot:ops",
+            "human:ana",
+            "Which one for the first?",
+            ops_rooms["ana"],
+            kind="ask",
+            refs={"task": first, "questions": QUESTIONS},
+        )
+        say(
+            c,
+            "bot:ops",
+            "human:ben",
+            "Which one for the second?",
+            ops_rooms["ben"],
+            kind="ask",
+            refs={"task": second, "questions": QUESTIONS},
+        )
     merge(api)
     with store(api).transaction() as c:
-        say(c, "bot:ops", "human:ana", "Which one for the first, again?", ops_rooms["ana"], kind="ask",
-            refs={"task": first, "questions": QUESTIONS})
+        say(
+            c,
+            "bot:ops",
+            "human:ana",
+            "Which one for the first, again?",
+            ops_rooms["ana"],
+            kind="ask",
+            refs={"task": first, "questions": QUESTIONS},
+        )
     with store(api).read() as c:
         ana = [t["id"] for t in H.tasks_asked_of(c, "human:ana")]
         ben = [t["id"] for t in H.tasks_asked_of(c, "human:ben")]
@@ -623,14 +722,35 @@ def test_a_question_asked_before_the_move_is_superseded_by_a_replacement_and_by_
     with store(api).transaction() as c:
         c.execute("UPDATE tasks SET conversation_id=? WHERE id=?", (ops_rooms["ana"], first))
         c.execute("UPDATE tasks SET conversation_id=? WHERE id=?", (ops_rooms["ben"], second))
-        old = say(c, "bot:ops", "human:ana", "Which one for the first?", ops_rooms["ana"], kind="ask",
-                  refs={"task": first, "questions": QUESTIONS})["id"]
-        left = say(c, "bot:ops", "human:ben", "Which one for the second?", ops_rooms["ben"], kind="ask",
-                   refs={"task": second, "questions": QUESTIONS})["id"]
+        old = say(
+            c,
+            "bot:ops",
+            "human:ana",
+            "Which one for the first?",
+            ops_rooms["ana"],
+            kind="ask",
+            refs={"task": first, "questions": QUESTIONS},
+        )["id"]
+        left = say(
+            c,
+            "bot:ops",
+            "human:ben",
+            "Which one for the second?",
+            ops_rooms["ben"],
+            kind="ask",
+            refs={"task": second, "questions": QUESTIONS},
+        )["id"]
     merge(api)
     with store(api).transaction() as c:
-        newer = say(c, "bot:ops", "human:ana", "Which one for the first, again?", ops_rooms["ana"], kind="ask",
-                    refs={"task": first, "questions": QUESTIONS})["id"]
+        newer = say(
+            c,
+            "bot:ops",
+            "human:ana",
+            "Which one for the first, again?",
+            ops_rooms["ana"],
+            kind="ask",
+            refs={"task": first, "questions": QUESTIONS},
+        )["id"]
         assert H.message(c, newer)["conversation_id"] == ops_rooms["home"]
     with store(api).transaction() as c:
         # The write's replacement found the question asked before the move (it is in the task's history) and superseded it.
@@ -657,9 +777,21 @@ def bot_file(api, conversation_id, name, text):
         digest = api.app.state.blobs.put(data, "text/plain")
         item = register(c, Identity("bot:ops", "bot"), digest, len(data), name, "text/plain")
         row, _, _ = api.app.state.files.add_version(
-            c, bot="ops", actor="bot:ops", scope="conversation:" + conversation_id, task=None,
-            conversation=conversation_id, attempt="", identity=series("ops", name), title=name, name=name,
-            mime="text/plain", blob_id=item["id"], digest=digest, size=len(data))
+            c,
+            bot="ops",
+            actor="bot:ops",
+            scope="conversation:" + conversation_id,
+            task=None,
+            conversation=conversation_id,
+            attempt="",
+            identity=series("ops", name),
+            title=name,
+            name=name,
+            mime="text/plain",
+            blob_id=item["id"],
+            digest=digest,
+            size=len(data),
+        )
     return row["id"]
 
 
@@ -672,17 +804,26 @@ def readable(api, fid):
 def attachable(api, conversation_id, fid):
     """The file ids a message in this conversation may attach (visuals.attach, as a Home reader posts)."""
     with store(api).transaction() as c:
-        out, _ = visuals.attach(c, Identity("human:cara", "human", "cara@acme.example"), api.app.state.files,
-                                api.app.state.blobs, [fid + "@1"], conversation_id=conversation_id)
+        out, _ = visuals.attach(
+            c,
+            Identity("human:cara", "human", "cara@acme.example"),
+            api.app.state.files,
+            api.app.state.blobs,
+            [fid + "@1"],
+            conversation_id=conversation_id,
+        )
     return [item["id"] for item in out]
 
 
 def test_a_file_from_an_old_room_reads_and_attaches_in_the_home_after_run_once(api, ops_rooms):
     fid = bot_file(api, ops_rooms["ana"], "plan.md", "# Plan")
-    assert readable(api, fid) == 404                               # a file of a private room
+    assert readable(api, fid) == 404  # a file of a private room
     assert run_once(api)["rooms"] == 2
     with store(api).read() as c:
-        assert c.execute("SELECT scope FROM bot_files WHERE id=?", (fid,)).fetchone()[0] == "conversation:" + ops_rooms["home"]
+        assert (
+            c.execute("SELECT scope FROM bot_files WHERE id=?", (fid,)).fetchone()[0]
+            == "conversation:" + ops_rooms["home"]
+        )
     assert readable(api, fid) == b"# Plan"
     listed = api.get("/api/v2/bots/ops/files?limit=100", headers=headers("cara-test")).json()["files"]
     assert fid in {f["id"] for f in listed}
@@ -691,7 +832,7 @@ def test_a_file_from_an_old_room_reads_and_attaches_in_the_home_after_run_once(a
 
 def test_two_rooms_files_under_one_name_both_stay_readable_in_the_home(api, ops_rooms):
     ana = bot_file(api, ops_rooms["ana"], "notes.md", "# Ana")
-    ben = bot_file(api, ops_rooms["ben"], "notes.md", "# Ben")     # one identity: only one can take the Home's scope
+    ben = bot_file(api, ops_rooms["ben"], "notes.md", "# Ben")  # one identity: only one can take the Home's scope
     assert run_once(api)["rooms"] == 2
     home = "conversation:" + ops_rooms["home"]
     with store(api).read() as c:
@@ -709,6 +850,9 @@ def test_a_file_the_home_already_has_under_its_name_keeps_its_room_scope_and_sta
     moved = bot_file(api, ops_rooms["ana"], "notes.md", "# Ana")
     assert run_once(api)["rooms"] == 2
     with store(api).read() as c:
-        assert c.execute("SELECT scope FROM bot_files WHERE id=?", (moved,)).fetchone()[0] == "conversation:" + ops_rooms["ana"]
+        assert (
+            c.execute("SELECT scope FROM bot_files WHERE id=?", (moved,)).fetchone()[0]
+            == "conversation:" + ops_rooms["ana"]
+        )
     assert readable(api, moved) == b"# Ana" and readable(api, own) == b"# Home"
     assert attachable(api, ops_rooms["home"], moved) == [moved]

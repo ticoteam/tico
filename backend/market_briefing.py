@@ -11,6 +11,7 @@ clears it. `cadence` says how Market labels it: `daily` when an automation poste
 than one day a week (the built-in Market briefing, each morning) or on anything but a schedule, so it is dated by its
 day; `weekly` for one posted by hand or by a once-a-week schedule.
 """
+
 import hashlib
 import re
 from datetime import datetime, timezone
@@ -102,7 +103,10 @@ def _view(c, row, body=True):
 
 def listing(c, limit=LIMIT_MAX):
     limit = max(1, min(int(limit or LIMIT_MAX), LIMIT_MAX))
-    return [_view(c, r, body=False) for r in c.execute("SELECT * FROM market_briefings ORDER BY week DESC LIMIT ?", (limit,))]
+    return [
+        _view(c, r, body=False)
+        for r in c.execute("SELECT * FROM market_briefings ORDER BY week DESC LIMIT ?", (limit,))
+    ]
 
 
 def get(c, week):
@@ -145,21 +149,37 @@ def post(c, who, week, title, body, items, source=None):
         items = MK.loads(before["items"], []) if before else []
         bets = MK.loads(before["bets"], []) if before else []
     else:
-        items = [{"text": " ".join(i.text.split()), "kind": i.kind, "entity_ids": list(dict.fromkeys(i.entity_ids))}
-                 for i in items]
+        items = [
+            {"text": " ".join(i.text.split()), "kind": i.kind, "entity_ids": list(dict.fromkeys(i.entity_ids))}
+            for i in items
+        ]
         if any(not i["text"] for i in items):
             raise Problem("validation", "each item says what happened, in a sentence", 422)
         bets = bets_touched(c, items)
     now = H.now()
     MK.write_page(c, who.actor, PAGE + week, title, body, CATEGORY, replace=True, record=False)
     if before:
-        c.execute("UPDATE market_briefings SET title=?, body=?, items=?, bets=?, updated_at=?, source=? WHERE week=?",
-                  (title, body, MK.dumps(items), MK.dumps(bets), now, MK.dumps(source) if source else None, week))
+        c.execute(
+            "UPDATE market_briefings SET title=?, body=?, items=?, bets=?, updated_at=?, source=? WHERE week=?",
+            (title, body, MK.dumps(items), MK.dumps(bets), now, MK.dumps(source) if source else None, week),
+        )
     else:
-        c.execute("INSERT INTO market_briefings (id, week, title, body, items, bets, created_by, created_at, updated_at, "
-                  "source) VALUES (?,?,?,?,?,?,?,?,?,?)",
-                  (H.new_id(), week, title, body, MK.dumps(items), MK.dumps(bets), who.actor, now, now,
-                   MK.dumps(source) if source else None))
+        c.execute(
+            "INSERT INTO market_briefings (id, week, title, body, items, bets, created_by, created_at, updated_at, "
+            "source) VALUES (?,?,?,?,?,?,?,?,?,?)",
+            (
+                H.new_id(),
+                week,
+                title,
+                body,
+                MK.dumps(items),
+                MK.dumps(bets),
+                who.actor,
+                now,
+                now,
+                MK.dumps(source) if source else None,
+            ),
+        )
     H.event(c, who.actor, "market.briefing", week, {"items": len(items), "bets": len(bets), "replaced": bool(before)})
     # One event per week; a replacement that touches other bets than before is a new occurrence for them.
     again = MK.loads(before["bets"], []) if before else []

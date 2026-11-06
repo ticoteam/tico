@@ -22,6 +22,7 @@ from backend.tests.test_api import api, headers, post, setup_attempt  # noqa: F4
 
 class ObjectStore:
     """Offline S3 semantics, including conditional writes, independent GETs and HEADs."""
+
     def __init__(self):
         self.objects = {}
         self.gets = []
@@ -65,12 +66,19 @@ class ObjectStore:
 
 
 def sources(api):
-    note = api.post("/api/notes", data={"text": "Private attachment to recover"},
-                    files={"files": ("draft.txt", b"Exact private draft")}, headers=headers("ben-test")).json()
+    note = api.post(
+        "/api/notes",
+        data={"text": "Private attachment to recover"},
+        files={"files": ("draft.txt", b"Exact private draft")},
+        headers=headers("ben-test"),
+    ).json()
     payload = b"\x03\x00" * 16000
-    rid = api.post("/api/v2/meetings/import", data={"title": "Recover source media", "notes": "Keep typed notes",
-                                                    "transcript": "Ana: Keep this call."},
-                   files={"files": ("call.m4a", payload)}, headers=headers()).json()["id"]
+    rid = api.post(
+        "/api/v2/meetings/import",
+        data={"title": "Recover source media", "notes": "Keep typed notes", "transcript": "Ana: Keep this call."},
+        files={"files": ("call.m4a", payload)},
+        headers=headers(),
+    ).json()["id"]
     return note, rid, payload
 
 
@@ -140,9 +148,11 @@ def test_corrupt_backups_fail_before_creating_restored_database(api, tmp_path):
 def test_backup_detects_corruption_during_independent_download(api):
     sources(api)
     s3 = ObjectStore()
+
     def corrupt(slot):
         if slot[1].startswith("recovery/"):
             s3.objects[slot] = b"Storage returned wrong bytes"
+
     s3.after_put = corrupt
     with pytest.raises(Problem, match="integrity"):
         bundle(api, s3)
@@ -159,10 +169,21 @@ def hand_run_backup(api, s3, monkeypatch, key="backups/hand.sqlite"):
     import boto3
 
     from backend import manage
+
     settings = api.app.state.store.settings
     monkeypatch.setattr(boto3, "client", lambda name, *a, **k: s3 if name == "s3" else pytest.fail(name))
-    manage.main(["backup", str(settings.db_path), "--bucket", "backup-bucket", "--key", key,
-                 "--blob-dir", str(api.app.state.blobs.directory)])
+    manage.main(
+        [
+            "backup",
+            str(settings.db_path),
+            "--bucket",
+            "backup-bucket",
+            "--key",
+            key,
+            "--blob-dir",
+            str(api.app.state.blobs.directory),
+        ]
+    )
 
 
 def test_a_hand_run_backup_carries_the_key_files_and_restore_brings_them_back(api, tmp_path, monkeypatch, capsys):
@@ -198,7 +219,9 @@ def test_a_hand_run_backup_carries_only_the_key_files_present_and_refuses_a_brok
     s3 = ObjectStore()
     hand_run_backup(api, s3, monkeypatch)
     settings = target(tmp_path)
-    assert restore_bundle("backup-bucket", "backups/hand.sqlite", settings, s3)["key_files"] == {"github-app.key": "restored"}
+    assert restore_bundle("backup-bucket", "backups/hand.sqlite", settings, s3)["key_files"] == {
+        "github-app.key": "restored"
+    }
     assert not (settings.db_path.parent / "credential.key").exists()
     # A key file that is not 32 bytes is no key: the bundle is not published rather than carry it.
     (data / "slack.key").write_bytes(b"short")

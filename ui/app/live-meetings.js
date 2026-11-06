@@ -115,10 +115,12 @@ function liveCaptureDraft(state, id) {
   const prior = state.drafts[id] || {};
   const chat = host.querySelector('#live-chat-form input[name="text"]');
   const picker = host.querySelector('#live-bot-picker select[name="bots"]');
+  const peoplePicker = host.querySelector('#live-people-picker select[name="people"]');
   const active = host.contains(document.activeElement) ? document.activeElement : null;
   const draft = {...prior};
   if (chat) draft.chatText = chat.value;
   if (picker) draft.selectedBots = [...picker.selectedOptions].map(option => option.value);
+  if (peoplePicker) draft.selectedPeople = [...peoplePicker.selectedOptions].map(option => option.value);
   if (active?.dataset.liveFocusKey) {
     draft.focusKey = active.dataset.liveFocusKey;
     if (typeof active.selectionStart === 'number') {
@@ -135,6 +137,10 @@ function liveRestoreDraft(host, draft) {
   if (picker && Array.isArray(draft.selectedBots)) {
     const selected = new Set(draft.selectedBots);
     for (const option of picker.options) option.selected = selected.has(option.value);
+  }
+  const peoplePicker = host.querySelector('#live-people-picker select[name="people"]');
+  if (peoplePicker && Array.isArray(draft.selectedPeople)) {
+    for (const option of peoplePicker.options) option.selected = draft.selectedPeople.includes(option.value);
   }
   if (draft.focusKey) {
     const target = host.querySelector(`[data-live-focus-key="${draft.focusKey}"]`);
@@ -163,11 +169,17 @@ function livePaintDetail(state, detail) {
   const me = liveIsHumanJoined(detail);
   const active = detail.state !== 'ended';
   const controls = detail.owner_actor === `human:${S.me?.id || ''}`;
+  const actor = `human:${S.me?.id || ''}`;
+  const canAdd = controls || me || (detail.access || []).some(person => person.actor === actor);
+  const people = [...new Map([...(detail.humans || []), ...(detail.access || [])].map(person => [person.actor, person])).values()];
+  const peopleCandidates = (S.people || []).filter(person => !person.hidden
+    && `human:${person.id}` !== detail.owner_actor
+    && !people.some(member => member.actor === `human:${person.id}`));
   // A candidate's `id` is what the meeting's bots name; a server from before ids sent only `slug`, which held it.
   const candidates = state.candidates.map(bot => ({...bot, id: bot.id ?? bot.slug})).filter(bot => !(detail.bots || []).some(attached => attached.bot === bot.id));
   const chunks = detail.chunks || [], chat = detail.chat || [], notices = detail.notices || [], router = detail.router || {windows: [], turns: []};
   // A teammate is named by the server (`name`); a bot the viewer's roster lacks would otherwise show its id.
-  const teammates = (detail.bots || []).map(attached => `<span class="live-teammate">${esc(attached.name)}${me && active ?
+  const teammates = (detail.bots || []).map(attached => `<span class="live-teammate">${esc(attached.name)}${active && (controls || attached.joined_by === actor) ?
     ` <button class="ghost" type="button" data-live-bot-remove="${esc(attached.bot)}" aria-label="Remove ${esc(attached.name)} from this meeting">Remove</button>` : ''}</span>`).join(' ');
   host.innerHTML = `<div class="live-screen" hidden><div class="muted">Screen · updates a few times a second</div><img alt="Shared screen" style="display:block;max-width:100%;max-height:65vh;margin:auto"></div><article class="live-card">
     <header class="live-card-head"><div><h2>${esc(detail.title)}</h2>${detail.client === 'tico-recorder' ? '<p class="muted">From Tico Recorder</p>' : ''}<span class="live-state ${esc(detail.state)}">${esc(detail.state)}</span></div>
@@ -176,10 +188,15 @@ function livePaintDetail(state, detail) {
       ${controls && active ? '<button class="danger" data-live-control="end">End</button>' : ''}
       ${controls && detail.state === 'ended' && !detail.imported_meeting_id ? '<button class="primary" data-live-finalize>Finalize transcript</button>' : ''}</div></header>
     ${!me ? '<p class="live-join"><button class="primary" data-live-join>Join to chat</button></p>' : ''}
-    ${me && active ? `<form class="live-bot-picker" id="live-bot-picker"><label>Attach teammates<select name="bots" data-live-focus-key="bot-picker" multiple size="${Math.min(5, Math.max(2, candidates.length))}" aria-label="Choose visible bots">
+    ${canAdd && active ? `<form class="live-bot-picker" id="live-people-picker"><label>Add people<select name="people" data-live-focus-key="people-picker" multiple size="${Math.min(5, Math.max(2, peopleCandidates.length))}" aria-label="Choose people">
+      ${peopleCandidates.map(person => `<option value="${esc(person.id)}">${esc(person.name || person.id)}</option>`).join('')}
+      </select></label><button class="ghost" type="submit"${peopleCandidates.length ? '' : ' disabled'}>Add people</button></form>` : ''}
+    ${canAdd && active ? `<form class="live-bot-picker" id="live-bot-picker"><label>Attach teammates<select name="bots" data-live-focus-key="bot-picker" multiple size="${Math.min(5, Math.max(2, candidates.length))}" aria-label="Choose visible bots">
       ${candidates.map(bot => `<option value="${esc(bot.id)}">${esc(bot.name)}${bot.team ? ' · ' + esc(bot.team) : ''}</option>`).join('')}
       </select></label><button class="ghost" type="submit"${candidates.length ? '' : ' disabled'}>Attach bots</button></form>` : ''}
-    <div class="live-members"><span>People: ${(detail.humans || []).map(person => esc(person.name || person.actor)).join(', ') || '—'}</span>
+    <div class="live-members"><span>People: ${people.map(person => `<span class="live-teammate">${esc(person.name || person.actor)}${active && controls && person.actor !== actor ?
+      ` <button class="ghost" type="button" data-live-person-remove="${esc(person.actor.slice(6))}" aria-label="Remove ${esc(person.name || person.actor)} from this meeting">Remove</button>`
+      : active && !controls && person.actor === actor ? ' <button class="ghost" type="button" data-live-leave>Leave</button>' : ''}</span>`).join(' ') || '—'}</span>
       <span>Teammates: ${teammates || '—'}</span></div>
     <section class="live-section"><h3>Transcript</h3><div class="live-transcript" aria-live="polite">${chunks.length ? chunks.map(chunk => `<p id="live-chunk-${chunk.seq}" data-seq="${chunk.seq}"><small>#${chunk.seq}${chunk.revision > 1 ? ' · revision ' + chunk.revision : ''} · ${esc(chunk.speaker || 'Speaker')}</small><span>${esc(chunk.text)}</span></p>`).join('') : '<p class="muted">Waiting for transcript text from Recorder.</p>'}</div></section>
     <section class="live-section"><h3>Chat</h3><div class="live-chat" aria-live="polite">${chat.length || notices.length ? liveChatRows(chat, notices) : '<p class="muted">No chat messages yet.</p>'}</div>
@@ -205,6 +222,13 @@ function livePaintDetail(state, detail) {
   host.querySelector('#live-bot-picker')?.addEventListener('submit', event => {
     event.preventDefault(); const bots = [...event.currentTarget.elements.bots.selectedOptions].map(option => option.value);
     void liveAttach(state, detail.id, bots);
+  });
+  host.querySelectorAll('[data-live-person-remove]').forEach(button => button.onclick = () =>
+    void liveAction(state, detail.id, '/access', {remove: [button.dataset.livePersonRemove]}, 'Removed from this meeting.'));
+  host.querySelector('[data-live-leave]')?.addEventListener('click', () => void liveLeave(state, detail));
+  host.querySelector('#live-people-picker')?.addEventListener('submit', event => {
+    event.preventDefault(); const add = [...event.currentTarget.elements.people.selectedOptions].map(option => option.value);
+    void liveAction(state, detail.id, '/access', {add}, 'People added.');
   });
   host.querySelector('#live-chat-form')?.addEventListener('submit', event => {
     event.preventDefault(); const input = event.currentTarget.elements.text;
@@ -301,6 +325,23 @@ const liveJoin = (state, id) => liveAction(state, id, '/join', {}, 'You joined t
 const liveControl = (state, id, action) => liveAction(state, id, '/control', {action},
   action === 'end' ? 'Meeting ended.' : ({pause: 'Meeting paused.', disconnect: 'Recorder disconnected; meeting paused.', resume: 'Meeting resumed.'}[action] || 'Meeting updated.'));
 const liveAttach = (state, id, bots) => liveAction(state, id, '/bots', {bots}, 'Teammates attached to this meeting.');
+// Leaving answers {left: true}. A private meeting is then out of reach, so the list opens instead of a 403.
+async function liveLeave(state, detail) {
+  if (state.busy) return;
+  try {
+    state.busy = true;
+    await post(LIVE_API + '/' + encodeURIComponent(detail.id) + '/access', {remove: [S.me?.id || '']});
+    state.busy = false;
+    delete state.drafts[detail.id];
+    if (detail.visibility !== 'team' && state.selected === detail.id) {
+      liveScreenStop(state); state.sources.get(detail.id)?.close(); state.sources.delete(detail.id);
+      state.pinned = state.selected = state.paintedId = ''; state.detail = null;
+    }
+    liveStatus(state, 'You left the meeting.');
+    await liveLoad(state);
+  } catch (error) { liveStatus(state, error.message); }
+  finally { state.busy = false; }
+}
 const liveFinalize = (state, id) => liveAction(state, id, '/finalize', {}, 'Transcript saved to Meetings.');
 
 async function liveRemoveBot(state, id, bot) {

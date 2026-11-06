@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
 """Conservative PR selection, measured Python and browser groups, and read-only check receipts."""
+
 import argparse
 import ast
 from collections import Counter, defaultdict
@@ -15,32 +16,59 @@ import sys
 import xml.etree.ElementTree as ET
 
 ROOT = Path(__file__).resolve().parents[1]
-UI_MAP = {"ui/app/chat.js": ["chat", "imported-history"],
-          "ui/app/chat-outline.js": ["chat", "imported-history"],
-          "ui/app/visual-cards.js": ["visual-cards", "visual-fallback", "visual-hosted"],
-          "ui/app/visual-media.js": ["visual-media", "visual-media-app"]}
+UI_MAP = {
+    "ui/app/chat.js": ["chat", "imported-history"],
+    "ui/app/chat-outline.js": ["chat", "imported-history"],
+    "ui/app/visual-cards.js": ["visual-cards", "visual-fallback", "visual-hosted"],
+    "ui/app/visual-media.js": ["visual-media", "visual-media-app"],
+}
 CONFORMANCE = "runner_support/tests/test_conformance.py"
 # These release contracts are marked slow and absent from default collection. Run them together on a separate VM:
 # recorded release times are CLI 108s, MCP 34s and goldens 3s; four workers keep it below the 180s job target with setup.
 CONTRACT_TESTS = ("backend/tests/test_e2e_mcp.py", "backend/tests/test_e2e_cli.py", "e2e/tests/test_contract.py")
-CONTRACT_INPUTS = ("backend/", "clients/", "e2e/", "templates/", "skills/", "roles/", "company/", "companies/",
-                   "company.yaml", "employees.yaml", "roles.yaml")
+CONTRACT_INPUTS = (
+    "backend/",
+    "clients/",
+    "e2e/",
+    "templates/",
+    "skills/",
+    "roles/",
+    "company/",
+    "companies/",
+    "company.yaml",
+    "employees.yaml",
+    "roles.yaml",
+)
 # Each crate's `cargo test --locked` runs in the conformance job when any of its test inputs change:
 # runner-rs tests read runner_support/ and runner/ (the Python helpers they compare against: source_id, the redactor)
 # and the backend's gateway enroll contract fixture, which gateway_relay's tests check the runner against, and the runner wire
 # contract's recorded answers (runner-rs/src/wire.rs).
-RUST_INPUTS = {"relay-rs": ("relay-rs/",),
-               "runner-rs": ("runner-rs/", "runner_support/", "runner/", "backend/tests/fixtures/gateway_enroll_contract.json",
-                             "contracts/runner/")}
-CHANGELOG_REFUSAL = ("No PR edits CHANGELOG.md; the Technical Writer writes notes at the release cut. "
-                     "Remove your CHANGELOG.md changes.")
+RUST_INPUTS = {
+    "relay-rs": ("relay-rs/",),
+    "runner-rs": (
+        "runner-rs/",
+        "runner_support/",
+        "runner/",
+        "backend/tests/fixtures/gateway_enroll_contract.json",
+        "contracts/runner/",
+    ),
+}
+CHANGELOG_REFUSAL = (
+    "No PR edits CHANGELOG.md; the Technical Writer writes notes at the release cut. Remove your CHANGELOG.md changes."
+)
 RELEASE_TRAILER = re.compile(r"^Changelog-Release:[ \t]*v?(\d+\.\d+\.\d+)[ \t]*$", re.M)
 # Each check VM has 4 vCPUs and runs 4 test workers. Groups are sized so a VM finishes in about
 # TICO_CI_JOB_SECONDS, setup included: short Spot jobs are rarely interrupted and lose little when one is.
+# The cap only guards against a runaway plan. At 16 it held the suite to 16 VMs once the measured default suite grew
+# past 16 x 540 s (Oct 23: 3,300 one-worker seconds; Nov 5: 39,900), so every full run's shards took 11-14 minutes.
 WORKERS = 4
 JOB_SECONDS = float(os.environ.get("TICO_CI_JOB_SECONDS", 180))
 SETUP_SECONDS = {"python": 45, "browser": 70}  # measured boot, checkout and warm install
-MAX_JOBS = 16
+MAX_JOBS = int(os.environ.get("TICO_CI_MAX_JOBS", 64))
+# Python jobs pass the release gate's own flags: restore a worker-local schema snapshot instead of migrating a fresh
+# database for every API test (about half of each file's time), and hand out at most two tests at a time so expensive
+# tests spread across the workers.
+PYTEST_FLAGS = ("--api-database-snapshots", "--maxschedchunk=2")
 UNTIMED_SCRIPT_SECONDS = 20  # a browser script with no measured time yet
 
 
@@ -51,6 +79,7 @@ def guard_changelog(base, head="HEAD", root=None):
     earlier commit cannot exempt a later ordinary notes edit. Direct release cuts
     on main never enter this PR-only gate; shipped-section guards still run.
     """
+
     def git(*args):
         return subprocess.check_output(["git", *args], cwd=root or ROOT, text=True)
 
@@ -65,10 +94,16 @@ def guard_changelog(base, head="HEAD", root=None):
     commits = git("log", "--no-merges", "--format=%H", f"{base}..{head}", "--", "CHANGELOG.md").splitlines()
     # A merge that writes notes of its own (a line added or removed against every parent) needs its own trailer;
     # bringing main's notes in, a clean union of the parents, stays allowed.
-    commits += [merge for merge in git("log", "--merges", "--format=%H", f"{base}..{head}").splitlines()
-                if merge_writes(git("show", "--cc", "--format=", merge, "--", "CHANGELOG.md"))]
-    if changed == ["CHANGELOG.md"] and commits and all(
-            RELEASE_TRAILER.search(git("show", "-s", "--format=%B", commit)) for commit in commits):
+    commits += [
+        merge
+        for merge in git("log", "--merges", "--format=%H", f"{base}..{head}").splitlines()
+        if merge_writes(git("show", "--cc", "--format=", merge, "--", "CHANGELOG.md"))
+    ]
+    if (
+        changed == ["CHANGELOG.md"]
+        and commits
+        and all(RELEASE_TRAILER.search(git("show", "-s", "--format=%B", commit)) for commit in commits)
+    ):
         return
     raise RuntimeError(CHANGELOG_REFUSAL)
 
@@ -89,6 +124,11 @@ def is_test(name):
     """A file pytest collects by name (pytest's default python_files); prepare() keeps the ones in the default run."""
     base = Path(name).name
     return base.endswith(".py") and (base.startswith("test_") or base.endswith("_test.py"))
+
+
+def is_check(name):
+    """A Python test file or a browser script (ui/tests/*.cjs)."""
+    return is_test(name) or (str(Path(name).parent) == "ui/tests" and name.endswith(".cjs"))
 
 
 def dotted_name(node):
@@ -113,19 +153,89 @@ def git_files(root):
 TOKEN = re.compile(r"[\w.\-/]+")
 IDENTIFIER = re.compile(r"[A-Za-z_]\w*(\.[A-Za-z_]\w*)*$")
 CODE = {".py", ".sh", ".bash", ".js", ".cjs", ".mjs", ".ts"}
-PATHLIKE = {"Path", "PurePath", "PosixPath", "open", "join", "joinpath", "with_name", "spec_from_file_location",
-            "run_path", "copy", "copy2", "copyfile", "copytree", "exists", "isfile", "isdir", "listdir", "scandir",
-            "walk", "read_text", "read_bytes", "relpath", "realpath", "abspath", "files"}
-RUNNERS = {"run", "check_output", "check_call", "call", "Popen", "execv", "execvp", "execvpe", "spawn",
-           "create_subprocess_exec", "create_subprocess_shell", "system"}
+PATHLIKE = {
+    "Path",
+    "PurePath",
+    "PosixPath",
+    "open",
+    "join",
+    "joinpath",
+    "with_name",
+    "spec_from_file_location",
+    "run_path",
+    "copy",
+    "copy2",
+    "copyfile",
+    "copytree",
+    "exists",
+    "isfile",
+    "isdir",
+    "listdir",
+    "scandir",
+    "walk",
+    "read_text",
+    "read_bytes",
+    "relpath",
+    "realpath",
+    "abspath",
+    "files",
+}
+RUNNERS = {
+    "run",
+    "check_output",
+    "check_call",
+    "call",
+    "Popen",
+    "execv",
+    "execvp",
+    "execvpe",
+    "spawn",
+    "create_subprocess_exec",
+    "create_subprocess_shell",
+    "system",
+}
 GLOBS = {"glob", "rglob", "iglob"}
 LISTINGS = {"iterdir", "listdir", "scandir", "walk"}
 OS_LISTINGS = {"os.listdir", "os.walk", "os.scandir", "glob.glob", "glob.iglob"}
 # Calls that read, copy, run, hash or measure files; a listing in a function without one uses only names.
-CONTENT = {"read_text", "read_bytes", "open", "load", "loads", "safe_load", "parse", "copy", "copy2", "copyfile",
-           "copytree", "copyfileobj", "exec_module", "run", "check_output", "check_call", "Popen", "call", "stat",
-           "lstat", "getsize", "getmtime", "digest", "hexdigest", "update", "compile", "import_module", "rmtree",
-           "unlink", "rename", "replace", "move", "write_text", "write_bytes", "hash_file", "file_digest"}
+CONTENT = {
+    "read_text",
+    "read_bytes",
+    "open",
+    "load",
+    "loads",
+    "safe_load",
+    "parse",
+    "copy",
+    "copy2",
+    "copyfile",
+    "copytree",
+    "copyfileobj",
+    "exec_module",
+    "run",
+    "check_output",
+    "check_call",
+    "Popen",
+    "call",
+    "stat",
+    "lstat",
+    "getsize",
+    "getmtime",
+    "digest",
+    "hexdigest",
+    "update",
+    "compile",
+    "import_module",
+    "rmtree",
+    "unlink",
+    "rename",
+    "replace",
+    "move",
+    "write_text",
+    "write_bytes",
+    "hash_file",
+    "file_digest",
+}
 
 
 class DependencyMap:
@@ -155,11 +265,11 @@ class DependencyMap:
             for parent in list(Path(path).parents)[:-1]:
                 self.dirs[parent.name].add(str(parent))
         self.runs, self.reads = defaultdict(set), defaultdict(set)  # file -> files ("folder/" for a folder)
-        self.globs = defaultdict(set)      # file -> basename patterns it lists in folders it does not name
-        self.listings = defaultdict(set)   # file -> (folder, pattern, recursive, names only) it lists
+        self.globs = defaultdict(set)  # file -> basename patterns it lists in folders it does not name
+        self.listings = defaultdict(set)  # file -> (folder, pattern, recursive, names only) it lists
         self.everything, self.unparsed = set(), set()
         self.fixtures = defaultdict(dict)  # conftest -> {fixture: (runs, reads)}
-        self.names = {}                    # Python file -> its identifiers and strings (fixture names it uses)
+        self.names = {}  # Python file -> its identifiers and strings (fixture names it uses)
         trees = {}
         for path in self.files:
             if path.endswith(".py"):
@@ -168,14 +278,28 @@ class DependencyMap:
                 except (OSError, SyntaxError, ValueError):
                     self.unparsed.add(path)
                     self.everything.add(path)
+        # One breadth-first pass per tree (ast.walk's order) feeds every scan: walking each tree once per scan was
+        # most of the map's build time, which every PR's plan pays and the selector's tests pay once per worker.
+        walked = {path: self.walk(tree) for path, tree in trees.items()}
         # Top-level names imported through sys.path (`import hubcli` with clients/ on the path).
-        self.bare = {a.name.split(".")[0] for tree in trees.values() for node in ast.walk(tree)
-                     if isinstance(node, ast.Import) for a in node.names}
-        self.bare |= {node.module.split(".")[0] for tree in trees.values() for node in ast.walk(tree)
-                      if isinstance(node, ast.ImportFrom) and not node.level and node.module}
-        self.bare = {name for name in self.bare - set(self.modules) if any(m.endswith("." + name) for m in self.modules)}
+        self.bare = {
+            a.name.split(".")[0]
+            for nodes, _ in walked.values()
+            for node in nodes
+            if isinstance(node, ast.Import)
+            for a in node.names
+        }
+        self.bare |= {
+            node.module.split(".")[0]
+            for nodes, _ in walked.values()
+            for node in nodes
+            if isinstance(node, ast.ImportFrom) and not node.level and node.module
+        }
+        self.bare = {
+            name for name in self.bare - set(self.modules) if any(m.endswith("." + name) for m in self.modules)
+        }
         for path, tree in trees.items():
-            self.python(path, tree)
+            self.python(path, tree, walked.pop(path))
         for path in self.files:
             if Path(path).suffix in CODE - {".py"} or (not Path(path).suffix and self.shebang(path)):
                 self.text(path)
@@ -184,6 +308,16 @@ class DependencyMap:
             for path, targets in edges.items():
                 for target in targets - {path}:
                     reverse[target].add(path)
+
+    @staticmethod
+    def walk(tree):
+        """Every node, in ast.walk's order, and each node's parent by id."""
+        nodes, parents = [tree], {}
+        for node in nodes:
+            for child in ast.iter_child_nodes(node):
+                parents[id(child)] = node
+                nodes.append(child)
+        return nodes, parents
 
     def shebang(self, path):
         try:
@@ -200,7 +334,9 @@ class DependencyMap:
         parts = name.split(".")
         for end in range(len(parts), 0, -1):
             if ".".join(parts[:end]) in self.modules:
-                return {self.modules[".".join(parts[:i])] for i in range(1, end + 1) if ".".join(parts[:i]) in self.modules}
+                return {
+                    self.modules[".".join(parts[:i])] for i in range(1, end + 1) if ".".join(parts[:i]) in self.modules
+                }
         if bare and parts[0] in self.bare:
             for end in range(len(parts), 0, -1):
                 found = {p for m, p in self.modules.items() if m.endswith("." + ".".join(parts[:end]))}
@@ -244,7 +380,11 @@ class DependencyMap:
         Path("ui", "app"); the literal parts up to the first computed one."""
         if isinstance(node, ast.Name):
             return set(self.values.get(node.id, ()))
-        if isinstance(node, ast.Call) and dotted_name(node.func).rsplit(".", 1)[-1] in ("Path", "PurePath", "PosixPath"):
+        if isinstance(node, ast.Call) and dotted_name(node.func).rsplit(".", 1)[-1] in (
+            "Path",
+            "PurePath",
+            "PosixPath",
+        ):
             parts = node.args
         elif isinstance(node, ast.BinOp) and isinstance(node.op, ast.Div):
             parts = self.chain(node)
@@ -287,37 +427,55 @@ class DependencyMap:
                 for token in TOKEN.findall(text):
                     self.path(token, runs, reads, bare_word=True)
 
-    def python(self, path, tree):
+    def python(self, path, tree, walked):
         runs, reads, names = set(), set(), set()
         package = path.split("/")[:-1]
+        nodes, parents = walked
         self.consts = {}
         for statement in tree.body:
-            if isinstance(statement, ast.Assign) and len(statement.targets) == 1 and isinstance(statement.targets[0], ast.Name) \
-                    and isinstance(statement.value, ast.Constant) and isinstance(statement.value.value, str):
+            if (
+                isinstance(statement, ast.Assign)
+                and len(statement.targets) == 1
+                and isinstance(statement.targets[0], ast.Name)
+                and isinstance(statement.value, ast.Constant)
+                and isinstance(statement.value.value, str)
+            ):
                 self.consts[statement.targets[0].id] = statement.value.value
-        bodies = [tree.body] + [n.body for n in ast.walk(tree) if isinstance(n, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef))]
-        docstrings = {id(b[0].value) for b in bodies if b and isinstance(b[0], ast.Expr) and isinstance(b[0].value, ast.Constant)}
-        nested = {id(n.left) for n in ast.walk(tree) if isinstance(n, ast.BinOp) and isinstance(n.op, ast.Div)}
+        bodies = [tree.body] + [
+            n.body for n in nodes if isinstance(n, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef))
+        ]
+        docstrings = {
+            id(b[0].value) for b in bodies if b and isinstance(b[0], ast.Expr) and isinstance(b[0].value, ast.Constant)
+        }
+        nested = {id(n.left) for n in nodes if isinstance(n, ast.BinOp) and isinstance(n.op, ast.Div)}
         scope = {}
         # Module-level names that hold a path found from __file__: ROOT = Path(__file__).parents[2]; DOCS = ROOT / "docs".
         # A name whose path joins a literal ("docs") names that folder, which its definition reads.
         located, named_here = set(), set()
         for statement in tree.body:
-            if isinstance(statement, (ast.Assign, ast.AnnAssign)) and statement.value is not None and any(
-                    isinstance(n, ast.Name) and (n.id == "__file__" or n.id in located) for n in ast.walk(statement.value)):
+            if (
+                isinstance(statement, (ast.Assign, ast.AnnAssign))
+                and statement.value is not None
+                and any(
+                    isinstance(n, ast.Name) and (n.id == "__file__" or n.id in located)
+                    for n in ast.walk(statement.value)
+                )
+            ):
                 literal = any(isinstance(n, ast.Name) and n.id in named_here for n in ast.walk(statement.value)) or any(
-                    isinstance(part, ast.Constant) and isinstance(part.value, str) for n in ast.walk(statement.value)
-                    if isinstance(n, ast.BinOp) and isinstance(n.op, ast.Div) for part in self.chain(n))
+                    isinstance(part, ast.Constant) and isinstance(part.value, str)
+                    for n in ast.walk(statement.value)
+                    if isinstance(n, ast.BinOp) and isinstance(n.op, ast.Div)
+                    for part in self.chain(n)
+                )
                 for target in statement.targets if isinstance(statement, ast.Assign) else [statement.target]:
                     found = {n.id for n in ast.walk(target) if isinstance(n, ast.Name)}
                     located |= found
                     named_here |= found if literal else set()
-        parents = {id(child): node for node in ast.walk(tree) for child in ast.iter_child_nodes(node)}
         # Names bound to a literal path (FIXTURES = Path(__file__).parent / "fixtures"): where such a name is joined
         # further, the joined path is what is read; where it is listed, only the listing.
         self.values, deferred = defaultdict(set), set()
         for _ in range(2):
-            for node in ast.walk(tree):
+            for node in nodes:
                 if isinstance(node, ast.Assign) and len(node.targets) == 1 and isinstance(node.targets[0], ast.Name):
                     found = self.paths_of(node.value)
                     if found:
@@ -325,27 +483,37 @@ class DependencyMap:
                         deferred.add(id(node.value))
         # A listing uses only names when nothing in the file reads file contents: a read elsewhere in the module (at
         # module level, in another function or a helper it calls) may read what was listed, so edits reach it too.
-        reads_content = any(isinstance(n, ast.Call) and dotted_name(n.func).rsplit(".", 1)[-1] in CONTENT
-                            for n in ast.walk(tree))
+        reads_content = any(
+            isinstance(n, ast.Call) and dotted_name(n.func).rsplit(".", 1)[-1] in CONTENT for n in nodes
+        )
         listed = set()
-        for node in ast.walk(tree):
-            if isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute) and node.func.attr in GLOBS | LISTINGS:
+        for node in nodes:
+            if (
+                isinstance(node, ast.Call)
+                and isinstance(node.func, ast.Attribute)
+                and node.func.attr in GLOBS | LISTINGS
+            ):
                 listed.add(id(node.func.value))
             elif isinstance(node, ast.Call) and dotted_name(node.func) in OS_LISTINGS and node.args:
                 listed.add(id(node.args[0]))
         if Path(path).name == "conftest.py":
-            for node in ast.walk(tree):
-                for decorator in getattr(node, "decorator_list", []) if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)) else []:
+            for node in nodes:
+                for decorator in (
+                    getattr(node, "decorator_list", [])
+                    if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef))
+                    else []
+                ):
                     call = decorator if isinstance(decorator, ast.Call) else None
                     keywords = {k.arg: k.value for k in call.keywords} if call else {}
                     autouse = keywords.get("autouse")
                     if dotted_name(call.func if call else decorator).split(".")[-1] == "fixture" and (
-                            autouse is None or isinstance(autouse, ast.Constant) and autouse.value is False):
+                        autouse is None or isinstance(autouse, ast.Constant) and autouse.value is False
+                    ):
                         name = keywords.get("name")
                         name = name.value if isinstance(name, ast.Constant) else node.name
                         self.fixtures[path][name] = (set(), set())
                         scope.update({id(n): self.fixtures[path][name] for n in ast.walk(node)})
-        for node in ast.walk(tree):
+        for node in nodes:
             runs_, reads_ = scope.get(id(node), (runs, reads))
             if isinstance(node, ast.arg):
                 names.add(node.arg)
@@ -355,7 +523,7 @@ class DependencyMap:
                 for alias in node.names:
                     runs_ |= self.module(alias.name, bare=True)
             elif isinstance(node, ast.ImportFrom):
-                prefix = package[:len(package) - node.level + 1] if node.level else []
+                prefix = package[: len(package) - node.level + 1] if node.level else []
                 module = ".".join([*prefix, *([node.module] if node.module else [])])
                 runs_ |= self.module(module, bare=not node.level)
                 for alias in node.names:
@@ -365,9 +533,16 @@ class DependencyMap:
                 if id(node) not in deferred | listed:
                     for found in self.paths_of(node):
                         self.path(found, runs_, reads_, bare_word=True)
-                start = next((i for i, part in enumerate(parts[1:], 1) if not isinstance(part, ast.Constant)), len(parts))
+                start = next(
+                    (i for i, part in enumerate(parts[1:], 1) if not isinstance(part, ast.Constant)), len(parts)
+                )
                 self.joined(parts if not self.paths_of(node) else parts[start:], runs_, reads_)
-            elif isinstance(node, ast.Name) and node.id in self.values and isinstance(node.ctx, ast.Load) and id(node) not in listed:
+            elif (
+                isinstance(node, ast.Name)
+                and node.id in self.values
+                and isinstance(node.ctx, ast.Load)
+                and id(node) not in listed
+            ):
                 parent = parents.get(id(node))
                 if not (isinstance(parent, ast.BinOp) and isinstance(parent.op, ast.Div) and parent.left is node):
                     for found in self.values[node.id]:
@@ -398,16 +573,19 @@ class DependencyMap:
                     if isinstance(first, ast.Constant) and isinstance(first.value, str):
                         if first.value.startswith("."):
                             level = len(first.value) - len(first.value.lstrip("."))
-                            runs_ |= self.module(".".join(package[:len(package) - level + 1] + [first.value.lstrip(".")]))
+                            runs_ |= self.module(
+                                ".".join(package[: len(package) - level + 1] + [first.value.lstrip(".")])
+                            )
                         else:
                             runs_ |= self.module(first.value, bare=True)
                     elif isinstance(first, (ast.JoinedStr, ast.BinOp)) and isinstance(
-                            head := first.values[0] if isinstance(first, ast.JoinedStr) else first.left, ast.Constant):
+                        head := first.values[0] if isinstance(first, ast.JoinedStr) else first.left, ast.Constant
+                    ):
                         # f"backend.connectors.{name}", "." + name: every module under the fixed package
                         fixed = str(head.value)
                         if fixed.startswith("."):
                             level = len(fixed) - len(fixed.lstrip("."))
-                            fixed = ".".join(package[:len(package) - level + 1] + [fixed.lstrip(".")])
+                            fixed = ".".join(package[: len(package) - level + 1] + [fixed.lstrip(".")])
                         fixed = fixed.rstrip(".")
                         runs_ |= {p for m, p in self.modules.items() if m == fixed or m.startswith(fixed + ".")}
                     else:
@@ -418,8 +596,8 @@ class DependencyMap:
                     # folder found from a __file__ alone (Path(module.__file__).parent.glob("*.py"), ROOT.iterdir()) reads
                     # every tracked file its pattern matches; one of a folder found at run time (tmp_path) reads none.
                     os_call = function in OS_LISTINGS
-                    receiver = (node.args[:1] if os_call else [node.func.value])
-                    patterns = [t for a in node.args[(1 if os_call else 0):] for t in self.strings(a)]
+                    receiver = node.args[:1] if os_call else [node.func.value]
+                    patterns = [t for a in node.args[(1 if os_call else 0) :] for t in self.strings(a)]
                     if os_call and function.startswith("glob."):
                         patterns, receiver = [t for t in self.strings(node.args[0])] if node.args else [], []
                     if last not in GLOBS or not patterns:
@@ -433,15 +611,24 @@ class DependencyMap:
                             name = folder.rsplit("/", 1)[-1]
                             for found in self.dirs.get(name, ()):
                                 if found == folder or found.endswith("/" + folder):
-                                    self.listings[path].update((found, t.rstrip("/").rsplit("/", 1)[-1] or "*", recursive, names_only)
-                                                               for t in patterns)
-                    elif any(isinstance(n, ast.Name) and (n.id == "__file__" or n.id in located) or
-                             isinstance(n, ast.Attribute) and n.attr == "__file__" for r in receiver for n in ast.walk(r)) or (
-                            os_call and function.startswith("glob.")):
+                                    self.listings[path].update(
+                                        (found, t.rstrip("/").rsplit("/", 1)[-1] or "*", recursive, names_only)
+                                        for t in patterns
+                                    )
+                    elif any(
+                        isinstance(n, ast.Name)
+                        and (n.id == "__file__" or n.id in located)
+                        or isinstance(n, ast.Attribute)
+                        and n.attr == "__file__"
+                        for r in receiver
+                        for n in ast.walk(r)
+                    ) or (os_call and function.startswith("glob.")):
                         self.globs[path].update(t.rstrip("/").rsplit("/", 1)[-1] or "*" for t in patterns)
             elif isinstance(node, ast.Constant) and isinstance(node.value, str) and id(node) not in docstrings:
                 names.add(node.value)
-                if "ls-files" in node.value and (is_test(path) or "tests" in Path(path).parts or path.startswith("scripts/")):
+                if "ls-files" in node.value and (
+                    is_test(path) or "tests" in Path(path).parts or path.startswith("scripts/")
+                ):
                     self.everything.add(path)  # lists this repository (elsewhere git ls-files reads a bot's checkout)
                 # Free text (a message naming scripts/tico) only reads what it names; a lone dotted name like
                 # "backend.app:app" or a monkeypatch target loads that module.
@@ -467,6 +654,50 @@ class DependencyMap:
             if IDENTIFIER.match(token) and "." in token:
                 self.runs[path] |= self.module(token, bare=True)
 
+    def readers(self, name, added):
+        """The files that read a changed file: by its path, through a folder that holds it, a glob on an unknown
+        folder, or a listing (one that uses only names sees it only when it is new)."""
+        users = set(self.read_by.get(name, set()))
+        for parent in list(Path(name).parents)[:-1]:
+            users |= self.read_by.get(str(parent) + "/", set())
+        users |= {
+            p for p, patterns in self.globs.items() if any(fnmatch.fnmatchcase(Path(name).name, g) for g in patterns)
+        }
+        folder = str(Path(name).parent)
+        users |= {
+            p
+            for p, listings in self.listings.items()
+            if any(
+                (folder == d or recursive and folder.startswith(d + "/"))
+                and fnmatch.fnmatchcase(Path(name).name, g)
+                and (not names_only or name in added)
+                for d, g, recursive, names_only in listings
+            )
+        }
+        return users
+
+    def fixture_users(self, name, read):
+        """Tests that use a non-autouse conftest fixture whose body runs `name` (or reads it, when `read`)."""
+        users = set()
+        for conftest, fixtures in self.fixtures.items():
+            used = {
+                f
+                for f, (runs, reads) in fixtures.items()
+                if name in runs or read and (name in reads or any(name.startswith(d) for d in reads if d.endswith("/")))
+            }
+            if used:
+                folder = str(Path(conftest).parent)
+                users |= {
+                    p
+                    for p, names in self.names.items()
+                    if is_test(p) and used & names and (folder == "." or p.startswith(folder + "/"))
+                }
+        return users
+
+    def below(self, conftest):
+        folder = str(Path(conftest).parent)
+        return {p for p in self.files if is_test(p) and (folder == "." or p.startswith(folder + "/"))}
+
     def affected(self, changed, added=None):
         """Changed files, and every tracked file that runs one of them, directly or through files that run each
         other, or that reads one; files that depend on everything and whatever runs them. A listing that uses only
@@ -479,37 +710,47 @@ class DependencyMap:
             name = pending.pop()
             users = set(self.run_by.get(name, ()))
             if name in changed:
-                users |= self.read_by.get(name, set())
-                for parent in list(Path(name).parents)[:-1]:
-                    users |= self.read_by.get(str(parent) + "/", set())
-                users |= {p for p, patterns in self.globs.items()
-                          if any(fnmatch.fnmatchcase(Path(name).name, g) for g in patterns)}
-                folder = str(Path(name).parent)
-                users |= {p for p, listings in self.listings.items() if any(
-                    (folder == d or recursive and folder.startswith(d + "/")) and fnmatch.fnmatchcase(Path(name).name, g)
-                    and (not names_only or name in added) for d, g, recursive, names_only in listings)}
-            for conftest, fixtures in self.fixtures.items():
-                used = {f for f, (runs, reads) in fixtures.items() if name in runs or name in changed and (
-                    name in reads or any(name.startswith(d) for d in reads if d.endswith("/")))}
-                if used:
-                    folder = str(Path(conftest).parent)
-                    users |= {p for p, names in self.names.items() if is_test(p) and used & names
-                              and (folder == "." or p.startswith(folder + "/"))}
+                users |= self.readers(name, added)
+            users |= self.fixture_users(name, name in changed)
             if Path(name).name == "conftest.py":
-                folder = str(Path(name).parent)
-                users |= {p for p in self.files if is_test(p) and (folder == "." or p.startswith(folder + "/"))}
+                users |= self.below(name)
             for user in users - seen:
                 seen.add(user)
                 pending.append(user)
         return seen
 
+    def read_by_tests(self, changed, added=None):
+        """For data that only code reads (read_only below): the files that read a changed one, and of the checks, the
+        tests and browser scripts among those readers and the ones that run a reader directly (a conftest reader: the
+        tests below it). Not everything that imports a reader: backend/manual.py reads docs/ and backend.app imports
+        it, which would make every page edit run the suite. A test that sees such a file only through the app must
+        name its path or folder literally. Files that depend on everything (they list the repository) read it too."""
+        changed = set(changed)
+        added = changed if added is None else set(added)
+        readers, out = set(self.everything), set(changed)
+        for name in changed:
+            readers |= self.readers(name, added)
+            out |= self.fixture_users(name, True)
+        out |= readers
+        for reader in readers:
+            if Path(reader).name == "conftest.py":
+                out |= self.below(reader)
+            elif not is_check(reader):
+                out |= {user for user in self.run_by.get(reader, ()) if is_check(user)}
+                out |= self.fixture_users(reader, False)
+        return out
 
-# Changes that steer every test rather than particular ones: CI, dependency pins, pytest's own configuration
-# (conftest hooks and autouse fixtures, pytest.ini) and this selector and its installer. Tests and the Assistant read
-# docs pages (the committed OpenAPI spec, the API guide, the manual) and CHANGELOG.md's shipped sections, so those
-# run everything too; no test or script reads screenshots, retired designs or the other top-level pages.
-FULL_SUITE = ("CHANGELOG.md", "pytest.ini", "package.json", "package-lock.json", ".gitignore",
-              "scripts/pr_checks.py", "scripts/ci_install.sh", "scripts/playwright-system-packages.json")
+
+# Changes that steer every test rather than particular ones: dependency pins and pytest's own configuration (conftest
+# hooks and autouse fixtures, pytest.ini).
+FULL_SUITE = ("pytest.ini", "package.json", "package-lock.json", ".gitignore")
+# How the checks run: the workflow, its installer and the browser system packages. A change runs the tests that read or
+# run them (the selector's own tests among them) and one short core browser script, so both kinds of check VM boot,
+# install and run under the changed setup; a workflow change also builds the Caddy image, whose job only it defines.
+# The selector, scripts/pr_checks.py, is code: its tests run like any other module's.
+PR_WORKFLOW = ".github/workflows/pr-checks.yml"
+CI_INPUTS = (PR_WORKFLOW, "scripts/ci_install.sh", "scripts/playwright-system-packages.json")
+SMOKE_SCRIPT = "sign-in-redirect"
 # The Caddy container job builds the server image (Dockerfile, docker/, the screen relay it compiles) and runs its
 # entrypoint's caddy-config, backend/caddy_assets.py. The image also compiles and imports the Python source; a plan
 # that skips the job runs those checks itself (image_checks).
@@ -519,25 +760,42 @@ UI_RUNNER = "scripts/ui-tests.cjs"
 
 
 def unread(name):
+    """No test or script reads screenshots, retired designs or the top-level pages other than CHANGELOG.md."""
     return name.startswith(("docs/images/", "docs/history/")) or (
-        "/" not in name and name.endswith(".md") and name != "CHANGELOG.md")
+        "/" not in name and name.endswith(".md") and name != "CHANGELOG.md"
+    )
+
+
+def read_only(name):
+    """Data that code reads but no test imports: docs pages (the manual, the OpenAPI copy, the API guide), CHANGELOG.md
+    (the changelog API, release-notes guards) and GitHub files (release tests parse the workflows). A change runs the
+    tests that read it (DependencyMap.read_by_tests), not everything that imports a reader."""
+    return name == "CHANGELOG.md" or name.startswith(("docs/", ".github/"))
 
 
 def full_suite(name):
-    return (name in FULL_SUITE or name.startswith((".github/", "docs/")) or Path(name).name == "conftest.py"
-            or re.fullmatch(r"requirements[\w.-]*\.txt", Path(name).name) is not None)
+    return (
+        name in FULL_SUITE
+        or Path(name).name == "conftest.py"
+        or re.fullmatch(r"requirements[\w.-]*\.txt", Path(name).name) is not None
+    )
 
 
 def selection(changed, event="pull_request", root=ROOT, graph=None, base=None, added=None, core=None):
     """None means the full default suite; an empty list means explicitly unaffected.
 
     A pull request runs the default tests that use a changed file (DependencyMap) and, of the browser scripts that
-    do, the core ones the full suite runs; a UI change runs its mapped scripts or all of them. `added` names the new
-    files (None: any may be new) and `core` the core browser scripts (None: read from scripts/ui-tests.cjs)."""
+    do, the core ones the full suite runs; a UI change runs its mapped scripts or all of them. A docs page,
+    CHANGELOG.md or a GitHub file runs the tests that read it (read_only); a CI input adds a short browser smoke
+    (CI_INPUTS). `added` names the new files (None: any may be new) and `core` the core browser scripts (None: read
+    from scripts/ui-tests.cjs)."""
     full = {"python": None, "browser": None, "caddy": True, "contracts": True, "reason": "full default suite"}
     rust = sorted(crate for crate, inputs in RUST_INPUTS.items() if any(p.startswith(inputs) for p in changed))
-    runner = bool(rust) or any(p.startswith(("runner/", "runner_support/", "runner-rs/", "relay-rs/")) or
-                               p in ("backend/harness_actions.py", "backend/runner_versions.py") for p in changed)
+    runner = bool(rust) or any(
+        p.startswith(("runner/", "runner_support/", "runner-rs/", "relay-rs/"))
+        or p in ("backend/harness_actions.py", "backend/runner_versions.py")
+        for p in changed
+    )
     full["rust"] = rust
     if event != "pull_request":
         return {**full, "conformance": runner, "reason": "main runs the full default suite"}
@@ -558,12 +816,27 @@ def selection(changed, event="pull_request", root=ROOT, graph=None, base=None, a
         graph = graph or DependencyMap(root)
         uncertain += [n for n in changed if n in graph.unparsed or n not in graph.files]
     if uncertain:
-        return {**full, "browser": ["--all"] if browser else None, "conformance": runner,
-                "reason": "unmapped, shared, deleted or uncertain change: full default suite", "uncertain": uncertain}
+        return {
+            **full,
+            "browser": ["--all"] if browser else None,
+            "conformance": runner,
+            "reason": "unmapped, shared, deleted or uncertain change: full default suite",
+            "uncertain": uncertain,
+        }
     if not changed:
-        return {"python": [], "browser": [], "conformance": False, "rust": [], "caddy": False, "contracts": False,
-                "reason": "documentation that no test or script reads"}
-    affected = graph.affected(changed, added)
+        return {
+            "python": [],
+            "browser": [],
+            "conformance": False,
+            "rust": [],
+            "caddy": False,
+            "contracts": False,
+            "reason": "documentation that no test or script reads",
+        }
+    data = [n for n in changed if read_only(n) and not graph.code(n)]
+    affected = graph.affected([n for n in changed if n not in data], added) | (
+        graph.read_by_tests(data, added) if data else set()
+    )
     python = sorted(p for p in affected if is_test(p) and not p.startswith("ui/"))
     if "--all" not in browser:
         scripts = {Path(p).stem for p in affected if Path(p).parent == Path("ui/tests") and p.endswith(".cjs")}
@@ -573,41 +846,76 @@ def selection(changed, event="pull_request", root=ROOT, graph=None, base=None, a
             except (OSError, subprocess.CalledProcessError, RuntimeError):
                 core = scripts
         browser |= scripts & set(core)
-    caddy = any(n.startswith(CADDY_INPUTS) for n in changed) or bool(affected & set(CADDY_ROOTS))
+        if any(n in CI_INPUTS for n in changed) and not browser:
+            browser.add(SMOKE_SCRIPT)
+    caddy = (
+        any(n.startswith(CADDY_INPUTS) for n in changed) or bool(affected & set(CADDY_ROOTS)) or PR_WORKFLOW in changed
+    )
     contracts = any(n.startswith(CONTRACT_INPUTS) for n in changed) or bool(affected & set(CONTRACT_TESTS))
-    return {"python": python, "browser": sorted(browser), "conformance": runner, "rust": rust, "caddy": caddy,
-            "contracts": contracts,
-            "reason": "measured dependency map"}
+    return {
+        "python": python,
+        "browser": sorted(browser),
+        "conformance": runner,
+        "rust": rust,
+        "caddy": caddy,
+        "contracts": contracts,
+        "reason": "measured dependency map",
+    }
 
 
 def changed_files(base, head="HEAD", root=ROOT, only=None):
     try:
         ancestor = subprocess.check_output(["git", "merge-base", base, head], cwd=root, text=True).strip()
-        raw = subprocess.check_output(["git", "diff", "--name-only", "--no-renames", "-z",
-                                       *([f"--diff-filter={only}"] if only else []), ancestor, head], cwd=root)
+        raw = subprocess.check_output(
+            [
+                "git",
+                "diff",
+                "--name-only",
+                "--no-renames",
+                "-z",
+                *([f"--diff-filter={only}"] if only else []),
+                ancestor,
+                head,
+            ],
+            cwd=root,
+        )
         return raw.decode().rstrip("\0").split("\0") if raw else []
     except (subprocess.CalledProcessError, OSError):
         return []  # The uncertain path runs everything, never nothing.
 
 
 def collect(root=ROOT):
-    result = subprocess.run([sys.executable, "-m", "pytest", "--collect-only", "-q", "-n", "0"],
-                            cwd=root, capture_output=True, text=True)
+    # Reuse the plan's existing collection as the sharding coverage guard: no extra collection or CI job.
+    # Direct script execution puts scripts/ on sys.path; package imports (including tests) use the relative form.
+    if __package__:
+        from .release_checks import validate_shard_coverage
+    else:
+        from release_checks import validate_shard_coverage
+    result = subprocess.run(
+        [sys.executable, "-m", "pytest", "--collect-only", "-q", "-n", "0"], cwd=root, capture_output=True, text=True
+    )
     if result.returncode:
         raise RuntimeError("Default collection failed:\n" + result.stdout[-4000:] + result.stderr[-4000:])
-    counts = Counter(line.split("::", 1)[0] for line in result.stdout.splitlines()
-                     if "::" in line and not line.startswith(" "))
+    counts = Counter(
+        line.split("::", 1)[0] for line in result.stdout.splitlines() if "::" in line and not line.startswith(" ")
+    )
     if not counts:
         raise RuntimeError("Default suite collected no tests")
+    validate_shard_coverage(counts, selection=(), root=root)
     return counts
 
 
 def weights(counts, timings, fallback=1.0):
     # Use measured per-file wall time, including setup/teardown. Unknown files use
     # the observed seconds/test, so adding files cannot put all unknown work in one VM.
-    known = {name: float(timings[name]) for name in counts if name in timings
-             and isinstance(timings[name], (int, float)) and math.isfinite(timings[name])
-             and 0 < timings[name] < 86400}
+    known = {
+        name: float(timings[name])
+        for name in counts
+        if name in timings
+        and isinstance(timings[name], (int, float))
+        and math.isfinite(timings[name])
+        and 0 < timings[name] < 86400
+    }
     seconds_per_test = sum(known.values()) / sum(counts[n] for n in known) if known else fallback
     return {n: known.get(n, counts[n] * seconds_per_test) for n in counts}
 
@@ -634,8 +942,10 @@ def merge_parent(base, head="HEAD", root=None):
     """The base a pull request is checked against. GitHub checks out the PR merged into the current base branch, while
     the event's base sha is the branch tip when the PR was last updated; diffing from that older sha would count
     everything main gained since as the PR's own change, CHANGELOG.md included."""
+
     def git(*args):
         return subprocess.run(["git", *args], cwd=root or ROOT, capture_output=True, text=True)
+
     parents = git("rev-list", "--parents", "-n", "1", head).stdout.split()[1:]
     if base and len(parents) == 2 and git("merge-base", "--is-ancestor", base, parents[0]).returncode == 0:
         return parents[0]
@@ -676,12 +986,19 @@ def prepare(event, base, output, timings_path=None):
         for path in paths:
             timings.update(json.loads(path.read_text()))
     split, loads = groups(counts, timings)
+    if loads and max(loads) / WORKERS + SETUP_SECONDS["python"] > 1.5 * JOB_SECONDS:
+        # Visible in the plan job's annotations: the cap (TICO_CI_MAX_JOBS) or one huge file holds a VM past the target.
+        print(
+            f"::warning::A Python VM is planned for {max(loads) / WORKERS + SETUP_SECONDS['python']:.0f}s against the "
+            f"{JOB_SECONDS:.0f}s target ({len(split)} VMs, cap {MAX_JOBS}): raise TICO_CI_MAX_JOBS or split the file"
+        )
     jobs = [{"suite": f"python-{i + 1}", "files": files} for i, files in enumerate(split) if files]
     if picked["browser"] != []:
         scripts = browser_scripts(picked["browser"] or [])
         browser_times = {name: timings.get(f"ui/tests/{name}.cjs") for name in scripts}
-        browser_split, browser_loads = groups(Counter(dict.fromkeys(scripts, 1)), browser_times, kind="browser",
-                                              fallback=UNTIMED_SCRIPT_SECONDS)
+        browser_split, browser_loads = groups(
+            Counter(dict.fromkeys(scripts, 1)), browser_times, kind="browser", fallback=UNTIMED_SCRIPT_SECONDS
+        )
         jobs += [{"suite": f"browser-{i + 1}", "files": names} for i, names in enumerate(browser_split) if names]
         loads += browser_loads
     if picked["conformance"]:
@@ -692,8 +1009,13 @@ def prepare(event, base, output, timings_path=None):
     # for documented no-test changes, without invoking bare pytest.
     if not jobs:
         jobs.append({"suite": "selection", "files": []})
-    plan = {**picked, "changed": changed, "matrix": {"include": jobs}, "estimated_seconds": loads,
-            "timed_files": len(set(counts) & timings.keys())}
+    plan = {
+        **picked,
+        "changed": changed,
+        "matrix": {"include": jobs},
+        "estimated_seconds": loads,
+        "timed_files": len(set(counts) & timings.keys()),
+    }
     Path(output).write_text(json.dumps(plan, indent=2) + "\n")
     print(json.dumps(plan, indent=2))
     if os.environ.get("GITHUB_OUTPUT"):
@@ -705,8 +1027,9 @@ def prepare(event, base, output, timings_path=None):
 
 def browser_scripts(args, root=ROOT):
     """The browser scripts these ui-tests.cjs arguments run (CORE for none), by name."""
-    out = subprocess.run(["node", "scripts/ui-tests.cjs", "--list", *args], cwd=root, capture_output=True,
-                         text=True, check=True).stdout.split()
+    out = subprocess.run(
+        ["node", "scripts/ui-tests.cjs", "--list", *args], cwd=root, capture_output=True, text=True, check=True
+    ).stdout.split()
     if not out:
         raise RuntimeError(f"Browser selection {args} listed no scripts")
     return out
@@ -730,8 +1053,18 @@ def run(plan_path, suite):
     else:
         if not files or any(not (ROOT / f).is_file() for f in files):
             raise RuntimeError("Python check requires an explicit nonempty existing file list")
-        command = [sys.executable, "-m", "pytest", "-q", "-n", str(WORKERS),
-                   "-o", "junit_family=xunit1", f"--junitxml=ci-results/{suite}.xml"]
+        command = [
+            sys.executable,
+            "-m",
+            "pytest",
+            "-q",
+            "-n",
+            str(WORKERS),
+            *PYTEST_FLAGS,
+            "-o",
+            "junit_family=xunit1",
+            f"--junitxml=ci-results/{suite}.xml",
+        ]
         if suite in ("conformance", "contracts"):
             command += ["-m", "slow"]
         command += files
@@ -756,8 +1089,9 @@ def cargo_tests(crates):
         # runner-rs/target is the directory the conformance job caches; relay-rs builds in a nested target there.
         target = ROOT / "runner-rs" / "target" / ("" if crate == "runner-rs" else crate)
         print(f"cargo test --locked: {crate}", flush=True)
-        if subprocess.run(["cargo", "test", "--locked"], cwd=ROOT / crate,
-                          env={**os.environ, "CARGO_TARGET_DIR": str(target)}).returncode:
+        if subprocess.run(
+            ["cargo", "test", "--locked"], cwd=ROOT / crate, env={**os.environ, "CARGO_TARGET_DIR": str(target)}
+        ).returncode:
             failed.append(crate)
     if failed:
         print(f"cargo test failed: {', '.join(failed)}", flush=True)
@@ -782,14 +1116,24 @@ def durations(paths, browser_paths=()):
 
 def receipt(jobs):
     from datetime import datetime
+
     rows = ["| Job | Result | Seconds |", "| --- | --- | ---: |"]
     for job in jobs:
         start, end = job.get("started_at"), job.get("completed_at")
-        seconds = (datetime.fromisoformat(end.replace("Z", "+00:00")) -
-                   datetime.fromisoformat(start.replace("Z", "+00:00"))).total_seconds() if start and end else None
+        seconds = (
+            (
+                datetime.fromisoformat(end.replace("Z", "+00:00"))
+                - datetime.fromisoformat(start.replace("Z", "+00:00"))
+            ).total_seconds()
+            if start and end
+            else None
+        )
         name = str(job["name"]).replace("|", r"\|").replace("\n", " ")
-        rows.append(f"| [{name}]({job['html_url']}) | {job.get('conclusion') or job['status']} | "
-                    + (f"{seconds:.1f}" if seconds is not None else "running") + " |")
+        rows.append(
+            f"| [{name}]({job['html_url']}) | {job.get('conclusion') or job['status']} | "
+            + (f"{seconds:.1f}" if seconds is not None else "running")
+            + " |"
+        )
     return "\n".join(rows) + "\n"
 
 
@@ -811,8 +1155,9 @@ def receipt_jobs(text):
     jobs, incomplete = [], False
     for page in pages:
         page_jobs = page.get("jobs") if isinstance(page, dict) else None
-        if isinstance(page_jobs, list) and all(isinstance(j, dict) and all(f in j for f in JOB_FIELDS)
-                                               for j in page_jobs):
+        if isinstance(page_jobs, list) and all(
+            isinstance(j, dict) and all(f in j for f in JOB_FIELDS) for j in page_jobs
+        ):
             jobs += page_jobs
         else:
             incomplete = True

@@ -1,4 +1,5 @@
 """Synthetic checks that a run's Gateway key follows what its claim handed it out on (fallback and check cases)."""
+
 import json
 
 import pytest
@@ -22,6 +23,7 @@ TICO_CHECK = {"runtime": "pi", "model": "tico-mid-1.0", "harness": "pi", "effort
 @pytest.mark.parametrize("change", ["fallback_added", "fallback_removed", "check_reassigned"])
 def test_the_key_follows_the_claims_fallback_and_check(api, monkeypatch, change):
     from backend import check_models
+
     setup(api, monkeypatch)
     with fake_gateway() as fake:
         fake.active(KEY, 0.1)
@@ -33,7 +35,9 @@ def test_the_key_follows_the_claims_fallback_and_check(api, monkeypatch, change)
     assign(api, machine, "ops")
     ready(api, machine, ["ops"])
     if change == "check_reassigned":
-        task = post(api, "tasks", {"owner": "ops", "title": "Synthetic check", "body": "Use only the synthetic fixture"})
+        task = post(
+            api, "tasks", {"owner": "ops", "title": "Synthetic check", "body": "Use only the synthetic fixture"}
+        )
         task_id = (task.get("task") or task)["id"]
         with api.app.state.store.transaction() as c:
             check_models.record(c, "bot:ops", task_id, TICO_CHECK)
@@ -48,7 +52,7 @@ def test_the_key_follows_the_claims_fallback_and_check(api, monkeypatch, change)
     elif change == "fallback_removed":
         set_fallback(api, "ops", None)
     else:
-        with api.app.state.store.transaction() as c:                         # the check is handed to another bot
+        with api.app.state.store.transaction() as c:  # the check is handed to another bot
             c.execute("UPDATE tasks SET owner_id='bot:finance' WHERE id=?", (task_id,))
             assert check_models.of(c, task_id, "ops") is None
     handed = handed_to(api, machine, attempt)

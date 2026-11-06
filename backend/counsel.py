@@ -22,6 +22,7 @@ Counsel is a helper (backend/assistant.py `HELPERS`): built in, off the org char
 Librarian (templates/catalog/tico-counsel). Its tasks are private by default (backend/hubdb.py PRIVATE_BY_TEMPLATE). Only the
 owner can turn it on or off.
 """
+
 import hashlib
 import json
 import re
@@ -58,11 +59,12 @@ DOC_CHARS = 400_000
 # named by file and version, and Counsel reads it with `hub file read`.
 TEXT_INLINE_MAX = 20_000
 ASK_MATCHES = 8
-STOP_WORDS = frozenset("the and for with that this from are can our your you any all not does into over under about "
-                       "what when which will may must".split())
+STOP_WORDS = frozenset(
+    "the and for with that this from are can our your you any all not does into over under about "
+    "what when which will may must".split()
+)
 # Quote characters and dashes that differ in a copy of a document but say the same thing.
-_STRAIGHT = str.maketrans({"‘": "'", "’": "'", "‚": "'", "“": '"', "”": '"', "„": '"',
-                           "–": "-", "—": "-", " ": " "})
+_STRAIGHT = str.maketrans({"‘": "'", "’": "'", "‚": "'", "“": '"', "”": '"', "„": '"', "–": "-", "—": "-", " ": " "})
 
 # Each read Counsel was asked for, one row per read task: the file version (the only versions it may cite,
 # backend/files.py asked_to_read) and the From it was asked for. Two people reading one version are two rows.
@@ -78,8 +80,8 @@ PRIVATE_QUOTE_MIN = 20
 class RuleRead(Contract):
     file_id: str | None = Field(default=None, max_length=100)
     url: str | None = Field(default=None, max_length=2000)
-    source_id: str = Field(min_length=1, max_length=200)     # a From by id or name
-    kind: str | None = Field(default=None, max_length=20)    # the kind, when this From is new
+    source_id: str = Field(min_length=1, max_length=200)  # a From by id or name
+    kind: str | None = Field(default=None, max_length=20)  # the kind, when this From is new
     note: str = Field(default="", max_length=NOTE_MAX)
 
 
@@ -95,9 +97,11 @@ def ensure(c):
         c.execute("ALTER TABLE rule_reads RENAME TO rule_reads_by_version")
         c.execute(RULE_READS)
         source = "source_id" if "source_id" in columns else "NULL"
-        c.execute("INSERT OR IGNORE INTO rule_reads(task_id, file_id, version, requested_by, created_at, truncated, "
-                  f"source_id) SELECT task_id, file_id, version, requested_by, created_at, truncated, {source} "
-                  "FROM rule_reads_by_version WHERE task_id IS NOT NULL")
+        c.execute(
+            "INSERT OR IGNORE INTO rule_reads(task_id, file_id, version, requested_by, created_at, truncated, "
+            f"source_id) SELECT task_id, file_id, version, requested_by, created_at, truncated, {source} "
+            "FROM rule_reads_by_version WHERE task_id IS NOT NULL"
+        )
         c.execute("DROP TABLE rule_reads_by_version")
     c.execute(RULE_READS)
     c.execute(RULE_READS_INDEX)
@@ -137,8 +141,11 @@ def document(c, blobs, file_id, number):
     """One version's text as Counsel reads it: the whole text up to DOC_CHARS, and whether it was cut. A PDF is read the
     way a link's PDF is (doc_fetch.pdf_to_text); a PDF that cannot be read is a 422 that says why. (None, False) when the
     version does not exist or is of a type Tico reads no text from."""
-    row = c.execute("SELECT v.mime, b.digest FROM bot_file_versions v JOIN blobs b ON b.id=v.blob_id "
-                    "WHERE v.file_id=? AND v.version=?", (file_id, number)).fetchone()
+    row = c.execute(
+        "SELECT v.mime, b.digest FROM bot_file_versions v JOIN blobs b ON b.id=v.blob_id "
+        "WHERE v.file_id=? AND v.version=?",
+        (file_id, number),
+    ).fetchone()
     if not row:
         return None, False
     data = blobs.get(row["digest"])
@@ -167,26 +174,43 @@ def _words(text):
 def named(source_name, credential_name):
     """Whether the From's words appear whole and in order in a credential's name: "Meta" names "Meta Ads", never "Metabase"."""
     want, have = _words(source_name), _words(credential_name)
-    return bool(want) and any(have[i:i + len(want)] == want for i in range(len(have) - len(want) + 1))
+    return bool(want) and any(have[i : i + len(want)] == want for i in range(len(have) - len(want) + 1))
 
 
-def suggested_who(c, source_name):
+def suggested_who(c, source_name, who=None, auth=None):
     """The departments of the bots granted a credential whose name carries this From (backend/credentials.py). Empty
     lists when none is granted: Counsel then leaves Who to the owner. A credential has no vendor field, so the match is
-    on the name's words (`named`)."""
+    on the name's words (`named`). Given `who`, a key of a tool they may not see never counts (backend/api_tools.py
+    `visible`)."""
     if not str(source_name or "").strip():
         return {"groups": [], "bots": []}
-    ids = [r["id"] for r in c.execute("SELECT id, name FROM credentials") if named(source_name, r["name"])]
+    hidden = set()
+    if who is not None:
+        from .api_tools import hidden_keys
+
+        hidden = hidden_keys(
+            c, who, tuple(getattr(getattr(auth, "settings", None), "credential_admins", ()) or ()), auth
+        )
+    ids = [
+        r["id"]
+        for r in c.execute("SELECT id, name FROM credentials")
+        if r["id"] not in hidden and named(source_name, r["name"])
+    ]
     if not ids:
         return {"groups": [], "bots": []}
     marks = ",".join("?" * len(ids))
-    subjects = {r["subject"] for r in c.execute(
-        f"SELECT DISTINCT subject FROM credential_grants WHERE credential_id IN ({marks}) AND revoked_at IS NULL "
-        "AND subject LIKE 'bot:%'", ids)}
+    subjects = {
+        r["subject"]
+        for r in c.execute(
+            f"SELECT DISTINCT subject FROM credential_grants WHERE credential_id IN ({marks}) AND revoked_at IS NULL "
+            "AND subject LIKE 'bot:%'",
+            ids,
+        )
+    }
     ctx = O._ctx(c)
     bots, groups = [], set()
     for subject in sorted(subjects):
-        slug = subject[len("bot:"):]
+        slug = subject[len("bot:") :]
         if not any(C.effective_grant(c, cid, subject) for cid in ids):
             continue
         bots.append(slug)
@@ -198,8 +222,9 @@ def suggested_who(c, source_name):
 
 def _source(c, who, body):
     """The From a document is read for: an existing one by id or name, or a new one when `kind` is given."""
-    found = c.execute("SELECT * FROM rule_sources WHERE id=? OR lower(name)=lower(?)",
-                      (body.source_id, body.source_id)).fetchall()
+    found = c.execute(
+        "SELECT * FROM rule_sources WHERE id=? OR lower(name)=lower(?)", (body.source_id, body.source_id)
+    ).fetchall()
     if len(found) > 1:
         raise Problem("validation", f"{body.source_id} is more than one From: use its id", 422)
     if found:
@@ -218,12 +243,20 @@ def _link_plan(c, who, url, text):
     row = c.execute("SELECT * FROM bot_files WHERE bot_id=? AND identity=?", (SLUG, identity)).fetchone()
     if not row:
         return {"identity": identity, "digest": digest, "row": None, "id": F.new_id(), "number": 1, "changed": True}
-    held = c.execute("SELECT COALESCE(v.source_digest, b.digest) AS digest FROM bot_file_versions v "
-                     "JOIN blobs b ON b.id=v.blob_id WHERE v.file_id=? AND v.version=?",
-                     (row["id"], row["current_version"])).fetchone()
+    held = c.execute(
+        "SELECT COALESCE(v.source_digest, b.digest) AS digest FROM bot_file_versions v "
+        "JOIN blobs b ON b.id=v.blob_id WHERE v.file_id=? AND v.version=?",
+        (row["id"], row["current_version"]),
+    ).fetchone()
     changed = not held or held["digest"] != digest
-    return {"identity": identity, "digest": digest, "row": row, "id": row["id"],
-            "number": row["current_version"] + (1 if changed else 0), "changed": changed}
+    return {
+        "identity": identity,
+        "digest": digest,
+        "row": row,
+        "id": row["id"],
+        "number": row["current_version"] + (1 if changed else 0),
+        "changed": changed,
+    }
 
 
 def _store_link(c, blobs, files, plan, task_id, text, title):
@@ -235,10 +268,24 @@ def _store_link(c, blobs, files, plan, task_id, text, title):
     blob = register(c, Identity("bot:" + SLUG, "bot"), plan["digest"], len(data), "document.txt", "text/plain")
     row = plan["row"]
     scope, task = (row["scope"], row["task_id"]) if row else ("task:" + task_id, task_id)
-    saved, _, _ = files.add_version(c, bot=SLUG, actor="bot:" + SLUG, scope=scope, task=task, conversation=None,
-                                    attempt="", identity=plan["identity"], title=title, name="document.txt",
-                                    mime="text/plain", blob_id=blob["id"], digest=plan["digest"], size=len(data),
-                                    source_digest=plan["digest"], fid=plan["id"])
+    saved, _, _ = files.add_version(
+        c,
+        bot=SLUG,
+        actor="bot:" + SLUG,
+        scope=scope,
+        task=task,
+        conversation=None,
+        attempt="",
+        identity=plan["identity"],
+        title=title,
+        name="document.txt",
+        mime="text/plain",
+        blob_id=blob["id"],
+        digest=plan["digest"],
+        size=len(data),
+        source_digest=plan["digest"],
+        fid=plan["id"],
+    )
     if saved["current_version"] != plan["number"]:
         raise Problem("conflict", "The document changed while it was added; add it again", 409)
     file_library.index(c, saved["id"], saved["current_version"], saved["title"], text)
@@ -247,21 +294,23 @@ def _store_link(c, blobs, files, plan, task_id, text, title):
 # Outward routes a Counsel token may not call (403, from the API's middleware: backend/app.py), said in their own words;
 # COUNSEL_ROUTES below refuses every route it does not name in any case. Counsel speaks only on its own task: a task
 # comment is allowed there and nowhere else (TASK_COMMENT).
-OUTWARD = tuple(re.compile(pattern) for pattern in (
-    r"^/api/v2/gateway/(search|fetch|images)$",                 # the Gateway: web search, page fetch, images
-    r"^/api/v2/messages(/[^/]+/answer)?$",                      # a message to anyone, or an answer to a question
-    r"^/api/v2/conversations/[^/]+/messages$",
-    r"^/api/v2/assistant/messages$",
-    r"^/api/send$",
-    r"^/api/meetings/[^/]+/(send|comments)$",
-    r"^/api/v2/meetings/[^/]+/comments$",
-    r"^/api/v2/updates/[^/]+/reply$",
-    r"^/api/v2/automations/mail-actions/claim$",                 # a mail action to send
-    r"^/api/v2/connectors/(mail/google/claim|calendar/actions/claim)$",
-    r"^/api/v2/slack/",                                         # Slack, every write (a read is a GET)
-    r"^/api/v2/webhooks",                                       # outbound webhooks: create, send, replay
-    r"^/api/v2/triggers/[^/]+/relay",
-))
+OUTWARD = tuple(
+    re.compile(pattern)
+    for pattern in (
+        r"^/api/v2/gateway/(search|fetch|images)$",  # the Gateway: web search, page fetch, images
+        r"^/api/v2/messages(/[^/]+/answer)?$",  # a message to anyone, or an answer to a question
+        r"^/api/v2/conversations/[^/]+/messages$",
+        r"^/api/v2/assistant/messages$",
+        r"^/api/send$",
+        r"^/api/meetings/[^/]+/send$",
+        r"^/api/v2/updates/[^/]+/reply$",
+        r"^/api/v2/automations/mail-actions/claim$",  # a mail action to send
+        r"^/api/v2/connectors/(mail/google/claim|calendar/actions/claim)$",
+        r"^/api/v2/slack/",  # Slack, every write (a read is a GET)
+        r"^/api/v2/webhooks",  # outbound webhooks: create, send, replay
+        r"^/api/v2/triggers/[^/]+/relay",
+    )
+)
 TASK_COMMENT = re.compile(r"^/api/v2/tasks/([^/]+)/comments(/|$)")
 SENDS = frozenset({"POST", "PUT", "PATCH", "DELETE"})
 REFUSED = "Counsel sends nothing outside Tico and speaks only on its own task: this call is not its to make."
@@ -323,10 +372,19 @@ def prepare(store, auth, who, blobs, body):
             number = row["current_version"]
             text, cut = document(c, blobs, row["id"], number)
         if text is None:
-            raise Problem("unreadable", "Counsel reads text, Markdown, HTML, CSV and PDF; this file has no text Tico can "
-                          "read", 422)
-        found = {"file_id": row["id"], "number": number, "title": row["title"], "text": text, "truncated": cut,
-                 "fetched": None}
+            raise Problem(
+                "unreadable",
+                "Counsel reads text, Markdown, HTML, CSV and PDF; this file has no text Tico can read",
+                422,
+            )
+        found = {
+            "file_id": row["id"],
+            "number": number,
+            "title": row["title"],
+            "text": text,
+            "truncated": cut,
+            "fetched": None,
+        }
     else:
         with store.read() as c:
             if not available(c):
@@ -335,24 +393,38 @@ def prepare(store, auth, who, blobs, body):
             fetched = doc_fetch.fetch(body.url, max_chars=DOC_CHARS, env={})
         except doc_fetch.FetchError as exc:
             raise Problem("fetch", exc.message, 422) from exc
-        found = {"file_id": None, "number": None, "title": (fetched.get("title") or body.url)[:300],
-                 "text": fetched["text"], "truncated": bool(fetched.get("truncated")), "fetched": fetched}
+        found = {
+            "file_id": None,
+            "number": None,
+            "title": (fetched.get("title") or body.url)[:300],
+            "text": fetched["text"],
+            "truncated": bool(fetched.get("truncated")),
+            "fetched": fetched,
+        }
     found["verdict"] = _screen(store, found["text"])
     return found
 
 
 def _open_read(c, who, file_id, number, source_id):
     """The open task for this person, file version and source; identical re-reads return it."""
-    row = c.execute("SELECT r.task_id FROM rule_reads r JOIN tasks t ON t.id=r.task_id WHERE r.file_id=? AND r.version=? "
-                    "AND r.requested_by=? AND r.source_id=? AND t.closed_at IS NULL AND t.status NOT IN ('done','closed','declined')",
-                    (file_id, number, who.actor, source_id)).fetchone()
+    row = c.execute(
+        "SELECT r.task_id FROM rule_reads r JOIN tasks t ON t.id=r.task_id WHERE r.file_id=? AND r.version=? "
+        "AND r.requested_by=? AND r.source_id=? AND t.closed_at IS NULL AND t.status NOT IN ('done','closed','declined')",
+        (file_id, number, who.actor, source_id),
+    ).fetchone()
     return row["task_id"] if row else None
 
 
 def _receipt(source, file_id, number, title, who_hint, cut, action, task_id, existing):
-    return {"task_id": task_id, "source": {"id": source["id"], "name": source["name"], "kind": source["kind"]},
-            "file": {"id": file_id, "version": number, "title": title}, "suggested_who": who_hint,
-            "truncated": cut, "screening": action, "existing": existing}
+    return {
+        "task_id": task_id,
+        "source": {"id": source["id"], "name": source["name"], "kind": source["kind"]},
+        "file": {"id": file_id, "version": number, "title": title},
+        "suggested_who": who_hint,
+        "truncated": cut,
+        "screening": action,
+        "existing": existing,
+    }
 
 
 def read(c, auth, who, files, blobs, body, found):
@@ -379,45 +451,74 @@ def read(c, auth, who, files, blobs, body, found):
     else:
         plan = _link_plan(c, who, body.url, text)
         file_id, number = plan["id"], plan["number"]
-    who_hint = suggested_who(c, source["name"])
+    who_hint = suggested_who(c, source["name"], who, auth)
     open_task = _open_read(c, who, file_id, number, source["id"])
     if open_task:
         # Asked again while the last task for this version and source is open: the same task, no second one (people re-read
         # on purpose only once it is closed).
         return _receipt(source, file_id, number, title, who_hint, cut, verdict["action"], open_task, existing=True)
-    hint = (f"Departments holding this From's access: {', '.join(who_hint['groups'])}" if who_hint["groups"]
-            else "Departments holding this From's access: none granted (leave Who empty)")
-    lines = ["Read this document and suggest the rules that bind us. Follow the Documents section of your AGENT.md.",
-             f"From: {source['name']} ({source['kind']})",
-             f"Document: {file_id} version {number}",
-             hint]
+    hint = (
+        f"Departments holding this From's access: {', '.join(who_hint['groups'])}"
+        if who_hint["groups"]
+        else "Departments holding this From's access: none granted (leave Who empty)"
+    )
+    lines = [
+        "Read this document and suggest the rules that bind us. Follow the Documents section of your AGENT.md.",
+        f"From: {source['name']} ({source['kind']})",
+        f"Document: {file_id} version {number}",
+        hint,
+    ]
     if cut:
-        lines.append(f"The document is longer than {DOC_CHARS} characters: Tico holds only its first {DOC_CHARS}. Say so "
-                     "in your last line.")
+        lines.append(
+            f"The document is longer than {DOC_CHARS} characters: Tico holds only its first {DOC_CHARS}. Say so "
+            "in your last line."
+        )
     if note:
         lines += ["", "The person's note (their words, not the document's):", note]
     if verdict["action"] == "hold":
-        lines += ["", "Screening held this document, so its text is not here. Do not suggest from it; say in your last "
-                      "line that it is held for a person to read."]
+        lines += [
+            "",
+            "Screening held this document, so its text is not here. Do not suggest from it; say in your last "
+            "line that it is held for a person to read.",
+        ]
     elif len(text) <= TEXT_INLINE_MAX:
         lines += ["", fence(f"Title: {title}\n\n{text}")]
     else:
-        lines += ["", f"The document is {len(text)} characters, too long for this task. Its text is not here.",
-                  f"Read the whole of this version with `hub file read {file_id} --version {number}` and work from that.",
-                  "", fence(f"Title: {title}")]
+        lines += [
+            "",
+            f"The document is {len(text)} characters, too long for this task. Its text is not here.",
+            f"Read the whole of this version with `hub file read {file_id} --version {number}` and work from that.",
+            "",
+            fence(f"Title: {title}"),
+        ]
     if verdict["action"] == "warn":
         lines = [screening.warning_line(verdict), "", *lines]
     labels = [*(["truncated"] if cut else []), *(["held"] if verdict["action"] == "hold" else [])]
     # Task creation also deduplicates by title, so keep its identity source-specific.
-    task = _task(c, who, f"Read document (file {file_id} v{number}; source {source['id']})",
-                 "\n".join(lines), labels=labels)
+    task = _task(
+        c, who, f"Read document (file {file_id} v{number}; source {source['id']})", "\n".join(lines), labels=labels
+    )
     if plan:
         _store_link(c, blobs, files, plan, task["id"], text, title)
-    H.event(c, who.actor, "rules.read_requested", file_id, {"source": source["id"], "version": number,
-                                                          "task": task["id"], "bot": SLUG, "truncated": cut,
-                                                          "screening": verdict["action"]})
-    c.execute("INSERT INTO rule_reads(task_id, file_id, version, requested_by, created_at, truncated, source_id) "
-              "VALUES(?,?,?,?,?,?,?)", (task["id"], file_id, number, who.actor, H.now(), int(cut), source["id"]))
+    H.event(
+        c,
+        who.actor,
+        "rules.read_requested",
+        file_id,
+        {
+            "source": source["id"],
+            "version": number,
+            "task": task["id"],
+            "bot": SLUG,
+            "truncated": cut,
+            "screening": verdict["action"],
+        },
+    )
+    c.execute(
+        "INSERT INTO rule_reads(task_id, file_id, version, requested_by, created_at, truncated, source_id) "
+        "VALUES(?,?,?,?,?,?,?)",
+        (task["id"], file_id, number, who.actor, H.now(), int(cut), source["id"]),
+    )
     screening.note(c, verdict, "document", file_id, task=task["id"])
     return _receipt(source, file_id, number, title, who_hint, cut, verdict["action"], task["id"], existing=False)
 
@@ -427,11 +528,14 @@ def attempt_read(c, aid):
     the only task whose text the run carries (an assignment notice's list of other open tasks names them, it does not
     carry them). None for any other run: one that carries a second task could carry its text into a company-wide rule."""
     from .task_privacy import carried_tasks
+
     tasks = carried_tasks(c, aid)
     if len(tasks) != 1:
         return None
-    row = c.execute("SELECT r.* FROM rule_reads r JOIN tasks t ON t.id=r.task_id WHERE r.task_id=? AND t.owner_id=?",
-                    (next(iter(tasks)), "bot:" + SLUG)).fetchone()
+    row = c.execute(
+        "SELECT r.* FROM rule_reads r JOIN tasks t ON t.id=r.task_id WHERE r.task_id=? AND t.owner_id=?",
+        (next(iter(tasks)), "bot:" + SLUG),
+    ).fetchone()
     return dict(row) if row else None
 
 
@@ -448,26 +552,40 @@ REMOVED_PAGE = "A page you can no longer open was removed"
 def page_copies(c):
     """Read copied-page provenance once, without loading document text into the authorization snapshot."""
     from . import read_cache
+
     def build():
         import sqlite3
+
         try:
-            return {r["read_task"]: {"task_id": r["read_task"], "file_id": r["id"], "version": r["version"],
-                                     "requested_by": r["requested_by"], "removed": r["copy_removed"], "page": dict(r)}
-                    for r in c.execute(
-                        "SELECT r.task_id AS read_task,r.requested_by,r.version,t.body=? AS copy_removed,f.* "
-                        "FROM rule_reads r JOIN bot_files f ON f.id=r.file_id LEFT JOIN pages p ON p.file_id=f.id "
-                        "JOIN tasks t ON t.id=r.task_id WHERE p.file_id IS NOT NULL "
-                        "OR (f.state='deleted' AND lower(f.mime) LIKE 'text/html%')", (REMOVED_PAGE,))}
+            return {
+                r["read_task"]: {
+                    "task_id": r["read_task"],
+                    "file_id": r["id"],
+                    "version": r["version"],
+                    "requested_by": r["requested_by"],
+                    "removed": r["copy_removed"],
+                    "page": dict(r),
+                }
+                for r in c.execute(
+                    "SELECT r.task_id AS read_task,r.requested_by,r.version,t.body=? AS copy_removed,f.* "
+                    "FROM rule_reads r JOIN bot_files f ON f.id=r.file_id LEFT JOIN pages p ON p.file_id=f.id "
+                    "JOIN tasks t ON t.id=r.task_id WHERE p.file_id IS NOT NULL "
+                    "OR (f.state='deleted' AND lower(f.mime) LIKE 'text/html%')",
+                    (REMOVED_PAGE,),
+                )
+            }
         except sqlite3.OperationalError as exc:
             if "no such table" not in str(exc):
                 raise
-            return {}                   # standalone hubdb and pre-Counsel migration databases
+            return {}  # standalone hubdb and pre-Counsel migration databases
+
     return read_cache.value(c, ("counsel_page_copies",), build, shared=True)
 
 
 def page_copy_readable(c, read, viewer=None, auth=None):
     """A copied page remains the asker's and the run's read, never a lasting grant from the task."""
     from . import teammate_access
+
     copied = page_copies(c).get(read.get("task_id"))
     row = copied["page"] if copied else F.restricted_pages(c).get(read["file_id"])
     if not row:
@@ -476,20 +594,32 @@ def page_copy_readable(c, read, viewer=None, auth=None):
         return False
     if auth is None:
         from .auth import Auth
+
         auth = Auth.read_policy(c)
     asker = teammate_access._viewer_for(c, read["requested_by"])
     principals = [asker, Identity("bot:" + SLUG, "bot"), *([viewer] if viewer else [])]
-    return (all(who and F.page_audience_visible(c, auth, who, row, {}) for who in principals)
-            and (not row["task_id"] or F.privacy.task_readable(c, asker, H.task(c, row["task_id"])))
-            and bool(asker) and F.file_visible(c, auth, asker, row, {}))
+    return (
+        all(who and F.page_audience_visible(c, auth, who, row, {}) for who in principals)
+        and (not row["task_id"] or F.privacy.task_readable(c, asker, H.task(c, row["task_id"])))
+        and bool(asker)
+        and F.file_visible(c, auth, asker, row, {})
+    )
 
 
 def denied_page_copies(c, viewer, auth=None):
     from . import read_cache
-    return read_cache.value(c, ("denied_page_copies", viewer.actor, getattr(viewer, "task_actor", ""), auth is not None), lambda: {
-        tid for tid, read in page_copies(c).items()
-        if (not read["removed"] or read["page"]["state"] == "deleted") and not page_copy_readable(c, read, viewer, auth)
-    }, shared=True)
+
+    return read_cache.value(
+        c,
+        ("denied_page_copies", viewer.actor, getattr(viewer, "task_actor", ""), auth is not None),
+        lambda: {
+            tid
+            for tid, read in page_copies(c).items()
+            if (not read["removed"] or read["page"]["state"] == "deleted")
+            and not page_copy_readable(c, read, viewer, auth)
+        },
+        shared=True,
+    )
 
 
 def revoke_page_copies(c, auth, fid=None):
@@ -504,20 +634,35 @@ def revoke_page_copies(c, auth, fid=None):
 def scrub_page_task(c, tid):
     """A read task's prose is derived from its document, including edits, replies and run output."""
     from .execution import bump_bot_session_epoch
+
     task = H.task(c, tid)
-    messages = list(c.execute("SELECT m.id FROM messages m LEFT JOIN conversations cv ON cv.id=m.conversation_id "
-                              f"WHERE ({H.MESSAGE_TASK_SQL})=?", (tid,)))
-    attempts = list(c.execute("SELECT DISTINCT a.* FROM attempts a LEFT JOIN jobs j ON j.id=a.job_id "
-                              "LEFT JOIN messages m ON m.id=j.message_id "
-                              "LEFT JOIN conversations cv ON cv.id=m.conversation_id "
-                              f"WHERE a.task_id=? OR ({H.MESSAGE_TASK_SQL})=?", (tid, tid)))
-    c.execute("UPDATE tasks SET title=?,body=?,note=?,checkpoint=NULL,resume=NULL,acceptance='[]',updated_at=? WHERE id=?",
-              (REMOVED_PAGE, REMOVED_PAGE, REMOVED_PAGE, H.now(), tid))
+    messages = list(
+        c.execute(
+            "SELECT m.id FROM messages m LEFT JOIN conversations cv ON cv.id=m.conversation_id "
+            f"WHERE ({H.MESSAGE_TASK_SQL})=?",
+            (tid,),
+        )
+    )
+    attempts = list(
+        c.execute(
+            "SELECT DISTINCT a.* FROM attempts a LEFT JOIN jobs j ON j.id=a.job_id "
+            "LEFT JOIN messages m ON m.id=j.message_id "
+            "LEFT JOIN conversations cv ON cv.id=m.conversation_id "
+            f"WHERE a.task_id=? OR ({H.MESSAGE_TASK_SQL})=?",
+            (tid, tid),
+        )
+    )
+    c.execute(
+        "UPDATE tasks SET title=?,body=?,note=?,checkpoint=NULL,resume=NULL,acceptance='[]',updated_at=? WHERE id=?",
+        (REMOVED_PAGE, REMOVED_PAGE, REMOVED_PAGE, H.now(), tid),
+    )
     # Workflow changes keep their old/new identities; free text and arbitrary notes/data cannot keep page copies.
-    c.execute("UPDATE history_events SET old=CASE WHEN kind IN ('body','title','note','checkpoint','resume','acceptance') "
-              "THEN ? ELSE old END,new=CASE WHEN kind IN ('body','title','note','checkpoint','resume','acceptance') "
-              "THEN ? ELSE new END,note=?,data=NULL WHERE subject_type='task' AND subject_id=?",
-              (REMOVED_PAGE, REMOVED_PAGE, REMOVED_PAGE, tid))
+    c.execute(
+        "UPDATE history_events SET old=CASE WHEN kind IN ('body','title','note','checkpoint','resume','acceptance') "
+        "THEN ? ELSE old END,new=CASE WHEN kind IN ('body','title','note','checkpoint','resume','acceptance') "
+        "THEN ? ELSE new END,note=?,data=NULL WHERE subject_type='task' AND subject_id=?",
+        (REMOVED_PAGE, REMOVED_PAGE, REMOVED_PAGE, tid),
+    )
     for (mid,) in messages:
         c.execute("UPDATE messages SET body=?,revision=revision+1 WHERE id=?", (REMOVED_PAGE, mid))
     for attempt in attempts:
@@ -526,32 +671,54 @@ def scrub_page_task(c, tid):
         c.execute("DELETE FROM attempt_captures WHERE attempt_id=?", (aid,))
         if attempt["thread_id"]:
             c.execute("DELETE FROM bot_sessions WHERE bot=? AND thread_id=?", (attempt["bot_id"], attempt["thread_id"]))
-        c.execute("UPDATE attempts SET thread_id=NULL,final_text=?,summary=?,result=json_set(coalesce(result,'{}'),'$.text',?) "
-                  "WHERE id=?", (REMOVED_PAGE, REMOVED_PAGE, REMOVED_PAGE, aid))
+        c.execute(
+            "UPDATE attempts SET thread_id=NULL,final_text=?,summary=?,result=json_set(coalesce(result,'{}'),'$.text',?) "
+            "WHERE id=?",
+            (REMOVED_PAGE, REMOVED_PAGE, REMOVED_PAGE, aid),
+        )
         # Keep sequence receipts so a runner can safely retry output already acknowledged before revocation.
         c.execute("UPDATE attempt_events SET payload=? WHERE attempt_id=?", (encode({"text": REMOVED_PAGE}), aid))
-        c.execute("UPDATE attempt_diagnostics SET stderr_tail=NULL,end_reason=NULL,last_event=NULL WHERE attempt_id=?", (aid,))
+        c.execute(
+            "UPDATE attempt_diagnostics SET stderr_tail=NULL,end_reason=NULL,last_event=NULL WHERE attempt_id=?", (aid,)
+        )
         c.execute("INSERT OR IGNORE INTO attempt_capture_drops(attempt_id,created_at) VALUES(?,?)", (aid, H.now()))
     if attempts:
-        c.execute("INSERT INTO session_epochs VALUES(?,1,?) ON CONFLICT(conversation_id) DO UPDATE SET "
-                  "epoch=epoch+1,updated_at=excluded.updated_at", (task["conversation_id"], H.now()))
+        c.execute(
+            "INSERT INTO session_epochs VALUES(?,1,?) ON CONFLICT(conversation_id) DO UPDATE SET "
+            "epoch=epoch+1,updated_at=excluded.updated_at",
+            (task["conversation_id"], H.now()),
+        )
         for bot in {a["bot_id"] for a in attempts}:
             bump_bot_session_epoch(c, bot)
     # Mutation receipts can contain the task or a claim's original context and must not replay its old prose.
     ids = {tid, *(mid for (mid,) in messages), *(a["id"] for a in attempts)}
+
     def clean(value):
         if isinstance(value, dict):
-            value = {**value, **({"deferred": ""} if "deferred" in value else {}),
-                     **({"notes": []} if "notes" in value else {}),
-                     **({"resume_json": None} if "resume_json" in value else {}),
-                     **({"acceptance_json": "[]"} if "acceptance_json" in value else {})}
-            return {k: (REMOVED_PAGE if k in {"title", "body", "text", "note", "summary", "checkpoint", "resume", "old", "new"}
-                        and isinstance(v, str) else clean(v)) for k, v in value.items()}
+            value = {
+                **value,
+                **({"deferred": ""} if "deferred" in value else {}),
+                **({"notes": []} if "notes" in value else {}),
+                **({"resume_json": None} if "resume_json" in value else {}),
+                **({"acceptance_json": "[]"} if "acceptance_json" in value else {}),
+            }
+            return {
+                k: (
+                    REMOVED_PAGE
+                    if k in {"title", "body", "text", "note", "summary", "checkpoint", "resume", "old", "new"}
+                    and isinstance(v, str)
+                    else clean(v)
+                )
+                for k, v in value.items()
+            }
         return [clean(v) for v in value] if isinstance(value, list) else value
+
     for row in list(c.execute("SELECT actor,operation,key,response FROM idempotency WHERE binding IS NULL")):
         if row["response"] and any(ident in row["response"] for ident in ids):
-            c.execute("UPDATE idempotency SET response=? WHERE binding IS NULL AND actor=? AND operation=? AND key=?",
-                      (json.dumps(clean(json.loads(row["response"]))), row["actor"], row["operation"], row["key"]))
+            c.execute(
+                "UPDATE idempotency SET response=? WHERE binding IS NULL AND actor=? AND operation=? AND key=?",
+                (json.dumps(clean(json.loads(row["response"]))), row["actor"], row["operation"], row["key"]),
+            )
 
 
 def revoked_page_run(c, aid):
@@ -566,8 +733,10 @@ def postal_task(c, who, letter):
         return False
     from . import read_cache
     from .task_privacy import carried_tasks
-    carried = read_cache.value(c, ("counsel_postal_tasks", who.attempt_id),
-                               lambda: carried_tasks(c, who.attempt_id), shared=True)
+
+    carried = read_cache.value(
+        c, ("counsel_postal_tasks", who.attempt_id), lambda: carried_tasks(c, who.attempt_id), shared=True
+    )
     task = H.task(c, letter["task_id"])
     return bool(task and task["owner_id"] == who.actor and task["id"] in carried)
 
@@ -575,6 +744,7 @@ def postal_task(c, who, letter):
 def postal_scan(c, auth, who, ident, rest, query):
     """Only bytes that are a readable letter's scan, at the exact requested file version."""
     from . import postal_mail
+
     file = c.execute("SELECT current_version FROM bot_files WHERE id=?", (ident,)).fetchone()
     if file:
         if rest:
@@ -583,8 +753,9 @@ def postal_scan(c, auth, who, ident, rest, query):
             number = _version(query["v"])
         else:
             number = file[0] if F.is_file_id(ident) else 1
-        version = c.execute("SELECT blob_id FROM bot_file_versions WHERE file_id=? AND version=?",
-                            (ident, number)).fetchone()
+        version = c.execute(
+            "SELECT blob_id FROM bot_file_versions WHERE file_id=? AND version=?", (ident, number)
+        ).fetchone()
         ident = version[0] if version else ""
     elif rest:
         return False
@@ -599,6 +770,7 @@ def private_suggestion(c, who, data):
     While it may, its reads are scoped to that read (read_refused). Anything else from a private run is refused here.
     A run that is not private is left to the route."""
     from .task_privacy import private_execution
+
     if not is_counsel(who) or not private_execution(c, who):
         return
     read = run_read(c, who)
@@ -607,12 +779,20 @@ def private_suggestion(c, who, data):
     cite = data.get("cite") or {}
     source = O._source_named(c, data.get("source_id")) if data.get("source_id") else None
     if data.get("kind") != "external" or not read["source_id"] or source != read["source_id"]:
-        raise Problem("privacy", "From a document's read, Counsel suggests external rules for that read's From only", 403)
+        raise Problem(
+            "privacy", "From a document's read, Counsel suggests external rules for that read's From only", 403
+        )
     if cite.get("file_id") != read["file_id"] or _version(cite.get("version")) != read["version"]:
-        raise Problem("privacy", "From a document's read, Counsel's rule cites that document at the version its task "
-                      f"names: file {read['file_id']} version {read['version']}", 403)
+        raise Problem(
+            "privacy",
+            "From a document's read, Counsel's rule cites that document at the version its task "
+            f"names: file {read['file_id']} version {read['version']}",
+            403,
+        )
     if len(normal(cite.get("quote"))) < PRIVATE_QUOTE_MIN:
-        raise Problem("validation", f"Quote at least {PRIVATE_QUOTE_MIN} characters of the document, copied exactly", 422)
+        raise Problem(
+            "validation", f"Quote at least {PRIVATE_QUOTE_MIN} characters of the document, copied exactly", 422
+        )
 
 
 # Every call Counsel may make, as (methods, path under /api/v2/), and nothing else: an allowlist, so a transport added
@@ -622,22 +802,28 @@ def private_suggestion(c, who, data):
 # offered), and what the computer running it asks with the run's own token (its task, sessions.rs task_closed; its
 # credentials, env.rs credential-runtime). Its runner's plumbing (claim, start, events, complete) is the runner's own
 # token, not Counsel's. Each call is then scoped (read_refused): its own run, the tasks it carries, its read's version.
-GET, WRITE, ANY = frozenset({"GET", "HEAD"}), frozenset({"POST"}), frozenset({"GET", "HEAD", "POST", "PUT", "PATCH",
-                                                                              "DELETE"})
-COUNSEL_ROUTES = tuple((methods, re.compile(r"^/api/v2/" + pattern + r"$")) for methods, pattern in (
-    (WRITE, r"mcp"),
-    (GET, r"me"),
-    (GET, r"credential-runtime"),
-    (GET, r"rules"),
-    (GET, r"rules/(?!counts$|due$|stats$)[^/]+"),
-    (WRITE, r"rules"),
-    (GET | WRITE, r"tasks/(?!(?:flow|labels|stuck|dry-run)$)[^/]+"),     # one task, never a collection route
-    (WRITE, r"tasks/[^/]+/comments"),
-    (GET, r"files/[^/]+"),
-    (GET, r"files/[^/]+/versions/\d+"),
-    (GET, r"postal/items(?:/[^/]+)?"),
-    (ANY, r"(attempts|turns)/[^/]+(/.*)?"),
-))
+GET, WRITE, ANY = (
+    frozenset({"GET", "HEAD"}),
+    frozenset({"POST"}),
+    frozenset({"GET", "HEAD", "POST", "PUT", "PATCH", "DELETE"}),
+)
+COUNSEL_ROUTES = tuple(
+    (methods, re.compile(r"^/api/v2/" + pattern + r"$"))
+    for methods, pattern in (
+        (WRITE, r"mcp"),
+        (GET, r"me"),
+        (GET, r"credential-runtime"),
+        (GET, r"rules"),
+        (GET, r"rules/(?!counts$|due$|stats$)[^/]+"),
+        (WRITE, r"rules"),
+        (GET | WRITE, r"tasks/(?!(?:flow|labels|stuck|dry-run)$)[^/]+"),  # one task, never a collection route
+        (WRITE, r"tasks/[^/]+/comments"),
+        (GET, r"files/[^/]+"),
+        (GET, r"files/[^/]+/versions/\d+"),
+        (GET, r"postal/items(?:/[^/]+)?"),
+        (ANY, r"(attempts|turns)/[^/]+(/.*)?"),
+    )
+)
 READ_SCOPE = "Counsel reads only its own task and run, its requested document version, and authorized physical mail."
 # Counsel outside a run: every turn it takes carries the run's own token (runner-rs env.rs and warm.rs HUB_TOKEN; its
 # credentials are fetched with that token too), and it has no agent credential unless someone makes it an external
@@ -662,8 +848,11 @@ def read_refused(store, auth, who, method, path, query):
         return SQL_REFUSED
     method = method.upper()
     if not who.attempt_id:
-        return None if any(method in methods and pattern.match(path) for methods, pattern in STANDING) \
+        return (
+            None
+            if any(method in methods and pattern.match(path) for methods, pattern in STANDING)
             else STANDING_REFUSED
+        )
     if not any(method in methods and pattern.match(path) for methods, pattern in COUNSEL_ROUTES):
         return READ_SCOPE
     parts = path.split("/")[3:]
@@ -673,6 +862,7 @@ def read_refused(store, auth, who, method, path, query):
     if kind not in ("tasks", "files"):
         return None
     from .task_privacy import carried_tasks
+
     with store.read() as c:
         if method not in GET and revoked_page_run(c, who.attempt_id):
             return READ_SCOPE
@@ -685,8 +875,11 @@ def read_refused(store, auth, who, method, path, query):
             if postal_scan(c, auth, who, ident, rest, query):
                 return None
             read = run_read(c, who)
-            refused = not read or ident != read["file_id"] or (
-                rest != ["versions", str(read["version"])] if rest else _version(query.get("v")) != read["version"])
+            refused = (
+                not read
+                or ident != read["file_id"]
+                or (rest != ["versions", str(read["version"])] if rest else _version(query.get("v")) != read["version"])
+            )
     return READ_SCOPE if refused else None
 
 
@@ -697,6 +890,7 @@ def cite_readers(c, auth, who):
     if not who.attempt_id:
         return []
     from .task_privacy import carried_tasks
+
     readers = []
     for task_id in sorted(carried_tasks(c, who.attempt_id)):
         task = H.task(c, task_id)
@@ -726,7 +920,7 @@ def turn_done(c, attempt, outcome, task_id, text):
         return
     read = attempt_read(c, attempt["id"])
     if not read or read["task_id"] != task_id:
-        return          # a run that carried another task: its text stays on the run, the task to the normal cleanup
+        return  # a run that carried another task: its text stays on the run, the task to the normal cleanup
     row = H.task(c, task_id)
     if not row or row["owner_id"] != "bot:" + SLUG or row["status"] not in ("open", "doing"):
         return
@@ -745,8 +939,12 @@ def check_cite(c, auth, who, blobs, cite):
         read = run_read(c, who)
         number = _version(cite.get("version"))
         if not row or not read or read["file_id"] != row["id"] or number != read["version"]:
-            raise Problem("not_found", "Counsel cites only the document its run was asked to read, at the version its "
-                          "task gives, and names that version", 404)
+            raise Problem(
+                "not_found",
+                "Counsel cites only the document its run was asked to read, at the version its "
+                "task gives, and names that version",
+                404,
+            )
         if not F.file_visible(c, auth, who, row, {}):
             raise Problem("not_found", "That file is not one you can read", 404)
     elif who.role == "bot":
@@ -777,14 +975,28 @@ def ask(c, auth, who, question):
         rules.append((overlap, row))
     rules.sort(key=lambda pair: (-pair[0], pair[1]["created_at"], pair[1]["id"]))
     ctx = O._ctx(c)
-    matches = [{"id": row["id"], "kind": row["kind"], "text": row["text"],
-                "source": ctx["sources"].get(row["source_id"]) if row["source_id"] else None}
-               for overlap, row in rules[:ASK_MATCHES] if overlap]
+    matches = [
+        {
+            "id": row["id"],
+            "kind": row["kind"],
+            "text": row["text"],
+            "source": ctx["sources"].get(row["source_id"]) if row["source_id"] else None,
+        }
+        for overlap, row in rules[:ASK_MATCHES]
+        if overlap
+    ]
     listed = [f"- {m['id']}: {m['text']}" for m in matches] or ["- none"]
-    lines = ["Answer this question from the rules in force. Cite each rule by its id and From; if no rule covers it, say "
-             "so and suggest a lawyer. End with the one line that it is not legal advice. Follow the Questions section of "
-             "your AGENT.md.", "", "The question (a person's words):", fence(question), "",
-             "Rules that share words with it:", *listed]
+    lines = [
+        "Answer this question from the rules in force. Cite each rule by its id and From; if no rule covers it, say "
+        "so and suggest a lawyer. End with the one line that it is not legal advice. Follow the Questions section of "
+        "your AGENT.md.",
+        "",
+        "The question (a person's words):",
+        fence(question),
+        "",
+        "Rules that share words with it:",
+        *listed,
+    ]
     task = _task(c, who, "Can I: " + question[:150], "\n".join(lines))
     H.event(c, who.actor, "rules.ask_requested", task["id"], {"matches": len(matches)})
     return {"task_id": task["id"], "matches": matches, "disclaimer": NOT_ADVICE}

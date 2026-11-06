@@ -18,8 +18,11 @@ def goal_manager(api, level=1):
     """The Strategy Bot at `level`, chosen by the owner (Passive unless asked otherwise); None leaves it as built, at
     the default level."""
     with api.app.state.store.transaction() as c:
-        c.execute("INSERT INTO bots(id,slug,display_name,effort,state,created_at) "
-                  "VALUES('goal-manager','goal-manager','Strategy Bot','','active',?)", (H.now(),))
+        c.execute(
+            "INSERT INTO bots(id,slug,display_name,effort,state,created_at) "
+            "VALUES('goal-manager','goal-manager','Strategy Bot','','active',?)",
+            (H.now(),),
+        )
         c.execute("INSERT INTO bot_config(bot,team,owner_id) VALUES('goal-manager',NULL,'ana')")
         BS.write(c, 'goal-manager', {"runtime": "fake", "host": "keeper"})
     raise_level(api, level)
@@ -34,10 +37,14 @@ def raise_level(api, level):
 
 def asks(api, owner=None):
     with api.app.state.store.read() as c:
-        return [dict(r) for r in c.execute(
-            "SELECT t.id, t.title, t.body, t.owner_id, t.status, a.kind, a.ref FROM goal_asks a JOIN tasks t ON t.id=a.task_id "
-            "WHERE t.requester_id=?" + (" AND t.owner_id=?" if owner else "") + " ORDER BY t.created_at",
-            (MANAGER, owner) if owner else (MANAGER,))]
+        return [
+            dict(r)
+            for r in c.execute(
+                "SELECT t.id, t.title, t.body, t.owner_id, t.status, a.kind, a.ref FROM goal_asks a JOIN tasks t ON t.id=a.task_id "
+                "WHERE t.requester_id=?" + (" AND t.owner_id=?" if owner else "") + " ORDER BY t.created_at",
+                (MANAGER, owner) if owner else (MANAGER,),
+            )
+        ]
 
 
 def manager_tasks(api, status):
@@ -58,7 +65,7 @@ def needs_tasks(api, token):
 def test_a_stale_kpi_is_one_task_for_its_owner_closed_by_a_fresh_reading(api):
     goal_manager(api, level=2)
     kpi = post(api, "kpis", {"name": "Unreported measure", "owner": "me", "cadence": "weekly"})["kpi"]
-    [task] = [a for a in asks(api, "human:ana") if a["kind"] != "vision"]     # above Passive the vision is asked too
+    [task] = [a for a in asks(api, "human:ana") if a["kind"] != "vision"]  # above Passive the vision is asked too
     assert (task["kind"], task["ref"], task["status"]) == ("kpi_stale", kpi["id"], "open")
     assert task["title"] == "Log the first Unreported measure reading"
     assert task["body"].startswith(task["title"])
@@ -66,8 +73,11 @@ def test_a_stale_kpi_is_one_task_for_its_owner_closed_by_a_fresh_reading(api):
     assert task["id"] in needs_tasks(api, "ana-test")
     [item] = [i for i in get(api, "goals/needs-you")["items"] if i.get("kpi_id") == kpi["id"]]
     assert item["kind"] == "kpi_stale" and item["task"]["id"] == task["id"]
-    assert (item["id"], item["subject"], item["actions"]) == (f"kpi_stale:{kpi['id']}", {"type": "kpi", "id": kpi["id"]},
-                                                              ["add_reading"])
+    assert (item["id"], item["subject"], item["actions"]) == (
+        f"kpi_stale:{kpi['id']}",
+        {"type": "kpi", "id": kpi["id"]},
+        ["add_reading"],
+    )
     assert item["title"] and "ref" not in item and item["created_at"]
     # Another write and the hourly pass ask nothing twice.
     post(api, "kpis", {"name": "Second measure", "owner": "me", "cadence": "weekly"})
@@ -91,7 +101,9 @@ def test_a_red_kpi_asks_the_goal_owner_and_closes_once_back_on_track(api):
     goal, kpi = goal_with_kpi(api, token="ben-test", owner="ben")
     log(api, kpi["id"], 10, token="ben-test", period_end=H.now())
     red = [a for a in asks(api, "human:ben") if a["kind"] == "kpi_red"]
-    assert [(a["ref"], a["title"]) for a in red] == [(kpi["id"], "Check why Activation is off track on Raise activation")]
+    assert [(a["ref"], a["title"]) for a in red] == [
+        (kpi["id"], "Check why Activation is off track on Raise activation")
+    ]
     assert red[0]["id"] in needs_tasks(api, "ben-test")
     assert red[0]["id"] not in needs_tasks(api, "ana-test")
     log(api, kpi["id"], 75, token="ben-test", period_end=H.now())
@@ -103,10 +115,18 @@ def test_a_proposal_asks_whoever_decides_it_and_closes_when_decided(api):
     goal_manager(api, level=2)
     goal, kpi = goal_with_kpi(api, token="ben-test", owner="ben")
     log(api, kpi["id"], 45, token="ben-test", period_end=H.now())
-    proposal = post(api, "goal-proposals", {"kind": "kpi_target", "goal_id": goal["id"], "kpi_id": kpi["id"],
-                    "reason": "The deadline cannot be met at this pace",
-                    "payload": {"kind": "improve", "baseline": 40, "target": 60, "deadline": "2099-12-31"}},
-                    token="ben-test")["proposal"]
+    proposal = post(
+        api,
+        "goal-proposals",
+        {
+            "kind": "kpi_target",
+            "goal_id": goal["id"],
+            "kpi_id": kpi["id"],
+            "reason": "The deadline cannot be met at this pace",
+            "payload": {"kind": "improve", "baseline": 40, "target": 60, "deadline": "2099-12-31"},
+        },
+        token="ben-test",
+    )["proposal"]
     [task] = [a for a in asks(api) if a["kind"] == "proposal"]
     assert (task["ref"], task["owner_id"]) == (proposal["id"], "human:ben")
     assert task["title"] == "Use a new Activation target on Raise activation?"
@@ -173,27 +193,46 @@ def test_at_passive_nobody_is_asked_anything_and_what_was_asked_still_closes(api
     post(api, "kpis", {"name": "Unreported measure", "owner": "me", "cadence": "weekly"})
     assert sync(api) == {"created": [], "closed": []} and not asks(api)
     assert get(api, "goals/needs-you", "ben-test")["items"] == [] and get(api, "goals/needs-you")["items"] == []
-    assert get(api, f"goals/{goal['id']}")["goal"]["status"] == "red"            # the regular checks still colour it
+    assert get(api, f"goals/{goal['id']}")["goal"]["status"] == "red"  # the regular checks still colour it
     raise_level(api, 2)
     sync(api)
     [red] = [a for a in asks(api) if a["kind"] == "kpi_red"]
     assert {a["kind"] for a in asks(api, "human:ana")} == {"vision", "kpi_stale"}
     raise_level(api, 1)
     post(api, "kpis", {"name": "Another measure", "owner": "me", "cadence": "weekly"})
-    assert sync(api)["created"] == []                                            # nothing new at Passive
+    assert sync(api)["created"] == []  # nothing new at Passive
     log(api, kpi["id"], 100, token="ben-test", period_end=H.now())
-    assert red["id"] in {t["id"] for t in manager_tasks(api, "closed")}         # resolved: it still closes
+    assert red["id"] in {t["id"] for t in manager_tasks(api, "closed")}  # resolved: it still closes
 
 
 def test_a_bots_id_never_reaches_the_text_people_read(api):
     """A bot made since ids has a UUID for an id: an ask, a resolved note and a reopen hint name it, not that."""
     bot_id = "0192f0aa-1111-7000-8000-000000000001"
     with api.app.state.store.transaction() as c:
-        c.execute("INSERT INTO bots(id,slug,display_name,state) VALUES(?,'acme-planner','Acme Planner','active')", (bot_id,))
-        item = {"kind": "proposal", "goal_title": "Grow", "proposal": {
-            "kind": "goal_wording", "proposed_by": "bot:" + bot_id, "reason": "", "payload": {"title": "Grow more"}}}
+        c.execute(
+            "INSERT INTO bots(id,slug,display_name,state) VALUES(?,'acme-planner','Acme Planner','active')", (bot_id,)
+        )
+        item = {
+            "kind": "proposal",
+            "goal_title": "Grow",
+            "proposal": {
+                "kind": "goal_wording",
+                "proposed_by": "bot:" + bot_id,
+                "reason": "",
+                "payload": {"title": "Grow more"},
+            },
+        }
         _, body = GA._ask(c, item)
-        hint = H.task_reopen_hint(c, "bot:ops", {"id": "t1", "status": "closed", "closed_by_id": "bot:" + bot_id,
-                                                 "requester_id": "bot:" + bot_id, "owner_id": "bot:ops"})
+        hint = H.task_reopen_hint(
+            c,
+            "bot:ops",
+            {
+                "id": "t1",
+                "status": "closed",
+                "closed_by_id": "bot:" + bot_id,
+                "requester_id": "bot:" + bot_id,
+                "owner_id": "bot:ops",
+            },
+        )
     assert "Acme Planner proposed it" in body and bot_id not in body
     assert "ask Acme Planner to reopen it" in hint and bot_id not in hint

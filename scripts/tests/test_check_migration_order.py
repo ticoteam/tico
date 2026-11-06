@@ -1,4 +1,5 @@
 """Independent timestamped migrations can merge in either order; new legacy names and collisions cannot."""
+
 from datetime import datetime, timezone
 import os
 from pathlib import Path
@@ -24,7 +25,8 @@ def test_a_new_legacy_name_gets_an_exact_timestamped_rename():
     added = paths("0094_x.py")
     assert errors(added, added, paths("0096_main.py")) == [
         "backend/migrations/0094_x.py: new migrations use YYYYMMDDHHMMSS UTC timestamps. Rename with: "
-        "git mv backend/migrations/0094_x.py backend/migrations/20261104235959_x.py"]
+        "git mv backend/migrations/0094_x.py backend/migrations/20261104235959_x.py"
+    ]
 
 
 def test_timestamp_additions_can_sort_before_the_base_tips_newest():
@@ -42,16 +44,17 @@ def test_duplicate_additions_across_sql_and_python_get_distinct_free_timestamps(
         "backend/migrations/20261104235958_a.sql: version also used by 20261104235958_b.py. Rename with: "
         "git mv backend/migrations/20261104235958_a.sql backend/migrations/20261105000001_a.sql",
         "backend/migrations/20261104235958_b.py: version also used by 20261104235958_a.sql. Rename with: "
-        "git mv backend/migrations/20261104235958_b.py backend/migrations/20261105000002_b.py"]
+        "git mv backend/migrations/20261104235958_b.py backend/migrations/20261105000002_b.py",
+    ]
 
 
 def test_an_addition_cannot_reuse_a_heads_or_base_tips_timestamp():
     added = paths("20261104235958_new.py")
-    for head, base in [(paths("20261104235958_old.sql") + added, []),
-                       (added, paths("20261104235958_old.sql"))]:
+    for head, base in [(paths("20261104235958_old.sql") + added, []), (added, paths("20261104235958_old.sql"))]:
         assert errors(added, head, base) == [
             "backend/migrations/20261104235958_new.py: version also used by 20261104235958_old.sql. Rename with: "
-            "git mv backend/migrations/20261104235958_new.py backend/migrations/20261104235959_new.py"]
+            "git mv backend/migrations/20261104235958_new.py backend/migrations/20261104235959_new.py"
+        ]
     # Independently adding the exact same filename on both branches also collides.
     assert "main already contains backend/migrations/20261104235958_new.py" in errors(added, added, added)[0]
 
@@ -59,9 +62,18 @@ def test_an_addition_cannot_reuse_a_heads_or_base_tips_timestamp():
 @pytest.mark.slow
 def test_git_diff_uses_the_merge_base_and_current_tip_and_checks_renamed_paths(tmp_path):
     def git(*args):
-        return subprocess.check_output(["git", *args], cwd=tmp_path, text=True,
-                                       env={**os.environ, "GIT_AUTHOR_NAME": "Acme", "GIT_AUTHOR_EMAIL": "dev@acme.example",
-                                            "GIT_COMMITTER_NAME": "Acme", "GIT_COMMITTER_EMAIL": "dev@acme.example"})
+        return subprocess.check_output(
+            ["git", *args],
+            cwd=tmp_path,
+            text=True,
+            env={
+                **os.environ,
+                "GIT_AUTHOR_NAME": "Acme",
+                "GIT_AUTHOR_EMAIL": "dev@acme.example",
+                "GIT_COMMITTER_NAME": "Acme",
+                "GIT_COMMITTER_EMAIL": "dev@acme.example",
+            },
+        )
 
     def commit():
         git("add", "-A")
@@ -89,8 +101,10 @@ def test_git_diff_uses_the_merge_base_and_current_tip_and_checks_renamed_paths(t
     (directory / "20261106000000_newer.sql").write_text("SELECT 6;\n")
     commit()
     # Both a legacy rename and a timestamp collision fail against the advanced tip, absent from the PR tree.
-    assert "git mv backend/migrations/0092_renamed.sql backend/migrations/" in guard.check(
-        "main", legacy_head, root=tmp_path)[0]
+    assert (
+        "git mv backend/migrations/0092_renamed.sql backend/migrations/"
+        in guard.check("main", legacy_head, root=tmp_path)[0]
+    )
     assert "version also used by 20261104000000_main.py" in guard.check("main", colliding_head, root=tmp_path)[0]
     git("checkout", "-q", "feature")
     (directory / "20261104000000_renamed.sql").rename(directory / "20261105000000_renamed.sql")
@@ -104,8 +118,13 @@ def test_git_diff_uses_the_merge_base_and_current_tip_and_checks_renamed_paths(t
     script = tmp_path / "scripts/check_migration_order.py"
     script.parent.mkdir()
     script.write_text(Path(guard.__file__).read_text())
-    for head, base, status in [(legacy_head, "main", 1), (colliding_head, "main", 1),
-                               ("HEAD", "main", 0), ("HEAD", "missing-base", 2)]:
-        result = subprocess.run([sys.executable, str(script), "--base", base, "--head", head],
-                                cwd=tmp_path, capture_output=True, text=True)
+    for head, base, status in [
+        (legacy_head, "main", 1),
+        (colliding_head, "main", 1),
+        ("HEAD", "main", 0),
+        ("HEAD", "missing-base", 2),
+    ]:
+        result = subprocess.run(
+            [sys.executable, str(script), "--base", base, "--head", head], cwd=tmp_path, capture_output=True, text=True
+        )
         assert result.returncode == status, result.stdout + result.stderr

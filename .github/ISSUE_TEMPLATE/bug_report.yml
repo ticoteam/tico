@@ -47,6 +47,6 @@ body:
     id: actual
     attributes:
       label: Actual
-      description: What happened instead. Error text and the relevant log lines help (`docker compose logs server`, `scripts/tico logs`), with secrets removed.
+      description: What happened instead. Error text and the relevant log lines help (`docker compose logs server`, `scripts/tico-computer logs`), with secrets removed.
     validations:
       required: true

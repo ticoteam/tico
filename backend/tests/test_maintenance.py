@@ -47,26 +47,31 @@ def inline(store, auth, run_id, only, wait):
 
 
 def test_the_steps_run_in_one_fixed_order_and_the_api_lists_them_so(api):
-    assert M.ORDER == ("collect", "clean_up", "check_health", "find_stuck", "learn", "suggest", "update", "dream")
+    assert M.ORDER == ("collect", "clean_up", "find_stuck", "check_health", "learn", "suggest", "update", "dream")
     assert [s["key"] for s in get(api, "maintenance")["steps"]] == list(M.ORDER)
-    assert next(s for s in get(api, "maintenance")["steps"] if s["key"] == "update")["old_timer"] is False
-    assert next(s for s in get(api, "maintenance")["steps"] if s["key"] == "learn")["old_timer"] is False
+    assert all("old_timer" not in s for s in get(api, "maintenance")["steps"]), "every step runs in the run"
     suggest = next(s for s in get(api, "maintenance")["steps"] if s["key"] == "suggest")
-    assert suggest["old_timer"] is False and suggest["consent"] is False, "Suggest is live and waits for consent"
+    assert suggest["consent"] is False, "Suggest is live and waits for consent"
 
 
 def test_each_frequency_is_due_on_its_own_clock():
     def row(frequency, last=None, every=None, unit=None):
-        return {"frequency": frequency, "last_started_at": M._stamp(last) if last else None,
-                "custom_every": every, "custom_unit": unit}
+        return {
+            "frequency": frequency,
+            "last_started_at": M._stamp(last) if last else None,
+            "custom_every": every,
+            "custom_unit": unit,
+        }
 
     assert M.due(row("run", la(4, 9)), la(4, 9, 5)), "every run is due on each run"
     assert M.due(row("day"), la(4, 10)), "a step that never started is due"
     assert not M.due(row("day", la(4, 6)), la(4, 10)), "a day's run started after today's 05:00 is not due again"
     assert not M.due(row("day", la(4, 6)), la(5, 4, 30)), "04:30 is still yesterday's day"
     assert M.due(row("day", la(4, 6)), la(5, 5, 30)), "after 05:00 the day is new"
-    old = datetime(2026, 10, 28, 14, 0, tzinfo=timezone.utc)      # absolute time: the clocks changed on Nov 1
-    assert not M.due(row("week", old), old + timedelta(days=7) - timedelta(minutes=1)), "six days and a bit is not a week"
+    old = datetime(2026, 10, 28, 14, 0, tzinfo=timezone.utc)  # absolute time: the clocks changed on Nov 1
+    assert not M.due(row("week", old), old + timedelta(days=7) - timedelta(minutes=1)), (
+        "six days and a bit is not a week"
+    )
     assert M.due(row("week", old), old + timedelta(days=7)), "seven days after the last attempt is due"
     assert not M.due(row("custom", la(4, 6), 3, "hours"), la(4, 8)), "every 3 hours: two hours is not enough"
     assert M.due(row("custom", la(4, 6), 3, "hours"), la(4, 9)), "every 3 hours: three hours is due"
@@ -93,7 +98,10 @@ def test_run_now_runs_every_step_in_order_like_a_scheduled_run(api):
     assert steps["find_stuck"]["status"] == "ran" and cursor(store, "find_stuck"), "Find stuck is live"
     assert steps["learn"]["status"] == "off", "learn is off by default"
     assert steps["check_health"]["status"] == "ran"
-    assert steps["suggest"]["status"] == "skipped" and steps["suggest"]["reason"] in ("Needs Tico Gateway", "Privacy consent is off")
+    assert steps["suggest"]["status"] == "skipped" and steps["suggest"]["reason"] in (
+        "Needs Tico Gateway",
+        "Privacy consent is off",
+    )
     assert steps["dream"]["status"] in ("ran", "skipped")
     assert run["finished_at"] and run["ok"] == 1, run
 
@@ -110,7 +118,7 @@ def test_the_schedule_starts_one_run_per_bucket(api, monkeypatch):
 
 def test_run_now_and_the_schedule_make_one_run(api, monkeypatch):
     store, auth = stores(api)
-    monkeypatch.setattr(M, "_start", lambda *args, **kwargs: None)     # nothing executes: the run stays live
+    monkeypatch.setattr(M, "_start", lambda *args, **kwargs: None)  # nothing executes: the run stays live
     with store.read() as c:
         before = c.execute("SELECT count(*) FROM maintenance_runs").fetchone()[0]
     first, started = M.run_now(store, auth, "human:ana")
@@ -126,14 +134,22 @@ def test_an_abandoned_run_is_recovered_and_its_occurrence_can_run_again(api):
     store, auth = stores(api)
     old = H.shift(H.now(), hours=-2)
     with store.transaction() as c:
-        c.execute("INSERT INTO maintenance_runs(id,occurrence_key,trigger,step,started_at,heartbeat_at,result) "
-                  "VALUES('dead','schedule:old','schedule',NULL,?,?,'')", (old, old))
-        c.execute("INSERT INTO maintenance_run_steps(id,maintenance_run_id,step,status,reason,started_at,details) "
-                  "VALUES('deadstep','dead','collect','pending','',?,'{}')", (old,))
+        c.execute(
+            "INSERT INTO maintenance_runs(id,occurrence_key,trigger,step,started_at,heartbeat_at,result) "
+            "VALUES('dead','schedule:old','schedule',NULL,?,?,'')",
+            (old, old),
+        )
+        c.execute(
+            "INSERT INTO maintenance_run_steps(id,maintenance_run_id,step,status,reason,started_at,details) "
+            "VALUES('deadstep','dead','collect','pending','',?,'{}')",
+            (old,),
+        )
     run, started = M.run_now(store, auth, "human:ana", step="collect", wait=True)
     assert started, "the abandoned run does not block a new one"
     with store.read() as c:
-        dead = c.execute("SELECT finished_at, ok, result, occurrence_key FROM maintenance_runs WHERE id='dead'").fetchone()
+        dead = c.execute(
+            "SELECT finished_at, ok, result, occurrence_key FROM maintenance_runs WHERE id='dead'"
+        ).fetchone()
         step = c.execute("SELECT status, reason FROM maintenance_run_steps WHERE id='deadstep'").fetchone()
     assert dead["finished_at"] and dead["ok"] == 0 and dead["result"] == "abandoned", dict(dead)
     assert dead["occurrence_key"].startswith("schedule:old:abandoned:"), "its key is freed for the schedule to claim"
@@ -158,6 +174,7 @@ def test_a_failing_step_is_recorded_and_the_run_goes_on(api, monkeypatch):
 
     def boom(c, ctx):
         raise RuntimeError("a bad row")
+
     monkeypatch.setitem(M.LIVE, "collect", boom)
     monkeypatch.setitem(M.LIVE, "clean_up", lambda c, ctx: result("ran", "pruned"))
     monkeypatch.setitem(M.LIVE, "dream", lambda c, ctx: result("skipped", "test"))
@@ -173,7 +190,9 @@ def test_the_switch_migration_keeps_an_explicit_choice_and_gives_an_inherited_on
     assert mig.switches({"learnings": {"on": False}}) == {"learn": False}
     assert mig.switches({"learnings": {"on": True}}) == {"learn": True}
     assert mig.switches({"auto_dream": {"on": False}, "health_scan": {"on": True}}) == {
-        "dream": False, "check_health": True}
+        "dream": False,
+        "check_health": True,
+    }
     assert mig.switches({"task_roundup": {"on": False}}) == {"find_stuck": False}
     assert mig.switches({"task_roundup": {"on": True}}) == {"find_stuck": True}
     assert mig.switches({"stall_triage": {"on": False}}) == {}, "stall_triage is gone"
@@ -185,11 +204,17 @@ def _migrated_rows(registry, rules):
     conn = sqlite3.connect(":memory:")
     conn.execute("CREATE TABLE registry_metadata(key TEXT PRIMARY KEY, value TEXT)")
     conn.execute("CREATE TABLE events(actor TEXT, action TEXT, created_at TEXT)")
-    conn.executemany("INSERT INTO registry_metadata VALUES(?,?)",
-                     [("system_routines", json.dumps(registry)), ("rules", json.dumps(rules))])
+    conn.executemany(
+        "INSERT INTO registry_metadata VALUES(?,?)",
+        [("system_routines", json.dumps(registry)), ("rules", json.dumps(rules))],
+    )
     mig.up(conn)
-    return {key: tuple(row) for key, *row in conn.execute(
-        "SELECT key, enabled, frequency, custom_every, custom_unit FROM maintenance_steps")}
+    return {
+        key: tuple(row)
+        for key, *row in conn.execute(
+            "SELECT key, enabled, frequency, custom_every, custom_unit FROM maintenance_steps"
+        )
+    }
 
 
 def _migrated(registry, rules):
@@ -213,8 +238,13 @@ def test_replaying_the_migration_changes_nothing(api):
 
     def rows():
         with store.read() as c:
-            return [tuple(r) for r in c.execute("SELECT key,enabled,frequency,max_bots,updated_by_id FROM maintenance_steps "
-                                                "ORDER BY key")]
+            return [
+                tuple(r)
+                for r in c.execute(
+                    "SELECT key,enabled,frequency,max_bots,updated_by_id FROM maintenance_steps ORDER BY key"
+                )
+            ]
+
     before = rows()
     with store.transaction() as c:
         mig.up(c)
@@ -243,14 +273,17 @@ def test_a_wake_that_names_a_list_of_tasks_is_one_fleet_wake_and_one_per_task(ap
     tasks = [f"list_task_{n}" for n in range(10)]
     with store.transaction() as c:
         L.record(c, "bot_list", tasks)
-        assert c.execute(L.COUNT_FLEET, (H.KEEPER, L.BOT_ACTION, hour_ago)).fetchone()[0] == 1, \
+        assert c.execute(L.COUNT_FLEET, (H.KEEPER, L.BOT_ACTION, hour_ago)).fetchone()[0] == 1, (
             "ten tasks in one list are one wake toward the fleet cap"
-        assert all(c.execute(L.COUNT_TARGET, (H.KEEPER, L.TASK_ACTION, task, day_ago)).fetchone()[0] == 1
-                   for task in tasks), "each task counts its one wake"
+        )
+        assert all(
+            c.execute(L.COUNT_TARGET, (H.KEEPER, L.TASK_ACTION, task, day_ago)).fetchone()[0] == 1 for task in tasks
+        ), "each task counts its one wake"
         assert not L.allow(c, "bot_list"), "the bot's one wake for this run is used"
         L.record(c, "bot_dup", ["dup_task", "dup_task"])
-        assert c.execute(L.COUNT_TARGET, (H.KEEPER, L.TASK_ACTION, "dup_task", day_ago)).fetchone()[0] == 1, \
+        assert c.execute(L.COUNT_TARGET, (H.KEEPER, L.TASK_ACTION, "dup_task", day_ago)).fetchone()[0] == 1, (
             "a task named twice in one wake counts once"
+        )
         L.record(c, "bot_more", ["list_task_0"])
         L.record(c, "bot_more_2", ["list_task_0"])
         assert not L.allow(c, "bot_three", "list_task_0"), "three wakes per task a day, across lists"
@@ -271,9 +304,18 @@ def test_only_an_owner_or_an_admin_changes_maintenance_and_everyone_reads_it(api
 
 def test_the_api_saves_the_schedule_cap_and_steps_and_refuses_bad_ones(api, monkeypatch):
     monkeypatch.setattr(M, "_start", lambda *args, **kwargs: None)
-    body = patch(api, "maintenance", {"schedule": "2h", "monthly_cap_usd": 25, "steps": [
-        {"key": "learn", "enabled": True, "frequency": "custom", "custom_every": 3, "custom_unit": "hours"},
-        {"key": "dream", "max_bots": 5}]})
+    body = patch(
+        api,
+        "maintenance",
+        {
+            "schedule": "2h",
+            "monthly_cap_usd": 25,
+            "steps": [
+                {"key": "learn", "enabled": True, "frequency": "custom", "custom_every": 3, "custom_unit": "hours"},
+                {"key": "dream", "max_bots": 5},
+            ],
+        },
+    )
     assert body["settings"]["schedule"] == "2h"
     assert body["settings"]["monthly_cap_usd_in_effect"] == 25.0
     steps = {s["key"]: s for s in body["steps"]}
@@ -299,17 +341,32 @@ def test_collect_counts_a_bot_only_when_a_settled_turn_wrote_something(api):
     store, _ = stores(api)
     during = "2026-11-03T12:30:00.000000Z"
     with store.transaction() as c:
-        c.execute("INSERT INTO attempts(id,bot_id,created_at,settled_at,did_nothing,outcome,state) "
-                  "VALUES('att-quiet','quiet',?,?,1,'nothing_to_do','completed')", (during, during))
-        c.execute("INSERT INTO attempts(id,bot_id,created_at,settled_at,did_nothing,outcome,state) "
-                  "VALUES('att-busy','busy',?,?,0,'acted','completed')", (during, during))
+        c.execute(
+            "INSERT INTO attempts(id,bot_id,created_at,settled_at,did_nothing,outcome,state) "
+            "VALUES('att-quiet','quiet',?,?,1,'nothing_to_do','completed')",
+            (during, during),
+        )
+        c.execute(
+            "INSERT INTO attempts(id,bot_id,created_at,settled_at,did_nothing,outcome,state) "
+            "VALUES('att-busy','busy',?,?,0,'acted','completed')",
+            (during, during),
+        )
         # a failed attempt does not count, even with a write
-        c.execute("INSERT INTO attempts(id,bot_id,created_at,settled_at,did_nothing,outcome,state) "
-                  "VALUES('att-failed','broken',?,?,0,'acted','failed')", (during, during))
-        c.execute("INSERT INTO bot_memory_updates(bot,sha,subject,author,committed_at,files,runner_id,reported_at) "
-                  "VALUES('quiet','abc123','memory','quiet',?,'[]','runner',?)", (during, during))
-        c.execute("INSERT INTO messages(id,sender_id,kind,body,created_at) "
-                  "VALUES('msg-quiet','bot:quiet','say','Nothing new.',?)", (during,))
+        c.execute(
+            "INSERT INTO attempts(id,bot_id,created_at,settled_at,did_nothing,outcome,state) "
+            "VALUES('att-failed','broken',?,?,0,'acted','failed')",
+            (during, during),
+        )
+        c.execute(
+            "INSERT INTO bot_memory_updates(bot,sha,subject,author,committed_at,files,runner_id,reported_at) "
+            "VALUES('quiet','abc123','memory','quiet',?,'[]','runner',?)",
+            (during, during),
+        )
+        c.execute(
+            "INSERT INTO messages(id,sender_id,kind,body,created_at) "
+            "VALUES('msg-quiet','bot:quiet','say','Nothing new.',?)",
+            (during,),
+        )
     with store.read() as c:
         counted = collect.did_work(c, "2026-11-03T12:00:00.000000Z", "2026-11-03T13:00:00.000000Z")
     assert counted == {"busy"}, "only the turn that wrote something counts"
@@ -321,8 +378,10 @@ def test_the_limiter_counts_read_their_events_index(api):
     store, _ = stores(api)
     since = "2026-11-03T00:00:00.000000Z"
     with store.read() as c:
-        for sql, params, index in ((L.COUNT_TARGET, (H.KEEPER, L.BOT_ACTION, "bot", since), "events_task_origin"),
-                                   (L.COUNT_FLEET, (H.KEEPER, L.BOT_ACTION, since), "events_actor_action_created")):
+        for sql, params, index in (
+            (L.COUNT_TARGET, (H.KEEPER, L.BOT_ACTION, "bot", since), "events_task_origin"),
+            (L.COUNT_FLEET, (H.KEEPER, L.BOT_ACTION, since), "events_actor_action_created"),
+        ):
             plan = " ".join(str(row[3]) for row in c.execute("EXPLAIN QUERY PLAN " + sql, params))
             assert index in plan and "SCAN events" not in plan, plan
 
@@ -330,8 +389,9 @@ def test_the_limiter_counts_read_their_events_index(api):
 def _dream_started_now(store):
     """Dream ran a moment ago, so on its own clock it is not due."""
     with store.transaction() as c:
-        c.execute("UPDATE maintenance_steps SET last_started_at=? WHERE key='dream'",
-                  (M._stamp(datetime.now(timezone.utc)),))
+        c.execute(
+            "UPDATE maintenance_steps SET last_started_at=? WHERE key='dream'", (M._stamp(datetime.now(timezone.utc)),)
+        )
 
 
 def test_a_step_only_run_now_runs_that_step_even_when_it_is_not_due(api, monkeypatch):
@@ -343,9 +403,6 @@ def test_a_step_only_run_now_runs_that_step_even_when_it_is_not_due(api, monkeyp
     assert run["steps"][0]["status"] == "ran" and run["steps"][0]["reason"] == "stubbed", "not due, but Run now runs it"
     run, _ = M.run_now(store, auth, "human:ana", step="learn", wait=True)
     assert run["steps"][0]["status"] == "off", "a step switched off stays off"
-    monkeypatch.setattr(M, "OLD_TIMER", ("check_health",))
-    run, _ = M.run_now(store, auth, "human:ana", step="check_health", wait=True)
-    assert run["steps"][0]["status"] == "skipped" and run["steps"][0]["reason"] == "on its old timer"
 
 
 def test_a_plain_run_now_keeps_the_due_rules(api, monkeypatch):
@@ -365,9 +422,11 @@ def test_a_stale_run_is_ended_before_the_bucket_guard_so_the_day_still_runs(api,
     monkeypatch.setitem(M.LIVE, "dream", lambda c, ctx: result("skipped", "test"))
     now = datetime.now(timezone.utc)
     with store.transaction() as c:
-        c.execute("INSERT INTO maintenance_runs(id,occurrence_key,trigger,step,started_at,heartbeat_at,result) "
-                  "VALUES('quiet','schedule:quiet','schedule',NULL,?,?,'')",
-                  (M._stamp(M.bucket("daily", now)), H.shift(H.now(), hours=-2)))
+        c.execute(
+            "INSERT INTO maintenance_runs(id,occurrence_key,trigger,step,started_at,heartbeat_at,result) "
+            "VALUES('quiet','schedule:quiet','schedule',NULL,?,?,'')",
+            (M._stamp(M.bucket("daily", now)), H.shift(H.now(), hours=-2)),
+        )
     run_id = M.tick(store, auth, now)
     assert run_id is not None and run_id != "quiet", "the bucket's stale run does not hold the day"
     with store.read() as c:
@@ -392,8 +451,9 @@ def test_a_step_that_returns_after_its_run_was_abandoned_is_dropped(api, monkeyp
 
     def late(c, ctx):
         with store.transaction() as tc:
-            M.recover(tc, H.shift(H.now(), minutes=60))      # the run has been silent for an hour by now
+            M.recover(tc, H.shift(H.now(), minutes=60))  # the run has been silent for an hour by now
         return result("ran", "too late")
+
     monkeypatch.setitem(M.LIVE, "collect", late)
     run, _ = M.run_now(store, auth, "human:ana", step="collect", wait=True)
     assert run["result"] == "abandoned" and run["ok"] == 0, run
@@ -403,19 +463,23 @@ def test_a_step_that_returns_after_its_run_was_abandoned_is_dropped(api, monkeyp
 
 def test_a_late_completion_reads_its_window_from_its_own_column_and_moves_the_cursor_forward_only(api, monkeypatch):
     store, auth = stores(api)
-    monkeypatch.setitem(M.LIVE, "collect", lambda c, ctx: {**result("pending", "later"), "details": {"blob": "x" * 30000}})
+    monkeypatch.setitem(
+        M.LIVE, "collect", lambda c, ctx: {**result("pending", "later"), "details": {"blob": "x" * 30000}}
+    )
     run, _ = M.run_now(store, auth, "human:ana", step="collect", wait=True)
     assert run["steps"][0]["details"] == {"truncated": True}, "the details were too long to keep"
     with store.read() as c:
-        row_id, window_end = c.execute("SELECT id, window_end FROM maintenance_run_steps WHERE maintenance_run_id=?",
-                                       (run["id"],)).fetchone()
+        row_id, window_end = c.execute(
+            "SELECT id, window_end FROM maintenance_run_steps WHERE maintenance_run_id=?", (run["id"],)
+        ).fetchone()
     assert M.complete_pending(store, row_id, result("ran", "caught up")) is True
     assert cursor(store, "collect") == window_end, "the window end comes from its own column, not the details"
     monkeypatch.setitem(M.LIVE, "collect", lambda c, ctx: result("pending", "later"))
     later_run, _ = M.run_now(store, auth, "human:ana", step="collect", wait=True)
     with store.read() as c:
-        later_id, later_end = c.execute("SELECT id, window_end FROM maintenance_run_steps WHERE maintenance_run_id=?",
-                                        (later_run["id"],)).fetchone()
+        later_id, later_end = c.execute(
+            "SELECT id, window_end FROM maintenance_run_steps WHERE maintenance_run_id=?", (later_run["id"],)
+        ).fetchone()
     ahead = H.shift(later_end, days=1)
     with store.transaction() as c:
         c.execute("UPDATE maintenance_steps SET cursor_at=? WHERE key='collect'", (ahead,))
@@ -429,7 +493,9 @@ def test_a_late_completion_adds_its_cost_to_its_run_and_a_failure_marks_the_run_
     run, _ = M.run_now(store, auth, "human:ana", step="collect", wait=True)
     assert run["ok"] == 1 and abs(run["cost_usd"] - 0.1) < 1e-9, run
     with store.read() as c:
-        row_id = c.execute("SELECT id FROM maintenance_run_steps WHERE maintenance_run_id=?", (run["id"],)).fetchone()[0]
+        row_id = c.execute("SELECT id FROM maintenance_run_steps WHERE maintenance_run_id=?", (run["id"],)).fetchone()[
+            0
+        ]
     assert M.complete_pending(store, row_id, {**result("failed", "boom"), "cost_usd": 0.25}) is True
     after = M.get_run(store, run["id"])
     assert abs(after["cost_usd"] - 0.35) < 1e-9 and after["ok"] == 0, after
@@ -456,8 +522,9 @@ def test_a_worker_whose_run_was_recovered_starts_no_further_step(api, monkeypatc
 
     def recovered_mid_step(c, ctx):
         with store.transaction() as tc:
-            M.recover(tc, H.shift(H.now(), minutes=60))      # the run has gone quiet: recovery ends it under this worker
+            M.recover(tc, H.shift(H.now(), minutes=60))  # the run has gone quiet: recovery ends it under this worker
         return result("ran", "recovered mid-run")
+
     monkeypatch.setitem(M.LIVE, "collect", recovered_mid_step)
     for key in ("clean_up", "dream"):
         monkeypatch.setitem(M.LIVE, key, lambda c, ctx, key=key: started.append(key) or result("skipped", "test"))
@@ -465,7 +532,10 @@ def test_a_worker_whose_run_was_recovered_starts_no_further_step(api, monkeypatc
     assert started == [], "the old worker starts no step once its run was recovered"
     assert run["result"] == "abandoned", run
     with store.read() as c:
-        steps = [row[0] for row in c.execute("SELECT step FROM maintenance_run_steps WHERE maintenance_run_id=?", (run["id"],))]
+        steps = [
+            row[0]
+            for row in c.execute("SELECT step FROM maintenance_run_steps WHERE maintenance_run_id=?", (run["id"],))
+        ]
     assert steps == ["collect"], steps
 
 
@@ -475,8 +545,11 @@ def test_a_request_key_replays_the_run_it_joined_even_after_that_run_ended(api, 
     monkeypatch.setitem(M.LIVE, "collect", lambda c, ctx: result("skipped", "nothing new"))
     now = H.now()
     with store.transaction() as c:
-        c.execute("INSERT INTO maintenance_runs(id,occurrence_key,trigger,step,started_at,heartbeat_at,result) "
-                  "VALUES('live','schedule:live','schedule',NULL,?,?,'')", (now, now))
+        c.execute(
+            "INSERT INTO maintenance_runs(id,occurrence_key,trigger,step,started_at,heartbeat_at,result) "
+            "VALUES('live','schedule:live','schedule',NULL,?,?,'')",
+            (now, now),
+        )
     joined, started = M.run_now(store, auth, "human:ana", step="collect", wait=True, key="join-1")
     assert joined["id"] == "live" and started is False, "a request that finds a live run joins it"
     with store.transaction() as c:
@@ -484,13 +557,14 @@ def test_a_request_key_replays_the_run_it_joined_even_after_that_run_ended(api, 
     again, started_again = M.run_now(store, auth, "human:ana", step="collect", wait=True, key="join-1")
     assert again["id"] == "live" and started_again is False, "the repeat replays the run it joined, now ended"
     with store.read() as c:
-        assert c.execute("SELECT count(*) FROM maintenance_runs WHERE trigger='run_now'").fetchone()[0] == 0, \
+        assert c.execute("SELECT count(*) FROM maintenance_runs WHERE trigger='run_now'").fetchone()[0] == 0, (
             "a joined request started no run"
+        )
 
 
 def test_a_request_key_replays_the_run_it_made_after_that_run_was_recovered(api, monkeypatch):
     store, auth = stores(api)
-    monkeypatch.setattr(M, "_start", lambda *args, **kwargs: None)      # the run is claimed, and its worker never returns
+    monkeypatch.setattr(M, "_start", lambda *args, **kwargs: None)  # the run is claimed, and its worker never returns
     first, started = M.run_now(store, auth, "human:ana", step="collect", key="recover-1")
     assert started, "the first request starts its run"
     with store.transaction() as c:
@@ -507,11 +581,60 @@ def test_a_request_key_replays_the_run_it_made_after_that_run_was_recovered(api,
 def test_a_saved_roundup_preset_sets_how_often_find_stuck_runs_and_an_inherited_one_keeps_six_hours():
     def find_stuck(registry, rules=None):
         return _migrated_rows(registry, rules or {})["find_stuck"][1:]
+
     assert find_stuck({}) == ("custom", 6, "hours"), "inherited: the seeded custom 6 hours"
-    assert find_stuck({"task_roundup": {"on": True}}) == ("custom", 6, "hours"), "a saved switch alone keeps the cadence"
+    assert find_stuck({"task_roundup": {"on": True}}) == ("custom", 6, "hours"), (
+        "a saved switch alone keeps the cadence"
+    )
     assert find_stuck({"task_roundup": {"preset": "daily"}}) == ("day", None, None), "saved daily is a daily run"
-    assert find_stuck({"task_roundup": {"preset": "three_daily"}}) == ("custom", 8, "hours"), "three a day is every 8 hours"
+    assert find_stuck({"task_roundup": {"preset": "three_daily"}}) == ("custom", 8, "hours"), (
+        "three a day is every 8 hours"
+    )
     assert find_stuck({"task_roundup": {"preset": "hourly"}}) == ("run", None, None), "saved hourly is every run"
-    assert find_stuck({"task_roundup": {"preset": "bogus"}}) == ("custom", 6, "hours"), "an unknown preset keeps the default"
+    assert find_stuck({"task_roundup": {"preset": "bogus"}}) == ("custom", 6, "hours"), (
+        "an unknown preset keeps the default"
+    )
     saved = _migrated_rows({"task_roundup": {"on": False, "preset": "daily"}}, {})["find_stuck"]
     assert saved == (0, "day", None, None), "the switch and the cadence both carry over"
+
+
+def test_the_replaced_jobs_mirrors_are_retired_once():
+    import importlib.util
+    from pathlib import Path
+
+    path = Path(__file__).resolve().parents[1] / "migrations" / "20261105214334_retire_replaced_job_mirrors.py"
+    spec = importlib.util.spec_from_file_location("retire_mirrors", path)
+    migration = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(migration)
+    with sqlite3.connect(":memory:") as c:
+        c.execute(
+            "CREATE TABLE automations(id TEXT PRIMARY KEY,builtin INTEGER,flow TEXT,enabled INTEGER,deleted_at TEXT,"
+            "updated_at TEXT)"
+        )
+        c.execute("CREATE TABLE automation_runs(id TEXT PRIMARY KEY,automation_id TEXT,status TEXT,finished_at TEXT)")
+        mirror = lambda key, readonly=1: json.dumps(
+            {"readonly": readonly, "trigger": {"name": "tico.builtin.job." + key}}
+        )
+        for aid, key, readonly in (
+            ("a", "auto_dream", 1),
+            ("b", "cleanup", 1),
+            ("c", "stall_triage", 1),
+            ("d", "memory_tidy", 1),
+            ("e", "cleanup", 0),
+        ):
+            c.execute("INSERT INTO automations VALUES(?,1,?,1,NULL,'then')", (aid, mirror(key, readonly)))
+        c.execute("INSERT INTO automation_runs VALUES('r1','a','queued',NULL)")
+        c.execute("INSERT INTO automation_runs VALUES('r2','b','ok','then')")
+        c.execute("INSERT INTO automation_runs VALUES('r3','d','queued',NULL)")
+        migration.up(c)
+        gone = {r[0] for r in c.execute("SELECT id FROM automations WHERE deleted_at IS NOT NULL AND enabled=0")}
+        assert gone == {"a", "b", "c"}, "only the replaced jobs' read-only mirrors"
+        runs = dict(c.execute("SELECT id, status FROM automation_runs"))
+        assert runs == {"r1": "skipped", "r2": "ok", "r3": "queued"}
+        when = c.execute("SELECT deleted_at FROM automations WHERE id='a'").fetchone()[0]
+        migration.up(c)
+        assert c.execute("SELECT deleted_at FROM automations WHERE id='a'").fetchone()[0] == when, (
+            "a second run changes nothing"
+        )
+    with sqlite3.connect(":memory:") as c:
+        migration.up(c)  # a file with no automations yet

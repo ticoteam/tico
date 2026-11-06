@@ -1,4 +1,5 @@
 """One public team logo, normalized to PNG for desktop builds."""
+
 import asyncio
 import hashlib
 import io
@@ -43,8 +44,13 @@ def png(data):
                     if out.tell() <= LIMIT:
                         return out.getvalue()
                     image.thumbnail((max(1, image.width // 2), max(1, image.height // 2)))
-    except (ValueError, OSError, UnidentifiedImageError, Image.DecompressionBombError,
-            Image.DecompressionBombWarning) as exc:
+    except (
+        ValueError,
+        OSError,
+        UnidentifiedImageError,
+        Image.DecompressionBombError,
+        Image.DecompressionBombWarning,
+    ) as exc:
         raise Problem("icon_type", "Use a valid PNG, JPEG or WebP image", 422) from exc
 
 
@@ -72,6 +78,7 @@ def install_team_icon(app, store):
             raise Problem("forbidden", "Only the owner changes the team icon", 403)
         data = await asyncio.to_thread(png, await request.body())
         digest = hashlib.sha256(data).hexdigest()
+
         def cleanup(c, icon):
             old = icon.get("retired_digest")
             if not old or c.execute("SELECT 1 FROM blobs WHERE digest=?", (old,)).fetchone():
@@ -81,7 +88,12 @@ def install_team_icon(app, store):
                     storage.s3.delete_object(Bucket=storage.bucket, Key=storage.s3_key(old))
                 (storage.directory / storage.key(old)).unlink(missing_ok=True)
             except Exception as exc:
-                raise Problem("blob_storage", "Previous team icon cleanup failed; check storage permissions and disk space, then retry", 503, True) from exc
+                raise Problem(
+                    "blob_storage",
+                    "Previous team icon cleanup failed; check storage permissions and disk space, then retry",
+                    503,
+                    True,
+                ) from exc
             c.execute("DELETE FROM blob_locations WHERE digest=?", (old,))
 
         def save(c):
@@ -93,19 +105,25 @@ def install_team_icon(app, store):
                 cleanup(c, icon)
             storage.put(data, "image/png")
             if icon:
-                c.execute("UPDATE blobs SET digest=?,size=?,created_at=? WHERE id=?",
-                          (digest, len(data), H.now(), icon["id"]))
+                c.execute(
+                    "UPDATE blobs SET digest=?,size=?,created_at=? WHERE id=?", (digest, len(data), H.now(), icon["id"])
+                )
             else:
                 icon = blobs.register(c, who, digest, len(data), "team-icon.png", "image/png")
             value = {"id": icon["id"], "digest": digest}
             if previous and icon["digest"] != digest:
                 value["retired_digest"] = icon["digest"]
-            c.execute("INSERT INTO registry_metadata(key,value) VALUES(?,?) "
-                      "ON CONFLICT(key) DO UPDATE SET value=excluded.value", (KEY, encode(value)))
+            c.execute(
+                "INSERT INTO registry_metadata(key,value) VALUES(?,?) "
+                "ON CONFLICT(key) DO UPDATE SET value=excluded.value",
+                (KEY, encode(value)),
+            )
             return {"url": "/api/v2/team/icon", "content_type": "image/png"}
 
         def write():
-            result = store.mutate(who, request.url.path, request.headers.get("idempotency-key"), {"digest": digest}, save)
+            result = store.mutate(
+                who, request.url.path, request.headers.get("idempotency-key"), {"digest": digest}, save
+            )
             # Cleanup follows the committed replacement. Retries also finish a pending cleanup
             # when the idempotency response is replayed, without storing another logo.
             with store.transaction() as c:

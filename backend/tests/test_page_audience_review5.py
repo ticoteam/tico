@@ -1,4 +1,5 @@
 """Generated recommendations and spend decisions keep copied labels revocable."""
+
 import json
 
 from backend import files
@@ -17,10 +18,16 @@ def test_multi_recommendation_fallback_keeps_its_copied_source(api):
     question["questions"][0]["multi"] = True
     question["questions"][0]["options"][0].update(label="Confidential draft", file=fid + "@1", recommended=True)
     question["if_no_answer"] = {"do": "Confidential draft", "kind": "reversible"}
-    sibling = post(api, f"tasks/{tid}/files", {"name": "recommendation.txt", "text": "Public notes", "ask": question},
-                   token="ops-test")
+    sibling = post(
+        api,
+        f"tasks/{tid}/files",
+        {"name": "recommendation.txt", "text": "Public notes", "ask": question},
+        token="ops-test",
+    )
     with api.app.state.store.read() as c:
-        asked = c.execute("SELECT ask_message_id FROM task_file_reviews WHERE file_id=?", (sibling["file_id"],)).fetchone()[0]
+        asked = c.execute(
+            "SELECT ask_message_id FROM task_file_reviews WHERE file_id=?", (sibling["file_id"],)
+        ).fetchone()[0]
     batch = post(api, "batch", {}, token="cara-test")
     assert batch["item"]["recommend"] == "Confidential draft"
     post(api, "needs-you/recommended", {"ask": asked}, token="cara-test")
@@ -44,16 +51,30 @@ def test_multi_recommendation_fallback_keeps_its_copied_source(api):
 def test_spend_pick_history_events_and_notice_keep_the_label_source(api):
     tid, _, fid = public_page(api)
     ordinary = post(api, f"tasks/{tid}/files", {"name": "public.txt", "text": "Public choice"})["file_id"]
-    made = review_ask(api, "ops-test", [{"file": fid}, {"file": ordinary}], on="cara", parent=tid,
-                      private=False, pick=True, spend={"label": "Confidential draft", "amount": "12.50", "what": "Render"})
+    made = review_ask(
+        api,
+        "ops-test",
+        [{"file": fid}, {"file": ordinary}],
+        on="cara",
+        parent=tid,
+        private=False,
+        pick=True,
+        spend={"label": "Confidential draft", "amount": "12.50", "what": "Render"},
+    )
     answered = review_answer(api, made, ["Confidential draft"], token="cara-test")
     aid = answered["answer"]["spend_approval"]
-    assert any(e.get("note") == 'Picked "Confidential draft".'
-               for e in get(api, "approvals/" + aid, token="cara-test")["history"])
+    assert any(
+        e.get("note") == 'Picked "Confidential draft".'
+        for e in get(api, "approvals/" + aid, token="cara-test")["history"]
+    )
     with api.app.state.store.read() as c:
         event = c.execute("SELECT detail FROM events WHERE target=? AND action='approval.decide'", (aid,)).fetchone()[0]
-        notice = H.message(c, c.execute("SELECT id FROM messages WHERE json_extract(refs,'$.approval')=? "
-                                       "AND sender_id=?", (aid, H.KEEPER)).fetchone()[0])
+        notice = H.message(
+            c,
+            c.execute(
+                "SELECT id FROM messages WHERE json_extract(refs,'$.approval')=? AND sender_id=?", (aid, H.KEEPER)
+            ).fetchone()[0],
+        )
         assert H._json(event, {})["body_sources"] == notice["refs"]["body_sources"] == [{"file": fid, "version": 1}]
         assert "Confidential draft" in notice["body"]
     edit(api, fid, {"people": ["ben"]})
@@ -73,14 +94,15 @@ def test_spend_pick_history_events_and_notice_keep_the_label_source(api):
 def test_held_review_pick_text_keeps_its_page_source(api):
     from backend.tests.test_org_rule_check import Judge
     from backend.tests.test_org_rules import rule
+
     tid, _, fid = public_page(api)
     text = "Never publish an unreviewed draft."
     api.app.state.judge = Judge(api.app.state.store, {text: "Confidential draft"})
     ordinary = post(api, f"tasks/{tid}/files", {"name": "public.txt", "text": "Public choice"})["file_id"]
-    rule(api, {"kind": "internal", "text": text, "who": {"bots": ["ops"]},
-               "if_broken": "escalate", "reviewer": "cara"})
-    held = review_ask(api, "ops-test", [{"file": fid}, {"file": ordinary}], on="cara", parent=tid,
-                      private=False, pick=True)["held"]["id"]
+    rule(api, {"kind": "internal", "text": text, "who": {"bots": ["ops"]}, "if_broken": "escalate", "reviewer": "cara"})
+    held = review_ask(
+        api, "ops-test", [{"file": fid}, {"file": ordinary}], on="cara", parent=tid, private=False, pick=True
+    )["held"]["id"]
     assert "Confidential draft" in get(api, "rule-holds/" + held, token="cara-test")["text"]
     with api.app.state.store.read() as c:
         stored = H._json(c.execute("SELECT payload FROM org_rule_holds WHERE id=?", (held,)).fetchone()[0], {})
@@ -96,22 +118,37 @@ def test_held_review_pick_text_keeps_its_page_source(api):
 def test_a_generated_pick_answer_forwarded_to_a_merged_ask_keeps_its_sources(api):
     from backend import ask_ingest
     from backend.tests.test_ask_ingest import FakeModel
+
     tid, _, fid = public_page(api)
     api.app.state.judge = model = FakeModel(recommends=0.95)
     with api.app.state.store.transaction() as c:
-        ask_ingest.save(c, "human:cara", "human:cara", {"mode": "on", "budget": 10, "chores_budget": 5,
-                                                      "criteria": ask_ingest.DEFAULTS["criteria"]})
+        ask_ingest.save(
+            c,
+            "human:cara",
+            "human:cara",
+            {"mode": "on", "budget": 10, "chores_budget": 5, "criteria": ask_ingest.DEFAULTS["criteria"]},
+        )
     question = ask("cara")
     question["questions"][0]["options"][0].update(label="Confidential draft", file=fid + "@1")
-    asked = post(api, f"tasks/{tid}/comments", {"text": "Choose the draft", "ask": question}, token="ops-test")["comment"]
+    asked = post(api, f"tasks/{tid}/comments", {"text": "Choose the draft", "ask": question}, token="ops-test")[
+        "comment"
+    ]
     model.covered = "Review drafts"
-    made = post(api, "tasks", {"owner": "cara", "title": "Choose another draft", "body": "Which draft should ship?",
-                               "private": False}, token="ops-test")
+    made = post(
+        api,
+        "tasks",
+        {"owner": "cara", "title": "Choose another draft", "body": "Which draft should ship?", "private": False},
+        token="ops-test",
+    )
     second = made.get("task") or made
     with api.app.state.store.read() as c:
         assert c.execute("SELECT merged_into FROM ask_ingest_items WHERE ref=?", (second["id"],)).fetchone()[0] == tid
-    post(api, f"tasks/{tid}/answers", {"target": {"comment": asked["id"]},
-                                      "answers": {"verdict": ["Confidential draft"]}}, token="cara-test")
+    post(
+        api,
+        f"tasks/{tid}/answers",
+        {"target": {"comment": asked["id"]}, "answers": {"verdict": ["Confidential draft"]}},
+        token="cara-test",
+    )
     with api.app.state.store.read() as c:
         forwarded = [m for m in H.task_comments(c, second["id"]) if "Confidential draft" in m["body"]]
         assert len(forwarded) == 1 and forwarded[0]["refs"]["body_sources"] == [{"file": fid, "version": 1}]
@@ -128,7 +165,9 @@ def test_quoted_pick_labels_keep_sources_in_the_answer_and_its_body(api):
     tid, _, fid = public_page(api)
     question = ask("cara")
     question["questions"][0]["options"][0].update(label="Confidential draft", file=fid + "@1")
-    asked = post(api, f"tasks/{tid}/comments", {"text": "Choose the draft", "ask": question}, token="ops-test")["comment"]
+    asked = post(api, f"tasks/{tid}/comments", {"text": "Choose the draft", "ask": question}, token="ops-test")[
+        "comment"
+    ]
     quoted = post(api, f"tasks/{tid}/comments/{asked['id']}/resolve", {"quote": "Confidential draft"}, token="ops-test")
     assert quoted["comment"]["refs"]["answer"]["body_sources"] == [{"file": fid, "version": 1}]
     edit(api, fid, {"people": ["ben"]})
