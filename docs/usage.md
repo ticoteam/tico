@@ -76,7 +76,7 @@ guards are separate safety controls and stay where they are.
 Strategy > **Budget** (`#/strategy/budget`) shows the same limits as one tree: the company on top, then the groups, people and bots
 as on Org, with the helpers in their own branch. Each row shows what it spent over the period picked above the list (**7 days**,
 **30 days** or **This month**; a group or person adds up everyone under it), and its limit that binds when one is set, with a thin
-bar. **Near limit** keeps the rows that are near or over a limit, or paused. Tapping a row opens a panel (a sheet on a phone) with
+bar. **Near limit** keeps the rows that are near or over a limit, or paused, or that have used up the day's count of a task cap they send. Tapping a row opens a panel (a sheet on a phone) with
 where the period's spend went, by model and by top task, then the row's limits and task caps. Limits are saved there as they are on
 Usage > Limits; the hub decides who may change which, and a row it says is not yours is read only.
 
