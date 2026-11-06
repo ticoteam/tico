@@ -232,8 +232,8 @@ async function withNeedsReads(page, run) {
       await page.keyboard.press('Escape');
       const asks = page.locator('#task-body [data-group="asks"]');
       assert.equal(await asks.locator('.tl-gname').textContent(), 'Approvals and questions');
-      assert.equal(await asks.locator('.tl-gcount').innerText(), '2', 'only the loose question and stale check');
-      assert.equal(await asks.locator('.tl-row').count(), 2);
+      assert.equal(await asks.locator('.tl-gcount').innerText(), '1', 'only the stale check: a question to Ana is a task row');
+      assert.equal(await asks.locator('.tl-row').count(), 1);
       assert.equal(await page.locator('#task-body .tl-row').count(), 13, 'one row per plate item');
       assert.equal(await page.locator('#task-body [data-task-key="tt-0"]').count(), 1, 'duplicate task only once');
       const declined = page.locator('#task-body [data-task-key="tt-declined"]');
