@@ -871,7 +871,8 @@ def retry_facts(c, job, started, finished):
     config = c.execute(BS.ONE_SQL, (job['bot_id'],)).fetchone()
     declared = json.loads(config[0]) if config else {}
     calls = recorded_tools(c, job['attempt_id'])
-    acted = sorted({call['tool'] for call in calls if call['tool'] not in READ_ONLY_TOOLS})
+    reads = READ_ONLY_TOOLS | (SHELL_CALLS if read_only_shells(c, job['attempt_id']) else frozenset())
+    acted = sorted({call['tool'] for call in calls if call['tool'] not in reads})
     window = (started or job['created_at'], finished or H.now())
     # New consumes name their attempt. Older receipts can use the originating message only when
     # no competing attempt overlapped its consumption; another lane's approval never holds this run.
@@ -924,11 +925,55 @@ def retry_facts(c, job, started, finished):
 
 # Tool calls that only read: a run that made nothing else repeats nothing when it runs again. Claude's and Codex's
 # own names. A subagent's launch is listed because its own calls are reported and judged one by one. A shell command
-# never counts, whatever its program: `cat` can be piped into anything.
+# never counts, whatever its program: `cat` can be piped into anything. Only a lapsed lease with no hub write and no
+# named outside action in any line reads a shell's own summary (read_only_shells).
 READ_ONLY_TOOLS = frozenset({
     "Read", "Grep", "Glob", "LS", "NotebookRead", "WebFetch", "WebSearch", "TodoWrite", "ToolSearch",
     "Agent", "Task", "web_search", "view_image", "spawnAgent", "subagent",
 })
+# Shell tools, by Claude's and Codex's names.
+SHELL_CALLS = frozenset({"Bash", "bash", "shell", "exec_command"})
+# Programs a shell call only reads with, by the runner's summary of the call: the line's first program, or `hub` and its
+# command path (runner-rs command_program). `cd repo && hub task list` is summarized `hub task list` or just `cd`.
+READ_ONLY_PROGRAMS = frozenset({"cd", "ls", "pwd", "cat", "head", "tail", "grep", "rg", "wc", "jq", "stat", "which",
+                                "date", "sort", "uniq", "diff", "tree", "du", "df"})
+# The last word of a hub command path that only reads (`hub task list`, `hub needs-you show`). A bare `hub` (flags came
+# before the command) passes too: any hub write shows on the run's `writes`, which must be 0.
+READ_ONLY_HUB_WORDS = frozenset({"hub", "list", "show", "read", "search", "find", "history", "status", "recent", "fetch",
+                                 "inbox", "thread", "upcoming", "summary", "stats", "runs", "held", "versions", "guide",
+                                 "templates", "catalog", "brief", "board", "people", "needs-you", "mailboxes", "sends"})
+
+
+def read_only_shell_summary(summary):
+    """Whether a shell call's runner summary names a program that only reads, or a hub command that only reads."""
+    words = str(summary or "").strip().lower().split()
+    if words[:1] == ["hub"]:
+        return words[-1] in READ_ONLY_HUB_WORDS
+    return len(words) == 1 and words[0] in READ_ONLY_PROGRAMS
+
+
+def read_only_shells(c, attempt_id):
+    """Whether every shell call of a run whose lease lapsed only read, so the lost turn repeats nothing when it runs
+    again. A lapsed lease is what a computer that dropped mid-reply looks like: a turn that had only run `hub needs-you
+    show` and `hub task list` would otherwise sit held for review for hours while its person hears nothing. Only for a
+    run with no hub write recorded (`writes`: every hub write counts there) and only for calls the runner scanned whole
+    and found no named outside action in (`outside_actions`, runner-rs shell_outside_actions: a merge, publish, send or
+    payment anywhere in the line); an older runner's program-only call never passes. The resumed turn's note still says
+    to check what already happened first."""
+    row = c.execute("SELECT state,coalesce(writes,0) AS writes FROM attempts WHERE id=?", (attempt_id,)).fetchone()
+    if not row or row['state'] != 'expired' or row['writes']:
+        return False
+    evidence = {}
+    for event in c.execute("SELECT seq,payload FROM attempt_events WHERE attempt_id=? AND kind='tool' ORDER BY seq",
+                           (attempt_id,)):
+        call = json.loads(event['payload'] or '{}') or {}
+        if str(call.get('tool') or call.get('name') or '') not in SHELL_CALLS:
+            continue
+        key = call.get('item_id') or f"seq:{event['seq']}"
+        if key not in evidence or call.get('status', call.get('state')) in ('started', 'running', 'in_progress'):
+            evidence[key] = call
+    return bool(evidence) and all(call.get('outside_actions') == [] and read_only_shell_summary(call.get('summary'))
+                                  for call in evidence.values())
 
 
 def recorded_tools(c, attempt_id):
@@ -3147,6 +3192,10 @@ class Execution:
                         quarantine_stops.requeue(c, {"id": row["id"], "job_id": job["id"]}, H.now()[11:16])
                 H.turn_finish(c, H.KEEPER, row["id"], exit_code="failed" if state == "failed" else "interrupted",
                               summary=reason if state == "failed" else "Runner lease expired", usage_reason="no_result")
+                facts = retry_facts(c, {
+                    **dict(next((j for j in jobs if j['id'] == row['job_id']), jobs[0])),
+                    'bot_id': row['bot_id'], 'attempt_id': row['id'], 'created_at': row['created_at']
+                }, row['started_at'], H.now()) if state == 'uncertain' and jobs and not row["stop_requested_at"] else None
                 if row["stop_requested_at"]:
                     job = c.execute("SELECT m.conversation_id FROM jobs j JOIN messages m ON m.id=j.message_id WHERE j.id=?",
                                     (row["job_id"],)).fetchone()
@@ -3157,17 +3206,42 @@ class Execution:
                 elif row["state"] == "leased" and state == "queued":
                     settle_status(c, row["bot_id"], "idle", "Last run didn't start; it is back in the queue",
                                   claimed=row["created_at"], stop=row["id"])
-                elif state == 'uncertain' and jobs and retry_facts(c, {
-                        **dict(next((j for j in jobs if j['id'] == row['job_id']), jobs[0])),
-                        'bot_id': row['bot_id'], 'attempt_id': row['id'], 'created_at': row['created_at']
-                }, row['started_at'], H.now())['safe']:
+                elif facts and facts['safe']:
                     settle_status(c, row['bot_id'], 'idle', 'Resuming after a lost lease; waiting for its computer',
                                   claimed=row['created_at'], stop=row['id'])
                 elif H.bot(c, row["bot_id"]):
                     settle_status(c, row["bot_id"], "crashed",
                                   reason if state == "failed" else "One run stopped; saved for later",
                                   claimed=row["created_at"], stop=row["id"])
+                    if facts:
+                        self.tell_held(c, row, facts)
                 H.event(c, H.KEEPER, "attempt.expired", row["id"], {"job_state": state})
+
+    def tell_held(self, c, row, facts):
+        """One notice to the person whose message a lapsed run was answering, when the run is held for review rather
+        than put back in line: without it they see the reply stop partway and then nothing for hours. Only a first
+        start, which the sweep resumes on its own within HELD_REVIEW_HOURS when nobody reviews it sooner, and never a
+        run Tico's own update cut, which resumes on the next sweep."""
+        if facts['starts'] > 1 or facts['update'] or facts['timeout']:
+            return
+        job = c.execute("SELECT message_id FROM jobs WHERE id=? AND attempt_id=?", (row["job_id"], row["id"])).fetchone()
+        msg = H.message(c, job["message_id"]) if job else None
+        if not msg or run_triggers.of_message(msg)[0] != "person_message":
+            return
+        bot = H.bot(c, row["bot_id"])
+        name = (self.store.settings.assistant_name if row["bot_id"] == self.store.settings.assistant_bot
+                else (bot["display_name"] if bot else None)) or row["bot_id"]
+        by = H.shift(H.now(), hours=HELD_REVIEW_HOURS)[11:16]
+        # A refused notice (the chat closed, a rule) must not undo the expiry itself, which would retry every tick.
+        c.execute("SAVEPOINT held_notice")
+        try:
+            H.say(c, "bot:" + row["bot_id"], msg["sender_id"],
+                  f"Your {name} stopped: its computer dropped mid-reply. It will check what it did and pick this up "
+                  f"again by {by} UTC.", kind="notice", conversation_id=msg["conversation_id"], in_reply_to=msg["id"],
+                  refs={"turn_id": row["id"]})
+        except (H.Refused, Problem):
+            c.execute("ROLLBACK TO held_notice")
+        c.execute("RELEASE held_notice")
 
     def settle_unstarted(self, c, row, summary, event="attempt.expired"):
         """A run its computer took and never started, its attempt already `expired`: its lease lapsed, or its
@@ -6016,9 +6090,9 @@ class Execution:
 
         - **Dismiss** when the task the delivery was for is already done or closed. There is
           nothing left to deliver, and rows that held bots were often this.
-        - **Resume** when the attempt recorded no tool call other than a read (READ_ONLY_TOOLS) and
-          consumed no approval: it read, it thought, it was cut off. Running it again repeats
-          nothing. This needs a host that reports its tool calls (`reports_tools`); a run from a
+        - **Resume** when the attempt recorded no tool call other than a read (READ_ONLY_TOOLS; on a
+          lapsed lease, read_only_shells) and consumed no approval: it read, it thought, it was cut
+          off. Running it again repeats nothing. This needs a host that reports its tool calls (`reports_tools`); a run from a
           host that does not is silent either way, so it is held like one that acted.
 
         A reported max_run_minutes cut uses this same recovery path immediately. It allows one continuation,

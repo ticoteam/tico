@@ -285,7 +285,11 @@ becomes *Interrupted*. Fifteen minutes later (after the runner's own chance to r
 scheduler settles what needs no eyes: a delivery whose task is already done or closed is dismissed,
 and a run whose host reports its tool calls, that only read (files, searches, web pages, subagents
 that only read) and consumed no approval, is resumed once, each with a note in the job's recovery
-record (`job.auto_reconcile` in the event log). A busy bot's runs are settled too: the scheduler waits only
+record (`job.auto_reconcile` in the event log). A run whose lease lapsed (its computer dropped) counts shell calls as
+reads too when it wrote nothing to Tico and each line, scanned whole by the computer, names no outside action and starts
+with a program that only reads (`cd`, `grep`, `cat`) or a `hub` read (`hub task list`, `hub needs-you show`). When such a
+run that answered a person's message is held instead, that person gets one notice in the chat: it stopped, and when
+it will pick up again. A busy bot's runs are settled too: the scheduler waits only
 while a live run of the bot is on the same task (or the same thread, or the same task session). An operator can choose
 **Try again** or **Don’t retry** in Stopped runs; while such a run is still live, Tico saves the choice and applies it
 when that lane frees. BotOps’s review is done as soon as all its recovery choices are saved. Tico records the live-work dependency
