@@ -321,8 +321,8 @@ ends.
 
 ## Webhooks through the Gateway
 
-With the Gateway connected, an incoming webhook can have a second address at Tico HQ (Settings → Webhooks → Through Tico
-Gateway). It keeps what senders post while your server is off or asleep, hands it over within seconds of the server being back,
+With the Gateway connected, an incoming webhook can have a second address at Tico HQ (Settings → Models → Tico
+Gateway → Webhooks). It keeps what senders post while your server is off or asleep, hands it over within seconds of the server being back,
 and wakes a server Tico hosts that is asleep. The same key brings notices from Tico Team. See [Webhooks](webhooks.md#through-tico-gateway).
 
 ## Credit and the minimum balance

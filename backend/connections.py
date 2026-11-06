@@ -210,7 +210,8 @@ def triggers(v, after, n):
         sql += " AND coalesce(consumer,'')<>'finance'"
     out = []
     for r in v.c.execute(sql + " ORDER BY id LIMIT ?", (after or "", n)):
-        out.append((r["id"], row("trigger", r["id"], r["name"], "on", "company", "Everyone", "#/settings/webhooks",
+        out.append((r["id"], row("trigger", r["id"], r["name"], "on", "company", "Everyone",
+                                 "#/automations/webhooks/" + r["id"],
                                  detail="Incoming webhook",
                                  can=v.person and (v.admin or r["created_by"] == v.who.actor))))
     return out
@@ -228,7 +229,7 @@ def webhooks(v, after, n):
     for r in v.c.execute(sql + " ORDER BY id LIMIT ?", (*args, n)):
         status = "paused" if r["paused_reason"] else "on" if r["enabled"] else "off"
         out.append((r["id"], row("webhook", r["id"], r["name"], status, "person", v.name(r["created_by"]),
-                                 "#/settings/webhooks/outgoing", detail=r["host"],
+                                 "#/tools/webhooks/" + r["id"], detail=r["host"],
                                  can=v.person and (v.admin or r["created_by"] == v.who.actor))))
     return out
 
