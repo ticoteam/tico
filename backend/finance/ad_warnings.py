@@ -2,8 +2,9 @@
 after every import), each active ad budget (budgeting.budget_platform: its vendor is an ad platform) whose teammate is a
 bot is checked, as its live read stands, against three levels: its warn level (80% by default), its amount, and a
 month-end pace over its amount. A level reached for the first time in the period (budgeting.event_key: a new amount
-arms it again) gives that bot one Finance line at the start of its next turn: a keeper note. Never a person and never
-the bot's manager; an ad budget with no bot gets none, and no ad budget gives its owner a notice (jobs.drain). Warn
+arms it again) gives that bot one Finance line at the start of its next turn: a keeper note, only while the bot's
+Finance view shows that budget and its spend (handlers.sees_budget, private_scope: Finance is the owner's alone until
+they grant it). Never a person and never the bot's manager; an ad budget with no bot gets none, and no ad budget gives its owner a notice (jobs.drain). Warn
 only: an ad budget never pauses, blocks or refuses anything (budgeting.warn_only)."""
 
 import sqlite3
@@ -13,6 +14,7 @@ from . import budgeting
 from .context import Ctx, is_set_up, load
 from .core import budgets as B
 from .core import dates
+from .handlers import private_scope, sees_budget
 from .store import ads as SA
 from .store import budgets as SB
 from .store import tico
@@ -31,10 +33,14 @@ class Sent:
 
 def bot_of(ctx: Ctx, b: B.Budget) -> str:
     """The bot an ad budget's warnings go to ("" when they go to nobody): its teammate, when that is a bot on the org
-    chart."""
+    chart whose Finance view shows the budget's spend."""
     if not b.active or not b.teammate.startswith("bot:") or b.teammate not in ctx.org.bots:
         return ""
-    return b.teammate if budgeting.budget_platform(ctx, b) else ""
+    if not budgeting.budget_platform(ctx, b):
+        return ""
+    if not sees_budget(ctx, b.teammate, b) or private_scope(ctx, b.teammate, b):
+        return ""
+    return b.teammate
 
 
 def _money(cents: int, currency: str) -> str:

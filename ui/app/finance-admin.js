@@ -578,14 +578,14 @@ function finViewAsPick() {
     finViewAs(form.elements.who.value);
   });
 }
-// The company's defaults (§7.5): owners see everything; managers and everyone else as set here; revenue, the
-// balance sheet, payables and receivables stay the owners' unless granted.
+// The company's defaults (§7.5): owners see everything; managers and everyone else as set here (nothing until the owner
+// opens it up); revenue, the balance sheet, payables and receivables stay the owners' unless granted.
 function finDefaultsEdit() {
   const d = FIN.acc.defaults || {}, opt = (v, l, cur) => `<option value="${v}"${v === cur ? ' selected' : ''}>${l}</option>`;
   finDialog('Edit defaults', `<label>Owners<select disabled><option>Everything</option></select></label>
-    <label>Managers<select name="manager">${opt('team_expenses', 'Expenses of what they manage', d.manager)}${opt('own_expenses', 'Own expenses', d.manager)}</select></label>
+    <label>Managers<select name="manager">${opt('none', 'Same as everyone else', d.manager)}${opt('team_expenses', 'Expenses of what they manage', d.manager)}${opt('own_expenses', 'Own expenses', d.manager)}</select></label>
     <label>Managers' payroll<select name="manager_payroll">${opt('totals', 'Totals', d.manager_payroll)}${opt('hidden', 'Hidden', d.manager_payroll)}</select></label>
-    <label>Everyone else<select name="member">${opt('own_expenses', 'Own expenses', d.member)}${opt('none', 'Nothing', d.member)}</select></label>
+    <label>Everyone else<select name="member">${opt('none', 'Nothing', d.member)}${opt('own_expenses', 'Own expenses', d.member)}</select></label>
     <label>Revenue, balance sheet, payables, receivables<select disabled><option>Owners only</option></select></label>`, 'Save', async form => {
     const pick = Object.fromEntries(['manager', 'member', 'manager_payroll'].map(k => [k, form.elements[k].value]).filter(([k, v]) => v && v !== d[k]));
     if (!Object.keys(pick).length) return;
