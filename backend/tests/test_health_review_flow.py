@@ -68,8 +68,10 @@ def test_approval_that_satisfies_merge_ready_names_the_builder_to_merge(environm
     assert 'bot:builder: merge PR #206' in item['fix']
 
 
-@pytest.mark.parametrize('state', ['held', 'blocked', 'done', 'ready'])
-@pytest.mark.parametrize('action', ['merge', 'advance', 'after_green', 'shared_after_green', 'waived_failure', 'conflict'])
+# Every action at a ready ticket, and the three ineligible states on the merge path every action shares.
+@pytest.mark.parametrize('state,action', [('ready', a) for a in ('merge', 'advance', 'after_green', 'shared_after_green',
+                                                                 'waived_failure', 'conflict')]
+                         + [(state, 'merge') for state in ('held', 'blocked', 'done')])
 def test_health_recommendations_use_the_flows_ticket_eligibility(environment, state, action):
     from backend import step_flow as F, task_holds, verdict_moves as V
     api = setup(environment)
