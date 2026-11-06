@@ -1304,7 +1304,7 @@ def yes_no_ask(text):
 def need_of(item):
     """The group a Needs you card goes in (NEED_GROUPS)."""
     kind = item.get("kind")
-    if kind in ("stale", "memory_tidy"):
+    if kind == "stale":
         return "decide"         # Accept or Skip, row by row
     if kind == "setup":
         return "connect"        # sign in to a provider (backend/models_preset.py)
@@ -1870,8 +1870,6 @@ def needs_items(c, auth, who, task_view, older=None, count_only=False):
                 item["title"] = "Send this to Tico support?"
                 item["support"] = {"to": hq_url().split("://", 1)[-1].split("/", 1)[0]}
             items.append(item)
-    from . import memory_tidy_cards
-    items.extend(memory_tidy_cards.cards_for(c, who.actor))
     from . import stale_review
     stale = stale_review.card(c, who.actor) if H.is_human(who.actor) else None
     if stale:
@@ -2007,7 +2005,7 @@ def needs_folded_ids(items):
 def needs_plate_count(items):
     """Everything on the person's plate across boards, counted once; folded tasks count through their card."""
     task_kinds = {"task", "question", "waiting", "declined"}
-    plate_kinds = task_kinds | {"approval", "ask", "stale", "memory_tidy"}
+    plate_kinds = task_kinds | {"approval", "ask", "stale"}
     folded = set(needs_folded_ids(items))
     return len({("task" if it["kind"] in task_kinds else it["kind"], str(it["id"]))
                 for it in items if it["kind"] in plate_kinds
@@ -3061,7 +3059,7 @@ def install_views(app, store, auth, mutate, task_view):
         `limit` (at most NEEDS_PAGE_MAX) sends a page, with `next` to pass as `cursor` for the one after it and `bots`,
         each bot's count over the whole list; `by_kind` counts each kind and `folded_task_ids` names tasks represented
         by other cards over the whole list, including unread pages. Every response includes `plate_count`: unique
-        task, question, waiting, declined, approval, ask, stale and memory_tidy items across all boards, less folded or merged
+        task, question, waiting, declined, approval, ask and stale items across all boards, less folded or merged
         tasks. It excludes thread and update attention; `count` keeps counting the whole attention list.
         A cursor from an older version starts again from the top (`restart`).
         Without either, the whole list. Every page is cut from the list built whole, so its `version` and each

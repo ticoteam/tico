@@ -20,7 +20,7 @@ from backend.tests import schema_source as S
 ROOT = Path(__file__).resolve().parents[2]
 FIXTURE = Path(__file__).parent / "fixtures" / "schema_old_main.sql"
 # Old tables a current install no longer makes: nothing reads them, an upgrade leaves them in place.
-LEFT_BEHIND = set()
+LEFT_BEHIND = {"memory_tidy_cards", "memory_tidy_keeps"}     # the retired Nightly memory tidy pilot's cards
 OLD_LOOKING = re.compile(r"^(created|updated|started|finished|expires|last_seen|first_seen|\w+_json)$")
 
 

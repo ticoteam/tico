@@ -171,10 +171,6 @@
       "description": "A thread's link to a Slack channel, both ways (docs/slack.md): asked for by an admin, checked by the gateway, then active, suspended or refused. Admins only."
     },
     {
-      "name": "Memory tidy",
-      "description": "Nightly memory tidy proposals, visible only to the named reviewer, independently of pass tasks."
-    },
-    {
       "name": "Threads",
       "description": "Threads: the sidebar, a thread and its timeline, read marks, search, members, follow, and the messages in a thread. A thread the viewer may not read answers 404, never 403."
     },
@@ -27571,170 +27567,6 @@
         },
         "tags": [
           "Meetings"
-        ]
-      }
-    },
-    "/api/v2/memory-tidy/cards": {
-      "get": {
-        "summary": "The named reviewer\u2019s open cards; diffs are fetched on opening a card. Human and bot reviewers.",
-        "operationId": "listMemoryTidyCards",
-        "responses": {
-          "200": {
-            "description": "OK",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/MemoryTidyCards"
-                }
-              }
-            }
-          },
-          "401": {
-            "description": "A problem: {\"error\": {\"code\", \"detail\", \"retryable\", ...}}",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/Problem"
-                }
-              }
-            }
-          },
-          "422": {
-            "description": "A problem: {\"error\": {\"code\", \"detail\", \"retryable\", ...}}",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/Problem"
-                }
-              }
-            }
-          }
-        },
-        "tags": [
-          "Memory tidy"
-        ]
-      }
-    },
-    "/api/v2/memory-tidy/cards/{ident}": {
-      "get": {
-        "summary": "A named reviewer\u2019s card with its checked diff, including after both pass tasks close.",
-        "operationId": "getMemoryTidyCard",
-        "parameters": [
-          {
-            "name": "ident",
-            "in": "path",
-            "required": true,
-            "schema": {
-              "type": "string",
-              "title": "Ident"
-            }
-          }
-        ],
-        "responses": {
-          "200": {
-            "description": "OK",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/MemoryTidyCardResult"
-                }
-              }
-            }
-          },
-          "401": {
-            "description": "A problem: {\"error\": {\"code\", \"detail\", \"retryable\", ...}}",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/Problem"
-                }
-              }
-            }
-          },
-          "422": {
-            "description": "A problem: {\"error\": {\"code\", \"detail\", \"retryable\", ...}}",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/Problem"
-                }
-              }
-            }
-          }
-        },
-        "tags": [
-          "Memory tidy"
-        ]
-      }
-    },
-    "/api/v2/memory-tidy/cards/{ident}/decide": {
-      "post": {
-        "summary": "Discard an open card without repository changes, or queue deterministic Keep on its capable assigned computer. Failed re-checks leave the card open.",
-        "operationId": "decideMemoryTidyCard",
-        "parameters": [
-          {
-            "name": "ident",
-            "in": "path",
-            "required": true,
-            "schema": {
-              "type": "string",
-              "title": "Ident"
-            }
-          },
-          {
-            "name": "Idempotency-Key",
-            "in": "header",
-            "required": true,
-            "schema": {
-              "type": "string"
-            },
-            "description": "1-200 characters. Reusing a key with the same body replays the first answer."
-          }
-        ],
-        "requestBody": {
-          "required": true,
-          "content": {
-            "application/json": {
-              "schema": {
-                "$ref": "#/components/schemas/MemoryTidyDecision"
-              }
-            }
-          }
-        },
-        "responses": {
-          "200": {
-            "description": "OK",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/MemoryTidyCardResult"
-                }
-              }
-            }
-          },
-          "401": {
-            "description": "A problem: {\"error\": {\"code\", \"detail\", \"retryable\", ...}}",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/Problem"
-                }
-              }
-            }
-          },
-          "422": {
-            "description": "A problem: {\"error\": {\"code\", \"detail\", \"retryable\", ...}}",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/Problem"
-                }
-              }
-            }
-          }
-        },
-        "tags": [
-          "Memory tidy"
         ]
       }
     },
@@ -60605,7 +60437,7 @@
                       "open"
                     ]
                   },
-                  "description": "The writes that settle it: `answer` POST /api/v2/messages/{ask id}/answer: answer the question it carries; `update` POST /api/v2/tasks/{task id}: finish, decline, move or comment on the task; `decide` the subject's decision: POST /api/v2/approvals/{id}, /api/v2/proposals/{id}/decide, or /api/v2/stale-review/{row id} for each row; a tidy card, POST /api/v2/memory-tidy/cards/{id}/decide; `add_reading` POST /api/v2/kpis/{kpi id}/readings; `open` nothing to send from the card: it opens its page (`link`, the subject, or the Goals page)"
+                  "description": "The writes that settle it: `answer` POST /api/v2/messages/{ask id}/answer: answer the question it carries; `update` POST /api/v2/tasks/{task id}: finish, decline, move or comment on the task; `decide` the subject's decision: POST /api/v2/approvals/{id}, /api/v2/proposals/{id}/decide, or /api/v2/stale-review/{row id} for each row; `add_reading` POST /api/v2/kpis/{kpi id}/readings; `open` nothing to send from the card: it opens its page (`link`, the subject, or the Goals page)"
                 },
                 "goal_id": {
                   "type": "string"
@@ -66040,163 +65872,6 @@
         ],
         "title": "MemberAdd"
       },
-      "MemoryTidyCard": {
-        "type": "object",
-        "properties": {
-          "id": {
-            "type": "string"
-          },
-          "kind": {
-            "enum": [
-              "memory_tidy"
-            ]
-          },
-          "bot": {
-            "type": "string"
-          },
-          "reviewer": {
-            "type": "string"
-          },
-          "requester_id": {
-            "type": "string"
-          },
-          "title": {
-            "type": "string"
-          },
-          "memory_commit": {
-            "type": "string"
-          },
-          "model": {
-            "type": "string"
-          },
-          "cost_usd": {
-            "type": "number",
-            "description": "Filing-ledger list-price estimate, including subscription usage."
-          },
-          "diary": {
-            "type": "string"
-          },
-          "diff": {
-            "type": "string",
-            "description": "Checked unified diff; present on detail reads and decisions, omitted from lists."
-          },
-          "created_at": {
-            "type": "string"
-          },
-          "expires_at": {
-            "type": "string"
-          },
-          "status": {
-            "enum": [
-              "open",
-              "withdrawn",
-              "discarded",
-              "kept"
-            ]
-          },
-          "reason": {
-            "type": "string"
-          },
-          "keep_available": {
-            "type": "boolean"
-          },
-          "keep_pending": {
-            "type": "boolean"
-          }
-        },
-        "required": [
-          "bot",
-          "cost_usd",
-          "created_at",
-          "diary",
-          "expires_at",
-          "id",
-          "keep_available",
-          "kind",
-          "memory_commit",
-          "model",
-          "reason",
-          "requester_id",
-          "reviewer",
-          "status",
-          "title"
-        ],
-        "additionalProperties": true
-      },
-      "MemoryTidyCardResult": {
-        "type": "object",
-        "properties": {
-          "card": {
-            "$ref": "#/components/schemas/MemoryTidyCard"
-          }
-        },
-        "required": [
-          "card"
-        ],
-        "additionalProperties": true
-      },
-      "MemoryTidyCards": {
-        "type": "object",
-        "properties": {
-          "cards": {
-            "type": "array",
-            "items": {
-              "$ref": "#/components/schemas/MemoryTidyCard"
-            }
-          }
-        },
-        "required": [
-          "cards"
-        ],
-        "additionalProperties": true
-      },
-      "MemoryTidyDecision": {
-        "properties": {
-          "decision": {
-            "type": "string",
-            "enum": [
-              "keep",
-              "discard"
-            ],
-            "title": "Decision"
-          }
-        },
-        "additionalProperties": false,
-        "type": "object",
-        "required": [
-          "decision"
-        ],
-        "title": "MemoryTidyDecision"
-      },
-      "MemoryTidyPilot": {
-        "properties": {
-          "bot": {
-            "type": "string",
-            "maxLength": 100,
-            "minLength": 1,
-            "title": "Bot"
-          },
-          "model": {
-            "type": "string",
-            "maxLength": 100,
-            "minLength": 1,
-            "title": "Model"
-          },
-          "effort": {
-            "type": "string",
-            "const": "low",
-            "title": "Effort",
-            "default": "low"
-          }
-        },
-        "additionalProperties": false,
-        "type": "object",
-        "required": [
-          "bot",
-          "model"
-        ],
-        "title": "MemoryTidyPilot"
-      },
       "Message": {
         "type": "object",
         "properties": {
@@ -66938,7 +66613,7 @@
               },
               "plate_count": {
                 "type": "integer",
-                "description": "Unique task, question, waiting, declined, approval, ask, stale and memory_tidy items across all boards, excluding folded or merged tasks; excludes thread and update attention"
+                "description": "Unique task, question, waiting, declined, approval, ask and stale items across all boards, excluding folded or merged tasks; excludes thread and update attention"
               },
               "by_kind": {
                 "type": "object",
@@ -67009,7 +66684,7 @@
           },
           "kind": {
             "type": "string",
-            "description": "Needs you: task, question, waiting, declined, ask, approval, stale, memory_tidy, setup. Goals: vision, kpi_red, kpi_stale, recovery, proposal, why. Each kind adds the fields its card reads"
+            "description": "Needs you: task, question, waiting, declined, ask, approval, stale, setup. Goals: vision, kpi_red, kpi_stale, recovery, proposal, why. Each kind adds the fields its card reads"
           },
           "title": {
             "type": "string"
@@ -67068,7 +66743,7 @@
                 "open"
               ]
             },
-            "description": "The writes that settle it: `answer` POST /api/v2/messages/{ask id}/answer: answer the question it carries; `update` POST /api/v2/tasks/{task id}: finish, decline, move or comment on the task; `decide` the subject's decision: POST /api/v2/approvals/{id}, /api/v2/proposals/{id}/decide, or /api/v2/stale-review/{row id} for each row; a tidy card, POST /api/v2/memory-tidy/cards/{id}/decide; `add_reading` POST /api/v2/kpis/{kpi id}/readings; `open` nothing to send from the card: it opens its page (`link`, the subject, or the Goals page)"
+            "description": "The writes that settle it: `answer` POST /api/v2/messages/{ask id}/answer: answer the question it carries; `update` POST /api/v2/tasks/{task id}: finish, decline, move or comment on the task; `decide` the subject's decision: POST /api/v2/approvals/{id}, /api/v2/proposals/{id}/decide, or /api/v2/stale-review/{row id} for each row; `add_reading` POST /api/v2/kpis/{kpi id}/readings; `open` nothing to send from the card: it opens its page (`link`, the subject, or the Goals page)"
           }
         },
         "required": [
@@ -74661,21 +74336,6 @@
       },
       "SystemRoutineUpdate": {
         "properties": {
-          "pilots": {
-            "anyOf": [
-              {
-                "items": {
-                  "$ref": "#/components/schemas/MemoryTidyPilot"
-                },
-                "type": "array",
-                "maxItems": 3
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Pilots"
-          },
           "on": {
             "anyOf": [
               {

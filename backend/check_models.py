@@ -33,12 +33,6 @@ def parse(spec):
 
 AUTO = "auto"
 
-# A nightly memory tidy pass (spec nightly-memory-tidy v1.3): its named model, at low effort, and never a Haiku-tier
-# model. It never moves to another model when its login is out of quota, it commits and pushes no memory, and it ends
-# skipped with the reason in the run log rather than wait (criteria 17, 22, 24).
-PASS_EFFORT = "low"
-PASS_SKIPPED = "skipped: model unavailable"
-
 
 def authors_of(c, settings, task_id):
     """The model makers who wrote a task's work: every maker on its runs so far (usage_records.ran_on, so a fallback
@@ -84,12 +78,11 @@ def _auto(c, settings, bot, authors):
                                                       "with --check-model"))
 
 
-def choose(c, settings, bot, spec, role, authors=(), memory_pass=False):
+def choose(c, settings, bot, spec, role, authors=()):
     """The check model a subtask of `bot` may name, or CheckModelError. The company must have the provider
     on (Settings > Computers), the model must be current, and the bot's computer must not report that
     runtime signed out. `auto` takes the company's check model for work by `authors`, from another provider when one
-    can run it and from theirs when none can; then `note` on the result says so for the task's history.
-    `memory_pass` (a nightly memory tidy pass) names a model that is not Haiku-tier and has the low effort, which it runs at."""
+    can run it and from theirs when none can; then `note` on the result says so for the task's history."""
     if role not in ROLES:
         raise CheckModelError("role", "Choose --role review or --role check")
     record = providers.load(c, settings)
@@ -106,19 +99,13 @@ def choose(c, settings, bot, spec, role, authors=(), memory_pass=False):
         raise CheckModelError("check_model", "Enable an AI provider in Settings before naming a check model")
     row = providers.MODEL_BY_ID.get(model) or {}
     effort = str(row.get("default_effort") or "")
-    if memory_pass:
-        if "haiku" in model.lower():
-            raise CheckModelError("check_model", "A nightly memory tidy pass never runs on a Haiku-tier model; name another model")
-        if PASS_EFFORT not in (row.get("efforts") or ()):
-            raise CheckModelError("check_model", f"{model} has no {PASS_EFFORT} effort, so it cannot run a nightly memory tidy pass")
-        effort = PASS_EFFORT
     harnesses = tuple(row.get("harnesses") or (runtime,))
     harness = next((h for h in harnesses if runtime_of(h) == runtime), harnesses[0])
     can = can_run(c, bot, runtime, harness=harness, model=model)
     if can.get("can_run") is False:
         raise CheckModelError("runner_not_ready", can.get("problem") or f"{runtime} cannot run on this bot's computer")
     return {"runtime": runtime, "model": model, "harness": harness, "effort": effort, "role": role,
-            **({"note": note} if note else {}), **({"memory_pass": True} if memory_pass else {})}
+            **({"note": note} if note else {})}
 
 
 def record(c, actor, task_id, check):
@@ -127,25 +114,6 @@ def record(c, actor, task_id, check):
                                           check["effort"], check["role"], actor, H.now()))
     H._task_event(c, task_id, actor, "check_model", None, f"{check['runtime']}:{check['model']}",
                   check["role"] + (f"; {check['note']}" if check.get("note") else ""))
-    if check.get("memory_pass"):
-        from .repositories import save_metadata
-        save_metadata(c, "memory-pass:" + task_id, {"runtime": check["runtime"], "model": check["model"]})
-
-
-def file_pass(c, settings, task_id, spec):
-    """Name the model of a nightly memory tidy pass on its check subtask, the owner bot's own (the pilot's call).
-    Only the model and the low effort are set; the subtask stays the bot's own."""
-    owner = H.task(c, task_id)["owner_id"]
-    if not H.is_bot(owner):
-        raise CheckModelError("check_model", "A memory pass runs on a bot's own subtask")
-    bot = H.actor_id(owner)
-    record(c, owner, task_id, choose(c, settings, bot, spec, "check", memory_pass=True))
-
-
-def memory_pass(c, task_id):
-    """Whether this check subtask is a nightly memory tidy pass (file_pass)."""
-    from .repositories import metadata
-    return bool(task_id) and bool(metadata(c, "memory-pass:" + task_id))
 
 
 def prime(c, pairs):
@@ -176,8 +144,6 @@ def of(c, task_id, bot):
     if (moved and _default_login(c, bot, first, moved["runner_id"])
             and _out_of_quota(c, moved["runner_id"], first["runtime"])):
         return {k: moved[k] for k in ("runtime", "model", "harness", "effort", "role")}
-    if first and memory_pass(c, task_id):
-        return {**first, "memory_pass": True}
     return first
 
 
@@ -203,8 +169,6 @@ def move_on(c, settings, bot, task_id, check, runner_id):
     from .maintenance_health import out_of_quota_logins
     from .repositories import save_metadata
     from .task_relations import parent_of
-    if memory_pass(c, task_id):
-        return None     # a memory pass never moves to another model: its limit ends it (skip_pass)
     first = H.check_model(c, task_id, bot)
     out = {x["runtime"] for x in out_of_quota_logins(c, settings) if x["runner_id"] == runner_id}
     if not first or check["runtime"] not in out or not _default_login(c, bot, check, runner_id):
@@ -224,21 +188,6 @@ def move_on(c, settings, bot, task_id, check, runner_id):
                       f"of quota; back to {first['runtime']}:{first['model']} once it works again")
         return nxt
     return None
-
-
-def skip_pass(c, task_id, check):
-    """A nightly memory tidy pass whose named model cannot run (its login is out of quota) ends skipped with the reason
-    on its own subtask: declined quietly, with no notice to its requester and no wake of its parent, and no retry.
-    Nothing else runs for it: no other model is named."""
-    from . import memory_tidy_runs
-    filed = c.execute('SELECT * FROM memory_tidy_passes WHERE check_task_id=?', (task_id,)).fetchone()
-    if filed:
-        # A waiting container resumes when its last child ends, independently
-        # of the verdict wake flag. Retire it before ending the check.
-        memory_tidy_runs.close_pass(c, filed, PASS_SKIPPED)
-    else:
-        H.task_update(c, H.KEEPER, task_id, status="declined", note=PASS_SKIPPED, quiet=True, wake_others=False)
-    H._task_event(c, task_id, H.KEEPER, "memory_pass", f"{check['runtime']}:{check['model']}", None, PASS_SKIPPED)
 
 
 def handed(c, attempt_id, task_id, check):
@@ -270,11 +219,10 @@ def held(c, task_id):
 
 
 def dropped(c, task_id):
-    """Whether a check a usage limit has held, or a nightly memory tidy pass skipped (skip_pass), has left the board
-    (done, closed or declined): its queued turn is let go (Execution.hold_unrunnable) instead of retrying after every
-    reset and running once on a finished task."""
+    """Whether a check a usage limit has held has left the board (done, closed or declined): its queued turn is let go
+    (Execution.hold_unrunnable) instead of retrying after every reset and running once on a finished task."""
     from .repositories import metadata
-    if not task_id or not (metadata(c, "check-limited:" + task_id) or memory_pass(c, task_id)):
+    if not task_id or not metadata(c, "check-limited:" + task_id):
         return False
     row = c.execute("SELECT status FROM tasks WHERE id=?", (task_id,)).fetchone()
     return bool(row) and row[0] not in H.ACTIVE_STATUSES
@@ -288,8 +236,6 @@ def apply(config, check):
     out = {k: v for k, v in config.items() if k not in ("fallback_models",)}
     out.update(runtime=check["runtime"], model=check["model"], harness=check["harness"],
                fallback={"off": True}, session="task", subtask_session="own")
-    if check.get("memory_pass"):
-        out["memory_pass"] = True     # the runner commits and pushes none of its memory (runner-rs finish_place)
     if check["effort"]:
         out["reasoning_effort"] = check["effort"]
     else:

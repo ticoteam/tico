@@ -162,7 +162,6 @@ Check health runs as a [Maintenance](maintenance.md) step. It has no separate Sy
 | **Production checks** | Reads a few production invariants in plain code and shows each failing one on Health. | Every 15 minutes | |
 | **Thread ranking** (AI) | Gives each thread with new messages in the last 14 days a level from 1 to 10, for the threads API's `sort=important` order. In that order a thread that needs attention comes first, whatever its level. A thread is ranked at most once an hour, and at most 20 threads a pass and 40 an hour. A thread never ranked sits at 5; a failed call keeps its last level. That order otherwise leaves out level 1 threads, threads of finished tasks, and task threads no person owns or asked for. It also stops for the day once the server's Decide calls reach 80% of the bots' daily call budget, so the checks that act on tasks keep room. | Every 5 minutes | |
 | **Bot thread digest** | Starts one run an hour for each bot with new messages in the threads it follows on digest. | Hourly | |
-| **Nightly memory tidy** | Proposes memory and knowledge edits for the pilot bots. | Nightly at 03:30 | |
 | **Tico company heartbeat** | Tells app.tico.dev this server's version once a day. | Daily | a linked Tico company |
 | **Scheduled update** | Updates a hosted server to the release Tico support scheduled, once no bot turn runs. | Every minute | a hosted server |
 | **Silent run check** | Marks a run that has gone silent and ends a run past this server's time limit. | Every minute | |

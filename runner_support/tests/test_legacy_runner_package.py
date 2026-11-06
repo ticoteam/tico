@@ -84,13 +84,6 @@ def test_python_dash_m_runner_entry_points_run_runner_support(module):
     assert old.stdout == new.stdout
 
 
-def test_python_dash_m_runner_memory_tidy_keep_answers_as_runner_support(tmp_path):
-    answers = [run("-m", name, str(tmp_path / "no-checkout"), str(tmp_path / f"journal-{i}"), stdin="{}")
-               for i, name in enumerate(("runner.memory_tidy_keep", "runner_support.memory_tidy_keep"))]
-    assert answers[0].returncode == answers[1].returncode == 0, answers[0].stderr
-    assert answers[0].stdout == answers[1].stdout and '"status"' in answers[0].stdout
-
-
 @pytest.mark.parametrize("shell", ["bash", "zsh"])
 def test_shell_init_by_its_old_path_still_sets_the_turn_path(shell):
     # A macOS turn an earlier runner binary started has BASH_ENV/ZDOTDIR at runner/shell_init.

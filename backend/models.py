@@ -1477,7 +1477,8 @@ class Heartbeat(Contract):
     platform: str = Field(max_length=100)
     device_id: str | None = Field(default=None, pattern=r"^[0-9a-f]{64}$")
     capacity: int = Field(default=4, ge=1, le=256)
-    # The assignment_* values name the retired temporary assignments (#420); an older runner still sends them.
+    # The assignment_* values name the retired temporary assignments (#420), and memory_tidy_packets_v1 the retired
+    # Nightly memory tidy pilot; a runner still sends them.
     capabilities: list[Literal[
         "assignment_instances_v1", "assignment_cleanup_v1", "task_lanes_v1", "task_lanes_v2", "session_roots_v1",
         "task_goals_v1", "screen_v1", "model_sign_out_v1", "model_keys_v1", "model_switch_type_v1", "model_remove_v1",
@@ -2655,16 +2656,9 @@ class Empty(Contract):
     pass
 
 
-class MemoryTidyPilot(Contract):
-    bot: str = Field(min_length=1, max_length=100)
-    model: str = Field(min_length=1, max_length=100)
-    effort: Literal["low"] = "low"
-
-
 class SystemRoutineUpdate(Contract):
     """One system routine's switch, schedule preset or daily time (backend/system_routines.py); only what is sent
     changes."""
-    pilots: list[MemoryTidyPilot] | None = Field(default=None, max_length=3)
     on: bool | None = None
     preset: Literal["15m", "hourly", "4h", "daily", "business"] | None = None
     at: str | None = Field(default=None, max_length=5)

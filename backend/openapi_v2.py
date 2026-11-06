@@ -725,7 +725,7 @@ ACTORS = {"type": "object", "additionalProperties": {"type": "string"},
 
 # One item of a person's Needs you, whatever its kind (backend/needs_shape.py).
 NEEDS_ITEM = obj({"id": "s", "kind": {"type": "string", "description": "Needs you: task, question, waiting, "
-                                             "declined, ask, approval, stale, memory_tidy, setup. Goals: vision, kpi_red, kpi_stale, "
+                                             "declined, ask, approval, stale, setup. Goals: vision, kpi_red, kpi_stale, "
                                              "recovery, proposal, why. Each kind adds the fields its card reads"},
                          "title": "s", "body": "n",
                          "subject": {"oneOf": [obj({"type": {"enum": ["task", "message", "approval", "proposal", "kpi",
@@ -1088,7 +1088,7 @@ SCHEMAS = {
                    "description": "Items that left the caller's queue this week on their own: expired, withdrawn, "
                                   "answered by their Assistant, and the total"},
         count={"type": "integer", "description": "Items in the whole list, whatever page this is"},
-        plate_count={"type": "integer", "description": "Unique task, question, waiting, declined, approval, ask, stale and memory_tidy items "
+        plate_count={"type": "integer", "description": "Unique task, question, waiting, declined, approval, ask and stale items "
                      "across all boards, excluding folded or merged tasks; excludes thread and update attention"},
         by_kind={"type": "object", "additionalProperties": {"type": "integer"},
                  "description": "Items of each kind in the whole list, including unread pages; Tasks excludes thread kinds"},
@@ -2607,26 +2607,6 @@ SCHEMAS['SlackLink'] = obj({
     'history': obj({'state': {'enum': ['off', 'pending', 'running', 'done', 'failed']}, 'count': 'i'}),
     'linked_by': 's', 'created_at': 's', 'updated_at': 's'})
 SCHEMAS['SlackLinkList'] = obj({'links': items(ref('SlackLink')), 'next_cursor': 'n', 'available': 'b'})
-
-# Independent reviewer cards: task closure never changes this audience or lifetime.
-TAGS['Memory tidy'] = "Nightly memory tidy proposals, visible only to the named reviewer, independently of pass tasks."
-STABLE.extend([
-    ('/api/v2/memory-tidy/cards', 'get', 'Memory tidy', 'listMemoryTidyCards',
-     'The named reviewer’s open cards; diffs are fetched on opening a card. Human and bot reviewers.', 'MemoryTidyCards'),
-    ('/api/v2/memory-tidy/cards/{ident}', 'get', 'Memory tidy', 'getMemoryTidyCard',
-     'A named reviewer’s card with its checked diff, including after both pass tasks close.', 'MemoryTidyCardResult'),
-    ('/api/v2/memory-tidy/cards/{ident}/decide', 'post', 'Memory tidy', 'decideMemoryTidyCard',
-     'Discard an open card without repository changes, or queue deterministic Keep on its capable assigned computer. Failed re-checks leave the card open.', 'MemoryTidyCardResult'),
-])
-SCHEMAS['MemoryTidyCard'] = obj({
-    'id': 's', 'kind': {'enum': ['memory_tidy']}, 'bot': 's', 'reviewer': 's', 'requester_id': 's', 'title': 's',
-    'memory_commit': 's', 'model': 's', 'cost_usd': {'type': 'number', 'description': 'Filing-ledger list-price estimate, including subscription usage.'},
-    'diary': 's', 'diff': {'type': 'string', 'description': 'Checked unified diff; present on detail reads and decisions, omitted from lists.'},
-    'created_at': 's', 'expires_at': 's', 'status': {'enum': ['open', 'withdrawn', 'discarded', 'kept']}, 'reason': 's', 'keep_available': 'b', 'keep_pending': 'b',
-}, required=['id', 'kind', 'bot', 'reviewer', 'requester_id', 'title', 'memory_commit', 'model', 'cost_usd', 'diary',
-             'created_at', 'expires_at', 'status', 'reason', 'keep_available'])
-SCHEMAS['MemoryTidyCards'] = obj({'cards': items(ref('MemoryTidyCard'))})
-SCHEMAS['MemoryTidyCardResult'] = obj({'card': ref('MemoryTidyCard')})
 
 # A bot's Dream (backend/dream.py): a cleanup task over its own memory, with up to three questions to its requester.
 STABLE.extend([

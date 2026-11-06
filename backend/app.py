@@ -824,7 +824,7 @@ def create_app(settings=None):
                 # A run's raw provider stream: up to 5 MB of frames, escaped once more as a JSON string.
                 captured = (request.url.path.startswith("/api/v2/attempts/") and request.url.path.endswith("/capture")
                             and request.state.identity.role == "runner")
-                memory_report = (bool(re.fullmatch(r"/api/v2/(?:bots/[^/]+/memory/report|attempts/[^/]+/memory-tidy/prepare)", request.url.path))
+                memory_report = (bool(re.fullmatch(r"/api/v2/bots/[^/]+/memory/report", request.url.path))
                                  and request.state.identity.role == "runner")
                 # A bot's video or audio file streams to disk up to the server's upload limit (backend/files.py).
                 media_raw = published and raw_media(request, imported=request.url.path == "/api/v2/files/imports")
@@ -8484,10 +8484,7 @@ def create_app(settings=None):
 
         def finish(c):
             with automations.for_attempt(c, aid):
-                result = execution.complete(c, request.state.identity, aid, body, rule_check=rc)
-                from . import memory_tidy_transport
-                memory_tidy_transport.complete(c, aid, body, request.state.identity, app.state.files, app.state.blobs)
-                return result
+                return execution.complete(c, request.state.identity, aid, body, rule_check=rc)
         return mutate(request, body, finish)
 
     @org_rule_check.replayer("reply")
@@ -8649,10 +8646,15 @@ def create_app(settings=None):
     install_bot_task_tabs(app, store, auth, mutate, settings, task_views)
     from .cards import install as install_cards
     install_cards(app, store, auth, mutate, settings, task_view)
-    from . import memory_tidy_cards
-    memory_tidy_cards.install(app, store, auth, mutate)
-    from . import memory_tidy_transport
-    memory_tidy_transport.install(app, store, execution, mutate)
+
+    @app.get("/api/v2/runners/me/memory-tidy-keeps")
+    def retired_memory_tidy_keeps(request: Request):
+        """The retired Nightly memory tidy pilot's Keep queue: always empty. runner-rs (memory_tidy_keep.rs) still asks
+        every 15 seconds; remove this once no runner does."""
+        if request.state.identity.role != "runner":
+            raise Problem("identity", "A registered computer is required", 403)
+        return {"keeps": []}
+
     turn_work.install(app, store, auth)
     from . import run_view
     run_view.install(app, store, auth)

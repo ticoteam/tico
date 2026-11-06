@@ -128,7 +128,6 @@ ACTIONS = {
                            ("finance", "rules", "digest")),
     "wake_rules_digest": ("open the week's rules digest task for the Bookkeeper when there are new rules",
                           ("finance", "rules", "digest", "wake")),
-    "propose_memory_tidy": ("propose memory and knowledge edits for the pilot bots", ("memory", "tidy", "pilot")),
     "remind_due": ("tell a bot when one of its tasks reaches its due time", ("due", "remind", "tasks")),
     "go_ahead": ("go ahead on a past-deadline question's default answer, or expire it",
                  ("ask", "question", "deadline", "expire")),
@@ -343,9 +342,6 @@ JOBS = [
         "rules is a quiet run.",
         CHECKS, "Weekly", 7 * 86400, then=("check_rules_digest", "wake_rules_digest"), department=FINANCE,
         applies=_bookkeeper),
-    Job("memory_tidy", "Nightly memory tidy",
-        "Proposes memory and knowledge edits for up to three pilot bots on their named models. Pilot stop: $50.",
-        LEARNING, "Nightly at 03:30", control=True, then=("propose_memory_tidy",)),
     Job("due_reminders", "Due reminders", "Tells a bot when one of its tasks reaches its due time.",
         REMINDERS, "Every 10 seconds", 10, then=("remind_due",)),
     Job("ask_deadlines", "Ask go-ahead",
@@ -549,7 +545,6 @@ class Control:
 CONTROLS = {
     "stale_review": Control(rule="stale_review", presets=AI_PRESETS, preset=HOURLY, at="09:00"),
     "kpi_asks": Control(presets=EVERY_PRESET, preset=HOURLY, at="09:00"),
-    "memory_tidy": Control(on=False, presets=(DAILY,), preset=DAILY, at="03:30"),
     "ask_deadlines": Control(presets=EVERY_PRESET, preset=HOURLY, at="09:00"),
     # Hourly while people are at work: a report outside business hours would wait on nobody to read it.
     "task_manager_report": Control(presets=(BUSINESS, HOURLY, FOUR_HOURS, DAILY), preset=BUSINESS, at="09:00"),
@@ -601,8 +596,7 @@ def schedule_words(key, cfg):
     """A controlled job's schedule in words: "Every 4 hours", "Daily at 09:00"."""
     if not cfg or not cfg.get("preset"):
         return BY_KEY[key].schedule
-    words = PRESETS[cfg["preset"]][0].format(at=cfg.get("at") or "")
-    return "Nightly at " + cfg["at"] if key == "memory_tidy" else words
+    return PRESETS[cfg["preset"]][0].format(at=cfg.get("at") or "")
 
 
 def may_change(auth, who, key):
@@ -1034,10 +1028,6 @@ def listing(c, settings, now=None, who=None, auth=None, everything=False):
                 "owner_only": bool(ctl and ctl.owner_only),
                 "can_change": bool(ctl and who is not None and auth is not None and can_change(auth, who, job.key)),
                 "last": None, "next": _stamp(following) if following else None}
-        if job.key == "memory_tidy" and item["can_change"]:
-            from . import memory_tidy_controls
-            item["pilots"] = memory_tidy_controls.pilot_rows(c)
-            item["pilot_models"] = memory_tidy_controls.model_options(c, settings)
         item["search"] = search_words(job, when_words, then_words, department)
         if job.key == "task_manager_report":
             from .task_manager import active as task_manager_active
@@ -1088,13 +1078,8 @@ def install(app, store, auth, mutate):
         Stale ticket review's and Topic changed's switch is their team rule (backend/team_rules.py)."""
         who = request.state.identity
         may_change(auth, who, key)
-        if body.pilots is not None and key != "memory_tidy":
-            raise Problem("invalid", "Only Nightly memory tidy has a pilot list", 422)
 
         def work(c):
-            if body.pilots is not None:
-                from . import memory_tidy_controls
-                memory_tidy_controls.save(c, store.settings, who.actor, [p.model_dump() for p in body.pilots])
             return save_config(c, who.actor, key, body.on, body.preset, body.at)
         mutate(request, body, work)
         with store.read() as c:

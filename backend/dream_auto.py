@@ -8,7 +8,8 @@ A bot is due when, read from `bot_memory_updates` (the commits its computer repo
 - its last dream of either kind started at least MIN_GAP_HOURS ago (a bot that never dreamed must be that old);
 - its memory since that dream's start (or LOOKBACK_DAYS ago, whichever is later) changed at least MIN_LINES lines over
   at least MIN_TURNS memory turns. Counted: memory/ except memory/state.md, and AGENT.md, AGENTS.md and CLAUDE.md. Not
-  counted: the commits of dreams and of memory tidy passes, which memory_tidy_runs.changed leaves out the same way.
+  counted: the commits of dreams and of the retired Nightly memory tidy pilot's passes (its Keep commits and the runs
+  of its pass tasks, still in bot repositories and in memory_tidy_passes).
 
 The requester is the bot's nearest human manager (org_rule_check.represented), else the company owner. The dream lands
 where that requester's work goes (shared_bots.route, as the dream route files it), and the gates are read on that bot.
@@ -40,7 +41,7 @@ MIN_TURNS = 10              # memory turns (commits that changed a counted file)
 INSTRUCTION_FILES = ("AGENT.md", "AGENTS.md", "CLAUDE.md")
 STATE = "memory/state.md"   # rewritten every turn: churn, not memory
 DREAM_SUBJECT = "Dream:"    # a dream's own commits
-TIDY_SUBJECT = "Dreamed "   # a memory tidy pass's commits (memory_tidy_runs.changed)
+TIDY_SUBJECT = "Dreamed "   # a Keep commit of the retired Nightly memory tidy pilot
 # The task ids of every dream of one owner, as a subquery: the runs that worked on them are that owner's dream runs.
 DREAM_IDS = (f"SELECT tasks.id FROM tasks JOIN task_tags tt ON tt.task_id=tasks.id JOIN tags g ON g.id=tt.tag_id "
              f"WHERE g.key=? AND tasks.owner_id=? AND {dream.MARKED}")
@@ -109,7 +110,7 @@ def _own_runs(c, owner):
 
 
 def _tidy_runs(c, bot):
-    """The runs of this bot's memory tidy passes. memory_tidy_runs.changed leaves them out the same way."""
+    """The runs of this bot's passes of the retired Nightly memory tidy pilot (memory_tidy_passes stays as history)."""
     return {row[0] for row in c.execute(
         "SELECT t.id FROM attempts t JOIN memory_tidy_passes p ON t.task_id=p.parent_task_id OR t.task_id=p.check_task_id "
         "WHERE (t.job_id IS NULL OR t.trigger IS NOT NULL) AND p.bot=?", (bot,))}

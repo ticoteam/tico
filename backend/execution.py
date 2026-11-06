@@ -3747,10 +3747,6 @@ class Execution:
                                    who.runner_id, row["id"], live_ref.get("turn_id"))
         # A check subtask's turns run on its own model, in its own session (backend/check_models.py).
         check = check_models.of(c, task["id"], row["bot_id"]) if task else None
-        if check and check.get('memory_pass'):
-            from . import memory_tidy_runs
-            if not memory_tidy_runs.before_start(c, self.store.settings, task['id'], H.parse_ts(H.now())):
-                return {"attempt": None}
         released_notice = bool(task and auto_tasks.notice_releases(c, task, msg))
         if (task and task['owner_id'] == 'bot:' + row['bot_id']
                 and not auto_tasks.refusal(c, task, followed, woken=True, message=msg)
@@ -3819,9 +3815,6 @@ class Execution:
         # runners/assignments resolves it: the runner starts exactly what this says.
         record = providers.load(c, self.store.settings)
         config = providers.fill(record, followed)
-        if check and check.get('memory_pass') and c.execute(
-                'SELECT 1 FROM memory_tidy_passes WHERE check_task_id=?', (task['id'],)).fetchone():
-            config = {**config, 'memory_tidy_packet': True}
         # The company's models choice: the Gateway while the bot's subscription is not signed in here, and the
         # Gateway as its last fallback, on a computer that can run it (backend/models_preset.py).
         here = readiness_document(runner["readiness"])
@@ -5459,12 +5452,10 @@ class Execution:
             # clears it.
             login_holds.after_turn(c, row["runner_id"], row["bot_id"], "", runtime, body, aid, H.now(),
                                    subscriptions_only=True)
-        # A nightly memory tidy pass never waits for a reset or retries: its limit ends it as skipped (below).
-        memory_pass_turn = bool(check and check.get("memory_pass"))
-        if not memory_pass_turn and (reset_wait or unstarted and body.primary_held and body.limited and not body.fallback):
+        if reset_wait or unstarted and body.primary_held and body.limited and not body.fallback:
             login_hold = hold_job_until_reset(c, row, own_login_hold(c, self.store.settings, row['bot_id']),
                                 'No fallback could take this claim; waiting for the primary login reset.') or login_hold
-        if not memory_pass_turn and source_pause and login_hold and (quota_continue or body.fallback or not fallback_choice(
+        if source_pause and login_hold and (quota_continue or body.fallback or not fallback_choice(
                 c, self.store.settings, row['runner_id'], row['bot_id'], json.loads(config[0] or '{}') if config else {})):
             hold_job_until_reset(c, row, login_hold, 'Provider quota paused this turn; continue its saved session at reset.')
         # A turn signed in with a company subscription: a refusal is that subscription's, never the computer's login.
@@ -5504,16 +5495,6 @@ class Execution:
             H.event(c, H.KEEPER, "attempt.skipped", aid, {"bot": row["bot_id"], "job_id": row["job_id"]})
         elif stopped:
             self.stopped(c, row, conv["id"], held=held_back)
-        elif memory_pass_turn and body.limited and body.outcome != "completed":
-            # A nightly memory tidy pass never moves to another model and never waits for a reset: its named model
-            # cannot run, so the pass ends skipped with the reason in the run log (spec criterion 22). Any limit does
-            # it, even one after work the turn already did (`limited` is cleared then).
-            check_models.skip_pass(c, check_task, check)
-            settle_status(c, row["bot_id"], "idle", f"Nightly memory tidy skipped: {runtime} is out of quota on this "
-                          f"computer, so its named model could not run", claimed=row["created_at"])
-            H.event(c, H.KEEPER, "attempt.check_skipped", aid,
-                    {"bot": row["bot_id"], "job_id": row["job_id"], "task_id": check_task, "runtime": runtime,
-                     "reason": check_models.PASS_SKIPPED})
         elif limited and check and not body.profile_used and (moved := check_models.move_on(
                 c, self.store.settings, row["bot_id"], check_task, check, row["runner_id"])):
             # The computer's default login for the check's model is already out of quota (Health's

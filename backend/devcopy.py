@@ -52,7 +52,7 @@ EMPTY = (
     "task_reconnects", "google_signin_refusals",
     # refusal holds on one task or chat: their cooldowns belong to the source's runs; the copy starts with none
     "quarantine_holds",
-    # Pass deadlines can withdraw tasks; a rehearsal copy never resumes that work.
+    # The retired Nightly memory tidy pilot's ledger: history only.
     "memory_tidy_passes", "memory_tidy_packets",
     # routines and watchers
     "webhooks", "webhook_events", "webhook_sends", "webhook_attempts",   # outgoing: a copy never sends an event out

@@ -245,9 +245,9 @@ def test_a_daily_system_job_sets_the_wake_time_and_an_interval_job_does_not(api,
     zone = SR.zone()
     noon = datetime(2026, 10, 26, 12, 0, tzinfo=zone)                    # Monday noon, company time
     hq.clock[0] = noon.timestamp()
-    system_jobs(api, memory_tidy=("daily", "03:30"), kpi_asks=("15m", "09:00"))
+    system_jobs(api, ask_deadlines=("daily", "03:30"), kpi_asks=("15m", "09:00"))
     with api.app.state.store.transaction() as c:                         # today's 03:30 run already happened
-        c.execute("INSERT INTO system_runs(id,job,started_at) VALUES('tidy','memory_tidy',?)",
+        c.execute("INSERT INTO system_runs(id,job,started_at) VALUES('asks','ask_deadlines',?)",
                   (sleep_idle.stamp(noon.timestamp() - 8.5 * 3600),))
     with api.app.state.store.read() as c:
         assert sleep_idle.busy(c, hq.clock[0]) == ""                     # the 15-minute job never keeps the server up
