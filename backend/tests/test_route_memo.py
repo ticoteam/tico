@@ -1,5 +1,5 @@
-"""Apps built in one process share their field validators (backend/route_memo.py), never their state or each
-other's types."""
+"""Apps built in one process share their routes' field validators (backend/route_memo.py), never their handlers,
+state or each other's types."""
 from typing import Literal
 
 import pytest
@@ -29,23 +29,29 @@ def build(store):
     return app
 
 
+def dependant(app, path):
+    return next(r for r in app.routes if getattr(r, "path", None) == path).dependant
+
+
 def fields(app, path):
-    route = next(r for r in app.routes if getattr(r, "path", None) == path)
-    return route.dependant.path_params + route.dependant.query_params + route.dependant.body_params
+    found = dependant(app, path)
+    return found.path_params + found.query_params + found.body_params
 
 
 def test_a_second_app_reuses_validators_but_keeps_its_own_state_and_types():
     first, second = build("first"), build("second")
+    one, two = dependant(first, "/items/{item_id}"), dependant(second, "/items/{item_id}")
+    assert one.call is not two.call and one.query_params is not two.query_params
     for a, b in zip(fields(first, "/items/{item_id}"), fields(second, "/items/{item_id}")):
         assert a._type_adapter is b._type_adapter, a.name
-        assert a is not b and a.field_info is not b.field_info
     # A model made inside the function is each app's own, and is never kept by the cache.
     (note_a,), (note_b,) = fields(first, "/notes"), fields(second, "/notes")
-    assert note_a._type_adapter is not note_b._type_adapter
-    assert not any("<locals>" in repr(key) for key in RM.ADAPTERS)
-    size = len(RM.ADAPTERS)
+    assert note_a is not note_b and note_a._type_adapter is not note_b._type_adapter
+    assert not any("<locals>" in repr(key) for key in [*RM.ADAPTERS, *RM.DEPENDANTS])
+    assert all(template.call is None for template in RM.DEPENDANTS.values())
+    sizes = len(RM.ADAPTERS), len(RM.DEPENDANTS)
     build("third")
-    assert len(RM.ADAPTERS) == size
+    assert (len(RM.ADAPTERS), len(RM.DEPENDANTS)) == sizes
 
     client = TestClient(second)
     assert client.get("/items/7?kind=b&limit=3").json() == {"store": "second", "item": 7, "kind": "b", "limit": 3}

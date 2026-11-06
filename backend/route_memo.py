@@ -1,10 +1,12 @@
 """Route building that does not repeat work an earlier app already did in this process.
 
-`create_app` adds about 1,440 routes. For each one FastAPI builds a pydantic `TypeAdapter` per parameter and response
-field and compiles the path's regex; that was most of the time an app took to build. The handlers are closures over
-each app's own store and settings, so the routes themselves are rebuilt every time, but two things are pure functions
-of their inputs and are shared here:
+`create_app` adds about 1,440 routes. For each one FastAPI analyses the handler's signature into a `Dependant`, builds a
+pydantic `TypeAdapter` per parameter and response field and compiles the path's regex; that was most of the time an
+app took to build. The handlers are closures over each app's own store and settings, so the routes themselves are
+rebuilt every time, but three things are pure functions of their inputs and are shared here:
 
+- a handler's `Dependant`, keyed by the path, the options and the typed signature by value. Each app gets its own copy
+  with its own handler and lists; the template kept here holds no handler;
 - a field's `TypeAdapter`, keyed by a by-value copy of exactly what FastAPI builds it from (the annotation, its
   metadata and the field's attributes). A key holds only values and module-level classes and functions; a field
   that names anything else (a model class made inside `install`, one per app, or the body model FastAPI generates
@@ -25,12 +27,14 @@ import typing
 import annotated_types
 from fastapi import routing as fastapi_routing
 from fastapi._compat import v2 as fastapi_v2
+from fastapi.dependencies import utils as fastapi_dependencies
 from pydantic.fields import FieldInfo
 from pydantic_core import PydanticUndefined
 from starlette import routing as starlette_routing
 
 ADAPTER_LIMIT = 20_000
 ADAPTERS = {}
+DEPENDANTS = {}
 _SCALARS = (str, int, float, bool, bytes, complex, type(None))
 _ATTRS = tuple(fastapi_v2._Attrs)     # the FieldInfo attributes FastAPI copies into a field's adapter
 
@@ -143,6 +147,48 @@ def _post_init(self):
     ADAPTERS[key] = self._type_adapter
 
 
+def dependant_key(path, call, name, own_oauth_scopes, parent_oauth_scopes, use_cache, scope):
+    """What get_dependant reads: the path, the options and the handler's typed signature (names, kinds, annotations
+    and defaults by value). The handler itself is not in it: each app's Dependant gets its own."""
+    parameters = tuple((p.name, p.kind, frozen(p.annotation), frozen(p.default))
+                       for p in fastapi_dependencies.get_typed_signature(call).parameters.values())
+    return (path, name, frozen(own_oauth_scopes), frozen(parent_oauth_scopes), use_cache, scope, parameters)
+
+
+_get_dependant = fastapi_dependencies.get_dependant
+
+
+def get_dependant(*, path, call, name=None, own_oauth_scopes=None, parent_oauth_scopes=None, use_cache=True,
+                  scope=None):
+    options = dict(path=path, name=name, own_oauth_scopes=own_oauth_scopes, parent_oauth_scopes=parent_oauth_scopes,
+                   use_cache=use_cache, scope=scope)
+    try:
+        key = dependant_key(call=call, **options)
+        hash(key)
+    except (Uncacheable, TypeError):
+        return _get_dependant(call=call, **options)
+    template = DEPENDANTS.get(key)
+    if template is None:
+        dependant = _get_dependant(call=call, **options)
+        if dependant.dependencies:      # a Depends: its own handler, compared by identity; none in Tico
+            return dependant
+        if len(DEPENDANTS) >= ADAPTER_LIMIT:
+            DEPENDANTS.clear()
+        DEPENDANTS[key] = _copy_dependant(dependant, None)     # never an app's handler
+        return dependant
+    return _copy_dependant(template, call, own_oauth_scopes=own_oauth_scopes, parent_oauth_scopes=parent_oauth_scopes)
+
+
+def _copy_dependant(dependant, call, **options):
+    """`dependant` for `call`, in lists of its own (FastAPI inserts a route's own dependencies into them). The fields
+    are shared: each holds a validator and a default that pydantic copies on every use."""
+    return dataclasses.replace(dependant, call=call, **{kind: list(getattr(dependant, kind)) for kind in _PARAM_LISTS},
+                               **options)
+
+
+_PARAM_LISTS = ("path_params", "query_params", "header_params", "cookie_params", "body_params", "dependencies")
+
+
 @functools.lru_cache(maxsize=None)
 def _compiled(path):
     return _compile_path(path)
@@ -163,3 +209,4 @@ def install():
     fastapi_v2.ModelField.__post_init__ = _post_init
     starlette_routing.compile_path = compile_path
     fastapi_routing.compile_path = compile_path
+    fastapi_routing.get_dependant = get_dependant
