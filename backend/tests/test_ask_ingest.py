@@ -442,6 +442,21 @@ def test_a_clear_wait_under_budget_is_set(gate):
         assert A.load(c, "human:ben") == 1
 
 
+def test_waiting_again_on_the_same_person_is_not_judged_again(gate):
+    api, model, token = gate
+    task = own_task(api, token, "Pick the venue")
+    for note in ("Venue A or B? I recommend A; I book it Friday if no answer.",
+                 "Venue A or B? A is cheaper; I book it Friday if no answer."):
+        version = get(api, f"tasks/{task['id']}", token=token)["task"]["version"]
+        r = api.post(f"/api/v2/tasks/{task['id']}", headers=headers(token),
+                     json={"version": version, "status": "waiting", "waiting_on": "ben", "note": note})
+        assert r.status_code == 200, r.text
+    # The task already waits on Ben through his question task: the second wait is no new ask for his plate.
+    assert [i["outcome"] for i in items(api)].count(A.THROUGH) == 1
+    with api.app.state.store.read() as c:
+        assert A.load(c, "human:ben") == 1
+
+
 def test_a_persons_question_is_not_gated(gate):
     api, model, token = gate
     r = api.post("/api/v2/messages", json={"to": "ben", "text": "Lunch at noon?", "kind": "ask"},

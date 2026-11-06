@@ -59,10 +59,12 @@ def _link(base, task_id, title, route=None):
 
 def _tasks(c, auth, who, attrs, base):
     from .store import H
+    from . import question_tasks as QT
     if attrs.get("waiting-on") != "viewer":
         return ""
-    # The same rules as Needs you: waiting on the viewer, not snoozed, and a task the reader may see (task_sql).
-    clauses, args = ["status='waiting'", "waiting_on=?", "NOT EXISTS (SELECT 1 FROM task_holds sh WHERE sh.task_id=tasks.id AND sh.kind='snoozed' "
+    # The same rules as Needs you: waiting on the viewer (an open question task of theirs under it or blocking it), not
+    # snoozed, and a task the reader may see (task_sql).
+    clauses, args = [QT.waits_sql("tasks", "=?"), "NOT EXISTS (SELECT 1 FROM task_holds sh WHERE sh.task_id=tasks.id AND sh.kind='snoozed' "
                      "AND sh.released_at IS NULL AND sh.until_at>?)",
                      "(" + auth.task_sql(c, who) + ")"], [who.actor, H.now()]
     if attrs.get("bot"):
@@ -93,12 +95,14 @@ def _file_item(base, task_id, row):
 def _task(c, auth, who, attrs, base):
     if not attrs.get("id"):
         return ""
-    row = c.execute("SELECT id,title,status,waiting_on FROM tasks WHERE id=? AND (" + auth.task_sql(c, who) + ")",
+    from .store import H
+    row = c.execute("SELECT id,title,status FROM tasks WHERE id=? AND (" + auth.task_sql(c, who) + ")",
                     (attrs["id"],)).fetchone()
     if not row:
         return ""
     if row["status"] == "waiting":
-        label = "Waiting on you" if row["waiting_on"] == who.actor else "Waiting"
+        # Their own open question task under it says so; no one else's is named here.
+        label = "Waiting on you" if H._waits_on(c, dict(row), who.actor) else "Waiting"
     else:
         label = (row["status"] or "").replace("_", " ").capitalize()
     return (f'<span class="tico-live-task">{_link(base, row["id"], row["title"])} '

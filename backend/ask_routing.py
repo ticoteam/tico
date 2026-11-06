@@ -306,9 +306,6 @@ def _repair_one(c, row):
     c.execute("UPDATE messages SET refs=? WHERE id=?",
               (H._dump({**old["refs"], "resent_as": new["id"]}), old["id"]))
     if task:
-        if task.get("waiting_on") == old["recipient_id"]:
-            c.execute("UPDATE tasks SET waiting_on=? WHERE id=?", (target, tid))
-            H._task_event(c, tid, H.KEEPER, "waiting_on", old["recipient_id"], target, notice(c, new))
         task_holds.refresh(c, tid)
         if (task.get("blocked_reason") or "").startswith("Waiting on " + old["recipient_id"]):
             task_holds.change(c, tid, "blocked", reason=task_holds.words(c, task_holds.holds(c, H.task(c, tid))))

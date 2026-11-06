@@ -4,7 +4,7 @@ exactly and in the Strategy Bot's name; several bots asking the owner the same t
 each of them; what can't be done comes back saying why; after 10 approvals in a row the Monday note may offer level 3,
 once a month."""
 
-from backend import strategy_suggest
+from backend import question_tasks as QT, strategy_suggest
 from backend.store import H
 from backend.tests.test_api import api, get, post  # noqa: F401
 from backend.tests.test_strategy_bot_level import level
@@ -146,19 +146,37 @@ def ask_ana(api, slug, title):
     return made["id"]
 
 
+def _mark(api):
+    with api.app.state.store.read() as c:
+        return c.execute("SELECT coalesce(max(rowid), 0) FROM messages").fetchone()[0]
+
+
+def _heard(api, bot, since, text):
+    with api.app.state.store.read() as c:
+        return [r[0] for r in c.execute("SELECT body FROM messages WHERE recipient_id=? AND rowid>? ORDER BY rowid",
+                                        (bot, since)) if text in (r[0] or "")]
+
+
+def _answer(api, task_id, text):
+    """The person answers a question task with no options in Needs you ("answer"): their words as Other."""
+    return post(api, f"tasks/{task_id}/answers", {"target": {"task": task_id}, "answers": {}, "other": text})
+
+
 def test_three_bots_asking_the_same_thing_are_one_item_and_the_answer_reaches_each(api):
-    """Spec test 13: three bots ask the owner the same thing (a question on a task, a task waiting on her, a task filed
-    for her); the Strategy Bot merges them and Needs you shows one item, not three. Her one answer reaches each bot that
-    asked, and the item is done. A merged item that ends unanswered puts the originals back."""
+    """Spec test 13: three bots ask the owner the same thing (a question on a task, a task waiting on her through a
+    question task, a task filed for her); the Strategy Bot merges them and Needs you shows one item, not three. The item
+    is a question task she owns; her one answer reaches each bot that asked, and the item is done. A merged item that
+    ends unanswered puts the originals back."""
     strategy_token = with_strategy_bot(api)
     asked = ask_ana(api, "ops", "Ship the pricing page")
     waiting = bot_task(api, "coo", "Plan the launch")
     with api.app.state.store.transaction() as c:
-        H.task_comment(c, "bot:coo", waiting, "Which pricing page first?", ask={"who": OWNER})     # `hub task question`
-        H.task_update(c, "bot:coo", waiting, status="waiting", waiting_on=OWNER, note="Which pricing page first?")
+        card = H.task_update(c, "bot:coo", waiting, status="waiting", waiting_on=OWNER,
+                             note="Which pricing page goes first? I'll plan the launch around it.")["asked_in"]["id"]
         filed = H.task_create(c, "bot:finance", "Pick the pricing page to launch", "Which one?", OWNER)["id"]
     originals = [asked, waiting, filed]
-    assert set(originals) <= needs_tasks(api, "ana-test")
+    # The waiting task is in her Needs you as the question task it waits on.
+    assert {asked, card, filed} <= needs_tasks(api, "ana-test")
     body = {"person": OWNER, "title": "Which pricing page goes live first?",
             "question": "Ops, COO and Finance each need to know which pricing page launches first.", "tasks": originals}
     post(api, "strategy-bot/merge", body, token=strategy_token, expected=422)                 # level 1: no merging
@@ -166,53 +184,59 @@ def test_three_bots_asking_the_same_thing_are_one_item_and_the_answer_reaches_ea
     post(api, "strategy-bot/merge", body, token=bot(api, "ops"), expected=403)    # only the Strategy Bot
     merged = post(api, "strategy-bot/merge", body, token=strategy_token)
     item = merged["task"]
-    assert (item["owner_id"], item["status"], item["waiting_on"]) == (STRATEGY_BOT, "waiting", OWNER)
+    assert (item["owner_id"], item["requester_id"], item["status"]) == (OWNER, STRATEGY_BOT, "open")
+    [question] = item["questions"]
+    assert question["question"] == body["question"] and question["options"] == []
     assert [o["task_id"] for o in merged["originals"]] == originals
     shown = needs_tasks(api, "ana-test")
-    assert item["id"] in shown and not set(originals) & shown                # one item, not three
-    # It names the originals, so the Tasks page, which lists Needs you from its own copy of the tasks, leaves them out.
+    assert item["id"] in shown and not {*originals, card} & shown            # one item, not three
+    # It names the originals and the card the waiting one stood behind, so the Tasks page, which lists Needs you from
+    # its own copy of the tasks, leaves them out.
     page = test_goal_asks.get(api, "needs-you", "ana-test")["items"]
-    assert next(i for i in page if i["id"] == item["id"])["merged"] == originals
-    # it counts toward the 5 a day, with the vision ask
+    assert set(next(i for i in page if i["id"] == item["id"])["merged"]) == {*originals, card}
+    # it counts toward the 5 a day once, with the vision ask
     assert get(api, "strategy-bot")["asked_today"] == {OWNER: 2}
     # already merged
     post(api, "strategy-bot/merge", {**body, "tasks": originals[:2]}, token=strategy_token, expected=422)
     # Ana answers once, on the merged item.
-    post(api, f"tasks/{item['id']}/comments", {"text": "The landlord page first."})
+    since = _mark(api)
+    _answer(api, item["id"], "The landlord page first.")
     with api.app.state.store.read() as c:
         assert H.task(c, item["id"])["status"] == "done"
-        for task_id, to in ((asked, "bot:ops"), (waiting, "bot:coo")):
-            reply = c.execute("SELECT * FROM messages WHERE kind='answer' AND recipient_id=? "
-                              "AND json_extract(refs,'$.task')=?", (to, task_id)).fetchone()
-            assert reply and "The landlord page first." in reply["body"] and '"quiet"' not in reply["refs"]
-            assert not H.open_task_asks(c, H.task(c, task_id))
+        reply = c.execute("SELECT * FROM messages WHERE kind='answer' AND recipient_id='bot:ops' "
+                          "AND json_extract(refs,'$.task')=?", (asked,)).fetchone()
+        assert reply and "The landlord page first." in reply["body"] and '"quiet"' not in reply["refs"]
+        assert not H.open_task_asks(c, H.task(c, asked))
+        # The waiting task's question task is answered as hers: COO hears it once, and nothing waits on her.
+        assert H.task(c, card)["status"] == "done"
+        assert QT.waiting_on(c, H.task(c, waiting)) is None and not H._waits_on(c, H.task(c, waiting), OWNER)
         said = c.execute("SELECT body FROM messages WHERE sender_id=? AND recipient_id='bot:finance' AND "
                          "json_extract(refs,'$.task')=? ORDER BY created_at DESC", (STRATEGY_BOT, filed)).fetchone()
         assert said and "The landlord page first." in said[0]
-        assert H.task(c, waiting)["waiting_on"] is None
         assert {r[0] for r in c.execute("SELECT state FROM "
                                         "strategy_merges WHERE merged_into=?", (item["id"],))} == {"answered"}
-    assert not set(originals + [item["id"]]) & needs_tasks(api, "ana-test")
-    # Another merge whose item ends unanswered: its originals are back in Needs you.
+    assert len(_heard(api, "bot:coo", since, "The landlord page first.")) == 1
+    assert not {*originals, card, item["id"]} & needs_tasks(api, "ana-test")
+    # Another merge whose item ends unanswered: Ana declines it, and its originals are back in Needs you.
     again = [ask_ana(api, "ops", "Ship the docs page"), ask_ana(api, "coo", "Ship the help page")]
     second = post(api, "strategy-bot/merge", {**body, "tasks": again}, token=strategy_token)["task"]
     assert not set(again) & needs_tasks(api, "ana-test")
     with api.app.state.store.transaction() as c:
-        H.task_update(c, STRATEGY_BOT, second["id"], status="declined", note="Not the same question after all.")
+        H.task_update(c, OWNER, second["id"], status="declined", note="Not the same question after all.")
     assert set(again) <= needs_tasks(api, "ana-test")
     # A new question after the answer was passed on is back in her Needs you, and may be merged again.
     with api.app.state.store.transaction() as c:
         H.task_comment(c, "bot:ops", asked, "And which price goes on it?", ask={"who": OWNER})
-        H.task_comment(c, "bot:coo", waiting, "Which day do we launch?", ask={"who": OWNER})
-        H.task_update(c, "bot:coo", waiting, status="waiting", waiting_on=OWNER, note="Which day do we launch?")
-    assert {asked, waiting} <= needs_tasks(api, "ana-test") and filed not in needs_tasks(api, "ana-test")
+        later = H.task_update(c, "bot:coo", waiting, status="waiting", waiting_on=OWNER,
+                              note="Which day do we launch? I'll book the venue after.")["asked_in"]["id"]
+    assert later != card
+    assert {asked, later} <= needs_tasks(api, "ana-test") and filed not in needs_tasks(api, "ana-test")
     post(api, "strategy-bot/merge", {**body, "title": "Price and launch day?", "tasks": [asked, waiting]},
          token=strategy_token)
-    # Answered as an open question (the "answer" step in Needs you) rather than a reply: the same pass-on.
+    # Closed Done with a note rather than answered in Needs you: the same pass-on.
     third = post(api, "strategy-bot/merge", {**body, "tasks": again}, token=strategy_token)["task"]
     with api.app.state.store.transaction() as c:
-        ask = next(a for a in H.open_task_asks(c, H.task(c, third["id"])) if a["recipient_id"] == OWNER)
-        H.answer(c, OWNER, ask["id"], "The help page first.")
+        H.task_update(c, OWNER, third["id"], status="done", note="The help page first.")
     with api.app.state.store.read() as c:
         assert H.task(c, third["id"])["status"] == "done"
         assert not any(H.open_task_asks(c, H.task(c, t)) for t in again)
@@ -251,7 +275,7 @@ def test_a_merged_answer_never_settles_a_question_asked_after_the_merge(api):
         H.answer(c, OWNER, old["id"], "The landlord page.")
         H.task_comment(c, "bot:ops", first, "Which price goes on it?", ask={"who": OWNER})
     assert first in needs_tasks(api, "ana-test") and second not in needs_tasks(api, "ana-test")
-    post(api, f"tasks/{item['id']}/comments", {"text": "The tenant page first."})
+    _answer(api, item["id"], "The tenant page first.")
     with api.app.state.store.read() as c:
         [new] = H.open_task_asks(c, H.task(c, first))
         assert new["body"] == "Which price goes on it?" and not H.open_task_asks(c, H.task(c, second))

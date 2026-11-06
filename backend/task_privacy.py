@@ -1034,7 +1034,8 @@ def require_create(c, who, private, owner, parent, actor=None, title=None, body=
 
 
 def require_wait(c, who, row, waiting_on):
-    """A private run's `--status waiting --on <person>` puts its ask in front of that person (hubdb._ask_in_subtask) and,
+    """A private run's `--status waiting --on <person>` puts its ask in front of that person (a question task,
+    hubdb._ask_in_subtask) and,
     on a private task with no person on it, makes them its reader: so they must read every private task the run carries,
     as for a subtask or a question to them (require_create, question_party). Checked in the write's own transaction."""
     person = H.resolve_actor(c, str(waiting_on or "").strip()) if waiting_on else None
@@ -1291,7 +1292,7 @@ APPROVALS_SQL = ("SELECT m.*, a.task_id AS approval_task{by} FROM approvals a JO
 # A long-lived bot's finished company tasks are most of its rows and change nothing.
 STATUS_TASKS_SQL = "(status IN (%s) OR private IS NOT 0)" % ",".join("'%s'" % s for s in H.ACTIVE_STATUSES)
 # The columns `status` reads of them: never the bodies, which were megabytes a status page on a real install.
-STATUS_TASK_COLUMNS = "id,owner_id,requester_id,status,private,readers,waiting_on"
+STATUS_TASK_COLUMNS = "id,owner_id,requester_id,status,private,readers"
 
 
 def status_tasks_sql(match):
@@ -1361,13 +1362,12 @@ def status(c, who, row, *, tasks=None, approvals=None, asks=None):
     if "open_tasks" in row:
         row["open_tasks"] = sum(t["owner_id"] == "bot:" + row["bot"] and t["status"] in H.ACTIVE_STATUSES for t in tasks)
     if "needs_human" in row:
-        # One per readable task that waits on a person (hubdb._recount): filed for a person, set
-        # waiting on one, or carrying the bot's unanswered question to one.
+        # One per readable task that waits on a person (hubdb._recount): filed for a person (a question task among
+        # them, as a task set waiting on a person files one), or carrying the bot's unanswered question to one.
         bot = "bot:" + row["bot"]
         live = {t["id"]: t for t in tasks if t["status"] in H.ACTIVE_STATUSES}
         waits = {i for i, t in live.items()
-                 if (t["requester_id"] == bot and H.is_human(t["owner_id"]))
-                 or (t["owner_id"] == bot and t["status"] == "waiting" and H.is_human(t.get("waiting_on") or ""))}
+                 if t["requester_id"] == bot and H.is_human(t["owner_id"])}
         if len(waits) < len(live):
             # Both are the message rows (`m.*`) as stored, read in this snapshot.
             for m in asks if asks is not None else c.execute(ASKS_SQL.format("=?"), (bot,)):

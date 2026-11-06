@@ -125,11 +125,10 @@ the server (`backend/hubdb.py`), never here. A command is its tool's name (clien
     hub task restore <id>                              put a deleted task back
     hub task update <id> --status doing|waiting|done|declined [--note "..."] [--goal ID|--goal ""]
                     [--title "..."]        rename it: checked as a new task's title would be
-                    [--on PERSON]          with --status waiting: the person it waits on (their Needs you);
-                                           --note is then your ask to them, one or two plain sentences:
+                    [--on PERSON]          with --status waiting: files the person a question task under it
+                                           (their Needs you); --note is your ask, one or two plain sentences:
                                            "Approve the video tool trial on Thursday? If yes, I'll send the invite."
-                    [--on bot:SLUG]        with --status waiting: an active bot owning a task this one is
-                                           blocked by (hub task wait); --note is the reason shown
+                                           --on "" withdraws it. Not a bot: DM it, or hub task wait on its task
     hub task close <id> [--note "..."]
     hub task wait <id> --on task:<id>|pr:<url>|release:<tag> [--note "..."]
                                            wait on a task, a PR merging or a release; one wake when it happens
@@ -1862,11 +1861,11 @@ def parser():
     s.add_argument("--owner")
     s.add_argument("--due")
     s.add_argument("--on", dest="waiting_on",
-                   help="with --status waiting: the person it waits on, so it is in their Needs you; '' clears it. "
-                        "--note is then your ask to them: one or two plain sentences saying what you need and what "
-                        "happens after, at most 40 words, with no ids, hashes, file paths or tool names (\"PR #1555\" is "
-                        "fine). Or bot:<slug>, an active bot that owns the first open task this one is blocked by "
-                        "(hub task wait <id> --on task:<its task>); --note is then the reason shown beside its name")
+                   help="with --status waiting: the person you need. It files them a question task under this one, "
+                        "and this task opens again with their answer. --note is your question: one or two plain "
+                        "sentences saying what you need and what happens after, at most 40 words, with no ids, hashes, "
+                        "file paths or tool names (\"PR #1555\" is fine). Not a bot: ask a bot in a DM (hub message "
+                        "send <slug> ... --needs-action), or wait on its task (hub task wait <id> --on task:<its task>)")
     s.add_argument("--goal", help='the goal this task serves; "" takes it off')
     s.add_argument("--brief", action="store_true", help="keep the note on the task; chat hears only the title and status")
     s.add_argument("--quiet", dest="brief", action="store_true", help=argparse.SUPPRESS)     # brief's older name

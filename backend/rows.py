@@ -145,7 +145,6 @@ class TaskRow(TypedDict):
     number: int | None
     step_rank: float | None
     private: int
-    waiting_on: str | None
     readers: str | None
     lane: str
     rank: float | None

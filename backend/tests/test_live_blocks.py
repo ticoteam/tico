@@ -11,8 +11,10 @@ ON_VISUALS = {"host": "visuals.localhost:9001"}
 
 
 def wait_on(api, tid, who):
+    """The task's bot waits on `who`: a question task of theirs under it (derived)."""
+    from backend.store import H
     with api.app.state.store.transaction() as c:
-        c.execute("UPDATE tasks SET status='waiting', waiting_on=? WHERE id=?", (who, tid))
+        H.task_update(c, "bot:ops", tid, status="waiting", waiting_on=who, note="Renew it for a year? I'll pay after.")
 
 
 def page(api, attempt, task, name, data):

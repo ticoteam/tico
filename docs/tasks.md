@@ -284,8 +284,10 @@ CLI) lists what holds it in `holds`, empty when nothing does:
   are null when there is none.
 
 The holds are read-only on a task: the moves and endpoints above set and clear them. What a hold is made of keeps its
-own field: `waiting_on` (the person it waits on), `relations.blocks`, `worktree_waits`, `check_waits`,
-`milestone_waits` and `deferred`. Task list filters are unchanged: `?snoozed=only|all` lists snoozed tasks, and a
+own field: `relations.blocks` (an open question task to a person is a blocker too), `worktree_waits`, `check_waits`,
+`milestone_waits` and `deferred`. Who a waiting task waits on is not stored: a task view's `waiting_on` is the owner
+of its oldest open question task (a subtask or a blocker), and null when a private question task's words do not reach
+the task's readers. Task list filters are unchanged: `?snoozed=only|all` lists snoozed tasks, and a
 blocked task is a `waiting` one (`?status=waiting`).
 
 Each hold is a row of `task_holds` in the hub database (one open row per kind; a released one keeps its
@@ -344,20 +346,18 @@ message carries `refs.reconnect` (`key`, `service`, `label`, `person`, `fix`, `s
 `task_reconnects` and `google_signin_refusals` (each refusing service per mailbox); other accounts (GitHub, an MCP server's sign-in) are new keys through the same path
 (backend/reconnects.py).
 
-When the task waits on a bot doing prerequisite work (a builder, a reviewer, QA), wait on that bot's task, then
-name the bot with `--on` and give the reason in the note:
+When the task waits on a bot doing prerequisite work (a builder, a reviewer, QA), wait on that bot's task:
 
 ```sh
 hub task wait <task> --on task:<the bot's task>
-hub task update <task> --status waiting --on bot:pr-reviewer --note "Needs the receipt-gate fix merged and QA'd first."
 ```
 
-The task and its card show "Waiting on Builder (OpenAI)" with that reason. The blocker holds the task, so its owner
-is not woken while the prerequisite stays open. When that task is done, declined or closed and nothing else blocks
-this one, its owner is woken once with the outcome ("Unblocked: … is finished" or "was declined") and picks it back
-up. `--on bot:<slug>` is accepted only for an active bot that owns the first open task this one is blocked by, the
-one its views name: a bot alone does not say which of its work must finish, so an inactive bot, an unknown name or a
-bot that does not own that task is refused with how to link it, and nothing changes. A subtask needs neither: its result comes back to its parent on its own.
+The task and its card show "Waiting on Builder (OpenAI)". The blocker holds the task, so its owner is not woken while
+the prerequisite stays open. When that task is done, declined or closed and nothing else blocks this one, its owner is
+woken once with the outcome ("Unblocked: … is finished" or "was declined") and picks it back up. `--on bot:<slug>` on
+`hub task update` is refused: a task waits on a person, not a bot. Ask a bot in a DM (`hub message send <slug>
+"<question>" --needs-action`), or link its task as above. A subtask needs neither: its result comes back to its parent
+on its own.
 
 When the task waits on a person to act instead (a decision, access, a host only they can fix),
 name them with `--on` and say plainly what you need in the note:
@@ -366,8 +366,9 @@ name them with `--on` and say plainly what you need in the note:
 hub task update <task> --status waiting --on ana --note "Restart the build host? It refuses SSH, and I'll rerun the deploy after."
 ```
 
-Tico turns that into one small subtask owned by the person: its title is the ask (its question, when it has one),
-its body is the note, and Decide shows it with Yes and No when it asks a yes-or-no question. The bot's task stays the
+Tico turns that into a question task for the person with no options, under the task: its title is the ask (its
+question, when it has one), its body and question are the note, and Decide shows it with Yes and No when it asks a
+yes-or-no question. The task's "Waiting on Ana" comes from that question task while it is open. The bot's task stays the
 bot's: it is Waiting, blocked on that subtask, with the note "Blocked on Ana: <the ask>", and it is not itself a card
 in Ana's **Needs you**. The update returns the subtask as `asked_in`. When Ana marks it done or declines it (Yes or
 No on her card), the task opens again with "Ana answered: <what she said>" as its note and the bot is woken once on
@@ -1593,7 +1594,7 @@ on its own.
 
 The person picker beside **Filter** says whose tasks the first tab shows. **Me** is the You list as
 always, with its approvals and questions. Pick a teammate (people by team, each with a count; bots
-fold behind one line) to see what is on their plate: an open task whose `waiting_on` is them, or
+fold behind one line) to see what is on their plate: a waiting task with an open question task of theirs under it, or
 that they own when it waits on nobody, or a question asked of them. **Asked by them** shows what
 they asked someone else to do. **Everyone** drops the person. The choice is in the address
 (`?who=human:sam&side=asked`), so a link opens the same plate; the Owner and Asked by filters still

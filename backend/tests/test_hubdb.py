@@ -14,6 +14,7 @@ import unittest.mock
 from pathlib import Path
 
 from backend import hubdb as H
+from backend import question_tasks as QT
 from backend import market as MK
 from backend import migrations
 from backend import marketing_tasks as MT
@@ -532,7 +533,7 @@ class Rule5Tasks(HubCase):
                               extra_refs={"answer": {"target": {"comment": asked["id"]},
                                                      "answers": {"pick": ["B"]}, "by": ANA, "at": H.now()}})
         self.assertEqual((said["kind"], said["recipient_id"]), ("answer", CMO))
-        self.assertIsNone(H.task(self.conn, row["id"])["waiting_on"])
+        self.assertNotIn("waiting_on", H.task(self.conn, row["id"]))
         self.assertFalse(said["refs"].get("quiet"), "it wakes the asker")
 
 # ----------------------------------------------------------------------------- rule 6
@@ -988,8 +989,10 @@ class WaitingWithDependency(HubCase):
         task = H.task_create(self.conn, CMO, 'Fix the build host', 'The deploy fails at the SSH step.', CMO, private=False)
         after = H.task_update(self.conn, CMO, task['id'], status='waiting', waiting_on='ana', note=ask)
         # The task stays the bot's, blocked, and is not itself a card for Ana.
-        self.assertEqual((after['owner_id'], after['status'], after['waiting_on'], after['note']),
+        self.assertEqual((after['owner_id'], after['status'], after.get('waiting_on'), after['note']),
                          (CMO, 'waiting', None, f'Blocked on Ana Rivera: {ask}'))
+        # Who it waits on is derived from the question task filed for her.
+        self.assertEqual(QT.waiting_on(self.conn, H.task(self.conn, task['id'])), ANA)
         card = H.task(self.conn, after['asked_in']['id'])
         self.assertEqual((card['owner_id'], card['requester_id'], card['title'], card['body'], card['status']),
                          (ANA, CMO, 'Restart the build host?', ask, 'open'))
@@ -1171,15 +1174,16 @@ class WaitingWithDependency(HubCase):
                 self.assertIn(f'Example: "{H.LINT_ASK_EXAMPLE}"', refused.exception.detail)
                 self.assertIn('s3:// links, tool names or error output', refused.exception.detail)
         self.assertEqual(H.bot(self.conn, 'cmo')['state'], 'active')
-        self.assertIsNone(H.task(self.conn, task['id'])['waiting_on'])
+        self.assertEqual(TR.child_ids(self.conn, task['id']), [])
         after = H.task_update(self.conn, CMO, task['id'], status='waiting', waiting_on='ana', note=plain)
-        self.assertEqual((after['waiting_on'], after['note'], after.get('warnings')),
+        self.assertEqual((after.get('waiting_on'), after['note'], after.get('warnings')),
                          (None, f'Blocked on Ana Rivera: {plain}', None))
         self.assertEqual(H.task(self.conn, after['asked_in']['id'])['body'], plain)
         # An open question to them on the task already asks (`hub task question`): no note is needed.
         asked = H.task_create(self.conn, ANA, 'Draft the launch post', '', CMO, private=False)
         H.task_ask(self.conn, CMO, asked['id'], 'Which date should it go out?')
-        self.assertEqual(H.task_update(self.conn, CMO, asked['id'], status='waiting', waiting_on='ana')['waiting_on'], ANA)
+        self.assertEqual(H.task_update(self.conn, CMO, asked['id'], status='waiting', waiting_on='ana')['status'], 'waiting')
+        self.assertEqual(TR.child_ids(self.conn, asked['id']), [])
         # A task given to a person opens its body with the ask; the rest of the body is details.
         with self.assertRaises(H.Refused) as refused:
             H.task_create(self.conn, CMO, 'Approve the video tool trial', 'Approve the video tool trial\n\nSee reports/x.md', ANA)
@@ -1307,8 +1311,8 @@ class WaitingWithDependency(HubCase):
             self.assertIn('ask any other separately', refused.exception.detail)
             self.assertNotIn('Retry once with this ask', refused.exception.detail)
             after = H.task(self.conn, task['id'])
-            self.assertEqual((after['version'], after['body'], after['status'], after['waiting_on']),
-                             (before['version'], before['body'], before['status'], before['waiting_on']))
+            self.assertEqual((after['version'], after['body'], after['status']),
+                             (before['version'], before['body'], before['status']))
             self.assertEqual(TR.child_ids(self.conn, task['id']), [])
         # A sole indirect request is preserved verbatim rather than disappearing as background context.
         self.assertEqual(H.person_ask_rewrite("The vendor needs our answer today. I need you to approve the $5,000 "
@@ -1341,8 +1345,8 @@ class WaitingWithDependency(HubCase):
             self.assertIn('then retry once', refused.exception.detail)
             self.assertNotIn('Retry once with this ask', refused.exception.detail)
             after = H.task(self.conn, task['id'])
-            self.assertEqual((after['status'], after['waiting_on'], after['body'], TR.child_ids(self.conn, task['id'])),
-                             ('open', None, 'All the runner notes.', []))
+            self.assertEqual((after['status'], after['body'], TR.child_ids(self.conn, task['id'])),
+                             ('open', 'All the runner notes.', []))
         # The refusals are recorded, so the blocker is never invisible, and none counts toward a quarantine.
         self.assertEqual(self.conn.execute("SELECT COUNT(*) FROM refusals WHERE actor=? AND rule='lint'",
                                            (CMO,)).fetchone()[0], 5)
@@ -1379,29 +1383,23 @@ class WaitingWithDependency(HubCase):
         stored = lambda bot: self.conn.execute("SELECT needs_human FROM bot_status WHERE bot=?", (bot,)).fetchone()[0]
         task = H.task_create(self.conn, ANA, 'Fix the build host', '', CMO, private=False)
         wait = lambda **kw: H.task_update(self.conn, CMO, task['id'], status='waiting', waiting_on='ana',
-                                          note='Restart it', **kw)
+                                          **{'note': 'Restart it', **kw})
         self.refused('identity', H.task_update, self.conn, ANA, task['id'], status='waiting', waiting_on='ana')
         self.refused('kind', wait, owner='seo')
         self.refused('private', H.task_update, self.conn, CMO, task['id'], status='waiting', waiting_on='ben',
                      private=True)
-        # A task that waits on a person itself (set before asks became subtasks, or one with an open question to
-        # them): a new note is detail beneath the wait and keeps it (backend/task_holds.py); a new owner clears it.
-        legacy = lambda: self.conn.execute("UPDATE tasks SET status='waiting', waiting_on=? WHERE id=?", (ANA, task['id']))
-        legacy()
-        self.assertEqual(H.task_update(self.conn, CMO, task['id'], note='Still down')['waiting_on'], ANA)
-        legacy()
-        self.assertIsNone(H.task_update(self.conn, CMO, task['id'], owner='seo')['waiting_on'])
-        self.assertEqual((stored('cmo'), stored('seo')), (0, 0), "the handoff recounts the old owner too")
-        # Made private: the wait no longer goes in front of a person who cannot read it.
-        own = H.task_create(self.conn, CMO, 'Rotate the deploy key', '', CMO, private=False)
-        self.conn.execute("UPDATE tasks SET status='waiting', waiting_on=? WHERE id=?", ('human:ben', own['id']))
-        self.assertIsNone(H.task_update(self.conn, CMO, own['id'], private=True)['waiting_on'])
+        # Waiting on a person is their question task: a new note is detail beneath the wait and keeps it.
+        wait(note='Restart the build host? It refuses SSH, and I will rerun the deploy after.')
+        H.task_update(self.conn, CMO, task['id'], note='Still down')
+        self.assertEqual(QT.waiting_on(self.conn, H.task(self.conn, task['id'])), ANA)
+        self.assertEqual(stored('cmo'), 1)
         # An approval on a task that waits on a person is the same wait.
         key = H.task_create(self.conn, CMO, 'Buy a signing key', '', CMO, private=False)
         H.task_update(self.conn, CMO, key['id'], status='waiting', waiting_on='ana',
                       note='Approve the purchase? If yes, I will order the key.')
         H.approval_request(self.conn, CMO, 'spend', {'amount': 5, 'account': 'ops', 'what': 'a key'}, task_id=key['id'])
-        self.assertEqual((H.status_live(self.conn, 'cmo')['needs_human'], stored('cmo')), (1, 1))
+        # Two tasks wait on Ana: the build host, and the key once though it has a question and an approval.
+        self.assertEqual((H.status_live(self.conn, 'cmo')['needs_human'], stored('cmo')), (2, 2))
         # A plain reply answers a question; deleting the reply reopens it.
         other = H.task_create(self.conn, ANA, 'Draft the launch post', '', SEO)
         H.task_ask(self.conn, SEO, other['id'], 'Which date?')

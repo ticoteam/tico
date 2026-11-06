@@ -34,10 +34,10 @@ def test_a_reversible_default_goes_ahead_after_the_teams_days_and_a_send_waits(a
         answer = _answer(c, safe_ask)
         assert answer["sender_id"] == H.KEEPER and answer["recipient_id"] == "bot:ops"
         assert "goes ahead" in answer["body"] and H._json(answer["refs"], {})["answer"]["answers"] == {"decision": ["Yes"]}
-        assert H.task(c, safe["id"])["waiting_on"] is None
+        assert not H.open_task_asks(c, H.task(c, safe["id"]))          # settled: it waits on her no more
         assert c.execute("SELECT 1 FROM jobs WHERE message_id=?", (answer["id"],)).fetchone()   # Ops wakes on it
         assert _answer(c, send_ask) is None and _answer(c, fresh_ask) is None
-        assert H.task(c, send["id"])["waiting_on"] == "human:ana"
+        assert [a["recipient_id"] for a in H.open_task_asks(c, H.task(c, send["id"]))] == ["human:ana"]
 
     # The owner turns it off: nothing goes ahead on its own.
     with api.app.state.store.transaction() as c:
@@ -70,17 +70,16 @@ def test_an_undated_ask_waits_for_the_batch_and_a_task_handed_to_a_person_closes
         assert H.task(c, touched["id"])["status"] == "open"
         assert H.task(c, later["id"])["status"] == "open"          # due later: not expired
 
-    # An ask card (a bot's task blocked on its person subtask) that expires opens the bot's task again, from Tico.
+    # A wait on a person (`--status waiting --on`) is a question task with no date: it never closes here; it goes
+    # back to its bot in the weekday batch (test_question_tasks).
     with api.app.state.store.transaction() as c:
         task = H.task_create(c, "bot:ops", "Book the venue", "x", "bot:ops", private=False)
         card = H.task_update(c, "bot:ops", task["id"], status="waiting", waiting_on="human:ana",
                              note="Approve the venue for Friday? If yes, I will book it.")["asked_in"]
         c.execute("UPDATE tasks SET created_at=? WHERE id=?", (H.shift(H.now(), days=-15), card["id"]))
         c.execute("UPDATE history_events SET created_at=? WHERE subject_type='task' AND subject_id=?", (H.shift(H.now(), days=-15), card["id"]))
-        assert ask_deadlines.sweep(c)["closed"] == [card["id"]]
-        back = H.task(c, task["id"])
-        assert back["status"] == "open" and back["note"].startswith(
-            f"The system closed the ask to {H.person_name(c, 'human:ana')}: No answer from")
+        assert card["id"] not in ask_deadlines.sweep(c)["closed"]
+        assert H.task(c, card["id"])["status"] == "open" and H.task(c, task["id"])["status"] == "waiting"
 
     # A go-ahead date after day 14 is refused when asked; here one is set anyway: the ask waits for its date, then
     # goes ahead and closes.

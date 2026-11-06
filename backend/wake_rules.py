@@ -258,6 +258,8 @@ def state_of(conn, task_row):
         if not row:
             return None
         parts = {
+            # waiting_on is None since step 6b (derived, from the question tasks in "relations"): kept, so a
+            # task's hash reads as it did before.
             "task": [row.get(k) for k in ("status", "step_id", "owner_id", "requester_id", "waiting_on", "snoozed_until",
                                            "version")],
             "relations": [list(r) for r in conn.execute(

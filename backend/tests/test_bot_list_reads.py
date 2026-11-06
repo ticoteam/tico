@@ -317,7 +317,7 @@ def test_status_task_read_seeks_each_bots_tasks_on_a_big_task_table(api):
 
 def test_status_private_tasks_are_read_from_an_index_holding_their_status(api):
     """The private tasks of a bot's status rows come from tasks_private_status, which holds the columns status reads
-    (status, waiting_on). On tasks_private_parties each private row was a table read for them, its body's pages
+    (status, readers). On tasks_private_parties each private row was a table read for them, its body's pages
     included: on a multi-GB hub that was most of a status page's time, as random reads."""
     from backend.task_privacy import status_tasks_sql
     store = api.app.state.store

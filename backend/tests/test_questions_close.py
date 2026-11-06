@@ -3,7 +3,7 @@ task above it, Dev 627), on a chat reply, on its fallback date, or back to its b
 
 from datetime import datetime, timezone
 
-from backend import approval_expiry, ask_deadlines, still_needed, task_roundup
+from backend import approval_expiry, ask_deadlines, still_needed, task_holds, task_roundup
 from backend.scheduler import Scheduler
 from backend.store import H
 from backend.tests.test_tasks_board import api, get, post  # noqa: F401
@@ -164,7 +164,7 @@ def test_closing_a_parent_closes_questions_and_waits_on_tasks_below(api):
     after, count = needs(api)
     assert now_["id"] not in after and count == len(after)
     with api.app.state.store.transaction() as c:
-        assert H.task(c, now_["id"])["waiting_on"] is None and cached_matches(c)    # the bot's count follows
+        assert H.task(c, now_["id"]).get("waiting_on") is None and cached_matches(c)    # the bot's count follows
         # Asked under a task that already ended (reopened by hand below it): the hourly sweep takes the question and
         # its wait.
         H.task_update(c, ANA, late["id"], status="open")
@@ -227,18 +227,18 @@ def test_bulk_closes_recount_the_asking_bot_and_one_bad_row_does_not_undo_the_sw
         H._recount(c, CPO)
         assert asking(c) == 2
         c.execute("UPDATE tasks SET status='closed' WHERE id IN (?,?)", (bad["id"], good["id"]))
-        drop = H.drop_asked_waits
+        drop = task_holds.withdrawn
 
-        def failing(conn, task_id, *args):
+        def failing(conn, task_id, *args, **kwargs):
             if task_id == bad["id"]:
                 raise ValueError("bad row")
-            return drop(conn, task_id, *args)
+            return drop(conn, task_id, *args, **kwargs)
 
-        monkeypatch.setattr(H, "drop_asked_waits", failing)
+        monkeypatch.setattr(task_holds, "withdrawn", failing)
         assert approval_expiry.sweep(c)["asks"] == [good_q["id"]]
         assert H.message(c, good_q["id"])["superseded_at"] and not H.message(c, bad_q["id"])["superseded_at"]
         assert asking(c) == 0                                           # the sweep recounted the asker
-        monkeypatch.setattr(H, "drop_asked_waits", drop)
+        monkeypatch.setattr(task_holds, "withdrawn", drop)
         assert approval_expiry.sweep(c)["asks"] == [bad_q["id"]] and asking(c) == 0
 
 
@@ -256,4 +256,5 @@ def test_still_needed_keeps_the_wait_while_another_question_to_the_same_person_i
                                                       {"label": "High", "description": ""}]}], "who": ANA})
         c.execute("UPDATE messages SET created_at=? WHERE id=?", ("2026-10-21T15:00:00.000000Z", fresh["id"]))
         assert still_needed.sweep(c, "2026-10-21T15:30:00.000000Z") == {OPS: [old["id"]]}
-        assert H.task(c, work["id"])["waiting_on"] == ANA and listed(c, work["id"])
+        # Ana's other question on the task stays open, and so in her Needs you (a legacy ask to her is that card).
+        assert [a["id"] for a in H.open_task_asks(c, H.task(c, work["id"]))] == [fresh["id"]] and listed(c, work["id"])

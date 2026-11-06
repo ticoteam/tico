@@ -433,12 +433,13 @@ def day_start(at=None):
 
 
 def asked_today(c, person, at=None):
-    """How many tasks the Strategy Bot filed for this person today (UTC), closed ones included, and merged items."""
+    """How many tasks the Strategy Bot filed for this person today (UTC), closed ones included, and merged items. A
+    merged item is a task filed for them since step 6b; one filed before was the Strategy Bot's own."""
     since = day_start(at)
     return c.execute("SELECT COUNT(*) FROM tasks WHERE requester_id=? AND owner_id=? AND created_at>=?",
                      ("bot:" + SLUG, person, since)).fetchone()[0] + c.execute(
-        "SELECT COUNT(DISTINCT merged_into) FROM "
-        "strategy_merges WHERE person=? AND created_at>=?", (person, since)).fetchone()[0]
+        "SELECT COUNT(DISTINCT m.merged_into) FROM strategy_merges m JOIN tasks t ON t.id=m.merged_into "
+        "WHERE m.person=? AND m.created_at>=? AND t.owner_id<>m.person", (person, since)).fetchone()[0]
 
 
 def asked_today_all(c, at=None):
@@ -446,8 +447,8 @@ def asked_today_all(c, at=None):
     since, out = day_start(at), {}
     for who, n in c.execute(
             "SELECT owner_id, COUNT(*) FROM tasks WHERE requester_id=? AND owner_id LIKE 'human:%' AND created_at>=? GROUP BY owner_id "
-            "UNION ALL SELECT person, COUNT(DISTINCT merged_into) FROM strategy_merges "
-            "WHERE created_at>=? GROUP BY person",
+            "UNION ALL SELECT m.person, COUNT(DISTINCT m.merged_into) FROM strategy_merges m JOIN tasks t "
+            "ON t.id=m.merged_into WHERE m.created_at>=? AND t.owner_id<>m.person GROUP BY m.person",
             ("bot:" + SLUG, since, since)):
         out[who] = out.get(who, 0) + n
     return out

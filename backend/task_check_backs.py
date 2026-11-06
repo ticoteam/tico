@@ -144,7 +144,7 @@ def view(row, at=None):
 
 
 def external_wait(c, row):
-    return bool(row.get("waiting_on") or _H().recorded_wait(c, row) in ("ask", "approval", "pull_request", "milestone", "subtask"))
+    return bool(_H().recorded_wait(c, row) in ("ask", "approval", "pull_request", "milestone", "subtask"))
 
 
 def stand(c, row):

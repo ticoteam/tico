@@ -853,8 +853,9 @@ SCHEMAS = {
                 number={"type": ["integer", "null"], "description": "The task's number, unique across the team "
                         "(#18945); given once on a numbered type and never changed"},
                 step_rank={"type": ["number", "null"], "description": "Its place within its step, lower first"},
-                waiting_on={"type": ["string", "null"], "description": "The person a waiting task waits on; "
-                            "the task is in their Needs you"},
+                waiting_on={"type": ["string", "null"], "description": "Read only, derived: the person a waiting "
+                            "task waits on, the owner of its oldest open question task (a subtask or a blocker). "
+                            "Null when a private question task's words do not reach this task's readers"},
                 readers=items({"type": "string"}) | {"description": "Who else can see a private task besides its "
                          "requester and owner: people, bots and group:<id>s (a group by its members now). Empty on a "
                          "company task. GET/PUT /api/v2/tasks/{id}/readers reads and changes it"},

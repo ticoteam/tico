@@ -22,6 +22,7 @@ from datetime import datetime, timedelta, timezone
 from fastapi import Request
 
 from . import models as M
+from . import question_tasks as QT
 from .store import H, Problem
 
 SCHEMA = """
@@ -299,12 +300,12 @@ def bot_wait_sql(visible_sql):
     """A bot wait uses the same readable, ordered blockers as the task's displayed wait line.
 
     Person waits/questions and gate/worktree holds keep their own meaning, even with a bot blocker.
-    Never infer a bot from waiting_on: that column stores people only.
+    A task waiting on a person's open question task (question_tasks.waits_sql) is a person wait, not a bot one.
     """
     blockers = ("SELECT b.owner_id FROM task_relations r JOIN tasks b ON b.id=r.from_task "
                 "WHERE r.to_task=tasks.id AND r.kind='blocks' AND b.status NOT IN ('done','closed','declined') "
                 f"AND EXISTS (SELECT 1 FROM tasks WHERE tasks.id=b.id AND ({visible_sql}))")
-    return ("status='waiting' AND coalesce(waiting_on,'') NOT LIKE 'human:%' "
+    return (f"status='waiting' AND NOT {QT.waits_sql('tasks')} "
             "AND NOT EXISTS (SELECT 1 FROM task_holds bh WHERE bh.task_id=tasks.id AND bh.kind='blocked' "
             "AND bh.released_at IS NULL AND bh.cause IN ('gate','worktree')) "
             f"AND ({blockers} ORDER BY r.created_at,r.rowid LIMIT 1) LIKE 'bot:%' "
@@ -334,13 +335,13 @@ def tab_sql(tab, bot, viewer, visible_sql="1"):
         elif field == "asked_by":
             part = party_sql("requester_id", value, bot, viewer)
         elif field == "needs":
-            part = "((owner_id=? AND status IN ('open','doing','waiting')) OR (status='waiting' AND waiting_on=?))", [viewer, viewer]
+            part = f"((owner_id=? AND status IN ('open','doing','waiting')) OR {QT.waits_sql('tasks', '=?')})", [viewer, viewer]
         elif field == "waiting_on":
             part = {"any": ("status='waiting'", []),
-                    "person": ("status='waiting' AND waiting_on LIKE 'human:%'", []),
+                    "person": (QT.waits_sql("tasks"), []),
                     "bot": (bot_wait_sql(visible_sql), []),
-                    "me": ("status='waiting' AND waiting_on=?", [viewer]),
-                    "not_me": ("status='waiting' AND coalesce(waiting_on,'')!=?", [viewer])}[value]
+                    "me": (QT.waits_sql("tasks", "=?"), [viewer]),
+                    "not_me": (f"status='waiting' AND NOT {QT.waits_sql('tasks', '=?')}", [viewer])}[value]
         elif field == "created_within":
             part = "created_at>=?", [ago(value)]
         elif field == "updated_within":

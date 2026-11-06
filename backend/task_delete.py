@@ -85,7 +85,9 @@ LEGACY_HOLDS = {
                 "blocked_from_step": "from_step_id", "blocked_from_status": "from_status", "blocked_gate": "gate",
                 "holds_cleared_at": "cleared_at"},
 }
-HANDLED = {"tasks": set(LEGACY_LINKS) | {k for cols in LEGACY_HOLDS.values() for k in cols}}
+# A task trashed before 20261106112609_derived_waiting kept who it waited on (`waiting_on`); who a task waits on is
+# derived now (question_tasks.waiting_on), so a restore leaves it behind.
+HANDLED = {"tasks": set(LEGACY_LINKS) | {k for cols in LEGACY_HOLDS.values() for k in cols} | {"waiting_on"}}
 
 
 def ensure(c):

@@ -5,8 +5,10 @@ Holds then cleared under it (a child finished, a question was answered or withdr
 "Waiting on Chris Hawkins" for weeks. Now the reason is derived from the holds Tico tracks (`holds`), every time one
 of them changes (`refresh`):
 
-- a question its owner asked on it, a child or blocker still open, an undecided approval, a person it waits on
-  (`waiting_on`), and the external holds `wait_detail` reads (a worktree, a milestone, GitHub);
+- a question its owner asked on it (an ask message from before question tasks, until step 6c moves them), a child
+  or blocker still open (a person's question task among them: "waiting on a person" is that, derived), an undecided
+  approval, an account a person reconnects, and the external holds `wait_detail` reads (a worktree, a milestone,
+  GitHub);
 - when the last one clears, a bot's task goes back to open at once with a note naming what cleared, and a person's
   task stays where it is with "Nothing left to wait on: <what cleared>";
 - an owner's own hold (a move to Blocked with a reason) is kept as written, and Engineering's gate, check and
@@ -103,8 +105,6 @@ def holds(conn, row):
     reconnect = reconnect_hold(conn, row["id"])
     if reconnect:
         out.append({"kind": "person", "on": reconnect["on"], "what": reconnect["what"]})
-    if row.get("waiting_on") and not any(h["on"] == row["waiting_on"] for h in out):
-        out.append({"kind": "person", "on": row["waiting_on"], "what": ""})
     # The external holds wait_detail reads after these: a worktree, a milestone, a GitHub callback.
     detail = H.wait_detail(conn, {**row, "blocked_kind": None})
     if not out and detail and detail.get("on") == "external":
@@ -114,9 +114,11 @@ def holds(conn, row):
 
 def _task_hold(conn, row, kind, other):
     """A child or blocker as a hold. A private one is named by neither title nor owner: the reason is shown to everyone
-    who reads the task (its readers and its parties' managers too), and not all of them read the other task."""
+    who reads the task (its readers and its parties' managers too), and not all of them read the other task. A private
+    subtask whose words reach its private parent's readers (hubdb.subtask_flows_up: the person a bot asked under its
+    task) is named there."""
     from . import hubdb as H
-    if H.task_private(conn, other):
+    if H.task_private(conn, other) and not H.subtask_flows_up(conn, other, row):
         return {"kind": "private", "on": None, "what": "a private task"}
     return {"kind": kind, "on": other["owner_id"], "what": _line(other["title"])}
 
@@ -152,7 +154,7 @@ def _applies(conn, row):
 
 def refresh(conn, task_id, cleared=None, at=None):
     """Recompute a waiting task's reason from its holds. `cleared` names a hold of this task that just went away (a
-    child done, a question answered or withdrawn, an approval decided, a person wait cleared): when it was the last,
+    child done, a question answered or withdrawn, an approval decided): when it was the last,
     a bot's task goes back to work and a person's says there is nothing left to wait on. Without `cleared` (a note,
     a new hold) only the words change. Returns what happened: "held", "open", "resumed", "nothing" or None."""
     from . import hubdb as H, review_gate, task_blocked
@@ -194,6 +196,18 @@ def refresh(conn, task_id, cleared=None, at=None):
                    cleared_at=at if cleared else row.get("holds_cleared_at"))
             task_blocked.bump(conn, row)
     return "nothing"
+
+
+def refresh_private_names(conn):
+    """Make again the Blocked reason of each waiting private task with an open private subtask: whom that reason may
+    name follows who reads both (_task_hold), and a group's members are readers by the group. Called when a group or its
+    members change (groups._finish); a task's own reader list refreshes it there (hubdb.set_task_readers)."""
+    from . import hubdb as H
+    marks = ",".join("?" * len(H.ACTIVE_STATUSES))
+    refresh_many(conn, [r[0] for r in conn.execute(
+        "SELECT DISTINCT r.to_task FROM task_relations r JOIN tasks p ON p.id=r.to_task JOIN tasks k ON k.id=r.from_task "
+        "WHERE r.kind='parent' AND p.status='waiting' AND p.private IS NOT 0 AND k.private IS NOT 0 "
+        f"AND k.status IN ({marks})", H.ACTIVE_STATUSES)])
 
 
 def refresh_many(conn, task_ids, cleared=None):

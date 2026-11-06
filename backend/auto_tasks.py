@@ -212,8 +212,7 @@ def maybe_waiting(c, rows):
     `waiting` and `H.wait_detail` make, only read for every task together; a row that any of them could match is kept
     in, and `waiting` decides for it."""
     rows = [r for r in rows if r]
-    suspect = {r['id'] for r in rows if snoozed(r) or r.get('next_run') or r.get('waiting_on')
-               or r.get('blocked_kind') == 'manual'}
+    suspect = {r['id'] for r in rows if snoozed(r) or r.get('next_run') or r.get('blocked_kind') == 'manual'}
     ids = [r['id'] for r in rows if r['id'] not in suspect]
     ids_set = set(ids)
     open_ids = [r['id'] for r in rows if r['id'] not in suspect and r['status'] == 'open']
@@ -344,7 +343,7 @@ def waiting(c, row, starting=False, *, include_next_run=True, result=False):
     if H._has_table(c, 'worktree_waits') and one(c, WORKTREE_SQL, (row['id'],)):
         return True
     from .milestone_waits import pending
-    if (row.get('waiting_on') or H.live_blocker(c, row['id'], children=not result)
+    if (H.live_blocker(c, row['id'], children=not result)
             or pending(c, row['id']) or one(c, APPROVAL_SQL, (row['id'],))):
         return True
     why = H.waiting_for(c, row, children=not result)

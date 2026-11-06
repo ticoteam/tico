@@ -26,15 +26,15 @@ def test_cards_are_titled_dated_grouped_and_one_per_blocker(api):
                                  "due": H.shift(H.now(), days=2)}, token=finance["token"])
     offsite = post(api, "tasks", {"title": "Plan next year's offsite", "body": "x", "owner": "human:ana",
                                   "due": H.shift(H.now(), days=60)}, token=finance["token"])
-    # A bot's task waiting on Ana, its BotOps child waiting on her too (parked on her directly, as before a wait
-    # became a subtask), and the subtask that asks her: one card.
+    # A bot's task waiting on the subtask that asks Ana, and its BotOps child waiting too: neither is an item of hers
+    # (who a task waits on is derived from her card under it, step 6b), so the subtask is the one card.
     vendor = post(api, "tasks", {"title": "Switch the payroll vendor", "body": "x", "owner": "bot:finance"})
     with api.app.state.store.transaction() as c:
         fix = H.task_create(c, "bot:finance", "Give finance the payroll connector", "x", "bot:ops",
                             parent_id=vendor["id"])
         pick = H.task_create(c, "bot:finance", "Gusto or Rippling for payroll?", "Should payroll move to Gusto or Rippling?",
                              "human:ana", parent_id=vendor["id"])
-        c.executemany("UPDATE tasks SET status='waiting', waiting_on='human:ana', note=? WHERE id=?",
+        c.executemany("UPDATE tasks SET status='waiting', note=? WHERE id=?",
                       [("Waiting on Ana to pick the vendor.", vendor["id"]), ("Same pick.", fix["id"])])
         gusto = H.say(c, "bot:finance", "human:ana", "Should payroll move to Gusto or Rippling?", kind="ask",
               conversation_id=H.task(c, pick["id"])["conversation_id"],
@@ -63,18 +63,16 @@ def test_cards_are_titled_dated_grouped_and_one_per_blocker(api):
     assert card["need"] == "decide" and card["recommend"]["do"] == "Gusto" and card["recommend"]["option"] == "Gusto"
     assert card["actions"] == ["answer", "update"]
     assert vendor["id"] not in items and fix["id"] not in items
-    assert {f["id"] for f in card["folded"]} == {vendor["id"], fix["id"]}
-    assert page["folded_task_ids"] == sorted([vendor["id"], fix["id"]])
-    # The walk-through and brief say the folded waits with the card.
-    assert {f["title"] for f in batch._row(card, "human:ana")["folded"]} == {"Switch the payroll vendor",
-                                                                              "Give finance the payroll connector"}
+    assert not card.get("folded") and page["folded_task_ids"] == []
+    assert "folded" not in batch._row(card, "human:ana")
     assert get(api, "needs-you?count=1")["count"] == len(page["items"])
 
-    # Two cards asking Ana different things under one wait: the wait folds into neither.
+    # Two cards asking Ana different things under one wait: each is its own item, and the wait is still neither.
     with api.app.state.store.transaction() as c:
         sign = H.task_create(c, "bot:finance", "Sign the payroll contract", "Can you sign the payroll contract today?",
                              "human:ana", parent_id=vendor["id"])
-    assert {pick["id"], vendor["id"], fix["id"]} <= {i["id"] for i in get(api, "needs-you")["items"]}
+    listed = {i["id"] for i in get(api, "needs-you")["items"]}
+    assert {pick["id"], sign["id"]} <= listed and not {vendor["id"], fix["id"]} & listed
     with api.app.state.store.transaction() as c:
         H.task_update(c, "human:ana", sign["id"], status="done", note="Signed")
 
@@ -85,14 +83,12 @@ def test_cards_are_titled_dated_grouped_and_one_per_blocker(api):
     assert get(api, "needs-you")["went_away"]["expired"] == 1
 
     # Taking the recommendation picks the option it names, as a tap on it would, and finishes Ana's card, which only
-    # asked it. Finance's own wait above it, the same question, stops waiting on her; BotOps's wait is BotOps's to clear.
+    # asked it.
     pick_version = get(api, f"tasks/{pick['id']}")["task"]["version"]
     post(api, "needs-you/recommended", {"ask": gusto["id"], "version": pick_version + 1}, expected=409)
     assert post(api, "needs-you/recommended", {"ask": gusto["id"], "version": pick_version})["done"] is True
     assert get(api, f"tasks/{pick['id']}")["task"]["status"] == "done"
     assert get(api, f"tasks/{pick['id']}/answers")["answers"][0]["answers"] == {"q": ["Gusto"]}
-    assert not get(api, f"tasks/{vendor['id']}")["task"]["waiting_on"]
-    assert get(api, f"tasks/{fix['id']}")["task"]["waiting_on"] == "human:ana"
 
 
 def test_do_what_you_recommend_answers_and_closes_the_card(api):
@@ -104,7 +100,7 @@ def test_do_what_you_recommend_answers_and_closes_the_card(api):
                       refs={"task": tool["id"]})
         asked = H.say(c, "bot:finance", "human:ana", "Shall I go with Apollo?", kind="ask", conversation_id=conv,
                       refs={"task": tool["id"], "if_no_answer": {"do": "Go with Apollo", "kind": "reversible"}})
-        c.execute("UPDATE tasks SET status='waiting', waiting_on='human:ana' WHERE id=?", (tool["id"],))
+        c.execute("UPDATE tasks SET status='waiting' WHERE id=?", (tool["id"],))
     card = next(i for i in get(api, "needs-you")["items"] if i["id"] == tool["id"])
     assert card["recommend"]["do"] == "Go with Apollo" and card["need"] == "decide"
     post(api, "needs-you/recommended", {"ask": plain["id"]}, expected=409)        # no recommendation to take
@@ -113,7 +109,7 @@ def test_do_what_you_recommend_answers_and_closes_the_card(api):
     with api.app.state.store.read() as c:
         said = c.execute("SELECT body FROM messages WHERE in_reply_to=? AND kind='answer'", (asked["id"],)).fetchone()
         assert said["body"] == "Yes, do what you recommend: Go with Apollo"
-        assert not H.task(c, tool["id"])["waiting_on"]
+        assert H.task(c, tool["id"]).get("waiting_on") is None
     post(api, "needs-you/recommended", {"ask": asked["id"]}, expected=409)        # once
 
 
@@ -144,23 +140,6 @@ def test_a_side_question_on_a_persons_task_is_answered_not_finished(api):
     assert post(api, "needs-you/recommended", {"ask": asked["id"]})["done"] is False
     task = get(api, f"tasks/{deck['id']}")["task"]
     assert task["status"] == "open" and deck["id"] in {i["id"] for i in get(api, "needs-you")["items"]}
-
-
-def test_waits_under_one_project_without_a_card_above_them_each_keep_their_card(api):
-    _, _, finance = setup_attempt(api, "finance")
-    launch = post(api, "tasks", {"title": "Q4 launch", "body": "x", "owner": "bot:finance"})
-    with api.app.state.store.transaction() as c:
-        stripe = H.task_create(c, "bot:finance", "Pay the Stripe invoice", "x", "bot:finance", parent_id=launch["id"])
-        venue = H.task_create(c, "bot:finance", "Book the venue", "x", "bot:finance", parent_id=launch["id"])
-        which = H.task_create(c, "bot:finance", "Which venue?", "Which venue should we book?", "human:ana",
-                              parent_id=launch["id"])
-        c.executemany("UPDATE tasks SET status='waiting', waiting_on='human:ana', note=? WHERE id=?", [
-            ("Waiting on Ana to approve paying the $4,000 Stripe invoice.", stripe["id"]),
-            ("Waiting on Ana to sign in to the venue site so I can book it.", venue["id"])])
-    items = {i["id"]: i for i in get(api, "needs-you")["items"]}
-    assert {stripe["id"], venue["id"], which["id"]} <= set(items)
-    assert not items[which["id"]].get("folded")
-    assert (items[stripe["id"]]["need"], items[venue["id"]]["need"]) == ("pay", "connect")
 
 
 def test_what_it_takes_reads_money_and_sign_ins_not_every_mention():
@@ -194,17 +173,17 @@ def test_a_wait_above_another_open_card_stays_after_a_one_tap_answer(api):
     with api.app.state.store.transaction() as c:
         venue = H.task_create(c, "bot:finance", "Which venue?", "Which venue should we book?", "human:ana",
                               parent_id=launch["id"])
-        H.task_create(c, "bot:finance", "Sign the catering contract", "Can you sign it?", "human:ana",
-                      parent_id=launch["id"])
-        c.execute("UPDATE tasks SET status='waiting', waiting_on='human:ana', note=? WHERE id=?",
+        catering = H.task_create(c, "bot:finance", "Sign the catering contract", "Can you sign it?", "human:ana",
+                                 parent_id=launch["id"])
+        c.execute("UPDATE tasks SET status='waiting', note=? WHERE id=?",
                   ("Waiting on Ana to approve paying the $4,000 Stripe invoice.", launch["id"]))
         asked = H.say(c, "bot:finance", "human:ana", "Which venue should we book?", kind="ask",
                       conversation_id=H.task(c, venue["id"])["conversation_id"],
                       refs={"task": venue["id"], "if_no_answer": {"do": "The Loft", "kind": "reversible"}})
     assert post(api, "needs-you/recommended", {"ask": asked["id"]})["done"] is True
-    assert get(api, f"tasks/{launch['id']}")["task"]["waiting_on"] == "human:ana"
-    items = get(api, "needs-you")["items"]
-    assert launch["id"] in {i["id"] for i in items} | {f["id"] for i in items for f in i.get("folded") or []}
+    # The other card below stays open, and the bot's task above it still waits.
+    assert get(api, f"tasks/{launch['id']}")["task"]["status"] == "waiting"
+    assert catering["id"] in {i["id"] for i in get(api, "needs-you")["items"]}
 
 
 def test_an_approval_keeps_its_needs_you_mark_while_only_the_clock_moves(api, monkeypatch):
@@ -244,18 +223,19 @@ def test_pages_cut_the_whole_list_and_a_cursor_from_an_older_version_starts_agai
     with api.app.state.store.transaction() as c:
         wait = H.task_create(c, "human:ana", "Prepare the offsite", "x", "bot:finance")
         H.task_create(c, "bot:finance", "Pick the offsite venue", "x", "human:ana", parent_id=wait["id"])
-        c.execute("UPDATE tasks SET status='waiting', waiting_on='human:ana' WHERE id=?", (wait["id"],))
+        c.execute("UPDATE tasks SET status='waiting' WHERE id=?", (wait["id"],))
     whole = get(api, "needs-you")
     assert whole["next"] is None and whole["count"] == len(whole["items"]) >= 6 and "bots" not in whole
     kinds = dict(Counter(it["kind"] for it in whole["items"]))
     assert whole["by_kind"] == kinds and kinds["approval"] == 1
-    assert whole["folded_task_ids"] == [wait["id"]]
+    # The bot's wait on the card below it is no item of Ana's (derived, step 6b): nothing folds.
+    assert whole["folded_task_ids"] == [] and wait["id"] not in {it["id"] for it in whole["items"]}
     seen, cursor, page = [], None, None
     while True:
         page = get(api, "needs-you?limit=2" + (f"&cursor={cursor}" if cursor else ""))
         assert page["version"] == whole["version"] and page["count"] == whole["count"] and len(page["items"]) <= 2
         assert page["by_kind"] == kinds          # approvals on unread pages count before their rows arrive
-        assert page["folded_task_ids"] == [wait["id"]]   # folding is independent of which cards this page holds
+        assert page["folded_task_ids"] == []
         seen += page["items"]
         cursor = page["next"]
         if not cursor:
@@ -283,8 +263,7 @@ def test_whole_list_facts_scope_inbox_and_folding_and_follow_live_changes(api):
         card = H.task_create(c, "bot:ops", "Pick the offsite venue", "x", "human:ana", parent_id=wait["id"])
         other_wait = H.task_create(c, "human:ben", "Prepare Ben's offsite", "x", "bot:ops")
         H.task_create(c, "bot:ops", "Pick Ben's venue", "x", "human:ben", parent_id=other_wait["id"])
-        c.executemany("UPDATE tasks SET status='waiting', waiting_on=? WHERE id=?",
-                      [("human:ana", wait["id"]), ("human:ben", other_wait["id"])])
+        c.executemany("UPDATE tasks SET status='waiting' WHERE id=?", [(wait["id"],), (other_wait["id"],)])
         room = threads.create(c, "human:cara", title="Launch", audience="members", members=["human:ana"])
         threads.post(c, "human:cara", room["id"], "Please check the launch plan.", to_actor="human:ana")
     page = get(api, "needs-you?limit=1")
@@ -292,8 +271,9 @@ def test_whole_list_facts_scope_inbox_and_folding_and_follow_live_changes(api):
     assert page["by_kind"] == dict(Counter(it["kind"] for it in whole["items"]))
     assert page["by_kind"]["approval"] == 1 and page["by_kind"]["thread_mention"] == 1
     assert sum(page["by_kind"].values()) == page["count"] > len(page["items"])
-    assert page["folded_task_ids"] == whole["folded_task_ids"] == [wait["id"]]
-    assert card["id"] not in {it["id"] for it in page["items"]}   # its folded task is known before the card loads
+    # The bot's wait on Ana's card is no item of hers (derived, step 6b): nothing folds, on any page.
+    assert page["folded_task_ids"] == whole["folded_task_ids"] == []
+    assert card["id"] in {it["id"] for it in whole["items"]} and wait["id"] not in {it["id"] for it in whole["items"]}
     assert other["id"] not in {it["id"] for it in whole["items"]}
     who = auth.authenticate({"authorization": "Bearer ana-test"})
     with store.read() as c:
@@ -305,14 +285,6 @@ def test_whole_list_facts_scope_inbox_and_folding_and_follow_live_changes(api):
     assert "approval" not in event["by_kind"] and event["by_kind"]["thread_mention"] == 1
     assert event["changed"] == [] and event["removed"] == [approval["id"]]
     assert "folded_task_ids" not in event
-
-    for remove, folded in [(True, []), (False, [wait["id"]])]:
-        with store.read() as c:
-            after = E.latest(c)
-        post(api, f"tasks/{card['id']}/relations", {"kind": "parent", "task": wait["id"], "remove": remove})
-        with store.read() as c:
-            event = E.read(c, auth, who, after, topics=("needs",), task_view=view, needs_held=held)[0][-1][2]
-        assert event["folded_task_ids"] == get(api, "needs-you?limit=1")["folded_task_ids"] == folded
 
 
 def test_each_card_task_is_read_by_id_once_however_many_cards(api):
@@ -337,14 +309,14 @@ def test_plate_count_covers_all_boards_folding_and_unread_pages_without_thread_a
         wait = H.task_create(c, "human:ana", "Prepare the offsite", "x", "bot:ops")
         card = H.task_create(c, "human:ana", "Choose the offsite venue", "Which venue suits the team?",
                              "human:ana", parent_id=wait["id"], type=board["id"])
-        c.execute("UPDATE tasks SET status='waiting', waiting_on='human:ana' WHERE id=?", (wait["id"],))
+        c.execute("UPDATE tasks SET status='waiting' WHERE id=?", (wait["id"],))
         room = threads.create(c, "human:cara", title="Launch", audience="members", members=["human:ana"])
         threads.post(c, "human:cara", room["id"], "Please check the launch plan.", to_actor="human:ana")
     whole = get(api, "needs-you")
     assert whole["plate_count"] == 3
     assert whole["count"] == 4 and whole["by_kind"]["thread_mention"] == 1
     assert whole["by_kind"]["declined"] == 1
-    assert whole["folded_task_ids"] == [wait["id"]]
+    assert whole["folded_task_ids"] == [] and wait["id"] not in {it["id"] for it in whole["items"]}
     assert {it["type_id"] for it in whole["items"] if it["kind"] == "task"} == {"general", board["id"]}
 
     page = get(api, "needs-you?limit=1")

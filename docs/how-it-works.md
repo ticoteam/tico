@@ -53,7 +53,7 @@ Words are defined in the [Glossary](glossary.md).
   note; a `lane` (`company` or `product`), a `rank` in its owner's queue, labels, links (a pull
   request first), and relations to other tasks (a parent, blockers, related, duplicates, follow-ups). States: `open`, `doing`,
   `waiting`, `review`, `ready`, `done`, `closed`, `declined` (`review` and `ready` belong to the
-  product lane). The owner marks it `done`; only the requester, a person who can edit it, or the person it waits on closes it. Every
+  product lane). The owner marks it `done`; only the requester or a person who can edit it closes it. Every
   task has a comment thread, on the record with the author.
 - **Message** — one line in a thread. Kinds: `say`, `ask`, `answer`, `notice`, `steer`. How it reaches a bot
   is one of three ways ([Steer, queue or defer](using-tico.md#steer-queue-or-defer)): **Steer** goes into the bot's

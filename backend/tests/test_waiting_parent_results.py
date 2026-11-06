@@ -99,14 +99,12 @@ def test_any_other_notice_on_the_waiting_parent_is_still_held(api):
     assert claim(api, machine, "ops") is None
 
 
-@pytest.mark.parametrize("wait", ["snooze", "waiting_on", "approval", "worktree", "blocker", "question", "manual"])
+@pytest.mark.parametrize("wait", ["snooze", "approval", "worktree", "blocker", "question", "manual"])
 def test_a_result_still_waits_for_the_parents_other_waits(api, wait):
     machine, parent, done, still = waiting_parent(api, results=1)
     with api.app.state.store.transaction() as c:
         if wait == "snooze":
             set_holds(c, parent, snoozed_until=H.shift(H.now(), hours=2))
-        elif wait == "waiting_on":
-            c.execute("UPDATE tasks SET waiting_on='human:ana' WHERE id=?", (parent,))
         elif wait == "approval":
             c.execute("INSERT INTO approvals(id,kind,task_id,requested_by_id,created_at) VALUES(?,'send',?,'bot:ops',?)",
                       (H.new_id(), parent, H.now()))

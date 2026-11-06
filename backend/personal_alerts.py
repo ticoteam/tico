@@ -157,8 +157,10 @@ def next_month(at):
 
 def future_deadlines(c, at):
     """Personal task deadlines wake a sleeping install so its next collection can page or defer to quiet-hours end."""
+    from . import question_tasks as QT
+    waits = QT.waits_sql("t", "='human:'||p.person_id")        # or waiting on them (an open question task of theirs)
     rows = c.execute("SELECT DISTINCT t.due_at FROM tasks t JOIN alert_preferences p ON "
-                     "(t.owner_id='human:'||p.person_id OR t.waiting_on='human:'||p.person_id) "
+                     f"(t.owner_id='human:'||p.person_id OR {waits}) "
                      "WHERE p.verified_at IS NOT NULL AND p.urgent_needs=1 AND p.monthly_cap>0 "
                      "AND t.status IN ('open','doing','waiting') AND t.due_at IS NOT NULL "
                      "AND NOT EXISTS (SELECT 1 FROM personal_alerts a WHERE a.person_id=p.person_id "
@@ -350,7 +352,7 @@ class Alerts:
         if alert["kind"] == "legal_mail":
             return True
         if alert["kind"] == "urgent_needs":
-            return overdue(task, H.parse_ts(H.now())) and who.actor in (task["owner_id"], task.get("waiting_on"))
+            return overdue(task, H.parse_ts(H.now())) and (who.actor == task["owner_id"] or H._waits_on(c, task, who.actor))
         return bool(H.is_bot(task["owner_id"]) and self.auth.bot_manager(c, who, H.actor_id(task["owner_id"]))
                     and H.stalled_tasks(c, task_ids=[task["id"]]))
 
@@ -425,7 +427,9 @@ class Alerts:
                 except Problem:
                     continue
                 if row["urgent_needs"]:
-                    tasks = c.execute("SELECT * FROM tasks WHERE (owner_id=? OR waiting_on=?) AND status IN ('open','doing','waiting') "
+                    from . import question_tasks as QT
+                    tasks = c.execute(f"SELECT * FROM tasks WHERE (owner_id=? OR {QT.waits_sql('tasks', '=?')}) "
+                                      "AND status IN ('open','doing','waiting') "
                                       "AND due_at IS NOT NULL AND due_at<=? AND NOT EXISTS (SELECT 1 FROM personal_alerts a "
                                       "WHERE a.person_id=? AND a.incident_key='due:'||tasks.id||':'||tasks.due_at) "
                                       "ORDER BY due_at LIMIT 100",

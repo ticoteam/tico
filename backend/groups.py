@@ -207,6 +207,9 @@ def _finish(c, roster, people, changed):
         Access._sync_human(c, row)
     roster = _roster(c)
     refresh_teams(c, roster)
+    # Who a private task's Blocked reason may name follows its readers, groups' members among them.
+    from . import task_holds
+    task_holds.refresh_private_names(c)
     return roster
 
 

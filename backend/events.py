@@ -180,7 +180,7 @@ _ASK_TASK = ("(SELECT " + H.MESSAGE_TASK_SQL + " FROM messages m LEFT JOIN conve
 
 _RUN_CONVERSATION = ("(SELECT m.conversation_id FROM attempts a JOIN jobs j ON j.id=a.job_id "
                      "JOIN messages m ON m.id=j.message_id WHERE a.id={aid})")
-_PARTIES = ("owner_id", "requester_id", "waiting_on")
+_PARTIES = ("owner_id", "requester_id")
 
 
 def _letters_for_source(kind, *ids):

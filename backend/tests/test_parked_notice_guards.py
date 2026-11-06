@@ -60,7 +60,7 @@ def test_notice_turn_never_clears_an_independent_wait(api, wait):
     with api.app.state.store.read() as c:
         still_blocked(c, task, blocker)
         after = H.task(c, task['id'])
-        assert all(after[k] == before[k] for k in ('status', 'step_id', 'waiting_on', 'snoozed_until', 'next_run'))
+        assert all(after[k] == before[k] for k in ('status', 'step_id', 'snoozed_until', 'next_run'))
         if wait == 'approval':
             assert c.execute("SELECT decision FROM approvals WHERE id='approval'").fetchone()[0] is None
         elif wait == 'worktree':

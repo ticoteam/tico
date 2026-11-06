@@ -1086,13 +1086,10 @@ BRIEF_OLD = {"type": "boolean", "description": "Older name for brief"}
        "check_back_note": _s("What result or handoff to inspect, at most 500 characters"),
        "due": _s("ISO-8601 date-time with timezone"),
        "labels": {"type": "array", "items": {"type": "string"}, "description": "Replace the labels"},
-       "waiting_on": _s("With status waiting: the person you need (their id). The note is your ask to them, under the "
-                        "same rules as hub_task_create's body (its first paragraph). It becomes one small task for "
-                        "them; this task "
-                        "stays yours, blocked on it, and opens again with their answer. Or bot:<slug>: an active team bot "
-                        "owning the first open linked blocked_by task. Link that prerequisite with hub_task_relate first; "
-                        "the note is then the reason displayed beside the bot. The existing relation holds the work and "
-                        "wakes the owner with its outcome when resolved. An empty string clears it"),
+       "waiting_on": _s("With status waiting: the person you need (their id). The note is your question to them, "
+                        "under the same rules as hub_task_create's body (its first paragraph). It becomes a question "
+                        "task for them under this one; this task stays yours, blocked on it, and opens again with their "
+                        "answer. Not a bot: message a bot in a DM, or link its task with hub_task_relate"),
        "roles": {"type": "object", "additionalProperties": {"type": "array", "items": {"type": "string"}},
                  "description": "Who is on it by role, {role: [people or bots]}: each role named replaces that role's people, [] clears one, "
                                 "a role not named stays. A role is a short name the team chooses (developer, reviewer, qa); one person may hold several"},

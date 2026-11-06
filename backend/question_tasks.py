@@ -24,6 +24,74 @@ FIRST_ID = "decision"
 # literal statuses included, so SQLite can use it).
 OPEN_SQL = ("questions IS NOT NULL AND answer IS NULL AND status IN ("
             + ",".join(f"'{s}'" for s in H.ACTIVE_STATUSES) + ")")
+# "Waiting on <person>" is derived, never stored (spec D8, step 6b): a waiting task waits on the person who owns an open
+# question task that is one of its subtasks or blockers. `waits_sql("tasks", "=?")` is that test in a filter.
+_WAITS = ("EXISTS (SELECT 1 FROM task_relations wr JOIN tasks wq ON wq.id=wr.from_task WHERE wr.to_task={t}.id "
+          "AND wr.kind IN ('parent','blocks') AND wq.questions IS NOT NULL AND wq.answer IS NULL AND wq.status IN ("
+          + ",".join(f"'{s}'" for s in H.ACTIVE_STATUSES) + ") AND wq.owner_id {owner})")
+
+
+def waits_sql(alias, owner="LIKE 'human:%'"):
+    """SQL true when the task aliased `alias` is waiting on a person matching `owner` (a condition on the question
+    task's owner: "=?", "LIKE 'human:%'")."""
+    return f"({alias}.status='waiting' AND {_WAITS.format(t=alias, owner=owner)})"
+
+
+def _named(conn, card, kinds, parent, seen):
+    """Whether private question task `card` may name its person on `parent`: its words reach `parent`'s readers
+    (hubdb.subtask_flows_up, read from the rows in hand). One that may not is only "a private task" there
+    (task_holds._task_hold). `seen` keeps each (party, parent) answer for the page."""
+    if "parent" not in kinds or not H.task_private(conn, parent):
+        return False                          # only a subtask's words flow up, and only to a private parent
+    parties = [p for p in (card["requester_id"], card["owner_id"]) if p]
+    parties += sorted(H.reader_actors(conn, card)) if H.task_readers(card) else []
+    direct = {parent.get("owner_id"), parent.get("requester_id"), *H.task_readers(parent)}
+
+    def reads(party):
+        key = (party, parent["id"])
+        if key not in seen:
+            seen[key] = party in direct or H.task_private_readable(conn, party, parent)
+        return seen[key]
+    return bool(parties) and all(reads(p) for p in parties)
+
+
+def waiting_on_many(conn, rows):
+    """{task id: the person it waits on} for the waiting tasks among `rows`: the owner of its first open question task
+    (a subtask or a blocker), oldest first. One read per 500 tasks, so a board costs one or two: each card comes with
+    what its privacy needs, so a private one costs no reads of its own."""
+    rows = {r["id"]: r for r in rows if r and r.get("status") == "waiting"}
+    out, ids, seen = {}, list(rows), {}
+    for start in range(0, len(ids), 500):
+        part = ids[start:start + 500]
+        found = {}
+        for to_task, card_id, owner, requester, private, readers, kind in conn.execute(
+                "SELECT wr.to_task, wq.id, wq.owner_id, wq.requester_id, wq.private, wq.readers, wr.kind "
+                f"FROM task_relations wr JOIN tasks wq ON wq.id=wr.from_task WHERE wr.to_task IN ({','.join('?' * len(part))}) "
+                "AND wr.kind IN ('parent','blocks') AND wq.questions IS NOT NULL AND wq.answer IS NULL "
+                f"AND wq.status IN ({','.join('?' * len(H.ACTIVE_STATUSES))}) AND wq.owner_id LIKE 'human:%' "
+                "ORDER BY wq.created_at, wq.rowid", (*part, *H.ACTIVE_STATUSES)).fetchall():
+            card = found.setdefault((to_task, card_id), {"id": card_id, "owner_id": owner, "requester_id": requester,
+                                                         "private": private, "readers": readers, "kinds": set()})
+            card["kinds"].add(kind)
+        for (to_task, _), card in found.items():   # insertion order: oldest card first
+            if to_task in out or card["private"] and not _named(conn, card, card["kinds"], rows[to_task], seen):
+                continue
+            out[to_task] = card["owner_id"]
+    return out
+
+
+def waiting_on(conn, row):
+    """The person waiting task `row` waits on (waiting_on_many), or None."""
+    return waiting_on_many(conn, [row]).get((row or {}).get("id"))
+
+
+def wait_card(conn, actor, row, person, said):
+    """`--status waiting --on <person>` (hubdb._ask_in_subtask): a question task with no options for the person under
+    `row`, the waiting note as its question. Returns the new task."""
+    card = H.task_create(conn, actor, H._ask_title(said), said, person, parent_id=row["id"], lint=False)
+    store(conn, card["id"], {"questions": [{"id": FIRST_ID, "header": "", "question": said, "why": "", "options": [],
+                                            "multi": False}]})
+    return H.task(conn, card["id"])
 
 
 def _load(value):
@@ -171,8 +239,7 @@ def supersede_legacy(conn, bot, person, task_id, *, parent=None, topic=None, pri
         return None
     old = found["task"]["id"]
     why = f"Asked again as a question task: {task_id}"
-    ids = H.supersede_asks(conn, old, from_actor=bot, to_actor=person, why=why)
-    H.drop_asked_waits(conn, old, ids, why)
+    H.supersede_asks(conn, old, from_actor=bot, to_actor=person, why=why)
     H.task_close(conn, H.KEEPER, old, f"Superseded by task {task_id}.", quiet=True, strict=False)
     return old
 
@@ -422,3 +489,74 @@ def send_back(conn, row, why):
     wake of its own; the bot's task blocked on it is unblocked without one."""
     H.task_close(conn, H.KEEPER, row["id"], why, quiet=True, strict=False,
                  closing_tasks=tuple(TR.blocked_ids(conn, row["id"])))
+
+
+# ---- the waits migration 20261106112609_derived_waiting set aside ---------------------------------------------------
+
+def move_waits(conn):
+    """Each open task the derived-waiting migration found waiting on someone (`task_waits_moved`), once, at the first
+    start after it (Store.initialize): a person becomes an open question task for them with no options under the task,
+    its waiting note as the question (hubdb._ask_in_subtask, as `--status waiting --on <person>` files one now), unless
+    an open question to them already holds it; a bot is the blocker it owns when there is one, else a line on the note.
+    Each row in its own savepoint: one that fails is logged and dropped, never retried at every start. The table goes
+    when it is empty."""
+    import logging
+    # Not H._has_table: a pooled connection remembers tables it saw, and this one is dropped below.
+    if not conn.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name='task_waits_moved'").fetchone():
+        return
+    for task_id, on in conn.execute("SELECT task_id, waiting_on FROM task_waits_moved ORDER BY created_at, task_id"
+                                    ).fetchall():
+        conn.execute("SAVEPOINT move_wait")
+        try:
+            _move_wait(conn, task_id, on)
+        except Exception:  # noqa: BLE001 - one task's old wait never stops a start
+            conn.execute("ROLLBACK TO move_wait")
+            logging.getLogger(__name__).exception("waiting_on of task %s not moved", task_id)
+        conn.execute("RELEASE move_wait")
+        conn.execute("DELETE FROM task_waits_moved WHERE task_id=?", (task_id,))
+    conn.execute("DROP TABLE IF EXISTS task_waits_moved")
+
+
+def _move_wait(conn, task_id, on):
+    from . import task_holds
+    row = H.task(conn, task_id)
+    if not row or row["status"] not in H.ACTIVE_STATUSES:
+        return
+    said = str(row.get("note") or "").strip()
+    if H.is_human(on):
+        # The note a wait set: "Blocked on <name>: <ask>", the name as it was then.
+        if said.startswith("Blocked on ") and ": " in said:
+            said = said.split(": ", 1)[1]
+        # Only the owner's own open question holds the task (task_holds.holds); another bot's leaves it unheld.
+        asked = any(a["recipient_id"] == on and a["sender_id"] == row["owner_id"] for a in H.open_task_asks(conn, row))
+        if H.is_bot(row["owner_id"]) and not asked and not H._waits_on(conn, row, on):
+            conn.execute("SAVEPOINT move_wait_card")
+            try:
+                card = H._ask_in_subtask(conn, row["owner_id"], row, on, said or row["title"])
+            except H.Refused as refused:
+                # A cap, reach or privacy rule refuses the card: the wait is kept as words on the note instead.
+                conn.execute("ROLLBACK TO move_wait_card")
+                conn.execute("RELEASE move_wait_card")
+                _note_line(conn, row, on, said)
+                H._task_event(conn, task_id, H.KEEPER, "waiting_on", on, None, f"No question task: {refused.detail}"[:500])
+                return
+            conn.execute("RELEASE move_wait_card")
+            H._task_event(conn, task_id, H.KEEPER, "waiting_on", on, None, f"Asked in question task {card['id']}")
+            task_holds.refresh(conn, task_id)
+            return
+        H._task_event(conn, task_id, H.KEEPER, "waiting_on", on, None,
+                      "An open question to them holds it" if asked else "")
+        return
+    held = any(b["owner_id"] == on for b in TR.live_blockers(conn, task_id, H.ACTIVE_STATUSES))
+    if not held and H.is_bot(on):
+        _note_line(conn, row, on, said)
+    H._task_event(conn, task_id, H.KEEPER, "waiting_on", on, None, "Its blocker holds it" if held else "")
+
+
+def _note_line(conn, row, on, said):
+    """"Waiting on <name>: <note>" on the task's note, once: the old wait kept as words where nothing can hold it."""
+    line = f"Waiting on {H.actor_name(conn, on)}"
+    if not said.startswith(line):
+        note = (line + (f": {said}" if said else ""))[:1000]
+        conn.execute("UPDATE tasks SET note=? WHERE id=?", (note, row["id"]))
+        H._task_event(conn, row["id"], H.KEEPER, "note", row.get("note"), note, "")

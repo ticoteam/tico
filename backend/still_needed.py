@@ -105,9 +105,6 @@ def send_back(conn, bot, items, tasks=()):
         if task:
             H._task_event(conn, task["id"], H.KEEPER, "asks_superseded", None, "1",
                           "No answer in two business days: back to the bot that asked, as still needed?")
-            # The wait was for this answer: the next move is the bot's, and the task leaves the person's Needs you,
-            # unless another question to them is still open on it.
-            H.drop_asked_waits(conn, task["id"], [asked["id"]], "Still needed? went to the bot")
             # The question shows it went back unanswered, and a bot's task left with nothing to wait on goes back to
             # open; the roundup line is the bot's word of it (backend/task_holds.py).
             from . import task_holds

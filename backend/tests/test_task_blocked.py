@@ -501,8 +501,7 @@ def test_person_wait_does_not_replace_owner_manual_hold(api):
              'options': [{'label': 'A'}, {'label': 'B'}], 'multi': False, 'other': True}], 'who': 'human:ana'})
         H.task_update(c, task['owner_id'], task['id'], status='waiting', waiting_on='human:ana')
         assert H.task(c, task['id'])['blocked_kind'] == 'manual'
-        H.supersede_asks(c, task['id'])
-        H.task_update(c, task['owner_id'], task['id'], waiting_on='')
+        H.supersede_asks(c, task['id'])                 # the ask ends: nothing waits on Ana any more
         task_blocked.reconcile(c, task['id'])
         assert H.task(c, task['id'])['blocked_kind'] == 'manual'
         assert H.task(c, task['id'])['blocked_reason'] == 'Waiting for a machine'

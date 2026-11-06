@@ -4,6 +4,7 @@ import json
 import pytest
 
 from backend import assigned_start as A, health, maintenance_health, queue_refusals, task_roundup
+from backend import question_tasks as QT
 from backend.store import H
 from backend.tests.test_api import api, claim, get, post  # noqa: F401
 from backend.tests.test_auto_tasks import deck, finish, set_cap, take
@@ -19,6 +20,17 @@ def clock(monkeypatch):
     value = ['2026-10-20T00:00:00.000000Z']
     monkeypatch.setattr(H, 'now', lambda: value[0])
     return value
+
+
+def wait_on_ana(c, task_ids):
+    """Each task waits on Ana as a task now does (question_tasks.waiting_on, derived): an open question task of hers
+    with no options blocks it, its own status left as it was. One card for many tasks keeps a big page cheap."""
+    card = H.task_create(c, 'human:ana', 'Which date should I use?', '', 'human:ana', lint=False)
+    QT.store(c, card['id'], {'questions': [{'id': QT.FIRST_ID, 'header': '', 'question': 'Which date should I use?',
+                                            'why': '', 'options': [], 'multi': False}]})
+    c.executemany("INSERT INTO task_relations(from_task,to_task,kind,created_by,created_at) VALUES(?,?,'blocks',?,?)",
+                  [(card['id'], tid, 'human:ana', H.now()) for tid in task_ids])
+    return card
 
 
 def advance(api, clock, hours):
@@ -123,7 +135,7 @@ def test_intentional_waits_and_any_attempt_are_not_listed(api, clock, hold):
     else:
         with api.app.state.store.transaction() as c:
             if hold == 'waiting':
-                c.execute("UPDATE tasks SET waiting_on='human:ana' WHERE id=?", (task['id'],))
+                wait_on_ana(c, [task['id']])
             elif hold == 'snoozed':
                 set_holds(c, task['id'], snoozed_until=H.shift(H.now(), days=1))
             elif hold == 'blocked':
@@ -227,7 +239,7 @@ def test_a_task_held_after_discover_is_not_listed_by_send(api, clock):
         plans = task_roundup.discover(c, H.now())
     assert [plan['slug'] for plan in plans] == ['ops']
     with store.transaction() as c:
-        c.execute("UPDATE tasks SET waiting_on='human:ana' WHERE id=?", (task['id'],))
+        wait_on_ana(c, [task['id']])
     with store.transaction() as c:
         assert task_roundup.send(c, plans[0]) == 0
     with store.read() as c:
@@ -288,7 +300,7 @@ def test_running_lane_does_not_mask_other_lanes_refusal_and_twelve_hour_finding(
         set_cap(api, 0)
     with api.app.state.store.transaction() as c:
         if refusal == 'task_wait':
-            c.execute("UPDATE tasks SET waiting_on='human:ana' WHERE id=?", (task['id'],))
+            wait_on_ana(c, [task['id']])
         elif refusal == 'check_model':
             from backend import check_models
             check_models.record(c, 'bot:ops', task['id'], {'runtime': 'codex', 'model': 'gpt-6.1',
@@ -469,7 +481,7 @@ def test_recovery_scan_advances_past_a_full_page_of_held_tasks(api, clock, monke
     ordered = sorted(t['id'] for t in tasks)
     monkeypatch.setattr(A, 'SCAN_LIMIT', 2)
     with store.transaction() as c:
-        c.executemany("UPDATE tasks SET waiting_on='human:ana' WHERE id=?", [(tid,) for tid in ordered[:4]])
+        wait_on_ana(c, ordered[:4])
     # Pages of two, each all held: the scan moves on to the next page until the free task.
     with store.read() as c:
         assert [row['id'] for row, *_ in A.unstarted(c, H.now())] == [ordered[4]]
@@ -584,7 +596,7 @@ def test_overdue_pages_past_more_than_two_hundred_ineligible_recoveries(api, clo
         if excluded == 'attempted':
             H.event(c, H.KEEPER, 'task.next-run.carried', attempt['id'], {'tasks': ids})
         else:
-            c.executemany("UPDATE tasks SET waiting_on='human:ana' WHERE id=?", [(tid,) for tid in ids])
+            wait_on_ana(c, ids)
     advance(api, clock, 1)
     with store.transaction() as c:
         c.execute("UPDATE bot_config SET reports_to='human:ana' WHERE bot='ops'")
@@ -772,7 +784,7 @@ def test_a_bot_whose_only_candidate_is_waiting_has_no_runs_read(api, monkeypatch
     store = api.app.state.store
     fleet(store, 2, 2, 0)
     with store.transaction() as c:
-        c.execute("UPDATE tasks SET waiting_on='human:ana' WHERE owner_id='bot:fleet-00'")
+        wait_on_ana(c, [r[0] for r in c.execute("SELECT id FROM tasks WHERE owner_id='bot:fleet-00'")])
     read = []
     original = A._runs
 

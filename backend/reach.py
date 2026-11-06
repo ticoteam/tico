@@ -631,7 +631,7 @@ def midnight():
 
 
 def _held(c, task_id, field, current, before):
-    """Who held a task's `field` (owner, waiting_on) at any point before `before`, and at that moment: the values its
+    """Who held a task's `field` (owner, the waiting_on it stored before step 6b) at any point before `before`, and at that moment: the values its
     changes moved between, and its value then (the one the first later change moved away from, else today's)."""
     out, later = set(), None
     for r in c.execute("SELECT old, new, created_at FROM history_events WHERE subject_type='task' AND subject_id=? "
@@ -648,13 +648,15 @@ def task_parties(c, task_id, before=None):
     """Everyone a task is shared with: its owner, requester, the one it waits on, its readers (a group's by its members), everyone who owned it, and
     whoever posted in or is a member of its thread. `before`: who was on it then (the dry-run's history; thread members
     are left out, as their joins are not dated)."""
-    row = c.execute("SELECT owner_id, requester_id, waiting_on, readers, conversation_id FROM tasks WHERE id=?",
+    row = c.execute("SELECT id, status, owner_id, requester_id, readers, conversation_id FROM tasks WHERE id=?",
                     (task_id,)).fetchone() if task_id else None
     if not row:
         return set()
+    from . import question_tasks as QT
     out = {row["requester_id"]} | H.reader_actors(c, dict(row))
     out |= _held(c, task_id, "owner", row["owner_id"], before)
-    out |= _held(c, task_id, "waiting_on", row["waiting_on"], before)
+    # Who it waits on now is derived (question_tasks.waiting_on); history keeps who it waited on before.
+    out |= _held(c, task_id, "waiting_on", QT.waiting_on(c, dict(row)), before)
     if row["conversation_id"]:
         out |= {r[0] for r in c.execute("SELECT DISTINCT sender_id FROM messages WHERE conversation_id=?"
                                         + (" AND created_at<?" if before else "") + " LIMIT 500",

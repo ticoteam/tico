@@ -87,7 +87,7 @@ def test_full_wait_one_history_note_and_reopen_undo(api, monkeypatch):
 
 def test_activity_and_all_holds_protect_done_tasks(api, monkeypatch):
     protected = []
-    for label in ('comment', 'edit', 'reopened', 'waiting', 'snoozed', 'pin', 'question', 'approval'):
+    for label in ('comment', 'edit', 'reopened', 'snoozed', 'pin', 'question', 'approval'):
         t = done(api, monkeypatch, label)
         protected.append(t['id'])
         with monkeypatch.context() as m:
@@ -98,7 +98,6 @@ def test_activity_and_all_holds_protect_done_tasks(api, monkeypatch):
                 elif label == 'reopened':
                     H.task_update(c, 'human:ana', t['id'], status='open')
                     H.task_update(c, 'human:ana', t['id'], status='done')
-                elif label == 'waiting': c.execute("UPDATE tasks SET waiting_on='human:ana' WHERE id=?", (t['id'],))
                 elif label == 'snoozed': set_holds(c, t['id'], snoozed_until=(AT + timedelta(days=1)).isoformat())
                 elif label == 'pin': c.execute("UPDATE tasks SET labels='[\"pinned\"]' WHERE id=?", (t['id'],))
                 elif label == 'question': H.task_comment(c, 'human:ana', t['id'], 'Should this stay open?', wake=False, ask={'to': 'human:ana'})

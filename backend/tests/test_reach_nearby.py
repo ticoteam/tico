@@ -50,6 +50,12 @@ def task(api, token, owner, title="Draft the launch note", expected=200, **extra
     return data.get("task", data)
 
 
+def wait_on_cara(c, task_id):
+    """The task's bot waits on Cara: a question task for her under it, so she is one it waits on (derived)."""
+    H.task_update(c, "bot:product-design", task_id, status="waiting", waiting_on="human:cara",
+                  note="Can you check the launch note? I'll send it after.")
+
+
 def message(api, token, to, text, expected=200, **extra):
     r = api.post("/api/v2/messages", json={"to": to, "text": text, **extra}, headers=headers(token))
     assert r.status_code == expected, r.text
@@ -146,7 +152,7 @@ def test_a_solicited_reply_and_work_on_a_shared_task_pass(api):
     # Cara is on Ben's task as the one it waits on: product-design may hand it to her, and give her nothing else.
     shared = task(api, "ben-test", "bot:product-design", title="Launch note")
     with api.app.state.store.transaction() as c:
-        c.execute("UPDATE tasks SET waiting_on='human:cara' WHERE id=?", (shared["id"],))
+        wait_on_cara(c, shared["id"])
         who = Identity("bot:product-design", "bot", agent="test")
         try:
             reach.check(c, who, "human:cara", "task")
@@ -287,7 +293,7 @@ def test_a_message_in_a_tasks_thread_uses_the_task_and_a_send_anyway_replay_is_n
     chart(api)
     shared = task(api, "ben-test", "bot:product-design", title="Launch note")
     with api.app.state.store.transaction() as c:
-        c.execute("UPDATE tasks SET waiting_on='human:cara' WHERE id=?", (shared["id"],))
+        wait_on_cara(c, shared["id"])
         conversation = H.task(c, shared["id"])["conversation_id"]
         who = Identity("bot:product-design", "bot", agent="test")
         reach.check(c, who, "human:cara", "chat", conversation_id=conversation)      # the thread's own task
@@ -349,7 +355,7 @@ def test_a_message_task_ref_sent_as_a_list_is_checked_on_its_first_task_and_junk
     chart(api)
     shared = task(api, "ben-test", "bot:product-design", title="Launch note")
     with api.app.state.store.transaction() as c:
-        c.execute("UPDATE tasks SET waiting_on='human:cara' WHERE id=?", (shared["id"],))     # Cara is on it
+        wait_on_cara(c, shared["id"])                                                       # Cara is on it
     other = task(api, "ben-test", "bot:finance", title="Budget")                             # Cara is not on it
     message(api, "pd-test", "human:cara", "On the launch note.", refs={"task": [shared["id"]]})
     refused = message(api, "pd-test", "human:cara", "On the budget.", expected=409, refs={"task": [other["id"]]})

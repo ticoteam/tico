@@ -1285,6 +1285,9 @@ def create_app(settings=None):
                  "labels": H.task_labels(row), "lane": row.get("lane") or "company",
                  "next_run": bool(row.get("next_run")), "private": H.task_private(c, row), "cover": None}
         value["readers"] = H.task_readers(row) if value["private"] else []
+        # Who it waits on is derived from its open question tasks (question_tasks.waiting_on); a list fills it in for
+        # the whole page (task_views).
+        value["waiting_on"] = question_tasks.waiting_on(c, row) if c is not None else None
         if c is not None and row.get("next_run"):
             value["next_run_waiting"] = H.next_run_waiting(c, row)
         if c is not None and (deferred := quiet_work.view(c, row)):
@@ -1465,9 +1468,11 @@ def create_app(settings=None):
         quiet_work.prime(c, [row for row in rows if row.get("next_run")])
         step_since = step_age.since_map(c, rows)
         hold_marks = task_holds.marks(c, rows)
+        waits = question_tasks.waiting_on_many(c, rows)
         result = []
         for row in rows:
             value = task_view(row, pipelines=pipelines, hold_marks=hold_marks)
+            value["waiting_on"] = waits.get(row["id"])
             value.pop("checkpoint", None)    # up to a page of text per task; the full task view carries it
             value.update({
                 "relations": relations[row["id"]],
@@ -4899,7 +4904,7 @@ def create_app(settings=None):
                     if gate["acts"]:
                         fields["owner"] = None
                 elif verdict["kind"] == "wait" and row["owner_id"] == who.actor and \
-                        row.get("waiting_on") != verdict["person"] and \
+                        not H._waits_on(c, row, verdict["person"]) and \
                         H.resolve_actor(c, body.waiting_on) == verdict["person"]:
                     gate = ask_ingest.apply(c, verdict)
                     waits.append((verdict, gate))
@@ -4951,7 +4956,7 @@ def create_app(settings=None):
                 reach.check(c, who, owner, "task", task_id=row["id"])
         if body.waiting_on:
             waits = H.resolve_actor(c, body.waiting_on)
-            if waits and waits != row.get("waiting_on"):
+            if waits and not H._waits_on(c, row, waits):
                 reach.check(c, who, waits, "task", task_id=row["id"])
 
     @app.post("/api/v2/tasks/{tid}")

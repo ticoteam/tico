@@ -1,7 +1,7 @@
 """The task roundup (Settings > Routines, "Task roundup"): each run gives each active bot at most one wake, with one grouped
 list of the tasks it needs to look at. Plain code: no model is called and no BotOps diagnostic is filed. It is the one
 place Tico tells a bot about its tasks on a schedule: the per-task wakes of the stall watcher, the check-backs, the late
-notices, the backlog warnings, the exceptions lines, the restate asks, the still-needed batch and the assigned-start
+notices, the backlog warnings, the exceptions lines, the still-needed batch and the assigned-start
 recovery are all lines here now.
 Its schedule is a setting; the default is three times a day, at 6am, noon and 6pm company time.
 
@@ -11,8 +11,6 @@ A bot's list has these lines, in this order, MAX_LINES in all (the rest are coun
   listed once;
 - an assignment the bot has not started an hour after it was given (backend/assigned_start.py): "Assigned, not started", listed
   once, its ledger row written when it is sent;
-- a task the bot owns that waits on a person with no plain ask (H.lint_person_ask): asked to restate it, relisted after
-  RELIST_DAYS until it is restated;
 - a Dev ticket late at its step, on its manager's list (backend/step_age.py): "Late in <step>: N days", relisted after
   RELIST_DAYS;
 - an engineering exception on a manager's list that reads the exceptions list (backend/pipeline_exceptions.py), relisted
@@ -30,14 +28,14 @@ A task is named once on a list, whatever its reason.
 A missed update is a task the bot owns, live (H.ACTIVE_STATUSES), readable to it, not snoozed, not already being run for it
 (a queued, leased or running job in its conversation), where someone other than the bot and Tico did something on it since
 the later of the bot's last turn on it and the last time it was listed. That is a message written or edited in its conversation;
-a change of the task itself (status, owner, step, waiting_on, due, title, body or acceptance; a task's creation row is not
+a change of the task itself (status, owner, step, due, title, body or acceptance; a task's creation row is not
 news, but a step or status set later on a task that had none is); a comment edited or deleted; a blocker taken off it; a
 blocker that finished (taken off by Tico: "a blocker is done", or kept on a roadmap item); or a subtask that finished, by
 someone other than the bot. A status change Tico made (a hub move) counts too. Tico's other bookkeeping (check-backs, rank,
 checkpoints, its wake notices) never counts.
 
-A task is quiet when nothing has changed on it for a day, and nothing holds it: it does not wait on someone (waiting_on), no
-live blocker holds it, nothing is recorded to wait on (H.recorded_wait, which includes an unanswered ask), and no follow-up
+A task is quiet when nothing has changed on it for a day, and nothing holds it: no
+live blocker holds it (an open question task to a person is one), nothing is recorded to wait on (H.recorded_wait, which includes an unanswered ask), and no follow-up
 time is still to come. A task left in `waiting` that waits on nothing is quiet like any other. A quiet task is listed when it
 was never listed or was last listed 7 or more days ago.
 
@@ -50,7 +48,7 @@ force hides the task (task_snooze.snoozed) until it ends.
 A private task is listed as "a private task <id>", without its title, its follow-up's who and note, its step, or what changed:
 only that a follow-up time has come, that it has an update, that it has gone quiet, or the bare fact of a line. A bot whose
 profile has its sweeps off (rules.sweeps_on: a reviewer, lead, responder or monitor) is listed its unanswered questions and
-its own follow-up times only: never an idle, late, exception, backlog, assigned or restate line. A manager and a doer get all
+its own follow-up times only: never an idle, late, exception, backlog or assigned line. A manager and a doer get all
 of them. A late ticket or an exception is listed only where its bot reads the task (H.bot_reads_task). Only bots are listed:
 a person a line would name is never told by the roundup.
 
@@ -92,8 +90,9 @@ MISSED_START_GRACE = timedelta(minutes=15)    # a snooze or deferred time must h
 MISSED_START_LOOKBACK = timedelta(days=3)     # a missed start older than this is history, not a line
 DELIVERED_JOBS = ("input", "running", "uncertain", "completed")     # a job that reached its bot: a turn on the task started
 # The lines' order on a list (a group sorts its own lines; a missed update newest first).
-DUE, ASKS, ASSIGNED, START, RESTATE, LATE, EXCEPTIONS, BACKLOG, BLOCKED, MISSED, QUIET = range(11)
+DUE, ASKS, ASSIGNED, START, LATE, EXCEPTIONS, BACKLOG, BLOCKED, MISSED, QUIET = range(10)
 # The changes to a task itself. Anything else a history row records (check-backs, rank, checkpoints) is bookkeeping.
+# "waiting_on" is the stored wait before step 6b, still in older history.
 TASK_KINDS = ("status", "owner", "step", "waiting_on", "due", "title", "body", "acceptance")
 _TASK_KINDS_SQL = ",".join(f"'{kind}'" for kind in TASK_KINDS)
 # The quiet clock: a change of the task itself by anyone. Args: the task.
@@ -319,10 +318,6 @@ def _items(c, slug, at, shared, skip_tasks=(), *, allowed=None):
             continue
         if not sweeping:
             continue
-        person = _restate(c, row)
-        if person and _stale(c, _key("restate", slug, row["id"]), at, timedelta(days=RELIST_DAYS)):
-            groups[RESTATE].append((row["created_at"] or "", _item(row["id"], _line(
-                row, _restate_reason(row, person, private), private), _key("restate", slug, row["id"]))))
         last_turn = _last_turn(c, row, slug, actor)
         listed = _listed(c, row["id"])
         news = _news(c, row, actor, _later(last_turn, listed))
@@ -511,29 +506,6 @@ def _asks_back(c, slug, actor, at):
     return out
 
 
-def _restate(c, row):
-    """The person a waiting task of the bot's needs restated, or None: the note reads as no plain ask (H.lint_person_ask),
-    and no open question to that person already holds it."""
-    person = row.get("waiting_on") or ""
-    if row["status"] != "waiting" or not person.startswith("human:") or not H.lint_person_ask(row.get("note")):
-        return None
-    if any(a["recipient_id"] == person for a in H.open_task_asks(c, row)):
-        return None
-    return person
-
-
-def _restate_reason(row, person, private):
-    """The restate line's reason. A private task says no person's name."""
-    if private:
-        return ("Waiting on a person with no plain ask. Restate it, at most "
-                f"{H.LINT_ASK_WORDS} words, with: hub task update {row['id']} --status waiting --on <person> "
-                "--note \"<your ask>\".")
-    who = H.actor_id(person)
-    return (f"Waiting on {who} with no plain ask. Restate it in one or two plain sentences, at most {H.LINT_ASK_WORDS} words: "
-            f"what you need from {who} and what happens after. Set it with: hub task update {row['id']} --status waiting "
-            f"--on {who} --note \"<your ask>\".")
-
-
 def _assigned(c, slug, actor, at):
     """The bot's open assignments no run has started and no list has named (backend/assigned_start.py), one line each, listed
     once. The line writes the assignment's ledger row when it is sent, so the health check's "not started" still reads it."""
@@ -684,12 +656,12 @@ def _days(delta):
 
 
 def _holds(c, row, at):
-    """Whether something holds the task off the quiet list: a person it waits on, an explicit follow-up time still to come
+    """Whether something holds the task off the quiet list: an explicit follow-up time still to come
     (a date nobody set, or one a snooze left behind, holds nothing), a live blocker, or a wait recorded for it (an unanswered
     ask included). A snooze in force is not here: _list skips the task while task_snooze.snoozed."""
     from . import task_relations as TR
     later = bool(follow_up(c, row) and H.parse_ts(row["check_back_at"]) > H.parse_ts(at))
-    return (bool(row.get("waiting_on")) or later
+    return (later
             or TR.live_blocker(c, row["id"], H.ACTIVE_STATUSES) is not None
             or H.recorded_wait(c, dict(row), at) is not None)
 
