@@ -107,7 +107,7 @@ function pagePerson(id, tab) {
       <label class="person-notify" title="One email an hour for the threads you follow on digest that have new messages for you: each title, its unread count and a link. Never the messages or who wrote them">
         <input type="checkbox" role="switch" class="people-switch" id="person-email-digest" ${p.email_digest !== false ? 'checked' : ''}>
         <span>Email digests</span></label>
-      <label class="person-notify" title="Each morning the Assistant drafts their update from what everyone may see: their shared tasks and goals, their decisions, comments and answers on those tasks, the meetings they were in that are not private, and their reports' updates. Never their private chats or approvals. It posts as theirs, labelled, and they can edit or replace it; once they post their own words that day, there is no draft">
+      <label class="person-notify" title="Each morning the Assistant drafts their update from what everyone may see: their shared tasks and goals, their decisions, comments and answers on those tasks, the meetings they were in that are not private, and their reports' updates. Never their private chats or approvals. It posts as theirs, and they can edit or replace it; once they post their own words that day, there is no draft">
         <input type="checkbox" role="switch" class="people-switch" id="person-update-draft" ${p.update_draft !== false ? 'checked' : ''}>
         <span>Assistant drafts my update</span></label>
       <div class="err" role="status" id="person-notify-status"></div></section>` : ''}
