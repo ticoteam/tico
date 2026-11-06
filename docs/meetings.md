@@ -243,7 +243,7 @@ format is a `422` that names the problem.
   asking again for the same bot returns the same task. Share also copies the meeting's link for a person; a saved
   meeting has no route to add a person or attach a bot, since `/api/v2/live-meetings/{id}/access` and `/bots` work
   only while its live meeting is live or paused.
-- **Tasks.** The meeting page shows one list: proposed tasks (**Create** or **Dismiss**), tasks made from the
+- **Tasks.** The meeting page shows one list: proposed tasks (**Create** or **Dismiss**, or **Link** when the proposal already names an existing task), tasks made from the
   meeting (created items, the task it was shared to a bot as, and that task's follow-ups) and tasks linked with
   `POST /api/v2/meetings/{id}/tasks`, each once; dismissed proposals sit behind **Dismissed (n)**. The proposal list
   shows only tasks, so a proposed doc update or feature request has no row to act on there. A meeting row still counts
@@ -256,8 +256,8 @@ format is a `422` that names the problem.
   (`POST /api/v2/meetings/{id}/items/{iid}/push`) becomes a task for the owner it names, or for `doc-updater` when it
   names none and you can send work to that bot. If it names no owner and `doc-updater` is absent or you cannot write
   to it, or it names someone who cannot own it or a bot you cannot write to, the push is refused. A refused item stays
-  proposed, so it can be edited and pushed again. A feature request becomes a task for whoever is primary for the
-  product group. Product area,
+  proposed, so it can be edited and pushed again. A feature request becomes a task for the person primary for the
+  product team in the roster, or for the environment owner when no one is. Product area,
   app and label
   are optional: use your team's names or leave them blank. Existing B/F and CA/PA codes still work.
   A near-identical open task returns a link only if the sender can read it.
