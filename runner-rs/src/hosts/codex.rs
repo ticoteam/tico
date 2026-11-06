@@ -13,7 +13,7 @@ use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 use tokio::process::ChildStdin;
 use tokio::sync::oneshot;
 
-use super::{command_program, event, failed, hub_mcp_server, is_limit, shell_outside_actions, tool_summary, Events, HostError, Settings};
+use super::{command_program, event, failed, hub_mcp_server, is_limit, shell_outside_actions, shell_reads_only, tool_summary, Events, HostError, Settings};
 use crate::env::Env;
 use crate::util::{iso, log, py_dumps, text_of};
 
@@ -562,7 +562,9 @@ impl CodexHost {
             fields["summary"] = json!(summary);
         }
         if kind == "commandExecution" && item["command"].is_string() {
-            fields["outside_actions"] = json!(shell_outside_actions(item["command"].as_str().unwrap()));
+            let command = item["command"].as_str().unwrap();
+            fields["outside_actions"] = json!(shell_outside_actions(command));
+            fields["reads_only"] = json!(shell_reads_only(command));
         }
         self.emit(event("tool", t, u, fields));
     }
@@ -799,10 +801,12 @@ mod tests {
             while let Ok(ev) = rx.try_recv() {
                 got.push(ev);
             }
-            // These shared Python snapshots contain read-only shell commands. Rust adds recovery labels.
+            // These shared Python snapshots hold no outside actions; Rust adds recovery labels and whether each
+            // line only reads (`cat`, `wc` and `ls` do, c3's `curl` does not).
             for event in &mut expected {
                 if event["tool"] == "shell" {
                     event["outside_actions"] = json!([]);
+                    event["reads_only"] = json!(event["item_id"] != "c3");
                 }
             }
             assert_eq!(got, expected, "{}", path.display());

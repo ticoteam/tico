@@ -16,7 +16,7 @@ use tokio::process::Child;
 use tokio::sync::mpsc;
 use tokio::time::Instant;
 
-use super::{event, failed, hub_mcp_server, is_auth_retryable, is_limit, shell_outside_actions, tool_summary, Events, HostError, Settings};
+use super::{event, failed, hub_mcp_server, is_auth_retryable, is_limit, shell_outside_actions, shell_reads_only, tool_summary, Events, HostError, Settings};
 use crate::util::{iso, log, py_dumps, text_of};
 
 pub const STREAM_ARGS: &[&str] = &[
@@ -1319,6 +1319,7 @@ impl ClaudeHost {
         if name == "Bash" {
             if let Some(command) = input["command"].as_str() {
                 fields["outside_actions"] = json!(shell_outside_actions(command));
+                fields["reads_only"] = json!(shell_reads_only(command));
             }
         }
         if let Some(s) = subagent {
@@ -1697,10 +1698,12 @@ mod tests {
                     break;
                 }
             }
-            // These shared Python snapshots contain read-only shell commands. Rust adds recovery labels.
+            // These shared Python snapshots hold no outside actions; Rust adds recovery labels and whether each
+            // line only reads (their `cat` and `wc` lines do, `sleep 4; echo done` does not).
             for event in &mut expected {
                 if event["tool"] == "Bash" && event["status"] == "started" {
                     event["outside_actions"] = json!([]);
+                    event["reads_only"] = json!(matches!(event["summary"].as_str(), Some("cat" | "wc")));
                 }
             }
             assert_eq!(got, expected, "{}", path.display());

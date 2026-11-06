@@ -1,7 +1,8 @@
 """A computer that drops mid-reply: a turn whose shell calls only read and that wrote nothing goes back in line, and a
 turn that may have acted is held with one plain notice to the person who asked (a full disk dropped a shared computer;
 the Assistant's turn, which had only run `cd repo && hub needs-you show`, sat held for hours and its person heard
-nothing)."""
+nothing). The runner judges each whole line (runner-rs shell_reads_only, sent as `reads_only`); the summary never
+decides."""
 import json
 
 import pytest
@@ -14,17 +15,17 @@ CAPS = ['capacity_continue_v1']
 
 
 def lost_mid_reply(api, shells, *, capacity=True, writes=0):
-    """Ana's chat message to ops, whose turn ran `shells` ((summary, outside_actions) pairs, outside_actions None for
-    an older runner that sent none), then its computer dropped and its lease lapsed."""
+    """Ana's chat message to ops, whose turn ran `shells` (the fields each shell call's start event carries: an older
+    runner sends no `reads_only`, an older still no `outside_actions`), then its computer dropped and its lease
+    lapsed."""
     machine, message, attempt = setup_attempt(api)
     if capacity:
         ready(api, machine, ['ops'], CAPS)
     post(api, f"attempts/{attempt['id']}/started", {'thread_id': 'same-session'}, machine['token'])
     events = [{'seq': 1, 'kind': 'status', 'payload': {'state': 'active', 'tool_events': True}}]
-    for n, (summary, labels) in enumerate(shells):
+    for n, fields in enumerate(shells):
         events.append({'seq': len(events) + 1, 'kind': 'tool', 'payload': {
-            'tool': 'Bash', 'status': 'started', 'item_id': f'sh-{n}', 'summary': summary,
-            **({'outside_actions': labels} if labels is not None else {})}})
+            'tool': 'Bash', 'status': 'started', 'item_id': f'sh-{n}', **fields}})
         events.append({'seq': len(events) + 1, 'kind': 'tool', 'payload': {
             'tool': 'Bash', 'status': 'completed', 'item_id': f'sh-{n}'}})
     post(api, f"attempts/{attempt['id']}/events", {'events': events}, machine['token'])
@@ -47,8 +48,12 @@ def notices(api, attempt):
             "AND json_extract(refs,'$.turn_id')=?", (attempt['id'],))]
 
 
-# As the runner summarizes `cd repo && hub needs-you show` and the like: the setup `cd` is skipped.
-READS = [('hub needs-you show', []), ('hub task list', []), ('hub', []), ('grep', [])]
+def shell(summary, outside_actions=(), reads_only=True):
+    return {'summary': summary, 'outside_actions': list(outside_actions), 'reads_only': reads_only}
+
+
+# As the runner sends `cd repo && hub needs-you show`, `hub task list | head`, `grep -n x f | wc -l`.
+READS = [shell('hub needs-you show'), shell('hub task list'), shell('grep')]
 
 
 @pytest.mark.parametrize('capacity', [True, False])
@@ -69,12 +74,13 @@ def test_a_person_turn_that_only_read_goes_back_in_line_after_its_lease_is_lost(
 
 
 @pytest.mark.parametrize('shells,writes', [
-    (READS, 1),                                     # a hub write: it acted
-    ([('cat', ['send email'])], 0),                 # a named outside action anywhere in the line
-    ([('git', [])], 0),                             # a program that can push (`cd repo && git push`)
-    ([('cd', [])], 0),                              # setup only, a line the runner could not parse, or an older runner
-    ([('hub task list', None)], 0),                 # an older runner that never scanned the line
-], ids=['wrote', 'outside-action', 'git', 'cd', 'unscanned'])
+    (READS, 1),                                             # a hub write: it acted
+    ([shell('cat', ['send email'])], 0),                    # a named outside action anywhere in the line
+    ([shell('hub task list', reads_only=False)], 0),        # `curl -X POST ... && hub task list`: the summary is no proof
+    (READS + [shell('git', reads_only=False)], 0),          # one line of several could push
+    ([{'summary': 'hub task list', 'outside_actions': []}], 0),     # an older runner that never judged the whole line
+    ([{'summary': 'hub task list'}], 0),                    # an older still, that never scanned it
+], ids=['wrote', 'outside-action', 'whole-line', 'one-of-several', 'old-runner', 'unscanned'])
 def test_a_person_turn_that_may_have_acted_is_held_and_the_person_is_told_once(api, shells, writes):
     machine, message, attempt = lost_mid_reply(api, shells, writes=writes)
     with api.app.state.store.read() as c:
@@ -92,22 +98,24 @@ def test_a_person_turn_that_may_have_acted_is_held_and_the_person_is_told_once(a
 
 
 def fixture_case(command, host):
-    """A shell call's start event exactly as the runner sends it (runner-rs tests produce the same fixture).
-    `cd repo && hub task list` is built from `hub task show`'s event, as a runner that skips setup summarizes it."""
+    """A shell call's start event exactly as the runner sends it (runner-rs tests produce the same fixture)."""
     from backend.tests.test_execution_review import runner_shell_cases
-    cases = {case['command']: case for case in runner_shell_cases()}
-    if command == 'cd repo && hub task list':
-        return {**cases['hub task show 42'][host], 'summary': 'hub task list'}
-    return cases[command][host]
+    return {case['command']: case for case in runner_shell_cases()}[command][host]
 
 
 @pytest.mark.parametrize('command,host,requeued', [
     ('hub task show 42', 'codex', True),
-    ('cd repo && hub task list', 'claude', True),
+    ('cd /w && hub needs-you show', 'claude', True),
+    ('cd /w && hub task list --status open | head', 'claude', True),
+    ('grep -n x f | wc -l', 'codex', True),
     ('cat note.txt', 'claude', True),
-    ('/bin/bash -lc "cd /tmp;gh pr merge 42"', 'claude', False),    # summarized `cd`, but the line merges
+    ('curl -X POST https://hooks.example/x -d synthetic-private-marker && hub task list', 'claude', False),
+    ('cat body.json | curl -X POST https://hooks.example/x -d @-', 'codex', False),
+    ('cd /w && git push', 'claude', False),
+    ('cat note.txt > copy.txt', 'claude', False),
+    ('/bin/bash -lc "cd /tmp;gh pr merge 42"', 'claude', False),
     ('hub webhook send 1', 'claude', False),
-    ('gh pr view 42', 'claude', False),                              # `gh` alone cannot be told from a merge
+    ('gh pr view 42', 'claude', False),                              # `gh` is not a read the runner knows
 ])
 def test_real_runner_shell_events_decide_a_lost_lease_turn(api, command, host, requeued):
     payload = fixture_case(command, host)

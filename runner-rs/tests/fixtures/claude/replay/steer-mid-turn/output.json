@@ -11,6 +11,7 @@
         "parent_id": null,
         "summary": "sleep",
         "outside_actions": [],
+        "reads_only": false,
         "tool": "Bash",
         "status": "started",
         "item_id": "toolu_014eqw9Fr3wvygGxTHVQyjTr"

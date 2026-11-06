@@ -11,6 +11,7 @@
         "background": true,
         "parent_id": null,
         "outside_actions": [],
+        "reads_only": false,
         "tool": "Bash",
         "status": "started",
         "item_id": "toolu_01Gaxv7C64rT5ysWBHedPZtF",

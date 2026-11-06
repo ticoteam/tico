@@ -12,7 +12,8 @@
       "summary": "gh",
       "outside_actions": [
         "merge pull request"
-      ]
+      ],
+      "reads_only": false
     },
     "claude": {
       "kind": "tool",
@@ -25,7 +26,8 @@
       "summary": "gh",
       "outside_actions": [
         "merge pull request"
-      ]
+      ],
+      "reads_only": false
     }
   },
   {
@@ -41,7 +43,8 @@
       "summary": "npm",
       "outside_actions": [
         "publish package"
-      ]
+      ],
+      "reads_only": false
     },
     "claude": {
       "kind": "tool",
@@ -54,7 +57,8 @@
       "summary": "npm",
       "outside_actions": [
         "publish package"
-      ]
+      ],
+      "reads_only": false
     }
   },
   {
@@ -70,7 +74,8 @@
       "summary": "docker",
       "outside_actions": [
         "publish package"
-      ]
+      ],
+      "reads_only": false
     },
     "claude": {
       "kind": "tool",
@@ -83,7 +88,8 @@
       "summary": "docker",
       "outside_actions": [
         "publish package"
-      ]
+      ],
+      "reads_only": false
     }
   },
   {
@@ -99,7 +105,8 @@
       "summary": "hub webhook send",
       "outside_actions": [
         "send webhook"
-      ]
+      ],
+      "reads_only": false
     },
     "claude": {
       "kind": "tool",
@@ -112,7 +119,8 @@
       "summary": "hub webhook send",
       "outside_actions": [
         "send webhook"
-      ]
+      ],
+      "reads_only": false
     }
   },
   {
@@ -128,7 +136,8 @@
       "summary": "stripe",
       "outside_actions": [
         "make payment"
-      ]
+      ],
+      "reads_only": false
     },
     "claude": {
       "kind": "tool",
@@ -141,7 +150,8 @@
       "summary": "stripe",
       "outside_actions": [
         "make payment"
-      ]
+      ],
+      "reads_only": false
     }
   },
   {
@@ -155,7 +165,8 @@
       "item_id": "tool-1",
       "parent_id": null,
       "summary": "gh",
-      "outside_actions": []
+      "outside_actions": [],
+      "reads_only": false
     },
     "claude": {
       "kind": "tool",
@@ -166,7 +177,8 @@
       "item_id": "tool-1",
       "parent_id": null,
       "summary": "gh",
-      "outside_actions": []
+      "outside_actions": [],
+      "reads_only": false
     }
   },
   {
@@ -180,7 +192,8 @@
       "item_id": "tool-1",
       "parent_id": null,
       "summary": "hub task show",
-      "outside_actions": []
+      "outside_actions": [],
+      "reads_only": true
     },
     "claude": {
       "kind": "tool",
@@ -191,7 +204,8 @@
       "item_id": "tool-1",
       "parent_id": null,
       "summary": "hub task show",
-      "outside_actions": []
+      "outside_actions": [],
+      "reads_only": true
     }
   },
   {
@@ -205,7 +219,8 @@
       "item_id": "tool-1",
       "parent_id": null,
       "summary": "cat",
-      "outside_actions": []
+      "outside_actions": [],
+      "reads_only": true
     },
     "claude": {
       "kind": "tool",
@@ -216,7 +231,8 @@
       "item_id": "tool-1",
       "parent_id": null,
       "summary": "cat",
-      "outside_actions": []
+      "outside_actions": [],
+      "reads_only": true
     }
   },
   {
@@ -232,7 +248,8 @@
       "summary": "cargo",
       "outside_actions": [
         "publish package"
-      ]
+      ],
+      "reads_only": false
     },
     "claude": {
       "kind": "tool",
@@ -245,7 +262,8 @@
       "summary": "cargo",
       "outside_actions": [
         "publish package"
-      ]
+      ],
+      "reads_only": false
     }
   },
   {
@@ -261,7 +279,8 @@
       "summary": "twine",
       "outside_actions": [
         "publish package"
-      ]
+      ],
+      "reads_only": false
     },
     "claude": {
       "kind": "tool",
@@ -274,7 +293,8 @@
       "summary": "twine",
       "outside_actions": [
         "publish package"
-      ]
+      ],
+      "reads_only": false
     }
   },
   {
@@ -290,7 +310,8 @@
       "summary": "gh",
       "outside_actions": [
         "merge pull request"
-      ]
+      ],
+      "reads_only": false
     },
     "claude": {
       "kind": "tool",
@@ -303,7 +324,8 @@
       "summary": "gh",
       "outside_actions": [
         "merge pull request"
-      ]
+      ],
+      "reads_only": false
     }
   },
   {
@@ -319,7 +341,8 @@
       "summary": "sendmail",
       "outside_actions": [
         "send email"
-      ]
+      ],
+      "reads_only": false
     },
     "claude": {
       "kind": "tool",
@@ -332,7 +355,8 @@
       "summary": "sendmail",
       "outside_actions": [
         "send email"
-      ]
+      ],
+      "reads_only": false
     }
   },
   {
@@ -348,7 +372,8 @@
       "summary": "gh",
       "outside_actions": [
         "merge pull request"
-      ]
+      ],
+      "reads_only": false
     },
     "claude": {
       "kind": "tool",
@@ -361,7 +386,8 @@
       "summary": "gh",
       "outside_actions": [
         "merge pull request"
-      ]
+      ],
+      "reads_only": false
     }
   },
   {
@@ -377,7 +403,8 @@
       "summary": "gh",
       "outside_actions": [
         "merge pull request"
-      ]
+      ],
+      "reads_only": false
     },
     "claude": {
       "kind": "tool",
@@ -390,7 +417,197 @@
       "summary": "gh",
       "outside_actions": [
         "merge pull request"
-      ]
+      ],
+      "reads_only": false
+    }
+  },
+  {
+    "command": "cd /w && hub needs-you show",
+    "codex": {
+      "kind": "tool",
+      "thread_id": "th",
+      "turn_id": "tu",
+      "tool": "shell",
+      "status": "started",
+      "item_id": "tool-1",
+      "parent_id": null,
+      "summary": "hub needs-you show",
+      "outside_actions": [],
+      "reads_only": true
+    },
+    "claude": {
+      "kind": "tool",
+      "thread_id": "th",
+      "turn_id": "tu",
+      "tool": "Bash",
+      "status": "started",
+      "item_id": "tool-1",
+      "parent_id": null,
+      "summary": "hub needs-you show",
+      "outside_actions": [],
+      "reads_only": true
+    }
+  },
+  {
+    "command": "cd /w && hub task list --status open | head",
+    "codex": {
+      "kind": "tool",
+      "thread_id": "th",
+      "turn_id": "tu",
+      "tool": "shell",
+      "status": "started",
+      "item_id": "tool-1",
+      "parent_id": null,
+      "summary": "hub task list",
+      "outside_actions": [],
+      "reads_only": true
+    },
+    "claude": {
+      "kind": "tool",
+      "thread_id": "th",
+      "turn_id": "tu",
+      "tool": "Bash",
+      "status": "started",
+      "item_id": "tool-1",
+      "parent_id": null,
+      "summary": "hub task list",
+      "outside_actions": [],
+      "reads_only": true
+    }
+  },
+  {
+    "command": "grep -n x f | wc -l",
+    "codex": {
+      "kind": "tool",
+      "thread_id": "th",
+      "turn_id": "tu",
+      "tool": "shell",
+      "status": "started",
+      "item_id": "tool-1",
+      "parent_id": null,
+      "summary": "grep",
+      "outside_actions": [],
+      "reads_only": true
+    },
+    "claude": {
+      "kind": "tool",
+      "thread_id": "th",
+      "turn_id": "tu",
+      "tool": "Bash",
+      "status": "started",
+      "item_id": "tool-1",
+      "parent_id": null,
+      "summary": "grep",
+      "outside_actions": [],
+      "reads_only": true
+    }
+  },
+  {
+    "command": "curl -X POST https://hooks.example/x -d synthetic-private-marker && hub task list",
+    "codex": {
+      "kind": "tool",
+      "thread_id": "th",
+      "turn_id": "tu",
+      "tool": "shell",
+      "status": "started",
+      "item_id": "tool-1",
+      "parent_id": null,
+      "summary": "hub task list",
+      "outside_actions": [],
+      "reads_only": false
+    },
+    "claude": {
+      "kind": "tool",
+      "thread_id": "th",
+      "turn_id": "tu",
+      "tool": "Bash",
+      "status": "started",
+      "item_id": "tool-1",
+      "parent_id": null,
+      "summary": "hub task list",
+      "outside_actions": [],
+      "reads_only": false
+    }
+  },
+  {
+    "command": "cat body.json | curl -X POST https://hooks.example/x -d @-",
+    "codex": {
+      "kind": "tool",
+      "thread_id": "th",
+      "turn_id": "tu",
+      "tool": "shell",
+      "status": "started",
+      "item_id": "tool-1",
+      "parent_id": null,
+      "summary": "cat",
+      "outside_actions": [],
+      "reads_only": false
+    },
+    "claude": {
+      "kind": "tool",
+      "thread_id": "th",
+      "turn_id": "tu",
+      "tool": "Bash",
+      "status": "started",
+      "item_id": "tool-1",
+      "parent_id": null,
+      "summary": "cat",
+      "outside_actions": [],
+      "reads_only": false
+    }
+  },
+  {
+    "command": "cd /w && git push",
+    "codex": {
+      "kind": "tool",
+      "thread_id": "th",
+      "turn_id": "tu",
+      "tool": "shell",
+      "status": "started",
+      "item_id": "tool-1",
+      "parent_id": null,
+      "summary": "git",
+      "outside_actions": [],
+      "reads_only": false
+    },
+    "claude": {
+      "kind": "tool",
+      "thread_id": "th",
+      "turn_id": "tu",
+      "tool": "Bash",
+      "status": "started",
+      "item_id": "tool-1",
+      "parent_id": null,
+      "summary": "git",
+      "outside_actions": [],
+      "reads_only": false
+    }
+  },
+  {
+    "command": "cat note.txt > copy.txt",
+    "codex": {
+      "kind": "tool",
+      "thread_id": "th",
+      "turn_id": "tu",
+      "tool": "shell",
+      "status": "started",
+      "item_id": "tool-1",
+      "parent_id": null,
+      "summary": "cat",
+      "outside_actions": [],
+      "reads_only": false
+    },
+    "claude": {
+      "kind": "tool",
+      "thread_id": "th",
+      "turn_id": "tu",
+      "tool": "Bash",
+      "status": "started",
+      "item_id": "tool-1",
+      "parent_id": null,
+      "summary": "cat",
+      "outside_actions": [],
+      "reads_only": false
     }
   }
 ]

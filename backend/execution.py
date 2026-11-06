@@ -925,33 +925,14 @@ def retry_facts(c, job, started, finished):
 
 # Tool calls that only read: a run that made nothing else repeats nothing when it runs again. Claude's and Codex's
 # own names. A subagent's launch is listed because its own calls are reported and judged one by one. A shell command
-# never counts, whatever its program: `cat` can be piped into anything. Only a lapsed lease with no hub write and no
-# named outside action in any line reads a shell's own summary (read_only_shells).
+# never counts, whatever its program: `cat` can be piped into anything. Only a lapsed lease with no hub write, no named
+# outside action and the runner's word that each whole line only read lets a shell call through (read_only_shells).
 READ_ONLY_TOOLS = frozenset({
     "Read", "Grep", "Glob", "LS", "NotebookRead", "WebFetch", "WebSearch", "TodoWrite", "ToolSearch",
     "Agent", "Task", "web_search", "view_image", "spawnAgent", "subagent",
 })
 # Shell tools, by Claude's and Codex's names.
 SHELL_CALLS = frozenset({"Bash", "bash", "shell", "exec_command"})
-# Programs a shell call only reads with, by the runner's summary of the call: the line's first program after any setup
-# (`cd`, `export`), or `hub` and its command path (runner-rs command_program), so `cd repo && hub task list` reads
-# `hub task list` and `cd repo && git push` reads `git`. No setup word is listed: a summary of bare `cd` is a line of
-# setup only, one the runner could not parse (`bash -lc "cd /tmp;gh pr merge 42"`), or an older runner's, and stays held.
-READ_ONLY_PROGRAMS = frozenset({"ls", "pwd", "cat", "head", "tail", "grep", "rg", "wc", "jq", "stat", "which",
-                                "date", "sort", "uniq", "diff", "tree", "du", "df"})
-# The last word of a hub command path that only reads (`hub task list`, `hub needs-you show`). A bare `hub` (flags came
-# before the command) passes too: any hub write shows on the run's `writes`, which must be 0.
-READ_ONLY_HUB_WORDS = frozenset({"hub", "list", "show", "read", "search", "find", "history", "status", "recent", "fetch",
-                                 "inbox", "thread", "upcoming", "summary", "stats", "runs", "held", "versions", "guide",
-                                 "templates", "catalog", "brief", "board", "people", "needs-you", "mailboxes", "sends"})
-
-
-def read_only_shell_summary(summary):
-    """Whether a shell call's runner summary names a program that only reads, or a hub command that only reads."""
-    words = str(summary or "").strip().lower().split()
-    if words[:1] == ["hub"]:
-        return words[-1] in READ_ONLY_HUB_WORDS
-    return len(words) == 1 and words[0] in READ_ONLY_PROGRAMS
 
 
 def read_only_shells(c, attempt_id):
@@ -960,8 +941,11 @@ def read_only_shells(c, attempt_id):
     show` and `hub task list` would otherwise sit held for review for hours while its person hears nothing. Only for a
     run with no hub write recorded (`writes`: every hub write counts there) and only for calls the runner scanned whole
     and found no named outside action in (`outside_actions`, runner-rs shell_outside_actions: a merge, publish, send or
-    payment anywhere in the line); an older runner's program-only call never passes. The resumed turn's note still says
-    to check what already happened first."""
+    payment anywhere in the line) and judged read-only as a whole (`reads_only`, runner-rs shell_reads_only: every run of
+    the line is setup, a reading program or a hub read, with no redirection to a file, expansion or heredoc). The
+    summary is never judged: it names one program of a line that may hold more (`curl -X POST ... && hub task list`
+    summarizes as `hub task list`). An older runner's call carries no `reads_only` and stays held. The resumed turn's
+    note still says to check what already happened first."""
     row = c.execute("SELECT state,coalesce(writes,0) AS writes FROM attempts WHERE id=?", (attempt_id,)).fetchone()
     if not row or row['state'] != 'expired' or row['writes']:
         return False
@@ -974,7 +958,7 @@ def read_only_shells(c, attempt_id):
         key = call.get('item_id') or f"seq:{event['seq']}"
         if key not in evidence or call.get('status', call.get('state')) in ('started', 'running', 'in_progress'):
             evidence[key] = call
-    return bool(evidence) and all(call.get('outside_actions') == [] and read_only_shell_summary(call.get('summary'))
+    return bool(evidence) and all(call.get('outside_actions') == [] and call.get('reads_only') is True
                                   for call in evidence.values())
 
 

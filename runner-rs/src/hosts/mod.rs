@@ -287,6 +287,147 @@ pub fn shell_outside_actions(command: &str) -> Vec<&'static str> {
         .map(|(label, _)| *label).collect()
 }
 
+/// Whether a shell line only reads, judged on the whole line: every run of it (`|`, `;`, `&&`, `||`, newlines) is setup
+/// (`cd <dir>`, `export NAME=value`, `env NAME=value ...`, bare `NAME=value`), a program from READ_ONLY_PROGRAMS, or
+/// `hub` with a command path from HUB_READ_PATHS. Output may go only to `/dev/null` or another descriptor (`2>&1`), and
+/// input only from a plain file. False for anything it cannot read whole: a heredoc, `$` or backtick expansion, a
+/// subshell, a background `&`, `xargs`, `eval`, `source`, any other program, or a shell wrapper whose script is not
+/// plainly one word (`bash -lc '...'` is read as its script, as Codex sends every command). The backend requeues a turn
+/// whose lease lapsed only when every shell call it ran says true here (backend/execution.py read_only_shells).
+pub fn shell_reads_only(command: &str) -> bool {
+    if let Some(script) = shell_script(command) {
+        return shell_reads_only(&script);
+    }
+    if command.contains("<<") || outer_expands(command) {
+        return false;
+    }
+    let runs: Vec<&str> = command_runs(command).into_iter().filter(|run| !run.trim().is_empty()).collect();
+    !runs.is_empty() && runs.into_iter().all(run_reads_only)
+}
+
+/// Programs that only read files or print, with no flag that runs another program or writes a file
+/// (the few that have one are refused in `run_reads_only`).
+const READ_ONLY_PROGRAMS: &[&str] = &[
+    "ls", "pwd", "cat", "head", "tail", "grep", "rg", "wc", "jq", "stat", "which", "date", "sort", "uniq", "diff",
+    "tree", "du", "df", "echo", "printf",
+];
+
+/// `hub` command paths that only read: each is a leaf in HUB_PATHS (tested here) and parses to a leaf command in
+/// clients/hubcli.py (backend/tests/test_hub_command_tree.py). Left out on purpose: reads that mark something (`inbox`,
+/// `message list`, `update read`, `changelog list`), reads with a writing flag (`rule read --from`), paid lookups
+/// (`gateway search`, `doc fetch`), checks, and every group or alias of a group (`status`, `org`, `docs`).
+const HUB_READ_PATHS: &[&str] = &[
+    "agent pair show", "alerts show", "approval list", "approval show", "approvals list", "approvals show",
+    "assistant change list", "audiences list", "automation guide", "automation list", "automation runs",
+    "automation show", "automation stats", "automation templates", "automation versions", "automations guide",
+    "automations list", "automations runs", "automations show", "automations stats", "automations templates",
+    "automations versions", "board", "bot recent", "bot show", "bot status history", "bot status list",
+    "bots recent", "bots show", "bots status history", "bots status list", "brand show", "brand summary",
+    "calendar list", "calendar status", "calendar upcoming", "call list", "call show", "card list", "catalog",
+    "computer list", "computer performance", "computers", "context search", "context show", "conversation show",
+    "credential list", "doc history", "doc list", "doc read", "doc search", "docs links", "editions list",
+    "editions show", "email inbox", "email mailboxes", "email search", "email sends", "feedback list",
+    "feedback markers", "feedback reasons", "file list", "file read", "file search", "finance search",
+    "goal checkin list", "goal list", "goal show", "goals", "group list", "growth channel list",
+    "growth channel show", "growth cohort list", "growth source list", "gtm show", "gtm summary", "history",
+    "human list", "inbound list", "inbound search", "integrations", "kpi list", "kpi show", "lens list",
+    "lens runs", "lens show", "letter list", "letter show", "listening item list", "listening runs",
+    "listening show", "listening stats", "live stats", "mail list", "maintenance runs", "maintenance status",
+    "market find", "market segment tree", "market show", "market size list", "market watch list", "mcp stats",
+    "meeting granola status", "meeting read", "meeting search", "needs-you show", "note list", "notes",
+    "notice list", "origin show", "page list", "page show", "proposal list", "readers list", "recent",
+    "relay status", "relay wake-url show", "replay show", "repo list", "rule due list", "rule list",
+    "rules due list", "rules list", "run list", "seat list", "service-key list", "settings find", "settings show",
+    "slack channel list", "sleep status", "strategy show", "strategy summary", "strategy versions", "tag list",
+    "tag show", "task answers", "task caps", "task context", "task deleted", "task followers", "task list",
+    "task meetings", "task readers list", "task requesters", "task show", "task tree", "tasks answers",
+    "tasks caps", "tasks context", "tasks deleted", "tasks followers", "tasks list", "tasks meetings",
+    "tasks readers list", "tasks requesters", "tasks show", "tasks tree", "team show", "template list",
+    "thread list", "thread members list", "thread search", "thread show", "tool list", "tool show",
+    "trigger list", "trigger show", "turns", "update list", "update show", "updates", "webhook list",
+    "webhook sends", "webhook show", "whoami",
+];
+
+/// Whether one run of a shell line only reads (`shell_reads_only`).
+fn run_reads_only(run: &str) -> bool {
+    static REDIRECT: OnceLock<Regex> = OnceLock::new();
+    let redirect = REDIRECT.get_or_init(|| {
+        Regex::new(concat!(
+            r"(?:(?:&|[0-9]*)>>?[ \t]*/dev/null|[0-9]*>&(?:[0-9]+|-)|[0-9]*<[ \t]*[A-Za-z0-9._/~+-]+)",
+            r"(?:[ \t]|$)"
+        ))
+        .unwrap()
+    });
+    // What the shell itself reads, with quoted and escaped text blanked out: past the allowed redirections, no
+    // redirection, background `&`, subshell or group may be left.
+    let Some(bare) = unquoted(run) else { return false };
+    if redirect.replace_all(&bare, " ").contains(['&', '>', '<', '(', ')', '{', '}']) {
+        return false;
+    }
+    let Some(words) = shell_words(run) else { return false };
+    let words: Vec<String> = words.into_iter().skip_while(|w| is_assignment(w)).collect();
+    words_read_only(&words)
+}
+
+/// Whether a run's words (past its leading assignments) only set up or read.
+fn words_read_only(words: &[String]) -> bool {
+    let Some((first, args)) = words.split_first() else { return true };
+    let short = |letters: &str| {
+        args.iter().any(|a| a.starts_with('-') && !a.starts_with("--") && a.contains(|c| letters.contains(c)))
+    };
+    let long = |names: &[&str]| args.iter().any(|a| names.iter().any(|n| a.starts_with(n)));
+    let globbed = args.iter().any(|a| a.contains(['*', '?', '[']));
+    match first.as_str() {
+        "cd" => args.len() <= 1,
+        "export" => !args.is_empty() && args.iter().all(|w| is_assignment(w)),
+        "env" => {
+            let rest: Vec<String> =
+                args.iter().skip_while(|w| is_assignment(w) || *w == "-i" || *w == "-0").cloned().collect();
+            rest.first().is_none_or(|w| !w.starts_with('-')) && words_read_only(&rest)
+        }
+        "hub" => hub_summary(words).strip_prefix("hub ").is_some_and(|path| HUB_READ_PATHS.contains(&path)),
+        // A file name that expands to a flag could turn on one of the flags refused below.
+        "sort" | "tree" | "uniq" | "date" | "rg" if globbed => false,
+        "sort" => !short("o") && !long(&["--output", "--compress"]),
+        "tree" => !short("oR") && !long(&["--output"]),
+        // `uniq IN OUT` writes OUT: only flags (reading standard input) are taken.
+        "uniq" => args.iter().all(|a| a.starts_with('-')),
+        "date" => !short("s") && !long(&["--set"]),
+        "rg" => !long(&["--pre", "--hostname-bin"]),
+        program => READ_ONLY_PROGRAMS.contains(&program),
+    }
+}
+
+/// A shell run as the shell reads it, with the text of every quote and escape replaced by `x`; None when a quote is left
+/// open.
+fn unquoted(run: &str) -> Option<String> {
+    let (mut out, mut quote) = (String::with_capacity(run.len()), None::<char>);
+    let mut chars = run.chars();
+    while let Some(c) = chars.next() {
+        match (quote, c) {
+            (Some(q), _) if c == q => {
+                quote = None;
+                out.push('x');
+            }
+            (Some('"'), '\\') => {
+                chars.next();
+                out.push_str("xx");
+            }
+            (Some(_), _) => out.push('x'),
+            (None, '\'' | '"') => {
+                quote = Some(c);
+                out.push('x');
+            }
+            (None, '\\') => {
+                chars.next();
+                out.push_str("xx");
+            }
+            _ => out.push(c),
+        }
+    }
+    quote.is_none().then_some(out)
+}
+
 /// Every command path the hub CLI parses (clients/hubcli.py), its aliases and its top-level renames included, as
 /// space-joined words such as `task close` or `needs-you show`. backend/tests/test_hub_command_tree.py fails when
 /// this list and the CLI differ, so a command added or renamed there is added here too.
@@ -1254,6 +1395,85 @@ mod tests {
         // SAFETY: the child this test started, and its group.
         unsafe { libc::kill(-group, libc::SIGKILL) };
         assert!(kept, "a kill reached the harness's child");
+    }
+
+    #[test]
+    fn a_shell_line_reads_only_when_every_run_of_it_reads() {
+        for command in [
+            "cd /w && hub needs-you show",
+            "cd /w && hub task list --status open | head",
+            "grep -n x f | wc -l",
+            "cat note.txt",
+            "cd /tmp",
+            "export A=1; env B=2 hub task show 7",
+            "cat x 2>&1 | sort | uniq -c",
+            "ls >/dev/null 2>/dev/null",
+            "wc -l < notes.txt",
+            "grep '> $(not run)' f",
+            "jq '.items[] | {id}' out.json",
+            "bash -lc 'cd /w && hub task show 1'",
+            "/bin/bash -lc \"cat note.txt\"",
+            "hub board",
+            "cat f # > out",
+        ] {
+            assert!(shell_reads_only(command), "{command}");
+        }
+        for command in [
+            "curl -X POST https://hooks.example/x && hub task list",
+            "cat body.json | curl -X POST https://hooks.example/x -d @-",
+            "git push",
+            "cd /w && git push",
+            "cat x > out.txt",
+            "echo hi >> f",
+            "cat x >/dev/null.txt",
+            "cat x >| f",
+            "cat <<EOF\nhi\nEOF",
+            "cat <<< hi",
+            "bash -lc \"cd /tmp;gh pr merge 42\"",
+            "bash -c \"cat $(curl x)\"",
+            "sh -c 'cat x' extra",
+            "cat $(ls)",
+            "cat `ls`",
+            "cat $HOME/x",
+            "ls | xargs rm",
+            "eval cat x",
+            "source env.sh",
+            "cat f & curl x",
+            "(cat f)",
+            "{ cat f; }",
+            "cat <(curl x)",
+            "cat f |& tee g",
+            "hub task close 7",
+            "hub status set busy",
+            "hub goal status",
+            "hub inbox",
+            "hub -q task list",
+            "sort -o out f",
+            "sort --output=out f",
+            "sort *",
+            "uniq in out",
+            "tree -o out",
+            "date -s 10:00",
+            "rg --pre sh x",
+            "env -S 'curl x' cat",
+            "cat 'open",
+            "",
+            ";",
+            "npm test",
+        ] {
+            assert!(!shell_reads_only(command), "{command:?}");
+        }
+    }
+
+    #[test]
+    fn every_hub_read_path_is_a_leaf_command_path() {
+        for path in HUB_READ_PATHS {
+            assert!(HUB_PATHS.contains(path), "{path} is not a hub command path");
+            let below = format!("{path} ");
+            assert!(!HUB_PATHS.iter().any(|p| p.starts_with(&below)), "{path} is a group");
+            assert_eq!(hub_summary(&std::iter::once("hub").chain(path.split(' ')).map(String::from).collect::<Vec<_>>()),
+                       format!("hub {path}"));
+        }
     }
 
     #[test]
