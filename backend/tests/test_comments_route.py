@@ -142,6 +142,37 @@ def test_the_loop_guard_caps_bots_waking_each_other_on_a_task(api, monkeypatch):
     assert capped and len(woke) <= 2
 
 
+def test_a_bots_at_mention_of_a_bot_wakes_it_and_its_plain_post_to_a_bot_follower_waits(api):
+    row = post(api, "tasks", {"owner": "ops", "title": "Close the month", "body": "Reconcile and close May."})
+    follow(api, row["id"], "bot:finance")
+    with api.app.state.store.transaction() as c:
+        c.execute("UPDATE jobs SET state='completed' WHERE state='queued'")
+        plain = H.task_comment(c, "bot:ops", row["id"], "Reconciled the bank feed.")
+    held = delivery(api, plain["id"], "bot:finance")
+    assert held["reason"] == "follower" and held["mode"] == "defer" and not held["carrier_id"], "the bot-to-bot hold"
+    assert bot_jobs(api, "finance") == []
+    with api.app.state.store.transaction() as c:
+        named = H.task_comment(c, "bot:ops", row["id"], "@coo can you sign off on the close?")
+    jobs = bot_jobs(api, "coo")
+    assert len(jobs) == 1 and jobs[0]["message_id"] in (named["id"], (delivery(api, named["id"], "bot:coo") or {})
+                                                        .get("carrier_id")), "an @mention wakes by the way"
+    assert follows(api, row["id"], "bot:coo")[:2] == (1, "live")
+
+
+def test_the_loop_guard_caps_bots_at_mentioning_each_other(api, monkeypatch):
+    monkeypatch.setattr(threads, "LOOP_GUARD_PER_HOUR", 2)
+    row = post(api, "tasks", {"owner": "ops", "title": "Close the month", "body": "Reconcile and close May."})
+    with api.app.state.store.transaction() as c:
+        c.execute("UPDATE jobs SET state='completed' WHERE state='queued'")
+        for n in range(4):
+            H.task_comment(c, "bot:ops", row["id"], f"@coo round {n}, over to you.")
+    root = "(SELECT conversation_id FROM tasks WHERE id=?)"
+    capped = rows(api, f"SELECT 1 FROM message_deliveries WHERE root_id={root} AND state='capped'", row["id"])
+    woke = rows(api, f"SELECT 1 FROM message_deliveries WHERE root_id={root} AND cause='bot' AND recipient='bot:coo' "
+                     "AND mode IN ('steer','queue') AND state<>'capped'", row["id"])
+    assert capped and len(woke) <= 2
+
+
 def test_a_bots_mention_on_a_private_task_adds_a_reader_only_within_its_reach(api):
     with api.app.state.store.transaction() as c:
         row = H.task_create(c, "human:ana", "Payroll review", "Confidential: payroll.", "bot:ops", private=True,

@@ -398,8 +398,8 @@ Unread counts come from counters (§5), not one row per reader.
 ### 4.3 Wake rule (in `backend/rules.py`, rule `thread_wake`)
 Per (message, bot) that §4.1 reaches, deduplicated, first match wins:
 1. a DM, or an explicit @mention / ask / assign of the bot → `queue` (`steer` when it is running in that root); a person's
-   @mention queues, and a plain @mention from a bot waits under `bot_to_bot` for the receiving bot's next run unless a
-   wake rule says otherwise;
+   @mention queues, and so does a bot's: an @mention is addressed, so it goes by the message's way, never the
+   `bot_to_bot` hold (always-wake `mention`, rule `bot_mention`; the loop guard still caps it, §4.5);
 2. the bot's Home → `queue`;
 3. a reply in a sub-thread the bot last posted in → `queue`;
 3a. a reply (`in_reply_to`, §4.9) to the bot's message in the same root → `queue`, reason `reply` (`steer` when it is

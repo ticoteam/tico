@@ -697,8 +697,8 @@ Who a message in a task's thread reaches comes first: whoever it @mentions or re
 [followers](#followers), each by the way it was sent (the comments paragraph under
 [Types bots work on](#types-bots-work-on)). A system line (task news, a roundup, a keeper notice) reaches only whom it
 addresses, never the followers. For each bot it reaches, whether it wakes that bot or waits is then decided by wake rules, each with an id (`parked`, `own_write`,
-`same_state`, `bot_to_bot`, `batch_*`, `assignment`, `stall`, ...). A person's message, an ask, an approval and a gate
-verdict always wake (a Manager hears of a verdict, and of its subtasks' and blockers' results, as a note). A rule can be set for the whole team, a task type, a department, a bot or one task, and the most
+`same_state`, `bot_to_bot`, `batch_*`, `assignment`, `stall`, ...). A person's message, another bot's @mention, an ask, an
+approval and a gate verdict always wake (a Manager hears of a verdict, and of its subtasks' and blockers' results, as a note). A rule can be set for the whole team, a task type, a department, a bot or one task, and the most
 specific wins (the **What wakes** automations on the Automations page). The message and the run both record the rule, and
 `rule_weekly` in `hub sql` shows how often each woke a bot and how often that run did nothing.
 
@@ -938,7 +938,7 @@ person or bot @mentioned in a comment (by id or slug, the part of their email be
 when no one else shares it) is reached and follows the task from then on; on a private task they are also added to
 **Who can see**, as a task event anyone on the task can undo. A bot's @mention adds only a teammate in its reach, and
 never a group. A bot's plain comment reaches a following bot on its next turn (the bot-to-bot hold); an @mention or
-`needs_action` wakes it.
+`needs_action` wakes it by the comment's way (Steer by default), within the loop guard's bot-caused wakes per hour.
 
 ## Numbers and the order within a step
 
