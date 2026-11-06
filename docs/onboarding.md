@@ -489,8 +489,7 @@ Open a seat from its row on the team chart (`#/seat/<id>`) or right after Post a
   applicant has its own page (`#/seat/<id>/<template>`) with a **Hire** box: name, reports to, computer and model.
   A seat under another open seat lists that seat in **Reports to**, marked *not hired yet*, and a line inside the box,
   under **Reports to**, names who the bot reports to until it is hired: *Reports to Ana until Head of Marketing is hired.*
-  When the viewer cannot see that person or bot, the line says *the person or bot above* in place of the name. Choosing
-  any other entry in **Reports to** hides the line.
+  Choosing any other entry in **Reports to** hides the line.
 - **Hire** (`POST /api/v2/seats/{id}/hire`, `{template, model, name?, runner_id?}`) creates the bot through the same checks
   as any new bot: named as given (the seat's title by default), in the seat's place on the chart and group, owned by the
   person who hired, with the template's instructions plus the job description, and **Onboarding**. A bot reports to a
