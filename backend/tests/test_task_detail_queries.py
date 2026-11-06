@@ -74,17 +74,11 @@ def page_statements(api, monkeypatch, tid, token):
     return response.json(), len(seen)
 
 
-SCALES = [
-    ("comments and their steps", {"comments": 2}, {"comments": 12}),
-    ("people's comments naming child tasks", {"people_comments": 2}, {"people_comments": 12}),
-    ("history events", {"events": 2}, {"events": 30}),
-    ("child tasks", {"children": 2}, {"children": 12}),
-    ("bots in the company", {"bots": 5}, {"bots": 40}),
-]
-
-
-@pytest.mark.parametrize("what,small,big", SCALES, ids=[s[0] for s in SCALES])
-def test_the_task_page_takes_the_same_statements_however_many_of_each_it_holds(tmp_path, monkeypatch, what, small, big):
+def test_the_task_page_takes_the_same_statements_however_many_of_each_it_holds(tmp_path, monkeypatch):
+    """One small and one big install, every dimension growing at once: comments and their steps, people's comments
+    naming child tasks, history events, child tasks and bots in the company."""
+    small = {"comments": 2, "people_comments": 2, "events": 2, "children": 2, "bots": 5}
+    big = {"comments": 12, "people_comments": 12, "events": 30, "children": 12, "bots": 40}
     counted = {}
     for name, scale in (("small", small), ("big", big)):
         (tmp_path / name).mkdir()
@@ -100,7 +94,7 @@ def test_the_task_page_takes_the_same_statements_however_many_of_each_it_holds(t
         few, many = counted[("small", reader)], counted[("big", reader)]
         assert few > 0 and many > 0, (reader, few, many)
         assert many - few <= 4, (
-            f"GET /api/v2/tasks/{{tid}} as {reader} takes {many} statements with {big} {what} against {few} with "
+            f"GET /api/v2/tasks/{{tid}} as {reader} takes {many} statements with {big} against {few} with "
             f"{small}: a read runs once per item again instead of once for the whole page. Batch it with "
             "task_privacy.prime_references before the per-row checks (see backend/turns.py annotate).")
 

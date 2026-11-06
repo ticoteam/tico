@@ -388,7 +388,7 @@ const HUB_PATHS: &[&str] = &[
     "rules edit", "rules list", "rules read", "rules retire", "rules skip", "rules suggested", "rules withdraw",
     "run", "run export", "run list", "say", "seat", "seat close", "seat create", "seat list", "seat update",
     "service-key", "service-key create", "service-key list", "service-key revoke", "settings", "settings ask",
-    "settings find", "settings set", "settings show", "skill", "skill copy", "slack", "slack channel",
+    "settings find", "settings set", "settings show", "skill", "skill copy", "skill submit", "slack", "slack channel",
     "slack channel add", "slack channel import", "slack channel list", "slack channel remove", "sleep",
     "sleep set", "sleep status", "sql", "status", "strategy", "strategy bet",
     "strategy bet add", "strategy bet retire", "strategy bet update", "strategy diff", "strategy draft",
