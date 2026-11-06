@@ -101,7 +101,8 @@ Never refused (a person receiver follows the rule above):
   on a task;
 - a held write (a message, note or task) a person chose to Send anyway: it passed reach before it was held;
 - built-in helpers off the chart, as sender or receiver: BotOps, Task Manager, Goal Manager, Librarian, the Assistant
-  (`TICO_ASSISTANT_BOT`, `coo` by default), the Bookkeeper, Counsel (`tico-counsel`) and the support helper. Anyone
+  (`TICO_ASSISTANT_BOT`, `coo` by default), the Bookkeeper, Counsel (`tico-counsel`), the Brand Owner (`brand`) and the
+  support helper. Anyone
   reaches them.
 
 The refusal is a 409 the bot reads once and acts on, never a retry:

@@ -28,7 +28,7 @@ Chief of Staff is no longer a default.
 | Group | Icon | Head | Templates | Goal |
 |---|---|---|---|---|
 | Sales | `handshake` | Sales Manager (`sales-lead`) | 8 | Turn interest into revenue |
-| Marketing | `campaign` | Head of Marketing (`marketing-lead`) | 14 | Be known by the customers you want |
+| Marketing | `campaign` | Head of Marketing (`marketing-lead`) | 13 | Be known by the customers you want |
 | Customer Support | `support_agent` | Head of Customer Support (`support-lead`) | 10 | Every customer helped and kept |
 | Finance | `account_balance` | Head of Finance (`finance-lead`) | 14 | Know where the money is |
 | Operations | `settings_suggest` | Operations Manager (`ops-manager`) | 13 | Run smoothly, nothing dropped |
@@ -50,7 +50,8 @@ function names and live outside it.
 The built-ins are not in any group and no template duplicates them: the Librarian owns the docs, the FAQ and the answers
 built from them (Support Agent asks it with `hub doc ask` and reports a missing or wrong doc to it as a task; HR Generalist and
 Benefits Administrator do the same for policy and plan questions; Technical Writer covers only READMEs and API docs in the
-product repositories); BotOps creates and maintains bots; the Assistant is each human's own; and the Strategy Bot keeps the
+product repositories); the Brand Owner keeps the brand book and the Brand card, which marketing bots check their drafts
+against; BotOps creates and maintains bots; the Assistant is each human's own; and the Strategy Bot keeps the
 KPIs, so no template owns a KPI (Product Analyst and FP&A Analyst answer questions and explain numbers, they do not keep them).
 
 ## The templates
@@ -87,7 +88,6 @@ fill); `scripts/build-icon-font.py` adds every card's and group's icon to the su
 | `event` | `events` | Event Marketing Manager | An events calendar with checklists, a brief per event (goal, budget, run-of-show, 48-hour follow-up), draft invitations, and results in meetings and pipeline | niche | Tico only; calendar, CRM and public event pages optional |
 | `newspaper` | `pr` | PR Manager | A media list and coverage log, a weekly PR review, and per announcement a release, targeted pitches and a draft spokesperson briefing | niche | Public web |
 | `diversity_3` | `community` | Community Manager | A weekly community digest (response time, unanswered questions, champions, guideline flags, feedback routed) and draft sourced replies | niche | Public forum or community channels (read) |
-| `palette` | `brand` | Brand Manager | The brand book (voice, words, naming, visual rules), reviews of copy and assets against it, and a monthly consistency audit with three fixes | niche | Public web; an existing brand guide optional |
 | `play_arrow` | `video-producer` | Video Producer | One video at a time from an approved brief: script, storyboard, shots, cut and final, each stage approved in Tico before the next; nothing published without the owner's yes on the exact file | common | Tico only; brand guide and product docs optional; voice and avatar tools need their own grants |
 | `filter_alt` | `marketing-ops` | Marketing Operations Manager | A tracking convention, tagged links for every campaign, lead handoff rules, and a weekly check of tagging, lead sources and handoff delay with fixes and owners | niche | Tico only; CRM (read) and analytics exports optional |
 
@@ -416,7 +416,7 @@ routine, and ask BotOps to set it up only after the owner says yes.
 - Event Marketing Manager: goals set before the event, leads tagged with context at the event, follow-up inside 48 hours, a post-mortem within a week, and results counted in leads, meetings, cost per lead and closed deals rather than attendance, from [Bizzabo on trade show ROI](https://www.bizzabo.com/blog/trade-show-roi) and [Winmo's trade show ROI best practices](https://www.winmo.com/events/how-to-maximize-trade-show-roi-best-practices-for-2025/).
 - PR Manager: a researched media list of reporters who cover the topic rather than mass lists, pitches under about 200 words that reference the reporter's recent work, one polite follow-up after about 48 hours, from [Meltwater on pitching a press release](https://www.meltwater.com/en/blog/pitch-a-press-release) and [Business Wire's media relations tips](https://www.businesswire.com/blog/32-media-relations-tips-to-maximize-your-coverage-opportunities).
 - Community Manager: health measures such as time to first reply, questions unreplied to and accepted solutions, the metrics chosen from the community's business purpose, from [CMX on community measurement](https://www.cmxhub.com/blog/community-measurement-strategy) and [the SPACES model](https://www.cmxhub.com/blog/the-spaces-model); champions identified and recognised, guidelines enforced consistently, from [HubSpot's community management best practices](https://blog.hubspot.com/marketing/community-management-best-practices).
-- Brand Manager: one voice that stays while tone changes with the reader's situation, plain active language, written down with examples, from the [Mailchimp Content Style Guide, Voice and Tone](https://styleguide.mailchimp.com/voice-and-tone/); regular audits of customer-facing content against the guidelines and a yearly review of the guide, from [Hootsuite on brand voice](https://blog.hootsuite.com/brand-voice/).
+- Brand Owner (built in): the brand book built in a coached workshop (story, audience, positioning, claims, messages, voice tested on real pieces, look), checked by a script; one voice that stays while tone changes with the reader's situation, plain active language, written down with examples, from the [Mailchimp Content Style Guide, Voice and Tone](https://styleguide.mailchimp.com/voice-and-tone/); regular audits of customer-facing content against the guidelines and a yearly review of the guide, from [Hootsuite on brand voice](https://blog.hootsuite.com/brand-voice/).
 - Marketing Operations Manager: source, medium and campaign on every campaign link, lowercase values, mediums that match the analytics tool's default channel groups, no internal links tagged, and never personal data in a parameter, from Google Analytics Help, [URL builders: collect campaign data with custom URLs](https://support.google.com/analytics/answer/10917952) and [Improvado's UTM naming conventions guide](https://improvado.io/blog/utm-naming-conventions).
 
 ### Customer Support

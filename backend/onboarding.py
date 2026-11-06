@@ -950,6 +950,7 @@ class Onboarding:
                     "onboarding_state": row["onboarding_state"] or "",
                     "stage": lifecycle.ACTIVE,
                     "changed": False,
+                    "routine": self._arm_built_in_starter(c, who, slug),
                 }
             return {
                 **lifecycle.ready(c, who, slug, summary),
@@ -969,6 +970,7 @@ class Onboarding:
                 "onboarding_state": row["onboarding_state"] or "",
                 "stage": lifecycle.ACTIVE,
                 "changed": False,
+                "routine": self._arm_built_in_starter(c, who, slug),
             }
         if self.auth.member_bot(c, slug):
             limit = Access.load_access(c, self.settings)["member_bot_limit"]
@@ -995,6 +997,16 @@ class Onboarding:
             "changed": True,
             "routine": routine,
         }
+
+    def _arm_built_in_starter(self, c, who, slug):
+        """A starter card that is also built in (`bootstrap`, the Brand Owner) is never parked, so no Start setup arms its
+        first routine: its setup-done does, once (`arm_first_routine`; one a person turned off stays off). Its routine
+        stays off until then, so it runs only once the setup it needs (the brand book) exists. Returns the key or None."""
+        template = self._declared(c, slug).get("template")
+        card = next((card for card in read_cards(self.settings) if card["template"] == template), None)
+        if not template or not card or not (card.get("bootstrap") and card.get("starter")):
+            return None
+        return self.arm_first_routine(c, who, slug)
 
     def attach_template(self, c, who, slug, template, instructions, *, queue_build=False, title_prefix=""):
         """Starters are built by their Computer; custom bots get a BotOps task."""
@@ -1121,6 +1133,13 @@ class Onboarding:
         was built in gets it once it can run it, and it is outside the org chart."""
         return self._ensure_builtin(c, H.COUNSEL, "Counsel", "counsel.turned_on")
 
+    def ensure_brand_owner(self, c):
+        """The same for the Brand Owner: a company from before it was built in gets it once it can run it. It sits outside
+        the org chart like the other built-ins. A company that already hired a bot
+        under its slug (a Brand Manager) keeps that bot as it is and gets no second one (`_ensure_builtin`). Its monthly
+        audit starts off and goes on when its setup is done (`onboarded`)."""
+        return self._ensure_builtin(c, H.BRAND_OWNER, "Brand Owner", "brand_owner.turned_on")
+
     def turn_on_task_manager(self, c, who):
         """Bring the Task Manager back after it was paused or archived by an older version (its report is plain code and
         keeps running either way, but the tasks it opens need the bot to be active)."""
@@ -1130,6 +1149,10 @@ class Onboarding:
         if not load(c)["completed"] or not providers.configured(providers.load(c, self.settings)):
             return None
         if not c.execute("SELECT 1 FROM runners WHERE revoked_at IS NULL").fetchone():
+            return None
+        found = H.resolve_bot(c, slug)
+        if found and found["id"] != slug:
+            # The company's own bot answers to this slug (one hired before it was built in): it stays theirs.
             return None
         row = H.bot(c, slug)
         if row and (
@@ -1369,6 +1392,7 @@ class Onboarding:
 
         bookkeeper.ensure(c, self, self.auth)
         self.ensure_counsel(c)
+        self.ensure_brand_owner(c)
         placed = self._wire(c, record, "human:" + operator, runner_id)
         self._store(c, record, "human:" + operator)
         return branches + placed

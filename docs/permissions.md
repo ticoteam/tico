@@ -235,7 +235,7 @@ on `/api/v2/groups` through `hub api`, or `hub group update`), with that person'
 refused. The Strategy Bot only suggests org changes; when the person in its chat asks for one, it makes it citing their message, with the
 same rights. Built-in bots stay outside groups.
 
-**The built-in bots** (the Assistant, BotOps, the Librarian and the Strategy Bot) act for the whole team, so only the owner changes their settings,
+**The built-in bots** (the Assistant, BotOps, the Librarian, the Strategy Bot, the Task Manager, the Bookkeeper, Counsel and the Brand Owner) act for the whole team, so only the owner changes their settings,
 routines, access or place, and only the owner may add them. A member cannot register a bot with the name `assistant`, `botops`,
 `librarian`, `goal-manager` or `coo`; an Admin can, and manages every other bot.
 The Strategy Bot's level, regular checks and name, and publishing a strategy version, are the owner's alone: an Admin cannot change them ([Your Strategy Bot](strategy-bot.md)).
@@ -369,7 +369,7 @@ is the same humans who always have full access to it. A bot owner can:
 
 - edit its configuration: instructions, model, routines, name and description, repository;
 - set its See, Read and Write access;
-- pause it, rename it, archive it (never the built-in Assistant, BotOps, Librarian or Strategy Bot);
+- pause it, rename it, archive it (never the built-in Assistant, BotOps, Librarian, Strategy Bot, Task Manager, Bookkeeper or Brand Owner);
 - add or remove owners (`POST /api/v2/bots/{bot}/co-owners`, Settings > Bots, **Owned by**);
 - give it a stored credential they hold themselves or stored themselves, and no one else's.
 
