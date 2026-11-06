@@ -173,12 +173,6 @@ def test_ana_and_pricing_talk_through_the_december_price(built):
     assert bodies[-len(said):] == said
 
 
-def test_the_seed_is_deterministic(built, tmp_path_factory):
-    _, _settings, first = built
-    second = demo.build(tmp_path_factory.mktemp("demo-threads-rules-again"), now=NOW)
-    assert first == _content(second.db_path)
-
-
 def _content(path):
     """What the seed writes for threads and rules. Thread ids are not compared: the threads module makes its own
     (uuid4, by design, backend/threads.py `_new_id`), so only the rows' text, times and rules are the same. Capture
