@@ -1,14 +1,14 @@
 """The Nightly memory tidy pilot is retired: Dream (a Maintenance step) does a bot's nightly memory work. Nothing can file
 a pass or a card any more, and nothing sweeps them, so what the pilot left open ends here:
-  - an open tidy card leaves Needs you: withdrawn, reason `retired`, as its hourly sweep withdrew an expired one;
-  - a Keep still queued or applying is refused with a plain reason (a runner is never handed it again);
+  - the cards and their Keeps (memory_tidy_cards, memory_tidy_keeps) are dropped: nothing reads them any more, an open
+    card no longer shows in Needs you, and a runner polling for Keeps is always answered with none;
   - a pass still filed is skipped, reason `skipped: retired`, and its two private tasks (the container and its check
     subtask) still on the board are closed by the keeper, each with a history event, as the pass's own sweep closed them;
   - the pilot list (`memory_tidy:pilots`) and the job's switch in the system_routines record are cleared.
 
-The tables stay as history: memory_tidy_passes and memory_tidy_packets (0038) on every file, memory_tidy_cards and
-memory_tidy_keeps where the pilot's code made them (a new file no longer has those two). Dream's auto check still reads
-memory_tidy_passes to leave the pilot's runs out of a bot's memory count (backend/dream_auto.py).
+memory_tidy_passes and memory_tidy_packets (0038) stay as history: Dream's auto check still reads memory_tidy_passes to
+leave the pilot's runs out of a bot's memory count (backend/dream_auto.py). A new file no longer makes the cards or
+Keeps tables, so dropping them here leaves an upgraded file the shape of a new one.
 
 Plain SQL: a migration never calls app code that may change later. Running it again changes nothing.
 """
@@ -19,7 +19,6 @@ from datetime import datetime, timezone
 KEEPER = "keeper"
 ACTIVE = ("open", "doing", "waiting", "review", "ready")     # H.ACTIVE_STATUSES: still on the board
 NOTE = "Nightly memory tidy retired"
-KEEP_REFUSED = "Nightly memory tidy is retired; nothing was changed"
 
 
 def _now():
@@ -29,13 +28,8 @@ def _now():
 def up(conn):
     tables = {row[0] for row in conn.execute("SELECT name FROM sqlite_master WHERE type='table'")}
     when = _now()
-    if "memory_tidy_keeps" in tables:
-        conn.execute("UPDATE memory_tidy_keeps SET status='refused', reason=? WHERE status IN ('queued','applying')",
-                     (KEEP_REFUSED,))
-    if "memory_tidy_cards" in tables:
-        decided = "decided_at" if "decided_at" in _columns(conn, "memory_tidy_cards") else "decided"
-        conn.execute(f"UPDATE memory_tidy_cards SET status='withdrawn', reason='retired', {decided}=? WHERE status='open'",
-                     (when,))
+    conn.execute("DROP TABLE IF EXISTS memory_tidy_keeps")
+    conn.execute("DROP TABLE IF EXISTS memory_tidy_cards")
     if "memory_tidy_passes" in tables:
         _close_passes(conn, tables, when)
     if "registry_metadata" in tables:
