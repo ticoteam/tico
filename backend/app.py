@@ -8991,17 +8991,33 @@ def create_app(settings=None):
 
     # A file index.html lists as TypeScript is served as its compiled JavaScript, and only while that is current
     # (backend/ui_build.py): the bundle uses it the same way, so this is the separate files' path (TICO_UI_BUNDLE=off).
-    @app.api_route("/tico/ui/{name:path}.ts", methods=["GET", "HEAD"], include_in_schema=False)
-    async def ui_typescript(request: Request, name: str):
+    def ui_typescript_source(name):
+        """ui/<name>.ts as a path relative to ui/, when it is a TypeScript file there; 404 otherwise."""
         name += ".ts"
         if not re.fullmatch(r"[\w-]+(?:/[\w.-]+)*\.ts", name) or ".." in name.split("/") or name.endswith(".d.ts") \
                 or not (settings.ui_dir / name).is_file():
             raise Problem("not_found", "Not found", 404)
+        return name
+
+    @app.api_route("/tico/ui/{name:path}.ts", methods=["GET", "HEAD"], include_in_schema=False)
+    async def ui_typescript(request: Request, name: str):
+        name = ui_typescript_source(name)
         try:
             path = ui_build.compiled(settings.ui_dir, name)
         except ui_build.StaleBuild as exc:
             raise Problem("ui_not_built", str(exc), 503) from None
         return FileResponse(path, media_type="text/javascript; charset=utf-8")
+
+    # Its source map, which the compiled file's last line names relative to it (app/a.ts -> app/a.js.map), so a stack
+    # trace and the developer tools show the .ts. Only for a file compiled from .ts, and only while current.
+    @app.api_route("/tico/ui/{name:path}.js.map", methods=["GET", "HEAD"], include_in_schema=False)
+    async def ui_typescript_map(request: Request, name: str):
+        name = ui_typescript_source(name)
+        try:
+            path = ui_build.source_map(settings.ui_dir, name)
+        except ui_build.StaleBuild as exc:
+            raise Problem("ui_not_built", str(exc), 503) from None
+        return FileResponse(path, media_type="application/json")
 
     # three.js is ~790 KB of text and StaticFiles sends it as is; the Overview waits on it. Gzipped once in
     # memory it is ~200 KB.

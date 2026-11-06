@@ -136,7 +136,8 @@ def build(ui_dir):
     # bundle opens with it once, and every file must already be strict.
     js = []
     for name, path in files["js"]:
-        text = path.read_text()
+        # A compiled file's last line names its source map, which maps the file served alone, not a bundle part.
+        text = ui_build.without_map_line(path.read_bytes()).decode() if name.endswith(".ts") else path.read_text()
         # esbuild writes the directive of a compiled file with double quotes.
         if not re.search(r"""^(['"])use strict\1;""", text, re.M):
             raise BundleError(f"{name}: not strict, so it cannot share a script")

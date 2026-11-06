@@ -1,8 +1,10 @@
 #!/usr/bin/env node
 // Compiles each TypeScript file under ui/ to JavaScript at the same path under build/ui/ (ui/app/a.ts ->
 // build/ui/app/a.js), with esbuild's per-file transform: types are stripped, nothing is bundled, and the file stays a
-// classic script, so it runs where index.html lists it as the .js file it replaced did. build/ui/manifest.json records
-// each source's and output's sha256; the server (backend/ui_build.py) refuses a .ts file the manifest does not match.
+// classic script, so it runs where index.html lists it as the .js file it replaced did. Beside each output is its source
+// map (a.js.map, named by the output's last line), so a stack trace from the separately served file points at a.ts.
+// build/ui/manifest.json records the sha256 of each source, output and map; the server (backend/ui_build.py) refuses a
+// .ts file the manifest does not match.
 // Usage: node scripts/build-ui.cjs [--watch]   (npm run build:ui, npm run watch:ui)
 'use strict';
 const crypto = require('node:crypto');
@@ -42,15 +44,27 @@ async function build() {
   const texts = new Map(files.map(name => [name, fs.readFileSync(path.join(UI, name))]));
   const result = files.length ? await esbuild.build({
     entryPoints: files.map(name => path.join(UI, name)), outdir: OUT, outbase: UI, write: false,
-    bundle: false, target: 'esnext', charset: 'utf8', logLevel: 'warning',
+    bundle: false, target: 'esnext', charset: 'utf8', logLevel: 'warning', sourcemap: 'linked',
   }) : {outputFiles: []};
   const manifest = {files: {}};
   const written = new Set([MANIFEST]);
+  const entry = name => manifest.files[name] ??= {source: sha256(texts.get(name))};
   for (const out of result.outputFiles) {
-    const name = path.relative(OUT, out.path).split(path.sep).join('/').replace(/\.js$/, '.ts');
-    writeAtomic(out.path, out.contents);
+    const rel = path.relative(OUT, out.path).split(path.sep).join('/');
+    let contents = out.contents;
+    if (rel.endsWith('.js.map')) {
+      // esbuild names the source by its path from build/ui; the browser resolves it from the map's URL
+      // (/tico/ui/app/a.js.map), where the source is a.ts beside it. The map carries the source text too.
+      const name = rel.replace(/\.js\.map$/, '.ts');
+      const map = JSON.parse(Buffer.from(contents).toString('utf8'));
+      map.sources = [path.posix.basename(name)];
+      contents = Buffer.from(JSON.stringify(map));
+      entry(name).map = sha256(contents);
+    } else {
+      entry(rel.replace(/\.js$/, '.ts')).output = sha256(contents);
+    }
+    writeAtomic(out.path, contents);
     written.add(out.path);
-    manifest.files[name] = {source: sha256(texts.get(name)), output: sha256(out.contents)};
   }
   // The output of a source that is gone would otherwise stay; nothing names it, but nothing should find it either.
   const prune = dir => {
