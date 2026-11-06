@@ -209,7 +209,9 @@ def strip_setup(words):
     while len(words) > 1 and words[0] in SETUP_WORDS:
         rest = words[1:]
         if words[0] in ("cd", "source", "."):
-            rest = rest[1:]
+            # Its one argument (a directory or a file) is skipped unless it is the work itself: `cd npm` is npm.
+            if len(rest) > 1 and rest[0] != "hub" and rest[0] not in SHELL_PROGRAMS:
+                rest = rest[1:]
         else:
             while rest and "=" in rest[0]:
                 rest = rest[1:]
