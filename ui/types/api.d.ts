@@ -50,6 +50,57 @@ export type Answer = {
   unknown?: boolean;
 };
 
+export type ApiTool = {
+  access: Array<{
+  initials: string;
+  kind: "bot" | "person";
+  last_used_at: string | null;
+  level: "read" | "read_write";
+  name: string;
+  subject: string;
+}>;
+  can_manage: boolean;
+  checks: Array<{
+  checked_at: string;
+  detail: string;
+  ok: boolean;
+  status_code: number | null;
+}>;
+  keys: Array<{
+  access_level: "read" | "read_write";
+  expires_on?: string | null;
+  id: string;
+  last_used_at?: string | null;
+  name: string;
+  preview: string;
+}>;
+  recent: Array<Record<string, unknown>>;
+  status: {
+  text: string;
+  tone: "ok" | "wait" | "fail" | "run" | "idle";
+};
+  tool: {
+  auth_scheme: string;
+  base_url: string;
+  check_path: string;
+  delivery: "proxy" | "computer";
+  id: string;
+  name: string;
+  service: string;
+};
+};
+
+export type ApiToolActivity = {
+  next: string | null;
+  rows: Array<{
+  actor: string;
+  at: string;
+  id: string;
+  kind: "call" | "use";
+  result: "sent" | "refused" | "failed" | "use";
+}>;
+};
+
 export type ApprovalCreate = {
   kind: "send" | "spend" | "publish" | "merge" | "support" | "task_cap" | "spend_limit";
   payload: Record<string, unknown>;
@@ -1087,28 +1138,6 @@ export type Config = {
 
 export type Confirmation = {
   code: string;
-};
-
-export type Connection = {
-  bots: Array<{
-  name: string;
-  slug: string;
-}>;
-  can_configure?: boolean;
-  configure: string;
-  detail?: string;
-  id: string;
-  kind: "slack" | "github" | "mailbox" | "inbox" | "meetings" | "trigger" | "webhook" | "postal" | "listening";
-  more_bots?: number;
-  name: string;
-  readers: string;
-  scope: "company" | "team" | "person";
-  status: "on" | "off" | "waiting" | "error" | "paused";
-};
-
-export type ConnectionList = {
-  connections: Array<Connection>;
-  next: string | null;
 };
 
 export type Contract = Record<string, unknown>;
@@ -4105,14 +4134,20 @@ export type PolicyUpdate = {
   approvers?: Array<string> | null;
   ask_attachments?: boolean | null;
   ask_legal_money?: boolean | null;
+  ask_lint?: boolean | null;
   ask_many_recipients?: boolean | null;
   ask_new_address?: boolean | null;
+  ask_outside_cc?: boolean | null;
+  blocked_recipients?: Array<string> | null;
   company_daily_cap?: number | null;
   daily_cap?: number | null;
   inherit?: boolean;
   mailbox_daily_cap?: number | null;
+  max_outside_recipients?: number | null;
   mode?: string | null;
+  owner_handles?: Array<string> | null;
   pacing_seconds?: number | null;
+  second_review?: boolean | null;
   to?: string | null;
   undo_seconds?: number | null;
   what?: string | null;
@@ -6081,6 +6116,39 @@ export type Token = {
   token_type: string;
 };
 
+export type ToolIndex = {
+  counts: {
+  all: number;
+  api: number;
+  mail: number;
+  needs_you: number;
+  websites: number;
+};
+  next: string | null;
+  rows: Array<ToolIndexRow>;
+};
+
+export type ToolIndexRow = {
+  detail: string;
+  href: string;
+  id: string;
+  kind: "api" | "mailbox" | "number" | "address" | "slack" | "github" | "meetings" | "listening" | "webhook" | "declared" | "website";
+  name: string;
+  needs_you: boolean;
+  status: {
+  text: string;
+  tone: "ok" | "wait" | "fail" | "run" | "idle";
+};
+  way: string;
+  who: Array<{
+  id: string;
+  initials: string;
+  kind: "bot" | "person";
+  name: string;
+}>;
+  who_total: number;
+};
+
 export type ToolRegister = {
   can: Array<string>;
   dry_run?: boolean;
@@ -6090,14 +6158,6 @@ export type ToolRegister = {
   note?: string;
   scope?: Record<string, unknown>;
   service: string;
-  title_prefix?: string;
-};
-
-export type ToolUpdate = {
-  can?: Array<string> | null;
-  mcp?: Record<string, unknown> | null;
-  note?: string | null;
-  scope?: Record<string, unknown> | null;
   title_prefix?: string;
 };
 
@@ -6526,6 +6586,14 @@ export type backend__letters__Settings = {
   mode?: "ask_first" | "on_their_own" | "never" | null;
   monthly_cap_micros?: number | null;
   return_address?: Address | null;
+};
+
+export type backend__models__ToolUpdate = {
+  can?: Array<string> | null;
+  mcp?: Record<string, unknown> | null;
+  note?: string | null;
+  scope?: Record<string, unknown> | null;
+  title_prefix?: string;
 };
 
 export type backend__presence__Heartbeat = {
@@ -7534,6 +7602,13 @@ export type FollowThreadResponse = ThreadFollow;
 export type GetAlertCompanyCapParams = Record<string, never>;
 export type GetAlertCompanyCapBody = never;
 export type GetAlertCompanyCapResponse = AlertCompanyCap;
+
+/** GET /api/v2/api-tools/{tool_id} */
+export type GetApiToolParams = {
+  tool_id: string;
+};
+export type GetApiToolBody = never;
+export type GetApiToolResponse = ApiTool;
 
 /** GET /api/v2/approvals/{aid} */
 export type GetApprovalParams = {
@@ -8732,6 +8807,16 @@ export type ListAllAutomationRunsParams = {
 export type ListAllAutomationRunsBody = never;
 export type ListAllAutomationRunsResponse = AutomationOverviewRuns;
 
+/** GET /api/v2/api-tools/{tool_id}/activity */
+export type ListApiToolActivityParams = {
+  cursor?: string;
+  limit?: number;
+  result?: string;
+  tool_id: string;
+};
+export type ListApiToolActivityBody = never;
+export type ListApiToolActivityResponse = ApiToolActivity;
+
 /** GET /api/v2/approvals */
 export type ListApprovalsParams = {
   before?: string | null;
@@ -8907,14 +8992,6 @@ export type ListComputerBrowserExitUsageResponse = BrowserExitUsage;
 export type ListComputerSubscriptionsParams = Record<string, never>;
 export type ListComputerSubscriptionsBody = never;
 export type ListComputerSubscriptionsResponse = ComputerSubscriptionList;
-
-/** GET /api/v2/connections */
-export type ListConnectionsParams = {
-  cursor?: string;
-  limit?: number;
-};
-export type ListConnectionsBody = never;
-export type ListConnectionsResponse = ConnectionList;
 
 /** GET /api/v2/conversations */
 export type ListConversationsParams = {
@@ -9802,6 +9879,14 @@ export type ListThreadsParams = {
 };
 export type ListThreadsBody = never;
 export type ListThreadsResponse = ThreadSidebar;
+
+/** GET /api/v2/tool-index */
+export type ListToolIndexParams = {
+  cursor?: string;
+  limit?: number;
+};
+export type ListToolIndexBody = never;
+export type ListToolIndexResponse = ToolIndex;
 
 /** GET /api/v2/triggers/{trigger_id}/deliveries */
 export type ListTriggerDeliveriesParams = {
@@ -11531,7 +11616,7 @@ export type UpdateBotToolParams = {
   bot: string;
   tool_id: string;
 };
-export type UpdateBotToolBody = ToolUpdate;
+export type UpdateBotToolBody = backend__models__ToolUpdate;
 export type UpdateBotToolResponse = BotToolUpdated;
 
 /** PATCH /api/v2/cards/{cid} */
