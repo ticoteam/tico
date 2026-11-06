@@ -318,6 +318,11 @@ def test_every_hub_command_in_templates_and_skills_runs_or_is_its_recorded_refus
     assert len(used) > 150, f"only {len(used)} commands found: the scan is not reading templates and skills"
     problems, observed = [], {}
     sample = live_sample(used)
+    # Which refusal a command gets can depend on state earlier commands made (a bot, a run, a share), so the exact
+    # recorded outcomes are compared only when every command runs, in order: the release gate and any change to the CLI.
+    # A sampled run still fails on a command that raises, prints a usage error or says nothing, and on an argv that
+    # does not parse.
+    exact = sample == set(used)
     for path, (leaf, where) in sorted(used.items()):
         if path in SKIPPED:
             continue
@@ -339,11 +344,13 @@ def test_every_hub_command_in_templates_and_skills_runs_or_is_its_recorded_refus
             observed[path] = result
         if RECORD:
             continue
-        if result == "ok":
+        if result in ("usage-error", "silent"):
+            problems.append(f"hub {path} ({where}): {result}: {(out + err)[:200]!r}")
+        elif not exact:
+            continue      # a subset runs without the state earlier commands leave, so refusals differ: see `exact`
+        elif result == "ok":
             if path in EXPECTED:
                 problems.append(f"hub {path}: was refused as {EXPECTED[path]!r} and now runs; update expected-refusals.json")
-        elif result in ("usage-error", "silent"):
-            problems.append(f"hub {path} ({where}): {result}: {(out + err)[:200]!r}")
         elif EXPECTED.get(path) != result:
             problems.append(f"hub {path} ({where}): refused as {result!r} (recorded: {EXPECTED.get(path)!r})")
     unlisted = sorted(f"hub {word} (in {where})" for word, where in stale.items() if word not in STALE)
