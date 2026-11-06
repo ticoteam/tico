@@ -247,7 +247,7 @@ const layout = async (page, view) => {
 // The header's visible controls, by the middle of each box, and whether the page scrolls sideways.
 const headRows = page => page.evaluate(() => {
   const head = document.querySelector('#tasks-pane .tl-head');
-  const shown = [...head.querySelectorAll('h1, button, .tl-search')].filter(el => el.getClientRects().length && !el.closest('[hidden]'));
+  const shown = [...head.querySelectorAll('h1, button, .tl-search')].filter(el => el.getBoundingClientRect().width > 2 && !el.closest('[hidden]'));
   const mids = shown.map(el => { const r = el.getBoundingClientRect(); return Math.round(r.top + r.height / 2); });
   const rows = [];
   for (const m of mids.sort((a, b) => a - b)) if (!rows.length || m - rows[rows.length - 1] > 6) rows.push(m);

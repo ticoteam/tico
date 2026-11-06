@@ -701,13 +701,15 @@ function tasksHeadFit(state) {
   const head = $('#tasks-pane .tl-head'), seg = $('#task-finished'), bar = $('#task-bar');
   if (!head || !seg || TASKS_ST !== state) return;
   const scope = head.querySelector('.tl-scope-l');
-  head.classList.remove('s-fold', 'wrap');
+  head.classList.remove('s-fold', 'h-fold', 'wrap');
   if (seg.parentElement !== head.querySelector('.tl-finished-slot')) head.querySelector('.tl-finished-slot').append(seg);
   // A phone's scope may shorten to "Gene…"; a wider header folds the search before it cuts the scope's name.
+  // Order of giving way: search to its icon, the finished segment to the chips row, a phone's title, then a second row.
   const phone = matchMedia(PHONE).matches;
   const over = () => head.scrollWidth - head.clientWidth > 1 || (!phone && scope && scope.scrollWidth - scope.clientWidth > 1);
   if (over()) head.classList.add('s-fold');
   if (!seg.hidden && over()) bar.querySelector('.tl-finished-bar').append(seg);
+  if (phone && over()) head.classList.add('h-fold');    // a phone drops the title before it wraps
   if (head.scrollWidth - head.clientWidth > 1) head.classList.add('wrap');
   bar.hidden = !bar.querySelector('#task-finished:not([hidden]), .tl-chip');
   tasksBarEdge(bar);

@@ -316,6 +316,7 @@ button.linkish.tl-clear:hover{color:var(--ink)}
   .tl-bar{overflow-x:auto;scrollbar-width:none;flex-wrap:nowrap}
   .tl-head{gap:4px}
   .tl-head h1{margin-right:2px}
+  .tl-head.h-fold h1{position:absolute;width:1px;height:1px;overflow:hidden;clip:rect(0 0 0 0)}   /* the bottom bar already says Tasks */
   .tl-head .spacer{display:none}
   .tl-scope{margin-right:auto;padding:0 6px 0 8px;gap:4px}
   .tl-ib,.tl-new{width:30px}
