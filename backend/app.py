@@ -1274,7 +1274,7 @@ def create_app(settings=None):
         if c is not None:
             row = task_holds.with_holds(c, row)
             H.hydrate_task_tags(c, [row])
-        value = {"id": row["id"], "short_id": row["id"][:8], **row, **question_tasks.fields(row),
+        value = {"id": row["id"], "short_id": row["id"][:8], **row, **question_tasks.view_fields(row),
                  "acceptance_criteria": json.loads(row.get("acceptance", "[]")),
                  "labels": H.task_labels(row), "lane": row.get("lane") or "company",
                  "next_run": bool(row.get("next_run")), "private": H.task_private(c, row), "cover": None}
@@ -1329,7 +1329,9 @@ def create_app(settings=None):
                 value.update(routine_id=routine['schedule_id'])
             asks = H.open_task_asks(c, row, actor=privacy.actor(who))
             if question_tasks.is_open(row):
-                asks = [question_tasks.as_ask(row), *asks]    # a question task is its own ask
+                # A question task is its own ask; its files under review as this reader may see them.
+                mine = question_tasks.as_ask(row)
+                asks = [visual_view(c, who, [mine])[0] if who is not None else mine, *asks]
             value.update({"origin_actor": H.task_origin(c, row), "ask": next(iter(asks), None), "open_asks": len(asks)})
             if who is not None and visible_sql != "1":
                 value["from_person"] = views.person_origin(c, row, visible_sql, who.actor)
@@ -5536,8 +5538,11 @@ def create_app(settings=None):
     def task_answers(request: Request, tid: str):
         with store.read() as c:
             task_id = auth.resolve_task(c, request.state.identity, tid)
-            auth.task(c, request.state.identity, task_id)
-            return {"answers": [m["answer"] for m in H.task_comments(c, task_id, actor=privacy.actor(request.state.identity)) if m.get("answer")]}
+            row = auth.task(c, request.state.identity, task_id)
+            answers = [m["answer"] for m in H.task_comments(c, task_id, actor=privacy.actor(request.state.identity)) if m.get("answer")]
+            # A question task's own answer (backend/question_tasks.py) is on the task, not in a comment.
+            own = question_tasks.fields(row)["answer"]
+            return {"answers": answers + ([own] if own else [])}
 
     def task_answer_write(c, who, tid, body, warn=""):
         from .task_review import answer_task

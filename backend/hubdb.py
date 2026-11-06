@@ -5932,7 +5932,10 @@ def _subtask_wake(conn, actor, row, previous, note=None, quiet=False):
     # Done or Declined carries a verdict; the bot closing its own check is a cancellation the parent need not hear.
     by_checker = bool(check and actor == row["owner_id"] and row["status"] in ("done", "declined"))
     by_worker = is_bot(actor) and task_represents(conn, actor, row["owner_id"]) and row["requester_id"] != row["owner_id"]
-    if not (is_human(actor) or by_checker or by_worker) or row["status"] not in terminal:
+    # A question task the keeper closes on its date (backend/question_tasks.py) is heard the same way, once; one sent
+    # back quietly goes on its bot's still-needed roundup instead (backend/still_needed.py).
+    by_date = actor == KEEPER and bool(row.get("questions")) and not quiet
+    if not (is_human(actor) or by_checker or by_worker or by_date) or row["status"] not in terminal:
         return None
     parent = _subtask_result_parent(conn, row)
     if not parent:

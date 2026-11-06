@@ -40,6 +40,15 @@ def fields(row):
     return {k: _load((row or {}).get(k)) for k in JSON_FIELDS}
 
 
+def view_fields(row):
+    """fields() as a task view carries them: the review's files without their attachments, which only the card's ask
+    carries, decorated for each reader (visuals.decorate: a file the reader may not open says nothing of itself)."""
+    f = fields(row)
+    if isinstance(f["review"], dict):
+        f["review"] = {k: v for k, v in f["review"].items() if k != "attachments"}
+    return f
+
+
 def is_question(row):
     return bool(row and row.get("questions"))
 
@@ -241,7 +250,8 @@ def answer(c, auth, who, task_id, body, warn=""):
     if spend and spend["label"] in labels:
         value["spend_approval"] = file_reviews.spend_approval(c, who, asked, task_id, spend, [])
     text, refs = H.answer_text(asked, body.answers, text=text, passed=passed, refs={"answer": value})
-    value = {**refs["answer"], "text": text}
+    # The pages its words copy (body_sources) stay with them, so a reader who may not open one gets it redacted.
+    value = {**refs["answer"], "text": text, **({"body_sources": refs["body_sources"]} if refs.get("body_sources") else {})}
     record(c, task_id, value)
     H.task_update(c, who.actor, task_id, status="declined" if body.dismiss else "done", note=text)
     if value.get("reviewed"):
@@ -288,8 +298,13 @@ def open_rows(conn):
 def settle(conn, row, text, *, answers=None):
     """The bot's default went ahead on its date: the keeper answers the question task with it and closes it done.
     The bot hears it once (hubdb._answered on its task, or as the requester)."""
-    record(conn, row["id"], {"target": {"task": row["id"]}, "answers": answers or {}, "other": None, "dismiss": False,
-                             "by": H.KEEPER, "at": H.now(), "text": text, "if_no_answer": "went_ahead"})
+    asked = as_ask(row)
+    value = {"target": {"task": row["id"]}, "answers": answers or {}, "other": None, "dismiss": False, "by": H.KEEPER,
+             "at": H.now(), "if_no_answer": "went_ahead"}
+    text, refs = H.answer_text(asked, answers or {}, text=text, refs={"answer": value})
+    text, refs = H.answer_text(asked, (asked["refs"].get("if_no_answer") or {}).get("do") or "", text=text, refs=refs)
+    record(conn, row["id"], {**refs["answer"], "text": text,
+                             **({"body_sources": refs["body_sources"]} if refs.get("body_sources") else {})})
     H.task_update(conn, H.KEEPER, row["id"], status="done", note=text)
     H.event(conn, H.KEEPER, "ask.went_ahead", row["id"], {"to": row["owner_id"], "bot": row["requester_id"],
                                                          "task": row["id"]})
