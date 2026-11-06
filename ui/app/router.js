@@ -138,7 +138,7 @@ function route(hash = location.hash) {
   else if (S.route === '#/settings/ceo') { location.replace(SETTINGS + '/strategy-bot'); return; }
   // Every other #/settings/<tab>[/<card>] opens that tab, and the card when named (the settings catalogue's links,
   // backend/settings_entries.py). settingsShow maps old names and sections and puts the tab's own address back in
-  // the bar, so a tab can be bookmarked and shared: #/settings/gateway, #/settings/models, …
+  // the bar, so a tab can be bookmarked and shared: #/settings/people, #/settings/models, …
   else if (/^#\/settings\/[a-z-]+(?:\/[a-z0-9-]+)?\/?(\?.*)?$/.test(S.route)) {
     const [path, query] = S.route.slice(11).split('?'), [tab, card] = path.split('/');
     if (tab === 'history') settingsHistoryAddress(query);   // History's view and filters (ui/app/settings-history.js)

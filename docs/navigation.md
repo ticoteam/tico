@@ -1,12 +1,10 @@
 # Navigation
 
 The current paths in Tico. Settings is under your email and opens on General; each tab has its own address,
-shown in the address bar while the tab is open (`#/settings/people`, `#/settings/gateway`), to bookmark or share, and a tab you can't see opens General with **That page is for admins**.
+shown in the address bar while the tab is open (`#/settings/people`, `#/settings/models`), to bookmark or share, and a tab you can't see opens General with **That page is for admins**.
 Tools is in the sidebar.
 Controls appear when your rights allow the action. A card you can read but cannot change names who can.
 For example, Repositories says **Ask Ana Rivera to connect GitHub** when Ana owns the team.
-
-**Picks and services** opens Gateway. **Key and connection** opens Models.
 
 | To | Open |
 |---|---|
@@ -26,7 +24,7 @@ For example, Repositories says **Ask Ana Rivera to connect GitHub** when Ana own
 | Add a subscription (Connect or paste) and give it to computers | Settings → Models → Add subscription; then Settings → Computers ([Subscriptions](computers.md#subscriptions)) |
 | Sign a computer in to an AI tool | Settings → Computers → open a computer → Connections ([Computers](computers.md)) |
 | Change company turn limits | Settings → Models → Limits |
-| Check problems and recovery | Settings → Health |
+| Check problems and recovery | Settings → General → Health → Details (`#/settings/health`) |
 | Store a Credential and grant it | Tools → Credentials → Add credential; then Access → Grant access |
 | Connect or review a Tool | Tools; Slack channels are under Tools → Slack channels |
 | Add or manage people and member rules | Settings → People |
