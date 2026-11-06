@@ -252,7 +252,7 @@ def check_icon(entry):
         )
         write_output("available", "false")
         return 0
-    except Exception as exc:
+    except Invalid as exc:
         raise OperationFailed(
             f"Company app icon download (TICO_COMPANY_APPS.icon_url) failed: {failure_reason(exc)}"
         ) from None
