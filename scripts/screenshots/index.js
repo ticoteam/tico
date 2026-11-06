@@ -31,7 +31,7 @@ const THEMES = ['light', 'dark'];
 // open a dialog).
 const PAGES = [
   {name: 'updates', route: '#/updates', ready: 'Write your update'},
-  {name: 'tasks', route: '#/tasks', ready: 'Needs you', steps: async page => {
+  {name: 'tasks', route: '#/tasks', ready: 'Raise Home Pro from $449 to $479 for December?', steps: async page => {
     await page.click('#task-view [data-view="list"]');
     await page.getByText('Draft replies for the open support tickets').first().waitFor();
   }},
