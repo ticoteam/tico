@@ -106,10 +106,16 @@ impl Store {
                 |row| row.get(0),
             )
             .optional()?;
-        Ok(match text {
+        let mut context = match text {
             Some(text) => serde_json::from_str(&text)?,
             None => Context::default(),
-        })
+        };
+        for name in self.meeting_speakers(id)?.participants {
+            if context.participants.len() < 100 && !context.participants.contains(&name) {
+                context.participants.push(name);
+            }
+        }
+        Ok(context)
     }
     pub fn save_context(&self, id: &str, value: &Context) -> Result<()> {
         self.exists(id)?;

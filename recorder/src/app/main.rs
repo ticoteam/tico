@@ -158,6 +158,8 @@ commands! {
     dismiss_error() => |app| app.dismiss_error();
     open_url(url: String) => |app| app.open_url(&url);
     dismiss_notice() => |app| app.dismiss_notice();
+    allow_speaker_names() => |app| tico_recorder_native::speaker_names::open_settings(app.store.root());
+    dismiss_speaker_names() => |app| tico_recorder_native::speaker_names::dismiss_permission(app.store.root());
     set_visible(visible: bool) => |app| app.set_visible(visible);
 }
 
@@ -401,6 +403,7 @@ fn main() {
     let root = settings::root();
     let library_lock = AppLock::acquire(&root).expect("Recorder library is in use");
     let store = Store::open(&root).expect("Open recorder library");
+    tico_recorder_native::diag::init(&root);
     store.recover().expect("Recover saved audio");
     if demo && store.list().unwrap_or_default().is_empty() {
         recorder::seed_demo(&store).expect("Create demo library");
@@ -495,6 +498,8 @@ fn main() {
             dismiss_error,
             open_url,
             dismiss_notice,
+            allow_speaker_names,
+            dismiss_speaker_names,
             set_visible,
             update::update_check,
             update::update_install,

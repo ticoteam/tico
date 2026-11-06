@@ -715,7 +715,7 @@ pub fn live_turns(
         let speaker = if me {
             "Me".to_owned()
         } else {
-            partial
+            let label = partial
                 .words
                 .iter()
                 .rev()
@@ -742,7 +742,8 @@ pub fn live_turns(
                                     .unwrap_or_else(|| "Meeting audio".into())
                             })
                     },
-                )
+                );
+            crate::speaker_names::name_of(record, &label).to_owned()
         };
         out.push(LiveTurn {
             speaker,
@@ -772,30 +773,18 @@ pub fn chunk_texts(record: &Recording) -> BTreeMap<String, String> {
 
 /// Each chunk's words without echo, as `chunk_texts` has them. `speaker` is kept only where
 /// diarization named a meeting-audio voice. A chunk without word timings is one word spanning it.
+/// Meeting-audio labels carry the names the meeting app showed speaking, where known.
 pub fn chunk_words(record: &Recording) -> BTreeMap<String, Vec<Word>> {
+    words_with(record, true)
+}
+/// As [`chunk_words`], with every voice's label and no names.
+pub(crate) fn chunk_labels(record: &Recording) -> BTreeMap<String, Vec<Word>> {
+    words_with(record, false)
+}
+fn words_with(record: &Recording, named: bool) -> BTreeMap<String, Vec<Word>> {
     let heard = Heard::chunks(record);
     let mut out = BTreeMap::new();
-    let mut named = record.clone();
-    named.register_speakers(
-        record
-            .chunks
-            .iter()
-            .filter(|c| c.channel == "them")
-            .flat_map(|c| {
-                c.words
-                    .iter()
-                    .map(move |w| (speaker_identity(c, w), w.speaker.clone()))
-            })
-            .chain(
-                record
-                    .chunks
-                    .iter()
-                    .filter(|c| c.channel == "them" && c.words.is_empty())
-                    .map(|c| (speaker_identity(c, &Word::default()), c.speaker.clone())),
-            )
-            .collect(),
-    );
-    let names = &named.speaker_labels;
+    let labels = speaker_labels(record, &BTreeMap::new());
     for chunk in record.chunks.iter().filter(|c| !c.text.trim().is_empty()) {
         let me = chunk.channel == "me";
         if me
@@ -820,9 +809,14 @@ pub fn chunk_words(record: &Recording) -> BTreeMap<String, Vec<Word>> {
             words
                 .into_iter()
                 .map(|word| {
-                    let label = speaker_identity(chunk, &word);
+                    let id = speaker_identity(chunk, &word);
+                    let label = labels.get(&id).unwrap_or(&id);
                     Word {
-                        speaker: names.get(&label).cloned().unwrap_or(label),
+                        speaker: if named {
+                            crate::speaker_names::name_of(record, label).to_owned()
+                        } else {
+                            label.clone()
+                        },
                         ..word
                     }
                 })
@@ -831,6 +825,44 @@ pub fn chunk_words(record: &Recording) -> BTreeMap<String, Vec<Word>> {
         out.insert(chunk.id.clone(), words);
     }
     out
+}
+
+/// Every meeting-audio identity's display label: stored ones, then any not reserved yet.
+pub(crate) fn speaker_labels(
+    record: &Recording,
+    streamed: &BTreeMap<String, Vec<Word>>,
+) -> BTreeMap<String, String> {
+    let mut labels = record.speaker_labels.clone();
+    crate::store::register_speakers(
+        &mut labels,
+        record
+            .chunks
+            .iter()
+            .filter(|c| c.channel == "them")
+            .flat_map(|c| {
+                c.words
+                    .iter()
+                    .map(move |w| (speaker_identity(c, w), w.speaker.clone()))
+            })
+            .chain(
+                record
+                    .chunks
+                    .iter()
+                    .filter(|c| c.channel == "them" && c.words.is_empty())
+                    .map(|c| (speaker_identity(c, &Word::default()), c.speaker.clone())),
+            )
+            .collect(),
+    );
+    crate::store::register_speakers(
+        &mut labels,
+        streamed
+            .get("them")
+            .into_iter()
+            .flatten()
+            .map(|w| (w.speaker.clone(), w.speaker.clone()))
+            .collect(),
+    );
+    labels
 }
 
 pub(crate) fn speaker_identity(chunk: &Chunk, word: &Word) -> String {
