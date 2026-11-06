@@ -5,8 +5,8 @@
 //    is no tab either: #/settings/health opens its page with no tab highlighted;
 //  - while a tab is shown the address bar names it (#/settings/<tab>), so it can be copied or shared: opening an address
 //    shows its tab's own, picking another tab follows without a history step, a reload reopens it, and a redraw
-//    (route() called again, as a status change does) keeps Settings and the tab; the old Rules and Routines
-//    addresses open System;
+//    (route() called again, as a status change does) keeps Settings and the tab; System is gone: its old addresses
+//    (and Rules and Routines before it) open Automations' System jobs, and its cards' addresses their new homes;
 //  - Inboxes moved to Tools: the old Google and Inbox addresses (Google's sign-in returns to #/settings/inbox) open
 //    Tools › Settings at Email, the old Mailboxes one Tools' mail, and an old inbox address its page under Tools,
 //    which a redraw and a reload keep;
@@ -24,8 +24,9 @@ const SPECIAL = ['models', 'providers', 'tags', 'types', 'triggers', 'runs', 'ro
   'storage', 'team', 'company', 'assistant', 'privacy'];
 // Old names that leave Settings: Listening moved to Strategy › Market (ui/app/redesign.js; redesign-shell.cjs checks it),
 // the old Strategy Bot address only redirects to its tab (ui/app/router.js), so no link is drawn to it, and Inboxes'
-// old addresses redirect to Tools (ui/app/tools.js toolsRoute; checked below).
-const MOVED = ['listening', 'ceo', 'inboxes'];
+// old addresses redirect to Tools (ui/app/tools.js toolsRoute; checked below), and System's (Rules and Routines before it)
+// leave for Automations (ui/app/settings.js settingsMovedOut; checked below).
+const MOVED = ['listening', 'ceo', 'inboxes', 'rules', 'routines'];
 
 // Every #/settings/<name> address written in the UI's sources.
 function settingsLinks() {
@@ -116,8 +117,8 @@ const address = page => page.evaluate(() => location.hash);
 
       // A Settings address survives a refresh in a new tab: the address, not the last tab, decides.
       const fresh = await context.newPage();
-      await fresh.goto('https://tico-ui.test/#/settings/system');
-      await fresh.waitForFunction(() => typeof SETTINGS_TAB !== 'undefined' && SETTINGS_TAB === 'system' && location.hash === '#/settings/system');
+      await fresh.goto('https://tico-ui.test/#/settings/security');
+      await fresh.waitForFunction(() => typeof SETTINGS_TAB !== 'undefined' && SETTINGS_TAB === 'security' && location.hash === '#/settings/security');
       await fresh.close();
       assert.deepEqual(errors, []);
       await context.close();
@@ -142,13 +143,24 @@ const address = page => page.evaluate(() => location.hash);
       assert.equal(await address(page), '#/settings/models', 'the old Models card on Computers opens Models');
       await go(page, '#/settings/computers');
       assert.equal(await address(page), '#/settings/devices');
-      // The old Rules and Routines addresses open System, and a redraw keeps Settings and the tab.
-      for (const old of ['#/settings/rules', '#/settings/rules?task=t1', '#/settings/routines', '#/settings/recurring']) {
-        await go(page, old);
-        assert.equal(await address(page), '#/settings/system', old);
+      // System's old addresses (Rules and Routines before it) open Automations' System jobs, and its cards their new homes.
+      for (const [old, want] of [['#/settings/system', '#/automations/system-jobs'], ['#/settings/rules', '#/automations/system-jobs'],
+        ['#/settings/rules?task=t1', '#/automations/system-jobs'], ['#/settings/routines', '#/automations/system-jobs'],
+        ['#/settings/recurring', '#/automations/system-jobs'], ['#/settings/system/set-system-card', '#/automations/system-jobs'],
+        ['#/settings/system/set-task-manager-card', '#/bot/task-manager/settings'], ['#/settings/strategy-bot', '#/bot/goal-manager/settings'],
+        ['#/settings/system/set-strategy-bot-card', '#/bot/goal-manager/settings'], ['#/settings/ceo', '#/bot/goal-manager/settings'],
+        ['#/settings/system/set-release-card', '#/settings/bots'], ['#/settings/releases', '#/settings/bots']]) {
+        await page.evaluate(h => { location.hash = h; }, '#/settings/general');
+        await page.waitForFunction(() => location.hash === '#/settings/general');
+        await page.evaluate(h => { location.hash = h; }, old);
+        await page.waitForFunction(w => location.hash === w, want).catch(() => assert.fail(`${old} leads to ${want}`));
       }
+      await go(page, '#/settings/system/set-screening-card');
+      assert.equal(await selected(page), 'security', 'Screening is on Security');
+      assert.equal(await address(page), '#/settings/security');
+      // A redraw keeps Settings and the tab.
       await page.evaluate(() => route());
-      assert.deepEqual(await page.evaluate(() => [S.route, SETTINGS_TAB, location.hash]), ['#/settings', 'system', '#/settings/system']);
+      assert.deepEqual(await page.evaluate(() => [S.route, SETTINGS_TAB, location.hash]), ['#/settings', 'security', '#/settings/security']);
       // Leaving Settings and coming back by Back reopens the tab the address names.
       await page.evaluate(() => { location.hash = '#/settings/health'; });
       await page.waitForFunction(() => location.hash === '#/settings/health' && SETTINGS_TAB === 'health');
@@ -187,6 +199,9 @@ const address = page => page.evaluate(() => location.hash);
       assert.equal(await page.locator('#settings-denied').isVisible(), true);
       assert.match(await page.locator('#settings-denied').innerText(), /That page is for admins/);
       assert.equal(await address(page), '#/settings/general', 'the address names the tab shown, not the one refused');
+      await go(page, '#/settings/security');
+      assert.equal(await page.locator('#settings-denied').isVisible(), true, 'Security is for admins');
+      assert.equal(await page.locator('#settings-tabs [data-settings-tab=security]').count(), 0);
       await go(page, '#/settings/nothing-here');
       assert.equal(await selected(page), 'general');
       assert.equal(await page.locator('#settings-denied').isVisible(), false, 'an unknown address says nothing about admins');

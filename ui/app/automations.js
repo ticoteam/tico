@@ -153,6 +153,8 @@ async function pageAutomations() {
       auDrawHead(); auDrawPane();
       await auMaintLoad(state);
       if (AU !== state || state.id !== id) return;
+    } else if (id === AU_SYSJOBS) {
+      // System jobs is its own screen too (automations-maintenance.js), read from /v2/system-routines.
     } else if (id) {
       auDrawHead(); auDrawPane();
       // A slow answer for an automation left behind must not land on the one now open.
@@ -310,6 +312,7 @@ function auDrawHead() {
   AU.root.querySelector('.au-crumb').innerHTML = AU.id ? `<a class="au-up" href="${AUTOMATIONS}"><span class="nav-icon" aria-hidden="true">chevron_left</span>Automations</a>` : '';
   if (!AU.id) { hd.innerHTML = ''; return; }
   if (AU.id === AU_MAINT) { auMaintHead(hd); return; }
+  if (AU.id === AU_SYSJOBS) { auSysJobsHead(hd); return; }
   const row = a && (AU.list || []).find(x => x.id === a.id);
   const name = a?.name || row?.name || '';
   const seg = ['flow', 'runs'].map(v => `<a role="tab" href="${auHref(AU.id, v)}" aria-selected="${AU.view === v}">${v === 'flow' ? 'Flow' : 'Runs'}</a>`).join('');
@@ -333,6 +336,7 @@ function auDrawPane() {
   const pane = AU.root.querySelector('.au-pane');
   if (!AU.id) { pane.innerHTML = ''; return; }
   if (AU.id === AU_MAINT) { auMaintPane(pane); return; }
+  if (AU.id === AU_SYSJOBS) { auSysJobsPane(pane); return; }
   if (!AU.cur) { pane.innerHTML = '<p class="muted au-pad">Loading…</p>'; return; }
   const top = pane.scrollTop;
   if (AU.view === 'runs') auRunsDraw(pane); else pane.innerHTML = auFlowHTML(AU.cur);

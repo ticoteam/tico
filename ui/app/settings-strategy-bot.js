@@ -1,4 +1,4 @@
-/* ui/app/settings-strategy-bot.js — Settings > System > Strategy Bot: "Regular checks" and "How much your Strategy Bot does"
+/* ui/app/settings-strategy-bot.js — the Strategy Bot's page, Settings tab: "Regular checks" and "How much your Strategy Bot does"
    Classic script: its globals are shared with the other files under ui/app/, loaded in the order index.html lists them. */
 'use strict';
 
@@ -7,7 +7,7 @@
 // before anything changes. Where the level is only the default (`level_chosen` false), the owner can confirm it too,
 // so a later default never moves them. It is a helper's settings, beside the Task Manager's: nobody chats with it, the
 // Assistant hands it the work. Only the owner sees the card; the server refuses everyone else, admins and every bot
-// included. Its name, pause and budget are its bot settings (Settings > Bots, its page's Info).
+// included. Its name, pause and budget are the rest of its page's Settings.
 let STRATEGY_BOT_PICK = null;
 const settingsStrategyBotShown = () => S.me?.role === 'owner';
 async function renderSettingsStrategyBot() {
