@@ -572,9 +572,10 @@ class TaskComment(Contract):
     text: Text
     ask: ReviewAsk | None = None
     attachments: list[Attachment] = Field(default_factory=list, max_length=10)
-    # How the comment reaches the task's bot (docs/tasks.md): steer into its running turn, queue right after it, defer
-    # to its next turn on the task (at the latest `defer_for`, 24h), or goal: the task session's goal becomes the text.
-    # Omitted, the comment default decides (H.comment_way).
+    # How the comment reaches the task's followers and whom it @mentions (docs/tasks.md): steer into each bot's
+    # running turn, queue right after it, defer to its next turn on the task (at the latest `defer_for`, 24h), or goal:
+    # the task session's goal becomes the text. Omitted, it steers (D13), or defers with no deadline for a reader who
+    # may not direct the task's bots.
     delivery: Literal["steer", "queue", "defer", "goal"] | None = None
     defer_for: DeferFor | None = None
 

@@ -250,19 +250,20 @@ def test_a_defer_rides_along_only_on_a_turn_in_its_own_session(api):
     assert rows(api, item=here["comment"]["id"]) == []
 
 
-def test_on_a_task_a_bot_filed_a_comment_defers_a_day_and_an_at_mention_queues(api):
+def test_on_a_task_a_bot_filed_a_comment_reaches_it_only_by_an_at_mention(api):
     token = bot_token(api, "ops")
     task = post(api, "tasks", {"owner": "ben", "title": "Fix the sign-in check", "body": "x"}, token=token)
-    before = H.now()
     plain = post(api, f"tasks/{task['id']}/comments", {"text": "On it today."}, token="ben-test")
-    assert plain["woke"] is False and plain["sent_as"]["delivery"] == "defer"
-    assert H.shift(before, hours=24) <= plain["sent_as"]["until"] <= H.shift(H.now(), hours=24)
+    assert plain["woke"] is False and "sent_as" not in plain, "the filer does not follow: no bot gets it"
     named = post(api, f"tasks/{task['id']}/comments", {"text": "@ops which app is it?"}, token="ben-test")
-    assert named["woke"] is True and named["sent_as"]["delivery"] == "queue"
-    # Named, it still goes by the sender's choice.
+    assert named["woke"] is True and named["sent_as"]["delivery"] == "steer"
+    # Defer never still reaches the bot it names, queued (D6).
     chosen = post(api, f"tasks/{task['id']}/comments", {"text": "@ops later is fine.", "delivery": "defer",
                                                          "defer_for": "never"}, token="ben-test")
-    assert chosen["woke"] is False and chosen["sent_as"] == {"delivery": "defer", "until": None}
+    assert chosen["woke"] is True and chosen["sent_as"] == {"delivery": "queue", "until": None}
+    # Mentioned once, the bot follows: a later plain comment steers it.
+    later = post(api, f"tasks/{task['id']}/comments", {"text": "Fixed it."}, token="ben-test")
+    assert later["sent_as"]["delivery"] == "steer"
 
 
 def test_a_new_task_takes_queue_or_defer_but_not_steer(api):

@@ -109,6 +109,39 @@ def test_a_legacy_shell_summary_naming_a_file_or_arguments_is_never_shown():
     assert turns.tool_label({"tool": "Bash", "summary": "cd"}) == "Ran cd"
 
 
+@pytest.mark.parametrize("summary, label", [
+    ("cd hub task list", "Listing tasks"),
+    ("cd npm", "Ran npm"),
+    ("cd web hub task close", "Closing a task"),
+    ("cd web npm", "Ran npm"),
+    (". env.sh hub task close", "Closing a task"),
+    ("source env.sh npm", "Ran npm"),
+    ("export HUB_TOKEN=sk-live-1 npm", "Ran npm"),
+    ("export HUB_TOKEN=sk-live-1 hub task close", "Closing a task"),
+    ("env HUB_TOKEN=sk-live-1 hub task list", "Listing tasks"),
+    ("env HUB_TOKEN=sk-live-1 cargo", "Ran cargo"),
+    ("cd web export A=sk-live-1 cargo", "Ran cargo"),
+])
+def test_a_setup_prefix_is_skipped_and_the_work_after_it_is_named(summary, label):
+    """A stored summary may start with the setup words a shell line ran first. They are skipped unread, so the label
+    names the work and never a setup word's argument or a secret assignment."""
+    got = turns.tool_label({"tool": "Bash", "summary": summary})
+    assert got == label
+    assert "sk-live-1" not in got and "env.sh" not in got
+
+
+@pytest.mark.parametrize("summary, label", [
+    ("cd", "Ran cd"),
+    ("export HUB_TOKEN=sk-live-1", "Ran Bash"),
+    ("cd customer-private.json", "Ran Bash"),
+    ("env HUB_TOKEN=sk-live-1", "Ran Bash"),
+])
+def test_a_setup_prefix_with_no_work_after_it_names_nothing_it_should_not(summary, label):
+    """A bare `cd` is the last resort (`Ran cd`). A setup prefix with no program after it names no program, so it reads
+    as the tool itself."""
+    assert turns.tool_label({"tool": "Bash", "summary": summary}) == label
+
+
 def test_a_folded_step_carries_its_label_and_keeps_its_tool_name():
     rows = [("tool", {"tool": "Bash", "status": "started", "item_id": "b1", "summary": "npm"}, "t1"),
             ("tool", {"tool": "Bash", "status": "completed", "item_id": "b1"}, "t2")]

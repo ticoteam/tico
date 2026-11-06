@@ -3724,7 +3724,7 @@ export type Message = {
   id: string;
   in_reply_to: string | null;
   kind: string;
-  recipient_id: string;
+  recipient_id: string | null;
   recipient_name?: string;
   refs: Record<string, unknown>;
   run?: {
@@ -6077,6 +6077,19 @@ export type ThreadRail = {
   next_cursor: string | null;
   pinned: Array<ThreadView>;
   threads: Array<ThreadView>;
+};
+
+export type ThreadReach = {
+  outside: Array<string>;
+  reaches: Array<{
+  actor: string;
+  adds_reader?: boolean;
+  defer_for?: string | null;
+  mode: "steer" | "queue" | "defer" | "digest";
+  reason: string;
+}>;
+  thread_id: string;
+  way?: "steer" | "queue" | "defer";
 };
 
 export type ThreadReactions = Array<{
@@ -8700,6 +8713,17 @@ export type GetThreadHomeParams = {
 };
 export type GetThreadHomeBody = never;
 export type GetThreadHomeResponse = ThreadView;
+
+/** GET /api/v2/threads/{thread_id}/reach */
+export type GetThreadReachParams = {
+  defer_for?: string | null;
+  delivery?: "steer" | "queue" | "defer" | null;
+  in_reply_to?: string | null;
+  text?: string;
+  thread_id: string;
+};
+export type GetThreadReachBody = never;
+export type GetThreadReachResponse = ThreadReach;
 
 /** GET /api/v2/threads/{thread_id}/timeline */
 export type GetThreadTimelineParams = {

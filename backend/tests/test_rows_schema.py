@@ -88,7 +88,7 @@ UNTYPED = frozenset({
     "call_holds", "call_participants", "calls", "message_deliveries",
     "message_mentions", "message_reactions", "message_revisions", "sequences", "slack_inbound_events",
     "slack_link_members", "slack_message_links", "slack_thread_links", "teammate_accesses", "thread_digests",
-    "thread_earlier_notices", "thread_followers", "thread_followups", "thread_members", "thread_routings",
+    "thread_earlier_notices", "thread_followers", "thread_followups", "thread_members",
     "fin_bill_retained", "fin_estimate_lines", "fin_estimates", "fin_po_lines", "fin_purchase_orders", "items", "locations",
     # Finance's combined build (migration 0037): prepaid postings and invoice reminders.
     "fin_invoice_reminders", "fin_prepaid_postings",

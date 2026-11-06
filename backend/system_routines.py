@@ -150,8 +150,6 @@ ACTIONS = {
                               ("thread", "earlier", "closed", "history", "managers", "notice")),
     "wake_digest_bots": ("start one run for each bot with new messages in the threads it follows on digest",
                          ("bot", "digest", "thread", "wake", "batch")),
-    "route_message": ("have Decide read a person's message that names nobody and wake the bots it is for, three at most",
-                      ("route", "routing", "thread", "bots", "wake", "message")),
     "resume_capped_wakes": ("let bot wakes the loop guard paused go when a thread's hour has room",
                             ("loop", "guard", "capped", "paused", "resume", "wake", "thread", "bots")),
     "purge_thread_messages": ("delete messages past the time their thread keeps them, with what was copied from them",
@@ -160,6 +158,8 @@ ACTIONS = {
                      "unread counts and links, never the messages", ("email", "digest", "unread", "thread", "notify")),
     "drop_unreadable": ("drop queued work its bot can no longer read", ("queue", "drop")),
     "ask_to_task": ("turn a bot's plain ask to a person into a small task", ("ask", "tasks")),
+    "reopen_stranded": ("send a bot's task waiting on nothing tracked back to open after two hours",
+                        ("waiting", "stranded", "reopen", "tasks")),
     "end_snooze": ("bring snoozed tasks back when their date comes", ("snooze", "tasks")),
     "start_deferred": ("start deferred runs that are due", ("deferred", "runs")),
     "end_go_live": ("end a go-live waiting for a computer that never reports", ("go-live", "computer", "expire")),
@@ -368,10 +368,6 @@ JOBS = [
         "Starts one run an hour for each bot that follows threads on digest and has new messages in them. Plain code: "
         "no model is called until a batch has something in it, and nothing new is a quiet run.",
         REMINDERS, "Hourly", 3600, then=("wake_digest_bots",)),
-    Job("thread_routing", "Thread routing",
-        "Reads a person's message that names nobody in a thread with several bots and wakes the ones it is for, three "
-        "at most. Below the confidence bar, or with Decide off, it wakes none.",
-        REMINDERS, "As messages arrive", ai=True, labels=("slack-route",), then=("route_message",)),
     Job("still_needed", "Unanswered questions",
         "On weekday mornings, questions unanswered for two business days go back to their bots as lines on the bots' "
         "task roundup, never as a wake.",
@@ -385,9 +381,9 @@ JOBS = [
         "Frees turns proven dead, keeps one Health finding per busy-turns incident and hands what it cannot fix to "
         "BotOps.", HOUSEKEEPING, "Every 10 seconds", 10, then=("free_dead_starts", "turns_finding")),
     Job("waiting_checks", "Waiting checks",
-        "Turns a bot's plain ask to a person into a small task. It no longer sends a waiting task back to work; a "
-        "waiting task that waits on nothing is listed on the task roundup after a day.",
-        HOUSEKEEPING, "Hourly", 3600, then=("ask_to_task",)),
+        "Turns a bot's plain ask to a person into a small task, and sends a bot's task waiting on nothing tracked "
+        "back to open after two hours (one that keeps coming back goes to its manager bot or BotOps).",
+        HOUSEKEEPING, "Hourly", 3600, then=("ask_to_task", "reopen_stranded")),
     Job("snooze_ends", "Snooze ends",
         "Brings snoozed tasks back when their date comes and starts deferred runs that are due.",
         HOUSEKEEPING, "Every 10 seconds", 10, then=("end_snooze", "start_deferred", "start_task")),

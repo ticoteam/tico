@@ -345,7 +345,7 @@
       "status": "started",
       "item_id": "tool-1",
       "parent_id": null,
-      "summary": "cd",
+      "summary": "gh",
       "outside_actions": [
         "merge pull request"
       ]
@@ -358,7 +358,7 @@
       "status": "started",
       "item_id": "tool-1",
       "parent_id": null,
-      "summary": "cd",
+      "summary": "gh",
       "outside_actions": [
         "merge pull request"
       ]
