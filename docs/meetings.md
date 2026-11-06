@@ -262,7 +262,8 @@ format is a `422` that names the problem.
   app and label
   are optional: use your team's names or leave them blank. Existing B/F and CA/PA codes still work.
   A near-identical open task returns a link only if the sender can read it.
-  Every sent task ends with a footer naming the meeting and quoting the line. Participants-only meetings send
+  Every task created from a meeting ends with a footer naming the meeting, and quotes the line when you gave one.
+  Participants-only meetings send
   private tasks only when every reader (including a bot owner's managers) is already in the meeting.
   The Recorder applies that check before Save too, using `live_meeting_id` on task creation.
   Title, owner, due and details autosave after 700 ms or on blur, one write at a time. **Not saved · Retry** keeps
