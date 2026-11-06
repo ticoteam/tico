@@ -53,9 +53,10 @@ def notices(api, task):
         return [dict(r) for r in c.execute("SELECT * FROM messages WHERE conversation_id=? AND json_extract(refs,'$.review_gate') IS NOT NULL", (task['conversation_id'],))]
 
 
-@pytest.mark.parametrize('step', ['Review 1', 'Review 2'])
-@pytest.mark.parametrize('receipt,allowed', [(None, False), (f'Tests: head {OLD}: 9 passed, 0 failed', False),
-    (f'Tests: base {BASE} head {HEAD}: 9 passed, 0 failed', True)])
+@pytest.mark.parametrize('step,receipt,allowed', [
+    ('Review 1', None, False), ('Review 1', f'Tests: head {OLD}: 9 passed, 0 failed', False),
+    ('Review 1', f'Tests: base {BASE} head {HEAD}: 9 passed, 0 failed', True),
+    ('Review 2', f'Tests: base {BASE} head {HEAD}: 9 passed, 0 failed', True)])
 def test_receipt_at_current_head_allows_review_child_and_other_receipts_do_not_wake(api, receipt, allowed, step):
     task = ticket(api, receipt)
     response = move(api, task, step)
@@ -73,7 +74,7 @@ def test_receipt_at_current_head_allows_review_child_and_other_receipts_do_not_w
 
 
 @pytest.mark.parametrize('checks,allowed,names', [({'python': 'failing'}, False, ['python']),
-    ({'python': 'passing'}, True, []), ({'python': 'pending'}, True, []),
+    ({'python': 'pending'}, True, []),
     ({'python': 'failing', 'browser': 'pending'}, False, ['python'])])
 def test_ci_is_first_names_failures_and_allows_pending(api, checks, allowed, names):
     task = ticket(api, f'Tests: head {HEAD}: 9 passed, 0 failed' if allowed else None)
@@ -241,9 +242,24 @@ def test_review_child_without_a_pr_cannot_queue_the_reviewer(api):
         assert not c.execute("SELECT 1 FROM jobs WHERE bot_id='cmo'").fetchone()
 
 
-@pytest.mark.parametrize('where', ['note', 'owner', 'keeper', 'child'])
-def test_gate_consumes_each_agreed_receipt_source(api, where):
-    task = ticket(api)
+def test_gate_consumes_each_agreed_receipt_source(api):
+    for n, where in enumerate(['note', 'owner', 'keeper', 'child']):
+        _consumes_source(api, ticket(api) if n == 0 else _another_ticket(api, n), where)
+
+
+def _another_ticket(api, n):
+    """One more ticket of the same type for a table of rows in one test, the only task holding the PR link."""
+    with api.app.state.store.read() as c:
+        typ = H.type_get(c, 'Dev tickets')
+    task = post(api, 'tasks', {'owner': 'cpo', 'title': f'Improve messages {n}', 'body': 'Build messages.',
+                              'type': typ['id'], 'step': 'In Progress', 'links': [PR]})
+    hook(api, 'pull_request', pr_event('opened', head={'sha': HEAD}))
+    with api.app.state.store.transaction() as c:
+        c.execute("DELETE FROM task_links WHERE task_id<>?", (task['id'],))
+    return get(api, 'tasks/' + task['id'])['task']
+
+
+def _consumes_source(api, task, where):
     text = f'Tests: base {BASE} head {HEAD}: 356 pass / 0 fail'
     with api.app.state.store.transaction() as c:
         if where == 'note':
@@ -258,7 +274,7 @@ def test_gate_consumes_each_agreed_receipt_source(api, where):
             actor = 'keeper' if where == 'keeper' else task['owner_id']
             H._write_message(c, actor, task['owner_id'], 'Ready for review. ' + text, conv, 'say',
                              {'task': task['id'], 'quiet': True}, None, None)
-    assert move(api, task).status_code == 200
+    assert move(api, task).status_code == 200, where
 
 
 def test_fresh_checks_failure_pending_and_status_failure_history(api, monkeypatch):

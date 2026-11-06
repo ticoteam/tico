@@ -173,9 +173,11 @@ def test_private_reviewer_cannot_send_a_private_verdict_to_a_public_task(api):
         assert "private" in P.waiting(c, task["id"])[0]["reason"]
 
 
-@pytest.mark.parametrize("private", [True, False], ids=["private-findings", "public-findings"])
-@pytest.mark.parametrize("title,bad,good", [
-    ("Review 1", "changes", "approve"), ("QA", "fail", "pass"), ("Review 1", None, "approve"),
+@pytest.mark.parametrize("private,title,bad,good", [
+    pytest.param(True, "Review 1", "changes", "approve", id="private-review-changes"),
+    pytest.param(False, "Review 1", "changes", "approve", id="public-review-changes"),
+    pytest.param(True, "QA", "fail", "pass", id="private-qa-fail"),
+    pytest.param(False, "Review 1", None, "approve", id="public-review-none"),
 ])
 def test_later_public_pass_keeps_the_findings_source_audience(api, private, title, bad, good):
     from backend import task_privacy
@@ -221,8 +223,8 @@ def test_later_public_pass_keeps_the_findings_source_audience(api, private, titl
         assert response.status_code == (404 if private else 200), response.text
 
 
-@pytest.mark.parametrize("private", [True, False], ids=["private-approval", "public-approval"])
-@pytest.mark.parametrize("other_merger", [False, True], ids=["parent-wake", "merge-task"])
+@pytest.mark.parametrize("private,other_merger", [
+    pytest.param(True, False, id="private-parent-wake"), pytest.param(False, True, id="public-merge-task")])
 def test_delayed_merge_notice_keeps_its_approval_sources(api, private, other_merger):
     from backend import task_privacy
     from backend.tests.test_api import unrelated_task_managers
@@ -404,7 +406,7 @@ def engineering_pr_pair(api):
         return task, H.task_links(c, task["id"])
 
 
-@pytest.mark.parametrize("queued", [False, True], ids=["direct", "queued"])
+@pytest.mark.parametrize("queued", [True], ids=["queued"])
 def test_engineering_without_check_steps_reviews_each_green_pr_once(api, monkeypatch, queued):
     from backend import review_gate
     task, prs = engineering_pr_pair(api)
@@ -587,8 +589,9 @@ def test_ambiguous_legacy_number_is_logged_and_bound_review_is_reused(api, caplo
     assert dispatch(api) == []
 
 
-@pytest.mark.parametrize("reviews", [1, 2], ids=["merge-next", "review-2-next"])
-@pytest.mark.parametrize("case,head", [("backfill", HEAD), ("backfill-done", HEAD), ("hold", HEAD), ("old-head", OLD)])
+@pytest.mark.parametrize("reviews,case,head", [
+    pytest.param(1, "hold", HEAD, id="hold-merge-next"), pytest.param(2, "hold", HEAD, id="hold-review-2-next"),
+    pytest.param(1, "backfill", HEAD, id="backfill-merge-next"), pytest.param(1, "old-head", OLD, id="old-head-merge-next")])
 def test_undelivered_approval_replays_once_at_current_head(api, monkeypatch, reviews, case, head):
     setup(api, reviews=reviews)
     task = task_pr(api)

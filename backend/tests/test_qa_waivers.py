@@ -107,6 +107,14 @@ def ticket(api, owner='cpo', step='In QA', checks=None, reviews=(('approve', HEA
     return row
 
 
+def fresh(api, n, **more):
+    """One more ticket for a table of rows in one test: titled apart, and the only task holding the pull request link."""
+    row = ticket(api, title=f'Fix the checkout total {n}', **more)
+    with api.app.state.store.transaction() as c:
+        c.execute("DELETE FROM task_links WHERE task_id<>?", (row['id'],))
+    return row
+
+
 def waive(api, row, token='ana-test', head=HEAD, reason='Urgent fix, QA bot down', **more):
     return call(api, 'POST', f"tasks/{row['id']}/qa-waiver", token, {'head': head, 'reason': reason, **more})
 
@@ -115,11 +123,17 @@ def shown(api, row):
     return call(api, 'GET', 'tasks/' + row['id']).json()
 
 
-@pytest.mark.parametrize('owner,token,actor', [('human:ben', 'ben-test', 'human:ben'),   # the ticket's owner
-                                               ('cpo', 'ana-test', 'human:ana'),           # a manager
-                                               ('human:ben', 'ana-test', 'human:ana')])    # a manager, a person's ticket
-def test_owner_or_manager_waives_the_current_qa_step_on_the_exact_head(api, owner, token, actor):
-    row = ticket(api, owner=owner)
+def test_owner_or_manager_waives_the_current_qa_step_on_the_exact_head(api):
+    for n, case in enumerate([('human:ben', 'ben-test', 'human:ben'),   # the ticket's owner
+                              ('cpo', 'ana-test', 'human:ana'),           # a manager
+                              ('human:ben', 'ana-test', 'human:ana')]):    # a manager, a person's ticket
+        _owner_or_manager_waives(api, n, *case)
+
+
+def _owner_or_manager_waives(api, n, owner, token, actor):
+    row = fresh(api, n, owner=owner)
+    with api.app.state.store.read() as c:
+        seen = c.execute("SELECT coalesce(max(rowid),0) FROM messages").fetchone()[0]
     r = waive(api, row, token)
     assert r.status_code == 200, r.text
     waiver = r.json()['waiver']
@@ -141,32 +155,33 @@ def test_owner_or_manager_waives_the_current_qa_step_on_the_exact_head(api, owne
         qa = H.task(c, qa['id'])
     assert qa['verdict'] is None and qa['verdict_head'] is None and qa['status'] == 'doing'
     with api.app.state.store.read() as c:
-        told = c.execute("SELECT recipient_id, body FROM messages WHERE json_extract(refs,'$.qa_waiver')=?", (HEAD,)).fetchall()
+        told = c.execute("SELECT recipient_id, body FROM messages WHERE json_extract(refs,'$.qa_waiver')=? AND rowid>?",
+                         (HEAD, seen)).fetchall()
     # The owner hears once, unless the owner waived it.
     assert [(m[0], 'not a QA pass' in m[1]) for m in told] == ([] if owner == actor else [(detail['task']['owner_id'], True)])
 
 
-@pytest.mark.parametrize('owner,token,why', [('human:ben', 'cara-test', 'owner or a manager'),
+def test_a_non_owner_non_manager_or_a_bot_is_refused(api):
+    for n, (owner, token, why) in enumerate([('human:ben', 'cara-test', 'owner or a manager'),
                                              ('cpo', 'ben-test', 'owner or a manager'),
-                                             ('cpo', 'bot-test', 'Only a person, signed in as themselves')])
-def test_a_non_owner_non_manager_or_a_bot_is_refused(api, owner, token, why):
-    row = ticket(api, owner=owner)
-    r = waive(api, row, token)
-    assert r.status_code == 403 and why in r.text, r.text
-    assert shown(api, row)['task']['qa_waivers'] == []
+                                             ('cpo', 'bot-test', 'Only a person, signed in as themselves')]):
+        row = fresh(api, n, owner=owner)
+        r = waive(api, row, token)
+        assert r.status_code == 403 and why in r.text, (token, r.text)
+        assert shown(api, row)['task']['qa_waivers'] == []
 
 
-@pytest.mark.parametrize('step,asked,why', [('Review 2', None, 'not In QA'), ('Pending Release', None, 'not In QA'),
+def test_only_the_current_in_qa_step_is_waivable(api):
+    for n, (step, asked, why) in enumerate([('Review 2', None, 'not In QA'), ('Pending Release', None, 'not In QA'),
                                             ('In QA', 'Review 1', 'Review 1 is mandatory'),
                                             ('In QA', 'Review 2', 'Review 2 is mandatory'),
                                             ('In QA', 'CI', 'CI is mandatory'),
                                             ('In QA', 'Release approval', 'Release approval is mandatory'),
-                                            ('In QA', 'Post Release QA', 'Only the In QA step')])
-def test_only_the_current_in_qa_step_is_waivable(api, step, asked, why):
-    row = ticket(api, step=step)
-    r = waive(api, row, step=asked) if asked else waive(api, row)
-    assert r.status_code == 422 and why in r.text, r.text
-    assert shown(api, row)['task']['qa_waivers'] == []
+                                            ('In QA', 'Post Release QA', 'Only the In QA step')]):
+        row = fresh(api, n, step=step)
+        r = waive(api, row, step=asked) if asked else waive(api, row)
+        assert r.status_code == 422 and why in r.text, (step, asked, r.text)
+        assert shown(api, row)['task']['qa_waivers'] == []
 
 
 def test_a_different_head_is_refused_and_a_new_push_voids_the_waiver(api):
@@ -188,29 +203,29 @@ def test_a_different_head_is_refused_and_a_new_push_voids_the_waiver(api):
     assert r.status_code == 422 and 'not the current head' in r.text, r.text
 
 
-@pytest.mark.parametrize('checks,why', [({'check:python': 'failing', 'check:browser': 'passing'}, 'CI failing on'),
-                                        ({'check:python': 'passing', 'check:browser': 'pending'}, 'CI still running'),
-                                        ({'check:python': 'skipped'}, 'no passing hosted check'),
-                                        # A re-run passed, but the read keeps the failed attempt (filter=all).
-                                        ({'check:python (1)': 'failing', 'check:python (2)': 'passing'}, 'CI failing on')])
-def test_checks_not_green_are_refused_and_named(api, checks, why):
-    row = ticket(api, checks=checks)
-    r = waive(api, row)
-    assert r.status_code == 422 and why in r.text and 'Hosted checks stay mandatory' in r.text, r.text
+def test_checks_not_green_are_refused_and_named(api):
+    for n, (checks, why) in enumerate([({'check:python': 'failing', 'check:browser': 'passing'}, 'CI failing on'),
+                                       ({'check:python': 'passing', 'check:browser': 'pending'}, 'CI still running'),
+                                       ({'check:python': 'skipped'}, 'no passing hosted check'),
+                                       # A re-run passed, but the read keeps the failed attempt (filter=all).
+                                       ({'check:python (1)': 'failing', 'check:python (2)': 'passing'}, 'CI failing on')]):
+        row = fresh(api, n, checks=checks)
+        r = waive(api, row)
+        assert r.status_code == 422 and why in r.text and 'Hosted checks stay mandatory' in r.text, (checks, r.text)
 
 
-@pytest.mark.parametrize('reviews,why', [((('approve', HEAD), (None, None)), 'Review 2 has no recorded verdict'),
+def test_required_reviews_not_approving_the_head_are_refused(api):
+    for n, (reviews, why) in enumerate([((('approve', HEAD), (None, None)), 'Review 2 has no recorded verdict'),
                                          (((None, None), ('approve', HEAD)), 'Review 1 has no recorded verdict'),
                                          ((('approve', HEAD), ('changes', HEAD)), 'Review 2 asked for changes'),
                                          ((('approve', HEAD), ('approve', NEW)), 'Review 2 approved bbbbbbbbbbbb'),
                                          ((('changes', HEAD), ('approve', HEAD)), 'Review 1 asked for changes'),
                                          # Review 2's approval of the head never stands in for Review 1's.
                                          ((('changes', NEW), ('approve', HEAD)), 'Review 1 asked for changes'),
-                                         ((('approve', NEW), ('approve', HEAD)), 'Review 1 approved bbbbbbbbbbbb')])
-def test_required_reviews_not_approving_the_head_are_refused(api, reviews, why):
-    row = ticket(api, reviews=reviews)
-    r = waive(api, row)
-    assert r.status_code == 422 and why in r.text and 'Code reviews stay mandatory' in r.text, r.text
+                                         ((('approve', NEW), ('approve', HEAD)), 'Review 1 approved bbbbbbbbbbbb')]):
+        row = fresh(api, n, reviews=reviews)
+        r = waive(api, row)
+        assert r.status_code == 422 and why in r.text and 'Code reviews stay mandatory' in r.text, (reviews, r.text)
 
 
 def test_review_1_re_asked_and_approving_the_fixed_head_allows_it(api):

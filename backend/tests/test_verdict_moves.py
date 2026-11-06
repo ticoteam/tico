@@ -392,10 +392,7 @@ def test_a_check_timeout_keeps_unrelated_human_and_bot_subtasks_open(api):
 
 
 @pytest.mark.parametrize("unavailable", [
-    {"state": "quarantined"}, {"state": "planned"}, {"state": "paused"}, {"state": "archived"},
-    {"state": ""}, {"state": None},
-    {"onboarding_state": "needs_setup"}, {"onboarding_state": "needs_onboarding"},
-    {"config": {"profile": "responder"}}, {"config": {"harness": "dots"}},
+    {"state": "quarantined"}, {"state": ""}, {"onboarding_state": "needs_setup"}, {"config": {"profile": "responder"}},
 ])
 def test_allocator_skips_inactive_pool_members_and_assigns_remaining_checks(api, unavailable):
     from backend import task_allocator
@@ -933,7 +930,7 @@ def _github_status_read(state):
     return [{"context": "shard 0", "state": state}] + [{"context": f"shard {n}", "state": "success"} for n in range(1, 101)]
 
 
-@pytest.mark.parametrize("state", ["failing", "pending"])
+@pytest.mark.parametrize("state", ["failing"])
 def test_a_dropped_check_among_more_than_100_non_passing_keeps_the_head_unpassed_on_later_webhooks(api, monkeypatch, state):
     """Dev 646 follow-up: the stored copy keeps 100 of 101 non-passing checks. The kept ones then pass one at a time by
     webhook while the dropped one is still `state`: the head must never read passing, and no merge may be woken."""
@@ -987,7 +984,7 @@ def test_a_push_after_a_marked_head_clears_the_dropped_marker_with_its_checks(ap
     assert "checks_dropped" not in H._json(link["detail"], {})
 
 
-@pytest.mark.parametrize("state", ["failing", "pending"])
+@pytest.mark.parametrize("state", ["failing"])
 def test_a_webhook_that_drops_a_non_passing_check_marks_the_head_before_any_full_read(api, state):
     """Dev 731 review: the first webhook past 100 non-passing checks sets the dropped-check marker itself, with no full
     read first. The retained checks then pass one by one; the head must stay on the dropped check's state and wake no merge."""

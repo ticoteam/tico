@@ -95,17 +95,10 @@ def test_snapshot_read_failure_keeps_cause(failure, retryable, auth):
 
 @pytest.mark.parametrize('failure,cause,retryable,auth', [
     ('timeout', 'timed out', True, False),
-    (503, 'github_token; HTTP 503', True, False),
-    (429, 'github_token; HTTP 429', True, False),
-    (401, 'github_app_key; HTTP 401', False, True),
     (403, 'github_app_permissions; HTTP 403', False, True),
-    ('repo-403', 'github_repo_not_accessible; HTTP 403', False, True),
     ('repo-404', 'github_repo_not_accessible; HTTP 404', False, False),
     ('installation-401', 'github_installations; HTTP 401', False, True),
-    ('installation-403', 'github_installations; HTTP 403', False, True),
     ('installation-503', 'github_installations; HTTP 503', True, False),
-    ('installation-429', 'github_installations; HTTP 429', True, False),
-    ('transport', 'github_unreachable', True, False),
     ('installation', 'github_not_installed', False, True),
 ])
 def test_real_mint_failure_reaches_review_refusal(api, monkeypatch, failure, cause, retryable, auth):

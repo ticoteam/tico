@@ -107,8 +107,7 @@ def test_external_message_refs_cannot_mask_the_native_threads_held_task(api, ext
     write(task)
 
 
-@pytest.mark.parametrize("mutation", ["ack", "answer", "edit", "delete", "react", "unreact"])
-def test_external_message_mutations_check_the_stored_message_and_native_task(api, external_work, mutation):
+def _external_message_mutations_check_the_stored_message_and_native_task(api, external_work, mutation):
     token, task, other = external_work
     messages = []
     for row in (task, other):
@@ -168,8 +167,7 @@ def test_a_bot_reads_feedback_on_its_held_task_without_recording_refusals(api, e
         assert {table: c.execute(f"SELECT count(*) FROM {table}").fetchone()[0] for table in before} == before
 
 
-@pytest.mark.parametrize("mutation", ["create", "subthread", "rename", "read", "read-all", "follow", "unfollow", "pin", "unpin"])
-def test_external_thread_mutations_check_the_stored_thread_task(api, external_work, mutation):
+def _external_thread_mutations_check_the_stored_thread_task(api, external_work, mutation):
     token, task, other = external_work
     # A bot may manage a thread it started, including one associated with a task.
     rooms = [post(api, "threads", {"title": row["title"], "task_id": row["id"], "members": ["ana"]}, token)
@@ -313,8 +311,7 @@ def test_external_page_changes_check_the_pages_stored_task(api, external_work, m
     assert result.status_code == 200, result.text
 
 
-@pytest.mark.parametrize("mutation", ["add", "add_page", "edit", "remove", "order", "card_edit", "card_delete", "card_add"])
-def test_external_task_pins_and_cards_check_their_stored_place(api, external_work, mutation):
+def _external_task_pins_and_cards_check_their_stored_place(api, external_work, mutation):
     token, task, other = external_work
     cards = [post(api, "cards", {"template": "tasks_by_status",
                                 **({} if mutation == "add" else {"place": "task:" + row["id"]})}, token)
@@ -458,7 +455,7 @@ def test_one_tasks_refusals_stop_only_its_turn_and_other_work_claims_and_runs(ap
     machine = task_bot(api, lanes=True)
     task = new_task(api, "Check the export")
     bad = started(api, machine)
-    other = new_task(api, "Check the archive")
+    other = new_task(api, f"Check the archive {n}")
     good = started(api, machine)
     waiting = new_task(api, "Check the summary")
     refusals(api, bad, task)
@@ -872,7 +869,7 @@ def test_a_held_task_cannot_ride_along_with_another_tasks_next_run(api):
     post(api, f"attempts/{attempt['id']}/complete", {"outcome": "interrupted", "last_seq": 0}, machine["token"])
     with api.app.state.store.transaction() as c:
         c.execute("UPDATE tasks SET next_run=1,status='open' WHERE id=?", (task["id"],))
-    other = new_task(api, "Check the archive")
+    other = new_task(api, f"Check the archive {n}")
     attempt = post(api, "jobs/claim", {"next_run": True, "start_places": True}, machine["token"])["attempt"]
     assert attempt["task"]["id"] == other["id"] and attempt["next_run"] == []
 
@@ -931,17 +928,11 @@ def test_a_bad_release_preserves_other_cooldowns_and_the_rest_of_the_scheduler_t
         assert not any("has lifted" in m["body"] for m in messages), "failed or skipped notices leave no partial write"
 
 
-@pytest.mark.parametrize("mutation", ["snooze", "unsnooze", "check-back", "later", "defer", "relations",
-                                     "reverse_relation", "wait_task", "wait_pr", "links", "unlink", "files",
-                                     "edit", "delete_comment", "resolve", "answers", "ask", "update"])
-def test_external_task_mutations_fence_the_explicit_task_and_allow_an_unheld_task(api, mutation):
+def _task_mutation(api, token, mutation, n):
     from backend import task_quarantine as Q
-    from backend.tests.test_agents import credential, hermes_bot
     from backend.tests.test_task_review import ask
 
-    hermes_bot(api)
-    token = credential(api)["token"]
-    tasks = [new_task(api, title, owner="scout") for title in ("Check the export", "Check the archive", "Check the summary")]
+    tasks = [new_task(api, f"{title} {n}", owner="scout") for title in ("Check the export", "Check the archive", "Check the summary")]
     other = tasks[2]
     requests = []
     for task in tasks[:2]:
@@ -1001,13 +992,8 @@ def test_external_task_mutations_fence_the_explicit_task_and_allow_an_unheld_tas
     post(api, path, body, token)
 
 
-@pytest.mark.parametrize("source", ["task", "task_padded", "task_id", "task_room", "chat", "chat_blank_task"])
-def test_notes_from_held_sources_stay_pending_and_unread_until_release(api, source, monkeypatch):
+def _held_notes(api, machine, source, n):
     from backend import bot_to_bot as B, task_quarantine as Q
-    from backend import threads
-
-    monkeypatch.setattr(threads, "NOTES_READ", 1)
-    machine = task_bot(api, lanes=True)
     with api.app.state.store.transaction() as c:
         if source.startswith("chat"):
             message = H.say(c, "bot:finance", "bot:ops", "The export is ready to check.")
@@ -1015,7 +1001,7 @@ def test_notes_from_held_sources_stay_pending_and_unread_until_release(api, sour
             if source == "chat_blank_task":
                 c.execute("UPDATE messages SET refs=? WHERE id=?", (H._dump({"task": " \t\u2003"}), message["id"]))
         else:
-            task = H.task_create(c, "bot:finance", "Check the export", "Check the report.", "bot:ops")
+            task = H.task_create(c, "bot:finance", f"Check the export {n}", "Check the report.", "bot:ops")
             message = H.task_comment(c, "bot:finance", task["id"], "The export is ready to check.")
             scope = "task:" + task["id"]
             if source != "task":
@@ -1028,7 +1014,7 @@ def test_notes_from_held_sources_stay_pending_and_unread_until_release(api, sour
         Q.hold(c, "ops", scope, "Repeated refusals", {"rule": "identity"})
         pending = H._one(c, "SELECT * FROM notes WHERE message_id=?", (message["id"],))
         free = H.say(c, "bot:cpo", "bot:ops", "The archive is ready to check.")
-    other = new_task(api, "Check the archive")
+    other = new_task(api, f"Check the archive {n}")
     attempt = post(api, "jobs/claim", {"next_run": True, "start_places": True}, machine["token"])["attempt"]
     assert attempt["task"]["id"] == other["id"]
     assert [n["message"] for n in attempt["notes"] if n.get("message")] == [free["id"]]
@@ -1046,7 +1032,7 @@ def test_notes_from_held_sources_stay_pending_and_unread_until_release(api, sour
     post(api, f"attempts/{attempt['id']}/complete", {"outcome": "completed", "last_seq": 0}, machine["token"])
     post(api, "bots/ops/quarantine/clear", {})
     if source.startswith("chat"):
-        new_task(api, "Check the summary")
+        new_task(api, f"Check the summary {n}")
     resumed = post(api, "jobs/claim", {"next_run": True, "start_places": True}, machine["token"])["attempt"]
     assert [n["message"] for n in resumed["notes"] if n.get("message")] == [message["id"]]
     with api.app.state.store.read() as c:
@@ -1060,10 +1046,57 @@ def test_a_held_task_does_not_use_the_bots_only_automatic_task_place(api):
     task = new_task(api, "Check the export")
     attempt = started(api, machine)
     set_cap(api, 1)
-    other = new_task(api, "Check the archive")
+    other = new_task(api, f"Check the archive {n}")
     assert claim(api, machine) is None
     refusals(api, attempt, task)
     post(api, f"attempts/{attempt['id']}/renew", {}, machine["token"])
     post(api, f"attempts/{attempt['id']}/complete", {"outcome": "interrupted", "last_seq": 0}, machine["token"])
     assert get(api, "bots/ops")["task_flow"]["going"] == 0
     assert started(api, machine)["task"]["id"] == other["id"]
+
+
+def fresh_work(api, token, n):
+    """Another held-task pair for the same bot: a new task and its sibling, titled apart."""
+    return (token, new_task(api, f"Check the export {n}", owner="scout"),
+            new_task(api, f"Check the archive {n}", owner="scout"))
+
+
+def _every(api, external_work, mutations, case):
+    for n, mutation in enumerate(mutations):
+        case(api, external_work if n == 0 else fresh_work(api, external_work[0], n), mutation)
+
+
+def test_external_message_mutations_check_the_stored_message_and_native_task(api, external_work):
+    """Every message mutations route is fenced for a held task, one fresh task and hold per route."""
+    _every(api, external_work, ["ack", "answer", "edit", "delete", "react", "unreact"], _external_message_mutations_check_the_stored_message_and_native_task)
+
+
+def test_external_thread_mutations_check_the_stored_thread_task(api, external_work):
+    """Every thread mutations route is fenced for a held task, one fresh task and hold per route."""
+    _every(api, external_work, ["create", "subthread", "rename", "read", "read-all", "follow", "unfollow", "pin", "unpin"], _external_thread_mutations_check_the_stored_thread_task)
+
+
+def test_external_task_pins_and_cards_check_their_stored_place(api, external_work):
+    """Every task pins and cards route is fenced for a held task, one fresh task and hold per route."""
+    _every(api, external_work, ["add", "add_page", "edit", "remove", "order", "card_edit", "card_delete", "card_add"], _external_task_pins_and_cards_check_their_stored_place)
+
+
+def test_external_task_mutations_fence_the_explicit_task_and_allow_an_unheld_task(api):
+    """Every task route is fenced for a held task, one fresh trio of tasks and one hold per route."""
+    from backend.tests.test_agents import credential, hermes_bot
+
+    hermes_bot(api)
+    token = credential(api)["token"]
+    for n, mutation in enumerate(["snooze", "unsnooze", "check-back", "later", "defer", "relations",
+                                  "reverse_relation", "wait_task", "wait_pr", "links", "unlink", "files",
+                                  "edit", "delete_comment", "resolve", "answers", "ask", "update"]):
+        _task_mutation(api, token, mutation, n)
+
+
+def test_notes_from_held_sources_stay_pending_and_unread_until_release(api, monkeypatch):
+    from backend import threads
+
+    monkeypatch.setattr(threads, "NOTES_READ", 1)
+    machine = task_bot(api, lanes=True)
+    for n, source in enumerate(["task", "task_padded", "task_id", "task_room", "chat", "chat_blank_task"]):
+        _held_notes(api, machine, source, n)

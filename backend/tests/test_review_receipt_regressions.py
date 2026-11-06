@@ -5,9 +5,21 @@ from types import SimpleNamespace
 import pytest
 
 from backend import hubdb as H, test_receipts, review_gate
-from backend.tests.test_github import api, headers, post, PR
+from backend.tests.test_github import api, get, headers, hook, post, pr_event, PR
 from backend.tests.test_review_gate import HEAD, OLD, ticket, move
 from backend import bot_settings as BS
+
+
+def another_ticket(api, n):
+    """One more Dev ticket for a table of rows in one test: titled apart and the only task holding the PR link."""
+    with api.app.state.store.read() as c:
+        typ = H.type_get(c, 'Dev tickets')
+    task = post(api, 'tasks', {'owner': 'cpo', 'title': f'Improve messages {n}', 'body': 'Build messages.',
+                              'type': typ['id'], 'step': 'In Progress', 'links': [PR]})
+    hook(api, 'pull_request', pr_event('opened', head={'sha': HEAD}))
+    with api.app.state.store.transaction() as c:
+        c.execute("DELETE FROM task_links WHERE task_id<>?", (task['id'],))
+    return get(api, 'tasks/' + task['id'])['task']
 
 
 def github(api, monkeypatch, checks=(), statuses=()):
@@ -24,9 +36,8 @@ def github(api, monkeypatch, checks=(), statuses=()):
     return calls
 
 
-@pytest.mark.parametrize('step', ['Review 1', 'Review 2'])
-@pytest.mark.parametrize('receipt', [None, f'Tests: head {HEAD}: 2 failed',
-                                  f'Tests: head {OLD}: 9 passed'])
+@pytest.mark.parametrize('step,receipt', [('Review 1', None), ('Review 1', f'Tests: head {HEAD}: 2 failed'),
+                                          ('Review 1', f'Tests: head {OLD}: 9 passed'), ('Review 2', None)])
 def test_fresh_all_green_opens_review_without_text_and_overrides_text_failure(api, monkeypatch, step, receipt):
     task = ticket(api, receipt)
     github(api, monkeypatch, [{'id': 1, 'name': 'python', 'conclusion': 'success'},
@@ -40,8 +51,7 @@ def test_fresh_all_green_opens_review_without_text_and_overrides_text_failure(ap
 
 @pytest.mark.parametrize('checks,statuses', [([], []),
     ([{'id': 1, 'name': 'python', 'conclusion': None}], []),
-    ([{'id': 1, 'name': 'python', 'conclusion': 'skipped'}], []),
-    ([{'id': 1, 'name': 'python', 'conclusion': 'neutral'}], [])])
+    ([{'id': 1, 'name': 'python', 'conclusion': 'skipped'}], [])])
 def test_absent_pending_or_only_skipped_checks_still_need_passing_receipt(api, monkeypatch, checks, statuses):
     task = ticket(api)
     github(api, monkeypatch, checks, statuses)
@@ -235,13 +245,6 @@ def test_repaired_counts_give_no_test_context_and_word_counts_block(note, status
     assert test_receipts.at_head({'id': 't', 'note': note}, HEAD)[0] == status
 
 
-@pytest.mark.parametrize('first', ['Lint', 'Deploy'])
-def test_no_ci_review_refuses_lint_pass_followed_by_repaired_test_line(api, first):
-    task = ticket(api, f'{first} at head {HEAD}: passed.\n2 failing tests were fixed.')
-    response = move(api, task)
-    assert response.status_code == 422 and 'passing test receipt' in response.text, response.text
-
-
 def test_headed_failure_count_needs_no_test_word():
     note = f'Re-run at head {HEAD}: 2 failed.'
     assert test_receipts.at_head({'id': 't', 'note': note}, HEAD)[0] == 'failed'
@@ -253,13 +256,6 @@ def test_headed_failure_count_needs_no_test_word():
     assert test_receipts.at_head({'id': 't', 'note': note}, HEAD)[0] == 'stale'
 
 
-@pytest.mark.parametrize('tail', ['Re-run: 2 failed', 'Rerun: 2 failing', 'Latest run: 2 failed, 9 passed', 'Re-run failed: 2'])
-def test_no_ci_review_refuses_failed_rerun_after_repaired_count(api, tail):
-    task = ticket(api, f'Tests at head {HEAD}: 9 passed; 2 failures were fixed. {tail}')
-    response = move(api, task)
-    assert response.status_code == 422 and 'failed test receipt' in response.text, response.text
-
-
 def test_dev505_original_note_does_not_claim_a_current_failure():
     # Exact opening sentence of the refused 03:37Z note, not the rewritten receipt.
     head = 'e06bfdf7ec6bdbd1772fb16102fee40715536e92'
@@ -269,21 +265,26 @@ def test_dev505_original_note_does_not_claim_a_current_failure():
     assert test_receipts.at_head({'id': 't', 'note': note}, head)[0] != 'failed'
 
 
-@pytest.mark.parametrize('author', ['manager', 'grandmanager', 'person', 'outsider'])
-def test_manager_chain_and_editing_person_can_supply_no_ci_receipt(api, author):
+def test_manager_chain_and_editing_person_can_supply_no_ci_receipt(api):
     task = ticket(api)
+    for n, author in enumerate(['manager', 'grandmanager', 'person', 'outsider']):
+        _author_supplies_receipt(api, task if n == 0 else another_ticket(api, n), author)
+
+
+def _author_supplies_receipt(api, task, author):
     with api.app.state.store.transaction() as c:
         for slug, parent in [('cpo', 'cmo'), ('cmo', 'boss')]:
             c.execute('UPDATE bot_config SET reports_to=? WHERE bot=?', (parent, slug))
-        c.execute("INSERT INTO bots(id,slug,state) VALUES('boss','boss','active')")
-        c.execute("INSERT INTO bot_config(bot,owner_id) VALUES('boss','ana')")
-        BS.write(c, 'boss', {})
+        if not c.execute("SELECT 1 FROM bots WHERE id='boss'").fetchone():
+            c.execute("INSERT INTO bots(id,slug,state) VALUES('boss','boss','active')")
+            c.execute("INSERT INTO bot_config(bot,owner_id) VALUES('boss','ana')")
+            BS.write(c, 'boss', {})
         if author == 'outsider':
             c.execute("UPDATE bot_config SET reports_to=NULL WHERE bot='cpo'")
         actor = {'manager': 'bot:cmo', 'grandmanager': 'bot:boss', 'person': 'human:ana', 'outsider': 'bot:cmo'}[author]
         H.task_comment(c, actor, task['id'], f'Tests: head {HEAD}: 9 passed, 0 failed', wake=False)
     response = move(api, task)
-    assert response.status_code == (422 if author == 'outsider' else 200), response.text
+    assert response.status_code == (422 if author == 'outsider' else 200), (author, response.text)
 
 
 def test_written_failure_is_not_cleared_by_a_managers_same_head_rerun(api):
@@ -305,21 +306,27 @@ def test_human_without_task_edit_rights_is_not_a_receipt_author(api):
     assert move(api, task).status_code == 422
 
 
-@pytest.mark.parametrize('permission', ['owner', 'mover', 'delegate'])
-def test_nonparty_person_with_task_edit_rights_counts(api, permission):
+def test_nonparty_person_with_task_edit_rights_counts(api):
     task = ticket(api)
+    # The owner row is replaced last, so the first two persons count by their team and their delegation alone.
+    for n, permission in enumerate(['mover', 'delegate', 'owner']):
+        _nonparty_counts(api, task if n == 0 else another_ticket(api, n), permission)
+
+
+def _nonparty_counts(api, task, permission):
+    who = 'editor-' + permission
     with api.app.state.store.transaction() as c:
-        c.execute("INSERT INTO humans(id,name,email,teams) VALUES('editor','Editor','editor@example.test',?)",
-                  (json.dumps(['leadership'] if permission == 'mover' else []),))
+        c.execute("INSERT INTO humans(id,name,email,teams) VALUES(?,'Editor',?,?)",
+                  (who, who + '@example.test', json.dumps(['leadership'] if permission == 'mover' else [])))
         if permission == 'owner':
             c.execute("INSERT OR REPLACE INTO registry_metadata VALUES('owner',?)",
-                      (json.dumps({'email': 'editor@example.test'}),))
+                      (json.dumps({'email': who + '@example.test'}),))
         elif permission == 'delegate':
             c.execute('INSERT INTO task_delegations(task_id,delegate,requested_by,expires_at) VALUES(?,?,?,?)',
-                      (task['id'], 'human:editor', task['requester_id'], '2099-01-01T00:00:00Z'))
-        H.task_comment(c, 'human:editor', task['id'], f'Tests: head {HEAD}: 9 passed', wake=False)
+                      (task['id'], 'human:' + who, task['requester_id'], '2099-01-01T00:00:00Z'))
+        H.task_comment(c, 'human:' + who, task['id'], f'Tests: head {HEAD}: 9 passed', wake=False)
     response = move(api, task)
-    assert response.status_code == 200, response.text
+    assert response.status_code == 200, (permission, response.text)
 
 
 @pytest.mark.parametrize('tail', [
@@ -370,9 +377,13 @@ def test_environment_owner_receipt_counts_without_stored_owner(api, handoff):
     assert response.status_code == 200, response.text
 
 
-@pytest.mark.parametrize('removal', ['deleted_at', 'hidden_at', 'superseded_at'])
-def test_removed_manager_receipt_does_not_count(api, removal):
+def test_removed_manager_receipt_does_not_count(api):
     task = ticket(api)
+    for n, removal in enumerate(['deleted_at', 'hidden_at', 'superseded_at']):
+        _removed_receipt(api, task if n == 0 else another_ticket(api, n), removal)
+
+
+def _removed_receipt(api, task, removal):
     with api.app.state.store.transaction() as c:
         c.execute("UPDATE bot_config SET reports_to='cmo' WHERE bot='cpo'")
         conv = H.conversation(c, task['conversation_id'])

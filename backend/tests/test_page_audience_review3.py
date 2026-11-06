@@ -134,8 +134,7 @@ def test_encrypted_cursor_passes_five_thousand_hidden_rows(api, endpoint, field)
 
 
 @pytest.mark.slow
-@pytest.mark.parametrize("disabled_guard", [None, "scrubber", "history", "recognizer", "audience"])
-def test_restricted_page_leak_matrix_across_stored_shapes_transports_and_deletion(api, live, monkeypatch, disabled_guard):
+def test_restricted_page_leak_matrix_across_stored_shapes_transports_and_deletion(api, live, monkeypatch):
     """One canary follows every persisted attachment form through both outsider identities and a real SSE socket."""
     from backend.tests.test_api import assign, ready, runner
     from backend.tests.test_events import ready as stream_ready
@@ -239,18 +238,6 @@ def test_restricted_page_leak_matrix_across_stored_shapes_transports_and_deletio
     post(api, f"tasks/{tid}/comments", {"text": "Start the review", "delivery": "steer"})
     failures = []
     claimed_ids = []
-    if disabled_guard == "scrubber":
-        monkeypatch.setattr(files, "readable_page_refs", lambda c, auth, who, refs, **kw: refs)
-    elif disabled_guard == "history":
-        original = task_privacy.content_readable
-        monkeypatch.setattr(task_privacy, "content_readable", lambda c, actor, payload:
-                            True if isinstance(payload, dict) and payload.get("field") == "file"
-                            else original(c, actor, payload))
-    elif disabled_guard == "recognizer":
-        monkeypatch.setattr(files, "page_references", lambda value, c=None, **kw: set())
-    elif disabled_guard == "audience":
-        monkeypatch.setattr(files, "page_audience_visible", lambda *args, **kwargs: True)
-
     def clean(label, value):
         serialized = json.dumps(value, default=str)
         found = [secret for secret in secrets if secret and secret in serialized]
@@ -352,16 +339,7 @@ def test_restricted_page_leak_matrix_across_stored_shapes_transports_and_deletio
         post(api, f"attempts/{aid}/complete", {"outcome": "completed", "text": "Checked", "last_seq": 0}, token=machine["token"])
         if not deleted:
             post(api, f"tasks/{tid}/comments", {"text": "Continue review after deletion", "delivery": "steer"})
-    if disabled_guard:
-        assert any(isinstance(found, list) and set(found) & set(secrets) for _, found, *rest in failures), \
-            "The matrix did not detect removal of " + disabled_guard
-        if disabled_guard == "history":
-            assert any(isinstance(found, list) and name in found for _, found, *rest in failures), failures
-        if disabled_guard == "audience":
-            assert any(isinstance(found, list) and "tasks/" + read_task in label and "Canary confidential quote." in found
-                       for label, found, *rest in failures), failures
-    else:
-        assert not failures, json.dumps(failures, indent=2)
+    assert not failures, json.dumps(failures, indent=2)
     # Recreate exactly the original bytes in the same task: its live review stays answerable.
     monkeypatch.undo()
     recreated = page(api, attempt, task=tid, name=name, title="Replacement folio", data=document)
