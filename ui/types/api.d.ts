@@ -8586,14 +8586,6 @@ export type GetSkillProposalParams = {
 export type GetSkillProposalBody = never;
 export type GetSkillProposalResponse = unknown;
 
-/** GET /api/v2/skills/{name}/usage */
-export type GetSkillUsageParams = {
-  days?: number;
-  name: string;
-};
-export type GetSkillUsageBody = never;
-export type GetSkillUsageResponse = unknown;
-
 /** GET /api/v2/skills/{name}/versions/{number} */
 export type GetSkillVersionParams = {
   name: string;
@@ -9665,11 +9657,6 @@ export type ListModelsParams = Record<string, never>;
 export type ListModelsBody = never;
 export type ListModelsResponse = unknown;
 
-/** GET /api/v2/skills/installed */
-export type ListMySkillInstallsParams = Record<string, never>;
-export type ListMySkillInstallsBody = never;
-export type ListMySkillInstallsResponse = unknown;
-
 /** GET /api/v2/me/tokens */
 export type ListMyTokensParams = Record<string, never>;
 export type ListMyTokensBody = never;
@@ -9868,11 +9855,6 @@ export type ListServiceKeysParams = Record<string, never>;
 export type ListServiceKeysBody = never;
 export type ListServiceKeysResponse = unknown;
 
-/** GET /api/v2/skills/install-targets */
-export type ListSkillInstallTargetsParams = Record<string, never>;
-export type ListSkillInstallTargetsBody = never;
-export type ListSkillInstallTargetsResponse = unknown;
-
 /** GET /api/v2/skills/installs */
 export type ListSkillInstallsParams = {
   target_id: string;
@@ -9887,13 +9869,6 @@ export type ListSkillProposalsParams = {
 };
 export type ListSkillProposalsBody = never;
 export type ListSkillProposalsResponse = unknown;
-
-/** GET /api/v2/skills/usage */
-export type ListSkillUsageParams = {
-  days?: number;
-};
-export type ListSkillUsageBody = never;
-export type ListSkillUsageResponse = unknown;
 
 /** GET /api/v2/skills */
 export type ListSkillsParams = Record<string, never>;

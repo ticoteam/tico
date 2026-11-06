@@ -243,7 +243,7 @@ CHECKS = (
           "owner", automation_overdue),
     Check("relay_silent", "Webhook relay not pulled",
           f"Webhook relay addresses exist, and no delivery was pulled from Tico Gateway for {RELAY_SILENT_MINUTES} minutes.",
-          "This server's Gateway key and network (Settings > Webhooks); deliveries wait at Tico Gateway until it works.",
+          "This server's Gateway key and network (Settings > Models › Tico Gateway); deliveries wait at Tico Gateway until it works.",
           "owner", relay_silent),
     Check("long_holds", "Write lock held too long",
           f"More than {LONG_HOLDS_PER_HOUR} write transactions held the database lock for "

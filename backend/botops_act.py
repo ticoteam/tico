@@ -672,7 +672,7 @@ def _place(path):
         what = "its repository access" if parts[2:3] == ["repositories"] else "its settings"
         return "#/bot/" + slug + "/more", slug, what
     if parts[0] == "repositories":
-        return "#/repositories", "", "Settings > Repositories"
+        return "#/settings/general/set-repos", "", "Settings > General › Repositories"
     if parts[0] == "tasks" and len(parts) > 1 and parts[1]:
         return "#/task/" + parts[1], "", "the task"
     if parts[0] == "credentials":
@@ -720,8 +720,8 @@ def fix(path, code, status, acting, names, base=""):
         # A worktree is made with the task's owner bot's own repository access (backend/worktrees.py), so no one's
         # request lends it: say who gives that access.
         text = ("The task's bot needs write access to that repository: an owner or admin gives it in Settings > "
-                "Repositories; then BotOps can add the worktree itself")
-        link = "#/repositories"
+                "General › Repositories; then BotOps can add the worktree itself")
+        link = "#/settings/general/set-repos"
     elif code == "on_behalf_of":
         # The cited request lends nothing (closed, too old, another person's, words others wrote): the detail says why.
         text = ("BotOps can't act on that earlier request: ask it again in your BotOps chat so it acts with your "

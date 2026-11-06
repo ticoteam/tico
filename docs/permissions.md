@@ -297,7 +297,7 @@ An incoming webhook (a trigger) is an address outside senders post to ([Webhooks
 ## Screening
 
 Text from outside Tico can carry instructions meant for the bot that reads it (a prompt injection). Screening checks that
-text at the doors it comes in by, before a bot reads it. Change it in **Settings → System → Screening** (owner or admin).
+text at the doors it comes in by, before a bot reads it. Change it in **Settings → Security → Screening** (owner or admin).
 
 | Door | What is checked | Default |
 |---|---|---|
@@ -579,11 +579,11 @@ routing), is them asking: the run it wakes has their rights. Anyone else's comme
 On a task another bot asked BotOps for, a person's comment lends nothing either: the run keeps that bot's rights, and
 what they can't do comes to the person who commented as a Confirm card in their BotOps chat.
 On its own task BotOps never needs anyone's rights to add the task's worktree (the bot's own repository access decides; an
-owner or admin gives it in Settings > Repositories) or to file a question or subtask for a person under it; that ask grants
+owner or admin gives it in Settings > General > Repositories) or to file a question or subtask for a person under it; that ask grants
 nothing by itself.
 With a person's rights BotOps may give another bot repository access at once, but never take any away: setting a bot to
 own, dropping a chosen repository or turning write into read comes to that person as a Confirm card naming the grants that
-would stop. The same change made in Settings > Repositories (or `hub bot repos`) says which grants stopped applying.
+would stop. The same change made in Settings > General > Repositories (or `hub bot repos`) says which grants stopped applying.
 A message cited by id (`on_behalf_of`) must be the requester's own, in their own chat with BotOps rather than a thread another human
 spoke in, and it must be the same human whose message started the run. Someone who has left lends nothing.
 

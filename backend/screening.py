@@ -1,7 +1,7 @@
 """Screening: outside text checked for prompt injection at the doors it comes in by, before a bot reads it
 (questions/injection-screen.json, docs/permissions.md "Screening").
 
-Six doors, each with its own mode (off, warn or hold; Settings > System > Screening):
+Six doors, each with its own mode (off, warn or hold; Settings > Security > Screening):
 
   webhook  a call whose automation opens a task or starts a bot's turn, and a `create_task` rule on `webhook.received`
   mail     an inbound message (backend/inbound.py) a bot reads

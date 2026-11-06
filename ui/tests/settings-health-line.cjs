@@ -68,11 +68,12 @@ const NOTE = {kind: 'uncertain_work', title: 'Writer saved 1 stopped run for lat
 
     await page.goto('https://tico-ui.test/#/settings');
     await page.locator('#settings-tabs').waitFor();
-    // The tab row: Health and Gateway are not tabs; More keeps System, Webhooks and Billing.
-    assert.deepEqual(await page.locator('#settings-tabs > [data-settings-tab]').evaluateAll(b => b.map(x => x.dataset.settingsTab)),
-      ['general', 'people', 'bots', 'devices', 'models', 'repos', 'tasks', 'history']);
+    // The tab row: Health, Gateway and Repositories are not tabs, Security is an admin's; More keeps Billing.
+    const tabs = await page.locator('#settings-tabs > [data-settings-tab]').evaluateAll(b => b.map(x => x.dataset.settingsTab));
+    assert.deepEqual(tabs.filter(t => t !== 'security'), ['general', 'people', 'bots', 'devices', 'models', 'tasks', 'history']);
+    if (tabs.includes('security')) assert.equal(tabs.indexOf('security'), tabs.indexOf('history') - 1, 'Security sits before History');
     assert.deepEqual(await page.locator('#settings-more [data-settings-tab]').evaluateAll(b => b.map(x => x.dataset.settingsTab)),
-      ['system', 'webhooks', 'billing']);
+      ['billing']);
     // Bad checks and a person's issue are urgent, warn checks to fix, info checks and the rest of the issues FYI.
     await page.waitForFunction(() => document.querySelector('#settings-health-line [data-hl-count=urgent]'));
     await redraw();

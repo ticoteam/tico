@@ -1,6 +1,6 @@
 // The redesign's shell (ui/app/redesign.js, ui/app/strategy-budget.js) against fixtures shaped per the redesign CONTRACT
 // (fixtures/redesign-*.json, the Acme example): the sidebar's order, helpers off the Team list, old addresses
-// redirected, Settings with its System tab and no design switch, the Strategy tabs with no Strategy Bot
+// redirected (System's to Automations' System jobs), Settings with no design switch, the Strategy tabs with no Strategy Bot
 // beside them (it is a helper of the Assistant; Ask is the way in), the Budget tab drawing (its tree and edits are
 // strategy-budget.cjs), a task cap's 409 read as its message, and no "CEO Bot" anywhere. Phone first (390×844), then desktop.
 // TICO_SCREENSHOT_DIR=<dir> saves review screenshots.
@@ -238,11 +238,12 @@ const noSideScroll = page => page.evaluate(() => document.documentElement.scroll
       await shot(page, 'desktop-settings');
       for (const old of ['#/settings/rules', '#/settings/routines', '#/settings/recurring']) {
         await page.evaluate(h => { location.hash = h; }, old);
-        assert.ok(await hashSoon(page, '#/settings/system'), `${tag}: ${old} lands on System`);
+        assert.ok(await hashSoon(page, '#/automations/system-jobs'), `${tag}: ${old} lands on System jobs`);
       }
-      assert.equal(await page.locator('[data-settings-tab="system"][aria-selected="true"], [data-settings-tab="system"].cur, [data-settings-tab="system"][aria-current]').count(), 1, tag + ': System is the tab shown');
-      assert.equal(await page.locator('#settings-system #set-rules-card, #settings-system [data-bot-routines]').count(), 0, tag + ': no wake rules or bot routines');
-      await shot(page, 'desktop-settings-system');
+      assert.equal(await page.locator('[data-settings-tab="system"]').count(), 0, tag + ': no System tab');
+      await page.locator('#set-system-routines').waitFor();
+      assert.equal(await page.locator('#set-rules-card, [data-bot-routines]').count(), 0, tag + ': no wake rules or bot routines');
+      await shot(page, 'desktop-automations-system-jobs');
       assert.deepEqual(errors, [], tag + ': no page errors');
       await page.close();
     }
