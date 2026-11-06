@@ -531,11 +531,8 @@ async function followReach(viewport, shot, theme) {
       return m.contains(e) ? '' : JSON.stringify({r: [r.left, r.top, r.width, r.height], hidden: m.hidden, vis: cs.visibility, op: cs.opacity, z: cs.zIndex, pos: cs.position, at: e?.outerHTML?.slice(0, 160)});
     });
     assert.equal(covered, '', 'the list is on top');
-    if (shot) {
-      await page.screenshot({path: shot});
-      const b = await modal.locator('.task-pill').boundingBox();
-      await page.screenshot({path: shot.replace('.png', '-box.png'), clip: {x: b.x - 8, y: b.y - 120, width: b.width + 16, height: b.height + 128}});
-    }
+    await pop.evaluate(m => Promise.all(m.getAnimations().map(a => a.finished)));   // its fade in (base.css)
+    if (shot) await page.screenshot({path: shot});
     assert.equal(await pop.isVisible(), true, 'the list stays open');
     await page.keyboard.press('Escape');
     // Send: the comment, then the follow; Follow goes once you follow.

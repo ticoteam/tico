@@ -641,6 +641,7 @@ async function followReach(browser) {
     assert.match(rows[2][0], /ben/i); assert.match(rows[3][0], /zed/i);
     const fits = await cPop.evaluate(m => { const r = m.getBoundingClientRect(); return r.left >= 0 && r.right <= innerWidth && r.top >= 0; });
     assert.ok(fits, 'the list fits');
+    await cPop.evaluate(m => Promise.all(m.getAnimations().map(a => a.finished)));
     await shot(page, `follow-reach-${theme}`);
     await page.keyboard.press('Escape');
     assert.equal(await cPop.isHidden(), true, 'Escape closes the list');
@@ -670,6 +671,7 @@ async function followReach(browser) {
     await page.locator('#chan-thread .p-reach').click();
     const phoneFits = await page.locator('#chan-thread .p-reach-pop').evaluate(m => { const r = m.getBoundingClientRect(); return r.left >= 0 && r.right <= innerWidth; });
     assert.ok(phoneFits, 'the list fits a phone');
+    await page.locator('#chan-thread .p-reach-pop').evaluate(m => Promise.all(m.getAnimations().map(a => a.finished)));
     await shot(page, `follow-reach-phone-${theme}`);
     await page.keyboard.press('Escape');
     await again.uncheck();
