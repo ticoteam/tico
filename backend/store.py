@@ -2075,6 +2075,10 @@ class Store:
                     Redesign.repair_inbox_prompts(c)
                 except Exception:  # noqa: BLE001 - startup goes on
                     logging.getLogger(__name__).exception("inbox prompt repair failed; it is tried at the next start")
+                # The waits 20261106112609_derived_waiting staged become question tasks, blockers or note lines, once:
+                # a no-op when nothing is staged (backend/question_tasks.py move_waits).
+                from . import question_tasks as QuestionTasks
+                QuestionTasks.move_waits(c)
                 from . import releases as Releases
                 Releases.record_start(c, H.now())
                 from .credentials import FILE_MIGRATION, HUB_MIGRATION

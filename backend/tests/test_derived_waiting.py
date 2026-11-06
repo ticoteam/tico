@@ -145,3 +145,157 @@ def test_the_strategy_bots_merged_question_task_passes_its_answer_on_when_closed
             assert not H.open_task_asks(c, H.task(c, task_id))
         assert {r[0] for r in c.execute("SELECT state FROM strategy_merges WHERE merged_into=?", (item["id"],))} == \
             {"answered"}
+
+
+def _bot_task(c, title="Renew the domain", owner="bot:ops", **kw):
+    return H.task_create(c, "human:ana", title, "", owner, lint=False, private=kw.pop("private", False), **kw)
+
+
+def _stage(c, *pairs):
+    c.execute("CREATE TABLE IF NOT EXISTS task_waits_moved(task_id TEXT PRIMARY KEY, waiting_on TEXT NOT NULL, "
+              "created_at TEXT NOT NULL)")
+    for task_id, on, note in pairs:
+        c.execute("UPDATE tasks SET status='waiting', note=? WHERE id=?", (note, task_id))
+        c.execute("INSERT INTO task_waits_moved VALUES(?,?,?)", (task_id, on, H.now()))
+
+
+def _another_bots_ask(c, row):
+    H.say(c, "bot:cpo", "human:ana", "Which registrar do we use?", kind="ask", conversation_id=row["conversation_id"],
+          refs={"task": row["id"]})
+
+
+def test_the_next_start_moves_the_staged_waits_once(api):
+    store = api.app.state.store
+    with store.transaction() as c:
+        row = _bot_task(c)
+        _stage(c, (row["id"], "human:ana", "Renew it for a year? I'll pay the invoice."))
+    store.initialize(seed_market=False)
+    with store.read() as c:
+        assert not c.execute("SELECT 1 FROM sqlite_master WHERE name='task_waits_moved'").fetchone()
+        [card_id] = TR.child_ids(c, row["id"])
+        assert QT.waiting_on(c, H.task(c, row["id"])) == "human:ana" and QT.is_open(H.task(c, card_id))
+        before = c.execute("SELECT count(*) FROM tasks").fetchone()[0]
+    store.initialize(seed_market=False)             # every start calls it; with nothing staged it does nothing
+    with store.read() as c:
+        assert c.execute("SELECT count(*) FROM tasks").fetchone()[0] == before
+
+
+def test_another_bots_old_ask_does_not_stand_for_the_owners_wait(api):
+    with api.app.state.store.transaction() as c:
+        waited, moved = _bot_task(c), _bot_task(c, "Renew the certificate")
+        _another_bots_ask(c, waited)
+        _another_bots_ask(c, moved)
+        H.task_update(c, "bot:ops", waited["id"], status="waiting", waiting_on="human:ana", note=ASK)
+        _stage(c, (moved["id"], "human:ana", ASK))
+        QT.move_waits(c)
+        for row in (waited, moved):
+            # Only the owner's own ask holds its task (task_holds): cpo's leaves it, so Ana gets ops's question task.
+            [card_id] = TR.child_ids(c, row["id"])
+            assert H.task(c, card_id)["requester_id"] == "bot:ops"
+            assert QT.waiting_on(c, H.task(c, row["id"])) == "human:ana"
+
+
+def test_a_refused_question_task_keeps_the_wait_as_a_note_line(api, monkeypatch):
+    def refuse(*_a, **_k):
+        raise H.Refused("caps", "Ana has too many open questions")
+    with api.app.state.store.transaction() as c:
+        row = _bot_task(c)
+        _stage(c, (row["id"], "human:ana", "Blocked on Ana Rivera: Renew it for a year? I'll pay the invoice."))
+        monkeypatch.setattr(H, "_ask_in_subtask", refuse)
+        QT.move_waits(c)
+        after = H.task(c, row["id"])
+        assert after["note"].startswith("Waiting on Ana") and "Renew it for a year?" in after["note"]
+        assert TR.child_ids(c, row["id"]) == []
+        assert not c.execute("SELECT 1 FROM sqlite_master WHERE name='task_waits_moved'").fetchone()
+
+
+def test_on_nobody_withdraws_the_question_task_quietly(api):
+    work, attempt = _work(api)
+    _wait(api, work["id"], attempt["token"])
+    with api.app.state.store.read() as c:
+        [card_id] = TR.child_ids(c, work["id"])
+    since = _mark(api)
+    _wait(api, work["id"], attempt["token"], on="", note="Not needed after all.")
+    with api.app.state.store.read() as c:
+        assert H.task(c, card_id)["status"] == "closed"
+        assert QT.waiting_on(c, H.task(c, work["id"])) is None
+    assert _to_ops(api, since) == []                    # taking it back wakes nobody
+    assert not [i for i in get(api, "needs-you")["items"] if i["id"] == card_id]
+
+
+def test_the_person_a_bots_task_waits_on_cannot_close_the_bots_task(api):
+    work, attempt = _work(api)
+    _wait(api, work["id"], attempt["token"], on="ben")
+    with api.app.state.store.transaction() as c:
+        try:
+            H.task_close(c, "human:ben", work["id"], note="Not now")
+        except H.Refused as refused:
+            assert refused.rule == "close"
+        else:
+            raise AssertionError("Ben closed the bot's task")
+        [card_id] = TR.child_ids(c, work["id"])
+        assert H.task(c, card_id)["owner_id"] == "human:ben"       # his question task is his to answer or decline
+
+
+def test_a_board_reads_private_waits_in_the_same_statements_however_many(api):
+    def statements(rows):
+        with api.app.state.store.read() as c:
+            seen = []
+            c.set_trace_callback(seen.append)
+            try:
+                found = QT.waiting_on_many(c, rows)
+            finally:
+                c.set_trace_callback(None)
+        return found, len(seen)
+    with api.app.state.store.transaction() as c:
+        ids = []
+        for n in range(5):
+            row = _bot_task(c, f"Plan launch {n}", private=True)
+            H.task_update(c, "bot:ops", row["id"], status="waiting", waiting_on="human:ana", note=ASK)
+            c.execute("UPDATE tasks SET private=1 WHERE id IN (SELECT from_task FROM task_relations WHERE to_task=?)",
+                      (row["id"],))
+            ids.append(row["id"])
+        rows = [H.task(c, i) for i in ids]
+    one, few = statements(rows[:1]), statements(rows)
+    assert one[0] == {ids[0]: "human:ana"} and few[0] == {i: "human:ana" for i in ids}
+    assert one[1] == few[1], (one[1], few[1])
+
+
+def test_hub_sql_reads_who_a_task_waits_on_from_task_waits(api):
+    work, attempt = _work(api)
+    _wait(api, work["id"], attempt["token"])
+    r = api.post("/api/v2/sql", json={"sql": "SELECT task_id, waiting_on FROM task_waits"},
+                 headers={"Authorization": "Bearer ana-test"})
+    assert r.status_code == 200, r.text
+    assert [work["id"], "human:ana"] in r.json()["rows"]
+
+
+def test_a_stalled_tasks_stand_keeps_the_slot_where_waiting_on_was(api, monkeypatch):
+    seen, dumps = [], H.json.dumps
+    with api.app.state.store.transaction() as c:
+        row = H.task(c, _bot_task(c)["id"])
+        monkeypatch.setattr(H.json, "dumps", lambda value, **kw: seen.append(value) or dumps(value, **kw))
+        H._stall_stand(c, row)
+        monkeypatch.undo()
+    # status, step, owner, the old waiting_on (None now, so stands recorded before keep their hash), relations, comments
+    [parts] = [v for v in seen if isinstance(v, list) and len(v) == 6]
+    assert parts[:4] == [row["status"], row.get("step_id"), row["owner_id"], None]
+
+
+def test_changing_a_groups_members_makes_a_private_waits_reason_again(api, monkeypatch):
+    from backend import groups
+    with api.app.state.store.transaction() as c:
+        row = _bot_task(c, private=True)
+        H.task_update(c, "bot:ops", row["id"], status="waiting", waiting_on="human:ana", note=ASK)
+        c.execute("UPDATE tasks SET private=1 WHERE id IN (SELECT from_task FROM task_relations WHERE to_task=?)",
+                  (row["id"],))
+        refreshed = []
+        monkeypatch.setattr(task_holds, "refresh_many", lambda c, ids, cleared=None: refreshed.extend(ids))
+        task_holds.refresh_private_names(c)
+        assert row["id"] in refreshed
+        called = []
+        monkeypatch.setattr(groups, "_save", lambda *a, **k: None)
+        monkeypatch.setattr(groups, "refresh_teams", lambda *a, **k: None)
+        monkeypatch.setattr(task_holds, "refresh_private_names", lambda c: called.append(True))
+        groups._finish(c, {}, None, [])
+        assert called

@@ -179,6 +179,15 @@ def live_masks(unsettled):
 # caller may read: a bucket of one run would otherwise tell them that run exists, what it cost and whether it acted.
 # `{all_table}` may only narrow what is counted, never add a row.
 DERIVED = {
+    # Who each waiting task waits on (spec D8, step 6b): the person owning its oldest open question task, a subtask or a
+    # blocker (question_tasks.waiting_on). Read over the caller's own views, so a card they cannot read names nobody.
+    "task_waits": (("tasks", "task_relations"), """
+        SELECT t.id AS task_id,
+               (SELECT q.owner_id FROM {task_relations} r JOIN {tasks} q ON q.id=r.from_task
+                WHERE r.to_task=t.id AND r.kind IN ('parent','blocks') AND q.questions IS NOT NULL AND q.answer IS NULL
+                  AND q.status IN ('open','doing','waiting','review','ready') AND q.owner_id LIKE 'human:%'
+                ORDER BY q.created_at, q.id LIMIT 1) AS waiting_on
+        FROM {tasks} t WHERE t.status='waiting'"""),
     # Runs per week (Monday, UTC), bot, trigger and purpose, with tokens and outcome (backend/run_triggers.py).
     # A run from before triggers were recorded reads `unknown`, and is counted, never dropped. Input is the run's
     # measured usage (every primary and fallback segment). A run from before measured usage has its one-number

@@ -4904,6 +4904,7 @@ def create_app(settings=None):
                     if gate["acts"]:
                         fields["owner"] = None
                 elif verdict["kind"] == "wait" and row["owner_id"] == who.actor and \
+                        not H._waits_on(c, row, verdict["person"]) and \
                         H.resolve_actor(c, body.waiting_on) == verdict["person"]:
                     gate = ask_ingest.apply(c, verdict)
                     waits.append((verdict, gate))
@@ -4955,7 +4956,7 @@ def create_app(settings=None):
                 reach.check(c, who, owner, "task", task_id=row["id"])
         if body.waiting_on:
             waits = H.resolve_actor(c, body.waiting_on)
-            if waits:
+            if waits and not H._waits_on(c, row, waits):
                 reach.check(c, who, waits, "task", task_id=row["id"])
 
     @app.post("/api/v2/tasks/{tid}")

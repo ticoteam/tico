@@ -198,6 +198,18 @@ def refresh(conn, task_id, cleared=None, at=None):
     return "nothing"
 
 
+def refresh_private_names(conn):
+    """Make again the Blocked reason of each waiting private task with an open private subtask: whom that reason may
+    name follows who reads both (_task_hold), and a group's members are readers by the group. Called when a group or its
+    members change (groups._finish); a task's own reader list refreshes it there (hubdb.set_task_readers)."""
+    from . import hubdb as H
+    marks = ",".join("?" * len(H.ACTIVE_STATUSES))
+    refresh_many(conn, [r[0] for r in conn.execute(
+        "SELECT DISTINCT r.to_task FROM task_relations r JOIN tasks p ON p.id=r.to_task JOIN tasks k ON k.id=r.from_task "
+        "WHERE r.kind='parent' AND p.status='waiting' AND p.private IS NOT 0 AND k.private IS NOT 0 "
+        f"AND k.status IN ({marks})", H.ACTIVE_STATUSES)])
+
+
 def refresh_many(conn, task_ids, cleared=None):
     for task_id in dict.fromkeys(t for t in task_ids if t):
         refresh(conn, task_id, cleared)

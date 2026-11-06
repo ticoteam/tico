@@ -115,16 +115,14 @@ class ClosingNeedsEdit(Case):
         child = self.make(CMO, "Draft the sales email", SEO, parent_id=parent["id"])
         self.assertEqual(H.task_close(self.conn, CARA, child["id"])["status"], "closed")    # requester of the parent
 
-    def test_the_person_a_task_waits_on_closes_it(self):
-        """A bot's question waits on a person; "not now" is theirs to say even when they can't edit the task."""
+    def test_the_person_a_bots_task_waits_on_does_not_close_it(self):
+        """A bot's task waiting on a person is still the bot's: they answer or decline their question task under it."""
         t = self.make(CMO, "Approve the launch budget?", CMO)
-        self.refused("close", H.task_close, self.conn, CARA, t["id"])
-        # As a bot's wait on her leaves it (--on): a question task of hers under it, the bot still its owner. Closing
-        # the task closes that card, which bumps the task's version: a column the store adds (Store.initialize).
-        H.add_column(self.conn, "tasks", "version", "INTEGER NOT NULL DEFAULT 1")
         H.task_update(self.conn, CMO, t["id"], status="waiting", waiting_on=CARA,
                       note="Approve the launch budget? I'll book the ads after.")
-        self.assertEqual(H.task_close(self.conn, CARA, t["id"], note="Not now")["status"], "closed")
+        self.refused("close", H.task_close, self.conn, CARA, t["id"], note="Not now")
+        [card] = TR.child_ids(self.conn, t["id"])
+        self.assertEqual(H.task(self.conn, card)["owner_id"], CARA)
 
     def test_the_caller_says_when_a_person_moves_tasks(self):
         t = self.make(ANA, "Draft the launch post", CMO)
