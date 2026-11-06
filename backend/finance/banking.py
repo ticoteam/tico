@@ -163,7 +163,7 @@ def connection_create(ctx: Ctx, who: str, p: V.Payload) -> Plan:
         for a in accounts:
             if str(a.get("status") or "active") not in ("active", "pending"):
                 continue
-            if (kept := _reuse(ctx, cid, a)) is not None:
+            if (kept := reuse_money(ctx, cid, a)) is not None:
                 mapped.append(kept)
                 continue
             subtype = "savings" if "saving" in str(a.get("kind") or "").lower() else "checking"
@@ -174,17 +174,17 @@ def connection_create(ctx: Ctx, who: str, p: V.Payload) -> Plan:
             named = F.bare_name(a.get("name") or "Mercury", four)
             gl = bank if bank is not None and not used else new_account(
                 ctx, BANK, f"{named} ••{four}" if four else named, "asset", "bank", who)
-            mapped.append(_money(ctx, cid, a, "bank", subtype, gl, who))
+            mapped.append(new_money(ctx, cid, a, "bank", subtype, gl, who))
         for a in credit:
             if str(a.get("status") or "active") not in ("active", "pending"):
                 continue
-            if (kept := _reuse(ctx, cid, a)) is not None:
+            if (kept := reuse_money(ctx, cid, a)) is not None:
                 mapped.append(kept)
                 continue
             if str(a.get("kind") or "").lower() == "debit":
                 # A debit card program spends cash it holds: an asset with its own account, no card liability (§8.1).
                 gl = new_account(ctx, BANK, f"{a.get('name') or 'Mercury'} debit card", "asset", "bank", who)
-                mapped.append(_money(ctx, cid, a, "card_program", "debit", gl, who))
+                mapped.append(new_money(ctx, cid, a, "card_program", "debit", gl, who))
                 continue
             cards = by_code(ctx, CARDS)
             gl = cards if cards is not None and not any(
@@ -192,14 +192,14 @@ def connection_create(ctx: Ctx, who: str, p: V.Payload) -> Plan:
             if gl is None:
                 gl = new_account(ctx, CARDS, "Credit cards" if cards is None else "Mercury IO", "liability",
                                   "credit_card", who)
-            mapped.append(_money(ctx, cid, {**a, "name": a.get("name") or "Mercury IO"}, "card_program", "credit", gl,
+            mapped.append(new_money(ctx, cid, {**a, "name": a.get("name") or "Mercury IO"}, "card_program", "credit", gl,
                                  who))
         return {"connection_id": cid, "money_accounts": mapped, "payments_enabled": not note,
                 "approval_note": note or None}
     return Plan(K.ALLOW, f"Connect Mercury ({len(accounts)} account(s), {len(credit)} credit)", apply)
 
 
-def _reuse(ctx: Ctx, cid: str, a: Mapping[str, object], provider: str = "mercury") -> Result | None:
+def reuse_money(ctx: Ctx, cid: str, a: Mapping[str, object], provider: str = "mercury") -> Result | None:
     """A provider account already in the books (connected before, perhaps with another token for the same organization)
     is the same money account: it moves to this connection, so its history is never taken in twice."""
     m = SK.money_account_by_provider_id(ctx.c, ctx.book.id, provider, str(a.get("id") or ""))
@@ -212,7 +212,7 @@ def _reuse(ctx: Ctx, cid: str, a: Mapping[str, object], provider: str = "mercury
             "code": gl.code if gl is not None else ""}
 
 
-def _money(ctx: Ctx, cid: str, a: Mapping[str, object], kind: str, subtype: str, gl: L.Account, who: str,
+def new_money(ctx: Ctx, cid: str, a: Mapping[str, object], kind: str, subtype: str, gl: L.Account, who: str,
            provider: str = "mercury") -> Result:
     current, available = a.get("current"), a.get("available")
     mid = SK.insert(ctx.c, "fin_money_accounts", {
