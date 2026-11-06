@@ -385,7 +385,7 @@ function decidePaintBody(st) {
   if (!c || !body) return;
   // Other bots' tasks waiting on the person for the same thing are named on the card.
   const html = c.type === 'approve' ? decideApprovalHTML(st, c) : c.type === 'stale' ? decideStaleHTML(c)
-    : (c.type === 'pick' ? decidePickHTML(st, c) : decideTaskHTML(st, c)) + foldedHTML(c.it) + decideClarifyHTML(c);
+    : (c.type === 'pick' ? decidePickHTML(st, c) : decideTaskHTML(st, c)) + foldedHTML(c.it);
   if (body.dataset.html !== html) body.innerHTML = body.dataset.html = html;
   if (c.type === 'task' || c.type === 'pick') decideAskRead(c.it);   // an option card reads its question too
 }
@@ -401,20 +401,6 @@ function decideStalePaint(st) {
   if (body.dataset.html !== html) { tasksPatch(body, html); body.dataset.html = html; }
   if (actions.dataset.html !== act) actions.innerHTML = actions.dataset.html = act;
   decidePaintHead(st);
-}
-// A stale ask from a bot to me (the server marks it `stale` past three days unanswered): one tap asks the bot
-// whether it still matters, in clearer words (backend/clarify_asks.py).
-const decideStaleAsk = c => { const a = c?.it?.ask;
-  return !!a && String(a.sender_id || '').startsWith('bot:') && a.recipient_id === myActor() && !!a.stale; };
-// The one-click Clarify's words: the wording the old clarify sent the asking bot (backend/clarify_asks.py, verbatim).
-const DEC_CLARIFY_PROMPT = 'Is this request still relevant? If not, say so in one sentence and stop. If yes, restate what '
-  + 'you need from the person in two plain sentences: what they must decide or do first, then what happens after. '
-  + 'No IDs, hashes, file names, or tool names.';
-const DEC_CLARIFY_CLIP = 200;
-function decideClarifyHTML(c) {
-  if (!decideStaleAsk(c)) return '';
-  const bot = actorLabel(c.it.ask.sender_id) || 'the bot';
-  return `<button type="button" class="ghost dc-clarify" data-dc="clarify" title="Ask ${esc(bot)} whether this still matters, in clearer words">Ask ${esc(bot)} to clarify</button>`;
 }
 const decideTwo = c => c.type === 'pick' && !c.q.multi && c.q.options.length === 2;
 // Yes / No reads No, Yes like an approval: the affirmative on the right.
@@ -582,15 +568,6 @@ function decideWriteBody(c, what, i, note) {
     // One pick, Yes to all, or the ticked picks (the rest go to the bot as "not this one"): question-card.js.
     const labels = qcardLabels(c.q, what, i, decideTicked(DEC, c));
     return {writes: qcardWrites(c.it, c.q, labels, note), label: qcardSaid(c.it, c.q, labels)};
-  }
-  if (what === 'clarify') {
-    // A question task: a comment that @mentions the bot that asked. The filer does not follow its own task, so the
-    // @mention is what wakes it (backend/threads.py mentions matches a bot by its slug).
-    const asker = c.it.ask?.sender_id, quote = String(decideAskText(c.it) || c.it.title || '').replace(/\s+/g, ' ').trim();
-    const said = quote.length > DEC_CLARIFY_CLIP ? quote.slice(0, DEC_CLARIFY_CLIP).trimEnd() + '…' : quote;
-    const me = /** @type {any} */ (S.me), person = me?.name ? ` for ${me.name}` : '';
-    return {writes: [{path: `/v2/tasks/${id}/comments`, body: {text: `@${actorSlug(asker)} Please clarify this${person}: "${said}" ${DEC_CLARIFY_PROMPT}`}}],
-      label: `Asked ${actorLabel(asker) || to} to clarify`};
   }
   if (what === 'recommend') {
     const rec = c.it.recommend, version = shown || c.it.version;

@@ -79,8 +79,8 @@ latency, how many excerpts and how long the question was; never its text) and co
 caps (`TICO_DECISIONS_DAILY_CALLS_*`, counted apart from decisions); over the cap the ask is a 429.
 
 **Bots and the Assistant.** `hub doc ask "question" [--wait 120]`, or the MCP tool `hub_doc_ask`, returns
-`{answer, citations: [{type, title, url_or_id}], covered}`. A bot's question is an `ask` message to the Librarian, the ordinary
-ask and answer path: the Librarian's final message is the answer. `covered` is false when the answer starts "Not in the docs".
+`{answer, citations: [{type, title, url_or_id}], covered}`. A bot's question is a direct message to the Librarian flagged
+`--needs-action`, the ordinary message path: the Librarian's final message is the answer. `covered` is false when the answer starts "Not in the docs".
 Citations have `type: internal|linked|manual`. Manual citations link to the release's page, such as
 `https://github.com/ticoteam/tico/blob/v0.3.3/docs/people.md`.
 The server MCP returns after at most 20 seconds: if pending, it returns

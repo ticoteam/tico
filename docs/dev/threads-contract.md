@@ -260,8 +260,9 @@ threads.post(c, principal, thread_id, body, *, kind="say", refs=None, parent_mes
   an actor string for system writes (`keeper`, a migration) which skip C1.
 - `thread_id`: the thread written to. With `parent_message_id`, the post goes to that message's sub-thread, created
   if it has none (§3.2), and `thread_id` must be the message's thread.
-- `kind`: `say|ask|answer|notice|steer`. `to_actor`: the explicit addressee (optional); otherwise the first
-  in-audience mention or ask target, otherwise NULL.
+- `kind`: `say|notice|steer`; `ask` and `answer` are refused (422 `kind`, with the replacement named), and their old rows are
+  history only (`H.OLD_MESSAGE_KINDS`). A question to a person is a question task, not a message. `to_actor`: the
+  explicit addressee (optional); otherwise the first in-audience mention, otherwise NULL.
 - `via`: who really acts (`assistant`, `botops`, `slack`), recorded in `refs.via`. `origin`:
   `{"origin_id", "revision", "actor"}` for replicated inbound (Slack); a repeat
   `(origin_id, revision)`, once the writer is authorized, returns the existing message (`duplicate: true`) and writes
@@ -383,9 +384,10 @@ post's transaction, plus outside destinations linked to the thread (`slack:<chan
   queued; when it is only the default for a reader off the task (`refs.send_people`), it binds the bots alone and people
   are notified as their level says. A deferred `to_actor` the list leaves out (a task's owner bot, on a task filed into
   a shared chat) is deferred all the same, with its deadline, and the bot a message is written to (a DM's, a Home's)
-  takes a Defer never as a Defer: only the other bots it addresses are queued. Until question tasks (step 6) an answer
-  to a person's question goes to the task's first bot (owner, requester, origin), a reviewer's verdict to the bot that
-  filed the review, and the Strategy Bot's relayed answer to the bot that asked. On a task's own thread the first bot given a turn is the message's `to_actor` (its job, ride-along and
+  takes a Defer never as a Defer: only the other bots it addresses are queued. A person's answer to a question task
+  reaches its bot once (on its parent task through `hubdb._subtask_wake`, else as the task's requester), a
+  reviewer's verdict goes to the bot that filed the review, and the Strategy Bot's relayed answer goes to the bot that
+  asked. On a task's own thread the first bot given a turn is the message's `to_actor` (its job, ride-along and
   `task_delegations` key off it); every other woken bot gets a carrier (§4.4).
 - `GET /api/v2/threads/{thread_id}/reach` (`threads.reaches`) answers the same list for a message not yet sent, given
   `text`, `delivery`, `defer_for` and `in_reply_to`, writing nothing.
@@ -397,7 +399,8 @@ Unread counts come from counters (§5), not one row per reader.
   notify live), `defer` (the bot's next run, as `bot_to_bot`/`wake_rules.hold` do today), `digest` (batched), `none`
   (recorded; nothing wakes).
 - `reason`: `dm`, `mention`, `ask`, `assign`, `addressed`, `home`, `sub_thread`, `reply`, `follower`, `digest`,
-  `member`, `outside`.
+  `member`, `outside`. `ask` is an old-row reason only: deliveries backfilled from a `kind='ask'` message keep it
+  (`threads.py` `_DELIVERIES_SQL`), and nothing new is written with it. Readers still match it for those rows.
 - `state`: `pending` → `delivered` (claimed / shown) → `read`; `capped` (loop guard, resumes); `held` (an org-rule
   hold on the message, local only); `failed` (an outside destination out of retries, one Needs-you item); `moot`
   (deleted before delivery, or the recipient lost access).
@@ -565,10 +568,10 @@ threads.unread(c, viewer, thread_id) -> {"unread": n, "activity": bool}
   (`threads.task_opened`). Task news (a keeper message with `refs.task`, `hubdb.task_news`) is the task's own history:
   it is written to the task's conversation and no person gets a delivery for it, so the requester who did not make the
   task hears nothing in the thread (no unread, Inbox row, digest or push). Bots still get it as a delivery.
-  A bot's say, notice or ask in a task's own thread (`hubdb.task_post_sql`, the thread is some task's
+  A bot's say, notice or steer in a task's own thread (`hubdb.task_post_sql`, the thread is some task's
   `conversation_id`) is the same: the message is written and shown on the task, and a person gets a delivery for it only
   when its body @-mentions them (`threads.mentions`, reason `mention`). Without the mention no person is unread for it,
-  it is in no Inbox row, digest or push, and an ask still lists its task in Needs you (that reads messages, not
+  it is in no Inbox row, digest or push. A question task still lists its task in Needs you (that reads tasks, not
   deliveries). Old deliveries of such posts stop counting by the same rule (`hubdb.delivery_counts_sql`), with no
   migration.
 - Unread count for a viewer = messages in the thread with `seq > last_read_seq` that are human-authored or
@@ -804,7 +807,7 @@ the oldest 500 native posts and edits). Candidates: company, team, members threa
 is in (a task's thread only with unread under the task rules, `H.delivery_counts_sql`), and the viewer's own Home;
 another's Home only through a mention, an ask or a hold. A root the viewer follows with notify `muted` is left out in SQL unless it
 mentions them; a migrated Home they read only for its history counts only by its attention items. Order: items that
-mention the viewer (an open mention or ask, or a new message delivered to them as a mention, ask or assignment) first,
+mention the viewer (an open mention, or a new message delivered to them as a mention or assignment; an old `ask` row counts too) first,
 then newest activity, then id (newest first). Roots are read and checked 100 at a time (batched read checks and
 subtree counts), at most 1,000 over all the pages: the cursor carries how many came before it, so the pages, `count`
 and `catch_up_ids` hold the same items. Counting stops at 99 and reads no message text. `new_count` is how many new

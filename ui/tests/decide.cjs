@@ -17,7 +17,7 @@ const items = [
   // an open question with "or" is not a yes or a no: it opens the task
   wait('t-ask', 'Coordinate the external agent scenario in the example', {created_at: at(500),
     ask: {id: 'q-1', sender_id: 'bot:writer', recipient_id: 'human:ana', body: 'Should the public example show the agent demo, or stay static?', created_at: at(300)}}),
-  // a question task a bot put to Ana, unanswered past three days: the card carries one-click Clarify
+  // a question task a bot put to Ana, unanswered past three days
   {id: 't-stale', kind: 'question', title: 'Sync the external agent scenario', body: '', owner_id: 'human:ana', requester_id: 'bot:writer',
     status: 'open', version: 2, created_at: at(5000), updated_at: at(5000), note: '', ask_missing: false, open_asks: 0,
     lane: 'company', rank: null, labels: [], tags: [], links: [], parts: {total: 0, done: 0},
@@ -54,8 +54,7 @@ const items = [
           title: second?.className === 'dc-title' ? second.textContent : null,
           sizes: [first, second].map(x => parseFloat(getComputedStyle(x).fontSize)),
           details: details ? {open: details.open, text: details.textContent, last: body.lastElementChild === details} : null,
-          buttons: [...document.querySelectorAll('#need-card .dc-actions button')].map(b => b.dataset.dc),
-          clarify: body.querySelector('[data-dc="clarify"]')?.textContent.trim() || null};
+          buttons: [...document.querySelectorAll('#need-card .dc-actions button')].map(b => b.dataset.dc)};
       });
     };
     // DECIDE_SHOTS=<dir> saves each card for the owner.
@@ -127,17 +126,8 @@ const items = [
     await page.waitForFunction(() => !DEC.pending && !DEC_OUTBOX.size, null, {timeout: 8000});
     assert.deepEqual(sent, [{id: 't-plain', text: 'Yes.'}]);
 
-    // A stale question carries one-click Clarify: one tap comments on its task and @mentions the bot that asked, which
-    // wakes it to say whether it still matters, in clearer words.
     assert.equal(c.lead, 'Should the public example show the agent demo?');
-    assert.equal(c.clarify, 'Ask Writer to clarify');
     assert.deepEqual(c.buttons, ['no', 'yes']);
-    await page.locator('#need-card .dc-body [data-dc="clarify"]').click();
-    assert.equal(await page.locator('#need-card .dc-toast span').textContent(), 'Asked Writer to clarify');
-    await page.waitForFunction(() => !DEC.pending && !DEC_OUTBOX.size, null, {timeout: 8000});
-    const clarify = sent.at(-1);
-    assert.equal(clarify.id, 't-stale');
-    assert.match(clarify.text, /^@writer Please clarify this( for [^:]+)?: "Should the public example show the agent demo\?" Is this request still relevant\?/);
     // the note is only ever text
     assert.equal(await page.locator('#need-card .dc-body img').count(), 0);
     assert.equal(await page.evaluate(() => window.pwned), undefined);

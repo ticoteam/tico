@@ -49,8 +49,6 @@
 .dc-wait{margin:0;font-size:var(--t-xl);font-weight:600;line-height:var(--lh-tight);color:var(--muted);letter-spacing:var(--track-tight)}
 .dc-blank{margin:0;color:var(--muted);font-size:var(--t-md);line-height:var(--lh-read)}
 .dc-ask{align-self:flex-start}
-/* one-click clarify on a stale ask: a quiet way in, aligned like the ask button */
-.dc-clarify{align-self:flex-start}
 .dc-details{color:var(--muted);font-size:var(--t-sm);border-top:1px solid var(--line);padding-top:10px}
 .dc-details summary{width:max-content;cursor:pointer;font-weight:500}
 .dc-details[open]>summary{margin-bottom:10px}

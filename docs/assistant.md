@@ -38,8 +38,7 @@ but draws nothing (a class, not `hidden`), and the dot's flying copy is made onc
 What waits on you from elsewhere comes at the end of the DM as cards: a Confirm card BotOps (or another bot) left in
 its own Home, with its Confirm and Cancel, and up to three bots' questions to you from Needs you. A question with two to
 six picks is answered with a tap, any other with a line of words (a question with several picks at once links to its
-task). You can also just tell the Assistant: "tell BotOps yes" answers BotOps' open question in your words (`hub
-question answer --on-behalf-of turn`, below). A Confirm card needs your own tap. A goal suggestion can also be confirmed by a plain yes in your chat ([below](#goals-agreed-in-words)).
+task). You can also just tell the Assistant: "tell BotOps yes" answers BotOps' open question task in your words, and the Assistant records it as your answer. A Confirm card needs your own tap. A goal suggestion can also be confirmed by a plain yes in your chat ([below](#goals-agreed-in-words)).
 
 ## Helpers through the Assistant
 

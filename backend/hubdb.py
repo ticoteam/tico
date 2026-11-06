@@ -1797,17 +1797,8 @@ def migrate(conn, adopt_legacy=False):
     task_blocked.backfill(conn)
     task_blocked.forget_retired_resumes(conn)
     task_blocked.leave_retired_blocked(conn)
-    # A person's open asks: old rows only since step 6c (the asks migration reads them once).
-    conn.execute(
-        "CREATE INDEX IF NOT EXISTS messages_open_asks_to ON messages(recipient_id, created_at) "
-        "WHERE kind='ask' AND answered_by_id IS NULL AND deleted_at IS NULL"
-    )
     # A bot's unread backlog, read newest first a page at a time on every inbox read (inbox_pages).
     conn.execute(UNREAD_INDEX)
-    conn.execute(
-        "CREATE INDEX IF NOT EXISTS messages_pending_conversation ON messages(conversation_id) "
-        "WHERE kind='ask' AND answered_by_id IS NULL AND deleted_at IS NULL"
-    )
     # The keeper's meeting inputs, the few messages a room's meeting provenance is read from (live_privacy.Sources) on
     # nearly every privacy check: the room index read every message of the room for them, millions of times a week.
     conn.execute(
@@ -4829,16 +4820,6 @@ def ask_clock(message):
     if not isinstance(refs, dict):
         refs = _json((message or {}).get("refs"), {}) or {}
     return refs.get("asked_again_at") or (message or {}).get("created_at")
-
-
-def ask_older(message, at=None):
-    """True when this unanswered ask has waited two business days (backend/still_needed.py). It stays in the person's
-    queue, marked stale, until that weekday morning's batch sends it back to its bot."""
-    from .still_needed import crossed_at
-
-    if not parse_ts(ask_clock(message)):
-        return False
-    return crossed_at(ask_clock(message)) <= (at or datetime.now(timezone.utc))
 
 
 def _step_end(conn, step_id, task_id, top=False):

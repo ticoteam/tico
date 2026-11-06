@@ -210,7 +210,6 @@
   must:
     - '^message send bot:engineering-lead\b'
   must_not:
-    - '^question answer 6d2b8e17\S*'
     - '^message send(?! -h\b| --help| bot:engineering-lead\b)'
     - '^task (close|bulk close)(?! -h\b| --help)'
     - '^approval (approve|decline)(?! -h\b| --help)'
