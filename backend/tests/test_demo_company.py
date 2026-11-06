@@ -7,9 +7,10 @@ from contextlib import closing
 from datetime import datetime, timedelta, timezone
 
 import pytest
+import time_machine
 from fastapi.testclient import TestClient
 
-from backend import demo, hubdb
+from backend import demo, demo_seed, hubdb
 from backend import demo_content as D
 from backend import usage_limits as U
 from backend.demo_sections import budgets as B
@@ -45,6 +46,13 @@ def stored(path):
             out[name] = [tuple(_mark(name, column, value) for column, value in zip(columns, row))
                          for row in cursor.fetchall()]
         return out
+
+
+@pytest.fixture(scope="module", autouse=True)
+def demo_clock():
+    """Builds and API reads see the same day, including clocks outside hubdb.now."""
+    with time_machine.travel(NOW, tick=False):
+        yield
 
 
 @pytest.fixture(scope="module")
@@ -100,6 +108,16 @@ def test_tasks_cover_every_status_and_some_have_chains(ana):
 
 def test_no_task_is_left_stuck_for_days(ana):
     assert ana.get("/api/v2/tasks/stuck").json()["tasks"] == []
+
+
+@pytest.mark.parametrize("hour", [0, 12])
+def test_no_task_is_left_stuck_at_other_build_hours(tmp_path, hour):
+    moment = NOW.replace(hour=hour)
+    with time_machine.travel(moment, tick=False):
+        settings = demo.build(tmp_path, now=moment)
+        with TestClient(create_app(settings), base_url="http://127.0.0.1:8765") as api:
+            api.headers["Authorization"] = "Bearer " + settings.local_owner_token_file.read_text().strip()
+            assert api.get("/api/v2/tasks/stuck").json()["tasks"] == []
 
 
 def test_a_meeting_waiting_for_review_is_not_in_the_live_list(ana):
@@ -165,11 +183,13 @@ def test_each_person_has_a_draft_update_for_every_day_and_the_friday_review(ana)
 
 
 def test_ana_sidebar_leaves_unread_only_the_decisions_she_still_owes(ana):
+    # Task news is not a chat (hubdb.task_news): the decisions she owes wait in Needs you, not as unread task threads.
     listing = ana.get("/api/v2/threads?limit=200").json()
     rows = listing["threads"] + listing["dms"] + listing["attention"]
     unread = {row["title"] for row in rows if row.get("kind") == "task" and (row.get("me") or {}).get("unread")}
     assert unread <= set(D.KEEP_UNREAD), sorted(unread - set(D.KEEP_UNREAD))
-    assert {"Raise Home Pro from $449 to $479 for December?", "Sign the FCC filing for Home Pro 2"} <= unread
+    owed = {item["title"] for item in ana.get("/api/v2/needs-you").json()["items"]}
+    assert {"Raise Home Pro from $449 to $479 for December?", "Sign the FCC filing for Home Pro 2"} <= owed
 
 
 def test_the_price_decision_leads_needs_you_with_a_short_reason(ana):
@@ -179,15 +199,17 @@ def test_the_price_decision_leads_needs_you_with_a_short_reason(ana):
 
 
 def test_the_assistant_answers_whats_waiting_with_the_open_decisions(ana):
-    answers = [message["body"] for message in ana.get("/api/v2/assistant").json()["messages"]
-               if message["sender_id"] == "bot:coo"]
-    waiting = [text for text in answers if "waiting on you" in text]
-    assert waiting and all(name in waiting[0] for name in (
-        "Raise Home Pro from $449 to $479 for December?", "Sign the FCC filing for Home Pro 2", "Choose the Larkford bid price"))
+    """The seeded Assistant thread answers "What needs me today?" with the scripted reply (every message is a bot turn,
+    so the demo script stands in for the model): the December price and the held refund are named."""
+    messages = ana.get("/api/v2/assistant").json()["messages"]
+    asked = [m for m in messages if m["sender_id"] == "human:ana" and m["body"] == "What needs me today?"]
+    answers = [m["body"] for m in messages if m["sender_id"] == "bot:coo" and "waiting on you" in m["body"]]
+    assert asked and answers and "Home Pro's December price" in answers[0] and "refund" in answers[0]
 
 
 def test_home_has_a_bot_page_settings_has_a_team_icon_and_granola_syncs(ana):
-    assert [page["title"] for page in ana.get("/api/v2/pages").json()["pages"]] == [D.PAGE["title"]]
+    pages = ana.get("/api/v2/pages").json()["pages"]
+    assert {page["bot_id"] for page in pages} == {D.PAGE["bot"], "coo"}
     assert ana.get("/api/v2/team/icon").status_code == 200
     assert ana.post("/api/v2/meetings/granola/sync").status_code == 200
 
@@ -233,6 +255,17 @@ def test_the_team_has_closed_tasks_every_week_for_two_months(built):
         done = datetime.strptime(day, "%Y-%m-%d").date()
         weeks[7 - (monday - (done - timedelta(days=done.weekday()))).days // 7] += 1
     assert all(n >= 20 for n in weeks[:-1]) and weeks[0] < weeks[-2], weeks
+
+
+def test_the_demo_clock_also_reads_the_spend_windows(built):
+    """The spend windows (30 minutes, hour, day...) are read at the build's own moment, not the real clock: a build that
+    straddles a window boundary would otherwise store different spend from its twin (the same-date test's failure)."""
+    saved = U.clock
+    moment = NOW - timedelta(hours=2)
+    clock = demo_seed.Clock(moment)
+    with demo_seed.fixed(clock):
+        assert U.clock() == moment
+    assert U.clock is saved and U.clock() == NOW
 
 
 def test_the_same_date_builds_the_same_company(built):

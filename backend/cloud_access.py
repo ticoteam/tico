@@ -96,13 +96,18 @@ def access(c):
     return found["access"] if found else None
 
 
-def frozen(c):
-    """Whether new turns that would spend usage wait: out of credit, or locked."""
-    return access(c) in ("frozen", "locked")
+_UNREAD = object()
 
 
-def locked(c):
-    return access(c) == "locked"
+def frozen(c, value=_UNREAD):
+    """Whether new turns that would spend usage wait: out of credit, or locked. `value`: access(c), when read already."""
+    value = access(c) if value is _UNREAD else value
+    return value in ("frozen", "locked")
+
+
+def locked(c, value=_UNREAD):
+    value = access(c) if value is _UNREAD else value
+    return value == "locked"
 
 
 def routines_paused(c):
@@ -223,6 +228,14 @@ def gate(store, who, path):
         return
     if getattr(who, "role", "") == "runner" or getattr(who, "support", False):
         return
+    # Revoking machine access stays available to the owner; the route gates enabling separately.
+    if path == "/api/v2/cloud-machines/support" and getattr(who, "role", "") == "owner":
+        return
+    require_unlocked(store)
+
+
+def require_unlocked(store):
+    """Refuse an action that needs an unlocked company, even on a route that also permits revocation."""
     found = current(store)
     if found and found.get("access") == "locked":
         raise Problem("locked", LOCKED, 402, extra={"cloud": view(found)})

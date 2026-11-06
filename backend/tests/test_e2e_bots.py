@@ -10,7 +10,7 @@ import pytest
 
 from backend.tests.test_api import api, assign, get, post, ready, setup_attempt  # noqa: F401
 from backend.tests.live import block_outside_network, live  # noqa: F401
-from runner.tests.test_conformance import Computer, reply_to, rust_binary, until  # noqa: F401
+from runner_support.tests.test_conformance import Computer, reply_to, rust_binary, until  # noqa: F401
 
 pytestmark = pytest.mark.slow
 
@@ -66,9 +66,8 @@ def test_a_bot_hands_a_message_to_another_bot_that_needs_action_and_the_other_bo
 
 def test_an_approval_a_bot_asks_for_is_decided_by_its_owner_and_consumed_once(api):
     _, _, bot = setup_attempt(api)
-    payload = {"to": "colleague@acme.example", "cc": [], "subject": "Acme draft", "body_sha256": "a" * 64,
-               "mailbox": "work"}
-    approval = post(api, "approvals", {"kind": "send", "payload": payload}, token=bot["token"])
+    payload = {"url": "https://acme.example/draft", "content_sha256": "a" * 64}
+    approval = post(api, "approvals", {"kind": "publish", "payload": payload}, token=bot["token"])
     path = "approvals/" + approval["id"]
     assert get(api, path, token="ana-test")["decision"] in (None, "")
 

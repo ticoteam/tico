@@ -11,17 +11,18 @@ shapes below are part of the contract; change them only with a reviewed contract
 - A signed-in human explicitly connects a meeting. A meeting is not team-visible before that action.
 - Connect chooses `visibility`: `team` (the default) lets signed-in company humans read the meeting's
   live state, transcript, chat, and router trace. `private` limits that to the connector, people the
-  connector adds, and attached bots; to everyone else the meeting answers 404 and is left out of the
-  list. The connector can add or remove people, or switch visibility, while the meeting is live or paused. Only the connector can write transcript chunks, pause/resume, disconnect, end, or
+  participants add, and attached bots; to everyone else the meeting answers 404 and is left out of the
+  list. The connector, added people and joined team members can add people on this team and attach bots
+  while the meeting is live or paused. Only the connector can remove other people or switch visibility;
+  anyone may remove themself. Only the connector can write transcript chunks, pause/resume, disconnect, end, or
   finalize; another human explicitly joins before chatting. Joining a team meeting does not grant
   access if it becomes private: only the connector and explicitly added people retain human access.
-- In a team meeting, a joined human may attach active org-chart bots they are allowed to see and have
-  Write access to. In a private meeting, only the connector can attach bots. Switching to private
-  removes bot attachments made by other people; the connector can attach those bots again explicitly.
+- In either a team or private meeting, participants may attach active org-chart bots they are allowed
+  to see and have Write access to. Switching to private keeps every attached bot and explicitly added person.
   Attachment creates a meeting-scoped read grant; it does not change the bot's standing access or
   grant access to other meetings. Runner delivery is checked against the attaching human's current
-  Write access and contact policy, so keeper transport does not create bot-to-bot contact. Any joined
-  human can remove an attached bot from this meeting; removal revokes that meeting-only grant and
+  Write access and contact policy, so keeper transport does not create bot-to-bot contact. The connector
+  or the person who attached a bot can remove it from this meeting; removal revokes that meeting-only grant and
   settles outstanding turns without changing ordinary bot permissions.
 - Meeting-derived threads, messages and run artifacts retain the meeting's current access
   restriction, including on retries and after a bot is removed. Company-owner inspection does not
@@ -47,11 +48,10 @@ signed-in company client. For an authenticated SSE fetch in Recorder's main proc
 credential in `Authorization: Bearer <credential>` just as for the other API calls. Do not put the
 credential in the URL. The Tico instance is the tenant boundary: a Recorder connected to one
 instance uses that user's credential for this instance only. The connector identity is stored as
-`owner_actor` and owns transcript input, lifecycle control and finalization. Joined humans can attach
-only bots they can see and contact under the existing org-chart Write permission, and only the
-connector can do so in a private meeting.
+`owner_actor` and owns transcript input, lifecycle control and finalization. Participants can attach
+only bots they can see and contact under the existing org-chart Write permission.
 
-Every write, including `DELETE` bot removal, uses the normal Tico `Idempotency-Key` header (1–200 characters). Repeating the same
+Except the ephemeral screen relay below, every write, including `DELETE` bot removal, uses the normal Tico `Idempotency-Key` header (1–200 characters). Repeating the same
 operation, key, and body returns the saved response; reusing a key for different content returns
 HTTP 409 with `error.code = "idempotency_conflict"`. Errors use
 `{"error":{"code":"...","detail":"...","retryable":false,...}}`; endpoint-specific cursor
@@ -66,10 +66,10 @@ fields are listed below.
 | `POST /api/v2/live-meetings/{id}/chunks` | Connector | Append `{chunks:[{seq,speaker,start_ms,end_ms,text}]}` (1–500 chunks). Seq starts at 1 and is contiguous. HTTP 200 body is exactly `{"id":"<live-id>","state":"live|paused|ended","seq":<highest-seq>,"accepted":[<seq>,...],"event_id":<meeting-event-id>}`. Identical duplicate seq is acknowledged without a new event; a different payload for an existing seq returns `409` with `error.code = "sequence_conflict"`; a gap returns `409` with `error.code = "sequence_gap"` and `error.expected_seq`. New chunks are accepted only in `live`; an already-stored identical retry may still be acknowledged while paused or ended. |
 | `POST /api/v2/live-meetings/{id}/chunks/{seq}/corrections` | Connector | Append `{revision,speaker,start_ms,end_ms,text}`. Revision 2 follows initial revision 1. HTTP 200 body is exactly `{"id":"<live-id>","seq":<seq>,"revision":<revision>,"replayed":<bool>,"event_id":<meeting-event-id>}`. Repeating the same revision and content returns `replayed:true` without a new event; changed content at an existing revision returns `409` with `error.code = "revision_conflict"`; a gap returns `409` with `error.code = "revision_gap"` and `error.expected_revision`. Corrections are accepted while live or paused. Empty `text` clears a chunk the final transcript has no words for; cleared chunks leave the transcript, bot context and finalization. The latest revision becomes the transcript used for display and finalization; older versions remain replayable. |
 | `POST /api/v2/live-meetings/{id}/join` | Human who can see it | Join the connected meeting. Joined people can chat. |
-| `POST /api/v2/live-meetings/{id}/access` | Connector | `{visibility?,add?:[person],remove?:[person]}` with person ids or `human:` actors. Adding lets a person see and join a private meeting; removing also takes them out of the joined list. Returns the meeting view, whose `visibility` and `access:[{actor,name}]` show the result. |
+| `POST /api/v2/live-meetings/{id}/access` | Participant to add; connector to change visibility or remove others; anyone to leave | `{visibility?,add?:[person],remove?:[person]}` with person ids or `human:` actors. Adding lets a person see and join a private meeting; removing also takes them out of the joined list. Returns the meeting view, whose `visibility` and `access:[{actor,name}]` show the result, or `{"id":"<live-id>","left":true}` on self-removal. |
 | `POST /api/v2/live-meetings/{id}/chat` | Joined human or attached bot | Append `{text,at_ms?,transcript_seq?,turn_id?}`. The response is `{"message":<saved chat object> or null,"event_id":<latest meeting-event-id>}` and includes `"outcome":"pass"` for a bot PASS. A live unnamed human message receives one multi-bot decision using the existing decisions service; a named-bot mention bypasses that decision and directly targets named attachments. Chat sent while paused is saved but not dispatched. A bot using this API must claim its turn first and name it on reply. For bot text exactly `PASS`, optionally followed by `.` or `!`, HTTP 200 is exactly `{"message":null,"event_id":<meeting-event-id>,"outcome":"pass"}`; it settles the claimed turn without chat text. Assigned bots using the normal Tico runner receive a private, meeting-scoped job; the runner lease claims the turn and its completed response settles it. A transcript reference links chat/replies to the captured words. |
-| `POST /api/v2/live-meetings/{id}/bots` | Joined human with Write access to each bot; connector only when private | Attach `{bots:[org_chart_slug,...]}`. Each bot receives meeting-only read/reply access. |
-| `DELETE /api/v2/live-meetings/{id}/bots/{bot}` | Joined human | Send `{}` with an `Idempotency-Key` to remove one attached bot. HTTP 200 is `{"id":"<live-id>","bot":"<slug>","removed":<bool>,"canceled_turns":[<turn-id>,...],"event_id":<meeting-event-id>}`. Repeating the same key/body returns the saved result. Unclaimed/claimed turns are marked skipped as `bot_detached`; queued jobs are canceled; late replies cannot post. Removal is meeting-local and idempotent when the bot is already absent. |
+| `POST /api/v2/live-meetings/{id}/bots` | Participant with See and Write access to each bot | Attach `{bots:[org_chart_slug,...]}`. Each bot receives meeting-only read/reply access. |
+| `DELETE /api/v2/live-meetings/{id}/bots/{bot}` | Connector or the person who attached the bot | Send `{}` with an `Idempotency-Key` to remove one attached bot. HTTP 200 is `{"id":"<live-id>","bot":"<slug>","removed":<bool>,"canceled_turns":[<turn-id>,...],"event_id":<meeting-event-id>}`. Repeating the same key/body returns the saved result. Unclaimed/claimed turns are marked skipped as `bot_detached`; queued jobs are canceled; late replies cannot post. Removal is meeting-local and idempotent when the bot is already absent. |
 | `POST /api/v2/live-meetings/{id}/control` | Connector | `{action:"pause"|"disconnect"|"resume"|"end"}`. Pause and disconnect are server-side live-sharing controls: both set Tico state to `paused`, preserve text/chat, suppress new routing, and reject new chunk writes. They do not stop Recorder's local device capture, local recording, or review. Recorder must stop uploading chunks while paused/disconnected; local capture/review behavior remains under Recorder and the person. Reconnect with the same `client_id`; only an explicit `resume` re-enables live chunk writes. End is terminal. |
 | `POST /api/v2/live-meetings/{id}/finalize` | Connector | Finalize an ended meeting with transcript text through the existing meeting import path, using stable source `tico-live` and external id equal to the live meeting id. The transcript enters the connector's `review=pending` person queue and is not automatically shared. HTTP 200 body is exactly `{"id":"<live-id>","meeting_id":"<imported-meeting-id>","existing":<bool>,"changed":<bool>,"event_id":<meeting-event-id>}`. `meeting_id` is the imported Tico meeting id to use when linking reviewed meeting items. Finalization uses latest corrected text. A later finalize call with a fresh idempotency key returns the same `meeting_id` with `existing:true` and `changed:false`; retrying with the same key/body replays the original saved response. |
 | `GET /api/v2/live-meetings/{id}/events?after={event_id}` | Company human, or attached bot | Authenticated SSE replay of persisted meeting events after a monotonically increasing meeting-local id. Recorder's main process must attach its existing Bearer credential. Use `after` or the `Last-Event-ID` header; when a positive `after` is supplied it takes precedence, otherwise `Last-Event-ID` is used. Resume from the last fully processed event id. The server sends keepalives and closes the stream after at most 55 one-second polling cycles; reconnect from the cursor. |
@@ -79,12 +79,16 @@ fields are listed below.
 Initial Recorder setup calls connect once with a stable client id, then sends initial transcript
 and later transcript segments through the same ordered chunk route. A retry reuses the same client
 id, chunk sequence, and idempotency key/body pair. Corrections use a new revision number; they never
-replace the history of a previously acknowledged chunk. Event IDs are monotonic per meeting and each
-event is committed with the state change it describes. Reconnect from the last fully processed id to
+replace the history of a previously acknowledged chunk. A person's edit of a line already shared live is
+sent the same way, as that line's next revision with the new text. Removing a line sends the text `[removed]`,
+which Tico shows in place of the line; editing a removed line sends its text again and brings it back. A person's
+edit is kept against later automatic corrections from the finished audio. Recorder refuses edits while Send
+runs for the meeting, even if Tico still shows it live or paused, and once the meeting has ended in Tico. Event IDs
+are monotonic per meeting and each event is committed with the state change it describes. Reconnect from the last fully processed id to
 replay without gaps or duplicate effects.
 
 The connect and detail routes return a meeting view with these top-level fields: `id`, `title`,
-`state`, `owner_actor`, `client`, `seq`, `event_id`, `window_ms`, `cooldown_ms`, `reply_cap`, `threshold`,
+`state`, `owner_actor`, `link`, `client`, `seq`, `event_id`, `window_ms`, `cooldown_ms`, `reply_cap`, `threshold`,
 `meeting_model` (the meeting's own choice as stored: `""` for the bot's own model, null to follow the company's),
 `meeting_model_effective` (what replies are set to run on now: the meeting's own choice, else the company's meeting
 model; `""` is the bot's own; not specific to a computer, see `meeting.model` for a fallback), `created_at`,
@@ -292,3 +296,37 @@ unreviewed action items to the server API.
 This contract is the PR #92 Recorder handoff for review; it does not claim that Recorder has
 integrated these behaviors or that PR #92 has shipped. Any implementation-specific shape change must
 be reviewed with Engineering Lead before Recorder ships against it.
+
+
+## Live screen and meeting links
+
+Meeting views include `link`, an absolute browser URL under the server's public origin:
+`/#/meetings/live/{id}`. This works after sign-in and for ended meetings. A private link grants
+no access; add the intended people explicitly. `/#/meetings?live={id}` redirects to this route.
+`GET /api/v2/recorder/browser` returns `{url: public_url}` for a signed-in human so Recorder can
+link filed meetings/tasks without sending people to an API-only runner hostname.
+
+The macOS Recorder can share a selected window/display as JPEG frames, at most 5 fps and
+1920 pixels per edge. This is intended for documents and slides. It sends no audio or camera
+video and gives bots no image access. Images live only in process memory (one latest frame
+per meeting, at most 32 meetings and 2 per owner) and are excluded from SQLite, idempotency receipts and SSE.
+A new server process has no active screen shares. Deployments must use one backend process
+or route each meeting's screen requests to the same process.
+
+| Route suffix under `/api/v2/live-meetings/{id}/screen` | Access and behavior |
+| --- | --- |
+| `GET` (the base path) | Owner of a live meeting; returns capability/limits before opening the picker. |
+| `GET /status` | People with current meeting access; returns `{generation}` for a live share, or 410. Small enough to check independently of media downloads. |
+| `POST /start` | Owner of a live meeting; `Idempotency-Key` is an ephemeral request ID, returns `{generation}`. Same ID during that share returns that generation; a new ID replaces it. Optional `expected_audience` must match the capability receipt, otherwise 409. Team joins do not change the team audience receipt. |
+| `POST /frame?generation=...&seq=...` | Owner; raw `image/jpeg`, at most 1,000,000 bytes, with strictly increasing sequence. Returns 204. Validates JPEG marker dimensions before retaining bytes. |
+| `POST /alive?generation=...` | Owner heartbeat, returns 204. Send every 2 seconds when no new frame is published. |
+| `POST /stop?generation=...` | Owner; stops only that generation, returns 204. A delayed old stop cannot affect a newer share. |
+| `GET /frame?after=...&wait=12` | People with current meeting access only; attached bots are denied. Returns JPEG with `X-Screen-Version`, or 204 after a bounded wait. Rechecks access on every wake-up. |
+
+Frames and heartbeats bypass durable mutation receipts; requests never carry credentials in
+URLs. Every successful media response has `Cache-Control: no-store` and `nosniff`. A share expires
+after ten seconds without a frame or heartbeat. Stop, pause, disconnect, end, or a visibility
+change clears it. A missing/stopped share returns 410; an obsolete generation or sequence
+returns 409; an oversized image returns 413. The viewer clears/revokes its image on stop, errors,
+access loss, hiding the page or navigation. Frame fetching is separate from transcript refresh. Authorization and contended memory locks run on workers, never the ASGI event loop. A separate status request revokes the displayed image while a slow image download is pending.
+Screen lifecycle is ephemeral; it is not replayable from SSE.

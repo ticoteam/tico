@@ -12,6 +12,7 @@ from backend import flight, worktrees
 from backend.scheduler import Scheduler
 from backend.store import H, encode
 from backend.tests.test_api import api, assign, headers, ready, runner  # noqa: F401
+from backend.enqueue import enqueue_stored
 
 
 def fleet(api, attempts=100, trees=50):
@@ -34,6 +35,7 @@ def fleet(api, attempts=100, trees=50):
                 c.execute("INSERT INTO messages(id,conversation_id,sender_id,recipient_id,kind,body,created_at,refs) "
                           "VALUES(?,?,'human:ana','bot:ops','say','Synthetic work',?,?)",
                           (mid, cid, now, encode({"task": tid})))
+                enqueue_stored(c, mid)
                 c.execute("INSERT INTO attempts(id,job_id,bot_id,runner_id,generation,token_hash,state,lease_until,created_at,lane) "
                           "VALUES(?,?,'ops',?,?,?,'running',?,?,?)",
                           (f"attempt-{i}", mid, computer["runner_id"], generation, f"synthetic-{i}", until, now, "task:" + tid))
@@ -225,6 +227,7 @@ def test_claim_cleans_a_bounded_page_of_obsolete_notices(api):
             c.execute("INSERT INTO messages(id,conversation_id,sender_id,recipient_id,kind,body,created_at,refs) "
                       "VALUES(?,?,?,'bot:ops','notice','Synthetic finished task',?,?)",
                       (f'obsolete-{i}', f'room-{i}', H.KEEPER, H.now(), encode({'task': f'task-{i}'})))
+            enqueue_stored(c, f'obsolete-{i}')
     assert post(api, 'jobs/claim', {}, computer['token'])['attempt'] is None
     with store.read() as c:
         assert c.execute("SELECT count(*) FROM jobs WHERE state='canceled'").fetchone()[0] == execution.CLAIM_MAINTENANCE
@@ -233,7 +236,7 @@ def test_claim_cleans_a_bounded_page_of_obsolete_notices(api):
 
 def test_health_flags_runner_p95_and_clears_after_the_window(api):
     import sqlite3
-    from backend import health, health_monitor
+    from backend import health, maintenance_health
     with sqlite3.connect(":memory:") as empty:
         assert health.runner_route_latency(empty) is None
     store = api.app.state.store
@@ -246,11 +249,12 @@ def test_health_flags_runner_p95_and_clears_after_the_window(api):
     with store.transaction() as c:
         flight.write(c, rec.take(now // 60 * 60))
         assert "renew" in health.runner_route_latency(c, now)["summary"]
-        assert any(row["key"] == "runner_route_latency" for row in health_monitor._server_checks(c))
+        assert any(row["key"] == "runner_route_latency" for row in maintenance_health._server_checks(c))
         assert health.runner_route_latency(c, now + 16 * 60) is None
 
 
 @pytest.mark.slow
+@pytest.mark.alone
 def test_100_attempt_routes_during_heartbeat_and_scheduler(api, monkeypatch):
     computer = fleet(api)
     store = api.app.state.store
@@ -320,6 +324,6 @@ def test_100_attempt_routes_during_heartbeat_and_scheduler(api, monkeypatch):
     assert not failures, failures
     with store.read() as c:
         assert c.execute("SELECT count(*) FROM attempts WHERE state='running' AND lease_until>?", (H.now(),)).fetchone()[0] == 100
-    # Held to the health monitor's 1 s warning: the gate runs this beside other tests on the same VM, which roughly
-    # doubles the 300 ms an idle 4-vCPU VM takes here.
+    # Held to the health monitor's 1 s warning. Marked alone: the release gate runs it by itself after the parallel
+    # tests, since three other xdist workers on the same 4-vCPU VM pushed a route's p95 past 1 s (v0.5.165 try 1).
     assert all(row["p95_ms"] < 1000 for row in receipt.values()), receipt

@@ -22,11 +22,13 @@ neither loses a deadline nor fires one twice. A later deadline in a session whos
 and a run whose items all went in with another turn is canceled. A bot that is paused or quarantined is passed over until it is active
 again; spend caps, turns at once and claim holds apply to the run's job as to any other. Sleep when idle counts the
 next deadline as a reason to wake (sleep_idle.routine_times).
+A task that ends cancels its pending deferred deliveries, even if it is reopened later.
 
 This module imports nothing from hubdb at load, so hubdb can import it.
 """
 
 import re
+from . import bot_settings as BS
 
 WAYS = ("steer", "queue", "defer")
 DEFER_FOR = r"^(never|[1-9][0-9]{0,5}[mhd])$"
@@ -121,16 +123,20 @@ def carried(conn, bot, attempt_id, conversation_ids, tasks=(), notes=(), *, job=
     H = _H()
     ids = [c for c in dict.fromkeys(conversation_ids) if c]
     stamp = H.now()
-    counts, lines, settle, left, size = {}, [], [], [], 0
+    counts, lines, settle, left, size, moot = {}, [], [], [], 0, []
     if ids:
         rows = conn.execute(
-            "SELECT d.id,d.kind,d.item,m.sender_id,m.body,m.created_at,m.deleted_at FROM deferrals d "
+            "SELECT d.id,d.kind,d.item,m.sender_id,m.body,m.created_at,m.deleted_at,m.refs,m.conversation_id,"
+            "d.conversation_id FROM deferrals d "
             "LEFT JOIN messages m ON m.id=d.item WHERE d.bot=? AND d.settled_at IS NULL AND d.conversation_id IN "
             f"({','.join('?' * len(ids))}) ORDER BY d.created_at,d.id", (bot, *ids)).fetchall()
         for row in rows:
-            rid, kind, item, sender, body, created, deleted = row
+            rid, kind, item, sender, body, created, deleted, refs, room, session = row
             if body is None or deleted:          # gone: nothing to carry
                 settle.append(rid)
+                continue
+            if not _carrier_ok(conn, bot, item, refs, room, session):
+                moot.append(rid)                 # the bot may no longer read what it carries: never written out
                 continue
             if item != current:
                 text = body if len(body) <= ITEM_CHARS else (
@@ -146,6 +152,9 @@ def carried(conn, bot, attempt_id, conversation_ids, tasks=(), notes=(), *, job=
     for part in H.chunks(settle):
         conn.execute(f"UPDATE deferrals SET settled_at=?,how='carried',attempt=? WHERE id IN ({','.join('?' * len(part))})",
                      (stamp, attempt_id, *part))
+    for part in H.chunks(moot):
+        conn.execute(f"UPDATE deferrals SET settled_at=?,how='moot' WHERE id IN ({','.join('?' * len(part))})",
+                     (stamp, *part))
     # What did not fit waits on: its deadline, if passed, starts a run of its own.
     for part in H.chunks(left):
         conn.execute(f"UPDATE deferrals SET fired_job=NULL WHERE id IN ({','.join('?' * len(part))})", part)
@@ -160,15 +169,36 @@ def carried(conn, bot, attempt_id, conversation_ids, tasks=(), notes=(), *, job=
 
 def _drop_spent(conn, H, attempt_id, job, note):
     """Cancel each queued deadline run whose items all went in with this turn (another way, or another run)."""
-    from . import claim_holds
     spent = [r[0] for r in conn.execute(
         "SELECT DISTINCT d.fired_job FROM deferrals d JOIN jobs j ON j.id=d.fired_job WHERE d.attempt=? "
         "AND j.state='queued' AND d.fired_job IS NOT ? AND NOT EXISTS(SELECT 1 FROM deferrals x "
         "WHERE x.fired_job=d.fired_job AND x.settled_at IS NULL)", (attempt_id, job)).fetchall()]
-    for spent_job in spent:
-        if conn.execute("UPDATE jobs SET state='canceled' WHERE id=? AND state='queued'", (spent_job,)).rowcount:
+    _drop_jobs(conn, H, spent, note, attempt_id)
+
+
+def _drop_jobs(conn, H, jobs, note, attempt_id=None):
+    """Cancel queued deadline runs with no deferred items left to carry."""
+    from . import claim_holds
+    for spent_job in jobs:
+        if conn.execute("UPDATE jobs SET state='canceled' WHERE id=? AND state='queued' AND NOT EXISTS("
+                        "SELECT 1 FROM deferrals WHERE fired_job=? AND settled_at IS NULL)",
+                        (spent_job, spent_job)).rowcount:
             claim_holds.clear(conn, spent_job, note)
             H.event(conn, H.KEEPER, "delivery.deferred.spent", spent_job, {"attempt": attempt_id})
+
+
+def task_closed(conn, task):
+    """Settle a task's pending deliveries and drop deadline runs that only carried them. A message is the task's by
+    its refs or its dedicated room (hubdb.MESSAGE_TASK_SQL), not by the chat room it was filed from."""
+    H = _H()
+    rows = H._rows(conn.execute(
+        "SELECT d.id,d.fired_job FROM deferrals d LEFT JOIN messages m ON m.id=d.item "
+        "LEFT JOIN conversations cv ON cv.id=m.conversation_id WHERE d.settled_at IS NULL AND "
+        f"((d.kind IN ('comment','message') AND {H.MESSAGE_TASK_SQL}=?) OR (d.kind='task' AND d.item=?))",
+        (task["id"], task["id"])))
+    _settle(conn, H, rows, H.now(), "moot")
+    jobs = dict.fromkeys(r["fired_job"] for r in rows if r["fired_job"])
+    _drop_jobs(conn, H, jobs, "Its task ended, canceling its deferred deliveries.")
 
 
 def summary(carried_=None, tasks=0, notes=0):
@@ -188,16 +218,40 @@ def summary(carried_=None, tasks=0, notes=0):
     return out
 
 
+def _carrier_ok(conn, bot, item, refs, room, session):
+    """A deferred carrier (a thread's keeper notice for a person's deferred post, backend/threads.py) passes the same
+    check when it is carried or fired as when it was written (threads.carrier_current: the source is still in its thread,
+    the bot is still in that thread's audience, and the per-message check passes), and only in its own thread's session.
+    Anything else deferred is not a carrier and passes."""
+    H = _H()
+    refs = H._json(refs, {}) if isinstance(refs, str) else (refs or {})
+    if not (isinstance(refs, dict) and refs.get("carries")):
+        return True
+    if room != session:
+        return False
+    from . import threads
+    return threads.carrier_current(conn, {"id": item, "conversation_id": room, "refs": refs}, "bot:" + str(bot))
+
+
 def _alive(conn, row):
-    """Whether a deferred item still waits: a task still a deferred task, a note not yet carried or taken back, a
-    message not deleted and not already queued by another way."""
+    """Whether a deferred item still waits and its task, if any, has not ended."""
     H = _H()
     if row["kind"] == "task":
         return H.next_run_waiting(conn, H.task(conn, row["item"]))
     if row["kind"] == "note":
         return H.note_waiting(conn, H.note(conn, row["item"]))
-    return conn.execute("SELECT 1 FROM messages m WHERE m.id=? AND m.deleted_at IS NULL AND NOT EXISTS("
-                        "SELECT 1 FROM jobs j WHERE j.message_id=m.id)", (row["item"],)).fetchone() is not None
+    found = conn.execute("SELECT m.refs, m.conversation_id, cv.task_id FROM messages m "
+                         "LEFT JOIN conversations cv ON cv.id=m.conversation_id "
+                         "WHERE m.id=? AND m.deleted_at IS NULL AND "
+                         "NOT EXISTS(SELECT 1 FROM jobs j WHERE j.message_id=m.id)", (row["item"],)).fetchone()
+    if found is None:
+        return False
+    refs = H._json(found[0], {}) or {}
+    task_id = H.message_task_id({"refs": refs}, {"task_id": found[2]})
+    ended = task_id and conn.execute(
+        f"SELECT 1 FROM tasks WHERE id=? AND status IN ({','.join('?' * len(H.TASK_ENDED))}) LIMIT 1",
+        (task_id, *H.TASK_ENDED)).fetchone()
+    return not ended and _carrier_ok(conn, row["bot"], row["item"], refs, found[1], row["conversation_id"])
 
 
 def due(conn, at, failures=None):
@@ -243,7 +297,7 @@ def _fire(conn, H, bot, conversation_id, at, external):
             conn.execute(f"UPDATE deferrals SET fired_job=? WHERE id IN ({','.join('?' * len(part))})",
                          (pending[0], *part))
         return None
-    config = conn.execute("SELECT config FROM bot_config WHERE bot=?", (bot,)).fetchone()
+    config = conn.execute(BS.ONE_SQL, (bot,)).fetchone()
     harness = (H._json(config[0], {}) or {}).get("harness") if config else None
     if harness in external:
         # Its app delivers what it reads; Tico starts no run for it. The items wait in its rooms.

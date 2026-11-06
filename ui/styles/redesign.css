@@ -3,6 +3,12 @@
 
 /* Sidebar: what moved out of the rail. Library's pages sit under it. */
 html.redesign #nav-inboxes-section{display:none!important}
+/* Rows and folds as this browser last left them, marked on <html> by ui/theme.js before the first paint and kept with
+   the rows by ui/app/redesign.js (rdNavPaint, rdLibSync) after, so the app's code never moves a row. */
+html:not(.nav-finance) #nav-finance,html:not(.nav-welcome) #nav-welcome{display:none}
+html.nav-lib-shut #rd-lib,html:not(.nav-rules-open) #rd-rules{display:none}
+html.nav-lib-shut .rd-lib-toggle:not(.rd-rules-toggle) .section-chev{transform:none}
+html.nav-rules-open .rd-rules-toggle .section-chev{transform:var(--chev-open)}
 .rd-lib{display:flex;flex-direction:column}
 .rd-lib[hidden]{display:none}
 /* Library folds: the Team section's chevron, on a small square beside the link (the sidebar's other row buttons). */
@@ -11,7 +17,7 @@ html.redesign #nav-inboxes-section{display:none!important}
 .rd-lib-toggle:focus-visible{outline:var(--focus-ring);outline-offset:var(--focus-inset)}
 .rd-lib-toggle .section-chev{margin:0}
 .rd-lib-toggle[aria-expanded="false"] .section-chev{transform:none}
-body.in-setup .rd-lib{display:none}
+html.in-setup .rd-lib{display:none}
 @media (max-width:760px){.rd-lib-toggle{width:40px;height:40px}}
 .rd-lib .nav-link{padding-left:calc(10px + 20px + var(--s2));color:var(--muted)}
 .rd-lib .nav-link .nav-icon{display:none}

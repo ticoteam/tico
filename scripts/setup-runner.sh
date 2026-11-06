@@ -56,7 +56,7 @@ DEFAULT_PROJECTS="$(cd "$TICO_ROOT/.." && pwd)"
 if [ -n "$ENV_SLUG" ]; then
   ENV_DIR="${TICO_ENVIRONMENTS_DIR:-$HOME/.config/tico/environments}/$ENV_SLUG"
   [ -f "$ENV_DIR/environment.json" ] \
-    || { echo "no environment $ENV_SLUG at $ENV_DIR (scripts/tico env list)" >&2; exit 1; }
+    || { echo "no environment $ENV_SLUG at $ENV_DIR (scripts/tico-computer env list)" >&2; exit 1; }
   CONFIG_FILE="$ENV_DIR/runner.json"
   ENVIRONMENT_ID="$(read_field "$ENV_DIR/environment.json" id)"
   DEFAULT_PROJECTS="$(read_field "$ENV_DIR/environment.json" workspace)"
@@ -78,23 +78,23 @@ chmod 0700 "$PROJECTS_DIR" "$PROJECTS_DIR/secrets"
 # `python -m` puts the working directory on the module path, so the runner runs from the checkout.
 cd "$TICO_ROOT"
 # The runner is the Rust binary: download this release's (or build it with cargo) before registering.
-"$VENV/bin/python" -m runner.engine prepare
-RUNNER_BIN="$("$VENV/bin/python" -m runner.engine path)"
+"$VENV/bin/python" -m runner_support.engine prepare
+RUNNER_BIN="$("$VENV/bin/python" -m runner_support.engine path)"
 export TICO_ROOT TICO_RUNNER_PYTHON="$VENV/bin/python"
 "$RUNNER_BIN" --config "$CONFIG_FILE" enroll --url "$RUNNER_URL" \
   --code-file "$ENROLLMENT_FILE" --label "$RUNNER_LABEL" --projects "$PROJECTS_DIR" \
   ${ENVIRONMENT_ID:+--environment "$ENVIRONMENT_ID"}
 
 if [ -n "$ENV_SLUG" ]; then
-  TICO_RUNNER_PYTHON="$VENV/bin/python" "$TICO_ROOT/scripts/tico" -e "$ENV_SLUG" install bot
+  TICO_RUNNER_PYTHON="$VENV/bin/python" "$TICO_ROOT/scripts/tico-computer" -e "$ENV_SLUG" install bot
 else
-  TICO_RUNNER_PYTHON="$VENV/bin/python" TICO_RUNNER_CONFIG="$CONFIG_FILE" "$TICO_ROOT/scripts/tico" install bot
+  TICO_RUNNER_PYTHON="$VENV/bin/python" TICO_RUNNER_CONFIG="$CONFIG_FILE" "$TICO_ROOT/scripts/tico-computer" install bot
 fi
 if ! "$RUNNER_BIN" --config "$CONFIG_FILE" doctor; then
   echo >&2
   echo "This computer is registered, but one or more readiness checks need attention." >&2
   echo "Fix the reported repository, runtime, login, model, or configuration issue, then run:" >&2
-  echo "  scripts/tico${ENV_SLUG:+ -e $ENV_SLUG} doctor" >&2
+  echo "  scripts/tico-computer${ENV_SLUG:+ -e $ENV_SLUG} doctor" >&2
   exit 1
 fi
 "$RUNNER_BIN" --config "$CONFIG_FILE" status

@@ -5,9 +5,11 @@ from datetime import datetime, timezone
 import pytest
 
 from backend import memory_tidy_runs as runs
+from backend import providers
 from backend.store import H, Problem
 from backend.tests.test_api import api, put  # noqa: F401
 from backend.tests.test_memory_tidy_controls import enable, entry
+from backend.tests.usage_rows import segment
 
 AT = datetime(2026, 11, 2, 11, 30, tzinfo=timezone.utc)  # 03:30 Pacific, after DST
 
@@ -172,13 +174,55 @@ def test_subscription_estimates_count_and_zero_reports_never_erase_cost(api):
     with store.transaction() as c:
         last(c)
         c.execute("UPDATE memory_tidy_passes SET check_task_id='synthetic-check'")
-        c.execute("INSERT INTO turns(id,bot,task_id,started_at,model,input_tokens,cached_tokens,output_tokens,"
+        c.execute("INSERT INTO attempts(id,bot_id,task_id,created_at,usage_model,input_tokens,cached_tokens,output_tokens,"
                   "est_cost_usd,billing) VALUES(?,?,?,?,?,?,?,?,?,?)",
                   ('synthetic-turn', 'ops', 'synthetic-check', '2026-11-01T11:31:00Z',
                    'gpt-6.1-sol', 1000000, 0, 100000, 0, 'subscription'))
         assert runs.refresh_costs(c) == pytest.approx(3)
-        c.execute("UPDATE turns SET input_tokens=0,output_tokens=0")
+        c.execute("UPDATE attempts SET input_tokens=0,output_tokens=0")
         assert runs.refresh_costs(c) == pytest.approx(3)
+
+
+@pytest.mark.parametrize("prompt, rate", [(271_999, (1.25, 0.062, 6.25)), (272_000, (2.5, 0.125, 9.375))])
+def test_a_terra_check_run_is_priced_as_one_request_at_the_long_prompt_limit(api, prompt, rate):
+    store = setup(api)
+    with store.transaction() as c:
+        last(c)
+        c.execute("UPDATE memory_tidy_passes SET check_task_id='synthetic-check'")
+        c.execute("INSERT INTO attempts(id,bot_id,task_id,created_at,usage_model,input_tokens,cached_tokens,output_tokens,"
+                  "est_cost_usd,billing) VALUES(?,?,?,?,?,?,?,?,?,?)",
+                  ('synthetic-terra-turn', 'ops', 'synthetic-check', '2026-11-01T11:31:00Z',
+                   'gpt-6.1-terra', prompt, 0, 1_000, 0, 'api'))
+        assert runs.refresh_costs(c) == pytest.approx((prompt * rate[0] + 1_000 * rate[2]) / 1_000_000)
+
+
+def test_a_haiku_check_run_over_its_long_tier_keeps_the_standard_price(api):
+    store = setup(api)
+    with store.transaction() as c:
+        last(c)
+        c.execute("UPDATE memory_tidy_passes SET check_task_id='synthetic-check'")
+        c.execute("INSERT INTO attempts(id,bot_id,task_id,created_at,usage_model,input_tokens,cached_tokens,output_tokens,"
+                  "est_cost_usd,billing) VALUES(?,?,?,?,?,?,?,?,?,?)",
+                  ('synthetic-haiku-turn', 'ops', 'synthetic-check', '2026-11-01T11:31:00Z',
+                   'claude-haiku-5-5', 100_001, 0, 1_000, 0, 'api'))
+        assert runs.refresh_costs(c) == pytest.approx((100_001 * 0.10 + 1_000 * 0.50) / 1_000_000)
+
+
+def test_two_requests_under_the_limit_that_cross_it_together_keep_their_own_price(api):
+    store = setup(api)
+    requests = [(200_000, 0, 500), (200_000, 0, 500)]           # each under 272,000; together 400,000
+    priced = providers.estimate_cost('gpt-6.1-terra', 400_000, 0, 1_000, requests)
+    assert priced < providers.estimate_cost('gpt-6.1-terra', 400_000, 0, 1_000, [(400_000, 0, 1_000)])   # one request pays the long tier
+    with store.transaction() as c:
+        last(c)
+        c.execute("UPDATE memory_tidy_passes SET check_task_id='synthetic-check'")
+        c.execute("INSERT INTO attempts(id,bot_id,task_id,created_at,usage_model,input_tokens,cached_tokens,output_tokens,"
+                  "est_cost_usd,billing) VALUES(?,?,?,?,?,?,?,?,?,?)",
+                  ('synthetic-two-requests', 'ops', 'synthetic-check', '2026-11-01T11:31:00Z',
+                   'gpt-6.1-terra', 400_000, 0, 1_000, 0, 'api'))
+        segment(c, 'synthetic-two-requests', model='gpt-6.1-terra', input_tokens=400_000, cached_tokens=0,
+                output_tokens=1_000, est_cost_usd=priced, low_estimate=0, billing='api')
+        assert runs.refresh_costs(c) == pytest.approx(priced)
 
 
 def test_free_skip_excludes_pass_turn_commits_with_ordinary_subjects(api):
@@ -186,7 +230,7 @@ def test_free_skip_excludes_pass_turn_commits_with_ordinary_subjects(api):
     with store.transaction() as c:
         last(c)
         c.execute("UPDATE memory_tidy_passes SET check_task_id='synthetic-check'")
-        c.execute("INSERT INTO turns(id,bot,task_id) VALUES('synthetic-turn','ops','synthetic-check')")
+        c.execute("INSERT INTO attempts(id,bot_id,task_id,created_at) VALUES('synthetic-turn','ops','synthetic-check','2026-11-01T11:31:00Z')")
         commit(c, subject='ordinary looking pass commit', attempt='synthetic-turn')
         assert not runs.changed(c, 'ops', '2026-11-01T11:30:00Z')
         commit(c)
@@ -237,14 +281,14 @@ def test_global_slot_survives_deadline_until_usage_is_reconciled(api):
         child = H.task_create(c, H.KEEPER, 'Synthetic overdue check', '', 'bot:ops',
                               private=True, quiet_notice=True, lint=False)
         c.execute('UPDATE memory_tidy_passes SET check_task_id=?', (child['id'],))
-        c.execute("INSERT INTO turns(id,bot,task_id,started_at,model) VALUES(?,?,?,?,?)",
+        c.execute("INSERT INTO attempts(id,bot_id,task_id,created_at,usage_model) VALUES(?,?,?,?,?)",
                   ('pending-turn', 'ops', child['id'], '2026-11-01T12:59:00Z', 'gpt-6.1-sol'))
         # The deadline closes the task but its running model is not yet settled.
         runs.sweep(c, AT)
         assert runs.unsettled(c)
-        c.execute("UPDATE turns SET finished_at=?,usage_reason='no_result'", (runs.stamp(AT),))
+        c.execute("UPDATE attempts SET settled_at=?,usage_reason='no_result'", (runs.stamp(AT),))
         assert runs.unsettled(c), 'an expired lease with missing usage is not a free pass'
-        c.execute("UPDATE turns SET input_tokens=1000000,output_tokens=100000,usage_reason=NULL")
+        c.execute("UPDATE attempts SET input_tokens=1000000,output_tokens=100000,usage_reason=NULL")
         assert not runs.unsettled(c)
         # The historical estimate never decreases; reconcile a cost past the stop.
         c.execute("UPDATE memory_tidy_passes SET cost_usd=51")
@@ -305,7 +349,7 @@ def test_two_eligible_bots_serialize_and_next_admission_uses_first_cost(api, mon
         assert runs.admit(c, store.settings, AT) == []
         assert len(filed) == 1
         # Completion and reconciled subscription usage release the global slot.
-        c.execute("INSERT INTO turns(id,bot,task_id,started_at,finished_at,model,input_tokens,output_tokens,billing) "
+        c.execute("INSERT INTO attempts(id,bot_id,task_id,created_at,settled_at,usage_model,input_tokens,output_tokens,billing) "
                   "VALUES(?,?,?,?,?,?,?,?,?)", ('turn-first', 'ops', filed[0], runs.stamp(AT), runs.stamp(AT),
                                                'gpt-6.1-sol', 1000000, 100000, 'subscription'))
         c.execute("UPDATE memory_tidy_passes SET status='no_change' WHERE id=?", (first[0],))

@@ -37,7 +37,7 @@ SCHEMA = '''
 CREATE TABLE IF NOT EXISTS inbound_inboxes(
  inbox_id TEXT PRIMARY KEY, kind TEXT NOT NULL, name TEXT NOT NULL, address TEXT NOT NULL,
  state TEXT NOT NULL, created_by TEXT NOT NULL, period_end REAL, cancel_pending INTEGER NOT NULL DEFAULT 0,
- used_for TEXT NOT NULL DEFAULT '');
+ used_for TEXT NOT NULL DEFAULT '', audience TEXT NOT NULL DEFAULT 'company', group_id TEXT);
 CREATE TABLE IF NOT EXISTS inbound_messages(
  seq INTEGER PRIMARY KEY AUTOINCREMENT, message_id TEXT NOT NULL UNIQUE, inbox_id TEXT NOT NULL,
  kind TEXT NOT NULL, received_at REAL NOT NULL, sender TEXT NOT NULL, subject TEXT NOT NULL,
@@ -53,12 +53,6 @@ INSERT OR IGNORE INTO inbound_sync(singleton) VALUES(1);
 
 
 AUDIENCES = ('company','team')
-
-
-def ensure(c):
-    """Columns added after the first release (idempotent)."""
-    H.add_column(c,'inbound_inboxes','audience',"TEXT NOT NULL DEFAULT 'company'")
-    H.add_column(c,'inbound_inboxes','group_id','TEXT')
 
 
 class InboxAudience(Contract):
@@ -191,7 +185,7 @@ class Inbound:
 
     def remote(self, method, path, body=None):
         if self.off:
-            raise Problem('inbound_unconfigured','Email & Phone is not connected. Ask your owner to set it up.',409)
+            raise Problem('inbound_unconfigured','Tico addresses and numbers are not connected. Ask your owner to set them up in Settings > Inboxes.',409)
         try:
             with httpx.Client(transport=TRANSPORT,timeout=35,follow_redirects=False,verify=outbound_tls.context()) as client:
                 response = client.request(method,self.url+'/v1/inbound/'+path,json=body,
@@ -212,7 +206,7 @@ class Inbound:
                     raise ValueError('oversized_delivery')
                 return response.json()
         except (httpx.HTTPError,ValueError,KeyError):
-            raise Problem('inbound_unavailable','Email & Phone did not answer. Please retry.',503) from None
+            raise Problem('inbound_unavailable','Tico addresses and numbers did not answer. Please retry.',503) from None
 
     def list_inboxes(self, who, after="", limit=100):
         with self.store.read_transaction() as c:
@@ -230,12 +224,14 @@ class Inbound:
         return {'inboxes':rows[:limit],'next':rows[limit-1]['inbox_id'] if len(rows)>limit else None,'configured':not self.off or demo_inboxes,'last_synced_at':sync['last_synced_at'],'error':sync['error'],
                 'gaps':gaps}
 
-    def connection_actor(self, who, what='Inbox', code='inbox_connection'):
+    def connection_actor(self, who, what='Inbox', code='inbox_connection', tap=False):
         # Delegated human identities may manage other Inbox operations, never company linking. Also the rule for
         # linking this server to its company (backend/company_server.py), with its own `what` and error `code`.
+        # `tap`: the person's own tap on a Confirm card counts (a disconnect, which holds no code).
         forbidden = Problem(code+'_forbidden',f'A signed-in owner or admin must connect {what} directly.',403)
         if (who.role not in ('owner','human') or not who.actor.startswith('human:')
-                or any((who.support,who.via,who.via_token,who.runner_id,who.attempt_id,who.agent,who.task_actor))):
+                or (who.via and not (tap and who.confirmed))
+                or any((who.support,who.via_token,who.runner_id,who.attempt_id,who.agent,who.task_actor))):
             raise forbidden
         from . import access, census
         with self.store.read_transaction() as c:
@@ -593,7 +589,11 @@ class Inbound:
 
     async def loop(self,stop):
         while not stop.is_set():
-            try:await asyncio.to_thread(self.tick)
+            # Each pass is one run of Inbound mail (Settings > Routines), on a server whose timers run; a copy with
+            # them off (a rehearsal, the tests) still keeps its retention, unrecorded.
+            from . import system_routines as SR
+            timers = getattr(self.settings,'scheduler_enabled',False) and not getattr(self.settings,'rehearsal',False)
+            try:await (asyncio.to_thread(SR.pass_of,self.store,'inbound_mail',self.tick) if timers else asyncio.to_thread(self.tick))
             except Exception:pass  # stable error code in Settings, never message content or a supplier traceback
             try:await asyncio.wait_for(stop.wait(),15)
             except TimeoutError:pass

@@ -33,7 +33,7 @@ function settingsBotEditorRows(e) {
 }
 // Where the bot's conversation compacts (backend/settings_admin.py COMPACT_AT). Only a CLI whose manifest says
 // `compaction` takes it, and it saves on its own without a fresh session, like the computer.
-const SETTINGS_COMPACT_AT = [[150000, '150k'], [250000, '250k'], [400000, '400k'], [600000, '600k'], [1000000, '1M']];
+const SETTINGS_COMPACT_AT = [[100000, '100k'], [150000, '150k'], [250000, '250k'], [400000, '400k'], [600000, '600k'], [1000000, '1M']];
 const SETTINGS_COMPACT_DEFAULT = 250000;
 function settingsCompactRow(e) {
   const harness = e.harness || e.runtime || e.resolved_runtime;
@@ -217,7 +217,7 @@ function settingsEditBot(slug = '', inline = false) {
         <label class="bot-editor-check"><input type="checkbox" name="shared" ${e?.shared ? 'checked' : ''}><span>Allow branches<small>People can make their own branch of it, on their computer and subscription.</small></span></label>
         <label class="bot-editor-check"><input type="checkbox" name="temp" ${e?.temp ? 'checked' : ''}><span>Temp bot<small>For work expected to end.</small></span></label>
         ${editing ? settingsUpdateSubscriptions(e) : ''}
-        ${editing ? `<h3 class="bot-editor-sec bot-editor-wide">Access, model and computer</h3><p class="bot-editor-hint bot-editor-wide">Nothing here saves until you press Save bot. Then every change saves together.</p><div class="bot-editor-wide sb-rows" data-bot-people></div>` : ''}
+        ${editing ? `<h3 class="bot-editor-sec bot-editor-wide">Access, model and computer</h3><p class="bot-editor-hint bot-editor-wide">Save bot saves your changes.</p><div class="bot-editor-wide sb-rows" data-bot-people></div>` : ''}
         ${editing ? '' : `<h3 class="bot-editor-sec bot-editor-wide">Model and computer</h3><div class="bot-editor-wide" data-add-choice>
           ${settingsChoiceFields(currentModel)}
           <input type="hidden" name="model_effort" value="${esc(currentModel)}">
@@ -289,6 +289,8 @@ function settingsEditBot(slug = '', inline = false) {
       if (pairing) void settingsAgentPair(pairing.dataset.agentPair);
       if (credential) void settingsAgentCredential(credential.dataset.agentCredential);
       if (revoke) void settingsAgentRevoke(revoke.dataset.agentRevoke);
+      const replace = event.target.closest('[data-bot-cloud-replace]');
+      if (replace) void cloudMachineReplace(replace.dataset.botCloudReplace, replace);
     });
     rows.addEventListener('change', event => {
       const changed = control => control.value !== (control.dataset.current || '');
@@ -302,9 +304,20 @@ function settingsEditBot(slug = '', inline = false) {
       }
       const cloudSize = event.target.closest('[data-bot-cloud-size]');
       if (cloudSize) stage('cloud-size', 'size', changed(cloudSize) && cloudMachineRun(slug, {size: cloudSize.value}, cloudSize));
+      const cloudPause = event.target.closest('[data-bot-cloud-pause]');
+      if (cloudPause) {
+        settingsFieldClear(cloudPause);
+        if (cloudPause.value === '' && !cloudPause.validity.badInput) cloudPause.value = '30';      // an empty box is the default
+        const whole = cloudPause.checkValidity();
+        if (!whole) settingsFieldError(cloudPause, 'Enter whole minutes from 5 to 1440.');
+        stage('cloud-pause', 'pause after', changed(cloudPause) && whole && cloudMachineRun(slug, {pause_minutes: Number(cloudPause.value)}, cloudPause));
+      }
       const cloudAlways = event.target.closest('[data-bot-cloud-always]');
-      if (cloudAlways) stage('cloud-always', 'always on', cloudAlways.checked !== (cloudAlways.dataset.current === 'true')
-        && cloudMachineRun(slug, {always_on: cloudAlways.checked}, cloudAlways));
+      if (cloudAlways) {
+        rows.querySelectorAll('[data-bot-cloud-pause]').forEach(input => { input.disabled = cloudAlways.checked; });
+        stage('cloud-always', 'always on', cloudAlways.checked !== (cloudAlways.dataset.current === 'true')
+          && cloudMachineRun(slug, {always_on: cloudAlways.checked}, cloudAlways));
+      }
       const compact = event.target.closest('[data-bot-compact]');
       if (compact) stage('compact', 'compact at', changed(compact) && settingsCompactRun(compact));
       const exit = event.target.closest('[data-bot-browser-exit]');

@@ -21,6 +21,7 @@ from . import team_rules
 from . import read_cache
 from . import report_managers
 from .store import H, Problem, digest
+from . import bot_settings as BS
 
 # Loopback sign-in for an environment with no identity proxy in front of it.
 # Cookies are shared across ports on one host, so each install names its own; the bare name is
@@ -129,6 +130,28 @@ def standing(c, pid):
     return ""
 
 
+def bot_identity(c, actor, *, attempt_id=""):
+    """Resolve current bot standing from its registry, without minting a credential or a lease."""
+    from . import agents
+    bot = H.actor_id(actor) if H.is_bot(actor) else None
+    record = H.bot(c, bot) if bot else None
+    config = read_cache.one(c, BS.ONE_SQL, (bot,)) if record else None
+    if not record or record["state"] != "active" or not config:
+        raise Problem("identity", "This bot is no longer available", 403)
+    external = agents.external_harness(c, bot)
+    credential = agents.row(c, bot)
+    active_agent = credential is not None and not credential["revoked_at"]
+    # Authentication still marks an active agent credential external while its configured harness changes.
+    if external or active_agent:
+        if not active_agent or not credential["harness"] or (external and credential["harness"] != external):
+            raise Problem("identity", "This external bot has no current credential", 403)
+        return Identity(actor, "bot", agent=credential["harness"])
+    attempt = read_cache.one(c, "SELECT runner_id FROM attempts WHERE id=? AND bot_id=?", (attempt_id, bot)) if attempt_id else None
+    if attempt_id and not attempt:
+        raise Problem("identity", "This bot's source execution is no longer available", 403)
+    return Identity(actor, "bot", attempt_id=attempt_id, runner_id=attempt["runner_id"] if attempt else "")
+
+
 def validate_identity(c, who):
     if who.support:
         # No roster row: the session it came in with must still be live.
@@ -168,7 +191,7 @@ def validate_identity(c, who):
             raise Problem("paused", "This bot is " + str(state or "unknown") + ", not active; "
                           "a person changes that in Settings", 409)
         return
-    runner = c.execute("SELECT * FROM runners WHERE id=? AND revoked_at IS NULL",
+    runner = c.execute("SELECT * FROM runners_with_state WHERE id=? AND revoked_at IS NULL",
                        (who.runner_id,)).fetchone()
     if not runner:
         raise Problem("revoked", "Runner credential is revoked or unknown", 401)
@@ -229,6 +252,18 @@ class Auth:
         self._access_seen = None
         self._credential_followed = None
         self.proxy = identity_proxy.build(self.settings, store)
+
+    @classmethod
+    def read_policy(cls, c):
+        """The database's read rules for native gates without a web server or sign-in settings."""
+        def build():
+            from . import access, teammate_access
+            policy = cls.__new__(cls)
+            policy.bot_admins = set(access.owner_and_admin_emails(c))
+            # Native reads use the same stored built-in bot set as teammate access.
+            policy.system_bot = lambda slug: slug in teammate_access._system_bots(c)
+            return policy
+        return read_cache.value(c, ("native_read_policy",), build, shared=True)
 
     def sync_access(self, c):
         """Adopt the stored owner and access list. One indexed read per request keeps a transfer
@@ -396,6 +431,31 @@ class Auth:
             touch(c, "UPDATE service_keys SET last_used_at=? WHERE id=?", (now, row["id"]))
         return Identity("service:" + row["id"], "service", token_label=str(row["label"]), scope=row["scope"] or "tasks")
 
+    def runner_receipt_principal(self, c, who, aid):
+        """Read a runner's saved receipt as its original principal, even after the lease ends."""
+        from . import task_privacy as privacy
+        if who.role != "runner" or not aid:
+            return who
+        attempt = c.execute(
+            "SELECT a.* FROM attempts a JOIN assignments x ON x.bot=a.bot_id "
+            "JOIN bots b ON b.id=a.bot_id WHERE a.id=? AND a.runner_id=? "
+            "AND x.runner_id=? AND x.generation=a.generation AND b.state='active'",
+            (aid, who.runner_id, who.runner_id)).fetchone()
+        if not attempt:
+            raise Problem("privacy", "This execution is no longer assigned to this computer", 403)
+        principal = Identity("bot:" + attempt["bot_id"], "bot", runner_id=who.runner_id, attempt_id=aid)
+        if attempt["acting_person"]:
+            person = self.chat_person(c, attempt["acting_person"], attempt["bot_id"], aid, who.runner_id)
+            if person is None:
+                raise Problem("privacy", "The person can no longer run this page request", 403)
+            principal = replace(person, task_actor="")
+        if not privacy.attempt_readable(c, privacy.actor(principal), aid):
+            raise Problem("privacy", "This execution is no longer available", 403)
+        if attempt["acting_person"]:
+            for task_id in privacy.attempt_tasks(c, aid):
+                self.task(c, principal, task_id)
+        return principal
+
     def assistant_principal(self, c, attempt):
         """The person an assistant chat turn acts for, as that person and nobody more, or None.
 
@@ -413,13 +473,17 @@ class Auth:
                 or str(attempt["lease_until"] or "") <= H.now()):
             return None
         row = c.execute(
-            "SELECT v.owner_id FROM jobs j JOIN messages m ON m.id=j.message_id "
+            "SELECT v.owner_id,m.refs FROM jobs j JOIN messages m ON m.id=j.message_id "
             "JOIN conversations v ON v.id=m.conversation_id WHERE j.id=? AND v.scope='personal' "
             "AND v.room_key=? AND m.sender_id=v.owner_id AND json_extract(m.refs,'$.assistant')=1",
             (attempt["job_id"], room_key)).fetchone()
         if not row:
             return None
-        return self.chat_person(c, row["owner_id"], attempt["bot_id"], attempt["id"], attempt["runner_id"])
+        person = self.chat_person(c, row["owner_id"], attempt["bot_id"], attempt["id"], attempt["runner_id"])
+        if person and isinstance((H._json(row["refs"], {}) or {}).get("make_page"), dict):
+            # The page request acts with the person's full rights; the attempt still identifies its Assistant.
+            return replace(person, task_actor="")
+        return person
 
     def chat_person(self, c, owner_actor, bot, attempt_id="", runner_id=""):
         """The person a turn of their chat bot (`bot`: the Assistant) acts as, with their rights and nobody more, or
@@ -620,7 +684,7 @@ class Auth:
                 or not str(who.actor).startswith("bot:") or self.system_bot(slug)):
             return False
         me = H.actor_id(who.actor)
-        row = c.execute("SELECT reports_to,config FROM bot_config WHERE bot=?", (slug,)).fetchone()
+        row = c.execute(f"SELECT bc.reports_to,{BS.CONFIG} AS config FROM bot_config bc {BS.JOIN} WHERE bc.bot=?", (slug,)).fetchone()
         if not row or me == slug:
             return False
         declared = json.loads(row["config"]) if row["config"] else {}
@@ -641,7 +705,7 @@ class Auth:
             if H.actor_id(parent) != me:
                 return False
         else:
-            row = c.execute("SELECT reports_to,config FROM bot_config WHERE bot=?", (slug,)).fetchone()
+            row = c.execute(f"SELECT bc.reports_to,{BS.CONFIG} AS config FROM bot_config bc {BS.JOIN} WHERE bc.bot=?", (slug,)).fetchone()
             if not row:
                 return False
             declared = json.loads(row["config"]) if row["config"] else {}
@@ -746,7 +810,7 @@ class Auth:
         return False
 
     def task_sql(self, c, who, delegations="task_delegations", unreadable=None):
-        """Company tasks respect bot activity controls; private tasks admit parties, their managers and a guest.
+        """Company tasks respect bot activity controls; private tasks also admit checked meeting participants.
 
         Type-wide work, task ancestry and delegation never widen private visibility.
         `delegations` stays accepted for compatibility with the guarded SQL caller.
@@ -760,14 +824,21 @@ class Auth:
         inherited_private = A.qlist(sorted(private_subjects(c, who.actor)))
         parties = A.qlist(sorted(subjects(c, who.actor)))
         me = A.q(who.actor)
+        from .meeting_audience import participant_access_sql
+        participant = participant_access_sql(c, me)
         # A private task's guest (hubdb.task_reach) reads it as its two parties do.
         audience = (f"(owner_id IN {inherited_private} OR requester_id IN {inherited_private} "
-                    f"OR (coalesce(private,1)<>0 AND guest={me}) "
+                    f"OR (coalesce(private,1)<>0 AND (guest={me} OR ({participant}))) "
                     f"OR (coalesce(private,1)=0 AND (owner_id IN {parties} OR requester_id IN {parties} OR ({clear}))))")
         if who.task_actor:
             actor = A.q(who.task_actor)
             carried = A.qlist(sorted(private_subjects(c, who.task_actor)))
-            audience += f" AND (coalesce(private,1)=0 OR owner_id IN {carried} OR requester_id IN {carried} OR guest={actor})"
+            audience += (f" AND (coalesce(private,1)=0 OR owner_id IN {carried} OR requester_id IN {carried} "
+                         f"OR guest={actor} OR ({participant_access_sql(c, actor)}))")
+        from . import counsel
+        denied = counsel.denied_page_copies(c, who, self)
+        if denied:
+            audience += " AND id NOT IN " + A.qlist(sorted(denied))
         return audience
 
     def operator(self, c, who, bot):
@@ -804,7 +875,8 @@ class Auth:
         if who.role == "runner":
             raise Problem("identity", "Runner credentials cannot act as a human or bot", 403)
 
-    def bot_contact(self, c, who, slug, conversation_id=None, task_id=None, kind="message"):
+    @staticmethod
+    def bot_contact(c, who, slug, conversation_id=None, task_id=None, kind="message"):
         """Whether this sender may open something with `slug`.
 
         `tasks` is the strict one and the simplest to reason about: work arrives as a task and
@@ -834,7 +906,7 @@ class Auth:
         all (`hubdb.answer` checks only that the ask was addressed to you), so refusing contact
         cannot strand a bot that is blocking on a reply.
         """
-        row = c.execute("SELECT config,reports_to FROM bot_config WHERE bot=?", (slug,)).fetchone()
+        row = c.execute(f"SELECT {BS.CONFIG} AS config,bc.reports_to FROM bot_config bc {BS.JOIN} WHERE bc.bot=?", (slug,)).fetchone()
         if who.role != "bot":
             return True
         sender = who.actor
@@ -872,15 +944,16 @@ class Auth:
             return True
         return False
 
-    def require_bot_contact(self, c, who, actor, conversation_id=None, task_id=None, kind="message"):
+    @staticmethod
+    def require_bot_contact(c, who, actor, conversation_id=None, task_id=None, kind="message"):
         """`bot_contact` as a gate. The refusal names the way back in, because the sending bot
         reads it and has to decide what to do next."""
         if not str(actor).startswith("bot:"):
             return
         slug = H.actor_id(actor)
-        if self.bot_contact(c, who, slug, conversation_id, task_id, kind):
+        if Auth.bot_contact(c, who, slug, conversation_id, task_id, kind):
             return
-        row = c.execute("SELECT config FROM bot_config WHERE bot=?", (slug,)).fetchone()
+        row = c.execute(BS.ONE_SQL, (slug,)).fetchone()
         declared = json.loads(row["config"]) if row and row["config"] else {}
         if declared.get("bot_contact") == "tasks":
             raise Problem("bot_contact", f"{slug} takes work as a task and nothing else (notes only from its manager "
@@ -969,6 +1042,10 @@ class Auth:
             row = H.task(c, row["id"])
         self.domain(who)
         if not row:
+            raise Problem("not_found", "Task not found", 404)
+        from . import counsel
+        copied = counsel.page_copies(c).get(row["id"])
+        if copied and (not copied["removed"] or copied["page"]["state"] == "deleted") and not counsel.page_copy_readable(c, copied, who, self):
             raise Problem("not_found", "Task not found", 404)
         if who.role not in ("owner", "human", "bot") or not H.task_private_readable(c, who.actor, row):
             raise Problem("not_found", "Task not found", 404)
@@ -1059,32 +1136,55 @@ class Auth:
         row = H.approval(c, approval_id)
         if not row:
             raise Problem("not_found", "Approval not found", 404)
+        if row["kind"] == "send" and (row.get("payload") or {}).get("email_send_id"):
+            from .email_sending import can_ok, effective
+            send = c.execute("SELECT * FROM email_sends WHERE id=?", (row["payload"]["email_send_id"],)).fetchone()
+            permitted = send and can_ok(c, self, who.actor, send["mailbox"], send["bot"],
+                                       effective(c, send["mailbox"], send["bot"]))
+            if permitted or (not decide and who.actor == row["requested_by_id"]):
+                return row
+            raise Problem("forbidden", "This send follows its inbox's approval rule", 403)
         msg = H.message(c, row["message_id"])
         if decide:
             allowed = who.role in ("owner", "human") and msg["recipient_id"] == who.actor
         else:
             allowed = who.role == "owner" or who.actor in (row["requested_by_id"], msg["recipient_id"])
+        if row["kind"] == "letter":
+            from . import letters
+            letter = c.execute("SELECT * FROM letters WHERE approval_id=?", (approval_id,)).fetchone()
+            allowed = False
+            if letter:
+                may_decide = who.role in ("owner", "human") and (letters.admin(self, who) or (
+                    letter["acting_bot_id"] and self.bot_manager(c, who, letter["acting_bot_id"])))
+                allowed = letters.readable(c, self, who, letter) and (not decide or may_decide)
         if not allowed:
             raise Problem("forbidden", "This approval is not yours", 403)
         return row
 
 
-def bot_reads_task(c, bot, row):
-    """Whether `bot` may read this task under the same rules as reading it (Auth.task_row): what a notice or an
-    answer sent to it may carry. A bot's access needs none of the server's sign-in settings, so no Auth is built.
+def actor_reads_task(c, actor, row):
+    """Whether an actor may read this task under every rule in Auth.task_row, using the stored read policy.
     With no transaction open, the read runs in a savepoint released at the end, so task_row's snapshot never leaves
     a BEGIN open on an autocommit connection."""
-    policy = Auth.__new__(Auth)
+    from . import teammate_access
     opened = not c.in_transaction
     if opened:
-        c.execute("SAVEPOINT bot_reads_task")
+        c.execute("SAVEPOINT actor_reads_task")
     try:
+        policy = Auth.read_policy(c)
         if opened and row:
-            row = H.task(c, row["id"])      # read in this snapshot, as task_row's own BEGIN would
-        policy.task_row(c, Identity(bot, "bot"), row)
+            row = H.task(c, row["id"])
+        who = read_cache.value(c, ("task_read_identity", actor), lambda: teammate_access._viewer_for(c, actor))
+        if who is None:
+            return False
+        policy.task_row(c, who, row)
     except Problem:
         return False
     finally:
         if opened:
-            c.execute("RELEASE bot_reads_task")
+            c.execute("RELEASE actor_reads_task")
     return True
+
+
+def bot_reads_task(c, bot, row):
+    return actor_reads_task(c, bot, row)

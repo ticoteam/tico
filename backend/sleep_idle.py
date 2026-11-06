@@ -59,7 +59,8 @@ STREAM = "/api/v2/events"        # an open stream says nothing about a person be
 # Outgoing sends: a row waiting for its next try (`next_attempt_at`, NULL = now) keeps the server up only when that try is
 # near; one Svix-style retry ten hours away must not. `sending` always does.
 SENDS = {"slack_posts": "state IN ('ready','retry','rate_limited')",
-         "webhook_sends": "state IN ('ready')"}
+         "webhook_sends": "state IN ('ready')",
+         "personal_alerts": "state='pending'"}
 NO_KEY = "Connect the Tico Gateway in Settings > Gateway first: Sleep when idle asks Tico with its key."
 NOT_HOSTED = "Sleep when idle is only for servers Tico hosts."
 now = time.time                  # tests' controlled clock
@@ -136,9 +137,10 @@ def table(c, name):
 
 def routine_times(c, at):
     """When the server next has something to do on a clock, soonest first: each switched-on schedule automation (an
-    overdue one is due now), the controlled system jobs that run at a fixed time, the daily release hours, the later
-    tries of waiting sends and the next deferred item's deadline. Jobs that repeat on an interval are housekeeping that
-    catches up after a wake, so they are left out: a 15-minute job would otherwise keep the server up for good."""
+    overdue one is due now), Maintenance's time-sensitive steps, the controlled system jobs that run at a fixed time,
+    the daily release hours, the later tries of waiting sends and the next deferred item's deadline. Other interval
+    jobs are housekeeping that catches up after a wake, so they are left out: a 15-minute job would otherwise keep the
+    server up for good."""
     when = datetime.fromtimestamp(at, timezone.utc)
     out = []
     if table(c, "automations"):
@@ -154,7 +156,13 @@ def routine_times(c, at):
             elif (due := epoch(row[1])) is not None:
                 out.append(due)
     out.extend(t for t in fixed_times(c, when) if t > at)      # one already past is being run by the scheduler now
+    from . import maintenance
+    if table(c, "maintenance_runs") and (due := maintenance.next_due(c, when)) is not None:
+        out.append(due.timestamp())
     out.extend(later_sends(c, at))
+    if table(c, "alert_preferences"):
+        from . import personal_alerts
+        out.extend(personal_alerts.future_deadlines(c, at))
     # A deferred item's deadline wakes its bot like a schedule (backend/delivery.py); one past is due now.
     from . import delivery
     if table(c, "deferrals") and (due := epoch(delivery.next_due(c))) is not None:
@@ -182,7 +190,7 @@ def fixed_times(c, when):
         last = SR.last_started(c, list(SR.CONTROLS))
         for key, cfg in SR.config(c).items():
             if cfg["on"] and cfg["preset"] == SR.DAILY:
-                found = SR.next_night(c, cfg, when) if key == "learnings" else SR.next_due(cfg, last.get(key), when)
+                found = SR.next_due(cfg, last.get(key), when)
                 if found:
                     out.append(found.timestamp())
     except Exception:
@@ -407,8 +415,9 @@ class SleepIdle:
                 pass
             if stop.is_set():
                 return
+            from . import system_routines as SR    # each look is one run of Sleep when idle (Settings > Routines)
             try:
-                await asyncio.to_thread(self.tick)
+                await asyncio.to_thread(SR.pass_of, self.store, "sleep_idle", self.tick)
             except Exception:
                 pass                                # the next look tries again; the failure is in the state row
 

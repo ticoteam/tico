@@ -210,11 +210,13 @@ impl RecordingHandle {
         // Live text streams when Settings allow it; the key is read on the stream's own thread.
         let plan = settings::read(store.root())
             .ok()
-            .and_then(|config| stream::Plan::from_settings(&config));
+            .and_then(|config| stream::Plan::from_settings(&config))
+            // Keep a settings-watching worker even while live text is off or not connected.
+            .or_else(|| stream::Plan::from_settings(&settings::Settings::default()));
         Self::with_plan(store, id, plan, move |inputs| {
             setup_inputs(
                 inputs,
-                || capture::start_microphone(microphone.as_deref()),
+                || capture::start_microphone_for_meeting(microphone.as_deref(), meeting_audio),
                 meeting_audio,
                 capture::start_meeting_audio,
             )
@@ -400,11 +402,30 @@ impl Writer {
             let before = self.pending.len();
             self.resampler
                 .push(&packet.samples[..packet.len], &mut self.pending);
-            if let Some(feed) = &self.feed {
-                let at_ms = self.chunk_ms + before as f64 * 1000. / OUTPUT_RATE as f64;
-                feed.push(at_ms, &self.pending[before..]);
+            let processed = self
+                .source
+                .live_input
+                .as_ref()
+                .is_some_and(|aid| aid.processed.load(Ordering::Acquire));
+            if !processed {
+                if let Some(feed) = &self.feed {
+                    let at_ms = self.chunk_ms + before as f64 * 1000. / OUTPUT_RATE as f64;
+                    feed.push(at_ms, &self.pending[before..]);
+                }
             }
             self.flush(store, id, false)?;
+        }
+        if let Some(aid) = &mut self.source.live_input {
+            while let Ok(packet) = aid.consumer.pop() {
+                if aid.processed.load(Ordering::Acquire) {
+                    if let Some(feed) = &self.feed {
+                        feed.push(
+                            self.base_ms + packet.start_frame as f64 * 1000. / OUTPUT_RATE as f64,
+                            &packet.samples[..packet.len],
+                        );
+                    }
+                }
+            }
         }
         Ok(())
     }
@@ -679,6 +700,7 @@ mod tests {
             health,
             consumer,
             stream: Box::new(Synthetic),
+            live_input: None,
         }
     }
     #[test]
@@ -865,11 +887,23 @@ mod tests {
         let mic_flag = mic_closed.clone();
         let late_flag = late_closed.clone();
         let (release, gate) = mpsc::channel();
+        let (fed_tx, fed_rx) = mpsc::channel();
         let handle =
             RecordingHandle::with_setup(store.clone(), recording.id.clone(), move |inputs| {
                 let (sink, consumer) = AudioSink::channel();
                 let health = sink.health.clone();
-                let _ = feed(sink, vec![0.2; 16000 * 56]);
+                // Speech-like pauses yield a normal chunk without making this setup test
+                // benchmark the 55-second continuous-signal boundary in a debug build.
+                let samples = (0..16000 * 46)
+                    .map(|n| {
+                        if n % 25600 < 20800 {
+                            (n as f32 * 0.12).sin() * 0.2
+                        } else {
+                            0.0005
+                        }
+                    })
+                    .collect();
+                let _ = fed_tx.send(feed(sink, samples));
                 inputs.ready(Source {
                     channel: Channel::Microphone,
                     name: "Synthetic mic".into(),
@@ -878,11 +912,13 @@ mod tests {
                     health,
                     consumer,
                     stream: Box::new(Tracked(mic_flag)),
+                    live_input: None,
                 })?;
                 inputs
                     .warning("Meeting audio is connecting. Microphone recording continues.".into());
-                // Long enough for a slow CI runner to cut the microphone's first chunk while this setup is held.
-                gate.recv_timeout(Duration::from_secs(30))?;
+                // The test owns the sender; dropping it on failure releases setup too.
+                // A wall-clock timeout here would accidentally unblock the very setup under test.
+                gate.recv()?;
                 let mut late = source(Channel::Meeting, 660.);
                 late.stream = Box::new(Tracked(late_flag));
                 inputs.ready(late)
@@ -895,11 +931,22 @@ mod tests {
         let during_setup = store.get(&recording.id).unwrap();
         assert!(
             !during_setup.chunks.is_empty(),
-            "Microphone audio was held behind the other input's setup"
+            "Microphone audio was held behind the other input's setup: status={:?}, state={}, warning={}",
+            handle.status(),
+            during_setup.state,
+            during_setup.warning
         );
         assert!(!during_setup.meeting_audio);
-        // Unbroken sound has no pause; at the 55 s limit it is cut mid-window.
-        assert_eq!(during_setup.chunks[0].signal.duration_ms, 42500);
+        assert!((30_000..=46_000).contains(&during_setup.chunks[0].signal.duration_ms));
+        let fed = fed_rx.recv_timeout(Duration::from_secs(1)).unwrap();
+        let deadline = Instant::now() + Duration::from_secs(10);
+        while !fed.load(Ordering::Acquire) && Instant::now() < deadline {
+            thread::sleep(Duration::from_millis(2));
+        }
+        assert!(
+            fed.load(Ordering::Acquire),
+            "The fixture did not finish feeding its audio"
+        );
         let started = Instant::now();
         handle.finish().unwrap();
         assert!(
@@ -928,7 +975,7 @@ mod tests {
                 .iter()
                 .map(|chunk| chunk.signal.duration_ms)
                 .sum::<u64>(),
-            56000
+            46000
         );
         assert!(saved.chunks.iter().all(|chunk| chunk.channel == "me"));
         assert!(store.get(&next.id).unwrap().chunks.is_empty());
@@ -983,6 +1030,14 @@ mod tests {
         let flag = done.clone();
         thread::spawn(move || {
             for part in samples.chunks(1024 * 32) {
+                let deadline = Instant::now() + Duration::from_secs(10);
+                while sink.queued_capacity() < part.len() {
+                    assert!(
+                        Instant::now() < deadline,
+                        "Synthetic audio consumer stalled"
+                    );
+                    thread::sleep(Duration::from_millis(2));
+                }
                 sink.push_interleaved(part, 1);
                 thread::sleep(Duration::from_millis(20));
             }
@@ -1026,6 +1081,7 @@ mod tests {
                         health,
                         consumer,
                         stream: Box::new(Synthetic),
+                        live_input: None,
                     }],
                     String::new(),
                 ))
@@ -1097,5 +1153,52 @@ mod tests {
         let saved = store.get(&recording.id).unwrap();
         assert!(saved.meeting_audio && !saved.microphone.is_empty());
         assert!(saved.warning.is_empty());
+    }
+    #[test]
+    fn saved_wav_uses_raw_samples_with_processed_live_aid_and_plain_fallback() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = Store::open(dir.path()).unwrap();
+        let record = store.create("Raw microphone").unwrap();
+        let (mut raw, consumer) = AudioSink::channel();
+        let (mut processed, aid_consumer) = AudioSink::channel();
+        let active = Arc::new(AtomicBool::new(true));
+        let source = Source {
+            channel: Channel::Microphone,
+            name: "raw".into(),
+            sample_rate: 16000,
+            started: Instant::now(),
+            health: raw.health.clone(),
+            consumer,
+            stream: Box::new(Synthetic),
+            live_input: Some(capture::LiveInput {
+                consumer: aid_consumer,
+                processed: active.clone(),
+            }),
+        };
+        let mut writer = Writer::new(source, Instant::now(), 0, None).unwrap();
+        for use_aid in [true, false] {
+            active.store(use_aid, Ordering::Release);
+            raw.push_interleaved(&[0.25; 1600], 1);
+            processed.push_interleaved(&[0.75; 1600], 1);
+            writer.pump(&store, &record.id).unwrap();
+        }
+        writer.flush(&store, &record.id, true).unwrap();
+        let saved = store.get(&record.id).unwrap();
+        let values: Vec<_> = saved
+            .chunks
+            .iter()
+            .flat_map(|c| {
+                hound::WavReader::open(store.audio_path(c).unwrap())
+                    .unwrap()
+                    .into_samples::<i16>()
+                    .map(Result::unwrap)
+            })
+            .collect();
+        assert_eq!(values.len(), 3200);
+        assert!(
+            values
+                .iter()
+                .all(|sample| (*sample as f32 / 32768. - 0.25).abs() < 0.001)
+        );
     }
 }

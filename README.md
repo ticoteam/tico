@@ -39,9 +39,9 @@ API key. One signed-in model is enough for the first result; Health lists the ot
 4. Before any real work, open **Settings > Health**: **Models** should read "Codex is signed in." (or Claude Code). If not, follow
    [first-result recovery](docs/install.md#first-result-recovery). With no spending limit set there is no cap; a limit pauses new
    work and lets a run in progress finish ([Usage](docs/usage.md)).
-5. Hire Head of Marketing first, then Content Marketer (or untick Head of Marketing in step 1): on the team chart, open each
-   seat and press **Hire** on its template. Hiring Content Marketer first fails with "Reports-to bot was not found". On
-   Content Marketer's page, press **Start onboarding**. Use the [sample answers](docs/install.md#sample-answers-for-content-marketer)
+5. On the team chart, open each seat and press **Hire** on its template, in any order. A seat hired before its manager
+   reports to the nearest hired manager above it until that manager is hired, then moves under it. On Content Marketer's
+   page, press **Start onboarding**. Use the [sample answers](docs/install.md#sample-answers-for-content-marketer)
    to give it readers, publishing plans, topics, voice examples and privacy rules; review its first draft in chat.
 6. On **Tasks > New task**, assign it the short draft from [Your first result](docs/install.md#your-first-result). The bot marks
    it Done with the draft file on the task. Read the draft, then close the task yourself: the requester closes it, not the bot.
@@ -105,7 +105,7 @@ team on localhost with no setup ([docs/demo.md](docs/demo.md)).
 | Mode | Where the server runs | Status |
 |---|---|---|
 | Docker | Any Linux server, HTTPS by Caddy or Cloudflare Tunnel, built-in Google or Microsoft sign-in | the one-line installer; [docs/install.md](docs/install.md) |
-| Local only | The same Mac as the runner, bound to `127.0.0.1` | For trying Tico out; `scripts/tico env create --local` (below) |
+| Local only | The same Mac as the runner, bound to `127.0.0.1` | For trying Tico out; `scripts/tico-computer env create --local` (below) |
 
 The server runs no bots or model CLIs and may call your configured Decision provider, and a runner never holds team-wide authority: it works one
 leased run at a time. A bot is one git repository plus one row on the server. One environment
@@ -216,7 +216,7 @@ named team must also carry a permanent id, or the process refuses to start.
 | `TICO_OIDC_CLIENT_ID` | For `oidc`: the OAuth client id | `1234-abc.apps.googleusercontent.com` |
 | `TICO_OIDC_CLIENT_SECRET` or `TICO_OIDC_CLIENT_SECRET_FILE` | For `oidc`: the client secret, or a file holding it | `/etc/tico/oidc-secret` |
 | `TICO_OIDC_ALLOWED_DOMAINS` | For `oidc`, optional: comma-separated email domains that may sign in (Google also checks the `hd` claim) | `acme.com` |
-| `TICO_GOOGLE_OAUTH_CLIENT_ID` and `TICO_GOOGLE_OAUTH_CLIENT_SECRET` | Optional: the server's Google OAuth web client, so each person can connect their own inbox and calendar, read only, from Settings > Inbox ([docs/mail.md](docs/mail.md#connect-your-google-account)) | `1234-abc.apps.googleusercontent.com` |
+| `TICO_GOOGLE_OAUTH_CLIENT_ID` and `TICO_GOOGLE_OAUTH_CLIENT_SECRET` | Optional: the server's Google OAuth web client, so each person can connect their own inbox and calendar, read only, from Settings > Inboxes ([docs/mail.md](docs/mail.md#connect-your-google-account)) | `1234-abc.apps.googleusercontent.com` |
 | `TICO_SESSION_IDLE_SECONDS` and `TICO_SESSION_ABSOLUTE_SECONDS` | For `oidc`, optional: how long a sign-in lasts without use (default 30 days) and in all (default 90 days). Lower them to sign humans out sooner | `28800` |
 | `TICO_STREAM_KEEPALIVE_SECONDS` | Optional: how often a quiet event stream (pages, runners) sends a keepalive, 5 to 50 seconds (default 15). Keep it under the idle timeout of any proxy in front | `20` |
 | `TICO_SESSION_SECRET` | For `oidc`, optional: at least 32 characters, signs the sign-in round trip. Generated and kept in `tico-session-secret` beside the database (mode 0600) when unset | |
@@ -236,7 +236,7 @@ named team must also carry a permanent id, or the process refuses to start.
 | `TICO_DECISIONS_DAILY_CALLS_OWNER`, `TICO_DECISIONS_DAILY_CALLS_HUMAN`, `TICO_DECISIONS_DAILY_CALLS_BOT` | How many calls to the server's own models one actor may make in a UTC day, by role (defaults 20000, 5000, 5000; `0` refuses every call). Decisions (`POST /api/v2/decisions`, listening and live-meeting routing, and Slack routing, counted against the sender) share one count; market asks (`POST /api/v2/market/ask`) are counted apart under the same caps. Over the cap is a 429 | `1000` |
 | `TICO_GATEWAY_KEY` or `TICO_GATEWAY_SECRET_ARN`, and `TICO_GATEWAY_URL` | The Tico AI Gateway key behind `hub_decision_ask` / `POST /api/v2/decisions` and the Slack gateway: Decide asks the Gateway first, as Tico Decide 1.0, in one try of at most 8 seconds. The URL defaults to Tico HQ's (`<TICO_HQ_URL>/v1/gateway/decisions`). When the Gateway is not set up, is down or refuses the key, the server asks the next provider below; all of them together answer within 25 seconds | |
 | `TICO_TYPESAFE_SECRET_ARN` or `TYPESAFE_API_KEY` | Optional: your own key for TypeSafe's Jev, asked after the Gateway, behind `hub_decision_ask` / `POST /api/v2/decisions` and the Slack gateway (`skills/decisions/SKILL.md`, `questions/README.md`), which is also what checks a message bot's mail for spam and injection. Not set by default and not needed. Without it, or when it fails, the server asks the team's own model provider, using `ANTHROPIC_API_KEY`, `OPENAI_API_KEY`, `GEMINI_API_KEY`, `XAI_API_KEY` or `OPENROUTER_API_KEY` from `.env` (`compose.yaml` hands these to the server); with none of them the route answers 503. The `judge.call` audit events and `TYPESAFE_*` names are unchanged | |
-| `TICO_UPDATE_CHECK`, `TICO_RELEASES_URL`, `TICO_VERSION`, `TICO_UPDATER_URL`, `TICO_UPDATER_TOKEN` | The "New version" notice and owner-only "Update now"; `TICO_UPDATE_CHECK=off` disables it. See [docs/releasing.md](docs/releasing.md) | |
+| `TICO_UPDATE_CHECK`, `TICO_RELEASES_URL`, `TICO_VERSION`, `TICO_UPDATER_URL`, `TICO_UPDATER_TOKEN` | The sidebar's "Update to" row and owner-only "Update now"; `TICO_UPDATE_CHECK=off` disables it. See [docs/releasing.md](docs/releasing.md) | |
 | `TICO_TELEMETRY`, `DO_NOT_TRACK`, `TICO_TELEMETRY_DEBUG`, `TICO_HQ_URL` | The anonymous usage count: `TICO_TELEMETRY=off` or `DO_NOT_TRACK=1` (or Settings > General) turns it off, `TICO_TELEMETRY_DEBUG=1` prints what would be sent and sends nothing. See [PRIVACY.md](PRIVACY.md) | |
 | `TICO_HQ_STAFF_READ_KEY` | For the Tico team's own server only: Tico HQ's read-only staff key. With it, the server reads HQ's nightly billing check every hour and the owner's Health page shows each billing mismatch (the company's install id and the difference in dollars), and a check that missed a night or cannot be read, in red. Read-only; unset, nothing is sent | |
 | `TICO_RELEASE`, `TICO_OBSERVABILITY_*`, `TICO_POSTHOG_*`, `TICO_SENTRY_*` | Optional release id and telemetry. Empty disables all of it | |
@@ -258,7 +258,7 @@ server's variable file; real hostnames, buckets, ARNs and humans live outside th
 |---|---|
 | `backend/` | The server: API, authorization, write layer, scheduler, backups, settings admin (FastAPI, SQLite) |
 | `runner-rs/` | The local runner (`tico-runner`): enrollment, readiness, leases, runs, subscription profiles, updates, and one host per model CLI in `runner-rs/src/hosts/` |
-| `runner/` | The runner's Python helpers: the `python -m runner run` shim, the connectors, Close transcript and meeting import jobs, catalog set-up and the update process |
+| `runner_support/` | The runner's Python helpers: the `python -m runner_support run` shim, the connectors, Close transcript and meeting import jobs, catalog set-up and the update process |
 | `clients/` | What bots and owners call: the `hub` CLI, the HTTP client, preflight, routine validation, team documents, and `environments.py` |
 | `ui/`, `app/` | The web interface and its browser tests; the Tauri desktop shell (Rust) |
 | `setup/` | `tico setup`, the guided Docker install of the server and of Linux runners |
@@ -286,18 +286,22 @@ change, change this repository.
 
 ## Operating commands
 
-`scripts/tico` is the one command on a Mac that runs bots (on Linux it does the same with systemd user units, [install.md](docs/install.md#a-linux-checkout-systemd)). `scripts/tico help` prints the full usage; the groups are:
+`scripts/tico-computer` is the one command on a Mac that runs bots (on Linux it does the same with systemd user units, [install.md](docs/install.md#a-linux-checkout-systemd)). `scripts/tico-computer help` prints the full usage; the groups are:
 
 ```
-scripts/tico [-e ENV] install|uninstall|restart|status|doctor|logs|update|open
-scripts/tico env create|list|show|remove ...         the teams on this Mac
-scripts/tico -e ENV enroll --code-file F --label L   register this Mac for one team
-scripts/tico -e ENV profile add|list|login|assign    the subscriptions its bots run on
-scripts/tico -e ENV bot create SLUG --name "Display" [--template T]
-scripts/tico -e ENV server install|uninstall|start|stop|restart|status|logs
+scripts/tico-computer [-e ENV] install|uninstall|restart|status|doctor|logs|update|open
+scripts/tico-computer env create|list|show|remove ...         the teams on this Mac
+scripts/tico-computer -e ENV enroll --code-file F --label L   register this Mac for one team
+scripts/tico-computer -e ENV profile add|list|login|assign    the subscriptions its bots run on
+scripts/tico-computer -e ENV bot create SLUG --name "Display" [--template T]
+scripts/tico-computer -e ENV server install|uninstall|start|stop|restart|status|logs
 ```
 
 `-e ENV` (or `TICO_ENV`) picks a team environment.
+
+`install` links `~/.local/bin/tico-computer` and `~/.local/bin/tico`. `tico` takes the same commands and hands any
+other to `hub` (`tico task list` is `hub task list`); in a later release `tico` becomes the teamwork CLI and these
+commands stay on `tico-computer` only.
 
 `scripts/setup-runner.sh [--env <slug>] <enrollment.json> [workspace]` does the venv, the
 enrollment, the bot service and `doctor` in one go from a file downloaded by **Add computer**, and
@@ -322,10 +326,10 @@ Browser checks need `npm ci` and a Playwright browser (`npx playwright install c
 dependency: `marked` and the icon font are vendored in `ui/vendor/` with their licenses.
 
 The live checkout on an owner's Mac is what the runner executes: the launchd jobs run
-`python -m runner` with that directory as the working directory, and the bot job execs the Rust runner built
+`python -m runner_support` with that directory as the working directory, and the bot job execs the Rust runner built
 from that tree (rebuilt on restart when `runner-rs/` changed). A pull without a restart leaves the old code
-running (`scripts/tico status` says so explicitly). Do development in a git worktree, never in the live checkout, and use
-`scripts/tico update`, which pulls and restarts after waiting for runs in flight.
+running (`scripts/tico-computer status` says so explicitly). Do development in a git worktree, never in the live checkout, and use
+`scripts/tico-computer update`, which pulls and restarts after waiting for runs in flight.
 
 ## License
 

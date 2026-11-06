@@ -6,7 +6,7 @@ from pathlib import Path
 import pytest
 from backend import memory_tidy as C
 from backend.tests.test_memory_tidy import snapshot, proposal, run, TODAY
-from runner.memory_tidy_keep import apply, candidate, Refused, Git
+from runner_support.memory_tidy_keep import apply, candidate, Refused, Git
 
 
 def raw(snap):
@@ -151,11 +151,11 @@ def test_moved_instructions_refuse_and_dirty_checkout_is_preserved(repos):
 
 def test_cli_repository_error_is_fixed_json_and_fetch_error_requests_reconciliation(repos, tmp_path):
     import sys
-    from runner import safe_git
+    from runner_support import safe_git
     remote, local, writer, request = repos
     git(local, 'remote', 'remove', 'origin')
     def call():
-        result = subprocess.run([sys.executable, '-m', 'runner.memory_tidy_keep', str(local), str(tmp_path / 'journal')],
+        result = subprocess.run([sys.executable, '-m', 'runner_support.memory_tidy_keep', str(local), str(tmp_path / 'journal')],
                                 input=json.dumps(request), text=True, capture_output=True,
                                 env=safe_git.process_environment(), check=True)
         assert result.stderr == ''

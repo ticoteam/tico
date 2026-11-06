@@ -171,7 +171,7 @@ contained so analytics failures cannot fail an application operation.
 
 The UI's `SERVICE_NAMES.posthog` entry names a bot tool; it is not application
 analytics. `TICO_RELEASE` is reused as the release label. Cloud installs use the same Docker configuration below. Native checkout
-installs put these variables in the environment's `server.env`, then use `scripts/tico -e <slug> server restart`. For the identity
+installs put these variables in the environment's `server.env`, then use `scripts/tico-computer -e <slug> server restart`. For the identity
 secret, use 32-256 URL-safe letters, digits, underscores or hyphens. Keep it stable across releases and out of command arguments and logs.
 
 ### Docker configuration
@@ -228,7 +228,7 @@ the same rows to a local file that can be read without the server (below).
 | Table | What | Kept |
 | --- | --- | --- |
 | `flight_requests` | Per minute (`span` 60), per route template (`GET /api/v2/tasks`) and caller kind (`human`, `bot`, `runner`, `service`, `anonymous`): count, 5xx errors, response bytes, total, p50, p95 and max milliseconds. A caller that hangs up while its request body is read is recorded as 499 (client closed request), not as a 5xx. After two days, minutes become hours (`span` 3600). | 14 days |
-| `flight_slow` | Each request over one second: route, caller kind, actor id, milliseconds, bytes, status, SQL milliseconds, write-lock wait milliseconds and query count (at most 50 a minute). | 14 days, 5,000 rows |
+| `flight_slow` | Each request over one second: route, caller kind, actor id, milliseconds, bytes, status, SQL milliseconds, write-lock wait milliseconds, query count and its five costliest statement shapes, values folded out (at most 50 a minute). | 14 days, 5,000 rows |
 | `flight_process` | Per minute: CPU (% of one core), memory, threads, open files and sockets, event-loop lag (p95, max), SQL statements and time, write transactions with the longest lock wait and hold, `database is locked` errors, and `dropped`: samples lost because the background thread fell behind (a gap in that minute's numbers). | 14 days |
 | `flight_sql` | Per hour, per statement shape (literals folded): count, total, p95 and max milliseconds, from the statement's start through its last row fetched (rows read by iterating, `fetchone`, `fetchmany` or `fetchall`; never the caller's own work between rows); the top 100 by time, the rest as `(other)`. | 90 days |
 | `flight_db` | Hourly: file, WAL and free bytes, row counts of the growing tables and their oldest row. Table/index sizes are estimated from sampled rows (no page is walked) and refresh at most once per 24 hours, reused between passes, including across restarts. | 90 days |
@@ -254,6 +254,7 @@ last hour under **Performance** on the Health page. `GET /api/v2/ops/timing` sti
 route since the start.
 
 With the recorder enabled, `Server-Timing` includes `sql` and `wait` durations alongside `auth` and `app`.
+Place GETs also include `prep`, `cards` and up to eight slowest `card-<template>` totals (repeated kinds summed; `card-page` for page pins, `card-hidden` for pins the caller can't read), capped at 300 added bytes.
 Slow metrics retain `sql_ms`, `wait_ms` and `queries`; rows recorded before the upgrade have null values.
 These are elapsed timings, so time waiting for CPU can also appear within SQL time. Compare the same
 window's CPU and event-loop lag before attributing the remaining request time to a lock.
@@ -288,7 +289,7 @@ named in a `recorder_gap` event (`minutes`, `count`), so the tables never lose a
 
 ```bash
 python -m backend.flight summary --since 30m          # Docker: docker compose exec server python -m backend.flight summary
-scripts/tico -e ENV server flight summary --since 2h   # a local install
+scripts/tico-computer -e ENV server flight summary --since 2h   # a local install
 ```
 
 The summary shows server starts, stalls with their class and stacks, the slowest routes (count, total, p95, max, SQL time,
@@ -319,7 +320,7 @@ memory` sends SIGUSR2, which starts tracemalloc, and the next one writes the top
 | `start` | `pid`, `version`, `commit`, `python`, `sqlite`, `platform` |
 | `minute` | `ts` is the minute's start. `cpu` (% of one core), `rss` (bytes), `threads`, `fds`, `sockets`, `lag_p95`, `lag_max` (ms), `requests`, `queries`, `sql_ms`, `txns`, `wait_max`, `wait_ms` (write-lock wait, longest and total), `hold_max`, `hold_p95`, `locked` (`database is locked` errors), `dropped` (samples lost in memory), `file_dropped` (records lost to a full queue since the start), `db_failed` (table writes that could not get the lock since the start), `db_pending` (writes waiting for the next try) |
 | `routes` | `ts` (the minute), `span` (60), `routes`: list of `route` (method and template), `caller`, `n`, `errors` (5xx), `bytes`, `bytes_max` (response bytes from Content-Length; 0 for streams), `total_ms`, `p50`, `p95`, `max_ms`, `sql_ms`, `wait_ms` |
-| `slow` | A request over one second: `route`, `caller`, `actor`, `ms`, `bytes`, `status`, `sql_ms`, `wait_ms`, `queries` (its own SQL and lock wait, from the threads it ran on) |
+| `slow` | A request over one second: `route`, `caller`, `actor`, `ms`, `bytes`, `status`, `sql_ms`, `wait_ms`, `queries` (its own SQL and lock wait, from the threads it ran on), and `top`: its five costliest statement shapes as `{sql, n, ms}`, literals folded as in `sql` |
 | `stall` | `id`, `seconds` (since the loop last woke), `class`, `usage`, and `threads` (`busy`: `thread`, `loop`, `stack` innermost last; `idle`: a count) at most once a minute |
 | `stall_end` | `id` (the `stall`'s), `seconds` (between the loop's two wakes), `class`, `usage` over the whole stall |
 | `long_hold` | `route`, `site`, `hold_s`, `wait_s`, `open`: as the `long_hold` event above |

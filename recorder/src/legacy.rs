@@ -54,6 +54,7 @@ impl Store {
                     chunks: vec![],
                     deliveries: vec![],
                     speakers: String::new(),
+                    speaker_labels: Default::default(),
                 };
                 self.db()?.execute(
                     "INSERT INTO recordings VALUES(?,?)",

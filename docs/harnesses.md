@@ -11,7 +11,7 @@ and holds no harness.
 
 | Harness | Manifest | Providers | Installed with | Signs in with |
 |---|---|---|---|---|
-| Codex | `runner/harnesses/codex.toml` | OpenAI | npm `@openai/codex` | ChatGPT subscription (device code, from Settings) or `OPENAI_API_KEY` |
+| Codex | `runner-rs/harnesses/codex.toml` | OpenAI | npm `@openai/codex` | ChatGPT subscription (device code, from Settings) or `OPENAI_API_KEY` |
 | Claude Code | `claude-code.toml` | Anthropic | npm `@anthropic-ai/claude-code` | Claude subscription (link and pasted code, from Settings), `CLAUDE_CODE_OAUTH_TOKEN` or `ANTHROPIC_API_KEY` |
 | Gemini CLI | `gemini-cli.toml` | Google | npm `@google/gemini-cli` | `GEMINI_API_KEY` |
 | Antigravity (Gemini variant) | `gemini-cli.toml` `[variants.antigravity]` | Google | Operator installs `agy`; the runner never installs or updates it | Google account, signed in by the operator in `agy`; readiness checks only that `agy` is on PATH, a real run checks the sign-in; no MCP servers |
@@ -268,6 +268,12 @@ to the bot's own model, with the task context length and any task effort that mo
 A task's own model ([Choosing the model a task runs on](tasks.md#choosing-the-model-a-task-runs-on)) falls back to the
 bot's task model first, then to the bot's own model. A review or check subtask keeps its check model.
 
+A bot whose **Task model** is not offered yet keeps that model, and its tasks still run on it, when you change
+**Task context length** or save the same model again. Settings lists no **Task effort** choices for such a model,
+so that field is disabled there; a save that sends only an effort or a context length keeps the model too.
+Terra 6.1 (`gpt-6.1-terra`) is one such model. Choosing it for a bot that does not have it saved is refused, and
+so is choosing another model that is not offered yet.
+
 #### A warning about a cheaper task model
 
 A bot that has requested send, spend or publish approvals, or holds a tool grant that can write beyond its
@@ -372,7 +378,7 @@ A harness is a manifest plus a host adapter.
 1. **Host adapter**: `runner-rs/src/hosts/<host>.rs` (`start_thread`, `start_turn`, `interrupt`, and events on the
    host's channel). Add it to the `Host` enum in `runner-rs/src/hosts/mod.rs` and to `make_host` in
    `runner-rs/src/execute.rs`.
-2. **Manifest**: `runner/harnesses/<id>.toml`. The file name is the id.
+2. **Manifest**: `runner-rs/harnesses/<id>.toml`. The file name is the id.
 
    ```toml
    id = "acme-agent"            # lowercase letters, digits, hyphens

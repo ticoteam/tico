@@ -2,13 +2,19 @@
 
 Growth (`#/growth`, under Strategy in the sidebar) is a place of cards, like the Dashboard: what each channel spent, how
 many customers it brought, how many stayed, what a customer was worth, the funnel, the channels, and the marketing tests.
-Anyone may read it; an admin or a bot arranges it. **Sources**, the systems each number comes from, sits behind a link
-on the page. Marketing work is not on this page: marketing ideas are tasks, and the KPIs the numbers feed are read on
+Anyone may read it; the owner and admins arrange it, and a bot acting as itself does too, pinning only the cards it
+made. **Sources**, the systems each number comes from, is linked from the page (the owner and admins find it in
+**Settings**). Marketing work is not on this page: marketing ideas are tasks,
+and the KPIs the numbers feed are read on
 Strategy's Goals tab.
 
 Examples use Acme, a home-cleaning company.
 
 ## The page
+
+The head shows the North Star line (when one is set), a **Growth board** link and, when two or more months have numbers, a
+month picker. The owner and admins get **Settings**, which holds the channels, the numbers the maths uses and a **Where
+numbers come from** link to Sources; anyone else gets a **Sources** link.
 
 The page is the place `growth` (`backend/cards.py`, the same grid and card forms as the Dashboard). A Growth page nobody
 arranged shows these cards, each a template below:
@@ -104,7 +110,7 @@ A channel's stage and budget are its owner's, and the owning bot may change its 
 proposes the change. The owner and admins may change any channel, source or setting.
 
 Everyone signed in reads the Growth page. The owner and admins arrange it, and so does a bot acting as itself, which
-pins its own cards there (a bot pins no pages to it). Its audience is everyone; it has no audience to change.
+pins only the cards it made there (a bot pins no pages to it). Its audience is everyone; it has no audience to change.
 
 ## Commands
 

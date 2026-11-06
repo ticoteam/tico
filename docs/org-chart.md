@@ -10,6 +10,8 @@ row of its own, and the groups, then the humans and bots, that report to them si
 human nobody is above follows as an ordinary row with their reports under them. With no such top person it nests as before. The built-in bots (the Assistant, BotOps, the
 Librarian, the Strategy Bot) stay out of the chart and the Goals tree. Ask opens the Assistant from any page, and the Assistant hands BotOps what needs it;
 the Librarian is reached from Docs and Market, the Strategy Bot from its panel beside the Strategy tabs. Settings > Bots lists all four.
+
+A paused bot shows a pause icon and **Paused** badge in **Settings > Bots** and beside its Team chart node. The whole chart node is dimmed. Click the badge or node to open the bot's page.
 When bots' names start with the same words (the "Head of" in **Head of Product** and **Head of Sales**), those words are
 muted, and on a narrow sidebar they drop out whole so each row keeps the part that tells it apart. Hover a bot to see its
 whole name. A bot still onboarding has a small amber gear beside its name (**Onboarding**).
@@ -19,11 +21,12 @@ chart lays out roles under roles, `reports_to: seat:<id>`). Hover it for its job
 is dropped on it; under a bot you may not see it hangs from the next row up, and it is left out of the recently-opened list.
 The sidebar reads seats from `seats` on `GET /api/humans`, the same rows as `seats` on `GET /api/v2/org`.
 The built-in **Strategy Bot** ([Your Strategy Bot](strategy-bot.md)) is on every install. The server hangs the Heads, each in its department's group, and the bots that report to no one under it; since it is not on the chart, the app shows them under the owner.
-The Assistant, BotOps, the Librarian and message bots stay apart. Only the chart moves: nobody's `reports_to` and
+Built-ins and explicitly marked helper bots stay apart. Only the chart moves: nobody's `reports_to` and
 nobody's access changes, and `hub team show` still gives each bot the `reports_to` it has.
-Message bots such as Inbox Manager follow in a separate **Message bots** section on the chart and Goals. The mailboxes and
-A message bot's mailboxes and Slack channels are listed under it in the sidebar; any other bot's Slack channels are
-under Slack in its Tools on the bot's page.
+Assigning a mailbox to a bot does not make it a helper: it stays on Team and Goals under its manager, or at the top
+when nobody is above it. Its mailboxes and Slack channels are listed under its Team row. Sources whose bot is off the
+chart, or not nested in the current view, appear in the separate **Message bots** section. Other bots' Slack channels
+are under Slack in Tools on the bot's page.
 Synced Grok Bots, Dots and Muse ([External agent sync](external-agent-sync.md)) are ordinary rows, initially under the
 human who linked them. Move each one under a human or bot, or into a group, with the same chart controls as other bots;
 later syncs preserve that placement. Grok's own sections and pins remain source metadata and do not create nested
@@ -132,13 +135,13 @@ The example team, Acme, has Ana Rivera at the root. Its groups are, for example,
 **Operations**.
 
 Each human has a manager (`reports_to`), a group (`team`), and optionally a personal message bot. In the web
-team chart, personal message bots appear as messaging icons beside their humans; the icons open the
-matching bot under **Message bots**. Shared mailboxes such as `shared@acme.example` can stay on the roster for mail routing with
+team chart, messaging icons beside humans open their matching bot's messages. A custom message bot also has its own
+Team row, unless explicitly marked as a helper. Shared mailboxes such as `shared@acme.example` can stay on the roster for mail routing with
 `hidden: true`, so they do not appear in the tree.
 
 Every Acme address is `<firstname>@acme.example`. Personal message bots come from the `inbox`
 template and read only the assigned mailbox by default. The template seeds one weekday 07:30 Routine in America/Los_Angeles, initially disabled.
-Extra passes and reading reports' mail (`org_read: true`) are optional owner choices. Each mailbox has its
+Extra passes are optional owner choices; reading a report's mail is a grant that report gives (Settings > Inboxes). Each mailbox has its
 own rules in `registry/mail-rules.yaml`. Photos prefer a Google Workspace Directory thumbnail
 when domain-wide delegation includes `admin.directory.user.readonly`; otherwise the Slack
 profile image stored on the roster.
@@ -174,9 +177,9 @@ bot to someone without giving them the whole group, put that bot's slug in their
 
 ## Where notes go
 
-A human's `bot` is where Tico sends a meeting when they choose **Send to bot > Auto**. If they have no bot, Auto uses the
-default bot (Assistant when active, otherwise BotOps). There is no separate routing model call. Choose a named bot in the dialog
-when the work belongs elsewhere. See [Meetings](meetings.md) for the resulting task and `backend/media.py` for the API.
+A human's `bot` is where Tico sends a meeting sent with `bot_id: "auto"` (Pending's **Send to** choice, or the API). If they
+have no bot, Auto uses the default bot (Assistant when active, otherwise BotOps). There is no separate routing model call. Pick a
+named bot under the meeting's **Share** menu when the work belongs elsewhere. See [Meetings](meetings.md) for the resulting task and `backend/media.py` for the API.
 
 ## Adding a human
 

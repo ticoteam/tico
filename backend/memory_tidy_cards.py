@@ -19,6 +19,7 @@ from . import models as M
 from .memory_tidy import Result
 from .still_needed import crossed_at
 from .store import H, Problem
+from . import bot_settings as BS
 
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS memory_tidy_cards (
@@ -69,7 +70,7 @@ SUMMARY_FIELDS = ('id', 'bot', 'reviewer', 'memory_commit', 'model', 'cost_usd',
 def ready_runner(c, bot):
     if c is None:
         return None
-    row = c.execute("SELECT r.id,r.capabilities FROM assignments a JOIN runners r ON r.id=a.runner_id "
+    row = c.execute("SELECT r.id,r.capabilities FROM assignments a JOIN runners_with_state r ON r.id=a.runner_id "
                     "WHERE a.bot=? AND r.revoked_at IS NULL", (bot,)).fetchone()
     return row['id'] if row and 'memory_tidy_keep_v1' in json.loads(row['capabilities']) else None
 
@@ -219,13 +220,13 @@ def install(app, store, auth, mutate):
         rid = computer(request)
         with store.transaction() as c:
             reconcile_queued(c)
-            rows = c.execute("SELECT k.id,k.card_id,t.bot,t.memory_commit,t.edits,t.diary,t.created_at,b.config "
-                             "FROM memory_tidy_keeps k JOIN memory_tidy_cards t ON t.id=k.card_id "
-                             "JOIN bot_config b ON b.bot=t.bot JOIN runners r ON r.id=k.runner_id "
+            rows = c.execute("SELECT k.id,k.card_id,t.bot,t.memory_commit,t.edits,t.diary,t.created_at,"
+                             f"{BS.CONFIG} AS config FROM memory_tidy_keeps k JOIN memory_tidy_cards t ON t.id=k.card_id "
+                             f"JOIN bot_config bc ON bc.bot=t.bot {BS.JOIN} JOIN runners r ON r.id=k.runner_id "
                              "WHERE k.runner_id=? AND r.revoked_at IS NULL AND k.status IN ('queued','applying') ORDER BY k.created_at LIMIT 1", (rid,)).fetchall()
             for row in rows:
                 c.execute("UPDATE memory_tidy_keeps SET status='applying' WHERE id=?", (row['id'],))
-            # edits_json is the runner wire's name (runner/memory_tidy_keep.py); older runners read it too.
+            # edits_json is the runner wire's name (runner_support/memory_tidy_keep.py); older runners read it too.
             return {'keeps': [{**{k: r[k] for k in r.keys() if k not in ('config', 'edits')}, 'edits_json': r['edits'], 'config': {key: value for key, value in json.loads(r['config']).items() if key in {'repo', 'repo_url', 'shared_from'}}, 'date': r['created_at'][:10]} for r in rows]}
 
     @app.post('/api/v2/runners/me/memory-tidy-keeps/{ident}/complete')

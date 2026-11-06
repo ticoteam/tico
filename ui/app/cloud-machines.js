@@ -13,14 +13,18 @@ const CLOUD_STATES = {none: 'Not started yet', starting: 'Starting', running: 'R
   stopped: 'Stopped', deleted: 'Deleted', failed: 'Failed'};
 // The Computer select's values for the two cloud machines; any other value is a computer's id.
 const CLOUD_CHOICES = {'cloud-shared': 'shared', 'cloud-own': 'own'};
+// The names the Computer select shows for them; settings-bots.js search matches a bot's by the same words.
+const CLOUD_CHOICE_LABELS = {'cloud-shared': 'Shared cloud machine', 'cloud-own': 'Own cloud machine'};
 let CLOUD_SIZES = null;
 const cloudSizeName = name => name ? name[0].toUpperCase() + name.slice(1) : '';
 const cloudMachineOn = e => e?.cloud_machine?.mode === 'cloud';
 const cloudMachineShared = e => cloudMachineOn(e) && e.cloud_machine.placement !== 'own';
 const cloudMachinePick = value => CLOUD_CHOICES[value] || null;
 const cloudMachineValue = e => cloudMachineOn(e) ? (cloudMachineShared(e) ? 'cloud-shared' : 'cloud-own') : '';
+// The name of a bot's cloud machine as the Computer select shows it; '' for a bot not on one.
+const cloudMachineLabel = e => CLOUD_CHOICE_LABELS[cloudMachineValue(e)] || '';
 function cloudMachineOptionsHTML(current) {
-  return Object.entries({'cloud-shared': 'Shared cloud machine', 'cloud-own': 'Own cloud machine'}).map(([value, label]) =>
+  return Object.entries(CLOUD_CHOICE_LABELS).map(([value, label]) =>
     `<option value="${value}" ${value === current ? 'selected' : ''}>${label}</option>`).join('');
 }
 async function cloudMachineSizes() {
@@ -31,7 +35,8 @@ async function cloudMachineSizes() {
 }
 function cloudSizeLabel(size) {
   if (!size.cpu) return cloudSizeName(size.name);
-  return `${cloudSizeName(size.name)} · ${size.cpu} CPU · ${size.memory_gb} GB · $${Number(size.usd_per_hour).toFixed(2)}/h`;
+  const hourly = Number(size.usd_per_hour).toLocaleString('en-US', {minimumFractionDigits: 2, maximumFractionDigits: 6});
+  return `${cloudSizeName(size.name)} · ${size.cpu} CPU · ${size.memory_gb} GB · $${hourly}/h`;
 }
 // "Running · Default · $0.42 this month · 3 starts", then a size waiting for the next start; a problem replaces the state.
 function cloudMachineStatus(m) {
@@ -53,21 +58,30 @@ function cloudMachineFacts(machine) {
   if (!m) return '';
   return m.shared ? `Cloud machine · ${cloudSizeName(m.size)}` : `Cloud machine · ${empName(m.bot)} · ${cloudSizeName(m.size)}`;
 }
-// The bot editor's row under Computer: its machine's size and Always on, both held until Save bot (`stage`). The
-// shared machine's are the company's: only owners and admins change them.
+// The bot editor's rows under Computer: its machine's size, Pause after and Always on, all held until Save bot
+// (`stage`). The shared machine's are the company's: only owners and admins change them. Always on never pauses, so
+// Pause after is off while it is on.
 function cloudMachineRowHTML(e) {
   if (!cloudMachineOn(e)) return '';
   const m = e.cloud_machine, scope = cloudMachineShared(e) ? 'shared' : 'own';
   const may = (scope === 'shared' ? settingsIsAdmin() : settingsCanManageBot(e)) ? '' : 'disabled';
   const names = CLOUD_SIZES?.length ? CLOUD_SIZES : CLOUD_SIZE_NAMES.map(name => ({name}));
   const what = scope === 'shared' ? 'the shared cloud machine' : `${esc(e.display_name)}'s cloud machine`;
+  const pauseOff = (may || m.always_on) ? 'disabled' : '';
   return `<div class="sb-row" data-bot-cloud-row><span>Size</span><div class="rel-line">
       <select class="settings-inline-select" data-bot-cloud-size="${esc(e.id)}" data-cloud-scope="${scope}" data-current="${esc(m.size)}" aria-label="Size of ${what}" ${may}>
         ${names.map(size => `<option value="${esc(size.name)}" ${size.name === m.size ? 'selected' : ''}>${esc(cloudSizeLabel(size))}</option>`).join('')}
       </select>
       <label class="bot-editor-check"><input type="checkbox" data-bot-cloud-always="${esc(e.id)}" data-cloud-scope="${scope}" data-current="${m.always_on}" ${m.always_on ? 'checked' : ''} ${may}> Always on</label>
     </div><span></span></div>
-    <div class="sb-sub" data-bot-cloud-status>${esc(cloudMachineStatus(m))}</div>`;
+    <div class="sb-row"><span>Pause after</span><div class="rel-line">
+      <input type="number" min="5" max="1440" step="1" class="settings-inline-select" data-bot-cloud-pause="${esc(e.id)}" data-cloud-scope="${scope}" data-current="${m.pause_minutes}" value="${m.pause_minutes}" aria-label="Pause after, in minutes, for ${what}" ${pauseOff}>
+      <span class="muted">min</span>
+    </div><span></span></div>
+    <div class="sb-sub" data-bot-cloud-status>${esc(cloudMachineStatus(m))}</div>
+    ${scope === 'own' && settingsIsAdmin() && (m.runner_id || !['none', 'deleted'].includes(m.state) || (m.state === 'deleted' && m.problem)) ? `<div class="sb-row"><span></span><div>
+      <button type="button" class="ghost" data-bot-cloud-replace="${esc(e.id)}">Replace machine</button>
+    </div><span></span></div>` : ''}`;
 }
 // HQ's sizes, with their prices, once they are read; the choice in the select stays as it is.
 async function cloudMachineMount(rows, slug) {
@@ -82,4 +96,51 @@ async function cloudMachineMount(rows, slug) {
 function cloudMachineRun(slug, body, control) {
   const path = control?.dataset.cloudScope === 'shared' ? '/v2/cloud-machines/shared' : `/v2/bots/${encodeURIComponent(slug)}/cloud-machine`;
   return async rev => { await post(path, body); return rev; };
+}
+async function cloudMachineReplace(slug, button) {
+  if (!await settingsConfirm({title: 'Replace machine?', ok: 'Replace machine',
+    text: 'Deletes this machine and its disk. The next task starts a fresh one.'})) return;
+  settingsFieldClear(button);
+  button.disabled = true;
+  try {
+    await post(`/v2/bots/${encodeURIComponent(slug)}/cloud-machine/replace`, {});
+    await loadSettings();
+    const status = button.closest('[data-bot-people]')?.querySelector('[data-bot-cloud-status]');
+    const machine = S.emps.find(e => e.id === slug)?.cloud_machine;
+    if (status && machine) { status.textContent = cloudMachineStatus(machine); button.remove(); }
+    toast('Machine replaced');
+  } catch (error) { settingsFieldError(button, error.message); }
+  finally { button.disabled = false; }
+}
+
+// Tico support on cloud machines (GET /v2/cloud-machines/support): HQ's switch for the company and each machine's
+// support helper, shared by the Settings panes until the next entry. A failed read shows no cached state.
+const CLOUD_SUPPORT = {view: null, read: null};
+function cloudSupportRead({fresh = false} = {}) {
+  if (fresh) CLOUD_SUPPORT.read = null;
+  if (!CLOUD_SUPPORT.read) {
+    const read = get('/v2/cloud-machines/support', {fresh: true}).then(view => view?.available ? view : null, () => null)
+      .then(view => {
+        // An older read may finish after a new entry or a write. Only the newest answer can replace the switch.
+        if (CLOUD_SUPPORT.read !== read) return CLOUD_SUPPORT.read;
+        CLOUD_SUPPORT.view = view;
+        return view;
+      });
+    CLOUD_SUPPORT.read = read;
+  }
+  return CLOUD_SUPPORT.read;
+}
+// The answer to a change is the whole state again; it replaces what was read.
+function cloudSupportSet(view) {
+  CLOUD_SUPPORT.view = view?.available ? view : null;
+  CLOUD_SUPPORT.read = Promise.resolve(CLOUD_SUPPORT.view);
+}
+// "Tico support: on", "off" or "offline" for a computer that is a cloud machine, matched by HQ's key (the shared
+// machine's `_shared`, else its bot); '' for a helper that is not there, any other computer, or before the read.
+function cloudSupportWords(machine) {
+  const m = machine?.cloud_machine;
+  if (!m || !CLOUD_SUPPORT.view) return '';
+  const key = m.shared ? '_shared' : m.bot;
+  const helper = CLOUD_SUPPORT.view.machines.find(row => row.key === key)?.helper;
+  return ['on', 'off', 'offline'].includes(helper) ? `Tico support: ${helper}` : '';
 }

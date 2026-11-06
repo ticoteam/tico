@@ -6,7 +6,7 @@ scope, budget and terms, protect private data and Credentials, and verify the re
 it is done. Tell the owner what changed and what remains blocked by missing information or Tools.
 
 An approval is optional when a bot is genuinely unsure about a specific action. Use
-`hub approval request --kind send|spend|publish|merge` with the exact message, amount, content or
+`hub approval request --kind spend|publish|merge` with the exact amount, content or
 pull request. Only a human decides a requested approval, and it can be consumed once. Do not add
 an approval step to work the owner already requested.
 
@@ -24,20 +24,22 @@ carries the `text` the person reads, that text must be exactly what will be publ
 `content_sha256` must be the lower-case hex SHA-256 of the text's UTF-8 bytes, or the request is refused.
 With or without text, a `content_sha256` that isn't 64 lower-case hex characters is refused.
 
-A `support` approval is a Tico bug report for the Tico maintainers, and nothing reaches them without a
-person's yes: `hub support report --message "..."` drafts it (the `message`, its `content_sha256` and
-`include_ids`, whether the version and install ID go with it), and once a person approves it,
-`hub support send --approval <id>` sends it, filed as that person. Make the report self-contained: what
+A `support` approval is a Tico bug report for the Tico maintainers. `hub support report --message "..."` sends it at
+once, unless the team's owner turned off "Bots send reports to the Tico team without asking"; then it is drafted (the
+`message`, its `content_sha256` and `include_ids`, whether the version and install ID go with it), and once a person
+approves it, `hub support send --approval <id>` sends it, filed as that person. The command's output says which. Make the report self-contained: what
 failed, since when, the exact error, what you tried. No secrets, customer data or tokens. Don't hand the
 person a copy-and-paste task instead.
 
 ## Outbound sends
 
-While `outbound_send` is false in a bot's `bot.yaml`, messages to outsiders stay drafts. Attach the
-send-ready text and its destination to the task. A requested approval does not turn sending on.
-When `outbound_send: true`, send within the requested work, standing instructions and the bot's
-Tools; no separate approval is required for each message.
+Every email, including an internal message or calendar invitation, enters the shared sending policy and frozen queue.
+Use `mail send` or `POST /api/v2/email/sends`; a generic `kind=send` approval request is refused. The effective company,
+inbox and bot policy decides whether it asks, sends on its own, or never sends. Never also blocks approved mail.
+An approval card binds the complete MIME, exact To/Cc/Bcc and attachment bytes, and approval requires loading its
+frozen preview. An in-chat instruction counts only after an authorized person sees that send and explicitly approves
+that exact pending send. Existing approvals created before the queue migration retain their original scope.
 
-Internal messages and calendar invitations need no approval. Calendar actions must follow the
-team's scheduling rules and any configured attendee restriction. An invitation does not authorize
-unrelated messages, spending or commitments.
+Calendar events are created silently. Their invitations enter the same queue after the conference link is ready and
+include the join URL and event details. Calendar actions also follow the team's scheduling and attendee rules.
+An invitation does not authorize unrelated messages, spending or commitments.

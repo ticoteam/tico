@@ -6,7 +6,9 @@ Run rows are kept 30 days (`automations.prune` drops only their step detail), so
 `automation_runs` directly. The system jobs Tico runs on its own timers record their runs in `system_runs`
 (backend/system_routines.py), not here; their read-only built-in automations (`tico.builtin.job.<key>`, the
 migration's mirrors) read them from there. A quiet run that repeats its job's last result is folded into that row, so a
-system job counts one run per row, with `count` the runs folded into it."""
+system job counts one run per row, with `count` the runs folded into it. The Maintenance run (backend/maintenance.py)
+keeps its own run log, `maintenance_runs`; anyone signed in sees it, as GET /api/v2/maintenance does, so its runs are
+listed and counted here under the list's Maintenance row (ui/app/automations-maintenance.js)."""
 import json
 from datetime import timedelta
 
@@ -19,18 +21,21 @@ KINDS = ("message", "task_received", "schedule", "webhook", "listening", "event"
 STATUSES = {"done": ("ok", "empty", "skipped"), "ok": ("ok", "empty", "skipped"), "failed": ("failed",),
             "waiting": ("waiting",), "running": ("queued", "running"), "held": ("held",)}
 JOB_PREFIX = "tico.builtin.job."
+TASK_RULE = "tico.builtin.task_rule"   # a task rule's read-only mirror (redesign_migration `_builtins`)
 SYSTEM_RUN = "sys_"          # a system job's run id, so it never meets an automation run's
+MAINT = "maintenance"        # the Maintenance row's id and the run's owner: Tico itself
+MAINT_RUN = "mnt_"           # a Maintenance run's id here
 IDS_MAX = 500
 STEP_WORDS = {"filter": "Filter", "decide": "Decide", "llm": "LLM", "find": "Find", "bot_turn": "Bot turn",
               "paths": "Paths", "action": "Action"}
 DONE_WORDS = {"archive": "Archived", "leave_for_you": "Left for you", "draft_reply": "Draft reply",
               "send_reply": "Replied", "create_task": "Task created", "label": "Labeled", "forward": "Forwarded",
               "wake_bot": "Bot woken", "note": "Noted", "post_update": "Update posted", "call_webhook": "Webhook called",
-              "assign": "Assigned"}
+              "assign": "Assigned", "unsubscribe": "Unsubscribed"}
 ACTION_WORDS = {"archive": "Archive", "leave_for_you": "Leave for you", "draft_reply": "Draft reply",
                 "send_reply": "Send reply", "create_task": "Create task", "label": "Label", "forward": "Forward",
                 "wake_bot": "Wake a bot", "note": "Note", "post_update": "Post update", "call_webhook": "Call a webhook",
-                "assign": "Assign"}
+                "assign": "Assign", "unsubscribe": "Unsubscribe"}
 
 
 def window(rng):
@@ -43,14 +48,36 @@ def window(rng):
 
 
 def system_key(flow):
-    """The system job a read-only built-in shows, else None."""
+    """The `system_runs` job a read-only built-in shows, else None: a system job's key, or a task rule's id (each task
+    rule records its runs under its id, backend/task_rules.py `tick`)."""
+    if not flow.get("readonly"):
+        return None
     name = str((flow.get("trigger") or {}).get("name") or "")
-    return name[len(JOB_PREFIX):] if flow.get("readonly") and name.startswith(JOB_PREFIX) else None
+    if name.startswith(JOB_PREFIX):
+        return name[len(JOB_PREFIX):]
+    source = flow.get("source") if isinstance(flow.get("source"), dict) else {}
+    if name == TASK_RULE and source.get("kind") == "task_rule" and source.get("id"):
+        return str(source["id"])
+    return None
+
+
+def hidden_jobs(c, settings):
+    """The system jobs that cannot do anything on this install (system_routines `not_applying`): their mirrors are left
+    out of the list, the runs and the counts until the feature they need is set up. None for `settings`: none hidden."""
+    if settings is None:
+        return set()
+    from . import system_routines as SR
+    return SR.not_applying(c, settings)
+
+
+def shown(flow, hidden):
+    """Whether an automation is listed: not the mirror of a job `hidden_jobs` names."""
+    return not hidden or system_key(flow) not in hidden
 
 
 def kind_of(flow):
-    """The trigger as the page groups it: its type, or `system` for Tico's own jobs (their mirrors, the Health
-    Monitor, and a job that became a real automation, Stale ticket review)."""
+    """The trigger as the page groups it: its type, or `system` for Tico's own jobs (their mirrors, the task rules'
+    mirrors, the Health Monitor)."""
     trigger = flow.get("trigger") or {}
     if flow.get("builtin") and (system_key(flow) or trigger.get("name") == "tico.builtin.health"
                                 or (flow.get("source") or {}).get("kind") == "system_job"):
@@ -59,8 +86,8 @@ def kind_of(flow):
 
 
 def system_jobs(c, settings=None):
-    """{job key: {schedule, on, next, last}}: each system job's schedule in words and its newest run, read once for a
-    list of their mirrors."""
+    """{job key: {schedule, on, next, last}}: each system job's and task rule's schedule in words and its newest run,
+    read once for a list of their mirrors."""
     from datetime import datetime, timezone
     from . import system_routines as SR
     if not H._has_table(c, "system_runs"):
@@ -79,6 +106,17 @@ def system_jobs(c, settings=None):
         out[job.key] = {"schedule": SR.schedule_words(job.key, cfg) if timed else job.schedule,
                         "on": cfg["on"] if cfg else True, "next": SR._stamp(following) if following else None,
                         "last": _system_last(row) if row else None}
+    if H._has_table(c, "task_rules"):
+        from . import task_rules
+        for rule in c.execute("SELECT id, enabled, preset, daily_at FROM task_rules").fetchall():
+            cfg, row = task_rules.config(rule), last.get(rule["id"])
+            try:
+                following = SR.next_due(cfg, H.parse_ts(row["started_at"]) if row else None, now) if cfg["on"] else None
+                schedule = SR.PRESETS[cfg["preset"]][0].format(at=cfg["daily_at"] or "")
+            except Exception:  # noqa: BLE001 - a rule saved with a preset this release does not know
+                following, schedule = None, None
+            out[rule["id"]] = {"schedule": schedule, "on": cfg["on"], "next": SR._stamp(following) if following else None,
+                               "last": _system_last(row) if row else None}
     return out
 
 
@@ -91,14 +129,16 @@ def _system_last(row):
             "finished_at": row["finished_at"]}
 
 
-def visible(c, who):
-    """(row, flow) of every automation `who` may see, newest first; one org chart for the lot."""
+def visible(c, who, settings=None):
+    """(row, flow) of every automation `who` may see, newest first; one org chart for the lot. With `settings`, the
+    mirror of a system job that cannot run here is left out (`hidden_jobs`)."""
     from . import automations as AU
     chart = AU.Chart(c) if who.role in ("human", "bot") else None
+    hidden = hidden_jobs(c, settings)
     out = []
     for r in c.execute("SELECT * FROM automations WHERE deleted_at IS NULL ORDER BY created_at DESC").fetchall():
         flow = AU.flow_of(r)
-        if AU.may_change(c, who, {**flow, "readonly": False}, chart):
+        if shown(flow, hidden) and AU.may_change(c, who, {**flow, "readonly": False}, chart):
             out.append((dict(r), flow))
     return out
 
@@ -221,6 +261,24 @@ def system_row(run, row):
             "step_count": None, "count": run["runs"] or 1}
 
 
+def maint_row(run):
+    status = _system_status(run)
+    return {"id": MAINT_RUN + run["id"], "automation_id": MAINT, "automation_name": "Maintenance", "trigger": "system",
+            "owner_id": "tico", "version": 1, "trigger_ref": run["trigger"], "started_at": run["started_at"],
+            "finished_at": run["finished_at"], "status": status, "cost": run["cost_usd"] or 0,
+            "started_by": "Run now" if run["trigger"] == "run_now" else "Scheduled",
+            "outcome": str(run["result"] or ("Done" if status == "ok" else "Failed" if status == "failed" else "Running"))[:140],
+            "step_count": None, "count": 1}
+
+
+def _maint_shown(c, trigger="", owner="", ids=""):
+    """Whether the Maintenance run's log is in a listing narrowed by trigger, owner and ids."""
+    kinds = {k for k in str(trigger or "").split(",") if k}
+    wanted = {i for i in str(ids or "").split(",") if i}
+    return (H._has_table(c, "maintenance_runs") and (not kinds or "system" in kinds)
+            and (not owner or owner == "tico") and (not wanted or MAINT in wanted))
+
+
 def system_runs_of(c, key, limit, before=""):
     """One system job's runs as an automation's run log shows them (GET /{id}/runs on its mirror)."""
     at = None
@@ -255,14 +313,14 @@ def _cursor(before):
     return started, rid.removeprefix(SYSTEM_RUN)
 
 
-def runs(c, who, rng="1h", status="", trigger="", owner="", ids="", limit=50, before=""):
+def runs(c, who, rng="1h", status="", trigger="", owner="", ids="", limit=50, before="", settings=None):
     """Runs across what `who` may see, newest first: `next` is the `before` for the page after."""
     from . import automations as AU
     _, since, _, _ = window(rng)
     if status and status not in STATUSES:
         raise Problem("invalid", "status is one of " + ", ".join(STATUSES), 422)
     limit, at = max(1, min(int(limit), 100)), _cursor(before)
-    picked = _pick(visible(c, who), trigger, owner, ids)
+    picked = _pick(visible(c, who, settings), trigger, owner, ids)
     by_id = {r["id"]: (r, f) for r, f in picked}
     jobs = {key: (r, f) for r, f in picked if (key := system_key(f))}
     page_at = " AND (started_at<? OR (started_at=? AND id<?))" if at else ""
@@ -281,11 +339,17 @@ def runs(c, who, rng="1h", status="", trigger="", owner="", ids="", limit=50, be
         found += [("s", r) for r in c.execute(
             "SELECT * FROM system_runs WHERE started_at>=? AND job IN (SELECT value FROM json_each(?))" + where + page_at
             + " ORDER BY started_at DESC, id DESC LIMIT ?", (since, json.dumps(list(jobs)), *marks, limit + 1)).fetchall()]
+    if status not in ("waiting", "held") and _maint_shown(c, trigger, owner, ids):
+        where = {"done": " AND ok=1 AND finished_at IS NOT NULL", "ok": " AND ok=1 AND finished_at IS NOT NULL",
+                 "failed": " AND finished_at IS NOT NULL AND ok=0", "running": " AND finished_at IS NULL"}.get(status, "")
+        found += [("m", r) for r in c.execute(
+            "SELECT * FROM maintenance_runs WHERE started_at>=?" + where + page_at
+            + " ORDER BY started_at DESC, id DESC LIMIT ?", (since, *marks, limit + 1)).fetchall()]
     found.sort(key=lambda x: (x[1]["started_at"], x[1]["id"]), reverse=True)
     more = len(found) > limit
     found = found[:limit]
-    out = [run_row(r, *by_id[r["automation_id"]]) if src == "a" else system_row(r, jobs[r["job"]][0])
-           for src, r in found]
+    out = [run_row(r, *by_id[r["automation_id"]]) if src == "a" else system_row(r, jobs[r["job"]][0]) if src == "s"
+           else maint_row(r) for src, r in found]
     shown, cut = AU.page(out, limit, 0, AU.RUN_BYTES)
     nxt = None
     if (more or cut is not None) and shown:
@@ -294,11 +358,11 @@ def runs(c, who, rng="1h", status="", trigger="", owner="", ids="", limit=50, be
     return {"runs": shown, "next": nxt, "since": since}
 
 
-def stats(c, who, rng="1h"):
+def stats(c, who, rng="1h", settings=None):
     """Per automation `who` may see that ran in the range: runs, failed, cost and its buckets oldest first; the
     totals the same way. An automation with no run in the range is left out."""
     now, since, width, n = window(rng)
-    rows = visible(c, who)
+    rows = visible(c, who, settings)
     seen = {r["id"] for r, _ in rows}
     jobs = {key: r["id"] for r, f in rows if (key := system_key(f))}
     per = {}
@@ -342,6 +406,11 @@ def stats(c, who, rng="1h"):
                     buckets[b] = buckets.get(b, 0) + 1
             for b, m in buckets.items():
                 add(jobs[r["job"]], b, m, 0 if r["ok"] else m, (r["cost_usd"] or 0) * m / len(times))
+    if _maint_shown(c):
+        for r in c.execute("SELECT CAST((julianday(substr(started_at,1,23)) - julianday(?)) * 86400.0 / ? AS INTEGER) AS b, "
+                           "COUNT(*) AS n, SUM(finished_at IS NOT NULL AND ok=0) AS f, SUM(cost_usd) AS cost "
+                           "FROM maintenance_runs WHERE started_at>=? GROUP BY b", (since[:23], width, since)):
+            add(MAINT, r["b"], r["n"], r["f"] or 0, r["cost"])
     totals = {"runs": 0, "failed": 0, "cost": 0.0, "buckets": [{"ok": 0, "failed": 0} for _ in range(n)]}
     for s in per.values():
         s["cost"] = round(s["cost"], 6)
@@ -370,7 +439,7 @@ def install(app, store, auth):
         who = request.state.identity
         with store.read() as c:
             auth.domain(who)
-            return runs(c, who, range, status, trigger, owner, ids, limit, before)
+            return runs(c, who, range, status, trigger, owner, ids, limit, before, store.settings)
 
     @app.get("/api/v2/automations/stats")
     def automations_stats(request: Request, range: str = "1h"):  # noqa: A002
@@ -379,4 +448,4 @@ def install(app, store, auth):
         who = request.state.identity
         with store.read() as c:
             auth.domain(who)
-            return stats(c, who, range)
+            return stats(c, who, range, store.settings)

@@ -14,7 +14,8 @@ from clients.manifest import tools_of
 from clients.routines import DEFAULT_ZONE, validate_schedules
 from . import people as P
 from .scheduler import next_due, stamp
-from .store import H, Problem, encode
+from .store import H, Problem
+from . import bot_settings as BS
 
 DEFAULT_TEXT = "Run this scheduled routine."
 # Every active bot looks at its own open tasks once a day, staggered across
@@ -231,7 +232,7 @@ def set_declared_mailbox(c, bot, address):
     address = str(address or "").strip().lower()
     if not MAILBOX.fullmatch(address):
         raise Problem("mailbox", "That is not an email address", 422)
-    found = c.execute("SELECT config FROM bot_config WHERE bot=?", (bot,)).fetchone()
+    found = c.execute(BS.ONE_SQL, (bot,)).fetchone()
     if not found:
         raise Problem("not_found", "Bot not found", 404)
     config = json.loads(found["config"] or "{}")
@@ -243,7 +244,8 @@ def set_declared_mailbox(c, bot, address):
         gmail["identity"] = address
     config.pop("access", None)
     config["tools"] = tools
-    c.execute("UPDATE bot_config SET config=?,revision=revision+1 WHERE bot=?", (encode(config), bot))
+    BS.write(c, bot, config)
+    c.execute("UPDATE bot_config SET revision=revision+1 WHERE bot=?", (bot,))
 
 
 def message_bot_mailboxes(c, roster=None):
@@ -252,17 +254,26 @@ def message_bot_mailboxes(c, roster=None):
     person's own email only when the bot declares none. People who left (hidden) and archived bots are
     skipped, and so is a mailbox that two bots share (listed once)."""
     roster = roster if roster is not None else _roster(c)
+    people = [p for p in (roster or {}).get("people") or [] if p.get("inbox_bot") and not p.get("hidden")]
+    # The bots and their declarations are read together, a fixed number of statements however long the roster is.
+    named = sorted({p["inbox_bot"] for p in people})
+    states, configs = {}, {}
+    for start in range(0, len(named), 500):
+        part = named[start:start + 500]
+        ids = sorted({H.actor_id(bot) for bot in part})
+        marks = ",".join("?" * len(ids))
+        states.update((r["id"], r["state"]) for r in c.execute(f"SELECT id,state FROM bots WHERE id IN ({marks})", ids))
+        marks = ",".join("?" * len(part))
+        configs.update((r["bot"], r["config"]) for r in c.execute(
+            f"SELECT bc.bot AS bot, {BS.CONFIG} AS config FROM bot_config bc {BS.JOIN} WHERE bc.bot IN ({marks})", part))
     out, seen = [], set()
-    for person in (roster or {}).get("people") or []:
-        bot = person.get("inbox_bot")
-        if not bot or person.get("hidden"):
+    for person in people:
+        bot = person["inbox_bot"]
+        state = states.get(H.actor_id(bot))
+        if state is None or state == "archived":
             continue
-        row = H.bot(c, bot)
-        if not row or row["state"] == "archived":
-            continue
-        found = c.execute("SELECT config FROM bot_config WHERE bot=?", (bot,)).fetchone()
         try:
-            config = json.loads(found["config"] or "{}") if found else {}
+            config = json.loads(configs.get(bot) or "{}")
         except ValueError:
             config = {}
         declared = declared_mailbox(config)
@@ -287,67 +298,17 @@ def person_for_mailbox(address, boxes, roster):
     return (P.person(found["person_id"], roster) if found else None) or P.person_by_email(wanted, roster)
 
 
-def reads_reports(config, address):
-    """Whether the bot's `gmail` entry for `address` sets `org_read: true`, the owner's deliberate choice to read the
-    mail of the people below that mailbox's person. Off unless that entry says so; being an `inbox_bot` is not enough."""
-    address = str(address or "").strip().lower()
-    return bool(address) and any(
-        isinstance(entry, dict) and str(entry.get("service", "")).lower() == "gmail"
-        and str(entry.get("identity") or "").strip().lower() == address and entry.get("org_read") is True
-        for entry in tools_of(config) or [])
-
-
 def token_mailboxes(c, bot, roster=None):
-    """The mailboxes a message bot's turn may ask its runner for a token for: its person's (the mailbox the
-    bot declares, else their email), and the people below them in the org chart only when that mailbox's
-    `gmail` entry sets `org_read: true`. Any other bot gets none."""
-    roster = roster if roster is not None else _roster(c)
-    who = P.inbox_person(bot, roster)
-    if not who:
-        return []
-    boxes = message_bot_mailboxes(c, roster)
-    found = c.execute("SELECT config FROM bot_config WHERE bot=?", (bot,)).fetchone()
-    try:
-        config = json.loads(found["config"] or "{}") if found else {}
-    except ValueError:
-        config = {}
-    people = P.below(who["id"], roster) if reads_reports(config, mailbox_of(who, boxes)) else [who]
-    out = []
-    for person in people:
-        addr = mailbox_of(person, boxes)
-        if addr and "@" in addr and addr not in out:
-            out.append(addr)
-    return out
+    """The mailboxes a bot's turn may ask its runner for a token for: every mailbox it holds a level on
+    (backend/mailbox_access.py), a person's message bot included only through its grant. `roster` is unused (kept
+    for callers that pass it)."""
+    from . import mailbox_access
+    return [box["address"] for box in mailbox_access.mailboxes_for(c, "bot:" + str(bot))]
 
 
-def inbox_of(bot, config, roster):
-    """Mailboxes this bot may read: declared gmail access plus a roster `inbox_bot`'s own mailbox. The people
-    below a mailbox's person are added only for a gmail entry with `org_read: true`."""
-    mailboxes, seen = [], set()
-    org_read = False
-
-    def add(addr):
-        addr = str(addr or "").strip().lower()
-        if addr and "@" in addr and addr not in seen:
-            seen.add(addr)
-            mailboxes.append(addr)
-
-    who = P.inbox_person(bot, roster)
-    own = declared_mailbox(config) or str((who or {}).get("email") or "").strip().lower()
-    if who:
-        add(own)
-    for entry in tools_of(config) or []:
-        if not isinstance(entry, dict) or str(entry.get("service", "")).lower() != "gmail":
-            continue
-        add(entry.get("identity"))
-        if entry.get("org_read") is True:
-            org_read = True
-            identity = str(entry.get("identity") or "").strip().lower()
-            person = P.person_by_email(identity, roster) or (who if who and identity == own else None)
-            if person:
-                for addr in P.mailboxes_below(person["id"], roster):
-                    add(addr)
-    return {"mailboxes": mailboxes, "org_read": org_read}
+def inbox_of(c, bot):
+    """The mailboxes a bot works on, as {"mailboxes": [address]}: the ones it holds a level on."""
+    return {"mailboxes": token_mailboxes(c, bot)}
 
 
 def retire_open_tasks_checks(c, at=None):

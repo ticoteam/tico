@@ -66,8 +66,8 @@ async function auStatsLoad(state) {
   try { s = await get('/v2/automations/stats?range=' + range); }
   catch (e) { s = {error: e.message}; }
   if (AU !== state || state.range !== range) return;
-  state.stats = {range, at: Date.now(), error: s.error || '', n: s.totals?.buckets?.length || 0,
-                 per: new Map((s.automations || []).map(x => [x.id, x]))};
+  const n = s.totals?.buckets?.length || 0, per = new Map((s.automations || []).map(x => [x.id, x]));
+  state.stats = {range, at: Date.now(), error: s.error || '', n, per};
   auDrawTable();
 }
 function auAllQuery() {
@@ -305,7 +305,9 @@ function auOverviewClick(t) {
   if ((m = t.closest('[data-agrp]'))) { const k = m.dataset.agrp; if (AU.closed.has(k)) AU.closed.delete(k); else AU.closed.add(k); auDrawTable(); return true; }
   if ((m = t.closest('[data-all-more]'))) { void auAllLoad(AU, true); return true; }
   if ((m = t.closest('tr[data-arun]'))) {
-    if (!m.dataset.arun.startsWith('sys_')) AU.openRun = m.dataset.arun;
+    const id = m.dataset.arun;
+    if (id.startsWith('mnt_')) AU.mtOpenRun = id.slice(4);
+    else if (!id.startsWith('sys_')) AU.openRun = id;
     location.hash = auHref(m.dataset.aid, 'runs');
     return true;
   }

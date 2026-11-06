@@ -8,9 +8,9 @@ repository a new bot starts from — AGENT.md, bot.yaml, playbooks, knowledge, m
 this installation calls itself and this bot.
 
 Pure: no HTTP, no database, no launchd. The runner materializes the two bootstrap bots before
-their first turn (runner/catalog_job.py); BotOps materializes every other chosen bot inside a turn
+their first turn (runner_support/catalog_job.py); BotOps materializes every other chosen bot inside a turn
 with `hub bot create` (clients/hubcli.py), and an operator can do it by hand with
-`scripts/tico -e <env> bot create <slug> --template <template>`. `TICO_CATALOG_DIR` overrides
+`scripts/tico-computer -e <env> bot create <slug> --template <template>`. `TICO_CATALOG_DIR` overrides
 where the cards are read from, so a test or a second checkout can hold its own.
 """
 
@@ -21,6 +21,7 @@ import os
 import re
 import shutil
 import subprocess
+import tempfile
 import unicodedata
 from datetime import date
 from pathlib import Path
@@ -28,6 +29,7 @@ from pathlib import Path
 import yaml
 
 from clients.manifest import OLD_REPO_PREFIX, REPO_PREFIX, folder_dir, manifest_path, repo_dir
+from clients.repo_safety import contained_file, outside_installation
 
 ROOT = Path(__file__).resolve().parents[1]
 CARD = "card.yaml"
@@ -152,7 +154,7 @@ def apply_mailbox(target, instructions):
         except (UnicodeError, OSError):
             continue
         if "{{mailbox}}" in text:
-            path.write_text(text.replace("{{mailbox}}", box))
+            _write(target, path, text.replace("{{mailbox}}", box))
 
 
 def identify(text, slug, display_name):
@@ -233,6 +235,7 @@ def materialize(template, slug, workspace, names, answers, display_name=None, in
     # A bot made before `bot-<slug>` keeps its `emp-<slug>` folder, and is never overwritten by a second one.
     elif target.exists() or (Path(workspace).expanduser() / (OLD_REPO_PREFIX + slug)).exists():
         target = repo_dir(workspace, slug)
+    target = outside_installation(target)
     if target.exists():
         raise ValueError(f"{target} already exists; a bot repository is never overwritten")
     names, answers = dict(names or {}), dict(answers or {})
@@ -253,17 +256,17 @@ def materialize(template, slug, workspace, names, answers, display_name=None, in
             continue                # a binary or unreadable file is copied as it is
         filled = fill(text, values)
         if filled != text:
-            path.write_text(filled)
+            _write(target, path, filled)
     manifest = manifest_path(target)
     if manifest.is_file():
-        manifest.write_text(identify(manifest.read_text(), slug, values["bot_name"]))
+        _write(target, manifest, identify(manifest.read_text(), slug, values["bot_name"]))
     (target / "knowledge").mkdir(exist_ok=True)
-    (target / "knowledge" / "company.md").write_text(company_page(names, answers))
+    _write(target, target / "knowledge" / "company.md", company_page(names, answers))
     if instructions:
-        (target / "AGENT.md").write_text(str(instructions).rstrip("\n") + "\n")
+        _write(target, target / "AGENT.md", str(instructions).rstrip("\n") + "\n")
     if state:
         page = target / "state.md"
-        page.write_text(set_sections(page.read_text() if page.is_file() else "# State\n", state))
+        _write(target, page, set_sections(page.read_text() if page.is_file() else "# State\n", state))
     apply_mailbox(target, instructions)
     if (card(template, directory) or {}).get("bootstrap"):
         _stamp(target, template, {rel: _digest(text) for rel, text in _product_files(source, template, values, directory)})
@@ -290,8 +293,28 @@ def _product_files(source, template, values, directory=None):
                 continue
 
 
+def _write(target, path, text):
+    """Rename a new file in a checked directory; opening the old destination would follow its link."""
+    path = contained_file(target, path)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path = contained_file(target, path)
+    tmp = None
+    try:
+        with tempfile.NamedTemporaryFile(mode="w", encoding="utf-8", dir=path.parent, delete=False) as handle:
+            tmp = Path(handle.name)
+            handle.write(text)
+        if path.is_file():
+            tmp.chmod(path.stat().st_mode & 0o777)
+        else:
+            tmp.chmod(0o644)
+        os.replace(tmp, path)
+    finally:
+        if tmp is not None:
+            tmp.unlink(missing_ok=True)
+
+
 def _stamp(target, template, files):
-    (Path(target) / STAMP).write_text(json.dumps({"template": template, "files": files}, indent=1, sort_keys=True) + "\n")
+    _write(target, Path(target) / STAMP, json.dumps({"template": template, "files": files}, indent=1, sort_keys=True) + "\n")
 
 
 def refresh(template, target, names, display_name=None, directory=None):
@@ -302,7 +325,7 @@ def refresh(template, target, names, display_name=None, directory=None):
     A repository from before the stamp counts as never refreshed: every product-owned file is brought up once. What was
     there stays in the repository's history. The bot's own files, and the playbooks it wrote itself, are never touched.
     """
-    target = Path(target)
+    target = outside_installation(target)
     if not (card(template, directory) or {}).get("bootstrap") or not (target / "AGENT.md").is_file():
         return []
     names = dict(names or {})
@@ -312,8 +335,12 @@ def refresh(template, target, names, display_name=None, directory=None):
         recorded = (json.loads((target / STAMP).read_text()) or {}).get("files") or {}
     except (OSError, ValueError):
         recorded = {}
+    products = list(_product_files(template_dir(template, directory), template, values, directory))
+    # Check every path before any commit or write, even if its digest says it needs no refresh.
+    for rel in [*(rel for rel, _ in products), STAMP]:
+        contained_file(target, target / rel)
     files, changed = dict(recorded), []
-    for rel, text in _product_files(template_dir(template, directory), template, values, directory):
+    for rel, text in products:
         digest = _digest(text)
         if recorded.get(rel) == digest:
             continue
@@ -322,8 +349,7 @@ def refresh(template, target, names, display_name=None, directory=None):
             if dest.is_file():
                 # What the bot had, saved in the history before the release's text replaces it.
                 commit_paths(target, [rel], f"Keep the bot's version of {rel} before the refresh")
-            dest.parent.mkdir(parents=True, exist_ok=True)
-            dest.write_text(text)
+            _write(target, dest, text)
             changed.append(rel)
         files[rel] = digest
     if files != recorded:

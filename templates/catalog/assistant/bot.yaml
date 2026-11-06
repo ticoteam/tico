@@ -12,9 +12,14 @@ max_run_minutes: 60
 outbound_send: false
 
 # Routines this bot owns. The server runs the clock and turns each occurrence into a task.
-# Start with none. A routine earns its place after a human has read a week of the same work done
-# by hand. See docs/routines.md for the shape.
-routines: []
+# The daily sweep runs once a day for the whole Assistant, not per person: it tidies each person's
+# queue and files one card per person. See docs/routines.md for the shape.
+routines:
+  - id: daily-sweep
+    title: Daily sweep of each person's queue
+    cron: "0 8 * * *"                 # runs in the company's timezone (no timezone: the team default applies)
+    template: playbooks/daily-sweep.md
+    labels: [priority:p2]
 
 # What this bot may touch. Not listed is not allowed. `env:` names the variable a credential
 # arrives in, never the value. Store a Credential in Tico and grant it to this bot;

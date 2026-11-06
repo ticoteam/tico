@@ -6,6 +6,7 @@ const LIVE_API = '/v2/live-meetings';
 
 function liveMeetingsStop() {
   if (!LIVE_MEETINGS) return;
+  liveScreenStop(LIVE_MEETINGS);
   clearInterval(LIVE_MEETINGS.poll);
   clearTimeout(LIVE_MEETINGS.refreshTimer);
   for (const source of LIVE_MEETINGS.sources.values()) source.close();
@@ -15,8 +16,10 @@ function liveMeetingsStop() {
 window.liveMeetingsStop = liveMeetingsStop;
 
 async function pageLiveMeetings(selected = '') {
+  const pinned = typeof selected === 'string' ? selected : selected.pinned || '';
+  liveMeetingsStop();
   meetStop();
-  const state = LIVE_MEETINGS = {list: [], selected, detail: null, sources: new Map(), cursor: {},
+  const state = LIVE_MEETINGS = {list: [], selected: pinned, pinned, detail: null, sources: new Map(), cursor: {},
     poll: 0, refreshTimer: 0, candidates: [], busy: false, drafts: {}, paintedId: '',
     listVersion: 0, detailVersions: {}, chatSending: new Set()};
   $('#main').innerHTML = `<section class="live-page">
@@ -73,14 +76,14 @@ async function liveLoad(state) {
     const response = await get(LIVE_API);
     if (LIVE_MEETINGS !== state || state.busy || version !== state.listVersion) return;
     state.list = response.meetings || [];
-    if (state.selected && !state.list.some(meeting => meeting.id === state.selected)) {
+    if (!state.pinned && state.selected && !state.list.some(meeting => meeting.id === state.selected)) {
       // Ended meetings leave Live now; keep their transcript open until the user returns to Meetings.
       const selected = state.selected;
       try { state.detail = await get(LIVE_API + '/' + encodeURIComponent(selected)); }
       catch { if (state.selected === selected) { state.selected = ''; state.detail = null; } }
       if (LIVE_MEETINGS !== state || state.busy || version !== state.listVersion || state.selected !== selected) return;
     }
-    if (!state.selected && state.list.length) state.selected = state.list[0].id;
+    if (!state.pinned && !state.selected && state.list.length) state.selected = state.list[0].id;
     if (LIVE_MEETINGS !== state || state.busy || version !== state.listVersion) return;
     livePaintList(state);
     if (state.selected) await liveLoadDetail(state, state.selected);
@@ -97,7 +100,7 @@ function livePaintList(state) {
     <b>${esc(meeting.title)}</b>${meeting.client === 'tico-recorder' ? '<small>From Tico Recorder</small>' : ''}<span class="live-state ${esc(meeting.state)}">${esc(meeting.state)}</span>
     <small>${meeting.seq || 0} transcript chunks · ${meeting.bots?.length || 0} bots</small></button>`).join('');
   host.querySelectorAll('[data-live-id]').forEach(button => button.onclick = () => {
-    state.selected = button.dataset.liveId; state.detail = null; livePaintList(state); void liveLoadDetail(state, state.selected);
+    location.hash = '#/meetings/live/' + encodeURIComponent(button.dataset.liveId);
   });
 }
 
@@ -112,10 +115,12 @@ function liveCaptureDraft(state, id) {
   const prior = state.drafts[id] || {};
   const chat = host.querySelector('#live-chat-form input[name="text"]');
   const picker = host.querySelector('#live-bot-picker select[name="bots"]');
+  const peoplePicker = host.querySelector('#live-people-picker select[name="people"]');
   const active = host.contains(document.activeElement) ? document.activeElement : null;
   const draft = {...prior};
   if (chat) draft.chatText = chat.value;
   if (picker) draft.selectedBots = [...picker.selectedOptions].map(option => option.value);
+  if (peoplePicker) draft.selectedPeople = [...peoplePicker.selectedOptions].map(option => option.value);
   if (active?.dataset.liveFocusKey) {
     draft.focusKey = active.dataset.liveFocusKey;
     if (typeof active.selectionStart === 'number') {
@@ -132,6 +137,10 @@ function liveRestoreDraft(host, draft) {
   if (picker && Array.isArray(draft.selectedBots)) {
     const selected = new Set(draft.selectedBots);
     for (const option of picker.options) option.selected = selected.has(option.value);
+  }
+  const peoplePicker = host.querySelector('#live-people-picker select[name="people"]');
+  if (peoplePicker && Array.isArray(draft.selectedPeople)) {
+    for (const option of peoplePicker.options) option.selected = draft.selectedPeople.includes(option.value);
   }
   if (draft.focusKey) {
     const target = host.querySelector(`[data-live-focus-key="${draft.focusKey}"]`);
@@ -160,23 +169,34 @@ function livePaintDetail(state, detail) {
   const me = liveIsHumanJoined(detail);
   const active = detail.state !== 'ended';
   const controls = detail.owner_actor === `human:${S.me?.id || ''}`;
+  const actor = `human:${S.me?.id || ''}`;
+  const canAdd = controls || me || (detail.access || []).some(person => person.actor === actor);
+  const people = [...new Map([...(detail.humans || []), ...(detail.access || [])].map(person => [person.actor, person])).values()];
+  const peopleCandidates = (S.people || []).filter(person => !person.hidden
+    && `human:${person.id}` !== detail.owner_actor
+    && !people.some(member => member.actor === `human:${person.id}`));
   // A candidate's `id` is what the meeting's bots name; a server from before ids sent only `slug`, which held it.
   const candidates = state.candidates.map(bot => ({...bot, id: bot.id ?? bot.slug})).filter(bot => !(detail.bots || []).some(attached => attached.bot === bot.id));
   const chunks = detail.chunks || [], chat = detail.chat || [], notices = detail.notices || [], router = detail.router || {windows: [], turns: []};
   // A teammate is named by the server (`name`); a bot the viewer's roster lacks would otherwise show its id.
-  const teammates = (detail.bots || []).map(attached => `<span class="live-teammate">${esc(attached.name)}${me && active ?
+  const teammates = (detail.bots || []).map(attached => `<span class="live-teammate">${esc(attached.name)}${active && (controls || attached.joined_by === actor) ?
     ` <button class="ghost" type="button" data-live-bot-remove="${esc(attached.bot)}" aria-label="Remove ${esc(attached.name)} from this meeting">Remove</button>` : ''}</span>`).join(' ');
-  host.innerHTML = `<article class="live-card">
+  host.innerHTML = `<div class="live-screen" hidden><div class="muted">Screen · updates a few times a second</div><img alt="Shared screen" style="display:block;max-width:100%;max-height:65vh;margin:auto"></div><article class="live-card">
     <header class="live-card-head"><div><h2>${esc(detail.title)}</h2>${detail.client === 'tico-recorder' ? '<p class="muted">From Tico Recorder</p>' : ''}<span class="live-state ${esc(detail.state)}">${esc(detail.state)}</span></div>
       <div class="live-controls">${controls && detail.state === 'live' ? '<button class="ghost" data-live-control="pause">Pause</button><button class="ghost" data-live-control="disconnect">Disconnect</button>' : ''}
       ${controls && detail.state === 'paused' ? '<button class="ghost" data-live-control="resume">Resume</button>' : ''}
       ${controls && active ? '<button class="danger" data-live-control="end">End</button>' : ''}
       ${controls && detail.state === 'ended' && !detail.imported_meeting_id ? '<button class="primary" data-live-finalize>Finalize transcript</button>' : ''}</div></header>
     ${!me ? '<p class="live-join"><button class="primary" data-live-join>Join to chat</button></p>' : ''}
-    ${me && active ? `<form class="live-bot-picker" id="live-bot-picker"><label>Attach teammates<select name="bots" data-live-focus-key="bot-picker" multiple size="${Math.min(5, Math.max(2, candidates.length))}" aria-label="Choose visible bots">
+    ${canAdd && active ? `<form class="live-bot-picker" id="live-people-picker"><label>Add people<select name="people" data-live-focus-key="people-picker" multiple size="${Math.min(5, Math.max(2, peopleCandidates.length))}" aria-label="Choose people">
+      ${peopleCandidates.map(person => `<option value="${esc(person.id)}">${esc(person.name || person.id)}</option>`).join('')}
+      </select></label><button class="ghost" type="submit"${peopleCandidates.length ? '' : ' disabled'}>Add people</button></form>` : ''}
+    ${canAdd && active ? `<form class="live-bot-picker" id="live-bot-picker"><label>Attach teammates<select name="bots" data-live-focus-key="bot-picker" multiple size="${Math.min(5, Math.max(2, candidates.length))}" aria-label="Choose visible bots">
       ${candidates.map(bot => `<option value="${esc(bot.id)}">${esc(bot.name)}${bot.team ? ' · ' + esc(bot.team) : ''}</option>`).join('')}
       </select></label><button class="ghost" type="submit"${candidates.length ? '' : ' disabled'}>Attach bots</button></form>` : ''}
-    <div class="live-members"><span>People: ${(detail.humans || []).map(person => esc(person.name || person.actor)).join(', ') || '—'}</span>
+    <div class="live-members"><span>People: ${people.map(person => `<span class="live-teammate">${esc(person.name || person.actor)}${active && controls && person.actor !== actor ?
+      ` <button class="ghost" type="button" data-live-person-remove="${esc(person.actor.slice(6))}" aria-label="Remove ${esc(person.name || person.actor)} from this meeting">Remove</button>`
+      : active && !controls && person.actor === actor ? ' <button class="ghost" type="button" data-live-leave>Leave</button>' : ''}</span>`).join(' ') || '—'}</span>
       <span>Teammates: ${teammates || '—'}</span></div>
     <section class="live-section"><h3>Transcript</h3><div class="live-transcript" aria-live="polite">${chunks.length ? chunks.map(chunk => `<p id="live-chunk-${chunk.seq}" data-seq="${chunk.seq}"><small>#${chunk.seq}${chunk.revision > 1 ? ' · revision ' + chunk.revision : ''} · ${esc(chunk.speaker || 'Speaker')}</small><span>${esc(chunk.text)}</span></p>`).join('') : '<p class="muted">Waiting for transcript text from Recorder.</p>'}</div></section>
     <section class="live-section"><h3>Chat</h3><div class="live-chat" aria-live="polite">${chat.length || notices.length ? liveChatRows(chat, notices) : '<p class="muted">No chat messages yet.</p>'}</div>
@@ -202,6 +222,13 @@ function livePaintDetail(state, detail) {
   host.querySelector('#live-bot-picker')?.addEventListener('submit', event => {
     event.preventDefault(); const bots = [...event.currentTarget.elements.bots.selectedOptions].map(option => option.value);
     void liveAttach(state, detail.id, bots);
+  });
+  host.querySelectorAll('[data-live-person-remove]').forEach(button => button.onclick = () =>
+    void liveAction(state, detail.id, '/access', {remove: [button.dataset.livePersonRemove]}, 'Removed from this meeting.'));
+  host.querySelector('[data-live-leave]')?.addEventListener('click', () => void liveLeave(state, detail));
+  host.querySelector('#live-people-picker')?.addEventListener('submit', event => {
+    event.preventDefault(); const add = [...event.currentTarget.elements.people.selectedOptions].map(option => option.value);
+    void liveAction(state, detail.id, '/access', {add}, 'People added.');
   });
   host.querySelector('#live-chat-form')?.addEventListener('submit', event => {
     event.preventDefault(); const input = event.currentTarget.elements.text;
@@ -256,18 +283,31 @@ async function liveLoadDetail(state, id) {
     if (LIVE_MEETINGS !== state || state.busy || state.selected !== id || state.detailVersions[id] !== version) return;
     state.detail = detail;
     livePaintDetail(state, detail);
-  } catch (error) { liveStatus(state, error.message); }
+    if (detail.state === 'live') liveScreenStart(state, id);
+    else liveScreenStop(state);
+  } catch (error) {
+    if (LIVE_MEETINGS !== state || state.selected !== id) return;
+    if ([403,404].includes(error.status)) {
+      liveScreenStop(state);
+      state.detail = null;
+      $('.live-detail').innerHTML = '<div class="empty">This meeting is not available to you, or it does not exist.</div>';
+    }
+    liveStatus(state, error.message);
+  }
 }
 
 function liveSubscribe(state, id, after) {
   if (state.sources.has(id) || !window.EventSource) return;
   const source = new EventSource(API + LIVE_API + '/' + encodeURIComponent(id) + '/events?after=' + encodeURIComponent(state.cursor[id] ?? after));
   state.sources.set(id, source);
-  const types = ['meeting.state', 'meeting.joined', 'meeting.chunk', 'meeting.chunk_corrected', 'meeting.chat',
+  const types = ['meeting.state', 'meeting.access', 'meeting.joined', 'meeting.chunk', 'meeting.chunk_corrected', 'meeting.chat',
     'meeting.bot_joined', 'meeting.bot_left', 'meeting.bot_turn', 'meeting.bot_turn_claimed', 'meeting.bot_turn_skipped',
     'meeting.bot_turn_failed', 'meeting.bot_turn_waiting', 'meeting.bot_turn_deferred', 'meeting.bot_turn_retried',
     'meeting.bot_reply', 'meeting.router', 'meeting.finalized'];
+  source.addEventListener('expired', () => { liveScreenStop(state); source.close(); void liveLoadDetail(state, id); });
   for (const type of types) source.addEventListener(type, event => {
+    if (type === 'meeting.state') liveScreenStop(state);
+    // Access changes revalidate on the next frame request; they must not blank a static slide.
     state.cursor[id] = Number(event.lastEventId) || state.cursor[id] || 0;
     clearTimeout(state.refreshTimer);
     state.refreshTimer = setTimeout(() => { if (LIVE_MEETINGS === state) void liveLoad(state); }, 150);
@@ -285,6 +325,23 @@ const liveJoin = (state, id) => liveAction(state, id, '/join', {}, 'You joined t
 const liveControl = (state, id, action) => liveAction(state, id, '/control', {action},
   action === 'end' ? 'Meeting ended.' : ({pause: 'Meeting paused.', disconnect: 'Recorder disconnected; meeting paused.', resume: 'Meeting resumed.'}[action] || 'Meeting updated.'));
 const liveAttach = (state, id, bots) => liveAction(state, id, '/bots', {bots}, 'Teammates attached to this meeting.');
+// Leaving answers {left: true}. A private meeting is then out of reach, so the list opens instead of a 403.
+async function liveLeave(state, detail) {
+  if (state.busy) return;
+  try {
+    state.busy = true;
+    await post(LIVE_API + '/' + encodeURIComponent(detail.id) + '/access', {remove: [S.me?.id || '']});
+    state.busy = false;
+    delete state.drafts[detail.id];
+    if (detail.visibility !== 'team' && state.selected === detail.id) {
+      liveScreenStop(state); state.sources.get(detail.id)?.close(); state.sources.delete(detail.id);
+      state.pinned = state.selected = state.paintedId = ''; state.detail = null;
+    }
+    liveStatus(state, 'You left the meeting.');
+    await liveLoad(state);
+  } catch (error) { liveStatus(state, error.message); }
+  finally { state.busy = false; }
+}
 const liveFinalize = (state, id) => liveAction(state, id, '/finalize', {}, 'Transcript saved to Meetings.');
 
 async function liveRemoveBot(state, id, bot) {
@@ -326,4 +383,90 @@ async function liveChat(state, id, text, input) {
       if (sendButton) sendButton.disabled = false;
     }
   }
+}
+
+
+// Frames have a separate bounded request loop; transcript refreshes never fetch media.
+function liveScreenClear(state) {
+  if (state.screen?.url) URL.revokeObjectURL(state.screen.url);
+  if (state.screen) { state.screen.url = ''; state.screen.after = ''; }
+  const host = $('.live-screen');
+  if (host) { host.hidden = true; host.querySelector('img')?.removeAttribute('src'); }
+}
+function liveScreenStop(state) {
+  state.screen?.abort.abort();
+  state.screen?.request?.abort();
+  state.screen?.statusRequest?.abort();
+  clearTimeout(state.screen?.statusTimer);
+  if (state.screen?.visibility) document.removeEventListener('visibilitychange', state.screen.visibility);
+  clearTimeout(state.screen?.timer);
+  liveScreenClear(state);
+  state.screen = null;
+}
+function liveScreenStart(state, id) {
+  if (state.screen?.id === id) {
+    const host = $('.live-screen');
+    if (host && state.screen.url && !document.hidden) { host.hidden = false; host.querySelector('img').src = state.screen.url; }
+    return;
+  }
+  liveScreenStop(state);
+  const screen = state.screen = {id, after: '', url: '', generation: '', abort: new AbortController(), running:false};
+  const current = () => LIVE_MEETINGS === state && state.screen === screen && !screen.abort.signal.aborted;
+  const next = async () => {
+    if (!current() || screen.running || !screen.generation) return;
+    if (document.hidden) { liveScreenClear(state); screen.after = ''; return; }
+    screen.running = true;
+    screen.request = new AbortController();
+    let timeout = setTimeout(() => screen.request.abort(), 4000);
+    let delay = 2000;
+    try {
+      const response = await fetch(API + LIVE_API + '/' + encodeURIComponent(id) + '/screen/frame?wait=2&after=' + encodeURIComponent(screen.after),
+        {credentials: 'same-origin', cache: 'no-store', signal: screen.request.signal});
+      if (!current()) return;
+      if (response.status === 200) {
+        clearTimeout(timeout);
+        const size = Number(response.headers.get('Content-Length')) || 1_000_000;
+        timeout = setTimeout(() => screen.request.abort(), Math.min(15000, 4000 + size / 65536 * 1000));
+        const version = response.headers.get('X-Screen-Version') || '';
+        const blob = await response.blob();
+        if (!current() || document.hidden || !screen.generation || !version.startsWith(screen.generation + ':')) { screen.after = ''; delay = 30; return; }
+        liveScreenClear(state);
+        screen.url = URL.createObjectURL(blob);
+        screen.after = version;
+        const host = $('.live-screen');
+        if (host) { host.hidden = false; host.querySelector('img').src = screen.url; }
+        delay = 30;
+      } else if (response.status === 204) delay = 30;
+      else { liveScreenClear(state); screen.after = ''; if ([401,403,404,410].includes(response.status)) screen.generation = ''; }
+    } catch { liveScreenClear(state); screen.after = ''; }
+    finally {
+      clearTimeout(timeout); screen.running = false;
+      if (current() && !document.hidden && screen.generation) screen.timer = setTimeout(next, delay);
+    }
+  };
+  // Stop/revocation remains visible even while a large image downloads on a slow connection.
+  const status = async () => {
+    if (!current() || document.hidden) return;
+    screen.statusRequest = new AbortController();
+    const timeout = setTimeout(() => screen.statusRequest.abort(), 2000);
+    try {
+      const response = await fetch(API + LIVE_API + '/' + encodeURIComponent(id) + '/screen/status',
+        {credentials:'same-origin', cache:'no-store', signal:screen.statusRequest.signal});
+      if (!current()) return;
+      if (response.ok) {
+        const value = await response.json();
+        if (screen.generation && screen.generation !== value.generation) { screen.request?.abort(); liveScreenClear(state); }
+        screen.generation = value.generation || '';
+        if (!screen.running && screen.generation) void next();
+      } else { screen.generation = ''; screen.request?.abort(); liveScreenClear(state); }
+    } catch { screen.generation = ''; screen.request?.abort(); liveScreenClear(state); }
+    finally { clearTimeout(timeout); if (current() && !document.hidden) screen.statusTimer = setTimeout(status, screen.generation ? 1000 : 10000); }
+  };
+  screen.visibility = () => {
+    clearTimeout(screen.timer); clearTimeout(screen.statusTimer);
+    if (document.hidden) { screen.request?.abort(); screen.statusRequest?.abort(); liveScreenClear(state); screen.after = ''; }
+    else { void status(); if (!screen.running) void next(); }
+  };
+  document.addEventListener('visibilitychange', screen.visibility);
+  void status();
 }

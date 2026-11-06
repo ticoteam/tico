@@ -388,10 +388,10 @@ process, so restart the server after a change.
   A bind mount (`./company-registry:/data/registry`) in a `compose.override.yaml` also works and
   lets `git pull` be the deploy.
 - Native Linux checkout: copy the files into the environment's `registry/` directory (`TICO_REGISTRY_DIR`), then run
-  `scripts/tico -e <slug> server restart` as the service user. The systemd user unit is `tico-<slug>-api.service`
+  `scripts/tico-computer -e <slug> server restart` as the service user. The systemd user unit is `tico-<slug>-api.service`
   (`tico-api.service` without a named environment). A cloud Docker installation uses the Docker steps above.
 - Local environment on a Mac: the environment's `registry/` folder
-  ([environments.md](environments.md)), then `scripts/tico -e <slug> server restart`.
+  ([environments.md](environments.md)), then `scripts/tico-computer -e <slug> server restart`.
 
 **Deploying to the runners.** A runner needs three things and no query files:
 

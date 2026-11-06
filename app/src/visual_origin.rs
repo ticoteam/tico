@@ -10,6 +10,7 @@ pub struct VisualOrigin {
 }
 
 impl VisualOrigin {
+    #[cfg(test)]
     pub fn new(hub: &Url, raw: &str) -> Option<Self> {
         Self::with_files(hub, raw, "")
     }
@@ -23,6 +24,11 @@ impl VisualOrigin {
             return None;
         }
         Some(Self { hub: hub.clone(), origin, files })
+    }
+
+    /// Whether this allowance belongs to the page on `hub`.
+    pub fn serves(&self, hub: Option<&Url>) -> bool {
+        hub == Some(&self.hub)
     }
 
     pub fn permits(&self, hub: Option<&Url>, url: &Url) -> bool {
@@ -65,7 +71,7 @@ fn https_origin(url: &Url) -> bool {
 pub fn is_visual_navigation(allowed: Option<&Url>, url: &Url) -> bool {
     let Some(allowed) = allowed.filter(|origin| https_origin(origin)) else { return false };
     if url.scheme() != "https" || url.origin() != allowed.origin() || !url.username().is_empty()
-        || url.password().is_some() || url.query().is_some() || url.fragment().is_some() {
+        || url.password().is_some() || url.query().is_some() || !view_marker(url.fragment()) {
         return false;
     }
     let Some(token) = url.path().strip_prefix("/visuals/") else { return false };
@@ -75,6 +81,19 @@ pub fn is_visual_navigation(allowed: Option<&Url>, url: &Url) -> bool {
     base64url(body) && mac.len() == 43 && base64url(mac)
 }
 
+/// No fragment, or the frame's view marker (ui/app/pages.js pageViewSrc, read by backend/visuals.py's reporter):
+/// `tico-view=card|full&tico-size=small|medium|large|full`. A fragment never reaches the server; only this one is
+/// allowed so the allowance stays a fixed shape.
+fn view_marker(fragment: Option<&str>) -> bool {
+    let Some(fragment) = fragment else { return true };
+    let Some((view, size)) = fragment.strip_prefix("tico-view=").and_then(|rest| rest.split_once("&tico-size=")) else { return false };
+    match view {
+        "card" => matches!(size, "small" | "medium" | "large"),
+        "full" => size == "full",
+        _ => false,
+    }
+}
+
 /// Tico file hosting's signed link to the cleaned copy of a page or SVG (backend/tico_storage.py `_signed`, checked
 /// by infra/files-edge/request.js): `/visuals/<2 hex>/<64 hex>` whose name starts with its folder, and a query of
 /// exactly `e`, `k` and `s`. The server's own `/visuals/<token>` route sends a frame here after checking the reader.
@@ -82,7 +101,7 @@ pub fn is_visual_navigation(allowed: Option<&Url>, url: &Url) -> bool {
 pub fn is_files_visual_navigation(allowed: Option<&Url>, url: &Url) -> bool {
     let Some(allowed) = allowed.filter(|origin| https_origin(origin)) else { return false };
     if url.scheme() != "https" || url.origin() != allowed.origin() || !url.username().is_empty()
-        || url.password().is_some() || url.fragment().is_some() {
+        || url.password().is_some() || !view_marker(url.fragment()) {
         return false;
     }
     let Some((folder, name)) = url.path().strip_prefix("/visuals/").and_then(|rest| rest.split_once('/')) else { return false };
@@ -138,6 +157,10 @@ mod tests {
         let allowance = VisualOrigin::new(&hub, ASSETS).unwrap();
         let valid = Url::parse(&format!("{ASSETS}/visuals/{TOKEN}")).unwrap();
         assert!(allowance.permits(Some(&hub), &valid));
+        for marker in ["tico-view=card&tico-size=small", "tico-view=card&tico-size=medium", "tico-view=card&tico-size=large",
+                       "tico-view=full&tico-size=full"] {
+            assert!(allowance.permits(Some(&hub), &Url::parse(&format!("{ASSETS}/visuals/{TOKEN}#{marker}")).unwrap()), "{marker}");
+        }
         assert!(!allowance.permits(None, &valid));
         assert!(!allowance.permits(Some(&Url::parse("https://other.example.com/").unwrap()), &valid));
         assert!(!is_visual_navigation(None, &valid));
@@ -149,6 +172,11 @@ mod tests {
             format!("https://user@team.files.example.com/visuals/{TOKEN}"),
             format!("{ASSETS}/visuals/{TOKEN}?download=1"),
             format!("{ASSETS}/visuals/{TOKEN}#part"),
+            format!("{ASSETS}/visuals/{TOKEN}#"),
+            format!("{ASSETS}/visuals/{TOKEN}#tico-view=card&tico-size=full"),
+            format!("{ASSETS}/visuals/{TOKEN}#tico-view=full&tico-size=small"),
+            format!("{ASSETS}/visuals/{TOKEN}#tico-view=card&tico-size=small&x=1"),
+            format!("{ASSETS}/visuals/{TOKEN}#tico-size=small&tico-view=card"),
             format!("{ASSETS}/other/{TOKEN}"),
             format!("{ASSETS}/visuals/{TOKEN}/other"),
             format!("{ASSETS}/visuals/{TOKEN}.extra"),
@@ -175,6 +203,8 @@ mod tests {
         let link = format!("{FILES}/visuals/ab/{NAME}?e=1793250000&k=k1&s={SIG}");
         let hosted = VisualOrigin::with_files(&hub, "", FILES).unwrap();
         assert!(hosted.permits(Some(&hub), &Url::parse(&link).unwrap()));
+        assert!(hosted.permits(Some(&hub), &Url::parse(&format!("{link}#tico-view=card&tico-size=medium")).unwrap()), "a redirect keeps the marker");
+        assert!(!hosted.permits(Some(&hub), &Url::parse(&format!("{link}#part")).unwrap()));
         assert!(hosted.permits(Some(&hub), &Url::parse(&format!("{FILES}/visuals/ab/{NAME}?s={SIG}&k=k1&e=1")).unwrap()));
         assert!(!hosted.permits(Some(&Url::parse("https://other.example.com/").unwrap()), &Url::parse(&link).unwrap()));
         // The visual origin's token route is not the files address's, nor the other way round.

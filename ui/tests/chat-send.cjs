@@ -39,7 +39,7 @@ const launch = () => chromium.launch({headless: true, channel: process.env.TICO_
         sends.push(text);
         const message = {id: 'm' + sends.length, sender_id: 'human:ana', body: text, created_at: new Date().toISOString()};
         thread.push(message);
-        return json({message, fast: true});
+        return json({message});
       }
       return json(unrouted(p));
     });

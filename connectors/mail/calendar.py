@@ -12,10 +12,13 @@ The rules are not ours to soften (policies/shared-rules.md):
 """
 
 from datetime import datetime, timedelta
+import copy
 import hashlib
 import re
+import time
+import uuid
 
-from . import DEFAULT_TZ, Failure, zone
+from . import DEFAULT_TZ, Failure, Refused, zone
 from .gmail import gmail_hint
 from . import oauth
 
@@ -26,6 +29,17 @@ DEFAULT_DAYS = 7
 STEP_MINUTES = 15                                       # slots start on the quarter hour
 MAX_CALENDARS = 50
 MAX_EVENTS_PER_CALENDAR = 100
+
+
+class ConferencePending(Failure):
+    """No invitation has been frozen; the caller can retry conference preparation."""
+
+    def __init__(self, msg, hint="", status=None, event=None, request_id=""):
+        super().__init__(msg, hint, status)
+        self.event = copy.deepcopy(event)
+        self.request_id = request_id
+
+
 MEETING_URL = re.compile(
     r"https?://(?:meet\.google\.com|(?:[a-z0-9-]+\.)?zoom\.us|teams\.microsoft\.com|"
     r"(?:[a-z0-9-]+\.)?webex\.com)/[^\s<>\"]+", re.I)
@@ -39,6 +53,7 @@ class Calendar:
     def __init__(self, service, mailbox):
         self.service, self.mailbox = service, mailbox
         self.granted = getattr(service, "_tico_granted", None)   # a connected account's scopes; None: service account
+        self.company = None          # the company's What Tico may do for this run (oauth.company_allows); None: unset
 
     def _exec(self, request, what):
         try:
@@ -65,7 +80,7 @@ class Calendar:
                 break
         return ids or ["primary"]
 
-    def busy(self, start, end, calendar_ids=None):
+    def busy(self, start, end, calendar_ids=None, exclude_hold=None):
         """[(start, end)] across every calendar, merged, in the mailbox's timezone."""
         ids = calendar_ids or self.calendar_ids()
         if not ids:
@@ -80,6 +95,9 @@ class Calendar:
             if data.get("groups") and any(g.get("errors") for g in data["groups"].values()):
                 raise Failure("A calendar group could not be checked.")
             for cid in batch:
+                if exclude_hold and cid in ("primary", self.mailbox):
+                    spans.extend(self.event_busy(cid, start, end, exclude_hold=exclude_hold))
+                    continue
                 result = calendars.get(cid)
                 if not isinstance(result, dict) or result.get("errors") or "busy" not in result:
                     spans.extend(self.event_busy(cid, start, end))
@@ -94,7 +112,7 @@ class Calendar:
                         raise Failure(f"Invalid busy interval returned for calendar {cid}.")
         return merge(spans)
 
-    def event_busy(self, calendar_id, start, end):
+    def event_busy(self, calendar_id, start, end, exclude_hold=None):
         """Some subscribed calendars lack freebusy support. Read their actual event instances.
 
         A failed fallback still raises; missing access never becomes an empty busy list.
@@ -122,6 +140,10 @@ class Calendar:
                         bounds.append(iso(value, zone(part.get("timeZone") or str(start.tzinfo))))
                     if bounds[0] >= bounds[1]:
                         raise ValueError("invalid event")
+                    holds = ([exclude_hold] if isinstance(exclude_hold, dict) else exclude_hold) or []
+                    if any(event.get("id") == hold["id"] and tuple(bounds) == hold["bounds"]
+                           and hold.get("event") and unchanged_hold(event, hold["event"], hold.get("conference_request_id")) for hold in holds):
+                        continue
                     spans.append(tuple(bounds))
                 except (KeyError, TypeError, ValueError):
                     raise Failure(f"Invalid event interval in calendar {calendar_id}.")
@@ -159,6 +181,7 @@ class Calendar:
                      send_updates="none", calendar_id="primary", status="tentative",
                      event_id=""):
         oauth.require(self.granted, "calendar-write", self.mailbox, "add calendar events")
+        oauth.company_allows(self.company, "calendar-write", self.mailbox, "add calendar events")
         body = {"summary": summary, "description": description,
                 "start": {"dateTime": start.isoformat()},
                 "end": {"dateTime": end.isoformat()},
@@ -169,7 +192,7 @@ class Calendar:
         try:
             return self._exec(
                 self.service.events().insert(calendarId=calendar_id, body=body,
-                                             sendUpdates=send_updates), "events.insert")
+                                             sendUpdates="none"), "events.insert")
         except Failure as exc:
             is_409 = exc.status == 409 or "409" in str(exc) or "already exists" in str(exc).lower()
             if not event_id or not is_409:
@@ -178,21 +201,76 @@ class Calendar:
                 self.service.events().get(calendarId=calendar_id, eventId=event_id),
                 "events.get after duplicate")
 
-    def create_scheduling_event(self, start, end, attendee, event_id, description, summary="Meeting"):
+    def create_scheduling_event(self, start, end, attendee, event_id, description, summary="Meeting", on_insert=None):
         oauth.require(self.granted, "calendar-write", self.mailbox, "add calendar events")
+        oauth.company_allows(self.company, "calendar-write", self.mailbox, "add calendar events")
         body = {"id": event_id, "summary": summary, "status": "confirmed",
                 "start": {"dateTime": start.isoformat(), "timeZone": "America/Los_Angeles"},
                 "end": {"dateTime": end.isoformat(), "timeZone": "America/Los_Angeles"},
                 "attendees": [{"email": attendee}], "description": description,
                 "conferenceData": {"createRequest": {"requestId": event_id,
                     "conferenceSolutionKey": {"type": "hangoutsMeet"}}}}
-        return self._exec(self.service.events().insert(calendarId="primary", body=body,
-                            sendUpdates="all", conferenceDataVersion=1), "events.insert")
+        event = self._exec(self.service.events().insert(calendarId="primary", body=body,
+                            sendUpdates="none", conferenceDataVersion=1), "events.insert")
+        snapshot = copy.deepcopy(event)
+        if on_insert:
+            on_insert(copy.deepcopy(snapshot))
+        return self.ready_conference(event, snapshot=snapshot)
+
+    def scheduling_hold(self, event_id, start, end, attendee, description, summary, snapshot=None, request_id=""):
+        """Only the insert response can establish the material of a reusable hold."""
+        if not snapshot:
+            raise Refused("Review the calendar hold: its original snapshot is unavailable.")
+        try:
+            event = self._exec(self.service.events().get(calendarId="primary", eventId=event_id), "events.get hold")
+        except Failure as exc:
+            if exc.status == 404:
+                return None
+            raise
+        try:
+            matches = (unchanged_hold(event, snapshot, request_id) and event["id"] == event_id
+                       and tuple(iso(event[k]["dateTime"]) for k in ("start", "end")) == (start, end)
+                       and event.get("status") == "confirmed")
+        except (KeyError, ValueError, TypeError):
+            matches = False
+        if not matches:
+            raise Refused("Review the calendar hold: it changed after creation.")
+        return copy.deepcopy(event)
+
+    def reuse_scheduling_event(self, snapshot, request_id="", on_request=None):
+        oauth.require(self.granted, "calendar-write", self.mailbox, "reuse calendar events")
+        oauth.company_allows(self.company, "calendar-write", self.mailbox, "reuse calendar events")
+        snapshot = copy.deepcopy(snapshot)
+        event = self._exec(self.service.events().get(calendarId="primary", eventId=snapshot["id"]), "events.get reused hold")
+        self.verify_hold(event, snapshot, request_id)
+        request = (event.get("conferenceData") or {}).get("createRequest") or {}
+        if (request.get("status") or {}).get("statusCode") == "failure":
+            if not event.get("etag"):
+                raise Refused("Review the calendar hold: it has no version for retrying its conference.")
+            request_id = uuid.uuid4().hex
+            # The connector records its own request ID; a provider read never replaces the insert snapshot.
+            if on_request:
+                on_request(request_id)
+            conference = copy.deepcopy(snapshot.get("conferenceData") or {})
+            conference["createRequest"]["requestId"] = request_id
+            conference["createRequest"].pop("status", None)
+            patch = self.service.events().patch(calendarId="primary", eventId=event["id"],
+                body={"conferenceData": conference}, sendUpdates="none", conferenceDataVersion=1)
+            patch.headers["If-Match"] = event["etag"]
+            event = self._exec(patch, "events.patch retry conference")
+            self.verify_hold(event, snapshot, request_id)
+        return self.ready_conference(event, snapshot=snapshot, request_id=request_id)
+
+    def verify_hold(self, event, snapshot, request_id=""):
+        if not unchanged_hold(event, snapshot, request_id):
+            raise ConferencePending("Review the calendar hold: it changed after creation.", status=409,
+                                    event=snapshot, request_id=request_id)
 
     def create_hub_event(self, start, end, summary, attendees, event_id, description="",
                          add_meet=True):
         """Create the deterministic event claimed from the Hub connector queue."""
         oauth.require(self.granted, "calendar-write", self.mailbox, "add calendar events")
+        oauth.company_allows(self.company, "calendar-write", self.mailbox, "add calendar events")
         body = {"id": event_id, "summary": summary, "description": description,
                 "status": "confirmed",
                 "start": {"dateTime": start.isoformat()},
@@ -203,9 +281,27 @@ class Calendar:
             body["conferenceData"] = {"createRequest": {"requestId": event_id,
                 "conferenceSolutionKey": {"type": "hangoutsMeet"}}}
             kwargs["conferenceDataVersion"] = 1
-        return self._exec(self.service.events().insert(
+        event = self._exec(self.service.events().insert(
             calendarId="primary", body=body,
-            sendUpdates="all" if attendees else "none", **kwargs), "events.insert")
+            sendUpdates="none", **kwargs), "events.insert")
+        return self.ready_conference(event) if add_meet else event
+
+    def ready_conference(self, event, snapshot=None, request_id=""):
+        """Freeze invitations only after the asynchronous conference has a usable join URL."""
+        snapshot = copy.deepcopy(snapshot if snapshot is not None else event)
+        for attempt in range(16):
+            self.verify_hold(event, snapshot, request_id)
+            status = ((event.get("conferenceData") or {}).get("createRequest") or {}).get("status", {}).get("statusCode")
+            if status != "pending" and _meeting_url({"hangoutLink": event.get("hangoutLink"), "conferenceData": event.get("conferenceData")}):
+                return event
+            if attempt == 15 or status == "failure":
+                break
+            time.sleep(1)
+            try:
+                event = self._exec(self.service.events().get(calendarId="primary", eventId=event["id"]), "events.get conference")
+            except Failure as exc:
+                raise ConferencePending("Could not read the meeting link; retry this booking before sending its invitation.", status=503, event=snapshot, request_id=request_id) from exc
+        raise ConferencePending("The meeting link is not ready; retry this booking before sending its invitation.", status=503, event=snapshot, request_id=request_id)
 
     def get_event(self, event_id, calendar_id="primary"):
         """Get one normalized event by ID."""
@@ -217,12 +313,30 @@ class Calendar:
 
     def delete_event(self, event_id, calendar_id="primary"):
         oauth.require(self.granted, "calendar-write", self.mailbox, "delete calendar events")
+        oauth.company_allows(self.company, "calendar-write", self.mailbox, "delete calendar events")
         return self._exec(
             self.service.events().delete(calendarId=calendar_id, eventId=event_id,
                                          sendUpdates="none"), "events.delete")
 
 
 # ---------------------------------------------------------------- pure
+
+EVENT_METADATA = frozenset(("kind", "etag", "created", "updated", "htmlLink"))
+
+
+def unchanged_hold(event, snapshot, request_id=""):
+    def material(value, expected_request=""):
+        result = copy.deepcopy({key: part for key, part in value.items() if key not in EVENT_METADATA})
+        result.pop("hangoutLink", None)
+        conference = result.get("conferenceData") or {}
+        conference.pop("entryPoints", None)
+        request = conference.get("createRequest") or {}
+        request.pop("status", None)
+        if expected_request:
+            request["requestId"] = expected_request
+        return result
+    return material(event) == material(snapshot, request_id)
+
 
 def iso(text, tz=None):
     dt = datetime.fromisoformat(str(text).replace("Z", "+00:00"))

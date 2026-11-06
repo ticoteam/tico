@@ -146,8 +146,11 @@ CREATE INDEX IF NOT EXISTS sends_day ON sends(employee, mailbox, day);
 CREATE INDEX IF NOT EXISTS sends_recipient ON sends(mailbox, recipient);
 CREATE INDEX IF NOT EXISTS messages_push ON messages(pushed_at, mailbox);
 CREATE INDEX IF NOT EXISTS messages_epoch ON messages(mailbox, epoch);
+CREATE INDEX IF NOT EXISTS messages_from ON messages(mailbox, from_addr);
 CREATE INDEX IF NOT EXISTS judge_cache_expiry ON judge_cache(expires_at);
 CREATE INDEX IF NOT EXISTS mail_check_misses_employee ON mail_check_misses(employee, created);
+CREATE TABLE IF NOT EXISTS queued_drafts(mailbox TEXT NOT NULL, draft_id TEXT NOT NULL, send_id TEXT NOT NULL,
+ PRIMARY KEY(mailbox,draft_id));
 """
 
 
@@ -159,6 +162,8 @@ def connect(path=None):
     conn.execute("PRAGMA journal_mode=WAL")
     conn.execute("PRAGMA synchronous=NORMAL")
     conn.executescript(SCHEMA)
+    if "send_facts_json" not in {row[1] for row in conn.execute("PRAGMA table_info(messages)")}:
+        conn.execute("ALTER TABLE messages ADD COLUMN send_facts_json TEXT NOT NULL DEFAULT '{}'")
     conn.commit()
     return conn
 
@@ -386,6 +391,40 @@ def last_send_to(conn, mailbox, recipient):
     return (r["t"] or "") if r else ""
 
 
+def has_sent_to(conn, mailbox, address):
+    """Whether this mailbox has ever written to `address`, on any of its sends (every recipient, not only the first)
+    or in the synced copy of its own sent mail (To and Cc, in any thread; only messages with the SENT label, from the
+    mailbox, not deleted, so a draft or inbound mail with the owner's From does not count). Gmail is not called. The
+    synced copy holds the 90 days sync backfills, then follows history."""
+    box, who = str(mailbox or "").strip().lower(), str(address or "").strip().lower()
+    if not box or not who:
+        return False
+    if conn.execute("SELECT 1 FROM sends WHERE mailbox=? AND status!='failed' AND (lower(recipient)=? OR "
+                    "instr(',' || lower(recipients) || ',', ?) > 0) LIMIT 1",
+                    (box, who, "," + who + ",")).fetchone():
+        return True
+    needle = json.dumps(who)            # the address as a JSON string, so a substring of another address never matches
+    for row in conn.execute("SELECT to_json, cc_json, labels_json FROM messages WHERE mailbox=? AND lower(from_addr)=? "
+                            "AND deleted_at IS NULL AND instr(labels_json, ?) > 0 "
+                            "AND (instr(lower(to_json), ?) > 0 OR instr(lower(cc_json), ?) > 0)",
+                            (box, box, json.dumps("SENT"), needle, needle)).fetchall():
+        if "SENT" not in _json_strings(row["labels_json"]):     # the prefilter is loose; the label itself is exact
+            continue
+        for column in ("to_json", "cc_json"):
+            if who in {a.strip().lower() for a in _json_strings(row[column])}:
+                return True
+    return False
+
+
+def _json_strings(text):
+    """The strings of a JSON list column; anything else reads as an empty list."""
+    try:
+        value = json.loads(text or "[]")
+    except ValueError:
+        return []
+    return [a for a in value if isinstance(a, str)] if isinstance(value, list) else []
+
+
 def send_message_ids(conn, mailbox):
     """Gmail message ids already in the log, so a reconcile does not duplicate our own sends."""
     rows = conn.execute("SELECT message_id FROM sends WHERE mailbox=? AND message_id!=''",
@@ -476,6 +515,7 @@ def _message_values(mailbox, msg):
         "list_id": msg.get("list_id") or "",
         "is_internal": 1 if msg.get("is_internal") else 0,
         "has_unsubscribe": 1 if (msg.get("unsubscribe") or msg.get("has_unsubscribe")) else 0,
+        "send_facts_json": json.dumps(msg.get("send_facts") or {}, sort_keys=True),
     }
 
 
@@ -495,6 +535,7 @@ def _decode_message(row):
     d["body_truncated"] = bool(d.get("body_truncated"))
     d["is_internal"] = bool(d.get("is_internal"))
     d["has_unsubscribe"] = bool(d.get("has_unsubscribe"))
+    d["send_facts"] = json.loads(d.pop("send_facts_json", "{}") or "{}")
     d["id"] = d.get("msg_id")
     return d
 
@@ -520,7 +561,7 @@ def upsert_message(conn, mailbox, msg, when=None):
                             (mailbox, values["msg_id"])).fetchone()
     cols = ("thread_id", "epoch", "date", "from_addr", "from_header", "to_json",
             "cc_json", "subject", "snippet", "labels_json", "body", "body_truncated",
-            "attachments_json", "list_id", "is_internal", "has_unsubscribe")
+            "attachments_json", "list_id", "is_internal", "has_unsubscribe", "send_facts_json")
     args = [values[c] for c in cols]
     if existing:
         if _same_content(existing, values) and not existing["deleted_at"]:
@@ -529,7 +570,7 @@ def upsert_message(conn, mailbox, msg, when=None):
             "UPDATE messages SET thread_id=?, epoch=?, date=?, from_addr=?, from_header=?, "
             "to_json=?, cc_json=?, subject=?, snippet=?, labels_json=?, body=?, "
             "body_truncated=?, attachments_json=?, list_id=?, is_internal=?, "
-            "has_unsubscribe=?, updated_at=?, deleted_at=NULL, pushed_at=NULL "
+            "has_unsubscribe=?, send_facts_json=?, updated_at=?, deleted_at=NULL, pushed_at=NULL "
             "WHERE mailbox=? AND msg_id=?",
             args + [when, mailbox, values["msg_id"]])
         conn.commit()
@@ -537,9 +578,9 @@ def upsert_message(conn, mailbox, msg, when=None):
     conn.execute(
         "INSERT INTO messages (mailbox, msg_id, thread_id, epoch, date, from_addr, "
         "from_header, to_json, cc_json, subject, snippet, labels_json, body, "
-        "body_truncated, attachments_json, list_id, is_internal, has_unsubscribe, "
+        "body_truncated, attachments_json, list_id, is_internal, has_unsubscribe, send_facts_json, "
         "fetched_at, updated_at, deleted_at, pushed_at) "
-        "VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,NULL,NULL)",
+        "VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,NULL,NULL)",
         [mailbox, values["msg_id"]] + args + [when, when])
     conn.commit()
     return True
@@ -570,6 +611,48 @@ def unpushed(conn, mailbox=None, mailboxes=None, limit=500):
         args = args + list(mailboxes)
     sql += " ORDER BY mailbox, epoch, msg_id LIMIT ?"
     return [_decode_message(r) for r in conn.execute(sql, args + [int(limit or 500)]).fetchall()]
+
+
+def first_sent_epochs(conn, mailbox):
+    """{address: epoch of the first message the mailbox's owner sent it}, over To and Cc. Only mail the provider marks
+    SENT counts: a draft, or an inbound message that claims the owner's From, does not. Only the copy this database
+    holds (sync backfills 90 days, then follows history); deleted messages do not count."""
+    owner = str(mailbox or "").strip().lower()
+    first = {}
+    rows = conn.execute("SELECT epoch, to_json, cc_json, labels_json FROM messages WHERE mailbox=? AND from_addr=? "
+                        "AND deleted_at IS NULL AND labels_json LIKE '%\"SENT\"%'", (mailbox, owner)).fetchall()
+    for row in rows:
+        try:
+            labels = json.loads(row["labels_json"] or "[]")
+        except ValueError:
+            labels = []
+        if "SENT" not in (labels if isinstance(labels, list) else []):
+            continue
+        epoch = int(row["epoch"] or 0)
+        for column in ("to_json", "cc_json"):
+            try:
+                addresses = json.loads(row[column] or "[]")
+            except ValueError:
+                addresses = []
+            for address in addresses if isinstance(addresses, list) else []:
+                key = str(address or "").strip().lower()
+                if key and (key not in first or epoch < first[key]):
+                    first[key] = epoch
+    return first
+
+
+def annotate_known_senders(conn, rows):
+    """Set `known_sender` on each row: the mailbox's owner had sent mail to the row's sender before the row's own date.
+    The owner's sends are in the copy like any other mail, so one read per mailbox answers every row: no Gmail call
+    and no scan per message. Returns the rows."""
+    firsts = {}
+    for row in rows:
+        box = row["mailbox"]
+        if box not in firsts:
+            firsts[box] = first_sent_epochs(conn, box)
+        first = firsts[box].get(str(row.get("from_addr") or "").strip().lower())
+        row["known_sender"] = first is not None and first < int(row.get("epoch") or 0)
+    return rows
 
 
 def mark_pushed(conn, mailbox, msg_ids, when=None):

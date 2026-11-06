@@ -2,7 +2,7 @@
 (token saving, Dev 149).
 
 A plain message one bot sends another, a direct message or a task comment, starts no run. H.say writes it to
-its room quietly (`refs.quiet`, so store.QUEUE_TRIGGER queues no job) and marks it `refs.can_wait`; `hold` then
+its room quietly (`refs.quiet`, so enqueue queues no job) and marks it `refs.can_wait`; `hold` then
 leaves a quiet note linked to it, which the recipient's next run carries whatever starts it (execution.claim),
 in the order sent, and that run marks the message read. Only a message from a private thread waits for a run of its own
 there (threads.note_fits_run), which the recipient's next run starts. Nothing is dropped: a note whose carrying run fails
@@ -100,14 +100,15 @@ def continue_backlog(conn, bot, skip=()):
     marked carried; at most one such notice waits at a time. `skip`: notes that wait for a run in their own thread
     (threads.wake_note_threads), which another run here would not carry."""
     from . import hubdb as H
+    from . import task_quarantine
     skip = list(skip)
     other = f"AND n.id NOT IN ({','.join('?' * len(skip))}) " if skip else ""
     left = conn.execute(f"SELECT 1 FROM notes n WHERE n.to_actor=? AND n.message_id IS NOT NULL {other}AND "
-                        f"{H.NOTE_WAITING_SQL} LIMIT 1", ("bot:" + bot, *skip)).fetchone()
+                        f"{H.NOTE_WAITING_SQL} AND {task_quarantine.notes_free_sql()} LIMIT 1", ("bot:" + bot, *skip)).fetchone()
     if not left:
         return None
-    pending = conn.execute("SELECT 1 FROM jobs j JOIN messages m ON m.id=j.message_id WHERE j.bot_id=? "
-                           "AND j.state IN ('queued','leased') AND json_extract(m.refs,'$.wake')=?",
+    pending = conn.execute("SELECT 1 FROM jobs j JOIN message_refs m ON m.id=j.message_id WHERE j.bot_id=? "
+                           "AND j.state IN ('queued','leased') AND m.ref_wake=?",
                            (bot, BACKLOG)).fetchone()
     if pending:
         return None

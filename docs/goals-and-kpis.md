@@ -115,7 +115,7 @@ While a goal is overridden the Strategy Bot may *suggest* a different colour. Th
 applied. Done and dropped are always set by a human.
 
 Every colour is stored with who set it: `status_by`, and `status_source` (`auto` or `person`), in the goal and in every
-`goal_events` row.
+`status` row of its history (`history_events.data`).
 
 ## The Strategy Bot
 
@@ -299,9 +299,10 @@ edited or logged to.
 
 The goals tree is the main column; the Strategy Bot has the right rail (below the tree on narrow windows): one line on what it does (keeps KPIs current and each goal green, yellow or
 red; humans set the goals), its routines as the server has them (when each runs and when it next does, or paused), and its
-last run with the first line of its result. Nobody chats with the Strategy Bot directly, the owner included: ask your
-[Assistant](assistant.md#helpers-through-the-assistant) to change a goal, and it hands the Strategy Bot the work. A goal
-change stays the owner's to confirm. The tree is drawn again when a change is saved. **Open bot** goes to its page. If it is paused or not set up, the owner gets **Turn on** (`POST
+last run with the first line of its result. Nobody chats with the Strategy Bot directly, the owner included. To change one of your goals, ask your
+[Assistant](assistant.md#goals-agreed-in-words): it writes the change back to you in your chat and saves only on your
+plain yes. Colour, done or dropped and archive stay clicks on this page, not agreed in chat. The Strategy Bot's own
+suggestions come to you as proposals under **Needs you**. You confirm or reject each one on its card, or agree it in your [Assistant](assistant.md#goals-agreed-in-words) chat: your plain yes confirms it, and it leaves **Needs you**. The tree is drawn again when a change is saved. **Open bot** goes to its page. If it is paused or not set up, the owner gets **Turn on** (`POST
 /api/v2/goal-manager/turn-on`, the same steps as on update); with no computer or model yet, the panel says so.
 
 One tree, built like the team chart: the team on top, then every human and every bot that is not archived, indented

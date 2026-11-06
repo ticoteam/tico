@@ -45,10 +45,9 @@ TABLE_FUNCTIONS = {"json_each", "json_tree"}
 SAFE_COLUMNS = {"slack_posts": {"message_id", "bot", "state", "attempts", "next_attempt_at",
                                 "slack_ts", "created_at", "updated_at"}}
 # Columns nobody reads through SQL. Tables not named in `guarded` (credentials, credential_keys,
-# credential_grants, credential_uses, idempotency, runners, enrollments, session_epochs, bot_session_epochs, settings_changes,
+# credential_grants, credential_uses, idempotency, runners, runner_states, enrollments, session_epochs, bot_session_epochs, settings_changes,
 # backup_verified_blobs, _litestream_*, sqlite_* except sqlite_master) are denied outright.
-HIDDEN = {"task_requesters": {"token_hash"}, "bots": {"token_hash", "cwd", "thread_id"}, "attempts": {"token_hash"},
-          "service_jobs": {"token_hash"}}
+HIDDEN = {"task_requesters": {"token_hash"}, "attempts": {"token_hash"}, "service_jobs": {"token_hash"}}
 # Columns read as an expression over the caller's own views: a column naming a task the caller may not read gives
 # its id to nobody. A bot's claim limit (bot_control.claim_task) on such a task reads '': a limit is on, as
 # GET /api/v2/bots says with `claim_scoped` and no `claim_task`.
@@ -93,7 +92,9 @@ def teammate_masks(unseen, me, inner=None, names=None, bots=()):
                                  for column in ("actor", "added_by")}
     if people and inner is not None:
         out["tasks"] = {column: masked(column, party("source.id")) for column in ("owner_id", "requester_id", "closed_by_id")}
-        out["task_events"] = {"actor": masked("actor", party("source.task_id"))}
+        # A task's history row names its actor as the task does; the other subjects are everyone's to read.
+        out["history_events"] = {"actor_id": (f"CASE WHEN source.subject_type='task' THEN "
+                                              f"{masked('actor_id', party('source.subject_id'))} ELSE source.actor_id END")}
         out["events"] = {"actor": masked("actor", f"({member('source.target')} OR {party('source.target')})")}
         # As REST and the stream say it (teammate_access.Known): the message stays, its author is not named.
         out["messages"] = {column: masked(column, member("source.conversation_id")) for column in ("sender_id", "recipient_id")}
@@ -102,6 +103,7 @@ def teammate_masks(unseen, me, inner=None, names=None, bots=()):
         out["message_mentions"] = {"actor": masked("actor", member(said))}
     if people or groups:
         out["bot_config"] = bot_config_masks(people, bare, groups)
+        out["bot_settings"] = bot_settings_masks(people, bare, groups)
     if people:
         out["conversations"] = {"participants": (
             "CASE WHEN source.participants IS NULL OR NOT json_valid(source.participants) THEN NULL "
@@ -119,8 +121,7 @@ def teammate_masks(unseen, me, inner=None, names=None, bots=()):
 
 def bot_config_masks(people, bare, groups):
     """bot_config columns less the people (`human:<id>` in `people`, bare ids in `bare`) and groups the caller may
-    not see: ids read '', owner lists drop them, and the configuration loses a `team`, `reports_to` or `owner_id`
-    naming one."""
+    not see: ids read '' and owner lists drop them."""
     nobody = "(SELECT NULL WHERE 0)"              # an IN list that matches nothing
     actors, ids, teams = qlist(people) if people else nobody, qlist(bare) if bare else nobody, \
         qlist(groups) if groups else nobody
@@ -136,12 +137,20 @@ def bot_config_masks(people, bare, groups):
         out[column] = (f"CASE WHEN source.{column} IS NULL OR NOT json_valid(source.{column}) THEN source.{column} "
                        f"ELSE (SELECT json_group_array(value) FROM json_each(source.{column}) "
                        f"WHERE value NOT IN {ids} AND value NOT IN {actors}) END")
-    out["config"] = (
-        "CASE WHEN source.config IS NULL OR NOT json_valid(source.config) THEN source.config "
-        "ELSE json_patch(source.config, (SELECT json_group_object(key, NULL) FROM json_each(source.config) "
-        f"WHERE (key='team' AND value IN {teams}) OR (key IN ('reports_to','operator') "
-        f"AND (value IN {ids} OR value IN {actors})))) END")
     return out
+
+
+def bot_settings_masks(people, bare, groups):
+    """bot_settings less the people and groups the caller may not see: the declaration's other keys (`extra`) lose a
+    `team`, `reports_to` or `operator` naming one."""
+    nobody = "(SELECT NULL WHERE 0)"
+    actors, ids, teams = qlist(people) if people else nobody, qlist(bare) if bare else nobody, \
+        qlist(groups) if groups else nobody
+    return {"extra": (
+        "CASE WHEN source.extra IS NULL OR NOT json_valid(source.extra) THEN source.extra "
+        "ELSE json_patch(source.extra, (SELECT json_group_object(key, NULL) FROM json_each(source.extra) "
+        f"WHERE (key='team' AND value IN {teams}) OR (key IN ('reports_to','operator') "
+        f"AND (value IN {ids} OR value IN {actors})))) END")}
 
 
 def unsettled_watched(c, inner):
@@ -163,8 +172,8 @@ def live_masks(unsettled):
     return {"attempts": {"final_text": hidden("final_text"),
                          "result": f"CASE WHEN source.id NOT IN ({unsettled}) THEN source.result "
                                         "WHEN json_valid(source.result) THEN json_remove(source.result,'$.text') "
-                                        "ELSE NULL END"},
-            "turns": {"summary": hidden("summary")}}
+                                        "ELSE NULL END",
+                         "summary": hidden("summary")}}
 # Read-only views built over the caller's connection: name -> (base tables it reads, SELECT over `{table}`, the
 # caller's own filtered view of each, and `{all_table}`, its unfiltered inner view). A total adds up only rows the
 # caller may read: a bucket of one run would otherwise tell them that run exists, what it cost and whether it acted.
@@ -173,10 +182,9 @@ DERIVED = {
     # Runs per week (Monday, UTC), bot, trigger and purpose, with tokens and outcome (backend/run_triggers.py).
     # A run from before triggers were recorded reads `unknown`, and is counted, never dropped. Input is the run's
     # measured usage (every primary and fallback segment). A run from before measured usage has its one-number
-    # count in input_tokens (migration 76). An attempt that never got a
-    # turn row (one that failed or expired before it started) is counted too, as `unknown`, with no tokens or outcome;
-    # one whose turn the caller may not read is not turnless, and is not counted.
-    "run_weekly": (("turns", "attempts"), """
+    # count in input_tokens (migration 76). An attempt with no run record (a job and no `trigger`: one that failed or
+    # expired before it started) is counted too, as `unknown`, in the week it started, with no tokens or outcome.
+    "run_weekly": (("attempts",), """
         SELECT date(started_at, '-6 days', 'weekday 1') AS week, bot, coalesce(trigger_kind, 'unknown') AS trigger,
                coalesce(purpose, 'unknown') AS purpose,
                count(*) AS runs,
@@ -193,17 +201,15 @@ DERIVED = {
                round(100.0 * sum(coalesce(outcome, '') = 'no_change') / count(*), 1) AS no_change_pct,
                round(100.0 * sum(coalesce(outcome, '') = 'nothing_to_do') / count(*), 1) AS nothing_to_do_pct,
                round(100.0 * sum(outcome IS NULL) / count(*), 1) AS unknown_pct
-        FROM (SELECT started_at, bot, trigger_kind, purpose, input_tokens, cached_tokens, output_tokens,
+        FROM (SELECT CASE WHEN trigger IS NULL THEN coalesce(started_at, created_at) ELSE created_at END AS started_at,
+                     bot_id AS bot, trigger_kind, purpose, input_tokens, cached_tokens, output_tokens,
                      outcome, did_nothing, rotated
-              FROM {turns} WHERE started_at IS NOT NULL
-              UNION ALL
-              SELECT coalesce(a.started_at, a.created_at), a.bot_id, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL
-              FROM {attempts} a WHERE NOT EXISTS (SELECT 1 FROM {all_turns} t WHERE t.id = a.id))
+              FROM {attempts})
         GROUP BY 1, 2, 3, 4"""),
     # Runs per week, bot and wake rule (backend/rules.py): the rule that woke the run, with its tokens and how many did
     # nothing. A run from before rules, or whose message carried none, reads `unknown`. Same token sums as run_weekly.
-    "rule_weekly": (("turns",), """
-        SELECT date(started_at, '-6 days', 'weekday 1') AS week, bot, coalesce(rule_id, 'unknown') AS rule,
+    "rule_weekly": (("attempts",), """
+        SELECT date(created_at, '-6 days', 'weekday 1') AS week, bot_id AS bot, coalesce(rule_id, 'unknown') AS rule,
                count(*) AS runs,
                sum(coalesce(input_tokens, 0) + coalesce(cached_tokens, 0)) AS input_tokens,
                sum(coalesce(cached_tokens, 0)) AS cached_input_tokens,
@@ -211,7 +217,7 @@ DERIVED = {
                sum(coalesce(outcome, '') = 'acted') AS acted,
                sum(coalesce(did_nothing, 0) = 1) AS did_nothing,
                round(100.0 * sum(coalesce(did_nothing, 0) = 1) / count(*), 1) AS did_nothing_pct
-        FROM {turns} WHERE started_at IS NOT NULL
+        FROM {attempts} WHERE (job_id IS NULL OR trigger IS NOT NULL)
         GROUP BY 1, 2, 3"""),
 }
 # Totals over rows the reader may not read one by one, built only for the owner and a bot the owner granted them
@@ -384,17 +390,21 @@ def guarded(c, auth, who, inner, function, columns=None, unseen=None):
     person = H.actor_id(who.actor)
     # Meetings are the company's; typed notes are their owner's (backend/media.py). A private
     # meeting narrows to the people its invite or its importer names, spelled either way.
-    if owner:
-        meetings = "1"
-    elif bot or not who.email:
-        meetings = "0"
+    # A meeting saved "Participants only" is read only by the people it names, owner too.
+    audience = "coalesce(json_extract(metadata,'$.audience'),'')='participants'"
+    if bot or not who.email:
+        meetings = f"NOT ({audience})" if owner else "0"
     else:
         email = q(who.email.lower())
-        meetings = (f"lower(owner)={email} OR (json_extract(metadata,'$.kind')='meeting' AND ("
-                    "coalesce(json_extract(metadata,'$.private'),0)=0 OR EXISTS (SELECT 1 FROM "
-                    f"json_each(json_extract(metadata,'$.calendar.attendees')) WHERE lower(value)={email}) "
-                    "OR EXISTS (SELECT 1 FROM json_each(json_extract(metadata,'$.participants')) "
-                    f"WHERE lower(json_extract(value,'$.email'))={email})))")
+        named = (f"EXISTS (SELECT 1 FROM json_each(json_extract(metadata,'$.audience_emails')) "
+                 f"WHERE lower(trim(value))={email})")
+        meetings = "1" if owner else (
+            f"json_extract(metadata,'$.kind')='meeting' AND ("
+            "coalesce(json_extract(metadata,'$.private'),0)=0 OR EXISTS (SELECT 1 FROM "
+            f"json_each(json_extract(metadata,'$.calendar.attendees')) WHERE lower(value)={email}) "
+            "OR EXISTS (SELECT 1 FROM json_each(json_extract(metadata,'$.participants')) "
+            f"WHERE lower(json_extract(value,'$.email'))={email}))")
+        meetings = f"lower(owner)={email} OR (CASE WHEN {audience} THEN {named} ELSE ({meetings}) END)"
     goals = f"owner_id NOT IN {qlist(['bot:' + slug for slug in hidden])}" if hidden else "id IS NOT NULL"
     kpis = goals            # a KPI is owned like a goal: a bot's own are read by whoever may read the bot
     admin = who.role == "owner" or auth.bot_admin(who)
@@ -407,6 +417,11 @@ def guarded(c, auth, who, inner, function, columns=None, unseen=None):
     else:
         events = (f"actor={me} OR target IN (SELECT id FROM tasks) OR target IN (SELECT id FROM conversations) "
                   "OR target IN (SELECT id FROM bots) OR target IN (SELECT 'bot:'||id FROM bots)")
+    # Personal alert activity belongs to its recipient, including in the owner's company audit. An accepted
+    # non-test alert also needs its task's current permission, for both the person and any delegated principal.
+    events = (f"({events}) AND (action NOT LIKE 'alerts.%' OR action='alerts.company_cap' OR actor={me}) "
+              "AND (action<>'alerts.accepted' OR json_extract(detail,'$.kind')='test' OR "
+              "json_extract(detail,'$.task_id') IN (SELECT id FROM tasks))")
     # Imported drafts do not enter company search, exports or the audit feed.
     meetings = f"({meetings}) AND review_state='live'"
     events = (f"({events}) AND target NOT IN (SELECT id FROM {inner('meetings')} "
@@ -423,23 +438,27 @@ def guarded(c, auth, who, inner, function, columns=None, unseen=None):
         "message_mentions": "EXISTS (SELECT 1 FROM messages readable WHERE readable.id=source.message_id)",
         "tasks": tasks,
         "tags": tag_gate, "task_tags": by_task,
-        "task_events": by_task + " AND " + content_gate(("old", "new", "note")), "task_delegations": by_task,
+        "task_delegations": by_task,
         "task_requesters": by_task, "task_reminders": by_task, "task_assets": by_task, "task_links": by_task, "task_roles": by_task,
+        # A task's moves to Blocked and snoozes, open and past (migration 0075), read with their task.
+        "task_holds": by_task,
         # A relation is read only when the caller may read both of its tasks.
         "task_relations": "from_task IN (SELECT id FROM tasks) AND to_task IN (SELECT id FROM tasks)",
         "message_assets": by_message,
         "approvals": ("(task_id IS NULL OR " + by_task + ") AND " + by_message + " AND (" +
-                      ("1" if owner else f"requested_by={me} OR message_id IN (SELECT id FROM messages WHERE recipient_id={me})") + ")"),
+                      ("1" if owner else f"requested_by_id={me} OR message_id IN (SELECT id FROM messages WHERE recipient_id={me})") + ")"),
         "bots": bots_visible("id"),
         "bot_status": bots_visible("bot"), "bot_status_history": bots_visible("bot"),
-        "schedules": bots_visible("bot"), "bot_config": bots_visible("bot"), "bot_control": bots_visible("bot"),
+        "schedules": bots_visible("bot"), "bot_config": bots_visible("bot"), "bot_settings": bots_visible("bot_id"),
+        "bot_control": bots_visible("bot"),
         "bot_transitions": bots_visible("bot"), "assignments": bots_visible("bot"),
         "schedule_config": by_schedule, "schedule_occurrences": f"{by_schedule} AND (task_id IS NULL OR {by_task})",
-        "turns": f"{bots_visible('bot')} AND (message_id IS NULL OR {by_message}) AND "
-                 f"(task_id IS NULL OR {by_task}) AND " + attempt_gate,
-        "deltas": "turn_id IN (SELECT id FROM turns)" + (f" AND turn_id NOT IN ({unsettled})" if unsettled else ""),
+        "deltas": "attempt_id IN (SELECT id FROM attempts)" + (f" AND attempt_id NOT IN ({unsettled})" if unsettled else ""),
         "jobs": f"{bots_visible('bot_id')} AND {by_message}",
-        "attempts": by_job + " AND " + attempt_gate, "job_recovery": by_job + " AND " + by_attempt,
+        # A run with a job is read with its job; one recorded with no lease (the demo seed, a run from before leases)
+        # with its bot and the message that started it. Either way its task, when it has one, must be readable too.
+        "attempts": (f"(CASE WHEN job_id IS NULL THEN {bots_visible('bot_id')} AND (message_id IS NULL OR {by_message}) "
+                     f"ELSE {by_job} END) AND (task_id IS NULL OR {by_task}) AND " + attempt_gate), "job_recovery": by_job + " AND " + by_attempt,
         "attempt_events": by_attempt + " AND " + content_gate(("payload",)) + (
             f" AND NOT (kind IN ('delta','message') AND attempt_id IN ({unsettled}))" if unsettled else ""),
         "attempt_inputs": by_attempt, "attempt_conversations": by_attempt,
@@ -451,7 +470,7 @@ def guarded(c, auth, who, inner, function, columns=None, unseen=None):
         "seats": "id IS NOT NULL",
         # Goals are the company's, except a bot's own: a caller reads those of bots they may read. Never a
         # bare "1" (the same reason as intake_items below).
-        "goals": goals, "goal_events": "goal_id IN (SELECT id FROM goals)", "kpis": kpis,
+        "goals": goals, "kpis": kpis,
         "kpi_readings": "kpi_id IN (SELECT id FROM kpis)", "kpi_definitions": "kpi_id IN (SELECT id FROM kpis)",
         "goal_kpis": "goal_id IN (SELECT id FROM goals)", "goal_checkins": "goal_id IN (SELECT id FROM goals)",
         # A strategy proposal carries the unpublished draft or every affected goal's title (goal_routes.strategy_visible):
@@ -461,21 +480,29 @@ def guarded(c, auth, who, inner, function, columns=None, unseen=None):
                               f"OR proposed_by={me})"),
         "goal_asks": "task_id IN (SELECT id FROM tasks)",
         # The company's Vision and Description and their history: everyone's to read, like the company's goals.
-        "company_profile": "id IS NOT NULL", "company_events": "id IS NOT NULL",
+        "company_profile": "id IS NOT NULL",
         # The team's strategy (backend/strategy.py): the published versions are everyone's, like the goals. The draft,
         # the live bets (their words may be unpublished) and the history of both are the owner's.
         "strategy_versions": "id IS NOT NULL" if owner else "status='published'",
         "strategy_bets": "id IS NOT NULL" if owner else "id IS NULL",
-        "strategy_events": "id IS NOT NULL" if owner else "id IS NULL",
         # A lens run (backend/lenses.py) on the draft carries the unpublished strategy's words: the owner's. Every other
         # run only discusses what is published.
         "lens_runs": "id IS NOT NULL" if owner else "on_draft=0",
         # The market graph is the company's, the same way goals are.
         "market_entities": "1", "market_edges": "1", "market_evidence": "1",
-        "market_citations": "1", "market_insights": "1", "market_events": "1",
+        "market_citations": "1", "market_insights": "1",
         # Page monitors and the weekly briefings (backend/market_watch.py, backend/market_briefing.py): public pages the
         # team watches and what the Librarian wrote about them, the market's to read.
         "market_watches": "1", "market_briefings": "1",
+        # One history table (backend/migrations/0064_history_events.py), each row read as its subject is: a task's
+        # with the task (and its words through the content gate), a goal's with the goal, the company's and the
+        # market's by everyone, the strategy's by the owner (its draft's words may be unpublished).
+        "history_events": ("CASE subject_type WHEN 'task' THEN subject_id IN (SELECT id FROM tasks) AND "
+                           + content_gate(("old", "new", "note", "data"))
+                           + " WHEN 'goal' THEN subject_id IN (SELECT id FROM goals)"
+                           + " WHEN 'strategy' THEN " + ("1" if owner else "0")
+                           + " WHEN 'company' THEN 1 ELSE subject_type IN "
+                             "('market_entity','market_edge','market_evidence','market_document') END"),
         "market_sizes": "1", "market_figures": "1", "market_sources": "1",
         # Listening's saved posts carry third parties' names and handles (backend/listening.py):
         # Listening and the owner read them all, a receiving bot only what was routed to it.
@@ -506,12 +533,14 @@ def guarded(c, auth, who, inner, function, columns=None, unseen=None):
         "market_pages": "1",
         "docs": "id IS NOT NULL", "doc_versions": "doc_id IN (SELECT id FROM docs)",
         "linked_docs": "id IS NOT NULL",
-        "bot_files": (file_gate + " AND " + (f"bot_id={q(H.actor_id(who.actor))} AND " if bot else "")
+        "bot_files": (f"CASE WHEN id IN (SELECT file_id FROM {inner('pages')} WHERE audience IS NOT NULL) "
+                      "THEN " + function("file") + "(id) ELSE 1 END AND " + file_gate + " AND " + (f"bot_id={q(H.actor_id(who.actor))} AND " if bot else "")
                       + f"(CASE WHEN scope LIKE 'task:%' THEN substr(scope,6) IN (SELECT id FROM tasks) "
                         "WHEN scope LIKE 'conversation:%' THEN substr(scope,14) IN (SELECT id FROM conversations) "
                         f"ELSE {bots_visible('bot_id')} END)"),
         "bot_file_versions": "file_id IN (SELECT id FROM bot_files)",
-        "bot_file_activity": "file_id IN (SELECT id FROM bot_files)",
+        "bot_file_activity": "file_id IN (SELECT id FROM bot_files) AND "
+                             "(action<>'page.access_changed' OR " + function("page_manager") + "(file_id))",
         # The company owner is not thereby the owner of everyone's private attachments (media.py).
         "blobs": blob_gate + " AND (" + ("" if bot else f"owner={me} OR ") +
                  "id IN (SELECT blob_id FROM message_assets) OR id IN (SELECT blob_id FROM task_assets) "
@@ -541,6 +570,8 @@ def guarded(c, auth, who, inner, function, columns=None, unseen=None):
     for table in ("docs", "doc_versions", "linked_docs", "market_pages"):
         cols = columns.get(table, ()) if columns is not None else [r[1] for r in c.execute(f'PRAGMA table_info("{table}")')]
         rules[table] = "(" + rules[table] + ") AND " + content_gate(cols)
+    rules["task_assets"] += " AND " + function("blob") + "(blob_id)"
+    rules["messages"] += " AND " + function("page_message") + "(refs)"
     rules["task_file_reviews"] = "file_id IN (SELECT id FROM bot_files) OR file_id IN (SELECT id FROM blobs)"
     rules["bot_file_activity"] += " AND (task_id IS NULL OR " + by_task + ") AND (attempt_id IS NULL OR " + by_attempt + ")"
     rules["bot_file_versions"] += " AND (attempt_id IS NULL OR " + by_attempt + ")"
@@ -551,14 +582,15 @@ def guarded(c, auth, who, inner, function, columns=None, unseen=None):
 
 
 # Per-request sets, each an indexed temp table only this request's views may read.
-SETS = ("visible_tasks", "readable_conversations", "denied_tasks", "unreadable_rooms", "run_carriers", "denied_reads")
+SETS = ("visible_tasks", "known_tasks", "plain_refs", "readable_conversations", "denied_tasks", "unreadable_rooms",
+        "run_carriers", "denied_reads")
 RUN_EVENTS = "('task.next-run.carried','attempt.input.moved')"
 
 
 class Gates:
     """SQL that answers yes, without Python, for a row the privacy functions in backend/privacy_index.py allow.
 
-    Each gate is `(fast OR privacy function)`: a fast yes skips the function and anything else still asks it, so a
+    Each gate is `CASE WHEN fast THEN 1 ELSE privacy function END`: anything but a fast yes still asks Python, so a
     fast clause may only be narrower than the function, never wider. A clause reads small sets built once per request
     (the caller's denied private tasks, the rooms whose plain messages they may not read, the runs that carry a denied
     task) and allows a message only when every message its provenance reaches is settled by its own row: its parent
@@ -567,16 +599,17 @@ class Gates:
 
     Where SQLite and Python could read the same JSON differently the clause declines and Python decides: a backslash
     (an escaped string), a repeated key (SQLite reads the first, Python the last), a task given as anything but one
-    string, a string that is itself JSON, a meeting reference, a moved input, and long provenance.
+    string or a list of strings, a string that is itself JSON, a meeting reference, a moved input, and long provenance.
     """
     KEYS = ("task", "task_id", "turn_id", "run", "attempt_id", "answers", "inputs")
 
     def __init__(self, inner, private, denied):
         self.inner, self.denied = inner, bool(denied)
-        self.tasks, self.messages = inner("tasks"), inner("messages")
+        self.tasks, self.messages = '"' + private("known_tasks") + '"', inner("messages")
         self.denied_tasks = '"' + private("denied_tasks") + '"'
         self.rooms = '"' + private("unreadable_rooms") + '"'
         self.carriers = '"' + private("run_carriers") + '"'
+        self.plain_refs = '"' + private("plain_refs") + '"'
 
     def strings(self, value):
         """No string in this JSON names a denied task the way ReadIndex.references finds one."""
@@ -588,37 +621,53 @@ class Gates:
                 f"AND substr(s.value,6) IN (SELECT id FROM {self.denied_tasks}))))")
 
     def task(self, refs, key):
-        """`refs.<key>` is absent, or one string naming a task that exists and is not denied."""
+        """`refs.<key>` is absent, one string naming a task that exists and is not denied, or a non-empty array in which
+        every element is such a string. ReadIndex.listed_tasks_known reads a list the same way: any other element, an
+        empty list, or a list naming one unknown or denied task is refused."""
         path = f"'$.{key}'"
+        listed = (f"SELECT 1 FROM json_each({refs},{path}) element WHERE element.type<>'text' OR "
+                  f"element.value NOT IN (SELECT id FROM {self.tasks}) OR element.value IN (SELECT id FROM {self.denied_tasks})")
         return (f"(json_type({refs},{path}) IS NULL OR (json_type({refs},{path})='text' AND "
                 f"json_extract({refs},{path}) IN (SELECT id FROM {self.tasks}) AND "
-                f"json_extract({refs},{path}) NOT IN (SELECT id FROM {self.denied_tasks})))")
+                f"json_extract({refs},{path}) NOT IN (SELECT id FROM {self.denied_tasks})) OR "
+                f"(json_type({refs},{path})='array' AND json_array_length({refs},{path})>0 AND NOT EXISTS ({listed})))")
 
-    def refs(self, refs, top):
+    def refs(self, refs, top, cached=True):
         """The row's own refs: an object naming no meeting, no denied string and only known readable tasks.
 
         Only the message being read (`top`) may name ancestors, a bounded few, and a run, which must itself pass."""
-        once = " AND ".join(f"instr(substr({refs},instr({refs},'\"{key}\"')+1),'\"{key}\"')=0" for key in self.KEYS)
-        checks = (f"json_valid({refs}) AND json_type({refs})='object' AND instr({refs},'\\')=0 "
-                  f"AND instr({refs},'live_meeting')=0 AND {once} "
+        once = {key: (f"(instr({refs},'\"{key}\"')=0 OR "
+                      f"instr(substr({refs},instr({refs},'\"{key}\"')+1),'\"{key}\"')=0)") for key in self.KEYS}
+        checks = (f"json_type({refs})='object' AND instr({refs},'\\')=0 "
+                  f"AND instr({refs},'live_meeting')=0 AND {once['task']} AND {once['task_id']} "
                   f"AND {self.task(refs, 'task')} AND {self.task(refs, 'task_id')} AND {self.strings(refs)}")
+        # Sibling WHENs short-circuit validation before inherited checks without nesting another CASE around
+        # the run and its roots. Plain refs need no JSON walk; malformed or undecided refs keep Python's gate.
+        plain = f"WHEN {refs} IN (SELECT id FROM {self.plain_refs}) THEN 1 " if cached else ""
+        checked = (f"CASE WHEN coalesce({refs},'') IN ('','{{}}') THEN 1 {plain}"
+                   f"WHEN NOT json_valid({refs}) THEN 0 WHEN NOT coalesce({checks},0) THEN 0 ")
         if not top:
-            return (f"(coalesce({refs},'') IN ('','{{}}') OR ({checks} "
-                    f"AND instr({refs},'\"answers\"')=0 AND instr({refs},'\"inputs\"')=0))")
+            return (f"{checked}WHEN instr({refs},'\"answers\"')=0 AND instr({refs},'\"inputs\"')=0 "
+                    "THEN 1 ELSE 0 END")
         turn, run_id = f"json_extract({refs},'$.turn_id')", f"json_extract({refs},'$.run.attempt_id')"
-        checks += (f" AND coalesce(json_type({refs},'$.answers'),'array')='array' "
-                   f"AND coalesce(json_type({refs},'$.inputs'),'array')='array' "
-                   f"AND coalesce(json_array_length({refs},'$.answers'),0)+coalesce(json_array_length({refs},'$.inputs'),0)<=48 "
-                   f"AND CASE WHEN json_type({refs},'$.turn_id') IS NOT NULL "
-                   f"THEN json_type({refs},'$.turn_id')='text' AND {self.attempt(turn)} "
-                   f"WHEN json_type({refs},'$.run.attempt_id') IS NOT NULL "
-                   f"THEN json_type({refs},'$.run.attempt_id')='text' AND {self.attempt(run_id)} ELSE 1 END")
-        return f"(coalesce({refs},'') IN ('','{{}}') OR ({checks}))"
+        # With no inherited keys there is no run or ancestor array to parse or check for duplicates. A root's
+        # run is not inherited at all, so only the top message needs these checks.
+        direct = " AND ".join(f"instr({refs},'\"{key}\"')=0" for key in ("turn_id", "run", "answers", "inputs"))
+        inherited = " AND ".join(once[key] for key in self.KEYS if key not in ("task", "task_id"))
+        inherited += (f" AND coalesce(json_type({refs},'$.answers'),'array')='array' "
+                      f"AND coalesce(json_type({refs},'$.inputs'),'array')='array' "
+                      f"AND coalesce(json_array_length({refs},'$.answers'),0)+coalesce(json_array_length({refs},'$.inputs'),0)<=48 "
+                      f"AND CASE WHEN json_type({refs},'$.turn_id') IS NOT NULL "
+                      f"THEN json_type({refs},'$.turn_id')='text' AND {self.attempt(turn)} "
+                      f"WHEN json_type({refs},'$.run.attempt_id') IS NOT NULL "
+                      f"THEN json_type({refs},'$.run.attempt_id')='text' AND {self.attempt(run_id)} ELSE 1 END")
+        return f"{checked}WHEN {direct} THEN 1 WHEN {inherited} THEN 1 ELSE 0 END"
 
     def root(self, alias):
         """A message settled by its own row: no parent, answers or inputs, and (unread here) no run."""
-        return (f"coalesce(coalesce({alias}.in_reply_to,'')='' AND {alias}.conversation_id NOT IN "
-                f"(SELECT id FROM {self.rooms}) AND {self.refs(alias + '.refs', top=False)}, 0)")
+        # Preserve CASE's false result for NULL comparisons under the negated root checks in message/attempt.
+        return (f"(coalesce({alias}.in_reply_to,'')='' AND coalesce({alias}.conversation_id NOT IN "
+                f"(SELECT id FROM {self.rooms}),0) AND {self.refs(alias + '.refs', top=False)})")
 
     def message(self, alias="source"):
         """ReadIndex.message: the row, its run, and each message it replies to, answers or took in as input."""
@@ -626,16 +675,16 @@ class Gates:
         ancestors = (f"SELECT {alias}.in_reply_to AS id UNION ALL "
                      f"SELECT value FROM json_each({refs},'$.answers') WHERE type='text' UNION ALL "
                      f"SELECT value FROM json_each({refs},'$.inputs') WHERE type='text'")
-        return (f"coalesce({alias}.conversation_id NOT IN (SELECT id FROM {self.rooms}) AND {self.refs(refs, top=True)} "
+        return (f"{alias}.conversation_id NOT IN (SELECT id FROM {self.rooms}) AND {self.refs(refs, top=True)} "
                 f"AND (coalesce({alias}.in_reply_to,'')='' AND coalesce(instr({refs},'\"answers\"'),0)=0 "
                 f"AND coalesce(instr({refs},'\"inputs\"'),0)=0 OR NOT EXISTS (SELECT 1 FROM ({ancestors}) ancestor JOIN {self.messages} parent "
-                f"ON parent.id=ancestor.id WHERE parent.id<>{alias}.id AND NOT {self.root('parent')})), 0)")
+                f"ON parent.id=ancestor.id WHERE parent.id<>{alias}.id AND NOT {self.root('parent')}))")
 
     def attempt(self, aid):
         """ReadIndex.attempt: its message and inputs are settled by their own rows, it carries no denied task and its
         retained run events name none."""
         jobs, attempts, inputs, events = (self.inner(t) for t in ("jobs", "attempts", "attempt_inputs", "events"))
-        return (f"coalesce(EXISTS (SELECT 1 FROM {attempts} run JOIN {jobs} job ON job.id=run.job_id "
+        return (f"EXISTS (SELECT 1 FROM {attempts} run JOIN {jobs} job ON job.id=run.job_id "
                 f"JOIN {self.messages} root ON root.id=job.message_id WHERE run.id={aid} AND {self.root('root')}) "
                 f"AND NOT EXISTS (SELECT 1 FROM {inputs} input JOIN {self.messages} root ON root.id=input.message_id "
                 f"WHERE input.attempt_id={aid} AND NOT {self.root('root')}) "
@@ -644,7 +693,7 @@ class Gates:
                 f"AND retained.target={aid} AND NOT coalesce(retained.action='task.next-run.carried' AND "
                 f"(coalesce(retained.detail,'')='' OR (json_valid(retained.detail) AND "
                 f"json_type(retained.detail)='object' AND instr(retained.detail,'\\')=0 AND "
-                f"{self.strings('retained.detail')})), 0)), 0)")
+                f"{self.strings('retained.detail')})), 0))")
 
 
 def materialize(conn, index, tables, inner, function, private):
@@ -670,6 +719,7 @@ def materialize(conn, index, tables, inner, function, private):
     tables = {table: (predicate.replace("IN (SELECT id FROM conversations)", rooms), hidden)
               for table, (predicate, hidden) in tables.items()}
     tables["conversations"] = ("id " + rooms, tables["conversations"][1])
+    create("known_tasks", "SELECT id FROM main.tasks")
     create("denied_tasks", sorted(index.denied))
     create("unreadable_rooms", sorted(index.unreadable_rooms()))
     create("run_carriers", sorted(aid for tid, aid in conn.execute(
@@ -679,19 +729,34 @@ def materialize(conn, index, tables, inner, function, private):
     create("denied_reads", "SELECT key FROM main.read_deps WHERE dep IN (SELECT 't:'||id FROM "
                            f'"{private("denied_tasks")}")')
     gates = Gates(inner, private, index.denied)
+    # Task-only refs repeat across a room's history. Validate the compact and spaced object encodings once per
+    # task, without reading message history; every other encoding or shape keeps the ordinary refs gate.
+    task_refs = gates.refs("json_object('task',id)", top=False, cached=False)
+    allowed = f"WITH allowed AS MATERIALIZED (SELECT id FROM main.tasks WHERE {task_refs}) "
+    objects = " UNION ALL ".join(
+        f"SELECT {value} AS refs FROM allowed"
+        for key in ("task", "task_id")
+        for value in (f"json_object('{key}',id)", f"'{{\"{key}\": '||json_quote(id)||'}}'"))
+    create("plain_refs", allowed + objects)
     message = function("message") + "(id,conversation_id,refs,in_reply_to)"
     attempt = function("attempt") + "(id)"
+    page = function("page_message") + "(refs)"
+    # A page review can narrow a message independently of task/run provenance. Only these top-level keys enter
+    # that check; escaped keys and every non-object keep Python's JSON parsing and page permissions.
+    no_page = " AND ".join(f"instr(refs,'\"{key}\"')=0" for key in privacy.PAGE_MESSAGE_KEYS)
+    page_gate = (f"(CASE WHEN coalesce(refs,'') IN ('','{{}}') THEN 1 WHEN json_valid(refs) "
+                 f"AND json_type(refs)='object' AND instr(refs,'\\')=0 AND {no_page} THEN 1 ELSE {page} END)")
 
-    def settled(prefix, fast):
+    def settled(prefix):
         """A settled row that touched no denied task is read at once; any other row keeps the gate and its walk."""
         key = f"'{prefix}:'||source.id"
-        return (f"CASE WHEN {key} IN (SELECT key FROM {inner('read_index')}) AND {key} NOT IN "
-                f'(SELECT id FROM "{private("denied_reads")}") THEN 1 ELSE {fast} END')
-    # SQLite evaluates the side of an OR without a subquery first, so `fast OR function` asked Python about every
-    # row. The fast answer goes in as an argument instead: a fast yes returns before any provenance is read.
-    return {table: (predicate.replace(message, function("settled_message") +
-                                      f"(id,conversation_id,refs,in_reply_to,{settled('m', gates.message())})")
-                    .replace(attempt, function("settled_attempt") + f"(id,{settled('a', gates.attempt('source.id'))})"),
+        return (f"{key} IN (SELECT key FROM {inner('read_index')}) AND {key} NOT IN "
+                f'(SELECT id FROM "{private("denied_reads")}")')
+    # CASE evaluates only the chosen branch. A fast yes skips the Python callback altogether; OR can evaluate
+    # the function first, and passing the fast answer to a function still calls Python for every history row.
+    return {table: (predicate.replace(message, f"(CASE WHEN {settled('m')} THEN 1 WHEN {gates.message()} THEN 1 ELSE {message} END)")
+                    .replace(attempt, f"(CASE WHEN {settled('a')} THEN 1 WHEN {gates.attempt('source.id')} THEN 1 ELSE {attempt} END)")
+                    .replace(page, page_gate),
                     hidden)
             for table, (predicate, hidden) in tables.items()}
 
@@ -718,8 +783,10 @@ def connect(path, c, auth, who, trace=None, seconds=None):
         columns = schema_columns(conn, path)
         unseen = TA.hidden(conn, who, "see", ("human", "group"), auth)
         tables = guarded(conn, auth, who, inner, function, columns, unseen=unseen)
-        source_tables = set(tables) | {"blob_media", "live_meetings", "live_meeting_access", "live_meeting_bots",
-                                       "live_meeting_turns"}
+        # Page visibility traverses letter proofs and current agent standing through trusted callbacks only.
+        source_tables = set(tables) | {"pages", "page_identities", "mail_items", "postal_mail_grants", "rule_reads", "pins", "pin_places", "teammate_accesses", "task_trash_assets", "home_merges", "home_merge_messages",
+                                       "blob_media", "live_meetings", "live_meeting_access", "live_meeting_bots",
+                                       "live_meeting_turns", "letters", "letter_proofs", "letter_outbox_grants", "agents"}
         class Source:
             def __init__(self):
                 self.statements = {}
@@ -761,12 +828,24 @@ def connect(path, c, auth, who, trace=None, seconds=None):
                 finally:
                     trusted[0] = False
         index = ReadIndex(Source(), who, rooms=True)
-        functions = {"message": (4, index.message), "attempt": (1, index.attempt),
+        from .files import page_audience_visible, page_event_readable, page_blob_visible, restricted_pages, readable_page_refs
+        from .pages import may_manage as page_manager
+        source = index.c
+        audience_cache = {}
+        def visible_file(fid):
+            row = restricted_pages(source).get(fid)
+            # SQL already enforces inherited scope/provenance below; only add the common narrowing.
+            return not row or page_audience_visible(source, auth, who, row, audience_cache)
+        def manages_page(fid):
+            row = source.execute("SELECT * FROM bot_files WHERE id=?", (fid,)).fetchone()
+            return bool(row) and page_manager(source, auth, who, row)
+        functions = {"page_message": (1, lambda refs: privacy.page_message_readable(source, privacy.actor(who), H._json(refs, {}) or {})),
+                     "page_refs": (1, lambda refs: readable_page_refs(source, auth, who, refs)),
+                     "file": (1, visible_file), "page_manager": (1, manages_page), "message": (4, index.message), "attempt": (1, index.attempt),
                      "conversation": (1, index.conversation), "meeting_room": (1, index.meeting_room),
-                     "event": (4, index.event), "tag": (2, index.tag), "blob": (1, index.blob),
-                     "settled_message": (5, lambda mid, cid, refs, reply, fast:
-                                         True if fast else index.message(mid, cid, refs, reply)),
-                     "settled_attempt": (2, lambda aid, fast: True if fast else index.attempt(aid)),
+                     "event": (4, lambda target, actor, ts, detail:
+                                    page_event_readable(source, auth, who, target, detail) and
+                                    index.event(target, actor, ts, detail)), "tag": (2, index.tag), "blob": (1, lambda bid: index.blob(bid) and page_blob_visible(source, auth, who, bid)),
                      "task": (1, lambda tid: tid not in index.denied),
                      "content": (-1, lambda *parts: index.content(list(parts)))}
         for name, (arity, fn) in functions.items():
@@ -782,11 +861,13 @@ def connect(path, c, auth, who, trace=None, seconds=None):
                 raise Problem("schema", f"Table {table} is missing from this database", 500)
             names = ",".join(f'"{column}"' for column in exposed[table])
             conn.execute(f'CREATE TEMP VIEW {inner(table)} AS SELECT {names} FROM main."{table}"')
+        conn.execute(f'CREATE TEMP VIEW {inner("pages")} AS SELECT file_id,audience FROM main.pages')
         if deadline is not None:
             conn.set_progress_handler(lambda: int(time.monotonic() > deadline), 2000)
         tables = materialize(conn, index, tables, inner, function, private)
         conn.set_progress_handler(None, 0)
         masks = {**MASKED, **live_masks(unsettled_watched(conn, inner))}
+        masks["messages"] = {**masks.get("messages", {}), "refs": function("page_refs") + "(source.refs)"}
         from . import threads
         names = qlist(threads.Viewer(auth, who).member_names(conn))
         bots = TA.hidden(conn, who, "see", ("bot",), auth)
@@ -825,7 +906,7 @@ def connect(path, c, auth, who, trace=None, seconds=None):
     except BaseException:
         conn.close()
         raise
-    inner_names = {prefix + table for table in set(tables) | sources}
+    inner_names = {prefix + table for table in set(tables) | sources | {"pages"}}
     sets = {private(name) for name in SETS}
 
     def fts_parent(name):
@@ -858,11 +939,11 @@ def connect(path, c, auth, who, trace=None, seconds=None):
             # These are visible in full (predicate 1). SQLite answers count(*) by reading
             # the base table with no view context; that read is the same rows as the view.
             if table in {"market_entities", "market_edges", "market_evidence", "market_citations",
-                         "market_insights", "market_events", "market_watches", "market_briefings", "market_sizes",
+                         "market_insights", "market_watches", "market_briefings", "market_sizes",
                          "market_figures", "market_sources", "listen_runs", "task_types", "task_steps"}:
                 return sqlite3.SQLITE_OK
             # A base table is read only by its own inner view, whose name is this connection's secret.
-            if (table in tables or table in sources) and context == prefix + table:
+            if (table in tables or table in sources or table == "pages") and context == prefix + table:
                 return sqlite3.SQLITE_OK
             # FTS5 reads the virtual table and its shadow tables with no view
             # context. Allow that only for the owner: mail_fts is owner-only.

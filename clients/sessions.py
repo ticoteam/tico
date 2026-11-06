@@ -1,7 +1,7 @@
 """Which provider thread a turn continues, and which lane it runs in.
 
 Pure functions shared by the server (backend/execution.py, which hands out work per lane) and the
-runner (runner/state.py, which keys its sessions), so the two never disagree about a turn.
+runner (runner_support/state.py, which keys its sessions), so the two never disagree about a turn.
 """
 
 # The thread a turn with no task continues. Every task is its own session by default; `session: bot`

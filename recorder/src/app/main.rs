@@ -2,6 +2,7 @@
 //! HTML/CSS/JS; it polls `view` and calls the commands below, each a thin wrapper over
 //! `Recorder`. Recording, transcription, live sync and drafts run on their own threads.
 mod recorder;
+mod screen;
 #[cfg(test)]
 mod tests;
 mod update;
@@ -58,7 +59,61 @@ fn view(
     Ok(view)
 }
 
+// Network writes run outside the Recorder mutex, so typing and redraws keep working while a save waits.
+#[tauri::command(async)]
+fn shared_item(
+    state: State<'_, Shared>,
+    id: Option<String>,
+    action: Option<String>,
+    body: Option<Value>,
+) -> Result<Value, String> {
+    let (config, destination, meeting, epoch) = {
+        let app = lock(&state);
+        let (destination, meeting) = app.saved_target().ok_or("Save the meeting first")?;
+        (app.config.clone(), destination, meeting, app.saved_scope())
+    };
+    let tico = tico_recorder_native::network::Tico::saved(&config, &destination)
+        .map_err(|e| format!("{e:#}"))?;
+    let mut path = format!("/api/v2/meetings/{meeting}/items");
+    if let Some(id) = &id {
+        path.push_str(&format!("/{id}"));
+    }
+    match action.as_deref() {
+        Some("send") => path.push_str("/push"),
+        Some("link") => path.push_str("/link"),
+        _ => {}
+    }
+    let reply = tico
+        .call(&path, body.as_ref(), &uuid::Uuid::new_v4().to_string())
+        .map_err(|e| format!("{e:#}"));
+    let data = tico
+        .call(&format!("/api/v2/meetings/{meeting}/items"), None, "")
+        .map_err(|e| format!("{e:#}"))?;
+    let mut app = lock(&state);
+    app.accept_saved_reply((destination, meeting), epoch, data.clone())?;
+    match reply {
+        Ok(value) => Ok(value),
+        Err(error) if error.contains("(version_conflict)") => {
+            let item = data["sections"]
+                .as_object()
+                .into_iter()
+                .flat_map(|s| s.values())
+                .filter_map(|v| v.as_array())
+                .flatten()
+                .find(|item| item["id"].as_str() == id.as_deref())
+                .cloned();
+            Ok(serde_json::json!({"conflict":item,"error":error}))
+        }
+        Err(error) => Err(error),
+    }
+}
+
 commands! {
+    more_task_links() => |app| app.more_task_links();
+    link_selected_tasks(ids: Vec<String>) => |app| app.link_selected_tasks(ids);
+    accept_link_item(id: String) => |app| app.accept_link_item(&id);
+    unlink_item(id: String) => |app| app.unlink_item(&id);
+    stop_screen() => |app| app.screen.stop("");
     record(event: Option<Value>) => |app| app.record(event);
     open_meeting(id: String) => |app| { let opened = app.open(&id); app.report(opened) };
     close_meeting() => |app| app.close();
@@ -89,10 +144,13 @@ commands! {
     set_chat_private(private: bool) => |app| app.set_chat_private(private);
     send_meeting(id: String, destination: String, paused_confirmed: Option<bool>) => |app| app.send_meeting_confirmed(&id, &destination, paused_confirmed.unwrap_or(false));
     delete_recording(id: String) => |app| app.delete(&id);
+    share_live(destination: String, team: bool, actors: Vec<String>) => |app| app.share_live(&destination, team, actors);
+    save_meeting(id: String, destination: String, audience: String, title: String, paused_confirmed: Option<bool>) => |app| app.save(&id, &destination, &audience, &title, paused_confirmed.unwrap_or(false));
+    keep_local(id: String) => |app| app.keep_local(&id);
     save_settings(form: SettingsForm) => |app| app.save_settings(form);
     set_audio(microphone: String, meeting: bool) => |app| app.set_audio(&microphone, meeting);
     sign_in(address: String) => |app| app.sign_in(&address);
-    sign_out(id: String) => |app| app.sign_out(&id);
+    sign_in_desktop(url: Option<String>) => |app| app.sign_in_desktop(url.as_deref());
     make_default(id: String) => |app| app.make_default(&id);
     import_legacy(directory: String) => |app| app.import_legacy(&directory);
     confirm_connect() => |app| app.confirm_connect();
@@ -100,7 +158,151 @@ commands! {
     dismiss_error() => |app| app.dismiss_error();
     open_url(url: String) => |app| app.open_url(&url);
     dismiss_notice() => |app| app.dismiss_notice();
-    set_visible(visible: bool) => |app| app.visible = visible;
+    set_visible(visible: bool) => |app| app.set_visible(visible);
+}
+
+#[tauri::command]
+async fn task_picker(
+    state: State<'_, Shared>,
+    query: String,
+    kind: Option<String>,
+    offset: usize,
+) -> Result<Value, String> {
+    let (config, destination) = lock(&state).task_picker_context();
+    let kind = kind.unwrap_or_default();
+    picker_search(
+        move || tico_recorder_native::network::Tico::saved(&config, &destination),
+        move |tico| tico.search_tasks(&query, &kind, offset),
+    )
+    .await
+}
+
+#[tauri::command]
+async fn task_types(state: State<'_, Shared>) -> Result<Value, String> {
+    let (config, destination) = lock(&state).task_picker_context();
+    picker_search(
+        move || tico_recorder_native::network::Tico::saved(&config, &destination),
+        |tico| tico.task_types(),
+    )
+    .await
+}
+
+/// The picker's reads are blocking HTTP, so they run off the Tauri runtime.
+async fn picker_search(
+    connect: impl FnOnce() -> anyhow::Result<tico_recorder_native::network::Tico> + Send + 'static,
+    read: impl FnOnce(tico_recorder_native::network::Tico) -> anyhow::Result<Value> + Send + 'static,
+) -> Result<Value, String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        connect().and_then(read).map_err(|e| e.to_string())
+    })
+    .await
+    .map_err(|e| e.to_string())?
+}
+
+#[tauri::command(async)]
+fn sign_out(state: State<'_, Shared>, id: String) -> Result<(), String> {
+    let screen = lock(&state).screen.clone();
+    screen.stop_destination_and_wait(&id);
+    let mut app = lock(&state);
+    app.sign_out(&id);
+    app.bump();
+    Ok(())
+}
+
+/// The native pasteboard works after an asynchronous server call in WKWebView.
+fn copy_meeting_url(handle: &tauri::AppHandle, url: &str) -> bool {
+    #[cfg(target_os = "macos")]
+    {
+        let (tx, rx) = std::sync::mpsc::sync_channel(1);
+        let text = url.to_owned();
+        if handle
+            .run_on_main_thread(move || {
+                use objc2_app_kit::{NSPasteboard, NSPasteboardTypeString};
+                let board = NSPasteboard::generalPasteboard();
+                board.clearContents();
+                let copied = board
+                    .setString_forType(&objc2_foundation::NSString::from_str(&text), unsafe {
+                        NSPasteboardTypeString
+                    });
+                let _ = tx.send(copied);
+            })
+            .is_err()
+        {
+            return false;
+        }
+        rx.recv_timeout(Duration::from_secs(2)).unwrap_or(false)
+    }
+    #[cfg(not(target_os = "macos"))]
+    {
+        let _ = (handle, url);
+        false
+    }
+}
+
+/// Creating a link is explicit: a local recording is opened privately in the chosen Tico.
+#[tauri::command(async)]
+fn meeting_link(
+    state: State<'_, Shared>,
+    handle: tauri::AppHandle,
+    id: String,
+    destination: String,
+    confirmed: bool,
+    copy: bool,
+) -> Result<Value, String> {
+    let (store, config) = {
+        let app = lock(&state);
+        (app.store.clone(), app.config.clone())
+    };
+    (|| -> anyhow::Result<Value> {
+        let record = store.get(&id)?;
+        let context = store.context(&id)?;
+        anyhow::ensure!(!context.live_discarded || context.live_removed, "This meeting was discarded; its recording stays local");
+        anyhow::ensure!(context.live_destination.is_empty() || context.live_destination == destination, "Choose this meeting's Tico");
+        let tico = tico_recorder_native::network::Tico::saved(&config, &destination)?;
+        let browser = tico.browser_url()?;
+        let filed = record.deliveries.iter().find(|d| d.destination_id == destination && !d.meeting_id.is_empty());
+        if let Some(delivery) = filed {
+            return Ok(serde_json::json!({"url":format!("{browser}/#/meetings?meeting={}", delivery.meeting_id)}));
+        }
+        anyhow::ensure!(!context.live_id.is_empty() || confirmed, "Confirm uploading this transcript privately to Tico first");
+        let live_id = if context.live_id.is_empty() { tico.ensure_live(&store, &id, false)? } else { context.live_id };
+        let detail = tico.call(&format!("/api/v2/live-meetings/{live_id}"), None, "")?;
+        Ok(serde_json::json!({"url":format!("{browser}/#/meetings/live/{live_id}"),"private":detail["visibility"] != "team", "only_you": detail["visibility"] != "team" && detail["access"].as_array().is_none_or(|a| a.is_empty()) && detail["humans"].as_array().is_none_or(|a| a.len() <= 1)}))
+    })().map(|mut value| {
+        value["copied"] = serde_json::json!(copy && value["url"].as_str().is_some_and(|url| copy_meeting_url(&handle, url)));
+        value
+    }).map_err(|e| format!("{e:#}"))
+}
+#[tauri::command(async)]
+fn share_screen(
+    state: State<'_, Shared>,
+    handle: tauri::AppHandle,
+    id: String,
+    expected_team: bool,
+) -> Result<(), String> {
+    let (screen, store, config) = {
+        let app = lock(&state);
+        (app.screen.clone(), app.store.clone(), app.config.clone())
+    };
+    (|| -> anyhow::Result<()> {
+        let context = store.context(&id)?;
+        screen::require_live(&context)?;
+        anyhow::ensure!(
+            store.get(&id)?.deliveries.is_empty(),
+            "This recording was already sent"
+        );
+        let tico = tico_recorder_native::network::Tico::saved(&config, &context.live_destination)?;
+        screen.begin(
+            handle,
+            tico,
+            id.clone(),
+            context.live_id,
+            store.get(&id)?.title,
+            store,
+            expected_team,
+        )
+    })()
+    .map_err(|e| format!("{e:#}"))
 }
 
 /// Background work, and telling the window when to redraw. Runs whether or not the window is
@@ -227,10 +429,26 @@ fn main() {
         .plugin(tauri_plugin_updater::Builder::new().build())
         // Focus decides when a downloaded update may install unattended (see update.rs).
         .on_window_event(move |_window, event| window_focus.window_event(event))
+        // The app menu gets "Check for Updates…" (see update.rs). No menu bar item.
+        .menu(update::app_menu)
+        .on_menu_event(|app, event| {
+            if event.id() == update::MENU_CHECK {
+                update::from_menu(app);
+            }
+        })
         .manage(recorder.clone())
         .manage(updates.clone())
         .invoke_handler(tauri::generate_handler![
+            more_task_links,
+            task_picker,
+            task_types,
+            link_selected_tasks,
+            accept_link_item,
+            unlink_item,
             view,
+            meeting_link,
+            share_screen,
+            stop_screen,
             record,
             open_meeting,
             close_meeting,
@@ -244,6 +462,7 @@ fn main() {
             set_notes,
             add_item,
             edit_item,
+            shared_item,
             set_owner,
             remove_item,
             send_item,
@@ -261,9 +480,13 @@ fn main() {
             set_chat_private,
             send_meeting,
             delete_recording,
+            share_live,
+            save_meeting,
+            keep_local,
             save_settings,
             set_audio,
             sign_in,
+            sign_in_desktop,
             sign_out,
             make_default,
             import_legacy,
@@ -275,13 +498,17 @@ fn main() {
             set_visible,
             update::update_check,
             update::update_install,
+            update::move_to_applications,
         ])
         .build(tauri::generate_context!())
         .expect("Start Tico Recorder");
+    updates.locate(app.package_info().version.to_string());
     ticker(app.handle().clone(), &recorder);
     update::start(app.handle().clone(), recorder.clone(), updates);
-    app.run(|handle, event| match event {
-        // `tico-recorder://connect?server=…` from Tico's Connect recorder button, also on a cold start.
+    app.run(|handle: &tauri::AppHandle, event: RunEvent| match event {
+        // `tico-recorder://connect?server=…` from Tico's Connect recorder button, and `tico-recorder://open?server=…`
+        // from Record in the Tico desktop app, also on a cold start.
+        #[cfg(any(target_os = "macos", target_os = "ios"))]
         RunEvent::Opened { urls } => {
             let state = handle.state::<Shared>();
             for url in urls {

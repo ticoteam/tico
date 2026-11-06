@@ -77,6 +77,8 @@ lives on other pages; on this page the button is **+ Add document**.
    sentences, each opening the setting), then **External**.
 2. **Rules › Internal** (board 2): list with Rule | Who | With | Due; filters Who, With, and "Settings too" (off).
    Clicking a rule opens a side panel: rule, description, Who, With, If broken (Block / Escalate / Warn, shown as Stop / Ask first / Warn), due date; Retire / Save.
+   Who may reach whom, how often, and the lines between teammates (each line's rule an internal rule): see
+   [reach.md](reach.md).
 3. **Blocked** (board 3): what a blocked bot gets back and does next (Block, the default), and an Escalate review task
    for the bot's manager (Keep blocked / Send anyway / Edit rule). **Nav:** Rules is a top-level item under Automations and Library, collapsed by default.
 4. **Rules › External** (board 4): the page is **Rules** with tabs **Internal · External · Due · Suggested**. External
@@ -252,12 +254,10 @@ ahead of time so it doesn't try.
     (`GET /api/v2/rule-holds?thread=`), which the chat draws under its messages.
   - **`where:`** narrows a rule to some places: `thread:<conversation id>`, `team:<group>` (the sender's or the
     conversation owner's group chain), `kind:dm` (a direct chat, or a write with no conversation), and
-    `has_outside_members` (someone in it is outside the roster, or is a Slack or federated actor). A write meets the
+    `has_outside_members` (someone in it is outside the roster, or is a Slack actor). A write meets the
     rule when one of its terms holds. A message has the place of its thread (`conversations.id` is the thread id, with
     its root, audience and members read from the thread); a task comment has its task's conversation. The Rules panel
-    sets one choice (anywhere, direct chats, outside, a team, or a thread). Its thread list is the threads sidebar
-    (`GET /api/v2/threads`: root threads the viewer belongs to or follows, the public company and team ones, and DMs; 200
-    at most), so a readable thread outside those is set by id through the API and CLI.
+    no longer shows or sets a place, so `where:` is set through the API and CLI, where a thread is named by its id.
     The API and CLI take several terms. A rule with no `where:` applies wherever its Who matches. Mail and drafts have
     no place, so a `where:` rule never matches them.
   - People's checks are charged to the same monthly budget as bots' (`rules_monthly_usd`) and counted on the Rules
@@ -304,6 +304,8 @@ ahead of time so it doesn't try.
   - A held output never shows as a task hold or on the Blocked tab.
 - **Rollout:** live with Block by default when it ships; no observe-only week (Chris, Oct 30). A team setting turns
   checks Off. The rule-check eval runs before merge and picks the level.
+- A verdict applies to the route it checked, even when it passes or goes unchecked. If the recipients change while
+  the judge runs, the send returns 409 `moved` and sends nothing. A new send checks the new route.
 - **Fails open:** no engine, the team's spend cap, the day's call cap, the deadline, an error or a malformed answer let
   the output through, with a `rules.unchecked` event. Each block, escalate or warn is one `rules.blocked` /
   `rules.escalated` / `rules.warned` event. Never the text.

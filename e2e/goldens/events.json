@@ -3,14 +3,17 @@
     {
       "data": {
         "after": 0,
-        "seq": 146,
+        "seq": 150,
         "topics": [
           "tasks",
           "messages",
           "runs",
           "bots",
           "needs",
-          "threads"
+          "threads",
+          "meeting_items",
+          "presence",
+          "letters"
         ]
       },
       "event": "ready",
@@ -43,6 +46,7 @@
             "last_read_seq": 0,
             "member": true,
             "notify": "live",
+            "pinned": false,
             "unread": 1
           },
           "owner_id": null,
@@ -51,6 +55,7 @@
           "path": [
             "<id1>"
           ],
+          "pinned_for_everyone": false,
           "retention_days": null,
           "root_id": "<id1>",
           "task_id": null,
@@ -91,6 +96,11 @@
           "root_id": "<id1>",
           "sender_id": "keeper",
           "seq": 1,
+          "source": {
+            "kind": "system",
+            "link": null,
+            "name": ""
+          },
           "superseded_at": null,
           "thread_id": "<id1>",
           "wait_s": null
@@ -113,9 +123,12 @@
           "last_unread_seq": 1
         },
         "kind": "activity",
+        "message_id": "<id2>",
         "root_id": "<id1>",
         "seq": 3,
-        "thread_id": "<id1>"
+        "thread_id": "<id1>",
+        "unread": true,
+        "unread_count": 1
       },
       "event": "threads",
       "id": "3"
@@ -164,6 +177,7 @@
             "last_read_seq": 0,
             "member": false,
             "notify": "live",
+            "pinned": false,
             "unread": 0
           },
           "owner_id": null,
@@ -172,6 +186,7 @@
           "path": [
             "<id5>"
           ],
+          "pinned_for_everyone": false,
           "retention_days": null,
           "root_id": "<id5>",
           "task_id": null,
@@ -212,6 +227,11 @@
           "root_id": "<id5>",
           "sender_id": "keeper",
           "seq": 2,
+          "source": {
+            "kind": "system",
+            "link": null,
+            "name": ""
+          },
           "superseded_at": null,
           "thread_id": "<id5>",
           "wait_s": null
@@ -234,9 +254,12 @@
           "last_unread_seq": 2
         },
         "kind": "activity",
+        "message_id": "<id6>",
         "root_id": "<id5>",
         "seq": 8,
-        "thread_id": "<id5>"
+        "thread_id": "<id5>",
+        "unread": false,
+        "unread_count": 0
       },
       "event": "threads",
       "id": "8"
@@ -273,7 +296,8 @@
             "last_read_seq": 3,
             "member": true,
             "notify": "live",
-            "unread": 3
+            "pinned": false,
+            "unread": 1
           },
           "owner_id": "human:ana",
           "parent_id": null,
@@ -281,6 +305,7 @@
           "path": [
             "<conversation>"
           ],
+          "pinned_for_everyone": false,
           "retention_days": null,
           "root_id": "<conversation>",
           "task_id": null,
@@ -323,6 +348,11 @@
           "root_id": "<conversation>",
           "sender_id": "human:ana",
           "seq": 3,
+          "source": {
+            "kind": "person",
+            "link": null,
+            "name": "Ana"
+          },
           "superseded_at": null,
           "thread_id": "<conversation>",
           "wait_s": null
@@ -345,11 +375,11 @@
         "job_id": "<chat_message>",
         "message_id": "<chat_message>",
         "run_id": "<id9>",
-        "seq": 14,
+        "seq": 15,
         "state": "completed"
       },
       "event": "runs",
-      "id": "14"
+      "id": "15"
     },
     {
       "data": {
@@ -360,11 +390,11 @@
           "last_read_seq": 3
         },
         "root_id": "<conversation>",
-        "seq": 15,
+        "seq": 16,
         "thread_id": "<conversation>"
       },
       "event": "threads",
-      "id": "15"
+      "id": "16"
     },
     {
       "data": {
@@ -398,6 +428,11 @@
           "root_id": "<conversation>",
           "sender_id": "human:ana",
           "seq": 4,
+          "source": {
+            "kind": "person",
+            "link": null,
+            "name": "Ana"
+          },
           "superseded_at": null,
           "thread_id": "<conversation>",
           "wait_s": null
@@ -405,11 +440,11 @@
         "message_seq": 4,
         "revision": 0,
         "root_id": "<conversation>",
-        "seq": 16,
+        "seq": 17,
         "thread_id": "<conversation>"
       },
       "event": "messages",
-      "id": "16"
+      "id": "17"
     },
     {
       "data": {
@@ -420,11 +455,11 @@
         "job_id": "<reply_message>",
         "message_id": "<reply_message>",
         "run_id": null,
-        "seq": 18,
+        "seq": 20,
         "state": "queued"
       },
       "event": "runs",
-      "id": "18"
+      "id": "20"
     },
     {
       "data": {
@@ -458,6 +493,11 @@
           "root_id": "<conversation>",
           "sender_id": "human:ana",
           "seq": 5,
+          "source": {
+            "kind": "person",
+            "link": null,
+            "name": "Ana"
+          },
           "superseded_at": null,
           "thread_id": "<conversation>",
           "wait_s": null
@@ -465,11 +505,11 @@
         "message_seq": 5,
         "revision": 0,
         "root_id": "<conversation>",
-        "seq": 19,
+        "seq": 21,
         "thread_id": "<conversation>"
       },
       "event": "messages",
-      "id": "19"
+      "id": "21"
     },
     {
       "data": {
@@ -480,11 +520,11 @@
         "job_id": "<direct_message>",
         "message_id": "<direct_message>",
         "run_id": null,
-        "seq": 21,
+        "seq": 24,
         "state": "queued"
       },
       "event": "runs",
-      "id": "21"
+      "id": "24"
     },
     {
       "data": {
@@ -492,7 +532,7 @@
         "at": "<time>",
         "kind": "created",
         "root_id": "<id12>",
-        "seq": 22,
+        "seq": 25,
         "thread": {
           "archived_at": null,
           "audience": "task",
@@ -511,6 +551,7 @@
             "last_read_seq": 6,
             "member": true,
             "notify": "live",
+            "pinned": false,
             "unread": 0
           },
           "owner_id": null,
@@ -519,6 +560,7 @@
           "path": [
             "<id12>"
           ],
+          "pinned_for_everyone": false,
           "retention_days": null,
           "root_id": "<id12>",
           "task_id": "<task>",
@@ -527,7 +569,7 @@
         "thread_id": "<id12>"
       },
       "event": "threads",
-      "id": "22"
+      "id": "25"
     },
     {
       "data": {
@@ -563,6 +605,11 @@
           "root_id": "<id12>",
           "sender_id": "keeper",
           "seq": 6,
+          "source": {
+            "kind": "task_update",
+            "link": null,
+            "name": "Task update"
+          },
           "superseded_at": null,
           "thread_id": "<id12>",
           "wait_s": null
@@ -570,11 +617,11 @@
         "message_seq": 6,
         "revision": 0,
         "root_id": "<id12>",
-        "seq": 31,
+        "seq": 34,
         "thread_id": "<id12>"
       },
       "event": "messages",
-      "id": "31"
+      "id": "34"
     },
     {
       "data": {
@@ -584,18 +631,6 @@
         "read": {
           "last_read_seq": 6
         },
-        "root_id": "<id12>",
-        "seq": 35,
-        "thread_id": "<id12>"
-      },
-      "event": "threads",
-      "id": "35"
-    },
-    {
-      "data": {
-        "actor": "human:ana",
-        "at": "<time>",
-        "kind": "attention",
         "root_id": "<id12>",
         "seq": 36,
         "thread_id": "<id12>"
@@ -639,6 +674,11 @@
           "root_id": "<id12>",
           "sender_id": "keeper",
           "seq": 7,
+          "source": {
+            "kind": "task_update",
+            "link": null,
+            "name": "Task update"
+          },
           "superseded_at": null,
           "thread_id": "<id12>",
           "wait_s": null
@@ -646,11 +686,11 @@
         "message_seq": 7,
         "revision": 0,
         "root_id": "<id12>",
-        "seq": 42,
+        "seq": 41,
         "thread_id": "<id12>"
       },
       "event": "messages",
-      "id": "42"
+      "id": "41"
     },
     {
       "data": {
@@ -661,11 +701,11 @@
         "job_id": "<id15>",
         "message_id": "<id15>",
         "run_id": null,
-        "seq": 44,
+        "seq": 43,
         "state": "queued"
       },
       "event": "runs",
-      "id": "44"
+      "id": "43"
     },
     {
       "data": {
@@ -703,6 +743,11 @@
           "root_id": "<id12>",
           "sender_id": "keeper",
           "seq": 8,
+          "source": {
+            "kind": "task_update",
+            "link": null,
+            "name": "Task update"
+          },
           "superseded_at": null,
           "thread_id": "<id12>",
           "wait_s": null
@@ -710,11 +755,11 @@
         "message_seq": 8,
         "revision": 0,
         "root_id": "<id12>",
-        "seq": 63,
+        "seq": 62,
         "thread_id": "<id12>"
       },
       "event": "messages",
-      "id": "63"
+      "id": "62"
     },
     {
       "data": {
@@ -725,11 +770,11 @@
         "job_id": "<id17>",
         "message_id": "<id17>",
         "run_id": null,
-        "seq": 65,
+        "seq": 64,
         "state": "queued"
       },
       "event": "runs",
-      "id": "65"
+      "id": "64"
     },
     {
       "data": {
@@ -765,6 +810,11 @@
           "root_id": "<conversation>",
           "sender_id": "keeper",
           "seq": 9,
+          "source": {
+            "kind": "task_update",
+            "link": null,
+            "name": "Task update"
+          },
           "superseded_at": null,
           "thread_id": "<conversation>",
           "wait_s": null
@@ -772,11 +822,11 @@
         "message_seq": 9,
         "revision": 0,
         "root_id": "<conversation>",
-        "seq": 66,
+        "seq": 65,
         "thread_id": "<conversation>"
       },
       "event": "messages",
-      "id": "66"
+      "id": "65"
     },
     {
       "data": {
@@ -814,6 +864,11 @@
           "root_id": "<id12>",
           "sender_id": "keeper",
           "seq": 10,
+          "source": {
+            "kind": "task_update",
+            "link": null,
+            "name": "Task update"
+          },
           "superseded_at": null,
           "thread_id": "<id12>",
           "wait_s": null
@@ -821,11 +876,11 @@
         "message_seq": 10,
         "revision": 0,
         "root_id": "<id12>",
-        "seq": 80,
+        "seq": 77,
         "thread_id": "<id12>"
       },
       "event": "messages",
-      "id": "80"
+      "id": "77"
     },
     {
       "data": {
@@ -836,12 +891,15 @@
           "last_unread_seq": 10
         },
         "kind": "activity",
+        "message_id": "<id21>",
         "root_id": "<id12>",
-        "seq": 81,
-        "thread_id": "<id12>"
+        "seq": 78,
+        "thread_id": "<id12>",
+        "unread": false,
+        "unread_count": 0
       },
       "event": "threads",
-      "id": "81"
+      "id": "78"
     },
     {
       "data": {
@@ -852,18 +910,23 @@
         "job_id": "<id21>",
         "message_id": "<id21>",
         "run_id": null,
-        "seq": 82,
+        "seq": 79,
         "state": "queued"
       },
       "event": "runs",
-      "id": "82"
+      "id": "79"
     },
     {
       "data": {
         "actor": "human:ana",
         "at": "<time>",
         "id": "<task>",
-        "seq": 83,
+        "kind": "update",
+        "kinds": [
+          "insert",
+          "update"
+        ],
+        "seq": 80,
         "task": {
           "acceptance": "[]",
           "acceptance_criteria": [],
@@ -872,6 +935,9 @@
           "body": "Please draft it.",
           "building_seconds": "<volatile>",
           "carried_by": null,
+          "check_back": null,
+          "check_back_at": null,
+          "check_back_note": null,
           "checkpoint_at": null,
           "checkpoint_blocked": 0,
           "checkpoint_by_id": null,
@@ -902,6 +968,7 @@
           "labels": [],
           "lane": "company",
           "links": [],
+          "live_meeting_id": null,
           "next_run": false,
           "note": "Accepted.",
           "number": null,
@@ -953,7 +1020,7 @@
         }
       },
       "event": "tasks",
-      "id": "83"
+      "id": "80"
     },
     {
       "data": {
@@ -961,7 +1028,7 @@
         "at": "<time>",
         "kind": "created",
         "root_id": "<id23>",
-        "seq": 85,
+        "seq": 82,
         "thread": {
           "archived_at": null,
           "audience": "task",
@@ -980,6 +1047,7 @@
             "last_read_seq": 12,
             "member": true,
             "notify": "live",
+            "pinned": false,
             "unread": 0
           },
           "owner_id": null,
@@ -988,6 +1056,7 @@
           "path": [
             "<id23>"
           ],
+          "pinned_for_everyone": false,
           "retention_days": null,
           "root_id": "<id23>",
           "task_id": "<open_task>",
@@ -996,7 +1065,7 @@
         "thread_id": "<id23>"
       },
       "event": "threads",
-      "id": "85"
+      "id": "82"
     },
     {
       "data": {
@@ -1032,6 +1101,11 @@
           "root_id": "<conversation>",
           "sender_id": "keeper",
           "seq": 11,
+          "source": {
+            "kind": "task_update",
+            "link": null,
+            "name": "Task update"
+          },
           "superseded_at": null,
           "thread_id": "<conversation>",
           "wait_s": null
@@ -1039,23 +1113,11 @@
         "message_seq": 11,
         "revision": 0,
         "root_id": "<conversation>",
-        "seq": 94,
+        "seq": 91,
         "thread_id": "<conversation>"
       },
       "event": "messages",
-      "id": "94"
-    },
-    {
-      "data": {
-        "actor": "human:ana",
-        "at": "<time>",
-        "kind": "attention",
-        "root_id": "<conversation>",
-        "seq": 96,
-        "thread_id": "<conversation>"
-      },
-      "event": "threads",
-      "id": "96"
+      "id": "91"
     },
     {
       "data": {
@@ -1093,6 +1155,11 @@
           "root_id": "<id23>",
           "sender_id": "keeper",
           "seq": 12,
+          "source": {
+            "kind": "task_update",
+            "link": null,
+            "name": "Task update"
+          },
           "superseded_at": null,
           "thread_id": "<id23>",
           "wait_s": null
@@ -1100,11 +1167,11 @@
         "message_seq": 12,
         "revision": 0,
         "root_id": "<id23>",
-        "seq": 98,
+        "seq": 93,
         "thread_id": "<id23>"
       },
       "event": "messages",
-      "id": "98"
+      "id": "93"
     },
     {
       "data": {
@@ -1115,12 +1182,15 @@
           "last_unread_seq": 12
         },
         "kind": "activity",
+        "message_id": "<id26>",
         "root_id": "<id23>",
-        "seq": 99,
-        "thread_id": "<id23>"
+        "seq": 94,
+        "thread_id": "<id23>",
+        "unread": false,
+        "unread_count": 0
       },
       "event": "threads",
-      "id": "99"
+      "id": "94"
     },
     {
       "data": {
@@ -1131,11 +1201,11 @@
         "job_id": "<id26>",
         "message_id": "<id26>",
         "run_id": null,
-        "seq": 100,
+        "seq": 95,
         "state": "queued"
       },
       "event": "runs",
-      "id": "100"
+      "id": "95"
     },
     {
       "data": {
@@ -1146,18 +1216,23 @@
           "last_read_seq": 12
         },
         "root_id": "<id23>",
-        "seq": 101,
+        "seq": 96,
         "thread_id": "<id23>"
       },
       "event": "threads",
-      "id": "101"
+      "id": "96"
     },
     {
       "data": {
         "actor": "human:ana",
         "at": "<time>",
         "id": "<open_task>",
-        "seq": 102,
+        "kind": "update",
+        "kinds": [
+          "insert",
+          "update"
+        ],
+        "seq": 97,
         "task": {
           "acceptance": "[]",
           "acceptance_criteria": [],
@@ -1165,6 +1240,9 @@
           "attachments": [],
           "body": "Compare the three.",
           "carried_by": null,
+          "check_back": null,
+          "check_back_at": null,
+          "check_back_note": null,
           "checkpoint_at": null,
           "checkpoint_blocked": 0,
           "checkpoint_by_id": null,
@@ -1195,6 +1273,7 @@
           "labels": [],
           "lane": "company",
           "links": [],
+          "live_meeting_id": null,
           "next_run": false,
           "note": "",
           "number": null,
@@ -1246,7 +1325,7 @@
         }
       },
       "event": "tasks",
-      "id": "102"
+      "id": "97"
     },
     {
       "data": {
@@ -1280,6 +1359,11 @@
           "root_id": "<conversation>",
           "sender_id": "human:ana",
           "seq": 13,
+          "source": {
+            "kind": "person",
+            "link": null,
+            "name": "Ana"
+          },
           "superseded_at": null,
           "thread_id": "<conversation>",
           "wait_s": null
@@ -1287,11 +1371,11 @@
         "message_seq": 13,
         "revision": 0,
         "root_id": "<conversation>",
-        "seq": 106,
+        "seq": 101,
         "thread_id": "<conversation>"
       },
       "event": "messages",
-      "id": "106"
+      "id": "101"
     },
     {
       "data": {
@@ -1302,12 +1386,15 @@
           "last_unread_seq": 17
         },
         "kind": "activity",
+        "message_id": "<id28>",
         "root_id": "<conversation>",
-        "seq": 107,
-        "thread_id": "<conversation>"
+        "seq": 102,
+        "thread_id": "<conversation>",
+        "unread": false,
+        "unread_count": 0
       },
       "event": "threads",
-      "id": "107"
+      "id": "102"
     },
     {
       "data": {
@@ -1318,25 +1405,11 @@
         "job_id": "<id28>",
         "message_id": "<id28>",
         "run_id": null,
-        "seq": 109,
+        "seq": 105,
         "state": "queued"
       },
       "event": "runs",
-      "id": "109"
-    },
-    {
-      "data": {
-        "actor": "runner:<id30>",
-        "at": "<time>",
-        "bot_id": "ops",
-        "conversation_id": "<conversation>",
-        "job_id": "<chat_message>",
-        "run_id": "<id9>",
-        "seq": 110,
-        "state": "completed"
-      },
-      "event": "runs",
-      "id": "110"
+      "id": "105"
     },
     {
       "data": {
@@ -1347,11 +1420,11 @@
         "job_id": "<chat_message>",
         "message_id": "<chat_message>",
         "run_id": "<id9>",
-        "seq": 111,
+        "seq": 109,
         "state": "completed"
       },
       "event": "runs",
-      "id": "111"
+      "id": "109"
     },
     {
       "data": {
@@ -1359,7 +1432,7 @@
         "at": "<time>",
         "kind": "created",
         "root_id": "<id31>",
-        "seq": 112,
+        "seq": 110,
         "thread": {
           "archived_at": null,
           "audience": "participants",
@@ -1385,6 +1458,7 @@
             "last_read_seq": 14,
             "member": true,
             "notify": "live",
+            "pinned": false,
             "unread": 2
           },
           "owner_id": null,
@@ -1393,6 +1467,7 @@
           "path": [
             "<id31>"
           ],
+          "pinned_for_everyone": false,
           "retention_days": null,
           "root_id": "<id31>",
           "task_id": null,
@@ -1401,7 +1476,7 @@
         "thread_id": "<id31>"
       },
       "event": "threads",
-      "id": "112"
+      "id": "110"
     },
     {
       "data": {
@@ -1436,6 +1511,11 @@
           "root_id": "<id31>",
           "sender_id": "bot:ops",
           "seq": 14,
+          "source": {
+            "kind": "bot",
+            "link": null,
+            "name": "ops"
+          },
           "superseded_at": null,
           "thread_id": "<id31>",
           "wait_s": null
@@ -1443,11 +1523,11 @@
         "message_seq": 14,
         "revision": 0,
         "root_id": "<id31>",
-        "seq": 119,
+        "seq": 117,
         "thread_id": "<id31>"
       },
       "event": "messages",
-      "id": "119"
+      "id": "117"
     },
     {
       "data": {
@@ -1483,6 +1563,11 @@
           "root_id": "<id31>",
           "sender_id": "keeper",
           "seq": 15,
+          "source": {
+            "kind": "system",
+            "link": null,
+            "name": ""
+          },
           "superseded_at": null,
           "thread_id": "<id31>",
           "wait_s": null
@@ -1490,11 +1575,11 @@
         "message_seq": 15,
         "revision": 0,
         "root_id": "<id31>",
-        "seq": 121,
+        "seq": 119,
         "thread_id": "<id31>"
       },
       "event": "messages",
-      "id": "121"
+      "id": "119"
     },
     {
       "data": {
@@ -1505,11 +1590,11 @@
         "job_id": "<id34>",
         "message_id": "<id34>",
         "run_id": null,
-        "seq": 124,
+        "seq": 122,
         "state": "queued"
       },
       "event": "runs",
-      "id": "124"
+      "id": "122"
     },
     {
       "data": {
@@ -1520,11 +1605,11 @@
           "last_read_seq": 14
         },
         "root_id": "<id31>",
-        "seq": 127,
+        "seq": 125,
         "thread_id": "<id31>"
       },
       "event": "threads",
-      "id": "127"
+      "id": "125"
     },
     {
       "data": {
@@ -1535,12 +1620,15 @@
           "last_unread_seq": 16
         },
         "kind": "activity",
+        "message_id": "<id36>",
         "root_id": "<id31>",
-        "seq": 129,
-        "thread_id": "<id31>"
+        "seq": 127,
+        "thread_id": "<id31>",
+        "unread": true,
+        "unread_count": 2
       },
       "event": "threads",
-      "id": "129"
+      "id": "127"
     },
     {
       "data": {
@@ -1548,17 +1636,18 @@
         "at": "<time>",
         "kind": "attention",
         "root_id": "<id31>",
-        "seq": 130,
+        "seq": 128,
         "thread_id": "<id31>"
       },
       "event": "threads",
-      "id": "130"
+      "id": "128"
     },
     {
       "data": {
         "actor": "bot:ops",
         "at": "<time>",
         "count": 1,
+        "folded_task_ids": [],
         "items": [
           {
             "actions": [
@@ -1601,7 +1690,8 @@
             "what": "spend"
           }
         ],
-        "seq": 132,
+        "plate_count": 1,
+        "seq": 130,
         "went_away": {
           "assistant": 0,
           "days": 7,
@@ -1611,7 +1701,7 @@
         }
       },
       "event": "needs",
-      "id": "132"
+      "id": "130"
     },
     {
       "data": {
@@ -1646,6 +1736,11 @@
           "root_id": "<id31>",
           "sender_id": "bot:ops",
           "seq": 16,
+          "source": {
+            "kind": "bot",
+            "link": null,
+            "name": "ops"
+          },
           "superseded_at": null,
           "thread_id": "<id31>",
           "wait_s": null
@@ -1653,10 +1748,37 @@
         "message_seq": 16,
         "revision": 0,
         "root_id": "<id31>",
-        "seq": 133,
+        "seq": 131,
         "thread_id": "<id31>"
       },
       "event": "messages",
+      "id": "131"
+    },
+    {
+      "data": {
+        "actor": "runner:<id30>",
+        "at": "<time>",
+        "bots": [],
+        "kind": "bot_status",
+        "root_id": "<conversation>",
+        "seq": 132,
+        "thread_id": "<conversation>"
+      },
+      "event": "threads",
+      "id": "132"
+    },
+    {
+      "data": {
+        "actor": "runner:<id30>",
+        "at": "<time>",
+        "bot_id": "ops",
+        "conversation_id": "<conversation>",
+        "job_id": "<chat_message>",
+        "run_id": "<id9>",
+        "seq": 133,
+        "state": "completed"
+      },
+      "event": "runs",
       "id": "133"
     },
     {
@@ -1668,12 +1790,15 @@
           "last_unread_seq": 17
         },
         "kind": "activity",
+        "message_id": "<id38>",
         "root_id": "<conversation>",
-        "seq": 139,
-        "thread_id": "<conversation>"
+        "seq": 141,
+        "thread_id": "<conversation>",
+        "unread": true,
+        "unread_count": 1
       },
       "event": "threads",
-      "id": "139"
+      "id": "141"
     },
     {
       "data": {
@@ -1681,17 +1806,18 @@
         "at": "<time>",
         "kind": "attention",
         "root_id": "<conversation>",
-        "seq": 140,
+        "seq": 142,
         "thread_id": "<conversation>"
       },
       "event": "threads",
-      "id": "140"
+      "id": "142"
     },
     {
       "data": {
         "actor": "runner:<id30>",
         "at": "<time>",
         "count": 1,
+        "folded_task_ids": [],
         "items": [
           {
             "actions": [
@@ -1734,7 +1860,8 @@
             "what": "spend"
           }
         ],
-        "seq": 141,
+        "plate_count": 1,
+        "seq": 143,
         "went_away": {
           "assistant": 0,
           "days": 7,
@@ -1744,7 +1871,7 @@
         }
       },
       "event": "needs",
-      "id": "141"
+      "id": "143"
     },
     {
       "data": {
@@ -1785,6 +1912,11 @@
           "root_id": "<conversation>",
           "sender_id": "bot:ops",
           "seq": 17,
+          "source": {
+            "kind": "bot",
+            "link": null,
+            "name": "ops"
+          },
           "superseded_at": null,
           "thread_id": "<conversation>",
           "wait_s": null
@@ -1792,11 +1924,11 @@
         "message_seq": 17,
         "revision": 0,
         "root_id": "<conversation>",
-        "seq": 143,
+        "seq": 145,
         "thread_id": "<conversation>"
       },
       "event": "messages",
-      "id": "143"
+      "id": "145"
     },
     {
       "data": {
@@ -1806,11 +1938,24 @@
         "conversation_id": "<conversation>",
         "job_id": "<chat_message>",
         "run_id": "<id9>",
-        "seq": 144,
+        "seq": 147,
         "state": "completed"
       },
       "event": "runs",
-      "id": "144"
+      "id": "147"
+    },
+    {
+      "data": {
+        "actor": "runner:<id30>",
+        "at": "<time>",
+        "bots": [],
+        "kind": "bot_status",
+        "root_id": "<conversation>",
+        "seq": 148,
+        "thread_id": "<conversation>"
+      },
+      "event": "threads",
+      "id": "148"
     },
     {
       "data": {
@@ -1821,18 +1966,18 @@
         "job_id": "<chat_message>",
         "message_id": "<chat_message>",
         "run_id": "<id9>",
-        "seq": 145,
+        "seq": 149,
         "state": "completed"
       },
       "event": "runs",
-      "id": "145"
+      "id": "149"
     },
     {
       "data": {
         "actor": "runner:<id30>",
         "at": "<time>",
         "bot": "ops",
-        "seq": 146,
+        "seq": 150,
         "status": {
           "bot": "ops",
           "bot_state": "active",
@@ -1850,7 +1995,7 @@
         }
       },
       "event": "bots",
-      "id": "146"
+      "id": "150"
     }
   ],
   "request": "GET /api/v2/events?after=0",

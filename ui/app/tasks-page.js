@@ -36,7 +36,10 @@ function pageTasks(forced, openId = '') {
     tasksTypeCheck(state);
   };
   if (keptPref) { prefApply(keptPref); state.migrate = false; }
-  if (kept) Object.assign(state, {tasks: kept.tasks, labels: kept.labels, tags: kept.tags, filtered: kept.filtered, loading: false, kept: true});
+  // A kept list read to its end keeps its cursor too, so coming back asks only for what changed since (a delta read),
+  // and the 15-minute clock (refresh.js tasksFreshen) runs on from its last full read.
+  if (kept) Object.assign(state, {tasks: kept.tasks, labels: kept.labels, tags: kept.tags, filtered: kept.filtered, loading: false, kept: true,
+    since: kept.since || null, fullAt: kept.since ? kept.fullAt || 0 : 0, activeComplete: !!kept.since});
   const main = $('#main');
   main.classList.add('tasks-layout');
   main.innerHTML = `<div class="tasks-page"><div class="tasks-pane" id="tasks-pane">
@@ -75,7 +78,7 @@ function pageTasks(forced, openId = '') {
     else if (ev.target.closest('#task-type-more')) taskPipelineMenu(state, $('#task-type-more'));
   };
   $('#task-pin').onclick = () => tasksPinToggle(state);
-  // Go through: the Needs you cards from the first, one at a time (decide.js).
+  // Catch up: the Needs you cards from the first, one at a time (decide.js).
   for (const b of document.querySelectorAll('#tasks-pane [data-go-through]')) b.onclick = () => decideGoThrough();
   $('#task-stats')?.addEventListener('click', () => taskStatsOpen(state));
   $('#task-new').onclick = () => { const p = tasksCreatePrefill(state); openTaskCreate(p.owner_id, {labels: p.labels}); };
@@ -223,15 +226,16 @@ function tasksRemember(state) {
 // way when leaving still keeps the last one).
 function tasksKeep(state) {
   if (!state?.read && !state?.kept) return;
-  S.lastRead.tasks = {key: activeTasksPath(), tasks: state.tasks, labels: state.labels, tags: state.tags, filtered: state.filtered};
+  S.lastRead.tasks = {key: activeTasksPath(), tasks: state.tasks, labels: state.labels, tags: state.tags, filtered: state.filtered,
+    since: state.activeComplete ? state.since : null, fullAt: state.fullAt};
 }
-function taskOwnerOptions(selected = '') {
+function taskOwnerOptions(selected = '', blank = 'Who is this for?') {
   const people = (S.people || []).filter(p => !p.hidden)
     .slice().sort((a, b) => String(a.name || a.id).localeCompare(String(b.name || b.id)));
   const bots = (S.emps || []).filter(e => e.status !== 'archived' && (!isHiddenBot(e.id) || [e.id, 'bot:' + e.id].includes(selected)))
     .slice().sort((a, b) => byBotOrder(a, b) || String(a.display_name || a.slug).localeCompare(String(b.display_name || b.slug)));
   const pick = value => value === selected ? ' selected' : '';
-  return `<option value="">Who is this for?</option>
+  return `<option value="">${esc(blank)}</option>
     <optgroup label="Humans">${people.map(p =>
       `<option value="human:${esc(p.id)}"${pick('human:' + p.id) || pick(p.id)}>${esc(p.name || p.id)}</option>`).join('')}</optgroup>
     <optgroup label="Bots">${bots.map(e =>
@@ -340,10 +344,29 @@ function formFocus(root) {
 }
 const mergeTaskRows = (...groups) => [...new Map(groups.flat().map(task => [task.id, task])).values()];
 // Snoozed tasks too: the Snoozed view shows them and every other view leaves them out (taskItems).
-const activeTasksPath = (offset = 0) => `/v2/tasks?lane=company&status=${ACTIVE_TASK_STATUSES}&snoozed=all&limit=100&offset=${offset}`;
+// The first page is short so the list paints soon; the rest come 500 at a time (the server's most), so a full read of a
+// thousand open tasks is three requests, not eleven.
+const activeTasksPath = (offset = 0) => `/v2/tasks?lane=company&status=${ACTIVE_TASK_STATUSES}&snoozed=all&limit=${offset ? 500 : 100}&offset=${offset}`;
 // Every status: a task that finished comes back as finished (as a live event brings it), not as gone.
 const tasksChangedPath = cursor => `/v2/tasks?lane=company&snoozed=all&changed_after=${encodeURIComponent(cursor)}`;
-async function tasksLoad(state, opts = {}) {
+// One full read at a time (state.fullRead), the first one on opening the page included. A load asked for while one is
+// on its way never starts the list over: the 2-minute poll shares it, and a load after a save waits for it and then
+// reads what changed since its cursor, which takes in the save. A list with a cursor reads only what changed.
+function tasksLoad(state, opts = {}) {
+  if (state.fullRead) {
+    if (opts.poll) return state.fullRead;
+    return state.loadAfter ||= state.fullRead.then(() => {
+      state.loadAfter = null;
+      return TASKS_ST === state ? tasksLoad(state, opts) : false;
+    });
+  }
+  return state.since ? tasksRead(state, opts) : tasksFullStart(state, opts);
+}
+function tasksFullStart(state, opts) {
+  const read = state.fullRead = tasksRead(state, opts).finally(() => { if (state.fullRead === read) state.fullRead = null; });
+  return read;
+}
+async function tasksRead(state, opts = {}) {
   const seq = ++state.loadSeq;
   // A list read in full keeps the cursor it was read at (`since`; `cursor` is the keyboard's row); from then on a load
   // asks only for what changed since (backend/task_reads.py), unless the server says to read in full again (`reset`).
@@ -353,16 +376,19 @@ async function tasksLoad(state, opts = {}) {
   state.loading = !state.kept && !(state.tasks || []).some(t => !['done', 'closed'].includes(String(t.status)));
   if (!cursor) tasksRender(state);
   const others = () => [v2Get('/v2/tasks/labels'),
-    taskTypesLoad().then(t => { state.typesLoaded = true; return t; }).catch(() => TASK_TYPES)];
+    taskTypesLoad().then(t => { state.typesLoaded = true; return t; }).catch(() => TASK_TYPES),
+    // A load after a save also reads the personal queue: its membership comes from the feed, including other boards.
+    // The first load and polls already read it in refresh(), alongside the task request.
+    ...(state.read && !opts.poll ? [v2NeedsRead()] : [])];
   let changed = null, active = null, lab, held = null;
   const seen = new Set(), isFinished = t => ['done', 'closed'].includes(String(t.status));
   if (cursor) {
     [changed, lab] = await Promise.all([v2Get(tasksChangedPath(cursor)), ...others()]);
     if (TASKS_ST !== state || state.loadSeq !== seq) return;
-    if (!changed || changed.reset) { changed = null; state.since = null; state.activeComplete = false; }
+    // The server says to read in full again: that read is the one full read (tasksLoad).
+    if (!changed || changed.reset) { state.since = null; state.activeComplete = false; return tasksLoad(state, opts); }
   }
   if (!changed) {
-    if (cursor) tasksRender(state);
     [active, lab] = await Promise.all([v2Get(activeTasksPath()), ...others()]);
     // A first read that lands after the page was left is kept for the next visit, as leaving would have kept it.
     if (TASKS_ST !== state && state.loadSeq === seq && active && !state.read && !state.kept && !S.lastRead.tasks)
@@ -387,7 +413,6 @@ async function tasksLoad(state, opts = {}) {
   state.loading = false; state.read = true;
   tasksTypeCheck(state);
   tasksTools(state); tasksRender(state);
-  if (tasksNeedsQueue(state)) void askFilteredLoad(state);
   tasksFilterMenuLoaded(state);
   tasksPeekSync(state);
   tasksFinishPending(state, seq);
@@ -445,8 +470,7 @@ function tasksReadFull(state, opts = {}) {
   state.since = null;
   getForget();
   getForgetTagged(p => p.startsWith('/v2/tasks'));
-  const read = state.fullRead = tasksLoad(state, opts).finally(() => { if (state.fullRead === read) state.fullRead = null; });
-  return read;
+  return tasksFullStart(state, opts);
 }
 // Pulled down at the top on a touch screen (pull-refresh.js): the list, Needs you and the counts read again.
 async function tasksPulled(state) {
@@ -525,7 +549,8 @@ function companyNeedGroups(items) {
   const needById = new Map((S.v2.needs || []).map(item => [String(item.id), item]));
   const groups = new Map();
   for (const it of items) {
-    if (!it.task || it.col === 'done' || !taskNeedsViewer(it.task)) continue;
+    // The server's queue already includes every counted task, including bot-owned escalations to their manager.
+    if (!it.task) continue;
     const need = needById.get(String(it.id)), actor = companyNeedActor(it.task, need);
     if (!groups.has(actor)) groups.set(actor, {actor, items: [], firstNeed: Infinity, firstRank: Infinity, updated_at: ''});
     const group = groups.get(actor);
@@ -607,7 +632,7 @@ function tasksRender(state) {
     : tasksFinishedView(state.view) ? tasksDoneHTML(items, state)
     : state.view === 'board' ? tasksBoardHTML(items, state)
     : tasksListHTML(items, state);
-  // Needs you holds the server's list a page at a time: its order, groups, approvals and questions come with each page.
+  // The whole-list count includes unread pages, which load as the list scrolls or through Show more.
   const paged = tasksNeedsQueue(state) && !state.loading;
   if (paged) html += needsMoreButton();
   tasksPatch(el, html);
@@ -625,4 +650,5 @@ function tasksRender(state) {
   }
   tasksSelectionPaint(state);
   tasksTabsPaint(state);
+  fbSync();
 }

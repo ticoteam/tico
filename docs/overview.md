@@ -25,11 +25,11 @@ in the sidebar tree; its arrow still folds it) is the same grid for one group. B
 | `growth` | Everyone (the [Growth page](growth.md), `#/growth`) | The owner, admins, and a bot acting as itself, which pins only its own cards there |
 | `team:<group>` | Whoever may Read the group: **Seen by** opens the group's Access (permissions.md, People and groups) | The owner, admins, and a person who leads the group or a group above it |
 | `bot:<slug>` | Whoever may Read the bot | The bot itself, or a person who manages it |
-| `task:<id>` | Whoever may read the task | The bot on it (owner or requester), its people, someone who can move it |
+| `task:<id>` | Whoever may read the task | The owner, requester, a person who can move tasks, or the org owner; a bot only tasks it owns or requested, acting as itself |
 | `person:<id>` | That person only (My dashboard) | That person, or BotOps and the Assistant acting for them |
 
 A Dashboard nobody arranged shows Tasks by status, Done per week, Needs you and Latest pages for the company; a team page
-shows the first three for its team; the Growth page shows its five growth cards (see [growth.md](growth.md)). The first
+shows the first three for its team; the Growth page shows its default growth cards (see [growth.md](growth.md)). The first
 change saves them as real pins. Arranging: drag a card by its grip, and its
 ⋯ menu edits it, resizes it (small, medium, large) or removes it; **Add card** and **Add page** add one. On a phone the
 grid is one column.
@@ -62,10 +62,14 @@ whose owner they may read, automations they may see. Spend shows to the owner an
 lead. A card that shows the reader nothing is hidden for them.
 
 **Pins** put a page (`page:<file id>`) or a card (`card:<id>`) at a place, in order and at a size. The pinning rule keeps
-a page's data from spreading on its own: a bot pins only its own pages and cards, to its own sidebar or a task it holds or
-asked for. A person pins to the Dashboard or a team page, and a page they pin there may be read by that place's audience;
-a private task's file is never pinned there. Each pin and unpin of a page is in the file's activity (docs/files.md).
+a page's data from spreading on its own: a bot pins only its own pages to its sidebar, and its own cards to its sidebar
+or a task it holds or asked for. A person pins to the Dashboard or a team page, and a page they pin there may be read
+by that place's audience; a private task's file is never pinned there. Each pin and unpin of a page is in the file's
+activity (docs/files.md).
 A page published with `--task` pins itself to the top of that task; a page's full view says where it is pinned.
+Any person or bot acting as itself who can read a task may link a page they can read there. Task pins widen nothing.
+This uses the task place's `can_link` flag; `can_edit` still controls arranging pins and creating cards.
+Unlinking is for whoever linked it, the task's owner or requester, or the org owner.
 A bot's sidebar pins are its sidebar widgets: `page:<file id>` and `card:<id>` beside Tasks, Updates and Files, any
 number, and the built-ins may be hidden so the sidebar is only pages. The Assistant's sidebar keeps its own widgets.
 

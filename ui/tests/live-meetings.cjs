@@ -8,7 +8,7 @@ const {t} = (() => { try { return require('./support/load.cjs'); } catch { retur
 
 // A bot made since bots got ids: its id is a UUID, its slug only a label. The picker and the meeting's bots use the id.
 const FINANCE = '0192f0c4-7b1e-7cc2-9d1a-3f5e8a6b2c10';
-const makeDetail = id => ({id, title: 'Weekly sync', state: 'live', owner_id: 'human:ana', seq: 2, event_id: 5,
+const makeDetail = id => ({id, title: 'Weekly sync', state: 'live', owner_actor: 'human:ana', visibility: 'team', access: [], seq: 2, event_id: 5,
   window_ms: 30000, cooldown_ms: 60000, reply_cap: 3, imported_meeting_id: null,
   humans: [{actor: 'human:ana', name: 'Ana'}], bots: [{bot: 'ops', name: 'Operations'}],
   chunks: [{seq: 1, revision: 1, speaker: 'Ana', text: 'We should ship the new plan.'},
@@ -60,7 +60,7 @@ async function main() {
       if (p === '/vendor/fonts/material-symbols-outlined.woff2') return route.fulfill({contentType: 'font/woff2', body: fs.readFileSync(uiFile('vendor/fonts/material-symbols-outlined.woff2'))});
       if (p === '/') return route.fulfill({contentType: 'text/html', body: html});
       if (p === '/api/me') return json({id: 'ana', role: 'owner', name: 'Ana', email: 'ana@example.test', cloud: true});
-      if (p === '/api/humans') return json({people: [{id: 'ana', name: 'Ana'}, {id: 'ben', name: 'Ben'}]});
+      if (p === '/api/humans') return json({people: [{id: 'ana', name: 'Ana'}, {id: 'ben', name: 'Ben'}, {id: 'cara', name: 'Cara'}]});
       // The viewer's roster lacks the attached UUID bot, so its teammate name can only come from the meeting's `bots`.
       if (p === '/api/employees') return json([{name: 'ops', display_name: 'Operations'}]);
       if (p === '/api/issues') return json([]);
@@ -76,6 +76,17 @@ async function main() {
         const body = JSON.parse(route.request().postData()); calls.push(['connect', body]);
         world.detail = makeDetail('live-1'); world.detail.title = body.title; world.meetings = [world.detail];
         return json(world.detail);
+      }
+      if (p === '/api/v2/live-meetings/denied') return route.fulfill({status:404, contentType:'application/json', body:JSON.stringify({error:{detail:'Meeting not found'}})});
+      if (p.includes('/screen/')) world.screenReads = (world.screenReads || 0) + 1;
+      if (p === '/api/v2/live-meetings/live-1/screen/status') return world.screen ? json({generation:'fixture'}) : route.fulfill({status:410});
+      if (p === '/api/v2/live-meetings/live-1/screen/frame') {
+        if (!world.screen) return route.fulfill({status:410});
+        if (url.searchParams.get('after') === 'fixture:1') {
+          await new Promise(resolve => setTimeout(resolve, 100));
+          return route.fulfill({status:204});
+        }
+        return route.fulfill({contentType:'image/jpeg', headers:{'X-Screen-Version':'fixture:1'}, body:world.screen});
       }
       if (p === '/api/v2/live-meetings/live-1/events') return route.fulfill({contentType: 'text/event-stream', body: ': fixture\n\n'});
       if (p === '/api/v2/live-meetings/live-1' && method === 'GET') {
@@ -100,7 +111,15 @@ async function main() {
           return route.fulfill({status: 400, contentType: 'application/json', body: JSON.stringify({error: {detail: 'Chat rejected'}})});
         }
         if (operation === 'join') world.detail.humans.push({actor: 'human:ben', name: 'Ben'});
-        if (operation === 'bots') world.detail.bots.push({bot: body.bots[0], name: 'Finance'});
+        if (operation === 'bots') world.detail.bots.push({bot: body.bots[0], name: 'Finance', joined_by: 'human:ana'});
+        if (operation === 'access') {
+          world.detail.access.push(...(body.add || []).map(id => ({actor: 'human:' + id, name: id === 'cara' ? 'Cara' : 'Ben'})));
+          const gone = new Set((body.remove || []).map(id => 'human:' + id));
+          world.detail.access = world.detail.access.filter(person => !gone.has(person.actor));
+          world.detail.humans = world.detail.humans.filter(person => !gone.has(person.actor));
+          // Leaving a private meeting takes it out of reach.
+          if (gone.has('human:ana')) { world.meetings = []; return json({id: 'live-1', left: true}); }
+        }
         if (operation === 'control') world.detail.state = body.action === 'end' ? 'ended' : body.action === 'resume' ? 'live' : 'paused';
         if (operation === 'finalize') world.detail.imported_meeting_id = 'meeting-imported';
         if (operation === 'chat') world.detail.chat.push({actor: 'human:ana', role: 'human', text: body.text});
@@ -134,13 +153,50 @@ async function main() {
     assert.equal(calls[0][1].reply_cap, 2);
     assert.equal(calls[0][1].cooldown_seconds, 90);
     world.detail.owner_actor = 'human:ben';
+    world.detail.visibility = 'private';
     await page.locator('[data-live-id=live-1]').click();
     await page.locator('[data-live-control=pause]').waitFor({state: 'detached'});
     await page.locator('#live-bot-picker').waitFor();
     assert.equal(await page.locator('[data-live-control=pause]').count(), 0, 'joined participant can attach without controlling the meeting');
+    assert.equal(await page.locator('[data-live-bot-remove=ops]').count(), 0, 'only the connector or adder can remove a bot');
+    await page.locator('#live-people-picker select').selectOption('cara');
+    await page.locator('#live-people-picker button').click();
+    await page.locator('.live-members').getByText(/Cara/).waitFor();
+    assert(calls.some(([op, body]) => op === 'access' && body.add.includes('cara')), 'a private participant can add a person');
+    assert.equal(await page.locator('[data-live-person-remove]').count(), 0, 'only the connector removes others');
+    assert.equal(await page.locator('[data-live-leave]').count(), 1, 'a participant can leave');
+    world.detail.bots[0].joined_by = 'human:ana';
+    await page.locator('[data-live-id=live-1]').click();
+    await page.locator('[data-live-bot-remove=ops]').waitFor();
+    delete world.detail.bots[0].joined_by;
+    world.detail.humans = [];
+    world.detail.access.push({actor: 'human:ana', name: 'Ana'});
+    await page.locator('[data-live-id=live-1]').click();
+    await page.locator('[data-live-join]').waitFor();
+    for (const width of [390, 1280]) {
+      await page.setViewportSize({width, height: 900});
+      for (const id of ['live-people-picker', 'live-bot-picker']) {
+        await page.locator('#' + id).waitFor();
+        assert(await page.locator('#' + id).evaluate(form => {
+          const box = form.getBoundingClientRect(); return box.left >= 0 && box.right <= innerWidth;
+        }), 'added participants have sharing controls at phone and desktop widths');
+      }
+      assert(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth), 'no sideways scroll at ' + width);
+    }
+    await page.locator('[data-live-leave]').click();
+    await page.locator('.live-status').getByText('You left the meeting.').waitFor();
+    await page.locator('.live-detail').getByText(/No live meetings/).waitFor();
+    assert(calls.some(([op, body]) => op === 'access' && body.remove?.includes('ana')), 'Leave removes only yourself');
+    world.meetings = [world.detail];
+    await page.evaluate(() => liveLoad(LIVE_MEETINGS));
+    world.detail.humans = [{actor: 'human:ana', name: 'Ana'}];
     world.detail.owner_actor = 'human:ana';
     await page.locator('[data-live-id=live-1]').click();
     await page.locator('[data-live-control=pause]').waitFor();
+    assert.equal(await page.locator('[data-live-leave], [data-live-person-remove=ana]').count(), 0, 'the connector neither leaves nor removes themselves');
+    await page.locator('[data-live-person-remove=cara]').click();
+    await page.locator('[data-live-person-remove=cara]').waitFor({state: 'detached'});
+    assert(calls.some(([op, body]) => op === 'access' && body.remove?.includes('cara')), 'the connector removes others');
     await page.locator(`#live-bot-picker select option[value="${FINANCE}"]`).waitFor();
     await page.locator('#live-bot-picker select').selectOption(FINANCE);
     const draft = 'Please review this plan';
@@ -228,7 +284,7 @@ async function main() {
     assert.match(await page.locator('.live-members').innerText(), /Teammates: Operations Remove Finance Remove/, 'teammates by name, not id');
     await page.locator(`[data-live-bot-remove="${FINANCE}"]`).click();
     await page.locator(`[data-live-bot-remove="${FINANCE}"]`).waitFor({state: 'detached'});
-    assert(calls.some(([op]) => op === FINANCE), 'a joined person can revoke meeting-only bot access');
+    assert(calls.some(([op]) => op === FINANCE), 'the connector can revoke meeting-only bot access');
     await page.locator('[data-live-control=pause]').click();
     await page.locator('[data-live-control=resume]').waitFor();
     assert(calls.some(([op, body]) => op === 'control' && body.action === 'pause'));
@@ -241,13 +297,37 @@ async function main() {
     assert(calls.some(([op]) => op === 'finalize'));
     assert.doesNotMatch(await page.locator('.live-card-head').innerText(), /From Tico Recorder/);
     world.detail.client = 'tico-recorder';
-    // The stable Open in Tico link selects even an ended meeting absent from the list.
+    // A deep link opens ended meetings absent from the active list, including the older alias.
     world.meetings = [];
     await page.goto('https://tico-ui.test/#/meetings?live=live-1');
-    await page.locator('.live-card').waitFor();
-    assert.match(await page.locator('.live-card-head').innerText(), /From Tico Recorder/);
-    await page.locator('#live-back').click();
-    await page.locator('#meet-live-now').waitFor();
+    await page.waitForURL('**/#/meetings/live/live-1');
+    await page.locator('.live-finalized').waitFor();
+    await page.locator('.live-card-head').getByText('From Tico Recorder').waitFor();
+    assert.equal(await page.evaluate(() => LIVE_MEETINGS.selected), 'live-1');
+    assert.equal(await page.evaluate(() => LIVE_MEETINGS.screen), null, 'An ended meeting never starts a screen loop');
+    const endedScreenReads = world.screenReads || 0;
+    await page.waitForTimeout(1100);
+    assert.equal(world.screenReads || 0, endedScreenReads, 'Ended meeting pages do not poll screen routes');
+    world.meetings = [makeDetail('live-1')];
+    await page.goto('https://tico-ui.test/#/meetings/live/denied');
+    await page.getByText('This meeting is not available to you, or it does not exist.').waitFor();
+    assert.equal(await page.locator('.live-card').count(), 0, 'denied link never falls through to another meeting');
+    assert.equal(await page.evaluate(() => LIVE_MEETINGS.selected), 'denied');
+    // Synthetic canvas pixels only: successful frame, expiration, and route teardown.
+    const jpeg = await page.evaluate(() => { const c = document.createElement('canvas'); c.width=80; c.height=60; c.getContext('2d').fillRect(0,0,80,60); return c.toDataURL('image/jpeg').split(',')[1]; });
+    world.screen = Buffer.from(jpeg, 'base64'); world.detail.state = 'live';
+    await page.goto('https://tico-ui.test/#/meetings/live/live-1');
+    await page.locator('.live-screen:not([hidden]) img').waitFor();
+    await page.waitForFunction(() => document.querySelector('.live-screen img')?.naturalWidth === 80);
+    await page.evaluate(() => LIVE_MEETINGS.sources.get('live-1').dispatchEvent(new MessageEvent('meeting.access', {data:'{}', lastEventId:'99'})));
+    await page.waitForTimeout(400);
+    assert(await page.locator('.live-screen').isVisible(), 'adding another person must preserve an unchanged slide');
+    await page.waitForFunction(() => document.querySelector('.live-screen img')?.naturalWidth === 80);
+    world.screen = null;
+    await page.locator('.live-screen').waitFor({state:'hidden'});
+    await page.goto('https://tico-ui.test/#/meetings');
+    await page.waitForFunction(() => LIVE_MEETINGS === null);
+    assert.equal(await page.locator('.live-screen').count(), 0, 'leaving a meeting removes its shared image');
     assert.deepEqual(errors, []);
     await context.close();
     await require('./support/recorder-pause.cjs')(browser);

@@ -125,6 +125,38 @@ def test_unread_threads_reads_cores_sidebar_and_only_what_is_unread(api, monkeyp
     assert seen == ["human:cara"]
 
 
+def test_home_builds_thread_attention_once_for_both_cards_and_rechecks_on_the_next_read(api, monkeypatch):
+    from backend import thread_attention
+    from backend.tests.test_thread_attention import members_thread, say
+    tid = members_thread(api)
+    mention = say(api, tid, "@ana please check.")
+    ask = say(api, tid, "Which lease?", kind="ask", to_actor="human:ana")
+    calls, addressed = [], thread_attention._addressed
+
+    def counted(c, me):
+        calls.append(me)
+        return addressed(c, me)
+
+    monkeypatch.setattr(thread_attention, "_addressed", counted)
+    cards = {p["card"]["template"]: p["card"]["data"] for p in place(api, "person:me")["pins"]}
+    assert calls == ["human:ana"]
+    # Needs you keeps the loose ask once, while the sidebar's separate projection still sees the thread.
+    assert {it["id"] for it in cards["needs_attention"]["items"]} == {mention["id"], ask["id"]}
+    assert [it["id"] for it in cards["unread_threads"]["threads"]] == [tid]
+    reply = say(api, tid, "Checked.", actor="human:ana")
+    calls.clear()
+    cards = {p["card"]["template"]: p["card"]["data"] for p in place(api, "person:me")["pins"]}
+    assert calls == ["human:ana"]
+    assert mention["id"] not in {it["id"] for it in cards["needs_attention"]["items"]}
+    # Replying clears attention but preserves the read mark; only an explicit read clears these two human messages.
+    assert [(it["id"], it["unread"]) for it in cards["unread_threads"]["threads"]] == [(tid, 2)]
+    post(api, f"threads/{tid}/read", {"seq": reply["seq"]})
+    calls.clear()
+    cards = {p["card"]["template"]: p["card"]["data"] for p in place(api, "person:me")["pins"]}
+    assert calls == ["human:ana"]
+    assert cards["unread_threads"]["threads"] == []
+
+
 def test_its_writes_leave_events_that_name_nothing(api):
     """The event log is the company's (the owner reads it whole, `hub sql` included): a write to My dashboard leaves
     its event and names no card, page, template or place, before or after the card is gone."""

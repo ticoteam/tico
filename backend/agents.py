@@ -22,6 +22,7 @@ from cryptography.hazmat.primitives.kdf.hkdf import HKDF
 
 from .harnesses import is_external, resolve_harness
 from .store import H, Problem, digest, encode
+from . import bot_settings as BS
 
 # The agent's timer posts every minute; three misses is offline. A Mac runner is offline after
 # 60 s because its heartbeat is every 15 s and a lease depends on it; nothing here does.
@@ -44,7 +45,7 @@ PAIRABLE = ("hermes", "openclaw")
 
 # One bot's config and agent record, read through read_cache so a page that primes them for every bot
 # (views.prime_machines) reads neither again per bot.
-CONFIG_SQL = "SELECT config FROM bot_config WHERE bot=?"
+CONFIG_SQL = BS.ONE_SQL
 ROW_SQL = "SELECT * FROM agents WHERE bot=?"
 
 
@@ -290,7 +291,8 @@ def approve_pairing(c, who, manager, code, bot):
         raise Problem("bot_state", "This bot is " + state + "; make it planned or active first", 409)
     if state == "planned":
         c.execute("UPDATE bots SET state='active' WHERE id=?", (bot,))
-        c.execute("UPDATE bot_config SET config=json_set(config,'$.status','active'),revision=revision+1 WHERE bot=?", (bot,))
+        BS.update(c, bot, {"status": "active"})
+        c.execute("UPDATE bot_config SET revision=revision+1 WHERE bot=?", (bot,))
         H.event(c, who.actor, "bot.activated", bot)
     issued = issue_credential(c, who, bot)
     c.execute("UPDATE agent_pairings SET state='approved',bot=?,token=?,decided_by=?,decided_at=? WHERE id=?",

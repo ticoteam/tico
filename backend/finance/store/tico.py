@@ -7,6 +7,7 @@ from typing import Any, cast
 
 from ... import hubdb as _hubdb
 from ..core.org import Org, Team
+from ... import bot_settings as BS
 
 # Tico's own modules are untyped: Finance reaches them only through this file, typed at each call.
 _H: Any = _hubdb
@@ -90,7 +91,7 @@ def org(c: sqlite3.Connection, owner: str) -> Org:
     roster = cast(dict[str, Any], P.load(doc if isinstance(doc, dict) else {"people": []}))
     configs: dict[str, dict[str, Any]] = {}
     archived = {str(r[0]) for r in c.execute("SELECT id FROM bots WHERE state='archived'")}
-    for row in c.execute("SELECT bot, config, reports_to FROM bot_config"):
+    for row in c.execute(f"SELECT bot, {BS.CONFIG} AS config, reports_to FROM bot_config bc {BS.JOIN}"):
         if str(row[0]) in archived:
             continue
         try:
@@ -156,6 +157,37 @@ def approval_decide(c: sqlite3.Connection, actor: str, approval_id: str, decisio
     """A person's decision, recorded as theirs. Only a person can make it (hubdb refuses any other actor); Finance calls
     this only for an invoice email's send approval, decided by the person whose yes the action waited on."""
     _H.approval_decide(c, actor, approval_id, decision)
+
+
+def queue_email(c: sqlite3.Connection, requester: str, addresses: list[str], subject: str, text: str,
+                ref: str, metadata: dict[str, str]) -> str:
+    """Freeze Finance's email through the same gate as a connector, on this install's transaction."""
+    from pathlib import Path
+    from ...auth import Auth
+    from ... import email_sending
+    from connectors.mail import compose
+    from ...store import Problem
+    sending: Any = email_sending
+    mime: Any = compose
+    if not _VAULT:
+        raise Refused("Finance's email queue is not available")
+    vault = _VAULT[0]
+    store = vault.store
+    database = next((str(row[2]) for row in c.execute("PRAGMA database_list") if row[1] == "main"), "")
+    if not database or Path(database).resolve() != Path(store.settings.db_path).resolve():
+        raise Refused("Finance's email queue belongs to another install")
+    auth: Any = vault.auth or Auth(store)
+    auth.sync_access(c)
+    try:
+        raw = str(mime.build(addresses, subject, text, from_addr=metadata["mailbox"]))
+        queued = cast(Row, sending.enqueue(c, auth, requester, sending.Enqueue(mailbox=metadata["mailbox"], raw=raw, operation_id=ref),
+                         {"legal_or_money": None, "status": "finance_preview_required"},
+                         via="finance", approval_metadata=metadata))
+        if queued["state"] == "blocked":
+            raise Refused("The email send policy refused this invoice email: " + str(queued["decision"]["reasons"]))
+    except Problem as exc:
+        raise Refused(str(exc)) from exc
+    return str(queued["approval_id"])
 
 
 def is_person(actor: str) -> bool:
@@ -239,8 +271,8 @@ def run_holds_settled(c: sqlite3.Connection, month: str, through: str, page: int
     last = ""
     while True:
         rows = c.execute(
-            "SELECT id, source_id FROM (SELECT h.id, h.source_id, coalesce((SELECT max(t.finished_at) FROM attempts a "
-            "JOIN turns t ON t.id = a.id WHERE a.job_id = substr(h.source_id, 5)), h.settled_at) AS finished_at "
+            "SELECT id, source_id FROM (SELECT h.id, h.source_id, coalesce((SELECT max(a.settled_at) FROM attempts a "
+            "WHERE a.job_id = substr(h.source_id, 5)), h.settled_at) AS finished_at "
             "FROM fin_holds h WHERE h.source='run' AND h.status='settled' AND h.entry_id IS NULL AND h.id>?) "
             "WHERE substr(finished_at, 1, 7)=? AND finished_at<=? ORDER BY id LIMIT ?", (last, month, through, page)).fetchall()
         out += [(str(r[0]), str(r[1])) for r in rows]
@@ -298,6 +330,22 @@ def idle_bot_cards(c: sqlite3.Connection, at: str, days: int) -> dict[str, str]:
         f"SELECT id, slug, state, last_turn_at FROM bots WHERE id IN ({','.join('?' * len(ids))})", ids)
         if str(r[2] or "") == "archived" or not r[3] or str(r[3]) < cutoff}
     return {card: idle[bot_id] for card, bot_id in holders.items() if bot_id in idle}
+
+
+def record_meter(c: sqlite3.Connection, month: str, as_of: str, charged: Mapping[str, int], at: str) -> int:
+    """Keep one read of the Gateway's meter as usage facts beside the install's estimates (backend/usage_facts.py):
+    {model: month-to-date charged nanodollars}. The facts added."""
+    from ... import usage_facts
+    return int(cast(Any, usage_facts).record_meter(c, month, as_of, dict(charged), at))
+
+
+def usage_reconciled(c: sqlite3.Connection, month: str) -> dict[str, dict[str, int | None]]:
+    """{model: {estimated_nano, metered_nano, amount_nano}} of a month's Gateway-billed usage; the amount is the meter's
+    where it has read the model."""
+    from ... import usage_facts
+    found = cast(dict[str, dict[str, Any]], cast(Any, usage_facts).reconciled(c, month))
+    return {str(model): {key: (None if value is None else int(value)) for key, value in row.items()}
+            for model, row in found.items()}
 
 
 def attempt_job(c: sqlite3.Connection, attempt_id: str) -> str | None:
@@ -440,24 +488,29 @@ def finance_hook_calls(c: sqlite3.Connection, at: str, most: int) -> list[Row]:
 # joining, leaving or being archived. A roster edit that changes none of these moves it too; that only costs a cache.
 _BUMP = ("UPDATE fin_view_versions SET version=version+1, reason='{why}', "
          "updated_at=strftime('%Y-%m-%dT%H:%M:%fZ','now') WHERE id=1")
-_TEAM = ("CASE WHEN json_valid(OLD.config) AND json_valid(NEW.config) "
-         "THEN json_extract(OLD.config, '$.team') IS NOT json_extract(NEW.config, '$.team') "
-         "OR json_extract(OLD.config, '$.reports_to') IS NOT json_extract(NEW.config, '$.reports_to') "
-         "ELSE OLD.config IS NOT NEW.config END")
+# A bot's declared team and manager are keys of its settings' `extra` (backend/bot_settings.py).
+_TEAM = ("CASE WHEN json_valid(OLD.extra) AND json_valid(NEW.extra) "
+         "THEN json_extract(OLD.extra, '$.team') IS NOT json_extract(NEW.extra, '$.team') "
+         "OR json_extract(OLD.extra, '$.reports_to') IS NOT json_extract(NEW.extra, '$.reports_to') "
+         "ELSE OLD.extra IS NOT NEW.extra END")
 ORG_TRIGGERS = (
     ("fin_view_roster_insert", "AFTER INSERT ON registry_metadata WHEN NEW.key = 'people'", "roster"),
     ("fin_view_roster_update", "AFTER UPDATE OF value ON registry_metadata WHEN NEW.key = 'people' "
      "AND OLD.value IS NOT NEW.value", "roster"),
     ("fin_view_bot_insert", "AFTER INSERT ON bot_config", "bot added"),
     ("fin_view_bot_delete", "AFTER DELETE ON bot_config", "bot removed"),
-    ("fin_view_bot_update", f"AFTER UPDATE OF reports_to, config ON bot_config WHEN "
-     f"OLD.reports_to IS NOT NEW.reports_to OR {_TEAM}", "reports to"),
+    ("fin_view_bot_update", "AFTER UPDATE OF reports_to ON bot_config WHEN OLD.reports_to IS NOT NEW.reports_to",
+     "reports to"),
+    ("fin_view_bot_settings_insert", "AFTER INSERT ON bot_settings", "reports to"),
+    ("fin_view_bot_settings_update", f"AFTER UPDATE OF extra ON bot_settings WHEN {_TEAM}", "reports to"),
     ("fin_view_bot_archive", "AFTER UPDATE OF state ON bots WHEN (OLD.state = 'archived') IS NOT "
      "(NEW.state = 'archived')", "bot archived"),
 )
 
 
 def watch_org(c: sqlite3.Connection) -> None:
-    """Make the org-chart triggers that move the view version. Idempotent."""
+    """Make the org-chart triggers that move the view version, and the version's row: a trigger's UPDATE moves nothing
+    while the row is absent, and view_version reads an absent row as 0, so the row starts at 0. Idempotent."""
+    c.execute("INSERT OR IGNORE INTO fin_view_versions(id, version, reason, updated_at) VALUES(1, 0, '', ?)", (now(),))
     for name, when, why in ORG_TRIGGERS:
         c.execute(f"CREATE TRIGGER IF NOT EXISTS {name} {when} BEGIN {_BUMP.format(why=why)}; END")

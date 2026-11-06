@@ -23,6 +23,54 @@ def read(api, thread_id, seq, token):
     assert response.status_code == 200, response.text
 
 
+def test_subtree_counters_and_oldest_unread_take_one_statement_together(api):
+    thread = new_thread(api, title="Launch", members=("human:ben", "bot:ops"), body="Kickoff")
+    anchor = say(api, thread["id"], "Notes")
+    unread = reply_under(api, thread["id"], anchor["id"], "Risks?")
+    other_anchor = say(api, thread["id"], "Other notes")
+    activity = reply_under(api, thread["id"], other_anchor["id"], "Another topic", token="ana-test")
+    with api.app.state.store.transaction() as c:
+        bot = threads.post(c, "bot:ops", activity["thread_id"], "Indexing finished")
+    empty = new_thread(api, title="Empty", members=("human:ben",))
+    seen = []
+    with api.app.state.store.read_transaction() as c:
+        viewer = threads.Viewer(api.app.state.auth, Identity("human:ana", "owner", "ana@acme.example"))
+        threads._backfill_floor(c, viewer)
+        c.set_trace_callback(seen.append)
+        try:
+            summaries = threads.subtree_summaries(c, viewer, [thread["id"], empty["id"]])
+        finally:
+            c.set_trace_callback(None)
+    summary = summaries[thread["id"]]
+    assert summary["unread"] == 1 and summary["activity"] is True
+    assert summary["activity_seq"] == bot["seq"] and summary["last_message_at"] == bot["created_at"]
+    assert summary["new_at"] == {"thread_id": unread["thread_id"], "message_id": unread["id"]}
+    assert summaries[empty["id"]] == {"unread": 0, "activity": False, "activity_seq": 0, "last_message_at": None}
+    assert len(seen) == 1, seen
+    read(api, unread["thread_id"], unread["seq"], "ana-test")
+    row = row_of(sidebar(api, token="ana-test"), thread["id"])
+    assert row["me"]["unread"] == 0 and row["new_at"] == {"thread_id": activity["thread_id"], "message_id": None}
+
+
+def test_batched_membership_is_shared_only_until_a_write_and_only_for_the_same_names(api):
+    thread = new_thread(api)
+    with api.app.state.store.transaction() as c:
+        ben = threads.viewer(api.app.state.auth, who(api, "ben"))
+        cara = threads.viewer(api.app.state.auth, who(api, "cara"))
+        ben.member_names(c)
+        seen = []
+        c.set_trace_callback(seen.append)
+        try:
+            assert threads._prefetch_members(c, ben, [thread["id"]]) == {thread["id"]: True}
+            assert threads._prefetch_members(c, ben, [thread["id"]]) == {thread["id"]: True}
+        finally:
+            c.set_trace_callback(None)
+        assert len(seen) == 1, seen
+        assert threads._prefetch_members(c, cara, [thread["id"]]) == {thread["id"]: False}
+        c.execute("DELETE FROM thread_members WHERE thread_id=? AND actor='human:ben'", (thread["id"],))
+        assert threads._prefetch_members(c, ben, [thread["id"]]) == {thread["id"]: False}
+
+
 def test_a_sub_thread_is_never_a_row_and_its_root_opens_the_new_reply(api):
     thread = new_thread(api, title="Launch", members=("human:ben",), body="Launch is Tuesday")
     first = say(api, thread["id"], "Kickoff notes")
@@ -144,7 +192,7 @@ def dm_rows(api, token):
 def test_a_dm_row_names_the_others_without_a_members_read(acme):
     api, _ = acme
     one = ok(call(api, "POST", "threads/dm", "cara-test", {"members": ["human:eve"]}))
-    many = ok(call(api, "POST", "threads/dm", "cara-test", {"members": ["human:eve", "human:fay", "human:ben", "human:ana"]}))
+    many = ok(call(api, "POST", "threads/dm", "cara-test", {"members": ["human:eve", "human:fay", "human:ben", "human:ana"], "title": "Plans"}))
     rows = dm_rows(api, "cara-test")
     assert [p["actor"] for p in rows[one["id"]]["dm_with"]] == ["human:eve"] and rows[one["id"]]["dm_with_count"] == 1
     assert "human:cara" not in {p["actor"] for p in rows[many["id"]]["dm_with"]}

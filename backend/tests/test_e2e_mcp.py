@@ -24,7 +24,10 @@ EXPECTED = json.loads((ROOT / "e2e" / "mcp" / "expected-refusals.json").read_tex
 SMOKE = "Acme smoke"
 # A tool's call needs state that nothing seeds: its refusal is recorded, and its argument set is listed here.
 # Each entry sets arguments the schema alone cannot pick (a value that must exist or match a rule).
-OVERRIDES = {}
+OVERRIDES = {
+    # A thread's audience defaults to its members, and every thread needs a title but a DM with one teammate (PR #2371).
+    "hub_thread_create": {"title": SMOKE},
+}
 # Values a string must match when its schema gives a pattern (the first candidate that matches is used).
 PATTERN_SAMPLES = ("1h", "30m", "never", "2d", "1", SMOKE)
 # Set to a file path to write every tool's outcome there instead of checking it: the way the recorded list is
@@ -157,7 +160,11 @@ def test_every_remote_tool_answers_a_generated_call_as_its_recorded_refusal_or_s
     stale = sorted(set(EXPECTED) - {t["name"] for t in tools})
     if stale:
         problems.append(f"expected-refusals.json names tools that no longer exist: {', '.join(stale)}")
-    assert not problems, "\n".join(problems)
+    assert not problems, "\n".join(problems) + (
+        "\nFix unexpected tool failures first. For intended refusal changes, edit e2e/mcp/expected-refusals.json; "
+        "remove entries for deleted tools. To regenerate for review: "
+        "TICO_E2E_RECORD_REFUSALS=/tmp/mcp-refusals.json python3 -m pytest -q -m slow backend/tests/test_e2e_mcp.py. "
+        "Review the diff before copying it over e2e/mcp/expected-refusals.json.")
 
 
 def test_a_scripted_task_runs_over_mcp_from_create_to_done(api):

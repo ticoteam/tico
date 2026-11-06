@@ -14,10 +14,10 @@ from .settings_catalog import Setting as S
 SETTINGS_FILES = sorted(
     ["settings.js", "settings-access.js", "settings-bot-editor.js", "settings-bots.js", "settings-strategy-bot.js",
      "settings-company.js", "settings-devices.js", "settings-history.js", "settings-hosted.js", "settings-listening.js",
-     "settings-mail.js", "settings-people.js", "settings-providers.js", "settings-recurring.js", "settings-release.js",
+     "settings-people.js", "settings-providers.js", "settings-recurring.js", "settings-release.js",
      "settings-repositories.js", "settings-storage.js", "settings-webhooks.js", "subscriptions.js",
-     "bot-budget.js", "bot-profile.js", "usage.js", "task-pipelines.js", "tags.js", "roadmaps.js", "inbound.js",
-     "cloud-machines.js"])
+     "bot-budget.js", "bot-profile.js", "usage.js", "task-pipelines.js", "tags.js", "roadmaps.js",
+     "inboxes-texts.js", "inboxes-letters.js", "cloud-machines.js"])
 
 
 def _card(tab, card=""):
@@ -26,8 +26,8 @@ def _card(tab, card=""):
 
 GENERAL, PEOPLE, COMPUTERS, BOTS = "Settings > General", "Settings > Humans", "Settings > Computers", "Settings > Bots"
 RULES, HOOKS, TASKS, REPOS = "Settings > System", "Settings > Webhooks", "Settings > Tasks", "Settings > Repositories"
-INBOUND, STRATEGY = "Settings > Email & Phone", "Settings > System > Strategy bot"
-MAIL = "Settings > Mail"
+INBOXES, STRATEGY = "Settings > Inboxes", "Settings > System > Strategy bot"
+INBOUND, TEXTS, MAIL = (INBOXES + " > Settings > " + s for s in ("Email", "Texts", "Letters in"))
 MODELS = "Settings > Models"
 
 _RULE_NAMES = {
@@ -43,16 +43,16 @@ _RULE_NAMES = {
     "bots_go_ahead": ("Bots go ahead on their recommendation when nobody answers", "confirm", ""),
     "support_access": ("Owners and admins may let Tico support in", "confirm", ""),
     "health_monitor_reports": ("Health monitor reports", "direct", ""),
+    "bot_reports_direct": ("Bots send reports to the Tico team without asking", "confirm", ""),
     "stale_review": ("Review stale tasks", "direct", ""),
     "topic_fresh": ("Keep topics fresh", "direct", ""),
-    "stall_triage": ("Stalled task check", "direct", ""),
     "org_rule_checks": ("Check bot outputs against rules", "direct", ""),
 }
 _RULE_WHERE = {"health_monitor_reports": ("Settings > Health > Health monitor", _card("health")),
+               "bot_reports_direct": (GENERAL + " > Team", _card("general", "settings-team")),
                "stale_review": (RULES + " > What Tico runs on its own", _card("system", "set-system-card")),
-               "topic_fresh": (RULES + " > What Tico runs on its own", _card("system", "set-system-card")),
-               "stall_triage": (RULES + " > What Tico runs on its own", _card("system", "set-system-card"))}
-_ADMIN_RULES = ("stale_review", "topic_fresh", "stall_triage", "org_rule_checks")
+               "topic_fresh": (RULES + " > What Tico runs on its own", _card("system", "set-system-card"))}
+_ADMIN_RULES = ("stale_review", "topic_fresh", "org_rule_checks")
 
 TEAM_RULES = [
     S("team.rules." + key, name, _RULE_WHERE.get(key, (PEOPLE + " > Team rules",))[0],
@@ -84,6 +84,12 @@ ENTRIES = TEAM_RULES + [
       "enabled", card=_card("general", "settings-privacy"), read="system/usage-count#enabled"),
     S("privacy.usage_count.reset", "Reset the usage count", GENERAL + " > Privacy", "owner", "confirm", "POST",
       "system/usage-count/reset", value="json", card=_card("general", "settings-privacy")),
+    S("privacy.share_stats_for_suggestions", "Share stats for suggestions", GENERAL + " > Privacy", "owner", "person",
+      "PUT", "system/suggestions", "share_stats_for_suggestions", card=_card("general", "settings-privacy"),
+      read="system/suggestions#share_stats_for_suggestions", why="Sharing counts requires the owner's consent in Settings"),
+    S("privacy.report_suggestion_outcomes", "Report suggestion outcomes", GENERAL + " > Privacy", "owner", "direct",
+      "PUT", "system/suggestions", "report_suggestion_outcomes", card=_card("general", "settings-privacy"),
+      read="system/suggestions#report_suggestion_outcomes"),
     S("company.server_connection", "Connect to the Tico company server", GENERAL + " > Tico company", "admin",
       "person", "POST", "company/server-connection", value="json", card=_card("general", "settings-company"),
       why="Only a person signed in themselves connects the company server"),
@@ -107,7 +113,10 @@ ENTRIES = TEAM_RULES + [
       value="json", card=_card("people"), words="invite person"),
     S("people.member_bot_limit", "Member bot limit", PEOPLE + " > Team rules", "admin", "confirm", "PUT",
       "access/limits", "member_bot_limit", "int", _card("people"), "access#limits.member_bot_limit"),
-    S("people.person.role", "A person's role", PEOPLE, "admin", "confirm", "POST", "access/humans/{person}", "role",
+    S("team.rules.cloud_machine_support", "Tico support can reach our cloud machines", PEOPLE + " > Team rules",
+      "owner", "confirm", "PUT", "cloud-machines/support", "on", card=_card("people"),
+      read="cloud-machines/support#on", words="cloud support helper access"),
+    S("people.person.role", "A person's role", PEOPLE, "owner", "confirm", "POST", "access/humans/{person}", "role",
       "choice:member|admin", _card("people"), words="admin member role"),
     S("people.person.sign_in", "A person may sign in", PEOPLE, "admin", "confirm", "POST", "access/humans/{person}",
       "sign_in", card=_card("people")),
@@ -150,6 +159,8 @@ ENTRIES = TEAM_RULES + [
       "enabled", card=_card("devices")),
     S("computer.member_bots", "Takes member bots", COMPUTERS, "admin", "confirm", "POST",
       "computers/{computer}/member-bots", "accepts", card=_card("devices")),
+    S("computer.label", "Rename a computer", COMPUTERS, "admin", "direct", "POST", "computers/{computer}/label", "label", "text",
+      card=_card("devices"), words="name computer"),
     S("computer.turns_at_once", "Turns at once", COMPUTERS, "admin", "direct", "POST",
       "computers/{computer}/turns-at-once", value="json", card=_card("devices")),
     S("computer.browser_exit", "Share internet with bots", COMPUTERS, "operator", "person", "POST",
@@ -231,13 +242,18 @@ ENTRIES = TEAM_RULES + [
       value="json", card=_card("bots"), words="turns per hour day"),
     S("bot.profile", "Bot profile", BOTS + " > Bot editor", "bot", "direct", "POST", "bots/{bot}/profile",
       value="json", card=_card("bots")),
-    # Tico Cloud: a cloud machine, shared or its own, its size and Always on all spend credit
-    # (backend/cloud_machines.py). The shared machine's size and Always on are the company's, for owners and admins.
+    # Tico Cloud: a cloud machine, shared or its own, its size, Always on and Pause after all spend credit
+    # (backend/cloud_machines.py). The shared machine's size, Always on and Pause after are the company's, for owners
+    # and admins.
     S("bot.cloud_machine", "Cloud machine", BOTS + " > Bot editor", "bot", "confirm", "POST",
       "bots/{bot}/cloud-machine", value="json", card=_card("bots"),
-      words="cloud machine shared own size always on computer"),
+      words="cloud machine shared own size always on pause after minutes computer"),
+    S("bot.cloud_machine.replace", "Replace machine", BOTS + " > Bot editor > Computer", "bot", "confirm", "POST",
+      "bots/{bot}/cloud-machine/replace", value="json", card=_card("bots"),
+      words="replace own cloud machine delete disk fresh broken stuck"),
     S("cloud.shared_machine", "Shared cloud machine", BOTS + " > Bot editor", "admin", "confirm", "POST",
-      "cloud-machines/shared", value="json", card=_card("bots"), words="shared cloud machine size always on"),
+      "cloud-machines/shared", value="json", card=_card("bots"),
+      words="shared cloud machine size always on pause after minutes"),
     # Letting a bot run workflows or edit workflow files, or turning Create product repositories back on (the Owner
     # only), is the person's own click: from BotOps, a Confirm card (backend/repositories.py bot_set).
     S("bot.repositories", "Bot repositories", REPOS, "admin", "direct", "PUT", "bots/{bot}/repositories",
@@ -306,10 +322,13 @@ ENTRIES = TEAM_RULES + [
       "triggers/{id}/delete", value="json", card=_card("webhooks", "incoming")),
     S("webhooks.gateway.wake", "Gateway wake", HOOKS + " > Gateway", "creator", "confirm", "POST",
       "triggers/{id}/relay/wake", "wake", card=_card("webhooks", "gateway")),
-    S("hooks.wake_url", "Gateway wake URL", HOOKS + " > Gateway", "owner", "confirm", "PUT", "hooks/wake-url", "url",
-      "text", _card("webhooks", "gateway")),
-    S("webhooks.outgoing.create", "New outgoing webhook", HOOKS + " > Outgoing", "anyone", "confirm", "POST", "webhooks",
-      value="json", card=_card("webhooks", "outgoing")),
+    # Both answer with a signing secret shown only then, which a Confirm card's tap never shows (it keeps the status).
+    S("hooks.wake_url", "Gateway wake URL", HOOKS + " > Gateway", "owner", "person", "PUT", "hooks/wake-url", "url",
+      "text", _card("webhooks", "gateway"),
+      why="Setting the Gateway wake URL shows its signing secret once, in Settings"),
+    S("webhooks.outgoing.create", "New outgoing webhook", HOOKS + " > Outgoing", "anyone", "person", "POST", "webhooks",
+      value="json", card=_card("webhooks", "outgoing"),
+      why="A new outgoing webhook shows its signing secret once, in Settings"),
     S("webhooks.outgoing", "Outgoing webhook", HOOKS + " > Outgoing", "creator", "confirm", "POST", "webhooks/{id}/update",
       value="json", card=_card("webhooks", "outgoing")),
     # Listening
@@ -330,46 +349,55 @@ ENTRIES = TEAM_RULES + [
       card=_card("tasks")),
     S("tasks.tag", "Task tag", TASKS + " > Task tags", "anyone", "direct", "POST", "tags/{id}", value="json",
       card=_card("tasks")),
-    # Email & Phone
+    # Inboxes
     S("inbound.company_connection", "Email & phone company connection", INBOUND, "admin", "person", "POST",
-      "inbound/company-connection", value="json", card=_card("inbound", "set-inbound"),
+      "inbound/company-connection", value="json", card=_card("inboxes", "settings/email"),
       why="Only a person signed in themselves connects company email and phone"),
-    S("inbound.inbox.create", "New inbox", INBOUND, "anyone", "direct", "POST", "inbound/inboxes", value="json",
-      card=_card("inbound", "set-inbound")),
-    S("inbound.inbox", "Inbox", INBOUND, "anyone", "direct", "PATCH", "inbound/inboxes/{id}", value="json",
-      card=_card("inbound", "set-inbound")),
-    S("inbound.inbox.audience", "Inbox readers", INBOUND, "admin", "confirm", "PUT", "inbound/inboxes/{id}/audience",
-      value="json", card=_card("inbound", "set-inbound"), words="audience readers group who reads"),
-    S("inbound.inbox.release", "Release an inbox", INBOUND, "admin", "confirm", "POST", "inbound/inboxes/{id}/release",
-      value="json", card=_card("inbound", "set-inbound")),
-    S("inbound.phone_request", "Ask for a phone number", INBOUND, "admin", "confirm", "POST",
-      "inbound/phone-requests", value="json", card=_card("inbound", "set-inbound")),
-    S("inbound.phone_request.accept", "Accept a phone number's price", INBOUND, "admin", "confirm", "POST",
-      "inbound/phone-requests/{id}/accept", value="json", card=_card("inbound", "set-inbound")),
-    S("inbound.phone_request.cancel", "Cancel a phone request", INBOUND, "admin", "direct", "POST",
-      "inbound/phone-requests/{id}/cancel", value="json", card=_card("inbound", "set-inbound")),
-    # Usage
+    S("inbound.inbox.create", "New inbox", INBOXES + " > Add inbox", "anyone", "direct", "POST", "inbound/inboxes",
+      value="json", card=_card("inboxes")),
+    S("inbound.inbox", "Inbox", INBOXES, "anyone", "direct", "PATCH", "inbound/inboxes/{id}", value="json",
+      card=_card("inboxes")),
+    S("inbound.inbox.audience", "Inbox readers", INBOXES + " > Who can use it", "admin", "confirm", "PUT",
+      "inbound/inboxes/{id}/audience", value="json", card=_card("inboxes"), words="audience readers group who reads"),
+    S("inbound.inbox.release", "Release an inbox", INBOXES + " > Stop using in Tico", "admin", "confirm", "POST",
+      "inbound/inboxes/{id}/release", value="json", card=_card("inboxes")),
+    S("inbound.phone_request", "Ask for a phone number", TEXTS, "admin", "confirm", "POST",
+      "inbound/phone-requests", value="json", card=_card("inboxes", "settings/texts")),
+    S("inbound.phone_request.accept", "Accept a phone number's price", TEXTS, "admin", "confirm", "POST",
+      "inbound/phone-requests/{id}/accept", value="json", card=_card("inboxes", "settings/texts")),
+    S("inbound.phone_request.cancel", "Cancel a phone request", TEXTS, "admin", "direct", "POST",
+      "inbound/phone-requests/{id}/cancel", value="json", card=_card("inboxes", "settings/texts")),
     S("mail.address.order", "Get an address", MAIL + " > Addresses", "admin", "confirm", "POST", "postal/orders",
-      value="json", card=_card("mail", "settings-mail-addresses"),
+      value="json", card=_card("inboxes", "settings/letters-in"),
       words="physical mail mailbox postal address registered agent form 1583"),
     S("mail.intake", "Mail-intake inbox", MAIL + " > Bring your own", "admin", "direct", "PUT", "postal/intake",
-      value="json", card=_card("mail", "settings-mail-intake"), read="postal/intake#intake",
+      value="json", card=_card("inboxes", "settings/letters-in"), read="postal/intake#intake",
       words="physical mail scans email in postal provider"),
+    S("mail.access.bot", "Give a bot Read access to physical mail", MAIL + " > Who can use it", "admin", "confirm",
+      "PUT", "postal/addresses/{id}/grants/bot/{bot}", "level", "choice:read",
+      _card("inboxes", "settings/letters-in"), read="postal/addresses/{id}/grants#grants"),
+    S("mail.access.person", "Give a person Read access to physical mail", MAIL + " > Who can use it", "admin", "confirm",
+      "PUT", "postal/addresses/{id}/grants/person/{person}", "level", "choice:read",
+      _card("inboxes", "settings/letters-in"), read="postal/addresses/{id}/grants#grants"),
+    S("mail.access.bot.remove", "Remove a bot's physical mail access", MAIL + " > Who can use it", "admin", "confirm",
+      "DELETE", "postal/addresses/{id}/grants/bot/{bot}", value="json", card=_card("inboxes", "settings/letters-in")),
+    S("mail.access.person.remove", "Remove a person's physical mail access", MAIL + " > Who can use it", "admin", "confirm",
+      "DELETE", "postal/addresses/{id}/grants/person/{person}", value="json", card=_card("inboxes", "settings/letters-in")),
+    S("mail.legal_bot", "Legal mail recipient", MAIL + " > Legal mail", "admin", "confirm", "PUT", "postal/settings",
+      value="json", card=_card("inboxes", "settings/letters-in"), read="postal/settings#settings"),
+    # Usage
     S("team.limit.usd", "Company spend limit", "Usage > Company", "admin", "confirm", "PUT", "usage/limits",
       value="json", card="#/usage", read="usage/limits#default", words="usd dollars spend " + _USD),
     S("pool.limit.usd", "Pool spend limit", "Usage > Pools", "admin", "confirm", "PUT", "usage/pools/{id}",
       value="json", card="#/usage", words="usd dollars spend group " + _USD),
+    S("team.queue.purge", "Clear automatic queue", "Usage > Clear automatic queue", "admin", "confirm", "POST",
+      "usage/queues/purge", value="json", card="#/usage",
+      words="queue purge clear automatic wakes waits backlog"),
 ]
 
 # Confirm entries whose route BotOps can't yet put on a Confirm card (backend/assistant.py valid_operation): a person
 # changes them in Settings until it can, rather than BotOps changing them at once.
-NO_CARD_YET = ("assistant.on", "privacy.usage_count.reset", "company.server_connection.remove", "storage.s3.remove",
-               "storage.move", "people.person.delete", "me.tokens.revoke", "team.turn_levels",
-               "bot.budget", "strategy.checks", "strategy.level",
-               "repos.product.create", "hooks.wake_url", "webhooks.outgoing.create",
-               "listening.destination", "listening.destination.remove", "roadmap.public",
-               "inbound.inbox.release", "inbound.phone_request", "inbound.phone_request.accept", "pool.limit.usd",
-               "bot.cloud_machine", "cloud.shared_machine", "mail.address.order")
+NO_CARD_YET = ("team.queue.purge",)
 _NO_CARD_WHY = " needs a person's yes, and BotOps can't ask for it on a Confirm card yet"
 ENTRIES = [(replace(e, when_held="person", why=e.name + " that sends outside" + _NO_CARD_WHY) if e.confirm_when else
             replace(e, kind="person", why=e.name + _NO_CARD_WHY)) if e.key in NO_CARD_YET else e for e in ENTRIES]

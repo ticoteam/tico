@@ -45,6 +45,12 @@ def ident(slug, key):
     return f"{AUTO}{slug}:{key}"
 
 
+def by_name(name):
+    """The metric key a tag names: its key (`tasks_done_7d`) or its name (`Tasks completed (7d)`), in any case; or None."""
+    wanted = " ".join(str(name or "").split()).lower()
+    return next((key for key, spec in METRICS.items() if wanted in (key, spec["name"].lower())), None)
+
+
 def parse(kpi_id):
     """(bot id, metric key) of an auto KPI id, or None."""
     rest = str(kpi_id or "")[len(AUTO):] if str(kpi_id or "").startswith(AUTO) else ""
@@ -105,8 +111,8 @@ def value(conn, slug, key, at=None, *, _privacy_checked=False):
                                   (slug, since, end)).fetchone()[0])
     # The estimate from each run's measured token counts (backend/usage.py).
     # A subscription run costs nothing extra, so only runs billed by the API count.
-    row = conn.execute("SELECT sum(est_cost_usd), count(est_cost_usd) FROM turns "
-                       "WHERE bot=? AND started_at>? AND started_at<=? AND usage_reason IS NULL "
+    row = conn.execute("SELECT sum(est_cost_usd), count(est_cost_usd) FROM attempts "
+                       "WHERE bot_id=? AND created_at>? AND created_at<=? AND usage_reason IS NULL "
                        "AND coalesce(billing, 'api') != 'subscription'",
                        (slug, since, end)).fetchone()
     return round(row[0], 4) if row and row[1] else None

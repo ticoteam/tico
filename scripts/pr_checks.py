@@ -19,13 +19,18 @@ UI_MAP = {"ui/app/chat.js": ["chat", "imported-history"],
           "ui/app/chat-outline.js": ["chat", "imported-history"],
           "ui/app/visual-cards.js": ["visual-cards", "visual-fallback", "visual-hosted"],
           "ui/app/visual-media.js": ["visual-media", "visual-media-app"]}
-CONFORMANCE = "runner/tests/test_conformance.py"
+CONFORMANCE = "runner_support/tests/test_conformance.py"
+# These release contracts are marked slow and absent from default collection. Run them together on a separate VM:
+# recorded release times are CLI 108s, MCP 34s and goldens 3s; four workers keep it below the 180s job target with setup.
+CONTRACT_TESTS = ("backend/tests/test_e2e_mcp.py", "backend/tests/test_e2e_cli.py", "e2e/tests/test_contract.py")
+CONTRACT_INPUTS = ("backend/", "clients/", "e2e/", "templates/", "skills/", "roles/", "company/", "companies/",
+                   "company.yaml", "employees.yaml", "roles.yaml")
 # Each crate's `cargo test --locked` runs in the conformance job when any of its test inputs change:
-# runner-rs tests read runner/ (harnesses, fixtures and the Python runner they compare against) and the
-# backend's gateway enroll contract fixture, which gateway_relay's tests check the runner against, and the runner wire
+# runner-rs tests read runner_support/ and runner/ (the Python helpers they compare against: source_id, the redactor)
+# and the backend's gateway enroll contract fixture, which gateway_relay's tests check the runner against, and the runner wire
 # contract's recorded answers (runner-rs/src/wire.rs).
 RUST_INPUTS = {"relay-rs": ("relay-rs/",),
-               "runner-rs": ("runner-rs/", "runner/", "backend/tests/fixtures/gateway_enroll_contract.json",
+               "runner-rs": ("runner-rs/", "runner_support/", "runner/", "backend/tests/fixtures/gateway_enroll_contract.json",
                              "contracts/runner/")}
 CHANGELOG_REFUSAL = ("No PR edits CHANGELOG.md; the Technical Writer writes notes at the release cut. "
                      "Remove your CHANGELOG.md changes.")
@@ -529,9 +534,9 @@ def selection(changed, event="pull_request", root=ROOT, graph=None, base=None, a
     A pull request runs the default tests that use a changed file (DependencyMap) and, of the browser scripts that
     do, the core ones the full suite runs; a UI change runs its mapped scripts or all of them. `added` names the new
     files (None: any may be new) and `core` the core browser scripts (None: read from scripts/ui-tests.cjs)."""
-    full = {"python": None, "browser": None, "caddy": True, "reason": "full default suite"}
+    full = {"python": None, "browser": None, "caddy": True, "contracts": True, "reason": "full default suite"}
     rust = sorted(crate for crate, inputs in RUST_INPUTS.items() if any(p.startswith(inputs) for p in changed))
-    runner = bool(rust) or any(p.startswith(("runner/", "runner-rs/", "relay-rs/")) or
+    runner = bool(rust) or any(p.startswith(("runner/", "runner_support/", "runner-rs/", "relay-rs/")) or
                                p in ("backend/harness_actions.py", "backend/runner_versions.py") for p in changed)
     full["rust"] = rust
     if event != "pull_request":
@@ -556,7 +561,7 @@ def selection(changed, event="pull_request", root=ROOT, graph=None, base=None, a
         return {**full, "browser": ["--all"] if browser else None, "conformance": runner,
                 "reason": "unmapped, shared, deleted or uncertain change: full default suite", "uncertain": uncertain}
     if not changed:
-        return {"python": [], "browser": [], "conformance": False, "rust": [], "caddy": False,
+        return {"python": [], "browser": [], "conformance": False, "rust": [], "caddy": False, "contracts": False,
                 "reason": "documentation that no test or script reads"}
     affected = graph.affected(changed, added)
     python = sorted(p for p in affected if is_test(p) and not p.startswith("ui/"))
@@ -569,7 +574,9 @@ def selection(changed, event="pull_request", root=ROOT, graph=None, base=None, a
                 core = scripts
         browser |= scripts & set(core)
     caddy = any(n.startswith(CADDY_INPUTS) for n in changed) or bool(affected & set(CADDY_ROOTS))
+    contracts = any(n.startswith(CONTRACT_INPUTS) for n in changed) or bool(affected & set(CONTRACT_TESTS))
     return {"python": python, "browser": sorted(browser), "conformance": runner, "rust": rust, "caddy": caddy,
+            "contracts": contracts,
             "reason": "measured dependency map"}
 
 
@@ -584,6 +591,12 @@ def changed_files(base, head="HEAD", root=ROOT, only=None):
 
 
 def collect(root=ROOT):
+    # Reuse the plan's existing collection as the sharding coverage guard: no extra collection or CI job.
+    # Direct script execution puts scripts/ on sys.path; package imports (including tests) use the relative form.
+    if __package__:
+        from .release_checks import validate_shard_coverage
+    else:
+        from release_checks import validate_shard_coverage
     result = subprocess.run([sys.executable, "-m", "pytest", "--collect-only", "-q", "-n", "0"],
                             cwd=root, capture_output=True, text=True)
     if result.returncode:
@@ -592,6 +605,7 @@ def collect(root=ROOT):
                      if "::" in line and not line.startswith(" "))
     if not counts:
         raise RuntimeError("Default suite collected no tests")
+    validate_shard_coverage(counts, selection=(), root=root)
     return counts
 
 
@@ -679,6 +693,8 @@ def prepare(event, base, output, timings_path=None):
         loads += browser_loads
     if picked["conformance"]:
         jobs.append({"suite": "conformance", "files": [CONFORMANCE], "crates": picked["rust"]})
+    if picked["contracts"]:
+        jobs.append({"suite": "contracts", "files": list(CONTRACT_TESTS)})
     # Actions rejects an empty matrix. Keep an explicit successful selection job
     # for documented no-test changes, without invoking bare pytest.
     if not jobs:
@@ -708,7 +724,7 @@ def run(plan_path, suite):
     job = next(j for j in plan["matrix"]["include"] if j["suite"] == suite)
     files = job["files"]
     if suite == "selection":
-        if plan["python"] != [] or plan["browser"] != [] or plan["caddy"] or plan["conformance"]:
+        if plan["python"] != [] or plan["browser"] != [] or plan["caddy"] or plan["conformance"] or plan["contracts"]:
             raise RuntimeError("Selection-only job requires an explicitly unaffected plan")
         print("Documentation-only change: no affected tests")
         return 0
@@ -723,7 +739,7 @@ def run(plan_path, suite):
             raise RuntimeError("Python check requires an explicit nonempty existing file list")
         command = [sys.executable, "-m", "pytest", "-q", "-n", str(WORKERS),
                    "-o", "junit_family=xunit1", f"--junitxml=ci-results/{suite}.xml"]
-        if suite == "conformance":
+        if suite in ("conformance", "contracts"):
             command += ["-m", "slow"]
         command += files
     (ROOT / "ci-results").mkdir(exist_ok=True)
@@ -784,6 +800,32 @@ def receipt(jobs):
     return "\n".join(rows) + "\n"
 
 
+RECEIPT_INCOMPLETE = "The GitHub API returned an error for part of this receipt, so it may be incomplete."
+JOB_FIELDS = ("name", "html_url", "status")
+
+
+def receipt_jobs(text):
+    """The jobs on the pages of `gh api --paginate --slurp` output that are jobs pages, and whether any page was not.
+
+    An error object (GitHub's body for a 502), a page without a list of well-formed jobs, a top level that is not a
+    list, and empty or invalid JSON are pages that were not read. The receipt is cosmetic: it never fails the gate.
+    """
+    try:
+        data = json.loads(text)
+    except ValueError:
+        return [], True
+    pages = data if isinstance(data, list) else [data]
+    jobs, incomplete = [], False
+    for page in pages:
+        page_jobs = page.get("jobs") if isinstance(page, dict) else None
+        if isinstance(page_jobs, list) and all(isinstance(j, dict) and all(f in j for f in JOB_FIELDS)
+                                               for j in page_jobs):
+            jobs += page_jobs
+        else:
+            incomplete = True
+    return jobs, incomplete
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     sub = parser.add_subparsers(dest="action", required=True)
@@ -808,9 +850,11 @@ def main():
             raise RuntimeError("No Python timings were collected")
         Path("durations.json").write_text(json.dumps(measured, indent=2))
     else:
-        data = json.load(sys.stdin)
         # gh --paginate --slurp emits one jobs response per page.
-        print(receipt([j for page in data for j in page["jobs"]]))
+        jobs, incomplete = receipt_jobs(sys.stdin.buffer.read())
+        print(receipt(jobs))
+        if incomplete:
+            print(RECEIPT_INCOMPLETE)
     return 0
 
 

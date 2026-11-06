@@ -33,8 +33,8 @@ code then applies the verdict inside the write (`apply`). Nothing here calls an 
   draft=False, skip=(), place=None, attempt_id="", origin=None)` checks one output held as `principal`, sent by
   `sender` by route `via`. `inbound(store, primary, principal, operation, output, recipients=(), *, source,
   authenticated="", origin="", place=None, context=None, obj="")` checks a message from outside this server (a Slack
-  message, or one from another Tico): `principal` is the teammate it is held for (or None, and then it is held as
-  `source:origin`), `source` names the route (`slack`, `federation`), `authenticated` is the actor the caller proved,
+  message): `principal` is the teammate it is held for (or None, and then it is held as
+  `source:origin`), `source` names the route (`slack`), `authenticated` is the actor the caller proved,
   and `origin` the message's id on its side. `apply(c, verdict, payload=None, replay=None, tell=False, obj_now=None)`
   writes the verdict inside the write and returns None (deliver), `{"warn": line}` (deliver with the line), or
   `{"held": view}` (write nothing); `answer(gate)` is what the write answers with. `changed(...)` answers a write whose
@@ -69,6 +69,7 @@ import weakref
 from datetime import datetime, timedelta, timezone
 
 from clients import judge as J
+from . import bot_settings as BS
 from . import judge as B
 from . import org_rules as R
 from . import groups as G
@@ -76,6 +77,7 @@ from . import team_rules
 from . import threads as T
 from .call_slots import NEUTRAL, Calls
 from .store import H, Problem
+from . import sources as SRC
 
 LOG = logging.getLogger("tico.org_rule_check")
 QUESTION_SET = "rule-check"
@@ -93,6 +95,7 @@ HOLD_LIST_MAX = 50
 # One hold's text as its readers get it: past this many characters it is cut (`text_cut`); Send anyway sends it whole.
 HOLD_TEXT_CHARS = 20_000
 HOLD_LIST_BYTES = 100_000     # one page of hold summaries stops here too (a page always holds at least one)
+BOTS_BELOW = 500             # bots read as the authors whose holds one person may be shown (`held_for`)
 TEAM_RULE = "org_rule_checks"
 UNCHECKED_SHARE, UNCHECKED_MIN = 0.2, 10    # a day's unchecked share at or over this, of at least this many checks
 ACTIONS = ("rules.blocked", "rules.escalated", "rules.warned", "rules.unchecked")
@@ -103,7 +106,7 @@ OPERATIONS = {
     "task_ask": "a question on a task", "bulk": "a change to several tasks", "note": "a note to a bot",
     "reply": "a reply in a conversation", "automation": "an automation's write", "slack": "a Slack reply",
     "mail": "an email", "update": "an update", "task_question": "a question put to a person",
-    "slack_message": "a Slack message", "federated_message": "a message from another Tico",
+    "slack_message": "a Slack message",
     "slack_dm": "a Slack message to a bot",
     "threads": "a thread message", "threads_edit": "an edit to a thread message",
     "chat_upload": "a chat message with files", "assistant_message": "a message to the Assistant",
@@ -352,8 +355,7 @@ def place_for(c, author, recipients=(), conversation_id=""):
     threads are rows of `conversations`). `root` and `audience`: the thread's root and the audience its root names
     (backend/threads.py), so a sub-thread has its root's. `kind`: `dm` for a direct chat, a personal thread (a DM under
     core's audiences) or a write with no conversation, else `thread`. `teams`: the groups the sender and the thread's
-    owner are in, and the team an audience names. `outside`: someone in it is outside the roster, or a Slack or
-    federated actor. A write with no conversation (a direct message) has an empty `thread` and `root`."""
+    owner are in, and the team an audience names. `outside`: someone in it is outside the roster, or a Slack actor. A write with no conversation (a direct message) has an empty `thread` and `root`."""
     conv = H.conversation(c, conversation_id) if conversation_id else None
     row = T.thread_row(c, conversation_id) if conv is not None else None
     root = T.root_of(c, row) if row is not None else None
@@ -376,7 +378,7 @@ def place_for(c, author, recipients=(), conversation_id=""):
 
 
 def _outside(c, people):
-    """Whether someone in `people` is outside the roster, or a Slack or federated actor."""
+    """Whether someone in `people` is outside the roster, or a Slack actor."""
     roster = {p.get("id") for p in (G._roster(c).get("people") or []) if p.get("id")}
     return any((H.is_human(a) and H.actor_id(a) not in roster) or (a and not H.is_human(a) and not H.is_bot(a))
                for a in people)
@@ -402,6 +404,7 @@ def _place_now(c, place, author, recipients):
     return place or None
 
 
+@SRC.scoped("rule-check")
 def check_as(store, primary, principal, sender, via, operation, output, recipients=(), *, context=None, obj="",
              draft=False, skip=(), place=None, attempt_id="", origin=None):
     """Check one output held as `principal` (a person or a bot). `sender` is who made it and `via` the route
@@ -512,11 +515,11 @@ def preflight(store, primary, who, operation, output, recipients=(), context=Non
 
 def inbound(store, primary, principal, operation, output, recipients=(), *, source, authenticated="", origin="",
             place=None, context=None, obj=""):
-    """The check for a message that came in from outside this server: a Slack message, or one from another Tico. The
-    bridge and federation builders call it. `principal` is who the message is held as: a roster person or bot, or the
-    outside sender's actor. With no principal it is held as `source:origin`, which only Who everyone and With rules
-    name, so no message skips the check. `authenticated` is the bridge's own actor (default: the principal), `source`
-    the route ("slack", "federation") and `origin` the outside id. The verdict and any hold keep all of them. A message
+    """The check for a message that came in from outside this server: a Slack message. The Slack bridge calls it.
+    `principal` is who the message is held as: a roster person or bot, or the outside sender's actor. With no principal
+    it is held as `source:origin`, which only Who everyone and With rules name, so no message skips the check.
+    `authenticated` is the bridge's own actor (default: the principal), `source` the route ("slack") and `origin` the
+    outside id. The verdict and any hold keep all of them. A message
     held here needs its own replayer (`replayer`), registered by the bridge, or Send anyway refuses it."""
     held_as = principal or f"{source}:{origin}"
     return check_as(store, primary, held_as, authenticated or held_as, source, operation, output, recipients,
@@ -530,6 +533,7 @@ def refused(problem):
     return {"refused": problem}
 
 
+@SRC.scoped("rule-check")
 def outside_edition(store, primary, output, to=""):
     """A Company page edition against the rules whose Who is Outside editions. Not `preflight`: that one skips a person's
     writes and fails open, and an edition goes outside the company whoever wrote it. Here anything short of the judge
@@ -655,6 +659,7 @@ def _repeats(c, author, rule_id):
                      (author, "org_rule:" + rule_id, _day())).fetchone()[0]
 
 
+@SRC.scoped("rule-check")
 def _tell_bot(c, author, text):
     """A note on the bot's next run, as the keeper (a plain row: a paused bot's note waits, nothing is refused)."""
     if not H.is_bot(author):
@@ -672,6 +677,7 @@ def _author_name(c, author):
     return (H.bot(c, H.actor_id(author)) or {}).get("display_name") or H.actor_id(author)
 
 
+@SRC.scoped("rule-check")
 def _review_task(c, hold_id, author, rule, reviewer):
     """The review task for a hold (or its appeal). Its title is the plain REVIEW_TITLE, which is also its thread's row in
     the sidebar, so it names no one and no rule: the hold's text is in the body's Hold line, opened from there."""
@@ -737,8 +743,9 @@ def apply(c, verdict, payload=None, replay=None, tell=False, obj_now=None, audie
     write the bot does not see answered: a completion reply, an automation). `obj_now`: the object as the write reads
     it (`current_obj`). Moved since the check, a verdict that holds still holds (a version bump never releases a
     Block); any other comes back as {"moved": True}, and the caller does not write: its next try checks again.
-    `audience_now`: the recipients the write reads now (the route's audience, read inside the write). A hold is only made
-    for the audience the check named, so a different one comes back as {"moved": True} as well. A refused verdict
+    `audience_now`: the recipients the write reads now (the route's audience, read inside the write). Every verdict
+    belongs to the audience it checked, including a route recorded with `outcome=no_rules` when no rule matched,
+    so a different one comes back as {"moved": True}. A refused verdict
     (`refused`) raises its error here, so the write fails with it."""
     if verdict and "refused" in verdict:
         raise verdict["refused"]
@@ -749,9 +756,9 @@ def apply(c, verdict, payload=None, replay=None, tell=False, obj_now=None, audie
     if obj_now is not None and verdict.get("obj") and obj_now != verdict["obj"] and not holds(verdict):
         return {"moved": True}
     author, operation = verdict["author"], verdict["operation"]
+    if audience_now is not None and _people(audience_now, author) != list(verdict["recipients"]):
+        return {"moved": True}
     if verdict["outcome"] in ("broken", "too_large"):
-        if audience_now is not None and _people(audience_now, author) != list(verdict["recipients"]):
-            return {"moved": True}
         # The rules in force now must be the ones checked: a rule edited, retired or added since is a new check, which
         # cannot run here (no engine under the write lock), so the output goes through unchecked.
         now = {(r["id"], r["version"])
@@ -813,11 +820,22 @@ def apply(c, verdict, payload=None, replay=None, tell=False, obj_now=None, audie
         if task_id is None and reviewer:
             task_id = _review_task(c, hold_id, author, strictest, reviewer)
     text = payload if isinstance(payload, str) else json.dumps(payload, sort_keys=True, default=str)
+    body = (replay or {}).get("body") or {}
+    if operation == "task_answer":
+        asked = H.answer_question(c, body.get("target") or {})
+        text, text_refs = H.answer_text(asked, body.get("answers") or {}, text=text)
+    elif operation in ("answer", "reply"):
+        text, text_refs = H.answer_text(H.message(c, replay["message"]),
+                                        replay.get("text") or body.get("text") or "", text=text)
+    else:
+        text_refs = {}
+    from .files import page_references
+    text, text_refs = H.sourced_text(text, [{"file": fid} for fid in sorted(page_references(replay, c))], text_refs)
     # The run the output came from: Send anyway writes as the bot with it, so the run's private tasks and meetings are
     # checked against the destination again, as the original write was.
     # The check's own input (`input`) too: a rule changed since is checked on what this check was shown, and Send anyway
     # refuses once the object moved. `path` is the write's route, whose privacy guard Send anyway runs again.
-    stored = {"text": text, "replay": replay,
+    stored = {"text": text, **text_refs, "replay": replay,
               "provenance": {"attempt_id": verdict.get("attempt_id") or "", "path": PATH.get(),
                              "authenticated": verdict.get("sender") or author, "via": verdict.get("via") or "",
                              "place": verdict.get("place"), "origin": verdict.get("origin")},
@@ -997,6 +1015,9 @@ def view_hold(c, who, hold, role=None, summary=False, auth=None):
     if not (author or reviewer or stands_in):
         raise Problem("not_found", "There is no hold " + hold["id"], 404)
     stored = {} if summary else json.loads(hold["payload"] or "{}")
+    if not summary:
+        from .files import readable_page_refs
+        stored = readable_page_refs(c, auth, who, stored)
     verdict = json.loads(hold["verdict"] or "{}")
     rule_ids = json.loads(hold["rule_ids"] or "[]")
     destinations = json.loads(hold["destinations"] or "[]")
@@ -1062,13 +1083,34 @@ def _reader_sql(who):
     return None, (), False
 
 
-def held_for(c, who, operations):
+def _bots_below(c, person):
+    """The bots that may report up to `person` first (report_managers.person_above), as actors, at most BOTS_BELOW: the
+    authors whose holds can be held for them. More than that is fine; `represented` settles each hold."""
+    found, frontier, seen = [], [person], {person}
+    while frontier and len(found) < BOTS_BELOW:
+        rows = c.execute(f"SELECT bc.bot FROM bot_config bc {BS.JOIN} WHERE bc.reports_to IN (SELECT value FROM json_each(?)) OR "
+                         "(COALESCE(bc.reports_to,'')='' AND "
+                         "json_extract(s.extra,'$.reports_to') IN (SELECT value FROM json_each(?)))",
+                         (json.dumps(frontier), json.dumps(frontier))).fetchall()
+        frontier = [r[0] for r in rows if r[0] not in seen]
+        seen.update(frontier)
+        found += frontier
+    return [f"bot:{b}" for b in found[:BOTS_BELOW]]
+
+
+def held_for(c, who, operations, limit=None):
     """The held writes of these operations that this person reads as their reviewer, as their author, or as the person
-    it is held for, oldest first, each with its `role`. The owner's and Admins' fallback is not listed: a hold with no reviewer is for
-    their review page, not a person's list."""
+    it is held for, oldest first, each with its `role`, at most `limit`. The owner's and Admins' fallback is not listed:
+    a hold with no reviewer is for their review page, not a person's list. Only their own candidates are read: their
+    own holds and their bots' (the author index) and the ones they review (org_rule_holds_reviewer)."""
     marks = ",".join("?" * len(operations))
-    rows = c.execute(f"SELECT id, author, reviewer, created_at FROM org_rule_holds WHERE state='held' AND operation IN "
-                     f"({marks}) ORDER BY created_at, id", tuple(operations)).fetchall()
+    authors = [who.actor, *(_bots_below(c, who.actor) if H.is_human(who.actor) else [])]
+    most = -1 if limit is None else max(0, int(limit))
+    pick = f"SELECT id, author, reviewer, created_at FROM org_rule_holds WHERE state='held' AND operation IN ({marks}) "
+    rows = c.execute(f"SELECT * FROM ({pick}AND author IN (SELECT value FROM json_each(?)) ORDER BY created_at, id "
+                     f"LIMIT ?) UNION SELECT * FROM ({pick}AND reviewer=? ORDER BY created_at, id LIMIT ?) "
+                     "ORDER BY created_at, id LIMIT ?",
+                     (*operations, json.dumps(authors), most, *operations, who.actor, most, most)).fetchall()
     out = []
     for row in rows:
         role = _reader(who, dict(row), c)
@@ -1136,6 +1178,7 @@ def holds_for_task(c, who, task_id, cursor=None, limit=HOLD_LIST_MAX, auth=None)
     return holds_listed(c, who, task_id=task_id, cursor=cursor, limit=limit, auth=auth)
 
 
+@SRC.scoped("rule-check")
 def _finish_task(c, hold):
     """The review task closes once none of its holds waits."""
     tid = hold["task_id"]
@@ -1144,10 +1187,11 @@ def _finish_task(c, hold):
     left = c.execute("SELECT 1 FROM org_rule_holds WHERE task_id=? AND state='held' LIMIT 1", (tid,)).fetchone()
     task = H.task(c, tid)
     if not left and task and task["status"] not in ("done", "closed"):
-        H.task_close(c, H.KEEPER, tid, "Every hold on this task is decided.", quiet=True)
+        H.task_close(c, H.KEEPER, tid, "Every hold on this task is decided.", quiet=True, strict=False)
 
 
 def _decide(c, who, hold, state, event=""):
+    H._writer(c, who.actor, task_id=hold["task_id"])
     c.execute("UPDATE org_rule_holds SET state=?, decided_at=?, decided_by=?, nonce=? WHERE id=? AND state='held'",
               (state, H.now(), who.actor, "used:" + secrets.token_hex(8), hold["id"]))
     from . import audit_log
@@ -1200,11 +1244,9 @@ def replay_identity(c, hold, auth):
     """The identity a held write runs as on Send anyway: the person it was held for, rebuilt with their own permissions
     (`auth.identity_for_actor`, refused once they are off the team), or for a bot's hold the bot, with the run it came
     from (its private tasks and meetings)."""
-    if H.is_human(hold["author"]) and not T.remote_guest(c, hold["author"]):
+    if H.is_human(hold["author"]):
         return auth.identity_for_actor(c, hold["author"])
     from .auth import Identity
-    if T.remote_guest(c, hold["author"]):               # another company's person or bot: never on this roster
-        return Identity(hold["author"], "guest", agent="org-rule-hold")
     return Identity(hold["author"], "bot", agent="org-rule-hold",
                     attempt_id=hold_provenance(hold).get("attempt_id") or "")
 
@@ -1373,6 +1415,7 @@ def appeal(c, who, hold_id, why):
         raise Problem("not_found", "There is no hold " + hold_id, 404)
     if hold["state"] != "held":
         raise Problem("conflict", "This hold is already decided", 409)
+    H._writer(c, who.actor, task_id=hold["task_id"])
     why = str(why or "").strip()[:2000]
     task_id = hold["task_id"]
     if not hold["reviewer"]:
@@ -1488,26 +1531,6 @@ def _blocked_again(c, hold, verdict):
     return _hold(c, hold["id"])
 
 
-def federated_hold(c, origin_id, revision):
-    """Whether this revision of a message from another install was held before: a catch-up brings it again, and the
-    first hold stands, whatever its reviewer decided."""
-    return c.execute("SELECT 1 FROM org_rule_holds WHERE operation='federated_message' "
-                     "AND json_extract(payload,'$.replay.origin_id')=? "
-                     "AND json_extract(payload,'$.replay.revision')=? LIMIT 1",
-                     (origin_id, int(revision))).fetchone() is not None
-
-
-def supersede_federated(c, origin_id, revision):
-    """A newer revision of a message from another install came: holds on its older revisions close, kept, so a late
-    Send anyway cannot put old words back. Their review tasks close with them."""
-    from .auth import Identity
-    rows = c.execute("SELECT * FROM org_rule_holds WHERE state='held' AND operation='federated_message' "
-                     "AND json_extract(payload,'$.replay.origin_id')=? "
-                     "AND json_extract(payload,'$.replay.revision')<?", (origin_id, int(revision))).fetchall()
-    for row in rows:
-        _decide(c, Identity(H.KEEPER, "service"), dict(row), "kept", "org_rule_hold.superseded")
-
-
 def supersede_mail(c, hold_id):
     """An approval a newer rule held again is spent: the new hold's Send anyway is the approval that counts."""
     c.execute("UPDATE org_rule_holds SET verdict=json_set(verdict,'$.used','superseded') WHERE id=? "
@@ -1601,7 +1624,7 @@ def stats(c, settings):
 
 
 def health_findings(c, settings):
-    """A high share of unchecked outputs in a day: the rules are not being enforced (backend/health_monitor.py)."""
+    """A high share of unchecked outputs in a day: the rules are not being enforced (backend/maintenance_health.py)."""
     try:
         if not on(c):
             return []
@@ -1899,7 +1922,9 @@ def install(app, store, auth, mutate):
                     ingest = prepare[hold["operation"]](store, ident, stored.get("replay") or {})
                 except Exception as exc:  # noqa: BLE001 - ask ingest's own preflight never stops the send
                     LOG.warning("Hold replay preflight failed: %s", type(exc).__name__)
-        return mutate(request, body, lambda c: send(c, who, hold_id, body.nonce, ingest, table, check, auth, audience))
+        from . import ask_ingest
+        return ask_ingest.judged(store, ingest, lambda: mutate(
+            request, body, lambda c: send(c, who, hold_id, body.nonce, ingest, table, check, auth, audience)))
 
     @app.post("/api/v2/rule-holds/{hold_id}/appeal")
     def rule_hold_appeal(request: Request, hold_id: str, body: HoldAppeal):

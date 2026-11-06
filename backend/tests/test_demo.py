@@ -2,6 +2,7 @@
 install, listens only where it may, and never touches the network."""
 
 import contextlib
+import json
 import os
 import signal
 import socket
@@ -11,13 +12,21 @@ from dataclasses import replace
 from datetime import datetime, timezone
 
 import pytest
+import time_machine
 from fastapi.testclient import TestClient
 
-from backend import demo, screen_binary
+from backend import demo, demo_seed, screen_binary, usage_limits
 from backend import server as serving
 from backend.app import create_app
 
 NOW = datetime(2026, 9, 25, 18, 30, tzinfo=timezone.utc)      # a Friday, so a week in review exists
+
+
+@pytest.fixture(scope="module", autouse=True)
+def demo_clock():
+    """Builds and API reads see the same day, including clocks outside hubdb.now."""
+    with time_machine.travel(NOW, tick=False):
+        yield
 
 
 @pytest.fixture(scope="module")
@@ -71,7 +80,8 @@ def test_every_bot_has_a_profile_and_no_one_is_told_of_a_change(built):
         assert told.fetchone()[0] == 0
         from backend import profiles
         from backend.store import H
-        configs = [H._json(config, {}) for (config,) in db.execute("SELECT config FROM bot_config")]
+        from backend import bot_settings as BS
+        configs = [H._json(config, {}) for (config,) in db.execute(f"SELECT {BS.CONFIG} FROM bot_config bc {BS.JOIN}")]
         assert configs and all(profiles.name_of(config) for config in configs)
 
 
@@ -94,7 +104,7 @@ def test_a_public_demo_is_read_only(tmp_path):
     settings = demo.build(tmp_path, now=NOW, url="https://demo.example.com", public=True)
     with signed_in(settings) as api:
         api.headers["Host"] = "demo.example.com"
-        assert api.get("/api/v2/config").status_code == 200
+        assert api.get("/api/v2/config").json()["demo_public"] is True      # the strip at the top says "Read only demo"
         # A link preview or monitor asks with HEAD and is sent to the same sign-in as a browser.
         first = TestClient(create_app(settings), base_url="https://demo.example.com", follow_redirects=False)
         assert first.head("/").status_code == 302 and first.head("/").headers["location"].startswith("/api/v2/local-signin")
@@ -127,6 +137,8 @@ def test_nothing_leaves_the_machine(built):
                 assert api.get(path).status_code == 200
             assert api.post("/api/v2/market/ask", json={"question": "Who competes with us?"},
                             headers={"Idempotency-Key": "net-1"}).status_code == 200      # falls back to the graph, no model
+            from backend import market
+            assert market.complete.__module__ == "backend.market"   # the demo never replaces the model call for everyone
     server.close()
     assert demo.ATTEMPTS == ["example.com", "93.184.216.34", "api.github.com"]     # only the three we tried
     with pytest.raises(OSError):                                                   # and the block is gone outside
@@ -173,3 +185,34 @@ def test_a_data_dir_is_never_removed(tmp_path, monkeypatch, ending, raised):
         demo.main(["--data-dir", str(data)])
     assert running == [data] and (data / "hub.sqlite").exists()
     assert not any(tmp_path.glob("tico-demo-*"))         # and no temporary folder was made for it
+
+
+def real_clock_at(monkeypatch, moment):
+    """The machine's clock as the usage-limit overlay reads it (`datetime.now`), set to `moment`."""
+    clock = type("RealClock", (datetime,), {"now": classmethod(lambda cls, tz=None: moment)})
+    monkeypatch.setattr(usage_limits, "datetime", clock)
+
+
+def test_the_usage_windows_follow_the_demo_clock_not_the_machines(monkeypatch):
+    real_clock_at(monkeypatch, datetime(2026, 9, 25, 7, 0, 1, tzinfo=timezone.utc))
+    with demo_seed.fixed(demo_seed.Clock(NOW)):
+        assert usage_limits.bounds() == usage_limits.bounds(NOW)
+
+
+def test_builds_either_side_of_the_hour_save_the_same_usage_limits(tmp_path, monkeypatch):
+    """The machine's clock crosses 07:00 UTC between two builds of one `now`: the limits they save still match."""
+    builds = {}
+    for name, moment in (("before", datetime(2026, 9, 25, 6, 59, 59, tzinfo=timezone.utc)),
+                         ("after", datetime(2026, 9, 25, 7, 0, 1, tzinfo=timezone.utc))):
+        real_clock_at(monkeypatch, moment)
+        builds[name] = demo.build(tmp_path / name, now=NOW)
+    saved = {name: usage_limits_saved(settings.db_path) for name, settings in builds.items()}
+    assert saved["before"] == saved["after"]
+    hours = [json.loads(response).get("limit", {}).get("spent", {}).get("hour") for _, response in saved["before"]]
+    assert any(hours), "the windows hold spend, so the hour is really compared"
+
+
+def usage_limits_saved(path):
+    with sqlite3.connect(path) as db:
+        return db.execute("SELECT operation, response FROM idempotency WHERE operation LIKE '/api/v2/usage/%' "
+                          "ORDER BY operation").fetchall()
