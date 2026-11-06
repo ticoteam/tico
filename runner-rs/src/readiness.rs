@@ -87,6 +87,7 @@ pub fn codex_models(home: Option<PathBuf>) -> Vec<String> {
 
 /// One runtime's row: installed, signed in, version, models, controls, detail, goals, commands. With a
 /// profile, every check runs in that profile's home and no shared key signs it in.
+#[cfg(test)]
 pub async fn runtime_readiness(
     runtime: &str,
     sign: &SignIn,

@@ -104,6 +104,7 @@ pub fn is_gateway(model: Option<&str>) -> bool {
 /// token read from GATEWAY_KEY_ENV when pi makes a request. It holds no secret. The models take text and tools only
 /// here: `gateway_models_json_for` adds images for a model the catalog says reads them. They reason, so pi sends the bot's effort as `reasoning_effort`; pi drops it for a model not marked `reasoning`. The Gateway
 /// takes none, minimal, low, medium, high and xhigh, so pi's `max` (`effort_for`) goes as `xhigh`.
+#[cfg(test)]
 pub fn gateway_models_json(url: &str) -> Value {
     gateway_models_json_for(url, None, &Value::Null)
 }
