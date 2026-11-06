@@ -190,9 +190,10 @@ def test_three_bots_asking_the_same_thing_are_one_item_and_the_answer_reaches_ea
     assert [o["task_id"] for o in merged["originals"]] == originals
     shown = needs_tasks(api, "ana-test")
     assert item["id"] in shown and not {*originals, card} & shown            # one item, not three
-    # It names the originals, so the Tasks page, which lists Needs you from its own copy of the tasks, leaves them out.
+    # It names the originals and the card the waiting one stood behind, so the Tasks page, which lists Needs you from
+    # its own copy of the tasks, leaves them out.
     page = test_goal_asks.get(api, "needs-you", "ana-test")["items"]
-    assert next(i for i in page if i["id"] == item["id"])["merged"] == originals
+    assert set(next(i for i in page if i["id"] == item["id"])["merged"]) == {*originals, card}
     # it counts toward the 5 a day once, with the vision ask
     assert get(api, "strategy-bot")["asked_today"] == {OWNER: 2}
     # already merged

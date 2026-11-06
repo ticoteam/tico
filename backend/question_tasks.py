@@ -484,7 +484,8 @@ def move_waits(conn):
     Each row in its own savepoint: one that fails is logged and dropped, never retried at every start. The table goes
     when it is empty."""
     import logging
-    if not H._has_table(conn, "task_waits_moved"):
+    # Not H._has_table: a pooled connection remembers tables it saw, and this one is dropped below.
+    if not conn.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name='task_waits_moved'").fetchone():
         return
     for task_id, on in conn.execute("SELECT task_id, waiting_on FROM task_waits_moved ORDER BY created_at, task_id"
                                     ).fetchall():

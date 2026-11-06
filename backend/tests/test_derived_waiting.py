@@ -106,7 +106,7 @@ def test_the_migration_turns_old_waits_into_question_tasks_and_blockers(api):
         assert {r[0] for r in c.execute("SELECT task_id FROM task_waits_moved")} == \
             {person["id"], blocked["id"], loose["id"]}
         QT.move_waits(c)
-        assert not H._has_table(c, "task_waits_moved")
+        assert not c.execute("SELECT 1 FROM sqlite_master WHERE name='task_waits_moved'").fetchone()
         # A person: one open question task for them under the task, the old note as its question.
         [card_id] = TR.child_ids(c, person["id"])
         card = H.task(c, card_id)
