@@ -1,4 +1,4 @@
-/* ui/app/issues.js — Shared issue and request rows, closeIssue, issue composer, Issues/Runs/Access tables
+/* ui/app/issues.js — Shared issue and request rows, Issues/Runs/Access tables
    Classic script: its globals are shared with the other files under ui/app/, loaded in the order index.html lists them. */
 'use strict';
 
@@ -148,11 +148,6 @@ function needsYouItem(i, folded, showName = true) {
         <div class="req-title">${esc(ask)}</div>
         ${context ? `<div class="req-context"><div class="md">${safeMd(context)}</div></div>` : decision ? `<div class="req-context"><div class="md">${safeMd(decision)}</div></div>` : ''}
         ${next ? `<div class="req-next"><span>Next</span><div class="md">${safeMd(next)}</div></div>` : ''}
-        <div class="issue-actions">
-          ${i.state === 'OPEN' ? `<button class="primary" type="button" data-issue-mode="comment" data-issue="${i.number}">Comment</button>` : ''}
-
-        </div>
-        <div class="issue-compose" hidden></div>
         ${previews.length ? `<div class="req-previews">${previews.map((key, n) => `<button class="ghost" type="button" data-preview-key="${esc(key)}" aria-expanded="false">View ${previews.length > 1 ? `proposal ${n + 1}` : 'proposal'}</button>`).join('')}</div>${previews.map(key => `<div class="req-preview" data-preview-for="${esc(key)}" hidden></div>`).join('')}` : ''}
         <details class="req-original"><summary>Full request</summary><div class="md" data-full-request>${safeMd(text)}</div></details>
       </div>
@@ -160,41 +155,6 @@ function needsYouItem(i, folded, showName = true) {
   }
 }
 
-const CLOSE_WITHOUT_APPROVAL = 'Closed without approval. Do not treat this as authorization to send, publish, spend, or change live systems.';
-function issueComposer(host, n, mode) {
-  if (!host) return;
-  if (!host.hidden && host.dataset.mode === mode) { host.hidden = true; host.innerHTML = ''; return; }
-  const closing = mode === 'close';
-  host.hidden = false; host.dataset.mode = mode;
-  host.innerHTML = `<form>
-    <textarea aria-label="${closing ? 'Optional closing note' : 'Comment'} on #${esc(n)}" placeholder="${closing ? 'Optional closing note…' : 'What should the bot know?'}"></textarea>
-    <div class="row"><button class="${closing ? 'ghost danger' : 'primary'}" type="submit">${closing ? 'Close task' : 'Send to bot'}</button>
-      <button class="ghost" type="button" data-issue-cancel>Cancel</button><span class="muted" data-issue-msg></span></div>
-    <p class="issue-help">${closing ? 'Closing does not approve the proposed action.' : 'Leaves Needs you until the bot needs another decision.'}</p>
-  </form>`;
-  const form = $('form', host), box = $('textarea', host), msg = $('[data-issue-msg]', host);
-  $('[data-issue-cancel]', host).onclick = () => { host.hidden = true; host.innerHTML = ''; };
-  form.onsubmit = async ev => {
-    ev.preventDefault();
-    let body = box.value.trim();
-    if (!closing && !body) { box.focus(); return; }
-    if (closing) body = body ? `${body}\n\n${CLOSE_WITHOUT_APPROVAL}` : CLOSE_WITHOUT_APPROVAL;
-    [...form.elements].forEach(el => el.disabled = true); msg.textContent = closing ? 'Closing…' : 'Sending…';
-    try {
-      await post(`/issues/${n}/comment`, closing
-        ? {body, close: true, clear_needs_human: false}
-        : {body, await_bot: true});
-      toast(closing ? `Closed #${n} without approval` : `Sent comment on #${n} to the bot`);
-      host.hidden = true; host.innerHTML = '';
-      host.dispatchEvent(new CustomEvent('issue-acted', {bubbles: true}));
-      await refresh(true);
-    } catch (e) {
-      msg.innerHTML = `<span class="err">${esc(e.message)}</span>`;
-      [...form.elements].forEach(el => el.disabled = false);
-    }
-  };
-  box.focus();
-}
 
 document.addEventListener('click', async ev => {
   const moreNeeds = ev.target.closest('[data-needs-more]');
@@ -213,13 +173,6 @@ document.addEventListener('click', async ev => {
     const full = expand.closest('.req-preview').classList.toggle('expanded');
     expand.textContent = full ? 'Collapse document' : 'Expand full document';
     expand.setAttribute('aria-expanded', String(full));
-    return;
-  }
-  const action = ev.target.closest('[data-issue-mode]');
-  if (action) {
-    ev.preventDefault();
-    const scope = action.closest('.req,.bcard,.trow');
-    issueComposer($(scope.matches('.bcard') ? ':scope > .issue-compose' : '.issue-compose', scope), +action.dataset.issue, action.dataset.issueMode);
     return;
   }
   const button = ev.target.closest('[data-preview-key]');
