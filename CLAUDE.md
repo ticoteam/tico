@@ -82,6 +82,8 @@ flight file, not the database.
   stands alone and must not depend on another unmerged migration's schema; pending files run even below applied ones.
 - Keep real team names, human names, domains, buckets and credentials out of the repository. Examples use
   the fictional team Acme (`acme.example`).
-- The UI has no build step and loads nothing from the network: vendored libraries live in
-  `ui/vendor/` with their licenses.
+- The UI loads nothing from the network: vendored libraries live in `ui/vendor/` with their licenses. Write a new
+  UI file as TypeScript (`ui/app/name.ts`, listed in index.html by that name; strict types, no `any`). `npm run build:ui`
+  compiles it to `build/ui/` (`npm run watch:ui` while editing; tests and `backend.server` build it when they can), and the
+  server refuses a missing or stale build (ui/README.md).
 - Comments say why in the present tense; they do not name who asked or when.

@@ -80,7 +80,7 @@ from . import company_billing, company_server, gateway_connection, gateway_page,
 from . import providers as Providers
 from . import access as Access
 from . import people_remove
-from . import hosted_updates, releases, runner_versions, ui_bundle
+from . import hosted_updates, releases, runner_versions, ui_build, ui_bundle
 from .bot_rows import BotRows
 from .census import Census
 from .harnesses import HARNESS_CATALOG, resolve_harness, runtime_of
@@ -8954,9 +8954,15 @@ def create_app(settings=None):
                 return Response(status_code=304, headers=headers)
             return Response(body if request.method == "GET" else None, media_type=media_type, headers=headers)
 
+        def current_bundle():
+            try:
+                return ui_bundles.get()
+            except ui_build.StaleBuild as exc:
+                raise Problem("ui_not_built", str(exc), 503) from None
+
         @app.api_route("/tico/ui/app.bundle.{part}", methods=["GET", "HEAD"], include_in_schema=False)
         async def ui_bundle_asset(request: Request, part: str):
-            bundle = ui_bundles.get()
+            bundle = current_bundle()
             path = request.url.path
             if bundle is None or path not in bundle.parts:
                 raise Problem("not_found", "Not found", 404)
@@ -8978,10 +8984,24 @@ def create_app(settings=None):
         @app.api_route("/tico/ui/", methods=["GET", "HEAD"], include_in_schema=False)
         @app.api_route("/tico/ui/index.html", methods=["GET", "HEAD"], include_in_schema=False)
         async def ui_page(request: Request):
-            bundle = ui_bundles.get()
+            bundle = current_bundle()
             if bundle is None:                       # cannot be bundled: the files, as they are
                 return FileResponse(settings.ui_dir / "index.html")
             return ui_reply(request, bundle.page, "text/html; charset=utf-8", bundle.page_etag)
+
+    # A file index.html lists as TypeScript is served as its compiled JavaScript, and only while that is current
+    # (backend/ui_build.py): the bundle uses it the same way, so this is the separate files' path (TICO_UI_BUNDLE=off).
+    @app.api_route("/tico/ui/{name:path}.ts", methods=["GET", "HEAD"], include_in_schema=False)
+    async def ui_typescript(request: Request, name: str):
+        name += ".ts"
+        if not re.fullmatch(r"[\w-]+(?:/[\w.-]+)*\.ts", name) or ".." in name.split("/") or name.endswith(".d.ts") \
+                or not (settings.ui_dir / name).is_file():
+            raise Problem("not_found", "Not found", 404)
+        try:
+            path = ui_build.compiled(settings.ui_dir, name)
+        except ui_build.StaleBuild as exc:
+            raise Problem("ui_not_built", str(exc), 503) from None
+        return FileResponse(path, media_type="text/javascript; charset=utf-8")
 
     # three.js is ~790 KB of text and StaticFiles sends it as is; the Overview waits on it. Gzipped once in
     # memory it is ~200 KB.
