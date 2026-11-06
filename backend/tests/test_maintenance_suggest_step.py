@@ -19,6 +19,13 @@ from backend.tests.test_api import api, get, put  # noqa: F401
 from backend.tests.test_maintenance_learn_step import complete, queue, start
 
 
+@pytest.fixture(autouse=True)
+def _not_a_friday(monkeypatch):
+    """A Friday's update must be a week in review (updates.kind_for); these tests post daily ones, so pin a Tuesday."""
+    from backend import updates as _updates
+    monkeypatch.setattr(_updates, "today", lambda at=None: "2026-09-29")
+
+
 def item(n=1, **changes):
     return {"id": f"sg_{n:032x}", "fingerprint": f"sha256:{n:064x}", "owner_role": "botops",
             "title": "Set up a manager", "body": "Give open work a manager.",

@@ -19,6 +19,14 @@ from backend.tests.test_api import claim, get, headers, post, setup_attempt  # n
 from backend.tests.test_org_rules import api, as_bot, edit, org, rule  # noqa: F401
 from backend import bot_settings as BS
 
+
+@pytest.fixture(autouse=True)
+def _not_a_friday(monkeypatch):
+    """A Friday's update must be a week in review (updates.kind_for); these tests post daily ones, so pin a Tuesday."""
+    from backend import updates as _updates
+    monkeypatch.setattr(_updates, "today", lambda at=None: "2026-09-29")
+
+
 COLOR = "Never tell anyone Acme's favorite color."
 NEEDLE = "favorite color is"
 
