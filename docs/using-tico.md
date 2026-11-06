@@ -262,7 +262,11 @@ A message or comment goes this way to everyone it reaches: whoever it @mentions 
 task's followers. A bot following at All gets it by the way; a person following at All is notified; a follower at
 Mentions or Off gets only what @mentions or replies to them. **Defer never** notifies no follower and wakes none, but
 still reaches whom it @mentions, queued. Before you send, `GET /api/v2/threads/{thread_id}/reach` says who it would
-reach and how. Steer does not
+reach and how; in the web app **Reaches N** under the box (outside a DM) opens that list by name: **Now** (steered),
+**After its turn** (queued), **Next turn** (deferred), **Notified** (a person), **Not reached** (an @mention who
+can't see the thread). Posting never follows a thread: tick **Follow** under the box (shown until you follow) to
+follow it once your message is in. The choice is kept for you, one for chats and one for tasks
+(`compose.follow.chat`, `compose.follow.task`). Steer does not
 apply to a new task (it has no turn yet). **Set as goal** is a separate action, apart in the send menu.
 
 In the web app a bot's chat (its Home and your DM with it) and a task's thread name a way every time. Send's icon shows it: an arrow for Steer, an arrow over

@@ -3551,12 +3551,13 @@ def view(c, principal, row, *, follower=None, summary=None, dm=None, pins=None):
         out.update(last_seq=int(last[0] or 0), last_unread_seq=int(last[0] or 0), last_message_at=last[1])
     if v is not None:
         f = follower if follower is not None else c.execute(
-            "SELECT following, notify, last_read_seq FROM thread_followers WHERE thread_id=? AND actor=?",
+            "SELECT following, notify, last_read_seq, reason FROM thread_followers WHERE thread_id=? AND actor=?",
             (row["id"], v.actor)).fetchone()
         u = ({"unread": 0, "activity": False} if only_old else summary if summary is not None
              else unread(c, v, row["id"], follower=(f["last_read_seq"],) if f else None))
         out["me"] = {"member": _is_member(c, v, root["id"]) or v.actor in (root.get("participants") or []),
-                     "following": bool(f and f["following"]), "notify": f["notify"] if f else "live",
+                     "following": bool(f and f["following"]), "follows": _follows(v.actor, out["audience"], f),
+                     "notify": f["notify"] if f else "live",
                      "last_read_seq": f["last_read_seq"] if f else 0, "unread": u["unread"],
                      "activity": u["activity"], "can_post": can_post(c, v, row), "can_manage": can_manage(c, v, row),
                      "pinned": pinned(out["pinned_for_everyone"], (pins if pins is not None
@@ -3566,6 +3567,15 @@ def view(c, principal, row, *, follower=None, summary=None, dm=None, pins=None):
         if out["audience"] in ("personal", "participants") and not row.get("parent_id"):
             out.update(dm or dm_with(c, v, [root]).get(root["id"]) or {})
     return out
+
+
+def _follows(actor, audience, f):
+    """Whether the thread's messages reach `actor` as a follower (`plan`): a following row that, for a person on a chat,
+    a follow, a mention, a reply or starting it made, not joining or reading. The composer offers Follow until then."""
+    if not f or not f["following"]:
+        return False
+    reason = f["reason"] if "reason" in f.keys() else None
+    return audience == "task" or not str(actor).startswith("human:") or reason not in ("joined", "read")
 
 
 def pin_rows(c, actor, root_ids):
@@ -4152,7 +4162,7 @@ def _followers_of(c, v, ids):
     none. `view` reads a page's rows from here."""
     out = {}
     for part in H.chunks(list(ids)):
-        for r in c.execute("SELECT thread_id, following, notify, last_read_seq FROM thread_followers WHERE actor=? "
+        for r in c.execute("SELECT thread_id, following, notify, last_read_seq, reason FROM thread_followers WHERE actor=? "
                            "AND thread_id IN (%s)" % ",".join("?" * len(part)), (v.actor, *part)):
             out[r["thread_id"]] = dict(r)
     return out

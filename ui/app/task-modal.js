@@ -788,6 +788,33 @@ function taskComposerToPaint(state) {
   if (hint) hint.textContent = taskDeliverySplit(state) ? taskDeliveryHint(state)
     : taskComposerTo(state.data?.comment_to, box?.value);
   taskDeliveryPaint(state);
+  taskFootPaint(state);
+}
+// Follow and "Reaches N" under the box (pill.js composeReach), for a task with a thread of its own (its `followers`
+// list; null for a task in a shared chat). Follow shows until you follow; a ticked Follow follows once the comment is in.
+const taskFollowersOf = state => {
+  const id = state.data?.task?.id;
+  return id != null && TASK_FOLLOWERS.has(String(id)) ? TASK_FOLLOWERS.get(String(id)) : state.data?.task?.followers;
+};
+const taskOwnThread = state => Array.isArray(taskFollowersOf(state)) ? state.data?.task?.conversation_id || '' : '';
+// The way the reach is asked for: the way Send shows, or the server's Steer where the comment names none.
+const taskReachMode = state => taskDeliverySplit(state) ? taskDeliveryMode(state) : '';
+function taskFootPaint(state) {
+  const foot = $('.p-foot', state.host);
+  if (!foot) return;
+  const list = taskFollowersOf(state);
+  composeFollowPaint(foot, 'task', Array.isArray(list) && !list.some(f => f.actor === myActor()));
+  state.reach?.update();
+}
+// The Followers row changed (task-props.js): Follow under the box hides or shows with it.
+function taskFootRepaint() { if (TASK_CHAT?.data && taskChatCurrent(TASK_CHAT)) taskFootPaint(TASK_CHAT); }
+async function taskFollowAfterSend(state) {
+  const task = state.data?.task;
+  if (!task) return;
+  try {
+    const data = await put(`/v2/tasks/${encodeURIComponent(task.id)}/followers`, {following: true});
+    if (Array.isArray(data?.followers)) taskFollowersPaint(state.dialog, task, data.followers);
+  } catch (e) { toast(`Not followed: ${e.message}`, true); }
 }
 async function taskRunStop(state, button) {
   button.disabled = true; button.title = 'Stopping…';
@@ -810,8 +837,10 @@ function taskCommentsRender(state, data, sent = '') {
       <div class="task-comments" role="log" aria-live="polite"></div>
       <form class="task-pill"><span class="muted" data-task-chat-to role="note"></span><div class="p-pill"><textarea class="p-text" rows="1" maxlength="4000" required aria-label="Message" placeholder="Message…"></textarea>
           <span class="task-send" data-task-send><button class="task-send-caret p-way" type="button" aria-haspopup="menu" aria-expanded="false" aria-label="Ways to send" title="Ways to send" data-task-caret hidden><span class="nav-icon" aria-hidden="true">expand_more</span></button><button class="p-send p-send-icon" type="submit" aria-label="Send" title="Send" data-task-main>${ICON_SEND}</button><div class="p-menu p-ways" role="menu" aria-label="Ways to send" data-task-menu hidden></div></span></div>
-          <span class="muted" data-task-chat-status role="status"></span></form>`;
+          ${composeFootHTML()}<span class="muted" data-task-chat-status role="status"></span></form>`;
     $('form', host).onsubmit = ev => { ev.preventDefault(); void taskCommentSend(state); };
+    state.reach = composeReach($('.p-foot', host), {thread: () => taskOwnThread(state), mode: () => taskReachMode(state),
+      text: () => $('textarea', host)?.value || ''});
     const caret = $('[data-task-caret]', host), menu = $('[data-task-menu]', host);
     caret.onclick = () => taskDeliveryMenu(state, menu.hidden);
     sendWayHold($('[data-task-main]', host), () => taskDeliveryMenu(state, true), () => taskDeliverySplit(state));
@@ -963,6 +992,7 @@ async function taskCommentSend(state) {
   const status = $('[data-task-chat-status]', form);
   // The way Send shows is the way it goes; a task with no bot names none.
   const split = taskDeliverySplit(state), mode = split ? taskDeliveryMode(state) : '', shown = deliveryWay(mode);
+  const follow = composeFollowWanted($('.p-foot', form));
   // A disabled Send says why on hover; with an aria-label, the title is its screen-reader description too.
   taskDeliveryMenu(state, false);
   button.disabled = box.disabled = true; caret.disabled = true; button.title = 'Sending…'; status.textContent = '';
@@ -976,6 +1006,7 @@ async function taskCommentSend(state) {
       return;
     }
     if (shown === 'goal') state.goalOnce = false;      // Set as goal was for this comment: back to the kept way
+    if (follow) void taskFollowAfterSend(state);
     if (!taskChatCurrent(state)) return;
     box.value = ''; box.style.height = ''; TASK_DRAFTS.delete(String(state.id)); state.sending = false;
     const thread = $('.task-comments', state.host);

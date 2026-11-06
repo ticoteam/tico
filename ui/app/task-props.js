@@ -180,6 +180,7 @@ function taskFollowersPaint(d, task, list) {
   TASK_FOLLOWERS.set(String(task.id), list);
   const row = $('[data-prop-row="followers"]', d);
   if (row && String(d.dataset.task) === String(task.id)) row.outerHTML = taskFollowersRowHTML({id: task.id}, taskPropRights(task)) || '<span hidden></span>';
+  if (typeof taskFootRepaint === 'function') taskFootRepaint();
 }
 // One change ({actor?, following, notify?}), then the row from the server's answer.
 async function taskFollow(d, task, body) {

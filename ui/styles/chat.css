@@ -291,6 +291,22 @@ a.ref::before,.run-did .ref::before{content:'';display:inline-block;width:.8em;h
 .p-ways [aria-checked="true"]>.p-way-i{color:var(--accent)}
 .p-send-icon{position:relative;-webkit-touch-callout:none;user-select:none}
 .p-way-badge{position:absolute;top:-5px;right:-7px;padding:0 4px;border:1px solid var(--line);border-radius:999px;background:var(--bg);color:var(--ink);font:500 10px/14px var(--mono);font-variant-numeric:tabular-nums;white-space:nowrap}
+/* Under a thread's or a task's box: Follow, then "Reaches N", which opens who the message reaches and how (pill.js
+   composeFootHTML). Small and muted, at Send's end; the list opens upward. */
+.p-foot{display:flex;align-items:center;justify-content:flex-end;gap:10px;padding:2px 8px 0;font-size:var(--t-sm);color:var(--muted)}
+.p-foot[hidden],.p-follow[hidden],.p-reach[hidden]{display:none}
+.p-follow{display:inline-flex;align-items:center;gap:5px;cursor:pointer;user-select:none}
+.p-follow input{width:14px;height:14px;margin:0;accent-color:var(--ink)}
+.p-reach-wrap{position:relative;display:inline-flex}
+.p-reach{padding:2px 6px;border:0;border-radius:6px;background:none;color:var(--muted);font:inherit;line-height:20px;cursor:pointer}
+.p-reach:hover,.p-reach[aria-expanded="true"]{background:var(--surface2);color:var(--ink)}
+.p-menu.p-reach-pop{top:auto;bottom:calc(100% + 6px);right:0;width:max-content;min-width:220px;max-width:calc(100vw - 32px);max-height:260px}
+.p-reach-row{display:flex;align-items:center;gap:8px;padding:5px 7px;color:var(--ink);font-size:var(--t-sm)}
+.p-reach-row>:first-child{flex:none}
+.p-reach-name{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.p-reach-mode{flex:none;color:var(--muted)}
+.p-reach-none{margin:0;padding:5px 7px;color:var(--muted)}
+@media (max-width:760px){.p-reach{padding:6px 8px}.p-follow{padding:6px 0}}
 /* Chat owns the viewport: chrome and composer stay visible while only history scrolls. */
 #main.chat-layout{display:flex;flex-direction:column;height:100vh;height:100dvh;min-height:0;overflow:hidden;padding-bottom:max(var(--s3),env(safe-area-inset-bottom))}
 /* On desktop the body grid sizes the row (the app nudge may sit above); 100vh here would push the composer below the fold. */

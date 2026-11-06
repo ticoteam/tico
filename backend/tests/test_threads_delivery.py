@@ -107,6 +107,19 @@ def test_a_mention_follows_and_keeps_the_notify_level_but_a_dm_delivery_never_un
     assert follower(api, dm["id"], "human:ben")["following"] == 0
 
 
+def test_me_follows_is_whether_a_message_naming_nobody_reaches_you(api):
+    """The composer offers Follow until `me.follows`: a member who only joined a chat is not reached by a message
+    naming nobody (threads.plan), its starter and anyone who follows are."""
+    thread = new_thread(api, members=("human:ben",))
+    me = lambda token: api.get(f"/api/v2/threads/{thread['id']}", headers=headers(token)).json()["me"]  # noqa: E731
+    assert me("ben-test")["following"] is True and me("ben-test")["follows"] is False
+    assert me("ana-test")["follows"] is True, "the starter follows"
+    assert delivery(api, say(api, thread["id"], "Budget is in")["id"], "human:ben") is None
+    assert api.put(f"/api/v2/threads/{thread['id']}/follow", json={}, headers=headers("ben-test")).status_code == 200
+    assert me("ben-test")["follows"] is True
+    assert delivery(api, say(api, thread["id"], "Budget is out")["id"], "human:ben")["reason"] == "follower"
+
+
 # ----------------------------------------------------------------------------- the unsolicited cap (19)
 def test_a_further_delivery_over_the_cap_is_not_delivered_and_its_author_is_told(api, monkeypatch):
     monkeypatch.setattr(H, "UNSOLICITED_PER_DAY", 1)
