@@ -1011,9 +1011,18 @@ def prepare(event, base, output, timings_path=None, head="HEAD"):
     # for documented no-test changes, without invoking bare pytest.
     if not jobs:
         jobs.append({"suite": "selection", "files": []})
+    coverage = {"lines": {}}
+    if event in ("pull_request", "merge_group") and base:
+        # The statements this change adds to backend/ and clients/ (diff_coverage.py): the gate counts which of them run.
+        if __package__:
+            from .diff_coverage import plan_coverage
+        else:
+            from diff_coverage import plan_coverage
+        coverage = plan_coverage(base, head)
     plan = {
         **picked,
         "changed": changed,
+        "coverage": coverage,
         "matrix": {"include": jobs},
         "estimated_seconds": loads,
         "timed_files": len(set(counts) & timings.keys()),
@@ -1037,10 +1046,25 @@ def browser_scripts(args, root=ROOT):
     return out
 
 
+def coverage_config(suite):
+    """The coverage config for a measured job: tests and migrations are left out of the data, the sources come from --cov."""
+    path = ROOT / "ci-results" / f"coverage-{suite}.ini"
+    path.parent.mkdir(exist_ok=True)
+    path.write_text("[run]\nomit =\n    */tests/*\n    */migrations/*\n")
+    return path
+
+
 def run(plan_path, suite):
     plan = json.loads(Path(plan_path).read_text())
     job = next(j for j in plan["matrix"]["include"] if j["suite"] == suite)
     files = job["files"]
+    if __package__:
+        from .diff_coverage import extract
+    else:
+        from diff_coverage import extract
+    lines = plan.get("coverage", {}).get("lines", {})
+    measured = bool(lines) and suite != "selection" and not suite.startswith("browser-")
+    data = ROOT / "ci-results" / f"coverage-{suite}.data"
     if suite == "selection":
         if plan["python"] != [] or plan["browser"] != [] or plan["caddy"] or plan["conformance"] or plan["contracts"]:
             raise RuntimeError("Selection-only job requires an explicitly unaffected plan")
@@ -1061,7 +1085,7 @@ def run(plan_path, suite):
             "pytest",
             "-q",
             "-n",
-            str(WORKERS),
+            os.environ.get("TICO_PYTEST_WORKERS", str(WORKERS)),
             *PYTEST_FLAGS,
             "-o",
             "junit_family=xunit1",
@@ -1069,10 +1093,17 @@ def run(plan_path, suite):
         ]
         if suite in ("conformance", "contracts"):
             command += ["-m", "slow"]
+        if measured:
+            # One data file per job, recording only the plan's statement files; extract() keeps the lines that ran.
+            command += ["--cov=backend", "--cov=clients", f"--cov-config={coverage_config(suite)}", "--cov-report="]
+            env = {**os.environ, "COVERAGE_FILE": str(data), "COVERAGE_CORE": "sysmon"}
         command += files
     (ROOT / "ci-results").mkdir(exist_ok=True)
     rust = cargo_tests(job.get("crates", [])) if suite == "conformance" else 0
     result = subprocess.run(command, cwd=ROOT, env=env)
+    if measured:
+        extract(plan, data, ROOT / "ci-results" / f"coverage-{suite}.json")
+        data.unlink(missing_ok=True)
     if result.returncode == 0 and not suite.startswith("browser-"):
         cases = list(ET.parse(ROOT / "ci-results" / f"{suite}.xml").iter("testcase"))
         if not any(t.find("skipped") is None for t in cases):

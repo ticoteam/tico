@@ -170,7 +170,7 @@ jobs:
           SUITE: ${{ matrix.suite }}
           TICO_PYTHON: ${{ runner.temp }}/venv/bin/python
         run: PATH="$RUNNER_TEMP/venv/bin:$PATH" "$RUNNER_TEMP/venv/bin/python" scripts/pr_checks.py run "$SUITE"
-      - if: always() && (startsWith(matrix.suite, 'python-') || startsWith(matrix.suite, 'browser-') || matrix.suite == 'contracts')
+      - if: always() && (startsWith(matrix.suite, 'python-') || startsWith(matrix.suite, 'browser-') || matrix.suite == 'contracts' || matrix.suite == 'conformance')
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: results-${{ matrix.suite }}
@@ -233,6 +233,9 @@ jobs:
         run: PATH="$RUNNER_TEMP/venv/bin:$PATH" bash scripts/check_ui_routes.sh --base "$BASE_SHA"
       - name: Runner wire contract
         run: '"$RUNNER_TEMP/venv/bin/python" scripts/check_wire_contract.py'
+      - name: Coverage pragmas carry a reason
+        # A pull request's merge commit and a queue group's both have the base they land on as their first parent.
+        run: '"$RUNNER_TEMP/venv/bin/python" scripts/diff_coverage.py pragmas --base HEAD^1 --head HEAD'
       - name: Shell scripts (shellcheck, pinned)
         run: bash scripts/shell_lint.sh
       - name: Workflows (actionlint, pinned)
@@ -480,3 +483,23 @@ jobs:
           check recorder "$RECORDER"
           check caddy-linux "$CADDY"
           exit "$status"
+      # The queue's diff coverage gate (scripts/diff_coverage.py): every statement this group's change adds to backend/ and
+      # clients/ must run under the tests above. It runs after the last job, so a group pays only a checkout and two
+      # artifact downloads for it. Its own step fails the check and lists each statement no test ran.
+      - if: ${{ !cancelled() && github.event_name == 'merge_group' && needs.plan.result == 'success' }}
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          persist-credentials: false
+      - if: ${{ !cancelled() && github.event_name == 'merge_group' && needs.plan.result == 'success' }}
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: pr-check-plan
+      - if: ${{ !cancelled() && github.event_name == 'merge_group' && needs.plan.result == 'success' }}
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          pattern: results-*
+          path: ci-results
+          merge-multiple: true
+      - name: Diff coverage gate (added statements must run under the tests)
+        if: ${{ !cancelled() && github.event_name == 'merge_group' && needs.plan.result == 'success' }}
+        run: python3 scripts/diff_coverage.py gate --plan ci-plan.json --results ci-results
