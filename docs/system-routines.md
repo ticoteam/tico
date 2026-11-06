@@ -29,7 +29,7 @@ Task rules, the built-in switches, schedules and run records described here are 
 
 A run that failed shows **Failed:** and a plain reason in red, for example "Failed: the database was busy". The reason names the kind of failure, never the error text, because error text can hold people's data.
 
-A job that wakes every few seconds and finds nothing to do does not add a row each time. A quiet run with the same result as the last one moves that row's times forward, at most once every 5 minutes, so a 10-second job's last run can read up to 5 minutes ago. A failure with the same reason as the last row folds the same way: the row keeps the time of the first failure and counts the repeats. A job that does not apply here writes nothing when it has nothing to do. Built-ins and task rules share these run records. Tico keeps the last 50 records for each job or rule. Task-rule results include "2 tasks closed" or "No eligible done tasks".
+A job that wakes every few seconds and finds nothing to do does not add a row each time. A quiet run with the same result as the last one moves that row's times forward, at most once every 5 minutes, so a 10-second job's last run can read up to 5 minutes ago. A failure with the same reason as the last row folds the same way: the row moves to the latest failure, at most once every 5 minutes, and each move counts one more run. A job that does not apply here writes nothing when it has nothing to do. Built-ins and task rules share these run records. Tico keeps the last 50 records for each job or rule. Task-rule results include "2 tasks closed" or "No eligible done tasks".
 
 The list refreshes when you open the tab and at most once a minute while it stays open.
 
@@ -147,7 +147,7 @@ Check health runs as a [Maintenance](maintenance.md) step. It has no separate Sy
 | **Page monitors** | Reads each competitor page the Librarian or owner watches (at most 50 a day, the longest unchecked first) and files a market insight only when one changed. See [Market watch](market-watch.md). | Daily | a watched page |
 | **Goal colours** | Works out every goal's colour again as its data ages. | Hourly |  |
 | **Gateway key check** | Asks the Tico AI Gateway whether this server's key still works and how much of the month's cap is used. | Hourly | a Gateway key |
-| **Billing check** | Reads HQ's nightly billing check for the owner's Health page. | Hourly | HQ's staff key (Tico's own server) |
+| **Billing check** | Reads HQ's nightly billing check for the owner's Health page. | Hourly | HQ's staff read key set on this server |
 | **Updates** | Asks people and bots for today's updates, one at a time. | Every 10 seconds |  |
 | **GitHub sync** | Catches up on pull requests, merges and releases whose notice from GitHub never arrived. | Every 10 seconds |  |
 | **Repository and setup waits** | Finishes a bot waiting for its repository or a worktree, and tells a person about a bot stuck in setup. | Every 10 seconds |  |
@@ -184,7 +184,7 @@ Check health runs as a [Maintenance](maintenance.md) step. It has no separate Sy
 | **Inbound mail** | Brings in mail and bills from HQ, and deletes inbound mail older than 90 days. | Every 15 seconds | |
 | **Gateway webhooks** | Brings in webhooks and Tico notices waiting at Tico Gateway. | Every 15 seconds with a relay, else every minute | a Gateway key |
 | **Physical mail** | Reads and routes letters the mail relay and the mail-intake inbox kept. | Every minute | physical mail received |
-| **Letters sync** | Sends approved letters and follows each one until it is delivered. | Every 30 seconds | a letter sent |
+| **Letters sync** | Sends approved letters and follows each one until it is delivered. | Every 30 seconds | a letter requested |
 | **Sleep when idle** | Asks HQ to put this server to sleep once nobody has used it for the set time. | Every 5 minutes; every minute on a cell | sleep set, or a cell |
 | **Cloud machines** | Starts bots' cloud machines for work and stops them when idle. | Every 10 seconds | a Tico Cloud company |
 
