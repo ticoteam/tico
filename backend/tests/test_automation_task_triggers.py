@@ -221,7 +221,8 @@ def test_private_task_event_redacts_text_and_refuses_create_and_webhook_actions(
         assert payload["task"].get("title") is None and payload["task"].get("body") is None
         assert payload["event"]["data"].get("title") is None and payload["event"]["data"].get("body") is None
         assert all(secret not in json.dumps(saved_state) for secret in secrets.values())
-    assert not sql(api, "SELECT id FROM tasks WHERE title=? OR body LIKE ?", (secrets["title"], "%Private synthetic body%"))
+    assert not sql(api, "SELECT id FROM tasks WHERE id<>? AND (title=? OR body LIKE ?)",
+                   (task["id"], secrets["title"], "%Private synthetic body%"))
     sends = sql(api, "SELECT body FROM webhook_sends WHERE webhook_id=?", (hook["id"],))
     assert sends == []
 
