@@ -4154,6 +4154,13 @@ NOTICE_COMMANDS = ("list",)                             # the subcommands `hub n
 
 
 MARKETING_TYPE = "idea"     # the marketing task type's id (backend/marketing_tasks.py TYPE_ID); its name is a team's to set
+# The old status words of the growth idea lines, and the step each one is now (backend/marketing_tasks.py).
+LEGACY_IDEA_STEP = {"idea": "On deck", "testing": "Live", "scaling": "Working", "won": "Succeeded", "lost": "Failed"}
+
+
+def legacy_idea_step(word):
+    """The step a legacy status word names: the new step name for an old one, else the word capitalized (Paused)."""
+    return LEGACY_IDEA_STEP.get(word.lower(), word.capitalize())
 LEGACY_IDEA_FLAGS = ("--title", "--hypothesis", "--prediction", "--bet", "--kpi", "--segment", "--source-kind",
                      "--source-ref", "--i", "--c", "--e", "--follow-up-of", "--assignee", "--body", "--status", "--q",
                      "--limit", "--result", "--learning", "--bet-effect", "--confidence")
@@ -4191,7 +4198,7 @@ def legacy_idea(argv):
     if old.verb == "list":
         line = ["task", "list", "--type", MARKETING_TYPE]
         if old.status:
-            line += ["--step", old.status.capitalize()]
+            line += ["--step", legacy_idea_step(old.status)]
         if old.channel:
             line += ["--label", f"channel:{old.channel[0]}"]
         return f'"hub growth idea list" is now "hub task list --type {MARKETING_TYPE}"', [line + json_out]
@@ -4199,7 +4206,7 @@ def legacy_idea(argv):
         p.error("verdict needs --status won|lost|inconclusive|dropped|paused")
     if not old.id:
         p.error("verdict needs the idea's task id")
-    update = ["task", "update", old.id, "--step", old.status.capitalize()]
+    update = ["task", "update", old.id, "--step", legacy_idea_step(old.status)]
     found = "\n".join(f"{label}: {value}" for label, value in (("Result", old.result), ("Learning", old.learning)) if value)
     if not found and old.status == "paused":
         found = "Test paused"           # a pause needs a note; with no result or learning, the note says only that
