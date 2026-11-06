@@ -1,0 +1,46 @@
+# Main is red: when a Release validation run on main finishes, tell the people and bots whose merges likely broke it
+# (scripts/main_red.py). A red run gets one review on each suspect pull request, once per break, and one open `main-red`
+# issue that is edited in place; the next green run on main closes that issue. Tico routes the reviews to the owners.
+# A validation run on a merge queue group (gh-readonly-queue/*) is not main's and never starts this: the trigger names
+# the branch and the job names the event.
+name: Main is red
+
+run-name: "Main is red: ${{ github.event.workflow_run.display_title }}"
+
+on:
+  workflow_run:
+    workflows: [Release validation]
+    types: [completed]
+    branches: [main]
+
+permissions:
+  contents: read
+
+# One alarm at a time, so two finished runs never both edit the issue. The later run waits, and it reads the state the
+# earlier one wrote.
+concurrency:
+  group: main-red-alarm
+  cancel-in-progress: false
+
+jobs:
+  alarm:
+    if: github.event.workflow_run.event == 'workflow_dispatch' && github.event.workflow_run.head_branch == 'main'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    permissions:
+      actions: read
+      contents: read
+      issues: write
+      pull-requests: write
+    steps:
+      # Full history, so the candidate commit of a red run is in the checkout whatever has landed since.
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Tell the owners of the run
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+          GITHUB_REPOSITORY: ${{ github.repository }}
+          RUN_ID: ${{ github.event.workflow_run.id }}
+        run: python3 scripts/main_red.py --run-id "$RUN_ID" --workdir "$RUNNER_TEMP/red"
