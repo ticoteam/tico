@@ -100,7 +100,8 @@ jobs:
   tests:
     needs: plan
     name: ${{ matrix.suite }}
-    runs-on: ${{ (github.event_name != 'pull_request' || !github.event.pull_request.head.repo.fork) && format('runs-on={0}/volume=30gb:gp3:125mbs:3000iops/runner=4cpu-linux-x64/family=m8+m7+m6+c8+c7+c6+r8+r7/extras=s3-cache', github.run_id) || 'ubuntu-24.04' }}
+    # Test shards stay on 16 GB+ families: on c-family .xlarge (8 GB) six Python shards were killed mid-run (#2838).
+    runs-on: ${{ (github.event_name != 'pull_request' || !github.event.pull_request.head.repo.fork) && format('runs-on={0}/volume=30gb:gp3:125mbs:3000iops/runner=4cpu-linux-x64/family=m8+m7+m6+r8+r7/extras=s3-cache', github.run_id) || 'ubuntu-24.04' }}
     timeout-minutes: 20
     strategy:
       fail-fast: false
