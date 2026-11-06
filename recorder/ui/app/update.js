@@ -1,7 +1,9 @@
 // Tico Recorder's updates in the window. app.js hands `status.update` to `ticoUpdate` on every view, and
 // draws `ticoUpdateRow` in Settings.
-// - The banner shows when a downloaded build is ready (Restart installs it now when the recorder is idle,
-//   otherwise it says why it waits), and once for a copy that cannot update itself (Move to Applications).
+// - Nothing shows while the app is held (`held`: a recording, a live or paused meeting, a send).
+// - A copy that cannot update itself and is not in an Applications folder (`prompt`) asks once per launch,
+//   before the first recording: Move or Not now. After Not now the smaller banner offers the move.
+// - The banner shows when a downloaded build is ready, with one line of the release notes, and Restart.
 // - The Settings row shows the version, Check for updates and its states, or Move to Applications.
 (() => {
   const invoke = (cmd, args = {}) => window.__TAURI__.core.invoke(cmd, args);
@@ -17,6 +19,14 @@
   // Move to Applications, on this page only: a newer copy found there, an error, or a move under way.
   const move = { ask: '', error: '', busy: false };
   let checkError = '';
+  // The launch prompt: answered (Not now) or passed (a recording started) for this launch.
+  let promptDone = false;
+
+  /** The release notes line, or '' for none or the build's "Built from <sha>" placeholder. */
+  const noteLine = (notes) => {
+    const line = String(notes || '').split('\n').map((l) => l.trim()).find(Boolean) || '';
+    return /^Built from [0-9a-f]+$/.test(line) ? '' : line;
+  };
 
   const redraw = () => { shown = ''; render(last); window.ticoRedraw?.(); };
 
@@ -76,9 +86,21 @@
     return `<div class="settings-group" id="updates"><div class="label">Updates</div><div class="inset"><div class="line update-row">${name}${tail}</div></div></div>`;
   }
 
+  /** Move and Not now; a newer copy in Applications or an error shows in their place. */
+  function promptControls() {
+    if (move.busy) return `<span class="value"><span class="spin"></span>Moving…</span>`;
+    if (move.ask) {
+      return `<span class="value">Applications has ${esc(move.ask)}</span>`
+        + `<button class="btn" data-upd="open">Open it</button><button class="btn primary" data-upd="replace">Replace</button>`;
+    }
+    return (move.error ? `<span class="value warn">${esc(move.error)}</span>` : '')
+      + `<button class="btn" data-upd="not-now">Not now</button><button class="btn primary" data-upd="move">Move</button>`;
+  }
+
   function render(update) {
     last = update ?? null;
-    const key = JSON.stringify([last, move, stored(DISMISSED)]);
+    if (last?.held) promptDone = true;
+    const key = JSON.stringify([last, move, stored(DISMISSED), promptDone]);
     if (key === shown) return;
     shown = key;
     if (!banner) {
@@ -89,11 +111,20 @@
       document.body.append(banner);
     }
     const installed = update?.state === 'installed';
-    if (update?.state === 'ready' || installed) {
-      // A build waiting on `blocked` is not restarted.
-      banner.innerHTML = update.blocked
-        ? `<span>${installed ? 'Update installed' : 'Update ready'}. ${esc(update.blocked)}.</span>`
-        : `<span>${installed ? 'Update installed' : 'Update ready'} · </span><button type="button" class="update-restart" data-upd="restart">Restart</button>`;
+    banner.classList.remove('update-prompt');
+    if (update?.held || (update?.blocked && (update.state === 'ready' || installed))) {
+      // Never during a recording, a live or paused meeting, or a send; Settings still says why it waits.
+      banner.replaceChildren();
+      banner.hidden = true;
+    } else if (update?.state === 'ready' || installed) {
+      const note = noteLine(update.notes);
+      banner.innerHTML = `<span class="update-title">${installed ? 'Update installed' : 'Update ready'}</span>`
+        + (note ? `<span class="update-note" title="${esc(note)}">${esc(note)}</span>` : '')
+        + `<button type="button" class="btn small primary update-restart" data-upd="restart">Restart</button>`;
+      banner.hidden = false;
+    } else if (update?.prompt && update.movable && !promptDone) {
+      banner.classList.add('update-prompt');
+      banner.innerHTML = `<p>Move Tico Recorder to Applications so it can update.</p><div class="update-actions">${promptControls()}</div>`;
       banner.hidden = false;
     } else if (update?.movable && !stored(DISMISSED)) {
       banner.innerHTML = `<span>${esc(update.location)}</span>${moveControls()}<button type="button" class="update-close" data-upd="dismiss" title="Dismiss" aria-label="Dismiss">×</button>`;
@@ -114,6 +145,7 @@
     else if (what === 'move') doMove('copy');
     else if (what === 'replace' || what === 'open') doMove(what);
     else if (what === 'dismiss') { store(DISMISSED, '1'); redraw(); }
+    else if (what === 'not-now') { promptDone = true; move.error = ''; redraw(); }
   });
 
   window.ticoUpdate = render;

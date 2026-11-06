@@ -3584,6 +3584,10 @@ export type MaintenanceUpdate = {
   steps?: Array<MaintenanceStepChange> | null;
 };
 
+export type MakePage = {
+  text: string;
+};
+
 export type MarketAnswers = {
   buyers?: string;
   competitors?: string;
@@ -3823,6 +3827,15 @@ export type ModelSubscriptionList = {
 
 export type Moderate = {
   action: string;
+};
+
+export type MyRecorder = {
+  download_url: string;
+  last_seen_at: string | null;
+  latest: string;
+  recent: boolean;
+  update_available: boolean;
+  version: string;
 };
 
 export type NeedsSummary = {
@@ -5654,6 +5667,14 @@ export type TaskList = {
   next_offset: number | null;
   reset?: boolean;
   tasks: Array<Task>;
+};
+
+export type TaskMakePage = {
+  make_page: {
+  conversation_id: string;
+  message_id: string;
+  state: "making" | "made" | "failed" | "update_required";
+} | null;
 };
 
 export type TaskMeeting = {
@@ -8308,6 +8329,11 @@ export type GetMyAlertsParams = Record<string, never>;
 export type GetMyAlertsBody = never;
 export type GetMyAlertsResponse = PersonalAlerts;
 
+/** GET /api/v2/meetings/recorder */
+export type GetMyRecorderParams = Record<string, never>;
+export type GetMyRecorderBody = never;
+export type GetMyRecorderResponse = MyRecorder;
+
 /** GET /api/v2/needs-you */
 export type GetNeedsYouParams = {
   count?: boolean;
@@ -8539,6 +8565,13 @@ export type GetTaskContextParams = {
 };
 export type GetTaskContextBody = never;
 export type GetTaskContextResponse = TaskContext;
+
+/** GET /api/v2/tasks/{tid}/make-page */
+export type GetTaskMakePageParams = {
+  tid: string;
+};
+export type GetTaskMakePageBody = never;
+export type GetTaskMakePageResponse = TaskMakePage;
 
 /** GET /api/v2/task-manager */
 export type GetTaskManagerParams = Record<string, never>;
@@ -9955,6 +9988,14 @@ export type MakeTaskFromMessageParams = {
 };
 export type MakeTaskFromMessageBody = MessageTask;
 export type MakeTaskFromMessageResponse = TaskResult;
+
+/** POST /api/v2/tasks/{tid}/make-page */
+export type MakeTaskPageParams = {
+  "Idempotency-Key": string;
+  tid: string;
+};
+export type MakeTaskPageBody = MakePage;
+export type MakeTaskPageResponse = AssistantSent;
 
 /** POST /api/v2/bots/{bot}/onboarded */
 export type MarkBotOnboardedParams = {

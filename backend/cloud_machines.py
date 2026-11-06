@@ -1445,8 +1445,9 @@ class Manager:
                 pass
             if stop.is_set():
                 return
+            from . import system_routines as SR    # each look is one run of Cloud machines (Settings > Routines)
             try:
-                await asyncio.to_thread(self.tick)
+                await asyncio.to_thread(SR.pass_of, self.store, "cloud_machines", self.tick)
             except Exception:  # noqa: BLE001 - the next look tries again
                 log.exception("Cloud machines look failed")
 

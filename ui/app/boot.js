@@ -75,7 +75,7 @@ const BOOT_ROSTER_WAIT_MS = 10000;
       $('#main [data-boot-retry]').onclick = () => location.reload();
       return;
     }
-    $('#main').innerHTML = `<section class="card"><h2>Tico server not running</h2><p>Start it with <code>scripts/tico server start</code> in the Tico repo, or install it with <code>scripts/tico server install</code> so it runs at login.</p><p class="err">${esc(e.message)}</p></section>`;
+    $('#main').innerHTML = `<section class="card"><h2>Tico server not running</h2><p>Start it with <code>scripts/tico-computer server start</code> in the Tico repo, or install it with <code>scripts/tico-computer server install</code> so it runs at login.</p><p class="err">${esc(e.message)}</p></section>`;
     return;
   }
   if (S.me?.cloud) {

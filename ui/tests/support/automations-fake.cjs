@@ -108,7 +108,7 @@ function maintSteps() {
   const d = {find_stuck: {frequency: 'custom', custom_every: 6, custom_unit: 'hours', max_bots: 10}, learn: {enabled: false, frequency: 'day'},
     suggest: {frequency: 'day'}, update: {frequency: 'day'}, dream: {frequency: 'day', max_bots: 3}};
   return MAINT_ORDER.map(key => ({key, name: MAINT_NAMES[key], enabled: true, frequency: 'run', custom_every: null, custom_unit: null,
-    max_bots: null, ...d[key], fixed: MAINT_EVERY_RUN.includes(key), old_timer: false,
+    max_bots: null, ...d[key], fixed: MAINT_EVERY_RUN.includes(key),
     last_started_at: null, last_ran_at: key === 'learn' ? null : new Date(Date.now() - 3600000).toISOString(), cursor_at: null,
     ...(key === 'suggest' ? {consent: false} : {}),
     ...(key === 'learn' ? {stats: {days: 7, runs: 6, items_read: 42, items_sent: {support: 3, 'eng-lead': 2}, saved: 4, dropped: 1,
@@ -301,9 +301,18 @@ async function openAutomations(browser, {viewport = PHONE, hash = '#/automations
     if (p === '/api/v2/automations') return json({automations: db.list.map(row), next: null});
     // The overview's reads: every run in the range across the list, newest first, and its counts per bucket.
     const RANGES = {'5m': [300, 10], '1h': [3600, 12], '24h': [86400, 24], '7d': [604800, 28]};
+    // The Maintenance run's log is listed under its row, as backend/automation_overview.py does (`maint_row`).
+    const maintRuns = () => (db.maint?.runs || []).map(r => {
+      const status = !r.finished_at ? 'running' : r.ok ? 'ok' : 'failed';
+      return {id: 'mnt_' + r.id, automation_id: 'maintenance', automation_name: 'Maintenance', trigger: 'system', owner_id: 'tico',
+        started_at: r.started_at, finished_at: r.finished_at, status, cost: r.cost_usd || 0,
+        started_by: r.trigger === 'run_now' ? 'Run now' : 'Scheduled', outcome: r.result || (status === 'ok' ? 'Done' : status === 'failed' ? 'Failed' : 'Running'),
+        step_count: null, count: 1, maint: true};
+    });
     const inRange = range => {
       const [secs] = RANGES[range] || RANGES['1h'], since = Date.now() - secs * 1000;
-      return Object.values(db.runs).flat().filter(r => new Date(r.started_at).getTime() >= since && find(r.automation_id))
+      return [...Object.values(db.runs).flat().filter(r => find(r.automation_id)), ...maintRuns()]
+        .filter(r => new Date(r.started_at).getTime() >= since)
         .sort((x, y) => y.started_at.localeCompare(x.started_at));
     };
     if (p === '/api/v2/automations/runs') {
@@ -312,6 +321,7 @@ async function openAutomations(browser, {viewport = PHONE, hash = '#/automations
         && (!status || (status === 'done' ? ['ok', 'empty', 'skipped'].includes(r.status) : r.status === status)));
       const from = q.get('before') ? all.findIndex(r => r.id === q.get('before')) + 1 : 0, limit = Number(q.get('limit') || 50);
       const rows = all.slice(from, from + limit).map(r => {
+        if (r.maint) return {...r, maint: undefined};
         const a = find(r.automation_id);
         return {...r, steps: undefined, automation_name: a.name, trigger: a.kind || a.trigger.type, owner_id: a.owner_id,
           started_by: r.started_by || 'From Sam Lee · Thursday?', outcome: r.outcome || (r.status === 'failed' ? 'LLM failed: model timed out' : 'Draft reply'),

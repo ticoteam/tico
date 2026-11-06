@@ -16,7 +16,7 @@ Every module of runner_support/ has a file here. `import runner.<name>` gives th
 file swaps itself out of sys.modules); `python -m runner.<name>` runs runner_support's as `python -m
 runner_support.<name>` would. macOS turns started by an earlier binary source shell_init/ by path: its files forward too.
 
-Units are still written with the old names (scripts/tico, runner_support/systemd_units.py render,
+Units are still written with the old names (scripts/tico-computer, runner_support/systemd_units.py render,
 runner_support/cloud_machine.py unit_text) so that a computer moved back to a release from before the move still starts.
 So runner/__main__.py and runner/cloud_machine.py stay until a later release rewrites the saved units to
 `runner_support` and no supported target release predates the move. The rest can go once no supported release predates

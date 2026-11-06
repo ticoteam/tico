@@ -1458,7 +1458,7 @@ class Heartbeat(Contract):
         "model_switch_to_key_v1", "computer_logins_v1", "capacity_continue_v1", "source_continue_v1",
         "turns_at_once_v1", "private_lanes_v1", "model_subscriptions_v1", "browser_exit_v1",
         "model_subscription_activation_v1", "model_connect_v1", "threads_v1", "memory_tidy_packets_v1",
-        "harness_allocation_v1"]] = Field(default_factory=list, max_length=20)
+        "harness_allocation_v1", "make_page"]] = Field(default_factory=list, max_length=32)
     # The bool map remains accepted during runner rollout. The server normalizes both
     # shapes before storing them, so every read path sees one structured document.
     readiness: StructuredReadiness | dict[str, bool] = Field(default_factory=dict)
@@ -2676,6 +2676,10 @@ class AssistantMessage(Contract):
     place: Literal["updates"] | None = None
     # Sent from the Ask panel (ui/app/ask-panel.js): the page the person is looking at, handed to the turn as a hint.
     page: AssistantPage | None = None
+
+
+class MakePage(Contract):
+    text: Annotated[str, Field(min_length=1, max_length=8000)]
 
 
 class AssistantUpload(Contract):

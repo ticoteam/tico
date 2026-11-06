@@ -285,6 +285,8 @@ class Pages:
         """A bot publishes a page: cleaned HTML stored as a version of its file, and the page row beside it, in one
         transaction. The same path (or name) again is a new version of the same page."""
         audience_set, audience = "audience" in fields, fields.get("audience")
+        if who.via == "assistant":
+            audience_set = False    # a Make page turn keeps the page's default audience; only managers set it
         fields = {k: (v if isinstance(v, (str, int, bool)) else "") for k, v in fields.items() if k != "audience"}
         name = str(fields.get("name") or str(fields.get("path") or "").rsplit("/", 1)[-1] or "")
         if not name.lower().endswith((".html", ".htm")):
@@ -305,29 +307,36 @@ class Pages:
 
         def extra(c, row, changed):
             now = H.now()
+            editor = who
+            if who.role == "runner":
+                from .auth import Identity
+                editor = Identity("bot:" + row["bot_id"], "bot")
             c.execute("INSERT INTO pages(file_id,cadence,as_of,created_at,updated_at) VALUES(?,?,?,?,?) "
                       "ON CONFLICT(file_id) DO UPDATE SET cadence=COALESCE(?,cadence),as_of=?,updated_at=?,"
                       "archived=CASE WHEN ? THEN 0 ELSE archived END",
                       (row["id"], cadence or "none", as_of, now, now, cadence, as_of, now, int(bool(changed))))
             if audience_set:
-                editor = who
-                if who.role == "runner":
-                    from .auth import Identity
-                    editor = Identity("bot:" + row["bot_id"], "bot")
                 self.set_audience(c, editor, row, checked_audience(c, audience))
             if replaces:
                 old = c.execute("SELECT f.* FROM pages p JOIN bot_files f ON f.id=p.file_id WHERE p.file_id=?",
                                 (replaces,)).fetchone()
-                if not old or old["bot_id"] != row["bot_id"] or old["state"] == "deleted":
+                if (not old or old["bot_id"] != row["bot_id"] or old["state"] == "deleted"
+                        or who.via == "assistant" and old["task_id"] != row["task_id"]
+                        or not self.files.visible(c, editor, old, {})):
                     raise Problem("not_found", "replaces names a page of this bot's", 404)
+                if not self.may_manage(c, editor, old):
+                    raise Problem("forbidden", "Only page managers replace a page", 403)
                 if old["id"] == row["id"]:
                     raise Problem("validation", "A page cannot replace itself", 422)
-                H._writer(c, "bot:" + row["bot_id"], task_id=old["task_id"])
+                H._writer(c, editor.actor, task_id=old["task_id"])
                 c.execute("UPDATE pages SET replaced_by_id=?,updated_at=? WHERE file_id=?", (row["id"], now, old["id"]))
-                self.files.activity(c, old["id"], "bot:" + row["bot_id"], "modified", now=now,
+                self.files.activity(c, old["id"], editor.actor, "modified", now=now,
                                     detail={"replaced_by": row["id"]})
             if task and row["task_id"] == task:
-                self.pin_to_task(c, row, task)
+                if who.via == "assistant" and not c.execute(
+                        "SELECT 1 FROM pins WHERE place=? AND item=?", ("task:" + task, "page:" + row["id"])).fetchone():
+                    self.require_pin_space(c, task)
+                self.pin_to_task(c, row, task, actor=who.actor if who.via == "assistant" else None)
             return {"page": self.view(c, who, row, c.execute("SELECT * FROM pages WHERE file_id=?",
                                                               (row["id"],)).fetchone(), {}, include_audience=True),
                     "unembedded": unembedded}
@@ -336,16 +345,22 @@ class Pages:
                                               **({"audience": audience} if audience_set else {})})
 
     @staticmethod
-    def pin_to_task(c, row, task):
+    def require_pin_space(c, task):
+        if c.execute("SELECT count(*) FROM pins WHERE place=?", ("task:" + task,)).fetchone()[0] >= cards.PLACE_MAX:
+            raise Problem("conflict", f"This task has {cards.PLACE_MAX} pins", 409)
+
+    @staticmethod
+    def pin_to_task(c, row, task, *, actor=None):
         """A page published with --task is pinned at the top of that task, by its bot, once. A task place never
         widens who reads the page (backend/cards.py WIDENING)."""
+        actor = actor or "bot:" + row["bot_id"]
         place, item = "task:" + task, "page:" + row["id"]
         count = c.execute("SELECT count(*) FROM pins WHERE place=?", (place,)).fetchone()[0]
         if count >= cards.PLACE_MAX or c.execute("SELECT 1 FROM pins WHERE place=? AND item=?", (place, item)).fetchone():
             return
         c.execute("INSERT INTO pins(id,place,item,position,size,made_by,created_at) VALUES(?,?,?,?,?,?,?)",
-                  (H.new_id(), place, item, count, "medium", "bot:" + row["bot_id"], H.now()))
-        cards.file_activity(c, row["id"], "bot:" + row["bot_id"], "pinned", place)
+                  (H.new_id(), place, item, count, "medium", actor, H.now()))
+        cards.file_activity(c, row["id"], actor, "pinned", place)
 
     def may_manage(self, c, who, row):
         return may_manage(c, self.auth, who, row)

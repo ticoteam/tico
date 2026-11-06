@@ -467,8 +467,10 @@ class PostalMail:
             if self.kicked.is_set() or waited >= EVERY:
                 self.kicked.clear()
                 waited = 0
+                from . import system_routines as SR   # each drain is one run of Physical mail (Settings > Routines)
                 try:
-                    await asyncio.to_thread(self.drain)
+                    await asyncio.to_thread(SR.pass_of, self.store, "physical_mail", self.drain,
+                                            words=lambda n: SR.count_words(n, "letter read", "letters read") if n else None)
                 except Exception as error:  # noqa: BLE001 - each letter keeps its own error; the next drain tries again
                     LOG.warning("Physical mail drain failed: %s", type(error).__name__)
             try:

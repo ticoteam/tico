@@ -827,8 +827,9 @@ class Letters:
 
     async def loop(self, stop):
         while not stop.is_set():
+            from . import system_routines as SR    # each pass is one run of Letters sync (Settings > Routines)
             try:
-                await asyncio.to_thread(self.drain)
+                await asyncio.to_thread(SR.pass_of, self.store, "letters", self.drain)
             except (Problem, OSError, ValueError) as exc:
                 LOG.warning("Letters sync failed: %s", type(exc).__name__)
             try:

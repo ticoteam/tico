@@ -20,7 +20,8 @@ other file.
   Without it, the page belongs to the turn's task or conversation, as a file would; `--scope bot` makes it
   bot-wide.
 - **`--replaces`** names an older page of the same bot that this one takes over. The older page then says
-  **Replaced by** and links here.
+  **Replaced by** and links here. An Assistant turn must be able to read and manage the older page as its person,
+  and both pages must be filed on the request's task.
 
 A bot writes only its own pages. Over MCP the same tools are `hub_page_publish`, `hub_page_list`, `hub_page_show` and
 `hub_page_archive`.
@@ -120,12 +121,22 @@ gets a different page.
 
   The `100vh` rule applies only in the card view: the page fills the card at its full size and does not scroll. A page with no
   such CSS looks as it always did. The bot's guide (`AGENT.md`, "Widget view") has the short form.
+- **Dark by default.** Tico shows pages dark, like the app. A page that colours neither `<html>` nor `<body>` gets a
+  dark background (`#191b1a`) and light text (`#e8eae9`) from Tico's height script; a page that sets its own dark
+  text and no background stays light. A page with its own background keeps its look. Design pages dark: a dark
+  background, light text, and chart colours that read on dark.
 - **The full view** has the page's versions (an older one opens in place) and, for whoever may manage it,
   **Archive**. The owner also has **Delete for good** ([Files](files.md#deleting-a-file-for-good)).
 - **A task** shows the pages pinned to it as cards at the top, a replaced page left out. **Link page** searches
   existing pages and links the chosen one. Any person, or bot acting as itself, who can read the task may link a page
   they can read; the link keeps the page's own access rules. Other task readers see only pages they can open, with no
   count of hidden pages.
+  **Make page** sends a description to your Assistant in a fresh session and temporary workspace. It acts with
+  your normal rights, reads task references through the normal tools, and publishes and pins the page with you as
+  author. The page gets the normal task audience; copying source content is accepted and does not narrow it.
+  The request shows progress or **Not made · Open chat**. An older runner leaves it queued with
+  **Update this computer to make pages · Retry** until updated. A full task (60 pins) refuses the request or
+  publication without storing a page. Publishing unchanged HTML adds no version.
   The task place's `can_link` controls linking; it grants no card editing or pin arranging rights (`can_edit`).
   **Unlink** is available to whoever linked it, the task's owner or requester, and the org owner.
 - **Pinned** to the Dashboard, a team page or a bot's sidebar ([Overview](overview.md)), a page shows as a card there.
@@ -147,6 +158,8 @@ Stable v2 (`docs/openapi/v2.json`, tag **Pages**):
 
 | Call | What it does |
 |---|---|
+| `POST /api/v2/tasks/{tid}/make-page` | Ask your Assistant with `text` (up to 8,000 characters) |
+| `GET /api/v2/tasks/{tid}/make-page` | Your latest request: `making`, `made`, `failed`, `update_required`, or null |
 | `POST /api/v2/pages` | Publish: raw HTML with the fields in the query, or JSON with `name` and `text` or `content_base64` |
 | `GET /api/v2/pages/{file_id}` | `page`: `file_id, title, bot, bot_name, version, updated_at, updated_by, cadence, as_of, stale_days, replaced_by, archived, task_id, src`; `pinned`: where it is pinned |
 | `GET /api/v2/pages?ids=a,b` | Up to 50 pages in that order, leaving out any the caller may not read |
@@ -162,5 +175,6 @@ Other readers get neither field.
 
 `hub page list --task ID` and MCP's `hub_page_list` include both filed and linked pages with the same paging.
 
-**Who acts.** A bot publishes during its turn. People archive and restore. BotOps archives for a person with that
+**Who acts.** A bot publishes during its turn. Your Assistant makes task pages as you, recording its authenticated
+attempt alongside your authorship. People archive and restore. BotOps archives for a person with that
 person's rights, and asks before a hard delete, which only the owner may do.

@@ -566,6 +566,8 @@ class Files:
 
     def writer_bot(self, c, who, given=""):
         """The bot a write is for: the authenticated bot, or the bot a runner ran a turn for."""
+        if who.via == "assistant" and who.attempt_id:
+            return self.store.settings.assistant_bot
         if who.role == "bot":
             return H.actor_id(who.actor)
         if who.role == "runner":
@@ -594,7 +596,20 @@ class Files:
     def target(self, c, who, bot, fields):
         """(scope, task id, conversation id, attempt id) for a write. Never chosen by a parameter alone:
         a task must be one this bot may see, and bot-wide is refused from inside a chat."""
-        attempt = who.attempt_id if who.role == "bot" and not who.agent else str(fields.get("attempt") or "")
+        attempt = (who.attempt_id if who.via == "assistant" or who.role == "bot" and not who.agent
+                   else str(fields.get("attempt") or ""))
+        if who.via == "assistant":
+            from .assistant import make_page_task
+            task = str(fields.get("task") or "").strip()
+            message = make_page_task(c, self.auth, who, task)
+            if fields.get("scope") not in (None, "", "task"):
+                raise Problem("validation", "Make page is filed on its task", 422)
+            return "task:" + task, task, message["conversation_id"], attempt
+        if attempt:
+            request = c.execute("SELECT m.refs FROM attempts a JOIN jobs j ON j.id=a.job_id "
+                                "JOIN messages m ON m.id=j.message_id WHERE a.id=?", (attempt,)).fetchone()
+            if request and "make_page" in (H._json(request["refs"], {}) or {}):
+                raise Problem("forbidden", "Make page publishes as the person who asked", 403)
         conversation, turn_task = self.turn_context(c, who, bot, attempt)
         H._writer(c, self.actor_of(who, bot), task_id=turn_task, attempt_id=attempt)
         task = str(fields.get("task") or "").strip()
@@ -810,6 +825,10 @@ class Files:
         size = data.size if staged else len(data)
         with self.store.read() as c:
             bot = self.writer_bot(c, who, str(fields.get("bot") or ""))
+            if who.via == "assistant":
+                self.target(c, who, bot, fields)
+                if extra is None:
+                    raise Problem("forbidden", "Make page uses the page publish API", 403)
         source = str(fields.get("source") or "")
         relative = str(fields.get("path") or "").replace("\\", "/").strip("/")
         if relative and (".." in relative.split("/") or relative.startswith("/")):
@@ -822,6 +841,9 @@ class Files:
             else:
                 name = str(fields.get("name") or relative.rsplit("/", 1)[-1])
                 identity = series(bot, relative or name)
+                if who.via == "assistant":
+                    # A filename must not overwrite another person’s page from the shared Assistant.
+                    identity += ":person:" + who.actor
             name, mime = BF.check_name(name)
             # A streamed video or audio file was checked against the server's limit when it was spooled.
             if not failed and not staged:
@@ -842,6 +864,8 @@ class Files:
         def work(c):
             scope, task, conversation, attempt = self.target(c, who, bot, fields)
             existing = self.find(c, bot, scope, identity)
+            if existing and who.via == "assistant" and not self.visible(c, who, existing, {}):
+                raise Problem("not_found", "Page not found", 404)
             stored_task = existing["task_id"] if existing else None
             H._writer(c, self.actor_of(who, bot), task_id=stored_task, attempt_id=attempt)
             with H.refusal_task(task or stored_task):

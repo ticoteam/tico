@@ -895,6 +895,182 @@ def ensure_builtins(c, catalog=None, settings=None):
     return made
 
 
+MIRROR_VIA = "system mirror sync"
+MIRRORS_SQL = ("SELECT * FROM automations WHERE deleted_at IS NULL AND builtin=1 AND json_extract(flow,'$.readonly')=1 "
+               "ORDER BY created_at, id")
+HEALTH = "tico.builtin.health"
+MIRROR_RETRY_SECONDS = 3600     # a mirror write that failed is tried again after this, not every tick
+_mirror_failed = {}             # (database file, what) -> _monotonic() of the failure, this process only
+
+
+def _monotonic():
+    import time
+    return time.monotonic()
+
+
+def _rule_controls(rule):
+    """A task rule's mirror controls, as the cutover writes them (redesign_migration `_builtins`)."""
+    from . import redesign_migration as M
+    return {"on": bool(rule["enabled"]), "preset": rule["preset"], "daily_at": rule["daily_at"],
+            "department": rule["department"], "triggers": M._json(rule["triggers"], []),
+            "actions": M._json(rule["actions"], [])}
+
+
+def _health_mirror(owner, bot):
+    from . import redesign_migration as M
+    return M._mirror("Health Monitor", owner, "health", {"on": bot.get("state") == "active", "bot": H.HEALTH_MONITOR},
+                     {"kind": "bot", "id": H.HEALTH_MONITOR}, "Finds install problems and files them for BotOps.")
+
+
+def sync_system_mirrors(c):
+    """Keep the read-only mirrors (redesign_migration `_builtins`) in step with what Tico runs, in the caller's write.
+    The cutover made them once; this keeps them right after it, on every automations tick:
+    - a system job (system_routines.JOBS) or a task rule with no mirror gets one, of the cutover's shape, owner and id
+      scheme, marked in `redesign_migrated` as the cutover marks it, and so does the Health Monitor once its bot is
+      back (restored after it was archived). Only once the cutover is done and has a person to own it (`owner_wait` is
+      `catch_up`'s);
+    - a mirror of a job no longer in JOBS, of a task rule that is gone, a second mirror of one job or rule, and the
+      Health Monitor's once its bot is gone or archived are retired as a delete retires an automation (`remove`): off,
+      soft-deleted, their unfinished runs skipped; their runs stay as history. A mark that named a retired twin names
+      the one kept, so the cutover report does not call the job deleted;
+    - a job's mirror whose name or words are not the job's takes the job's; a task rule's takes the rule's name, switch
+      and settings; the Health Monitor's takes its bot's on/off.
+    A job that cannot run on this install keeps its mirror: the reads hide it (automation_overview `hidden_jobs`).
+    One read of the mirrors; writes only for what differs, so a second pass changes nothing. Never raises: a mirror
+    that cannot be written is logged once and tried again after MIRROR_RETRY_SECONDS (per process). Returns {made,
+    retired, renamed} automation ids."""
+    from . import automation_overview as AO, redesign_migration as M, system_routines as SR
+    done = {"made": [], "retired": [], "renamed": []}
+    try:
+        record = M.state(c)
+    except Exception:  # noqa: BLE001 - a database from before the converter
+        return done
+    if record.get("state") != "done":
+        return done
+    rules = ({r["id"]: dict(r) for r in c.execute("SELECT * FROM task_rules ORDER BY created_at, id")}
+             if H._has_table(c, "task_rules") else {})
+    health = H.bot(c, H.HEALTH_MONITOR)
+    health = dict(health) if health and health["state"] != "archived" else None
+    jobs, rule_mirrors, retire, twins, health_mirror = {}, {}, [], {}, None
+    for row in c.execute(MIRRORS_SQL).fetchall():
+        flow = flow_of(row)
+        name = str((flow.get("trigger") or {}).get("name") or "")
+        source = flow.get("source") if isinstance(flow.get("source"), dict) else {}
+        if name.startswith(AO.JOB_PREFIX):
+            key = name[len(AO.JOB_PREFIX):]
+            if key in jobs:
+                twins[row["id"]] = jobs[key][0]["id"]
+            if key not in SR.BY_KEY or key in jobs:
+                retire.append(row)
+            else:
+                jobs[key] = (row, flow)
+        elif name == AO.TASK_RULE and source.get("kind") == "task_rule":
+            rid = source.get("id")
+            if rid in rule_mirrors:
+                twins[row["id"]] = rule_mirrors[rid][0]["id"]
+            if rid not in rules or rid in rule_mirrors:
+                retire.append(row)
+            else:
+                rule_mirrors[rid] = (row, flow)
+        elif name == HEALTH:
+            if not health or health_mirror:
+                retire.append(row)
+            else:
+                health_mirror = (row, flow)
+
+    database = []
+
+    def what_of(what):
+        if not database:
+            found = c.execute("PRAGMA database_list").fetchone()
+            database.append(str(found[2]) if found else "")
+        return database[0], what
+
+    def waiting(what):
+        """Whether `what` failed under MIRROR_RETRY_SECONDS ago in this process: it is not tried, nor warned, again."""
+        at = _mirror_failed.get(what_of(what))
+        return at is not None and _monotonic() - at < MIRROR_RETRY_SECONDS
+
+    def step(what, work):
+        """`work()` in a savepoint of its own: True when it was written."""
+        if waiting(what):
+            return False
+        c.execute("SAVEPOINT mirror_sync")
+        try:
+            work()
+            c.execute("RELEASE mirror_sync")
+            _mirror_failed.pop(what_of(what), None)
+            return True
+        except Exception as exc:  # noqa: BLE001 - one mirror must not stop the tick; it is tried again in an hour
+            c.execute("ROLLBACK TO mirror_sync")
+            c.execute("RELEASE mirror_sync")
+            _mirror_failed[what_of(what)] = _monotonic()
+            log.warning("The system mirror %s could not be synced: %s", what, type(exc).__name__)
+            return False
+
+    def retire_one(row):
+        remove(c, H.KEEPER, row, via=MIRROR_VIA)
+        if row["id"] in twins and H._has_table(c, "redesign_migrated"):
+            c.execute("UPDATE redesign_migrated SET automation=? WHERE automation=?", (twins[row["id"]], row["id"]))
+
+    def update(row, flow, changed):
+        if step("update:" + row["id"], lambda: _save(c, H.KEEPER, row["id"], changed, flow, via=MIRROR_VIA)):
+            done["renamed"].append(row["id"])
+
+    for row in retire:
+        if step("retire:" + row["id"], lambda row=row: retire_one(row)):
+            done["retired"].append(row["id"])
+    for key, (row, flow) in jobs.items():
+        job = SR.BY_KEY[key]
+        name, words = job.name[:120], job.what[:500]
+        if flow.get("name") != name or flow.get("description") != words:
+            # Only its words change, never what it is: no new version, and its owner is not checked again.
+            update(row, flow, {**flow, "name": name, "description": words})
+    for rid, (row, flow) in rule_mirrors.items():
+        rule = rules[rid]
+        controls = _rule_controls(rule)
+        name, on = str(rule["name"] or "")[:120], bool(rule["enabled"])
+        if flow.get("name") != name or bool(flow.get("enabled")) != on or flow.get("controls") != controls:
+            update(row, flow, {**flow, "name": name, "enabled": on, "controls": controls})
+    if health_mirror:
+        row, flow = health_mirror
+        on = health.get("state") == "active"
+        if bool(flow.get("enabled")) != on:
+            controls = {**(flow.get("controls") or {}), "on": on}
+            update(row, flow, {**flow, "enabled": on, "controls": controls})
+    missing = [job for job in SR.JOBS if job.key not in jobs and not waiting("make:job:" + job.key)]
+    unmirrored = [(rid, rule) for rid, rule in rules.items()
+                  if rid not in rule_mirrors and not waiting("make:rule:" + rid)]
+    lost_health = bool(health and not health_mirror and not waiting("make:health"))
+    if not (missing or unmirrored or lost_health) or record.get("owner_wait"):
+        return done                                     # the usual tick: one read, nothing to write
+    who = M.system_who(c)
+    owner = M._owner_person(who)
+    if not owner:
+        return done
+    mid = record.get("migration") or "mig_" + H.new_id()
+    cfg = SR.config(c) if missing else {}
+
+    def make(what, flow, kind, ident, title):
+        def work():
+            made = M._save(c, who, flow)
+            M._mark(c, kind, ident, mid, made, title=title)
+            done["made"].append(made)
+        step(what, work)
+
+    for job in missing:
+        oid = "job:" + job.key
+        controls = {"on": True, "schedule": job.schedule, **(cfg.get(job.key) or {})}
+        flow = M._mirror(job.name, owner, "job." + job.key, controls, {"kind": "system_job", "id": oid}, job.what)
+        make("make:job:" + job.key, flow, "system_job", oid, job.name)
+    for rid, rule in unmirrored:
+        flow = M._mirror(rule["name"], owner, "task_rule", _rule_controls(rule), {"kind": "task_rule", "id": rid})
+        make("make:rule:" + rid, flow, "task_rule", rid, rule["name"])
+    if lost_health:
+        make("make:health", _health_mirror(owner, health), "health_monitor", "bot:" + H.HEALTH_MONITOR, "Health Monitor")
+    return done
+
+
 # ---------------------------------------------------------------------------------------------------- triggers
 def _count(c, aid, field):
     c.execute(f"INSERT INTO automation_daily(automation_id,day,{field}) VALUES(?,?,1) "
@@ -2328,6 +2504,10 @@ def tick(store, at=None):
     now = at.astimezone(timezone.utc).strftime("%Y-%m-%dT%H:%M:%S.%f") + "Z"
     with store.transaction() as c:
         ensure_builtins(c, settings=getattr(store, "settings", None))
+        try:
+            sync_system_mirrors(c)              # the system jobs' read-only mirrors, in step with JOBS
+        except Exception as exc:  # noqa: BLE001 - the mirrors wait for the next tick; the automations go on
+            log.warning("System mirror sync failed: %s", type(exc).__name__)
         from .scheduler import next_due
         for row in c.execute("SELECT * FROM automations WHERE deleted_at IS NULL AND enabled=1 "
                              "AND trigger_type='schedule'").fetchall():
@@ -2735,8 +2915,10 @@ def install(app, store, auth, mutate):
                                                      "WHERE status='pending' GROUP BY automation_id")}
             chart = Chart(c) if who.role in ("human", "bot") else None   # one chart for every row's rule
             jobs = AO.system_jobs(c, store.settings)
+            hidden = AO.hidden_jobs(c, store.settings)     # a system job that cannot run here is not listed
             visible = [{**view(c, dict(r), who, chart=chart, jobs=jobs), "pending": pending.get(r["id"], 0)}
-                       for r in rows if may_change(c, who, {**flow_of(r), "readonly": False}, chart)]
+                       for r in rows if AO.shown(flow_of(r), hidden)
+                       and may_change(c, who, {**flow_of(r), "readonly": False}, chart)]
         shown, more = page(visible[max(cursor, 0):], max(1, min(limit, 500)), max(cursor, 0), LIST_BYTES)
         return {"automations": shown, "next": more}
 

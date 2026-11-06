@@ -54,6 +54,18 @@ The CLI and the API act as the human whose credential they carry: set `HUB_API_U
 a personal token (see [Who can do what](#who-can-do-what)). All of them land in the same place, in the same shape, so the list, search, sharing, Send and
 action items work identically whatever the source.
 
+### Tico Recorder
+
+**Get Tico Recorder** on Meetings downloads the Mac app
+(`https://github.com/ticoteam/tico/releases/latest/download/Tico-Recorder.dmg`); the app moves itself to Applications
+on first launch. The link hides once Tico has seen one of your copies in the last 30 days. The
+Recorder sends `X-Tico-Recorder-Version` and `X-Tico-Recorder-Install` (a random id per copy) on its calls; Tico keeps
+the last version and time per person and copy, writing at most every ten minutes unless the version changes. The newest
+version comes from the Recorder's own updater feed (`recorder-latest.json` on the latest release), read at most hourly;
+when the copy you used last is older, Meetings shows **Recorder update available**, and nothing else.
+`GET /api/v2/meetings/recorder` answers the same for your own copies; owners and admins see everyone's version in
+Settings > People. Neither link shows on a phone.
+
 ## Review before sharing
 
 Imported meetings wait in the importing person's **Pending** queue by default. Only the person
@@ -317,7 +329,7 @@ as large tiles instead (**Add notes** stays in the header).
 ## Meeting importers
 
 Zoom, Google Meet and Granola each have an importer. They run as one job, `python -m runner_support
-importers`, on an enrolled computer (`scripts/tico install importers` on a Mac; a Linux runner (Docker) starts it by itself once an importer is assigned to it; the Sources strip on the
+importers`, on an enrolled computer (`scripts/tico-computer install importers` on a Mac; a Linux runner (Docker) starts it by itself once an importer is assigned to it; the Sources strip on the
 Meetings page shows each one's health). Each importer:
 
 - reads its tool's official API and files what it finds through `POST /api/v2/meetings/import`, so a
@@ -645,7 +657,7 @@ stays is everything that was ever imported or recorded. An upgrading install kee
   `hub_recordings_*` tools `hub_meeting_*`; `hub_recordings_submit` and `POST /api/v2/recordings`
   are replaced by the import API. `/api/v2/recordings/search` and `/transcript` still answer.
 - `recording.ready` is still emitted beside `meeting.ready`.
-- A Mac set up earlier has a processing job (`team.tico.tico-processing`); `scripts/tico install`,
+- A Mac set up earlier has a processing job (`team.tico.tico-processing`); `scripts/tico-computer install`,
   `restart` and `uninstall` remove it.
 - The desktop app no longer captures audio or shows a meeting prompt; it is Tico in a window
   (with no menu-bar item since a later release). It no longer asks for microphone or system-audio permission.

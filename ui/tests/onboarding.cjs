@@ -702,11 +702,11 @@ function recruitFor({department, briefing, share}) {
         assert.doesNotMatch(commands, /codex login|profile login default codex|profile login default pi/);
       }
     }
-    assert.match(await page.locator('#onb-step').textContent(), /scripts\/tico -e <slug> install bot/);
+    assert.match(await page.locator('#onb-step').textContent(), /scripts\/tico-computer -e <slug> install bot/);
     await page.locator('#onb-enroll').click();
     await page.waitForFunction(() => !/<setup-file>/.test(document.querySelector('#onb-step').textContent));
     assert.deepEqual(enrollments, [{operator: 'ana'}]);
-    assert.match(await page.locator('#onb-step').textContent(), /scripts\/tico -e <slug> enroll --code-file "\$HOME\/Downloads\/tico-enrollment-ana-[a-z0-9]+\.json" --label "Ana's Mac"/);
+    assert.match(await page.locator('#onb-step').textContent(), /scripts\/tico-computer -e <slug> enroll --code-file "\$HOME\/Downloads\/tico-enrollment-ana-[a-z0-9]+\.json" --label "Ana's Mac"/);
     // A Linux or cloud server gets the installer line (compose, with the updater) with the real URL and code, and no setup file.
     await page.locator('[data-onb-kind][value=linux]').check();
     const installLine = /curl -fsSL https:\/\/github\.com\/ticoteam\/tico\/releases\/download\/v0\.2\.0\/install\.sh -o install\.sh && sh install\.sh --runner --name tico-code --url https:\/\/initech\.test --code '<code>' --label "Ana's server"/;

@@ -190,6 +190,10 @@ fn thread_runtime(runtime: &str, harness: &str) -> String {
 
 /// The provider thread this turn continues (clients/sessions.py session_key).
 pub fn session_key(attempt: &Value) -> String {
+    // A shared page starts without any earlier private Assistant session's content.
+    if attempt["make_page"]["task"].is_object() {
+        return format!("make-page:{}", text_of(&attempt["id"]));
+    }
     let config = &attempt["config"];
     let bot = text_of(&attempt["bot"]);
     let mode = match text_of(&config["session"]) {
@@ -244,8 +248,10 @@ fn task_private(task: &Value) -> bool {
 
 /// A stateless bot's message with no task behind it (crate::continuity::stateless): a new session each time, none saved,
 /// and no process reused or kept. Decided by the task, not the session key, since `session: bot` keys every turn "bot".
+/// Make page also starts and stops its provider process within the request's scratch lifetime.
 pub fn stateless_chat(attempt: &Value) -> bool {
-    crate::continuity::stateless(&attempt["config"]) && text_of(&attempt["task"]["id"]).is_empty()
+    attempt["make_page"]["task"].is_object()
+        || crate::continuity::stateless(&attempt["config"]) && text_of(&attempt["task"]["id"]).is_empty()
 }
 
 /// The epoch that moves when this turn's thread is cleared, and the conversation it is recorded for: the bot's shared
@@ -1500,6 +1506,12 @@ impl Runner {
                 }
             }
             env = crate::env::environment(&ctx, &attempt, &mut vault).await.map_err(Fail::runtime)?;
+            if attempt["make_page"]["task"].is_object() {
+                // Captured in base_env too, so every fallback keeps the same disposable workspace.
+                for key in ["HUB_WORKSPACE", "TICO_PROJECTS_DIR"] {
+                    env.insert(key.into(), execution_path.display().to_string());
+                }
+            }
             // The subscription this bot runs on: Claude keys its login to HOME, so it is the turn's own environment,
             // the same one the host process and the turn's shell commands get.
             if let Some(p) = &selected {
@@ -2935,6 +2947,20 @@ mod tests {
             MEMORY_OVERRIDE.with(|reading| reading.set(None));
             hosts::TEST_STARTS.with(|starts| starts.set(0));
         }
+    }
+
+    #[test]
+    fn make_page_uses_its_own_provider_session() {
+        let mut turn = json!({"id": "a1", "bot": "coo", "config": {"session": "bot"},
+            "conversation": {"id": "personal", "root_id": "personal", "audience_class": "private"},
+            "make_page": {"task": {"id": "t1"}}});
+        assert_eq!(session_key(&turn), "make-page:a1");
+        assert!(stateless_chat(&turn));
+        turn["id"] = json!("a2");
+        assert_eq!(session_key(&turn), "make-page:a2");
+        turn.as_object_mut().unwrap().remove("make_page");
+        assert_eq!(session_key(&turn), "root:personal:private");
+        assert!(!stateless_chat(&turn));
     }
 
     #[test]
@@ -5240,6 +5266,36 @@ for line in sys.stdin:
             assert!(runner.state.pending("a-start-wait").unwrap().is_empty(), "handback must flush its history");
             std::fs::remove_dir_all(dir).ok();
         }
+    }
+
+    #[tokio::test]
+    async fn make_page_placement_discards_outputs_and_never_grants_the_shared_checkout() {
+        let (runner, dir) = runner_at("http://127.0.0.1:1", "make-page-scratch");
+        let env = crate::env::Env::new();
+        let config = json!({"session": "bot"});
+        let main = crate::sessions::local_path(&runner.config, "coo", &config);
+        std::fs::create_dir_all(&main).unwrap();
+        std::fs::write(main.join("private.txt"), "PRIVATE-SHARED-CHECKOUT").unwrap();
+        for id in ["make-first", "make-failed"] {
+            let mut attempt = json!({"id": id, "bot": "coo", "config": config,
+                "make_page": {"task": {"id": "t1"}}, "worktrees": [{"path": main.display().to_string()}]});
+            let lost = AtomicBool::new(false);
+            let mut place = runner.enter_lanes(&attempt, &lost).await.unwrap();
+            runner.place_turn(&mut place, &mut attempt, &env, &lost).await.unwrap();
+            let scratch = place.execution_path.clone();
+            assert_ne!(scratch, main);
+            assert_eq!(place.main_path, scratch);
+            assert!(!place.has_checkout() && place.private && place.add_dirs.is_empty());
+            assert!(!scratch.join("private.txt").exists());
+            std::fs::create_dir(scratch.join("reports")).unwrap();
+            std::fs::write(scratch.join("reports/page.html"), "PRIVATE-PAGE-OUTPUT").unwrap();
+            assert!(!runner.finish_place(&place, &attempt, &env, &[], false).await);
+            drop(place);
+            assert!(!scratch.exists());
+            assert!(!main.join("reports/page.html").exists());
+        }
+        assert_eq!(std::fs::read_to_string(main.join("private.txt")).unwrap(), "PRIVATE-SHARED-CHECKOUT");
+        std::fs::remove_dir_all(dir).ok();
     }
 
     #[tokio::test]

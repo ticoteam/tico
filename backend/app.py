@@ -30,6 +30,7 @@ from . import repo_waits
 from . import built_on
 from . import agents, app_delivery, batch, external_sync, inbox_isolation, lifecycle, mcp_oauth, recruiting, harness_actions, model_login, oidc, personal_tokens, views
 from . import outcome_stats
+from . import recorder_installs
 from . import assistant_changes, why_here
 from . import teammate_access
 from . import sources as SRC
@@ -337,7 +338,7 @@ def create_app(settings=None):
                 except Exception as exc:
                     telemetry.capture("github_wakes", exc)
                 try:
-                    app.state.personal_alerts.tick()
+                    app.state.personal_alerts.tick()           # its pass records on its own thread (personal_alerts)
                     await asyncio.to_thread(scheduler.tick)
                     await asyncio.to_thread(recorded, "release_check", release_check)
                     await asyncio.to_thread(recorded, "repository_waits", repository_waits)
@@ -345,20 +346,27 @@ def create_app(settings=None):
                     telemetry.capture("scheduler", exc)
                     import logging
                     logging.getLogger("tico.scheduler").error("Scheduler tick failed: %s", type(exc).__name__)
+                def call_sweeps():
+                    # Live-meeting windows a lost routing thread (a restart) had not routed (backend/live_meetings.py), and
+                    # calls kept to their threads: people and bots whose access ended, and a LiveKit that restarted.
+                    failed = None
+                    for name, sweep in (("live_meeting_sweep", app.state.live_meeting_routing.sweep),
+                                        ("calls_sweep", app.state.calls.sweep)):
+                        try:
+                            sweep()
+                        except Exception as exc:
+                            telemetry.capture(name, exc)
+                            failed = failed or exc
+                    if failed:
+                        raise failed
                 try:
-                    # Live-meeting windows a lost routing thread (a restart) had not routed (backend/live_meetings.py).
-                    await asyncio.to_thread(app.state.live_meeting_routing.sweep)
-                except Exception as exc:
-                    telemetry.capture("live_meeting_sweep", exc)
-                try:
-                    # Calls keep to their threads: people and bots whose access ended, and a LiveKit that restarted.
-                    await asyncio.to_thread(app.state.calls.sweep)
-                except Exception as exc:
-                    telemetry.capture("calls_sweep", exc)
+                    await asyncio.to_thread(system_routines.pass_of, store, "call_sweeps", call_sweeps)
+                except Exception:                              # noqa: S110 - captured above, and the run says it failed
+                    pass
                 try:
                     # Tools > Settings > Email's pending and failing Workspace key is checked again (backend/google_workspace.py).
                     from . import google_workspace as workspace_checks
-                    await asyncio.to_thread(workspace_checks.tick, store)
+                    await asyncio.to_thread(system_routines.pass_of, store, "workspace_check", workspace_checks.tick, store)
                 except Exception as exc:
                     telemetry.capture("google_workspace", exc)
                 try:
@@ -761,7 +769,7 @@ def create_app(settings=None):
                     from . import support_access
                     raw = request.scope.get("raw_path") or b""
                     support_access.gate(who, raw.decode("latin-1") if raw else request.url.path, request.method)
-                if who.via == "assistant" and not who.confirmed and not who.task_actor:
+                if who.via == "assistant" and not who.confirmed and not who.task_actor and not who.attempt_id:
                     who = replace(who, task_actor="bot:" + settings.assistant_bot)
                 request.state.auth_ms = (time.perf_counter() - began) * 1000
                 request.state.identity = who
@@ -780,6 +788,9 @@ def create_app(settings=None):
                     raise Problem("privacy", reason, 403)
                 if census.person_due(who):
                     await asyncio.get_running_loop().run_in_executor(None, census.note_person, who)
+                # Which Recorder a person runs (backend/recorder_installs.py): a write only when one is due.
+                if (recorder := app.state.recorder_seen.due(who, request.headers)) is not None:
+                    await asyncio.get_running_loop().run_in_executor(None, app.state.recorder_seen.note, *recorder)
                 if who.via:
                     # The Assistant acting for a person (backend/assistant.py): what it writes is
                     # recorded via assistant, and unless the person just confirmed a proposal it may
@@ -1501,6 +1512,7 @@ def create_app(settings=None):
 
     def check_refs(c, who, refs):
         # Validate referenced objects rather than trusting an arbitrary ID in a payload.
+        H.check_message_refs(refs)
         for kind, values in refs.items():
             if kind in ("task", "task_id"):
                 # One task id, or a list of them (bots send `task:<id>` as a list); each must be one the caller can read.
@@ -2012,7 +2024,9 @@ def create_app(settings=None):
                     "invites": {pid: sent["at"] for pid, sent in invites.sent(c).items()},
                     "invite_email": invites.can_email(settings),
                     # Whether the issuer also makes accounts with a generated password (Create password).
-                    "account_password": bool(invites.can_make(auth, settings))}
+                    "account_password": bool(invites.can_make(auth, settings)),
+                    # Each person's most recently used Tico Recorder (backend/recorder_installs.py).
+                    "recorders": recorder_installs.everyone(c)}
 
     @app.post("/api/v2/access/people")
     def access_person_add(request: Request, body: M.AccessPersonAdd):
@@ -8252,7 +8266,9 @@ def create_app(settings=None):
             if 0 < len(request.headers.get("idempotency-key", "")) <= 200:
                 with store.read_transaction() as c:
                     validate_identity(c, request.state.identity)
-                    fresh = execution.renew(c, request.state.identity, aid, if_fresh=True)
+                    fresh = (None if store.saved(c, request.state.identity, request.url.path,
+                                                 request.headers.get("idempotency-key")) else
+                             execution.renew(c, request.state.identity, aid, if_fresh=True))
                     if fresh is not None:
                         return fresh
             return mutate(request, body, lambda c: execution.renew(c, request.state.identity, aid, arrived=arrived))
@@ -8281,7 +8297,8 @@ def create_app(settings=None):
             # Warm neutral provenance in a read snapshot. The transaction checks current
             # permissions again, and only reuses this graph while its source clock matches.
             with store.read_transaction() as c:
-                execution.attempt(c, request.state.identity, aid, active=False)
+                if not store.saved(c, request.state.identity, request.url.path, request.headers.get("idempotency-key")):
+                    execution.attempt(c, request.state.identity, aid, active=False)
             return mutate(request, body, lambda c: execution.events(c, request.state.identity, aid, body))
 
     @app.post("/api/v2/attempts/{aid}/capture")
@@ -8554,6 +8571,7 @@ def create_app(settings=None):
     install_imports(app, store, auth, execution, mutate)
     from .granola_mcp import install_granola
     install_granola(app)
+    recorder_installs.install(app, store)   # before /api/v2/meetings/{id}
     from .meeting_review import install_meeting_review
     install_meeting_review(app, store, auth, mutate)
     from .credentials import install_credentials

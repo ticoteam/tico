@@ -95,6 +95,8 @@ EMPTY = (
     "inbound_inboxes", "inbound_messages", "inbound_sync",
     # Personal phone consent and paid dispatch queues belong to the source install.
     "alert_preferences", "personal_alerts",
+    # Which Recorder each person's computers run (backend/recorder_installs.py): per-machine, the copy starts without it.
+    "recorder_installs",
     "bills_inbound",     # emailed bills: senders, subjects and HQ delivery ids
     "usage_alerts", "task_requesters", "roadmap_actions",
     # raw provider streams: customer text, and whatever the secret scrub missed

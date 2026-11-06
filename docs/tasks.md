@@ -500,9 +500,13 @@ Decide's readout counts those outcomes and reconciles their calls.
 asked about; an owner or admin sets the team default everyone starts from, and **Use the team default** goes back to
 it. A change applies to the next item; nothing already on a plate moves. It ships as **On**. Off makes no check. A
 stored Rehearsal reads as On. An old stored `chores_budget` is ignored.
-**Replay a day** judges one past day's existing bot items with your settings and your plate as it was then; nothing
-moves. Refused writes have no saved item text to replay. Older items kept with a bot before refusals were introduced
-can still be replayed. An owner or admin replaying someone else's day sees only the titles they may read.
+**Replay a day** judges one past day's existing bot items with your settings. Each item is judged against the tasks you
+own today that were created before it and were open at its time, leaving out the item itself; nothing moves. Refused
+writes have no saved item text to replay. Older items kept with a bot before refusals were introduced can still be
+replayed. A bot handing its own task to you (one or many) is judged like a task filed for you. A bot's handoff of a task
+to you is also listed when the filter was Off at the time, because no ask row was written. Replay reads it from the
+task's owner history. A handoff by a person is not listed. Each handoff appears once, on the day the bot handed it over,
+even if you let it through later. An owner or admin replaying someone else's day sees only the titles they may read.
 
 API: `GET`/`PUT`/`DELETE /api/v2/ask-ingest/settings` (`mode` is `off` or `on`; a `rehearsal` sent is saved as `on`),
 `POST /api/v2/ask-ingest/replay` (`person`, `date`, `offset`, a page of up to 25; the person, or an owner or admin).
@@ -1295,7 +1299,8 @@ bot's DM uses ([Steer, queue or defer](using-tico.md#steer-queue-or-defer)): **S
 now (right after it, if the bot's harness cannot steer); **Queue** goes right after that turn, or now when the bot is
 idle; **Defer** wakes nobody and goes in with the bot's next turn on this task, at the latest after the time picked
 under it (30m to 7d, or Never; 24h unless picked). A Defer sent while the bot works on this task goes in queued; a turn
-on another task does not count. **Set as goal**, apart in the menu, makes the text the goal of the bot's session for
+on another task does not count. Closing, finishing or declining the task cancels every Defer still waiting on it, and
+reopening it does not bring them back. **Set as goal**, apart in the menu, makes the text the goal of the bot's session for
 this task, as `/goal` does in a thread (no files, not public; [chat goals](chat-goals.md)). Only someone on the task (its
 owner, requester or a mover) may steer, queue or set the goal; anyone else may defer. Send's icon shows the way, and the caret
 (or a right-click or long press on Send) opens the ways. The web always sends the shown way: your kept way
