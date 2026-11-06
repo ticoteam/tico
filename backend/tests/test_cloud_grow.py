@@ -211,9 +211,9 @@ def test_a_size_hq_refuses_at_the_restart_goes_back_and_is_not_grown_to_again(gr
     grow.full(0.2)
     grow.tick(1)
     assert grow.row()["size"] == "default" and grow.row()["problem"] == "disk_full"
-    view = post(grow.api, "bots/ops/cloud-machine", {"always_on": False})["cloud_machine"]
+    view = post(grow.api, "bots/ops/cloud-machine", {"always_on": True})["cloud_machine"]
     assert view["grow_note"] and "cpu_cap" not in view["grow_note"]
-    # HQ's CPU cap may pass: an hour on, it is asked again.
+    # HQ's CPU cap may pass: an hour on (Always on keeps it running meanwhile), it is asked again.
     grow.tick(CM.GROW_RETRY)
     grow.full(0.2)
     grow.tick(1)
@@ -278,7 +278,7 @@ def test_a_reading_from_before_the_restart_does_not_grow_it_again(grow):
         grow.tick(1)
     assert grow.row()["size"] == "large" and grow.hq.actions().count("stop") == 1
     assert len(events(grow, "cloud_machine.grew")) == 1
-    _, checks = health_of(grow.api)
+    _, checks = health_of(grow.api, headers())
     assert "disk:" + computer["runner_id"] not in checks
     # A reading after the start that still shows the old 51 GB disk: not resized, said so, and no second grow.
     grow.full(0.2)
@@ -359,7 +359,7 @@ def test_health_says_nothing_of_a_stopped_machines_disk(grow):
     rid = computer["runner_id"]
     post(grow.api, "bots/ops/cloud-machine", {"grow_storage": False})
     grow.full(1)
-    _, checks = health_of(grow.api)
+    _, checks = health_of(grow.api, headers())
     assert "disk:" + rid in checks                              # running and full: said
     with grow.store.transaction() as c:
         c.execute("UPDATE jobs SET state='canceled' WHERE bot_id='ops'")
@@ -367,5 +367,5 @@ def test_health_says_nothing_of_a_stopped_machines_disk(grow):
     grow.tick()
     assert grow.row()["state"] == "stopped"
     grow.full(1)
-    _, checks = health_of(grow.api)
+    _, checks = health_of(grow.api, headers())
     assert "disk:" + rid not in checks
