@@ -1495,7 +1495,7 @@ def test_chat_updates_and_task_questions_are_held_under_a_block_rule(ruled, monk
     monkeypatch.setattr(updates, "today", lambda at=None: "2026-09-29")  # a Tuesday: a daily, whatever today is
     color_rule(api)
     assert chat(api, "Our favorite color is blue.")["held"]
-    assert post(api, "updates", {"body": "- Our favorite color is blue."}, token="ops-test")["held"]
+    assert post(api, "updates", {"kind": "daily", "body": "- Our favorite color is blue."}, token="ops-test")["held"]
     weekly = {"goal": "Ship the palette", "done": ["Our favorite color is teal"], "focus": ["Launch"],
               "blockers": ["None"]}
     assert post(api, "updates", {"slides": weekly}, token="ops-test")["held"]
@@ -1516,10 +1516,10 @@ def test_the_update_tool_answers_with_the_hold_or_the_warning(ruled, monkeypatch
     api, _ = ruled
     monkeypatch.setattr(updates, "today", lambda at=None: "2026-09-29")  # a Tuesday: a daily, whatever today is
     made = color_rule(api)
-    error, held = mcp(api, "hub_update_create", {"body": "- Our favorite color is blue."}, token="ops-test")
+    error, held = mcp(api, "hub_update_create", {"kind": "daily", "body": "- Our favorite color is blue."}, token="ops-test")
     assert not error and held["held"]["outcome"] == "blocked"
     edit(api, made["id"], {"if_broken": "warn", "version": made["version"]})
-    error, posted = mcp(api, "hub_update_create", {"body": "- Our favorite color is blue."}, token="ops-test")
+    error, posted = mcp(api, "hub_update_create", {"kind": "daily", "body": "- Our favorite color is blue."}, token="ops-test")
     assert not error and posted["rule_warning"] and posted["body"].startswith("Warning:")
 
 
@@ -1529,7 +1529,7 @@ def test_chat_updates_and_task_questions_carry_a_warn_rules_line(ruled, monkeypa
     color_rule(api, if_broken="warn")
     got = chat(api, "Our favorite color is blue.")
     assert got["rule_warning"] and got["message"]["body"].startswith("Warning:")
-    update = post(api, "updates", {"body": "- Our favorite color is blue."}, token="ops-test")
+    update = post(api, "updates", {"kind": "daily", "body": "- Our favorite color is blue."}, token="ops-test")
     assert update["rule_warning"] and update["update"]["body"].startswith("Warning:")
     asked = ask(api, "Ship it?", title="Palette", body="Our favorite color is blue.")
     assert asked["rule_warning"] and asked["question"]["body"].startswith("Warning:")
@@ -1543,7 +1543,7 @@ def test_send_anyway_delivers_a_held_chat_update_and_task_question_once(ruled, m
     monkeypatch.setattr(updates, "today", lambda at=None: "2026-09-29")  # a Tuesday: a daily, whatever today is
     color_rule(api, if_broken="escalate", reviewer="ben")
     holds = [chat(api, "Our favorite color is blue.")["held"]["id"],
-             post(api, "updates", {"body": "- Our favorite color is blue."}, token="ops-test")["held"]["id"],
+             post(api, "updates", {"kind": "daily", "body": "- Our favorite color is blue."}, token="ops-test")["held"]["id"],
              ask(api, "Ship it?", title="Palette", body="Our favorite color is blue.")["held"]["id"]]
     for hold_id in holds:
         assert send_anyway(api, hold_id)["hold"]["state"] == "sent"
@@ -1600,7 +1600,7 @@ def test_with_no_rule_in_force_bot_writes_resolve_no_audience(ruled, monkeypatch
     monkeypatch.setattr(threads, "mentioned_people", lambda *a, **k: resolved.append("mentions") or [])
     task = task_for_ops(api)
     post(api, f"tasks/{task['id']}/comments", {"text": "Ask @ana or ben@acme.example about it."}, token="ops-test")
-    assert "held" not in post(api, "updates", {"body": "- Shipped the launch note."}, token="ops-test")
+    assert "held" not in post(api, "updates", {"kind": "daily", "body": "- Shipped the launch note."}, token="ops-test")
     aid = post(api, "automations", {"name": "Post", "owner": "bot:finance", "trigger": {"type": "event", "name": "x.y"},
                                     "steps": [{"id": "p", "type": "action", "do": "post_update",
                                                "args": {"text": "- Closed the books."}}]})["id"]
