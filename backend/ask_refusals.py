@@ -65,6 +65,8 @@ def duplicate(c, person, title, question, parent_id, topic=""):
         if row["owner_id"] != person:
             continue
         card = H.task(c, row["id"])
+        if card is None:
+            continue
         theirs = H.question_topic(card.get("question_topic"))
         distinct = bool(topic and theirs and topic != theirs)
         if (
@@ -79,7 +81,7 @@ def duplicate(c, person, title, question, parent_id, topic=""):
     return None
 
 
-def check(c, who, person, *, title, question, parent=None, default=None, folds=None, topic=""):
+def check(c, who, person, *, title, question, parent=None, default=None, folds=None, topic: str | None = ""):
     """Raise the refusal for a bot's question to `person`, or return. `parent` is the task it is filed under, `default`
     its `if_no_answer` ({do, kind, by}), `folds` the open question it joins by topic (never a duplicate of itself)."""
     why = go_ahead(c, default)
@@ -87,7 +89,7 @@ def check(c, who, person, *, title, question, parent=None, default=None, folds=N
         raise Problem("ask_default_go_ahead", why, 422)
     if folds:
         return
-    found = duplicate(c, person, title, question, parent["id"] if parent else None, H.question_topic(topic))
+    found = duplicate(c, person, title, question, parent["id"] if parent else None, H.question_topic(topic) or "")
     if not found:
         return
     name = H.person_name(c, H.actor_id(person)) or H.actor_id(person)
