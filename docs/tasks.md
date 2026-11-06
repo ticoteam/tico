@@ -618,7 +618,7 @@ Answering closes the question task, and the answer stays on it:
 - Declining closes it **Declined**.
 - Done or Declined from the task itself, Decide's buttons, or the Assistant counts as an answer too. A note that names
   an option ("Yes." or "Yes. Ship it Friday") picks that option.
-- Only the person asked answers, or someone acting for them: an admin or their manager. The bot that asked never
+- Only the person asked answers, or someone acting for them: the install owner or their manager. The bot that asked never
   does, and a question task never moves to a bot.
 - A reply to the bot's last line in the person's chat with it answers the bot's question, when it is the bot's one
   open question to that person.

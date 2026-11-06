@@ -318,7 +318,7 @@ one was given. Only the card's owner can confirm it, and the owner can still Can
 answering a bot) is one bulk card, never one each: `POST /api/v2/assistant/actions` with path `/api/v2/assistant/batch`
 and body `{"actions": [{"method": "POST", "path": "/api/v2/tasks/<id>", "body": {...}}, ...]}`, 1 to 100 task changes,
 comments or links, approval decisions (`/api/v2/approvals/<id>`, `{"decision": "declined", "note": "<reason>"}`) and
-answers to bots' questions (`/api/v2/messages/<id>/answer`), and nothing else (`422`). An approval or question that was
+answers to questions (`/api/v2/tasks/<id>/answers`), and nothing else (`422`). An approval or question that was
 not put to you is refused (`403`), so a card never lists anyone else's. The card first sums the steps up by what they do
 and how old the items are ("Decline 11 publish approvals, over a month old", with the reason when the group shares one),
 then lists one line per item: the task, or the approval's kind, requester, amount or target and age, or the question and

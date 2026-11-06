@@ -7,7 +7,7 @@ Answering is the close: a pick, a Yes / No or a note closes it done with `answer
 declined, and the bot hears it once (on its task through hubdb._subtask_wake, else as the task's requester).
 
 Every surface reads it through `as_ask`, the question shaped as the ask a question card already draws (Needs you,
-Decide, the task page, the Ask panel), next to the old ask messages until those move over (step 6c). One open question
+Decide, the task page, the Ask panel). One open question
 task per topic per person and bot (`open_for`, `fold`). ask_deadlines and still_needed settle them on their dates.
 """
 
@@ -419,8 +419,8 @@ def reopened(conn, row, at):
 
 
 def may_answer(c, auth, who, row):
-    """The person a question task asks (its owner), or a person acting for them: an admin, or their manager on the
-    org chart (auth.manages). Never the bot that asked, nor any other bot."""
+    """The person a question task asks (its owner), or a person acting for them: the install owner, or their manager
+    on the org chart (auth.manages). Never the bot that asked, nor any other bot."""
     if who.actor == row["owner_id"]:
         return True
     if who.role == "owner":

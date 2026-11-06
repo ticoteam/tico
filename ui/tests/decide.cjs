@@ -22,7 +22,7 @@ const items = [
     status: 'open', version: 2, created_at: at(5000), updated_at: at(5000), note: '', ask_missing: false, open_asks: 0,
     lane: 'company', rank: null, labels: [], tags: [], links: [], parts: {total: 0, done: 0},
     ask: {id: 't-stale', sender_id: 'bot:writer', recipient_id: 'human:ana', body: 'Should the public example show the agent demo?',
-      created_at: at(5000), stale: true, question_task: true, refs: {}}},
+      created_at: at(5000), question_task: true, refs: {}}},
   wait('t-plain', 'Run the video tool trial', {created_at: at(490), note: PLAIN, person_ask: PLAIN,
     body: 'Run the video tool trial\n\nThe test plan is in the shared folder.'}),
   // set waiting before the rule, with no plain ask: its task, not a card
@@ -127,6 +127,7 @@ const items = [
     assert.deepEqual(sent, [{id: 't-plain', text: 'Yes.'}]);
 
     assert.equal(c.lead, 'Should the public example show the agent demo?');
+    assert.equal(await page.locator('#need-card [data-dc="clarify"]').count(), 0, 'a stale check has no Clarify');
     assert.deepEqual(c.buttons, ['no', 'yes']);
     // the note is only ever text
     assert.equal(await page.locator('#need-card .dc-body img').count(), 0);
@@ -136,9 +137,6 @@ const items = [
     await page.goBack();
     await page.waitForFunction(() => !document.querySelector('#need-card')?.open && !DEC);
     assert.match(await page.evaluate(() => location.hash), /^#\/tasks\?(.*&)?view=foryou/);
-    // The stale question is handled from its card; with no Clarify tap left, mark it handled the way an answer's tap
-    // does (until its undo window closes) so Catch up reads nothing waiting.
-    await page.evaluate(() => { DEC_HANDLED.add('task:t-stale'); needsListsRedraw(); });
 
     // A Needs you row with no card opens its task.
     await page.locator('#task-body [data-task-key="tt-blank"] .tl-title').click();
@@ -153,11 +151,10 @@ const items = [
     await page.evaluate(() => { location.hash = '#/tasks?view=foryou'; });
 
     // Catch up, in the phone's header, opens the first card without repeating the count.
+    // The stale question is still open, so it waits on its card: Catch up is there and opens it.
     const go = page.locator('#tasks-pane [data-go-through]:visible');
-    assert.equal(await go.count(), 0, 'nothing waits on a card: no Catch up');
-    assert.equal(await page.locator('#task-body .tl-row').count(), 3, 'full-task rows still need the person');
-    assert.equal(await page.locator('#task-scope .cnt').innerText(), '3');
-    await page.evaluate(() => { DEC_HANDLED.delete('task:t-stale'); needsListsRedraw(); });
+    assert.equal(await page.locator('#task-body .tl-row').count(), 4, 'the open question and the full-task rows need the person');
+    assert.equal(await page.locator('#task-scope .cnt').innerText(), '4');
     assert.equal((await go.textContent()).trim(), 'Catch up');
     assert.equal(await go.evaluate(el => !!el.closest('.tl-head')), true, 'Catch up sits in the header row');
     await go.click();

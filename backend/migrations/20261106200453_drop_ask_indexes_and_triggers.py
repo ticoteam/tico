@@ -4,7 +4,6 @@ the triggers that watched them for the Needs you list are dead weight on every m
 """
 
 INDEXES = (
-    "messages_open_asks",  # REPLY_ANSWERS_ASKS (hubdb's numbered step), made before this file runs
     "messages_open_asks_to",
     "messages_pending_conversation",
     "messages_open_ask_to",

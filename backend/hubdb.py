@@ -250,8 +250,8 @@ MESSAGE_KINDS = ("say", "notice", "steer")
 # to a person is a question task, `hub task question`; to a bot, a DM flagged needs-action).
 OLD_MESSAGE_KINDS = ("ask", "answer")
 ASK_GONE = (
-    "asks are gone: ask a person with hub task question <task> \"<question>\"; ask a bot with "
-    "hub message send <bot> \"<question>\" --needs-action"
+    "asks are gone: ask a person with hub task question \"<question>\" --on <person> [--parent <task>]; "
+    "ask a bot with hub message send <bot> \"<question>\" --needs-action"
 )
 CONVERSATION_KINDS = ("chat", "ask", "task", "notice")
 CONVERSATION_SCOPES = ("direct", "personal", "shared", "task")
@@ -635,6 +635,7 @@ END;
 # A person's reply closes whatever that bot asked them. `answered_by` is the message that did it.
 REPLY_ANSWERS_ASKS = """
 ALTER TABLE messages ADD COLUMN answered_by_id TEXT;
+-- Stays after step 6d: sender and recipient lookups use it (teammate_access, triggers, assistant, auth).
 CREATE INDEX IF NOT EXISTS messages_open_asks ON messages(recipient_id, sender_id, kind, answered_by_id);
 """
 

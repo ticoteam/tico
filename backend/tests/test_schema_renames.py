@@ -146,7 +146,6 @@ DROPPED.add(("tasks", "waiting_on"))
 DROPPED_INDEXES.add("tasks_waiting_on")
 # Dropped by backend/migrations/20261106200453_drop_ask_indexes_and_triggers.py with the ask kinds: questions are tasks now.
 DROPPED_INDEXES |= {
-    "messages_open_asks",
     "messages_open_asks_to",
     "messages_pending_conversation",
     "messages_open_ask_to",
