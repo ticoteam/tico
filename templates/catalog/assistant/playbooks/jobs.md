@@ -44,8 +44,7 @@ tasks they own. The owned tasks are one kind of many.
 1. Count from Needs you only: `hub needs-you show --by kind` (total, per kind), `--by bot` for the split. Its lists stop
    at 10 per bot, so take the ids in step 2.
 2. Ids: owned tasks `hub task list --all`; tasks waiting on them `hub task list --status waiting`; bots' questions
-   `hub message list` (each names its task); approvals `hub approval list --limit 100` (`--offset <next>` until null);
-   threads `hub thread catch-up`.
+   `hub message list` (each names its task); approvals `hub approval list --limit 100` (`--offset <next>` until null).
 3. Act in this turn, as them, on every item below. "Go" and "whatever you think" are the yes: never close some and ask
    about the rest.
    - Task they own, waiting task, declined task: `hub task bulk close --where-id <id> --where-id <id> --note "<why>"`
@@ -55,11 +54,10 @@ tasks they own. The owned tasks are one kind of many.
      An answer cannot be taken back: say so, with no undo line.
    - Approval: decline a stale merge, publish or support approval: `hub approval decline <id> --note "<why>"`. Never
      approve in a clear.
-   - Thread mention or DM: `hub thread read <thread id> --all`.
 4. Keep what needs them: a real decision on money, legal, a customer-facing reply, production access, or anything only
    they can answer. Do not act on it. Name each kept item with its link and why.
-5. No command here clears these: a held message, a paused thread, a stale-ticket suggestion, a memory tidy card, a setup
-   or reconnect card. Name the ones left, and say they clear them in Tico. Never guess a command for them.
+5. No command here clears these: a held message, a paused thread, a thread mention or DM, a stale-ticket suggestion, a
+   memory tidy card, a setup or reconnect card. Name the ones left, and say they clear them in Tico. Never guess a command.
 6. Recount: `hub needs-you show --by kind`. Reply in a few lines: the Needs you count before and after; what was closed,
    answered and declined, with counts and links; the kept items; what is left; "say undo to put the tasks back".
 
