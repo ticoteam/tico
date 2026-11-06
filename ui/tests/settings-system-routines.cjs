@@ -1,9 +1,9 @@
-// Settings > System (ui/app/settings-recurring.js): one flat list of Tico's own jobs, no group headings, a search box
+// Automations > System jobs (ui/app/settings-recurring.js, #/automations/system-jobs): one flat list of Tico's own jobs, no group headings, a search box
 // that matches name, trigger, action and department; each row reads WHEN ... THEN ... with one department tag, its
 // schedule, last run in words (a failure in red with its reason), next run, and for a Decide job the route that answered,
 // a fallback in words and this month's spend. Housekeeping says Tico needs it. An owner or admin gets a switch, a
 // schedule preset (no every 15 minutes for an AI job) and Run now on controlled jobs; a member none.
-// Fixtures only.
+// Fixtures only. TICO_UI_SHOTS=<dir> saves the screen at 1440 and 390, dark.
 const {chromium} = require('playwright');
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
@@ -90,10 +90,7 @@ async function open(browser, role) {
     if (p.endsWith('/watch') || p === '/api/v2/events') return route.fulfill({contentType: 'text/event-stream', body: ': fixture\n\n'});
     return json(unrouted(p));
   });
-  await page.goto('https://tico-ui.test/#/settings');
-  await page.locator('#settings-tabs').waitFor();
-  await page.locator('#settings-more summary').click();
-  await page.locator('[data-settings-tab="system"]').click();
+  await page.goto('https://tico-ui.test/#/automations/system-jobs');
   await page.locator('[data-system-routine="stale_review"]').waitFor();
   return {page, errors, asked, writes};
 }
@@ -101,7 +98,10 @@ const row = (page, key) => page.locator(`[data-system-routine="${key}"]`);
 // A change on a row is saved once its write has gone, the row is no longer busy, and it shows no error ("Saved" is a toast).
 const saved = async (page, writes, count, key) => {
   for (let i = 0; i < 200 && writes.length < count; i++) await page.waitForTimeout(25);
-  assert.ok(writes.length >= count, `the ${key} change is sent`);
+  if (writes.length < count) {
+    const box = await page.evaluate(k => { const i = document.querySelector(`[data-system-routine="${k}"] [data-sysr-at]`); return {value: i?.value, focus: document.activeElement?.outerHTML?.slice(0, 120)}; }, key);
+    assert.fail(`the ${key} change is sent: ${JSON.stringify({writes, box})}`);
+  }
   await page.waitForFunction(k => !SYSTEM_ROUTINE_BUSY.has(k) && !document.querySelector(`[data-system-routine="${k}"] [data-sysr-status].err`), key);
 };
 
@@ -111,8 +111,10 @@ const saved = async (page, writes, count, key) => {
     for (const role of ['owner', 'admin', 'member']) {
       const {page, errors, asked, writes} = await open(browser, role);
       // One flat list, no wake rules or bot routines: no group headings, a search box on top.
-      const headings = await page.locator('#settings-system h2:visible').allInnerTexts();
-      assert.equal(headings[0].trim(), 'What Tico runs on its own', role);
+      assert.equal((await page.locator('.au-hd .au-name').innerText()).trim(), 'System jobs', role);
+      assert.equal((await page.locator('.au-hd .pill').innerText()).trim(), 'Built-in', role);
+      assert.equal(await page.locator('#au-root').getAttribute('data-screen'), 'detail', 'it opens in place');
+      const headings = await page.locator('.au-pane h2:visible').allInnerTexts();
       assert.ok(!headings.some(h => /wakes|routines/i.test(h)), role + ': ' + headings);
       assert.equal(await page.locator('#set-system-routines h3').count(), 0, 'no group headings');
       assert.equal(await page.locator('#set-system-routines [data-sysr-search]').count(), 1);
@@ -150,7 +152,7 @@ const saved = async (page, writes, count, key) => {
       assert.equal(await row(page, 'health_scan').count(), 0, 'Check health runs through Maintenance');
       if (role === 'member') {
         // A member reads the list: no switch, schedule choice or Run now anywhere.
-        assert.equal(await page.locator('#set-system-card input:not([data-sysr-search]), #set-system-card select, #set-system-card button').count(), 0);
+        assert.equal(await page.locator('#set-system-routines input:not([data-sysr-search]), #set-system-routines select, #set-system-routines button').count(), 0);
         assert.match(await row(page, 'stale_review').locator('[data-sysr-state]').innerText(), /On/);
         assert.equal(await page.locator('[data-sysr-owner]').count(), 0);
       } else {
@@ -174,7 +176,7 @@ const saved = async (page, writes, count, key) => {
         await page.waitForFunction(() => /4 checked, 1 suggestion/.test(document.querySelector('[data-system-routine="stale_review"] [data-sysr-result]')?.textContent || ''));
         // The daily time saves once, when the box is left, not after the hour alone.
         const at = row(page, 'kpi_asks').locator('[data-sysr-at]');
-        await at.click();
+        await at.click({position: {x: 16, y: 12}});   // the hour
         await page.keyboard.type('1030');
         await page.keyboard.type('AM');
         assert.equal(await page.evaluate(() => document.activeElement?.matches('[data-sysr-at]')), true, 'focus stays while typing');
@@ -256,10 +258,18 @@ const saved = async (page, writes, count, key) => {
     }
     {
       // A phone: the row stacks and nothing spills sideways.
-      const {page} = await open(browser, 'owner');
+      const {page, errors} = await open(browser, 'owner');
+      const dir = process.env.TICO_UI_SHOTS;
+      const shot = async name => { if (dir) { fs.mkdirSync(dir, {recursive: true}); await page.screenshot({path: `${dir}/${name}.png`, animations: 'disabled'}); } };
+      await page.evaluate(() => window.ticoTheme?.set('dark'));
+      await shot('automations-system-jobs-desktop-dark');
       await page.setViewportSize({width: 390, height: 844});
+      await page.waitForTimeout(100);
       const wide = await page.evaluate(() => document.querySelector('#set-system-routines').scrollWidth - document.querySelector('#set-system-routines').clientWidth);
       assert.ok(wide <= 1, `no sideways scroll on a phone (${wide}px)`);
+      assert.ok(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth + 1), 'the page does not scroll sideways');
+      await shot('automations-system-jobs-phone-dark');
+      assert.deepEqual(errors, []);
       await page.close();
     }
     console.log('settings-system-routines: ok');

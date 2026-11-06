@@ -82,6 +82,7 @@ The operation groups below are generated from the committed spec's tags. After r
 | Physical mail | Company letters, explicit Read grants and legal mail routing ([guide](physical-mail.md)). |
 | Email sending | One sending policy and durable undo queue for bots, automations and people acting through Tico. |
 | Alerts | Personal phone verification, consent and opt-in paging, paid by the company at $1 per accepted alert. |
+| Skills | The company's approved skills: proposals and approval, screening state, and installs for bots and people ([guide](skills.md)). |
 <!-- api-tags:end -->
 
 Internal developer tutorials: [Listening](listening.md#save-decide-and-resolve) and [Needs you batches](needs-you-batches.md).
@@ -296,7 +297,7 @@ story, with the CLI, is on [Webhooks](webhooks.md).
 ## Outgoing webhooks
 
 Tico posts an event to an address you choose when something happens: a task is made, finishes or is blocked; an approval is
-asked or decided; a bot is held or fails; a release is published; and more. Add them in Settings → Webhooks → Outgoing, or use
+asked or decided; a bot is held or fails; a release is published; and more. Add them in Tools → Add tool → Outgoing webhook, or use
 the API, `hub webhook` or the `hub_webhook_*` tools ([Webhooks](webhooks.md#outgoing)).
 
 ```

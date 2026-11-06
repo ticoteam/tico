@@ -188,6 +188,22 @@ with `enabled: true`. If direct writes are disabled, `hub assistant propose` can
 confirmation creates and enables that routine. Existing routines use a PATCH proposal. The same API and card apply
 to web, phone and desktop; the `hub` CLI and MCP tools return the pending action, never confirm it for the Assistant.
 
+## Where you stand, and the morning message
+
+The Assistant's goal number one is to help you use Tico to achieve your business goals. Its skill **where we stand**
+(`skills/where-we-stand/`) reads your strategy, your goals and their colours, the bots working on them, and the Marketing
+board, and names up to three things only you can do today, each with the goal it moves and one link to act. Ask "where do we
+stand?" or "what should I do next?" any time, or it runs for you as the morning message.
+
+The **morning message** is the Assistant's one routine (the routine id is still `daily-sweep`, now titled "Morning message").
+Once a day it sends each person at most one message in their Assistant DM, with `hub assistant morning --for human:<id>
+--body`. A quiet day gets no message. A second send on the same company day is refused (`409 already_sent_today`), and the
+Assistant does not retry. The message never closes, declines or proposes anything: it has no Confirm card. Stalled Marketing
+tasks go to their owning bot as a comment, not to you.
+
+In a chat, after it finishes an ask about your goals, the Assistant may offer one next step ("Next: <thing> for <goal>. Do it
+now?"). Say "that's enough" or "later" and it stops offering in that chat. It never follows up on its own.
+
 ## Undo
 
 Every change your Assistant makes for you is listed with the words it acted on: `hub assistant change list [--days N]`
@@ -282,7 +298,7 @@ comments, links, approval declines and answers, `PATCH /api/v2/automations/<id>`
 the Assistant may never make on your words (the list above, or a rule that sets the Assistant's own switches) is refused
 when the card is made.
 
-**The Assistant's own background run** (its daily sweep) may put a card in your own Assistant DM with
+**The Assistant's own background run** (a routine of its own) may put a card in your own Assistant DM with
 `hub assistant propose --for human:<id>`. Only the Assistant bot may do this, for that person, at most five cards a day
 per person, and never with an approve step. The card is yours: it runs only on your tap, as you, and says the Assistant
 proposed it. Any other bot, or a person naming someone else, gets `403`.

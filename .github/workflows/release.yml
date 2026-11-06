@@ -32,6 +32,10 @@ on:
         description: Dry run only (from a branch), the Release validation run ID to check publication from
         type: string
         default: ''
+      latest:
+        description: Make it the latest release and move the images' latest tags (release windows pass false and do it once the canary is healthy)
+        type: boolean
+        default: true
 
 # Read-only by default; only the two jobs that write to the GitHub release (release, desktop-assets) get contents: write.
 permissions:
@@ -167,6 +171,7 @@ jobs:
       RUN: ${{ needs.validated.outputs.run }}
       VERSION: ${{ needs.validated.outputs.version }}
       DRY_RUN: ${{ needs.validated.outputs.dry_run }}
+      LATEST: ${{ github.event_name != 'workflow_dispatch' || inputs.latest }}
     steps:
       - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
         with:
@@ -216,7 +221,8 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
       # Before the release exists, so an installer never runs against a tag whose images are missing. A prerelease
-      # (v1.2.0-rc1) never moves latest; a dry run only prints the manifests it would push.
+      # (v1.2.0-rc1) never moves latest, nor does latest=false (a release window moves it after the canary); a dry run
+      # only prints the manifests it would push.
       - name: Point the version tags at the validated images
         run: |
           # The three images at once, each in its own subshell; any failure fails the step.
@@ -231,7 +237,7 @@ jobs:
               sources+=("ghcr.io/ticoteam/$image@$digest")
             done
             tags=(-t "ghcr.io/ticoteam/$image:$VERSION")
-            case "$VERSION" in *-*) ;; *) tags+=(-t "ghcr.io/ticoteam/$image:latest") ;; esac
+            case "$VERSION" in *-*) ;; *) [ "$LATEST" = false ] || tags+=(-t "ghcr.io/ticoteam/$image:latest") ;; esac
             flags=()
             [ "$DRY_RUN" = true ] && flags+=(--dry-run)
             # The registry sometimes drops the manifest upload; retry instead of failing the release.
@@ -259,6 +265,7 @@ jobs:
           gh release view "$VERSION" >/dev/null 2>&1 && { echo "The $VERSION release already exists."; exit 0; }
           flags=()
           case "$VERSION" in *-*) flags+=(--prerelease) ;; esac
+          [ "$LATEST" = false ] && flags+=(--latest=false)
           gh release create "$VERSION" "${files[@]}" --title "$VERSION" --notes "" --verify-tag "${flags[@]}"
 
   # The Mac runner and relay, built from the tag when runner-changes says so, after the publication. A GitHub-hosted

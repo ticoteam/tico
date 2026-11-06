@@ -123,4 +123,12 @@ keeping as a guard.
 - `cases/live.yaml`: asks from the owner's real chat that went wrong: a model change across every bot, a short
   follow-up answer, an ambiguous reply that must not answer an open question for them, a routing change for one bot's
   tasks with a rule, and "those" read as the items just listed (not the page they are on).
+- `cases/goals.yaml`: where the person stands on their goals, what to do today (at most three, the red goal first), a
+  suggestion they turned down, work a bot can do (a task for the bot), the keep-going offer in a chat and when it stops, an
+  ordinary chore with no offer, a non-owner's own area, and the morning message (one send, none on a quiet day, no retry
+  on a 409).
+- `cases/tico.yaml`: Tico awareness: where a routine's time changes, where a bot's model is, what Needs you counts, where
+  budgets, the Marketing board, the Credentials page and the Strategy page are, and how a goal gets its colour.
+- `cases/background.yaml`: the morning message as a scheduled run (`background-daily-sweep`): one message to the person, and
+  no close, decline or card.
 - `BASELINE.md`: the numbers for main, by model.
