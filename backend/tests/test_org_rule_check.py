@@ -584,6 +584,69 @@ def test_with_the_reviewer_gone_app_only_tico_support_reads_no_person_hold_and_t
     assert kept["state"] == "kept" and kept["decided_by"] == "human:ben"
 
 
+def _app_reads_nothing(api, hold_id):
+    """App-only Tico support sees no hold, lists none, keeps none and sends none: the hold stays held."""
+    app, auth = _app_support(), api.app.state.auth
+    with api.app.state.store.read() as c:
+        hold = K._hold(c, hold_id)
+        assert not K._is_reviewer(app, hold, c, auth)
+        assert K.holds_listed(c, app, auth=auth) == ([], None)
+        with pytest.raises(Problem) as seen:
+            K.view_hold(c, app, hold, auth=auth)
+        assert seen.value.status == 404
+    with api.app.state.store.transaction() as c:
+        with pytest.raises(Problem) as kept:
+            K.keep(c, app, hold_id, auth)
+        assert kept.value.status == 404
+        with pytest.raises(Problem) as sent:
+            K.send(c, app, hold_id, hold_row(api, hold_id)["nonce"], auth=auth)
+        assert sent.value.status == 404
+    assert hold_row(api, hold_id)["state"] == "held"
+
+
+def test_with_no_reviewer_app_only_tico_support_reads_no_bot_hold_and_the_owner_and_admin_do(ruled, monkeypatch):
+    api, _ = ruled
+    _nobody_near_ops(api)
+    monkeypatch.setattr(K, "owner_or_admin", lambda c: None)  # no person on the team to name as reviewer
+    color_rule(api, if_broken="escalate")
+    held = say(api, "Our favorite color is gold")["held"]
+    assert held["outcome"] == "blocked" and hold_row(api, held["id"])["reviewer"] is None
+    _app_reads_nothing(api, held["id"])
+    get(api, f"rule-holds/{held['id']}", token="cara-test", expected=404)
+    assert "nonce" in get(api, f"rule-holds/{held['id']}", token="ben-test")  # an Admin reads it
+    assert [h["id"] for h in get(api, "rule-holds", token="ben-test")["holds"]] == [held["id"]]
+    assert "nonce" in get(api, f"rule-holds/{held['id']}", token="ana-test")  # the owner too
+    assert post(api, f"rule-holds/{held['id']}/keep", {}, token="ben-test")["state"] == "kept"
+
+
+def test_with_no_reviewer_app_only_tico_support_reads_no_person_hold_and_the_owner_and_admin_do(ruled):
+    api, _ = ruled
+    made = color_rule(api)
+    with api.app.state.store.transaction() as c:  # a person's held post whose rule names no reviewer
+        c.execute(
+            "INSERT INTO org_rule_holds(id, operation, payload, author, destinations, rule_ids, "
+            "verdict, nonce, state, reviewer, task_id, created_at) VALUES(?,?,?,?,?,?,?,?,?,?,?,?)",
+            (
+                "h-cara-none",
+                "message",
+                json.dumps({"text": "Our favorite color is gold", "replay": {}}),
+                "human:cara",
+                "[]",
+                json.dumps([made["id"]]),
+                "{}",
+                "n-cara-none",
+                "held",
+                None,
+                None,
+                H.now(),
+            ),
+        )
+    _app_reads_nothing(api, "h-cara-none")
+    assert "nonce" in get(api, "rule-holds/h-cara-none", token="ben-test")  # an Admin reads and releases it
+    assert "nonce" in get(api, "rule-holds/h-cara-none", token="ana-test")  # the owner too
+    assert post(api, "rule-holds/h-cara-none/keep", {}, token="ben-test")["state"] == "kept"
+
+
 def test_with_the_reviewer_present_a_bot_hold_is_not_read_by_app_only_tico_support(ruled):
     api, _ = ruled
     color_rule(api, reviewer="ben")
