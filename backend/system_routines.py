@@ -160,6 +160,8 @@ ACTIONS = {
                      "unread counts and links, never the messages", ("email", "digest", "unread", "thread", "notify")),
     "drop_unreadable": ("drop queued work its bot can no longer read", ("queue", "drop")),
     "ask_to_task": ("turn a bot's plain ask to a person into a small task", ("ask", "tasks")),
+    "reopen_stranded": ("send a bot's task waiting on nothing tracked back to open after two hours",
+                        ("waiting", "stranded", "reopen", "tasks")),
     "end_snooze": ("bring snoozed tasks back when their date comes", ("snooze", "tasks")),
     "start_deferred": ("start deferred runs that are due", ("deferred", "runs")),
     "end_go_live": ("end a go-live waiting for a computer that never reports", ("go-live", "computer", "expire")),
@@ -385,9 +387,9 @@ JOBS = [
         "Frees turns proven dead, keeps one Health finding per busy-turns incident and hands what it cannot fix to "
         "BotOps.", HOUSEKEEPING, "Every 10 seconds", 10, then=("free_dead_starts", "turns_finding")),
     Job("waiting_checks", "Waiting checks",
-        "Turns a bot's plain ask to a person into a small task. It no longer sends a waiting task back to work; a "
-        "waiting task that waits on nothing is listed on the task roundup after a day.",
-        HOUSEKEEPING, "Hourly", 3600, then=("ask_to_task",)),
+        "Turns a bot's plain ask to a person into a small task, and sends a bot's task waiting on nothing tracked "
+        "back to open after two hours (one that keeps coming back goes to its manager bot or BotOps).",
+        HOUSEKEEPING, "Hourly", 3600, then=("ask_to_task", "reopen_stranded")),
     Job("snooze_ends", "Snooze ends",
         "Brings snoozed tasks back when their date comes and starts deferred runs that are due.",
         HOUSEKEEPING, "Every 10 seconds", 10, then=("end_snooze", "start_deferred", "start_task")),

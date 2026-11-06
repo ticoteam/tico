@@ -7191,8 +7191,11 @@ def task_update(conn, actor, task_id, status=None, note=None, owner=None, due=No
                        "in a note, file the child task, blocker or approval first, name the person with --on, "
                        "or keep working")
             # A note naming what it waits on parks it, but a note wakes nobody (bots parked tasks "waiting on
-            # BotOps" that BotOps never heard of): the hint goes back with the write.
-            self_wait = self_wait if durable else [f"nothing this task waits on is recorded, so nothing will move it: "
+            # BotOps" that BotOps never heard of): the hint goes back with the write, and the task goes back to open
+            # after task_holds.GRACE_HOURS (task_holds.unstrand).
+            from .task_holds import GRACE_HOURS
+            self_wait = self_wait if durable else [f"nothing this task waits on is recorded, so it goes back to open "
+                         f"in {GRACE_HOURS} h: "
                          f"file a subtask for whoever must act (hub task create "
                          f"--parent {task_id} --owner <bot or person>), relate a blocker, name the person with --on, "
                          "or set --due for when to look again"]
