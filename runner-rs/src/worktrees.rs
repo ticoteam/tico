@@ -3602,7 +3602,7 @@ mod tests {
             )
             .await;
         assert!(
-            manager.inner.lock().unwrap().errors.get("link").is_none(),
+            !manager.inner.lock().unwrap().errors.contains_key("link"),
             "a subtask's turn holds the removal"
         );
         // The task's own turn, on its own lane, holds it too.
@@ -3620,7 +3620,7 @@ mod tests {
             .await;
         server.abort();
         assert!(
-            manager.inner.lock().unwrap().errors.get("link").is_none(),
+            !manager.inner.lock().unwrap().errors.contains_key("link"),
             "the task's own turn holds the removal"
         );
     }
