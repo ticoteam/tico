@@ -24,8 +24,9 @@ const wholeTask = task('t-whole', {person_ask: '', body: 'Review the attachments
 const extras = [
   {id: 'a-send', kind: 'approval', what: 'send', title: 'Send the launch email', requester_id: 'bot:writer',
     created_at: now, payload: {to: ['team@acme.example'], subject: 'Launch'}},
-  {id: 'q-loose', kind: 'ask', title: 'Which vendor?', requester_id: 'bot:writer', created_at: now,
-    ask: {id: 'q-loose', sender_id: 'bot:writer', recipient_id: 'human:ana', body: 'Which vendor?'}},
+  {id: 'q-loose', kind: 'question', title: 'Which vendor?', requester_id: 'bot:writer', owner_id: 'human:ana', created_at: now,
+    ask: {id: 'q-loose', sender_id: 'bot:writer', recipient_id: 'human:ana', body: 'Which vendor?', question_task: true,
+      refs: {questions: [{id: 'vendor', question: 'Which vendor?', options: [{label: 'Acme'}, {label: 'Globex'}]}]}}},
   {id: 'stale', kind: 'stale', title: 'Stale tickets', created_at: now, rows: []},
 ];
 const threadKinds = ['thread_ask', 'thread_mention', 'thread_dm', 'thread_held', 'thread_capped'];

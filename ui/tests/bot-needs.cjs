@@ -29,9 +29,11 @@ const T = {
     ask: {id: 'q-1', body: 'Should full access refuse credential changes?', sender_id: 'bot:lead', recipient_id: 'human:ana', created_at: ago(30)}}),
   qa: task('t-qa', 'Run the release check', {owner_id: 'bot:qa', requester_id: 'bot:lead', status: 'doing'}),
 };
-const LOOSE = {kind: 'ask', id: 'm-loose', message_id: 'm-loose', title: 'Is Friday fine for the summary?', first_line: 'Is Friday fine for the summary?',
-  body: 'Is Friday fine for the summary?', requester_id: 'bot:lead', origin_actor: 'bot:lead', created_at: ago(20),
-  ask: {id: 'm-loose', sender_id: 'bot:lead', recipient_id: 'human:ana', body: 'Is Friday fine for the summary?', created_at: ago(20)}};
+// A question to Ana outside any task is a question task now: its card is keyed by the task id.
+const LOOSE = {kind: 'question', id: 'm-loose', title: 'Is Friday fine for the summary?', first_line: 'Is Friday fine for the summary?',
+  body: 'Is Friday fine for the summary?', requester_id: 'bot:lead', owner_id: 'human:ana', origin_actor: 'bot:lead', created_at: ago(20),
+  ask: {id: 'm-loose', sender_id: 'bot:lead', recipient_id: 'human:ana', body: 'Is Friday fine for the summary?', created_at: ago(20), question_task: true,
+    refs: {questions: [{id: 'friday', question: 'Is Friday fine for the summary?', options: [{label: 'Yes'}, {label: 'No'}]}]}}};
 const NEEDS = [{...T.asked, kind: 'question'}, {...T.forAna, kind: 'task'}, {...T.waits, kind: 'waiting'}, LOOSE,
   {kind: 'approval', id: 'approval-1', what: 'send', requested_by: 'bot:lead', requester_id: 'bot:lead', title: 'Approve the announcement', created_at: ago(10)},
   {...task('t-qa-ana', 'Approve the test plan', {owner_id: 'human:ana', requester_id: 'bot:qa', status: 'open'}), kind: 'task'}];
@@ -220,7 +222,7 @@ const LAYOUT = [{builtin: 'needs', name: 'Needs You'}, {builtin: 'active', name:
     // A half-typed answer on the card of the question outside any task survives a redraw of the rail, and the picked
     // tab stays.
     await tab('needs').click();
-    await rail.locator('#t-needs [data-need-card="ask:m-loose"] .ttl').click();
+    await rail.locator('#t-needs [data-need-card="task:m-loose"] .ttl').click();
     await page.locator('#need-card .dc-note textarea').fill('Friday works');
     await page.evaluate(() => botNeedsChanged('lead'));
     assert.equal(await page.locator('#need-card .dc-note textarea').inputValue(), 'Friday works');

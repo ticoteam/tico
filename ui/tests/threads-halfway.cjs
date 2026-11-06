@@ -256,7 +256,8 @@ let browser = null;
 
     // The Ask's question, with a thread's composer on screen, is its own row above the composer, never over it.
     // Seed the pending question: askPeek's timer and focusout checks hide a forced ask-on with no matching item.
-    state.needs = [{id: 'q1', kind: 'ask', ask: {id: 'q1', sender_id: 'bot:ops', recipient_id: 'human:ana', body: 'Ready to ship?'}}];
+    state.needs = [{id: 'q1', kind: 'question', ask: {id: 'q1', sender_id: 'bot:ops', recipient_id: 'human:ana', body: 'Ready to ship?',
+      refs: {questions: [{id: 'ship', question: 'Ready to ship?', options: []}]}}}];
     await page.locator('.thv-composer .p-text').blur();
     await page.evaluate(() => v2Refresh());
     // Wait for both visible boxes and read them together; the assertion below checks their ordering.
