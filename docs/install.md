@@ -592,7 +592,7 @@ minutes:
 {"type": "tico.wake", "install": "acme", "pending": 3, "oldest_received_at": "2026-10-25T10:00:00Z"}
 ```
 
-Set it as the owner, with the Tico Gateway connected in Settings → Gateway:
+Set it as the owner, with the Tico Gateway connected in Settings → Models:
 
 ```
 hub relay wake-url set https://wake.acme.example/start-tico

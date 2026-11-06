@@ -162,6 +162,8 @@ async function pageAutomations() {
       auDrawHead(); auDrawPane();
       await auMaintLoad(state);
       if (AU !== state || state.id !== id) return;
+    } else if (id === AU_SYSJOBS) {
+      // System jobs is its own screen too (automations-maintenance.js), read from /v2/system-routines.
     } else if (id) {
       auDrawHead(); auDrawPane();
       // A slow answer for an automation left behind must not land on the one now open.
@@ -190,21 +192,25 @@ function auOpenTaskActionDraft(trigger, typeName = '') {
 
 function auShell() {
   $('#main').innerHTML = `<div class="au" id="au-root">
-    <header class="au-ph"><h1>Automations</h1><div class="au-seg au-range" role="group" aria-label="Time range"></div><span class="au-sp"></span><button class="docs-ask" type="button" data-ask-open aria-label="Ask" title="Ask">${ldotHTML({state: 'still', size: 16})}<span class="docs-ask-word">Ask</span></button><span class="au-newbox"><button class="primary au-new" type="button" aria-haspopup="menu" aria-expanded="false">+ New</button>
-      <div class="au-newm" role="menu" hidden><button type="button" role="menuitem" data-new="inbox"><span class="nav-icon" aria-hidden="true">mail</span>New inbox</button>${AU_WHEN.map(([k, l]) => `<button type="button" role="menuitem" data-new="${k}"><span class="nav-icon" aria-hidden="true">${AU_TRIGGER_ICONS[k]}</span>${l}</button>`).join('')}</div></span></header>
+    <header class="au-ph"><div class="au-hrow"><h1>Automations</h1><div class="au-seg au-range" role="group" aria-label="Time range"></div></div><span class="au-sp"></span><button class="docs-ask" type="button" data-ask-open aria-label="Ask" title="Ask">${ldotHTML({state: 'still', size: 16})}<span class="docs-ask-word">Ask</span></button>
+      <div class="au-hrow"><button type="button" class="au-fbtn" data-filters aria-label="Filters" aria-expanded="false">${auIcon('filter_alt')}<span class="au-fbn" hidden></span></button><span class="au-newbox"><button class="primary au-new" type="button" aria-label="New automation" aria-haspopup="menu" aria-expanded="false"><span class="nav-icon" aria-hidden="true">add</span><span class="au-new-w">+ New</span></button>
+      <div class="au-newm" role="menu" hidden><button type="button" role="menuitem" data-new="inbox"><span class="nav-icon" aria-hidden="true">mail</span>New inbox</button>${AU_WHEN.map(([k, l]) => `<button type="button" role="menuitem" data-new="${k}"><span class="nav-icon" aria-hidden="true">${AU_TRIGGER_ICONS[k]}</span>${l}</button>`).join('')}</div></span></div></header>
     <div class="au-body">
       <aside class="au-rail" aria-label="Filters">
         <div class="au-s"><input class="au-q" type="search" placeholder="Search" aria-label="Search automations"></div>
         <div class="au-facets"></div>
       </aside>
       <section class="au-c" aria-live="polite">
-        <div class="au-ov"><div class="au-ctl"></div><div class="au-tbl"></div></div>
+        <div class="au-ov"><div class="au-ctl"><div class="au-tabs" role="tablist" aria-label="View">
+          <button type="button" role="tab" data-tab="list" aria-selected="true">Automations</button>
+          <button type="button" role="tab" data-tab="runs" aria-selected="false">Runs</button></div><span class="au-sp"></span><span class="au-sels"></span></div><div class="au-tbl"></div></div>
         <div class="au-crumb"></div><div class="au-hd"></div><div class="au-pane"></div><div class="au-menu" role="menu" hidden></div></section>
       <aside class="au-side"><div class="au-ed" hidden></div></aside>
       <div class="au-scrim" hidden></div>
     </div>
   </div>`;
   const root = AU.root = $('#au-root');
+  auPlace();
   auOverviewWire(root);
   root.querySelector('.au-new').onclick = () => auNewMenu(root.querySelector('.au-newm').hidden);
   root.querySelector('.au-newm').onclick = e => {
@@ -322,6 +328,7 @@ function auDrawHead() {
   AU.root.querySelector('.au-crumb').innerHTML = AU.id ? `<a class="au-up" href="${AUTOMATIONS}"><span class="nav-icon" aria-hidden="true">chevron_left</span>Automations</a>` : '';
   if (!AU.id) { hd.innerHTML = ''; return; }
   if (AU.id === AU_MAINT) { auMaintHead(hd); return; }
+  if (AU.id === AU_SYSJOBS) { auSysJobsHead(hd); return; }
   const row = a && (AU.list || []).find(x => x.id === a.id);
   const name = a?.name || row?.name || '';
   const seg = ['flow', 'runs'].map(v => `<a role="tab" href="${auHref(AU.id, v)}" aria-selected="${AU.view === v}">${v === 'flow' ? 'Flow' : 'Runs'}</a>`).join('');
@@ -345,6 +352,7 @@ function auDrawPane() {
   const pane = AU.root.querySelector('.au-pane');
   if (!AU.id) { pane.innerHTML = ''; return; }
   if (AU.id === AU_MAINT) { auMaintPane(pane); return; }
+  if (AU.id === AU_SYSJOBS) { auSysJobsPane(pane); return; }
   if (!AU.cur) { pane.innerHTML = '<p class="muted au-pad">Loading…</p>'; return; }
   const top = pane.scrollTop;
   if (AU.view === 'runs') auRunsDraw(pane); else pane.innerHTML = auFlowHTML(AU.cur);

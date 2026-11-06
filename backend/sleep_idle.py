@@ -61,7 +61,7 @@ STREAM = "/api/v2/events"        # an open stream says nothing about a person be
 SENDS = {"slack_posts": "state IN ('ready','retry','rate_limited')",
          "webhook_sends": "state IN ('ready')",
          "personal_alerts": "state='pending'"}
-NO_KEY = "Connect the Tico Gateway in Settings > Gateway first: Sleep when idle asks Tico with its key."
+NO_KEY = "Connect the Tico Gateway in Settings > Models first: Sleep when idle asks Tico with its key."
 NOT_HOSTED = "Sleep when idle is only for servers Tico hosts."
 now = time.time                  # tests' controlled clock
 

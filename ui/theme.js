@@ -37,8 +37,8 @@ try { performance.mark('tico:head'); } catch { /* no User Timing */ }
   }, ready);
   if (document.readyState === 'loading') addEventListener('DOMContentLoaded', check, {once: true}); else check();
 })();
-// The sidebar as this browser last left it, so the first paint is the rail that stays (index.html): Library open unless
-// folded here, Rules folded unless opened here, each open on its own pages (ui/app/redesign.js rdLibSync, the same keys),
+// The sidebar as this browser last left it, so the first paint is the rail that stays (index.html): Company and Library
+// open unless folded here, Rules folded unless opened here, each open on its own pages (ui/app/redesign.js rdLibSync, the same keys),
 // the Team section's fold, and Finance and Finish setup as the last answer for whoever signed in here last said
 // (redesign.js rdNavShow, which corrects them once this visit's answer is in, and forgets them for anyone else and on
 // sign-out). The app's code keeps each mark with its row from then on.
@@ -46,6 +46,7 @@ try { performance.mark('tico:head'); } catch { /* no User Timing */ }
   const root = document.documentElement, hash = location.hash.split('?')[0];
   const read = key => { try { return localStorage.getItem(key); } catch { return null; } };
   const under = base => hash === base || hash.startsWith(base + '/');
+  root.classList.toggle('nav-co-shut', read('tico.nav.company') === 'closed' && !['#/strategy', '#/growth', '#/finance'].some(under));
   root.classList.toggle('nav-lib-shut', read('tico.nav.library') === 'closed' && !['#/docs', '#/meetings', '#/library'].some(under));
   root.classList.toggle('nav-rules-open', read('tico.nav.rules') === 'open' || under('#/rules'));
   // The Team section folded here (ui/app/sidebar.js renderNavSections).

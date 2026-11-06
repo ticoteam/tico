@@ -82,7 +82,7 @@ def _prefix(address, relay_id):
         return ""
     return f"https://{parts.netloc}" + "/".join(segments[:segments.index(relay_id, len(segments) - 2) + 1])
 WAKE_URL_MAX = 2000
-NO_KEY = "Connect the Tico Gateway in Settings > Gateway first: an address through Tico Gateway needs its key."
+NO_KEY = "Connect the Tico Gateway in Settings > Models first: an address through Tico Gateway needs its key."
 now = time.time                  # tests' controlled clock
 
 
@@ -674,7 +674,7 @@ class HookRelay:
         try:
             return link.call(method, path, body, idempotency)
         except Stop:
-            raise Problem("gateway", "The Tico Gateway does not accept this server's key. Check it in Settings > Gateway.",
+            raise Problem("gateway", "The Tico Gateway does not accept this server's key. Check it in Settings > Models.",
                           409) from None
         except Failed as failed:
             if refused and failed.code == refused[0]:

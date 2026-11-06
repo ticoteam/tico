@@ -147,7 +147,7 @@ call went to it. People who manage the webhook read the whole body.
 
 Before a bot gets a task or turn from a call, Tico's [screening](permissions.md#screening) checks the call's text for a prompt
 injection. A possible one reaches the bot with a warning line on top. At Hold, a likely one is held: the task goes to a
-person titled `Held: ...`, and handing it to the bot releases it. Settings → System → Screening sets this per door
+person titled `Held: ...`, and handing it to the bot releases it. Settings → Security → Screening sets this per door
 (Warn by default); it fails open.
 
 ### Who may do what
@@ -247,7 +247,7 @@ hub trigger relay create github
 
 It looks like `https://hooks.tico.dev/hr_<16 characters>/<secret>`, and like the first address it is shown once.
 `hub trigger relay rotate github` replaces it and `hub trigger relay delete github` removes it. The webhook's own address keeps
-working beside it. It needs the Tico Gateway connected in Settings → Gateway ([Tico AI Gateway](ai-gateway.md)).
+working beside it. It needs the Tico Gateway connected in Settings → Models ([Tico AI Gateway](ai-gateway.md)).
 
 - Your server collects the calls every 15 seconds and treats each as if the sender had posted it here. Signature checks,
   duplicates, routines and rules behave the same. The hourly cap does not apply to them.

@@ -1,12 +1,10 @@
 # Navigation
 
 The current paths in Tico. Settings is under your email and opens on General; each tab has its own address,
-shown in the address bar while the tab is open (`#/settings/people`, `#/settings/gateway`), to bookmark or share, and a tab you can't see opens General with **That page is for admins**.
+shown in the address bar while the tab is open (`#/settings/people`, `#/settings/models`), to bookmark or share, and a tab you can't see opens General with **That page is for admins**.
 Tools is in the sidebar.
 Controls appear when your rights allow the action. A card you can read but cannot change names who can.
 For example, Repositories says **Ask Ana Rivera to connect GitHub** when Ana owns the team.
-
-**Picks and services** opens Gateway. **Key and connection** opens Models.
 
 | To | Open |
 |---|---|
@@ -14,7 +12,7 @@ For example, Repositories says **Ask Ana Rivera to connect GitHub** when Ana own
 | Talk to a bot about one task | Bot's Home → tap the task's row ([Sessions](sessions.md)) |
 | See or link a task's sessions | Task → Sessions +; ⋯ → Copy session ID |
 | Add or edit a Routine | Automations → New automation ([Routines](routines.md)) |
-| See what Tico runs on its own | Settings → System → What Tico runs on its own ([System routines](system-routines.md)) |
+| See what Tico runs on its own | Automations → System jobs ([System routines](system-routines.md)) |
 | Receive a webhook, or send events out | Settings → Webhooks → Incoming or Outgoing ([Webhooks](webhooks.md)) |
 | Keep webhooks while the server is off | Settings → Webhooks → Through Tico Gateway |
 | Stop a hosted server when idle | Settings → Computers → Sleep when idle ([Account](account.md#sleep-when-idle)) |
@@ -26,7 +24,7 @@ For example, Repositories says **Ask Ana Rivera to connect GitHub** when Ana own
 | Add a subscription (Connect or paste) and give it to computers | Settings → Models → Add subscription; then Settings → Computers ([Subscriptions](computers.md#subscriptions)) |
 | Sign a computer in to an AI tool | Settings → Computers → open a computer → Connections ([Computers](computers.md)) |
 | Change company turn limits | Settings → Models → Limits |
-| Check problems and recovery | Settings → Health |
+| Check problems and recovery | Settings → General → Health → Details (`#/settings/health`) |
 | Store a Credential and grant it | Tools → Credentials → Add credential; then Access → Grant access |
 | Connect or review a Tool | Tools; Slack channels are under Tools → Slack channels |
 | Add or manage people and member rules | Settings → People |
@@ -40,15 +38,15 @@ For example, Repositories says **Ask Ana Rivera to connect GitHub** when Ana own
 | Find a bot, human or page | ⌘K, or Search in the sidebar: its icon at the end of the **Tico Assistant** row, or its own row on the Assistant page, during setup and where no person has loaded (phone: the Search tab while Threads is off, else in More) |
 | Find a file or page any bot made | Library → Files (`#/library/files`); search finds text inside ([Files](files.md#library--files)) |
 | See every tool and connection, who uses it and its status | Tools (`#/tools`) ([Connect tools](connect-tools.md#tools-list)) |
-| Arrange your own landing page | Overview → Mine (`#/home`) ([Overview](overview.md#my-dashboard)) |
-| See rules or goals on the team chart, by bot | Overview → Graph (`#/overview/graph`, `?view=goals` for goals) ([Overview](overview.md#graph)) |
+| Arrange your own landing page | Company → Mine (`#/home`) ([Company](overview.md#my-dashboard)) |
+| See rules or goals on the team chart, by bot | Company → Graph (`#/overview/graph`, `?view=goals` for goals) ([Company](overview.md#graph)) |
 | Open a page full size | Tap its card, or `#/page/<id>` ([Pages](pages.md)) |
-| Read or write the team's strategy, publish a version | Strategy (`#/strategy`); the owner writes and publishes, the Strategy Bot proposes ([Strategy](strategy.md)); Lenses on that page run a framework against it ([Lenses](lenses.md)) |
+| Read or write the team's strategy, publish a version | Company → Strategy (`#/strategy`); the owner writes and publishes, the Strategy Bot proposes ([Strategy](strategy.md)); Lenses on that page run a framework against it ([Lenses](lenses.md)) |
 | See the market map, or ask the Librarian about the market | Strategy → Market (`#/strategy/market`; `#/market` redirects there) |
-| See growth numbers and their sources, or marketing tasks | Growth (`#/growth`; Sources is a link on the page, or in Settings for the owner and admins) ([Growth](growth.md)). Marketing tasks are on the Tasks page, type Marketing |
+| See growth numbers and their sources, or marketing tasks | Company → Growth (`#/growth`; Sources is a link on the page, or in Settings for the owner and admins) ([Growth](growth.md)). Marketing tasks are on the Tasks page, type Marketing |
 | Review goals and KPIs | Goals; a goal's **Bet** picker links it to a strategy bet |
-| See the Company page, or share it | Overview → Share (`#/overview/company-page`); the share icon has transparency, the address and readers. Owners and admins only ([Company page](company-page.md)) |
-| Change the Company page: editions, disclosure, stats, audiences, accent, logo | Overview → Share → Manage (`#/company-page`) |
+| See the Company page, or share it | Company → Share (`#/overview/company-page`); the share icon has transparency, the address and readers. Owners and admins only ([Company page](company-page.md)) |
+| Change the Company page: editions, disclosure, stats, audiences, accent, logo | Company → Share → Manage (`#/company-page`) |
 | Message the Tico team | **?** beside Search (phone: More drawer, beside Search), or any `#/support` link |
 
 All four system bots appear as **Built-in** in Settings > Bots. Neither Assistant nor BotOps has a rail entry: **Tico Assistant**

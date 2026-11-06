@@ -61,7 +61,7 @@ function route(hash = location.hash) {
   if (!S.route.startsWith('#/replay')) replayStop();
   if (!/^#\/computers\/[^/?]+\/screen$/.test(S.route)) screenStop();
   if (!/^#\/computers\/[^/?]+\/performance$/.test(S.route)) perfStop();
-  if (!(S.route === UPDATES || S.route.startsWith(UPDATES + '?'))) { if (UPD) { UPD.io?.disconnect(); void updFlush(UPD); UPD = null; } updcStop(); }
+  if (!(S.route === UPDATES || S.route.startsWith(UPDATES + '?'))) { if (UPD) { UPD.io?.disconnect(); void updFlush(UPD); UPD = null; } }
   if (!S.route.startsWith('#/bot/')) botStopped();
   if (!S.route.startsWith('#/seat/')) recruitStop();
   threadsSync();      // the sidebar's Threads link and the rail's lists (ui/app/threads.js)
@@ -116,7 +116,7 @@ function route(hash = location.hash) {
   }
   else if (S.route === UPDATES || S.route.startsWith(UPDATES + '?')) pageUpdates();
   else if (S.route === SETTINGS) pageSettings();
-  else if (S.route === HELP) { location.replace(OVERVIEW); window.supportOpen?.(); return; }   // Help is the Support pop-up, over Overview
+  else if (S.route === HELP) { location.replace(OVERVIEW); window.supportOpen?.(); return; }   // Help is the Support pop-up, over Company
   else if (S.route === '#/getting-started') { location.replace(TASKS); return; }   // the checklist is gone
   else if (S.route === '#/repositories') { SETTINGS_TAB = 'repos'; location.replace(SETTINGS); return; }   // Settings > Repositories
   // Settings > Webhooks (it was Triggers); #/settings/webhooks/outgoing and /gateway open that tab.
@@ -129,18 +129,21 @@ function route(hash = location.hash) {
   // Settings > Inboxes and the tabs it replaced are Tools pages now: ui/app/tools.js toolsRoute redirects them first.
   else if (S.route === '#/settings/roadmap') { SETTINGS_TAB = 'tasks'; ROADMAP_SETTINGS_REVEAL = true; location.replace(SETTINGS); return; }   // Health's roadmap suggestions fix
   else if (S.route === '#/settings/storage') { SETTINGS_TAB = 'storage'; location.replace(SETTINGS); return; }   // Health's Set up S3
-  // Settings > System (it was Rules, before that Routines): Tico's own jobs. Wake rules and routines are Automations now.
-  else if (['#/settings/rules', '#/settings/routines'].includes(S.route.split('?')[0])) { SETTINGS_TAB = 'system'; location.replace(SETTINGS); return; }
+  // Settings > System (it was Rules, before that Routines): Tico's own jobs are Automations' System jobs now.
+  else if (['#/settings/rules', '#/settings/routines'].includes(S.route.split('?')[0])) { location.replace(settingsMovedOut('system')); return; }
   else if (S.route === '#/settings/people') { SETTINGS_TAB = 'people'; location.replace(SETTINGS); return; }   // setup's people to invite
   else if (S.route === '#/settings/computers') { SETTINGS_TAB = 'devices'; location.replace(SETTINGS); return; }
   else if (['#/settings/subscriptions', '#/subscriptions'].includes(S.route)) { SETTINGS_TAB = 'models'; location.replace(SETTINGS); return; }   // Subscriptions are on Models
-  // Old links and bookmarks to the Strategy Bot's settings address still open its card (Settings > System).
+  // Old links and bookmarks to the Strategy Bot's settings address still open its card (its bot page's Settings).
   else if (S.route === '#/settings/ceo') { location.replace(SETTINGS + '/strategy-bot'); return; }
   // Every other #/settings/<tab>[/<card>] opens that tab, and the card when named (the settings catalogue's links,
   // backend/settings_entries.py). settingsShow maps old names and sections and puts the tab's own address back in
-  // the bar, so a tab can be bookmarked and shared: #/settings/gateway, #/settings/models, …
+  // the bar, so a tab can be bookmarked and shared: #/settings/people, #/settings/models, …
   else if (/^#\/settings\/[a-z-]+(?:\/[a-z0-9-]+)?\/?(\?.*)?$/.test(S.route)) {
     const [path, query] = S.route.slice(11).split('?'), [tab, card] = path.split('/');
+    // A System card (or the tab) that moved out of Settings opens where it went; Releases reads its bot first.
+    const moved = settingsMovedOut(tab, card);
+    if (moved) { if (moved !== 'wait') location.replace(moved); return; }
     if (tab === 'history') settingsHistoryAddress(query);   // History's view and filters (ui/app/settings-history.js)
     SETTINGS_REVEAL = card ? '#' + card : '';
     // The Models card and Company turn levels moved from Computers to Models.

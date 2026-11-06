@@ -315,7 +315,7 @@ pub fn plain_error(text: &str) -> String {
         "out_of_credit" => {
             "Tico models are paused: this company is out of credit. Your bots use their other models until credit is added (out_of_credit)".into()
         }
-        "unknown_model" => "Tico AI Gateway: this model isn't offered; Settings > Gateway lists the picks (unknown_model)".into(),
+        "unknown_model" => "Tico AI Gateway: this model isn't offered; Settings > Models lists the picks (unknown_model)".into(),
         "no_route" => "Tico AI Gateway: no Tico route for this request (no_route)".into(),
         "upstream_unavailable" => "Tico AI Gateway is unavailable, try again (upstream_unavailable)".into(),
         _ => {
@@ -1676,7 +1676,7 @@ mod tests {
             (401, "unknown_key", "Unknown gateway key.", "Tico AI Gateway: key not recognised (api key invalid: unknown_key)"),
             (429, "rate_limited", "Too many refused keys from this address. Try again later.", "Tico AI Gateway: rate limited; retrying after the Gateway's requested wait (rate_limited)"),
             (429, "out_of_credit", "Tico models are paused: this company is out of credit.", "Tico models are paused: this company is out of credit. Your bots use their other models until credit is added (out_of_credit)"),
-            (400, "unknown_model", "Unknown model. Tico models: tico-cheap-1.0, tico-mid-1.0, tico-power-1.0.", "Tico AI Gateway: this model isn't offered; Settings > Gateway lists the picks (unknown_model)"),
+            (400, "unknown_model", "Unknown model. Tico models: tico-cheap-1.0, tico-mid-1.0, tico-power-1.0.", "Tico AI Gateway: this model isn't offered; Settings > Models lists the picks (unknown_model)"),
             (400, "unsupported_field", "Tico models here take text and tools only: no images, audio, files or more than one choice.", "Tico AI Gateway refused the request as sent: Tico models here take text and tools only: no images, audio, files or more than one choice. (unsupported_field)"),
             (400, "bad_request", "The request is not a chat completion the gateway can send.", "Tico AI Gateway refused the request as sent: The request is not a chat completion the gateway can send. (bad_request)"),
             (400, "upstream_refused", "The model refused this request as it was sent.", "Tico AI Gateway refused the request as sent: The model refused this request as it was sent. (upstream_refused)"),

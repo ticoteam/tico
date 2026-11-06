@@ -1,4 +1,5 @@
-/* ui/app/settings-release.js — Settings > System: the Releases, Task Manager and Screening cards, and the board's Release now
+/* ui/app/settings-release.js — The built-in bots' cards on their bot page's Settings (Releases on the Release Manager's,
+   Task Manager's and the Strategy Bot's), Settings > Security's Screening card, and the board's Release now
    Classic script: its globals are shared with the other files under ui/app/, loaded in the order index.html lists them. */
 'use strict';
 
@@ -148,7 +149,7 @@ function taskManagerHTML(v) {
     </div>`).join('');
   return `<div class="tm-head"><span class="sysr-state" data-tm-state>${state}</span>
       ${last ? `<span class="muted">Last run <span class="tnum" title="${esc(fmt(last))}">${esc(ago(last))}</span></span>` : '<span class="muted">Not run yet</span>'}
-      ${toggle}<a class="ghost" href="#/bot/${encodeURIComponent(v.bot)}">Open</a></div>
+      ${toggle}${BOT?.slug === v.bot ? '' : `<a class="ghost" href="#/bot/${encodeURIComponent(v.bot)}">Open</a>`}</div>
     <div class="tm-list">${rows}</div><p class="settings-cell-note" role="status" data-tm-status></p>`;
 }
 function taskManagerPaint() {
@@ -175,7 +176,7 @@ async function renderTaskManagerCard() {
 }
 
 // Screening (backend/screening.py): a switch per detector (patterns, decision model), a mode per door outside text comes
-// in by, a Test of the built-in samples, and the newest holds and warnings. Owners and admins only; the card stays hidden for anyone else.
+// in by, a Test of the built-in samples, and the newest holds and warnings. Owners and admins only: Security is their tab.
 let SCREENING_VIEW = null, SCREENING_TEST = null;
 const SCREENING_MODES = {off: 'Off', warn: 'Warn', hold: 'Hold'};
 const screeningScore = s => (typeof s === 'number' ? `${Math.round(s * 100)}%` : '—');
@@ -237,6 +238,26 @@ function screeningPaint() {
 }
 async function renderScreeningCard() {
   if (!$('#set-screening')) return;
-  try { SCREENING_VIEW = await get('/v2/screening'); } catch { return; }   // not an admin: the card stays hidden
+  try { SCREENING_VIEW = await get('/v2/screening'); }
+  catch (e) { const el = $('#set-screening'); if (el && !SCREENING_VIEW) el.innerHTML = `<div class="empty">Couldn't load screening: ${esc(e.message || 'try again')}</div>`; return; }
   if (SCREENING_VIEW?.modes) screeningPaint();
+}
+
+// A built-in bot's own card on its page's Settings tab (ui/app/bot-page.js), drawn only on that bot's page: the Task
+// Manager's checks, the Strategy Bot's levels (the owner's alone), and Releases on whichever bot the release schedule
+// names or finds as its Release Manager. Each keeps the permissions it had in Settings: the server's answers decide.
+function botBuiltinCardsHTML(slug) {
+  if (slug === 'task-manager') return '<section class="card" id="set-task-manager-card" hidden><header><h2>Task Manager</h2><span class="pill">Built-in</span></header><div id="set-task-manager"></div></section>';
+  if (slug === 'goal-manager' && settingsStrategyBotShown()) return `<section class="card" id="set-strategy-bot-card"><header><h2>${esc(strategyBotName())}</h2><span class="pill">Built-in</span></header>
+    <div id="set-strategy-bot">${skelRows(3, {card: true, dot: false})}</div></section>`;
+  return '';
+}
+async function botBuiltinCardsMount(slug) {
+  if (slug === 'task-manager') void renderTaskManagerCard();
+  if (slug === 'goal-manager') void renderSettingsStrategyBot();
+  const host = $('#bot-builtin-cards');
+  try { await releaseScheduleLoad(); } catch { return; }   // a team with no schedule to read has no Releases card
+  if (BOT?.slug !== slug || !host?.isConnected || (RELEASE_VIEW?.bot || RELEASE_VIEW?.release_manager) !== slug) return;
+  if (!$('#set-release-card')) host.insertAdjacentHTML('afterbegin', '<section class="card" id="set-release-card" hidden><header><h2>Releases</h2></header><div id="set-release"></div></section>');
+  void renderReleaseCard();
 }

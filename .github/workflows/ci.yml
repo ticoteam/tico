@@ -35,7 +35,7 @@ concurrency:
 jobs:
   # What to validate: the requested candidate against the requested published release.
   candidate:
-    runs-on: runs-on=${{ github.run_id }}/runner=2cpu-linux-x64/extras=s3-cache
+    runs-on: runs-on=${{ github.run_id }}/volume=30gb:gp3:125mbs:3000iops/runner=2cpu-linux-x64/extras=s3-cache
     outputs:
       sha: ${{ steps.pick.outputs.sha }}
       previous: ${{ steps.pick.outputs.previous }}
@@ -54,7 +54,7 @@ jobs:
 
   # The runner and screen relay for Linux, built once from the candidate, reusing compiled dependencies from a cache only
   # main writes. Linux builds are static (musl): the images, Linux checkouts and
-  # the gate all run these same files. On-demand VMs, so an interruption never leaves a half-built release.
+  # the gate all run these same files. Spot VMs: an interrupted build is rerun automatically and pushes by digest again.
   native-linux:
     needs: candidate
     strategy:
@@ -62,7 +62,7 @@ jobs:
         include:
           - {arch: x64, name: linux-x86_64, target: x86_64-unknown-linux-musl}
           - {arch: arm64, name: linux-arm64, target: aarch64-unknown-linux-musl}
-    runs-on: runs-on=${{ github.run_id }}/runner=4cpu-linux-${{ matrix.arch }}/spot=false
+    runs-on: runs-on=${{ github.run_id }}/volume=30gb:gp3:125mbs:3000iops/runner=4cpu-linux-${{ matrix.arch }}
     timeout-minutes: 20
     steps:
       - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
@@ -130,7 +130,7 @@ jobs:
         image: [tico, tico-runner, tico-updater]
         platform: [amd64, arm64]
     # Each architecture builds natively: emulating npm and pip installs is slow and flaky.
-    runs-on: runs-on=${{ github.run_id }}/runner=4cpu-linux-${{ matrix.platform == 'arm64' && 'arm64' || 'x64' }}/spot=false/extras=s3-cache
+    runs-on: runs-on=${{ github.run_id }}/volume=30gb:gp3:125mbs:3000iops/runner=4cpu-linux-${{ matrix.platform == 'arm64' && 'arm64' || 'x64' }}/extras=s3-cache
     timeout-minutes: 30
     permissions:
       actions: read   # watches this run's native-linux build
@@ -217,8 +217,9 @@ jobs:
       contents: read
       actions: read   # product watches this run's image builds; every part watches the Linux binary build
     # The gate needs 35 GiB free (Docker images, browsers, Rust targets); the default RunsOn disk leaves about 10.
-    # On demand, not Spot: a reclaimed VM would fail the one validation a release waits on.
-    # Every part runs on 4 vCPUs (common on-demand sizes start fast); more shards, not bigger VMs, for speed.
+    # Spot, like every RunsOn job: RunsOn reruns a part whose VM is reclaimed (twice at most), and AWS does not bill a
+    # Spot VM reclaimed in its first hour. Disks use the free gp3 speed (125 MiB/s).
+    # Every part runs on 4 vCPUs; more shards, not bigger VMs, for speed.
     timeout-minutes: 45
     strategy:
       fail-fast: false
@@ -259,7 +260,7 @@ jobs:
           - {name: python-28, part: python, shard: '28/28', workers: '4', runner: 4cpu-linux-x64, binaries: 'no'}
           # The Linux desktop app updating from a company feed; on its own VM, beside the longer product part.
           - {name: desktop, part: desktop, shard: '', workers: '2', runner: 4cpu-linux-x64}
-    runs-on: runs-on=${{ github.run_id }}/runner=${{ matrix.runner }}/volume=80gb/spot=false/extras=s3-cache
+    runs-on: runs-on=${{ github.run_id }}/runner=${{ matrix.runner }}/volume=80gb:gp3:125mbs:3000iops/extras=s3-cache
     env:
       CANDIDATE_SHA: ${{ needs.candidate.outputs.sha }}
       PREVIOUS_RELEASE: ${{ needs.candidate.outputs.previous }}
@@ -496,7 +497,7 @@ jobs:
   factory-sim:
     needs: candidate
     name: factory-sim-${{ matrix.shard }}
-    runs-on: runs-on=${{ github.run_id }}/runner=4cpu-linux-x64/spot=false/extras=s3-cache
+    runs-on: runs-on=${{ github.run_id }}/volume=30gb:gp3:125mbs:3000iops/runner=4cpu-linux-x64/extras=s3-cache
     timeout-minutes: 20
     strategy:
       fail-fast: false

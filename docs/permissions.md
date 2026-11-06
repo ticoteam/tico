@@ -195,7 +195,7 @@ release moved into its group's Read once on upgrade: whoever both the page and t
 audience when Read was Everyone), never more; See was left as it was. A bot pins only its own pages and cards, to its own
 sidebar or a task it holds or asked for; a person who manages a bot may pin another bot's page to its sidebar. A page a
 person pins to the Dashboard or a team page may be read by that place's audience, and a private task's file is never
-pinned there ([Overview](overview.md), [Files](files.md)). BotOps does all of this with the rights of the person who
+pinned there ([Company](overview.md), [Files](files.md)). BotOps does all of this with the rights of the person who
 asked (`hub card`, `hub pin`).
 
 ## History's Log
@@ -270,8 +270,8 @@ Create product repositories is a wider reach than bot repositories, so:
   bot's Instructions.
 - **The bot gets write to what it made, and the Owner is told** in a notice, for example *Head of Engineering created
   private repo tico-services (acme/tico-services). Head of Engineering has write access to it.* Granting write ticks the
-  repository for the team, so bots set to **All ticked repos** reach it too; the notice names them. A creator on **All
-  ticked repos** with read access moves to **Chosen repos**, keeping read on every repository it reached, so its write
+  repository for the team, so bots set to **All repos in use** reach it too; the notice names them. A creator on **All
+  repos in use** with read access moves to **Chosen repos**, keeping read on every repository it reached, so its write
   stays on what it made; the notice says so, and a repository ticked later reaches it only once chosen. Every creation is
   recorded as `github.product_repo_created` with the bot as the actor, and the grant as `bot.repos_changed`.
 
@@ -297,7 +297,7 @@ An incoming webhook (a trigger) is an address outside senders post to ([Webhooks
 ## Screening
 
 Text from outside Tico can carry instructions meant for the bot that reads it (a prompt injection). Screening checks that
-text at the doors it comes in by, before a bot reads it. Change it in **Settings → System → Screening** (owner or admin).
+text at the doors it comes in by, before a bot reads it. Change it in **Settings → Security → Screening** (owner or admin).
 
 | Door | What is checked | Default |
 |---|---|---|

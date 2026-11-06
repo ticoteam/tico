@@ -236,6 +236,13 @@ async function openAutomations(browser, {viewport = PHONE, hash = '#/automations
     let m0;
     if (method !== 'GET') writes.push({method, path: p, body});
 
+    // System jobs beside Maintenance (ui/app/settings-recurring.js draws them): two of Tico's own jobs.
+    if (db.maint && p === '/api/v2/system-routines' && method === 'GET') {
+      const job = (key, name, extra) => ({key, name, what: name + '.', schedule: 'Every hour', when: ['every hour'], then: [name.toLowerCase()],
+        department: {name: 'Engineering'}, records: true, last: null, next: null, presets: [], search: name.toLowerCase(), ...extra});
+      return json({can_create_task_rule: false, jobs: [job('stale_review', 'Stale ticket review', {switch: true, on: true, can_change: owner, controllable: true}),
+        job('stall_checks', 'Stall checks', {needed: true, schedule: 'Every minute', when: ['every minute']})]});
+    }
     if (db.maint && p.startsWith('/api/v2/maintenance')) {
       const mt = db.maint;
       if (method !== 'GET' && !owner) return refuse(403, 'forbidden', 'Only an owner or an admin changes Maintenance');

@@ -1,4 +1,4 @@
-// The Company page (ui/app/company-page.js) against a fake hub: Acme (acme.example). Overview's tab shows owners and admins
+// The Company page (ui/app/company-page.js) against a fake hub: Acme (acme.example). Company's Share tab shows owners and admins
 // the page in a sandboxed frame, a share panel and Manage; a member has no tab and no way in by address. The section: Transparency warns before Open and says what stops being visible before
 // anything is taken away, and sends nothing on Cancel. The queue puts a held edition first with its reason. Approve shows
 // only to the person an approval is addressed to and goes through the approvals API. Override needs a note. Text from a
@@ -212,12 +212,12 @@ async function shotPart(page, id, name) {
     await close();
     // Overview as it always was: no tab, no way in by address, and search doesn't offer it.
     const tab = await open(browser, {viewer: 'erin', hash: '#/overview', ready: false});
-    assert.deepEqual(await tabLabels(tab.page), ['Mine', 'Company', 'Campus', 'Graph']);
+    assert.deepEqual(await tabLabels(tab.page), ['Mine', 'Dashboard', 'Campus', 'Graph']);
     assert.equal(await tab.page.evaluate(() => searchEntries().some(x => x.label === 'Share')), false);
     await tab.page.evaluate(h => { location.hash = h; }, '#/overview/company-page');
     await tab.page.locator('#cp-tab-body .empty-state').waitFor();
     assert.equal(await tab.page.locator('.cp-frame, [data-cp-preview], [data-cp-share], [data-cp-manage]').count(), 0, 'no frame, no controls');
-    assert.deepEqual(await tabLabels(tab.page), ['Mine', 'Company', 'Campus', 'Graph']);
+    assert.deepEqual(await tabLabels(tab.page), ['Mine', 'Dashboard', 'Campus', 'Graph']);
     assert.deepEqual(tab.hub.reads, [], 'a member asks the server for nothing here');
     assert.deepEqual(tab.hub.previews, []);
     assert.deepEqual(tab.errors, []);
@@ -230,7 +230,7 @@ async function shotPart(page, id, name) {
     assert.match(await page.locator('#cp-page').innerText(), /Owners and admins only/);
     await page.evaluate(h => { location.hash = h; }, '#/overview/company-page');
     await page.locator('#cp-tab-body .empty-state').waitFor();
-    assert.deepEqual(await tabLabels(page), ['Mine', 'Company', 'Campus', 'Graph', 'Share']);
+    assert.deepEqual(await tabLabels(page), ['Mine', 'Dashboard', 'Campus', 'Graph', 'Share']);
     assert.equal(await page.locator('.cp-frame').count(), 0, 'no frame');
     assert.equal(await page.locator('.cp-tab-acts').isVisible(), false, 'no controls');
     assert.deepEqual(hub.previews, []);
@@ -242,7 +242,7 @@ async function shotPart(page, id, name) {
     const {page, hub, errors, natives, close} = await open(browser);
     await loaded(page);
     assert.equal(await page.locator('a[data-nav="company-page"]').count(), 0, 'no sidebar link');
-    assert.ok(await page.locator('#side a[data-nav="overview"]').evaluate(a => a.classList.contains('cur')), 'Overview stays lit');
+    assert.ok(await page.locator('#side a[data-nav="overview"]').evaluate(a => a.classList.contains('cur')), 'Company stays lit');
     const parts = await page.locator('#cp-page > section').evaluateAll(s => s.map(x => x.id));
     assert.deepEqual(parts, ['cp-transparency', 'cp-editions', 'cp-audiences', 'cp-disclosure', 'cp-stats', 'cp-readers', 'cp-preview'], 'the parts, in order');
 
@@ -636,14 +636,14 @@ async function shotPart(page, id, name) {
   // Overview's tab: the page in a sandboxed frame, the share panel, Manage and back.
   {
     const {page, hub, errors, natives, close} = await open(browser, {hash: '#/overview', theme: 'dark', ready: false});
-    assert.deepEqual(await tabLabels(page), ['Mine', 'Company', 'Campus', 'Graph', 'Share']);
+    assert.deepEqual(await tabLabels(page), ['Mine', 'Dashboard', 'Campus', 'Graph', 'Share']);
     assert.equal(await page.evaluate(() => searchEntries().find(x => x.label === 'Share')?.href), '#/overview/company-page', 'search finds it');
     await page.locator('.dash-tabs a', {hasText: 'Share'}).click();
     const frame = page.locator('iframe.cp-frame');
     await frame.waitFor();
     assert.equal(await frame.getAttribute('sandbox'), 'allow-scripts', 'the frame gets no origin');
     assert.match(await frame.getAttribute('src'), /\/api\/v2\/company-page\/preview\?audience=a-board&theme=dark$/, 'the first audience on, in the app\'s theme');
-    assert.ok(await page.locator('#side a[data-nav="overview"]').evaluate(a => a.classList.contains('cur')), 'Overview stays lit');
+    assert.ok(await page.locator('#side a[data-nav="overview"]').evaluate(a => a.classList.contains('cur')), 'Company stays lit');
     assert.equal(await page.locator('.dash-tabs a.cur').innerText(), 'Share');
     const pick = page.locator('.cp-tab-acts select');
     await pick.selectOption('a-pub');
@@ -700,7 +700,7 @@ async function shotPart(page, id, name) {
     await page.locator('#cp-page').waitFor();
     assert.equal(await page.evaluate(() => location.hash), '#/company-page');
     await page.locator('#cp-readers [data-cp-reader="r1"]').waitFor();
-    assert.ok(await page.locator('#side a[data-nav="overview"]').evaluate(a => a.classList.contains('cur')), 'Overview stays lit');
+    assert.ok(await page.locator('#side a[data-nav="overview"]').evaluate(a => a.classList.contains('cur')), 'Company stays lit');
     await page.locator('[data-cp-view]').click();
     await frame.waitFor();
     assert.match(await frame.getAttribute('src'), /audience=a-pub/, 'the audience chosen holds');

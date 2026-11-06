@@ -1692,7 +1692,7 @@
     },
     "/api/v2/assistant/messages": {
       "post": {
-        "summary": "Say something to the Assistant. It is a turn of the assistant bot, shown as `execution` on GET /api/v2/assistant. `place: updates` (the Updates chat) is handed the recent updates the caller may read",
+        "summary": "Say something to the Assistant. It is a turn of the assistant bot, shown as `execution` on GET /api/v2/assistant. `place: updates` is handed the recent updates the caller may read",
         "operationId": "sendAssistantMessage",
         "requestBody": {
           "content": {

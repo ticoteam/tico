@@ -8,11 +8,13 @@
 function searchEntries() {
   const out = [];
   for (const a of document.querySelectorAll('#side .nav-link[data-nav]')) {
-    if (a.hidden || a.closest('[hidden]:not(#account-menu)')) continue;   // a closed account menu still lists its pages
+    // A closed account menu or a folded rail group still lists its pages.
+    if (a.hidden || a.closest('[hidden]:not(#account-menu):not(.rd-lib)')) continue;
     const label = [...a.childNodes].filter(n => n.nodeType === 3).map(n => n.textContent).join('').trim();
-    out.push({kind: 'page', label, href: a.getAttribute('href'), icon: a.querySelector('.nav-icon')?.textContent || 'article'});
+    // data-alias: a page's old name still finds it (Company was Overview).
+    out.push({kind: 'page', label, alias: a.dataset.alias || '', href: a.getAttribute('href'), icon: a.querySelector('.nav-icon')?.textContent || 'article'});
   }
-  if (cpAllowed()) out.push({kind: 'page', label: 'Share', href: OVERVIEW_COMPANY, icon: 'newspaper'});   // a tab of Overview, with no link of its own
+  if (cpAllowed()) out.push({kind: 'page', label: 'Share', href: OVERVIEW_COMPANY, icon: 'newspaper'});   // a tab of Company, with no link of its own
   for (const e of shownEmps()) {
     // label is the plain name for matching and sorting; html is the same name as shown elsewhere, flag and all
     out.push({kind: 'bot', label: String(e.display_name || '').replace(TEMP_RE, ''), html: shownName(e), temp: isTempBot(e),

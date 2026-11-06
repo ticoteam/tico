@@ -300,6 +300,14 @@ tr:hover .sb-task-mark,.sb-task-mark:focus-visible,.sb-task-mark[aria-expanded=t
 .settings-role-guide summary{cursor:pointer;width:max-content}
 .settings-role-guide dl{display:grid;grid-template-columns:max-content minmax(0,1fr);gap:4px 14px;margin:8px 0 0}
 .settings-role-guide dt{color:var(--ink);font-weight:600}.settings-role-guide dd{margin:0}
+/* General's Health line (ui/health.js hlSummaryDraw) and the Health page's way back to General */
+.settings-health-row{display:flex;align-items:center;flex-wrap:wrap;gap:4px 10px;font-size:var(--t-base)}
+.settings-health-row .hl-alert{margin-left:-6px}
+.settings-health-counts,.settings-health-version{color:var(--muted)}
+.settings-health-fix{color:var(--wait-ink)}
+.settings-health-details{margin-left:auto;white-space:nowrap}
+.settings-back{display:inline-block;margin:0 0 10px;font-size:var(--t-sm);color:var(--muted);text-decoration:none}
+.settings-back:hover{color:var(--ink)}
 .settings-issues{margin-bottom:14px;border-color:color-mix(in srgb,var(--fail) 45%,var(--line))}
 .settings-issues>summary{display:flex;align-items:center;gap:7px;list-style:none;color:var(--ink);font-size:var(--t-md)}
 .settings-issues>summary::-webkit-details-marker{display:none}.settings-issues>summary .sub{margin-left:auto;font-weight:400}
@@ -550,38 +558,56 @@ dialog.access-editor .access-body{flex:1;min-height:0;overflow:auto}
 .theme-seg button{border:0;background:none;border-radius:999px;padding:4px 12px;font-size:var(--t-sm);font-weight:600;color:var(--muted);cursor:pointer}
 .theme-seg button:hover{color:var(--ink)}
 .theme-seg button[aria-checked=true]{background:var(--raised);color:var(--ink);box-shadow:0 1px 3px rgba(0,0,0,.18)}
-/* Settings > Repositories (ui/app/settings-repositories.js): one 28px row per repository, thin dividers */
+/* Settings > Repositories (ui/app/settings-repositories.js): In use, one 30px line per repository that opens in place;
+   Not in use, one line with a search until searched or opened */
 .repos-card>header{align-items:center;gap:var(--s2);margin-bottom:var(--s2)}
 .repos-card .spacer{flex:1}
 .repos-bots{display:inline-flex;align-items:center;gap:2px;font-size:var(--t-sm);color:var(--muted);cursor:pointer;white-space:nowrap}
-button.repos-small{padding:3px 9px;font-size:var(--t-sm)}
+button.repos-small{padding:3px 9px;font-size:var(--t-sm);line-height:18px;flex:none}
 .repos-line{margin:0;font-size:var(--t-base);color:var(--muted)}
 .repos-line a{color:var(--ink)}
-.repos-bar{display:flex;align-items:center;flex-wrap:wrap;gap:6px 10px;padding:0 0 var(--s2);border-bottom:1px solid var(--line)}
+.repos-bar{display:flex;align-items:center;flex-wrap:wrap;gap:6px 10px;padding:0 0 var(--s2)}
+.repos-bar>[data-field-err]{flex-basis:100%;margin:0}
 .repos-k,.brepo-k{font-size:var(--t-sm);color:var(--muted);white-space:nowrap}
-input[type=search].repos-filter{flex:0 1 220px;margin-left:auto;padding:4px 10px 4px 30px;font-size:var(--t-base);background-position:9px center}
+.repos-newbot{display:inline-flex;align-items:center;gap:8px;margin:0;min-width:0}
+.repos-newbot select{width:auto;max-width:100%;height:28px;padding:2px 26px 2px 8px;font-size:var(--t-sm)}
+.repos-new{display:grid;gap:6px;justify-items:start;margin:0 0 var(--s2);padding:var(--s2);border:1px solid var(--line);border-radius:var(--r-ctl)}
+.repos-new[hidden]{display:none}
+.repos-new-row{display:flex;gap:8px;width:100%;max-width:420px}
+.repos-new-row input{flex:1;min-width:0;height:28px;padding:2px 8px;font-size:var(--t-base)}
+.repos-h{display:flex;align-items:center;gap:6px;margin:var(--s2) 0 0;padding:4px 0;font-size:var(--t-label);font-weight:600;letter-spacing:var(--track-caps);text-transform:uppercase;color:var(--muted);border-bottom:1px solid var(--line)}
+.repos-n{font-weight:400;letter-spacing:0}
+button.repos-toggle{flex:none;margin:0;padding:4px 0;border:0;background:none;cursor:pointer;font-family:inherit}
+button.repos-toggle:hover{color:var(--ink)}
+.repos-off-head{display:flex;align-items:center;gap:10px;margin-top:var(--s2);border-bottom:1px solid var(--line)}
+.repos-off-head>.repos-h{border-bottom:0}
+input[type=search].repos-filter{flex:0 1 240px;width:auto;min-width:0;margin-left:auto;padding:3px 10px 3px 30px;font-size:var(--t-base);background-position:9px center}
+.repos-off-opts{display:flex;justify-content:flex-end;gap:12px;padding:4px 0;border-bottom:1px solid var(--line)}
 .repos-list,.brepo-list{list-style:none;margin:0;padding:0}
-.repos-list>.empty,.brepo-list>.empty{padding:var(--s2) 0}
-.repo-row{display:grid;grid-template-columns:minmax(0,1.1fr) 84px minmax(0,1.5fr) 92px;align-items:center;gap:10px;min-height:28px;padding:1px 0;border-bottom:1px solid var(--line);font-size:var(--t-base)}
+.repos-list>.empty,.brepo-list>.empty{padding:var(--s2) 0;color:var(--muted);font-size:var(--t-sm)}
+.repo-row{display:flex;flex-wrap:wrap;align-items:center;gap:0 8px;min-height:30px;border-bottom:1px solid var(--line);font-size:var(--t-base)}
 .repo-row:last-child{border-bottom:0}
+.repo-line{display:flex;flex:1;align-items:center;gap:6px;min-width:0;min-height:30px;margin:0;padding:0 2px;border:0;background:none;color:var(--ink);font:inherit;text-align:left}
+button.repo-line{cursor:pointer}
+button.repo-line:hover{background:var(--surface2)}
+.repo-nm{flex:0 1 auto;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.repo-row:not(.on) .repo-nm{color:var(--muted)}
+.repo-chev{flex:none;font-size:16px;width:16px;height:16px;color:var(--muted);transition:transform var(--dur-fast) var(--ease)}
+[aria-expanded=true]>.repo-chev{transform:rotate(90deg)}
 .repo-name{display:flex;align-items:center;gap:4px;min-width:0;color:var(--ink);cursor:pointer}
 .repo-name>span:not(.repo-tag){overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .repo-name input:disabled+span{cursor:default}
 .repo-org{color:var(--muted)}
-.repo-row:not(.on) .repo-name>span:not(.repo-tag){color:var(--muted)}
-.repo-row:not(.on) .repo-org{opacity:.8}
-.repo-tag{flex:none;font-size:var(--t-xs);padding:0 5px;border-radius:8px;background:var(--surface2);color:var(--muted)}
-.repo-branch{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:var(--muted);font-size:var(--t-sm);font-family:var(--mono)}
-.repo-setup{display:flex;align-items:center;gap:6px;min-width:0}
-.repo-setup input{flex:1;min-width:0;height:24px;padding:2px 6px;border-color:transparent;background:transparent;color:var(--muted);font-family:var(--mono);font-size:var(--t-sm)}
-.repo-setup input:hover:not([readonly]){border-color:var(--line)}
-.repo-setup input:focus{color:var(--ink);background:var(--surface)}
-.repo-setup input::placeholder{font-family:var(--sans);opacity:.45}
-.repo-setup input:hover::placeholder,.repo-setup input:focus::placeholder{opacity:.8}
-.repo-setup input[readonly]{background:transparent;cursor:default}
+.repo-tag{flex:none;font-size:var(--t-xs);padding:0 5px;border-radius:8px;background:var(--surface2);color:var(--muted);white-space:nowrap}
+.repo-tag.repo-warn{color:var(--wait-ink)}
+.repo-branch{flex:none;max-width:120px;margin-left:auto;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:var(--muted);font-size:var(--t-sm);font-family:var(--mono)}
+.repo-more{display:flex;flex-wrap:wrap;align-items:center;gap:6px 12px;flex-basis:100%;padding:2px 0 8px 20px}
+.repo-setup{display:flex;flex:1 1 280px;align-items:center;gap:6px;min-width:0}
+.repo-setup input{flex:1;min-width:0;height:28px;padding:2px 8px;font-family:var(--mono);font-size:var(--t-sm)}
+.repo-setup input::placeholder{font-family:var(--sans)}
 .repo-src{flex:none;font-size:var(--t-xs);color:var(--muted);opacity:.8;font-family:var(--mono)}
-.repo-state{display:flex;justify-content:flex-end;min-width:0}
-.repo-warn{font-size:var(--t-sm);color:var(--wait-ink);white-space:nowrap}
+.repo-used{font-size:var(--t-sm);color:var(--muted)}
+.repo-more>[data-field-err],.repo-row>[data-field-err]{flex-basis:100%;margin:0 0 6px}
 /* Two or three choices as one strip of radios (New bots get, a bot's mode, Read or Write) */
 .repo-seg{display:inline-flex;flex:none;background:var(--surface2);border-radius:7px;padding:2px;gap:2px}
 .repo-seg label{position:relative;display:inline-flex;margin:0;cursor:pointer}
@@ -619,11 +645,14 @@ fieldset.brepo>.repo-name+p{margin:-4px 0 4px 24px;font-size:var(--t-xs);line-he
 .brepo-acc{font-family:var(--sans);opacity:.75}
 @media (max-width:760px){
   .repos-card>header{flex-wrap:wrap}
-  .repo-row{grid-template-columns:minmax(0,1fr) auto auto;grid-template-areas:"name branch state" "setup setup setup";gap:0 8px;padding:4px 0}
-  .repo-name{grid-area:name}.repo-branch{grid-area:branch}.repo-state{grid-area:state}
-  .repo-setup{grid-area:setup;padding-left:20px}
-  .repo-setup input{height:30px}
-  input[type=search].repos-filter{flex:1 1 100%;margin-left:0}
+  .repo-row,.repo-line{min-height:40px}
+  .repo-branch{max-width:72px}
+  .repo-more{padding-left:4px}
+  .repo-setup{flex-basis:100%}
+  .repo-setup input,.repos-new-row input{height:40px;font-size:16px}
+  .repos-newbot select{height:40px;font-size:16px}
+  button.repos-small{min-height:36px}
+  input[type=search].repos-filter{flex:1 1 140px}
   .repo-seg span{padding:5px 10px}
   .brepo-mode{display:flex;justify-self:stretch;min-width:0}.brepo-mode label{flex:1 1 0;min-width:0;justify-content:center}.brepo-mode span{padding:5px 6px;text-align:center;white-space:normal}
   .repo-seg-sm span{padding:3px 9px}
@@ -718,7 +747,7 @@ fieldset.brepo>.repo-name+p{margin:-4px 0 4px 24px;font-size:var(--t-xs);line-he
 .listen-form label{display:grid;gap:4px;min-width:0}.listen-form input,.listen-form select{min-width:0;width:100%}
 .listen-wide{grid-column:1/-1}
 @media (max-width:640px){.listen-list li{grid-template-columns:1fr}.listen-actions{justify-content:flex-start}}
-/* Settings > System > Strategy Bot (ui/app/settings-strategy-bot.js): three levels, one sentence each, a Confirm before a
+/* The Strategy Bot's card on its bot page's Settings (ui/app/settings-strategy-bot.js): three levels, one sentence each, a Confirm before a
    change. */
 .strategy-levels{display:grid;gap:8px;margin:10px 0}
 .strategy-level{display:grid;gap:4px;text-align:left;padding:10px 12px;border:1px solid var(--line);border-radius:8px;background:none;color:inherit;font:inherit;cursor:pointer}
@@ -731,7 +760,7 @@ fieldset.brepo>.repo-name+p{margin:-4px 0 4px 24px;font-size:var(--t-xs);line-he
 .strategy-log-entry:last-child{border-bottom:0}
 .strategy-log-entry .row{gap:8px;flex-wrap:wrap;align-items:baseline}
 .strategy-log-entry ul{margin:6px 0 0;padding-left:18px}
-/* Settings > System, the flat list of Tico's own jobs (ui/app/settings-recurring.js) */
+/* Automations > System jobs, the flat list of Tico's own jobs (ui/app/settings-recurring.js) */
 .sysr-list{display:grid}
 .settings-bots-filters .settings-filter-search.sysr-search{width:min(100%,420px);flex:0 1 420px;max-width:100%}
 .sysr-row{display:grid;grid-template-columns:minmax(0,2.4fr) minmax(0,1fr) minmax(0,1.3fr) minmax(0,.7fr) minmax(0,1fr);gap:12px;padding:10px 0;border-top:1px solid var(--line);align-items:start}
@@ -745,6 +774,8 @@ fieldset.brepo>.repo-name+p{margin:-4px 0 4px 24px;font-size:var(--t-xs);line-he
 .sysr-schedule{display:flex;flex-wrap:wrap;gap:4px;align-items:center;min-width:0}
 .sysr-schedule .sysr-label{flex-basis:100%}
 .sysr-schedule select,.sysr-schedule input[type=time]{max-width:100%}
+/* Automations' pane is wide: the time box keeps its own width, so a click lands on its hour. */
+.sysr-schedule input[type=time]{width:auto}
 .sysr-ctl{display:flex;flex-wrap:wrap;gap:6px;align-items:center;min-width:0}
 .sysr-ctl .settings-cell-note{flex-basis:100%;margin:0}
 .sysr-switch{display:inline-flex;gap:6px;align-items:center}
@@ -817,46 +848,21 @@ fieldset.brepo>.repo-name+p{margin:-4px 0 4px 24px;font-size:var(--t-xs);line-he
 .task-rule-form input:not([type=checkbox]),.task-rule-form select{max-width:100%;min-width:0}
 .task-rule-form input[name=ruleName]{flex:1 1 100%}
 .task-rule-form input[type=number]{width:90px}
-/* Settings > Gateway (ui/app/settings-gateway.js) and the Gateway pick in a bot's Model picker (settings-bots.js) */
+/* The Tico Gateway card's services (ui/app/settings-gateway.js) */
 .gw-table{width:100%;border-collapse:collapse;font-size:var(--t-sm)}
 .gw-table td,.gw-table th{padding:6px 8px 6px 0;border-bottom:1px solid var(--line);text-align:left;vertical-align:top}
-.gw-table .num{text-align:right;font-variant-numeric:tabular-nums}
-.gw-table .gw-bots-word{display:none}
 .gw-table code{font-size:var(--t-sm);margin-right:4px;white-space:nowrap}
 .gw-status-cell{white-space:nowrap}
 .gw-status-cell[data-status=live]{color:var(--ok)}
 .gw-status-cell:not([data-status=live]){color:var(--muted)}
-.gw-table .gw-note{color:var(--muted)}
-.gw-table .gw-open{text-align:right;white-space:nowrap}
 .gw-table .gw-sub{display:block;color:var(--muted);font-size:var(--t-xs);font-weight:400}
-.gw-table .gw-word{display:none}
-.gw-table .gw-ctx{white-space:nowrap}
-.gw-same{margin:8px 0 12px;font-size:var(--t-sm)}
-.gw-table tr.gw-has-details td{border-bottom:0;padding-bottom:2px}
-.gw-table .gw-details-row td{padding-top:0}
-.gw-details{display:flex;flex-wrap:wrap;gap:2px 18px;margin:0;font-size:var(--t-xs)}
-.gw-details div{display:flex;gap:6px;min-width:0}
-.gw-details dt{color:var(--muted);white-space:nowrap}
-.gw-details dd{margin:0;min-width:0;overflow-wrap:anywhere}
 @media (max-width:640px){
   .gw-table thead{display:none}
   .gw-table tbody tr{display:grid;grid-template-columns:minmax(0,1fr) auto;gap:2px 12px;padding:8px 0;border-bottom:1px solid var(--line)}
   .gw-table tbody tr:last-child{border-bottom:0}
   .gw-table td{padding:0;border:0}
   .gw-table .gw-name{font-weight:600}
-  .gw-table .gw-bots-word{display:inline}
-  .gw-table .gw-model,.gw-table .gw-tools,.gw-table .gw-price,.gw-table .gw-note{grid-column:1 / -1;color:var(--muted)}
-  .gw-table .gw-open{grid-column:2;grid-row:1}
-  .gw-table tbody tr.gw-has-details{border-bottom:0;padding-bottom:2px}
-  .gw-table tbody tr.gw-details-row{padding-top:0}
-  .gw-table .gw-details-row td{grid-column:1 / -1}
-  .gw-table .gw-word{display:inline}
-  .gw-table.gw-levels .gw-ctx{grid-column:2;grid-row:1;text-align:right;color:var(--muted)}
-  .gw-table.gw-levels .gw-model{grid-column:1;grid-row:2;color:var(--ink)}
-  .gw-table.gw-levels .gw-price{grid-column:2;grid-row:2;text-align:right;color:var(--ink)}
-  .gw-table.gw-levels .gw-fast{grid-column:1;grid-row:3}
-  .gw-table.gw-levels .gw-fast-price{grid-row:3}
-  .gw-table.gw-others .gw-price{grid-column:2;grid-row:1;text-align:right}
+  .gw-table .gw-tools,.gw-table .gw-price{grid-column:1 / -1;color:var(--muted)}
 }
 .settings-tier{display:grid;gap:8px;min-width:0}
 .settings-tier-row{display:flex;flex-wrap:wrap;gap:8px 12px;align-items:flex-end;min-width:0}
@@ -978,6 +984,17 @@ section.card>header .settings-head-act{margin-left:auto}
 .models-adv[open]>summary{margin-bottom:8px}
 .models-gw-line{display:flex;align-items:center;gap:6px;flex-wrap:wrap;margin:0 0 8px;font-size:var(--t-sm)}
 .models-gw-line .dot.ok{background:var(--ok)}
+.models-gw-head{display:flex;align-items:center;flex-wrap:wrap;gap:6px 12px}
+.models-gw-head .models-gw-line{margin:0;flex:1 1 220px}
+.models-gw-bar{width:48px}
+.models-gw-table{width:100%;max-width:560px;border-collapse:collapse;margin-top:12px;font-size:var(--t-sm)}
+.models-gw-table th,.models-gw-table td{padding:5px 10px 5px 0;border-bottom:1px solid var(--line);text-align:left;font-weight:400}
+.models-gw-table th{color:var(--muted)}
+.models-gw-table th:first-child{white-space:normal}
+.models-gw-table .num{text-align:right;font-variant-numeric:tabular-nums;white-space:nowrap}
+.models-gw-table tbody tr:last-child td{border-bottom:0}
+.models-gw-keys{display:flex;align-items:center;gap:12px;max-width:560px;margin:12px 0 0;font-size:var(--t-sm)}
+.models-gw-keys a{margin-left:auto}
 .models-adv .prov-gateway{display:grid;gap:8px;max-width:560px}
 @media (max-width:760px){
   .models-row{grid-template-columns:minmax(0,1fr);gap:4px}
