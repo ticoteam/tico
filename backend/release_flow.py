@@ -171,7 +171,7 @@ def _qa_room(c, ticket, qa):
 # ----------------------------------------------------------------------------- what is waiting for a release
 def pending(c):
     """The Dev tickets at the Pending Release step, oldest first: dicts of the task row plus `prs` (its pull request
-    links). Every one is listed; a task names only what its reader may see (`_named`)."""
+    links). Every one is listed; a task body names each ticket as `_named` allows."""
     from .roadmap_flow import ENGINEERING
 
     rows = [
@@ -191,38 +191,40 @@ def _name(t, title=None):
     return (f"#{t['number']} " if t.get("number") is not None else "") + title
 
 
-def _named(c, t, reader):
-    """How `reader` (an actor, the bot the task goes to) may name a ticket: its title when it may open it or it is not
-    private; a private ticket it may not open shows its public title and summary, if it has a public title; else None,
-    and the ticket is only counted. A private title never reaches a task body that its reader may not open."""
-    if not H.task_private(c, t) or H.task_private_readable(c, reader, t):
-        return str(t["title"]).strip(), None
+def _named(c, t):
+    """How a ticket is named in a team-visible task body, whoever reads it. A ticket that is not private is named as
+    usual. A private ticket is never named by its private title, owner or pull request: it shows its public title and
+    summary when it has a public title, and otherwise is only counted (None)."""
+    if not H.task_private(c, t):
+        return str(t["title"]).strip(), None, False
     public = str(t.get("public_title") or "").strip()
     if not public:
         return None
     summary = " ".join(str(t.get("public_summary") or "").split())[:PUBLIC_SUMMARY_MAX]
-    return public, summary or None
+    return public, summary or None, True
 
 
-def _line(t, name):
+def _line(t, name, private):
+    if private:
+        return f"- {name}"
     pr = next((p["url"] for p in t["prs"]), "")
     return f"- {name} (owner {t['owner_id']}){' ' + pr if pr else ''}"
 
 
-def _listing(c, tickets, reader, more_where):
-    """The ticket lines a team-visible task or routine may carry, as `reader` may see them (`_named`). A private ticket
-    with no public title is counted only, and the task says to leave it out and never to ask anyone for its name."""
+def _listing(c, tickets, more_where):
+    """The ticket lines a team-visible task or routine may carry (`_named`). A private ticket with no public title is
+    counted only, and the task says to leave it out and never to ask anyone for its name."""
     named, hidden = [], 0
     for t in tickets:
-        found = _named(c, t, reader)
+        found = _named(c, t)
         if found is None:
             hidden += 1
         else:
             named.append((t, *found))
     shown = named[:MAX_LISTED]
     lines = []
-    for t, title, summary in shown:
-        lines.append(_line(t, _name(t, title)))
+    for t, title, summary, private in shown:
+        lines.append(_line(t, title if private else _name(t, title), private))
         if summary:
             lines.append(f"  {summary}")
     if len(named) > len(shown):
@@ -235,7 +237,7 @@ def _listing(c, tickets, reader, more_where):
     return "\n".join(lines)
 
 
-def _task_body(c, tickets, why, reader):
+def _task_body(c, tickets, why):
     if not tickets:
         return (
             f"{why}\n\nNothing is at Pending Release now; the work may be merged pull requests that were never Dev "
@@ -243,7 +245,7 @@ def _task_body(c, tickets, why, reader):
         )
     return (
         f"{why}\n\nAt Pending Release now:\n"
-        + _listing(c, tickets, reader, 'with `hub task list --step "Pending Release"`')
+        + _listing(c, tickets, 'with `hub task list --step "Pending Release"`')
         + "\n\nCut one release for them with your release playbook and docs/releasing.md. When it is published, "
         "Tico wakes each ticket's QA owner and the Technical Writer by itself."
     )
@@ -281,7 +283,7 @@ def request(c, actor, *, source, note=""):
         if tickets
         else f"{TITLE}requested by {H.actor_name(c, actor)}"
     )
-    body = _task_body(c, tickets, who, owner)
+    body = _task_body(c, tickets, who)
     open_task = _unfinished(c, owner)
     if open_task:
         if source == "release_schedule":
@@ -397,7 +399,7 @@ def _docs_task(c, writer, tag, tickets, url):
     body = (
         f"{tag} is published" + (f" ({url})" if url else "") + ". Update the docs for the changes people will see, "
         "each with its pull request; skip what nobody sees. The version's CHANGELOG section comes on its release "
-        "notes task.\n\nIn this release:\n" + _listing(c, tickets, owner, f"at {tag}")
+        "notes task.\n\nIn this release:\n" + _listing(c, tickets, f"at {tag}")
     )
     return H.task_create(
         c, H.KEEPER, title, body, owner, deduplicate=False, trigger=EVENT, trigger_source=tag, wake_refs={"wake": EVENT}

@@ -325,19 +325,26 @@ def test_a_private_ticket_with_a_public_title_is_named_by_it_and_its_summary(api
         )
         docs = RF._docs_task(c, "cpo", "v1.2.3", RF.pending(c), RELEASE_URL)
         body = H.task(c, docs)["body"]
-    assert "Faster payroll exports" in body and "Exports now finish in seconds. No more timeouts." in body
+    assert "- Faster payroll exports" in body and "Exports now finish in seconds. No more timeouts." in body
     assert "Acme payroll" not in body and "private ticket" not in body, "its count line is not needed"
+    assert "qab" not in body and "/413" not in body, "a private ticket shows no owner and no pull request"
 
 
-def test_a_private_ticket_without_a_public_title_is_counted_and_its_own_reader_still_sees_it(api):
+def test_a_private_ticket_is_never_named_by_its_private_title_for_anyone(api):
     dev = _team(api)
+    _ticket(api, dev, "Visual replies", 412)
     secret = _ticket(api, dev, "Acme payroll export", 413, owner="qab")
     with api.app.state.store.transaction() as c:
         c.execute("UPDATE tasks SET private=1 WHERE id=?", (secret["id"],))
         tickets = RF.pending(c)
-        assert "Acme payroll export" in RF._listing(c, tickets, H.bot_actor("qab"), "x"), "its owner reads its title"
-        body = RF._listing(c, tickets, H.bot_actor("cmo"), "x")
-    assert body == (
-        "...and 1 private ticket with no public title. Leave private tickets out of the docs and release notes; "
-        "do not ask anyone for their names."
-    )
+        body = RF._listing(c, tickets, "x")
+        assert "Visual replies" in body and "Acme payroll" not in body
+        assert "...and 1 private ticket with no public title. " in body and LEAVE_OUT in body
+        c.execute("UPDATE tasks SET public_title=? WHERE id=?", ("Faster payroll exports", secret["id"]))
+        body = RF._listing(c, tickets, "x")
+        assert "- Faster payroll exports\n" in body + "\n" and "Acme payroll" not in body
+        assert "qab" not in body and "/413" not in body, "a private ticket shows no owner and no pull request"
+        release = RF.request(c, "human:ana", source="release_now")
+        assert "Acme payroll export" not in H.task(c, release["task"])["body"]
+        docs = RF._docs_task(c, "cpo", "v1.2.3", tickets, RELEASE_URL)
+        assert "Acme payroll export" not in H.task(c, docs)["body"]
