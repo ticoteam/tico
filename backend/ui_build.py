@@ -12,6 +12,7 @@ install folders when PATH has none (a launchd service's PATH has only the system
 
 `python -m backend.ui_build --check` exits 1, naming the files, when any output is missing or stale.
 """
+
 import hashlib
 import json
 import os
@@ -76,13 +77,14 @@ def compiled(ui_dir, name, manifest=None):
     entry = (_manifest(ui_dir) if manifest is None else manifest).get(name) or {}
     output = out_dir(ui_dir) / (name[:-3] + ".js")
     try:
-        fresh = (entry.get("source") == _sha(ui_dir / name) and output.is_file()
-                 and entry.get("output") == _sha(output))
+        fresh = entry.get("source") == _sha(ui_dir / name) and output.is_file() and entry.get("output") == _sha(output)
     except OSError:
         fresh = False
     if not fresh:
-        raise StaleBuild(f"ui/{name} has no up-to-date compiled JavaScript in build/ui: run `{COMMAND}` "
-                         "(or `npm run watch:ui` while editing)")
+        raise StaleBuild(
+            f"ui/{name} has no up-to-date compiled JavaScript in build/ui: run `{COMMAND}` "
+            "(or `npm run watch:ui` while editing)"
+        )
     return output
 
 
@@ -122,8 +124,10 @@ def stale(ui_dir):
 def check(ui_dir):
     bad = stale(ui_dir)
     if bad:
-        raise StaleBuild(f"{len(bad)} UI TypeScript file{'s' if len(bad) > 1 else ''} not compiled or out of date "
-                         f"({', '.join('ui/' + n for n in bad)}): run `{COMMAND}` in {Path(ui_dir).parent}")
+        raise StaleBuild(
+            f"{len(bad)} UI TypeScript file{'s' if len(bad) > 1 else ''} not compiled or out of date "
+            f"({', '.join('ui/' + n for n in bad)}): run `{COMMAND}` in {Path(ui_dir).parent}"
+        )
 
 
 def _nvm_default(home):
@@ -140,7 +144,10 @@ def _nvm_default(home):
 
     def number(p):
         return tuple(int(n) if n.isdigit() else 0 for n in p.name.lstrip("v").split("."))
-    named = [p for p in installed if re.fullmatch(r"[\d.]+", alias) and f"{p.name.lstrip('v')}.".startswith(f"{alias}.")]
+
+    named = [
+        p for p in installed if re.fullmatch(r"[\d.]+", alias) and f"{p.name.lstrip('v')}.".startswith(f"{alias}.")
+    ]
     return [max(named or installed, key=number) / "bin"]
 
 

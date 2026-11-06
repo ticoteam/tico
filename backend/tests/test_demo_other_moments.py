@@ -41,13 +41,22 @@ def nothing_is_dated_after(settings, moment, label, run_on_the_machines_clock=Fa
     with closing(sqlite3.connect(settings.db_path)) as db:
         for (table,) in db.execute("SELECT name FROM sqlite_master WHERE type='table'").fetchall():
             for column in [row[1] for row in db.execute(f'PRAGMA table_info("{table}")')]:
-                if column in FUTURE_BY_DESIGN or (run_on_the_machines_clock and table == "system_runs"
-                                                  and column in ("started_at", "first_started_at")):
+                if column in FUTURE_BY_DESIGN or (
+                    run_on_the_machines_clock
+                    and table == "system_runs"
+                    and column in ("started_at", "first_started_at")
+                ):
                     continue
                 count = db.execute(
                     f'SELECT count(*) FROM "{table}" WHERE typeof("{column}")=\'text\' AND "{column}" > ? '
-                    f'AND "{column}" LIKE \'20__-__-__T%\'' +
-                    (" AND NOT (subject_type='task' AND kind IN ('check_back_at','check_back_explicit'))" if table == "history_events" and column in ("old", "new") else ""), (cut,)).fetchone()[0]
+                    f'AND "{column}" LIKE \'20__-__-__T%\''
+                    + (
+                        " AND NOT (subject_type='task' AND kind IN ('check_back_at','check_back_explicit'))"
+                        if table == "history_events" and column in ("old", "new")
+                        else ""
+                    ),
+                    (cut,),
+                ).fetchone()[0]
                 if count:
                     later.append((table, column, count))
     assert later == [], f"{label}: rows dated after the build"
@@ -57,7 +66,9 @@ def every_message_body_is_kept(settings, label):
     """Retention runs on the demo's own clock while it is built: a demo built months before today keeps its bodies."""
     with closing(sqlite3.connect(settings.db_path)) as db:
         total = db.execute("SELECT COUNT(*) FROM inbound_messages").fetchone()[0]
-        removed = db.execute("SELECT COUNT(*) FROM inbound_messages WHERE body IS NULL OR retention_removed=1").fetchone()[0]
+        removed = db.execute(
+            "SELECT COUNT(*) FROM inbound_messages WHERE body IS NULL OR retention_removed=1"
+        ).fetchone()[0]
     assert total == 11 and removed == 0, f"{label}: {removed} of {total} inbound message bodies were removed"
 
 
@@ -76,7 +87,8 @@ def the_market_is_dated_to_the_year(api, year, label):
     assert dated and all(f"-{year}" in url for url in dated), f"{label}: a source url is dated to another year"
     assert any(str(year) in i["quote"] for i in listening), f"{label}: no listening quote names {year}"
     assert not any(str(year - 1) in i["quote"] + i["claim"] for i in listening), (
-        f"{label}: a listening quote or claim names {year - 1}")
+        f"{label}: a listening quote or claim names {year - 1}"
+    )
 
 
 def test_a_demo_built_early_in_the_day_in_another_year_keeps_its_invariants(tmp_path):

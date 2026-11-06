@@ -42,8 +42,10 @@ def explanation(c, slug, who, auth):
     at = resume_time(timing)
     # Include the date so a cooldown crossing midnight has an unambiguous UTC deadline.
     resumes = f"at {resume_label(at)}" if at else "after its cooldown"
-    text = (f"Quarantined for repeated refused writes (rule 8; {H.quarantine_reason(c, slug)}): "
-            f"resumes by itself {resumes}; a person who manages it can clear it sooner.")
+    text = (
+        f"Quarantined for repeated refused writes (rule 8; {H.quarantine_reason(c, slug)}): "
+        f"resumes by itself {resumes}; a person who manages it can clear it sooner."
+    )
     if manages:
         row = H._one(c, H.QUARANTINE_DETAIL_SQL, (H.bot_actor(slug),))
         detail = (H._json(row["detail"], {}) or {}) if row else {}

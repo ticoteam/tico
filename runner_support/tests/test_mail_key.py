@@ -1,4 +1,5 @@
 """The company's Google key stays with the supervisor; an inbox bot's turn gets a token for its own mailboxes only."""
+
 import os
 import shutil
 import stat
@@ -19,6 +20,7 @@ def channel():
     def mail(service, mailbox):
         minted.append((service, mailbox))
         return {"token": f"ya29.{mailbox}", "expiry": "2026-01-01T00:00:00"}
+
     server = C.Server(os.path.join(directory, "cred.sock"), lambda bot: "ghs", mail).start()
     server.minted = minted
     yield server
@@ -28,14 +30,19 @@ def channel():
 
 def test_only_the_inbox_bots_turn_gets_mail_and_only_for_its_mailboxes(channel):
     channel.register("attempt-inbox", "ana-inbox", ["ana@acme.example", "ben@acme.example"])
-    channel.register("attempt-other", "helper")                    # a bot the hub named no mailbox for
-    assert C.request_mail(channel.path, "attempt-inbox", "gmail", "Ana@Acme.example")["token"] == "ya29.ana@acme.example"
-    for attempt, mailbox in (("attempt-other", "ana@acme.example"), ("attempt-inbox", "cara@acme.example"),
-                             ("guess", "ana@acme.example")):
+    channel.register("attempt-other", "helper")  # a bot the hub named no mailbox for
+    assert (
+        C.request_mail(channel.path, "attempt-inbox", "gmail", "Ana@Acme.example")["token"] == "ya29.ana@acme.example"
+    )
+    for attempt, mailbox in (
+        ("attempt-other", "ana@acme.example"),
+        ("attempt-inbox", "cara@acme.example"),
+        ("guess", "ana@acme.example"),
+    ):
         with pytest.raises(ValueError):
             C.request_mail(channel.path, attempt, "gmail", mailbox)
     with pytest.raises(ValueError):
-        C.request_mail(channel.path, "attempt-inbox", "drive", "ana@acme.example")     # no other service
+        C.request_mail(channel.path, "attempt-inbox", "drive", "ana@acme.example")  # no other service
     assert channel.minted == [("gmail", "ana@acme.example")]
     channel.unregister("attempt-inbox")
     with pytest.raises(ValueError):
@@ -50,7 +57,7 @@ def test_the_key_moves_out_of_the_bots_reach_when_isolated(tmp_path, monkeypatch
     (secrets / "google-sa.json").write_text('{"type": "service_account"}')
     os.chmod(secrets / "google-sa.json", 0o600)
     config = {"projects_dir": str(home / "workspace"), "state_dir": str(home / "state-r1")}
-    bot_uid = os.getuid() + 1                     # any bot user other than the supervisor running this test
+    bot_uid = os.getuid() + 1  # any bot user other than the supervisor running this test
     monkeypatch.setattr(isolation, "identity", lambda: (bot_uid, 10002))
     assert mail_key.status(config) == "exposed"
     assert mail_key.protect(config) is True
@@ -76,9 +83,10 @@ def test_without_isolation_the_key_stays_and_is_reported_readable(tmp_path, monk
 
 def test_the_mail_cli_asks_the_supervisor_only_inside_an_isolated_turn(channel, monkeypatch):
     from connectors.mail import auth
+
     channel.register("attempt-inbox", "ana-inbox", ["ana@acme.example"])
     monkeypatch.delenv(auth.SOCKET_ENV, raising=False)
-    assert auth.supervisor_token("ana@acme.example", [auth.GMAIL_SCOPE]) is None        # Mac: the key file is used
+    assert auth.supervisor_token("ana@acme.example", [auth.GMAIL_SCOPE]) is None  # Mac: the key file is used
     monkeypatch.setenv(auth.SOCKET_ENV, channel.path)
     monkeypatch.setenv("HUB_TOKEN", "attempt-inbox")
     assert auth.supervisor_token("ana@acme.example", [auth.GMAIL_SCOPE])["token"] == "ya29.ana@acme.example"
@@ -91,19 +99,20 @@ def test_the_computer_holds_the_key_only_when_isolated_with_the_key_and_the_conn
     monkeypatch.setenv("TICO_SIDE_JOBS", "1")
     config = {"projects_dir": str(tmp_path / "workspace"), "state_dir": str(tmp_path / "state-r1")}
     monkeypatch.setattr(isolation, "identity", lambda: (10003, 10002))
-    assert mail_key.held_by_computer(config) is False                       # no key on this computer
+    assert mail_key.held_by_computer(config) is False  # no key on this computer
     (tmp_path / "state-r1").mkdir()
     (tmp_path / "state-r1" / "google-sa.json").write_text("{}")
     assert mail_key.held_by_computer(config) is True
     monkeypatch.setenv("TICO_SIDE_JOBS", "0")
-    assert mail_key.held_by_computer(config) is False                       # nothing runs the connectors job
+    assert mail_key.held_by_computer(config) is False  # nothing runs the connectors job
     monkeypatch.setenv("TICO_SIDE_JOBS", "1")
     monkeypatch.setattr(isolation, "identity", lambda: None)
-    assert mail_key.held_by_computer(config) is False                       # a bot reads the key itself there
+    assert mail_key.held_by_computer(config) is False  # a bot reads the key itself there
 
 
 def test_the_connectors_job_writes_group_writable_files_only_in_the_two_user_layout(monkeypatch):
     from runner_support.connectors import mail_umask
+
     monkeypatch.setattr(isolation, "identity", lambda: (10003, 10002))
     assert mail_umask() == {"umask": 0o002}
     monkeypatch.setattr(isolation, "identity", lambda: None)
@@ -112,6 +121,7 @@ def test_the_connectors_job_writes_group_writable_files_only_in_the_two_user_lay
 
 def previous_registration(tmp_path):
     import json
+
     config = {"runner_id": "new", "operator": "ana", "url": "https://tico.example.com", "environment": "team"}
     stale = tmp_path / "runner.json.stale"
     stale.write_text(json.dumps({**config, "runner_id": "old"}))
@@ -122,6 +132,7 @@ def previous_registration(tmp_path):
     key.write_text('{"type": "service_account"}')
     key.chmod(0o600)
     return config, key
+
 
 def test_reenrollment_carries_the_protected_key_once_with_permissions(tmp_path):
     config, key = previous_registration(tmp_path)
@@ -205,7 +216,9 @@ def test_reenrollment_never_imports_another_operators_key(tmp_path, monkeypatch,
         monkeypatch.setattr(os, "getuid", lambda: key.stat().st_uid + 1)
     elif change == "volume":
         from pathlib import Path
+
         real = Path.lstat
+
         def different_volume(path):
             result = real(path)
             if path.name == "state-old":
@@ -213,6 +226,7 @@ def test_reenrollment_never_imports_another_operators_key(tmp_path, monkeypatch,
                 values[2] += 1
                 return os.stat_result(values)
             return result
+
         monkeypatch.setattr(Path, "lstat", different_volume)
     assert not mail_key.carry_protected(config, tmp_path / "runner.json")
     assert not (tmp_path / "state-new" / mail_key.FILE).exists()
@@ -236,19 +250,21 @@ def test_connected_account_grants_alone_give_mail_access_and_stay_out_of_the_bot
     assert not (secrets / mail_key.GRANTS).exists() and not (home / "state-r1" / mail_key.FILE).exists()
     assert mail_key.status(config) == "protected" and mail_key.held_by_computer(config)
     from runner_support.connectors import mail_credential_present, mail_grants_path
+
     assert mail_grants_path(config) == moved and mail_credential_present(config)
 
 
 def test_a_connected_accounts_scopes_reach_the_turn_with_its_token():
     def mail(service, mailbox):
         return {"token": "ya29.t", "expiry": "", "scopes": ["https://www.googleapis.com/auth/gmail.readonly"]}
-    directory = tempfile.mkdtemp(dir="/tmp")     # short: a Unix socket path has a length limit
+
+    directory = tempfile.mkdtemp(dir="/tmp")  # short: a Unix socket path has a length limit
     server = C.Server(os.path.join(directory, "cred.sock"), lambda bot: "ghs", mail).start()
     try:
         server.register("attempt", "inbox", ["ben@acme.example"])
         reply = C.request_mail(server.path, "attempt", "gmail", "ben@acme.example")
         assert reply["scopes"] == ["https://www.googleapis.com/auth/gmail.readonly"]
-        with pytest.raises(ValueError):            # the grant is bound to its own mailbox only
+        with pytest.raises(ValueError):  # the grant is bound to its own mailbox only
             C.request_mail(server.path, "attempt", "gmail", "ana@acme.example")
     finally:
         server.stop()
@@ -267,6 +283,7 @@ def test_a_second_grant_moved_from_the_workspace_keeps_the_first(tmp_path, monke
         os.chmod(secrets / mail_key.GRANTS, 0o600)
         assert mail_key.protect(config) is True
     import json
+
     kept = json.loads((home / "state-r1" / mail_key.GRANTS).read_text())["grants"]
     assert sorted(kept) == ["ana@x.example", "ben@x.example"]
 
@@ -285,20 +302,23 @@ def test_a_corrupt_workspace_grants_file_leaves_the_protected_one_alone(tmp_path
     for broken in ("{not json", "[]"):
         (secrets / mail_key.GRANTS).write_text(broken)
         os.chmod(secrets / mail_key.GRANTS, 0o600)
-        mail_key.protect(config)                                    # logs, never raises
+        mail_key.protect(config)  # logs, never raises
         assert (home / "state-r1" / mail_key.GRANTS).read_text() == protected
-        assert (secrets / mail_key.GRANTS).is_file()                # left for a person to look at
+        assert (secrets / mail_key.GRANTS).is_file()  # left for a person to look at
 
 
 def test_the_supervisor_s_mint_reaches_the_server_that_refreshes_connect_google_never_with_the_hub_token(
-        tmp_path, monkeypatch):
+    tmp_path, monkeypatch
+):
     script = tmp_path / "mail.sh"
-    script.write_text('#!/bin/sh\n[ -z "$HUB_TOKEN" ] || exit 9\n'
-                      'printf \'{"token": "ya29.t", "expiry": "", "url": "%s", "auth": "%s"}\' '
-                      '"$TICO_GOOGLE_BROKER_URL" "$TICO_GOOGLE_BROKER_AUTH"\n')
+    script.write_text(
+        '#!/bin/sh\n[ -z "$HUB_TOKEN" ] || exit 9\n'
+        'printf \'{"token": "ya29.t", "expiry": "", "url": "%s", "auth": "%s"}\' '
+        '"$TICO_GOOGLE_BROKER_URL" "$TICO_GOOGLE_BROKER_AUTH"\n'
+    )
     script.chmod(0o755)
     monkeypatch.setenv("HUB_TOKEN", "hub-token")
-    monkeypatch.setenv("TICO_GOOGLE_BROKER_AUTH", "inherited")       # never one the runner did not set itself
+    monkeypatch.setenv("TICO_GOOGLE_BROKER_AUTH", "inherited")  # never one the runner did not set itself
     config = {"url": "https://team.acme.example", "token": "runner-token", "state_dir": str(tmp_path)}
     minted = mail_key.minter(config, script)("gmail", "ana@acme.example")
     assert (minted["url"], minted["auth"]) == ("https://team.acme.example", "runner-token")

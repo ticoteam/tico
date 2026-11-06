@@ -5,6 +5,7 @@ a proxy token where the key would be (the credential's own variable). The token'
 variable holding it is found by reading them; they are not secret, and only the server can check the signature. The
 token goes as Bearer, which the proxy accepts for every auth scheme and replaces with the real key.
 """
+
 import base64
 import json
 import os
@@ -36,7 +37,7 @@ def url_env(tool):
 
 def _tool_of(token):
     try:
-        body = token[len(TOKEN_PREFIX):].split(".", 1)[0]
+        body = token[len(TOKEN_PREFIX) :].split(".", 1)[0]
         return json.loads(base64.urlsafe_b64decode(body + "=" * (-len(body) % 4))).get("t")
     except (ValueError, AttributeError):
         return None
@@ -48,8 +49,10 @@ def find(tool, environ=None):
     address = environ.get(url_env(tool), "")
     if not address:
         have = sorted(k for k in environ if k.startswith("TICO_TOOL_") and k.endswith("_URL"))
-        raise CallError(f"{tool} is not a proxied tool in this run" +
-                        (f" (this run has {', '.join(have)})" if have else " (this run has none)"))
+        raise CallError(
+            f"{tool} is not a proxied tool in this run"
+            + (f" (this run has {', '.join(have)})" if have else " (this run has none)")
+        )
     wanted = address.rstrip("/").rsplit("/", 1)[-1]
     for value in environ.values():
         if value.startswith(TOKEN_PREFIX) and _tool_of(value) == urllib.parse.unquote(wanted):

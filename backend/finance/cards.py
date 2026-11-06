@@ -11,6 +11,7 @@ when it sends, so a superseded change is never sent, and a card's creation reads
 as it stands then (a freeze made before then follows once it exists); a card left with no allocation is not issued
 (`WAITING` until it has one), and a canceled one never is. A lower limit or a cancel keeps the old reservation until
 Mercury confirms it (`allocation_due`), so the budget never counts on room the card can still spend."""
+
 import sqlite3
 from collections.abc import Callable
 from datetime import date
@@ -22,7 +23,17 @@ from .core import dates
 from .core import kinds as K
 from .core.budgets import amount_at
 from .core import validate as V
-from .core.errors import CONFLICT, DENIED, INVALID, NOT_AVAILABLE, NOT_FOUND, FinanceError, Named, invalid, named_refusal
+from .core.errors import (
+    CONFLICT,
+    DENIED,
+    INVALID,
+    NOT_AVAILABLE,
+    NOT_FOUND,
+    FinanceError,
+    Named,
+    invalid,
+    named_refusal,
+)
 from .core.org import SYSTEM
 from .handlers import Plan, Result
 from .store import ap as SAP
@@ -31,12 +42,16 @@ from .store import budgets as SB
 from .store import ledger as SL
 from .store import tico as T
 
-STATE_OPS = {"card_freeze": ("freeze", "frozen"), "card_unfreeze": ("unfreeze", "active"),
-             "card_cancel": ("cancel", "canceled")}
+STATE_OPS = {
+    "card_freeze": ("freeze", "frozen"),
+    "card_unfreeze": ("unfreeze", "active"),
+    "card_cancel": ("cancel", "canceled"),
+}
 
 
 def sees(ctx: Ctx, who: str, card: Any) -> bool:
     from .tab import sees_card
+
     if who == SYSTEM:
         return True
     b = ctx.budgets().get(str(card["budget_id"] or ""))
@@ -48,13 +63,18 @@ def _card(ctx: Ctx, who: str, card_id: str) -> Any:
     if card is None or not sees(ctx, who, card):
         raise FinanceError(NOT_FOUND, "no such card")
     if str(card["provider"] or "") == "brex":
-        raise invalid("a Brex card is read-only in Finance: change it in Brex")   # Brex is read, never written to
+        raise invalid("a Brex card is read-only in Finance: change it in Brex")  # Brex is read, never written to
     return card
 
 
 def _program(ctx: Ctx, money_id: str | None) -> Any:
-    programs = [m for m in SK.money_accounts(ctx.c, ctx.book.id) if str(m["kind"]) == "card_program"
-                and str(m["status"] or "active") == "active" and str(m["provider"] or "mercury") == "mercury"]
+    programs = [
+        m
+        for m in SK.money_accounts(ctx.c, ctx.book.id)
+        if str(m["kind"]) == "card_program"
+        and str(m["status"] or "active") == "active"
+        and str(m["provider"] or "mercury") == "mercury"
+    ]
     if money_id:
         programs = [m for m in programs if str(m["id"]) == money_id]
     if not programs:
@@ -69,16 +89,23 @@ def queue(ctx: Ctx, card: Any, op: str, body: dict[str, object], key: str, aid: 
     already waiting (not yet claimed) covers any later change, so a second one is not queued. The worker is rung once
     the action commits, so Mercury hears of the change now rather than at its next sweep."""
     if op == "card_sync" and SK.card_sync_waiting(ctx.c, str(card["id"])):
-        SK.update(ctx.c, "fin_cards", str(card["id"]), {"sync_status": "pending", "sync_error": None,
-                                                        "updated_at": ctx.at})
+        SK.update(
+            ctx.c, "fin_cards", str(card["id"]), {"sync_status": "pending", "sync_error": None, "updated_at": ctx.at}
+        )
         _ring_after_commit(ctx)
         return
     money = SK.get(ctx.c, "fin_money_accounts", str(card["money_account_id"] or ""))
-    SK.outbox_add(ctx.c, connection_id=str(money["connection_id"]) if money is not None and money["connection_id"]
-                  else None, action_id=aid, op=op, payload={"card_id": str(card["id"]), **body}, key=key, by=by,
-                  at=ctx.at)
-    SK.update(ctx.c, "fin_cards", str(card["id"]), {"sync_status": "pending", "sync_error": None,
-                                                    "updated_at": ctx.at})
+    SK.outbox_add(
+        ctx.c,
+        connection_id=str(money["connection_id"]) if money is not None and money["connection_id"] else None,
+        action_id=aid,
+        op=op,
+        payload={"card_id": str(card["id"]), **body},
+        key=key,
+        by=by,
+        at=ctx.at,
+    )
+    SK.update(ctx.c, "fin_cards", str(card["id"]), {"sync_status": "pending", "sync_error": None, "updated_at": ctx.at})
     _ring_after_commit(ctx)
 
 
@@ -86,6 +113,7 @@ def _ring_after_commit(ctx: Ctx) -> None:
     """Ring the bank worker after this transaction commits (the store runs `after_commit` callbacks then, and drops
     them on rollback), so the worker reads the outbox row it can see. Imported here: sync reads cards."""
     from . import sync
+
     hooks = cast(list[Callable[[], object]] | None, getattr(ctx.c, "after_commit", None))
     if hooks is not None:
         hooks.append(sync.ring)
@@ -107,9 +135,19 @@ def sync(ctx: Ctx, card_id: str, aid: str, by: str, after: str = "") -> None:
     limit = issue_limit(ctx.c, card)
     if str(card["sync_status"]) == WAITING and limit > 0 and not SK.card_create_waiting(ctx.c, card_id):
         asked = SK.card_create_payload(ctx.c, card_id)
-        queue(ctx, card, "card_create", {"user_id": str(asked.get("user_id") or ""),
-                                         "nickname": str(asked.get("nickname") or card["nickname"] or ""),
-                                         "monthly": limit}, f"card-create-{card_id}-{aid or ctx.at}", aid, by)
+        queue(
+            ctx,
+            card,
+            "card_create",
+            {
+                "user_id": str(asked.get("user_id") or ""),
+                "nickname": str(asked.get("nickname") or card["nickname"] or ""),
+                "monthly": limit,
+            },
+            f"card-create-{card_id}-{aid or ctx.at}",
+            aid,
+            by,
+        )
 
 
 def issue_limit(c: sqlite3.Connection, card: Any) -> int:
@@ -127,6 +165,7 @@ def issue_limit(c: sqlite3.Connection, card: Any) -> int:
 def used(ctx: Ctx, card: Any) -> int:
     """What the card has used this budget period: its live holds plus what settled (§8.2)."""
     from .budgeting import period_window, subtree
+
     bid = str(card["budget_id"] or "")
     if bid not in ctx.budgets():
         return 0
@@ -141,8 +180,11 @@ def in_step(card: Any) -> bool:
         return False
     if want != str(card["provider_status"] or "active"):
         return False
-    return want == "canceled" or int(card["provider_limit"] or 0) == int(card["limit_amount"] or 0) or \
-        (want == "frozen" and card["allocation_due"] is not None and int(card["allocation_due"]) == 0)
+    return (
+        want == "canceled"
+        or int(card["provider_limit"] or 0) == int(card["limit_amount"] or 0)
+        or (want == "frozen" and card["allocation_due"] is not None and int(card["allocation_due"]) == 0)
+    )
 
 
 def confirmed(ctx: Ctx, card_id: str, done: dict[str, Any], aid: str = "", follow: str = "") -> None:
@@ -169,9 +211,16 @@ def confirmed(ctx: Ctx, card_id: str, done: dict[str, Any], aid: str = "", follo
         return
     SK.update(ctx.c, "fin_cards", card_id, {"sync_status": "ok", "sync_error": None})
     if card["allocation_due"] is not None and card["budget_id"]:
-        SB.upsert_allocation(ctx.c, budget_id=str(card["budget_id"]), target_kind="card", target_id=card_id,
-                             amount=int(card["allocation_due"]), currency=ctx.book.base_currency, by=SYSTEM,
-                             at=ctx.at)
+        SB.upsert_allocation(
+            ctx.c,
+            budget_id=str(card["budget_id"]),
+            target_kind="card",
+            target_id=card_id,
+            amount=int(card["allocation_due"]),
+            currency=ctx.book.base_currency,
+            by=SYSTEM,
+            at=ctx.at,
+        )
         SK.update(ctx.c, "fin_cards", card_id, {"allocation_due": None})
 
 
@@ -183,24 +232,34 @@ def created(ctx: Ctx, card_id: str, aid: str, outbox_id: str = "") -> None:
     confirmed(ctx, card_id, {}, aid, follow=outbox_id or f"create-{aid or ctx.at}")
 
 
-WAITING = "waiting"         # sync_status of a card whose creation was held back: no allocation yet
-UNCERTAIN = "uncertain"     # provider_status of a card whose creation was cut off: Mercury may or may not have it
+WAITING = "waiting"  # sync_status of a card whose creation was held back: no allocation yet
+UNCERTAIN = "uncertain"  # provider_status of a card whose creation was cut off: Mercury may or may not have it
 
 
 def uncertain(ctx: Ctx, card_id: str, why: str) -> None:
     """The card's creation may have gone through at Mercury: its reservation stays (a cancel keeps it too) until a
     person confirms its Mercury card or that there is none (card_resolve)."""
-    SK.update(ctx.c, "fin_cards", card_id, {"provider_status": UNCERTAIN, "sync_status": "failed", "sync_error": why,
-                                            "synced_at": None, "updated_at": ctx.at})
+    SK.update(
+        ctx.c,
+        "fin_cards",
+        card_id,
+        {
+            "provider_status": UNCERTAIN,
+            "sync_status": "failed",
+            "sync_error": why,
+            "synced_at": None,
+            "updated_at": ctx.at,
+        },
+    )
 
 
 def _mercury_status(raw: object) -> str:
     s = str(raw or "")
-    return s if s in ("active", "frozen") else "canceled"     # inactive, expired, suspended: it can't spend
+    return s if s in ("active", "frozen") else "canceled"  # inactive, expired, suspended: it can't spend
 
 
 def _limit_cents(raw: object) -> int | None:
-    value = raw.get("amountCents") if isinstance(raw, dict) else None   # type: ignore[union-attr]
+    value = raw.get("amountCents") if isinstance(raw, dict) else None  # type: ignore[union-attr]
     return int(cast(Any, value)) if isinstance(value, int) else None
 
 
@@ -212,14 +271,28 @@ def candidates(ctx: Ctx, card: Any, found: list[dict[str, Any]]) -> str:
     asked = SK.card_create_payload(ctx.c, card_id)
     nickname = str(asked.get("nickname") or card["nickname"] or "")[:50]
     since = str(card["created_at"])[:10]
-    matches = [f for f in found if str(f.get("nickname") or "") == nickname and str(f.get("createdAt") or "")[:10]
-               >= since and f.get("id") and SK.card_by_provider(ctx.c, str(card["provider"]), str(f["id"])) is None]
-    shown = ", ".join(f"{f['id']} (••{str(f.get('lastFour') or '')[-4:]}, {str(f.get('createdAt') or '')[:16]})"
-                      for f in matches[:5])
-    why = (f"Mercury may have issued this card; it lists {len(matches)} possible: {shown}." if matches else
-           f"Mercury lists no card named {nickname!r} made since {since}; it may still have issued it.")
-    SK.update(ctx.c, "fin_cards", card_id, {"sync_status": "failed", "sync_error": why[:300], "synced_at": ctx.at,
-                                            "updated_at": ctx.at})
+    matches = [
+        f
+        for f in found
+        if str(f.get("nickname") or "") == nickname
+        and str(f.get("createdAt") or "")[:10] >= since
+        and f.get("id")
+        and SK.card_by_provider(ctx.c, str(card["provider"]), str(f["id"])) is None
+    ]
+    shown = ", ".join(
+        f"{f['id']} (••{str(f.get('lastFour') or '')[-4:]}, {str(f.get('createdAt') or '')[:16]})" for f in matches[:5]
+    )
+    why = (
+        f"Mercury may have issued this card; it lists {len(matches)} possible: {shown}."
+        if matches
+        else f"Mercury lists no card named {nickname!r} made since {since}; it may still have issued it."
+    )
+    SK.update(
+        ctx.c,
+        "fin_cards",
+        card_id,
+        {"sync_status": "failed", "sync_error": why[:300], "synced_at": ctx.at, "updated_at": ctx.at},
+    )
     return why
 
 
@@ -241,10 +314,21 @@ def adopt(ctx: Ctx, card_id: str, found: dict[str, Any], user: str, outbox_id: s
         SK.update(ctx.c, "fin_cards", card_id, {"sync_status": "failed", "sync_error": why, "updated_at": ctx.at})
         return "refused"
     limit = _limit_cents(found.get("spendLimit"))
-    SK.update(ctx.c, "fin_cards", card_id, {
-        "provider_card_id": pid, "last4": str(found.get("lastFour") or "")[-4:] or None,
-        "provider_status": _mercury_status(found.get("status")), "provider_limit": limit,
-        "sync_status": "ok", "sync_error": None, "synced_at": ctx.at, "updated_at": ctx.at})
+    SK.update(
+        ctx.c,
+        "fin_cards",
+        card_id,
+        {
+            "provider_card_id": pid,
+            "last4": str(found.get("lastFour") or "")[-4:] or None,
+            "provider_status": _mercury_status(found.get("status")),
+            "provider_limit": limit,
+            "sync_status": "ok",
+            "sync_error": None,
+            "synced_at": ctx.at,
+            "updated_at": ctx.at,
+        },
+    )
     created(ctx, card_id, "", f"adopt-{outbox_id}")
     return "adopted"
 
@@ -268,18 +352,35 @@ def card_resolve(ctx: Ctx, who: str, p: V.Payload) -> Plan:
 
     def apply(aid: str) -> Result:
         if pid:
-            queue(ctx, card, "card_adopt", {"provider_card_id": pid, "user_id": str(asked.get("user_id") or "")},
-                  f"card-adopt-{card_id}-{aid}", aid, who)
+            queue(
+                ctx,
+                card,
+                "card_adopt",
+                {"provider_card_id": pid, "user_id": str(asked.get("user_id") or "")},
+                f"card-adopt-{card_id}-{aid}",
+                aid,
+                who,
+            )
             return {"card_id": card_id, "sync_status": "pending"}
         SK.update(ctx.c, "fin_cards", card_id, {"provider_status": None, "sync_error": None, "updated_at": ctx.at})
         if str(card["status"]) == "canceled":
             not_issued(ctx, card_id)
             return {"card_id": card_id, "status": "canceled"}
-        queue(ctx, card, "card_create", {"user_id": str(asked.get("user_id") or ""),
-                                         "nickname": str(asked.get("nickname") or card["nickname"] or ""),
-                                         "monthly": int(card["limit_amount"] or asked.get("monthly") or 0)},
-              f"card-create-{card_id}-again-{aid}", aid, who)
+        queue(
+            ctx,
+            card,
+            "card_create",
+            {
+                "user_id": str(asked.get("user_id") or ""),
+                "nickname": str(asked.get("nickname") or card["nickname"] or ""),
+                "monthly": int(card["limit_amount"] or asked.get("monthly") or 0),
+            },
+            f"card-create-{card_id}-again-{aid}",
+            aid,
+            who,
+        )
         return {"card_id": card_id, "sync_status": "pending"}
+
     what = f"Use Mercury card {pid} for this card" if pid else "Mercury never issued this card"
     return Plan(K.default_gate(ctx.org, who, "card_resolve"), what, apply, facts={"holder": str(card["holder"])})
 
@@ -289,11 +390,29 @@ def not_issued(ctx: Ctx, card_id: str) -> None:
     card = SK.get(ctx.c, "fin_cards", card_id)
     if card is None:
         return
-    SK.update(ctx.c, "fin_cards", card_id, {"sync_status": "ok", "sync_error": None, "allocation_due": None,
-                                            "provider_status": "canceled", "synced_at": ctx.at})
+    SK.update(
+        ctx.c,
+        "fin_cards",
+        card_id,
+        {
+            "sync_status": "ok",
+            "sync_error": None,
+            "allocation_due": None,
+            "provider_status": "canceled",
+            "synced_at": ctx.at,
+        },
+    )
     if card["budget_id"] and SB.allocation(ctx.c, str(card["budget_id"]), "card", card_id) is not None:
-        SB.upsert_allocation(ctx.c, budget_id=str(card["budget_id"]), target_kind="card", target_id=card_id, amount=0,
-                             currency=ctx.book.base_currency, by=SYSTEM, at=ctx.at)
+        SB.upsert_allocation(
+            ctx.c,
+            budget_id=str(card["budget_id"]),
+            target_kind="card",
+            target_id=card_id,
+            amount=0,
+            currency=ctx.book.base_currency,
+            by=SYSTEM,
+            at=ctx.at,
+        )
 
 
 def card_kind(p: V.Payload, bot: bool) -> str:
@@ -303,8 +422,9 @@ def card_kind(p: V.Payload, bot: bool) -> str:
     if kind not in ("standing", "person", "single_use"):
         raise invalid("kind is standing|person|single_use")
     if kind == "single_use":
-        raise FinanceError(NOT_AVAILABLE, "Mercury has no single-use cards yet: a bot's card is a standing card with a "
-                           "tight limit")
+        raise FinanceError(
+            NOT_AVAILABLE, "Mercury has no single-use cards yet: a bot's card is a standing card with a tight limit"
+        )
     if kind != ("standing" if bot else "person"):
         raise invalid(f"a {'bot' if bot else 'teammate'}'s card is {'standing' if bot else 'person'}")
     return kind
@@ -328,8 +448,9 @@ def _mercury_user(ctx: Ctx, p: V.Payload, holder: str, program: Any) -> tuple[st
     setting = str(SK.loads(row["settings"] if row is not None else None).get("card_user_id") or "")
     if setting:
         return setting, "the connection's card user"
-    raise invalid("a Mercury user is needed to issue the card: name one (provider_user_id), or set the connection's "
-                  "card user")
+    raise invalid(
+        "a Mercury user is needed to issue the card: name one (provider_user_id), or set the connection's card user"
+    )
 
 
 def card_create(ctx: Ctx, who: str, p: V.Payload) -> Plan:
@@ -350,30 +471,62 @@ def card_create(ctx: Ctx, who: str, p: V.Payload) -> Plan:
     card_id = SL.new_id()
     budget_id = V.text(p, "budget_id", 80)
     route = handlers.figure_route(ctx, who, budget_id)
-    alloc = handlers.allocation_plan(ctx, who, {"budget_id": budget_id, "target_kind": "card", "target_id": card_id,
-                                                "amount": amount}, route)
+    alloc = handlers.allocation_plan(
+        ctx, who, {"budget_id": budget_id, "target_kind": "card", "target_id": card_id, "amount": amount}, route
+    )
     nickname = V.opt_text(p, "nickname", 50) or holder.split(":", 1)[-1]
     merchant = V.opt_text(p, "merchant", 120) or ""
     user, found = _mercury_user(ctx, p, holder, program)
 
     def apply(aid: str) -> Result:
         alloc.apply(aid)
-        SK.insert(ctx.c, "fin_cards", {
-            "id": card_id, "provider": str(program["provider"] or "mercury"), "holder": holder, "budget_id": budget_id,
-            "money_account_id": str(program["id"]), "kind": kind, "limit_amount": amount, "limit_interval": "month",
-            "currency": ctx.book.base_currency, "status": "active", "nickname": nickname, "merchant": merchant,
-            "created_at": ctx.at, "created_by": who, "updated_at": ctx.at})
-        queue(ctx, SK.get(ctx.c, "fin_cards", card_id), "card_create",
-              {"user_id": user, "nickname": nickname, "monthly": amount}, f"card-create-{card_id}", aid, who)
+        SK.insert(
+            ctx.c,
+            "fin_cards",
+            {
+                "id": card_id,
+                "provider": str(program["provider"] or "mercury"),
+                "holder": holder,
+                "budget_id": budget_id,
+                "money_account_id": str(program["id"]),
+                "kind": kind,
+                "limit_amount": amount,
+                "limit_interval": "month",
+                "currency": ctx.book.base_currency,
+                "status": "active",
+                "nickname": nickname,
+                "merchant": merchant,
+                "created_at": ctx.at,
+                "created_by": who,
+                "updated_at": ctx.at,
+            },
+        )
+        queue(
+            ctx,
+            SK.get(ctx.c, "fin_cards", card_id),
+            "card_create",
+            {"user_id": user, "nickname": nickname, "monthly": amount},
+            f"card-create-{card_id}",
+            aid,
+            who,
+        )
         return {"card_id": card_id, "sync_status": "pending"}
+
     gate = alloc.gate if route else K.default_gate(ctx.org, who, "card_create")
-    return Plan(gate,
-                f"Issue a {kind} card to {holder} with {amount / 100:.2f} a month from {ctx.budgets()[budget_id].name}",
-                apply,
-                facts={"amount": amount, "holder": holder, "budget_id": budget_id, "card.kind": kind,
-                       "holder.kind": "bot" if bot else "human"},
-                impact={"provider_user_id": user, "provider_user_from": found},
-                resolved={"provider_user_id": user})
+    return Plan(
+        gate,
+        f"Issue a {kind} card to {holder} with {amount / 100:.2f} a month from {ctx.budgets()[budget_id].name}",
+        apply,
+        facts={
+            "amount": amount,
+            "holder": holder,
+            "budget_id": budget_id,
+            "card.kind": kind,
+            "holder.kind": "bot" if bot else "human",
+        },
+        impact={"provider_user_id": user, "provider_user_from": found},
+        resolved={"provider_user_id": user},
+    )
 
 
 def card_update_limit(ctx: Ctx, who: str, p: V.Payload) -> Plan:
@@ -389,15 +542,21 @@ def card_update_limit(ctx: Ctx, who: str, p: V.Payload) -> Plan:
     route = handlers.figure_route(ctx, who, budget_id, card)
     if not route:
         check_lower(ctx, card, amount, who)
-    alloc = handlers.allocation_plan(ctx, who, {"budget_id": budget_id, "target_kind": "card",
-                                                "target_id": str(card["id"]), "amount": amount}, route)
+    alloc = handlers.allocation_plan(
+        ctx, who, {"budget_id": budget_id, "target_kind": "card", "target_id": str(card["id"]), "amount": amount}, route
+    )
 
     def apply(aid: str) -> Result:
-        alloc.apply(aid)                            # the limit follows the allocation (`limit_follows`)
+        alloc.apply(aid)  # the limit follows the allocation (`limit_follows`)
         return {"card_id": str(card["id"]), "limit": amount}
+
     gate = alloc.gate if route else K.default_gate(ctx.org, who, "card_update_limit")
-    return Plan(gate, f"Set card ••{card['last4'] or '----'}'s limit to {amount / 100:.2f} a month", apply,
-                facts={"amount": amount, "holder": str(card["holder"]), "budget_id": str(card["budget_id"] or "")})
+    return Plan(
+        gate,
+        f"Set card ••{card['last4'] or '----'}'s limit to {amount / 100:.2f} a month",
+        apply,
+        facts={"amount": amount, "holder": str(card["holder"]), "budget_id": str(card["budget_id"] or "")},
+    )
 
 
 def _state(kind: str) -> handlers.Planner:
@@ -411,6 +570,7 @@ def _state(kind: str) -> handlers.Planner:
         bid = ""
         if kind == "card_freeze" and "budget_id" in p:
             from .budgeting import subtree
+
             bid = V.text(p, "budget_id", 80)
             b = ctx.budgets().get(bid)
             if b is None or (who != SYSTEM and not handlers.sees_budget(ctx, who, b)):
@@ -424,8 +584,13 @@ def _state(kind: str) -> handlers.Planner:
             cards = [_card(ctx, who, V.text(p, "card_id", 80))]
 
         def claims(card: Any) -> bool:
-            return kind == "card_freeze" and who != SYSTEM and str(card["status"]) == "frozen" and \
-                str(card["freeze_by"] or "") == "budget"
+            return (
+                kind == "card_freeze"
+                and who != SYSTEM
+                and str(card["status"]) == "frozen"
+                and str(card["freeze_by"] or "") == "budget"
+            )
+
         for card in cards:
             if str(card["status"]) == status and not claims(card):
                 raise FinanceError(CONFLICT, f"that card is already {status}")
@@ -433,6 +598,7 @@ def _state(kind: str) -> handlers.Planner:
                 raise FinanceError(CONFLICT, "that card is canceled")
         if kind == "card_unfreeze":
             from .core import dates
+
             if who == SYSTEM and any(str(card["freeze_by"] or "") != "budget" for card in cards):
                 raise FinanceError(CONFLICT, "only a budget's cutoff lifts its own freeze")
             leaf = str(cards[0]["budget_id"] or "")
@@ -444,28 +610,41 @@ def _state(kind: str) -> handlers.Planner:
             for card in cards:
                 cid = str(card["id"])
                 if claims(card):
-                    SK.update(ctx.c, "fin_cards", cid, {"freeze_by": "person", "freeze_budget_id": None,
-                                                        "updated_at": ctx.at})
+                    SK.update(
+                        ctx.c, "fin_cards", cid, {"freeze_by": "person", "freeze_budget_id": None, "updated_at": ctx.at}
+                    )
                     continue
                 fields: dict[str, object] = {"status": status, "updated_at": ctx.at}
                 if kind == "card_cancel":
-                    fields["allocation_due"] = 0         # its reservation goes when Mercury confirms the cancel
+                    fields["allocation_due"] = 0  # its reservation goes when Mercury confirms the cancel
                 elif kind == "card_freeze":
                     fields.update(freeze_by="budget" if who == SYSTEM else "person", freeze_budget_id=bid or None)
                 else:
                     fields.update(freeze_by=None, freeze_budget_id=None)
                 SK.update(ctx.c, "fin_cards", cid, fields)
-                if kind == "card_cancel" and not card["provider_card_id"] and \
-                        str(card["provider_status"] or "") != UNCERTAIN and \
-                        not SK.card_create_waiting(ctx.c, cid):
-                    not_issued(ctx, cid)       # never issued and not being issued: nothing to undo
+                if (
+                    kind == "card_cancel"
+                    and not card["provider_card_id"]
+                    and str(card["provider_status"] or "") != UNCERTAIN
+                    and not SK.card_create_waiting(ctx.c, cid)
+                ):
+                    not_issued(ctx, cid)  # never issued and not being issued: nothing to undo
                     continue
                 sync(ctx, cid, aid, who)
             return {"cards": [str(card["id"]) for card in cards], "status": status}
-        what = f"{op.capitalize()} {len(cards)} card(s)" if len(cards) > 1 else \
-            f"{op.capitalize()} card ••{cards[0]['last4'] or '----'}"
-        return Plan(K.default_gate(ctx.org, who, kind), what, apply,
-                    facts={"holder": [str(card["holder"]) for card in cards], "cards": len(cards)})
+
+        what = (
+            f"{op.capitalize()} {len(cards)} card(s)"
+            if len(cards) > 1
+            else f"{op.capitalize()} card ••{cards[0]['last4'] or '----'}"
+        )
+        return Plan(
+            K.default_gate(ctx.org, who, kind),
+            what,
+            apply,
+            facts={"holder": [str(card["holder"]) for card in cards], "cards": len(cards)},
+        )
+
     return planner
 
 
@@ -475,8 +654,12 @@ def unfreeze_with_room(ctx: Ctx, budget_id: str = "", aid: str = "") -> int:
     lifted = 0
     for card in lift_eligible(ctx, budget_id):
         cid = str(card["id"])
-        SK.update(ctx.c, "fin_cards", cid, {"status": "active", "freeze_by": None, "freeze_budget_id": None,
-                                            "updated_at": ctx.at})
+        SK.update(
+            ctx.c,
+            "fin_cards",
+            cid,
+            {"status": "active", "freeze_by": None, "freeze_budget_id": None, "updated_at": ctx.at},
+        )
         sync(ctx, cid, aid, SYSTEM)
         lifted += 1
     return lifted
@@ -488,6 +671,7 @@ def lift_eligible(ctx: Ctx, budget_id: str = "") -> list[Any]:
     that budget are looked at."""
     from .budgeting import subtree
     from .core import dates
+
     budgets = ctx.budgets()
     scope = subtree(ctx, budget_id) if budget_id else None
     today = dates.day(ctx.today)
@@ -503,13 +687,20 @@ def lift_through_actions(ctx: Ctx) -> int:
     """The hourly look's lift (§8.2): each card lift_eligible names is unfrozen as system work through the action path,
     one action a card, so the lift is logged, refused like any unfreeze and replay-safe. How many."""
     from . import actions
+
     lifted = 0
     for card in lift_eligible(ctx):
         cid = str(card["id"])
         # The key carries the hour: a lift refused this hour (its failed result is stored under the key) is tried again
         # the next hour, while a lift that committed is replayed by the same key and not sent again.
-        res = actions.act(ctx.c, SYSTEM, "card_unfreeze", {"card_id": cid, "reason": "budget has room"},
-                          f"cutoff-lift-{cid}-{card['updated_at']}-{ctx.at[:13]}", at=ctx.at)
+        res = actions.act(
+            ctx.c,
+            SYSTEM,
+            "card_unfreeze",
+            {"card_id": cid, "reason": "budget has room"},
+            f"cutoff-lift-{cid}-{card['updated_at']}-{ctx.at[:13]}",
+            at=ctx.at,
+        )
         if res.status == "committed":
             lifted += 1
     return lifted
@@ -520,13 +711,18 @@ def freeze_paused(ctx: Ctx, budget_id: str, aid: str, by: str) -> int:
     allocations stay; a raise that leaves room lifts them (`unfreeze_with_room`). Each freeze goes to Mercury through
     `sync`. How many. An ad budget's pause freezes nothing: it only warns (budgeting.warn_only)."""
     from .budgeting import budget_platform, subtree
+
     if budget_platform(ctx, ctx.budgets()[budget_id]):
         return 0
     cards = SK.cards_on_budgets(ctx.c, subtree(ctx, budget_id))
     for card in cards:
         cid = str(card["id"])
-        SK.update(ctx.c, "fin_cards", cid, {"status": "frozen", "freeze_by": "budget", "freeze_budget_id": budget_id,
-                                            "updated_at": ctx.at})
+        SK.update(
+            ctx.c,
+            "fin_cards",
+            cid,
+            {"status": "frozen", "freeze_by": "budget", "freeze_budget_id": budget_id, "updated_at": ctx.at},
+        )
         sync(ctx, cid, aid, by)
     return len(cards)
 
@@ -536,10 +732,11 @@ def _over(ctx: Ctx, budget_id: str, at: date) -> bool:
     unfreeze read. An unused allocation, a card's own limit included, is not spend, so it never freezes the card that
     set it aside (§4.4, §8.2)."""
     from .budgeting import state
+
     return state(ctx, budget_id, at).at_limit
 
 
-BLOCKING = ("decline", "hold_payment")     # the at-limit actions that refuse spend: a card under one stays frozen
+BLOCKING = ("decline", "hold_payment")  # the at-limit actions that refuse spend: a card under one stays frozen
 
 
 def blocking_budget(ctx: Ctx, leaf: str, at: date) -> str:
@@ -549,6 +746,7 @@ def blocking_budget(ctx: Ctx, leaf: str, at: date) -> str:
     by hand, only when none of them stops it. A warn or ask budget above zero blocks nothing, and an ad budget
     (budgeting.warn_only) nothing at all, at zero too."""
     from .budgeting import budget_platform, chain_of
+
     budgets = ctx.budgets()
     for bid in chain_of(ctx, leaf):
         if budget_platform(ctx, budgets[bid]):
@@ -568,8 +766,11 @@ def _unfreeze_refusal(ctx: Ctx, who: str, leaf: str, blocker: str) -> FinanceErr
     """Why a card cannot be unfrozen yet. The blocking budget is named only where `who` may see it (§7.5); the record
     keeps no name, so a replay names it again only while `who` may still see it."""
     b = ctx.budgets()[blocker]
-    fallback = ("this card's budget is used up; raise it before unfreezing" if blocker == leaf
-                else "a budget above this one is used up; raise it before unfreezing")
+    fallback = (
+        "this card's budget is used up; raise it before unfreezing"
+        if blocker == leaf
+        else "a budget above this one is used up; raise it before unfreezing"
+    )
     named = Named((blocker,), "the {0} budget is used up; raise it before unfreezing", fallback)
     return named_refusal(DENIED, named, [b.name], handlers.sees_budget(ctx, who, b))
 
@@ -582,8 +783,14 @@ def check_lower(ctx: Ctx, card: Any, amount: int, who: str) -> None:
     Named record: its figure shows only to a reader who sees the card and whose own figure is the true one (named_reason)."""
     have = used(ctx, card)
     if 0 < amount < have:
-        named = Named((), f"the card has used {have / 100:.2f} this period; its limit can't go below that",
-                      LIMIT_FALLBACK, numbers=True, cards=(str(card["id"]),), on=dates.day(ctx.today).isoformat())
+        named = Named(
+            (),
+            f"the card has used {have / 100:.2f} this period; its limit can't go below that",
+            LIMIT_FALLBACK,
+            numbers=True,
+            cards=(str(card["id"]),),
+            on=dates.day(ctx.today).isoformat(),
+        )
         shown = sees(ctx, who, card) and not figure_hidden(ctx, who, card)
         raise named_refusal(INVALID, named, [], shown)
 
@@ -592,6 +799,7 @@ def figure_hidden(ctx: Ctx, who: str, card: Any, on: str = "") -> bool:
     """Whether `who`'s figure for the card's spend, in the period holding `on` (today when none), differs from the true
     one: a settled private part is netted out of it."""
     from .budgeting import Netted, period_window, settled_used, subtree
+
     bid = str(card["budget_id"] or "")
     start, end = period_window(ctx, bid, on)
     netted = Netted(ctx.view(who))
@@ -607,12 +815,16 @@ def limit_follows(ctx: Ctx, card_id: str, amount: int, aid: str, by: str, lowere
         return
     fields: dict[str, object] = {"updated_at": ctx.at, "allocation_due": amount if lowered else None}
     if amount <= 0:
-        fields.update(status="frozen", freeze_by="person", freeze_budget_id=None)    # a zero allocation is a person's
+        fields.update(status="frozen", freeze_by="person", freeze_budget_id=None)  # a zero allocation is a person's
     else:
         fields["limit_amount"] = amount
     SK.update(ctx.c, "fin_cards", card_id, fields)
-    if lowered and not card["provider_card_id"] and str(card["provider_status"] or "") == "" and \
-            not SK.card_create_claimed(ctx.c, card_id):
+    if (
+        lowered
+        and not card["provider_card_id"]
+        and str(card["provider_status"] or "") == ""
+        and not SK.card_create_claimed(ctx.c, card_id)
+    ):
         confirmed_now(ctx, card_id, amount)
         return
     sync(ctx, card_id, aid, by)
@@ -623,8 +835,16 @@ def confirmed_now(ctx: Ctx, card_id: str, amount: int) -> None:
     lower reservation can take effect at once."""
     card = SK.get(ctx.c, "fin_cards", card_id)
     if card is not None and card["budget_id"]:
-        SB.upsert_allocation(ctx.c, budget_id=str(card["budget_id"]), target_kind="card", target_id=card_id,
-                             amount=amount, currency=ctx.book.base_currency, by=SYSTEM, at=ctx.at)
+        SB.upsert_allocation(
+            ctx.c,
+            budget_id=str(card["budget_id"]),
+            target_kind="card",
+            target_id=card_id,
+            amount=amount,
+            currency=ctx.book.base_currency,
+            by=SYSTEM,
+            at=ctx.at,
+        )
         SK.update(ctx.c, "fin_cards", card_id, {"allocation_due": None})
 
 
@@ -635,8 +855,11 @@ def _vendor(ctx: Ctx, text: str) -> tuple[str, str]:
     if not key:
         raise invalid("name the vendor")
     contact = SAP.contacts(ctx.c, [key]).get(key) if SAP.is_contact(ctx.c, key) else None
-    label = str(contact["name"]) if contact is not None else \
-        SL.vendor_label_texts(ctx.c, ctx.book.id, [key]).get(key) or text.strip()
+    label = (
+        str(contact["name"])
+        if contact is not None
+        else SL.vendor_label_texts(ctx.c, ctx.book.id, [key]).get(key) or text.strip()
+    )
     return key, label[:80]
 
 
@@ -662,18 +885,47 @@ def card_save(ctx: Ctx, who: str, p: V.Payload) -> Plan:
 
     def apply(aid: str) -> Result:
         if row is None:
-            SK.insert(ctx.c, "fin_card_saves", {
-                "book_id": ctx.book.id, "card_id": card_id, "vendor_key": key, "vendor_label": label, "active": 1,
-                "saved_by": who, "saved_at": ctx.at, "removed_by": None, "removed_at": None, "created_at": ctx.at,
-                "created_by": who, "updated_at": ctx.at})
+            SK.insert(
+                ctx.c,
+                "fin_card_saves",
+                {
+                    "book_id": ctx.book.id,
+                    "card_id": card_id,
+                    "vendor_key": key,
+                    "vendor_label": label,
+                    "active": 1,
+                    "saved_by": who,
+                    "saved_at": ctx.at,
+                    "removed_by": None,
+                    "removed_at": None,
+                    "created_at": ctx.at,
+                    "created_by": who,
+                    "updated_at": ctx.at,
+                },
+            )
         else:
-            SK.update(ctx.c, "fin_card_saves", str(row["id"]), {
-                "vendor_label": label, "active": 1, "saved_by": who, "saved_at": ctx.at, "removed_by": None,
-                "removed_at": None, "updated_at": ctx.at})
+            SK.update(
+                ctx.c,
+                "fin_card_saves",
+                str(row["id"]),
+                {
+                    "vendor_label": label,
+                    "active": 1,
+                    "saved_by": who,
+                    "saved_at": ctx.at,
+                    "removed_by": None,
+                    "removed_at": None,
+                    "updated_at": ctx.at,
+                },
+            )
         return {"card_id": card_id, "vendor": key, "vendor_label": label, "saved": True}
-    return Plan(K.default_gate(ctx.org, who, "card_save"),
-                f"Record card ••{card['last4'] or '----'} as saved on {label}", apply,
-                facts={"holder": str(card["holder"]), "vendor": key})
+
+    return Plan(
+        K.default_gate(ctx.org, who, "card_save"),
+        f"Record card ••{card['last4'] or '----'} as saved on {label}",
+        apply,
+        facts={"holder": str(card["holder"]), "vendor": key},
+    )
 
 
 def card_unsave(ctx: Ctx, who: str, p: V.Payload) -> Plan:
@@ -690,18 +942,47 @@ def card_unsave(ctx: Ctx, who: str, p: V.Payload) -> Plan:
 
     def apply(aid: str) -> Result:
         for row in live:
-            SK.update(ctx.c, "fin_card_saves", str(row["id"]),
-                      {"active": 0, "removed_by": who, "removed_at": ctx.at, "updated_at": ctx.at})
+            SK.update(
+                ctx.c,
+                "fin_card_saves",
+                str(row["id"]),
+                {"active": 0, "removed_by": who, "removed_at": ctx.at, "updated_at": ctx.at},
+            )
         return {"card_id": card_id, "vendor": key, "vendor_label": label, "saved": False}
-    return Plan(K.default_gate(ctx.org, who, "card_unsave"),
-                f"Record card ••{card['last4'] or '----'} as removed from {label}", apply,
-                facts={"holder": str(card["holder"]), "vendor": key})
+
+    return Plan(
+        K.default_gate(ctx.org, who, "card_unsave"),
+        f"Record card ••{card['last4'] or '----'} as removed from {label}",
+        apply,
+        facts={"holder": str(card["holder"]), "vendor": key},
+    )
 
 
 PLANNERS: dict[str, handlers.Planner] = {
-    "card_create": card_create, "card_update_limit": card_update_limit, "card_freeze": _state("card_freeze"),
-    "card_unfreeze": _state("card_unfreeze"), "card_cancel": _state("card_cancel"), "card_resolve": card_resolve,
-    "card_save": card_save, "card_unsave": card_unsave}
+    "card_create": card_create,
+    "card_update_limit": card_update_limit,
+    "card_freeze": _state("card_freeze"),
+    "card_unfreeze": _state("card_unfreeze"),
+    "card_cancel": _state("card_cancel"),
+    "card_resolve": card_resolve,
+    "card_save": card_save,
+    "card_unsave": card_unsave,
+}
 
-__all__ = ["PLANNERS", "UNCERTAIN", "WAITING", "adopt", "candidates", "check_lower", "confirmed", "created",
-           "issue_limit", "limit_follows", "not_issued", "queue", "sync", "uncertain", "used"]
+__all__ = [
+    "PLANNERS",
+    "UNCERTAIN",
+    "WAITING",
+    "adopt",
+    "candidates",
+    "check_lower",
+    "confirmed",
+    "created",
+    "issue_limit",
+    "limit_follows",
+    "not_issued",
+    "queue",
+    "sync",
+    "uncertain",
+    "used",
+]

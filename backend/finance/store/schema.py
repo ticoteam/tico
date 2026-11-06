@@ -6,6 +6,7 @@ the statements here carry it for a new install, where cloud step 64 runs `create
 Every row has `id` (core's id format), `created_at` and `created_by` (a teammate, `system:finance` or `rule:<id>`).
 Money is BIGINT minor units beside its ISO currency. Booleans are 0/1 integers, times ISO text, JSON is text.
 """
+
 import json
 import re
 import sqlite3
@@ -483,69 +484,101 @@ BEGIN SELECT RAISE(ABORT, 'period closed'); END;
 # 65 (`phase1`) adds whichever is missing, so an upgraded install ends with the same schema as a new one.
 ADDED = (
     ("fin_lines", "role", "TEXT NOT NULL DEFAULT ''"),
-    ("fin_money_accounts", "provider_account_id", "TEXT"), ("fin_money_accounts", "subtype", "TEXT NOT NULL DEFAULT ''"),
+    ("fin_money_accounts", "provider_account_id", "TEXT"),
+    ("fin_money_accounts", "subtype", "TEXT NOT NULL DEFAULT ''"),
     ("fin_money_accounts", "available_balance", "BIGINT"),
     ("fin_money_accounts", "status", "TEXT NOT NULL DEFAULT 'active'"),
     ("fin_feed_txns", "pending", "INTEGER NOT NULL DEFAULT 0"),
-    ("fin_feed_txns", "provider_status", "TEXT NOT NULL DEFAULT ''"), ("fin_feed_txns", "posted_at", "TEXT"),
-    ("fin_feed_txns", "kind", "TEXT NOT NULL DEFAULT ''"), ("fin_feed_txns", "card_id", "TEXT"),
-    ("fin_feed_txns", "hold_id", "TEXT"), ("fin_feed_txns", "reconciliation_id", "TEXT"),
-    ("fin_feed_txns", "version", "INTEGER NOT NULL DEFAULT 0"), ("fin_feed_txns", "request_id", "TEXT"),
+    ("fin_feed_txns", "provider_status", "TEXT NOT NULL DEFAULT ''"),
+    ("fin_feed_txns", "posted_at", "TEXT"),
+    ("fin_feed_txns", "kind", "TEXT NOT NULL DEFAULT ''"),
+    ("fin_feed_txns", "card_id", "TEXT"),
+    ("fin_feed_txns", "hold_id", "TEXT"),
+    ("fin_feed_txns", "reconciliation_id", "TEXT"),
+    ("fin_feed_txns", "version", "INTEGER NOT NULL DEFAULT 0"),
+    ("fin_feed_txns", "request_id", "TEXT"),
     ("fin_feed_txns", "raw", "TEXT NOT NULL DEFAULT '{}'"),
     ("fin_outbox", "unknown", "INTEGER NOT NULL DEFAULT 0"),
     ("fin_bill_lines", "external_line", "TEXT NOT NULL DEFAULT ''"),
     ("fin_invoice_lines", "external_line", "TEXT NOT NULL DEFAULT ''"),
     ("fin_reconciliations", "cleared_total", "BIGINT NOT NULL DEFAULT 0"),
-    ("fin_reconciliations", "statement_id", "TEXT"), ("fin_reconciliations", "action_id", "TEXT"),
-    ("fin_reconciliations", "undone_at", "TEXT"), ("fin_reconciliations", "undone_by", "TEXT"),
-    ("fin_cards", "nickname", "TEXT NOT NULL DEFAULT ''"), ("fin_cards", "provider_limit", "BIGINT"),
-    ("fin_cards", "sync_status", "TEXT NOT NULL DEFAULT ''"), ("fin_cards", "sync_error", "TEXT"),
+    ("fin_reconciliations", "statement_id", "TEXT"),
+    ("fin_reconciliations", "action_id", "TEXT"),
+    ("fin_reconciliations", "undone_at", "TEXT"),
+    ("fin_reconciliations", "undone_by", "TEXT"),
+    ("fin_cards", "nickname", "TEXT NOT NULL DEFAULT ''"),
+    ("fin_cards", "provider_limit", "BIGINT"),
+    ("fin_cards", "sync_status", "TEXT NOT NULL DEFAULT ''"),
+    ("fin_cards", "sync_error", "TEXT"),
     ("fin_cards", "synced_at", "TEXT"),
-    ("fin_cards", "freeze_by", "TEXT"), ("fin_cards", "freeze_budget_id", "TEXT"),
+    ("fin_cards", "freeze_by", "TEXT"),
+    ("fin_cards", "freeze_budget_id", "TEXT"),
     ("fin_cards", "merchant", "TEXT NOT NULL DEFAULT ''"),
     ("fin_connections", "name", "TEXT NOT NULL DEFAULT ''"),
-    ("fin_connections", "settings", "TEXT NOT NULL DEFAULT '{}'"), ("fin_connections", "events_cursor", "TEXT"),
-    ("fin_connections", "last_sync_at", "TEXT"), ("fin_connections", "next_sync_at", "TEXT"),
-    ("fin_outbox", "claimed_at", "TEXT"), ("fin_cards", "provider_status", "TEXT"), ("fin_cards", "allocation_due", "INTEGER"),
-    ("fin_inbox", "attempts", "INTEGER NOT NULL DEFAULT 0"), ("fin_inbox", "next_try_at", "TEXT"),
+    ("fin_connections", "settings", "TEXT NOT NULL DEFAULT '{}'"),
+    ("fin_connections", "events_cursor", "TEXT"),
+    ("fin_connections", "last_sync_at", "TEXT"),
+    ("fin_connections", "next_sync_at", "TEXT"),
+    ("fin_outbox", "claimed_at", "TEXT"),
+    ("fin_cards", "provider_status", "TEXT"),
+    ("fin_cards", "allocation_due", "INTEGER"),
+    ("fin_inbox", "attempts", "INTEGER NOT NULL DEFAULT 0"),
+    ("fin_inbox", "next_try_at", "TEXT"),
     ("fin_inbox", "tried", "TEXT NOT NULL DEFAULT '[]'"),
     ("fin_payments", "counted", "TEXT NOT NULL DEFAULT '[]'"),
     # a finance admin's cancel of an unknown payment, waiting for Mercury's lookup by its key (migration 0037)
-    ("fin_payments", "cancel_asked_at", "TEXT"), ("fin_payments", "cancel_asked_by", "TEXT NOT NULL DEFAULT ''"),
+    ("fin_payments", "cancel_asked_at", "TEXT"),
+    ("fin_payments", "cancel_asked_by", "TEXT NOT NULL DEFAULT ''"),
     # phase 2: bills, invoices, contacts, posting rules and the cash view (migration 66)
     ("fin_entries", "basis", "TEXT NOT NULL DEFAULT 'both' CHECK (basis IN ('both','accrual'))"),
-    ("fin_bills", "terms_days", "INTEGER"), ("fin_bills", "memo", "TEXT NOT NULL DEFAULT ''"),
-    ("fin_bills", "origin", "TEXT NOT NULL DEFAULT 'manual'"), ("fin_bills", "approved_by", "TEXT"),
-    ("fin_bills", "approved_at", "TEXT"), ("fin_bills", "schedule", "TEXT NOT NULL DEFAULT '{}'"),
-    ("fin_bills", "amount_paid", "BIGINT NOT NULL DEFAULT 0"), ("fin_bills", "voided_at", "TEXT"),
-    ("fin_bills", "pay_on", "TEXT"), ("fin_bill_lines", "line_no", "INTEGER NOT NULL DEFAULT 0"),
+    ("fin_bills", "terms_days", "INTEGER"),
+    ("fin_bills", "memo", "TEXT NOT NULL DEFAULT ''"),
+    ("fin_bills", "origin", "TEXT NOT NULL DEFAULT 'manual'"),
+    ("fin_bills", "approved_by", "TEXT"),
+    ("fin_bills", "approved_at", "TEXT"),
+    ("fin_bills", "schedule", "TEXT NOT NULL DEFAULT '{}'"),
+    ("fin_bills", "amount_paid", "BIGINT NOT NULL DEFAULT 0"),
+    ("fin_bills", "voided_at", "TEXT"),
+    ("fin_bills", "pay_on", "TEXT"),
+    ("fin_bill_lines", "line_no", "INTEGER NOT NULL DEFAULT 0"),
     ("fin_invoice_lines", "line_no", "INTEGER NOT NULL DEFAULT 0"),
     ("fin_invoice_lines", "taxable", "INTEGER NOT NULL DEFAULT 1"),
-    ("fin_invoices", "terms_days", "INTEGER"), ("fin_invoices", "memo", "TEXT NOT NULL DEFAULT ''"),
-    ("fin_invoices", "sent_at", "TEXT"), ("fin_invoices", "written_off", "BIGINT NOT NULL DEFAULT 0"),
+    ("fin_invoices", "terms_days", "INTEGER"),
+    ("fin_invoices", "memo", "TEXT NOT NULL DEFAULT ''"),
+    ("fin_invoices", "sent_at", "TEXT"),
+    ("fin_invoices", "written_off", "BIGINT NOT NULL DEFAULT 0"),
     ("fin_invoices", "voided_at", "TEXT"),
-    ("fin_contacts", "tax_id_last4", "TEXT"), ("fin_rules", "priority", "INTEGER NOT NULL DEFAULT 100"),
+    ("fin_contacts", "tax_id_last4", "TEXT"),
+    ("fin_rules", "priority", "INTEGER NOT NULL DEFAULT 100"),
     # phase 4: the mirror's external refs (kind, revision, status) on installs made before them (migration 68)
-    ("fin_external_refs", "kind", "TEXT NOT NULL DEFAULT ''"), ("fin_external_refs", "revision", "TEXT NOT NULL DEFAULT ''"),
-    ("fin_external_refs", "status", "TEXT NOT NULL DEFAULT 'active'"), ("fin_external_refs", "updated_at", "TEXT"),
+    ("fin_external_refs", "kind", "TEXT NOT NULL DEFAULT ''"),
+    ("fin_external_refs", "revision", "TEXT NOT NULL DEFAULT ''"),
+    ("fin_external_refs", "status", "TEXT NOT NULL DEFAULT 'active'"),
+    ("fin_external_refs", "updated_at", "TEXT"),
     # the generation of a full re-read that the books returned the ref in (migration 0037); negative once swept in it
     ("fin_external_refs", "seen_gen", "INTEGER"),
     # the provider's id for a journal or credit memo line, so its tags follow the line across a revision
     ("fin_lines", "external_line", "TEXT NOT NULL DEFAULT ''"),
     # vendors: seats or licenses, and the next renewal date (spec §12; the renewal stage events come from watch)
-    ("fin_contacts", "seats", "INTEGER"), ("fin_contacts", "renewal_on", "TEXT"),
+    ("fin_contacts", "seats", "INTEGER"),
+    ("fin_contacts", "renewal_on", "TEXT"),
     # the books gaps (migration 73): fin_transfers' columns added since it was first written
-    ("fin_transfers", "from_feed_id", "TEXT"), ("fin_transfers", "to_feed_id", "TEXT"),
-    ("fin_transfers", "settled_at", "TEXT"), ("fin_transfers", "submitted_at", "TEXT"),
+    ("fin_transfers", "from_feed_id", "TEXT"),
+    ("fin_transfers", "to_feed_id", "TEXT"),
+    ("fin_transfers", "settled_at", "TEXT"),
+    ("fin_transfers", "submitted_at", "TEXT"),
     ("fin_transfers", "counted", "TEXT NOT NULL DEFAULT '[]'"),
-    ("fin_transfers", "provider_credit_txn_id", "TEXT"), ("fin_transfers", "find_after", "TEXT"),
+    ("fin_transfers", "provider_credit_txn_id", "TEXT"),
+    ("fin_transfers", "find_after", "TEXT"),
     # the journal line a bank row matched (migration 75), so a transfer's two legs on one account match one at a time
     ("fin_feed_txns", "entry_line_id", "TEXT"),
     # the shared item a bill or invoice line names (migration 76, backend/records)
-    ("fin_bill_lines", "item_id", "TEXT"), ("fin_invoice_lines", "item_id", "TEXT"),
+    ("fin_bill_lines", "item_id", "TEXT"),
+    ("fin_invoice_lines", "item_id", "TEXT"),
     ("fin_bill_lines", "po_line_id", "TEXT"),
     # a prepaid bill line: the month its expense starts and the months it is spread over (migration 0037)
-    ("fin_bill_lines", "prepaid_start", "TEXT"), ("fin_bill_lines", "prepaid_months", "INTEGER"),
+    ("fin_bill_lines", "prepaid_start", "TEXT"),
+    ("fin_bill_lines", "prepaid_months", "INTEGER"),
     # the money-out row a money-in row refunds (migration 0037, backend/finance/refunds.py). A column, not raw: a
     # provider's update rewrites raw, and the link must survive it.
     ("fin_feed_txns", "refund_of", "TEXT"),
@@ -624,6 +657,7 @@ CREATE TABLE IF NOT EXISTS fin_invoice_reminders (
   UNIQUE (invoice_id, stage));
 """
 
+
 def table_names() -> list[str]:
     """Every fin_* table the migration makes."""
     return re.findall(r"CREATE TABLE IF NOT EXISTS (fin_\w+)", TABLES + TAX + PURCHASING + PREPAIDS + REMINDERS)
@@ -664,6 +698,7 @@ def create(c: sqlite3.Connection) -> None:
         for statement in statements(script):
             c.execute(statement)
     from . import tico
+
     tico.watch_org(c)
 
 
@@ -689,10 +724,11 @@ def freeze_provenance(c: sqlite3.Connection) -> None:
     rows are read, so a second run changes nothing."""
     if not c.execute("SELECT 1 FROM fin_cards WHERE status='frozen' AND freeze_by IS NULL LIMIT 1").fetchone():
         return
-    last: dict[str, str] = {}     # card id -> the budget its latest freeze or unfreeze was a cutoff of ("" if none)
+    last: dict[str, str] = {}  # card id -> the budget its latest freeze or unfreeze was a cutoff of ("" if none)
     for kind, actor, payload, result in c.execute(
-            "SELECT kind, actor, payload, result FROM fin_actions WHERE status='committed' AND "
-            "kind IN ('card_freeze','card_unfreeze') ORDER BY created_at, rowid").fetchall():
+        "SELECT kind, actor, payload, result FROM fin_actions WHERE status='committed' AND "
+        "kind IN ('card_freeze','card_unfreeze') ORDER BY created_at, rowid"
+    ).fetchall():
         body = cast(dict[str, object], json.loads(str(payload or "{}")))
         cut = str(body.get("budget_id") or "") if kind == "card_freeze" and actor == SYSTEM else ""
         outcome = cast(dict[str, object], json.loads(str(result or "{}")))
@@ -700,10 +736,13 @@ def freeze_provenance(c: sqlite3.Connection) -> None:
             last[str(card)] = cut
     for card_id, budget_id in last.items():
         if budget_id:
-            c.execute("UPDATE fin_cards SET freeze_by='budget', freeze_budget_id=? WHERE id=? AND status='frozen' AND "
-                      "freeze_by IS NULL AND EXISTS (SELECT 1 FROM fin_allocations a "
-                      "WHERE a.budget_id=fin_cards.budget_id AND a.target_kind='card' AND a.target_id=fin_cards.id "
-                      "AND a.amount>0)", (budget_id, card_id))
+            c.execute(
+                "UPDATE fin_cards SET freeze_by='budget', freeze_budget_id=? WHERE id=? AND status='frozen' AND "
+                "freeze_by IS NULL AND EXISTS (SELECT 1 FROM fin_allocations a "
+                "WHERE a.budget_id=fin_cards.budget_id AND a.target_kind='card' AND a.target_id=fin_cards.id "
+                "AND a.amount>0)",
+                (budget_id, card_id),
+            )
 
 
 def phase2(c: sqlite3.Connection) -> None:
@@ -717,10 +756,12 @@ def feed_lines(c: sqlite3.Connection) -> None:
     """Cloud migration 75: the journal line each matched bank row took (fin_feed_txns.entry_line_id). A row matched
     before it takes the entry's line on its bank account for its amount, if the entry has one. Idempotent."""
     create(c)
-    c.execute("UPDATE fin_feed_txns SET entry_line_id=(SELECT l.id FROM fin_lines l JOIN fin_money_accounts m ON "
-              "m.id=fin_feed_txns.money_account_id WHERE l.entry_id=fin_feed_txns.entry_id AND "
-              "l.account_id=m.account_id AND l.amount=fin_feed_txns.amount ORDER BY l.id LIMIT 1) "
-              "WHERE entry_id IS NOT NULL AND entry_line_id IS NULL")
+    c.execute(
+        "UPDATE fin_feed_txns SET entry_line_id=(SELECT l.id FROM fin_lines l JOIN fin_money_accounts m ON "
+        "m.id=fin_feed_txns.money_account_id WHERE l.entry_id=fin_feed_txns.entry_id AND "
+        "l.account_id=m.account_id AND l.amount=fin_feed_txns.amount ORDER BY l.id LIMIT 1) "
+        "WHERE entry_id IS NOT NULL AND entry_line_id IS NULL"
+    )
 
 
 def phase4(c: sqlite3.Connection) -> None:
@@ -765,16 +806,23 @@ def vendor_keys_folded(c: sqlite3.Connection) -> None:
     """Phase 2 keys a plain vendor name folded (core/ledger.name_key); phase 1 posted it as written. Each vendor value
     lines carry that is no contact's id labels its key (its newest entry date's text); a budget's vendor name is keyed.
     Idempotent."""
-    rows = c.execute("SELECT l.book_id, l.contact_id, MAX(l.entry_date) FROM fin_lines l WHERE l.contact_id<>'' AND "
-                     "NOT EXISTS (SELECT 1 FROM fin_contacts k WHERE k.id=l.contact_id) "
-                     "GROUP BY l.book_id, l.contact_id").fetchall()
+    rows = c.execute(
+        "SELECT l.book_id, l.contact_id, MAX(l.entry_date) FROM fin_lines l WHERE l.contact_id<>'' AND "
+        "NOT EXISTS (SELECT 1 FROM fin_contacts k WHERE k.id=l.contact_id) "
+        "GROUP BY l.book_id, l.contact_id"
+    ).fetchall()
     for book_id, raw, day in rows:
         key = name_key(str(raw))
-        c.execute("INSERT INTO fin_vendor_labels(book_id, name_key, label, seen_on) VALUES(?,?,?,?) "
-                  "ON CONFLICT(book_id, name_key) DO UPDATE SET label=excluded.label, seen_on=excluded.seen_on "
-                  "WHERE excluded.seen_on>fin_vendor_labels.seen_on", (book_id, key, str(raw).strip(), day))
-    for bid, vendor in c.execute("SELECT b.id, b.vendor FROM fin_budgets b WHERE b.vendor<>'' AND NOT EXISTS "
-                                 "(SELECT 1 FROM fin_contacts k WHERE k.id=b.vendor)").fetchall():
+        c.execute(
+            "INSERT INTO fin_vendor_labels(book_id, name_key, label, seen_on) VALUES(?,?,?,?) "
+            "ON CONFLICT(book_id, name_key) DO UPDATE SET label=excluded.label, seen_on=excluded.seen_on "
+            "WHERE excluded.seen_on>fin_vendor_labels.seen_on",
+            (book_id, key, str(raw).strip(), day),
+        )
+    for bid, vendor in c.execute(
+        "SELECT b.id, b.vendor FROM fin_budgets b WHERE b.vendor<>'' AND NOT EXISTS "
+        "(SELECT 1 FROM fin_contacts k WHERE k.id=b.vendor)"
+    ).fetchall():
         if name_key(str(vendor)) != vendor:
             c.execute("UPDATE fin_budgets SET vendor=? WHERE id=?", (name_key(str(vendor)), bid))
 
@@ -799,6 +847,7 @@ def catalog(c: sqlite3.Connection, at: str) -> None:
     project dimension moves to projects under its value. A project tag holds the project's id, which is the legacy
     value, so no line's tags change and a closed month keeps its lines as they were. Idempotent."""
     from ...records import store as RS
+
     RS.create(c)
     _widen(c, "fin_dimensions", "'class'")
     _widen(c, "fin_line_tags", "'location'")
@@ -823,10 +872,16 @@ def _widen(c: sqlite3.Connection, table: str, marker: str) -> None:
 def _move_projects(c: sqlite3.Connection, at: str) -> None:
     """A project dimension becomes a projects row under its value. A project tag value no record has yet becomes
     one under its own text, so the tag still points at a record."""
-    c.execute("INSERT INTO projects(id, name, status, archived_at, created_at, created_by_id) "
-              "SELECT value, name, 'open', CASE WHEN active THEN NULL ELSE ? END, ?, ? FROM fin_dimensions "
-              "WHERE kind='project' AND value NOT IN (SELECT id FROM projects)", (at, at, SYSTEM))
+    c.execute(
+        "INSERT INTO projects(id, name, status, archived_at, created_at, created_by_id) "
+        "SELECT value, name, 'open', CASE WHEN active THEN NULL ELSE ? END, ?, ? FROM fin_dimensions "
+        "WHERE kind='project' AND value NOT IN (SELECT id FROM projects)",
+        (at, at, SYSTEM),
+    )
     c.execute("DELETE FROM fin_dimensions WHERE kind='project'")
-    c.execute("INSERT INTO projects(id, name, status, created_at, created_by_id) "
-              "SELECT DISTINCT value, value, 'open', ?, ? FROM fin_line_tags WHERE kind='project' "
-              "AND value NOT IN (SELECT id FROM projects)", (at, SYSTEM))
+    c.execute(
+        "INSERT INTO projects(id, name, status, created_at, created_by_id) "
+        "SELECT DISTINCT value, value, 'open', ?, ? FROM fin_line_tags WHERE kind='project' "
+        "AND value NOT IN (SELECT id FROM projects)",
+        (at, SYSTEM),
+    )

@@ -1,4 +1,5 @@
 """Where the mail connector keeps things: the Mac layout by default, named places on a Linux runner."""
+
 import os
 import subprocess
 from pathlib import Path
@@ -20,10 +21,13 @@ def venv_of(env):
     """The venv scripts/mail.sh would use, read by running it with a python that only says so."""
     fake = ROOT / "scripts/mail.sh"
     text = fake.read_text().split('if [ ! -x')[0] + 'echo "$VENV"\n'
-    done = subprocess.run(["bash", "-c", text.replace('"$(dirname "$0")/.."', '"' + str(ROOT) + '"')],
-                          capture_output=True, text=True, env={"PATH": os.environ["PATH"], **env})
+    done = subprocess.run(
+        ["bash", "-c", text.replace('"$(dirname "$0")/.."', '"' + str(ROOT) + '"')],
+        capture_output=True,
+        text=True,
+        env={"PATH": os.environ["PATH"], **env},
+    )
     return done.stdout.strip()
-
 
 
 def test_the_venv_follows_the_projects_folder_a_runner_names_and_a_named_venv_wins():

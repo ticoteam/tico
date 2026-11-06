@@ -55,7 +55,9 @@ def test_the_rules_say_who_follows_them_and_with_whom(built):
         assert item["text"] in texts, item["text"]
         rule = texts[item["text"]]
         assert rule["if_broken"] == item.get("if_broken", "block")
-        assert (rule.get("reviewer") or {}).get("id") == (item["reviewer"].split(":", 1)[1] if "reviewer" in item else None)
+        assert (rule.get("reviewer") or {}).get("id") == (
+            item["reviewer"].split(":", 1)[1] if "reviewer" in item else None
+        )
         if "who" not in item:
             assert rule["who"]["everyone"] is True
             continue
@@ -85,7 +87,9 @@ def test_every_mention_in_a_rule_names_a_real_teammate(built):
         rules = api.get("/api/v2/rules", params={"status": "active"}).json()["rules"]
     people = {"ana", "ben", "cara", "eli"}
     ours = {item["text"] for item in CONTENT["rules"]}
-    named = [m.rstrip(".-") for r in rules if r["text"] in ours for m in re.findall(r"(?<![\w@])@(\w[\w.-]*)", r["text"])]
+    named = [
+        m.rstrip(".-") for r in rules if r["text"] in ours for m in re.findall(r"(?<![\w@])@(\w[\w.-]*)", r["text"])
+    ]
     assert {"ana", "ben", "bookkeeper", "accounts-payable", "firmware", "pricing"} <= set(named)
     assert [m for m in named if m not in bots | people] == []
     assert not any(re.search(r"\b(Ana|Ben)'s\b|go to Ben\b", text) for text in ours), "a teammate is named by @handle"
@@ -110,8 +114,9 @@ def test_the_refund_draft_is_held_for_ben_and_written_nowhere(built):
     held = next(m for m in CONTENT["messages"] if m.get("held"))
     assert held["say"] not in [m["body"] for m in care]
     with sqlite3.connect(settings.db_path) as db:
-        hold = db.execute("SELECT id, state, reviewer, task_id, json_extract(verdict, '$.outcome') "
-                          "FROM org_rule_holds").fetchall()
+        hold = db.execute(
+            "SELECT id, state, reviewer, task_id, json_extract(verdict, '$.outcome') FROM org_rule_holds"
+        ).fetchall()
     assert len(hold) == 1
     hold_id, state, reviewer, task_id, outcome = hold[0]
     assert (state, reviewer, outcome) == ("held", "human:ben", "escalate")
@@ -135,19 +140,23 @@ def test_the_engineering_home_has_the_pause_and_its_fix_thread(built):
     assert len(messages) == len(said)
     bodies = [m["body"] for m in messages]
     assert any(text.startswith("Rollout paused") for text in bodies)
-    assert sum(1 for m in messages if m["depth"] == 1) == 4      # the fix's sub-thread
-    stamps = [datetime.strptime(m["created_at"], "%Y-%m-%dT%H:%M:%S.%fZ").replace(tzinfo=timezone.utc) for m in messages]
+    assert sum(1 for m in messages if m["depth"] == 1) == 4  # the fix's sub-thread
+    stamps = [
+        datetime.strptime(m["created_at"], "%Y-%m-%dT%H:%M:%S.%fZ").replace(tzinfo=timezone.utc) for m in messages
+    ]
     assert all(NOW - timedelta(days=7) <= stamp <= NOW for stamp in stamps)
 
 
 def test_ana_sidebar_lists_her_department_homes_and_her_dms(built):
     _, settings, _rows = built
     with signed_in(settings) as api:
-        sidebar = api.get("/api/v2/threads").json()          # rooms and DMs are paged apart: threads, dms
+        sidebar = api.get("/api/v2/threads").json()  # rooms and DMs are paged apart: threads, dms
         listed = {t["id"] for key in ("threads", "dms") for t in sidebar.get(key, [])}
         homes = [home_id(api, spec["home"]) for spec in CONTENT["threads"].values() if "home" in spec]
-        dms = [api.get("/api/v2/threads/dm", params={"with": with_, "create": "false"}).json()["id"]
-               for with_ in ("bot:coo", "bot:pricing")]
+        dms = [
+            api.get("/api/v2/threads/dm", params={"with": with_, "create": "false"}).json()["id"]
+            for with_ in ("bot:coo", "bot:pricing")
+        ]
     assert [h for h in homes if h not in listed] == [], "department homes missing from the sidebar"
     assert [d for d in dms if d not in listed] == [], "DMs missing from the sidebar"
 
@@ -170,7 +179,7 @@ def test_ana_and_pricing_talk_through_the_december_price(built):
         dm = api.get("/api/v2/threads/dm", params={"with": "bot:pricing", "create": "false"})
         assert dm.status_code == 200
         bodies = [m["body"] for m in timeline(api, dm.json()["id"])]
-    assert bodies[-len(said):] == said
+    assert bodies[-len(said) :] == said
 
 
 def _content(path):
@@ -181,12 +190,19 @@ def _content(path):
     texts = [item["text"] for item in CONTENT["rules"]] + [CONTENT["suggestion"]["text"]]
     with sqlite3.connect(path) as db:
         return {
-            "messages": db.execute(f"SELECT body, created_at, kind, sender_id, recipient_id FROM messages "
-                                   f"WHERE body IN ({','.join('?' * len(says))}) ORDER BY created_at, body",
-                                   says).fetchall(),
-            "conversations": db.execute("SELECT subject, audience, kind, owner_id, created_at, last_message_at "
-                                        "FROM conversations ORDER BY created_at, subject").fetchall(),
-            "rules": db.execute(f"SELECT id, text, status, who, with_scope, if_broken, reviewer, suggested_by FROM org_rules "
-                                f"WHERE text IN ({','.join('?' * len(texts))}) ORDER BY id", texts).fetchall(),
+            "messages": db.execute(
+                f"SELECT body, created_at, kind, sender_id, recipient_id FROM messages "
+                f"WHERE body IN ({','.join('?' * len(says))}) ORDER BY created_at, body",
+                says,
+            ).fetchall(),
+            "conversations": db.execute(
+                "SELECT subject, audience, kind, owner_id, created_at, last_message_at "
+                "FROM conversations ORDER BY created_at, subject"
+            ).fetchall(),
+            "rules": db.execute(
+                f"SELECT id, text, status, who, with_scope, if_broken, reviewer, suggested_by FROM org_rules "
+                f"WHERE text IN ({','.join('?' * len(texts))}) ORDER BY id",
+                texts,
+            ).fetchall(),
             "holds": db.execute("SELECT id, author, reviewer, state, created_at FROM org_rule_holds").fetchall(),
         }

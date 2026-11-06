@@ -7,6 +7,7 @@ followed (the token stays with the host it was meant for) and a 3xx is a failed 
 
 Brex's production API is api.brex.com (its staging host is not a sandbox and takes no customer tokens). A developer's
 override names only a local host, as the other providers do."""
+
 import http.client
 import json
 import logging
@@ -20,16 +21,16 @@ from typing import Any, Protocol, cast
 
 from .mercury import Answer, Opener
 
-BASE = "https://api.brex.com"          # Brex's production API, the host of its OpenAPI server. There is no fallback host: a
-                                       # connection error is reported, and the token is never sent to a second host
-BASE_ENV = "TICO_BREX_BASE"            # a developer's override: a local fake
+BASE = "https://api.brex.com"  # Brex's production API, the host of its OpenAPI server. There is no fallback host: a
+# connection error is reported, and the token is never sent to a second host
+BASE_ENV = "TICO_BREX_BASE"  # a developer's override: a local fake
 OVERRIDE_HOSTS = frozenset({"127.0.0.1", "localhost", "::1"})  # the only hosts it may name
 log = logging.getLogger(__name__)
 _warned = [False]
 TIMEOUT = 15
-MAX_WAIT = 30.0                        # seconds one Retry-After may make us wait
-TRIES = 3                              # a 429 or 5xx is tried this many times more at most
-PAGE = 100                             # rows asked for per page
+MAX_WAIT = 30.0  # seconds one Retry-After may make us wait
+TRIES = 3  # a 429 or 5xx is tried this many times more at most
+PAGE = 100  # rows asked for per page
 
 
 class Provider(Protocol):
@@ -60,8 +61,9 @@ def base_url() -> str:
 class _NoRedirect(urllib.request.HTTPRedirectHandler):
     """Never follow a redirect: urllib would resend the Authorization header to wherever Location points."""
 
-    def redirect_request(self, req: urllib.request.Request, fp: Any, code: int, msg: str, headers: Any,
-                         newurl: str) -> urllib.request.Request | None:
+    def redirect_request(
+        self, req: urllib.request.Request, fp: Any, code: int, msg: str, headers: Any, newurl: str
+    ) -> urllib.request.Request | None:
         return None
 
 
@@ -69,8 +71,14 @@ _OPENER = urllib.request.build_opener(_NoRedirect())
 
 
 class Brex:
-    def __init__(self, token: str, base: str = BASE, opener: Opener | None = None,
-                 sleep: Callable[[float], None] = time.sleep, budget: float | None = None) -> None:
+    def __init__(
+        self,
+        token: str,
+        base: str = BASE,
+        opener: Opener | None = None,
+        sleep: Callable[[float], None] = time.sleep,
+        budget: float | None = None,
+    ) -> None:
         """`budget`, when given, bounds every call made through this client together (the connect probe passes
         PROBE_SECONDS): a call's timeout is what is left of it, and a 429 or 5xx is not waited out past it."""
         self._token, self._base, self._opener, self._sleep = token, base.rstrip("/"), opener, sleep
@@ -128,8 +136,10 @@ class Brex:
     def cash_transactions(self, account_id: str, posted_at_start: str, cursor: str | None = None) -> Answer:
         """Settled transactions of one cash account posted on or after `posted_at_start`
         (GET /v2/transactions/cash/{id})."""
-        return self._get(f"/v2/transactions/cash/{urllib.parse.quote(account_id, safe='')}",
-                         _page(cursor, posted_at_start=posted_at_start))
+        return self._get(
+            f"/v2/transactions/cash/{urllib.parse.quote(account_id, safe='')}",
+            _page(cursor, posted_at_start=posted_at_start),
+        )
 
     def me(self) -> Answer:
         """The user the token belongs to (GET /v2/users/me). The connect probe reads it as the token check; the response has
@@ -158,7 +168,7 @@ def _retry_after(value: object, attempt: int) -> float:
     try:
         wait = float(str(value))
     except (TypeError, ValueError):
-        wait = 2.0 ** attempt
+        wait = 2.0**attempt
     return max(0.0, min(wait, MAX_WAIT))
 
 

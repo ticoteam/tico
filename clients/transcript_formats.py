@@ -17,6 +17,7 @@ Pure: no files, no clock, no network. Times are integer milliseconds; a format t
          "h:mm:ss[.fff]"); start_ms and end_ms are milliseconds. speaker may be speaker_name,
          name or a {name} object.
 """
+
 import json
 import re
 
@@ -30,7 +31,9 @@ class TranscriptFormatError(ValueError):
 
 
 CLOCK = r"(?:(\d{1,2}):)?(\d{1,2}):(\d{2})(?:[.,](\d{1,3}))?"
-CUE_TIME = re.compile(r"^\s*(?:(\d{1,2}):)?(\d{1,2}):(\d{2})[.,](\d{1,3})\s*-->\s*(?:(\d{1,2}):)?(\d{1,2}):(\d{2})[.,](\d{1,3})")
+CUE_TIME = re.compile(
+    r"^\s*(?:(\d{1,2}):)?(\d{1,2}):(\d{2})[.,](\d{1,3})\s*-->\s*(?:(\d{1,2}):)?(\d{1,2}):(\d{2})[.,](\d{1,3})"
+)
 LEADING_TIME = re.compile(r"^[\[(]" + CLOCK + r"[\])]\s*")
 SPEAKER = re.compile(r"^([^:\n]{1,60}):\s+(.+)$")
 VOICE = re.compile(r"^<v(?:\.[^\s>]+)?\s+([^>]+)>(.*)$", re.S)
@@ -70,8 +73,12 @@ def segment(speaker, start, end, text):
     end = max(start, int(end if end is not None else start))
     if start > DAY_MS or end > DAY_MS:
         raise TranscriptFormatError("A segment is past the 24-hour limit")
-    return {"speaker": re.sub(r"\s+", " ", str(speaker or "")).strip()[:100],
-            "start_ms": start, "end_ms": end, "text": text}
+    return {
+        "speaker": re.sub(r"\s+", " ", str(speaker or "")).strip()[:100],
+        "start_ms": start,
+        "end_ms": end,
+        "text": text,
+    }
 
 
 def detect(text):
@@ -99,7 +106,7 @@ def parse_text(text):
         match = LEADING_TIME.match(line)
         if match:
             at = clock_ms(*match.groups())
-            line = line[match.end():]
+            line = line[match.end() :]
         speaker, words = "", line
         named = SPEAKER.match(line)
         if named and not named.group(1).strip().lower().startswith("http"):
@@ -143,7 +150,7 @@ def parse_cues(text, fmt):
             if match:
                 g = match.groups()
                 start, end = clock_ms(*g[:4]), clock_ms(*g[4:])
-                speaker, words = cue_speaker(" ".join(part.strip() for part in lines[index + 1:]))
+                speaker, words = cue_speaker(" ".join(part.strip() for part in lines[index + 1 :]))
                 made = segment(speaker, start, end, words)
                 if made:
                     out.append(made)

@@ -1,5 +1,6 @@
 """The checks that prove an upgrade kept a database (e2e/preserve.py), tested on small databases where the answer is
 known: a changed value, a lost row, a value moved to another row, a broken foreign key, a counter that went back."""
+
 import sqlite3
 
 from e2e.preserve import compare, integrity, table_state
@@ -41,18 +42,31 @@ def test_a_new_column_is_the_new_schema_and_is_not_compared(tmp_path):
 
 
 def test_a_broken_foreign_key_is_reported(tmp_path):
-    path = make(tmp_path / "fk.sqlite", [(1, "Plan")], [
-        "CREATE TABLE notes(id INTEGER PRIMARY KEY, task_id INTEGER REFERENCES tasks(id))",
-        "INSERT INTO notes VALUES(1, 99)"])
+    path = make(
+        tmp_path / "fk.sqlite",
+        [(1, "Plan")],
+        [
+            "CREATE TABLE notes(id INTEGER PRIMARY KEY, task_id INTEGER REFERENCES tasks(id))",
+            "INSERT INTO notes VALUES(1, 99)",
+        ],
+    )
     problems = integrity(path)
     assert [kind for kind, _ in problems] == ["foreign_key"]
 
 
 def test_a_change_counter_may_rise_but_not_go_back(tmp_path):
     def with_counter(name, value):
-        path = make(tmp_path / name, [(1, "Plan")], ["CREATE TABLE roster_clock(id INTEGER PRIMARY KEY, value INTEGER)",
-                                                       f"INSERT INTO roster_clock VALUES(1,{value})"])
+        path = make(
+            tmp_path / name,
+            [(1, "Plan")],
+            [
+                "CREATE TABLE roster_clock(id INTEGER PRIMARY KEY, value INTEGER)",
+                f"INSERT INTO roster_clock VALUES(1,{value})",
+            ],
+        )
         return table_state(path)
+
     assert compare(with_counter("a.sqlite", 5), with_counter("b.sqlite", 9), NO_RENAMES) == []
     assert compare(with_counter("c.sqlite", 5), with_counter("d.sqlite", 4), NO_RENAMES) == [
-        "roster_clock: change counter went back (5 before, 4 after)"]
+        "roster_clock: change counter went back (5 before, 4 after)"
+    ]

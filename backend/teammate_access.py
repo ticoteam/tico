@@ -42,6 +42,7 @@ Entry points, each taking a database connection, a viewer (an `auth.Identity`) a
 `auth` is optional everywhere: the Auth instance when the caller has one, so a request's admin list is the one it
 already read. Without it the admins are read from the database (`access.owner_and_admin_emails`).
 """
+
 import json
 import sqlite3
 
@@ -51,10 +52,11 @@ from . import sources
 from .store import H, Problem
 
 LEVELS = ("see", "read", "write", "manage")
-AUDIENCE_LEVELS = A.LEVELS          # see, read, write: the stored ones
+AUDIENCE_LEVELS = A.LEVELS  # see, read, write: the stored ones
 KINDS = ("bot", "human", "group")
 FULL = {"see": True, "read": True, "write": True, "manage": True}
 NONE = {"see": False, "read": False, "write": False, "manage": False}
+
 
 def ensure(c):
     """Every start: the one data step. The table is migration 0047."""
@@ -67,11 +69,13 @@ def migrate_team_pages(c):
     Read is still Everyone; when both are narrowed, Read becomes whoever both let in. Nothing widens. Then it is
     cleared."""
     try:
-        rows = c.execute("SELECT place, audience FROM pin_places "
-                         "WHERE place LIKE 'team:%' AND audience IS NOT NULL").fetchall()
-    except sqlite3.OperationalError:     # a database from before team pages
+        rows = c.execute(
+            "SELECT place, audience FROM pin_places WHERE place LIKE 'team:%' AND audience IS NOT NULL"
+        ).fetchall()
+    except sqlite3.OperationalError:  # a database from before team pages
         return
     from . import audit_log
+
     for place, raw in ((r[0], r[1]) for r in rows):
         gid = place[5:]
         try:
@@ -79,18 +83,25 @@ def migrate_team_pages(c):
         except (ValueError, TypeError):
             level = {"everyone": True}
         if not level.get("everyone"):
-            row = c.execute("SELECT id, access FROM teammate_accesses WHERE target_type='group' AND target_id=?",
-                            (gid,)).fetchone()
+            row = c.execute(
+                "SELECT id, access FROM teammate_accesses WHERE target_type='group' AND target_id=?", (gid,)
+            ).fetchone()
             before = _complete(row[1] if row else None, "group", gid)
             doc = dict(before, read=_narrowest(c, before["read"], level))
             if doc != before:
                 text, now = json.dumps(doc, sort_keys=True, separators=(",", ":")), H.now()
                 if row:
-                    c.execute("UPDATE teammate_accesses SET access=?,revision=revision+1,updated_by='system',updated_at=? "
-                              "WHERE id=?", (text, now, row[0]))
+                    c.execute(
+                        "UPDATE teammate_accesses SET access=?,revision=revision+1,updated_by='system',updated_at=? "
+                        "WHERE id=?",
+                        (text, now, row[0]),
+                    )
                 else:
-                    c.execute("INSERT INTO teammate_accesses (id,target_type,target_id,access,revision,updated_by,"
-                              "created_at,updated_at) VALUES (?,?,?,?,1,'system',?,?)", (H.new_id(), "group", gid, text, now, now))
+                    c.execute(
+                        "INSERT INTO teammate_accesses (id,target_type,target_id,access,revision,updated_by,"
+                        "created_at,updated_at) VALUES (?,?,?,?,1,'system',?,?)",
+                        (H.new_id(), "group", gid, text, now, now),
+                    )
                 audit_log.write(c, "system", f"group:{gid}:access", before, doc, "team-page-audience")
         c.execute("UPDATE pin_places SET audience=NULL WHERE place=?", (place,))
 
@@ -103,6 +114,7 @@ def _narrowest(c, stored, legacy):
     if legacy.get("everyone") or stored == legacy:
         return dict(stored)
     from . import views
+
     roster, entries = views.roster(c, shared=True), views.entries(c, shared=True)
 
     def actors(level):
@@ -110,14 +122,19 @@ def _narrowest(c, stored, legacy):
         for gid in level.get("teams") or []:
             out |= group_member_actors(c, gid, roster, entries)
         return out
+
     mine, theirs = actors(stored), actors(legacy)
     if mine <= theirs:
         return dict(stored)
     if theirs <= mine:
         return dict(legacy)
     both = mine & theirs
-    return {"everyone": False, "people": sorted(a[6:] for a in both if a.startswith("human:")), "teams": [],
-            "bots": sorted(a[4:] for a in both if a.startswith("bot:"))}
+    return {
+        "everyone": False,
+        "people": sorted(a[6:] for a in both if a.startswith("human:")),
+        "teams": [],
+        "bots": sorted(a[4:] for a in both if a.startswith("bot:")),
+    }
 
 
 def forget_group(c, actor, gid):
@@ -125,6 +142,7 @@ def forget_group(c, actor, gid):
     with the same id starts from the defaults. What it was stays in the audit log."""
     from . import audit_log
     from . import pages
+
     pages.forget_audience_member(c, actor, "teams", gid)
     for row in list(stored_rows(c).values()):
         kind, ident = row["target_type"], row["target_id"]
@@ -133,11 +151,15 @@ def forget_group(c, actor, gid):
             c.execute("DELETE FROM teammate_accesses WHERE id=?", (row["id"],))
             audit_log.write(c, actor, f"group:{gid}:access", before, None, "group-deleted")
             continue
-        after = {level: (dict(value, teams=[t for t in value["teams"] if t != gid]) if gid in value["teams"] else value)
-                 for level, value in before.items()}
+        after = {
+            level: (dict(value, teams=[t for t in value["teams"] if t != gid]) if gid in value["teams"] else value)
+            for level, value in before.items()
+        }
         if after != before:
-            c.execute("UPDATE teammate_accesses SET access=?,revision=revision+1,updated_by=?,updated_at=? WHERE id=?",
-                      (json.dumps(after, sort_keys=True, separators=(",", ":")), actor, H.now(), row["id"]))
+            c.execute(
+                "UPDATE teammate_accesses SET access=?,revision=revision+1,updated_by=?,updated_at=? WHERE id=?",
+                (json.dumps(after, sort_keys=True, separators=(",", ":")), actor, H.now(), row["id"]),
+            )
             audit_log.write(c, actor, f"{kind}:{ident}:access", before, after, "group-deleted")
 
 
@@ -155,8 +177,11 @@ def default_document(kind, ident):
     """The audiences a person or group has before anyone narrows them."""
     everyone = dict(A.OPEN_LEVEL, people=[], teams=[], bots=[])
     if kind == "group":
-        return {"see": dict(everyone), "read": dict(everyone),
-                "write": {"everyone": False, "people": [], "teams": [ident], "bots": []}}
+        return {
+            "see": dict(everyone),
+            "read": dict(everyone),
+            "write": {"everyone": False, "people": [], "teams": [ident], "bots": []},
+        }
     return {level: dict(everyone) for level in AUDIENCE_LEVELS}
 
 
@@ -168,8 +193,10 @@ def _complete(raw, kind, ident):
         value = None
     value = value if isinstance(value, dict) else {}
     base = default_document(kind, ident)
-    return {level: A.audience(value[level]) if isinstance(value.get(level), dict) else base[level]
-            for level in AUDIENCE_LEVELS}
+    return {
+        level: A.audience(value[level]) if isinstance(value.get(level), dict) else base[level]
+        for level in AUDIENCE_LEVELS
+    }
 
 
 def stored_rows(c, kind=None):
@@ -179,7 +206,7 @@ def stored_rows(c, kind=None):
             rows = c.execute("SELECT * FROM teammate_accesses WHERE target_type=?", (kind,)).fetchall()
         else:
             rows = c.execute("SELECT * FROM teammate_accesses").fetchall()
-    except sqlite3.OperationalError:     # a database from before the table: everyone has the defaults
+    except sqlite3.OperationalError:  # a database from before the table: everyone has the defaults
         return {}
     return {(r["target_type"], r["target_id"]): r for r in rows}
 
@@ -206,6 +233,7 @@ class _Context:
 
     def __init__(self, c, viewer, auth=None):
         from . import views
+
         self.c, self.viewer, self.auth = c, viewer, auth
         self.roster = views.roster(c, shared=True)
         self.entries = views.entries(c, shared=True)
@@ -255,6 +283,7 @@ class _Context:
         """The groups the viewer leads, and every group below them."""
         if self._leads is None:
             from . import groups as G
+
             out = set()
             for gid in self.roster.get("org_groups") or {}:
                 lead = G.lead_of(gid, self.roster, self.entries)
@@ -272,6 +301,7 @@ def in_audience(c, viewer, level, auth=None):
 def parse_audience(c, value):
     """One audience checked with the same shape and known teammates as the access editor."""
     from . import views
+
     roster = views.roster(c, shared=True)
     people = {p["id"] for p in roster.get("people") or []} | {h["id"] for h in H.humans(c)}
     groups = set(roster.get("org_groups") or {})
@@ -281,7 +311,7 @@ def parse_audience(c, value):
 
 def _lead_actor(ref):
     text = str(ref or "").strip()
-    return "human:" + text[len("person:"):] if text.startswith("person:") else text
+    return "human:" + text[len("person:") :] if text.startswith("person:") else text
 
 
 def is_admin(c, viewer, auth=None):
@@ -296,6 +326,7 @@ def is_admin(c, viewer, auth=None):
     if getattr(viewer, "support", "") == "app":
         return True
     from . import access
+
     return str(getattr(viewer, "email", "") or "").lower() in set(access.owner_and_admin_emails(c))
 
 
@@ -315,6 +346,7 @@ def bot_levels(c, viewer, slugs=None, admin=None, auth=None, ctx=None):
     `Auth.bot_accesses` has always applied, with one change: a bot viewer in a group matches that group in an audience
     (it used to match only people)."""
     from . import read_cache
+
     wanted = list(dict.fromkeys(slugs)) if slugs is not None else None
     rows = {r["bot"]: r for r in read_cache.configs(c, wanted)}
     full = {"see": True, "read": True, "write": True}
@@ -322,7 +354,7 @@ def bot_levels(c, viewer, slugs=None, admin=None, auth=None, ctx=None):
     if role not in ("human", "owner", "bot") or role == "owner":
         return {slug: dict(full) for slug in (wanted if wanted is not None else rows)}
     out = {}
-    for slug in (wanted if wanted is not None else rows):
+    for slug in wanted if wanted is not None else rows:
         row = rows.get(slug)
         doc = A.document(row["access"]) if row else None
         if doc is None or A.is_open(doc):
@@ -342,8 +374,12 @@ def bot_levels(c, viewer, slugs=None, admin=None, auth=None, ctx=None):
         else:
             pid = ctx.me
             admin_now = ctx.admin if admin is None else admin
-            managed = (admin_now or row["owner_id"] == pid or pid in A.owner_ids(row["bot_owners"])
-                       or P.manages(pid, "bot", slug, ctx.roster, ctx.entries, ctx.archived, True))
+            managed = (
+                admin_now
+                or row["owner_id"] == pid
+                or pid in A.owner_ids(row["bot_owners"])
+                or P.manages(pid, "bot", slug, ctx.roster, ctx.entries, ctx.archived, True)
+            )
             if managed:
                 out[slug] = dict(full)
                 continue
@@ -373,6 +409,7 @@ def _bot_manage(c, viewer, slug, ctx):
 def _system_bots(c):
     """The built-in bots, which only the company owner manages (`Auth.system_bot`)."""
     from . import groups as G
+
     return set(G.SYSTEM_BOTS)
 
 
@@ -381,12 +418,12 @@ def _human_levels(ctx, pid):
     if ctx.role == "owner" or ctx.admin:
         return dict(FULL)
     if ctx.role == "human" and P.manages(ctx.me, "person", pid, ctx.roster, ctx.entries, ctx.archived, True):
-        return dict(FULL)          # themselves, or someone they report up to
+        return dict(FULL)  # themselves, or someone they report up to
     row = ctx.stored.get(("human", pid))
     doc = _complete(row["access"] if row else None, "human", pid)
     levels = {level: ctx.names(doc[level]) for level in AUDIENCE_LEVELS}
     if ctx.role == "bot" and not levels["write"] and may_reply(ctx.c, ctx.viewer, "human:" + pid):
-        levels["write"] = True     # the reply-back rule, as for bots
+        levels["write"] = True  # the reply-back rule, as for bots
     levels["see"] = levels["see"] or levels["read"] or levels["write"]
     return {**levels, "manage": False}
 
@@ -447,11 +484,15 @@ def require(c, viewer, level, target, auth=None, missing=None):
     if not levels["see"]:
         raise Problem("not_found", missing or f"{noun} not found", 404)
     if not levels[level]:
-        raise Problem("forbidden", {
-            "read": f"You can see {ident} but not read their Home. Ask whoever manages them for Read access.",
-            "write": f"You can see {ident} but not message them. Ask whoever manages them for Write access.",
-            "manage": f"Only whoever manages {ident} changes this.",
-        }[level], 403)
+        raise Problem(
+            "forbidden",
+            {
+                "read": f"You can see {ident} but not read their Home. Ask whoever manages them for Read access.",
+                "write": f"You can see {ident} but not message them. Ask whoever manages them for Write access.",
+                "manage": f"Only whoever manages {ident} changes this.",
+            }[level],
+            403,
+        )
     return levels
 
 
@@ -470,13 +511,19 @@ def may_reply(c, viewer, target):
     other = f"{kind}:{ident}"
     if c.execute("SELECT 1 FROM messages WHERE recipient_id=? AND sender_id=? LIMIT 1", (actor, other)).fetchone():
         return True
-    return bool(c.execute("SELECT 1 FROM tasks WHERE requester_id=? AND owner_id=? AND status NOT IN "
-                          "('done','closed','declined') LIMIT 1", (other, actor)).fetchone())
+    return bool(
+        c.execute(
+            "SELECT 1 FROM tasks WHERE requester_id=? AND owner_id=? AND status NOT IN "
+            "('done','closed','declined') LIMIT 1",
+            (other, actor),
+        ).fetchone()
+    )
 
 
 def group_member_actors(c, group_id, roster=None, entries=None):
     """Every person and bot in the group and in the groups nested under it, as actors."""
     from . import views
+
     roster = roster or views.roster(c, shared=True)
     entries = entries if entries is not None else views.entries(c, shared=True)
     below = P.group_and_below(group_id, roster)
@@ -484,19 +531,20 @@ def group_member_actors(c, group_id, roster=None, entries=None):
         return set()
     archived = {r["id"] for r in H.bots(c) if r.get("state") == "archived"}
     out = {"human:" + p["id"] for p in P.visible_people(roster) if p.get("team") in below}
-    out |= {"bot:" + slug for slug in entries
-            if slug not in archived and P.team_of(slug, entries, roster) in below}
+    out |= {"bot:" + slug for slug in entries if slug not in archived and P.team_of(slug, entries, roster) in below}
     return out
 
 
 def all_actors(c, roster=None, entries=None):
     """Every person and non-archived bot: who a set-based answer can name."""
     from . import views
+
     roster = roster or views.roster(c, shared=True)
     entries = entries if entries is not None else views.entries(c, shared=True)
     archived = {r["id"] for r in H.bots(c) if r.get("state") == "archived"}
-    return ({"human:" + p["id"] for p in roster.get("people") or []}
-            | {"bot:" + slug for slug in entries if slug not in archived})
+    return {"human:" + p["id"] for p in roster.get("people") or []} | {
+        "bot:" + slug for slug in entries if slug not in archived
+    }
 
 
 def readers(c, target, level="read", auth=None):
@@ -522,17 +570,21 @@ def readers(c, target, level="read", auth=None):
 def _viewer_for(c, actor):
     """An identity for an actor, without elevating it: the owner when it is the owner's address."""
     from . import read_cache
+
     def build():
         from .auth import Identity
+
         if actor.startswith("bot:"):
             return Identity(actor, "bot")
         human = H.human(c, H.actor_id(actor))
         if not human:
             return None
         from . import access
+
         email = str(human.get("email") or "").lower()
         owner = str((access._load_json(c, access.OWNER) or {}).get("email") or "").lower()
         return Identity(actor, "owner" if email and email == owner else "human", email=email)
+
     return read_cache.value(c, ("teammate_viewer", actor), build, shared=True)
 
 
@@ -543,8 +595,9 @@ def hidden(c, viewer, level="see", kinds=KINDS, auth=None):
     if role not in ("human", "bot") or is_admin(c, viewer, auth):
         return set()
     if level in ("see", "read") and "bot" not in kinds and not stored_rows(c):
-        return set()            # nobody narrowed a person or a group: the defaults let everyone see them
+        return set()  # nobody narrowed a person or a group: the defaults let everyone see them
     from . import views
+
     targets = []
     roster = views.roster(c, shared=True)
     if "human" in kinds:
@@ -586,6 +639,7 @@ def save(c, who, target, body, auth=None, via=None):
     if int(body.get("revision") or 0) != current:
         raise Problem("version_conflict", "Access changed; refresh before saving", 409)
     from . import views
+
     roster = views.roster(c, shared=True)
     people = {p["id"] for p in roster.get("people") or []} | {h["id"] for h in H.humans(c)}
     groups = set(roster.get("org_groups") or {})
@@ -597,15 +651,26 @@ def save(c, who, target, body, auth=None, via=None):
     now = H.now()
     text = json.dumps(doc, sort_keys=True, separators=(",", ":"))
     if row:
-        c.execute("UPDATE teammate_accesses SET access=?,revision=revision+1,updated_by=?,updated_at=? WHERE id=?",
-                  (text, who.actor, now, row["id"]))
+        c.execute(
+            "UPDATE teammate_accesses SET access=?,revision=revision+1,updated_by=?,updated_at=? WHERE id=?",
+            (text, who.actor, now, row["id"]),
+        )
     else:
-        c.execute("INSERT INTO teammate_accesses (id,target_type,target_id,access,revision,updated_by,created_at,"
-                  "updated_at) VALUES (?,?,?,?,1,?,?,?)", (H.new_id(), kind, ident, text, who.actor, now, now))
+        c.execute(
+            "INSERT INTO teammate_accesses (id,target_type,target_id,access,revision,updated_by,created_at,"
+            "updated_at) VALUES (?,?,?,?,1,?,?,?)",
+            (H.new_id(), kind, ident, text, who.actor, now, now),
+        )
     from . import audit_log
+
     audit_log.write(c, who.actor, f"{kind}:{ident}:access", before, doc, via)
-    H.event(c, who.actor, f"{'person' if kind == 'human' else 'group'}.access_changed", ident,
-            {"before": A.summary(before), "after": A.summary(doc)})
+    H.event(
+        c,
+        who.actor,
+        f"{'person' if kind == 'human' else 'group'}.access_changed",
+        ident,
+        {"before": A.summary(before), "after": A.summary(doc)},
+    )
     return view(c, who, target, auth)
 
 
@@ -615,11 +680,17 @@ def view(c, who, target, auth=None):
     kind, ident = parse_target(target)
     _require_existing(c, who, kind, ident, target, auth)
     from . import views
+
     roster = views.roster(c, shared=True)
     names = {gid: g.get("name") or gid for gid, g in (roster.get("org_groups") or {}).items()}
-    return {"target": f"{kind}:{ident}", **document(c, target), "default": default_document(kind, ident),
-            "revision": revision(c, target), "you": levels_for(c, who, target, auth),
-            "teams": group_choices(c, who, names, auth)}
+    return {
+        "target": f"{kind}:{ident}",
+        **document(c, target),
+        "default": default_document(kind, ident),
+        "revision": revision(c, target),
+        "you": levels_for(c, who, target, auth),
+        "teams": group_choices(c, who, names, auth),
+    }
 
 
 def _require_existing(c, who, kind, ident, target, auth):
@@ -639,15 +710,23 @@ def group_rows(c, viewer, groups, auth=None):
     """`[{id, name, parent}]` for a roster's `org_groups`, less the groups the viewer may not see; a parent they may
     not see reads as the nearest one above it they may (or null)."""
     from . import views
+
     roster = views.roster(c, shared=True)
     groups_hidden = unseen(c, viewer, auth)[1]
-    return [{"id": gid, "name": g.get("name") or gid,
-             "parent": visible_group(g.get("parent") or "", roster, groups_hidden) or None}
-            for gid, g in groups.items() if gid not in groups_hidden]
+    return [
+        {
+            "id": gid,
+            "name": g.get("name") or gid,
+            "parent": visible_group(g.get("parent") or "", roster, groups_hidden) or None,
+        }
+        for gid, g in groups.items()
+        if gid not in groups_hidden
+    ]
 
 
 def _exists(c, kind, ident):
     from . import views
+
     roster = views.roster(c, shared=True)
     if kind == "human":
         return bool(P.person(ident, roster) or H.human(c, ident))
@@ -660,8 +739,10 @@ def _exists(c, kind, ident):
 def unseen(c, viewer, auth=None):
     """(person ids, group ids) the viewer may not see: what lists, the chart and the @mention picker leave out."""
     found = hidden(c, viewer, "see", ("human", "group"), auth)
-    return ({t.split(":", 1)[1] for t in found if t.startswith("human:")},
-            {t.split(":", 1)[1] for t in found if t.startswith("group:")})
+    return (
+        {t.split(":", 1)[1] for t in found if t.startswith("human:")},
+        {t.split(":", 1)[1] for t in found if t.startswith("group:")},
+    )
 
 
 def visible_group(gid, roster, groups_hidden):
@@ -694,12 +775,23 @@ def redact_chart(view, roster, people_hidden, groups_hidden):
         for row in view.get(key) or []:
             parents[prefix + str(row.get("id"))] = row.get("org_parent") or ""
     out = dict(view)
-    out["people"] = [_redact_row(row, roster, parents, gone, groups_hidden)
-                     for row in view.get("people") or [] if row.get("id") not in people_hidden]
+    out["people"] = [
+        _redact_row(row, roster, parents, gone, groups_hidden)
+        for row in view.get("people") or []
+        if row.get("id") not in people_hidden
+    ]
     if "bots" in view:
         # Rehung first (a hidden manager gives way to the next one up), then its own fields.
-        out["bots"] = [redact_bot(_redact_row(row, roster, parents, gone, groups_hidden), roster, people_hidden,
-                                  groups_hidden, team_was=row.get("team")) for row in view.get("bots") or []]
+        out["bots"] = [
+            redact_bot(
+                _redact_row(row, roster, parents, gone, groups_hidden),
+                roster,
+                people_hidden,
+                groups_hidden,
+                team_was=row.get("team"),
+            )
+            for row in view.get("bots") or []
+        ]
     if "seats" in view:
         out["seats"] = [_redact_row(row, roster, parents, gone, groups_hidden) for row in view.get("seats") or []]
     groups = []
@@ -725,11 +817,20 @@ def redact_bots(c, viewer, rows, auth=None):
     if not people_hidden and not groups_hidden:
         return rows
     from . import views
+
     roster, entries = views.roster(c, shared=True), views.entries(c, shared=True)
     archived = {row["id"] for row in H.bots(c) if row.get("state") == "archived"}
     chart = P.org_view(roster, entries, archived, bare_people=True)
-    view = redact_chart({"people": chart.get("people") or [], "org_groups": chart.get("org_groups") or [],
-                         "bots": [dict(row) for row in rows]}, roster, people_hidden, groups_hidden)
+    view = redact_chart(
+        {
+            "people": chart.get("people") or [],
+            "org_groups": chart.get("org_groups") or [],
+            "bots": [dict(row) for row in rows],
+        },
+        roster,
+        people_hidden,
+        groups_hidden,
+    )
     return view["bots"]
 
 
@@ -740,6 +841,7 @@ def bot_redactor(c, viewer, auth=None):
     if not people_hidden and not groups_hidden:
         return lambda row: row
     from . import views
+
     roster = views.roster(c, shared=True)
     return lambda row: redact_bot(row, roster, people_hidden, groups_hidden)
 
@@ -756,6 +858,7 @@ def redact_bot(row, roster, people_hidden, groups_hidden, team_was=None):
     def gone(ref):
         ref = str(ref or "")
         return (ref[6:] if ref.startswith("human:") else ref) in people_hidden
+
     if row.get("owner_id") and gone(row["owner_id"]):
         row["owner_id"] = None
         if "owner_name" in row:
@@ -809,8 +912,9 @@ class Known:
     def _in_conversation(self, conversation_id):
         """On its participant list or its root's, or a member of its root, directly or through a group: a native DM lists
         only its starter as a participant, and thread_members holds the rest."""
-        row = self.c.execute("SELECT participants, COALESCE(root_id,id) FROM conversations WHERE id=?",
-                             (conversation_id,)).fetchone()
+        row = self.c.execute(
+            "SELECT participants, COALESCE(root_id,id) FROM conversations WHERE id=?", (conversation_id,)
+        ).fetchone()
         if not row:
             return False
         if self.me in (H._json(row[0], []) or []):
@@ -821,9 +925,15 @@ class Known:
             if above and self.me in (H._json(above[0], []) or []):
                 return True
         from . import threads
+
         names = threads.Viewer(self.auth, self.viewer).member_names(self.c)
-        return self.c.execute("SELECT 1 FROM thread_members WHERE thread_id=? AND actor IN (%s) LIMIT 1"
-                              % ",".join("?" * len(names)), (root, *names)).fetchone() is not None
+        return (
+            self.c.execute(
+                "SELECT 1 FROM thread_members WHERE thread_id=? AND actor IN (%s) LIMIT 1" % ",".join("?" * len(names)),
+                (root, *names),
+            ).fetchone()
+            is not None
+        )
 
     def name(self, actor, conversation_id):
         """`actor`, or "" when they are unseen and the reader is not in this conversation."""
@@ -841,8 +951,11 @@ class Known:
         if self.member(conversation_id):
             return rows
         strangers = self.strangers
-        return [{**row, "added_by": "" if row.get("added_by") in strangers else row.get("added_by")}
-                for row in rows if row["actor"] not in strangers]
+        return [
+            {**row, "added_by": "" if row.get("added_by") in strangers else row.get("added_by")}
+            for row in rows
+            if row["actor"] not in strangers
+        ]
 
     @property
     def strangers(self):
@@ -889,6 +1002,7 @@ class Known:
     def message(self, message):
         if isinstance(message, dict):
             from .files import readable_page_refs
+
             message = readable_page_refs(self.c, self.auth, self.viewer, message)
             if "sender_id" in message:
                 message = {**message, "source": self.source(message)}
@@ -905,8 +1019,10 @@ class Known:
     def conversation(self, conversation):
         if not self.people or not isinstance(conversation, dict) or self.me in (conversation.get("participants") or []):
             return conversation
-        return {**conversation, "participants": [a for a in conversation.get("participants") or []
-                                                 if a not in self.people]}
+        return {
+            **conversation,
+            "participants": [a for a in conversation.get("participants") or [] if a not in self.people],
+        }
 
     def task(self, task):
         if not self.people or not isinstance(task, dict):
@@ -919,8 +1035,12 @@ class Known:
             return task
         if self.me in (task.get("owner_id"), task.get("requester_id")) or self.member(task.get("conversation_id")):
             return task
-        return {**task, **{key: "" for key in named}, **({"from_person": None} if origin else {}),
-                **({"readers": [r for r in readers if r not in self.people]} if hidden else {})}
+        return {
+            **task,
+            **{key: "" for key in named},
+            **({"from_person": None} if origin else {}),
+            **({"readers": [r for r in readers if r not in self.people]} if hidden else {}),
+        }
 
     def tasks(self, tasks):
         return [self.task(t) for t in tasks] if self.people else tasks
@@ -936,8 +1056,7 @@ def _redact_row(row, roster, parents, gone, groups_hidden):
     bare = reports[6:] if reports.startswith("human:") else reports
     if bare and "p:" + bare in gone:
         up = _rehang("p:" + bare, parents, gone)
-        row["reports_to"] = ((("human:" if reports.startswith("human:") else "") + up[2:])
-                             if up.startswith("p:") else "")
+        row["reports_to"] = (("human:" if reports.startswith("human:") else "") + up[2:]) if up.startswith("p:") else ""
     if row.get("primary_for"):
         row["primary_for"] = [g for g in row["primary_for"] if g not in groups_hidden]
     return row

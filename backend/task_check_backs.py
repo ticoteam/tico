@@ -4,6 +4,7 @@ No time wakes a bot. A due follow-up is listed once on its owner's task roundup 
 clears it there. A queued check-back wake from before that is obsolete when its bot claims it (stale), unless its turn
 is already under way (continuing).
 """
+
 import hashlib
 import json
 import re
@@ -19,6 +20,7 @@ STATUSES = ACTIVE + RESULT
 
 def _H():
     from . import hubdb
+
     return hubdb
 
 
@@ -69,13 +71,19 @@ def timestamp(value, at):
 def set_time(c, row, value, note=None, *, actor=None, at=None, system=False):
     H = _H()
     from . import task_holds
-    row = task_holds.with_holds(c, row)     # its snooze, when the row came from plain `tasks`
+
+    row = task_holds.with_holds(c, row)  # its snooze, when the row came from plain `tasks`
     if system and ("version" not in row or "check_back_at" not in row):
         return row  # legacy upgrade helpers create tasks before the file migrations finish
     at = at or H.now()
     actor = actor or H.KEEPER
     if not system and H.is_bot(actor) and row["status"] in RESULT:
-        H.refuse(c, actor, "check_back", "This result needs a disposition: close it to accept, or reopen it with what remains. Do not park a returned result again.")
+        H.refuse(
+            c,
+            actor,
+            "check_back",
+            "This result needs a disposition: close it to accept, or reopen it with what remains. Do not park a returned result again.",
+        )
     if not involved(row) or row["status"] not in STATUSES:
         if not system:
             H.refuse(c, actor, "check_back", "Only unfinished work involving a bot needs a follow-up")
@@ -95,13 +103,18 @@ def set_time(c, row, value, note=None, *, actor=None, at=None, system=False):
             stamp = snooze
         else:
             H.refuse(c, actor, "snoozed", "A person snoozed this task; follow up at or after " + snooze)
-    text = str(note if note is not None else row.get("check_back_note") or "Inspect the next result and continue this task.").strip()
+    text = str(
+        note if note is not None else row.get("check_back_note") or "Inspect the next result and continue this task."
+    ).strip()
     if len(text) > NOTE_MAX:
         H.refuse(c, actor, "check_back", "Say what to inspect in at most 500 characters")
     if (stamp, text) == (row.get("check_back_at"), row.get("check_back_note")):
         return row
     bump = int(not system and getattr(c, "building", None) != row["id"])
-    c.execute("UPDATE tasks SET check_back_at=?,check_back_note=?,version=version+? WHERE id=?", (stamp, text, bump, row["id"]))
+    c.execute(
+        "UPDATE tasks SET check_back_at=?,check_back_note=?,version=version+? WHERE id=?",
+        (stamp, text, bump, row["id"]),
+    )
     _event(c, row["id"], actor, "check_back_at", row.get("check_back_at"), stamp, text)
     if not system and stamp != row.get("check_back_at"):
         _event(c, row["id"], actor, "check_back_explicit", None, stamp, text)
@@ -139,8 +152,12 @@ def view(row, at=None):
     stamp = row.get("check_back_at")
     if not stamp:
         return None
-    return {"at": stamp, "note": row.get("check_back_note") or "", "by": actor_for(row),
-            "due": stamp <= (at or _H().now())}
+    return {
+        "at": stamp,
+        "note": row.get("check_back_note") or "",
+        "by": actor_for(row),
+        "due": stamp <= (at or _H().now()),
+    }
 
 
 def external_wait(c, row):
@@ -150,9 +167,18 @@ def external_wait(c, row):
 def stand(c, row):
     H = _H()
     base = H._stall_stand(c, row, exclude_actors=tuple(x for x in (actor_for(row),) if x))
-    links = [list(r) for r in c.execute("SELECT id,state,pr_sha,pr_merged_at FROM task_links WHERE task_id=? AND kind='pr' ORDER BY id", (row["id"],))]
-    human = c.execute("SELECT id FROM history_events WHERE subject_type='task' AND subject_id=? AND actor_id LIKE 'human:%' "
-                      "AND kind='check_back_explicit' ORDER BY created_at DESC,rowid DESC LIMIT 1", (row["id"],)).fetchone()
+    links = [
+        list(r)
+        for r in c.execute(
+            "SELECT id,state,pr_sha,pr_merged_at FROM task_links WHERE task_id=? AND kind='pr' ORDER BY id",
+            (row["id"],),
+        )
+    ]
+    human = c.execute(
+        "SELECT id FROM history_events WHERE subject_type='task' AND subject_id=? AND actor_id LIKE 'human:%' "
+        "AND kind='check_back_explicit' ORDER BY created_at DESC,rowid DESC LIMIT 1",
+        (row["id"],),
+    ).fetchone()
     return hashlib.sha256(json.dumps([base, links, human[0] if human else None]).encode()).hexdigest()[:16]
 
 
@@ -160,8 +186,10 @@ def continuing(c, job):
     """Whether a queued job is the rest of a turn already under way: its attempt started (a drain's time limit and a shared
     login's hold cap yield one), or a person resumed it (job_recovery 'resume'). execution.obsolete_notices_sql keeps these."""
     started = c.execute("SELECT 1 FROM attempts WHERE id=? AND started_at IS NOT NULL", (job["attempt_id"],)).fetchone()
-    resumed = c.execute("SELECT 1 FROM job_recovery WHERE job_id=? AND attempt_id=? AND decision='resume'",
-                        (job["id"], job["attempt_id"])).fetchone()
+    resumed = c.execute(
+        "SELECT 1 FROM job_recovery WHERE job_id=? AND attempt_id=? AND decision='resume'",
+        (job["id"], job["attempt_id"]),
+    ).fetchone()
     return started is not None or resumed is not None
 
 

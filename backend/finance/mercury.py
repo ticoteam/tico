@@ -4,6 +4,7 @@ connect probe. Every call returns (status, JSON); it never raises for an HTTP an
 few times; 401/403 on a write means the token's IP allowlist lacks this server; a redirect is never followed (the
 token stays with the host it was meant for) and a 3xx is a failed answer. The Vault host (full card numbers) is never
 called."""
+
 import http.client
 import json
 import logging
@@ -19,12 +20,12 @@ from typing import Any, Protocol, cast
 
 BASE = "https://api.mercury.com/api/v1"
 SANDBOX = "https://api-sandbox.mercury.com/api/v1"
-BASE_ENV = "TICO_MERCURY_BASE"          # a developer's override: the sandbox, or a local fake (scripts/fake_mercury.py)
+BASE_ENV = "TICO_MERCURY_BASE"  # a developer's override: the sandbox, or a local fake (scripts/fake_mercury.py)
 OVERRIDE_HOSTS = frozenset({"127.0.0.1", "localhost", "::1", "api-sandbox.mercury.com"})  # the only hosts it may name
 log = logging.getLogger(__name__)
 _warned = [False]
 TIMEOUT = 15
-MAX_WAIT = 30.0                       # seconds one 429 may make us wait
+MAX_WAIT = 30.0  # seconds one 429 may make us wait
 TRIES_429 = 3
 PAGE = 500
 IP_HINT = "Mercury refused the write: add this server's IP address to the token's allowlist in Mercury"
@@ -38,7 +39,7 @@ class Opener(Protocol):
 
 @dataclass(frozen=True)
 class Answer:
-    status: int | None                 # None: unreachable or timed out (the call may or may not have landed)
+    status: int | None  # None: unreachable or timed out (the call may or may not have landed)
     body: dict[str, Any]
 
     @property
@@ -58,8 +59,9 @@ class Provider(Protocol):
     def users(self) -> Answer: ...
     def transactions(self, start_after: str | None, limit: int = PAGE) -> Answer: ...
     def transaction(self, txn_id: str) -> Answer: ...
-    def account_transactions(self, account_id: str, search: str | None, start: str, end: str,
-                             offset: int = 0, request_id: str | None = None) -> Answer: ...
+    def account_transactions(
+        self, account_id: str, search: str | None, start: str, end: str, offset: int = 0, request_id: str | None = None
+    ) -> Answer: ...
     def events(self, start_after: str | None, limit: int = PAGE, newest: bool = False) -> Answer: ...
     def statements(self, account_id: str, start: str, end: str) -> Answer: ...
     def credit_statements(self, account_id: str) -> Answer: ...
@@ -88,8 +90,11 @@ def base_url() -> str:
         return raw
     if not _warned[0]:
         _warned[0] = True
-        log.warning("%s ignored: %r is not 127.0.0.1, localhost, ::1 or api-sandbox.mercury.com; using Mercury's API",
-                    BASE_ENV, host or raw)
+        log.warning(
+            "%s ignored: %r is not 127.0.0.1, localhost, ::1 or api-sandbox.mercury.com; using Mercury's API",
+            BASE_ENV,
+            host or raw,
+        )
     return BASE
 
 
@@ -102,8 +107,9 @@ class _NoRedirect(urllib.request.HTTPRedirectHandler):
     """Never follow a redirect: urllib would resend the Authorization header to wherever Location points, past the
     host guard. The 3xx comes back as the answer (an HTTPError), a failure no one retries to the Location."""
 
-    def redirect_request(self, req: urllib.request.Request, fp: Any, code: int, msg: str, headers: Any,
-                         newurl: str) -> urllib.request.Request | None:
+    def redirect_request(
+        self, req: urllib.request.Request, fp: Any, code: int, msg: str, headers: Any, newurl: str
+    ) -> urllib.request.Request | None:
         return None
 
 
@@ -111,18 +117,25 @@ _OPENER = urllib.request.build_opener(_NoRedirect())
 
 
 class Mercury:
-    def __init__(self, token: str, base: str = BASE, opener: Opener | None = None,
-                 sleep: Callable[[float], None] = time.sleep) -> None:
+    def __init__(
+        self, token: str, base: str = BASE, opener: Opener | None = None, sleep: Callable[[float], None] = time.sleep
+    ) -> None:
         self._token, self._base, self._opener, self._sleep = token, base.rstrip("/"), opener, sleep
 
-    def _call(self, method: str, path: str, params: Mapping[str, object] | None = None,
-              body: Mapping[str, object] | None = None) -> Answer:
-        query = urllib.parse.urlencode([(k, str(v)) for k, v in (params or {}).items() if v not in (None, "")],
-                                       doseq=True)
+    def _call(
+        self,
+        method: str,
+        path: str,
+        params: Mapping[str, object] | None = None,
+        body: Mapping[str, object] | None = None,
+    ) -> Answer:
+        query = urllib.parse.urlencode(
+            [(k, str(v)) for k, v in (params or {}).items() if v not in (None, "")], doseq=True
+        )
         url = self._base + path + (f"?{query}" if query else "")
         try:
             data = json.dumps(body, default=_json_default).encode() if body is not None else None
-        except ValueError:                       # an amount too big to send exactly (see _json_default)
+        except ValueError:  # an amount too big to send exactly (see _json_default)
             return Answer(None, {})
         headers = {"Authorization": "Bearer " + self._token, "Accept": "application/json"}
         if data is not None:
@@ -163,20 +176,24 @@ class Mercury:
     def transaction(self, txn_id: str) -> Answer:
         return self._call("GET", f"/transaction/{urllib.parse.quote(txn_id)}")
 
-    def account_transactions(self, account_id: str, search: str | None, start: str, end: str,
-                             offset: int = 0, request_id: str | None = None) -> Answer:
+    def account_transactions(
+        self, account_id: str, search: str | None, start: str, end: str, offset: int = 0, request_id: str | None = None
+    ) -> Answer:
         """One account's transactions created from `start` through `end` (YYYY-MM-DD), a page of up to PAGE from
         `offset`. Mercury pages this list by offset and its answer carries `total` (every match): a read goes on until
         offset reaches it (sync.py). `search` finds a transaction by its note, description, recipient memo or
         counterparty name; `request_id` finds the transaction a send-money request became. The list has no start_after,
         cursor or nextPage (docs.mercury.com listaccounttransactions)."""
-        return self._call("GET", f"/account/{urllib.parse.quote(account_id)}/transactions",
-                          {"search": search, "start": start, "end": end, "limit": PAGE, "offset": offset,
-                           "requestId": request_id})
+        return self._call(
+            "GET",
+            f"/account/{urllib.parse.quote(account_id)}/transactions",
+            {"search": search, "start": start, "end": end, "limit": PAGE, "offset": offset, "requestId": request_id},
+        )
 
     def events(self, start_after: str | None, limit: int = PAGE, newest: bool = False) -> Answer:
-        return self._call("GET", "/events", {"limit": limit, "order": "desc" if newest else "asc",
-                                             "start_after": start_after})
+        return self._call(
+            "GET", "/events", {"limit": limit, "order": "desc" if newest else "asc", "start_after": start_after}
+        )
 
     def statements(self, account_id: str, start: str, end: str) -> Answer:
         return self._call("GET", f"/account/{urllib.parse.quote(account_id)}/statements", {"start": start, "end": end})
@@ -199,18 +216,32 @@ class Mercury:
     def send_requests(self, account_id: str, start_after: str | None = None, status: str | None = None) -> Answer:
         """One page of the account's send-money requests, filtered to one documented status when `status` is given
         (pendingApproval, approved, rejected or cancelled; the list does not show a sent status)."""
-        return self._call("GET", "/request-send-money", {"accountId": account_id, "limit": PAGE, "status": status,
-                                                         "start_after": start_after})
+        return self._call(
+            "GET",
+            "/request-send-money",
+            {"accountId": account_id, "limit": PAGE, "status": status, "start_after": start_after},
+        )
 
     # writes
     def create_card(self, user_id: str, nickname: str, monthly_cents: int) -> Answer:
-        return self._call("POST", "/cards", body={"userId": user_id, "type": "virtual", "kind": "credit",
-                                                  "nickname": nickname[:50],
-                                                  "spendLimit": {"amountCents": monthly_cents, "interval": "monthly"}})
+        return self._call(
+            "POST",
+            "/cards",
+            body={
+                "userId": user_id,
+                "type": "virtual",
+                "kind": "credit",
+                "nickname": nickname[:50],
+                "spendLimit": {"amountCents": monthly_cents, "interval": "monthly"},
+            },
+        )
 
     def card_limit(self, card_id: str, monthly_cents: int) -> Answer:
-        return self._call("POST", f"/cards/{urllib.parse.quote(card_id)}",
-                          body={"spendLimit": {"amountCents": monthly_cents, "interval": "monthly"}})
+        return self._call(
+            "POST",
+            f"/cards/{urllib.parse.quote(card_id)}",
+            body={"spendLimit": {"amountCents": monthly_cents, "interval": "monthly"}},
+        )
 
     def card_state(self, card_id: str, op: str) -> Answer:
         assert op in ("freeze", "unfreeze", "cancel")
@@ -255,7 +286,7 @@ def _retry_after(value: object, attempt: int) -> float:
     try:
         wait = float(str(value))
     except (TypeError, ValueError):
-        wait = 2.0 ** attempt
+        wait = 2.0**attempt
     return max(0.0, min(wait, MAX_WAIT))
 
 

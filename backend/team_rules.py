@@ -11,6 +11,7 @@ chat starts fresh when the topic changes (backend/topic_change.py), and whether 
 The stale review and fresh topics are off by default; those two and
 triage an admin may turn too (ADMIN_RULES), and the server's environment may set their default (ENV_DEFAULTS).
 """
+
 import json
 import os
 
@@ -18,22 +19,22 @@ from .store import H
 
 KEY = "rules"
 DEFAULTS = {
-    "assistant_direct": True,       # the Assistant makes tasks (for a person or a bot), comments and messages to bots without a card
-    "assistant_approvals": True,    # a person may let their own Assistant decide their approvals (backend/assistant.py)
-    "botops_direct": True,          # BotOps sets AI providers and raises limits without a card
-    "botops_manages_bots": True,    # BotOps, in its own runs, manages every bot that is not built in (Auth.botops_manages)
-    "admin_credentials": True,      # Admins store credentials, not only the owner
+    "assistant_direct": True,  # the Assistant makes tasks (for a person or a bot), comments and messages to bots without a card
+    "assistant_approvals": True,  # a person may let their own Assistant decide their approvals (backend/assistant.py)
+    "botops_direct": True,  # BotOps sets AI providers and raises limits without a card
+    "botops_manages_bots": True,  # BotOps, in its own runs, manages every bot that is not built in (Auth.botops_manages)
+    "admin_credentials": True,  # Admins store credentials, not only the owner
     "members_store_credentials": True,  # anyone on the team stores a credential for a bot they manage
-    "admin_sql": True,              # Admins see the SQL page
-    "member_tokens": True,          # members make personal tokens
-    "bots_go_ahead": True,          # an ask with a reversible, internal default goes ahead after `go_ahead_days`
+    "admin_sql": True,  # Admins see the SQL page
+    "member_tokens": True,  # members make personal tokens
+    "bots_go_ahead": True,  # an ask with a reversible, internal default goes ahead after `go_ahead_days`
     "health_monitor_reports": True,  # the Health Monitor, once turned on, files Tico bug reports without a card
-    "bot_reports_direct": True,     # a bot's report to the Tico team is sent without a card (backend/support.py send_by_rule)
-    "support_access": True,         # an owner or admin may let Tico support in from a ticket (backend/support_access.py)
-    "stale_review": False,          # the hourly stale ticket review suggests updates to owners (backend/stale_review.py)
-    "topic_fresh": False,           # a direct chat starts fresh when the topic changes (backend/topic_change.py)
+    "bot_reports_direct": True,  # a bot's report to the Tico team is sent without a card (backend/support.py send_by_rule)
+    "support_access": True,  # an owner or admin may let Tico support in from a ticket (backend/support_access.py)
+    "stale_review": False,  # the hourly stale ticket review suggests updates to owners (backend/stale_review.py)
+    "topic_fresh": False,  # a direct chat starts fresh when the topic changes (backend/topic_change.py)
     "managers_manage_reports": True,  # a bot changes its direct reports' model, task model, name and description (backend/report_managers.py)
-    "org_rule_checks": True,        # a bot's outputs are checked against the org rules that apply to them (backend/org_rule_check.py)
+    "org_rule_checks": True,  # a bot's outputs are checked against the org rules that apply to them (backend/org_rule_check.py)
 }
 # Rules an admin may change too, not only the owner (Settings > General).
 ADMIN_RULES = ("stale_review", "topic_fresh", "org_rule_checks")
@@ -44,7 +45,7 @@ CREDENTIAL_RULES = ("admin_credentials", "members_store_credentials", "member_to
 ENV_DEFAULTS = {"stale_review": "TICO_STALE_REVIEW", "topic_fresh": "TICO_TOPIC_FRESH"}
 # Numbers the owner sets, with their default and bounds.
 NUMBERS = {
-    "go_ahead_days": (3, 1, 14),    # days an ask with a default waits for a person before the bot goes ahead
+    "go_ahead_days": (3, 1, 14),  # days an ask with a default waits for a person before the bot goes ahead
     # Most reports a manager bot may add, and most it may archive or restore, each rolling week, through BotOps
     # (backend/report_managers.py). 0 turns that off.
     "report_creates_per_week": (3, 0, 50),
@@ -73,26 +74,37 @@ def load(c):
     rules = {name: bool(stored[name]) if name in stored else default_of(name) for name in DEFAULTS}
     for name, (default, low, high) in NUMBERS.items():
         value = stored.get(name)
-        rules[name] = value if isinstance(value, int) and not isinstance(value, bool) and low <= value <= high else default
+        rules[name] = (
+            value if isinstance(value, int) and not isinstance(value, bool) and low <= value <= high else default
+        )
     return rules
 
 
 def save(c, actor, changes):
     """Set the rules named in `changes`; returns all of them."""
     before = load(c)
-    after = {**before, **{name: bool(value) for name, value in changes.items() if name in DEFAULTS and value is not None}}
+    after = {
+        **before,
+        **{name: bool(value) for name, value in changes.items() if name in DEFAULTS and value is not None},
+    }
     for name, (_, low, high) in NUMBERS.items():
         value = changes.get(name)
         if value is not None:
             after[name] = min(high, max(low, int(value)))
     stored = _stored(c)
-    kept = {name: value for name, value in after.items()
-            if name not in ENV_DEFAULTS or name in stored or changes.get(name) is not None}
-    c.execute("INSERT INTO registry_metadata VALUES(?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value",
-              (KEY, json.dumps(kept, sort_keys=True)))
+    kept = {
+        name: value
+        for name, value in after.items()
+        if name not in ENV_DEFAULTS or name in stored or changes.get(name) is not None
+    }
+    c.execute(
+        "INSERT INTO registry_metadata VALUES(?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value",
+        (KEY, json.dumps(kept, sort_keys=True)),
+    )
     if after != before:
         H.event(c, actor, "access.rules_updated", "", {"before": before, "after": after})
     if before["support_access"] and not after["support_access"]:
         from . import support_access
+
         support_access.end_all(c, actor, "turned_off")
     return after

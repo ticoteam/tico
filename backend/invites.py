@@ -59,8 +59,10 @@ def sent(c):
 def record(c, actor, pid):
     at = H.now()
     invites = {**sent(c), pid: {"at": at, "by": actor}}
-    c.execute("INSERT INTO registry_metadata(key,value) VALUES(?,?) "
-              "ON CONFLICT(key) DO UPDATE SET value=excluded.value", (KEY, encode(invites)))
+    c.execute(
+        "INSERT INTO registry_metadata(key,value) VALUES(?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value",
+        (KEY, encode(invites)),
+    )
     H.event(c, actor, "person.invited", pid, {})
     return at
 
@@ -72,8 +74,10 @@ def record_send(store, who, request, pid):
     key, operation = request_key(request), request.url.path
 
     def work(c):
-        row = c.execute("SELECT response FROM idempotency WHERE binding=? AND actor=? AND operation=? AND key=?",
-                        (BINDING, who.actor, operation, key)).fetchone()
+        row = c.execute(
+            "SELECT response FROM idempotency WHERE binding=? AND actor=? AND operation=? AND key=?",
+            (BINDING, who.actor, operation, key),
+        ).fetchone()
         try:
             recorded = json.loads(row["response"]).get("invited_at") if row and row["response"] else None
         except (ValueError, AttributeError):
@@ -81,9 +85,12 @@ def record_send(store, who, request, pid):
         if recorded:
             return recorded
         at = record(c, who.actor, pid)
-        c.execute("UPDATE idempotency SET response=?,updated_at=? WHERE binding=? AND actor=? AND operation=? AND key=?",
-                  (encode({"invited_at": at}), at, BINDING, who.actor, operation, key))
+        c.execute(
+            "UPDATE idempotency SET response=?,updated_at=? WHERE binding=? AND actor=? AND operation=? AND key=?",
+            (encode({"invited_at": at}), at, BINDING, who.actor, operation, key),
+        )
         return at
+
     return store.write(who, work)
 
 
@@ -107,13 +114,25 @@ def replay(store, who, request, body):
     the request. A bound key answers from its binding (`_once`): nothing is written or sent."""
     key, operation = request_key(request), request.url.path
     with store.read() as c:
-        row = c.execute("SELECT subject FROM idempotency WHERE binding=? AND actor=? AND operation=? AND key=?",
-                        (BINDING, who.actor, operation, key)).fetchone()
+        row = c.execute(
+            "SELECT subject FROM idempotency WHERE binding=? AND actor=? AND operation=? AND key=?",
+            (BINDING, who.actor, operation, key),
+        ).fetchone()
     if not row:
         return None
-    _once(store, who, request, body, None, None,
-          lambda name: ("invite_unknown", "This invite is still being sent, or Tico couldn't tell whether it went. Check "
-                                          "the People page before inviting again."))
+    _once(
+        store,
+        who,
+        request,
+        body,
+        None,
+        None,
+        lambda name: (
+            "invite_unknown",
+            "This invite is still being sent, or Tico couldn't tell whether it went. Check "
+            "the People page before inviting again.",
+        ),
+    )
     return row["subject"]
 
 
@@ -122,12 +141,26 @@ def make_password(store, auth, settings, who, request, body, person):
     answer only. A repeat of a request that made one raises (its password is gone); a refusal raises."""
     _available(auth, settings, person, "password")
     name = person.get("name") or "this person"
-    made = _once(store, who, request, body, person, lambda: make(auth, settings, person),
-                 lambda name: ("password_unknown", f"This account for {name} is still being made, or Tico couldn't tell "
-                                                   f"whether it was. Ask {name} to try \"Forgot password?\" at sign-in."))
+    made = _once(
+        store,
+        who,
+        request,
+        body,
+        person,
+        lambda: make(auth, settings, person),
+        lambda name: (
+            "password_unknown",
+            f"This account for {name} is still being made, or Tico couldn't tell "
+            f"whether it was. Ask {name} to try \"Forgot password?\" at sign-in.",
+        ),
+    )
     if made is None:
-        raise Problem("password_shown", f"The account for {name} was made, but its password can't be shown again. Ask "
-                                        f"{name} to choose \"Forgot password?\" on the sign-in page.", 422)
+        raise Problem(
+            "password_shown",
+            f"The account for {name} was made, but its password can't be shown again. Ask "
+            f"{name} to choose \"Forgot password?\" on the sign-in page.",
+            422,
+        )
     return made
 
 
@@ -139,8 +172,10 @@ def _once(store, who, request, body, person, work, unknown=None):
     key, operation, hashed = request_key(request), request.url.path, digest(encode(body.model_dump()))
     with store.transaction() as c:
         validate_identity(c, who)
-        row = c.execute("SELECT * FROM idempotency WHERE binding=? AND actor=? AND operation=? AND key=?",
-                        (BINDING, who.actor, operation, key)).fetchone()
+        row = c.execute(
+            "SELECT * FROM idempotency WHERE binding=? AND actor=? AND operation=? AND key=?",
+            (BINDING, who.actor, operation, key),
+        ).fetchone()
         if row:
             # A binding whose person was removed has no hash (people_remove): any copy of its request gets its answer.
             if row["request_hash"] not in ("", hashed):
@@ -152,16 +187,24 @@ def _once(store, who, request, body, person, work, unknown=None):
             name = (person or {}).get("name") or "this person"
             if unknown:
                 raise Problem(*unknown(name), 422)
-            raise Problem("invite_unknown", f"This invite to {name} is still being sent, or Tico couldn't tell whether it "
-                                            f"went. Check the People page or ask {name} before inviting again.", 422)
+            raise Problem(
+                "invite_unknown",
+                f"This invite to {name} is still being sent, or Tico couldn't tell whether it "
+                f"went. Check the People page or ask {name} before inviting again.",
+                422,
+            )
         # An answer left under this key with no binding is an older release's roster add that committed before its
         # invite was bound (migration 0050 removes those): nothing was sent for it, so the binding takes its place.
-        c.execute("DELETE FROM idempotency WHERE binding IS NULL AND actor=? AND operation=? AND key=?",
-                  (who.actor, operation, key))
+        c.execute(
+            "DELETE FROM idempotency WHERE binding IS NULL AND actor=? AND operation=? AND key=?",
+            (who.actor, operation, key),
+        )
         now = H.now()
-        c.execute("INSERT INTO idempotency(actor,operation,key,request_hash,response,created_at,updated_at,binding,"
-                  "subject,state) VALUES(?,?,?,?,NULL,?,?,?,?,'pending')",
-                  (who.actor, operation, key, hashed, now, now, BINDING, person["id"]))
+        c.execute(
+            "INSERT INTO idempotency(actor,operation,key,request_hash,response,created_at,updated_at,binding,"
+            "subject,state) VALUES(?,?,?,?,NULL,?,?,?,?,'pending')",
+            (who.actor, operation, key, hashed, now, now, BINDING, person["id"]),
+        )
     try:
         answer = work()
     except Problem as problem:
@@ -169,15 +212,19 @@ def _once(store, who, request, body, person, work, unknown=None):
         # no copy of it ever asks the issuer again. A person removed while the issuer was asked (no hash) keeps no
         # refusal text that names their address.
         with store.transaction() as c:
-            c.execute("UPDATE idempotency SET state='refused',error_code=?,"
-                      "error_detail=CASE WHEN request_hash='' THEN ? ELSE ? END,updated_at=? "
-                      "WHERE binding=? AND actor=? AND operation=? AND key=?",
-                      (problem.code, REMOVED, problem.detail, H.now(), BINDING, who.actor, operation, key))
+            c.execute(
+                "UPDATE idempotency SET state='refused',error_code=?,"
+                "error_detail=CASE WHEN request_hash='' THEN ? ELSE ? END,updated_at=? "
+                "WHERE binding=? AND actor=? AND operation=? AND key=?",
+                (problem.code, REMOVED, problem.detail, H.now(), BINDING, who.actor, operation, key),
+            )
         raise
     with store.transaction() as c:
-        c.execute("UPDATE idempotency SET state='completed',updated_at=? "
-                  "WHERE binding=? AND actor=? AND operation=? AND key=?",
-                  (H.now(), BINDING, who.actor, operation, key))
+        c.execute(
+            "UPDATE idempotency SET state='completed',updated_at=? "
+            "WHERE binding=? AND actor=? AND operation=? AND key=?",
+            (H.now(), BINDING, who.actor, operation, key),
+        )
     return answer if answer is not None else True
 
 
@@ -209,17 +256,29 @@ def _available(auth, settings, person, kind="invite"):
         if not email:
             raise Problem("password_email", f"{name} has no email address for a Tico account", 422)
         if not proxy or getattr(proxy, "name", "") != "oidc" or not hasattr(proxy, "make_account"):
-            raise Problem("password_unavailable", f"This Tico doesn't sign in with Tico accounts, so it can't make "
-                                                  f"one. Use your sign-in provider's own accounts for {name}.", 422)
+            raise Problem(
+                "password_unavailable",
+                f"This Tico doesn't sign in with Tico accounts, so it can't make "
+                f"one. Use your sign-in provider's own accounts for {name}.",
+                422,
+            )
         return
     if rehearsing(settings):
-        raise Problem("rehearsal", f"Invites are off in a rehearsal: this server is a copy of real data and sends no "
-                                   f"mail. Tell {name} to sign in at {settings.public_url}.", 422)
+        raise Problem(
+            "rehearsal",
+            f"Invites are off in a rehearsal: this server is a copy of real data and sends no "
+            f"mail. Tell {name} to sign in at {settings.public_url}.",
+            422,
+        )
     if not email:
         raise Problem("invite_email", f"{name} has no email address to invite", 422)
     if not proxy or getattr(proxy, "name", "") != "oidc" or not hasattr(proxy, "invite"):
-        raise Problem("invite_unavailable", f"This Tico doesn't sign in with Tico accounts, so it can't email invites. "
-                                            f"Tell {name} to sign in at {settings.public_url} with {email}.", 422)
+        raise Problem(
+            "invite_unavailable",
+            f"This Tico doesn't sign in with Tico accounts, so it can't email invites. "
+            f"Tell {name} to sign in at {settings.public_url} with {email}.",
+            422,
+        )
 
 
 def send(auth, settings, person):
@@ -232,11 +291,18 @@ def send(auth, settings, person):
     try:
         answer = auth.proxy.invite(email)
     except SignInError:
-        raise Problem("invite_failed", "Tico's sign-in service couldn't be reached, so the invite wasn't sent. "
-                                       "Try again in a minute.", 422) from None
+        raise Problem(
+            "invite_failed",
+            "Tico's sign-in service couldn't be reached, so the invite wasn't sent. Try again in a minute.",
+            422,
+        ) from None
     if answer is None:
-        raise Problem("invite_unavailable", f"This Tico's sign-in provider doesn't send Tico invites. "
-                                            f"Tell {name} to sign in at {settings.public_url} with {email}.", 422)
+        raise Problem(
+            "invite_unavailable",
+            f"This Tico's sign-in provider doesn't send Tico invites. "
+            f"Tell {name} to sign in at {settings.public_url} with {email}.",
+            422,
+        )
     status, body = answer
     if status == 202 and body.get("status") == "sent":
         return
@@ -254,16 +320,23 @@ def make(auth, settings, person):
     try:
         answer = auth.proxy.make_account(email)
     except SignInError:
-        raise Problem("password_failed", "Tico's sign-in service couldn't be reached, so no account was made. "
-                                         "Try again in a minute.", 422) from None
+        raise Problem(
+            "password_failed",
+            "Tico's sign-in service couldn't be reached, so no account was made. Try again in a minute.",
+            422,
+        ) from None
     if answer is None:
-        raise Problem("password_unavailable", f"This Tico's sign-in provider doesn't make Tico accounts. "
-                                              f"Use Invite for {name}.", 422)
+        raise Problem(
+            "password_unavailable",
+            f"This Tico's sign-in provider doesn't make Tico accounts. Use Invite for {name}.",
+            422,
+        )
     status, body = answer
     password = body.get("password")
     if status == 201 and body.get("status") == "created" and isinstance(password, str) and len(password) >= 16:
         return password
     code = str(body.get("error") or "")
     reason = MADE.get(code, "Tico's sign-in service refused, so no account was made.").format(email=email, name=name)
-    raise Problem({"account_exists": "password_exists", "too_many": "password_limited"}.get(code, "password_failed"),
-                  reason, 422)
+    raise Problem(
+        {"account_exists": "password_exists", "too_many": "password_limited"}.get(code, "password_failed"), reason, 422
+    )

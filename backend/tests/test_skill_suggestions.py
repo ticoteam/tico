@@ -5,6 +5,7 @@ acted on, dismissed or 30 days old, admins only, nothing removed until an admin 
 Ana owns the company, Ben is an admin, Cara is a member (the base fixture). Bots run Claude Code here unless a test
 says otherwise: only a harness that reports every skill use lets coverage call a bot's install unused.
 """
+
 from datetime import timedelta
 
 import pytest
@@ -22,14 +23,19 @@ from backend.tests.test_skills import proposal, publish
 
 def unlisted(api, name, bot, uses, days=1, at=NOW):
     with api.app.state.store.transaction() as c:
-        c.execute("INSERT INTO unlisted_skill_usage_dailies (used_on, name, bot_id, uses_count) VALUES (?,?,?,?) "
-                  "ON CONFLICT(used_on, name, bot_id) DO UPDATE SET uses_count=uses_count+excluded.uses_count",
-                  ((at - timedelta(days=days)).date().isoformat(), name, bot, uses))
+        c.execute(
+            "INSERT INTO unlisted_skill_usage_dailies (used_on, name, bot_id, uses_count) VALUES (?,?,?,?) "
+            "ON CONFLICT(used_on, name, bot_id) DO UPDATE SET uses_count=uses_count+excluded.uses_count",
+            ((at - timedelta(days=days)).date().isoformat(), name, bot, uses),
+        )
 
 
 def installed(api, target_type, target_id, *, age=40, staged=True, reporting=False, harness="claude"):
-    r = api.post("/api/v2/skills/triage/installs", json={"target_type": target_type, "target_id": target_id,
-                                                      "version_policy": "latest"}, headers=headers("ana-test"))
+    r = api.post(
+        "/api/v2/skills/triage/installs",
+        json={"target_type": target_type, "target_id": target_id, "version_policy": "latest"},
+        headers=headers("ana-test"),
+    )
     assert r.status_code == 200, r.text
     iid = r.json()["id"]
     with api.app.state.store.transaction() as c:
@@ -37,13 +43,24 @@ def installed(api, target_type, target_id, *, age=40, staged=True, reporting=Fal
         if target_type == "Bot":
             BS.update(c, target_id, {"harness": harness})
         if staged:
-            c.execute("INSERT INTO skill_receipts (target_type, target_id, skill_id, sha256, source, staged_at) "
-                      "VALUES (?,?,?,?,?,?)", (target_type, target_id, skill_id(api), "a" * 64,
-                                               "runner" if target_type == "Bot" else "helper", H.now()))
+            c.execute(
+                "INSERT INTO skill_receipts (target_type, target_id, skill_id, sha256, source, staged_at) "
+                "VALUES (?,?,?,?,?,?)",
+                (
+                    target_type,
+                    target_id,
+                    skill_id(api),
+                    "a" * 64,
+                    "runner" if target_type == "Bot" else "helper",
+                    H.now(),
+                ),
+            )
         if reporting:
-            c.execute("INSERT INTO skill_devices (id, person_id, label, token_hash, reporting_enabled, created_at, "
-                      "updated_at) VALUES (?, ?, 'laptop', ?, 1, ?, ?)",
-                      ("skd_" + target_id, target_id, "h" + target_id, H.now(), H.now()))
+            c.execute(
+                "INSERT INTO skill_devices (id, person_id, label, token_hash, reporting_enabled, created_at, "
+                "updated_at) VALUES (?, ?, 'laptop', ?, 1, ?, ?)",
+                ("skd_" + target_id, target_id, "h" + target_id, H.now(), H.now()),
+            )
     return iid
 
 
@@ -61,10 +78,10 @@ def test_remove_is_suggested_only_for_installs_coverage_calls_unused_never_unkno
     publish(api)
     ops, finance, cpo = bot_id(api, "ops"), bot_id(api, "finance"), bot_id(api, "cpo")
     unused_bot = installed(api, "Bot", ops)
-    installed(api, "Bot", finance, staged=False)            # no receipt: unknown
-    installed(api, "Bot", cpo, age=10)                      # under 30 days: unknown
+    installed(api, "Bot", finance, staged=False)  # no receipt: unknown
+    installed(api, "Bot", cpo, age=10)  # under 30 days: unknown
     installed(api, "Bot", bot_id(api, "coo"), harness="codex")  # its harness does not report every use: unknown
-    installed(api, "Human", "cara")                         # staged, but her helper does not report: unknown
+    installed(api, "Human", "cara")  # staged, but her helper does not report: unknown
     unused_person = installed(api, "Human", "ben", reporting=True)
     used = installed(api, "Human", "ana", reporting=True)
     use(api, ("Human", "ana"), days=2)
@@ -83,6 +100,7 @@ def test_remove_follows_coverage_not_a_copy_of_its_rule(api, monkeypatch):
 
     def stub(c, auth, who, skill, at):
         return [{**r, "coverage": "unknown"} if r["target"]["id"] == ops else r for r in real(c, auth, who, skill, at)]
+
     monkeypatch.setattr(U, "coverage", stub)
     refresh(api)
     assert set(rows(api)) == {("remove", kept)}
@@ -98,14 +116,17 @@ def test_promote_needs_two_bots_or_ten_uses_in_thirty_days_and_a_name_outside_th
     unlisted(api, "ten-uses", finance, 2, days=3)
     unlisted(api, "nine-uses", ops, 9)
     unlisted(api, "long-ago", ops, 50, days=40)
-    unlisted(api, "triage", ops, 20)                        # in the directory now
+    unlisted(api, "triage", ops, 20)  # in the directory now
     unlisted(api, "proposed", ops, 20)
     proposal(api, [{"path": "SKILL.md", "content": "---\nname: proposed\n---\n\nx\n"}], name="proposed")
     refresh(api)
     found = {s: r for (k, s), r in rows(api).items() if k == "promote"}
     assert set(found) == {"two-bots", "ten-uses"}
-    assert (found["ten-uses"]["target_id"], found["ten-uses"]["uses_count"], found["ten-uses"]["bots_count"]) == (ops, 12, 2), \
-        "it asks the bot that used it most"
+    assert (found["ten-uses"]["target_id"], found["ten-uses"]["uses_count"], found["ten-uses"]["bots_count"]) == (
+        ops,
+        12,
+        2,
+    ), "it asks the bot that used it most"
 
 
 # ------------------------------------------------------------------ once per subject
@@ -163,7 +184,7 @@ def test_suggestions_and_the_counts_outside_the_directory_are_for_admins_only(ap
         post(api, f"skills/suggestions/{remove['id']}/{verb}", {}, "cara-test", expected=403)
     with api.app.state.store.read() as c:
         assert c.execute("SELECT 1 FROM skill_installs WHERE id=?", (iid,)).fetchone(), "refreshing removes nothing"
-    post(api, f"skills/suggestions/{remove['id']}/asked", {}, "ben-test", expected=404)   # Ask is for promote only
+    post(api, f"skills/suggestions/{remove['id']}/asked", {}, "ben-test", expected=404)  # Ask is for promote only
     assert post(api, f"skills/suggestions/{remove['id']}/remove", {}, "ben-test")["removed"] is True
     with api.app.state.store.read() as c:
         assert c.execute("SELECT 1 FROM skill_installs WHERE id=?", (iid,)).fetchone() is None
@@ -177,8 +198,11 @@ def test_suggestions_and_the_counts_outside_the_directory_are_for_admins_only(ap
 
 @pytest.mark.parametrize("name", ["suggestions"])
 def test_the_route_word_cannot_be_a_skill_name(api, name):
-    r = api.post("/api/v2/skills/proposals", headers=headers("ana-test"), json={
-        "name": name, "files": [{"path": "SKILL.md", "content": f"---\nname: {name}\n---\n\nx\n"}]})
+    r = api.post(
+        "/api/v2/skills/proposals",
+        headers=headers("ana-test"),
+        json={"name": name, "files": [{"path": "SKILL.md", "content": f"---\nname: {name}\n---\n\nx\n"}]},
+    )
     assert r.status_code == 422 and "reserved" in r.text
 
 

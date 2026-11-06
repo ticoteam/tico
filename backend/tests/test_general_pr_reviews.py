@@ -1,4 +1,5 @@
 """Bot PRs outside ticket boards use the ticket pools and captured verdict handoff."""
+
 import json
 from types import SimpleNamespace
 
@@ -15,11 +16,24 @@ def setup(api, reviews=1, qa=False, limit=20):
     with api.app.state.store.transaction() as c:
         steps = [{"name": "Build", "status": "doing"}]
         for i in range(reviews):
-            steps.append({"name": f"Review {i + 1}", "status": "review", "check_pool": ["rev-a", "rev-b"],
-                          "check_limit": limit, "flow": {"check": "review", "on_pass": "merge"}})
+            steps.append(
+                {
+                    "name": f"Review {i + 1}",
+                    "status": "review",
+                    "check_pool": ["rev-a", "rev-b"],
+                    "check_limit": limit,
+                    "flow": {"check": "review", "on_pass": "merge"},
+                }
+            )
         if qa:
-            steps.append({"name": "In QA", "status": "review", "check_pool": ["rev-c"],
-                          "flow": {"check": "qa", "on_pass": "merge"}})
+            steps.append(
+                {
+                    "name": "In QA",
+                    "status": "review",
+                    "check_pool": ["rev-c"],
+                    "flow": {"check": "qa", "on_pass": "merge"},
+                }
+            )
         typ = H.type_create(c, H.KEEPER, "Dev tickets", steps)
         BS.update(c, "cpo", {"github_login": "acme-writer"})
         c.execute("UPDATE bot_config SET repo='Acme/atlas' WHERE bot='cpo'")
@@ -28,13 +42,27 @@ def setup(api, reviews=1, qa=False, limit=20):
 
 def task_pr(api, number=12, head=HEAD, private=False, conflict=False, stale=False, labels=None, owner="bot:cpo"):
     with api.app.state.store.transaction() as c:
-        task = H.task_create(c, "human:ana", f"Update the guide {number}", "Private text" if private else "Docs and code",
-                             owner, private=private, labels=labels, mover=True)
+        task = H.task_create(
+            c,
+            "human:ana",
+            f"Update the guide {number}",
+            "Private text" if private else "Docs and code",
+            owner,
+            private=private,
+            labels=labels,
+            mover=True,
+        )
         pr = H.task_link(c, "human:ana", task["id"], f"https://github.com/Acme/atlas/pull/{number}")
-        detail = {"head_sha": head, "author_login": "acme-writer", "checks": {"required": "passing"},
-                  "mergeable_state": "behind" if stale else "clean"}
-        c.execute("UPDATE task_links SET state='open',repo='Acme/atlas',checks='passing',mergeable=?,detail=? WHERE id=?",
-                  ("conflict" if conflict else "clean", json.dumps(detail), pr["id"]))
+        detail = {
+            "head_sha": head,
+            "author_login": "acme-writer",
+            "checks": {"required": "passing"},
+            "mergeable_state": "behind" if stale else "clean",
+        }
+        c.execute(
+            "UPDATE task_links SET state='open',repo='Acme/atlas',checks='passing',mergeable=?,detail=? WHERE id=?",
+            ("conflict" if conflict else "clean", json.dumps(detail), pr["id"]),
+        )
     return task
 
 
@@ -51,11 +79,18 @@ def dispatch(api):
 def finish(api, child, verdict="approve", head=HEAD, capture=True):
     with api.app.state.store.transaction() as c:
         attempt = H.new_id()
-        c.execute("INSERT INTO attempts(id,bot_id,created_at,task_id) VALUES(?,?,?,?)",
-                  (attempt, H.actor_id(child["owner_id"]), H.now(), child["id"]))
-        H.task_update(c, child["owner_id"], child["id"], status="done",
-                      **({"verdict": verdict, "verdict_head": head} if verdict else {}),
-                      note="Fix the broken link." if verdict == "changes" else "Reviewed the current diff.")
+        c.execute(
+            "INSERT INTO attempts(id,bot_id,created_at,task_id) VALUES(?,?,?,?)",
+            (attempt, H.actor_id(child["owner_id"]), H.now(), child["id"]),
+        )
+        H.task_update(
+            c,
+            child["owner_id"],
+            child["id"],
+            status="done",
+            **({"verdict": verdict, "verdict_head": head} if verdict else {}),
+            note="Fix the broken link." if verdict == "changes" else "Reviewed the current diff.",
+        )
         if capture:
             c.execute("UPDATE attempts SET settled_at=? WHERE id=?", (H.now(), attempt))
             P.capture_attempt(c, attempt)
@@ -64,8 +99,13 @@ def finish(api, child, verdict="approve", head=HEAD, capture=True):
 
 def handoffs(api, task, kind):
     with api.app.state.store.read() as c:
-        return [dict(r) for r in c.execute("SELECT body,recipient_id FROM messages WHERE conversation_id=? "
-                                          "AND json_extract(refs,'$.handoff')=?", (task["conversation_id"], kind))]
+        return [
+            dict(r)
+            for r in c.execute(
+                "SELECT body,recipient_id FROM messages WHERE conversation_id=? AND json_extract(refs,'$.handoff')=?",
+                (task["conversation_id"], kind),
+            )
+        ]
 
 
 def test_general_pr_uses_pool_once_and_new_push_supersedes_open_review(api):
@@ -85,14 +125,19 @@ def test_general_pr_uses_pool_once_and_new_push_supersedes_open_review(api):
     assert len(children(api, task, active=False)) == 2
 
 
-@pytest.mark.parametrize("verdict,head,green,capture,merge,changes", [
-    ("approve", HEAD, True, True, True, False),
-    ("approve", OLD, True, True, False, False),
-    ("approve", HEAD, False, True, False, False),
-    ("approve", HEAD, True, False, False, False),
-    ("changes", HEAD, True, True, False, True),
-])
-def test_verdict_handoff_requires_current_head_capture_and_green_checks(api, verdict, head, green, capture, merge, changes):
+@pytest.mark.parametrize(
+    "verdict,head,green,capture,merge,changes",
+    [
+        ("approve", HEAD, True, True, True, False),
+        ("approve", OLD, True, True, False, False),
+        ("approve", HEAD, False, True, False, False),
+        ("approve", HEAD, True, False, False, False),
+        ("changes", HEAD, True, True, False, True),
+    ],
+)
+def test_verdict_handoff_requires_current_head_capture_and_green_checks(
+    api, verdict, head, green, capture, merge, changes
+):
     setup(api)
     task = task_pr(api)
     dispatch(api)
@@ -158,7 +203,9 @@ def test_private_task_is_not_shared_with_pool(api):
     assert children(api, task) == []
     with api.app.state.store.read() as c:
         assert "private" in P.waiting(c, task["id"])[0]["reason"]
-        assert not c.execute("SELECT 1 FROM messages WHERE recipient_id LIKE 'bot:rev-%' AND body LIKE '%Private text%'").fetchone()
+        assert not c.execute(
+            "SELECT 1 FROM messages WHERE recipient_id LIKE 'bot:rev-%' AND body LIKE '%Private text%'"
+        ).fetchone()
 
 
 def test_private_reviewer_cannot_send_a_private_verdict_to_a_public_task(api):
@@ -173,12 +220,15 @@ def test_private_reviewer_cannot_send_a_private_verdict_to_a_public_task(api):
         assert "private" in P.waiting(c, task["id"])[0]["reason"]
 
 
-@pytest.mark.parametrize("private,title,bad,good", [
-    pytest.param(True, "Review 1", "changes", "approve", id="private-review-changes"),
-    pytest.param(False, "Review 1", "changes", "approve", id="public-review-changes"),
-    pytest.param(True, "QA", "fail", "pass", id="private-qa-fail"),
-    pytest.param(False, "Review 1", None, "approve", id="public-review-none"),
-])
+@pytest.mark.parametrize(
+    "private,title,bad,good",
+    [
+        pytest.param(True, "Review 1", "changes", "approve", id="private-review-changes"),
+        pytest.param(False, "Review 1", "changes", "approve", id="public-review-changes"),
+        pytest.param(True, "QA", "fail", "pass", id="private-qa-fail"),
+        pytest.param(False, "Review 1", None, "approve", id="public-review-none"),
+    ],
+)
 def test_later_public_pass_keeps_the_findings_source_audience(api, private, title, bad, good):
     from backend import task_privacy
     from backend.auth import Identity
@@ -190,28 +240,56 @@ def test_later_public_pass_keeps_the_findings_source_audience(api, private, titl
     api.app.state.auth.settings.test_identities["observer-test"] = observer
     with api.app.state.store.transaction() as c:
         unrelated_task_managers(c)
-        c.execute("INSERT INTO agents(bot,harness,token_hash,created_at,created_by) VALUES(?,?,?,?,?)",
-                  ("rev-c", "test", "observer-credential", H.now(), "human:ana"))
-        first = H.task_create(c, "bot:cpo", f"{title}: PR #12", f"Check head {HEAD}", "bot:rev-a",
-                              parent_id=task["id"], private=private, lint=False)
+        c.execute(
+            "INSERT INTO agents(bot,harness,token_hash,created_at,created_by) VALUES(?,?,?,?,?)",
+            ("rev-c", "test", "observer-credential", H.now(), "human:ana"),
+        )
+        first = H.task_create(
+            c,
+            "bot:cpo",
+            f"{title}: PR #12",
+            f"Check head {HEAD}",
+            "bot:rev-a",
+            parent_id=task["id"],
+            private=private,
+            lint=False,
+        )
     finish(api, first, bad)
     with api.app.state.store.transaction() as c:
-        second = H.task_create(c, "bot:cpo", f"{title}: PR #12", f"Check head {HEAD}", "bot:rev-b",
-                               parent_id=task["id"], private=False, lint=False)
+        second = H.task_create(
+            c,
+            "bot:cpo",
+            f"{title}: PR #12",
+            f"Check head {HEAD}",
+            "bot:rev-b",
+            parent_id=task["id"],
+            private=False,
+            lint=False,
+        )
     finish(api, second, good)
     with api.app.state.store.transaction() as c:
         outcome = V.delivery(c, H.task(c, second["id"]))
         assert outcome["source_tasks"] == [first["id"], second["id"]]
         assert "only a new head clears it" in outcome["say"]
         assert task_privacy.content_readable(c, observer.actor, outcome) is not private
-        wake = H.message(c, c.execute("SELECT id FROM messages WHERE conversation_id=? "
-                                      "AND json_extract(refs,'$.handoff')='verdict' ORDER BY rowid DESC LIMIT 1",
-                                      (task["conversation_id"],)).fetchone()[0])
+        wake = H.message(
+            c,
+            c.execute(
+                "SELECT id FROM messages WHERE conversation_id=? "
+                "AND json_extract(refs,'$.handoff')='verdict' ORDER BY rowid DESC LIMIT 1",
+                (task["conversation_id"],),
+            ).fetchone()[0],
+        )
         assert wake["refs"]["trigger_source"] == first["id"]
         # A later Done note/final reply reuses the saved outcome, not just the public child's audience.
         H._deliver_subtask_result(c, H.task(c, second["id"]), H.task(c, task["id"]), "Later result.", quiet=True)
-        replay = H.message(c, c.execute("SELECT id FROM messages WHERE conversation_id=? ORDER BY rowid DESC LIMIT 1",
-                                        (task["conversation_id"],)).fetchone()[0])
+        replay = H.message(
+            c,
+            c.execute(
+                "SELECT id FROM messages WHERE conversation_id=? ORDER BY rowid DESC LIMIT 1",
+                (task["conversation_id"],),
+            ).fetchone()[0],
+        )
         for msg in (wake, replay):
             assert first["id"] in msg["refs"]["source_tasks"]
             assert ("Fix the broken link." if bad == "changes" else "Reviewed the current diff.") in msg["body"]
@@ -223,8 +301,10 @@ def test_later_public_pass_keeps_the_findings_source_audience(api, private, titl
         assert response.status_code == (404 if private else 200), response.text
 
 
-@pytest.mark.parametrize("private,other_merger", [
-    pytest.param(True, False, id="private-parent-wake"), pytest.param(True, True, id="private-merge-task")])
+@pytest.mark.parametrize(
+    "private,other_merger",
+    [pytest.param(True, False, id="private-parent-wake"), pytest.param(True, True, id="private-merge-task")],
+)
 def test_delayed_merge_notice_keeps_its_approval_sources(api, private, other_merger):
     from backend import task_privacy
     from backend.tests.test_api import unrelated_task_managers
@@ -238,15 +318,25 @@ def test_delayed_merge_notice_keeps_its_approval_sources(api, private, other_mer
             c.execute("UPDATE bot_config SET repo='Acme/atlas' WHERE bot='cmo'")
             c.execute("UPDATE task_types SET manager='cmo' WHERE id=?", (typ["id"],))
         c.execute("UPDATE task_links SET checks='pending' WHERE task_id=?", (task["id"],))
-        review = H.task_create(c, "bot:cpo", "Review 1: PR #12", f"Check head {HEAD}", "bot:rev-a",
-                               parent_id=task["id"], private=private, lint=False)
+        review = H.task_create(
+            c,
+            "bot:cpo",
+            "Review 1: PR #12",
+            f"Check head {HEAD}",
+            "bot:rev-a",
+            parent_id=task["id"],
+            private=private,
+            lint=False,
+        )
     finish(api, review)
     with api.app.state.store.transaction() as c:
         assert not c.execute("SELECT 1 FROM messages WHERE json_extract(refs,'$.handoff')='merge'").fetchone()
         c.execute("UPDATE task_links SET checks='passing' WHERE task_id=?", (task["id"],))
         assert V.merge_wake(c, H.task(c, task["id"]))
-        [notice] = [H.message(c, r[0]) for r in c.execute(
-            "SELECT id FROM messages WHERE json_extract(refs,'$.handoff')='merge'")]
+        [notice] = [
+            H.message(c, r[0])
+            for r in c.execute("SELECT id FROM messages WHERE json_extract(refs,'$.handoff')='merge'")
+        ]
         assert notice["refs"]["source_tasks"] == [review["id"]]
         assert notice["refs"]["trigger_source"] == review["id"]
         assert "Approved at" in notice["body"]
@@ -266,7 +356,9 @@ def test_backfill_is_oldest_first_and_limited_per_reviewer_per_hour(api, monkeyp
     tasks = [task_pr(api, n) for n in range(20, 24)]
     with api.app.state.store.transaction() as c:
         for i, task in enumerate(tasks):
-            c.execute("UPDATE task_links SET created_at=? WHERE task_id=?", (H.shift(H.now(), hours=-10 + i), task["id"]))
+            c.execute(
+                "UPDATE task_links SET created_at=? WHERE task_id=?", (H.shift(H.now(), hours=-10 + i), task["id"])
+            )
     dispatch(api)
     assert [len(children(api, t)) for t in tasks] == [1, 1, 0, 0]
     dispatch(api)
@@ -309,9 +401,13 @@ def test_backfill_reads_github_before_dispatching_a_cached_clean_pr(api, monkeyp
     monkeypatch.setattr(service, "mint", lambda *a, **kw: ("synthetic", "later"))
 
     def fetch(method, path, **kw):
-        data = ({"head": {"sha": HEAD}, "state": "open", "mergeable_state": mergeable_state}
-                if "/pulls/" in path else {"check_runs": [{"name": "required", "conclusion": "success"}]}
-                if path.endswith("check-runs") else [])
+        data = (
+            {"head": {"sha": HEAD}, "state": "open", "mergeable_state": mergeable_state}
+            if "/pulls/" in path
+            else {"check_runs": [{"name": "required", "conclusion": "success"}]}
+            if path.endswith("check-runs")
+            else []
+        )
         return SimpleNamespace(status_code=200, json=lambda: data)
 
     monkeypatch.setattr(service, "_call", fetch)
@@ -323,8 +419,17 @@ def test_backfill_reads_github_before_dispatching_a_cached_clean_pr(api, monkeyp
 def test_role_review_without_check_model_is_normal_child(api):
     setup(api)
     task = task_pr(api)
-    result = api.post("/api/v2/tasks", headers=headers(), json={"owner": "rev-a", "title": "PR #12", "body": "Review the PR.",
-                      "check_role": "review", "relations": [{"task": task["id"], "kind": "parent"}]})
+    result = api.post(
+        "/api/v2/tasks",
+        headers=headers(),
+        json={
+            "owner": "rev-a",
+            "title": "PR #12",
+            "body": "Review the PR.",
+            "check_role": "review",
+            "relations": [{"task": task["id"], "kind": "parent"}],
+        },
+    )
     assert result.status_code == 200, result.text
     [child] = children(api, task)
     assert child["title"] == "Review 1: PR #12"
@@ -358,7 +463,10 @@ def test_done_task_with_open_pr_returns_to_review_and_human_pr_is_skipped(api):
     human = task_pr(api, 13)
     with api.app.state.store.transaction() as c:
         H.task_update(c, H.KEEPER, task["id"], status="done", strict=False)
-        c.execute("UPDATE task_links SET detail=json_set(detail,'$.author_login','acme-person') WHERE task_id=?", (human["id"],))
+        c.execute(
+            "UPDATE task_links SET detail=json_set(detail,'$.author_login','acme-person') WHERE task_id=?",
+            (human["id"],),
+        )
     dispatch(api)
     assert len(children(api, task)) == 1 and children(api, human) == []
     with api.app.state.store.read() as c:
@@ -372,8 +480,10 @@ def test_pr_1_and_12_each_need_their_own_review(api, second_head):
     with api.app.state.store.transaction() as c:
         second = H.task_link(c, "human:ana", task["id"], "https://github.com/Acme/atlas/pull/1")
         first = next(p for p in H.task_links(c, task["id"]) if p["number"] == 12)
-        c.execute("UPDATE task_links SET state='open',repo='Acme/atlas',checks='passing',mergeable='clean',detail=? WHERE id=?",
-                  (json.dumps({**H._json(first["detail"], {}), "head_sha": second_head}), second["id"]))
+        c.execute(
+            "UPDATE task_links SET state='open',repo='Acme/atlas',checks='passing',mergeable='clean',detail=? WHERE id=?",
+            (json.dumps({**H._json(first["detail"], {}), "head_sha": second_head}), second["id"]),
+        )
     dispatch(api)
     dispatch(api)
     reviews = children(api, task)
@@ -392,6 +502,7 @@ def test_pr_1_and_12_each_need_their_own_review(api, second_head):
 
 def engineering_pr_pair(api):
     from backend import review_gate, step_flow
+
     setup(api)
     task = task_pr(api)
     with api.app.state.store.transaction() as c:
@@ -401,13 +512,16 @@ def engineering_pr_pair(api):
         assert review_gate.engineering(c, task) and not step_flow.checks(c, typ["id"])
         first = H.task_links(c, task["id"])[0]
         second = H.task_link(c, "human:ana", task["id"], "https://github.com/Acme/atlas/pull/13")
-        c.execute("UPDATE task_links SET state='open',repo='Acme/atlas',checks='passing',mergeable='clean',detail=? WHERE id=?",
-                  (json.dumps({**H._json(first["detail"], {}), "head_sha": OLD}), second["id"]))
+        c.execute(
+            "UPDATE task_links SET state='open',repo='Acme/atlas',checks='passing',mergeable='clean',detail=? WHERE id=?",
+            (json.dumps({**H._json(first["detail"], {}), "head_sha": OLD}), second["id"]),
+        )
         return task, H.task_links(c, task["id"])
 
 
 def test_engineering_without_check_steps_reviews_each_green_pr_once(api, monkeypatch):
     from backend import review_gate
+
     task, prs = engineering_pr_pair(api)
     snapshots = {p["id"]: {**H._json(p["detail"], {}), "at": H.now()} for p in prs}
     monkeypatch.setattr(review_gate, "snapshot", lambda service, links: snapshots)
@@ -424,8 +538,12 @@ def test_engineering_without_check_steps_reviews_each_green_pr_once(api, monkeyp
     with api.app.state.store.read() as c:
         for pr in prs:
             [child] = [r for r in reviews if PR.matches(r, pr)]
-            heads = [r[0] for r in c.execute("SELECT new FROM history_events WHERE subject_id=? AND kind='review_head'",
-                                            (child["id"],))]
+            heads = [
+                r[0]
+                for r in c.execute(
+                    "SELECT new FROM history_events WHERE subject_id=? AND kind='review_head'", (child["id"],)
+                )
+            ]
             assert heads == [H._json(pr["detail"], {})["head_sha"]]
     assert P.retry(api.app.state.store, service=api.app.state.github_app) == []
     assert {r["id"] for r in children(api, task)} == set(filed)
@@ -435,6 +553,7 @@ def test_engineering_without_check_steps_reviews_each_green_pr_once(api, monkeyp
 @pytest.mark.parametrize("queued", [False, True], ids=["direct", "queued"])
 def test_detached_review_gate_checks_its_own_pr_and_keeps_other_evidence(api, monkeypatch, queued):
     from backend import review_gate
+
     task, prs = engineering_pr_pair(api)
     snapshots = {p["id"]: {**H._json(p["detail"], {}), "at": H.now()} for p in prs}
     broken = next(p for p in prs if p["number"] == 13)
@@ -453,8 +572,15 @@ def test_detached_review_gate_checks_its_own_pr_and_keeps_other_evidence(api, mo
     assert P.retry(api.app.state.store, service=api.app.state.github_app) == []
     with api.app.state.store.transaction() as c:
         with pytest.raises(H.Refused, match="CI failing"):
-            H.task_create(c, "human:ana", "Review 1: PR #13", broken["url"], "bot:rev-b",
-                          parent_id=task["id"], review_prs=snapshots)
+            H.task_create(
+                c,
+                "human:ana",
+                "Review 1: PR #13",
+                broken["url"],
+                "bot:rev-b",
+                parent_id=task["id"],
+                review_prs=snapshots,
+            )
     assert snapshots[broken["id"]]["checks"] == {"required": "failing"}
 
 
@@ -471,8 +597,12 @@ def test_legacy_number_only_review_is_bound_before_backfill_or_hand_filing(api):
     assert PR.matches(bound, "https://github.com/Acme/atlas/pull/12")
     assert dispatch(api) == []
     with api.app.state.store.transaction() as c:
-        assert c.execute("SELECT count(*) FROM history_events WHERE subject_id=? AND kind='review_pr'",
-                         (bound["id"],)).fetchone()[0] == 1
+        assert (
+            c.execute(
+                "SELECT count(*) FROM history_events WHERE subject_id=? AND kind='review_pr'", (bound["id"],)
+            ).fetchone()[0]
+            == 1
+        )
         # A hand-filed check must bind old children before applying the same duplicate rule.
         c.execute("UPDATE tasks SET body=? WHERE id=?", (body, bound["id"]))
         with pytest.raises(H.Refused, match="already open"):
@@ -491,10 +621,13 @@ def test_private_parent_pr_binding_never_widens_the_audience_or_files_a_duplicat
     auth = {"Authorization": "Bearer observer-test"}
     body = "Check the diff."
     with api.app.state.store.transaction() as c:
-        c.execute("INSERT INTO agents(bot,harness,token_hash,created_at,created_by) VALUES(?,?,?,?,?)",
-                  (observer, "test", "observer-credential", H.now(), "human:ana"))
-        legacy = H.task_create(c, "human:ana", "Review 1: PR #12", body, "bot:rev-a", parent_id=task["id"],
-                               from_private=not private)
+        c.execute(
+            "INSERT INTO agents(bot,harness,token_hash,created_at,created_by) VALUES(?,?,?,?,?)",
+            (observer, "test", "observer-credential", H.now(), "human:ana"),
+        )
+        legacy = H.task_create(
+            c, "human:ana", "Review 1: PR #12", body, "bot:rev-a", parent_id=task["id"], from_private=not private
+        )
         pr = H.task_links(c, task["id"])[0]
         assert bool(legacy["private"]) is private
         assert legacy["body"] == body
@@ -514,14 +647,22 @@ def test_private_parent_pr_binding_never_widens_the_audience_or_files_a_duplicat
     with api.app.state.store.transaction() as c:
         assert not P.waiting(c, task["id"])
         with pytest.raises(H.Refused, match="already open"):
-            H.task_create(c, "human:ana", "Review 1: PR #12", body, "bot:rev-b", parent_id=task["id"],
-                          from_private=not private)
+            H.task_create(
+                c, "human:ana", "Review 1: PR #12", body, "bot:rev-b", parent_id=task["id"], from_private=not private
+            )
         assert dict(c.execute("SELECT * FROM tasks WHERE id=?", (legacy["id"],)).fetchone()) == before
-        assert [dict(r) for r in c.execute("SELECT * FROM history_events WHERE subject_id=?", (legacy["id"],))] == events
+        assert [
+            dict(r) for r in c.execute("SELECT * FROM history_events WHERE subject_id=?", (legacy["id"],))
+        ] == events
     response = api.get("/api/v2/tasks/" + task["id"], headers=auth)
     assert response.status_code == 404, response.text
-    for path in ("tasks/" + legacy["id"], "tasks/" + legacy["id"] + "/comments", "tasks/" + legacy["id"] + "/links",
-                 "tasks/" + legacy["id"] + "/tree", "tasks"):
+    for path in (
+        "tasks/" + legacy["id"],
+        "tasks/" + legacy["id"] + "/comments",
+        "tasks/" + legacy["id"] + "/links",
+        "tasks/" + legacy["id"] + "/tree",
+        "tasks",
+    ):
         response = api.get("/api/v2/" + path, headers=auth)
         assert response.status_code == 200, response.text
         assert pr["url"] not in response.text and HEAD not in response.text
@@ -545,8 +686,12 @@ def test_private_pool_request_does_not_copy_parent_pr_data_to_a_wider_child(api)
         child = H.task_create(c, "human:ana", "Review 1: PR #12", "Check the diff.", "bot:cpo", parent_id=task["id"])
         assert review_gate.can_copy_prs(c, task, child)
         assert PR.matches(child, pr)
-        assert c.execute("SELECT new FROM history_events WHERE subject_id=? AND kind='review_head'",
-                         (child["id"],)).fetchone()[0] == HEAD
+        assert (
+            c.execute(
+                "SELECT new FROM history_events WHERE subject_id=? AND kind='review_head'", (child["id"],)
+            ).fetchone()[0]
+            == HEAD
+        )
 
 
 def test_wider_review_cannot_save_parent_data_in_its_verdict_result(api):
@@ -555,12 +700,14 @@ def test_wider_review_cannot_save_parent_data_in_its_verdict_result(api):
     with api.app.state.store.transaction() as c:
         pr = H.task_links(c, task["id"])[0]
         # An existing explicit link cannot authorize more parent data in the child's saved result.
-        child = H.task_create(c, "human:ana", "Review 1: PR #12", pr["url"], "bot:rev-a",
-                              parent_id=task["id"], from_private=True)
+        child = H.task_create(
+            c, "human:ana", "Review 1: PR #12", pr["url"], "bot:rev-a", parent_id=task["id"], from_private=True
+        )
     finish(api, child)
     with api.app.state.store.read() as c:
-        assert not c.execute("SELECT 1 FROM history_events WHERE subject_id=? AND kind='verdict_move'",
-                             (child["id"],)).fetchone()
+        assert not c.execute(
+            "SELECT 1 FROM history_events WHERE subject_id=? AND kind='verdict_move'", (child["id"],)
+        ).fetchone()
         assert not (V.delivery(c, H.task(c, child["id"])) or {}).get("consumed")
 
 
@@ -573,8 +720,10 @@ def test_ambiguous_legacy_number_is_logged_and_bound_review_is_reused(api, caplo
         legacy = H.task_create(c, "human:ana", "Review 1: PR #12", body, "bot:rev-a", parent_id=task["id"])
         c.execute("UPDATE tasks SET body=? WHERE id=?", (body, legacy["id"]))
         other = H.task_link(c, "human:ana", task["id"], "https://github.com/Acme/other/pull/12")
-        c.execute("UPDATE task_links SET state='open',repo='Acme/other',checks='passing',mergeable='clean',detail=? WHERE id=?",
-                  (first["detail"], other["id"]))
+        c.execute(
+            "UPDATE task_links SET state='open',repo='Acme/other',checks='passing',mergeable='clean',detail=? WHERE id=?",
+            (first["detail"], other["id"]),
+        )
         bound = H.task_create(c, "human:ana", "Review 1: PR #12", first["url"], "bot:rev-b", parent_id=task["id"])
     filed = dispatch(api)
     assert len(filed) == 1
@@ -587,10 +736,16 @@ def test_ambiguous_legacy_number_is_logged_and_bound_review_is_reused(api, caplo
     assert dispatch(api) == []
 
 
-@pytest.mark.parametrize("reviews,case,head", [
-    pytest.param(1, "hold", HEAD, id="hold-merge-next"), pytest.param(2, "hold", HEAD, id="hold-review-2-next"),
-    pytest.param(1, "backfill", HEAD, id="backfill-merge-next"), pytest.param(1, "backfill-done", HEAD, id="backfill-done-merge-next"),
-    pytest.param(1, "old-head", OLD, id="old-head-merge-next")])
+@pytest.mark.parametrize(
+    "reviews,case,head",
+    [
+        pytest.param(1, "hold", HEAD, id="hold-merge-next"),
+        pytest.param(2, "hold", HEAD, id="hold-review-2-next"),
+        pytest.param(1, "backfill", HEAD, id="backfill-merge-next"),
+        pytest.param(1, "backfill-done", HEAD, id="backfill-done-merge-next"),
+        pytest.param(1, "old-head", OLD, id="old-head-merge-next"),
+    ],
+)
 def test_undelivered_approval_replays_once_at_current_head(api, monkeypatch, reviews, case, head):
     setup(api, reviews=reviews)
     task = task_pr(api)
@@ -638,26 +793,32 @@ def test_undelivered_approval_replays_once_at_current_head(api, monkeypatch, rev
     assert len(handoffs(api, task, "merge")) == int(head == HEAD and reviews == 1)
 
 
-@pytest.mark.parametrize("url,expected", [
-    ("https://github.com/Acme/atlas/pull/1", True),
-    ("https://GITHUB.com/ACME/ATLAS/pull/1/?tab=files#review-12", True),
-    ("https://github.com/Acme/atlas/pull/12", False),
-    ("https://github.example/Acme/atlas/pull/1", False),
-    ("https://github.com/Other/atlas/pull/1", False),
-    ("https://github.com/Acme/other/pull/1", False),
-    ("https://github.com/Acme/atlas/pull/1extra", False),
-    ("", False),
-])
+@pytest.mark.parametrize(
+    "url,expected",
+    [
+        ("https://github.com/Acme/atlas/pull/1", True),
+        ("https://GITHUB.com/ACME/ATLAS/pull/1/?tab=files#review-12", True),
+        ("https://github.com/Acme/atlas/pull/12", False),
+        ("https://github.example/Acme/atlas/pull/1", False),
+        ("https://github.com/Other/atlas/pull/1", False),
+        ("https://github.com/Acme/other/pull/1", False),
+        ("https://github.com/Acme/atlas/pull/1extra", False),
+        ("", False),
+    ],
+)
 def test_review_reuse_requires_the_full_identity_even_when_title_matches(url, expected):
     check = {"title": "Review 1: PR #1", "body": f"Check this PR: ({url})."}
     assert V.for_pr(check, {"url": "https://github.com/Acme/atlas/pull/1", "number": 1}) is expected
 
 
-@pytest.mark.parametrize("other_url", [
-    "https://github.com/Acme/other/pull/12",
-    "https://github.com/Other/atlas/pull/12",
-    "https://github.example/Acme/atlas/pull/12",
-])
+@pytest.mark.parametrize(
+    "other_url",
+    [
+        "https://github.com/Acme/other/pull/12",
+        "https://github.com/Other/atlas/pull/12",
+        "https://github.example/Acme/atlas/pull/12",
+    ],
+)
 def test_queued_reviews_keep_equal_numbers_on_distinct_prs(api, other_url):
     setup(api)
     task = task_pr(api)
@@ -665,8 +826,10 @@ def test_queued_reviews_keep_equal_numbers_on_distinct_prs(api, other_url):
         first = H.task_links(c, task["id"])[0]
         other = H.task_link(c, "human:ana", task["id"], other_url, kind="pr")
         identity = PR.identity(other_url)
-        c.execute("UPDATE task_links SET state='open',repo=?,number=12,checks='passing',mergeable='clean',detail=? WHERE id=?",
-                  (f"{identity[1]}/{identity[2]}", first["detail"], other["id"]))
+        c.execute(
+            "UPDATE task_links SET state='open',repo=?,number=12,checks='passing',mergeable='clean',detail=? WHERE id=?",
+            (f"{identity[1]}/{identity[2]}", first["detail"], other["id"]),
+        )
         c.execute("UPDATE runner_states SET last_seen_at=?", (H.shift(H.now(), minutes=-10),))
     dispatch(api)
     dispatch(api)
@@ -714,14 +877,21 @@ def test_replayed_approval_keeps_the_fresh_ci_read(api, monkeypatch, owner):
         patch.setattr(V, "after_verdict", lambda *args: None)
         finish(api, first)
     from backend import review_gate
-    monkeypatch.setattr(review_gate, "snapshot", lambda service, prs: {
-        p["id"]: {"head_sha": HEAD, "checks": {"required": "failing"}} for p in prs})
+
+    monkeypatch.setattr(
+        review_gate,
+        "snapshot",
+        lambda service, prs: {p["id"]: {"head_sha": HEAD, "checks": {"required": "failing"}} for p in prs},
+    )
     P.retry_prs(api.app.state.store, service=api.app.state.github_app)
     assert not handoffs(api, task, "merge")
     with api.app.state.store.read() as c:
         assert V.delivery(c, H.task(c, first["id"]))["consumed"]
-    monkeypatch.setattr(review_gate, "snapshot", lambda service, prs: {
-        p["id"]: {"head_sha": HEAD, "checks": {"required": "passing"}} for p in prs})
+    monkeypatch.setattr(
+        review_gate,
+        "snapshot",
+        lambda service, prs: {p["id"]: {"head_sha": HEAD, "checks": {"required": "passing"}} for p in prs},
+    )
     P.retry_prs(api.app.state.store, service=api.app.state.github_app)
     P.retry_prs(api.app.state.store, service=api.app.state.github_app)
     assert len(handoffs(api, task, "merge")) == 1
@@ -737,8 +907,12 @@ def test_fresh_failed_checks_do_not_allow_merge_from_a_green_cache(api, monkeypa
     with api.app.state.store.transaction() as c:
         c.execute("UPDATE task_links SET checks='passing' WHERE task_id=?", (task["id"],))
     from backend import review_gate
-    monkeypatch.setattr(review_gate, "snapshot", lambda service, prs: {
-        p["id"]: {"head_sha": HEAD, "checks": {"required": "failing"}} for p in prs})
+
+    monkeypatch.setattr(
+        review_gate,
+        "snapshot",
+        lambda service, prs: {p["id"]: {"head_sha": HEAD, "checks": {"required": "failing"}} for p in prs},
+    )
     P.retry_prs(api.app.state.store, service=api.app.state.github_app)
     assert not handoffs(api, task, "merge")
 
@@ -750,6 +924,7 @@ def test_health_names_unfiled_pr_after_a_day_without_disclosing_private_task(api
     with api.app.state.store.transaction() as c:
         c.execute("UPDATE task_links SET created_at=?", (H.shift(H.now(), hours=-25),))
     from backend.auth import Identity
+
     with api.app.state.store.read() as c:
         auth = api.app.state.auth
         checks = health._unfiled_pr_checks(c, Identity("human:ana", "owner", "ana@acme.example"), auth, True, "owner")

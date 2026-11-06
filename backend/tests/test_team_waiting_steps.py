@@ -1,4 +1,5 @@
 """A team's own waiting step holds the tickets a person parks there, and an upgrade never sends a ticket to a stale step."""
+
 import sqlite3
 
 import pytest
@@ -12,7 +13,9 @@ from backend.tests.hold_rows import set_holds
 def _park_step(api, task):
     with api.app.state.store.transaction() as c:
         typ = H.type_get(c, task['type_id'])
-        H.type_update(c, H.KEEPER, typ['id'], steps=[*typ['steps'], {'name': 'Waiting On Dependency', 'status': 'waiting'}])
+        H.type_update(
+            c, H.KEEPER, typ['id'], steps=[*typ['steps'], {'name': 'Waiting On Dependency', 'status': 'waiting'}]
+        )
         return next(s['id'] for s in H.type_get(c, typ['id'])['steps'] if s['name'] == 'Waiting On Dependency')
 
 
@@ -27,15 +30,24 @@ def _dev(tmp_path):
     c.row_factory = sqlite3.Row
     H.migrate(c)
     c.execute("INSERT INTO task_types(id,name,created_at,updated_at) VALUES('dev','Dev tickets','x','x')")
-    for position, (ident, name, status) in enumerate([
-            ('deck', 'On Deck', 'open'), ('progress', 'In Progress', 'doing'),
-            ('staging', 'Pending Push To Staging', 'doing'), ('closed', 'Closed', 'closed')]):
-        c.execute('INSERT INTO task_steps(id,type_id,name,position,status) VALUES(?,?,?,?,?)',
-                  (ident, 'dev', name, position, status))
+    for position, (ident, name, status) in enumerate(
+        [
+            ('deck', 'On Deck', 'open'),
+            ('progress', 'In Progress', 'doing'),
+            ('staging', 'Pending Push To Staging', 'doing'),
+            ('closed', 'Closed', 'closed'),
+        ]
+    ):
+        c.execute(
+            'INSERT INTO task_steps(id,type_id,name,position,status) VALUES(?,?,?,?,?)',
+            (ident, 'dev', name, position, status),
+        )
     for ident in ('retired', 'chosen'):
         # Held in the working step they are in: a hold moves no ticket, so only its status says it waits.
-        c.execute("INSERT INTO tasks(id,title,status,body,note,type_id,step_id) VALUES(?,?,'waiting','x','','dev','staging')",
-                  (ident, 'A ticket'))
+        c.execute(
+            "INSERT INTO tasks(id,title,status,body,note,type_id,step_id) VALUES(?,?,'waiting','x','','dev','staging')",
+            (ident, 'A ticket'),
+        )
         H._task_event(c, ident, 'human:ana', 'step', 'progress', 'staging')
     # Retiring a waiting step put this one back in the step its history last named, weeks old.
     H._task_event(c, 'retired', H.KEEPER, 'step', 'old-waiting', 'staging', H.RETIRED_WAITING)
@@ -103,7 +115,7 @@ def test_a_parked_ticket_stays_a_held_one_goes_manual_and_deleting_the_step_retu
     # A person parking a held ticket in a team's waiting step makes the hold manual.
     heldback = another('Held on a blocker')
     blocker = _held_on_a_blocker(api, heldback)
-    assert move(api, heldback, 'Waiting On Dependency').status_code == 200   # a board drag sends no note
+    assert move(api, heldback, 'Waiting On Dependency').status_code == 200  # a board drag sends no note
     with api.app.state.store.transaction() as c:
         assert H.task(c, heldback['id'])['blocked_kind'] == 'manual'
         # The dependency is done: the ticket stays in the step a person parked it in, not at the step it was held from.
@@ -113,7 +125,7 @@ def test_a_parked_ticket_stays_a_held_one_goes_manual_and_deleting_the_step_retu
     # A person parks a bot's own ticket without a note.
     own = another('Its own ticket')
     with api.app.state.store.transaction() as c:
-        c.execute('UPDATE tasks SET requester_id=owner_id WHERE id=?', (own['id'],))    # the bot asked for it itself
+        c.execute('UPDATE tasks SET requester_id=owner_id WHERE id=?', (own['id'],))  # the bot asked for it itself
         # The bot's own move still says why: nobody else will answer a ticket it parks for itself.
         with pytest.raises(H.Refused) as refused:
             H.task_update(c, 'bot:cpo', own['id'], step='Waiting On Dependency')
@@ -145,13 +157,22 @@ def test_a_parked_ticket_stays_a_held_one_goes_manual_and_deleting_the_step_retu
 
 def test_an_upgrade_or_a_person_parks_a_bots_ticket_in_a_teams_waiting_or_blocked_step_on_a_content_board(api):
     with api.app.state.store.transaction() as c:
-        typ = H.type_create(c, H.KEEPER, 'Content', [{'name': 'Drafting', 'status': 'doing'},
-                                                     {'name': 'Waiting On Review', 'status': 'waiting'},
-                                                     {'name': 'Blocked', 'status': 'waiting'}])
+        typ = H.type_create(
+            c,
+            H.KEEPER,
+            'Content',
+            [
+                {'name': 'Drafting', 'status': 'doing'},
+                {'name': 'Waiting On Review', 'status': 'waiting'},
+                {'name': 'Blocked', 'status': 'waiting'},
+            ],
+        )
 
     def draft(title):
-        return post(api, 'tasks', {'owner': 'cpo', 'title': title, 'body': 'Write it.',
-                                   'type': typ['id'], 'step': 'Drafting'})
+        return post(
+            api, 'tasks', {'owner': 'cpo', 'title': title, 'body': 'Write it.', 'type': typ['id'], 'step': 'Drafting'}
+        )
+
     review, upgraded, parked = draft('Draft the guide'), draft('Draft the other guide'), draft('Draft the third guide')
     blocker = post(api, 'tasks', {'owner': 'cmo', 'title': 'Ship the dependency', 'body': 'Build it.'})
     with api.app.state.store.transaction() as c:

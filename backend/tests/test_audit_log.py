@@ -1,5 +1,6 @@
 """The redesign's audit trail (backend/audit_log.py): rows written with their change, read newest first, paged,
 the owner seeing all and anyone else only their own."""
+
 import json
 import sqlite3
 from contextlib import closing
@@ -18,12 +19,18 @@ def _write(api, *changes):
 
 
 def test_a_recorded_change_is_append_only_read_newest_first_and_each_member_reads_only_their_own(api):
-    _write(api, ("human:ana", "task_cap:1", None, {"per_day": 5}),
-           ("human:ben", "task_cap:1", {"per_day": 5}, {"per_day": 7}),
-           ("human:ana", "automation:a", None, {"n": 1}), ("human:ben", "automation:b", None, {"n": 2}))
+    _write(
+        api,
+        ("human:ana", "task_cap:1", None, {"per_day": 5}),
+        ("human:ben", "task_cap:1", {"per_day": 5}, {"per_day": 7}),
+        ("human:ana", "automation:a", None, {"n": 1}),
+        ("human:ben", "automation:b", None, {"n": 2}),
+    )
     rows = get(api, "audit?object=task_cap:1")["rows"]
     assert [(r["actor"], r["before"], r["after"]) for r in rows] == [
-        ("human:ben", {"per_day": 5}, {"per_day": 7}), ("human:ana", None, {"per_day": 5})]
+        ("human:ben", {"per_day": 5}, {"per_day": 7}),
+        ("human:ana", None, {"per_day": 5}),
+    ]
     assert {r["object"] for r in get(api, "audit", token="ben-test")["rows"]} == {"task_cap:1", "automation:b"}
     assert {r["actor"] for r in get(api, "audit", token="ben-test")["rows"]} == {"human:ben"}
     # A separate connection, as a script or a second process would hold: the database itself refuses both.
@@ -41,13 +48,19 @@ def test_the_cli_and_the_tool_read_the_same_rows_and_a_member_reads_only_their_o
     from backend.tests.test_mcp import call as mcp
     from clients import hubcli, remotecli
 
-    _write(api, ("human:ana", "task_cap:1", None, {"per_day": 5}),
-           ("human:ben", "task_cap:1", {"per_day": 5}, {"per_day": 7}))
-    first = remotecli.via_tool(Client(api, "ana-test"), hubcli.parser().parse_args(
-        ["audit", "--object", "task_cap:1", "--limit", "1"]))
+    _write(
+        api,
+        ("human:ana", "task_cap:1", None, {"per_day": 5}),
+        ("human:ben", "task_cap:1", {"per_day": 5}, {"per_day": 7}),
+    )
+    first = remotecli.via_tool(
+        Client(api, "ana-test"), hubcli.parser().parse_args(["audit", "--object", "task_cap:1", "--limit", "1"])
+    )
     assert [r["actor"] for r in first["rows"]] == ["human:ben"] and first["next"]
-    rest = remotecli.via_tool(Client(api, "ana-test"), hubcli.parser().parse_args(
-        ["audit", "--object", "task_cap:1", "--before", first["next"]]))
+    rest = remotecli.via_tool(
+        Client(api, "ana-test"),
+        hubcli.parser().parse_args(["audit", "--object", "task_cap:1", "--before", first["next"]]),
+    )
     assert [r["actor"] for r in rest["rows"]] == ["human:ana"]
     err, mine = mcp(api, "hub_audit", {}, token="ben-test")
     assert not err and {r["actor"] for r in mine["rows"]} == {"human:ben"}, mine
@@ -63,6 +76,7 @@ def test_pages_never_skip_a_row_by_count_by_shared_time_or_by_byte_budget(api, m
             seen += [r["object"] for r in page["rows"] if r["object"].startswith(prefix)]
             if not (cursor := page["next"]):
                 return seen
+
     _write(api, *[("human:ana", f"group:{i}", None, {"i": i}) for i in range(5)])
     first = get(api, "audit?limit=2")
     assert len(first["rows"]) == 2 and first["next"]

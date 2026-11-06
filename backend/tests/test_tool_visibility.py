@@ -66,26 +66,34 @@ def test_a_credential_admin_who_is_not_listed_gets_404_everywhere_and_never_sees
         r = api.get("/api/v2/" + path, headers=headers("ben-test"))
         assert r.status_code == 404 and "No such tool" in r.text and "Acme" not in r.text
     for method, path, body in (
-            ("post", f"api-tools/{tid}/check", {}),
-            ("patch", f"api-tools/{tid}", {"name": "Mine now"}),
-            ("patch", f"api-tools/{tid}", {"audience": None}),
-            ("post", f"api-tools/{tid}/keys", {"name": "x", "value": "y" * 20, "access_level": "read"}),
-            ("patch", f"api-tools/{tid}/keys/{rw}", {"expires_on": "2030-01-01"}),
-            ("delete", f"api-tools/{tid}/keys/{rw}", None),
-            ("put", f"api-tools/{tid}/access/human:ben", {"level": "read_write"}),
-            ("put", f"api-tools/{tid}/access/bot:ops", {"level": "read"}),
-            ("delete", f"api-tools/{tid}", None)):
+        ("post", f"api-tools/{tid}/check", {}),
+        ("patch", f"api-tools/{tid}", {"name": "Mine now"}),
+        ("patch", f"api-tools/{tid}", {"audience": None}),
+        ("post", f"api-tools/{tid}/keys", {"name": "x", "value": "y" * 20, "access_level": "read"}),
+        ("patch", f"api-tools/{tid}/keys/{rw}", {"expires_on": "2030-01-01"}),
+        ("delete", f"api-tools/{tid}/keys/{rw}", None),
+        ("put", f"api-tools/{tid}/access/human:ben", {"level": "read_write"}),
+        ("put", f"api-tools/{tid}/access/bot:ops", {"level": "read"}),
+        ("delete", f"api-tools/{tid}", None),
+    ):
         kw = {"json": body} if body is not None else {}
         r = getattr(api, method)("/api/v2/" + path, headers=headers("ben-test"), **kw)
         assert r.status_code == 404, (method, path, r.text)
         assert SECRET not in r.text and "Acme Bank" not in r.text
     # The vault: not listed, and every action on its keys is a 404, as for a credential that does not exist.
     assert not {rw, ro} & vault_ids(api, "ben-test")
-    for path, body in ((f"credentials/{rw}/reveal", {}), (f"credentials/{rw}/grants", {"subject": "human:ben"}),
-                       (f"credentials/{ro}/grants", {"subject": "bot:ops"}), (f"credentials/{rw}", {"name": "x"})):
+    for path, body in (
+        (f"credentials/{rw}/reveal", {}),
+        (f"credentials/{rw}/grants", {"subject": "human:ben"}),
+        (f"credentials/{ro}/grants", {"subject": "bot:ops"}),
+        (f"credentials/{rw}", {"name": "x"}),
+    ):
         r = api.post("/api/v2/" + path, json=body, headers=headers("ben-test"))
         assert r.status_code == 404 and SECRET not in r.text and "Acme" not in r.text, (path, r.text)
-    assert api.post(f"/api/v2/credentials/{rw}/grants/{grant}/revoke", json={}, headers=headers("ben-test")).status_code == 404
+    assert (
+        api.post(f"/api/v2/credentials/{rw}/grants/{grant}/revoke", json={}, headers=headers("ben-test")).status_code
+        == 404
+    )
     assert api.delete(f"/api/v2/credentials/{rw}", headers=headers("ben-test")).status_code == 404
     # Nothing changed: the tool, both keys and their values are as Ana left them.
     page = get(api, f"api-tools/{tid}")
@@ -97,8 +105,12 @@ def test_a_credential_admin_who_is_not_listed_gets_404_everywhere_and_never_sees
 
 def test_ben_cannot_find_it_through_sql_events_or_history(api):
     tid, rw, _ = bank(api)
-    for sql in ("SELECT * FROM tools", "SELECT * FROM credentials", "SELECT * FROM tool_calls",
-                "SELECT target, detail FROM events"):
+    for sql in (
+        "SELECT * FROM tools",
+        "SELECT * FROM credentials",
+        "SELECT * FROM tool_calls",
+        "SELECT target, detail FROM events",
+    ):
         r = api.post("/api/v2/sql", json={"sql": sql}, headers=headers("ben-test"))
         assert tid not in r.text and rw not in r.text and "Acme Bank" not in r.text, (sql, r.text[:300])
     r = api.get("/api/v2/history", headers=headers("ben-test"))
@@ -111,7 +123,12 @@ def test_a_grant_holder_sees_it_and_the_proxy_key_works_for_them(api):
     level(api, tid, "bot:ops", "read_write")
     assert index(api, "cara-test")["api:" + tid]["private"] is True
     page = get(api, f"api-tools/{tid}", "cara-test")
-    assert page["private"] is True and page["can_set_audience"] is False and "audience" not in page and "seen_by" not in page
+    assert (
+        page["private"] is True
+        and page["can_set_audience"] is False
+        and "audience" not in page
+        and "seen_by" not in page
+    )
     assert post(api, f"credentials/{ro}/reveal", {}, "cara-test")["value"] == SECRET_R
     with api.app.state.store.read() as c:
         assert api_tools.key_for(c, tid, "bot:ops")[0]["id"] == rw
@@ -140,7 +157,9 @@ def test_a_listed_group_and_bot_see_it(api):
     tid, _, _ = bank(api, {**ONLY, "teams": [gid], "bots": ["ops"]})
     assert "api:" + tid in index(api, "cara-test")
     get(api, f"api-tools/{tid}", "eve-test", expected=404)
-    assert ("group:" + gid, "Listed", "Treasury") in [(r["subject"], r["why"], r["name"]) for r in get(api, f"api-tools/{tid}")["seen_by"]]
+    assert ("group:" + gid, "Listed", "Treasury") in [
+        (r["subject"], r["why"], r["name"]) for r in get(api, f"api-tools/{tid}")["seen_by"]
+    ]
     with api.app.state.store.read() as c:
         admins = api.app.state.vault.admins
         ops, coo = Identity("bot:ops", "bot"), Identity("bot:coo", "bot")
@@ -155,7 +174,7 @@ def test_the_owner_always_sees_it_and_may_change_it_without_being_listed(api):
     assert [(r["subject"], r["why"]) for r in page["seen_by"]] == [("human:ana", "Owner"), ("human:cara", "Listed")]
     assert index(api, "ana-test")["api:" + tid]["private"] is True
     patch(api, tid, {"audience": ONLY})
-    assert get(api, f"api-tools/{tid}")["audience"] == ONLY     # the owner is never added: always sees it
+    assert get(api, f"api-tools/{tid}")["audience"] == ONLY  # the owner is never added: always sees it
 
 
 def test_an_admin_who_sets_only_listed_stays_listed_and_an_event_says_before_and_after(api):
@@ -168,8 +187,9 @@ def test_an_admin_who_sets_only_listed_stays_listed_and_an_event_says_before_and
     patch(api, tid, {"audience": {**ONLY, "people": ["cara"]}}, "ben-test")
     assert sorted(get(api, f"api-tools/{tid}", "ben-test")["audience"]["people"]) == ["ben", "cara"]
     with api.app.state.store.read() as c:
-        rows = c.execute("SELECT actor, detail FROM events WHERE action='tool.audience_changed' AND target=? "
-                         "ORDER BY rowid", (tid,)).fetchall()
+        rows = c.execute(
+            "SELECT actor, detail FROM events WHERE action='tool.audience_changed' AND target=? ORDER BY rowid", (tid,)
+        ).fetchall()
     assert len(rows) == 1 and rows[0][0] == "human:ben"
     change = json.loads(rows[0][1])
     assert change["before"] is None and sorted(change["after"]["people"]) == ["ben", "cara"]
@@ -190,13 +210,13 @@ def test_null_audience_keeps_the_old_rules(api):
     page = get(api, f"api-tools/{tid}", "ben-test")
     assert page["private"] is False and page["audience"] is None and page["seen_by"] == []
     assert rw in vault_ids(api, "ben-test")
-    get(api, f"api-tools/{tid}", "cara-test", expected=404)    # a member with no grant still does not see it
+    get(api, f"api-tools/{tid}", "cara-test", expected=404)  # a member with no grant still does not see it
     assert "api:" + tid not in index(api, "cara-test")
 
 
 def test_a_bad_audience_is_refused_and_an_unreadable_stored_one_lists_nobody(api):
     tid, _, _ = bank(api, None)
-    patch(api, tid, {"audience": {**ONLY, "people": ["nobody-here"]}}, expected=404)    # Unknown person
+    patch(api, tid, {"audience": {**ONLY, "people": ["nobody-here"]}}, expected=404)  # Unknown person
     patch(api, tid, {"audience": {"everyone": False, "people": "cara"}}, expected=422)
     with api.app.state.store.transaction() as c:
         c.execute("UPDATE tools SET audience='not json' WHERE id=?", (tid,))
@@ -213,12 +233,13 @@ def test_adding_a_tool_or_storing_a_key_never_reveals_a_hidden_tools_id_or_fills
     for made in (mine["id"], ours["id"]):
         assert made.startswith("acme-bank-") and len(made) == len("acme-bank-") + 8
     assert mine["id"] != ours["id"]
-    assert post(api, "api-tools", {"name": "Fresh Tool"}, "ben-test")["id"] == "fresh-tool"     # a free id is the name
+    assert post(api, "api-tools", {"name": "Fresh Tool"}, "ben-test")["id"] == "fresh-tool"  # a free id is the name
     # A known service's key stored in the vault fills the first free tool of that service, never a private one.
     close = tool(api)["id"]
     patch(api, close, {"audience": ONLY})
-    cid = post(api, "credentials", {"name": "Close API key", "env": "CLOSE_API_KEY", "secret": SECRET + "-close"},
-               "ben-test")["id"]
+    cid = post(
+        api, "credentials", {"name": "Close API key", "env": "CLOSE_API_KEY", "secret": SECRET + "-close"}, "ben-test"
+    )["id"]
     with api.app.state.store.read() as c:
         landed = c.execute("SELECT tool_id FROM credentials WHERE id=?", (cid,)).fetchone()[0]
         made = c.execute("SELECT name FROM tools WHERE id=?", (landed,)).fetchone()[0]
@@ -239,6 +260,7 @@ def test_the_chat_card_never_replaces_a_hidden_key_or_names_it(api):
     """Ben stores the same variable for a bot that already holds Ana's hidden key: without the rule his value would
     overwrite hers. It is refused without naming her key, and her value stays."""
     from backend import credential_cards
+
     tid, rw, _ = bank(api)
     level(api, tid, "bot:ops", "read_write")
     with api.app.state.store.read() as c:
@@ -272,7 +294,6 @@ def test_level_writes_by_the_owner_still_work_on_a_private_tool(api):
     post(api, f"credentials/{ro}/reveal", {}, "cara-test", expected=404)
 
 
-
 def ben_and_ana(api, c):
     auth = api.app.state.auth
     return auth.identity_for_actor(c, "human:ben"), auth.identity_for_actor(c, "human:ana")
@@ -300,20 +321,23 @@ def test_a_new_credentials_name_never_steps_around_a_hidden_keys_name(api):
     """The chat card renames a new credential whose name is taken; a hidden key's name is not taken for Ben, so the name
     he gets is the one he asked for, as if the hidden key did not exist."""
     from backend import credential_cards
+
     bank(api)
     vault = api.app.state.vault
     post(api, "credentials", {"name": "Ben visible", "env": "BEN_VISIBLE_KEY", "secret": SECRET + "-v"}, "ben-test")
     with api.app.state.store.transaction() as c:
         ben, _ = ben_and_ana(api, c)
-        hidden = credential_cards.store_for_bot(c, vault, ben, "ACME_OTHER_KEY", "ops", SECRET + "-a",
-                                                name="Close read_write")
+        hidden = credential_cards.store_for_bot(
+            c, vault, ben, "ACME_OTHER_KEY", "ops", SECRET + "-a", name="Close read_write"
+        )
         seen = credential_cards.store_for_bot(c, vault, ben, "ACME_THIRD_KEY", "ops", SECRET + "-b", name="Ben visible")
     assert hidden["name"] == "Close read_write"
-    assert seen["name"] != "Ben visible"        # a name he can see is still stepped around, as before
+    assert seen["name"] != "Ben visible"  # a name he can see is still stepped around, as before
 
 
 def test_counsels_who_hint_never_counts_a_hidden_key(api):
     from backend import counsel
+
     tid, _, _ = bank(api)
     level(api, tid, "bot:ops", "read_write")
     with api.app.state.store.read() as c:
@@ -327,6 +351,7 @@ def test_copying_a_bot_never_reports_or_tries_a_hidden_key(api):
     """Ops holds the hidden key; Ben's copy of Ops is told the original has none (as if it did not exist), never
     "Credential not found"; Ana's copy gets it."""
     from backend import bot_copy
+
     tid, rw, _ = bank(api)
     level(api, tid, "bot:ops", "read_write")
     vault = api.app.state.vault
@@ -357,10 +382,11 @@ def test_a_grant_refused_by_a_hidden_holder_names_no_key_nor_its_variable(api):
 
 def test_health_and_the_assistants_card_never_name_a_hidden_key(api):
     from backend import assistant, health
+
     tid, rw, _ = bank(api)
     level(api, tid, "bot:ops", "read_write")
     with api.app.state.store.transaction() as c:
-        c.execute("UPDATE credentials SET env='TICO_ACME_BANK' WHERE id=?", (rw,))   # a reserved name, after the grant
+        c.execute("UPDATE credentials SET env='TICO_ACME_BANK' WHERE id=?", (rw,))  # a reserved name, after the grant
     admins = api.app.state.vault.admins
     auth = api.app.state.auth
     with api.app.state.store.read() as c:

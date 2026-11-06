@@ -3,6 +3,7 @@
 TIDY's sqlite_stat1 says messages has 16k rows (analysed long ago; it has 72k now) and jobs and attempts have none. With
 those stats the planner scans messages and seeks each job, or scans every attempt, so each of these reads cost 40-150 ms
 under the write lock. Each statement must name the partial index that keeps it to the live rows."""
+
 from backend import turn_fixer
 from backend import wake_presets as W
 from backend.tests.test_api import api, post  # noqa: F401  (api is a fixture)
@@ -10,14 +11,16 @@ from backend import views
 
 NOW = "2026-10-29T14:00:00.000Z"
 # TIDY's stale statistics (sqlite_stat1, 2026-10-29): only messages has rows.
-TIDY_STATS = [("messages", "messages_pending_conversation", "212 3"),
-              ("messages", "messages_from_kind", "16209 181 99"),
-              ("messages", "messages_reply_kind", "16209 6 6"),
-              ("messages", "slack_task_completion_notices", "23 1 1 1"),
-              ("messages", "messages_open_asks", "16209 173 35 28 28"),
-              ("messages", "messages_conversation", "16209 8 1"),
-              ("messages", "messages_to_delivered", "16209 173 3"),
-              ("messages", "sqlite_autoindex_messages_1", "16209 1")]
+TIDY_STATS = [
+    ("messages", "messages_pending_conversation", "212 3"),
+    ("messages", "messages_from_kind", "16209 181 99"),
+    ("messages", "messages_reply_kind", "16209 6 6"),
+    ("messages", "slack_task_completion_notices", "23 1 1 1"),
+    ("messages", "messages_open_asks", "16209 173 35 28 28"),
+    ("messages", "messages_conversation", "16209 8 1"),
+    ("messages", "messages_to_delivered", "16209 173 3"),
+    ("messages", "sqlite_autoindex_messages_1", "16209 1"),
+]
 
 
 def tidy_stats(api):
@@ -35,6 +38,7 @@ def plan(api, sql, args=()):
 
 def test_the_periodic_reads_name_the_partial_index_that_keeps_them_to_live_rows(api):
     from backend import start_places
+
     tidy_stats(api)
     # The planner's choice depends on sizes and statistics, so the hint itself is pinned: without INDEXED BY the plan
     # scanned messages on TIDY (the old statements had no hint).
@@ -65,14 +69,17 @@ def test_the_periodic_reads_name_the_partial_index_that_keeps_them_to_live_rows(
 
 def register_worktree_computer(c, computer):
     # A missing registration is retired; a registered computer needs no heartbeat to keep its trees.
-    c.execute("INSERT INTO runners(id,label,owner_id,token_hash,created_at) VALUES(?,?,'ana',?,?)",
-              (computer, computer, computer, NOW))
+    c.execute(
+        "INSERT INTO runners(id,label,owner_id,token_hash,created_at) VALUES(?,?,'ana',?,?)",
+        (computer, computer, computer, NOW),
+    )
 
 
 def test_worktree_inventory_seeks_one_computers_worktrees(api):
     # worktrees.inventory runs on every heartbeat; without a computer index it scanned every worktree link ever kept.
     import sqlite3
     from backend import worktrees
+
     c = sqlite3.connect(str(api.app.state.store.settings.db_path), isolation_level=None)
     c.row_factory = sqlite3.Row
     register_worktree_computer(c, "computer-1")
@@ -93,14 +100,21 @@ def test_worktree_inventory_bot_state_matches_each_owner(api):
     import json
     import sqlite3
     from backend import worktrees
+
     db = str(api.app.state.store.settings.db_path)
     c = sqlite3.connect(db, isolation_level=None)
     c.row_factory = sqlite3.Row
     register_worktree_computer(c, 'wt-computer')
     assert c.execute("SELECT last_seen_at FROM runner_states WHERE runner_id='wt-computer'").fetchone()[0] is None
     now = '2026-10-29T00:00:00Z'
-    c.execute("INSERT INTO bots(id,slug,state,created_at) VALUES('wt-archived','wt-archived','archived',?),('wt-active','wt-active','active',?)", (now, now))
-    c.execute("INSERT INTO tasks(id,title,owner_id,requester_id,status,created_at,updated_at) VALUES('wt-task','t','bot:wt-active','human:ana','open',?,?)", (now, now))
+    c.execute(
+        "INSERT INTO bots(id,slug,state,created_at) VALUES('wt-archived','wt-archived','archived',?),('wt-active','wt-active','active',?)",
+        (now, now),
+    )
+    c.execute(
+        "INSERT INTO tasks(id,title,owner_id,requester_id,status,created_at,updated_at) VALUES('wt-task','t','bot:wt-active','human:ana','open',?,?)",
+        (now, now),
+    )
     cases = {
         'detail': ('wt-a', json.dumps({'owner': 'bot:wt-archived'}), 'human:ana'),
         'added': ('wt-b', '{}', 'bot:wt-archived'),
@@ -109,12 +123,19 @@ def test_worktree_inventory_bot_state_matches_each_owner(api):
         'human': ('wt-e', json.dumps({'owner': 'human:ana'}), 'human:ana'),
     }
     for key, (link, detail, added) in cases.items():
-        c.execute("INSERT INTO task_links(id,task_id,kind,url,state,added_by,created_at,computer_id,detail) "
-                  "VALUES(?,'wt-task','worktree','u','present',?,?,'wt-computer',?)", (link, added, now, detail))
+        c.execute(
+            "INSERT INTO task_links(id,task_id,kind,url,state,added_by,created_at,computer_id,detail) "
+            "VALUES(?,'wt-task','worktree','u','present',?,?,'wt-computer',?)",
+            (link, added, now, detail),
+        )
     rows = {r['id']: (r['owner_id'], r['bot_state']) for r in worktrees.inventory(c, 'wt-computer')}
-    assert rows == {'wt-a': ('bot:wt-archived', 'archived'), 'wt-b': ('bot:wt-archived', 'archived'),
-                    'wt-c': ('bot:wt-active', 'active'), 'wt-d': ('bot:', 'active'),
-                    'wt-e': ('human:ana', 'active')}, rows
+    assert rows == {
+        'wt-a': ('bot:wt-archived', 'archived'),
+        'wt-b': ('bot:wt-archived', 'archived'),
+        'wt-c': ('bot:wt-active', 'active'),
+        'wt-d': ('bot:', 'active'),
+        'wt-e': ('human:ana', 'active'),
+    }, rows
     c.execute("UPDATE runners SET revoked_at=? WHERE id='wt-computer'", (now,))
     assert worktrees.inventory(c, 'wt-computer') == []
     c.execute("DELETE FROM runners WHERE id='wt-computer'")
@@ -126,10 +147,12 @@ def test_queue_refusal_scan_reads_every_bots_state_in_one_query(api):
     # The scheduler's claim observations: one read for the targets, one for all their saved states (not one per bot).
     from backend import queue_refusals
     from backend.tests.test_task_lanes import task_bot
+
     task_bot(api, lanes=True, others=("finance", "inbox"))
     for bot in ("ops", "finance", "inbox"):
         post(api, "chat/" + bot, {"text": "Check the queue."})
     from backend.store import H
+
     store = api.app.state.store
     seen = []
     with store.read_transaction() as c:

@@ -16,28 +16,58 @@ from backend.tests.test_onboarding import ASSISTANT_AGENT, ASSISTANT_CARD, BOTOP
 COO = {"coo": {"name": "Coo", "status": "active", "template": "assistant"}}
 SWEEP = "coo:daily-sweep"
 BOOKKEEPER = {"bk": {"name": "Bk", "status": "active", "template": "bookkeeper"}}
-BOOKKEEPER_CARD = {"template": "bookkeeper", "slug": "bk", "name": "Bookkeeper", "required": False, "bootstrap": True,
-                   "summary": "Keeps the books.", "owns": ["the books"], "never": ["pays bills"],
-                   "reasoning_effort": "high", "recommend_when": ["always"]}
+BOOKKEEPER_CARD = {
+    "template": "bookkeeper",
+    "slug": "bk",
+    "name": "Bookkeeper",
+    "required": False,
+    "bootstrap": True,
+    "summary": "Keeps the books.",
+    "owns": ["the books"],
+    "never": ["pays bills"],
+    "reasoning_effort": "high",
+    "recommend_when": ["always"],
+}
 BOOKKEEPER_AGENT = "# {{bot_name}}\n\nYou keep {{company_name}}'s books.\n"
-MONTHLY = {"id": "monthly-report", "title": "Monthly finance report", "cron": "0 9 3 * *",
-           "timezone": "America/Los_Angeles", "template": "playbooks/monthly-report.md"}
+MONTHLY = {
+    "id": "monthly-report",
+    "title": "Monthly finance report",
+    "cron": "0 9 3 * *",
+    "timezone": "America/Los_Angeles",
+    "template": "playbooks/monthly-report.md",
+}
 
 
 def _write_assistant_routines(api):
     folder = Path(api.app.state.store.settings.catalog_dir) / "assistant"
     (folder / "playbooks").mkdir(exist_ok=True)
-    (folder / "bot.yaml").write_text(yaml.safe_dump({"name": "assistant", "routines": [{
-        "id": "daily-sweep", "title": "Daily sweep of each person's queue", "cron": "0 8 * * *",
-        "template": "playbooks/daily-sweep.md"}]}))
+    (folder / "bot.yaml").write_text(
+        yaml.safe_dump(
+            {
+                "name": "assistant",
+                "routines": [
+                    {
+                        "id": "daily-sweep",
+                        "title": "Daily sweep of each person's queue",
+                        "cron": "0 8 * * *",
+                        "template": "playbooks/daily-sweep.md",
+                    }
+                ],
+            }
+        )
+    )
     (folder / "playbooks" / "daily-sweep.md").write_text("Sweep {{company_name}}'s queue.\n")
 
 
 def _rows(api):
     """Every schedule row the key has (a deleted or moved one stays, with deleted_at set)."""
     with api.app.state.store.read() as c:
-        return [dict(row) for row in c.execute(
-            "SELECT id, cron, deleted_at FROM schedules WHERE bot='coo' AND routine_key='daily-sweep'")]
+        return [
+            dict(row)
+            for row in c.execute(
+                "SELECT id, cron, deleted_at FROM schedules WHERE bot='coo' AND routine_key='daily-sweep'"
+            )
+        ]
 
 
 def _row(api):
@@ -49,8 +79,9 @@ def _row(api):
 
 def _created(api):
     with api.app.state.store.read() as c:
-        return c.execute("SELECT COUNT(*) FROM events WHERE action='routine.created' AND target=?",
-                         (SWEEP,)).fetchone()[0]
+        return c.execute(
+            "SELECT COUNT(*) FROM events WHERE action='routine.created' AND target=?", (SWEEP,)
+        ).fetchone()[0]
 
 
 def _ensure(api):
@@ -71,6 +102,7 @@ def test_the_assistant_gets_its_daily_sweep_once_and_an_edit_a_delete_or_a_lost_
     """The key is also kept in the bot's config (`routines_seeded`), so no schedule row going missing brings it back.
     Once moved, a routine's on/off and its words are the automation's: a person's edit there stays through a restart."""
     from backend import automations
+
     api = environment(seed=COO)
     _write_assistant_routines(api)
     assert _rows(api) == []
@@ -89,12 +121,12 @@ def test_the_assistant_gets_its_daily_sweep_once_and_an_edit_a_delete_or_a_lost_
         auto_id = _row(api)["automation"]
         before = automations.flow_of(_automation(c, auto_id))
         automations._save(c, who.actor, auto_id, {**before, "name": "My sweep"}, before, via="routine")
-        routines.update(c, who.actor, SWEEP, {"enabled": False})     # after the rename, so it does not undo it
+        routines.update(c, who.actor, SWEEP, {"enabled": False})  # after the rename, so it does not undo it
     with api.app.state.store.read() as c:
         auto = _automation(c, auto_id)
     api = _restart(api)
     with api.app.state.store.read() as c:
-        assert _automation(c, auto_id) == auto               # the same automation, unchanged by startup
+        assert _automation(c, auto_id) == auto  # the same automation, unchanged by startup
         assert routines.row(c, SWEEP)["enabled"] == 0
     assert auto["name"] == "My sweep" and auto["enabled"] == 0
     assert len(_rows(api)) == 1
@@ -103,7 +135,7 @@ def test_the_assistant_gets_its_daily_sweep_once_and_an_edit_a_delete_or_a_lost_
         who = api.app.state.auth.owner_identity(c)
         routines.remove(c, who.actor, SWEEP)
     api = _restart(api)
-    assert len(_rows(api)) == 1 and _row(api)["deleted_at"] is not None     # still deleted, no new row
+    assert len(_rows(api)) == 1 and _row(api)["deleted_at"] is not None  # still deleted, no new row
     # A schedule row gone (its config row goes with it) is still not recreated.
     with api.app.state.store.transaction() as c:
         c.execute("DELETE FROM schedule_config WHERE schedule_id=?", (SWEEP,))
@@ -116,8 +148,10 @@ def test_the_assistant_gets_its_daily_sweep_once_and_an_edit_a_delete_or_a_lost_
 def test_at_startup_only_the_assistant_gets_a_routine_a_bootstrap_bot_with_routines_gets_none(environment):
     """The backfill is the Assistant's daily sweep alone. The bookkeeper's monthly report (enabled in its template) is
     set up with the bot, so an install whose bookkeeper has none keeps none: the startup path does not switch it on."""
-    api = environment(cards=[(ASSISTANT_CARD, ASSISTANT_AGENT), (BOTOPS_CARD, ""), (BOOKKEEPER_CARD, BOOKKEEPER_AGENT)],
-                      seed={**COO, **BOOKKEEPER})
+    api = environment(
+        cards=[(ASSISTANT_CARD, ASSISTANT_AGENT), (BOTOPS_CARD, ""), (BOOKKEEPER_CARD, BOOKKEEPER_AGENT)],
+        seed={**COO, **BOOKKEEPER},
+    )
     _write_assistant_routines(api)
     folder = Path(api.app.state.store.settings.catalog_dir) / "bookkeeper"
     (folder / "playbooks").mkdir(exist_ok=True)

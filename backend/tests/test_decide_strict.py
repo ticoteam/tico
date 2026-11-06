@@ -10,13 +10,15 @@ import pytest
 
 from backend import judge as B
 from backend.store import H
-from backend.tests.test_api import api   # noqa: F401
+from backend.tests.test_api import api  # noqa: F401
 from backend.tests.test_decide_gateway import GATEWAY_URL, answer_all
 from backend.tests.test_judge import QUESTIONS
 from clients import judge as J
 
-EVIDENCE = {"summary": "reads a keychain secret", "findings": [
-    {"file": "run.py", "line": 4, "issue": "reads a secret", "severity": "high"}]}
+EVIDENCE = {
+    "summary": "reads a keychain secret",
+    "findings": [{"file": "run.py", "line": 4, "issue": "reads a secret", "severity": "high"}],
+}
 SKILL_TEXT = "the-skill-body-that-must-never-be-kept"
 
 
@@ -32,9 +34,13 @@ class Gateway:
         self.sent.append((url, body, timeout))
         if self.fail:
             raise urllib.error.HTTPError(url, self.fail, "no", {}, io.BytesIO(b'{"error":"unavailable"}'))
-        payload = {"model": body["model"], "answers": answer_all(body["questions"]),
-                   "usage": {"input_tokens": 900, "output_tokens": 60, "cost_usd": 0.0004}, "ms": 300,
-                   "label": body.get("label")}
+        payload = {
+            "model": body["model"],
+            "answers": answer_all(body["questions"]),
+            "usage": {"input_tokens": 900, "output_tokens": 60, "cost_usd": 0.0004},
+            "ms": 300,
+            "label": body.get("label"),
+        }
         if body.get("evidence") and self.evidence is not None:
             payload["evidence"] = self.evidence
         return io.BytesIO(json.dumps(payload).encode())
@@ -63,7 +69,9 @@ def strict(api, **kwargs):
 
 def judge_calls(api):
     with api.app.state.store.read() as c:
-        return [json.loads(r[0]) for r in c.execute("SELECT detail FROM events WHERE action='judge.call' ORDER BY rowid")]
+        return [
+            json.loads(r[0]) for r in c.execute("SELECT detail FROM events WHERE action='judge.call' ORDER BY rowid")
+        ]
 
 
 def spend_rows(api):
@@ -74,7 +82,7 @@ def spend_rows(api):
 def test_the_strict_call_asks_the_gateway_at_high_once_and_nothing_else(api, gateway):
     engine = strict(api)
     result = engine({"skill": {"name": "triage"}}, QUESTIONS, "skill-screen@1", evidence=True)
-    (url, body, timeout), = gateway.sent                    # one call, to the Gateway, and no other provider
+    ((url, body, timeout),) = gateway.sent  # one call, to the Gateway, and no other provider
     assert url == GATEWAY_URL and body["model"] == "tico-decide-high-1.0" and body["label"] == "skill-screen@1"
     assert timeout == B.STRICT_SECONDS == 90
     assert result["model"] == "tico-decide-high-1.0" and result["provider"] == "Tico AI Gateway"
@@ -102,10 +110,10 @@ def test_a_gateway_failure_is_raised_with_its_code_once_and_no_other_provider_is
     with pytest.raises(J.JudgeError) as failed:
         strict(api)({"skill": {"text": SKILL_TEXT}}, QUESTIONS, "skill-screen@1", evidence=True)
     assert failed.value.code == "unavailable"
-    assert len(gateway.sent) == 1                           # no retry, and no other provider
+    assert len(gateway.sent) == 1  # no retry, and no other provider
     (detail,) = judge_calls(api)
     assert detail["error"] == "unavailable" and "answers" not in detail
-    assert spend_rows(api) == 0                             # nothing was answered, so nothing was charged
+    assert spend_rows(api) == 0  # nothing was answered, so nothing was charged
 
 
 def test_an_answer_with_malformed_evidence_fails_the_screen_and_its_cost_is_still_counted(api, gateway):
@@ -127,7 +135,7 @@ def test_the_month_at_its_cap_means_no_engine_at_all(api, gateway):
 
 
 def test_a_call_that_would_pass_the_cap_is_refused_before_the_gateway_is_asked(api, gateway):
-    api.app.state.store.settings.decisions_monthly_usd = 0.001     # the reservation of one High call is far more
+    api.app.state.store.settings.decisions_monthly_usd = 0.001  # the reservation of one High call is far more
     with pytest.raises(J.JudgeError) as refused:
         strict(api)({"skill": {"text": SKILL_TEXT}}, QUESTIONS, "skill-screen@1", evidence=True)
     assert refused.value.code == "spend_cap" and gateway.sent == []
@@ -140,14 +148,24 @@ def test_without_a_gateway_key_or_url_there_is_no_strict_engine(api, gateway):
 
 
 def test_the_client_checks_and_clamps_evidence_the_way_the_gateway_does():
-    long = {"summary": "s" * 900, "findings": [{"file": "f" * 300, "line": -2, "issue": "i" * 400, "severity": "low"}]
-            + [{"file": "a", "line": n, "issue": "b", "severity": "high"} for n in range(30)]}
+    long = {
+        "summary": "s" * 900,
+        "findings": [{"file": "f" * 300, "line": -2, "issue": "i" * 400, "severity": "low"}]
+        + [{"file": "a", "line": n, "issue": "b", "severity": "high"} for n in range(30)],
+    }
     got = J.check_evidence(long)
     assert len(got["summary"]) == J.EVIDENCE_SUMMARY and len(got["findings"]) == J.EVIDENCE_FINDINGS
-    assert got["findings"][0] == {"file": "f" * J.EVIDENCE_FILE, "line": 0, "issue": "i" * J.EVIDENCE_ISSUE,
-                                  "severity": "low"}
-    for bad in (None, {"summary": "x"}, {"summary": "x", "findings": [{"file": "a", "line": 1.0, "issue": "x",
-                                                                      "severity": "low"}]}):
+    assert got["findings"][0] == {
+        "file": "f" * J.EVIDENCE_FILE,
+        "line": 0,
+        "issue": "i" * J.EVIDENCE_ISSUE,
+        "severity": "low",
+    }
+    for bad in (
+        None,
+        {"summary": "x"},
+        {"summary": "x", "findings": [{"file": "a", "line": 1.0, "issue": "x", "severity": "low"}]},
+    ):
         with pytest.raises(J.JudgeError) as shape:
             J.check_evidence(bad)
         assert shape.value.code == "shape"

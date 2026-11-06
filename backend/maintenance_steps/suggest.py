@@ -12,8 +12,15 @@ LOG = logging.getLogger("tico.maintenance")
 
 
 def _result(status, reason, checked=0, found=0, details=None):
-    return {"status": status, "reason": reason, "checked": checked, "found": found, "woke": 0,
-            "cost_usd": 0.0, "details": details or {}}
+    return {
+        "status": status,
+        "reason": reason,
+        "checked": checked,
+        "found": found,
+        "woke": 0,
+        "cost_usd": 0.0,
+        "details": details or {},
+    }
 
 
 def run(c, ctx):
@@ -59,12 +66,15 @@ def _gateway(c, ctx):
         suggestions.expire(tx, now)
         found = suggestions.store_new(tx, items, now)
         delivered = suggestions.deliver_people(tx, store.settings)
-        tx.execute("INSERT INTO registry_metadata VALUES(?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value",
-                   (suggestions.LAST_FETCH, now))
+        tx.execute(
+            "INSERT INTO registry_metadata VALUES(?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value",
+            (suggestions.LAST_FETCH, now),
+        )
     try:
         reported = suggestions.report(store)
     except Exception as exc:  # noqa: BLE001 - delivered suggestions stay delivered; reports retry next run
         reason = str(exc) if isinstance(exc, suggestions.GatewayError) else "Gateway connection failed"
         return _result("failed", reason, len(items), found, {"delivered": delivered, "reported": 0})
-    return _result("ran", "Suggestions kept for the next Update", len(items), found,
-                   {"delivered": delivered, "reported": reported})
+    return _result(
+        "ran", "Suggestions kept for the next Update", len(items), found, {"delivered": delivered, "reported": reported}
+    )

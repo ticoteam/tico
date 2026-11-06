@@ -15,6 +15,7 @@ Exit status: 0 only when every check passed and no step was reported as not poss
 3 when every check passed but some step cannot be run here (listed in the report). Everything the script starts is
 stopped by the PID it started, and its demo folder is a new temporary folder that is removed on exit.
 """
+
 import argparse
 import hashlib
 import hmac
@@ -36,7 +37,7 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parent.parent
 DEMO_PORT = 18811
 FAKE_PORT = 18812
-BANK_ID, CARD_ID = "acct-chk", "credit-io"       # the fake bank's checking and IO credit accounts (fake_mercury.py)
+BANK_ID, CARD_ID = "acct-chk", "credit-io"  # the fake bank's checking and IO credit accounts (fake_mercury.py)
 DEMO_HOST = "127.0.0.1"
 OWNER_EMAIL = "ana@acme.example"
 APPROVER = "ben@acme.example"
@@ -76,12 +77,14 @@ class Api:
         self.token = token
         self.calls: list[dict[str, object]] = []
 
-    def request(self, method: str, path: str, body: object = None, query: dict | None = None,
-                key: str | None = None) -> tuple[int, object]:
+    def request(
+        self, method: str, path: str, body: object = None, query: dict | None = None, key: str | None = None
+    ) -> tuple[int, object]:
         url = self.base + path.lstrip("/")
         if query:
-            url += "?" + "&".join(f"{k}={urllib.request.quote(str(v), safe='')}" for k, v in query.items()
-                                  if v is not None)
+            url += "?" + "&".join(
+                f"{k}={urllib.request.quote(str(v), safe='')}" for k, v in query.items() if v is not None
+            )
         data = json.dumps(body).encode() if body is not None else None
         headers = {"Authorization": "Bearer " + self.token, "Content-Type": "application/json"}
         if method != "GET":
@@ -108,8 +111,9 @@ class Api:
 
     def act(self, kind: str, payload: dict, key: str | None = None, dry_run: bool = False) -> dict:
         """POST /finance/actions. Returns the answer whatever its status; the caller checks status and code."""
-        status, out = self.request("POST", "finance/actions",
-                                   {"kind": kind, "payload": payload, "dry_run": dry_run}, key=key)
+        status, out = self.request(
+            "POST", "finance/actions", {"kind": kind, "payload": payload, "dry_run": dry_run}, key=key
+        )
         if not isinstance(out, dict):
             out = {"raw": out}
         out["_http"] = status
@@ -180,19 +184,28 @@ class Stack:
     def start(self) -> None:
         for port in (self.fake_port, self.demo_port):
             if not self._port_free(port):
-                raise SystemExit(f"port {port} already answers on this computer; this rehearsal starts its own stack "
-                                 "there and will not use something it did not start")
+                raise SystemExit(
+                    f"port {port} already answers on this computer; this rehearsal starts its own stack "
+                    "there and will not use something it did not start"
+                )
         self.log_dir.mkdir(parents=True, exist_ok=True)
-        fake = subprocess.Popen(["python3", str(ROOT / "scripts" / "fake_mercury.py"), "--port", str(self.fake_port)],
-                                cwd=ROOT, stdout=open(self.log_dir / "fake.log", "w"), stderr=subprocess.STDOUT)
+        fake = subprocess.Popen(
+            ["python3", str(ROOT / "scripts" / "fake_mercury.py"), "--port", str(self.fake_port)],
+            cwd=ROOT,
+            stdout=open(self.log_dir / "fake.log", "w"),
+            stderr=subprocess.STDOUT,
+        )
         self.procs.append(("fake Mercury", fake))
         if not self._wait(f"http://{DEMO_HOST}:{self.fake_port}/_fake/calls", 30):
             raise SystemExit("the fake Mercury did not start")
         env = dict(os.environ, TICO_MERCURY_BASE=f"http://{DEMO_HOST}:{self.fake_port}/api/v1")
-        demo = subprocess.Popen(["python3", "-m", "backend.demo", "--port", str(self.demo_port),
-                                 "--data-dir", str(self.data_dir)],
-                                cwd=ROOT, env=env, stdout=open(self.log_dir / "demo.log", "w"),
-                                stderr=subprocess.STDOUT)
+        demo = subprocess.Popen(
+            ["python3", "-m", "backend.demo", "--port", str(self.demo_port), "--data-dir", str(self.data_dir)],
+            cwd=ROOT,
+            env=env,
+            stdout=open(self.log_dir / "demo.log", "w"),
+            stderr=subprocess.STDOUT,
+        )
         self.procs.append(("demo", demo))
         if not self._wait(f"http://{DEMO_HOST}:{self.demo_port}/", 240):
             raise SystemExit("the demo did not start; see " + str(self.log_dir / "demo.log"))
@@ -218,7 +231,7 @@ def sign_mercury(body: bytes, secret: str = SIGNING_SECRET) -> str:
 
 
 def today() -> date:
-    return datetime.now(timezone.utc).astimezone().date()          # the local day, as date.today() gave it
+    return datetime.now(timezone.utc).astimezone().date()  # the local day, as date.today() gave it
 
 
 class Context:
@@ -235,13 +248,32 @@ class Context:
 
 
 # ------------------------------------------------------------------------------------------------ the month
-PAST_MONTH = "2026-10"                 # the month this rehearsal closes (today is in November)
-EXPECTED_RULES = ("floor:budget-cutoff-freeze", "rule:new-recipient", "rule:payment-over-1000",
-                  "rule:bot-card-single-use-over-200", "rule:bot-card-standing", "rule:bot-books-over-5000",
-                  "rule:bot-new-account", "rule:close-reopen-owner")
+PAST_MONTH = "2026-10"  # the month this rehearsal closes (today is in November)
+EXPECTED_RULES = (
+    "floor:budget-cutoff-freeze",
+    "rule:new-recipient",
+    "rule:payment-over-1000",
+    "rule:bot-card-single-use-over-200",
+    "rule:bot-card-standing",
+    "rule:bot-books-over-5000",
+    "rule:bot-new-account",
+    "rule:close-reopen-owner",
+)
 BOOKKEEPER_RIGHTS = {"finance.book", "finance.ap", "finance.ar", "finance.pay", "finance.cards", "finance.rules"}
-CARD_VENDORS = ["FIGMA", "SLACK", "OPENROUTER", "ADOBE", "NOTION", "ZOOM", "GITHUB", "LINEAR", "CANVA", "DROPBOX",
-                "ZAPIER", "AWS"]
+CARD_VENDORS = [
+    "FIGMA",
+    "SLACK",
+    "OPENROUTER",
+    "ADOBE",
+    "NOTION",
+    "ZOOM",
+    "GITHUB",
+    "LINEAR",
+    "CANVA",
+    "DROPBOX",
+    "ZAPIER",
+    "AWS",
+]
 
 
 def october_seed() -> list[dict]:
@@ -251,11 +283,23 @@ def october_seed() -> list[dict]:
     for i in range(28):
         customer = i % 7 == 0
         amount = round((150.0 + i * 7.25) * (1 if customer else -1), 2)
-        rows.append({"amount": amount, "counterparty": f"REH BANK {i:02d} {'CUSTOMER' if customer else 'VENDOR'}",
-                     "date": f"{PAST_MONTH}-{1 + i:02d}", "kind": "bank"})
+        rows.append(
+            {
+                "amount": amount,
+                "counterparty": f"REH BANK {i:02d} {'CUSTOMER' if customer else 'VENDOR'}",
+                "date": f"{PAST_MONTH}-{1 + i:02d}",
+                "kind": "bank",
+            }
+        )
     for i in range(12):
-        rows.append({"amount": -round(19.99 + i * 3.5, 2), "counterparty": f"REH CARD {i:02d} {CARD_VENDORS[i]}",
-                     "date": f"{PAST_MONTH}-{2 + i:02d}", "kind": "credit card"})
+        rows.append(
+            {
+                "amount": -round(19.99 + i * 3.5, 2),
+                "counterparty": f"REH CARD {i:02d} {CARD_VENDORS[i]}",
+                "date": f"{PAST_MONTH}-{2 + i:02d}",
+                "kind": "credit card",
+            }
+        )
     return rows
 
 
@@ -312,65 +356,127 @@ def run_step1(ctx: Context) -> None:
     step, api, fake = "1 setup", ctx.api, ctx.fake
     # Forty rows go into the fake before Tico connects, so the first sync is a real backfill of them.
     seeded = [fake.call("POST", "/_fake/txn", row)[0] for row in october_seed()]
-    ctx.check(step, "fake Mercury holds the seeded transactions before connecting", seeded.count(200) == 40,
-              f"{seeded.count(200)} of 40 accepted")
+    ctx.check(
+        step,
+        "fake Mercury holds the seeded transactions before connecting",
+        seeded.count(200) == 40,
+        f"{seeded.count(200)} of 40 accepted",
+    )
     # A second token whose approver is its own creator: Tico must say payments are off and why, and must not fall back.
-    _, neg = api.request("POST", "credentials", {"name": "Mercury (approver check)", "kind": "token",
-                                                  "secret": "fake-token-approver-check"})
-    st, out = api.request("POST", "finance/connections", {
-        "provider": "mercury", "credential_id": neg["id"], "name": "Mercury (approver check)",
-        "approver_email": OWNER_EMAIL, "token_creator_email": OWNER_EMAIL})
+    _, neg = api.request(
+        "POST",
+        "credentials",
+        {"name": "Mercury (approver check)", "kind": "token", "secret": "fake-token-approver-check"},
+    )
+    st, out = api.request(
+        "POST",
+        "finance/connections",
+        {
+            "provider": "mercury",
+            "credential_id": neg["id"],
+            "name": "Mercury (approver check)",
+            "approver_email": OWNER_EMAIL,
+            "token_creator_email": OWNER_EMAIL,
+        },
+    )
     result = out.get("result") or {} if isinstance(out, dict) else {}
-    ctx.check(step, "a token whose creator is also the approver is refused for payments",
-              st == 200 and result.get("payments_enabled") is False
-              and "approver" in str(result.get("approval_note") or ""),
-              f"HTTP {st}, payments_enabled={result.get('payments_enabled')}, note={result.get('approval_note')}")
+    ctx.check(
+        step,
+        "a token whose creator is also the approver is refused for payments",
+        st == 200 and result.get("payments_enabled") is False and "approver" in str(result.get("approval_note") or ""),
+        f"HTTP {st}, payments_enabled={result.get('payments_enabled')}, note={result.get('approval_note')}",
+    )
     neg_cid = str(result.get("connection_id") or "")
     if neg_cid:
         dis = api.act("connection_disconnect", {"connection_id": neg_cid})
-        ctx.check(step, "the approver check connection is disconnected again", committed(dis),
-                  f"{dis.get('status')} {dis.get('code')} {dis.get('reason')}")
+        ctx.check(
+            step,
+            "the approver check connection is disconnected again",
+            committed(dis),
+            f"{dis.get('status')} {dis.get('code')} {dis.get('reason')}",
+        )
     # The real connection: an approver other than the token's creator, so payments go through Mercury's queue.
-    _, good = api.request("POST", "credentials", {"name": "Mercury (rehearsal)", "kind": "token",
-                                                   "secret": FAKE_TOKEN})
-    st, out = api.request("POST", "finance/connections", {
-        "provider": "mercury", "credential_id": good["id"], "name": "Mercury (rehearsal)",
-        "approver_email": APPROVER, "token_creator_email": OWNER_EMAIL})
+    _, good = api.request("POST", "credentials", {"name": "Mercury (rehearsal)", "kind": "token", "secret": FAKE_TOKEN})
+    st, out = api.request(
+        "POST",
+        "finance/connections",
+        {
+            "provider": "mercury",
+            "credential_id": good["id"],
+            "name": "Mercury (rehearsal)",
+            "approver_email": APPROVER,
+            "token_creator_email": OWNER_EMAIL,
+        },
+    )
     result = out.get("result") or {} if isinstance(out, dict) else {}
     ctx.state["connection_id"] = str(result.get("connection_id") or "")
-    ctx.check(step, "Mercury connects with a fake token and an approver who is not its creator",
-              st == 200 and result.get("payments_enabled") is True, f"HTTP {st}, {str(out)[:160]}")
+    ctx.check(
+        step,
+        "Mercury connects with a fake token and an approver who is not its creator",
+        st == 200 and result.get("payments_enabled") is True,
+        f"HTTP {st}, {str(out)[:160]}",
+    )
     sources = api.get("finance/sources")
     groups = {g["group"]: g["rows"] for g in sources["groups"]}
     banks = {r["name"]: r for r in groups.get("banks", [])}
-    ctx.check(step, "the two Mercury bank accounts are in the books", {"Acme Checking", "Reserve"} <= set(banks),
-              ", ".join(sorted(banks)))
-    ctx.check(step, "the Mercury IO card program is in the books", any("Mercury IO" in str(r.get("name")) for r in
-                                                                       groups.get("cards", [])))
+    ctx.check(
+        step,
+        "the two Mercury bank accounts are in the books",
+        {"Acme Checking", "Reserve"} <= set(banks),
+        ", ".join(sorted(banks)),
+    )
+    ctx.check(
+        step,
+        "the Mercury IO card program is in the books",
+        any("Mercury IO" in str(r.get("name")) for r in groups.get("cards", [])),
+    )
     pay = [r for r in groups.get("payments", []) if r.get("id") == ctx.state["connection_id"]]
-    ctx.check(step, "payments run through Mercury's approval queue on that connection",
-              bool(pay) and (pay[0].get("payments") or {}).get("enabled") is True
-              and (pay[0].get("payments") or {}).get("mode") == "approval_queue",
-              json.dumps(pay[0].get("payments") if pay else None)[:200])
+    ctx.check(
+        step,
+        "payments run through Mercury's approval queue on that connection",
+        bool(pay)
+        and (pay[0].get("payments") or {}).get("enabled") is True
+        and (pay[0].get("payments") or {}).get("mode") == "approval_queue",
+        json.dumps(pay[0].get("payments") if pay else None)[:200],
+    )
     # The Bookkeeper: it appears off the org chart, with the rights the spec gives it by default.
     bots = {b["slug"]: b for b in api.get("bots")}
-    ctx.check(step, "the Bookkeeper appears as an active built-in bot", bots.get("bookkeeper", {}).get("state") == "active")
+    ctx.check(
+        step, "the Bookkeeper appears as an active built-in bot", bots.get("bookkeeper", {}).get("state") == "active"
+    )
     access = api.get("finance/access")
     book = next((t for t in access["teammates"] if t["teammate"] == "bot:bookkeeper"), {})
-    ctx.check(step, "the Bookkeeper is off the org chart (no team, no manager)",
-              book and book.get("team") is None and book.get("reports_to") is None,
-              f"team={book.get('team')}, reports_to={book.get('reports_to')}")
-    ctx.check(step, "the Bookkeeper holds book, ap, ar, pay and cards",
-              set(book.get("rights") or []) == BOOKKEEPER_RIGHTS, ", ".join(sorted(book.get("rights") or [])))
+    ctx.check(
+        step,
+        "the Bookkeeper is off the org chart (no team, no manager)",
+        book and book.get("team") is None and book.get("reports_to") is None,
+        f"team={book.get('team')}, reports_to={book.get('reports_to')}",
+    )
+    ctx.check(
+        step,
+        "the Bookkeeper holds book, ap, ar, pay and cards",
+        set(book.get("rights") or []) == BOOKKEEPER_RIGHTS,
+        ", ".join(sorted(book.get("rights") or [])),
+    )
     # The owner grants the Bookkeeper Everything, as the spec asks at setup (its view is not granted by default).
-    grant = api.act("view_grant", {"subject_kind": "teammate", "subject": "bot:bookkeeper", "what": "everything",
-                                   "whose": "company"})
-    ctx.check(step, "the owner grants the Bookkeeper Everything to see the books", committed(grant),
-              f"{grant.get('status')} {grant.get('code')} {grant.get('reason')}"[:200])
+    grant = api.act(
+        "view_grant",
+        {"subject_kind": "teammate", "subject": "bot:bookkeeper", "what": "everything", "whose": "company"},
+    )
+    ctx.check(
+        step,
+        "the owner grants the Bookkeeper Everything to see the books",
+        committed(grant),
+        f"{grant.get('status')} {grant.get('code')} {grant.get('reason')}"[:200],
+    )
     rules = {r["id"]: r for r in api.get("finance/rules")["rules"]}
     missing = [rid for rid in EXPECTED_RULES if rid not in rules or not rules[rid].get("active")]
-    ctx.check(step, "the default rules for a new company are present and on", not missing,
-              f"missing: {missing}" if missing else f"{len(EXPECTED_RULES)} of spec 6.4")
+    ctx.check(
+        step,
+        "the default rules for a new company are present and on",
+        not missing,
+        f"missing: {missing}" if missing else f"{len(EXPECTED_RULES)} of spec 6.4",
+    )
 
 
 def run_step2(ctx: Context) -> None:
@@ -379,39 +485,61 @@ def run_step2(ctx: Context) -> None:
     ctx.check(step, "backfill brings all 40 seeded transactions into the feed", len(rows) == 40, f"{len(rows)} rows")
     checking = next(a for a in fake.mercury("/accounts")["accounts"] if a["id"] == "acct-chk")
     banks = {r["name"]: r for g in api.get("finance/sources")["groups"] if g["group"] == "banks" for r in g["rows"]}
-    ctx.check(step, "checking balance loads and matches Mercury",
-              banks.get("Acme Checking", {}).get("balance") == round(checking["currentBalance"] * 100),
-              f"Tico {banks.get('Acme Checking', {}).get('balance')} vs Mercury {round(checking['currentBalance'] * 100)}")
+    ctx.check(
+        step,
+        "checking balance loads and matches Mercury",
+        banks.get("Acme Checking", {}).get("balance") == round(checking["currentBalance"] * 100),
+        f"Tico {banks.get('Acme Checking', {}).get('balance')} vs Mercury {round(checking['currentBalance'] * 100)}",
+    )
     # Three more transactions arrive as signed webhook deliveries, one of them twice (a replay must not post twice).
     made = api.request("POST", "triggers", {"id": HOOK_ID, "name": "Mercury rehearsal"}, key="rh-trigger")
     made_trigger = (made[1].get("trigger") or {}) if isinstance(made[1], dict) else {}  # answers are {"trigger": {...}}
     url = str(made_trigger.get("url") or "")
     secret = url.rsplit("/", 1)[-1]
     ctx.check(step, "the Mercury webhook address is made", made[0] == 200 and bool(secret), f"HTTP {made[0]}")
-    signed_st, signed = api.request("POST", f"triggers/{HOOK_ID}/signing",
-                                    {"secret": SIGNING_SECRET, "preset": "mercury"}, key="rh-sign")
-    ctx.check(step, "the webhook checks Mercury's signature with the signing secret",
-              signed_st == 200 and isinstance(signed, dict) and (signed.get("trigger") or {}).get("preset") == "mercury",
-              f"HTTP {signed_st}")
+    signed_st, signed = api.request(
+        "POST", f"triggers/{HOOK_ID}/signing", {"secret": SIGNING_SECRET, "preset": "mercury"}, key="rh-sign"
+    )
+    ctx.check(
+        step,
+        "the webhook checks Mercury's signature with the signing secret",
+        signed_st == 200 and isinstance(signed, dict) and (signed.get("trigger") or {}).get("preset") == "mercury",
+        f"HTTP {signed_st}",
+    )
     ctx.state["hook_path"] = f"hooks/{HOOK_ID}/{secret}"
     accepted = []
     for i in range(3):
-        added = fake.call("POST", "/_fake/txn", {"amount": -(40.0 + i), "counterparty": f"REH HOOK {i}",
-                                                 "date": f"{PAST_MONTH}-28", "kind": "bank"})[1]
+        added = fake.call(
+            "POST",
+            "/_fake/txn",
+            {"amount": -(40.0 + i), "counterparty": f"REH HOOK {i}", "date": f"{PAST_MONTH}-28", "kind": "bank"},
+        )[1]
         txn = added["transaction"]
         accepted.append(deliver_mercury(ctx, txn, f"evt-rehearsal-{i}"))
         if i == 0:
-            accepted.append(deliver_mercury(ctx, txn, "evt-rehearsal-0"))   # Mercury's retry of the same event
+            accepted.append(deliver_mercury(ctx, txn, "evt-rehearsal-0"))  # Mercury's retry of the same event
     statuses = [s[0] for s in accepted]
     # Accepted is 202; the replay of the first delivery is answered 200 as a duplicate and posts nothing.
-    ctx.check(step, "signed deliveries are accepted (202), and the replay is a duplicate (200)",
-              statuses == [202, 200, 202, 202], f"statuses {statuses}")
-    bad = api_post_raw(ctx, f"hooks/{HOOK_ID}/{secret}", json.dumps({"id": "evt-forged"}).encode(),
-                       {"Mercury-Signature": f"t={int(time.time())},v1=deadbeef", "Content-Type": "application/json"})
+    ctx.check(
+        step,
+        "signed deliveries are accepted (202), and the replay is a duplicate (200)",
+        statuses == [202, 200, 202, 202],
+        f"statuses {statuses}",
+    )
+    bad = api_post_raw(
+        ctx,
+        f"hooks/{HOOK_ID}/{secret}",
+        json.dumps({"id": "evt-forged"}).encode(),
+        {"Mercury-Signature": f"t={int(time.time())},v1=deadbeef", "Content-Type": "application/json"},
+    )
     ctx.check(step, "a webhook with a wrong signature is refused (401, signature)", bad[0] == 401, f"HTTP {bad[0]}")
     total = wait_for(lambda: len(feed_rows(api, "REH")) == 43 and 43, 120)
-    ctx.check(step, "the webhook rows and the polled rows post once each (43 in all)", total == 43,
-              f"{len(feed_rows(api, 'REH'))} rows")
+    ctx.check(
+        step,
+        "the webhook rows and the polled rows post once each (43 in all)",
+        total == 43,
+        f"{len(feed_rows(api, 'REH'))} rows",
+    )
 
 
 def api_post_raw(ctx: Context, path: str, body: bytes, headers: dict) -> tuple[int, bytes]:
@@ -428,9 +556,19 @@ def api_post_raw(ctx: Context, path: str, body: bytes, headers: dict) -> tuple[i
 def deliver_mercury(ctx: Context, txn: dict, event_id: str) -> tuple[int, bytes]:
     """A signed Mercury webhook delivery for one transaction, to this script's trigger address (the same event id
     twice is a retry)."""
-    body = json.dumps({"id": event_id, "resourceType": "transaction", "resourceId": txn["id"],
-                       "operationType": "create", "resourceVersion": 1, "occurredAt": "2026-10-28T12:00:00Z",
-                       "changedPaths": sorted(txn), "mergePatch": txn, "previousValues": None}).encode()
+    body = json.dumps(
+        {
+            "id": event_id,
+            "resourceType": "transaction",
+            "resourceId": txn["id"],
+            "operationType": "create",
+            "resourceVersion": 1,
+            "occurredAt": "2026-10-28T12:00:00Z",
+            "changedPaths": sorted(txn),
+            "mergePatch": txn,
+            "previousValues": None,
+        }
+    ).encode()
     headers = {"Mercury-Signature": sign_mercury(body), "Content-Type": "application/json"}
     return api_post_raw(ctx, str(ctx.state["hook_path"]), body, headers)
 
@@ -439,26 +577,46 @@ def run_step3(ctx: Context) -> None:
     step, api = "3 categorize", ctx.api
     accounts = {a["name"]: a["id"] for a in api.get("finance/chart")["accounts"] if a.get("name")}
     ai, software, revenue = accounts["AI services"], accounts["Software"], accounts["Revenue"]
-    rule = api.act("rule_create", {
-        "kind": "posting", "name": "AI vendors", "words": "OpenRouter and Anthropic charges are AI services.",
-        "when": {"counterparty": {"matches": "OPENROUTER|ANTHROPIC"}},
-        "outcome": {"outcome": "post", "account_id": ai},
-        "examples": [{"input": {"counterparty": "OPENROUTER INC"}, "expect": "post", "account_id": ai}]})
-    ctx.check(step, "a posting rule for AI vendors is saved (its example passes)", committed(rule),
-              f"{rule.get('status')} {rule.get('reason')}"[:200])
+    rule = api.act(
+        "rule_create",
+        {
+            "kind": "posting",
+            "name": "AI vendors",
+            "words": "OpenRouter and Anthropic charges are AI services.",
+            "when": {"counterparty": {"matches": "OPENROUTER|ANTHROPIC"}},
+            "outcome": {"outcome": "post", "account_id": ai},
+            "examples": [{"input": {"counterparty": "OPENROUTER INC"}, "expect": "post", "account_id": ai}],
+        },
+    )
+    ctx.check(
+        step,
+        "a posting rule for AI vendors is saved (its example passes)",
+        committed(rule),
+        f"{rule.get('status')} {rule.get('reason')}"[:200],
+    )
     # A new card charge after the rule arrives as a signed webhook: the posting rule books it to AI services by itself.
-    made_st, made = ctx.fake.call("POST", "/_fake/txn", {"amount": -88.80, "counterparty": "REH CARD 99 OPENROUTER",
-                                                          "date": f"{PAST_MONTH}-29", "kind": "credit card"})
+    made_st, made = ctx.fake.call(
+        "POST",
+        "/_fake/txn",
+        {"amount": -88.80, "counterparty": "REH CARD 99 OPENROUTER", "date": f"{PAST_MONTH}-29", "kind": "credit card"},
+    )
     ctx.check(step, "the new AI vendor card charge is made on Mercury", made_st == 200, f"HTTP {made_st}")
     hook_st, _ = deliver_mercury(ctx, made["transaction"], "evt-rehearsal-card-99")
     ctx.check(step, "its webhook delivery is accepted (202)", hook_st == 202, f"HTTP {hook_st}")
     rule_row = wait_for(lambda: next(iter(feed_rows(api, "REH CARD 99 OPENROUTER")), None), 120)
-    ctx.check(step, "the posting rule books the new AI vendor row as posted",
-              rule_row is not None and rule_row.get("status") == "posted" and rule_row.get("entry_id") is not None,
-              f"row {json.dumps(rule_row)[:300] if rule_row else 'none'}")
+    ctx.check(
+        step,
+        "the posting rule books the new AI vendor row as posted",
+        rule_row is not None and rule_row.get("status") == "posted" and rule_row.get("entry_id") is not None,
+        f"row {json.dumps(rule_row)[:300] if rule_row else 'none'}",
+    )
     ai_lines = api.get(f"finance/lines/{ai}", start=f"{PAST_MONTH}-01", end=f"{PAST_MONTH}-31")
-    ctx.check(step, "the charge sits on the AI services line", "REH CARD 99" in json.dumps(ai_lines),
-              f"AI services lines hold {len(json.dumps(ai_lines))} bytes of detail")
+    ctx.check(
+        step,
+        "the charge sits on the AI services line",
+        "REH CARD 99" in json.dumps(ai_lines),
+        f"AI services lines hold {len(json.dumps(ai_lines))} bytes of detail",
+    )
     # Everything else is categorized through the tool, as the Bookkeeper's queue asks. Vendors go to Software, money in
     # to Revenue. Some rows get no team tag, which is allowed and shows as Unattributed.
     items = api.get("finance/inbox", kind="uncategorized", limit=200).get("items", [])
@@ -472,17 +630,27 @@ def run_step3(ctx: Context) -> None:
             done += 1
         else:
             errors.append(f"{out.get('code')}:{out.get('reason') or out.get('status')}")
-    ctx.check(step, "every uncategorized row is categorized through the tool", done == len(items) and not errors,
-              f"{done} of {len(items)}; {errors[:3]}")
+    ctx.check(
+        step,
+        "every uncategorized row is categorized through the tool",
+        done == len(items) and not errors,
+        f"{done} of {len(items)}; {errors[:3]}",
+    )
     left = api.get("finance/inbox", kind="uncategorized", limit=200).get("items", [])
     ctx.check(step, "no uncategorized rows remain in the Bookkeeper's queue", not left, f"{len(left)} left")
     expenses = api.get("finance/expenses", by="team", start=f"{PAST_MONTH}-01", end=f"{PAST_MONTH}-31")
-    ctx.check(step, "unattributed spend is allowed and shows as Unattributed",
-              any("Unattributed" in json.dumps(row) for row in (expenses.get("rows") or [])),
-              f"groups: {[r.get('label') or r.get('name') for r in (expenses.get('rows') or [])][:6]}")
-    ctx.gap(step, "categorized as the Bookkeeper bot",
-            "the demo has no bot credential: a bot's HTTP calls need an agent or runner token, and the Bookkeeper runs "
-            "on a computer the demo does not have. Every write here is made as the owner (human:ana)")
+    ctx.check(
+        step,
+        "unattributed spend is allowed and shows as Unattributed",
+        any("Unattributed" in json.dumps(row) for row in (expenses.get("rows") or [])),
+        f"groups: {[r.get('label') or r.get('name') for r in (expenses.get('rows') or [])][:6]}",
+    )
+    ctx.gap(
+        step,
+        "categorized as the Bookkeeper bot",
+        "the demo has no bot credential: a bot's HTTP calls need an agent or runner token, and the Bookkeeper runs "
+        "on a computer the demo does not have. Every write here is made as the owner (human:ana)",
+    )
 
 
 # ------------------------------------------------------------------------------------------------ steps 4 to 11
@@ -581,8 +749,12 @@ def owner_decides(ctx: Context, step: str, out: dict, what: str) -> None:
     committed, and that is checked rather than skipped."""
     aid = approval_of(out)
     if not aid:
-        ctx.check(step, f"{what} needed no ask: the requester is the owner, who is the approver",
-                  committed(out) and not approval_of(out), describe(out))
+        ctx.check(
+            step,
+            f"{what} needed no ask: the requester is the owner, who is the approver",
+            committed(out) and not approval_of(out),
+            describe(out),
+        )
         return
     st, answer = ctx.api.request("POST", f"approvals/{aid}", {"decision": "approved", "note": "rehearsal"})
     ctx.check(step, f"the owner approves {what}", st == 200, f"HTTP {st} {str(answer)[:160]}")
@@ -606,9 +778,11 @@ def wait_status(ctx: Context, needle: str, done: set[str], seconds: float) -> st
 
 def fake_request(ctx: Context, needle: str, seconds: float = 120) -> dict | None:
     """The Mercury send-money request on the fake whose body mentions `needle`."""
+
     def look() -> dict | None:
         answer = ctx.fake.mercury(f"/request-send-money?accountId={FAKE_CHECKING}")
         return next((r for r in answer.get("requests", []) if needle in json.dumps(r)), None)
+
     return wait_for(look, seconds)
 
 
@@ -652,71 +826,136 @@ def budget_rows(api: Api, month: str = PAST_MONTH) -> list[dict]:
     """The REH budgets as of the month's end (October by default), with the figures (amount, actual, held, remaining)
     from their `state`."""
     rows = api.get("finance/budgets", at=f"{month}-28", limit=200)
-    return [{**d, **d["state"]} for d in walk(rows)
-            if str(d.get("name") or "").startswith("REH ") and isinstance(d.get("state"), dict)]
+    return [
+        {**d, **d["state"]}
+        for d in walk(rows)
+        if str(d.get("name") or "").startswith("REH ") and isinstance(d.get("state"), dict)
+    ]
 
 
 def run_step4(ctx: Context) -> None:
     step, api = "4 bills and payments", ctx.api
     acct, chk = account_ids(api), bank_id(api, "Acme Checking")
-    made = api.act("contact_create", {"name": "REH Vendor Hosting Co", "kind": "vendor", "emails": ["ap@vendor.example"],
-                                       "default_account_id": acct["Software"], "is_1099": True, "tax_id": "12-3456789"})
+    made = api.act(
+        "contact_create",
+        {
+            "name": "REH Vendor Hosting Co",
+            "kind": "vendor",
+            "emails": ["ap@vendor.example"],
+            "default_account_id": acct["Software"],
+            "is_1099": True,
+            "tax_id": "12-3456789",
+        },
+    )
     ctx.check(step, "a vendor is made with its 1099 flag and tax id", committed(made), describe(made))
     vendor = by_field(api.get("finance/contacts", q="REH Vendor Hosting Co"), "name", "REH Vendor Hosting Co")
-    rec = api.act("recipient_add", {"name": "REH Vendor Hosting Co", "method": "ach", "contact_id": vendor,
-                                    "money_account_id": chk, "email": "ap@vendor.example",
-                                    "address": {"address1": "1 Hosting Way", "city": "Austin", "region": "TX",
-                                                "postalCode": "78701", "country": "US"},
-                                    "account_number": "000123456789", "routing_number": "021000021"})
+    rec = api.act(
+        "recipient_add",
+        {
+            "name": "REH Vendor Hosting Co",
+            "method": "ach",
+            "contact_id": vendor,
+            "money_account_id": chk,
+            "email": "ap@vendor.example",
+            "address": {
+                "address1": "1 Hosting Way",
+                "city": "Austin",
+                "region": "TX",
+                "postalCode": "78701",
+                "country": "US",
+            },
+            "account_number": "000123456789",
+            "routing_number": "021000021",
+        },
+    )
     ctx.check(step, "the vendor's bank details are saved as a recipient", committed(rec), describe(rec))
     recipients = api.get("finance/recipients")
     recipient = by_field(recipients, "name", "REH Vendor Hosting Co")
     ctx.state["recipient_id"] = recipient
-    ctx.check(step, "the recipient list shows no full account number", bool(recipient)
-              and "000123456789" not in json.dumps(recipients), f"recipient {recipient or 'none'}")
-    bill = api.act("bill_create", {"vendor_id": vendor, "number": "REH-BILL-1", "bill_date": f"{PAST_MONTH}-20",
-                                   "terms_days": 30, "memo": "REH hosting, October",
-                                   "lines": [{"account_id": acct["Software"], "amount": 250000,
-                                              "description": "REH hosting, October"}]})
+    ctx.check(
+        step,
+        "the recipient list shows no full account number",
+        bool(recipient) and "000123456789" not in json.dumps(recipients),
+        f"recipient {recipient or 'none'}",
+    )
+    bill = api.act(
+        "bill_create",
+        {
+            "vendor_id": vendor,
+            "number": "REH-BILL-1",
+            "bill_date": f"{PAST_MONTH}-20",
+            "terms_days": 30,
+            "memo": "REH hosting, October",
+            "lines": [{"account_id": acct["Software"], "amount": 250000, "description": "REH hosting, October"}],
+        },
+    )
     ctx.check(step, "a $2,500.00 bill is entered from the vendor", committed(bill), describe(bill))
     bill_id = by_field(api.get("finance/bills", q="REH-BILL-1"), "number", "REH-BILL-1")
     ctx.check(step, "the bill can be found by its number", bool(bill_id), f"id {bill_id or 'none'}")
     if not bill_id:
         return
     approved = api.act("bill_approve", {"bill_id": bill_id})
-    ctx.check(step, "the bill is approved (expense debit, accounts payable credit)", committed(approved),
-              describe(approved))
-    sched = api.act("bill_schedule", {"bill_id": bill_id, "pay_on": today().isoformat(), "money_account_id": chk,
-                                      "recipient_id": recipient, "memo": "REH-BILL-1"})
+    ctx.check(
+        step, "the bill is approved (expense debit, accounts payable credit)", committed(approved), describe(approved)
+    )
+    sched = api.act(
+        "bill_schedule",
+        {
+            "bill_id": bill_id,
+            "pay_on": today().isoformat(),
+            "money_account_id": chk,
+            "recipient_id": recipient,
+            "memo": "REH-BILL-1",
+        },
+    )
     ctx.check(step, "the bill is scheduled for payment from Acme Checking", committed(sched), describe(sched))
     owner_decides(ctx, step, sched, "the scheduled $2,500.00 payment (over $1,000)")
     req = fake_request(ctx, "REH-BILL-1")
-    ctx.check(step, "the payment reaches Mercury's approval queue (pending on the fake)",
-              bool(req) and req.get("status") == "pendingApproval",
-              f"request {json.dumps(req)[:200] if req else 'none'}")
+    ctx.check(
+        step,
+        "the payment reaches Mercury's approval queue (pending on the fake)",
+        bool(req) and req.get("status") == "pendingApproval",
+        f"request {json.dumps(req)[:200] if req else 'none'}",
+    )
     if req:
         approved_fake = ctx.fake.call("POST", f"/_fake/approve/{req['requestId']}")
-        ctx.check(step, "Mercury's approver approves it on the fake", approved_fake[0] == 200,
-                  f"HTTP {approved_fake[0]}")
+        ctx.check(
+            step, "Mercury's approver approves it on the fake", approved_fake[0] == 200, f"HTTP {approved_fake[0]}"
+        )
     status = wait_status(ctx, bill_id, DONE_PAYMENT, 180)
     bill_status = status_of(api.get(f"finance/bills/{bill_id}"), bill_id)
-    ctx.check(step, "the approved payment is sent and the bill is paid", status in DONE_PAYMENT
-              and bill_status in ("paid", "settled"), f"payment {status}, bill {bill_status}")
-    pay = api.act("payment_create", {"recipient_id": recipient, "amount": 30000, "money_account_id": chk,
-                                     "memo": "REH-REJECT", "account_id": acct["Software"],
-                                     "mode": "approval_queue"})
+    ctx.check(
+        step,
+        "the approved payment is sent and the bill is paid",
+        status in DONE_PAYMENT and bill_status in ("paid", "settled"),
+        f"payment {status}, bill {bill_status}",
+    )
+    pay = api.act(
+        "payment_create",
+        {
+            "recipient_id": recipient,
+            "amount": 30000,
+            "money_account_id": chk,
+            "memo": "REH-REJECT",
+            "account_id": acct["Software"],
+            "mode": "approval_queue",
+        },
+    )
     ctx.check(step, "a $300.00 payment is queued through the approval queue", committed(pay), describe(pay))
     owner_decides(ctx, step, pay, "the $300.00 payment to the recipient")
     req2 = fake_request(ctx, "REH-REJECT")
     if req2:
         rejected = ctx.fake.call("POST", f"/_fake/reject/{req2['requestId']}")
-        ctx.check(step, "Mercury's approver rejects the payment on the fake", rejected[0] == 200,
-                  f"HTTP {rejected[0]}")
+        ctx.check(step, "Mercury's approver rejects the payment on the fake", rejected[0] == 200, f"HTTP {rejected[0]}")
     status2 = wait_status(ctx, "REH-REJECT", REFUSED_PAYMENT, 120)
-    ctx.check(step, "the rejected payment shows as refused in Tico", status2 in REFUSED_PAYMENT,
-              f"payment status {status2}")
-    ctx.gap(step, "Mercury refuses an approval made by the token's creator",
-            "the fake approves as user-ben whatever token made the connection; the setup refusal is checked in step 1")
+    ctx.check(
+        step, "the rejected payment shows as refused in Tico", status2 in REFUSED_PAYMENT, f"payment status {status2}"
+    )
+    ctx.gap(
+        step,
+        "Mercury refuses an approval made by the token's creator",
+        "the fake approves as user-ben whatever token made the connection; the setup refusal is checked in step 1",
+    )
 
 
 def run_step5(ctx: Context) -> None:
@@ -725,44 +964,76 @@ def run_step5(ctx: Context) -> None:
     made = api.act("contact_create", {"name": "REH Customer Co", "kind": "customer", "emails": ["ap@customer.example"]})
     ctx.check(step, "a customer is made", committed(made), describe(made))
     customer = by_field(api.get("finance/contacts", q="REH Customer Co"), "name", "REH Customer Co")
-    made = api.act("invoice_create", {"customer_id": customer, "number": "REH-INV-1", "invoice_date": f"{PAST_MONTH}-15",
-                                      "terms_days": 30, "memo": "REH retainer",
-                                      "lines": [{"account_id": acct["Revenue"], "amount": 250000,
-                                                 "description": "REH retainer, October"}]})
+    made = api.act(
+        "invoice_create",
+        {
+            "customer_id": customer,
+            "number": "REH-INV-1",
+            "invoice_date": f"{PAST_MONTH}-15",
+            "terms_days": 30,
+            "memo": "REH retainer",
+            "lines": [{"account_id": acct["Revenue"], "amount": 250000, "description": "REH retainer, October"}],
+        },
+    )
     ctx.check(step, "a $2,500.00 invoice is made to the customer", committed(made), describe(made))
     inv = by_field(api.get("finance/invoices", q="REH-INV-1"), "number", "REH-INV-1")
     sent = api.act("invoice_send", {"invoice_id": inv})
     ctx.check(step, "the invoice is sent (receivable debit, income credit)", committed(sent), describe(sent))
-    paid = api.act("invoice_record_payment", {"invoice_id": inv, "amount": 100000, "date": f"{PAST_MONTH}-20",
-                                              "money_account_id": chk})
+    paid = api.act(
+        "invoice_record_payment",
+        {"invoice_id": inv, "amount": 100000, "date": f"{PAST_MONTH}-20", "money_account_id": chk},
+    )
     ctx.check(step, "a $1,000.00 part payment is recorded against it", committed(paid), describe(paid))
     # The customer's money reaches the bank the same day, so the checking statement holds it too (the books record the
     # receipt on the checking line; a receipt the bank never saw would leave the reconcile open by its amount).
-    dep = ctx.fake.call("POST", "/_fake/txn", {"amount": 1000.00, "counterparty": "REH CUSTOMER", "date": f"{PAST_MONTH}-20"})
+    dep = ctx.fake.call(
+        "POST", "/_fake/txn", {"amount": 1000.00, "counterparty": "REH CUSTOMER", "date": f"{PAST_MONTH}-20"}
+    )
     ctx.check(step, "the customer's $1,000.00 reaches the bank the same day", dep[0] == 200, f"HTTP {dep[0]}")
     part = status_of(api.get(f"finance/invoices/{inv}"), inv)
     ctx.check(step, "the invoice shows as part paid", "partial" in str(part), f"status {part}")
-    late = api.act("invoice_create", {"customer_id": customer, "number": "REH-INV-2", "invoice_date": "2026-09-01",
-                                      "terms_days": 30, "lines": [{"account_id": acct["Revenue"], "amount": 50000,
-                                                                   "description": "REH overdue work"}]})
+    late = api.act(
+        "invoice_create",
+        {
+            "customer_id": customer,
+            "number": "REH-INV-2",
+            "invoice_date": "2026-09-01",
+            "terms_days": 30,
+            "lines": [{"account_id": acct["Revenue"], "amount": 50000, "description": "REH overdue work"}],
+        },
+    )
     ctx.check(step, "a second invoice, due in October, is made", committed(late), describe(late))
     inv2 = by_field(api.get("finance/invoices", q="REH-INV-2"), "number", "REH-INV-2")
     sent2 = api.act("invoice_send", {"invoice_id": inv2})
     ctx.check(step, "the second invoice is sent", committed(sent2), describe(sent2))
     overdue = api.get("finance/invoices", late="true", limit=200)
-    ctx.check(step, "the unpaid invoice past its due date is listed as late", find_row(overdue, id=inv2) is not None,
-              f"late list holds {len(json.dumps(overdue))} bytes")
+    ctx.check(
+        step,
+        "the unpaid invoice past its due date is listed as late",
+        find_row(overdue, id=inv2) is not None,
+        f"late list holds {len(json.dumps(overdue))} bytes",
+    )
+
     def overdue_item() -> dict | None:
         inbox = api.get("finance/inbox", kind="invoice_overdue", limit=200)
         return next((d for d in walk(inbox) if d.get("kind") == "invoice_overdue" and inv2 in json.dumps(d)), None)
+
     item = wait_for(overdue_item, 60)
-    ctx.check(step, "the Bookkeeper's inbox holds an invoice_overdue item for the invoice (the hourly watch raises it)",
-              bool(item), f"item {json.dumps(item)[:200]}" if item else "no invoice_overdue row for the invoice within 60 s")
+    ctx.check(
+        step,
+        "the Bookkeeper's inbox holds an invoice_overdue item for the invoice (the hourly watch raises it)",
+        bool(item),
+        f"item {json.dumps(item)[:200]}" if item else "no invoice_overdue row for the invoice within 60 s",
+    )
     wo = api.act("invoice_write_off", {"invoice_id": inv2, "memo": "REH bad debt, written off"})
     ctx.check(step, "the rest of the second invoice is written off", committed(wo), describe(wo))
     written = status_of(api.get(f"finance/invoices/{inv2}"), inv2)
-    ctx.check(step, "the invoice shows as written off (or paid in full by the write-off)",
-              written is not None and ("writ" in written or written == "paid"), f"status {written}")
+    ctx.check(
+        step,
+        "the invoice shows as written off (or paid in full by the write-off)",
+        written is not None and ("writ" in written or written == "paid"),
+        f"status {written}",
+    )
 
 
 def card_month() -> str:
@@ -775,74 +1046,142 @@ def run_step6(ctx: Context) -> None:
     step, api, fake = "6 cards", ctx.api, ctx.fake
     cm = card_month()
     card_day = f"{cm}-22" if cm == PAST_MONTH else today().isoformat()
-    bank_id(api, "Acme Checking")                   # the bank account must exist before the card steps run
+    bank_id(api, "Acme Checking")  # the bank account must exist before the card steps run
     other = account_ids(api)["Other expenses"]
-    line = api.act("budget_create", {"name": "REH Card line", "account_id": other, "period": "month", "amount": 100000000,
-                                     "at_limit": "decline", "warn_pct": 80, "effective_from": f"{cm}-01"})
+    line = api.act(
+        "budget_create",
+        {
+            "name": "REH Card line",
+            "account_id": other,
+            "period": "month",
+            "amount": 100000000,
+            "at_limit": "decline",
+            "warn_pct": 80,
+            "effective_from": f"{cm}-01",
+        },
+    )
     ctx.check(step, "the Other expenses line budget the card budget splits under", committed(line), describe(line))
     line_id = by_field(api.get("finance/budgets", at=f"{cm}-28", limit=200), "name", "REH Card line")
-    made = api.act("budget_create", {"name": "REH Card budget", "parent_id": line_id, "account_id": other,
-                                     "period": "month", "amount": 50000,
-                                     "at_limit": "decline", "warn_pct": 80, "teammate": "human:ana",
-                                     "effective_from": f"{cm}-01"})
+    made = api.act(
+        "budget_create",
+        {
+            "name": "REH Card budget",
+            "parent_id": line_id,
+            "account_id": other,
+            "period": "month",
+            "amount": 50000,
+            "at_limit": "decline",
+            "warn_pct": 80,
+            "teammate": "human:ana",
+            "effective_from": f"{cm}-01",
+        },
+    )
     ctx.check(step, "a $500.00 monthly budget for a card, declining at its limit", committed(made), describe(made))
     budget = by_field(api.get("finance/budgets", at=f"{cm}-28", limit=200), "name", "REH Card budget")
     user = pick_user(api.get("finance/mercury-users"))
-    made = api.act("card_create", {"holder": "human:ana", "budget_id": budget, "amount": 50000, "kind": "person",
-                                   "nickname": "REH owner card", "money_account_id": card_program_id(api),
-                                   "provider_user_id": user})
+    made = api.act(
+        "card_create",
+        {
+            "holder": "human:ana",
+            "budget_id": budget,
+            "amount": 50000,
+            "kind": "person",
+            "nickname": "REH owner card",
+            "money_account_id": card_program_id(api),
+            "provider_user_id": user,
+        },
+    )
     ctx.check(step, "a person card is issued on that budget", committed(made), describe(made))
     card = id_containing(api.get("finance/cards"), "REH owner card")
     fake_card = find_row(fake.mercury("/cards"), nickname="REH owner card") or {}
     limit = fake_card.get("spendLimit")
     if isinstance(limit, dict):
         limit = limit.get("amountCents")
-    ctx.check(step, "Mercury's card carries the budget's $500.00 limit", limit in (500, 500.0, 50000),
-              f"spendLimit on Mercury {limit}")
+    ctx.check(
+        step,
+        "Mercury's card carries the budget's $500.00 limit",
+        limit in (500, 500.0, 50000),
+        f"spendLimit on Mercury {limit}",
+    )
     fake_id = fake_card.get("id") or fake_card.get("cardId")
-    s1 = fake.call("POST", "/_fake/card-spend", {"card": fake_id, "amount": 120.50, "merchant": "REH CARD SPEND 1",
-                                                  "date": card_day})
+    s1 = fake.call(
+        "POST",
+        "/_fake/card-spend",
+        {"card": fake_id, "amount": 120.50, "merchant": "REH CARD SPEND 1", "date": card_day},
+    )
     ctx.check(step, "a $120.50 card charge is made on Mercury", s1[0] == 200, f"HTTP {s1[0]}")
     row1 = until(ctx, lambda: next(iter(feed_rows(api, "REH CARD SPEND 1")), None), 180)
     ctx.check(step, "the charge comes into Tico's feed on the card", row1 is not None, f"row {bool(row1)}")
     # Mercury enforces the card's monthly spendLimit: a $450.00 charge that takes the month past $500.00 is declined
     # (not forced), and a declined charge posts nothing, so it leaves the card and the budget as they were.
-    over = fake.call("POST", "/_fake/card-spend", {"card": fake_id, "amount": 450.00, "merchant": "REH CARD OVER LIMIT",
-                                                    "date": card_day})
+    over = fake.call(
+        "POST",
+        "/_fake/card-spend",
+        {"card": fake_id, "amount": 450.00, "merchant": "REH CARD OVER LIMIT", "date": card_day},
+    )
     over_txn = over[1].get("transaction", {}) if isinstance(over[1], dict) else {}
-    ctx.check(step, "Mercury declines a $450.00 charge over the card's $500.00 monthly limit (not forced)",
-              over_txn.get("status") == "failed" and "limit" in str(over_txn.get("reasonForFailure") or "").lower(),
-              f"HTTP {over[0]}; Mercury {over_txn.get('status')} ({over_txn.get('reasonForFailure')})")
+    ctx.check(
+        step,
+        "Mercury declines a $450.00 charge over the card's $500.00 monthly limit (not forced)",
+        over_txn.get("status") == "failed" and "limit" in str(over_txn.get("reasonForFailure") or "").lower(),
+        f"HTTP {over[0]}; Mercury {over_txn.get('status')} ({over_txn.get('reasonForFailure')})",
+    )
     still_active = fake.mercury(f"/cards/{fake_id}").get("status") if fake_id else None
-    ctx.check(step, "the declined charge leaves the card active on Mercury", still_active == "active",
-              f"status {still_active}")
+    ctx.check(
+        step,
+        "the declined charge leaves the card active on Mercury",
+        still_active == "active",
+        f"status {still_active}",
+    )
     # The second charge is a force post (spec 8.2): Mercury posts it in full, past the $500.00 limit.
-    s2 = fake.call("POST", "/_fake/card-spend", {"card": fake_id, "amount": 450.00, "merchant": "REH CARD SPEND 2",
-                                                  "date": card_day, "force": True})
+    s2 = fake.call(
+        "POST",
+        "/_fake/card-spend",
+        {"card": fake_id, "amount": 450.00, "merchant": "REH CARD SPEND 2", "date": card_day, "force": True},
+    )
     txn2 = s2[1].get("transaction", {}) if isinstance(s2[1], dict) else {}
-    ctx.check(step, "a $450.00 force post goes past the $500.00 limit and posts in full on Mercury",
-              s2[0] == 200 and txn2.get("status") == "sent", f"HTTP {s2[0]}; Mercury {txn2.get('status')}")
+    ctx.check(
+        step,
+        "a $450.00 force post goes past the $500.00 limit and posts in full on Mercury",
+        s2[0] == 200 and txn2.get("status") == "sent",
+        f"HTTP {s2[0]}; Mercury {txn2.get('status')}",
+    )
     frozen = until(ctx, lambda: find_row(api.get("finance/cards", status="frozen"), id=card) if card else None, 240)
-    ctx.check(step, "the card past its budget is frozen by the decline (budget cutoff)", frozen is not None,
-              f"card {card or 'none'} frozen in Tico: {frozen is not None}")
+    ctx.check(
+        step,
+        "the card past its budget is frozen by the decline (budget cutoff)",
+        frozen is not None,
+        f"card {card or 'none'} frozen in Tico: {frozen is not None}",
+    )
     mercury_status = fake.mercury(f"/cards/{fake_id}").get("status") if fake_id else None
     ctx.check(step, "Mercury shows the card frozen", mercury_status == "frozen", f"status {mercury_status}")
     row2 = until(ctx, lambda: next(iter(feed_rows(api, "REH CARD SPEND 2")), None), 180)
-    ctx.check(step, "the forced charge past the limit posts in the feed (actuals always post)",
-              (row2 or {}).get("status") == "posted",
-              f"feed status {(row2 or {}).get('status')}; Mercury {txn2.get('status')}")
+    ctx.check(
+        step,
+        "the forced charge past the limit posts in the feed (actuals always post)",
+        (row2 or {}).get("status") == "posted",
+        f"feed status {(row2 or {}).get('status')}; Mercury {txn2.get('status')}",
+    )
     unfrozen = api.act("card_unfreeze", {"card_id": card, "reason": "rehearsal: the owner unfreezes"})
-    ctx.check(step, "the owner's unfreeze is refused while the budget is over (spec 738)",
-              unfrozen.get("status") == "denied" and "used up" in json.dumps(unfrozen), describe(unfrozen))
+    ctx.check(
+        step,
+        "the owner's unfreeze is refused while the budget is over (spec 738)",
+        unfrozen.get("status") == "denied" and "used up" in json.dumps(unfrozen),
+        describe(unfrozen),
+    )
     still = fake.mercury(f"/cards/{fake_id}").get("status") if fake_id else None
-    ctx.check(step, "Mercury still shows the card frozen while the budget is over", still == "frozen",
-              f"status {still}")
+    ctx.check(
+        step, "Mercury still shows the card frozen while the budget is over", still == "frozen", f"status {still}"
+    )
     raised = api.act("budget_update", {"budget_id": budget, "amount": 100000, "effective_from": f"{cm}-01"})
     ctx.check(step, "the owner raises the card budget to $1,000.00", committed(raised), describe(raised))
-    released = until(ctx, lambda: fake.mercury(f"/cards/{fake_id}").get("status") == "active" if fake_id else False, 240)
+    released = until(
+        ctx, lambda: fake.mercury(f"/cards/{fake_id}").get("status") == "active" if fake_id else False, 240
+    )
     now_status = fake.mercury(f"/cards/{fake_id}").get("status") if fake_id else None
-    ctx.check(step, "a raise releases the budget-frozen card on Mercury (spec 738)", bool(released),
-              f"status {now_status}")
+    ctx.check(
+        step, "a raise releases the budget-frozen card on Mercury (spec 738)", bool(released), f"status {now_status}"
+    )
     spent = sum(int(r.get("amount") or 0) for r in feed_rows(api, "REH CARD SPEND"))
     ctx.check(step, "the two card charges reach the feed at $570.50", spent == -57050, f"feed sum {spent}")
     rec = next((r for r in budget_rows(api, cm) if r.get("name") == "REH Card budget"), {})
@@ -853,9 +1192,12 @@ def run_step6(ctx: Context) -> None:
     print(f"DIAG card: {json.dumps(find_row(api.get('finance/cards'), id=card) or {}, sort_keys=True)[:1200]}")
     print(f"DIAG budget: {json.dumps(rec, sort_keys=True)[:1500]}")
     # Feed vs actual: the two posted charges are the budget's actual, to the cent; the declined charge is in neither.
-    ctx.check(step, "feed-vs-actual reconciliation: the budget's actual equals the feed's two card charges (570.50)",
-              rec.get("actual") == 57050 and -spent == 57050,
-              f"feed {-spent}, budget actual {rec.get('actual')}, held {rec.get('held')}, remaining {rec.get('remaining')}")
+    ctx.check(
+        step,
+        "feed-vs-actual reconciliation: the budget's actual equals the feed's two card charges (570.50)",
+        rec.get("actual") == 57050 and -spent == 57050,
+        f"feed {-spent}, budget actual {rec.get('actual')}, held {rec.get('held')}, remaining {rec.get('remaining')}",
+    )
 
 
 def run_step7(ctx: Context) -> None:
@@ -866,16 +1208,33 @@ def run_step7(ctx: Context) -> None:
     made = api.act("budget_create", {"name": "REH Software", "account_id": acct["Software"], "amount": 300000, **base})
     ctx.check(step, "a $3,000.00 Software budget", committed(made), describe(made))
     parent = by_field(api.get("finance/budgets", at=f"{cm}-28", limit=200), "name", "REH Software")
-    made = api.act("budget_create", {"name": "REH Software tools", "parent_id": parent, "account_id": acct["Software"],
-                                     "team": "leadership", "amount": 100000, **base})
+    made = api.act(
+        "budget_create",
+        {
+            "name": "REH Software tools",
+            "parent_id": parent,
+            "account_id": acct["Software"],
+            "team": "leadership",
+            "amount": 100000,
+            **base,
+        },
+    )
     ctx.check(step, "a $1,000.00 child budget under it (split by team)", committed(made), describe(made))
     rows = budget_rows(api, cm)
     names = {str(r.get("name")) for r in rows}
-    ctx.check(step, "the two REH budgets are in this month's budget list",
-              {"REH Software", "REH Software tools"} <= names, ", ".join(sorted(names)))
+    ctx.check(
+        step,
+        "the two REH budgets are in this month's budget list",
+        {"REH Software", "REH Software tools"} <= names,
+        ", ".join(sorted(names)),
+    )
     child = next((r for r in rows if r.get("name") == "REH Software tools"), {})
-    ctx.check(step, "the child budget sits under its parent", child.get("parent_id") == parent,
-              f"parent_id {child.get('parent_id')}")
+    ctx.check(
+        step,
+        "the child budget sits under its parent",
+        child.get("parent_id") == parent,
+        f"parent_id {child.get('parent_id')}",
+    )
     bad = []
     for r in rows:
         if r.get("amount") is None:
@@ -883,87 +1242,175 @@ def run_step7(ctx: Context) -> None:
         expect = r["amount"] - (r.get("actual") or 0) - (r.get("held") or 0) - (r.get("allocated") or 0)
         if expect != r.get("remaining"):
             bad.append((r.get("name"), r.get("remaining"), expect))
-    ctx.check(step, "remaining equals amount less actuals, holds and allocations", bool(rows) and not bad,
-              f"{len(rows)} budgets; mismatches {bad[:3]}")
+    ctx.check(
+        step,
+        "remaining equals amount less actuals, holds and allocations",
+        bool(rows) and not bad,
+        f"{len(rows)} budgets; mismatches {bad[:3]}",
+    )
     ai_row = find_row(api.get("finance/budgets", at=f"{PAST_MONTH}-31", limit=200), name="AI services") or {}
     ai = ai_row.get("state") if isinstance(ai_row.get("state"), dict) else {}
-    ctx.check(step, "the AI services budget (the demo's own) holds the AI charge and posts it though over",
-              (ai.get("actual") or 0) >= 8880, f"state {json.dumps(ai)[:200]}")
+    ctx.check(
+        step,
+        "the AI services budget (the demo's own) holds the AI charge and posts it though over",
+        (ai.get("actual") or 0) >= 8880,
+        f"state {json.dumps(ai)[:200]}",
+    )
     # Each at-limit budget sits on its own new expense line; a $100.00 payment on that line is over its $50.00 budget.
     # A held payment stays queued with the budget named as its reason (payments.py _hold).
-    new_lines = [api.act("account_create", {"code": code, "name": name, "type": "expense"})
-                 for code, name in (("6210", "REH Travel"), ("6220", "REH Meals"))]
-    ctx.check(step, "two new expense lines for the at-limit budgets", all(committed(n) for n in new_lines),
-              " / ".join(describe(n) for n in new_lines))
+    new_lines = [
+        api.act("account_create", {"code": code, "name": name, "type": "expense"})
+        for code, name in (("6210", "REH Travel"), ("6220", "REH Meals"))
+    ]
+    ctx.check(
+        step,
+        "two new expense lines for the at-limit budgets",
+        all(committed(n) for n in new_lines),
+        " / ".join(describe(n) for n in new_lines),
+    )
     ids = account_ids(api)
-    for label, line, at_limit, memo in (("REH Ask budget", "REH Travel", "ask", "REH-ASK"),
-                                        ("REH Hold budget", "REH Meals", "hold_payment", "REH-HOLD")):
-        made = api.act("budget_create", {"name": label, "account_id": ids.get(line, ""), "period": "month",
-                                         "amount": 5000, "at_limit": at_limit, "warn_pct": 80,
-                                         "effective_from": f"{cm}-01"})
+    for label, line, at_limit, memo in (
+        ("REH Ask budget", "REH Travel", "ask", "REH-ASK"),
+        ("REH Hold budget", "REH Meals", "hold_payment", "REH-HOLD"),
+    ):
+        made = api.act(
+            "budget_create",
+            {
+                "name": label,
+                "account_id": ids.get(line, ""),
+                "period": "month",
+                "amount": 5000,
+                "at_limit": at_limit,
+                "warn_pct": 80,
+                "effective_from": f"{cm}-01",
+            },
+        )
         ctx.check(step, f"a $50.00 monthly budget on {line} at {at_limit}", committed(made), describe(made))
-        pay = api.act("payment_create", {"recipient_id": ctx.state["recipient_id"], "amount": 10000,
-                                         "money_account_id": bank_id(api, "Acme Checking"), "memo": memo,
-                                         "account_id": ids.get(line, ""), "mode": "approval_queue"})
-        ctx.check(step, f"a $100.00 payment on {line} from the owner is committed, past the {label}",
-                  committed(pay), describe(pay))
+        pay = api.act(
+            "payment_create",
+            {
+                "recipient_id": ctx.state["recipient_id"],
+                "amount": 10000,
+                "money_account_id": bank_id(api, "Acme Checking"),
+                "memo": memo,
+                "account_id": ids.get(line, ""),
+                "mode": "approval_queue",
+            },
+        )
+        ctx.check(
+            step,
+            f"a $100.00 payment on {line} from the owner is committed, past the {label}",
+            committed(pay),
+            describe(pay),
+        )
         owner_decides(ctx, step, pay, f"the $100.00 payment on {line}")
-        wait_status(ctx, memo, {"awaiting_bank_approval"}, 120)     # the send is a background tick: wait for its state
-        row = next((d for d in walk(api.get("finance/payments", limit=200)) if "status" in d and memo in json.dumps(d)), {})
+        wait_status(ctx, memo, {"awaiting_bank_approval"}, 120)  # the send is a background tick: wait for its state
+        row = next(
+            (d for d in walk(api.get("finance/payments", limit=200)) if "status" in d and memo in json.dumps(d)), {}
+        )
         held_for = str(row.get("last_error") or row.get("reason") or "")
-        ctx.check(step, f"at {at_limit} the owner's over-budget payment goes to Mercury's approval queue "
-                        f"(awaiting_bank_approval), with no ask first",
-                  row.get("status") == "awaiting_bank_approval" and not approval_of(pay),
-                  f"status {row.get('status')}, reason {held_for[:160]}")
-    ctx.gap(step, "AI services Gateway meter and the AI-services cutoff",
-            "the meter is read and sent by HQ's gateway_sync.py only; the demo's finance tick runs drain_events and "
-            "watch_documents, and the cutoff's key cap goes through HQ, which this stack cannot reach")
+        ctx.check(
+            step,
+            f"at {at_limit} the owner's over-budget payment goes to Mercury's approval queue "
+            f"(awaiting_bank_approval), with no ask first",
+            row.get("status") == "awaiting_bank_approval" and not approval_of(pay),
+            f"status {row.get('status')}, reason {held_for[:160]}",
+        )
+    ctx.gap(
+        step,
+        "AI services Gateway meter and the AI-services cutoff",
+        "the meter is read and sent by HQ's gateway_sync.py only; the demo's finance tick runs drain_events and "
+        "watch_documents, and the cutoff's key cap goes through HQ, which this stack cannot reach",
+    )
 
 
 def run_step8(ctx: Context) -> None:
     step, api = "8 reconcile and close", ctx.api
     acct, chk = account_ids(api), bank_id(api, "Acme Checking")
     feed_all = all_feed(api)
+
     def account_of(row: dict) -> str | None:
         ma = row.get("money_account")
         return str(ma.get("id")) if isinstance(ma, dict) else ma
+
     feed = [r for r in feed_all if account_of(r) == chk and str(r.get("date") or "") <= f"{PAST_MONTH}-31"]
-    seen = sorted({str((r.get("money_account") or {}).get("name") if isinstance(r.get("money_account"), dict)
-                       else r.get("money_account")) for r in feed_all})[:6]
-    ctx.check(step, "October's bank rows for Acme Checking are found", bool(feed),
-              f"{len(feed)} rows; money_account values {seen}")
+    seen = sorted(
+        {
+            str(
+                (r.get("money_account") or {}).get("name")
+                if isinstance(r.get("money_account"), dict)
+                else r.get("money_account")
+            )
+            for r in feed_all
+        }
+    )[:6]
+    ctx.check(
+        step,
+        "October's bank rows for Acme Checking are found",
+        bool(feed),
+        f"{len(feed)} rows; money_account values {seen}",
+    )
+
     # The statement is the bank's own ending balance on October 31 (the fake's live balance less what it posted after),
     # and the reconcile opens at the set opening (da7253f35), so the books must agree with the bank for it to close.
     def reconcile_line(out: dict) -> str:
         res = out.get("result") or {}
-        return (f"{describe(out)} | status {res.get('status')} difference {res.get('difference')} "
-                f"book_difference {res.get('book_difference')} outstanding {res.get('outstanding')}")
+        return (
+            f"{describe(out)} | status {res.get('status')} difference {res.get('difference')} "
+            f"book_difference {res.get('book_difference')} outstanding {res.get('outstanding')}"
+        )
 
     bank_of = {"Mercury IO": CARD_ID}
-    names = {str(r["money_account"]["id"]): str(r["money_account"].get("name"))
-             for r in feed_all if isinstance(r.get("money_account"), dict)}
-    rec = api.act("reconcile", {"money_account_id": chk, "statement_end": f"{PAST_MONTH}-31",
-                                "statement_balance": round(fake_balance_on(ctx.fake, BANK_ID, f"{PAST_MONTH}-31") * 100),
-                                "cleared": [r["id"] for r in feed]})
-    ctx.check(step, "October's bank rows reconcile to the bank's ending balance (status done)", reconciled(rec),
-              reconcile_line(rec))
+    names = {
+        str(r["money_account"]["id"]): str(r["money_account"].get("name"))
+        for r in feed_all
+        if isinstance(r.get("money_account"), dict)
+    }
+    rec = api.act(
+        "reconcile",
+        {
+            "money_account_id": chk,
+            "statement_end": f"{PAST_MONTH}-31",
+            "statement_balance": round(fake_balance_on(ctx.fake, BANK_ID, f"{PAST_MONTH}-31") * 100),
+            "cleared": [r["id"] for r in feed],
+        },
+    )
+    ctx.check(
+        step,
+        "October's bank rows reconcile to the bank's ending balance (status done)",
+        reconciled(rec),
+        reconcile_line(rec),
+    )
     # The close needs every active money account with October rows reconciled (reads.py _checklist), not only Acme's.
     others = sorted({account_of(r) for r in feed_all if account_of(r) and account_of(r) != chk})
     for other in others:
         rows = [r for r in feed_all if account_of(r) == other and str(r.get("date") or "") <= f"{PAST_MONTH}-31"]
         label = names.get(other, other[:8])
         if not rows or label not in bank_of:
-            ctx.check(step, f"October's bank rows for the money account {label} reconcile to the bank's balance",
-                      False, f"no bank id known for {label} ({len(rows)} rows)")
+            ctx.check(
+                step,
+                f"October's bank rows for the money account {label} reconcile to the bank's balance",
+                False,
+                f"no bank id known for {label} ({len(rows)} rows)",
+            )
             continue
         # A card statement shows what is owed, as a positive amount; Mercury's credit balance is the negative of that.
         sign = -1 if bank_of[label] == CARD_ID else 1
-        more = api.act("reconcile", {"money_account_id": other, "statement_end": f"{PAST_MONTH}-31",
-                                     "statement_balance": round(sign * fake_balance_on(ctx.fake, bank_of[label],
-                                                                                       f"{PAST_MONTH}-31") * 100),
-                                     "cleared": [r["id"] for r in rows]})
-        ctx.check(step, f"October's bank rows for the money account {label} reconcile to the bank's balance",
-                  reconciled(more), reconcile_line(more))
+        more = api.act(
+            "reconcile",
+            {
+                "money_account_id": other,
+                "statement_end": f"{PAST_MONTH}-31",
+                "statement_balance": round(sign * fake_balance_on(ctx.fake, bank_of[label], f"{PAST_MONTH}-31") * 100),
+                "cleared": [r["id"] for r in rows],
+            },
+        )
+        ctx.check(
+            step,
+            f"October's bank rows for the money account {label} reconcile to the bank's balance",
+            reconciled(more),
+            reconcile_line(more),
+        )
     closed = api.act("close_period", {"month": PAST_MONTH})
     behind = []
     if not committed(closed):
@@ -971,31 +1418,48 @@ def run_step8(ctx: Context) -> None:
         for item in checklist.get("checks") or []:
             if item.get("key") == "reconciled":
                 behind = [a.get("name") for a in item.get("accounts") or []]
-    ctx.check(step, "October closes", committed(closed), describe(closed) + (f" | still behind: {behind}" if behind else ""))
-    late_entry = {"date": f"{PAST_MONTH}-15", "memo": "REH late entry",
-                  "lines": [{"account_id": acct["Software"], "amount": 1000},
-                            {"account_id": acct["Revenue"], "amount": -1000}]}
+    ctx.check(
+        step, "October closes", committed(closed), describe(closed) + (f" | still behind: {behind}" if behind else "")
+    )
+    late_entry = {
+        "date": f"{PAST_MONTH}-15",
+        "memo": "REH late entry",
+        "lines": [{"account_id": acct["Software"], "amount": 1000}, {"account_id": acct["Revenue"], "amount": -1000}],
+    }
     bad = api.act("journal", late_entry)
-    ctx.check(step, "a posting into the closed month is refused (period_closed)",
-              bad.get("status") != "committed" and bad.get("code") == "period_closed", describe(bad))
+    ctx.check(
+        step,
+        "a posting into the closed month is refused (period_closed)",
+        bad.get("status") != "committed" and bad.get("code") == "period_closed",
+        describe(bad),
+    )
     pnl = api.get("finance/pnl", start=f"{PAST_MONTH}-01", end=f"{PAST_MONTH}-31")
     columns = pnl if isinstance(pnl, dict) else {}
     nets, incomes, expenses = (columns.get(k) for k in ("net", "income", "expense"))
     pnl_net = sum(nets) if isinstance(nets, list) else None
     pnl_inc = sum(incomes) if isinstance(incomes, list) else None
     pnl_exp = sum(expenses) if isinstance(expenses, list) else None
-    ctx.check(step, "October's P&L net is its income less its expense",
-              None not in (pnl_net, pnl_inc, pnl_exp) and pnl_net == pnl_inc - pnl_exp,
-              f"net {pnl_net}, income {pnl_inc}, expense {pnl_exp}")
-    ctx.gap(step, "the closed month's stored snapshot totals agree with the P&L",
-            "not possible over HTTP: the close checklist and the P&L return only the snapshot's restatement count, "
-            "not its stored totals (pnl_json; backend/finance/reads.py:1781)")
+    ctx.check(
+        step,
+        "October's P&L net is its income less its expense",
+        None not in (pnl_net, pnl_inc, pnl_exp) and pnl_net == pnl_inc - pnl_exp,
+        f"net {pnl_net}, income {pnl_inc}, expense {pnl_exp}",
+    )
+    ctx.gap(
+        step,
+        "the closed month's stored snapshot totals agree with the P&L",
+        "not possible over HTTP: the close checklist and the P&L return only the snapshot's restatement count, "
+        "not its stored totals (pnl_json; backend/finance/reads.py:1781)",
+    )
     bs = api.get("finance/balance-sheet", as_of=f"{PAST_MONTH}-31")
     totals = bs.get("totals") if isinstance(bs, dict) and isinstance(bs.get("totals"), dict) else {}
     assets, liab, equity = (amount(totals.get(k)) for k in ("asset", "liability", "equity"))
-    ctx.check(step, "the balance sheet at October's end balances",
-              None not in (assets, liab, equity) and assets == liab + equity,
-              f"assets {assets}, liabilities {liab}, equity {equity}; totals {json.dumps(totals)[:200]}")
+    ctx.check(
+        step,
+        "the balance sheet at October's end balances",
+        None not in (assets, liab, equity) and assets == liab + equity,
+        f"assets {assets}, liabilities {liab}, equity {equity}; totals {json.dumps(totals)[:200]}",
+    )
     reopened = api.act("reopen_period", {"month": PAST_MONTH})
     ctx.check(step, "the owner reopens October", committed(reopened), describe(reopened))
     fix = api.act("journal", {**late_entry, "memo": "REH correction after close"})
@@ -1006,31 +1470,47 @@ def run_step8(ctx: Context) -> None:
     inc2 = sum(pnl2.get("income") or []) if isinstance(pnl2, dict) else None
     exp2 = sum(pnl2.get("expense") or []) if isinstance(pnl2, dict) else None
     moved = pnl_inc is not None and pnl_exp is not None and inc2 == pnl_inc + 1000 and exp2 == pnl_exp + 1000
-    ctx.check(step, "the re-closed month's P&L shows the correction in income and in expense (no restatement flag asserted)",
-              moved, f"income {pnl_inc} -> {inc2}, expense {pnl_exp} -> {exp2}")
+    ctx.check(
+        step,
+        "the re-closed month's P&L shows the correction in income and in expense (no restatement flag asserted)",
+        moved,
+        f"income {pnl_inc} -> {inc2}, expense {pnl_exp} -> {exp2}",
+    )
 
 
 def run_step9(ctx: Context) -> None:
     step, api = "9 tax", ctx.api
     jur = api.act("tax_jurisdiction_add", {"code": "US-CA", "name": "California sales tax", "due_day": 28})
-    ctx.check(step, "a sales tax jurisdiction is added (due on the 28th after each quarter)", committed(jur),
-              describe(jur))
+    ctx.check(
+        step, "a sales tax jurisdiction is added (due on the 28th after each quarter)", committed(jur), describe(jur)
+    )
     st, sales = api.request("GET", "finance/tax/sales-tax", query={"year": 2026})
     ctx.check(step, "the sales tax workpaper for 2026 answers", st == 200, f"HTTP {st}")
     jurisdiction = find_row(sales, code="US-CA") if st == 200 else None
     due = [v for k, v in (jurisdiction or {}).items() if "due" in k]
     ctx.check(step, "the jurisdiction carries a due date", bool(due), f"due fields {due}")
     st_csv, csv_text = api.request("GET", "finance/tax/sales-tax.csv", query={"year": 2026})
-    ctx.check(step, "the sales tax CSV downloads", st_csv == 200 and isinstance(csv_text, str) and "," in csv_text,
-              f"HTTP {st_csv}")
+    ctx.check(
+        step,
+        "the sales tax CSV downloads",
+        st_csv == 200 and isinstance(csv_text, str) and "," in csv_text,
+        f"HTTP {st_csv}",
+    )
     st1, form = api.request("GET", "finance/tax/1099", query={"year": 2026})
     ctx.check(step, "the 1099 workpaper for 2026 answers", st1 == 200, f"HTTP {st1}")
     vendor_row = next((d for d in walk(form) if "REH Vendor Hosting Co" in d.values()), None) if st1 == 200 else None
-    ctx.check(step, "the vendor's $2,500.00 bill payment is on its 1099 line",
-              bool(vendor_row) and 250000 in vendor_row.values(),
-              f"row {json.dumps(vendor_row)[:200] if vendor_row else 'none'}")
-    ctx.check(step, "card charges are left out of the 1099", st1 == 200 and "OPENROUTER" not in json.dumps(form),
-              "searched the 1099 for the card vendor's name")
+    ctx.check(
+        step,
+        "the vendor's $2,500.00 bill payment is on its 1099 line",
+        bool(vendor_row) and 250000 in vendor_row.values(),
+        f"row {json.dumps(vendor_row)[:200] if vendor_row else 'none'}",
+    )
+    ctx.check(
+        step,
+        "card charges are left out of the 1099",
+        st1 == 200 and "OPENROUTER" not in json.dumps(form),
+        "searched the 1099 for the card vendor's name",
+    )
     threshold = total(form, "threshold")
     ctx.check(step, "the 2026 threshold is $2,000", threshold in (2000, 200000), f"threshold {threshold}")
     st1c, form_csv = api.request("GET", "finance/tax/1099.csv", query={"year": 2026})
@@ -1045,39 +1525,73 @@ def run_step10(ctx: Context) -> None:
     # into May, an empty month, and checks the closed-month refusal on April, closed while it has no itemized rows.
     empty, closed_empty = "2026-05", "2026-04"
     csv_text = f"month,line,amount\n{empty},Revenue,1500000\n{empty},Software,420000\n{empty},Other,250000\n"
-    imp = api.act("import_raw_totals", {"csv": csv_text, "basis": "accrual", "mapping": mapping,
-                                        "source_name": "REH invented May sheet"})
+    imp = api.act(
+        "import_raw_totals",
+        {"csv": csv_text, "basis": "accrual", "mapping": mapping, "source_name": "REH invented May sheet"},
+    )
     ctx.check(step, "an invented May P&L is imported as totals (an empty month)", committed(imp), describe(imp))
     pnl = api.get("finance/pnl", start=f"{empty}-01", end=f"{empty}-31")
-    ctx.check(step, "the imported figures are labelled Imported on the May P&L",
-              "imported" in json.dumps(pnl).lower(), json.dumps(pnl)[:160])
+    ctx.check(
+        step,
+        "the imported figures are labelled Imported on the May P&L",
+        "imported" in json.dumps(pnl).lower(),
+        json.dumps(pnl)[:160],
+    )
     shut = api.act("close_period", {"month": closed_empty})
     ctx.check(step, "April closes with no itemized rows", committed(shut), describe(shut))
-    refused = api.act("import_raw_totals", {"csv": f"month,line,amount\n{closed_empty},Revenue,100\n",
-                                            "basis": "accrual", "mapping": mapping,
-                                            "source_name": "REH closed-month check"})
-    ctx.check(step, "an import into the closed April (no itemized rows) is refused (period_closed)",
-              refused.get("status") != "committed" and refused.get("code") == "period_closed", describe(refused))
+    refused = api.act(
+        "import_raw_totals",
+        {
+            "csv": f"month,line,amount\n{closed_empty},Revenue,100\n",
+            "basis": "accrual",
+            "mapping": mapping,
+            "source_name": "REH closed-month check",
+        },
+    )
+    ctx.check(
+        step,
+        "an import into the closed April (no itemized rows) is refused (period_closed)",
+        refused.get("status") != "committed" and refused.get("code") == "period_closed",
+        describe(refused),
+    )
 
 
 def run_step11(ctx: Context) -> None:
     step, api = "11 access", ctx.api
     access = api.get("finance/access")
-    ctx.check(step, "the owner may view as another teammate", access.get("can_view_as") is True,
-              f"can_view_as={access.get('can_view_as')}")
+    ctx.check(
+        step,
+        "the owner may view as another teammate",
+        access.get("can_view_as") is True,
+        f"can_view_as={access.get('can_view_as')}",
+    )
     defaults = access.get("defaults") or {}
-    ctx.check(step, "managers see payroll as totals or hidden by default (spec 7.5 to confirm)",
-              defaults.get("manager_payroll") in ("totals", "hidden"), json.dumps(defaults)[:200])
-    st, _ = api.request("GET", "finance/pnl", query={"start": f"{PAST_MONTH}-01", "end": f"{PAST_MONTH}-31",
-                                                     "view_as": "bot:bookkeeper"})
+    ctx.check(
+        step,
+        "managers see payroll as totals or hidden by default (spec 7.5 to confirm)",
+        defaults.get("manager_payroll") in ("totals", "hidden"),
+        json.dumps(defaults)[:200],
+    )
+    st, _ = api.request(
+        "GET",
+        "finance/pnl",
+        query={"start": f"{PAST_MONTH}-01", "end": f"{PAST_MONTH}-31", "view_as": "bot:bookkeeper"},
+    )
     ctx.check(step, "the owner views the P&L as the Bookkeeper", st == 200, f"HTTP {st}")
-    ctx.gap(step, "the manager, member and bot identities each see their own cut",
-            "over HTTP the only identity is the owner (ana); the demo mints no other tokens")
-    ctx.gap(step, "a person with no rights is refused",
-            "needs a second signed-in person with no rights; the demo has none")
-    ctx.gap(step, "the view_as audit row is written",
-            "not scripted in this run: finance.note_view_as (backend/finance_routes.py:108) writes it, and no read "
-            "route for it was checked")
+    ctx.gap(
+        step,
+        "the manager, member and bot identities each see their own cut",
+        "over HTTP the only identity is the owner (ana); the demo mints no other tokens",
+    )
+    ctx.gap(
+        step, "a person with no rights is refused", "needs a second signed-in person with no rights; the demo has none"
+    )
+    ctx.gap(
+        step,
+        "the view_as audit row is written",
+        "not scripted in this run: finance.note_view_as (backend/finance_routes.py:108) writes it, and no read "
+        "route for it was checked",
+    )
 
 
 def main() -> int:
@@ -1094,23 +1608,43 @@ def main() -> int:
     try:
         stack.start()  # a failed start still reaches the finally, which stops whatever did start
         token = (data_dir / "demo" / "local-owner.token").read_text().strip()
-        ctx = Context(Api(f"http://{DEMO_HOST}:{DEMO_PORT}", token), Fake(f"http://{DEMO_HOST}:{FAKE_PORT}"), ledger,
-                      f"http://{DEMO_HOST}:{DEMO_PORT}")
-        steps = [("1", run_step1), ("2", run_step2), ("3", run_step3), ("4", run_step4), ("5", run_step5),
-                 ("6", run_step6), ("7", run_step7), ("8", run_step8), ("9", run_step9), ("10", run_step10),
-                 ("11", run_step11)]
+        ctx = Context(
+            Api(f"http://{DEMO_HOST}:{DEMO_PORT}", token),
+            Fake(f"http://{DEMO_HOST}:{FAKE_PORT}"),
+            ledger,
+            f"http://{DEMO_HOST}:{DEMO_PORT}",
+        )
+        steps = [
+            ("1", run_step1),
+            ("2", run_step2),
+            ("3", run_step3),
+            ("4", run_step4),
+            ("5", run_step5),
+            ("6", run_step6),
+            ("7", run_step7),
+            ("8", run_step8),
+            ("9", run_step9),
+            ("10", run_step10),
+            ("11", run_step11),
+        ]
         for number, fn in steps:
             if only and number not in only:
                 continue
             try:
                 fn(ctx)
             except Exception as exc:  # noqa: BLE001 - a failed step is recorded, and the next one still runs
-                ledger.check(f"{number}", "the step ran to its end", False,
-                             f"{type(exc).__name__}: {str(exc)[:300]} | {traceback.format_exc().splitlines()[-2:]}")
+                ledger.check(
+                    f"{number}",
+                    "the step ran to its end",
+                    False,
+                    f"{type(exc).__name__}: {str(exc)[:300]} | {traceback.format_exc().splitlines()[-2:]}",
+                )
     finally:
         if args.keep:
             for name, proc in stack.procs:
-                print(f"left running: {name} (pid {proc.pid}); stop it by that PID. demo folder: {data_dir}", flush=True)
+                print(
+                    f"left running: {name} (pid {proc.pid}); stop it by that PID. demo folder: {data_dir}", flush=True
+                )
         else:
             stack.stop()
             shutil.rmtree(data_dir, ignore_errors=True)

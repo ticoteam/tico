@@ -1,5 +1,6 @@
 """Shared neutral reads (backend/row_clock.py): the private parties and the access registry rows are read once per
 change, never once per request, and a write that is not yet committed shares nothing."""
+
 import pytest
 
 from backend import row_clock
@@ -12,10 +13,16 @@ def store(tmp_path):
     s = Store(Settings(db_path=tmp_path / "hub.sqlite"))
     s.initialize(seed_market=False)
     with s.transaction() as c:
-        c.execute("INSERT INTO tasks(id,title,requester_id,owner_id,status,private,created_at,updated_at) "
-                  "VALUES('secret','S','human:ana','bot:ops','open',1,?,?)", (H.now(), H.now()))
-        c.execute("INSERT INTO tasks(id,title,requester_id,owner_id,status,private,created_at,updated_at) "
-                  "VALUES('plain','P','human:ana','bot:ops','open',0,?,?)", (H.now(), H.now()))
+        c.execute(
+            "INSERT INTO tasks(id,title,requester_id,owner_id,status,private,created_at,updated_at) "
+            "VALUES('secret','S','human:ana','bot:ops','open',1,?,?)",
+            (H.now(), H.now()),
+        )
+        c.execute(
+            "INSERT INTO tasks(id,title,requester_id,owner_id,status,private,created_at,updated_at) "
+            "VALUES('plain','P','human:ana','bot:ops','open',0,?,?)",
+            (H.now(), H.now()),
+        )
     return s
 
 
@@ -28,6 +35,7 @@ def builds(monkeypatch):
     def counting(c, statement):
         count["n"] += 1
         return real(c, statement)
+
     monkeypatch.setattr(row_clock, "_rows", counting)
     return count
 
@@ -53,8 +61,11 @@ def _parties_are_read_once_until_a_private_party_changes(store, builds):
 
     with store.transaction() as c:
         c.execute("UPDATE tasks SET status='done' WHERE id='secret'")
-        c.execute("INSERT INTO tasks(id,title,requester_id,owner_id,status,private,created_at,updated_at) "
-                  "VALUES('open-plain','O','human:ana','bot:ops','open',0,?,?)", (H.now(), H.now()))
+        c.execute(
+            "INSERT INTO tasks(id,title,requester_id,owner_id,status,private,created_at,updated_at) "
+            "VALUES('open-plain','O','human:ana','bot:ops','open',0,?,?)",
+            (H.now(), H.now()),
+        )
     request(store, parties)
     assert builds["n"] == 1, "status changes and public tasks do not move the clock"
 
@@ -64,8 +75,11 @@ def _parties_are_read_once_until_a_private_party_changes(store, builds):
     assert builds["n"] == 2
 
     with store.transaction() as c:
-        c.execute("INSERT INTO tasks(id,title,requester_id,owner_id,status,private,created_at,updated_at) "
-                  "VALUES('newly','N','human:ana','bot:ops','open',1,?,?)", (H.now(), H.now()))
+        c.execute(
+            "INSERT INTO tasks(id,title,requester_id,owner_id,status,private,created_at,updated_at) "
+            "VALUES('newly','N','human:ana','bot:ops','open',1,?,?)",
+            (H.now(), H.now()),
+        )
     assert set(request(store, parties)) == {"secret", "newly"}
     with store.transaction() as c:
         c.execute("DELETE FROM tasks WHERE id='newly'")
@@ -100,7 +114,6 @@ def _access_rows_follow_only_the_access_keys(store, builds):
     assert ("owner", '{"email":"ben@acme.example"}') in request(store, row_clock.access_rows)
 
 
-
 def test_shared_party_and_access_reads_follow_only_their_keys_and_never_share_uncommitted_writes(store, builds):
     _parties_are_read_once_until_a_private_party_changes(store, builds)
     _an_uncommitted_write_shares_nothing(store, builds)
@@ -117,6 +130,7 @@ def index_request(s):
     from backend import row_clock as rc
     from backend.auth import Identity
     from backend.privacy_index import ReadIndex
+
     ran = []
     with s.read() as c:
         c.set_trace_callback(lambda sql: ran.append(sql.strip()))
@@ -132,6 +146,7 @@ def index_request(s):
 
 def _task_ids_and_room_tasks_are_read_once_until_a_task_or_room_moves(store):
     from backend import row_clock as rc
+
     (ids, rooms), ran = index_request(store)
     assert ran == [rc.TASK_IDS, rc.ROOM_TASKS] and {"secret", "plain"} <= ids
     assert index_request(store) == ((ids, rooms), []), "a second request reads neither table"
@@ -141,10 +156,16 @@ def _task_ids_and_room_tasks_are_read_once_until_a_task_or_room_moves(store):
     assert index_request(store) == ((ids, rooms), []), "a status change moves nothing"
 
     with store.transaction() as c:
-        c.execute("INSERT INTO tasks(id,title,requester_id,owner_id,status,private,created_at,updated_at) "
-                  "VALUES('newly','N','human:ana','bot:ops','open',0,?,?)", (H.now(), H.now()))
-        c.execute("INSERT INTO conversations(id,kind,task_id,participants,scope,room_key,created_at) "
-                  "VALUES('room-new','task','newly','[]','direct',NULL,?)", (H.now(),))
+        c.execute(
+            "INSERT INTO tasks(id,title,requester_id,owner_id,status,private,created_at,updated_at) "
+            "VALUES('newly','N','human:ana','bot:ops','open',0,?,?)",
+            (H.now(), H.now()),
+        )
+        c.execute(
+            "INSERT INTO conversations(id,kind,task_id,participants,scope,room_key,created_at) "
+            "VALUES('room-new','task','newly','[]','direct',NULL,?)",
+            (H.now(),),
+        )
     (ids, rooms), ran = index_request(store)
     assert "newly" in ids and rooms["room-new"] == "newly" and ran
 
@@ -163,16 +184,23 @@ def _task_ids_and_room_tasks_are_read_once_until_a_task_or_room_moves(store):
 def _an_uncommitted_task_is_never_shared(store):
     from backend.auth import Identity
     from backend.privacy_index import ReadIndex
+
     index_request(store)
     with pytest.raises(RuntimeError):
         with store.transaction() as writer:
-            writer.execute("INSERT INTO tasks(id,title,requester_id,owner_id,status,private,created_at,updated_at) "
-                           "VALUES('ghost','G','human:ana','bot:ops','open',0,?,?)", (H.now(), H.now()))
+            writer.execute(
+                "INSERT INTO tasks(id,title,requester_id,owner_id,status,private,created_at,updated_at) "
+                "VALUES('ghost','G','human:ana','bot:ops','open',0,?,?)",
+                (H.now(), H.now()),
+            )
             assert "ghost" in ReadIndex(writer, Identity("human:ana", "human")).task_ids
             raise RuntimeError("roll back")
     assert "ghost" not in index_request(store)[0][0]
     with store.transaction() as c:
-        c.execute("INSERT INTO tasks(id,title,requester_id,owner_id,status,private,created_at,updated_at) "
-                  "VALUES('real','R','human:ana','bot:ops','open',0,?,?)", (H.now(), H.now()))
+        c.execute(
+            "INSERT INTO tasks(id,title,requester_id,owner_id,status,private,created_at,updated_at) "
+            "VALUES('real','R','human:ana','bot:ops','open',0,?,?)",
+            (H.now(), H.now()),
+        )
     ids = index_request(store)[0][0]
     assert "real" in ids and "ghost" not in ids

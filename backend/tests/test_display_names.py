@@ -1,4 +1,5 @@
 """Every stable GET keeps the names supplied by the response annotation contract."""
+
 import pytest
 from fastapi.routing import APIRoute
 
@@ -14,12 +15,28 @@ def named_data(api):
         c.execute("UPDATE bots SET display_name='Operations' WHERE slug='ops'")
         task = H.task_create(c, 'human:ana', 'Review the plan', 'Please review the plan.', 'bot:ops')
         # A bot's ask in a task's thread reaches a person only by an @mention (hubdb.counts_for_person), so this one has it.
-        ask = threads.post(c, 'bot:ops', task['conversation_id'], '@ana Please choose a review date.', kind='ask',
-                           to_actor='human:ana', refs={'task': task['id']})
+        ask = threads.post(
+            c,
+            'bot:ops',
+            task['conversation_id'],
+            '@ana Please choose a review date.',
+            kind='ask',
+            to_actor='human:ana',
+            refs={'task': task['id']},
+        )
         notice = H.notice(c, 'bot:ops', 'human:ana', 'New task from bot:ops: Review the plan')
-        meetings.snapshot({'id': 'review-meeting', 'title': 'Review the plan', 'kind': 'meeting',
-                           'private': False, 'owner': 'ana@example.com', 'status': 'done'},
-                          transcript='Please review the plan.', conn=c)
+        meetings.snapshot(
+            {
+                'id': 'review-meeting',
+                'title': 'Review the plan',
+                'kind': 'meeting',
+                'private': False,
+                'owner': 'ana@example.com',
+                'status': 'done',
+            },
+            transcript='Please review the plan.',
+            conn=c,
+        )
     doc = post(api, 'docs', {'title': 'Review plan', 'body': 'Please review the plan.'})['doc']
     return {'task': task, 'ask': ask, 'notice': notice, 'doc': doc}
 
@@ -56,10 +73,14 @@ def test_messages_and_task_asks_have_display_names(api, named_data):
 
 def test_a_task_the_server_filed_reads_new_task_without_from(api):
     from backend import names
+
     notice = {'kind': 'notice', 'sender_id': 'keeper', 'body': 'New task from keeper: Health: Watchers'}
     with api.app.state.store.read() as c:
         names.annotate(c, {'messages': [notice]}, render_notices=True)
         bot = {'kind': 'notice', 'sender_id': 'keeper', 'body': 'New task from keeper: Health: Watchers'}
         names.annotate(c, {'messages': [bot]})
-    assert notice['body'] == 'New task: Health: Watchers' and notice['body_raw'] == 'New task from keeper: Health: Watchers'
-    assert bot['body'] == 'New task from keeper: Health: Watchers'      # bots read it as written
+    assert (
+        notice['body'] == 'New task: Health: Watchers'
+        and notice['body_raw'] == 'New task from keeper: Health: Watchers'
+    )
+    assert bot['body'] == 'New task from keeper: Health: Watchers'  # bots read it as written

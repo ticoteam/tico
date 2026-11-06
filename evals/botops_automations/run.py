@@ -17,6 +17,7 @@ file per request, the saved-answer shape the offline tests replay.
 What it prints per request: PASS or FAIL, and each failed check with what was wanted and what was saved. Exit code 0
 when every request passed.
 """
+
 import argparse
 import json
 import sys
@@ -42,9 +43,17 @@ class Live:
 
     def request(self, method, path, body=None, token=None):
         data = json.dumps(body).encode() if body is not None else None
-        req = urllib.request.Request(self.url + "/api/v2/" + path.lstrip("/"), data=data, method=method, headers={
-            "Authorization": "Bearer " + str(token), "Accept": "application/json", "Content-Type": "application/json",
-            "Idempotency-Key": str(uuid.uuid4())})
+        req = urllib.request.Request(
+            self.url + "/api/v2/" + path.lstrip("/"),
+            data=data,
+            method=method,
+            headers={
+                "Authorization": "Bearer " + str(token),
+                "Accept": "application/json",
+                "Content-Type": "application/json",
+                "Idempotency-Key": str(uuid.uuid4()),
+            },
+        )
         try:
             with urllib.request.urlopen(req, timeout=60) as response:
                 return response.status, json.load(response)
@@ -82,7 +91,12 @@ def made(server, before, token):
     for aid in sorted(ids(server, token) - before):
         code, row = server.request("GET", f"automations/{aid}", token=token)
         if code == 200:
-            found.append({"owner": row.get("owner_id"), **{key: row[key] for key in ("name", "enabled", "trigger", "steps", "batch") if key in row}})
+            found.append(
+                {
+                    "owner": row.get("owner_id"),
+                    **{key: row[key] for key in ("name", "enabled", "trigger", "steps", "batch") if key in row},
+                }
+            )
     return {"created": found}
 
 
@@ -92,21 +106,27 @@ def run_case(server, case, owner, quiet=60, timeout=900):
         body = {key: seed[key] for key in ("name", "owner", "enabled", "trigger", "steps", "batch") if key in seed}
         code, saved = server.request("POST", "automations", body, owner)
         if code != 200:
-            return {"id": case["id"], "passed": False, "checks": [{"name": "seeded", "held": False,
-                    "why": f"could not save the automation ({code})"}]}
+            return {
+                "id": case["id"],
+                "passed": False,
+                "checks": [{"name": "seeded", "held": False, "why": f"could not save the automation ({code})"}],
+            }
         aid = saved["id"]
         refs = {"automation": aid}
     before = ids(server, owner)
     code, sent = server.request("POST", f"chat/{BOT}", {"text": case["prompt"], "refs": refs}, owner)
     if code != 200:
-        return {"id": case["id"], "passed": False, "checks": [{"name": "asked", "held": False,
-                "why": f"could not ask BotOps ({code})"}]}
+        return {
+            "id": case["id"],
+            "passed": False,
+            "checks": [{"name": "asked", "held": False, "why": f"could not ask BotOps ({code})"}],
+        }
     conversation, seen, replies = sent["conversation"]["id"], set(), []
     last, deadline = time.monotonic(), time.monotonic() + timeout
     while time.monotonic() < deadline and time.monotonic() - last < quiet + (60 if busy(server, owner) else 0):
         time.sleep(3)
         code, page = server.request("GET", f"conversations/{conversation}/messages", token=owner)
-        for message in (page.get("messages", []) if code == 200 else []):
+        for message in page.get("messages", []) if code == 200 else []:
             if message["id"] in seen:
                 continue
             seen.add(message["id"])
@@ -136,15 +156,21 @@ def main(argv=None):
     for case in chosen:
         result = run_case(server, case, args.owner_token, quiet=args.quiet)
         results.append(result)
-        print(f"{result['id']:24} {'PASS' if result.get('passed') else 'FAIL'}"
-              + "".join(f"\n    - {check['name']}: {check.get('why', '')}" for check in result["checks"] if not check["held"]))
+        print(
+            f"{result['id']:24} {'PASS' if result.get('passed') else 'FAIL'}"
+            + "".join(
+                f"\n    - {check['name']}: {check.get('why', '')}" for check in result["checks"] if not check["held"]
+            )
+        )
     if args.json:
         Path(args.json).write_text(json.dumps(results, indent=1, default=str))
     if args.record:
         folder = Path(args.record)
         folder.mkdir(parents=True, exist_ok=True)
         for result in results:
-            (folder / f"{result['id']}.json").write_text(json.dumps(result["observed"], indent=2, ensure_ascii=False) + "\n")
+            (folder / f"{result['id']}.json").write_text(
+                json.dumps(result["observed"], indent=2, ensure_ascii=False) + "\n"
+            )
     return 0 if results and all(result.get("passed") for result in results) else 1
 
 

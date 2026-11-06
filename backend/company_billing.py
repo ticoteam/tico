@@ -45,21 +45,21 @@ from . import cloud_access
 from .store import Problem
 
 PATH = "/billing"
-WAIT = 10                    # seconds for HQ's answer
-MAX_BYTES = 2_000_000        # a month of usage by day is small; anything past this is not HQ's answer
+WAIT = 10  # seconds for HQ's answer
+MAX_BYTES = 2_000_000  # a month of usage by day is small; anything past this is not HQ's answer
 MONTH = re.compile(r"[0-9]{4}-(0[1-9]|1[0-2])")
 DAY = re.compile(r"[0-9]{4}-(0[1-9]|1[0-2])-(0[1-9]|[12][0-9]|3[01])")
 STATES = ("active", "low", "paused", "grace")
-OPENER = None                # tests replace it with a function (request, timeout) -> response: nothing leaves the test
+OPENER = None  # tests replace it with a function (request, timeout) -> response: nothing leaves the test
 REFUSED = ("unknown_key", "revoked_key")
 SERVERS = "/servers"
-CLOUD = "/cloud"             # a Tico Cloud company's access (backend/cloud_access.py)
+CLOUD = "/cloud"  # a Tico Cloud company's access (backend/cloud_access.py)
 SERVER_ID = re.compile(r"pv-[0-9a-f]{16}")
 KINDS = ("tico", "bot_computer")
 PAUSED = "Paused: out of credit. Add credit to start this computer."
-PAUSE_TTL = 60               # seconds a pause bit is reused: the bot page asks on every refresh
-CLOCK = time.monotonic       # tests replace it
-_pause = {}                  # (sha256 of the gateway key, base) -> (expires, paused)
+PAUSE_TTL = 60  # seconds a pause bit is reused: the bot page asks on every refresh
+CLOCK = time.monotonic  # tests replace it
+_pause = {}  # (sha256 of the gateway key, base) -> (expires, paused)
 
 
 def _no_float(text):
@@ -74,8 +74,12 @@ def _micros(value):
 
 def _get(key, base, path, method="GET", root=PATH):
     """(status, body bytes, content type) of a GET (or an empty POST) to HQ, or ("unreachable", b"", "")."""
-    request = urllib.request.Request(base + root + path, method=method, data=b"" if method == "POST" else None, headers={
-        "Authorization": "Bearer " + key, "Accept": "application/json, text/csv"})
+    request = urllib.request.Request(
+        base + root + path,
+        method=method,
+        data=b"" if method == "POST" else None,
+        headers={"Authorization": "Bearer " + key, "Accept": "application/json, text/csv"},
+    )
     opener = OPENER or G._send
     try:
         with opener(request, timeout=WAIT) as response:
@@ -111,8 +115,14 @@ def _code(body):
 
 def _booking(value):
     """The booking link "Talk to us to add credit" opens (or a paused start's account page): https only, or None."""
-    return value if isinstance(value, str) and value.startswith("https://") and len(value) <= 300 \
-        and not any(ch.isspace() for ch in value) else None
+    return (
+        value
+        if isinstance(value, str)
+        and value.startswith("https://")
+        and len(value) <= 300
+        and not any(ch.isspace() for ch in value)
+        else None
+    )
 
 
 def _ask(key, base, path):
@@ -142,19 +152,36 @@ def _period(row, width):
     lines = row.get("lines")
     if not isinstance(lines, list):
         raise ValueError("usage lines")
-    return {"period": row["period"], "total_micros": _micros(row.get("total_micros")),
-            "lines": [{"product": str(line.get("product") or "")[:40], "sku": str(line.get("sku") or "")[:120],
-                       "amount_micros": _micros(line.get("amount_micros"))} for line in lines if isinstance(line, dict)]}
+    return {
+        "period": row["period"],
+        "total_micros": _micros(row.get("total_micros")),
+        "lines": [
+            {
+                "product": str(line.get("product") or "")[:40],
+                "sku": str(line.get("sku") or "")[:120],
+                "amount_micros": _micros(line.get("amount_micros")),
+            }
+            for line in lines
+            if isinstance(line, dict)
+        ],
+    }
 
 
 def _credit(row):
     if not isinstance(row, dict):
         raise ValueError("a credit")
-    return {"label": str(row.get("label") or "Credit")[:60], "source": str(row.get("source") or "")[:40],
-            "amount_micros": _micros(row.get("amount_micros")), "left_micros": _micros(row.get("left_micros")),
-            "expired_micros": _micros(row.get("expired_micros", 0)), "expires": row.get("expires") or None,
-            "created": str(row.get("created") or ""), "expired": row.get("expired") is True,
-            "used_up": row.get("used_up") is True, "current": row.get("current") is True}
+    return {
+        "label": str(row.get("label") or "Credit")[:60],
+        "source": str(row.get("source") or "")[:40],
+        "amount_micros": _micros(row.get("amount_micros")),
+        "left_micros": _micros(row.get("left_micros")),
+        "expired_micros": _micros(row.get("expired_micros", 0)),
+        "expires": row.get("expires") or None,
+        "created": str(row.get("created") or ""),
+        "expired": row.get("expired") is True,
+        "used_up": row.get("used_up") is True,
+        "current": row.get("current") is True,
+    }
 
 
 def _statement(row):
@@ -164,12 +191,16 @@ def _statement(row):
     by_product = row.get("debits_by_product") or {}
     if not isinstance(by_source, dict) or not isinstance(by_product, dict):
         raise ValueError("a statement")
-    return {"month": str(row.get("month") or ""), "opening_micros": _micros(row.get("opening_micros")),
-            "credits_micros": _micros(row.get("credits_micros")),
-            "credits_by_source": {str(k)[:40]: _micros(v) for k, v in by_source.items()},
-            "debits_micros": _micros(row.get("debits_micros")),
-            "debits_by_product": {str(k)[:40]: _micros(v) for k, v in by_product.items()},
-            "expired_micros": _micros(row.get("expired_micros")), "closing_micros": _micros(row.get("closing_micros"))}
+    return {
+        "month": str(row.get("month") or ""),
+        "opening_micros": _micros(row.get("opening_micros")),
+        "credits_micros": _micros(row.get("credits_micros")),
+        "credits_by_source": {str(k)[:40]: _micros(v) for k, v in by_source.items()},
+        "debits_micros": _micros(row.get("debits_micros")),
+        "debits_by_product": {str(k)[:40]: _micros(v) for k, v in by_product.items()},
+        "expired_micros": _micros(row.get("expired_micros")),
+        "closing_micros": _micros(row.get("closing_micros")),
+    }
 
 
 def parse(body):
@@ -179,15 +210,21 @@ def parse(body):
         raise ValueError("not a billing answer")
     months = [m for m in data.get("months") or [] if isinstance(m, str) and MONTH.fullmatch(m)][:24]
     grace = data.get("grace_until")
-    return {"state": data["state"], "balance_micros": _micros(data.get("balance_micros")),
-            "min_balance_micros": _micros(data.get("min_balance_micros")),
-            "last_day_micros": _micros(data.get("last_day_micros", 0)),
-            "record_only": data.get("record_only") is not False, "grace_until": grace if isinstance(grace, str) else None,
-            "month": str(data.get("month") or ""), "months": months,
-            "credits": [_credit(row) for row in data.get("credits") or []],
-            "usage": [_period(row, 10) for row in data.get("usage") or []],
-            "statement": _statement(data.get("statement")), "booking_url": _booking(data.get("booking_url")),
-            "cloud": cloud_access.parse(data.get("cloud"))}
+    return {
+        "state": data["state"],
+        "balance_micros": _micros(data.get("balance_micros")),
+        "min_balance_micros": _micros(data.get("min_balance_micros")),
+        "last_day_micros": _micros(data.get("last_day_micros", 0)),
+        "record_only": data.get("record_only") is not False,
+        "grace_until": grace if isinstance(grace, str) else None,
+        "month": str(data.get("month") or ""),
+        "months": months,
+        "credits": [_credit(row) for row in data.get("credits") or []],
+        "usage": [_period(row, 10) for row in data.get("usage") or []],
+        "statement": _statement(data.get("statement")),
+        "booking_url": _booking(data.get("booking_url")),
+        "cloud": cloud_access.parse(data.get("cloud")),
+    }
 
 
 def cloud(key, base):
@@ -288,9 +325,14 @@ def servers(key, base):
         return {"state": "unreachable"}
     if data.get("deactivated") is True:
         return {"state": "deactivated"}
-    rows = [{"server_id": row["server_id"], "kind": row["kind"], "power": "on" if row.get("power") == "on" else "stopped"}
-            for row in data["servers"] if isinstance(row, dict) and isinstance(row.get("server_id"), str)
-            and SERVER_ID.fullmatch(row["server_id"]) and row.get("kind") in KINDS]
+    rows = [
+        {"server_id": row["server_id"], "kind": row["kind"], "power": "on" if row.get("power") == "on" else "stopped"}
+        for row in data["servers"]
+        if isinstance(row, dict)
+        and isinstance(row.get("server_id"), str)
+        and SERVER_ID.fullmatch(row["server_id"])
+        and row.get("kind") in KINDS
+    ]
     return {"state": "ok", "servers": rows} if rows else {"state": "none"}
 
 

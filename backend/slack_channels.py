@@ -52,7 +52,9 @@ def parse_ref(ref, name=""):
     else:
         raise Problem("slack_channel", HOW, 422)
     if label and not NAME_RE.match(label):
-        raise Problem("slack_channel", "A channel name is lowercase letters, digits, dashes, dots and underscores.", 422)
+        raise Problem(
+            "slack_channel", "A channel name is lowercase letters, digits, dashes, dots and underscores.", 422
+        )
     return cid, label
 
 
@@ -61,10 +63,19 @@ def entry_key(cid, name):
 
 
 def _entry(row, source):
-    return {"key": row["key"], "id": row["id"], "name": row["name"], "channel": row["name"] and "#" + row["name"] or row["id"],
-            "readers": list(row["readers"]), "post": bool(row["post"]), "note": row["note"],
-            "digest_hours": row["digest_hours"], "source": source,
-            "updated_at": row.get("updated_at"), "updated_by": row.get("updated_by", "")}
+    return {
+        "key": row["key"],
+        "id": row["id"],
+        "name": row["name"],
+        "channel": row["name"] and "#" + row["name"] or row["id"],
+        "readers": list(row["readers"]),
+        "post": bool(row["post"]),
+        "note": row["note"],
+        "digest_hours": row["digest_hours"],
+        "source": source,
+        "updated_at": row.get("updated_at"),
+        "updated_by": row.get("updated_by", ""),
+    }
 
 
 def _readers(value):
@@ -99,26 +110,52 @@ def file_rows(registry_dir):
             hours = max(0.0, float(raw.get("digest_hours") or 0))
         except (TypeError, ValueError):
             hours = 0.0
-        out.append({"key": entry_key(cid, name), "id": cid, "name": name, "readers": _readers(raw.get("readers")),
-                    "post": raw.get("post") is not False, "note": str(raw.get("purpose") or raw.get("note") or ""),
-                    "digest_hours": hours})
+        out.append(
+            {
+                "key": entry_key(cid, name),
+                "id": cid,
+                "name": name,
+                "readers": _readers(raw.get("readers")),
+                "post": raw.get("post") is not False,
+                "note": str(raw.get("purpose") or raw.get("note") or ""),
+                "digest_hours": hours,
+            }
+        )
     return out
 
 
 def file_channels(registry_dir):
     """The shape the gateway used to read from the file: {channel id: {name, purpose, post, digest_hours, readers}}."""
-    return {row["id"]: {"name": row["name"], "purpose": row["note"], "post": row["post"],
-                        "digest_hours": row["digest_hours"], "readers": row["readers"]}
-            for row in file_rows(registry_dir) if row["id"]}
+    return {
+        row["id"]: {
+            "name": row["name"],
+            "purpose": row["note"],
+            "post": row["post"],
+            "digest_hours": row["digest_hours"],
+            "readers": row["readers"],
+        }
+        for row in file_rows(registry_dir)
+        if row["id"]
+    }
 
 
 # ----------------------------------------------------------------------------- the stored list
 def _stored(c):
     out = []
     for r in c.execute("SELECT * FROM slack_channels ORDER BY name, channel_id"):
-        out.append({"key": r["key"], "id": r["channel_id"], "name": r["name"], "readers": H._json(r["readers"], []),
-                    "post": bool(r["post"]), "note": r["note"], "digest_hours": r["digest_hours"],
-                    "updated_at": r["updated_at"], "updated_by": r["updated_by"]})
+        out.append(
+            {
+                "key": r["key"],
+                "id": r["channel_id"],
+                "name": r["name"],
+                "readers": H._json(r["readers"], []),
+                "post": bool(r["post"]),
+                "note": r["note"],
+                "digest_hours": r["digest_hours"],
+                "updated_at": r["updated_at"],
+                "updated_by": r["updated_by"],
+            }
+        )
     return out
 
 
@@ -142,8 +179,17 @@ def listing(c, settings):
 
 def channel_map(c, settings):
     """{channel id: {name, purpose, post, digest_hours, readers}} for the channels that have an id: what the gateway reads."""
-    return {r["id"]: {"name": r["name"], "purpose": r["note"], "post": r["post"], "digest_hours": r["digest_hours"],
-                      "readers": r["readers"]} for r in listing(c, settings) if r["id"]}
+    return {
+        r["id"]: {
+            "name": r["name"],
+            "purpose": r["note"],
+            "post": r["post"],
+            "digest_hours": r["digest_hours"],
+            "readers": r["readers"],
+        }
+        for r in listing(c, settings)
+        if r["id"]
+    }
 
 
 def lookup(c, settings, channel_id, name=""):
@@ -183,13 +229,37 @@ def _find(rows, cid, name):
 def _save(c, who, entry, created):
     now = H.now()
     if created:
-        c.execute("INSERT INTO slack_channels(key,channel_id,name,readers,post,note,digest_hours,created_at,updated_at,updated_by) "
-                  "VALUES(?,?,?,?,?,?,?,?,?,?)", (entry["key"], entry["id"], entry["name"], _dump(entry["readers"]),
-                                                   int(entry["post"]), entry["note"], entry["digest_hours"], now, now, who.actor))
+        c.execute(
+            "INSERT INTO slack_channels(key,channel_id,name,readers,post,note,digest_hours,created_at,updated_at,updated_by) "
+            "VALUES(?,?,?,?,?,?,?,?,?,?)",
+            (
+                entry["key"],
+                entry["id"],
+                entry["name"],
+                _dump(entry["readers"]),
+                int(entry["post"]),
+                entry["note"],
+                entry["digest_hours"],
+                now,
+                now,
+                who.actor,
+            ),
+        )
     else:
-        c.execute("UPDATE slack_channels SET channel_id=?,name=?,readers=?,post=?,note=?,digest_hours=?,updated_at=?,updated_by=? WHERE key=?",
-                  (entry["id"], entry["name"], _dump(entry["readers"]), int(entry["post"]), entry["note"], entry["digest_hours"],
-                   now, who.actor, entry["key"]))
+        c.execute(
+            "UPDATE slack_channels SET channel_id=?,name=?,readers=?,post=?,note=?,digest_hours=?,updated_at=?,updated_by=? WHERE key=?",
+            (
+                entry["id"],
+                entry["name"],
+                _dump(entry["readers"]),
+                int(entry["post"]),
+                entry["note"],
+                entry["digest_hours"],
+                now,
+                who.actor,
+                entry["key"],
+            ),
+        )
 
 
 def _dump(value):
@@ -201,7 +271,9 @@ def _check_readers(c, readers):
     ids = [(H.resolve_bot(c, slug) or {}).get("id") for slug in readers]
     unknown = [slug for slug, bot_id in zip(readers, ids, strict=True) if not bot_id]
     if unknown:
-        raise Problem("slack_reader", "No bot named " + ", ".join(unknown) + ". Readers are bots' slugs (Settings > Bots).", 422)
+        raise Problem(
+            "slack_reader", "No bot named " + ", ".join(unknown) + ". Readers are bots' slugs (Settings > Bots).", 422
+        )
     return ids
 
 
@@ -213,19 +285,29 @@ def add(c, settings, who, ref, readers=None, post=None, note=None, digest_hours=
     rows = listing(c, settings)
     have = _find(rows, cid, label)
     if have is None:
-        entry = {"key": entry_key(cid, label), "id": cid, "name": label, "readers": readers,
-                 "post": True if post is None else bool(post), "note": (note or "").strip(),
-                 "digest_hours": max(0.0, float(digest_hours or 0))}
-        if any(r["key"] == entry["key"] for r in _stored(c)):       # the same channel under its other spelling
+        entry = {
+            "key": entry_key(cid, label),
+            "id": cid,
+            "name": label,
+            "readers": readers,
+            "post": True if post is None else bool(post),
+            "note": (note or "").strip(),
+            "digest_hours": max(0.0, float(digest_hours or 0)),
+        }
+        if any(r["key"] == entry["key"] for r in _stored(c)):  # the same channel under its other spelling
             raise Problem("slack_channel", "That channel is already listed.", 409)
         _save(c, who, entry, True)
         created = True
     else:
-        entry = {"key": have["key"], "id": have["id"] or cid, "name": have["name"] or label,
-                 "readers": have["readers"] + [r for r in readers if r not in have["readers"]],
-                 "post": have["post"] if post is None else bool(post),
-                 "note": have["note"] if note is None else note.strip(),
-                 "digest_hours": have["digest_hours"] if digest_hours is None else max(0.0, float(digest_hours))}
+        entry = {
+            "key": have["key"],
+            "id": have["id"] or cid,
+            "name": have["name"] or label,
+            "readers": have["readers"] + [r for r in readers if r not in have["readers"]],
+            "post": have["post"] if post is None else bool(post),
+            "note": have["note"] if note is None else note.strip(),
+            "digest_hours": have["digest_hours"] if digest_hours is None else max(0.0, float(digest_hours)),
+        }
         stored = any(r["key"] == have["key"] for r in _stored(c))
         if stored:
             _save(c, who, entry, False)
@@ -233,8 +315,13 @@ def add(c, settings, who, ref, readers=None, post=None, note=None, digest_hours=
             entry["key"] = entry_key(entry["id"], entry["name"])
             _save(c, who, entry, True)
         created = False
-    H.event(c, who.actor, "slack.channel_added" if created else "slack.channel_changed", entry["key"],
-            {"readers": entry["readers"], "post": entry["post"]})
+    H.event(
+        c,
+        who.actor,
+        "slack.channel_added" if created else "slack.channel_changed",
+        entry["key"],
+        {"readers": entry["readers"], "post": entry["post"]},
+    )
     return {**next(r for r in listing(c, settings) if _same(entry, r)), "created": created}
 
 
@@ -246,8 +333,12 @@ def remove(c, settings, who, ref, reader=""):
     if have is None:
         raise Problem("not_found", "That channel is not on the list.", 404)
     if have["source"] == "file":
-        raise Problem("slack_file", "That channel is only in registry/slack-channels.yaml. Import the file first "
-                      "(Settings > Tools > Slack, or `hub slack channel import`), then change it here.", 409)
+        raise Problem(
+            "slack_file",
+            "That channel is only in registry/slack-channels.yaml. Import the file first "
+            "(Settings > Tools > Slack, or `hub slack channel import`), then change it here.",
+            409,
+        )
     if reader:
         slug = _readers([reader])[0]
         bot_id = (H.resolve_bot(c, slug) or {}).get("id", slug)
@@ -278,8 +369,10 @@ def import_file(c, settings, who):
         _save(c, who, raw, True)
         stored.append(raw)
         added += 1
-    c.execute("INSERT INTO registry_metadata VALUES(?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value",
-              (IMPORTED, _dump({"at": H.now(), "by": who.actor, "added": added})))
+    c.execute(
+        "INSERT INTO registry_metadata VALUES(?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value",
+        (IMPORTED, _dump({"at": H.now(), "by": who.actor, "added": added})),
+    )
     H.event(c, who.actor, "slack.channels_imported", "", {"added": added, "skipped": skipped})
     return {"imported": added, "skipped": skipped}
 
@@ -312,7 +405,9 @@ def install(app, settings, store, auth):
         who = request.state.identity
         auth.domain(who)
         if manage and not auth.bot_admin(who):
-            raise Problem("forbidden", "Only an owner or an admin changes which Slack channels bots may read and post in", 403)
+            raise Problem(
+                "forbidden", "Only an owner or an admin changes which Slack channels bots may read and post in", 403
+            )
         return who
 
     @app.get("/api/v2/slack/channels")
@@ -322,10 +417,18 @@ def install(app, settings, store, auth):
         with store.read() as c:
             present = file_rows(settings.registry_dir)
             done = imported(c)
-            return {"channels": listing(c, settings), "can_manage": auth.bot_admin(who),
-                    "registry_file": {"present": bool(present), "channels": len(present), "imported": done},
-                    "bots": [{"id": b["id"], "name": b.get("name") or b["slug"]} for b in H.bots(c) if b.get("state") != "archived"]
-                    if auth.bot_admin(who) else []}
+            return {
+                "channels": listing(c, settings),
+                "can_manage": auth.bot_admin(who),
+                "registry_file": {"present": bool(present), "channels": len(present), "imported": done},
+                "bots": [
+                    {"id": b["id"], "name": b.get("name") or b["slug"]}
+                    for b in H.bots(c)
+                    if b.get("state") != "archived"
+                ]
+                if auth.bot_admin(who)
+                else [],
+            }
 
     @app.post("/api/v2/slack/channels")
     def channel_add(request: Request, body: ChannelAdd):

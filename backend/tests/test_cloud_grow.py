@@ -15,10 +15,19 @@ from backend.tests.test_api import api, headers, post, ready  # noqa: F401
 from backend.tests.test_health import health_of
 from backend.tests.test_cloud_machines import claim_on, cloud, enrolled, events, facts, machine_row, work  # noqa: F401
 
-GB = 1024 ** 3
-OFFERED = [{"name": name, "cpu": cpu, "memory_gb": cpu * 2, "disk_gb": disk, "usd_per_hour": 0.05 * cpu,
-            "start_usd": 0.04, "idle_stop_s": 300}
-           for name, cpu, disk in (("small", 2, 51), ("default", 4, 51), ("large", 8, 111), ("xlarge", 16, 251))]
+GB = 1024**3
+OFFERED = [
+    {
+        "name": name,
+        "cpu": cpu,
+        "memory_gb": cpu * 2,
+        "disk_gb": disk,
+        "usd_per_hour": 0.05 * cpu,
+        "start_usd": 0.04,
+        "idle_stop_s": 300,
+    }
+    for name, cpu, disk in (("small", 2, 51), ("default", 4, 51), ("large", 8, 111), ("xlarge", 16, 251))
+]
 
 
 def disk(free_gb, total_gb=51):
@@ -29,15 +38,19 @@ def disk(free_gb, total_gb=51):
 def test_a_nearly_full_disk_plans_the_next_size_with_more_disk_up_to_the_largest_and_the_cpu_cap():
     assert not CM.low_disk(disk(20)) and not CM.low_disk(None) and not CM.low_disk({"free_bytes": 0, "total_bytes": 0})
     assert CM.low_disk(disk(9)) and CM.low_disk(disk(0.2))
-    assert CM.low_disk(disk(15, 111)) and not CM.low_disk(disk(40, 111))    # under 15% even with over 10 GB free
+    assert CM.low_disk(disk(15, 111)) and not CM.low_disk(disk(40, 111))  # under 15% even with over 10 GB free
     running = machine_row(state="running")
     target, why, full = CM.grow_plan(running, disk(0.2), OFFERED, {}, 0)
     assert (target, why, full) == ("large", None, 100)
     # small has no more disk than default: it goes straight to the next size that has.
-    assert CM.grow_plan(machine_row(state="running", size="small", machine_size="small"), disk(1), OFFERED, {}, 0)[0] \
+    assert (
+        CM.grow_plan(machine_row(state="running", size="small", machine_size="small"), disk(1), OFFERED, {}, 0)[0]
         == "large"
-    assert CM.grow_plan(machine_row(state="running", size="large", machine_size="large"), disk(5, 111), OFFERED, {},
-                        0)[0] == "xlarge"
+    )
+    assert (
+        CM.grow_plan(machine_row(state="running", size="large", machine_size="large"), disk(5, 111), OFFERED, {}, 0)[0]
+        == "xlarge"
+    )
     # Room on the disk, or a size already waiting for the restart: nothing to plan.
     assert CM.grow_plan(running, disk(30), OFFERED, {}, 0) == (None, None, None)
     assert CM.grow_plan(machine_row(state="running", size="large"), disk(0.2), OFFERED, {}, 0) == (None, None, None)
@@ -56,21 +69,23 @@ def test_a_nearly_full_disk_plans_the_next_size_with_more_disk_up_to_the_largest
 def test_grow_storage_is_on_unless_the_bot_or_the_company_turned_it_off():
     assert CM.grows(machine_row()) and CM.grows(machine_row(grow_storage=None), {"grow_storage": None})
     assert not CM.grows(machine_row(grow_storage=0))
-    assert not CM.grows(machine_row(grow_storage=None), {"grow_storage": 0})        # the company's
-    assert CM.grows(machine_row(grow_storage=1), {"grow_storage": 0})               # the bot's own choice wins
+    assert not CM.grows(machine_row(grow_storage=None), {"grow_storage": 0})  # the company's
+    assert CM.grows(machine_row(grow_storage=1), {"grow_storage": 0})  # the bot's own choice wins
 
 
 def test_a_running_machine_with_another_size_stops_only_once_no_turn_is_out_always_on_too():
     pending = machine_row(state="running", size="large", heartbeat_at=990, active_at=999)
     assert CM.resizing(pending) and not CM.resizing(machine_row(state="running"))
-    assert not CM.resizing(machine_row(size="large"))                               # stopped: the next start sends it
-    assert CM.decide(pending, facts(), 1000, 300) == ("stop", None)                 # not idle yet, but drained
+    assert not CM.resizing(machine_row(size="large"))  # stopped: the next start sends it
+    assert CM.decide(pending, facts(), 1000, 300) == ("stop", None)  # not idle yet, but drained
     assert CM.decide({**pending, "always_on": 1}, facts(), 1000, 300) == ("stop", None)
     assert CM.decide(pending, facts(turns=True), 1000, 300) == (None, None)
     assert CM.decide(pending, facts(turns=True), 1100, 300) == ("heartbeat", None)  # kept on, never cut
     assert CM.decide(pending, facts(updating=True), 1000, 300) == (None, None)
-    assert CM.decide({**machine_row(state="running", always_on=1, heartbeat_at=990)}, facts(), 1000, 300) \
-        == (None, None)
+    assert CM.decide({**machine_row(state="running", always_on=1, heartbeat_at=990)}, facts(), 1000, 300) == (
+        None,
+        None,
+    )
 
 
 # ----------------------------------------------------------------------------- the manager, with HQ's sizes
@@ -90,8 +105,12 @@ def grow(cloud, monkeypatch):  # noqa: F811
         rid = rid or cloud.row()["runner_id"]
         at = math.ceil(cloud.at[0]) if at is None else at
         with cloud.store.transaction() as c:
-            c.execute("INSERT OR REPLACE INTO perf_points(runner_id,span,created_at,n,cpu,cpu_max,disk_free,disk_total) "
-                      "VALUES(?,?,?,1,10,10,?,?)", (rid, performance.MINUTE, at, int(free_gb * GB), int(total_gb * GB)))
+            c.execute(
+                "INSERT OR REPLACE INTO perf_points(runner_id,span,created_at,n,cpu,cpu_max,disk_free,disk_total) "
+                "VALUES(?,?,?,1,10,10,?,?)",
+                (rid, performance.MINUTE, at, int(free_gb * GB), int(total_gb * GB)),
+            )
+
     cloud.full = full
     return cloud
 
@@ -121,7 +140,7 @@ def test_a_full_disk_grows_the_machine_once_its_turn_finishes_and_the_turn_is_ne
     grow.tick(1)
     assert grow.hq.actions() == ["stop"] and grow.row()["state"] == "stopped"
     assert grow.row()["drain_started_at"] is None
-    grow.tick(1)                                                # the queued work starts it again, at the new size
+    grow.tick(1)  # the queued work starts it again, at the new size
     assert grow.hq.calls[-1] == ("start", "m1", "large")
     after = grow.row()
     assert after["machine_size"] == "large" and after["size"] == "large" and after["grow_note"] == ""
@@ -173,7 +192,7 @@ def test_at_the_largest_size_it_is_a_problem_on_health_not_a_resize(grow):
     with grow.store.read() as c:
         found = CM.health(c, grow.store.settings)
         assert found and found["status"] == "warn" and row["grow_note"] in found["summary"]
-    grow.full(100, 251)                                         # space freed: the problem clears
+    grow.full(100, 251)  # space freed: the problem clears
     grow.tick(1)
     assert grow.row()["problem"] == ""
 
@@ -192,20 +211,20 @@ def test_over_the_cpu_cap_it_does_not_grow(grow):
 def test_a_size_hq_refuses_at_the_restart_goes_back_and_is_not_grown_to_again(grow):
     computer = enrolled(grow)
     ready(grow.api, computer, ["ops"])
-    with grow.store.transaction() as c:                        # the first chat is done: nothing out
+    with grow.store.transaction() as c:  # the first chat is done: nothing out
         c.execute("UPDATE jobs SET state='canceled' WHERE bot_id='ops'")
     grow.full(0.2)
     grow.tick(1)
     assert grow.row()["size"] == "large"
     grow.tick(1)
     assert grow.row()["state"] == "stopped"
-    grow.hq.fail["start"] = [CM.Refused("cpu_cap", 409)]    # once
+    grow.hq.fail["start"] = [CM.Refused("cpu_cap", 409)]  # once
     work(grow, text="Another thing")
     grow.tick(1)
     row = grow.row()
     assert row["size"] == "default" and row["grow_refused_size"] == "large" and row["next_try_at"] is None
     grow.hq.calls.clear()
-    grow.tick(1)                                               # starts again at its own size, not at the refused one
+    grow.tick(1)  # starts again at its own size, not at the refused one
     assert grow.hq.calls[-1] == ("start", "m1", None)
     grow.tick(1)
     grow.full(0.2)
@@ -269,7 +288,7 @@ def test_a_reading_from_before_the_restart_does_not_grow_it_again(grow):
         c.execute("UPDATE jobs SET state='canceled' WHERE bot_id='ops'")
     grow.full(0.2)
     grow.hq.calls.clear()
-    grow.tick(1)                                               # grows and, with nothing out, stops on the same look
+    grow.tick(1)  # grows and, with nothing out, stops on the same look
     assert grow.row()["size"] == "large" and grow.hq.actions() == ["stop"]
     work(grow, text="Another thing")
     grow.tick(1)
@@ -336,14 +355,14 @@ def test_a_smaller_disk_is_refused_and_the_same_choice_again_keeps_a_refusal(gro
     shrink = grow.api.post("/api/v2/bots/ops/cloud-machine", json={"size": "default"}, headers=headers())
     assert shrink.status_code == 422 and shrink.json()["error"]["code"] == "too_small"
     assert grow.row()["size"] == "large"
-    post(grow.api, "bots/ops/cloud-machine", {"size": "large"})                  # the same size again
+    post(grow.api, "bots/ops/cloud-machine", {"size": "large"})  # the same size again
     post(grow.api, "bots/ops/cloud-machine", {"grow_storage": True})
-    post(grow.api, "bots/ops/cloud-machine", {"grow_storage": True})             # and the same switch again
+    post(grow.api, "bots/ops/cloud-machine", {"grow_storage": True})  # and the same switch again
     with grow.store.transaction() as c:
         CM.save(c, "ops", grow_refused_size="xlarge")
     post(grow.api, "bots/ops/cloud-machine", {"grow_storage": True})
     assert grow.row()["grow_refused_size"] == "xlarge"
-    post(grow.api, "bots/ops/cloud-machine", {"size": "xlarge"})                 # a real change clears it
+    post(grow.api, "bots/ops/cloud-machine", {"size": "xlarge"})  # a real change clears it
     assert grow.row()["grow_refused_size"] is None
     # The shared machine refuses a shrink the same way.
     with grow.store.transaction() as c:
@@ -360,7 +379,7 @@ def test_health_says_nothing_of_a_stopped_machines_disk(grow):
     post(grow.api, "bots/ops/cloud-machine", {"grow_storage": False})
     grow.full(1)
     _, checks = health_of(grow.api, headers())
-    assert "disk:" + rid in checks                              # running and full: said
+    assert "disk:" + rid in checks  # running and full: said
     with grow.store.transaction() as c:
         c.execute("UPDATE jobs SET state='canceled' WHERE bot_id='ops'")
     grow.at[0] = grow.row()["active_at"] + 300

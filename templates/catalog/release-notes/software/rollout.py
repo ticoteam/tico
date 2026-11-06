@@ -20,6 +20,7 @@ Each `key_env` is a Credential granted to this bot holding that install's update
 Prints one JSON report (before and after per install) and exits 1 when a step fails; nothing after a failed step runs.
 Standard library only.
 """
+
 import argparse
 import json
 import os
@@ -34,9 +35,9 @@ from pathlib import Path
 
 HERE = Path(__file__).resolve().parent
 CONFIG = HERE.parent / "knowledge" / "rollout.json"
-RELEASE_WAIT = 90 * 60      # the desktop builds come before the GitHub release
-UPDATE_WAIT = 30 * 60       # the updater pulls, snapshots, restarts and checks health, or rolls back
-COMPUTERS_WAIT = 10 * 60    # computers follow their server within a few minutes; reported, never a gate
+RELEASE_WAIT = 90 * 60  # the desktop builds come before the GitHub release
+UPDATE_WAIT = 30 * 60  # the updater pulls, snapshots, restarts and checks health, or rolls back
+COMPUTERS_WAIT = 10 * 60  # computers follow their server within a few minutes; reported, never a gate
 POLL = 20
 
 
@@ -90,7 +91,9 @@ def wait_release(repo, version):
         runs = gh("run", "list", "-R", repo, "--branch", name, "--json", "name,status,conclusion,url", check=False)
         for run in json.loads(runs.stdout or "[]") if runs.returncode == 0 else []:
             if run.get("name") == "Release" and run.get("conclusion") in ("failure", "cancelled", "timed_out"):
-                raise Stop("the %s workflow for %s ended %s: %s" % (run["name"], name, run["conclusion"], run.get("url")))
+                raise Stop(
+                    "the %s workflow for %s ended %s: %s" % (run["name"], name, run["conclusion"], run.get("url"))
+                )
         time.sleep(POLL)
     raise Stop("no GitHub release for %s after %d minutes" % (name, RELEASE_WAIT // 60))
 
@@ -137,7 +140,7 @@ def update(install, version):
     if before == target:
         out["outcome"] = "already"
         return out
-    call(install, "POST", "/api/v2/system/update/check")          # 429 within a minute of another check is fine
+    call(install, "POST", "/api/v2/system/update/check")  # 429 within a minute of another check is fine
     code, started = call(install, "POST", "/api/v2/system/update", {"version": target})
     if code != 200:
         out["outcome"] = "refused"
@@ -148,7 +151,7 @@ def update(install, version):
         time.sleep(POLL)
         code, status = call(install, "GET", "/api/v2/system/update")
         if code != 200:
-            continue                                                # the server is restarting
+            continue  # the server is restarting
         state = status.get("state") or ""
         if plain(status.get("to")) == target and state in ("rolled_back", "failed"):
             out.update(outcome=state, after=running(install))
@@ -158,7 +161,9 @@ def update(install, version):
             break
     else:
         out.update(outcome="timeout", after=running(install))
-        raise Stop("%s did not report %s within %d minutes (last state %s)" % (name, target, UPDATE_WAIT // 60, state), out)
+        raise Stop(
+            "%s did not report %s within %d minutes (last state %s)" % (name, target, UPDATE_WAIT // 60, state), out
+        )
     say(name, "healthy on", target)
     out["computers"] = follow(install, install.get("canary", False))
     return out
@@ -211,10 +216,10 @@ def main(argv=None):
         if args.step in ("all", "update"):
             chosen = [i for i in installs if not args.only or i["name"] == args.only]
             canaries = [i for i in chosen if i.get("canary")]
-            for install in canaries:                                # one at a time; a failure stops everything after
+            for install in canaries:  # one at a time; a failure stops everything after
                 report["installs"].append(update(install, args.version))
             rest = [i for i in chosen if not i.get("canary")]
-            with ThreadPoolExecutor(max(1, len(rest))) as pool:     # the rest together
+            with ThreadPoolExecutor(max(1, len(rest))) as pool:  # the rest together
                 futures = [pool.submit(update, i, args.version) for i in rest]
             failures = []
             for future in futures:

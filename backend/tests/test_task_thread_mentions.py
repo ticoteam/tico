@@ -15,8 +15,9 @@ def task_thread(api):
     """Ben's task that Ana asked for, and its own thread: a task thread has no members list, so the people in it are its
     requester and owner."""
     with api.app.state.store.transaction() as c:
-        made = H.task_create(c, "human:ben", "Budget review", "Details.", "human:ben", requester_actor="human:ana",
-                             lint=False)
+        made = H.task_create(
+            c, "human:ben", "Budget review", "Details.", "human:ben", requester_actor="human:ana", lint=False
+        )
     return made["conversation_id"]
 
 
@@ -65,17 +66,20 @@ def test_an_old_bot_delivery_in_a_task_thread_no_longer_counts_as_unread(api):
     said = bot_say(api, thread_id, "The budget draft is in the doc.", to="human:ana")
     with api.app.state.store.transaction() as c:
         # The row the trigger wrote before the rule: an 'addressed' delivery to Ana (who does not follow) for the post.
-        c.execute("INSERT INTO message_deliveries(id,message_id,recipient,thread_id,root_id,mode,reason,cause,state,"
-                  "revision,created_at,updated_at) SELECT 'old-' || id, id, 'human:ana', conversation_id, "
-                  "conversation_id, 'queue', 'addressed', 'bot', 'pending', 0, created_at, created_at "
-                  "FROM messages WHERE id=?", (said["id"],))
+        c.execute(
+            "INSERT INTO message_deliveries(id,message_id,recipient,thread_id,root_id,mode,reason,cause,state,"
+            "revision,created_at,updated_at) SELECT 'old-' || id, id, 'human:ana', conversation_id, "
+            "conversation_id, 'queue', 'addressed', 'bot', 'pending', 0, created_at, created_at "
+            "FROM messages WHERE id=?",
+            (said["id"],),
+        )
     assert delivery(api, said["id"], "human:ana")["state"] == "pending"
     assert unread_for(api, "human:ana", thread_id) == 0
 
 
 def test_a_bot_question_to_a_person_in_a_task_thread_is_not_a_delivery_but_still_needs_them(api):
     thread_id = task_thread(api)
-    with api.app.state.store.transaction() as c:   # Ben stops following: the ask reaches him only through Needs you
+    with api.app.state.store.transaction() as c:  # Ben stops following: the ask reaches him only through Needs you
         c.execute("UPDATE thread_followers SET following=0 WHERE thread_id=? AND actor='human:ben'", (thread_id,))
     asked = bot_say(api, thread_id, "Is the total final? If yes, I'll send it to the board.", kind="ask")
     assert delivery(api, asked["id"], "human:ben") is None

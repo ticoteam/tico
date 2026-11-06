@@ -19,7 +19,7 @@ from .batch_work import isolated
 from .updates import ZONE
 
 BUSINESS_DAYS = 2
-MORNING = time(8)           # the batch runs at the first hourly sweep after this, Monday to Friday
+MORNING = time(8)  # the batch runs at the first hourly sweep after this, Monday to Friday
 ACTION = "ask.still_needed"
 
 
@@ -74,6 +74,7 @@ def crossed_tasks(conn, at):
     """Open question tasks (backend/question_tasks.py) with no fallback date that crossed the line by `at`: their due
     date when they have one, else two business days after they were asked. Oldest first."""
     from . import question_tasks
+
     rules = team_rules.load(conn)
     limit = _local(at)
     out = []
@@ -81,8 +82,11 @@ def crossed_tasks(conn, at):
         if ask_deadlines.fallback_at(question_tasks.as_ask(row), rules):
             continue
         due = H.parse_ts(row.get("due_at")) if row.get("due_at") else None
-        line = (due if due.tzinfo else due.replace(tzinfo=timezone.utc)) if due else crossed_at(
-            question_tasks.asked_at(row))
+        line = (
+            (due if due.tzinfo else due.replace(tzinfo=timezone.utc))
+            if due
+            else crossed_at(question_tasks.asked_at(row))
+        )
         if line <= limit:
             out.append(row)
     return out
@@ -92,24 +96,35 @@ def send_back(conn, bot, items, tasks=()):
     """Take `items` (and question `tasks`) off their people's lists and record them for `bot`'s task roundup (no wake:
     the roundup lists them). A question task closes; the bot's task blocked on it goes on without a wake."""
     from . import question_tasks
+
     stamp = H.now()
     people = set()
     for row in tasks:
         people.add(row["owner_id"])
-        question_tasks.send_back(conn, row, "No answer in two business days: back to the bot that asked, as still "
-                                 "needed?")
+        question_tasks.send_back(
+            conn, row, "No answer in two business days: back to the bot that asked, as still needed?"
+        )
     for asked, task in items:
         conn.execute("UPDATE messages SET superseded_at=? WHERE id=?", (stamp, asked["id"]))
         person = asked["recipient_id"]
         people.add(person)
         if task:
-            H._task_event(conn, task["id"], H.KEEPER, "asks_superseded", None, "1",
-                          "No answer in two business days: back to the bot that asked, as still needed?")
+            H._task_event(
+                conn,
+                task["id"],
+                H.KEEPER,
+                "asks_superseded",
+                None,
+                "1",
+                "No answer in two business days: back to the bot that asked, as still needed?",
+            )
             # The question shows it went back unanswered, and a bot's task left with nothing to wait on goes back to
             # open; the roundup line is the bot's word of it (backend/task_holds.py).
             from . import task_holds
-            task_holds.withdrawn(conn, task["id"], [asked["id"]], "no answer in two business days (still needed?)",
-                                 told=False)
+
+            task_holds.withdrawn(
+                conn, task["id"], [asked["id"]], "no answer in two business days (still needed?)", told=False
+            )
     for person in people:
         H._recount(conn, person)
     H._recount(conn, bot)
@@ -132,6 +147,11 @@ def sweep(conn, at=None):
         with isolated(conn, "still_needed", bot):
             send_back(conn, bot, items, tasks)
             sent[bot] = [asked["id"] for asked, _ in items] + [row["id"] for row in tasks]
-    H.event(conn, H.KEEPER, ACTION + ".batch", _local(at).date().isoformat(),
-            {"bots": len(sent), "asks": sum(len(v) for v in sent.values())})
+    H.event(
+        conn,
+        H.KEEPER,
+        ACTION + ".batch",
+        _local(at).date().isoformat(),
+        {"bots": len(sent), "asks": sum(len(v) for v in sent.values())},
+    )
     return sent

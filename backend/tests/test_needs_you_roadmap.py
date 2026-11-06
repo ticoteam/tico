@@ -20,15 +20,17 @@ def test_needs_you_lists_every_owned_active_task_past_five_hundred(api):
 
 def test_a_declined_roadmap_item_stays_off_its_requesters_list_and_a_roadmap_card_says_it_moves_by_step(api):
     with api.app.state.store.transaction() as c:
-        idea = H.task_create(c, ANA, "Dark mode for the public roadmap", "x", OPS, type="product-roadmap",
-                             step="Suggested")
+        idea = H.task_create(
+            c, ANA, "Dark mode for the public roadmap", "x", OPS, type="product-roadmap", step="Suggested"
+        )
         plain = H.task_create(c, ANA, "Book the venue", "x", OPS)
         H.task_update(c, OPS, plain["id"], status="declined", note="No budget.")
         H.task_update(c, H.KEEPER, idea["id"], step="Declined")
         assert H.task(c, idea["id"])["status"] == "declined"
         declined = {t["id"] for t in H.needs_you(c, ANA)["declined"]}
-        asked = H.task_create(c, ANA, "Bulk export for roadmap items", "x", OPS, type="product-roadmap",
-                              step="Suggested")
+        asked = H.task_create(
+            c, ANA, "Bulk export for roadmap items", "x", OPS, type="product-roadmap", step="Suggested"
+        )
         question(c, OPS, asked["id"], "Which format should the export use?")
     assert plain["id"] in declined and idea["id"] not in declined
     items = {i["id"]: i for i in get(api, "needs-you", token="ana-test")["items"]}

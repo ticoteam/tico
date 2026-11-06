@@ -24,8 +24,8 @@ MAX_RESPONSE = 20_000_000
 TIMEOUT = 60
 MAX_TURNS = 10_000
 MAX_TRANSCRIPT = 1_000_000
-RECENT_HOURS = 72          # notes and recordings are revisited for this long: summaries arrive late
-PENDING_DAYS = 7           # how long a meeting whose transcript is not ready holds the cursor
+RECENT_HOURS = 72  # notes and recordings are revisited for this long: summaries arrive late
+PENDING_DAYS = 7  # how long a meeting whose transcript is not ready holds the cursor
 MAX_BACKFILL_DAYS = 365
 
 # What the Settings card and `importers-doctor` say about each code. Nothing else about a
@@ -104,7 +104,7 @@ def people(*entries):
     """Participants for the hub: unique, emails when known, at most 100."""
     out, seen = [], set()
     for entry in entries:
-        name, email = (entry if isinstance(entry, tuple) else ("", entry))
+        name, email = entry if isinstance(entry, tuple) else ("", entry)
         email, name = email_of(email), text(name, 120)
         key = email or name.lower()
         if key and key not in seen:
@@ -135,8 +135,7 @@ def turns_of(rows, merge_gap_ms=8000):
     return out
 
 
-def request_json(method, url, *, headers=None, body=None, form=None, timeout=TIMEOUT, tool="The tool",
-                 opener=None):
+def request_json(method, url, *, headers=None, body=None, form=None, timeout=TIMEOUT, tool="The tool", opener=None):
     """One provider call. Every failure is a ProviderError that never carries the URL or a body."""
     data, headers = None, dict(headers or {})
     if body is not None:
@@ -144,6 +143,7 @@ def request_json(method, url, *, headers=None, body=None, form=None, timeout=TIM
         headers["Content-Type"] = "application/json"
     elif form is not None:
         from urllib.parse import urlencode
+
         data = urlencode(form).encode()
         headers["Content-Type"] = "application/x-www-form-urlencoded"
     headers.setdefault("Accept", "application/json")
@@ -188,6 +188,7 @@ def parse_json(payload, tool):
 @dataclass
 class Scope:
     """One credential's view: a Granola key, a Zoom account, a Google user."""
+
     id: str
     label: str = ""
     data: dict = field(default_factory=dict)
@@ -197,23 +198,23 @@ class Scope:
 class Item:
     external_id: str
     owner_email: str
-    body: dict                 # what the hub takes, minus source, external_id and owner_email
+    body: dict  # what the hub takes, minus source, external_id and owner_email
     started: datetime
-    revision: str = ""         # what the provider changed last; unchanged means no refetch
+    revision: str = ""  # what the provider changed last; unchanged means no refetch
 
 
 class Importer:
     source = ""
     name = ""
-    prefix = ""                # credential names and options start with this
-    secret_file = ""           # under <projects>/secrets/
-    required = ()              # every one must be present
+    prefix = ""  # credential names and options start with this
+    secret_file = ""  # under <projects>/secrets/
+    required = ()  # every one must be present
     interval = 300
     window = timedelta(days=1)
     max_lookback_days = MAX_BACKFILL_DAYS
     lookback_days = 30
     private_by_default = False
-    fallback = True            # unmatched people's meetings go to the company owner; False skips them
+    fallback = True  # unmatched people's meetings go to the company owner; False skips them
 
     def __init__(self, config, state, client, *, env=None, transport=None, now=None, backfill_days=None):
         self.config, self.state, self.client = config, state, client
@@ -242,15 +243,17 @@ class Importer:
         env = self.env()
         missing = [k for k in self.required if not env.get(k)]
         if missing:
-            raise ProviderError("missing_credentials", "Missing " + ", ".join(missing)
-                                + " in secrets/" + self.secret_file + " on this computer")
+            raise ProviderError(
+                "missing_credentials",
+                "Missing " + ", ".join(missing) + " in secrets/" + self.secret_file + " on this computer",
+            )
         return env
 
     def private(self):
         flag = self.env().get(self.prefix + "_PRIVATE", "").strip().lower()
         return flag in ("1", "true", "yes") if flag else self.private_by_default
 
-    pace = 0.0                 # seconds between calls to a rate-limited tool
+    pace = 0.0  # seconds between calls to a rate-limited tool
 
     def send(self, method, url, *, headers=None, body=None, form=None, raw=False):
         """Every provider call goes through here: tests replace `transport` and never touch a network."""
@@ -299,12 +302,18 @@ class Importer:
                 if exc.code != "not_found" or (self.fallback and owner == self.fallback_owner()):
                     raise
                 if not self.fallback:
-                    log("Tico " + self.name + ": " + owner + " is not on the Tico roster; skipped "
-                        + item.external_id)
+                    log("Tico " + self.name + ": " + owner + " is not on the Tico roster; skipped " + item.external_id)
                     return {"changed": False, "status": "skipped"}
                 # Someone outside the roster: the company owner keeps it rather than dropping it.
-                log("Tico " + self.name + ": " + owner + " is not on the Tico roster; filing "
-                    + item.external_id + " under the owner")
+                log(
+                    "Tico "
+                    + self.name
+                    + ": "
+                    + owner
+                    + " is not on the Tico roster; filing "
+                    + item.external_id
+                    + " under the owner"
+                )
                 result = self.client.post("meetings/import", {**body, "owner_email": self.fallback_owner()})
         except APIError as exc:
             raise ProviderError("hub_rejected", "The Tico server refused a meeting (" + exc.code + ")") from None

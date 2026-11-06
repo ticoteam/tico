@@ -18,6 +18,7 @@ stored KPI shows to a viewer who may read its owner, as its API route does, and 
 shows nothing, never a zero. Attributes not listed are dropped when a page is published (backend/visuals.py clean). A
 tag with no answer for this viewer shows nothing, except tico-tasks, which says so. A page fills at most LIVE_TAG_CAP
 tags; the rest render empty."""
+
 import html
 import re
 from datetime import timedelta
@@ -25,8 +26,12 @@ from urllib.parse import quote
 
 # Kinds a file list takes; video and audio are both kinds of the media group.
 FILE_KINDS = {"video": "media", "audio": "media"}
-LIVE_ATTRS = {"tico-tasks": ("waiting-on", "bot", "parent", "limit"), "tico-task": ("id",),
-              "tico-files": ("task", "kind", "limit"), "tico-kpi": ("bot", "name", "period", "id")}
+LIVE_ATTRS = {
+    "tico-tasks": ("waiting-on", "bot", "parent", "limit"),
+    "tico-task": ("id",),
+    "tico-files": ("task", "kind", "limit"),
+    "tico-kpi": ("bot", "name", "period", "id"),
+}
 DEFAULT_LIMIT, MAX_LIMIT = 10, 50
 # A file listing reads at most this many rows to find the ones the viewer may see.
 SCAN_LIMIT = 200
@@ -34,8 +39,10 @@ SCAN_LIMIT = 200
 LIVE_TAG_CAP = 50
 TAG = re.compile(r"<(tico-tasks|tico-task|tico-files|tico-kpi)\b([^>]*?)/?>(?:\s*</\1\s*>)?", re.I)
 ATTR = re.compile(r"""([\w:-]+)\s*=\s*(?:"([^"]*)"|'([^']*)'|([^\s"'>]+))""")
-STYLE = ("<style>.tico-live-tasks,.tico-live-files{margin:0;padding-left:1.2em}"
-         ".tico-live-empty{margin:0;opacity:.7}.tico-live-link{color:inherit}</style>")
+STYLE = (
+    "<style>.tico-live-tasks,.tico-live-files{margin:0;padding-left:1.2em}"
+    ".tico-live-empty{margin:0;opacity:.7}.tico-live-link{color:inherit}</style>"
+)
 
 
 def has_live(text):
@@ -53,20 +60,29 @@ def _limit(value):
 
 def _link(base, task_id, title, route=None):
     href = html.escape(f"{base}/{route or '#/task/' + quote(task_id, safe='')}", quote=True)
-    return (f'<a class="tico-live-link" href="{href}" target="_blank" rel="noopener">'
-            f'{html.escape(title or "Untitled task")}</a>')
+    return (
+        f'<a class="tico-live-link" href="{href}" target="_blank" rel="noopener">'
+        f'{html.escape(title or "Untitled task")}</a>'
+    )
 
 
 def _tasks(c, auth, who, attrs, base):
     from .store import H
     from . import question_tasks as QT
+
     if attrs.get("waiting-on") != "viewer":
         return ""
     # The same rules as Needs you: waiting on the viewer (an open question task of theirs under it or blocking it), not
     # snoozed, and a task the reader may see (task_sql).
-    clauses, args = [QT.waits_sql("tasks", "=?"), "NOT EXISTS (SELECT 1 FROM task_holds sh WHERE sh.task_id=tasks.id AND sh.kind='snoozed' "
-                     "AND sh.released_at IS NULL AND sh.until_at>?)",
-                     "(" + auth.task_sql(c, who) + ")"], [who.actor, H.now()]
+    clauses, args = (
+        [
+            QT.waits_sql("tasks", "=?"),
+            "NOT EXISTS (SELECT 1 FROM task_holds sh WHERE sh.task_id=tasks.id AND sh.kind='snoozed' "
+            "AND sh.released_at IS NULL AND sh.until_at>?)",
+            "(" + auth.task_sql(c, who) + ")",
+        ],
+        [who.actor, H.now()],
+    )
     if attrs.get("bot"):
         bot = (H.resolve_bot(c, attrs["bot"]) or {}).get("id", attrs["bot"])
         clauses.append("owner_id=?")
@@ -74,8 +90,10 @@ def _tasks(c, auth, who, attrs, base):
     if attrs.get("parent"):
         clauses.append("parent_id=?")
         args.append(attrs["parent"])
-    rows = c.execute("SELECT id,title FROM tasks WHERE " + " AND ".join(clauses) + " ORDER BY created_at LIMIT ?",
-                     (*args, _limit(attrs.get("limit")))).fetchall()
+    rows = c.execute(
+        "SELECT id,title FROM tasks WHERE " + " AND ".join(clauses) + " ORDER BY created_at LIMIT ?",
+        (*args, _limit(attrs.get("limit"))),
+    ).fetchall()
     if not rows:
         return '<p class="tico-live-empty">Nothing waiting on you</p>'
     items = "".join(f"<li>{_link(base, row['id'], row['title'])}</li>" for row in rows)
@@ -96,8 +114,10 @@ def _task(c, auth, who, attrs, base):
     if not attrs.get("id"):
         return ""
     from .store import H
-    row = c.execute("SELECT id,title,status FROM tasks WHERE id=? AND (" + auth.task_sql(c, who) + ")",
-                    (attrs["id"],)).fetchone()
+
+    row = c.execute(
+        "SELECT id,title,status FROM tasks WHERE id=? AND (" + auth.task_sql(c, who) + ")", (attrs["id"],)
+    ).fetchone()
     if not row:
         return ""
     if row["status"] == "waiting":
@@ -105,12 +125,15 @@ def _task(c, auth, who, attrs, base):
         label = "Waiting on you" if H._waits_on(c, dict(row), who.actor) else "Waiting"
     else:
         label = (row["status"] or "").replace("_", " ").capitalize()
-    return (f'<span class="tico-live-task">{_link(base, row["id"], row["title"])} '
-            f'<span class="tico-live-status">{html.escape(label)}</span></span>')
+    return (
+        f'<span class="tico-live-task">{_link(base, row["id"], row["title"])} '
+        f'<span class="tico-live-status">{html.escape(label)}</span></span>'
+    )
 
 
 def _files(c, files, who, attrs, base):
     from . import file_library
+
     if not attrs.get("task"):
         return ""
     where, args = ["f.task_id=?", "f.state<>'deleted'", "f.archived=0", "COALESCE(p.archived,0)=0"], [attrs["task"]]
@@ -121,9 +144,13 @@ def _files(c, files, who, attrs, base):
         where.append("p.file_id IS NULL AND f.kind IN (%s)" % ",".join("?" * len(file_library.STORED[kind])))
         args += list(file_library.STORED[kind])
     elif kind:
-        return ""                                                 # an unknown kind lists nothing
-    rows = c.execute("SELECT f.*,p.file_id IS NOT NULL AS is_page FROM bot_files f LEFT JOIN pages p ON p.file_id=f.id WHERE "
-                     + " AND ".join(where) + " ORDER BY f.last_activity_at DESC LIMIT ?", (*args, SCAN_LIMIT)).fetchall()
+        return ""  # an unknown kind lists nothing
+    rows = c.execute(
+        "SELECT f.*,p.file_id IS NOT NULL AS is_page FROM bot_files f LEFT JOIN pages p ON p.file_id=f.id WHERE "
+        + " AND ".join(where)
+        + " ORDER BY f.last_activity_at DESC LIMIT ?",
+        (*args, SCAN_LIMIT),
+    ).fetchall()
     cache, shown, limit = {}, [], _limit(attrs.get("limit"))
     for row in rows:
         if len(shown) >= limit:
@@ -148,10 +175,12 @@ def _kpi_html(name, value, change):
     """The card a KPI tag shows. Spans, not divs: a bot may put the tag inside a paragraph, which a div would close.
     Inline styles and no colours of its own: the text takes the page's colour."""
     note = f'<span style="display:block;opacity:.7;font-size:.85em">{html.escape(change)}</span>' if change else ""
-    return (f'<span class="tico-live-kpi" style="display:block;line-height:1.25">'
-            f'<span style="display:block;opacity:.7;font-size:.85em">{html.escape(name)}</span>'
-            f'<span style="display:block;font-size:1.75em;font-weight:600">{html.escape(value)}</span>'
-            f'{note}</span>')
+    return (
+        f'<span class="tico-live-kpi" style="display:block;line-height:1.25">'
+        f'<span style="display:block;opacity:.7;font-size:.85em">{html.escape(name)}</span>'
+        f'<span style="display:block;font-size:1.75em;font-weight:600">{html.escape(value)}</span>'
+        f'{note}</span>'
+    )
 
 
 def _auto_kpi(c, auth, who, attrs):
@@ -160,6 +189,7 @@ def _auto_kpi(c, auth, who, attrs):
     reading."""
     from . import botkpis as K
     from .store import H
+
     bot = H.resolve_bot(c, attrs.get("bot", ""))
     key = K.by_name(attrs.get("name", ""))
     if not bot or not key or not auth.bot_access(c, who, bot["id"])["read"]:
@@ -195,6 +225,7 @@ def _stored_kpi(c, auth, who, kpi_id):
     from . import kpis as KP
     from .goal_routes import _hidden_owners
     from .store import H
+
     if KP.auto(kpi_id):
         return ""
     record = KP.kpi(c, kpi_id)
@@ -205,8 +236,9 @@ def _stored_kpi(c, auth, who, kpi_id):
     if not last:
         return ""
     end = H.parse_ts(last["period_end"])
-    earlier = [r for r in readings if r["id"] != last["id"] and r["quality"] != "partial"
-               and H.parse_ts(r["period_end"]) < end]
+    earlier = [
+        r for r in readings if r["id"] != last["id"] and r["quality"] != "partial" and H.parse_ts(r["period_end"]) < end
+    ]
     prior = None
     if earlier:
         window = KP.CADENCES.get(record["cadence"])
@@ -223,8 +255,9 @@ def _stored_kpi(c, auth, who, kpi_id):
         label = _WINDOW_WORDS.get(record["cadence"], "reading")
         diff = round(float(last["value"]) - float(prior["value"]), 4)
         if diff:
-            amount = (f"{KP.number(abs(diff))} pts" if record["unit"] in ("%", "pp")
-                      else KP.amount(abs(diff), record["unit"]))
+            amount = (
+                f"{KP.number(abs(diff))} pts" if record["unit"] in ("%", "pp") else KP.amount(abs(diff), record["unit"])
+            )
             change = f"{'▲' if diff > 0 else '▼'} {amount} vs previous {label}"
         else:
             change = f"No change vs previous {label}"
@@ -249,8 +282,11 @@ def fill(text, c, who, auth, files):
             return ""
         used.append(True)
         name = match.group(1).lower()
-        attrs = {key.lower(): html.unescape(quoted or single or bare)
-                 for key, quoted, single, bare in ATTR.findall(match.group(2)) if key.lower() in LIVE_ATTRS[name]}
+        attrs = {
+            key.lower(): html.unescape(quoted or single or bare)
+            for key, quoted, single, bare in ATTR.findall(match.group(2))
+            if key.lower() in LIVE_ATTRS[name]
+        }
         if name == "tico-tasks":
             body = _tasks(c, auth, who, attrs, base)
         elif name == "tico-task":
@@ -260,4 +296,5 @@ def fill(text, c, who, auth, files):
         else:
             body = _files(c, files, who, attrs, base)
         return STYLE + body if len(used) == 1 else body
+
     return TAG.sub(replace, text)

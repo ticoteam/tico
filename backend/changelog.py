@@ -1,4 +1,5 @@
 """Shipped product history, available from the installed source without Git or a network call."""
+
 import hashlib
 import json
 import re
@@ -22,9 +23,15 @@ def parse_notes(text):
             bullet = None
             if match and releases.parse(match[1]):
                 version = match[1].lstrip("v")
-                row = {"id": "release-" + version, "version": version, "title": "Tico v" + version,
-                       "shipped_at": match[2] + "T00:00:00Z", "bullets": [], "source": "release",
-                       "url": "https://github.com/ticoteam/tico/releases/tag/v" + version}
+                row = {
+                    "id": "release-" + version,
+                    "version": version,
+                    "title": "Tico v" + version,
+                    "shipped_at": match[2] + "T00:00:00Z",
+                    "bullets": [],
+                    "source": "release",
+                    "url": "https://github.com/ticoteam/tico/releases/tag/v" + version,
+                }
                 rows.append(row)
             continue
         if row is None:
@@ -87,8 +94,7 @@ def _packaged(path, mtime_ns, size):
         bullets = [str(item).strip() for item in (row.get("bullets") or []) if str(item).strip()]
         if not bullets:
             continue
-        value = {"title": str(row["title"]).strip(), "bullets": bullets,
-                 "shipped_at": str(row.get("shipped_at") or "")}
+        value = {"title": str(row["title"]).strip(), "bullets": bullets, "shipped_at": str(row.get("shipped_at") or "")}
         # Reordering the packaged announcements must not change which ones a person has read.
         value["id"] = "packaged-" + hashlib.sha256(encode(value).encode()).hexdigest()[:20]
         out.append(value)
@@ -99,8 +105,10 @@ def products(c, settings):
     extra = stored_products(c)
     titles = {row.get("title") for row in extra}
     rows = release_entries() + extra + [row for row in packaged_products(settings) if row["title"] not in titles]
-    rows.sort(key=lambda row: (row.get("shipped_at") or "",
-                              releases.parse(row.get("version")) or (-1, -1, -1, (0,))), reverse=True)
+    rows.sort(
+        key=lambda row: (row.get("shipped_at") or "", releases.parse(row.get("version")) or (-1, -1, -1, (0,))),
+        reverse=True,
+    )
     return [{**row, "area": "Product", "kind": "product"} for row in rows]
 
 
@@ -119,7 +127,9 @@ def mark_read(c, settings, actor, ids):
     known = {row["id"] for row in products(c, settings)}
     # Merge acknowledgements from concurrent tabs; a later announcement is never acknowledged implicitly.
     read = read_ids(c, actor) | (set(ids) & known)
-    c.execute("INSERT INTO preferences(actor,key,value,updated_at) VALUES(?,?,?,?) "
-              "ON CONFLICT(actor,key) DO UPDATE SET value=excluded.value, updated_at=excluded.updated_at",
-              (actor, READ_KEY, encode(sorted(read)), H.now()))
+    c.execute(
+        "INSERT INTO preferences(actor,key,value,updated_at) VALUES(?,?,?,?) "
+        "ON CONFLICT(actor,key) DO UPDATE SET value=excluded.value, updated_at=excluded.updated_at",
+        (actor, READ_KEY, encode(sorted(read)), H.now()),
+    )
     return summary(c, settings, actor)

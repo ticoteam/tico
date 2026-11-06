@@ -1,5 +1,6 @@
 """Usage facts (backend/usage_facts.py): one append-only row per metered segment, the estimate a run recorded beside the
 Gateway meter's charge, and the migration that moves turn_usage_segments into them."""
+
 import importlib.util
 import sqlite3
 from pathlib import Path
@@ -11,10 +12,27 @@ from backend.store import H
 from backend.tests.test_api import api  # noqa: F401  (the api fixture)
 
 MIGRATION = Path(__file__).resolve().parents[1] / "migrations" / "0053_usage_facts.py"
-SONNET = {"input_tokens": 1000, "cached_tokens": 0, "output_tokens": 100, "model": "claude-sonnet-5-5",
-          "provider": "anthropic", "est_cost_usd": 0.0045, "billing": "subscription", "runtime": "claude"}
-TICO = {"input_tokens": 500, "cached_tokens": 0, "output_tokens": 50, "model": "tico-general-medium-1.0",
-        "provider": "tico", "est_cost_usd": 0.002, "billing": "api", "runtime": "pi", "est_cost_low": 0}
+SONNET = {
+    "input_tokens": 1000,
+    "cached_tokens": 0,
+    "output_tokens": 100,
+    "model": "claude-sonnet-5-5",
+    "provider": "anthropic",
+    "est_cost_usd": 0.0045,
+    "billing": "subscription",
+    "runtime": "claude",
+}
+TICO = {
+    "input_tokens": 500,
+    "cached_tokens": 0,
+    "output_tokens": 50,
+    "model": "tico-general-medium-1.0",
+    "provider": "tico",
+    "est_cost_usd": 0.002,
+    "billing": "api",
+    "runtime": "pi",
+    "est_cost_low": 0,
+}
 
 
 def turn(c, tid, bot="ops"):
@@ -32,7 +50,9 @@ def test_a_finished_run_keeps_one_fact_per_segment_and_a_late_finish_adds_none(a
         H.turn_finish(c, H.KEEPER, "r1", usage=usage)
         rows = facts(c, "r1")
         assert [(r["model"], r["billing"], r["cost_nano"]) for r in rows] == [
-            ("claude-sonnet-5-5", "subscription", 4_500_000), ("tico-general-medium-1.0", "api", 2_000_000)]
+            ("claude-sonnet-5-5", "subscription", 4_500_000),
+            ("tico-general-medium-1.0", "api", 2_000_000),
+        ]
         month = rows[1]["metered_at"][:7]
         assert rows[0]["meter_key"] is None and rows[1]["meter_key"] == f"gateway:{month}:tico-general-medium-1.0"
         assert rows[0]["family"] == "anthropic" and rows[0]["bot_id"] == "ops"
@@ -70,7 +90,10 @@ def test_the_meter_adds_what_moved_and_is_preferred_over_the_estimate(api):
         month = facts(c, "r4")[0]["metered_at"][:7]
         model = TICO["model"]
         assert usage_facts.reconciled(c, month)[model] == {
-            "estimated_nano": 2_000_000, "metered_nano": None, "amount_nano": 2_000_000}
+            "estimated_nano": 2_000_000,
+            "metered_nano": None,
+            "amount_nano": 2_000_000,
+        }
         at = H.now()
         assert usage_facts.record_meter(c, month, f"{month}-02T00:00:00.000000Z", {model: 1_500_000}, at) == 1
         assert usage_facts.record_meter(c, month, f"{month}-03T00:00:00.000000Z", {model: 1_500_000}, at) == 0
@@ -78,7 +101,10 @@ def test_the_meter_adds_what_moved_and_is_preferred_over_the_estimate(api):
         # A read older than the newest kept never walks the month back.
         assert usage_facts.record_meter(c, month, f"{month}-01T00:00:00.000000Z", {model: 900_000}, at) == 0
         assert usage_facts.reconciled(c, month)[model] == {
-            "estimated_nano": 2_000_000, "metered_nano": 2_100_000, "amount_nano": 2_100_000}
+            "estimated_nano": 2_000_000,
+            "metered_nano": 2_100_000,
+            "amount_nano": 2_100_000,
+        }
         # Meter facts are not runs: limits and the usage report count the estimate once.
         assert usage_limits.spent(c, "ops", "2000-01-01", "2999-01-01", True) == pytest.approx(0.002)
 
@@ -117,14 +143,21 @@ INSERT INTO turns VALUES ('blank', 'cmo', '2025-01-02T00:00:00Z', '2025-01-02T00
 """)
     module = _migration()
     module.up(conn)
-    module.up(conn)                                      # safe to run again: nothing doubles
+    module.up(conn)  # safe to run again: nothing doubles
     rows = [dict(r) for r in conn.execute("SELECT * FROM usage_facts ORDER BY run_id, position")]
     assert [(r["run_id"], r["position"], r["model"], r["cost_nano"]) for r in rows] == [
-        ("mid", 0, "gpt-6-sol", 100_000_000), ("old", 0, "gpt-6-sol", None), ("seg", 0, "claude-sonnet-5-5", 50_000_000),
-        ("seg", 1, "tico-general-medium-1.0", 250_000_000)]
+        ("mid", 0, "gpt-6-sol", 100_000_000),
+        ("old", 0, "gpt-6-sol", None),
+        ("seg", 0, "claude-sonnet-5-5", 50_000_000),
+        ("seg", 1, "tico-general-medium-1.0", 250_000_000),
+    ]
     seg = rows[3]
     assert (seg["bot_id"], seg["task_id"], seg["started_at"], seg["metered_at"]) == (
-        "ops", "t1", "2026-10-31T23:50:00Z", "2026-11-01T00:10:00Z")
+        "ops",
+        "t1",
+        "2026-10-31T23:50:00Z",
+        "2026-11-01T00:10:00Z",
+    )
     assert seg["meter_key"] == "gateway:2026-11:tico-general-medium-1.0" and rows[2]["meter_key"] is None
     assert rows[2]["profile"] == "engineering" and rows[2]["family"] == "anthropic"
     assert (rows[1]["input_tokens"], rows[1]["cached_tokens"], rows[1]["output_tokens"]) == (7, 1, 2)
@@ -135,7 +168,13 @@ INSERT INTO turns VALUES ('blank', 'cmo', '2025-01-02T00:00:00Z', '2025-01-02T00
 
 def test_a_cost_becomes_exact_nanodollars_and_a_bad_one_becomes_no_cost():
     assert [usage_facts.nano(v) for v in (0.35, 0.1 + 0.2, 1234.567891, 0.0000000005, 0.0000000015, -0.5)] == [
-        350_000_000, 300_000_000, 1_234_567_891_000, 0, 2, -500_000_000]
+        350_000_000,
+        300_000_000,
+        1_234_567_891_000,
+        0,
+        2,
+        -500_000_000,
+    ]
     assert [usage_facts.nano(v) for v in (None, "abc", float("inf"), float("nan"))] == [None] * 4
 
 
@@ -169,8 +208,10 @@ def test_an_unchanged_reading_moves_the_newest_so_a_delayed_older_one_cannot_low
         assert usage_facts.record_meter(c, month, "2026-10-15T06:00:00.000000Z", {model: 600}, at) == 0
         assert usage_facts.record_meter(c, month, "2026-10-15T05:00:00.000000Z", {model: 550}, at) == 0
         assert meter_total(c, month, model)["metered_nano"] == 600
-        assert c.execute("SELECT as_of FROM usage_meter_reads WHERE month=?", (month,)).fetchone()[0] == \
-            "2026-10-15T06:00:00.000000Z"
+        assert (
+            c.execute("SELECT as_of FROM usage_meter_reads WHERE month=?", (month,)).fetchone()[0]
+            == "2026-10-15T06:00:00.000000Z"
+        )
         # At the same time, only a higher total replaces the read (Finance's snapshot rule).
         assert usage_facts.record_meter(c, month, "2026-10-15T06:00:00.000000Z", {model: 500}, at) == 0
         assert usage_facts.record_meter(c, month, "2026-10-15T06:00:00.000000Z", {model: 650}, at) == 1
@@ -184,6 +225,8 @@ def test_a_late_report_leaves_the_runs_own_usage_columns_as_its_facts_have_them(
         H.turn_finish(c, H.KEEPER, "r6", usage={**TICO, "input_tokens": 1500, "segments": [TICO]})
         H.turn_finish(c, H.KEEPER, "r6", usage={**SONNET, "segments": [SONNET]})
         H.turn_finish(c, H.KEEPER, "r6", exit_code="interrupted", usage_reason="no_result")
-        row = c.execute("SELECT input_tokens, usage_model, est_cost_usd, usage_reason FROM attempts WHERE id='r6'").fetchone()
+        row = c.execute(
+            "SELECT input_tokens, usage_model, est_cost_usd, usage_reason FROM attempts WHERE id='r6'"
+        ).fetchone()
         assert tuple(row) == (1500, TICO["model"], TICO["est_cost_usd"], None)
         assert [(r["model"], r["cost_nano"]) for r in facts(c, "r6")] == [(TICO["model"], 2_000_000)]

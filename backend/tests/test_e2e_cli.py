@@ -91,19 +91,23 @@ def used_commands():
                 stale.setdefault(words[0], rel)
                 continue
             if subparsers(leaf) is not None or leaf.get_default("fn") is None:
-                continue                      # a group named in prose (`hub task`), not a command to run
+                continue  # a group named in prose (`hub task`), not a command to run
             used.setdefault(" ".join(found), (leaf, rel))
     return used, stale
 
 
 def changed_files():
     """Repo paths changed by the change under test: the working tree, the diff from origin/main, else the last commit."""
+
     def git(*args):
         try:
             return subprocess.run(["git", *args], cwd=ROOT, capture_output=True, text=True, timeout=20).stdout
         except (OSError, subprocess.SubprocessError):
             return ""
-    names = set(git("diff", "--name-only", "HEAD").split()) | set(git("diff", "--name-only", "origin/main...HEAD").split())
+
+    names = set(git("diff", "--name-only", "HEAD").split()) | set(
+        git("diff", "--name-only", "origin/main...HEAD").split()
+    )
     return names or set(git("diff", "--name-only", "HEAD~1", "HEAD").split())
 
 
@@ -114,8 +118,12 @@ def rotation():
     if os.environ.get("TICO_E2E_CLI_ROTATION", "").isdigit():
         return int(os.environ["TICO_E2E_CLI_ROTATION"])
     try:
-        return int(subprocess.run(["git", "rev-list", "--count", "HEAD"], cwd=ROOT, capture_output=True, text=True,
-                                  timeout=20).stdout.strip() or 0)
+        return int(
+            subprocess.run(
+                ["git", "rev-list", "--count", "HEAD"], cwd=ROOT, capture_output=True, text=True, timeout=20
+            ).stdout.strip()
+            or 0
+        )
     except (OSError, ValueError, subprocess.SubprocessError):
         return 0
 
@@ -171,17 +179,27 @@ def argument_value(action, command):
         return str(next(iter(action.choices)))
     if action.type in (int, float):
         return "0" if "wait" in dest else "1"
-    if dest in ("id", "task", "task_id", "parent", "ref", "item", "automation", "trigger", "message", "conversation") \
-            or dest.endswith("_id"):
+    if dest in (
+        "id",
+        "task",
+        "task_id",
+        "parent",
+        "ref",
+        "item",
+        "automation",
+        "trigger",
+        "message",
+        "conversation",
+    ) or dest.endswith("_id"):
         return SEEDS.get(command[0], SEEDS["default"])
     if dest == "owner" and command[0] == "task":
-        return "human:ana"                        # an explicit actor: the test registry has no employees.yaml
+        return "human:ana"  # an explicit actor: the test registry has no employees.yaml
     if dest in ("bot", "owner", "to", "slug", "from_bot", "bots"):
         return "ops"
     if dest in ("person", "human", "email") or dest.endswith("_email"):
         return "smoke@acme.example"
     if dest == "name":
-        return "acme-smoke"                       # a slug in most commands (`hub market page <slug>`)
+        return "acme-smoke"  # a slug in most commands (`hub market page <slug>`)
     if dest in ("text", "title", "body", "note", "subject", "reason", "description", "question"):
         return SMOKE
     if dest in ("url",):
@@ -300,11 +318,27 @@ def seeded_ids(api, tmp_path):
     task = post(api, "tasks", {"owner": "ops", "title": "Acme smoke task", "body": "Seeded for the CLI sweep."})
     message = post(api, "chat/ops", {"text": "Acme smoke message"})
     trigger = post(api, "triggers", {"name": "Acme smoke hook"})["trigger"]
-    automation = post(api, "automations", {"name": "Acme smoke automation", "owner": "person:ana", "steps": [NOTE_STEP],
-                                           "trigger": {"type": "schedule", "cron": "0 9 * * *", "tz": "UTC"}})
-    SEEDS.update({"default": "acme-smoke-id", "task": task["id"], "automation": automation["id"],
-                  "trigger": trigger["id"], "chat": message["conversation_id"], "conversation": message["conversation_id"],
-                  "message": message["id"]})
+    automation = post(
+        api,
+        "automations",
+        {
+            "name": "Acme smoke automation",
+            "owner": "person:ana",
+            "steps": [NOTE_STEP],
+            "trigger": {"type": "schedule", "cron": "0 9 * * *", "tz": "UTC"},
+        },
+    )
+    SEEDS.update(
+        {
+            "default": "acme-smoke-id",
+            "task": task["id"],
+            "automation": automation["id"],
+            "trigger": trigger["id"],
+            "chat": message["conversation_id"],
+            "conversation": message["conversation_id"],
+            "message": message["id"],
+        }
+    )
     file_path = tmp_path / "acme-smoke.txt"
     file_path.write_text("Acme smoke file\n")
     yield file_path
@@ -327,7 +361,7 @@ def test_every_hub_command_in_templates_and_skills_runs_or_is_its_recorded_refus
         if path in SKIPPED:
             continue
         argv = argv_for(path.split(" "), leaf, seeded_ids)
-        try:                                      # every command's argv parses, run live or not
+        try:  # every command's argv parses, run live or not
             command_tree().parse_args(argv)
         except SystemExit:
             problems.append(f"hub {path} ({where}): the argv built for it does not parse: {argv}")
@@ -336,7 +370,7 @@ def test_every_hub_command_in_templates_and_skills_runs_or_is_its_recorded_refus
             continue
         try:
             code, out, err = run_as_owner(live, workspace, argv)
-        except Exception as exc:       # a command that raises instead of exiting is the failure this test is for
+        except Exception as exc:  # a command that raises instead of exiting is the failure this test is for
             problems.append(f"hub {path}: raised {type(exc).__name__}: {exc}")
             continue
         result = classify(code, out, err)
@@ -347,10 +381,12 @@ def test_every_hub_command_in_templates_and_skills_runs_or_is_its_recorded_refus
         if result in ("usage-error", "silent"):
             problems.append(f"hub {path} ({where}): {result}: {(out + err)[:200]!r}")
         elif not exact:
-            continue      # a subset runs without the state earlier commands leave, so refusals differ: see `exact`
+            continue  # a subset runs without the state earlier commands leave, so refusals differ: see `exact`
         elif result == "ok":
             if path in EXPECTED:
-                problems.append(f"hub {path}: was refused as {EXPECTED[path]!r} and now runs; update expected-refusals.json")
+                problems.append(
+                    f"hub {path}: was refused as {EXPECTED[path]!r} and now runs; update expected-refusals.json"
+                )
         elif EXPECTED.get(path) != result:
             problems.append(f"hub {path} ({where}): refused as {result!r} (recorded: {EXPECTED.get(path)!r})")
     unlisted = sorted(f"hub {word} (in {where})" for word, where in stale.items() if word not in STALE)
@@ -371,4 +407,5 @@ def test_every_hub_command_in_templates_and_skills_runs_or_is_its_recorded_refus
         "remove entries no template or skill uses. Fix stale command references or update e2e/cli/stale.json "
         "(remove unused entries). To regenerate refusals for review: "
         "TICO_E2E_RECORD_REFUSALS=/tmp/cli-refusals.json python3 -m pytest -q -m slow backend/tests/test_e2e_cli.py. "
-        "Review the diff before copying it over e2e/cli/expected-refusals.json.")
+        "Review the diff before copying it over e2e/cli/expected-refusals.json."
+    )

@@ -5,6 +5,7 @@ month-end pace over its amount. A level reached for the first time in the period
 arms it again) gives that bot one Finance line at the start of its next turn: a keeper note. Never a person and never
 the bot's manager; an ad budget with no bot gets none, and no ad budget gives its owner a notice (jobs.drain). Warn
 only: an ad budget never pauses, blocks or refuses anything (budgeting.warn_only)."""
+
 import sqlite3
 from dataclasses import dataclass
 
@@ -16,7 +17,7 @@ from .store import ads as SA
 from .store import budgets as SB
 from .store import tico
 
-LEVELS = ("limit", "warn", "pace")        # the strongest first: one line names the strongest new level
+LEVELS = ("limit", "warn", "pace")  # the strongest first: one line names the strongest new level
 PERIOD_WORDS = {"month": "month", "quarter": "quarter"}
 
 
@@ -101,8 +102,9 @@ def check(ctx: Ctx) -> list[Sent]:
         version = max((v.version for v in SB.versions(ctx.c, [b.id])[b.id]), default=0)
         key = budgeting.event_key(st.period_start, version)
         slug = bot.partition(":")[2]
-        new = tuple(level for level in LEVELS if level in reached and
-                    SA.warn_once(ctx.c, b.id, key, level, slug, ctx.at))
+        new = tuple(
+            level for level in LEVELS if level in reached and SA.warn_once(ctx.c, b.id, key, level, slug, ctx.at)
+        )
         if not new:
             continue
         text = words(b, st, new, SA.LABEL[budgeting.budget_platform(ctx, b)], ctx.book.base_currency)
