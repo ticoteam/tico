@@ -42,7 +42,7 @@ kept per person (their id). A live change and a refresh both check it, one after
 
 Tico posts no nudge in a thread for an unanswered question. A question a bot is waiting on is listed on the bot's task roundup, and a question to a person that stays unanswered for two business days goes back to its bot ([Tasks](tasks.md)).
 
-Each manager of a bot whose Home still holds closed history gets one direct message about it, once (the **Earlier messages** row in [System routines](system-routines.md)). The job is plain code on a 15-minute schedule. It never calls or wakes a model, and a run with nothing to tell writes nothing.
+A bot's manager opens a Home's closed history from the Home's menu or its **Earlier messages** row.
 
 ## Catch up
 

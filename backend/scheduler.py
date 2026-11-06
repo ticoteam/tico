@@ -127,16 +127,6 @@ def run_bookkeeper_rules_digest(store, auth, at, failures=None):
         run.did(made["words"], quiet=not made["items"])
 
 
-def run_thread_followups(store, auth, at, failures=None):
-    # A bot's managers get one notice about its Home's closed history (backend/thread_followups.py). Nothing due is a quiet
-    # run: no post, no model.
-    with SR.recording(store, "thread_followups", failures, "helper") as run:
-        from . import thread_followups
-        with store.transaction() as c:
-            notices = thread_followups.earlier_sweep(c, auth, stamp(at))     # scoped "earlier-messages" there
-        run.did(SR.words_of(notices, "notice", "Nothing to tell"), quiet=not notices)
-
-
 def run_thread_digest(store, auth, at, failures=None):
     # One email an hour to each person with threads to list on digest (backend/thread_digest.py). Nothing unread is a
     # quiet run: no mail and no write.
@@ -172,7 +162,6 @@ QUICK = {"kpi_asks": run_kpi_asks,
 # a person switches). The Bookkeeper's pause is their off switch.
 FIXED = {"bookkeeper_watch": (run_bookkeeper_watch, timedelta(days=1)),
          "bookkeeper_rules_digest": (run_bookkeeper_rules_digest, timedelta(days=7)),
-         "thread_followups": (run_thread_followups, timedelta(minutes=15)),
          "thread_digest": (run_thread_digest, timedelta(hours=1)),
          "thread_bot_digest": (run_thread_bot_digest, timedelta(hours=1)),
          "thread_retention": (run_thread_retention, timedelta(minutes=15))}
@@ -792,29 +781,15 @@ class Scheduler:
                 except Exception as exc:
                     failures.append({"drop_unreadable": type(exc).__name__})
         if self.stranded is None or at - self.stranded >= timedelta(hours=1):
-            # Every hour: waiting tasks' holds, and plain asks to a person (backend/task_holds.py, person_asks.py).
+            # Every hour: a bot's task waiting on nothing tracked goes back to open after a grace (task_holds.unstrand).
             self.stranded = at
-            try:
-                # Once after this shipped: every waiting task's reason put right, one wake per bot (task_holds.py).
-                from . import task_holds
-                with self.store.transaction() as c:
-                    task_holds.backfill(c, stamp(at))
-            except Exception as exc:
-                failures.append({"task_holds_backfill": type(exc).__name__})
-            # ...bot tasks waiting on a person with a plain ask become the bot's task blocked on one small subtask
-            # the person owns...
-            with SR.recording(self.store, "waiting_checks", failures, "person_asks") as run:
-                from . import person_asks
-                with self.store.transaction() as c:
-                    moved = person_asks.migrate(c)
-                # ...and a bot's task waiting on nothing tracked goes back to open after a grace (task_holds.unstrand).
+            with SR.recording(self.store, "waiting_checks", failures, "stranded") as run:
                 from . import task_holds
                 with self.store.transaction() as c:
                     unstranded = task_holds.unstrand(c, stamp(at))
-                run.did(SR.words_of({"plain asks made tasks": moved,
-                                     "tasks waiting on nothing reopened": unstranded["opened"],
+                run.did(SR.words_of({"tasks waiting on nothing reopened": unstranded["opened"],
                                      "stuck tasks handed to a manager": unstranded["told"]},
-                                    none="No plain asks to a person, nothing stranded"))
+                                    none="Nothing stranded"))
 
         if self.asks_checked is None or at - self.asks_checked >= timedelta(hours=1):
             self.asks_checked = at

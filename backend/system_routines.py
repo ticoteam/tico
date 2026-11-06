@@ -146,8 +146,6 @@ ACTIONS = {
     "send_task_roundup": ("send each bot one list of its tasks: a follow-up that came due, an unanswered question, an assignment "
                           "not started, a restate, a late ticket, an exception, a backlog, a missed update or a quiet task",
                          ("tasks", "roundup", "wake", "missed", "quiet", "update", "late", "backlog", "exceptions", "assigned")),
-    "tell_earlier_messages": ("tell each manager of a bot once when its Home still holds closed history",
-                              ("thread", "earlier", "closed", "history", "managers", "notice")),
     "wake_digest_bots": ("start one run for each bot with new messages in the threads it follows on digest",
                          ("bot", "digest", "thread", "wake", "batch")),
     "resume_capped_wakes": ("let bot wakes the loop guard paused go when a thread's hour has room",
@@ -157,7 +155,6 @@ ACTIONS = {
     "email_digest": ("email a person once an hour the threads they follow on digest that have new messages: titles, "
                      "unread counts and links, never the messages", ("email", "digest", "unread", "thread", "notify")),
     "drop_unreadable": ("drop queued work its bot can no longer read", ("queue", "drop")),
-    "ask_to_task": ("turn a bot's plain ask to a person into a small task", ("ask", "tasks")),
     "reopen_stranded": ("send a bot's task waiting on nothing tracked back to open after two hours",
                         ("waiting", "stranded", "reopen", "tasks")),
     "end_snooze": ("bring snoozed tasks back when their date comes", ("snooze", "tasks")),
@@ -356,10 +353,6 @@ JOBS = [
         REMINDERS, "Hourly", 3600, control=True, then=("go_ahead",)),
     Job("approval_expiry", "Approval expiry", "Takes approvals and asks nobody will act on out of Needs you.",
         REMINDERS, "Hourly", 3600, then=("expire_approvals",)),
-    Job("thread_followups", "Earlier messages",
-        "Tells each manager of a bot once, in a direct message, when the bot's Home still holds closed history. Plain code: "
-        "no model is called, and nothing new is a quiet run. Asks nobody answered are on the bot's task roundup.",
-        REMINDERS, "Every 15 minutes", 900, then=("tell_earlier_messages",)),
     Job("thread_digest", "Email digest",
         "Emails a person once an hour the threads they follow on digest that have new messages: each title, its unread "
         "count and a link, never the messages. Nothing unread is a quiet run.",
@@ -381,9 +374,9 @@ JOBS = [
         "Frees turns proven dead, keeps one Health finding per busy-turns incident and hands what it cannot fix to "
         "BotOps.", HOUSEKEEPING, "Every 10 seconds", 10, then=("free_dead_starts", "turns_finding")),
     Job("waiting_checks", "Waiting checks",
-        "Turns a bot's plain ask to a person into a small task, and sends a bot's task waiting on nothing tracked "
-        "back to open after two hours (one that keeps coming back goes to its manager bot or BotOps).",
-        HOUSEKEEPING, "Hourly", 3600, then=("ask_to_task", "reopen_stranded")),
+        "Sends a bot's task waiting on nothing tracked back to open after two hours (one that keeps coming back "
+        "goes to its manager bot or BotOps).",
+        HOUSEKEEPING, "Hourly", 3600, then=("reopen_stranded",)),
     Job("snooze_ends", "Snooze ends",
         "Brings snoozed tasks back when their date comes and starts deferred runs that are due.",
         HOUSEKEEPING, "Every 10 seconds", 10, then=("end_snooze", "start_deferred", "start_task")),
@@ -568,7 +561,7 @@ CONTROLS = {
 # Last runs read by backend/scheduler.py (QUICK and FIXED).
 QUICK_KEYS = ("kpi_asks", "ask_deadlines", "task_manager_report",
               "bookkeeper_check", "bookkeeper_watch",
-              "bookkeeper_rules_digest", "thread_followups", "thread_digest", "thread_bot_digest", "thread_retention")
+              "bookkeeper_rules_digest", "thread_digest", "thread_bot_digest", "thread_retention")
 
 
 def zone():
