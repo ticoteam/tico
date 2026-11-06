@@ -446,6 +446,11 @@ impl Repositories {
             .map_err(|_| "Repository sync is busy; retry shortly or use the cached copy".into())
     }
 
+    /// The sync lock of the base clone in `repos/<folder>` if no fetch or sync holds it now (disk_clean.rs).
+    pub fn try_sync_guard(&self, folder: &str) -> Option<tokio::sync::OwnedMutexGuard<()>> {
+        self.sync_locks.lock().unwrap().entry(folder.to_string()).or_default().clone().try_lock_owned().ok()
+    }
+
     fn path(&self, name: &str) -> Result<PathBuf, Fail> {
         let full = self.rows.lock().unwrap().get(name).map(|r| text_of(&r["full_name"])).filter(|n| !n.is_empty()).unwrap_or_else(|| name.into());
         let path = self.root.join(base_folder(&full));

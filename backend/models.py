@@ -1305,7 +1305,7 @@ class DiskReadiness(Contract):
 
 
 class DiskCleanupClass(Contract):
-    # tmp, home_cache, finished_task_cache, git or idle_task_cache (runner-rs/src/disk_clean.rs Class)
+    # tmp, finished_task_cache or git (runner-rs/src/disk_clean.rs Class)
     kind: str = Field(max_length=40)
     count: int = Field(ge=0)
     bytes: int = Field(ge=0)

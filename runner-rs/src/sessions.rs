@@ -870,12 +870,41 @@ pub async fn ensure_reads(workspace: &Path, path: &Path) -> Result<(), String> {
 
 type Lock = Arc<AsyncMutex<()>>;
 
+/// A live turn here. A subtask's turn runs in its session root's lane (backend/hubdb.py `session_root`), so `task`
+/// (the lane's) can be its parent while `claimed` is the subtask it works on, whose folder it is in.
+#[derive(Debug, Clone, Default)]
+pub struct LiveTurn {
+    pub bot: String,
+    pub lane: String,
+    /// The lane's task (`task_of(lane)`), "" off a task lane.
+    pub task: String,
+    /// The task the claim carries (`attempt.task.id`), "" for none.
+    pub claimed: String,
+}
+
+impl LiveTurn {
+    pub fn of(attempt: &Value) -> LiveTurn {
+        let lane = turn_lane(attempt);
+        LiveTurn {
+            bot: text_of(&attempt["bot"]).trim_start_matches("bot:").to_string(),
+            task: task_of(&lane),
+            lane,
+            claimed: text_of(&attempt["task"]["id"]),
+        }
+    }
+
+    /// Whether the turn is on `task`, by its lane or by its claim.
+    pub fn on(&self, task: &str) -> bool {
+        !task.is_empty() && (self.task == task || self.claimed == task)
+    }
+}
+
 /// The runner's lane and checkout locks, the lanes of live turns, and what worktree maintenance needs from them.
 pub struct Lanes {
     locks: Mutex<HashMap<String, Lock>>,
     git_locks: Mutex<HashMap<String, Lock>>,
-    /// aid -> (bot, lane, the turn's task id) for every live worker here.
-    pub attempts: Mutex<HashMap<String, (String, String, String)>>,
+    /// aid -> the live worker's bot, lane and tasks, for every live worker here.
+    pub attempts: Mutex<HashMap<String, LiveTurn>>,
     vault: Mutex<HashMap<String, Vec<String>>>,
     pub repositories: Arc<Repositories>,
     push_warned: Mutex<HashMap<String, Instant>>,
@@ -974,7 +1003,7 @@ impl Lanes {
 
     /// The claim's `busy_lanes`: `bot|lane` of every live worker here.
     pub fn busy_lanes(&self) -> Vec<String> {
-        let mut lanes: Vec<String> = self.attempts.lock().unwrap().values().map(|(b, l, _)| format!("{b}|{l}")).collect::<HashSet<_>>().into_iter().collect();
+        let mut lanes: Vec<String> = self.attempts.lock().unwrap().values().map(|t| format!("{}|{}", t.bot, t.lane)).collect::<HashSet<_>>().into_iter().collect();
         lanes.sort();
         lanes
     }
@@ -983,7 +1012,7 @@ impl Lanes {
 impl crate::worktrees::Host for Lanes {
     fn idle(&self, bot: &str, task: &str) -> bool {
         let bot = bot.trim_start_matches("bot:");
-        !self.attempts.lock().unwrap().values().any(|(b, lane, turn_task)| b == bot && (task.is_empty() || lane == "main" || turn_task == task))
+        !self.attempts.lock().unwrap().values().any(|t| t.bot == bot && (task.is_empty() || t.lane == "main" || t.on(task)))
     }
 
     fn try_locks(&self, bot: &str, lane: &str) -> Option<Box<dyn Send>> {
@@ -997,7 +1026,7 @@ impl crate::worktrees::Host for Lanes {
     }
 
     fn retain_vault(&self, owners: &HashSet<String>) {
-        let live: HashSet<String> = self.attempts.lock().unwrap().values().map(|(b, _, _)| b.clone()).collect();
+        let live: HashSet<String> = self.attempts.lock().unwrap().values().map(|t| t.bot.clone()).collect();
         self.vault.lock().unwrap().retain(|bot, _| owners.contains(bot) || live.contains(bot));
     }
 
@@ -1006,7 +1035,7 @@ impl crate::worktrees::Host for Lanes {
     }
 
     fn task_busy(&self, task: &str) -> bool {
-        !task.is_empty() && self.attempts.lock().unwrap().values().any(|(_, _, turn_task)| turn_task == task)
+        self.attempts.lock().unwrap().values().any(|t| t.on(task))
     }
 }
 
@@ -1390,7 +1419,7 @@ impl Runner {
                 return;
             }
         };
-        let running: HashSet<(String, String)> = self.lanes.attempts.lock().unwrap().values().map(|(b, l, _)| (b.clone(), l.clone())).collect();
+        let running: HashSet<(String, String)> = self.lanes.attempts.lock().unwrap().values().map(|t| (t.bot.clone(), t.lane.clone())).collect();
         for row in reply["sessions"].as_array().into_iter().flatten() {
             let (bot, task) = (text_of(&row["bot"]), text_of(&row["task"]));
             let Some((_, path)) = found.iter().find(|((b, t), _)| *b == bot && *t == task) else { continue };
@@ -1443,6 +1472,24 @@ mod tests {
             assert!(problem.contains("inside the Tico install"), "{problem}");
         }
         std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn a_subtask_turn_in_its_parents_lane_keeps_the_subtask_busy() {
+        use crate::worktrees::Host;
+        let dir = std::env::temp_dir().join(format!("tico-lanes-{}", uuid::Uuid::new_v4().simple()));
+        let client = crate::client::Client::new("http://127.0.0.1:9", "t", 1, 0).unwrap();
+        let lanes = Lanes::new(Arc::new(Repositories::new(&dir, &dir, client)));
+        // The subtask t2's turn runs in its session root t1's lane (backend/hubdb.py session_root).
+        let turn = LiveTurn::of(&json!({"bot": "bot:dev", "lane": "task:t1", "task": {"id": "t2", "session_task_id": "t1"}}));
+        assert_eq!((turn.bot.as_str(), turn.task.as_str(), turn.claimed.as_str()), ("dev", "t1", "t2"));
+        lanes.attempts.lock().unwrap().insert("a1".into(), turn);
+        assert!(!lanes.idle("dev", "t2") && !lanes.idle("bot:dev", "t1"));
+        assert!(lanes.task_busy("t2") && lanes.task_busy("t1"));
+        assert!(lanes.idle("dev", "t3") && !lanes.task_busy("t3") && !lanes.task_busy(""));
+        // Another bot's turn (a reviewer's) on the task counts too.
+        assert!(lanes.idle("qa", "t2") && lanes.task_busy("t2"));
+        assert_eq!(lanes.busy_lanes(), vec!["dev|task:t1".to_string()]);
     }
 
     #[tokio::test]

@@ -24,7 +24,8 @@ teammate). Good means the human's bot works end to end with little bother to the
    product Tico in completion messages too; never call it Hub. Say "Setup was already marked done" when that detail matters; never use "onboarding" in completion prose or expose
    `onboarding_state`.
 3. **"Tell me issues to solve", "what's broken", "status":** run `hub health check`, fix what you may right away
-   (`playbooks/health-check.md`), and reply with a short prioritised list: what is wrong, what you fixed, what they must do.
+   (`playbooks/health-check.md`), and reply with a short prioritised list: what is wrong, what you fixed, the one thing
+   they need to do.
 4. **Never send a human to a settings page** for something a command here does: use the command `playbooks/commands.md` names
    for any change to a bot, team, Slack or access setting. Only an owner or admin may change Slack
    channel access. If the product cannot do it, say so in one line and file it with `hub support file`.
@@ -40,8 +41,8 @@ teammate). Good means the human's bot works end to end with little bother to the
    `playbooks/change-model-or-computer.md`: if the bot's computer cannot run it, say so at once with the fix and link. Never
    report "verified" for a setting you only read back.
 9. **Never hand-edit a computer.** Never copy a repository into a computer's projects folder, remove or change a git remote,
-   or edit a runner's files, state or source. Repositories reach computers only through Tico's commands; if they cannot,
-   that is a Tico bug (`playbooks/refusals.md`). Low disk: clean up yourself first (`playbooks/health-check.md`).
+   or edit a runner's files, state or source. Repositories reach computers only through Tico's own commands. If they cannot
+   do it, that is a Tico bug (`playbooks/refusals.md`).
 10. **Never watch an update from a turn.** Read a computer's update once (`hub computer list` or `hub health check`), record
     it as waiting on your task, and end the run. Never sleep and look again. Never stop, restart or rebuild another bot's turn, a build or an updater to hurry an update; stopping a turn is the person's choice.
 

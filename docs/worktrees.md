@@ -70,28 +70,31 @@ The runner confirms worktrees through `PATCH /api/v2/tasks/{id}/links/{link_id}`
 
 When free space on the workspace volume drops below 15% of the volume or 10 GB, whichever is larger (at most a quarter
 of the volume and at most 40 GB), the computer cleans up by itself, at most once every 30 minutes, without asking
-anyone. It removes, in this order, and stops once it is 5 GB above that mark:
+anyone. It removes only what nothing can still need, in this order, and stops once it is 5 GB above that mark:
 
 1. Finished tasks' worktrees whose cleanup Tico already asked for, at once instead of after the computer's retry wait.
    The usual cleanup runs: unpushed or uncommitted work is saved to its `wip/` branch first, and a tree it cannot save
    is kept.
-2. On Linux: top-level entries of the temp folder untouched for 24 hours that no process holds open (never the
-   runner's own `tico*` files, sockets or another user's files), and files untouched for a day in the runner user's
-   package caches: `~/.cache/pip`, `uv`, `go-build`, `yarn`, `node-gyp`, `~/.npm/_cacache`, `~/.cargo/registry/cache`.
-   Browser downloads (`ms-playwright` and the like) stay.
-3. Rebuildable folders in finished tasks' folders under `tasks/` (virtual environments, Cargo `target`,
-   `node_modules`, pytest caches), and in folders no worktree link names once untouched for a day.
-4. `git worktree prune` and `git gc --auto` in the base clones under `repos/`.
-5. Build caches (`target`, `node_modules`, pytest caches; never a virtual environment) in open tasks' worktrees whose
-   bots are idle, the longest untouched first.
+2. Rebuildable folders (virtual environments, Cargo `target`, `node_modules`, pytest caches) in task folders under
+   `tasks/` whose every worktree link is a finished task's and a bot's. A folder is left whole when Tico lists no
+   worktree for it, when any of its tasks is open, when a person owns one of its worktrees, when a cleanup there was
+   refused or given up on, when any turn on one of its tasks runs (a subtask's turn in its parent's session or a
+   reviewer's included), or when its bots' locks or a `hub worktree` step on it are busy. Inside a git checkout, a
+   folder goes only when Git tracks nothing in it and shows no change in it, and the checkout has no uncommitted or
+   unpushed work and no ignored files outside build folders.
+3. On Linux: top-level entries of the temp folder untouched for 24 hours that no process holds open and that hold no
+   git checkout (never the runner's own `tico*` files, sockets or another user's files).
+4. `git worktree prune` and `git gc --auto` (in the foreground) in Tico's own base clones under `repos/`, one at a
+   time and only while no fetch holds that clone.
 
-It never touches a task folder while any turn on that task (or a turn in its bot's main checkout) runs, and holds
-the bot's locks while it cleans one. It never removes a git checkout, a bot's repository, credentials, the runner's
-state or configuration, or Docker images and volumes, never follows a symlink, and never cleans a folder inside the
-Tico install. Each removal is logged with its kind and size. The computer's readiness report carries the last clean-up
-(`disk_cleanup`: when, free space before and after, bytes per kind, and whether the disk is still low), and Health's
-disk warning names what it freed. When the disk is still low afterwards, what is left needs a person: BotOps removes
-the same safe things on its own computer without asking, and asks a person only for anything else.
+It never touches an open task's folder, package caches in the home folder, a git checkout itself, a bot's repository,
+credentials, the runner's state or configuration, or Docker images and volumes. It never follows a symlink, never
+removes anything on another volume or under a mount point, and never cleans a folder inside the Tico install. Each
+removal is logged with its kind and size; only space freed on the workspace volume is counted. The computer's
+readiness report carries the last clean-up (`disk_cleanup`: when, free space before and after, bytes per kind, and
+whether the disk is still low), and Health's disk warning names what it freed. What is left is for the disk to grow
+(a cloud machine Tico hosts grows its own) or for a person. BotOps never deletes files by hand: it reads Health and
+asks a person only about what is outside this list.
 
 ## Without a GitHub App
 

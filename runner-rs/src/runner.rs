@@ -1050,9 +1050,7 @@ impl Runner {
                 self.active.lock().unwrap().insert(aid.clone());
                 self.attempt_bots.lock().unwrap().insert(aid.clone(), text_of(&attempt["bot"]));
                 crate::lanes::track(&attempt);
-                let lane = crate::sessions::turn_lane(&attempt);
-                let task = crate::sessions::task_of(&lane);
-                self.lanes.attempts.lock().unwrap().insert(aid.clone(), (text_of(&attempt["bot"]).trim_start_matches("bot:").to_string(), lane, task));
+                self.lanes.attempts.lock().unwrap().insert(aid.clone(), crate::sessions::LiveTurn::of(&attempt));
                 if let Err(e) = self.state.record(&attempt) {
                     log(&format!("Tico runner: could not save attempt {aid} ({e})"));
                 }

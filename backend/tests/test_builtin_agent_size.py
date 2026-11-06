@@ -92,6 +92,17 @@ MOVED = {
 }
 
 
+def test_botops_never_cleans_a_low_disk_by_hand():
+    """The runner cleans its own disk (runner-rs/src/disk_clean.rs) and sees open files, locks and finished tasks;
+    BotOps sees none of them, so its playbook reads Health and asks a person, and names nothing for it to delete."""
+    text = " ".join((CATALOG / "botops" / "playbooks" / "health-check.md").read_text().split())
+    section = text[text.index("### A computer low on disk"):text.index("### A missing repository")]
+    assert "Never delete anything by hand" in section and "Health's disk row" in section
+    assert not any(hand in section for hand in ("rm ", "remove the same", "node_modules", "~/.cache/pip", "untouched for 24"))
+    agent = " ".join((CATALOG / "botops" / "AGENT.md").read_text().split())
+    assert "Low disk" not in agent and "Repositories reach computers only through Tico's own commands." in agent
+
+
 @pytest.mark.parametrize("name", PINNED)
 def test_critical_rules_stay_inline(name):
     text = " ".join((CATALOG / name / "AGENT.md").read_text().split())
