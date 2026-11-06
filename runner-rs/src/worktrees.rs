@@ -2786,7 +2786,12 @@ where
                 moved?;
             }
         } else if count(&path, env, &unpushed).await? > 0 {
-            if crate::util::truthy(row.get("prs_finished")) || current.is_empty() {
+            // Its task is closed or its pull requests are finished: the branch is not pushed to again, so the commits
+            // go to the snapshot branch.
+            if crate::util::truthy(row.get("prs_finished"))
+                || crate::util::truthy(row.get("task_closed"))
+                || current.is_empty()
+            {
                 git(
                     &path,
                     env,
@@ -3124,7 +3129,15 @@ impl Worktrees {
             let Some(guards) = host.try_locks(&bot, &format!("task:{task}")) else {
                 continue;
             };
-            if !host.idle(&bot, &task) || (kind == "remove" && host.task_busy(&task)) {
+            // A removal waits only for turns on its own task (a subtask's runs in its session root's lane, which
+            // task_busy counts too). Another turn of the bot may run beside it; the checkout and lane locks above
+            // still keep a turn out of this tree.
+            let busy = if kind == "remove" {
+                host.task_busy(&task)
+            } else {
+                !host.idle(&bot, &task)
+            };
+            if busy {
                 continue;
             }
             if explicit_retry {
@@ -3341,6 +3354,7 @@ impl Worktrees {
         let vault = host.vault(&bot);
         let client = self.client.clone();
         let (h, l, b, t) = (host.clone(), link.clone(), bot.clone(), task.clone());
+        let remove = kind == "remove";
         let still_closed = move || {
             let (client, h, l, b, t) = (client.clone(), h.clone(), l.clone(), b.clone(), t.clone());
             async move {
@@ -3354,7 +3368,7 @@ impl Worktrees {
                     return false;
                 };
                 let fd = detail(&fresh);
-                h.idle(&b, &t)
+                (remove || h.idle(&b, &t))
                     && !h.task_busy(&t)
                     && (closed(&fresh)
                         || (released && crate::util::truthy(fd.get("release_requested"))))

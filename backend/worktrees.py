@@ -623,7 +623,7 @@ def heartbeat(c, who, reports, capable, default_org="", live_tasks=None):
         closed = row['task_status'] in CLOSED or row['bot_state'] == 'archived' or detail.get('delete_requested')
         # A worktree whose pull requests are all merged or closed has done its job even while its task waits on
         # something else (a release, an acceptance): it is released so it stops counting against the bot's limit.
-        # The computer removes it only while the bot is idle and only when it is clean and pushed (runner_support/worktrees.py).
+        # The computer removes it only while no turn runs on its task and only when it is clean and pushed (runner-rs worktrees.rs).
         # A `pending` one too: a reservation or checkout that never finished must not hold a place for work that is
         # done (one sat pending for days after its pull request shipped).
         # A tree coming back for a reopened task is new work starting: it is judged once it is present.
@@ -664,8 +664,10 @@ def heartbeat(c, who, reports, capable, default_org="", live_tasks=None):
         # Only worktrees that actually existed when closed are eligible on reopening.
         if closed and row['state'] == 'present' and not detail.get('delete_requested'):
             detail['restore_on_reopen'] = True
+        # A closed task's tree goes even while a pull request is still open: its branch is already on GitHub, and the
+        # computer saves anything unsaved or unpushed to a wip/ branch before it removes the tree (runner-rs worktrees.rs).
         # Restore and guarded retired-computer preparation select the same saved history before setup.
-        action = ('remove' if (closed and (finished or detail.get('delete_requested')) or released) and row['state'] != 'removed'
+        action = ('remove' if (closed or released) and row['state'] != 'removed'
                   else 'restore' if not closed and restore_requested(row, detail)
                   and (row['state'] == 'removed' or not detail.get('recovery'))
                   else 'prepare' if not closed and preparable(c, row, detail) else None)
@@ -699,7 +701,8 @@ def heartbeat(c, who, reports, capable, default_org="", live_tasks=None):
         if action and (action == 'remove' or row['repo'] and row['branch']):
             actions.append({'link_id': row['id'], 'action': action, 'branch': row['branch'], 'path': row['path'],
                             'task_id': row['task_id'], 'repo': row['repo'], 'owner': H.actor_id(row['owner_id']),
-                            'prs_finished': bool(prs) and finished, **({'release': True} if released else {}),
+                            'prs_finished': bool(prs) and finished, 'task_closed': bool(closed),
+                            **({'release': True} if released else {}),
                             **({'cleanup_retry_generation': detail['cleanup_retry_generation']}
                                if action == 'remove' and detail.get('cleanup_retry_generation') else {})})
 
