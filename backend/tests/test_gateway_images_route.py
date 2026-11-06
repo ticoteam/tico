@@ -15,8 +15,8 @@ def test_the_images_route_forwards_the_request_and_answers_the_gateways_shape(ap
     connect(api)
     calls = []
 
-    def image(base, key, prompt, category, images, size, count, header):
-        calls.append((base, key, prompt, category, list(images), size, count))
+    def image(base, key, prompt, category, images, size, count, header, **options):
+        calls.append((base, key, prompt, category, list(images), size, count, options))
         return (
             200,
             {
@@ -41,9 +41,42 @@ def test_the_images_route_forwards_the_request_and_answers_the_gateways_shape(ap
         "images": [{"mime": "image/png", "b64": "AAAA"}],
         "usage": {"cost_usd": 0.05},
     }
-    assert calls[0][1:] == ("gw-synthetic", "a kettle", "photo", [], "1920x1080", 2)
+    assert calls[0][1:] == (
+        "gw-synthetic",
+        "a kettle",
+        "photo",
+        [],
+        "1920x1080",
+        2,
+        {"model": "tico-images-1.0", "quality": None},
+    )
     api.post("/api/v2/gateway/images", json={"prompt": "x", "category": "storyboard"}, headers=headers("ana-test"))
-    assert calls[1][3:] == ("storyboard", [], None, 1)
+    assert calls[1][3:] == ("storyboard", [], None, 1, {"model": "tico-images-1.0", "quality": None})
+
+
+def test_the_lineup_models_reach_the_gateway_with_their_own_choice(api, monkeypatch):
+    connect(api)
+    calls = []
+
+    def image(base, key, prompt, category, images, size, count, header, **options):
+        calls.append((category, options))
+        return (200, {"model": options["model"], "images": [{"mime": "image/svg+xml", "b64": "AAAA"}]}, "")
+
+    monkeypatch.setattr(G, "image", image)
+    for body in (
+        {"model": "tico-images-low", "prompt": "x"},
+        {"model": "tico-images-high", "prompt": "x", "category": "graphic"},
+        {"model": "tico-svg", "prompt": "x", "quality": "pro"},
+        {"model": "tico-svg", "prompt": "x"},
+    ):
+        assert api.post("/api/v2/gateway/images", json=body, headers=headers("ana-test")).status_code == 200, body
+    assert [c[0] for c in calls] == [None, "graphic", None, None]
+    assert [c[1] for c in calls] == [
+        {"model": "tico-images-low", "quality": None},
+        {"model": "tico-images-high", "quality": None},
+        {"model": "tico-svg", "quality": "pro"},
+        {"model": "tico-svg", "quality": None},
+    ]
 
 
 def test_the_images_route_checks_its_input_and_needs_a_connected_gateway(api, monkeypatch):
@@ -57,6 +90,12 @@ def test_the_images_route_checks_its_input_and_needs_a_connected_gateway(api, mo
         {"prompt": "x", "category": "video"},
         {"prompt": "x", "category": "photo", "count": 0},
         {"prompt": "x", "category": "photo", "count": 5},
+        {"model": "tico-images-low", "prompt": "x", "category": "photo"},
+        {"model": "tico-images-high", "prompt": "x", "category": "storyboard"},
+        {"model": "tico-svg", "prompt": "x", "images": ["data:image/png;base64,AAAA"]},
+        {"model": "tico-svg", "prompt": "x", "quality": "pro", "size": "64x64"},
+        {"model": "tico-images-1.0", "prompt": "x", "quality": "pro", "category": "photo"},
+        {"model": "tico-video", "prompt": "x"},
     ):
         assert api.post("/api/v2/gateway/images", json=body, headers=headers("ana-test")).status_code == 422, body
     refused = api.post("/api/v2/gateway/images", json={"prompt": "x", "category": "photo"}, headers=headers("ana-test"))
@@ -71,7 +110,7 @@ def test_the_gateways_refusals_come_back_as_plain_problems(api, monkeypatch):
         (429, "cap_reached", 503, "gateway_image_failed"),
         (0, "unreachable", 503, "gateway_image_failed"),
     ):
-        monkeypatch.setattr(G, "image", lambda *args, status=status, code=code: (status, {}, code))
+        monkeypatch.setattr(G, "image", lambda *args, status=status, code=code, **kwargs: (status, {}, code))
         refused = api.post(
             "/api/v2/gateway/images", json={"prompt": "x", "category": "graphic"}, headers=headers("ana-test")
         )
@@ -83,7 +122,7 @@ def test_the_images_route_answers_429_with_retry_after_while_its_slots_are_full(
 
     connect(api)
     slots = api.app.state.image_slots
-    monkeypatch.setattr(G, "image", lambda *args: (200, {"model": "tico-images-1.0", "images": []}, ""))
+    monkeypatch.setattr(G, "image", lambda *args, **kwargs: (200, {"model": "tico-images-1.0", "images": []}, ""))
     taken = [slots.acquire(blocking=False) for _ in range(GATEWAY_IMAGE_SLOTS)]
     full = api.post("/api/v2/gateway/images", json={"prompt": "x", "category": "photo"}, headers=headers("ana-test"))
     assert full.status_code == 429 and full.headers["Retry-After"] == "10"
@@ -110,7 +149,7 @@ def test_a_video_production_budget_at_its_cutoff_refuses_new_images(api, monkeyp
     connect(api)
     calls = []
     monkeypatch.setattr(
-        G, "image", lambda *args: calls.append(args) or (200, {"model": "tico-images-1.0", "images": []}, "")
+        G, "image", lambda *args, **kwargs: calls.append(args) or (200, {"model": "tico-images-1.0", "images": []}, "")
     )
     now = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%S.%fZ")
     store = api.app.state.store

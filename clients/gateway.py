@@ -20,6 +20,7 @@ minute per key, so the server asks it gently (backend/gateway_connection.py `che
 import datetime
 import hashlib
 import hmac
+import http.client
 import json
 import os
 import re
@@ -47,6 +48,7 @@ TRANSIENT = ("unreachable", "busy")
 # States where the connection is not working: the Gateway refuses the key, or the key may not go to its URL.
 REFUSED = ("revoked", "unknown", "bad_url")
 CAP_MESSAGE = "Gateway cap reached"
+IMAGE_MODEL = "tico-images-1.0"
 # What each state says to the people who own the connection.
 MESSAGES = {
     "connected": "Connected.",
@@ -308,7 +310,7 @@ def check(key, url="", timeout=TIMEOUT, opener=None):
         with exc:
             try:
                 code = _code(exc.read())
-            except Exception:
+            except (OSError, http.client.HTTPException, ValueError):
                 code = ""
             state, used = state_of_error(exc.code, code), None
     except (urllib.error.URLError, TimeoutError, OSError, ValueError):
@@ -413,7 +415,7 @@ def _post(url, body, headers, timeout, opener):
         with exc:
             try:
                 code = _code(exc.read())
-            except Exception:
+            except (OSError, http.client.HTTPException, ValueError):
                 code = ""
             return exc.code, {}, code or str(exc.code)
     except (urllib.error.URLError, TimeoutError, OSError, ValueError):
@@ -473,11 +475,30 @@ def search(url, key, query, max_results=5, headers=None, timeout=25, opener=None
     )
 
 
-def image(url, key, prompt, category, images=(), size=None, count=1, headers=None, timeout=130, opener=None):
-    """Tico HQ's image maker (`POST <base>/images`, the gateway key): (status, {model, category, images: [{mime, b64}],
-    usage: {cost_usd}} or {}, error code). The references are base64 data URLs the caller has checked; the images come
-    back as the Gateway sent them. A count the Gateway gives less than asked for is the answer's own."""
-    body = {"prompt": str(prompt)[:4000], "category": str(category), "count": max(1, min(4, int(count)))}
+def image(
+    url,
+    key,
+    prompt,
+    category=None,
+    images=(),
+    size=None,
+    count=1,
+    headers=None,
+    timeout=130,
+    opener=None,
+    model=IMAGE_MODEL,
+    quality=None,
+):
+    """Tico HQ's image maker (`POST <base>/images`, the gateway key): (status, {model, category or quality, images:
+    [{mime, b64}], usage: {cost_usd}} or {}, error code). `model` is HQ's id (tico-images-low, tico-images-high, tico-svg,
+    or the alias tico-images-1.0 that takes a `category`); a chat model takes `category`, the SVG model `quality`. The
+    references are base64 data URLs the caller has checked; the images come back as the Gateway sent them. A count the
+    Gateway gives less than asked for is the answer's own."""
+    body = {"model": str(model), "prompt": str(prompt)[:4000], "count": max(1, min(4, int(count)))}
+    if category:
+        body["category"] = str(category)
+    if quality:
+        body["quality"] = str(quality)
     if images:
         body["images"] = [str(ref) for ref in images][:4]
     if size:
@@ -494,16 +515,114 @@ def image(url, key, prompt, category, images=(), size=None, count=1, headers=Non
     ][:4]
     usage = payload.get("usage") if isinstance(payload.get("usage"), dict) else {}
     cost = usage.get("cost_usd")
-    return (
-        200,
-        {
-            "model": str(payload.get("model") or "")[:60],
-            "category": str(payload.get("category") or category)[:20],
-            "images": made,
-            "usage": {"cost_usd": cost if isinstance(cost, (int, float)) and not isinstance(cost, bool) else None},
-        },
-        "",
+    answer = {
+        "model": str(payload.get("model") or model)[:60],
+        "images": made,
+        "usage": {"cost_usd": cost if isinstance(cost, (int, float)) and not isinstance(cost, bool) else None},
+    }
+    if category:
+        answer["category"] = str(payload.get("category") or category)[:20]
+    if quality:
+        answer["quality"] = str(payload.get("quality") or quality)[:20]
+    return 200, answer, ""
+
+
+# A video job's answer keys the caller may see (HQ's public view: no provider id, no request, no content path).
+VIDEO_FIELDS = ("id", "status", "seconds", "resolution", "aspect", "audio", "cost_usd")
+VIDEO_MODEL = "tico-video"
+# The most one video's MP4 the computer takes from HQ (a 4k, 15-second clip is well under this).
+VIDEO_MAX_BYTES = 150 * 1024 * 1024
+VIDEO_TIMEOUT = 120
+_JOB = re.compile(r"gv_[0-9a-f]{24}")
+
+
+def job_path(job_id):
+    """`/videos/<id>` for a job id HQ made (`gv_` and 24 hex digits); None for anything else."""
+    return "/videos/" + job_id if _JOB.fullmatch(str(job_id)) else None
+
+
+def video_submit(url, key, body, headers=None, timeout=TIMEOUT, opener=None):
+    """Tico HQ's video maker (`POST <base>/videos`, the gateway key): (202, {id, status}, "") for a queued job, or
+    (status, {}, error code). `body` is the request as the door takes it (model, prompt, seconds, resolution, aspect,
+    audio and the frames that are given)."""
+    status, payload, code = _post(
+        safe_base(url) + "/videos", body, {"Authorization": "Bearer " + key, **(headers or {})}, timeout, opener
     )
+    if status != 202:
+        return status, {}, code
+    if not _JOB.fullmatch(str(payload.get("id") or "")):
+        return 502, {}, "unreadable"
+    return 202, {"id": str(payload["id"]), "status": str(payload.get("status") or "queued")[:20]}, ""
+
+
+def video_status(url, key, job_id, headers=None, timeout=TIMEOUT, opener=None):
+    """Tico HQ's view of a video job (`GET <base>/videos/<id>`): (200, the VIDEO_FIELDS of the job, ""), or (status, {},
+    error code). An id that is not a job id is 404 here, as HQ answers an unknown one."""
+    path = job_path(job_id)
+    if path is None:
+        return 404, {}, NOT_FOUND
+    status, payload, code = _get(
+        safe_base(url) + path, {"Authorization": "Bearer " + key, **(headers or {})}, timeout, opener
+    )
+    if status != 200:
+        return status, {}, code
+    job = {field: payload[field] for field in VIDEO_FIELDS if field in payload}
+    if "cost_usd" in job and (isinstance(job["cost_usd"], bool) or not isinstance(job["cost_usd"], (int, float))):
+        job["cost_usd"] = None
+    return 200, job, ""
+
+
+def video_content(url, key, job_id, headers=None, timeout=VIDEO_TIMEOUT, opener=None, limit=VIDEO_MAX_BYTES):
+    """The MP4 of a done job (`GET <base>/videos/<id>/content`): (200, bytes, ""), or (status, b"", code) -- 409 not_ready
+    or failed, 410 expired. A video longer than `limit` is (200, b"", "too_large")."""
+    path = job_path(job_id)
+    if path is None:
+        return 404, b"", NOT_FOUND
+    return _get_bytes(
+        safe_base(url) + path + "/content",
+        {"Authorization": "Bearer " + key, **(headers or {})},
+        timeout,
+        opener,
+        limit,
+    )
+
+
+def _get(url, headers, timeout, opener):
+    """(status, payload, code) for a GET to the Gateway, as `_post` answers a POST."""
+    status, body, code = _exchange(url, headers, "application/json", timeout, opener, None)
+    if status != 200:
+        return status, {}, code
+    try:
+        payload = json.loads(body or b"{}")
+    except ValueError:
+        return 0, {}, "unreadable"
+    return 200, payload if isinstance(payload, dict) else {}, ""
+
+
+def _get_bytes(url, headers, timeout, opener, limit):
+    """(status, bytes, code) for a GET of a binary answer, at most `limit` bytes."""
+    return _exchange(url, headers, "video/mp4", timeout, opener, limit)
+
+
+def _exchange(url, headers, accept, timeout, opener, limit):
+    """(status, body, code) for one GET: the body of a 2xx answer (at most `limit` bytes, when given), else the Gateway's
+    error code. An unreachable Gateway is status 0."""
+    request = urllib.request.Request(url, method="GET", headers={**headers, "Accept": accept})
+    try:
+        with (opener or _send)(request, timeout=timeout) as response:
+            body = response.read(limit + 1) if limit else response.read()
+        if limit and len(body) > limit:
+            return 200, b"", "too_large"
+        return getattr(response, "status", 200), body, ""
+    except urllib.error.HTTPError as exc:
+        with exc:
+            try:
+                code = _code(exc.read())
+            except (OSError, ValueError, AttributeError):
+                code = ""
+            return exc.code, b"", code or str(exc.code)
+    except (urllib.error.URLError, TimeoutError, OSError, ValueError):
+        return 0, b"", "unreachable"
 
 
 def fetch(url, key, page, max_tokens=10000, headers=None, timeout=35, opener=None):
@@ -529,6 +648,123 @@ def fetch(url, key, page, max_tokens=10000, headers=None, timeout=35, opener=Non
             "usage": {"cost_usd": cost if isinstance(cost, (int, float)) and not isinstance(cost, bool) else None},
         },
         "",
+    )
+
+
+def digest(url, key, items, focus=None, style="brief", headers=None, timeout=130, opener=None):
+    """Tico HQ's digest (`POST <base>/digest`, the gateway key): (status, {summary, groups: [{title, why, item_ids}],
+    dropped, usage: {cost_usd}} or {}, error code). The items are the caller's text, read by the Gateway; the answer keeps
+    only the fields the Gateway documents, each cut to a sensible length."""
+    body = {"items": list(items)[:300], "style": style if style in ("brief", "full") else "brief"}
+    if focus:
+        body["focus"] = str(focus)[:500]
+    status, payload, code = _post(
+        safe_base(url) + "/digest", body, {"Authorization": "Bearer " + key, **(headers or {})}, timeout, opener
+    )
+    if status != 200:
+        return status, {}, code
+    groups = [
+        {
+            "title": str(g.get("title") or "")[:200],
+            "why": str(g.get("why") or "")[:600],
+            "item_ids": [str(i) for i in g.get("item_ids") or []][:300],
+        }
+        for g in payload.get("groups") or []
+        if isinstance(g, dict)
+    ][:100]
+    usage = payload.get("usage") if isinstance(payload.get("usage"), dict) else {}
+    cost = usage.get("cost_usd")
+    return (
+        200,
+        {
+            "summary": str(payload.get("summary") or "")[:12000],
+            "groups": groups,
+            "dropped": [str(i) for i in payload.get("dropped") or []][:300],
+            "usage": {"cost_usd": cost if isinstance(cost, (int, float)) and not isinstance(cost, bool) else None},
+        },
+        "",
+    )
+
+
+def _call(method, url, body=None, headers=None, timeout=TIMEOUT, opener=None):
+    """(status, payload, error code) for a call to the Gateway that is not a POST: a GET, or a DELETE that answers no
+    body (its payload is {}). An unreachable Gateway is status 0, and an answer too large to keep is `too_large`."""
+    request = urllib.request.Request(
+        url,
+        data=json.dumps(body).encode() if body is not None else None,
+        method=method,
+        headers={
+            **(headers or {}),
+            "Accept": "application/json",
+            **({"Content-Type": "application/json"} if body is not None else {}),
+        },
+    )
+    cap = 4 * 1024 * 1024
+    try:
+        with (opener or _send)(request, timeout=timeout) as response:
+            raw = response.read(cap + 1)
+            if len(raw) > cap:
+                return 0, {}, "too_large"
+            payload = json.loads(raw) if raw else {}
+        return getattr(response, "status", 200), payload if isinstance(payload, dict) else {}, ""
+    except urllib.error.HTTPError as exc:
+        with exc:
+            try:
+                code = _code(exc.read(4096))
+            except (OSError, http.client.HTTPException, ValueError):
+                code = ""
+            return exc.code, {}, code or str(exc.code)
+    except (urllib.error.URLError, TimeoutError, OSError, ValueError):
+        return 0, {}, "unreachable"
+
+
+def signals_watches(base, key, timeout=TIMEOUT, opener=None):
+    """This install's Signals watches at Tico HQ (`GET <base>/signals/watches`): (status, {watches: [...]}, code)."""
+    return _call(
+        "GET",
+        safe_base(base) + "/signals/watches",
+        headers={"Authorization": "Bearer " + key},
+        timeout=timeout,
+        opener=opener,
+    )
+
+
+def signals_watch(base, key, kind, target, timeout=TIMEOUT, opener=None):
+    """Watch `target` (a page's https address, or a release's `github:owner/repo` or feed) at Tico HQ, `kind` page or
+    release (`POST <base>/signals/watches`): (status, {id, kind, target, ...}, code). HQ answers the same watch again
+    for the same target, so a retry is safe."""
+    return _call(
+        "POST",
+        safe_base(base) + "/signals/watches",
+        {"kind": kind, "target": target},
+        {"Authorization": "Bearer " + key},
+        timeout,
+        opener,
+    )
+
+
+def signals_end(base, key, watch_id, timeout=TIMEOUT, opener=None):
+    """End one of this install's watches at Tico HQ (`DELETE <base>/signals/watches/<id>`): (status, {}, code); 204 when
+    ended, 404 when HQ does not hold it."""
+    return _call(
+        "DELETE",
+        safe_base(base) + "/signals/watches/" + urllib.parse.quote(str(watch_id), safe=""),
+        headers={"Authorization": "Bearer " + key},
+        timeout=timeout,
+        opener=opener,
+    )
+
+
+def signals_changes(base, key, since="", limit=200, timeout=TIMEOUT, opener=None):
+    """What Signals found on this install's watches after the cursor `since` (`GET <base>/signals/changes`):
+    (status, {changes: [...], next: cursor}, code). Pass `next` back as `since`."""
+    query = urllib.parse.urlencode({"since": since, "limit": int(limit)} if since else {"limit": int(limit)})
+    return _call(
+        "GET",
+        safe_base(base) + "/signals/changes?" + query,
+        headers={"Authorization": "Bearer " + key},
+        timeout=timeout,
+        opener=opener,
     )
 
 
