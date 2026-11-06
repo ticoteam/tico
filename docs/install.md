@@ -992,7 +992,7 @@ Add `slack` to `COMPOSE_PROFILES` to run the Slack service, then paste the app's
 
 ## Update
 
-Use **Update now** (Settings, or Health → Version for the owner), or run the target release's installer again to update both the pinned image tag and compose bundle, preserving `.env`.
+Use **Update now** (in the sidebar's new-version notice, or on the Version row under Settings → General → Health → Details for the owner), or run the target release's installer again to update both the pinned image tag and compose bundle, preserving `.env`.
 
 ![Health Version row with Update now beside Check for updates](images/settings-stage1/settings-health-version-context.png)
 
