@@ -32,6 +32,7 @@ from datetime import date, datetime, timedelta, timezone
 from decimal import ROUND_HALF_UP, Decimal, InvalidOperation
 from typing import Any, cast
 
+from . import ad_warnings
 from .core import ledger as L
 from .core.org import SYSTEM
 from .gateway_sync import Bell
@@ -617,6 +618,11 @@ def pass_once(store: Any, vault: object, *, now: str | None = None, http_: Http 
             done[imp.tool_id] = Outcome("failed", error="the import stopped unexpectedly")
             with store.transaction() as c:
                 SA.finish(c, imp.id, "failed", "the import stopped unexpectedly", at, imported=False)
+    try:
+        with store.transaction() as c:
+            ad_warnings.run(c, at)
+    except Exception:                                       # a warning never stops the next import
+        log.exception("Finance ad budget warnings failed")
     return done
 
 

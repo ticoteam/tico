@@ -1,6 +1,7 @@
 """Ad spend in budgets (budgeting.py's live read, reads.py): in an open month a budget reads the platforms' daily spend
-in place of their card charges, never both; a closed month reads the books; the month-end pace; and each bot sees its
-own ad budget while its manager bot sees its reports'.
+in place of their card charges, never both; a closed month reads the books; the month-end pace; each bot sees its own
+ad budget while its manager bot sees its reports'; and the warnings (ad_warnings.py) go to the spending bot alone, once
+per level per period, and pause nothing.
 
 Slugs echo TIDY's ad bots (paid-rental-ads, rental-social-ad-owner, their manager cmo) for realism only; nothing in the
 code knows them."""
@@ -11,7 +12,10 @@ import pytest
 
 from backend import bot_settings as BS
 from backend import hubdb as H
+from backend.credentials import Vault
+from backend.finance import actions as FA
 from backend.finance import ad_import as AI
+from backend.finance import ad_warnings
 from backend.finance import budgeting
 from backend.finance import reads
 from backend.finance.context import load
@@ -192,3 +196,90 @@ def test_each_bot_sees_its_own_ad_budget_and_the_manager_bot_its_reports(books: 
         with pytest.raises(FinanceError) as refused:
             reads.metric(c, "bot:rental-social-ad-owner", "budget_remaining", budget_id=w["google"], at=AT)
         assert refused.value.code == NOT_FOUND and str(refused.value.message) == "Not in your view."
+
+
+# ------------------------------------------------------------------------------------------------ warnings
+WARN_AT = "2026-10-06T12:00:00.000000Z"
+FOOT = "This is a warning only. Nothing has been paused."
+
+
+def warning_notes(c: sqlite3.Connection) -> list[tuple[str, str]]:
+    return [(str(r[0]), str(r[1])) for r in c.execute(
+        "SELECT to_actor, body FROM notes WHERE from_actor=? AND body LIKE 'Finance · budget warning%' ORDER BY rowid",
+        (H.KEEPER,))]
+
+
+def warn(store: Store, at: str = WARN_AT) -> list[tuple[str, tuple[str, ...]]]:
+    with store.transaction() as c:
+        return [(s.bot, s.levels) for s in ad_warnings.run(c, at)]
+
+
+def test_the_spending_bot_gets_one_line_per_level_and_nobody_else(books: Store):
+    w = world(books, WARN_AT)
+    google = w["google_ads"]
+    platform_spend(books, google, [("2026-10-02", 40_000), ("2026-10-05", 36_000)], "2026-10-01", "2026-10-06")
+    assert warn(books) == [("bot:paid-rental-ads", ("pace",))]
+    with books.read() as c:
+        assert warning_notes(c) == [("bot:paid-rental-ads", "Finance · budget warning\n"
+                                     "Rental Google Ad Owner · Google Ads · October\n"
+                                     "Spent $760 of $3,000 (25%), but at today's pace the month ends near $3,927, "
+                                     "which is over budget.\n" + FOOT)]
+    assert warn(books) == []                                            # once per level
+    platform_spend(books, google, [("2026-10-02", 200_000), ("2026-10-05", 45_000)], "2026-10-01", "2026-10-06")
+    assert warn(books) == [("bot:paid-rental-ads", ("warn",))]
+    with books.read() as c:
+        line = warning_notes(c)[-1][1].split("\n")[2]
+        assert line == ("Spent $2,450 of $3,000 (82%), past the 80% warning level. At today's pace the month ends "
+                        "near $12,658, which is over budget.")
+    platform_spend(books, google, [("2026-10-02", 200_000), ("2026-10-05", 110_000)], "2026-10-01", "2026-10-06")
+    assert warn(books) == [("bot:paid-rental-ads", ("limit",))]
+    assert warn(books) == []
+    with books.read() as c:
+        sent = warning_notes(c)
+        assert sent[-1][1].split("\n")[2] == "Spent $3,100 of $3,000 (103%): the month's budget is used up."
+        # The bot alone: not its manager bot, not a person, not the Marketing budget with no bot.
+        assert {to for to, _ in sent} == {"bot:paid-rental-ads"} and len(sent) == 3
+        # Warn only: the budget's own action is untouched and the books-based state stays under its limit.
+        assert c.execute("SELECT at_limit FROM fin_budgets WHERE id=?", (w["google"],)).fetchone()[0] == "warn"
+        assert not budgeting.state(load(c, WARN_AT), w["google"], date(2026, 10, 6)).at_limit
+
+
+def test_a_jump_past_two_levels_is_one_line(books: Store):
+    w = world(books, WARN_AT)
+    platform_spend(books, w["meta_ads"], [("2026-10-03", 260_000)], "2026-10-01", "2026-10-06")
+    assert warn(books) == [("bot:rental-social-ad-owner", ("warn", "pace"))]
+    with books.read() as c:
+        (to, body), = warning_notes(c)
+        assert to == "bot:rental-social-ad-owner"
+        assert body.split("\n")[1] == "Rental Social Ad Owner · Meta Ads · October"
+    assert warn(books) == []
+
+
+def test_the_import_pass_gives_the_warnings(books: Store):
+    w = world(books, WARN_AT)
+    platform_spend(books, w["google_ads"], [("2026-10-05", 76_000)], "2026-10-01", "2026-10-06")
+    assert AI.pass_once(books, Vault(books), now=WARN_AT) == {}          # nothing due: imported at WARN_AT
+    with books.read() as c:
+        assert [to for to, _ in warning_notes(c)] == ["bot:paid-rental-ads"]
+
+
+def test_the_owner_gets_no_notice_for_an_ad_budget(books: Store):
+    w = world(books, WARN_AT)
+
+    def notices(c: sqlite3.Connection, name: str) -> int:
+        return int(c.execute("SELECT count(*) FROM messages WHERE recipient_id=? AND kind='notice' AND body LIKE ?",
+                             (OWNER, f"%{name}%")).fetchone()[0])
+
+    with books.transaction() as c:
+        soft = act(c, OWNER, "budget_create", {"name": "Tools", "account_id": account(c, "6100"), "amount": 1_000},
+                   at=WARN_AT)
+        assert soft.status == "committed", soft
+        # Books-based crossings: the bot's ad budget (its card charge) and a budget with no ad spend in it.
+        spend(c, "6300", 260_000, day="2026-10-05", teammate="bot:paid-rental-ads", vendor=w["google_ads_vendor"])
+        spend(c, "6100", 900, day="2026-10-05")
+        assert FA.drain_events(c, WARN_AT) >= 2
+        assert notices(c, "Tools") == 1
+        assert notices(c, "Rental Google Ad Owner") == 0
+        ctx = load(c, WARN_AT)
+        assert ad_warnings.bot_of(ctx, ctx.budgets()[w["marketing"]]) == ""
+        assert ad_warnings.bot_of(ctx, ctx.budgets()[w["google"]]) == "bot:paid-rental-ads"

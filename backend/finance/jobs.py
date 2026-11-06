@@ -6,7 +6,7 @@ import sqlite3
 from collections.abc import Mapping
 from typing import cast
 
-from . import handlers
+from . import ad_warnings, handlers
 from .budgeting import LIMIT_EVENT, WARN_EVENT, event_period, state, subtree
 from .context import is_set_up, load
 from .core import budgets as B
@@ -53,7 +53,8 @@ def _words(b: B.Budget, name: str, bots: bool, images: bool = False) -> str:
 
 def drain(c: sqlite3.Connection, at: str | None = None, most: int = DRAIN_MOST) -> int:
     """Hand waiting `finance.*` events to rules (`judge_event`) and automations, ids only, so whoever acts reads the
-    budget through their own view; and tell a budget's owner at warn and at cutoff. How many were drained."""
+    budget through their own view; and tell a budget's owner at warn and at cutoff (not an ad budget's: its bot is
+    told, ad_warnings.py). How many were drained."""
     rows = SU.undrained(c, most)
     if not rows:
         return 0
@@ -73,7 +74,8 @@ def drain(c: sqlite3.Connection, at: str | None = None, most: int = DRAIN_MOST) 
         tico.emit(c, name, subject, data)
         if ctx is not None and b is not None and name == LIMIT_EVENT and b.at_limit == "decline":
             _freeze_cards(c, b.id, eid, ctx.at)
-        if ctx is not None and b is not None and name in (WARN_EVENT, LIMIT_EVENT):
+        # An ad budget's warnings go to its bot alone (ad_warnings.py): its owner gets no notice of its own.
+        if ctx is not None and b is not None and name in (WARN_EVENT, LIMIT_EVENT) and not ad_warnings.bot_of(ctx, b):
             owner = b.owner if b.owner.startswith("human:") and handlers.sees_budget(ctx, b.owner, b) else ctx.org.owner
             if owner:
                 c.execute("SAVEPOINT fin_notice")
