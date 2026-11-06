@@ -1413,6 +1413,7 @@ def fire(c, kind, payload, ref="", match=None, access=None, only=None):
         routine_created_task = bool(turn_chain and isinstance(event, dict) and
                                     (event.get("name") == "task.created" or
                                      isinstance(event_data, dict) and event_data.get("initial_step")))
+        task_trigger_turn = _task_trigger_chain(c, turn_chain)
         queued = []
         for row in c.execute("SELECT * FROM automations WHERE deleted_at IS NULL AND enabled=1 AND trigger_type=? "
                              + ("AND id=? " if only else "") + "ORDER BY created_at",
@@ -1428,8 +1429,8 @@ def fire(c, kind, payload, ref="", match=None, access=None, only=None):
                 continue
             task_trigger = kind == "event" and not row["builtin"] and _task_trigger(trigger)
             row_chain = chain
-            if turn_chain and task_trigger and not routine_created_task:
-                # A routine's own task is held at creation; its bot may still act on other tasks.
+            if turn_chain and task_trigger and not routine_created_task and not task_trigger_turn:
+                # Routines may trigger other tasks; their own task is held at creation. Task-trigger chains stay intact.
                 row_chain = action_chain
             if row["id"] in row_chain:
                 continue
@@ -1455,6 +1456,22 @@ def fire(c, kind, payload, ref="", match=None, access=None, only=None):
 def _task_trigger(trigger):
     from . import event_catalog as CAT
     return (CAT.canonical(trigger.get("name")) or trigger.get("name")) in TASK_TRIGGER_EVENTS
+
+
+def _task_trigger_chain(c, chain):
+    """Whether a bot turn was started by a saved automation on one of the five task events."""
+    if not chain:
+        return False
+    placeholders = ",".join("?" for _ in chain)
+    rows = c.execute(f"SELECT flow FROM automations WHERE id IN ({placeholders})", tuple(chain)).fetchall()
+    for row in rows:
+        try:
+            trigger = (json.loads(row["flow"]) or {}).get("trigger") or {}
+        except (TypeError, ValueError):
+            continue
+        if _task_trigger(trigger):
+            return True
+    return False
 
 
 def _event_payload_for_owner(c, row, payload):

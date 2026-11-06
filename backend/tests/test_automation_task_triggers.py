@@ -129,7 +129,7 @@ def test_a_routine_started_bot_turn_still_starts_a_trigger_for_another_task(api)
     from backend import automations
     from backend.tests.test_api import runner
 
-    routine = make(api, {"type": "event", "name": "task.created"}, [NOTE], enabled=False)
+    routine = make(api, {"type": "event", "name": "routine.started"}, [NOTE], enabled=False)
     entered = task_rule(api, "task.step_changed", when={"owner": "ops", "step": "In QA"})
     with api.app.state.store.transaction() as c:
         typ = task_type(c)
@@ -170,6 +170,52 @@ def test_a_routine_started_bot_turn_still_starts_a_trigger_for_another_task(api)
         note = H.task(c, task["id"])["note"]
         assert "Trigger: task.step_changed" in note and "Action: note" in note and "A note" in note
     assert len(runs(api, heard)["runs"]) == 1, "a routine bot may trigger Automations on another task"
+
+
+def test_a_task_trigger_automation_does_not_reenter_from_its_bot_turn(api):
+    import json
+
+    from backend import automations
+    from backend.tests.test_api import runner
+
+    automation = make(api, {"type": "event", "name": "task.step_changed"}, [
+        {"id": "wake", "type": "action", "do": "wake_bot", "args": {"bot": "ops", "text": "Review this task."}}
+    ])
+    with api.app.state.store.transaction() as c:
+        typ = task_type(c)
+        task = H.task_create(c, "human:ana", "One task event", "Synthetic body", "bot:ops", type=typ["id"],
+                             step="Open", lint=False, deduplicate=False)
+        H.task_update(c, "human:ana", task["id"], step="In QA", note="Start the task-trigger automation", mover=True)
+    api.app.state.store.automations.drain()
+    assert started(api, automation) == 1
+
+    enrolled = runner(api)
+    now = H.now()
+    attempt_id = H.new_id()
+    with api.app.state.store.transaction() as c:
+        jobs = c.execute("SELECT j.id,j.message_id,m.refs FROM jobs j JOIN messages m ON m.id=j.message_id "
+                         "WHERE j.bot_id='ops' ORDER BY j.created_at DESC").fetchall()
+        wake = next((dict(job) for job in jobs
+                     if (json.loads(job["refs"] or "{}") or {}).get("automation_run")
+                     and automation in (json.loads(job["refs"] or "{}") or {}).get("automation_chain", [])), None)
+        assert wake is not None
+        refs = json.loads(wake["refs"] or "{}")
+        assert refs.get("task") == task["id"]
+        c.execute("UPDATE jobs SET state='running',attempt_id=? WHERE id=?", (attempt_id, wake["id"]))
+        c.execute("INSERT INTO attempts(id,job_id,bot_id,runner_id,generation,token_hash,state,lease_until,created_at) "
+                  "VALUES(?,?,?,?,?,?,'running',?,?)",
+                  (attempt_id, wake["id"], "ops", enrolled["runner_id"], 1, H.new_id(), H.shift(now, minutes=5), now))
+        run_token = H.RUN.set(attempt_id)
+        chain_token = automations.CHAIN.set(())
+        try:
+            H.task_update(c, "bot:ops", task["id"], step="Open", note="Bot changed the task", mover=True)
+        finally:
+            automations.CHAIN.reset(chain_token)
+            H.RUN.reset(run_token)
+
+    api.app.state.store.automations.drain()
+    assert started(api, automation) == 1
+    assert len(runs(api, automation)["runs"]) == 1
 
 
 def test_a_generic_event_rule_created_task_still_starts_task_event_automations(api):
