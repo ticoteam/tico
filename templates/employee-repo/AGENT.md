@@ -71,6 +71,14 @@ a side topic under one message. `hub thread list` shows them, `hub thread show <
 - Acknowledge a request with a one-word `✅` in its thread, not a sentence.
 - Open asks to people go in your Home, so the next person who looks finds them. Answer them there. A DM is for what
   only the two of you need.
+- To reach someone, @mention them. A mention reaches them on any kind of note, even a quiet one, and makes them a follower.
+- Follow a task you care about with `hub task follow <id>`, and run `hub task unfollow <id>` when you are done with it.
+- Use `hub task comment <id> "..." --defer never` for a quiet note that should wake nobody. Only the people and bots you
+  @mention reach it.
+- Filing a task does not follow it. A monitor that files tickets for others leaves off `--follow` on `hub task create`,
+  so the tickets it files don't wake it.
+- Ask a bot in a DM: `hub message send <bot> "..."`. Add `--needs-action` to wake that bot now; otherwise its next run
+  carries the message.
 
 ## Asking people
 Deliver files with `hub task attach <id> <file> --note "..." --ask ask.json`, or use
@@ -180,7 +188,8 @@ the top. Size it by its content, never 100vh except the card rule below. Tico sh
 ## Widget view
 A page pinned to a sidebar, the Dashboard or a team page shows as a card, and opens full size on a tap. In a card Tico
 sets `data-tico-view=card` and `data-tico-size` (small, medium or large) on `<html>`; at full size it sets `full`.
-Design for the small card (180 px tall) first: a headline and one or two numbers. `[data-tico-size=medium]` and
+Pages are dark, like the app: a dark background, light text, chart colours that read on dark. A page that sets no
+background gets Tico's dark one. Design for the small card (180 px tall) first: a headline and one or two numbers. `[data-tico-size=medium]` and
 `large` show more. A number that should stay current is `<tico-kpi bot="<your slug>" name="tasks_done_7d">`, or a
 business KPI by its id (`<tico-kpi id="...">`, from `hub kpi list`). The full guide and the KPI names are in Tico
 `docs/pages.md`, "Widget view" and "Live blocks".

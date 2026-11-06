@@ -40,8 +40,11 @@ PAGES = {
     "docs": page("docs", "docs"),
     "library": page("docs", "docs"),
     "files": page("files", "files"),
+    # Library › Skills (ui/app/skills.js): the directory, its usage and proposals (backend/demo_sections/skills.py).
+    "skills": page("skills", "skills"),
     "tools": page("tools", "integrations"),
-    "connections": page("connections", "connections"),
+    # The Tools page's one list (backend/api_tools.py); the old Connections row maps here until the nav drops it.
+    "connections": page("tool-index", "rows"),
     "meetings": page("meetings", "meetings"),
     "meetings-live": page("live-meetings", "meetings"),
     "threads": page("threads", "threads"),
@@ -157,7 +160,28 @@ def test_task_pages_have_demo_data(api):
     assert any(p.get("page", {}).get("file_id") == pages[0]["file_id"] for p in pins)
 
 
+def test_a_demo_task_has_a_page_made_by_its_person(api):
+    pages = api.get("/api/v2/pages?bot=coo").json()["pages"]
+    made = next(p for p in pages if p["updated_by"] == "human:ana")
+    pins = api.get("/api/v2/places/task:" + made["task_id"]).json()["pins"]
+    assert any(p.get("page", {}).get("file_id") == made["file_id"] for p in pins)
+    with api.app.state.store.read() as c:
+        row = c.execute("SELECT v.attempt_id,m.refs FROM bot_file_versions v JOIN attempts a ON a.id=v.attempt_id "
+                        "JOIN jobs j ON j.id=a.job_id JOIN messages m ON m.id=j.message_id WHERE v.file_id=?",
+                        (made["file_id"],)).fetchone()
+        assert row and made["task_id"] in row["refs"]
+
+
 def test_mail_settings_have_a_read_grant_and_keep_owner_routing(api):
     grant = api.get("/api/v2/postal/addresses/all/grants").json()["grants"][0]
     assert (grant["grantee_id"], grant["level"]) == ("legal-review", "read")
     assert api.get("/api/v2/postal/settings").json()["settings"]["legal_bot_id"] is None
+
+
+def test_skills_page_has_usage_proposals_and_an_unused_install(api):
+    usage = api.get("/api/v2/skills/usage", params={"days": 30}).json()["skills"]
+    assert all(row["uses"] for row in usage) and any(row["top"] for row in usage)
+    pending = api.get("/api/v2/skills/proposals", params={"status": "pending"}).json()["proposals"]
+    assert {p["screen_status"] for p in pending} == {"pending", "screened"}
+    states = {i["coverage"] for i in api.get("/api/v2/skills/refund-check/usage").json()["installs"]}
+    assert {"used", "unused"} <= states

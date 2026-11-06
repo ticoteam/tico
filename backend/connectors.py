@@ -419,7 +419,7 @@ def install_connectors(app, store, execution, mutate):
             return {"ok": not failing}
         return mutate(request, body, work)
 
-    CALENDAR_OFF = ("The company turned Create and change calendar events off in Tico (Settings > Inboxes > What Tico "
+    CALENDAR_OFF = ("The company turned Create and change calendar events off in Tico (Tools > Settings > Email > What Tico "
                     "may do), so Tico will not add the event")
 
     @app.post("/api/v2/connectors/calendar/actions/claim")
@@ -618,7 +618,7 @@ def install_connectors(app, store, execution, mutate):
                 "synced_at": row["synced_at"] if row else None,
                 "error": row["error"] if row else None,
             })
-        # What Tico may do (Settings > Inboxes), which the mail CLI the runner runs checks every write against
+        # What Tico may do (Tools), which the mail CLI the runner runs checks every write against
         # (connectors/mail/policy.py runner_company): it reads it here, over the runner's own registration.
         return {"mailboxes": mailboxes, "batch": MAIL_BATCH,
                 "retention_days": store.settings.mail_retention_days, "company": company}

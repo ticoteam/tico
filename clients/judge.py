@@ -63,6 +63,14 @@ GATEWAY_MODELS = ("tico-decide-1.0", "tico-classify-1.0", "tico-classify-low", "
 GATEWAY_PATH = "/v1/gateway/decisions"
 GATEWAY_TIMEOUT = 8
 GATEWAY_SLOW_TIMEOUT = 30
+# The Gateway's language-model levels: the only ones that answer evidence (`evidence` in the request; the Gateway's
+# contract, HQ gateway/contract.py `check_evidence`, has the same limits as the checks below).
+DECIDE_LLM_MODELS = tuple(f"tico-decide-{level}-1.0" for level in ("medium", "high"))
+EVIDENCE_SUMMARY = 600
+EVIDENCE_FINDINGS = 20
+EVIDENCE_FILE = 200
+EVIDENCE_ISSUE = 300
+SEVERITIES = ("low", "medium", "high")
 
 
 def normalize_level(value):
@@ -395,6 +403,24 @@ def clean(questions):
     return {qid: {k: v for k, v in q.items() if k != "dynamic"} for qid, q in questions.items()}
 
 
+def check_evidence(value):
+    """The evidence a Gateway language model sent beside its answers, checked and clamped as the Gateway clamps it: the
+    summary cut to EVIDENCE_SUMMARY characters, at most EVIDENCE_FINDINGS findings, each file and issue cut to its limit
+    and each line at least 0. Never trusted: a missing or malformed one (a finding without a file, a severity that is not
+    one of SEVERITIES) is `JudgeError("shape")`."""
+    if not isinstance(value, dict) or not isinstance(value.get("summary"), str) or not isinstance(value.get("findings"), list):
+        raise JudgeError("shape", "the evidence is not a summary and a list of findings")
+    findings = []
+    for item in value["findings"][:EVIDENCE_FINDINGS]:
+        if (not isinstance(item, dict) or not isinstance(item.get("file"), str) or not isinstance(item.get("issue"), str)
+                or item.get("severity") not in SEVERITIES or not isinstance(item.get("line"), int)
+                or isinstance(item.get("line"), bool)):
+            raise JudgeError("shape", "a finding is not a file, line, issue and severity")
+        findings.append({"file": item["file"][:EVIDENCE_FILE], "line": max(0, item["line"]),
+                         "issue": item["issue"][:EVIDENCE_ISSUE], "severity": item["severity"]})
+    return {"summary": value["summary"][:EVIDENCE_SUMMARY], "findings": findings}
+
+
 def check_answers(answers, questions):
     """Every question answered, in its type's shape; anything else is `JudgeError("shape")`. Returns the answers rebuilt
     from what each type answers (`_project`): only the questions asked, only their fields, so nothing else a provider
@@ -515,13 +541,17 @@ def gateway(api_key, url, model=GATEWAY_MODEL, timeout=GATEWAY_TIMEOUT, opener=N
     extra = dict(headers or {})
     opener = opener or gateway_open
 
-    def engine(state, questions, label=None):
+    def engine(state, questions, label=None, evidence=False):
+        """`evidence` asks a language-model level for its evidence beside the answers: the result then keeps it (checked),
+        and a level that answers none (Jev's Low) keeps no `evidence` key."""
         validate(state, questions, label)
         if not safe_gateway_url(url):                   # checked at use, so the next provider is asked instead
             raise JudgeError("unconfigured", "the Tico AI Gateway URL is neither https nor this computer")
         body = {"state": state, "model": model, "questions": clean(questions)}
         if label:
             body["label"] = label
+        if evidence:
+            body["evidence"] = True
         request = urllib.request.Request(url, data=json.dumps(body, default=str).encode(), method="POST", headers={
             **extra, "Authorization": "Bearer " + api_key, "Content-Type": "application/json",
             "Accept": "application/json"})
@@ -548,11 +578,14 @@ def gateway(api_key, url, model=GATEWAY_MODEL, timeout=GATEWAY_TIMEOUT, opener=N
             raise JudgeError("shape", "the Tico AI Gateway answered with something other than an object")
         answered = payload.get("model") if payload.get("model") in GATEWAY_MODELS else model
         usage = clean_usage(payload.get("usage"))
+        wants_evidence = bool(evidence) and model in DECIDE_LLM_MODELS
         try:
             answers = check_answers(payload.get("answers"), questions)
+            checked = check_evidence(payload.get("evidence")) if wants_evidence else None
         except JudgeError as exc:
             raise _paid(exc, answered, usage)
-        return {"model": answered, "answers": answers, "usage": usage, "ms": ms, "provider": GATEWAY_PROVIDER}
+        return {"model": answered, "answers": answers, "usage": usage, "ms": ms, "provider": GATEWAY_PROVIDER,
+                **({"evidence": checked} if wants_evidence else {})}
     engine.model, engine.provider = model, GATEWAY_PROVIDER
     return engine
 
@@ -930,6 +963,8 @@ def check_set(data, name):
     thresholds = data.get("thresholds") or {}
     if not isinstance(thresholds, dict) or not all(isinstance(v, (int, float)) for v in thresholds.values()):
         raise JudgeError("invalid", f"{name}: thresholds is a map of name -> number")
+    if not isinstance(data.get("evidence", False), bool):
+        raise JudgeError("invalid", f"{name}: `evidence` is true or false")
     try:
         state = list(data.get("state") or [])
     except TypeError:

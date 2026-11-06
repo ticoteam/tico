@@ -671,11 +671,12 @@ def channel_names(ctx):
 
 
 def marketing_tasks(ctx):
-    """The open marketing tasks the reader may read, each with its stage (idea, testing or scaling), owner and channel
-    slugs, most recently updated first (backend/marketing_tasks.py: the Idea, Testing and Scaling steps)."""
+    """The open marketing tasks the reader may read, each with its stage (idea, building, testing or scaling), owner
+    and channel slugs, most recently updated first (backend/marketing_tasks.py: the On deck, In development, Live and
+    Working steps)."""
     from . import marketing_tasks as MT
     def make():
-        steps = {MT.step_id(key): key for key in ("idea", "testing", "scaling")}
+        steps = {MT.step_id(key): key for key in ("idea", "building", "testing", "scaling")}
         marks = ",".join("?" * len(steps))
         found = {}
         for r in ctx.c.execute(
@@ -696,8 +697,8 @@ def marketing_tasks(ctx):
 
 def growth_channels(ctx, s):
     """Each live channel's new customers and CAC for the picked month, its LTV:CAC carried back, its last six months of
-    new customers, and up to three of its open marketing tasks (Scaling, then Testing, then Idea). Unknown comes last,
-    when it has a row that month."""
+    new customers, and up to three of its open marketing tasks (Working, then Live, In development and On deck). Unknown
+    comes last, when it has a row that month."""
     from . import growth as G
     nums = ctx.growth(GROWTH_MONTHS)
     live = [ch for ch in nums["channels"] if ch["slug"] != G.UNKNOWN]
@@ -706,7 +707,7 @@ def growth_channels(ctx, s):
     month = ctx.month
     cal = months_between(nums["months"][0], month) if nums["months"] else [month]
     tasks = {}
-    rank = {"scaling": 0, "testing": 1, "idea": 2}
+    rank = {"scaling": 0, "testing": 1, "building": 2, "idea": 3}
     for task in sorted(marketing_tasks(ctx), key=lambda t: rank[t["stage"]]):
         for slug in task["channels"]:
             tasks.setdefault(slug, []).append({"id": task["id"], "title": task["title"], "stage": task["stage"]})
@@ -739,10 +740,11 @@ def growth_retention(ctx, s):
 
 
 def growth_board(ctx, s):
-    """Open marketing tasks by stage: Testing, Scaling, then Idea, each lane's count and its newest few."""
+    """Open marketing tasks by stage: Live, Working, In development, then On deck; each lane's count and newest few."""
     tasks, names = marketing_tasks(ctx), channel_names(ctx)
     lanes = []
-    for stage, label in (("testing", "Testing"), ("scaling", "Scaling"), ("idea", "Idea")):
+    for stage, label in (("testing", "Live"), ("scaling", "Working"), ("building", "In development"),
+                         ("idea", "On deck")):
         mine = [t for t in tasks if t["stage"] == stage]
         lanes.append({"stage": stage, "label": label, "count": len(mine),
                       "cards": [{"id": t["id"], "title": t["title"], "owner_id": t["owner_id"],

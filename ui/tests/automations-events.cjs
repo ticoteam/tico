@@ -35,11 +35,9 @@ const rowText = (page, id) => page.locator(`tr.au-row[data-row="${id}"] td.au-tt
       for (const [id, words] of Object.entries(want)) assert.equal(await rowText(page, id), words, id);
       assert.doesNotMatch(await page.locator('.au-tbl').innerText(), RAW, 'no dotted ids in the list');
       // Search still finds one by its words.
-      await page.locator('[data-filters]').click();
       await page.locator('.au-q').fill('task finished');
       assert.deepEqual(await page.locator('tr.au-row').evaluateAll(r => r.map(x => x.dataset.row)), ['au_done']);
       await page.locator('.au-q').fill('');
-      await page.locator('[data-filters]').click();
       await shot(page, 'phone-events-list');
 
       await page.locator('tr.au-row[data-row="au_wakes"] a').click();

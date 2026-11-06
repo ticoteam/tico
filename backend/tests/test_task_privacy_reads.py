@@ -56,7 +56,7 @@ def test_participant_permission_is_never_reused_for_another_tasks_content(api, m
     probes = {}
     with api.app.state.store.transaction() as c:
         a, b = H.task(c, allowed), H.task(c, denied)
-        assert [a[k] for k in ('owner_id','requester_id','guest','private')] == [b[k] for k in ('owner_id','requester_id','guest','private')]
+        assert [a[k] for k in ('owner_id','requester_id','readers','private')] == [b[k] for k in ('owner_id','requester_id','readers','private')]
         room = H.open_conversation(c, 'human:ana', ['human:ben','bot:ops'], kind='chat', subject='Provenance probes')
         c.execute('UPDATE messages SET conversation_id=? WHERE id=(SELECT message_id FROM jobs WHERE id=?)',
                   (room['id'], attempt['job_id']))
@@ -825,7 +825,7 @@ def test_person_origin_rows_are_checked_in_one_row_and_match_the_one_row_read(ap
             task(api, private=False, requester="human:ana", owner="bot:ops", title="Company parent"),
             task(api, private=False, requester="bot:ops", owner="bot:ops", title="Bot work")]
     with api.app.state.store.transaction() as c:
-        c.execute("UPDATE tasks SET guest='human:cara' WHERE id=?", (rows[3]["id"],))
+        c.execute("UPDATE tasks SET readers=json_array('human:cara') WHERE id=?", (rows[3]["id"],))
         c.execute("UPDATE tasks SET status='done' WHERE id IN (?,?)", (rows[1]["id"], rows[5]["id"]))
         c.execute("INSERT INTO task_relations(from_task,to_task,kind,created_at) VALUES(?,?,'parent','now')",
                   (rows[1]["id"], rows[4]["id"]))

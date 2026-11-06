@@ -222,7 +222,7 @@ When the deliverable is ready but the business result depends on a person, recor
 action on the existing task: the artifact and version, the destination, the decision owner, and
 the check you will run after the decision. Keep a product task with an open review PR in `review`
 and attach the PR link; that link is the handoff, so do not add a generic merge approval. Keep a
-team task awaiting a missing decision in `waiting`. For requested publication, verify the facts, assets and placement, then publish with your Tools when `outbound_send` is on. Ask only if the destination or scope is missing. Do not count
+team task awaiting a missing decision in `waiting`. For requested publication, verify the facts, assets and placement, then publish with your Tools when your sending policy in Tico lets you send. Ask only if the destination or scope is missing. Do not count
 acceptance as publication.
 
 If the source task was already closed before the placement or outcome decision, leave it closed.

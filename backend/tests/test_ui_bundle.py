@@ -6,7 +6,7 @@ from unittest.mock import patch
 
 import pytest
 
-from backend import ui_bundle
+from backend import ui_build, ui_bundle
 from backend.tests.test_api import api  # noqa: F401
 
 AUTH = {"Authorization": "Bearer ana-test"}
@@ -150,9 +150,17 @@ def test_the_bundle_is_cut_into_parts_a_webkit_cache_keeps(api):
 
 
 @served
-@pytest.mark.parametrize("kind", ("js", "css"))
-@pytest.mark.parametrize("n", (0, 1))
-def test_an_old_bundle_url_is_complete_and_never_cached(api, monkeypatch, kind, n):
+def test_an_old_bundle_url_is_complete_and_never_cached(api, monkeypatch):
+    for kind in ("js", "css"):
+        for n in (0, 1):
+            try:
+                an_old_bundle_url_is_complete_and_never_cached(api, monkeypatch, kind, n)
+            except AssertionError as exc:
+                exc.add_note(f"in the {kind} bundle, n={n}")
+                raise
+
+
+def an_old_bundle_url_is_complete_and_never_cached(api, monkeypatch, kind, n):
     bundle = ui_bundle.Bundle(b"", [b"'use strict';\nconst A = 1;\n", b"'use strict';\nconst B = A + 1;\n"],
                               [b"a{color:red}\n", b"b{color:blue}\n"])
     monkeypatch.setattr(ui_bundle.UiBundle, "get", lambda self: bundle)
@@ -198,3 +206,142 @@ def test_parts_are_cut_between_files_in_order():
         "/tico/ui/app.bundle.js", "/tico/ui/app.bundle.2.js", "/tico/ui/app.bundle.3.js"]
     assert ui_bundle.is_part("/tico/ui/app.bundle.12.css") and not ui_bundle.is_part("/tico/ui/app.bundle.1.js")
     assert not ui_bundle.is_part("/tico/ui/app.bundle.js.map")
+
+
+def test_a_typescript_file_runs_only_as_its_current_compiled_output(tmp_path):
+    # A .ts file the page lists is bundled as build/ui's compiled JavaScript, and only while build/ui/manifest.json
+    # matches the source and the output: a missing or stale build is refused, never served as old JavaScript.
+    import hashlib
+    import json
+    ui = tmp_path / "ui"
+    (ui / "app").mkdir(parents=True)
+    (ui / "styles").mkdir()
+    (ui / "app/a.js").write_text("'use strict';\nconst A = 1;\n")
+    (ui / "app/b.ts").write_text("'use strict';\nconst B: number = A + 1;\n")
+    (ui / "styles/a.css").write_text("a{color:red}\n")
+    (ui / "index.html").write_text(
+        "<head>\n<!-- bundle:css:start -->\n<link rel=\"stylesheet\" href=\"/tico/ui/styles/a.css\">\n<!-- bundle:css:end -->\n</head>\n<body>\n"
+        "<!-- bundle:js:start -->\n<script src=\"/tico/ui/app/a.js\"></script>\n<script src=\"/tico/ui/app/b.ts\"></script>\n<!-- bundle:js:end -->\n</body>\n")
+    bundles = ui_bundle.UiBundle(ui)
+    with pytest.raises(ui_build.StaleBuild, match=r"ui/app/b\.ts .*npm run build:ui"):
+        bundles.get()
+    out = tmp_path / "build/ui"
+    (out / "app").mkdir(parents=True)
+
+    def sha(text):
+        return hashlib.sha256(text.encode()).hexdigest()
+
+    def compile_(source, output):           # what scripts/build-ui.cjs writes
+        (out / "app/b.js").write_text(output)
+        (out / "manifest.json").write_text(json.dumps({"files": {"app/b.ts": {"source": sha(source), "output": sha(output)}}}))
+    compile_((ui / "app/b.ts").read_text(), '"use strict";\nconst B = A + 1;\n//# sourceMappingURL=b.js.map\n')
+    first = bundles.get().js.decode()
+    assert '// file: app/b.ts\n"use strict";\nconst B = A + 1;' in first and "B: number" not in first
+    # The map line is the file served alone's, so a bundle part leaves it out.
+    assert "sourceMappingURL" not in first
+    assert ui_build.stale(ui) == []
+    # The source changed after the build: the old output is refused, and the bundle built from it is not kept.
+    edited = ui / "app/b.ts"
+    before = edited.stat()
+    edited.write_text("'use strict';\nconst B: number = A + 2;\n")
+    os.utime(edited, ns=(before.st_atime_ns, before.st_mtime_ns + 1_000_000_000))
+    with pytest.raises(ui_build.StaleBuild):
+        bundles.get()
+    assert ui_build.stale(ui) == ["app/b.ts"] and ui_bundle.build_id(ui) == ""
+    # An output edited by hand is refused as well.
+    compile_(edited.read_text(), '"use strict";\nconst B = A + 2;\n')
+    assert "A + 2" in bundles.get().js.decode()
+    (out / "app/b.js").write_text('"use strict";\nconst B = 0;\n')
+    with pytest.raises(ui_build.StaleBuild):
+        ui_build.check(ui)
+
+
+def test_a_typescript_file_is_served_as_its_compiled_javascript(api):
+    # With the files served separately (TICO_UI_BUNDLE=off), the page asks for the .ts name it lists.
+    name = next(n for n in ui_build.sources(ui_build.ROOT / "ui") if n.startswith("app/"))
+    r = api.get(f"/tico/ui/{name}", headers=AUTH)
+    assert r.status_code == 200 and r.headers["content-type"].startswith("text/javascript")
+    assert r.content == ui_build.compiled(ui_build.ROOT / "ui", name).read_bytes()
+    assert api.get(f"/tico/ui/{name}").status_code == 401
+    assert api.get("/tico/ui/app/no-such-file.ts", headers=AUTH).status_code == 404
+    # Its source map sits beside it under the name its last line gives, and names the .ts with the source text.
+    js = r.content.decode()
+    assert js.rstrip().endswith(f"//# sourceMappingURL={Path(name).stem}.js.map")
+    m = api.get(f"/tico/ui/{name[:-3]}.js.map", headers=AUTH)
+    assert m.status_code == 200 and m.json()["sources"] == [Path(name).name]
+    assert m.json()["sourcesContent"] == [(ui_build.ROOT / "ui" / name).read_text()]
+    assert api.get(f"/tico/ui/{name[:-3]}.js.map").status_code == 401
+    assert api.get("/tico/ui/app/no-such-file.js.map", headers=AUTH).status_code == 404
+
+
+def test_a_stale_map_is_refused(tmp_path):
+    import hashlib
+    import json
+    ui, out = tmp_path / "ui", tmp_path / "build/ui"
+    (ui / "app").mkdir(parents=True)
+    (out / "app").mkdir(parents=True)
+    (ui / "app/b.ts").write_text("const B: number = 1;\n")
+    (out / "app/b.js").write_text("const B = 1;\n//# sourceMappingURL=b.js.map\n")
+    (out / "app/b.js.map").write_text('{"sources":["b.ts"]}')
+
+    def sha(path):
+        return hashlib.sha256(path.read_bytes()).hexdigest()
+    (out / "manifest.json").write_text(json.dumps({"files": {"app/b.ts": {
+        "source": sha(ui / "app/b.ts"), "output": sha(out / "app/b.js"), "map": sha(out / "app/b.js.map")}}}))
+    assert ui_build.source_map(ui, "app/b.ts") == out / "app/b.js.map"
+    assert ui_build.without_map_line((out / "app/b.js").read_bytes()) == b"const B = 1;\n"
+    (out / "app/b.js.map").write_text('{"sources":["other.ts"]}')
+    with pytest.raises(ui_build.StaleBuild, match="source map"):
+        ui_build.source_map(ui, "app/b.ts")
+
+
+def test_a_server_finds_node_off_path_or_says_what_is_missing(tmp_path, monkeypatch):
+    # A launchd service's PATH has only the system folders: Node is looked for where it is usually installed.
+    monkeypatch.delenv("NVM_BIN", raising=False)
+    monkeypatch.delenv("VOLTA_HOME", raising=False)
+    root = tmp_path / "checkout"
+    (root / "ui/app").mkdir(parents=True)
+    (root / "scripts").mkdir()
+    (root / "scripts/build-ui.cjs").write_text("")
+    (root / "ui/app/b.ts").write_text("const B: number = 1;\n")
+    home = tmp_path / "home"
+    nvm = home / ".nvm/versions/node"
+    for version in ("v20.1.0", "v22.3.0", "v22.11.0", "v24.0.0"):
+        (nvm / version / "bin").mkdir(parents=True)
+        (nvm / version / "bin/node").write_text("")
+        (nvm / version / "bin/node").chmod(0o755)
+    (home / ".nvm/alias").mkdir()
+    (home / ".nvm/alias/default").write_text("22\n")
+    tried = []
+
+    def run(cmd, **_):
+        tried.append(cmd[0])
+    no_path = lambda name: None  # noqa: E731
+    with pytest.raises(ui_build.StaleBuild, match=r"no Node on PATH or in /nowhere"):
+        ui_build.prepare(root / "ui", run, no_path, dirs=("/nowhere",), home=tmp_path / "empty")
+    with pytest.raises(ui_build.StaleBuild, match=r"node_modules/esbuild is missing: run `npm ci`"):
+        ui_build.prepare(root / "ui", run, no_path, dirs=(), home=home)
+    assert ui_build.nodes(no_path, (), home) == [str(nvm / "v22.11.0/bin/node")]
+    (root / "node_modules/esbuild").mkdir(parents=True)
+    with pytest.raises(ui_build.StaleBuild, match=r"npm run build:ui.*building with .*v22\.11\.0/bin/node failed"):
+        ui_build.prepare(root / "ui", run, no_path, dirs=(), home=home)
+    assert tried == [str(nvm / "v22.11.0/bin/node")]
+
+    # A Node that builds it is enough; the first that does wins.
+    def build(cmd, **_):
+        import hashlib
+        import json
+        tried.append(cmd[0])
+        out = root / "build/ui"
+        (out / "app").mkdir(parents=True, exist_ok=True)
+        (out / "app/b.js").write_text("const B = 1;\n")
+        sha = lambda p: hashlib.sha256(p.read_bytes()).hexdigest()  # noqa: E731
+        (out / "manifest.json").write_text(json.dumps({"files": {"app/b.ts": {
+            "source": sha(root / "ui/app/b.ts"), "output": sha(out / "app/b.js")}}}))
+    volta = home / ".volta/bin"
+    volta.mkdir(parents=True)
+    (volta / "node").write_text("")
+    (volta / "node").chmod(0o755)
+    tried.clear()
+    ui_build.prepare(root / "ui", build, no_path, dirs=("~/.volta/bin",), home=home)
+    assert tried == [str(volta / "node")] and ui_build.stale(root / "ui") == []

@@ -1,4 +1,8 @@
-"""Encrypted company credentials with explicit human and run-bound bot grants."""
+"""Encrypted company credentials with explicit human and run-bound bot grants.
+
+A key of an API tool someone may not see (backend/api_tools.py `visible`: an Only listed tool) does not exist for them
+here: it is left out of the list, and its reveal, change, grant, revoke and delete answer 404 "Credential not found",
+a credential administrator included (`key_hidden`). Runs and computers follow grants alone, as before."""
 import base64
 import hashlib
 import hmac
@@ -125,9 +129,24 @@ def prime_granted(c, subjects):
         values[("credential_granted", subject)] = frozenset(found[subject])
 
 
+def key_hidden(c, who, credential, admins):
+    """Whether `credential` is a key of an API tool `who` may not see (backend/api_tools.py `visible`)."""
+    from . import api_tools
+    return api_tools.key_hidden(c, who, credential, admins)
+
+
+def require_seen(c, who, credential, admins):
+    """A 404, as for a credential that does not exist, when it is a key of a tool `who` may not see."""
+    if key_hidden(c, who, credential, admins):
+        raise Problem('not_found', 'Credential not found', 404)
+
+
 def permitted(c, who, credential, admins):
-    return administrator(c, who, admins) or (who.role in ('human', 'owner', 'bot')
-                                             and effective_grant(c, credential, who.actor) is not None)
+    """Whether `who` may reveal it: an effective grant, or a credential administrator, unless it is a key of a tool they
+    may not see (holding a grant on it lets them see that tool)."""
+    if who.role in ('human', 'owner', 'bot') and effective_grant(c, credential, who.actor) is not None:
+        return True
+    return administrator(c, who, admins) and not key_hidden(c, who, credential, admins)
 
 
 def owned(c, who):
@@ -449,6 +468,8 @@ class Vault:
                       and (not cid or creator(c, who, cid)))
         if not member:
             require_admin(c, who, self.admins)
+        if cid and who.role in ('human', 'owner', 'bot'):
+            require_seen(c, who, cid, self.admins)
         old = self.row(c, cid) if cid else None
         if old and body.expected_revision != old['revision']:
             raise Problem('version_conflict', 'Credential changed; refresh before saving', 409)
@@ -477,6 +498,8 @@ class Vault:
                   (cid,name,body.username,body.kind,model_env(name,body.kind,body.env),preview,ciphertext,nonce,body.source,now,now,who.actor,who.actor,
                    int(member)))
         H.event(c,who.actor,'credential.updated' if old else 'credential.created',cid,{'secret_changed':secret is not None})
+        from . import api_tools
+        api_tools.ensure_tool(c, who, cid)        # a tool's key shows on Tools however it was stored
         return self.brief(self.row(c,cid))
 
     def manages_bot(self, c, who, subject):
@@ -485,6 +508,7 @@ class Vault:
                 and self.auth.bot_manager(c, who, H.actor_id(subject)))
 
     def grant_authority(self, c, who, cid, subject):
+        require_seen(c, who, cid, self.admins)
         if subject.startswith('bot:'):
             subject = 'bot:' + (H.resolve_bot(c, subject) or {}).get('id', H.actor_id(subject))
         if subject == COMPUTERS:
@@ -555,6 +579,10 @@ class Vault:
                 held=effective_grant(c,other['id'],subject)
                 if held:
                     bot=(H.bot(c,H.actor_id(subject)) or {}).get('slug') or H.actor_id(subject)
+                    if key_hidden(c,who,other['id'],self.admins):
+                        # A key of a tool this person may not see is never named, nor is its variable or that one
+                        # exists: a refusal that says no more than that the owner (who sees every tool) must do it.
+                        raise Problem('grant_refused',f"You can't give {bot} this credential. Ask the owner",409)
                     ask='' if self.may_revoke(c,who,other['id'],held) else ' '+ask_admin_detail(
                         c,self.admins,f"take {other['name']} away from {bot}")
                     raise Problem('env_in_use',f"{bot} already gets {row['env']} from the credential {other['name']}, and a run "
@@ -575,6 +603,8 @@ class Vault:
 
     def reveal(self,c,who,cid):
         validate_identity(c,who)
+        if who.role in ('human','owner','bot') and effective_grant(c,cid,who.actor) is None:
+            require_seen(c,who,cid,self.admins)
         if not permitted(c,who,cid,self.admins):
             raise Problem('forbidden','You do not have access to this credential',403)
         row=self.row(c,cid)
@@ -613,7 +643,7 @@ def record_use(c,actor,action,cid,detail,windowed):
 
 def last_used(c,cid):
     """`last_used_at` (when) and `last_used_by` (the bot's slug; empty when a computer took it for no one bot, a model
-    key) for Library › Tools: the newest use of the credential, from credential_uses."""
+    key) for Tools: the newest use of the credential, from credential_uses."""
     row=c.execute('SELECT used_at,bot FROM credential_uses WHERE credential_id=? ORDER BY used_at DESC LIMIT 1',(cid,)).fetchone()
     if not row:
         return {'last_used_at':None,'last_used_by':''}
@@ -692,6 +722,8 @@ def install_credentials(app,store,delegate=None,propose=None):
                 c.execute('INSERT INTO credential_grants(id,credential_id,subject,granted_by,created_at) VALUES(?,?,?,?,?)',
                           (gid,cid,subject,who.actor,now))
                 H.event(c,who.actor,'credential.migrated',cid,{'env':item.env,'bot':bot,'grant':gid})
+                from . import api_tools
+                api_tools.ensure_tool(c,who,cid,from_computer=True)   # already in use from the computer
             if first:
                 pending.remove(bot)
                 c.execute('UPDATE registry_metadata SET value=? WHERE key=?',(encode(pending),FILE_MIGRATION))
@@ -733,7 +765,10 @@ def install_credentials(app,store,delegate=None,propose=None):
                 raise Problem('forbidden',ask_admin_detail(c,vault.admins,'share credentials, or grant you access to one'),403)
             admin=administrator(c,who,vault.admins)
             rows,added,own=[],False,owned(c,who)
+            from . import api_tools
+            hidden=api_tools.hidden_keys(c,who,vault.admins)    # keys of tools this person may not see
             for row in c.execute('SELECT * FROM credentials ORDER BY lower(name),id'):
+                if row['id'] in hidden:continue
                 # A credential this person added is listed for sharing (its grants too), never revealed unless granted.
                 mine=row['id'] in own
                 revealable=permitted(c,who,row['id'],vault.admins)
@@ -792,6 +827,7 @@ def install_credentials(app,store,delegate=None,propose=None):
         who=request.state.identity
         with store.transaction() as c:
             validate_identity(c,who)
+            require_seen(c,who,cid,vault.admins)
             row=c.execute('SELECT subject,granted_by FROM credential_grants WHERE id=? AND credential_id=?',(gid,cid)).fetchone()
             if not row:
                 require_admin(c,who,vault.admins)
@@ -807,6 +843,9 @@ def install_credentials(app,store,delegate=None,propose=None):
         with store.transaction() as c:
             validate_identity(c,who)
             require_admin(c,who,vault.admins)
+            require_seen(c,who,cid,vault.admins)
+            from . import api_tools
+            api_tools.refuse_finance_key(c,[cid])     # a Finance source still reads it (409 key_in_use)
             row=vault.row(c,cid)
             grants=c.execute('SELECT count(*) FROM credential_grants WHERE credential_id=?',(cid,)).fetchone()[0]
             from .computer_keys import before_delete
@@ -829,8 +868,18 @@ def install_credentials(app,store,delegate=None,propose=None):
             validate_identity(c,who)
             values=[]
             held=granted(c,who.actor)
+            # A proxied tool's key stays here: the run gets a token for the proxy instead (backend/tool_proxy.py).
+            from . import tool_proxy
+            proxied=tool_proxy.proxied_tools(c)
             for row in c.execute('SELECT * FROM credentials ORDER BY id'):
                 if row['ciphertext'] is not None and row['id'] in held:
+                    tool=proxied.get(row['tool_id'])
+                    if tool is not None:
+                        values.append(tool_proxy.runtime_item(c,vault,store.settings,row,tool,who.actor,
+                                                              attempt=who.attempt_id,agent=bool(who.agent)))
+                        record_use(c,who.actor,'credential.proxied',row['id'],{'attempt':who.attempt_id or None,'tool':tool['id']},
+                                   windowed=bool(who.attempt_id))
+                        continue
                     values.append({'id':row['id'],'name':row['name'],'env':row['env'],'kind':row['kind'],**vault.reveal(c,who,row['id'])})
             # Never the Tico AI Gateway's key: a run reaches it through its runner (runner-gateway-credentials below).
             # The company subscriptions its claim handed it, for this run only (backend/model_subscriptions.py).
@@ -878,8 +927,15 @@ def install_credentials(app,store,delegate=None,propose=None):
             placed(c)
             values=[]
             held=granted(c,'bot:'+bot)
+            from . import tool_proxy
+            proxied=tool_proxy.proxied_tools(c)
             for row in c.execute('SELECT * FROM credentials ORDER BY id'):
                 if row['ciphertext'] is not None and row['env'] and row['id'] in held:
+                    tool=proxied.get(row['tool_id'])
+                    if tool is not None:
+                        values.append(tool_proxy.runtime_item(c,vault,store.settings,row,tool,'bot:'+bot,runner=who.runner_id))
+                        record_use(c,who.actor,'credential.proxied',row['id'],{'bot':bot,'runner':who.runner_id,'use':'watcher','tool':tool['id']},windowed=True)
+                        continue
                     values.append({'id':row['id'],'env':row['env'],'kind':row['kind'],'value':vault.cipher.decrypt(c,row)})
                     record_use(c,who.actor,'credential.sent_to_computer',row['id'],{'bot':bot,'runner':who.runner_id,'use':'watcher'},windowed=True)
             return {'credentials':values}

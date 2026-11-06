@@ -159,6 +159,15 @@ def runner_route_latency(c, now=None):
     return None
 
 
+def _disk_row(fresh, document):
+    """A computer's disk for Health: its newest one-minute sample (`fresh`) when there is one, else its readiness disk,
+    with the last clean-up the computer ran by itself (readiness `disk_cleanup`) on it."""
+    disk = {k: fresh[k] for k in ("total_bytes", "free_bytes")} if fresh else document.get("disk")
+    if isinstance(disk, dict) and isinstance(document.get("disk_cleanup"), dict):
+        disk = {**disk, "cleanup": document["disk_cleanup"]}
+    return disk
+
+
 def _computers(c, runners_online, settings, limits=None):
     from .readiness import computer_login, login_warning, SIGNED_OUT
     since = {r["id"] for r in runners_online}
@@ -171,12 +180,15 @@ def _computers(c, runners_online, settings, limits=None):
     wanted = {default} - {""}
     from .cloud_machines import resting as resting_machines
     from .model_subscriptions import KINDS, RUNNER_CAPABILITIES_SQL, in_effect
+    from .performance import latest_disks
     from .read_cache import prime
     resting = resting_machines(c)
     found = c.execute("SELECT r.id,r.label,r.last_seen_at,r.platform,r.readiness,r.capabilities,"
                       "coalesce(nullif(h.name,''),r.owner_id) AS owner_id FROM runners_with_state r "
                       "LEFT JOIN humans h ON h.id=r.owner_id WHERE r.revoked_at IS NULL ORDER BY r.label").fetchall()
     prime(c, RUNNER_CAPABILITIES_SQL, {(r["id"],): r for r in found})      # in_effect's runner read, for every computer
+    # The disk as of its last minute's sample: readiness sends the disk again only when something else changed.
+    disks = latest_disks(c, [r["id"] for r in found])
     for r in found:
         document = readiness_document(r["readiness"])
         runtimes = document.get("runtimes") or {}
@@ -186,7 +198,9 @@ def _computers(c, runners_online, settings, limits=None):
         rows.append({"id": r["id"], "label": r["label"], "online": r["id"] in since, "last_seen_at": r["last_seen_at"],
                      "resting": r["id"] in resting and r["id"] not in since,
                      "platform": r["platform"] or "", "update": runner_versions.view(fleet.get(r["id"])),
-                     "disk": document.get("disk"),
+                     # The disk as of its last minute's sample, else its readiness. The last clean-up the computer
+                     # ran by itself rides on its disk row (runner-rs/src/disk_clean.rs).
+                     "disk": _disk_row(disks.get(r["id"]), document),
                      "owner_id": r["owner_id"], "container_exec": document.get("container_exec"),
                      "github_auth": document.get("github_auth"), "browser_launch": document.get("browser_launch"),
                      "engine": document.get("engine"),
@@ -347,16 +361,21 @@ def _missing_tool_credentials(c, online_ids):
     return sorted(out)
 
 
-def reserved_credentials(c):
+def reserved_credentials(c, who=None, admins=(), auth=None):
     """(credential name, variable, bot) for each credential a bot holds under a name Tico reserves. The runner leaves
-    such a credential out of the bot's turns, so the bot runs without it until someone renames the variable."""
+    such a credential out of the bot's turns, so the bot runs without it until someone renames the variable. Given
+    `who`, never a key of a tool they may not see (backend/api_tools.py `visible`)."""
     from clients.access_entry import RESERVED_ENV, RESERVED_PREFIXES
     from .credentials import effective_grant
+    hidden = set()
+    if who is not None:
+        from .api_tools import hidden_keys
+        hidden = hidden_keys(c, who, admins, auth)
     out = []
     for row in c.execute("SELECT DISTINCT v.id,v.name,v.env,g.subject FROM credentials v JOIN credential_grants g "
                          "ON g.credential_id=v.id WHERE g.subject LIKE 'bot:%' AND g.revoked_at IS NULL "
                          "AND v.ciphertext IS NOT NULL AND v.env<>'' ORDER BY v.name"):
-        if (row["env"] in RESERVED_ENV or row["env"].startswith(RESERVED_PREFIXES)) \
+        if (row["env"] in RESERVED_ENV or row["env"].startswith(RESERVED_PREFIXES)) and row["id"] not in hidden \
                 and effective_grant(c, row["id"], row["subject"]):
             out.append((row["name"], row["env"], H.actor_id(row["subject"])))
     return out
@@ -516,9 +535,9 @@ def _rejected_summary(rows):
     first = ", ".join(sorted({f"{name} on {label}" for label, name, _, _, _ in rows}))
     when, why = rows[0][2], rows[0][3]
     sources = {row[4] for row in rows}
-    fix = (" Replace the model key in Tools > Credentials." if sources == {"credentials"} else
+    fix = (" Replace the model key in Tools > Keys." if sources == {"credentials"} else
            " Update the computer-local key or sign in again from Settings > Computers." if sources == {"computer"} else
-           " If the model key is stored in Credentials, replace it in Tools > Credentials. Otherwise update the "
+           " If the model key is stored in Tools > Keys, replace it there. Otherwise update the "
            "computer-local key or sign in again from Settings > Computers.")
     return (f"Sign-in rejected for {first}" + (f" at {when}" if when else "") + (f": {why}" if why else ".")
             + fix + " It takes no work that needs it until then.")
@@ -838,9 +857,9 @@ def runtime_choice(c, bot, runtime, who, computers, harness="", model=""):
         return view
     problem = str(answer.get("problem") or "")
     here = (answer.get("computer") or {})
-    if here.get("label") and here["label"] not in problem and answer.get("link") != "#/credentials":
+    if here.get("label") and here["label"] not in problem and answer.get("link") != "#/tools/keys?show=credentials":
         view["problem"] = f"{problem} on {here['label']}"      # the runner's own words name no computer
-    view["short"] = ("not installed" if "not installed" in problem else "no key" if answer.get("link") == "#/credentials"
+    view["short"] = ("not installed" if "not installed" in problem else "no key" if answer.get("link") == "#/tools/keys?show=credentials"
                      else "not on this computer" if "Tico Gateway work" in problem else "sign in")
     if (runtime in model_login.RUNTIMES and str(answer.get("fix") or "").startswith(f"Sign in {runtime} ")):
         view["sign_in"] = {"runner_id": here.get("id"), "runtime": runtime, "computer": here.get("label")}
@@ -898,6 +917,7 @@ HELD = {
     "check_model": ("Its check model does not run on {computer}, or is on hold", BOT_SETTINGS),
     # A private meeting's turn runs only on a runner with private lanes (execution.PRIVATE_LANES).
     "private_update": ("{computer} needs a Tico update before it can join private meetings", COMPUTERS),
+    "make_page_upgrade": ("Update {computer} to make pages", COMPUTERS),
     "unreadable": ("Its queued message is one it may not read", RUNS),
     # Tico stopped the bot (backend/bot_stops.py): a person releases it. A back-off is a short pause after a failed run.
     "run_hold": ("Tico stopped it after five failed runs in a row and tries one run on its own now and then: check its last runs, or release it now", BOT_SETTINGS),
@@ -975,7 +995,7 @@ def _stuck(c, rows, online_ids, who, full, auth=None):
                     fix = {**_fix("Sign in"), "login": {"runner_id": login["runner_id"], "runtime": runtime, "computer": label}}
                 else:
                     move = choice.get("move")
-                    fix = _fix("Open Credentials", "#/credentials") if choice.get("link") == "#/credentials" \
+                    fix = _fix("Open Keys", "#/tools/keys?show=credentials") if choice.get("link") == "#/tools/keys?show=credentials" \
                         else _fix("Open Computers", "#/settings", "devices")
             else:
                 fix = _fix("Open bot settings", "#/settings", "bots")
@@ -1180,7 +1200,7 @@ def _github_repo_create(c, github):
     return _check("github_repo_create", "GitHub can't create bot repositories", "warn", summary,
                   [_fix("Let BotOps create repositories", fix["permissions_url"]),
                    _fix("Create " + fix["repository"] if fix["repository"] else "Create a repository", fix["create_url"]),
-                   _fix("Open GitHub settings", "#/integrations/github")])
+                   _fix("Open GitHub settings", "#/tools/github")])
 
 
 def _github_workflows(c, github):
@@ -1196,7 +1216,7 @@ def _github_workflows(c, github):
                       "accept it for the organisation. Waiting: " + ", ".join(waiting[:3])
                       + ("." if len(waiting) <= 3 else f"; and {len(waiting) - 3} more."),
                       [_fix("Change the App's permissions", permissions_url(c, github.row(c))),
-                       _fix("Open GitHub settings", "#/integrations/github")])
+                       _fix("Open GitHub settings", "#/tools/github")])
     if refused := workflows_refused(c) if connected else []:
         # The installation reports Actions: Read and write, so the setting is not the cause and is not offered.
         return _check("github_workflows", "GitHub refused workflow tokens", "warn",
@@ -1205,7 +1225,7 @@ def _github_workflows(c, github):
                       "if this stays, check the installation's repository access and the organisation's Actions "
                       "policy on GitHub. Refused: " + ", ".join(refused[:3])
                       + ("." if len(refused) <= 3 else f"; and {len(refused) - 3} more."),
-                      [_fix("Open GitHub settings", "#/integrations/github")])
+                      [_fix("Open GitHub settings", "#/tools/github")])
     return None
 
 
@@ -1222,14 +1242,14 @@ def _github_workflow_edits(c, github):
                       "permissions, then accept it for the organisation. Waiting: " + ", ".join(waiting[:3])
                       + ("." if len(waiting) <= 3 else f"; and {len(waiting) - 3} more."),
                       [_fix("Change the App's permissions", permissions_url(c, github.row(c))),
-                       _fix("Open GitHub settings", "#/integrations/github")])
+                       _fix("Open GitHub settings", "#/tools/github")])
     if refused := workflows_refused(c, 'edit_workflows') if connected else []:
         return _check("github_workflow_edits", "GitHub refused workflow-editing tokens", "warn",
                       "These bots may edit workflow files but get only the ordinary write token: GitHub refused a "
                       "token with Workflows: write although the installation reports it. Tico asks again after a "
                       "minute; if this stays, check the installation's repository access on GitHub. Refused: "
                       + ", ".join(refused[:3]) + ("." if len(refused) <= 3 else f"; and {len(refused) - 3} more."),
-                      [_fix("Open GitHub settings", "#/integrations/github")])
+                      [_fix("Open GitHub settings", "#/tools/github")])
     return None
 
 
@@ -1503,7 +1523,7 @@ def unreadable_waits(c):
     """Name held questions whose recipient cannot sign in, run, or read every task source."""
     from . import ask_routing, task_privacy
     task_privacy.snapshot(c)
-    fields = "t.id,t.title,t.owner_id,t.requester_id,t.private,t.guest"
+    fields = "t.id,t.title,t.owner_id,t.requester_id,t.private,t.readers"
     rows = c.execute(
         f"SELECT * FROM (SELECT {fields},m.recipient_id AS recipient,m.id AS message_id FROM tasks t "
         "JOIN messages m ON m.sender_id=t.owner_id JOIN conversations cv ON cv.id=m.conversation_id "
@@ -2055,19 +2075,6 @@ def view(c, who, settings, auth, github, config):
         checks.append(_check("bot_access", "Bot access", "info", str(notice.get("message") or ""),
                              [_fix("Open bots", "#/settings", "bots")]))
 
-    # A bot.yaml asking to send without approval, or to forward to new addresses, has no effect until a person turns
-    # it on in Tico (backend/mail_settings.py); the request itself is worth a look, since a bot or BotOps may write it.
-    # Whoever may turn it on sees it: the owner and admins for every bot, a person who manages a bot for that bot only.
-    from .mail_settings import alert_text, alerts as mail_alerts
-    asking = mail_alerts(c) if full or who.role == "human" else []
-    if not full:
-        asking = [(bot, extra) for bot, extra in asking if auth.bot_manager(c, who, bot)]
-    if asking:
-        checks.append(_check("mail_sending", "Mail sending", "warn",
-                             "; ".join(alert_text(_bot_name(c, bot), extra) for bot, extra in asking[:3])
-                             + ("." if len(asking) <= 3 else f"; and {len(asking) - 3} more."),
-                             [_fix("Open bots", "#/settings", "bots"),
-                              _fix("How", "https://github.com/ticoteam/tico/blob/main/docs/mail.md#turning-sending-on")]))
     # A go-live waiting for its computer to get the repository finishes by itself (backend/go_live.py); until then
     # the bot is placed but not on. Seen by the owner and admins, and by a person who manages that bot.
     from .go_live import EXPIRY_DAYS, waiting as waiting_go_lives
@@ -2106,7 +2113,7 @@ def view(c, who, settings, auth, github, config):
             said.append(f"{hooks['skipped']} events skipped endpoints past the limit of {webhooks.MAX_PER_EVENT} per event")
         if said:
             checks.append(_check("webhooks", "Outgoing webhooks", "warn", "In the last 24 hours Tico " + "; ".join(said) + ".",
-                                 [_fix("Open webhooks", "#/settings", "webhooks")]))
+                                 [_fix("Open webhooks", "#/tools/webhooks")]))
     if full and (denies := _harness_denies_check(c, settings)):
         checks.append(denies)
     if full:
@@ -2173,13 +2180,13 @@ def view(c, who, settings, auth, github, config):
         checks.append(_check("tool_credentials", "Tool credentials", "warn",
                              "Missing Credential: " + "; ".join(f"{tool} on {label}" for tool, label in missing_tools[:5])
                              + ("." if len(missing_tools) <= 5 else f"; and {len(missing_tools) - 5} more."),
-                             [_fix("Open Credentials", "#/credentials"), _fix("Open Computers", "#/settings", "devices")]))
-    if full and (reserved := reserved_credentials(c)):
+                             [_fix("Open Keys", "#/tools/keys?show=credentials"), _fix("Open Computers", "#/settings", "devices")]))
+    if full and (reserved := reserved_credentials(c, who, tuple(settings.credential_admins or ()), auth)):
         checks.append(_check("reserved_credentials", "Credential names", "warn",
                              "Bots run without these credentials, because Tico keeps their variable names for itself: " + "; ".join(f"{name} ({env}) for {_bot_name(c, bot)}" for name, env, bot in reserved[:5])
                              + ("." if len(reserved) <= 5 else f"; and {len(reserved) - 5} more.")
                              + " Give each a variable name that does not start with TICO_, DYLD_ or LD_.",
-                             [_fix("Open Credentials", "#/credentials")]))
+                             [_fix("Open Keys", "#/tools/keys?show=credentials")]))
     lacking = missing_repositories(c, online_ids) if full else []
     if lacking:
         checks.append(_check("repositories", "Bot repositories", "bad",
@@ -2248,14 +2255,26 @@ def view(c, who, settings, auth, github, config):
 
     if full:
         overloads = recent_overloads(c, [computer["id"] for computer in computers])
+        from .cloud_machines import disk_words
+        cloud_disks = disk_words(c)                     # a cloud machine grows to a bigger size instead
         for computer in computers:
             disk = computer.get("disk") or {}
+            cloud = cloud_disks.get(computer["id"])
+            if cloud is not None:
+                # A cloud machine's own reading since it last started; none when it rests or has not read since.
+                disk = {**disk, **cloud["disk"]} if cloud["disk"] and computer["id"] not in resting_ids else {}
             total, free = disk.get("total_bytes"), disk.get("free_bytes")
             if isinstance(total, int) and total > 0 and isinstance(free, int) and 1 - free / total > .85:
+                cleanup = disk.get("cleanup") or {}
+                done = (f" Its own clean-up at {cleanup.get('at', '')[11:16]} UTC freed "
+                        f"{(cleanup.get('freed_bytes') or 0) / 1024**3:.1f} GB; what is left is not safe for it to remove."
+                        if cleanup.get("still_low") else "")
+                advice = (cloud or {}).get("advice") or (
+                    "Free space on this computer; for Docker, run `docker image prune -a` to remove unused images. "
+                    "The update retries when space frees.")
                 checks.append(_check("disk:" + computer["id"], "Disk space", "warn",
                                      f"{computer['label']}: disk is {100 * (1 - free / total):.0f}% full "
-                                     f"({free / 1024**3:.1f} GB free). Free space on this computer; for Docker, run "
-                                     "`docker image prune -a` to remove unused images. The update retries when space frees.",
+                                     f"({free / 1024**3:.1f} GB free).{done} " + advice,
                                      [_fix("Open Computers", "#/settings", "devices")]))
             # Diagnostics only: an overload is shown here and on the computer's Performance page; nothing acts on it.
             from .performance import describe
@@ -2297,12 +2316,12 @@ def view(c, who, settings, auth, github, config):
                                  [_fix("Choose providers", "#/settings", "models")]))
         elif online and not signed and rejected:
             checks.append(_check("models", "Models", "bad", _rejected_summary(rejected),
-                                 [_fix("Open Credentials", "#/credentials"), _fix("Open Computers", "#/settings", "devices")]))
+                                 [_fix("Open Keys", "#/tools/keys?show=credentials"), _fix("Open Computers", "#/settings", "devices")]))
         elif online and not signed:
             checks.append(_check("models", "Models", "bad", "No online computer is signed in to your model.",
                                  [_fix("Open Computers", "#/settings", "devices")]))
         elif signed and rejected:
-            checks.append(_check("models", "Models", "warn", f"{_harness_name(signed)} is signed in on another computer. " + _rejected_summary(rejected), [_fix("Open Credentials", "#/credentials"), _fix("Open Computers", "#/settings", "devices")]))
+            checks.append(_check("models", "Models", "warn", f"{_harness_name(signed)} is signed in on another computer. " + _rejected_summary(rejected), [_fix("Open Keys", "#/tools/keys?show=credentials"), _fix("Open Computers", "#/settings", "devices")]))
         elif signed:
             checks.append(_check("models", "Models", "ok", f"{_harness_name(signed)} is signed in."))
         else:
@@ -2313,8 +2332,8 @@ def view(c, who, settings, auth, github, config):
                              "; ".join(f"{label}: sign in to {model}" for label, model in unsigned[:5])
                              + ("." if len(unsigned) <= 5 else f"; and {len(unsigned) - 5} more.")
                              + " Sign in from Settings > Computers (BotOps can start it). To have new computers sign in by "
-                             "themselves, store the company's model key in Credentials and give it to every computer.",
-                             [_fix("Open Computers", "#/settings", "devices"), _fix("Open Credentials", "#/credentials")]))
+                             "themselves, store the company's model key in Tools > Keys and give it to every computer.",
+                             [_fix("Open Computers", "#/settings", "devices"), _fix("Open Keys", "#/tools/keys?show=credentials")]))
     # A signed-in API key can be paid and usable, but it never spends a subscription's allowance. Keep this visible
     # before an upgrade moves bots to the computer login, even when none of those bots has queued work yet.
     logins = [(computer, runtime) for computer in computers if computer["online"]
@@ -2340,7 +2359,7 @@ def view(c, who, settings, auth, github, config):
     # Webhooks waiting at Tico Gateway that this server is not collecting (backend/hook_relay.py).
     if kind == "owner" and (relay := hook_relay.health(c, settings)):
         checks.append(_check("hook_relay", "Webhooks through Tico Gateway", relay["status"], relay["summary"],
-                             [_fix("Open Webhooks", "#/settings", "webhooks")]))
+                             [_fix("Open Webhooks", "#/settings/models/wh-gateway")]))
     # Sleep when idle is on but Tico could not be asked to stop this server (backend/sleep_idle.py).
     if kind == "owner" and (sleep := sleep_idle.health(c, settings)):
         checks.append(_check("sleep_idle", "Sleep when idle", sleep["status"], sleep["summary"],

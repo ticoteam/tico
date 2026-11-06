@@ -851,6 +851,17 @@ class Known:
             self._strangers = hidden(self.c, self.viewer, "see", KINDS, self.auth)
         return self._strangers
 
+    def unseen_of(self, actors):
+        """Which of these actors the viewer may not see, read for just them: cheaper than `strangers` for a short
+        list on a page that must not grow with the company."""
+        actors = [a for a in dict.fromkeys(actors) if a]
+        if self._strangers is not None:
+            return {a for a in actors if a in self._strangers}
+        role = getattr(self.viewer, "role", "")
+        if not actors or role not in ("human", "bot") or is_admin(self.c, self.viewer, self.auth):
+            return set()
+        return {a for a, levels in levels_many(self.c, self.viewer, actors, self.auth).items() if not levels["see"]}
+
     def seen(self, actors):
         """`actors` as someone not in their conversation may be told of them."""
         return [a for a in actors if a not in self.strangers]
@@ -902,11 +913,14 @@ class Known:
             return task
         named = [key for key in self.TASK_FIELDS if task.get(key) in self.people]
         origin = task.get("from_person") in self.people
-        if not named and not origin:
+        readers = task.get("readers") if isinstance(task.get("readers"), list) else []
+        hidden = [r for r in readers if r in self.people]
+        if not named and not origin and not hidden:
             return task
         if self.me in (task.get("owner_id"), task.get("requester_id")) or self.member(task.get("conversation_id")):
             return task
-        return {**task, **{key: "" for key in named}, **({"from_person": None} if origin else {})}
+        return {**task, **{key: "" for key in named}, **({"from_person": None} if origin else {}),
+                **({"readers": [r for r in readers if r not in self.people]} if hidden else {})}
 
     def tasks(self, tasks):
         return [self.task(t) for t in tasks] if self.people else tasks

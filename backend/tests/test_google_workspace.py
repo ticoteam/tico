@@ -1,4 +1,4 @@
-"""Settings > Inboxes, the Workspace key on this server (backend/google_workspace.py): setup codes, the key upload and its
+"""Tools, the Workspace key on this server (backend/google_workspace.py): setup codes, the key upload and its
 checks, what a computer's token may be used for, and the OAuth client Connect Google uses.
 
 Google is never asked: `google_call` is replaced. The keys are throwaway RSA keys made in the test, the domain is

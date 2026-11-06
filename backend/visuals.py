@@ -283,7 +283,10 @@ def loading_references(data):
 # It also marks the page's view. A card frame names its view in the fragment, which never reaches the server:
 # `#tico-view=card&tico-size=small|medium|large`. The reporter sets `data-tico-view` ("card" or "full") and
 # `data-tico-size` on <html> from it, and again on hashchange, so a page's own CSS can show a compact layout under
-# `[data-tico-view=card]`. No fragment is the full view. It runs as the page's last script.
+# `[data-tico-view=card]`. No fragment is the full view.
+# Pages are dark by default: a page that colours neither <html> nor <body> gets a dark background, and light text
+# unless it chose its own dark text (then it stays as it was, a light page). A page with its own background keeps
+# its look. It runs as the page's last script.
 REPORTER = Path(__file__).with_name("visual-reporter.js").read_text().strip()
 REPORTER_HASH = "sha256-" + base64.b64encode(hashlib.sha256(REPORTER.encode()).digest()).decode()
 

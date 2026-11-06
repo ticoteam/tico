@@ -10,17 +10,17 @@
 #   B018         8   owner: engineering
 #   B023        17   owner: engineering
 #   B034         1   owner: engineering
-#   B904        36   owner: engineering
+#   B904        35   owner: engineering
 #   B905        19   owner: engineering
-#   BLE001     129   owner: engineering
+#   BLE001     128   owner: engineering
 #   DTZ005       2   owner: engineering
 #   DTZ007       2   owner: engineering
 #   DTZ011       5   owner: engineering
-#   F401        28   owner: engineering
+#   F401        26   owner: engineering
 #   F402         1   owner: engineering
 #   F541         4   owner: engineering
 #   F811         2   owner: engineering
-#   F841        16   owner: engineering
+#   F841        15   owner: engineering
 #   PLW1510     29   owner: engineering
 #   S110        33   owner: engineering
 
@@ -148,7 +148,6 @@
 "backend/tests/test_report_managers.py" = ["F841"]
 "backend/tests/test_screen_relay_contract.py" = ["F841"]
 "backend/tests/test_source_outages.py" = ["F841"]
-"backend/tests/test_system_routines.py" = ["F841"]
 "backend/tests/test_task_manager_rights.py" = ["F841"]
 "backend/tests/test_triggers_incoming.py" = ["F841"]
 "backend/tico_storage.py" = ["BLE001", "F401"]
@@ -193,7 +192,6 @@
 "connectors/mail/judge.py" = ["B905"]
 "connectors/mail/oauth.py" = ["B904", "BLE001"]
 "connectors/mail/policy.py" = ["BLE001", "S110"]
-"connectors/mail/review.py" = ["B904", "BLE001"]
 "connectors/mail/rules.py" = ["B904"]
 "connectors/mail/scheduling.py" = ["B904", "BLE001", "F401"]
 "connectors/mail/unsubscribe.py" = ["BLE001"]

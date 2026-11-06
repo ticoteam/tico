@@ -537,4 +537,7 @@ def started(c, row, *, message=None):
     H._set_status(c, H.KEEPER, row, status='doing', step=step, note=START_NOTE)
     c.execute('UPDATE tasks SET version=version+1 WHERE id=?', (row['id'],))
     H.recount(c, [row['owner_id'], row['requester_id']])
+    # Each start is one run of Start assigned tasks (Settings > Routines, Automations).
+    from . import system_routines as SR
+    SR.keep(c, SR.Run('assigned_tasks').did('1 task started'))
     return H.task(c, row['id'])

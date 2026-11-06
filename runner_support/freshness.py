@@ -31,7 +31,7 @@ def checkout_head(root=None, run=subprocess.run):
 
 def supervised():
     """Only a supervisor that starts the runner again may let it exit to restart: launchd sets
-    XPC_SERVICE_NAME to the job's label, the systemd user unit `scripts/tico install` writes on Linux sets
+    XPC_SERVICE_NAME to the job's label, the systemd user unit `scripts/tico-computer install` writes on Linux sets
     TICO_SYSTEMD_UNIT (and Restart=always), and TICO_SUPERVISED=1 covers any other supervisor (the Docker
     runner, runit)."""
     env = os.environ

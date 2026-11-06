@@ -18,7 +18,6 @@ from backend.finance import delivery
 from backend.finance import jobs
 from backend.finance.core.errors import CONFLICT, DENIED, NOT_AVAILABLE, FinanceError
 from backend.tests.test_finance_fixtures import AT, OWNER, account, act, books, finance_template, store  # noqa: F401
-from connectors.mail import policy as pl
 
 BOT = "bot:bookkeeper"
 EMAIL = "ap@acme-retail.example"
@@ -82,11 +81,6 @@ def _approved_reminder(c, stage=7) -> tuple[str, str, str]:
     return iid, str(done.result["send_approval_id"]), str(done.result["text"])
 
 
-def _mail_reads(c, monkeypatch) -> None:
-    """The mail connector reads a Tico approval through the hub; here it reads this test's database."""
-    monkeypatch.setattr(pl, "HUB_GET", lambda path: H.approval(c, path.split("/", 1)[1]))
-
-
 def test_a_bots_reminder_asks_a_person_and_records_nothing_until_they_say_yes(books):
     with books.transaction() as c:
         iid = _sent_invoice(c)
@@ -109,21 +103,6 @@ def test_finance_yes_records_the_reminder_but_the_frozen_email_still_needs_its_o
         assert payload["bcc"] == [] and not c.execute("SELECT * FROM email_send_previews").fetchone()
         assert c.execute("SELECT send_approval_id FROM fin_invoice_reminders WHERE invoice_id=?",
                          (iid,)).fetchone()[0] == send_id
-
-
-def test_the_mail_connector_sends_the_exact_text_to_the_exact_recipients_and_nothing_else(books, monkeypatch):
-    with books.transaction() as c:
-        _iid, send_id, text = _approved_reminder(c)
-        H.approval_decide(c, OWNER, send_id, "approved")
-        _mail_reads(c, monkeypatch)
-        exact = pl.approval_check(send_id, [EMAIL], [], "", slug="bookkeeper", body=text)
-        assert exact["full"] is True, exact
-        changed = pl.approval_check(send_id, [EMAIL], [], "", slug="bookkeeper", body=text.replace("300", "30"))
-        assert changed["full"] is False and "another text" in changed["detail"], changed
-        other = pl.approval_check(send_id, ["dan@other.example"], [], "", slug="bookkeeper", body=text)
-        assert other["full"] is False and "names to=" in other["detail"], other
-        extra = pl.approval_check(send_id, [EMAIL, "dan@other.example"], [], "", slug="bookkeeper", body=text)
-        assert extra["full"] is False, extra
 
 
 def test_a_bot_cannot_issue_or_decide_a_send_approval(books):

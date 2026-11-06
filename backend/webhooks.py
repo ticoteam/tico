@@ -361,8 +361,8 @@ def _publish_only(c, type_, subject, data, actor, only, revision):
     if _is_strategy_bot(actor):
         raise Refused("The Strategy Bot does not send webhooks")
     if H.is_bot(actor):
-        from . import mail_settings
-        if not (mail_settings.stored(c, H.actor_id(actor)) or {}).get("outbound_send"):
+        from .email_sending import sends_on_own
+        if not sends_on_own(c, H.actor_id(actor)):
             raise Refused("This bot may not send outside: its send switch is off")
     name = canonical(type_)
     if not name:
@@ -591,8 +591,8 @@ def may_send(c, who, hook, name):
         return
     if who.role != "bot" or _is_strategy_bot(who.actor):
         raise Problem("forbidden", "Only people and bots with sending switched on send webhooks", 403)
-    from . import mail_settings
-    if not (mail_settings.stored(c, H.actor_id(who.actor)) or {}).get("outbound_send"):
+    from .email_sending import sends_on_own
+    if not sends_on_own(c, H.actor_id(who.actor)):
         raise Problem("forbidden", "Sending is off for this bot; a person turns it on in its mail settings", 403)
     if not subscribed(json.loads(hook["events"]), name):
         raise Problem("forbidden", "That endpoint does not listen for this event", 403)
@@ -1152,7 +1152,7 @@ def auto_disable(c, now=None):
             c.execute("SAVEPOINT webhook_disable")
             task = H.task_create(c, H.KEEPER, f"Webhook {hook['name']} was turned off",
                                  f"Every attempt to reach it failed for {DISABLE_DAYS} days, so Tico stopped sending. "
-                                 f"Fix the address, then turn it on in Settings > Webhooks or `hub webhook enable {hook['id']}`; "
+                                 f"Fix the address, then turn it on in Tools › Webhooks or `hub webhook enable {hook['id']}`; "
                                  f"Tico then offers to send again what it held back.", hook["created_by"], lint=False)
             c.execute("UPDATE webhooks SET notify_task=? WHERE id=?", (task["id"], hook["id"]))
             c.execute("RELEASE webhook_disable")

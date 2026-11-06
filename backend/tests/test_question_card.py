@@ -47,7 +47,7 @@ def test_a_pick_question_without_its_picks_or_what_happens_or_with_ids_is_refuse
     # The reason says the rule and gives an example to copy.
     assert "The rule: a question with picks gives each pick as an option" in bare and "Example:" in bare
     with api.app.state.store.read() as c:
-        assert c.execute("SELECT count(*) FROM tasks WHERE waiting_on='human:ana'").fetchone()[0] == 0
+        assert c.execute("SELECT count(*) FROM tasks WHERE questions IS NOT NULL").fetchone()[0] == 0
         # A writing refusal: recorded, but never toward a quarantine.
         assert c.execute("SELECT count(*) FROM refusals WHERE actor='bot:ops' AND rule='lint'").fetchone()[0] == 6
     # Yes / No needs no options, and a clean pick question goes through with its card fields kept.
@@ -55,7 +55,7 @@ def test_a_pick_question_without_its_picks_or_what_happens_or_with_ids_is_refuse
     ok = _ask(api, token, "g", question="Website sales chat: go with these picks?", why="Engineering can't start until these are set.",
               multi=True, options=PICKS)
     assert ok.status_code == 200, ok.text
-    q = ok.json()["question"]["ask"]["questions"][0]
+    q = ok.json()["question"]["refs"]["questions"][0]
     assert q["multi"] and q["why"] == "Engineering can't start until these are set."
     assert q["options"] == [{"description": "", **o} for o in PICKS]
 
@@ -83,17 +83,17 @@ def test_send_ticked_says_not_this_one_for_each_unticked_pick_and_yes_to_all_say
     """Acceptance 12 and 13, as the bot reads the answer."""
     _, _, attempt = setup_attempt(api)
     made = _ask(api, attempt["token"], "q1", question="Website sales chat: go with these picks?", multi=True, options=PICKS).json()
-    tid, target = made["task"]["id"], {"comment": made["question"]["id"]}
+    tid, target = made["task"]["id"], {"task": made["task"]["id"]}
     out = post(api, f"tasks/{tid}/answers", {"target": target, "answers": {"decision": ["Calls", "Visitor notes", "Spend cap"]},
                                              "other": "Pages: only pricing for now."})
     assert out["answer"]["not"] == {"decision": ["Pages"]} and out["woke"]
-    assert out["comment"]["body"] == ('Ana answered "Website sales chat: go with these picks?": Calls, Visitor notes, Spend cap. '
+    assert out["answer"]["text"] == ('Ana answered "Website sales chat: go with these picks?": Calls, Visitor notes, Spend cap. '
                                       'Not this one: Pages. Pages: only pricing for now.')
     again = _ask(api, attempt["token"], "q2", question="Second chat: go with these picks?", multi=True, options=PICKS,
                  topic="second").json()
-    every = post(api, f"tasks/{again['task']['id']}/answers", {"target": {"comment": again["question"]["id"]},
+    every = post(api, f"tasks/{again['task']['id']}/answers", {"target": {"task": again["task"]["id"]},
                                                               "answers": {"decision": [o["label"] for o in PICKS]}})
-    assert "not" not in every["answer"] and "Not this one" not in every["comment"]["body"]
+    assert "not" not in every["answer"] and "Not this one" not in every["answer"]["text"]
 
 
 def test_the_card_says_what_it_holds_up_and_decide_puts_a_building_item_first(api):

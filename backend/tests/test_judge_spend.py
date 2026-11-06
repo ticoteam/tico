@@ -389,26 +389,27 @@ def test_every_transport_caps_a_decisions_answer_at_what_the_cap_reserves(provid
             "openrouter": body.get("max_tokens")}[provider] == J.MAX_OUTPUT_TOKENS
 
 
-@pytest.mark.parametrize("provider,model", COMPANY_MODELS)
-def test_a_company_model_call_billed_its_whole_allowance_stays_within_its_reservation(api, monkeypatch, provider,
-                                                                                      model):
+def test_a_company_model_call_billed_its_whole_allowance_stays_within_its_reservation(api, monkeypatch):
     """The bound holds only if no call costs more than was held for it. Through the meter, on the company's model,
     with the provider billing the longest answer the request allows: the recorded cost is at most the reservation."""
     store = api.app.state.store
     store.settings.decisions_monthly_usd = 50.0
-    provider_api = WholeAllowance(provider)
-    monkeypatch.setattr(B, "fallback_engine", lambda *args, **kwargs: J.llm(provider, "synthetic", model,
-                                                                             opener=provider_api))
-    held, reserve = [], B.reservation
-    monkeypatch.setattr(B, "reservation", lambda *args: held.append(reserve(*args)) or held[-1])
-    with store.read() as c:
-        engine = B.server_engine(store, c, None)
-    result = engine({"team": "Acme"}, QUESTIONS, "company")
-    assert provider_api.limits == [J.MAX_OUTPUT_TOKENS]
-    with store.read() as c:
-        recorded = json.loads(c.execute("SELECT detail FROM events WHERE action='judge.spend'").fetchone()[0])
-    assert recorded["model"] == model and recorded["cost_usd"] == result["cost_usd"] > 0
-    assert recorded["cost_usd"] <= held[0], f"{provider}: billed ${recorded['cost_usd']}, held ${held[0]}"
+    reserve = B.reservation
+    for provider, model in COMPANY_MODELS:
+        provider_api = WholeAllowance(provider)
+        monkeypatch.setattr(B, "fallback_engine", lambda *args, provider=provider, model=model, provider_api=provider_api,
+                            **kwargs: J.llm(provider, "synthetic", model, opener=provider_api))
+        held = []
+        monkeypatch.setattr(B, "reservation", lambda *args, held=held: held.append(reserve(*args)) or held[-1])
+        with store.read() as c:
+            engine = B.server_engine(store, c, None)
+        result = engine({"team": "Acme"}, QUESTIONS, "company")
+        assert provider_api.limits == [J.MAX_OUTPUT_TOKENS]
+        with store.read() as c:
+            recorded = json.loads(c.execute("SELECT detail FROM events WHERE action='judge.spend' "
+                                            "ORDER BY rowid DESC LIMIT 1").fetchone()[0])
+        assert recorded["model"] == model and recorded["cost_usd"] == result["cost_usd"] > 0
+        assert recorded["cost_usd"] <= held[0], f"{provider}: billed ${recorded['cost_usd']}, held ${held[0]}"
 
 
 # ----------------------------------------------------------------------------- one engine for every caller

@@ -425,6 +425,8 @@ def prime_machines(c, slugs):
         return
     for part in H.chunks(sorted(set(slugs))):
         marks = ",".join("?" * len(part))
+        declared = {row["bot_id"]: row for row in c.execute(f"SELECT * FROM bot_settings WHERE bot_id IN ({marks})", part)}
+        read_cache.prime(c, BS.ROW_SQL_ONE, {(s,): declared.get(s) for s in part})
         for statement, query in ((CONFIG_SQL, f"SELECT {BS.CONFIG} AS config,bot FROM bot_config bc {BS.JOIN} WHERE bot IN ({marks})"),
                                  (OPERATOR_SQL, f"SELECT bot,owner_id FROM bot_config WHERE bot IN ({marks})"),
                                  (ROW_SQL, f"SELECT * FROM agents WHERE bot IN ({marks})"),
@@ -470,8 +472,9 @@ def _lapsed_plan(c, bot, runner_id, document, detail):
     if detail.get("ready") is not True or not signed_in_by_lapsed_plan(document, detail, {}):
         return detail
     from . import model_subscriptions, providers
-    runner = c.execute("SELECT id, capabilities FROM runners_with_state WHERE id=?", (runner_id,)).fetchone()
-    filled = providers.fill(providers.load(c), BS.read(c, bot))
+    # Read once per snapshot: every bot on one computer asks for the same row (read_cache.one).
+    runner = read_cache.one(c, "SELECT id, capabilities FROM runners_with_state WHERE id=?", (runner_id,))
+    filled = providers.fill(providers.load(c), BS.read_in_snapshot(c, bot))
     if not runner or not signed_in_by_lapsed_plan(document, detail,
                                                   model_subscriptions.covered_runtimes(c, dict(runner), filled)):
         return detail
@@ -809,7 +812,7 @@ def operation_issues(c, who, auth):
         if key and key["status"] == "failing":
             add("google_workspace", "The Google Workspace key is failing",
                 key["last_error"] or "Google has refused the Workspace key for too long.",
-                needs_person=True, action="Check the key in Settings > Inboxes.")
+                needs_person=True, action="Check the key in Tools > Settings > Email.")
         sync_owners = google_workspace.workspace_sync_owners(c)
         for box in google_workspace.workspace_mailboxes(c):
             if box["address"] not in sync_owners:
@@ -827,9 +830,9 @@ def operation_issues(c, who, auth):
                 holder = labels.get(grant["holder"]) or "another computer"
                 bot_computer = labels.get(host) or "the computer that runs their message bot"
                 add("google_grant", grant["mailbox"] + "'s Google grant is on " + holder,
-                    grant["mailbox"] + "'s Google grant is on " + holder + ". Reconnect in Settings > Inboxes to move it "
+                    grant["mailbox"] + "'s Google grant is on " + holder + ". Reconnect in Tools > Settings > Email to move it "
                     "to " + bot_computer + ", where their message bot runs.", machine=grant["holder"], needs_person=True,
-                    action="Open Settings > Inboxes")
+                    action="Open Tools > Settings > Email")
         # A connector that stopped refreshing (the Mac lost the network, or the sync hung) writes no
         # error, so its age is checked while a Mac is online: calendar refreshes every 45 s, mail
         # reports every 10 minutes.
@@ -1301,7 +1304,7 @@ def yes_no_ask(text):
 def need_of(item):
     """The group a Needs you card goes in (NEED_GROUPS)."""
     kind = item.get("kind")
-    if kind in ("stale", "memory_tidy"):
+    if kind == "stale":
         return "decide"         # Accept or Skip, row by row
     if kind == "setup":
         return "connect"        # sign in to a provider (backend/models_preset.py)
@@ -1828,8 +1831,10 @@ def needs_items(c, auth, who, task_view, older=None, count_only=False):
                 # The Strategy Bot's merged item: the originals it stands for, which the Tasks page leaves out of Needs
                 # you.
                 item["merged"] = [t for t in merged[row["id"]] if t in can_see]
-            if ask and ask.get("recipient_id") == who.actor and H.ask_older(ask):
-                ask["stale"] = True      # its one-click Clarify (backend/clarify_asks.py) shows on the card
+            if ask and ask.get("recipient_id") == who.actor and not ask.get("question_task") and H.ask_older(ask):
+                # Its one-click Clarify (backend/clarify_asks.py) shows on the card. A question task has none: it goes
+                # back to its bot on its date (backend/still_needed.py).
+                ask["stale"] = True
             items.append(item)
     for msg in privacy.readable_messages(c, privacy.actor(who), H.loose_asks_to(c, who.actor)):
         msg["refs"] = H._json(msg.get("refs"), {}) or {}
@@ -1867,8 +1872,6 @@ def needs_items(c, auth, who, task_view, older=None, count_only=False):
                 item["title"] = "Send this to Tico support?"
                 item["support"] = {"to": hq_url().split("://", 1)[-1].split("/", 1)[0]}
             items.append(item)
-    from . import memory_tidy_cards
-    items.extend(memory_tidy_cards.cards_for(c, who.actor))
     from . import stale_review
     stale = stale_review.card(c, who.actor) if H.is_human(who.actor) else None
     if stale:
@@ -2004,7 +2007,7 @@ def needs_folded_ids(items):
 def needs_plate_count(items):
     """Everything on the person's plate across boards, counted once; folded tasks count through their card."""
     task_kinds = {"task", "question", "waiting", "declined"}
-    plate_kinds = task_kinds | {"approval", "ask", "stale", "memory_tidy"}
+    plate_kinds = task_kinds | {"approval", "ask", "stale"}
     folded = set(needs_folded_ids(items))
     return len({("task" if it["kind"] in task_kinds else it["kind"], str(it["id"]))
                 for it in items if it["kind"] in plate_kinds
@@ -3058,7 +3061,7 @@ def install_views(app, store, auth, mutate, task_view):
         `limit` (at most NEEDS_PAGE_MAX) sends a page, with `next` to pass as `cursor` for the one after it and `bots`,
         each bot's count over the whole list; `by_kind` counts each kind and `folded_task_ids` names tasks represented
         by other cards over the whole list, including unread pages. Every response includes `plate_count`: unique
-        task, question, waiting, declined, approval, ask, stale and memory_tidy items across all boards, less folded or merged
+        task, question, waiting, declined, approval, ask and stale items across all boards, less folded or merged
         tasks. It excludes thread and update attention; `count` keeps counting the whole attention list.
         A cursor from an older version starts again from the top (`restart`).
         Without either, the whole list. Every page is cut from the list built whole, so its `version` and each

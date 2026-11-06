@@ -1,11 +1,7 @@
 # The Assistant
 
 Every human has one private DM with the team's assistant (the `coo` bot; you may have renamed it): a personal
-bot that knows how Tico is laid out and does things in it on your behalf. **Ask Tico** opens it from any page: on a
-computer it is the sidebar's bottom row, above your account, with Search's icon (⌘K) and the Tico team's **?** at its end; it (or ⌘J / Ctrl+J)
-opens a small panel straight above that row, over the sidebar, and nothing floats over the page. On a phone the Liquid Dot in the
-middle of the tab bar opens it as a sheet. The panel names the page it sees, and a message sent from it carries that
-page, so "this" and "here" mean what you are looking at. The panel is called **Tico Assistant** (or the name your team
+bot that knows how Tico is laid out and does things in it on your behalf. **Tico Assistant** opens it from any page except its own page and setup, and still opens while the signed-out banner shows. Where no person has loaded, the row is not shown and ⌘J does nothing; Search's icon becomes a row of its own. On a computer it is the sidebar's bottom row, above your account, with Search's icon (⌘K) and the Tico team's **?** at its end; it (or ⌘J / Ctrl+J) opens a small panel straight above that row, over the sidebar, and nothing floats over the page. On a phone the Liquid Dot in the middle of the tab bar (**Assistant**) opens it as a sheet, even while the signed-out banner shows. On the Assistant page a tap on that tab does not open the sheet at once; it comes up when you leave that page by a link, not by the tab bar. Where no person has loaded, a tap on that tab opens the sheet only once one does. During setup the tab bar is not shown. The panel names the page it sees, and a message sent from it carries that page, so "this" and "here" mean what you are looking at. The panel is called **Tico Assistant** (or the name your team
 gave the assistant); its header has the dot, the name and the page it sees. The DM is also a
 page of its own (`#/assistant`): the assistant's name, then the same thread and composer as a bot's Home, with a
 few things to ask while it is empty. The **Assistant** tab, first on your own page (`#/person/<you>`), opens the same
@@ -24,7 +20,7 @@ The Ask panel is only the Assistant. Talking to the people at Tico is a separate
 phone, beside Search in the More drawer), or any link to `#/support`, such as the Assistant's "Message the Tico team"
 reply, opens it ([Support](support.md)). Nothing from the DM goes to the Tico team.
 
-A **peek** is a few words beside the closed dot, just past the sidebar level with the Ask row (above the tab bar on a phone), Tico saying something waits on you:
+A **peek** is a few words beside the closed dot, just past the sidebar level with the Tico Assistant row (above the tab bar on a phone), Tico saying something waits on you:
 "Got a quick question for you", "3 questions are waiting on you", "Need your OK on something". Six words at most,
 never who asked. Tap it and the DM opens at that card; × dismisses it for good, for every item it spoke for. One at a time, none in the first
 few seconds after the page loads or while you are typing, each question at most once a day, and never a sound or a
@@ -192,6 +188,22 @@ with `enabled: true`. If direct writes are disabled, `hub assistant propose` can
 confirmation creates and enables that routine. Existing routines use a PATCH proposal. The same API and card apply
 to web, phone and desktop; the `hub` CLI and MCP tools return the pending action, never confirm it for the Assistant.
 
+## Where you stand, and the morning message
+
+The Assistant's goal number one is to help you use Tico to achieve your business goals. Its skill **where we stand**
+(`skills/where-we-stand/`) reads your strategy, your goals and their colours, the bots working on them, and the Marketing
+board, and names up to three things only you can do today, each with the goal it moves and one link to act. Ask "where do we
+stand?" or "what should I do next?" any time, or it runs for you as the morning message.
+
+The **morning message** is the Assistant's one routine (the routine id is still `daily-sweep`, now titled "Morning message").
+Once a day it sends each person at most one message in their Assistant DM, with `hub assistant morning --for human:<id>
+--body`. A quiet day gets no message. A second send on the same company day is refused (`409 already_sent_today`), and the
+Assistant does not retry. The message never closes, declines or proposes anything: it has no Confirm card. Stalled Marketing
+tasks go to their owning bot as a comment, not to you.
+
+In a chat, after it finishes an ask about your goals, the Assistant may offer one next step ("Next: <thing> for <goal>. Do it
+now?"). Say "that's enough" or "later" and it stops offering in that chat. It never follows up on its own.
+
 ## Undo
 
 Every change your Assistant makes for you is listed with the words it acted on: `hub assistant change list [--days N]`
@@ -286,10 +298,17 @@ comments, links, approval declines and answers, `PATCH /api/v2/automations/<id>`
 the Assistant may never make on your words (the list above, or a rule that sets the Assistant's own switches) is refused
 when the card is made.
 
-**The Assistant's own background run** (its daily sweep) may put a card in your own Assistant DM with
+**The Assistant's own background run** (a routine of its own) may put a card in your own Assistant DM with
 `hub assistant propose --for human:<id>`. Only the Assistant bot may do this, for that person, at most five cards a day
 per person, and never with an approve step. The card is yours: it runs only on your tap, as you, and says the Assistant
 proposed it. Any other bot, or a person naming someone else, gets `403`.
+
+The same run may send you **one morning message a day**: `hub assistant morning --for human:<id> --body "<text>"` (`POST
+/api/v2/assistant/morning`, `hub_assistant_morning`). It is a plain message in your own Assistant DM, from the
+Assistant, with no card and nothing to confirm: what you can do today to move your goals. The server allows one per
+person per company day (the company's clock, not UTC); a second that day is `409 already_sent_today` and says when the
+next can go. Only the Assistant bot may send it, for an active person; other callers get `403`, and a person who is
+gone or signed out gets `404`.
 
 Any teammate, person or bot, can withdraw a Confirm card that still waits (`hub assistant withdraw <id>`, `POST
 /api/v2/assistant/actions/{aid}/withdraw`, or `hub_assistant_withdraw`; `hub assistant proposals` lists the waiting cards
@@ -334,23 +353,13 @@ Strategy Bot is on ([Strategy Bot](strategy-bot.md#what-it-has-learned)).
 
 ## On the Updates page
 
-Updates has your DM beside the feed: the same thread as the menu tab, so a question asked here shows there too.
-It is labelled with your Assistant, the owner's too. On a
-desktop it is a right rail; drag its left edge to resize it, as with other right rails, and the button at the end of the
-page's header shows or hides it. Tico remembers that for you on every device. On a phone the same button opens the DM
-full screen; its close button or Back shuts it. While the Assistant is off, whoever may turn it on sees one line with
-**Turn on** there; anyone else gets no DM and no button.
+Updates has no Assistant chat beside the feed. To talk to your Assistant, press **Tico Assistant** at the bottom of the sidebar
+(⌘J; the middle tab on a phone). It opens from any page except the Assistant page and setup, and still opens while the signed-out banner shows. The full page (`#/assistant`) shows the same thread. While
+the Assistant is off, the owner sees one line with **Turn on** there; anyone else sees the same line without the button,
+telling them to ask the owner.
 
-A question asked here is handed the recent updates you can read: the last four days' dailies and the latest week in
-review, chosen by the same rules as your Updates page. Tico leaves out any update that links or names a task, thread or
-bot you can't open, so the bot never has it to quote or link. That filter runs on the server, not in the bot's
-instructions. Ask "what's the top update today?" and it picks one and says why in a sentence. With nothing posted today
-it says so and offers the last day's top one. Until you teach it otherwise (see below), "top" means affects a goal, then
-waits on you, then newest.
-
-A link to an update in its reply stays on the page. It scrolls to that card and highlights it, switching Daily or Weekly
-and the day as needed. On a phone the DM closes first. Each question is one ordinary turn. It costs no more than any
-other message to your Assistant, and it acts only as you, as everywhere.
+Each question is one ordinary turn. It costs no more than any other message to your Assistant, and it acts only as you,
+as everywhere.
 
 ## API
 
@@ -360,7 +369,7 @@ own session, not a personal token.
 | Request | Answer |
 |---|---|
 | `GET /api/v2/assistant` | `{"available", "state", "bot", "name", "can_turn_on", "room_id", "messages": [...], "has_more", "next_before", "execution", "actions": {id: action}, "pending": [...]}`. Creates your DM the first time. `execution` is the assistant's current run (null when idle): show a thinking state while it is set and poll again. A message whose `refs.action` names an id in `actions` is a Confirm / Cancel card; `refs.links` lists what it linked. |
-| `POST /api/v2/assistant/messages` `{"text", "place"}` | `{"message"}` (with `held` or `rule_warning` when the org rule check has something to say). The bot is working on it: poll `GET /api/v2/assistant`. `"place": "updates"` (the Updates DM) always takes a turn, handed the recent updates you may read. `409 assistant_off` when it is off. |
+| `POST /api/v2/assistant/messages` `{"text", "place"}` | `{"message"}` (with `held` or `rule_warning` when the org rule check has something to say). The bot is working on it: poll `GET /api/v2/assistant`. `"place": "updates"` always takes a turn, handed the recent updates you may read. `409 assistant_off` when it is off. |
 | `POST /api/v2/assistant/turn-on` | Owner only. `{"bot", "state", "restored", "placed"}`. |
 | `POST /api/v2/assistant/actions` `{"summary", "method", "path", "body"}` | A proposal `{"action": {...}}` (what the assistant's tool calls). |
 | `GET /api/v2/assistant/actions/{id}` | `{"action": {"status": "pending"\|"running"\|"done"\|"failed"\|"canceled"\|"expired", "result": {...}}}` |

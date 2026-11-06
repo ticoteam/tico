@@ -47,12 +47,14 @@ def _card(ctx: Ctx, who: str, card_id: str) -> Any:
     card = SK.get(ctx.c, "fin_cards", card_id)
     if card is None or not sees(ctx, who, card):
         raise FinanceError(NOT_FOUND, "no such card")
+    if str(card["provider"] or "") == "brex":
+        raise invalid("a Brex card is read-only in Finance: change it in Brex")   # Brex is read, never written to
     return card
 
 
 def _program(ctx: Ctx, money_id: str | None) -> Any:
     programs = [m for m in SK.money_accounts(ctx.c, ctx.book.id) if str(m["kind"]) == "card_program"
-                and str(m["status"] or "active") == "active"]
+                and str(m["status"] or "active") == "active" and str(m["provider"] or "mercury") == "mercury"]
     if money_id:
         programs = [m for m in programs if str(m["id"]) == money_id]
     if not programs:
@@ -516,8 +518,10 @@ def lift_through_actions(ctx: Ctx) -> int:
 def freeze_paused(ctx: Ctx, budget_id: str, aid: str, by: str) -> int:
     """A budget set to 0 (a pause) freezes every active card on it and under it, as `frozen_by` budget. Their
     allocations stay; a raise that leaves room lifts them (`unfreeze_with_room`). Each freeze goes to Mercury through
-    `sync`. How many."""
-    from .budgeting import subtree
+    `sync`. How many. An ad budget's pause freezes nothing: it only warns (budgeting.warn_only)."""
+    from .budgeting import budget_platform, subtree
+    if budget_platform(ctx, ctx.budgets()[budget_id]):
+        return 0
     cards = SK.cards_on_budgets(ctx.c, subtree(ctx, budget_id))
     for card in cards:
         cid = str(card["id"])
@@ -542,10 +546,13 @@ def blocking_budget(ctx: Ctx, leaf: str, at: date) -> str:
     """The id of the first budget on a card's path (its own, then its parents) that stops the card on `at`, or "": one
     at zero (a pause, whatever its at-limit: a zero budget means no spending, §12), or one at its amount whose at-limit
     refuses spend. A pause or a cutoff reaches a card through these same parent links, so a card is lifted, or unfrozen
-    by hand, only when none of them stops it. A warn or ask budget above zero blocks nothing."""
-    from .budgeting import chain_of
+    by hand, only when none of them stops it. A warn or ask budget above zero blocks nothing, and an ad budget
+    (budgeting.warn_only) nothing at all, at zero too."""
+    from .budgeting import budget_platform, chain_of
     budgets = ctx.budgets()
     for bid in chain_of(ctx, leaf):
+        if budget_platform(ctx, budgets[bid]):
+            continue
         if _paused(ctx, bid, at) or (budgets[bid].at_limit in BLOCKING and _over(ctx, bid, at)):
             return bid
     return ""

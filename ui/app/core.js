@@ -4,7 +4,7 @@
 
 const API = '/api';
 const GH = 'https://github.com/ticoteam/tico';
-// My dashboard (Overview › Mine) is where the app opens; Company is the company's Dashboard.
+// My dashboard (Company › Mine) is where the app opens; Company › Dashboard is the company's.
 const HOME = '#/home';
 const OVERVIEW = '#/overview';
 const WELCOME = '#/welcome';          // first run: names, the team, the bot templates, a computer
@@ -22,7 +22,7 @@ const LEARNED = '#/assistant/learned';   // what your chat bot has learned (ui/a
 const BOARD = '#/board';              // the old links still work, each opening its view
 const ISSUES = '#/issues';
 const SETTINGS = '#/settings';
-const HELP = '#/help';                // old Help links: Overview with the Support pop-up open (ui/support.js)
+const HELP = '#/help';                // old Help links: Company with the Support pop-up open (ui/support.js)
 const CREDENTIALS = '#/credentials';   // the owner's connections: what is connected and whether it works
 const SQL_PAGE = '#/sql';              // the owner's and admins' read-only query page over the hub database
 const STRATEGY = '#/strategy';       // the team's strategy, with Market as its second tab (ui/strategy-page.js)

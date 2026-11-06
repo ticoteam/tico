@@ -310,7 +310,7 @@ def run_code(text):
 def run_status(code, text=""):
     """What a bot's status says about a run the Gateway refused with `code`, before what happens to the run."""
     if code == "unknown_model":
-        return "The Tico AI Gateway doesn't offer this model; Settings > Gateway lists the picks"
+        return "The Tico AI Gateway doesn't offer this model; Settings > Models lists the picks"
     if code == "no_route":
         return "No Tico route for this request"
     if code == NOT_FOUND:

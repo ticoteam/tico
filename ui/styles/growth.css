@@ -103,8 +103,9 @@ a.gr-btn.grh-btn,button.grh-btn{min-height:var(--ctl);font-size:var(--t-base)}
 .grc-old{color:var(--muted)}
 .grc-more{font-size:var(--t-xs);color:var(--muted);white-space:nowrap}
 .grc-more:hover{color:var(--ink)}
-/* a task's stage: Idea grey, Testing blue, Scaling green */
+/* a task's stage: On deck grey, In development amber, Live blue, Working green */
 .grc-sq{display:inline-block;flex:none;width:8px;height:8px;border-radius:2px;background:var(--g5)}
+.grc-sq[data-stage=building]{background:var(--wait)}
 .grc-sq[data-stage=testing]{background:var(--run)}
 .grc-sq[data-stage=scaling]{background:var(--ok)}
 

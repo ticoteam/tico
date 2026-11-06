@@ -57,7 +57,14 @@ fn wants(runner: &Runner, channel: &'static str, every: f64) -> bool {
     let now = Instant::now();
     let mut polled = relays().polled.lock().unwrap();
     let due = runner.events.take(channel)
-        || polled.get(channel).is_none_or(|at| now.duration_since(*at).as_secs_f64() >= if runner.events.live() { BACKUP_POLL_S } else { every });
+        || polled.get(channel).is_none_or(|at| {
+            now.duration_since(*at).as_secs_f64()
+                >= if runner.events.live() {
+                    BACKUP_POLL_S
+                } else {
+                    every
+                }
+        });
     if due {
         polled.insert(channel, now);
     }
@@ -111,7 +118,15 @@ pub fn poll(runner: &Arc<Runner>) {
         let me = runner.clone();
         tokio::spawn(async move {
             // Optional on older servers: a failure is dropped, as service.py does.
-            let ask = if refresh.busy() { None } else { Some(wants(&me, "refresh", crate::subscription_refresh::POLL_SECONDS)) };
+            let ask = if refresh.busy() {
+                None
+            } else {
+                Some(wants(
+                    &me,
+                    "refresh",
+                    crate::subscription_refresh::POLL_SECONDS,
+                ))
+            };
             if ask != Some(false) {
                 let _ = refresh.poll(&me, ask).await;
             }
@@ -122,7 +137,11 @@ pub fn poll(runner: &Arc<Runner>) {
             let me = runner.clone();
             tokio::spawn(async move {
                 let _held = held;
-                note("imports", crate::credential_imports::poll(&me).await, "credential import poll");
+                note(
+                    "imports",
+                    crate::credential_imports::poll(&me).await,
+                    "credential import poll",
+                );
             });
         }
     }
@@ -134,7 +153,11 @@ pub fn poll(runner: &Arc<Runner>) {
                 // Install what this computer's bots run on and the optional defaults, including the Gateway
                 // before subscription sign-in. A computer with no bots yet also takes the company default.
                 let changed = CONFIG_CHANGED.swap(false, std::sync::atomic::Ordering::SeqCst);
-                if changed || harness.default_at.is_none_or(|t| t.elapsed().as_secs_f64() >= 60.0) {
+                if changed
+                    || harness
+                        .default_at
+                        .is_none_or(|t| t.elapsed().as_secs_f64() >= 60.0)
+                {
                     harness.default_at = Some(Instant::now());
                     if let Ok(c) = me.client.get("config").await {
                         crate::fallback::remember(&c);
@@ -143,16 +166,25 @@ pub fn poll(runner: &Arc<Runner>) {
                     if let Ok(rows) = me.client.get("runners/assignments").await {
                         let rows = rows.as_array().cloned().unwrap_or_default();
                         let runtimes = harness_runtimes(&rows);
-                        let default = harness_defaults(&runtimes, &harness.config, crate::gateway_relay::runs_gateway());
+                        let default = harness_defaults(
+                            &runtimes,
+                            &harness.config,
+                            crate::gateway_relay::runs_gateway(),
+                        );
                         let runtimes: Vec<String> = runtimes.into_iter().collect();
                         tools.lock().unwrap().want(&runtimes, &default);
                     }
                 }
                 // Read at the moment of a switch, not here: a turn can start while `tick` waits on the server.
                 let turns = me.clone();
-                let busy = move || crate::harness_tools::busy(&turns.active.lock().unwrap().clone());
+                let busy =
+                    move || crate::harness_tools::busy(&turns.active.lock().unwrap().clone());
                 let ask = wants(&me, "harness", crate::harness_tools::POLL_S);
-                harness.relay.get_or_insert_with(crate::harness_tools::Relay::new).tick(&tools, &me.client, busy, ask).await
+                harness
+                    .relay
+                    .get_or_insert_with(crate::harness_tools::Relay::new)
+                    .tick(&tools, &me.client, busy, ask)
+                    .await
             }
             .await;
             note("harness", result, "harness step");

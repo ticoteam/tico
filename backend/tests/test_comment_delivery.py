@@ -235,20 +235,20 @@ def test_a_goal_the_harness_cannot_take_saves_no_comment(api):
     assert all(m["body"] != "Ship it." for m in get(api, f"tasks/{tid}")["comments"])
 
 
-@pytest.mark.parametrize("body", [
-    {"text": "Pick the venue.", "delivery": "later"},                           # not a way
-    {"text": "Pick the venue.", "delivery": "goal", "public": True},            # a goal is not public
-    {"text": "Pick the venue.", "needs_action": True, "delivery": "queue"},     # needs_action is steer
-    {"text": "Pick the venue.", "delivery": "queue", "defer_for": "4h"},        # a deadline is for defer
-    {"text": "Pick the venue.", "delivery": "defer", "defer_for": "soon"},      # not a time
-    {"text": "Pick the venue.", "delivery": "defer", "defer_for": "800d"},      # over two years
-])
-def test_a_delivery_that_cannot_apply_is_refused_and_nothing_is_saved(api, body):
+def test_a_delivery_that_cannot_apply_is_refused_and_nothing_is_saved(api):
     machine, tid = world(api)
     before = len(get(api, f"tasks/{tid}")["comments"])
-    r = api.post(f"/api/v2/tasks/{tid}/comments", json=body, headers=headers("ana-test"))
-    assert r.status_code == 422, r.text
-    assert len(get(api, f"tasks/{tid}")["comments"]) == before
+    for body in [
+        {"text": "Pick the venue.", "delivery": "later"},                           # not a way
+            {"text": "Pick the venue.", "delivery": "goal", "public": True},            # a goal is not public
+            {"text": "Pick the venue.", "needs_action": True, "delivery": "queue"},     # needs_action is steer
+            {"text": "Pick the venue.", "delivery": "queue", "defer_for": "4h"},        # a deadline is for defer
+            {"text": "Pick the venue.", "delivery": "defer", "defer_for": "soon"},      # not a time
+            {"text": "Pick the venue.", "delivery": "defer", "defer_for": "800d"},      # over two years
+    ]:
+        r = api.post(f"/api/v2/tasks/{tid}/comments", json=body, headers=headers("ana-test"))
+        assert r.status_code == 422, (body, r.text)
+        assert len(get(api, f"tasks/{tid}")["comments"]) == before, body
 
 
 def test_mcp_and_the_hub_cli_send_the_same_delivery(api):

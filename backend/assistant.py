@@ -19,6 +19,7 @@ import re
 import secrets
 import unicodedata
 import uuid
+from datetime import datetime, time, timedelta, timezone
 from urllib.parse import unquote
 
 import httpx
@@ -36,6 +37,7 @@ RUNNING_TTL_S = 120                # a confirm that has not settled in two minut
 CONFIRM_TTL_H = 24                 # a proposal nobody confirmed for a day is not run
 MAX_PENDING = 20
 MAX_BACKGROUND_PER_DAY = 5      # cards the Assistant's own background run may put in one person's chat a day
+MORNING_KEY = "morning"         # the message's refs key: the company day it was sent for (one a day per person)
 
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS assistant_actions (
@@ -77,6 +79,9 @@ def write_allowed(method, path, settings=None, body=b"", actor="", owns=None, di
         return True
     if method != "POST":
         return False
+    if path == "/api/v2/pages":
+        # The page writer authenticates the request and records the person as author.
+        return True
     # Saving what the person taught it (backend/learned.py checks the layer: theirs, or the company's for the owner).
     if path in ("/api/v2/updates/read", "/api/v2/changelog/read", "/api/notes", "/api/v2/assistant/actions",
                 "/api/v2/assistant/read-back", "/api/v2/assistant/learned", "/api/v2/goals/read-back"):
@@ -103,9 +108,9 @@ def write_allowed(method, path, settings=None, body=b"", actor="", owns=None, di
     # Reversible Gmail labels; the route checks the person's mailbox level and the company organize switch.
     if path == "/api/v2/mail/messages/organize":
         return True
-    # The mail tool's org rule check before a send, and its report of checks Tico never answered, change nothing: a
-    # person's own mail is never checked (backend/org_rule_check.py), and the send itself meets its own checks.
-    if re.fullmatch(r"/api/v2/bots/[^/]+/mail-check(/misses)?", path):
+    # An org rule check of a draft changes nothing: a person's own mail is never checked (backend/org_rule_check.py),
+    # and the send itself meets every check in the send queue.
+    if re.fullmatch(r"/api/v2/bots/[^/]+/mail-check", path):
         return True
     try:
         fields = json.loads(body or b"{}")
@@ -253,7 +258,12 @@ NEVER = [(m, re.compile(p)) for m, p in (
     # tests/test_assistant_acts_as_you.py walks app.routes so a new one cannot slip past.
     ("POST", r"/api/v2/me/tokens(/[^/]+/revoke)?"),
     ("POST", r"/api/v2/service-keys(/[^/]+/revoke)?"),
+    # A person's skills helper token (backend/skill_devices.py): connecting, revoking and its reporting are the person's.
+    (None, r"/api/v2/skills/devices(/.*)?"),
     (None, r"/api/v2/credentials(/.*)?"), (None, r"/api/v2/credential-set"),
+    # An API tool's keys and levels are credentials and grants; its address and auth scheme decide where a key is sent,
+    # so changing, adding or deleting a tool is the person's tap too (backend/api_tools.py). Its check only reads.
+    (None, r"/api/v2/api-tools(/[^/]+(/(keys|access)(/.*)?)?)?"),
     # HQ's cloud-machine support switch grants access just like the support_access team rule.
     ("PUT", r"/api/v2/cloud-machines/support"),
     (None, r"/api/v2/credential-imports(/.*)?"), (None, r"/api/v2/runner-credential-(migration|imports)(/.*)?"),
@@ -287,7 +297,7 @@ NEVER = [(m, re.compile(p)) for m, p in (
     (None, r"/api/v2/google/workspace(/.*)?"), (None, r"/api/v2/google/oauth-client"),
     # What Tico may do in Google: Send mail lets every bot write outside, a person's own word as a bot's Mail sending is.
     (None, r"/api/v2/google/permissions"),
-    # Who can use a mailbox (Settings > Inboxes, backend/mailboxes.py): connecting one, sharing it, each access and
+    # Who can use a mailbox (Tools, backend/mailboxes.py): connecting one, sharing it, each access and
     # stopping it are the person's own tap, never a chat's.
     (None, r"/api/v2/mailboxes(/.*)?"),
     (None, r"/api/v2/letters/(settings|outboxes/.*|bots/.*/settings)"),
@@ -652,6 +662,26 @@ def instruction(c, who, ref):
     return {"for": who.actor, "cited": msg["id"], "run": "asked"}
 
 
+def make_page_task(c, auth, who, task):
+    """A live Assistant attempt may publish only for its person's initiating Make page request."""
+    attempt = c.execute("SELECT * FROM attempts WHERE id=?", (who.attempt_id,)).fetchone()
+    principal = auth.assistant_principal(c, attempt) if attempt else None
+    row = c.execute("SELECT m.* FROM attempts a JOIN jobs j ON j.id=a.job_id "
+                    "JOIN messages m ON m.id=j.message_id WHERE a.id=?", (who.attempt_id,)).fetchone()
+    message = H.message(c, row["id"]) if row else None
+    room = H.conversation(c, message["conversation_id"]) if message else None
+    target = (message.get("refs") or {}).get("make_page") if message else None
+    if (who.via != "assistant" or not principal or principal.actor != who.actor
+            or principal.task_actor != who.task_actor or not message or message.get("deleted_at")
+            or message["kind"] != "say" or message["sender_id"] != who.actor
+            or message["recipient_id"] != "bot:" + attempt["bot_id"] or edited(c, message)
+            or (message.get("refs") or {}).get("via") or not room or room.get("closed_at")
+            or not isinstance(target, dict) or target.get("task") != task or not task):
+        raise Problem("forbidden", "Publish from the person's own Make page request", 403)
+    auth.task(c, who, task)
+    return message
+
+
 def require_on_task(c, auth, who, path):
     """A task change, comment or link the turn makes must be on a task the person may read: a task they may not read is
     a 404, as the route answers it, and the refusal never says it is there. Being on the task is not a limit: the
@@ -844,9 +874,17 @@ def groups(c, steps):
     return lines
 
 
-def describe(c, method, path, body):
+def describe(c, method, path, body, viewer=None, admins=()):
     """A one-line, server-derived description of what confirming would do (never the bot's words), and
-    for a task update the exact field changes."""
+    for a task update the exact field changes. Given the `viewer`, a key of a tool they may not see is named as one that
+    does not exist is: by its id (backend/api_tools.py `visible`)."""
+    def credential_name(cid):
+        if viewer is not None:
+            from .api_tools import key_hidden
+            if key_hidden(c, viewer, cid, admins):
+                return cid
+        return (c.execute("SELECT name FROM credentials WHERE id=?", (cid,)).fetchone() or {"name": cid})["name"]
+
     def bot(slug):
         row = H.bot(c, slug) or {}
         return row.get("display_name") or row.get("slug") or slug
@@ -945,12 +983,11 @@ def describe(c, method, path, body):
          lambda g: ("Revoke" if g[1] else "Make a new") + f" agent credential for bot {bot(g[0])}"),
         (r"/api/v2/repositories/settings", lambda g: {
             "own": "New bots get only their own repository",
-            "all": "New bots get every repository ticked in Settings > Repositories"}.get(
+            "all": "New bots get every repository ticked in Settings > General › Repositories"}.get(
                 body.get("new_bot_default"), "Change which repositories new bots get")),
         (r"/api/v2/repositories/refresh", lambda g: "Refresh the repository list from GitHub"),
         (r"/api/v2/repositories/([^/]+)/([^/]+)", lambda g: f"Change repository {g[1]}: " + fields(body)),
-        (r"/api/v2/credentials/([^/]+)", lambda g: "Delete the stored credential “" + ((c.execute(
-            "SELECT name FROM credentials WHERE id=?", (g[0],)).fetchone() or {"name": g[0]})["name"]) + "”"),
+        (r"/api/v2/credentials/([^/]+)", lambda g: "Delete the stored credential “" + credential_name(g[0]) + "”"),
         (r"/api/v2/(?:people|humans)/([^/]+)", lambda g: f"Delete {who('human:' + g[0])} from the team for good"
          if method == "DELETE" else f"Edit person {who(g[0])}: " + fields(body)),
         (r"/api/v2/access/(?:people|humans)", lambda g: f"Add {body.get('name') or body.get('email', '')} ({body.get('email', '')}) "
@@ -1187,7 +1224,8 @@ def create_proposal(c, settings, who, room, proposer, summary, method, path, bod
     if same:
         # The same card again is the same card: a retried command never leaves two to click.
         return {"action": action_view(dict(same), c), "message_id": None, "repeated": True}
-    said, diff = describe(c, method, path, body)
+    admins = tuple(getattr(settings, "credential_admins", ()) or ())       # who may see a key's name on the card (backend/api_tools.py `visible`)
+    said, diff = describe(c, method, path, body, who, admins)
     if routine:
         said, diff = routine
     if not what and (m := re.fullmatch(r"/api/v2/bots/([^/]+)/repositories", path)) and method == "PUT":
@@ -1199,7 +1237,7 @@ def create_proposal(c, settings, who, room, proposer, summary, method, path, bod
         # One line per step: what it does to which task, and the fields it changes.
         diff = groups(c, body["actions"])
         for i, s in enumerate(body["actions"]):
-            line, changes = routine_steps.get(i) or describe(c, s["method"], s["path"], s["body"])
+            line, changes = routine_steps.get(i) or describe(c, s["method"], s["path"], s["body"], who, admins)
             fields = changes or [{"field": k, "new": v} for k, v in s["body"].items()]
             diff.append({"field": line, "new": ", ".join(f"{d['field']}: {d['new']}" for d in fields
                                                           if d["field"] != "version"),
@@ -1338,6 +1376,15 @@ def earlier_chat(c, settings, who):
 def chat_room(c, settings, who, create=True):
     """This person's own Assistant room, opened with `create`."""
     return ensure_room(c, who.actor, settings.assistant_bot) if create else find_room(c, who.actor)
+
+
+def morning_day():
+    """The company day a morning message is for: today's date on the company's clock (updates.ZONE, the zone the update
+    ladder and the automations read, not UTC), and the UTC instant that day ends, when the next one may go."""
+    from .updates import ZONE
+    local = H.parse_ts(H.now()).astimezone(ZONE)
+    ends = datetime.combine(local.date() + timedelta(days=1), time(0), tzinfo=ZONE)
+    return local.date().isoformat(), ends.astimezone(timezone.utc).strftime("%Y-%m-%dT%H:%M:%S.%f") + "Z"
 
 
 def availability(c, settings, who):
@@ -1528,7 +1575,7 @@ def install(app, store, auth, mutate, onboarding):
         if gate and gate.get("held"):
             return org_rule_check.held_answer(c, who, gate, auth=auth)
         message = H.say(c, who.actor, "bot:" + bot, org_rule_check.warned_text(gate, text) if gate else text,
-                        conversation_id=room["id"], kind="say", refs=refs)
+                        conversation_id=room["id"], kind="say", refs=refs, make_page="make_page" in refs)
         if uploads is not None:
             message = app.state.uploads.attach(c, who, bot, message, uploads, titles)
         return {"message": message, **org_rule_check.answer(gate)}
@@ -1557,6 +1604,11 @@ def install(app, store, auth, mutate, onboarding):
         if "bot:" + bot != replay.get("to"):
             raise Problem("changed", "Your " + settings.assistant_name + " changed since the message was held; send it "
                           "again", 409)
+        target = (replay.get("refs") or {}).get("make_page")
+        if target:
+            from .pages import Pages
+            task = auth.task(c, who, target["task"])
+            Pages.require_pin_space(c, task["id"])
         return assistant_say(c, who, bot, chat_room(c, settings, who), replay["text"], replay.get("refs") or {},
                              org_rule_check.decided(gate), replay.get("uploads"), replay.get("titles") or [])
 
@@ -1572,6 +1624,62 @@ def install(app, store, auth, mutate, onboarding):
             raise Problem("assistant_off", "The " + info["name"] + " is off", 409)
         rc = await asyncio.to_thread(assistant_checks, who, info["bot"], body.text)
         return await asyncio.to_thread(post_message_sync, request, body, who, None, rc)
+
+    @app.post("/api/v2/tasks/{tid}/make-page")
+    async def make_page(request: Request, tid: str, body: M.MakePage):
+        from .pages import Pages
+        who = own(request)
+        text = body.text.strip()
+        if not text:
+            raise Problem("validation", "Say what page to make", 422)
+        def admit():
+            with store.read() as c:
+                task = auth.task(c, who, auth.resolve_task(c, who, tid))
+                Pages.require_pin_space(c, task["id"])
+                return task["id"], chat_bot_for(c, who)
+        task, bot = await asyncio.to_thread(admit)
+        rc = await asyncio.to_thread(assistant_checks, who, bot, text)
+        def work(c):
+            auth.task(c, who, task)
+            Pages.require_pin_space(c, task)
+            bot = chat_bot_for(c, who)
+            return assistant_say(c, who, bot, chat_room(c, settings, who), text,
+                                 {"assistant": True, "make_page": {"task": task}, "delivery": "queue"}, rc)
+        return await asyncio.to_thread(mutate, request, body, work)
+
+    @app.get("/api/v2/tasks/{tid}/make-page")
+    def make_page_status(request: Request, tid: str):
+        """Only the requester's latest Make page request, including after a reconnect or another chat turn."""
+        who = own(request)
+        with store.read_transaction() as c:
+            task = auth.task(c, who, auth.resolve_task(c, who, tid))
+            room = find_room(c, who.actor)
+            row = c.execute("SELECT m.id,m.conversation_id,j.bot_id,j.state,a.state AS attempt_state,a.lease_until "
+                            "FROM messages m LEFT JOIN jobs j ON j.message_id=m.id "
+                            "LEFT JOIN attempts a ON a.id=j.attempt_id WHERE m.conversation_id=? "
+                            "AND m.sender_id=? AND m.deleted_at IS NULL AND json_extract(m.refs,'$.assistant')=1 "
+                            "AND json_extract(m.refs,'$.make_page.task')=? ORDER BY m.rowid DESC LIMIT 1",
+                            ((room or {}).get("id"), who.actor, task["id"])).fetchone()
+            if not row:
+                return {"make_page": None}
+            # Publish and pin commit together. Later unlinking or archiving keeps a successful request successful.
+            made = c.execute("SELECT 1 FROM bot_files f JOIN pages p ON p.file_id=f.id "
+                             "WHERE f.scope=? "
+                             "AND EXISTS (SELECT 1 FROM bot_file_activity v JOIN attempts a ON a.id=v.attempt_id "
+                             "JOIN jobs j ON j.id=a.job_id WHERE v.file_id=f.id AND j.message_id=? "
+                             "AND v.action IN ('created','modified','published')) LIMIT 1",
+                             ("task:" + task["id"], row["id"])).fetchone()
+            active = (row["state"] == "queued" or row["state"] in ("leased", "running")
+                      and row["attempt_state"] in ("leased", "running") and str(row["lease_until"] or "") > H.now())
+            state = "made" if made else "making" if active else "failed"
+            if not made and row["state"] == "queued":
+                from .execution import MAKE_PAGE, capability_set
+                computer = c.execute("SELECT r.capabilities FROM assignments a JOIN runners_with_state r ON r.id=a.runner_id "
+                                     "WHERE a.bot=?", (row["bot_id"],)).fetchone()
+                if computer and MAKE_PAGE not in capability_set(computer["capabilities"]):
+                    state = "update_required"
+            return {"make_page": {"message_id": row["id"], "conversation_id": row["conversation_id"],
+                                  "state": state}}
 
     # Files and pictures in a person's own Assistant chat (the Ask panel, the Assistant page), stored on the message like
     # any bot chat's, in their room's conversation.
@@ -1747,6 +1855,38 @@ def install(app, store, auth, mutate, onboarding):
             room = chat_room(c, settings, who)
             return create_proposal(c, settings, who, room, "assistant", body.summary, body.method, body.path, body.body,
                                    request.headers.get("x-tico-on-behalf-of"), routes=request.app.routes)
+        return mutate(request, body, work)
+
+    @app.post("/api/v2/assistant/morning")
+    def morning(request: Request, body: M.AssistantMorning):
+        """The Assistant's one morning message to a person: what they can do today to move their goals, in their own
+        Assistant chat, as the Assistant. No card and nothing to confirm. Only the Assistant bot's background run may
+        send it, for an active person, and once a company day per person: a second one that day is refused
+        `409 already_sent_today`, whatever the caller sends."""
+        caller = request.state.identity
+        assistant_run = H.is_bot(caller.actor) and H.actor_id(caller.actor) == settings.assistant_bot
+        if not assistant_run or not H.is_human(body.for_person):
+            raise Problem("forbidden", "Only the " + settings.assistant_name + " sends a person their morning message, "
+                          "from its own background run, and only to that person", 403)
+
+        def work(c):
+            found = auth.chat_person(c, body.for_person, settings.assistant_bot)
+            if not found:
+                raise Problem("not_found", "No active person " + body.for_person + " to send a morning message to", 404)
+            day, next_at = morning_day()
+            sent = c.execute("SELECT 1 FROM messages WHERE recipient_id=? AND sender_id=? AND kind='say' AND "
+                             "json_extract(refs,'$." + MORNING_KEY + "')=? LIMIT 1",
+                             (found.actor, "bot:" + settings.assistant_bot, day)).fetchone()
+            if sent:
+                raise Problem("already_sent_today", "The " + settings.assistant_name + " has already sent this person "
+                              "their morning message today; the next can go at " + next_at + " (midnight, "
+                              "company time)", 409, extra={"next_at": next_at})
+            room = chat_room(c, settings, found)
+            message = H._write_message(c, "bot:" + settings.assistant_bot, found.actor, body.body, room, "say",
+                                       {"assistant": True, MORNING_KEY: day}, None, None, delivered_at=H.now())
+            H.event(c, found.actor, "assistant.morning", message["id"],
+                    {"day": day, "by": caller.actor, "chars": len(body.body)})
+            return {"message_id": message["id"], "conversation_id": room["id"], "day": day, "next_at": next_at}
         return mutate(request, body, work)
 
     def propose_setting(c, who, method, path, data, summary, asked=None, what=None):

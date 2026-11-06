@@ -260,7 +260,7 @@ def test_a_turn_limit_set_on_the_bot_reads_back_as_its_sentence(api):
     texts = [s["text"] for s in get(api, "bots/ops/rules")["settings"]]
     assert "Up to 7 turns per hour" in texts
     assert "Team default: 2500 turns per day" in texts
-    assert "ops cannot send mail outside Tico" in texts
+    assert "ops asks before sending mail" in texts             # the one sending policy: Ask first by default
 
 
 def test_a_bot_with_no_team_of_its_own_is_in_its_managers_group(api):

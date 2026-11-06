@@ -92,7 +92,7 @@ def post(conn, kind, row, actor=None, blocker=None):
             del refs['quiet']
         if _names_blocker(conn, kind, blocker, to):
             # Its name and step are in the text, so the comment is read only by who may read the blocker too, then
-            # and later (task_privacy.message_tasks): not a guest of the ticket, nor anyone after the blocker narrows.
+            # and later (task_privacy.message_tasks): not a reader of the ticket only, nor anyone after the blocker narrows.
             refs['blocker'] = blocker['id']
         msg = H._write_message(conn, H.KEEPER, to, text(conn, kind, row, blocker, reader=to), conv, 'say', refs,
                                None, None)

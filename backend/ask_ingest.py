@@ -170,7 +170,7 @@ def load(c, person):
 def source_readable(c, asker, task):
     """Whether the bot `asker` may read `task` in full: the ordinary task-read check (`auth.Auth.task_row`, the rule
     every task page applies), from the database alone, so the offer, the write and a reply forwarding judge it alike.
-    A private task admits its parties, their managers and its guest; a company task admits its parties, and otherwise
+    A private task admits its parties, their managers and its readers; a company task admits its parties, and otherwise
     each bot it involves must let the asker read its activity. Similarity of a question never grants it."""
     from . import teammate_access
     from .auth import Identity
@@ -831,17 +831,19 @@ def replay_items(c, person, start, end, assistant_bot=None):
     # shows on the day it was handed back, wherever the task was created and whoever owns it now. When the check was
     # off there is no ask row, so owner history supplies that handoff. New On handoffs and let-through owner events
     # link back to their ask row; the nearby-row check keeps older history single where that link is absent.
+    # A question task (backend/question_tasks.py) was judged with its question's lines, which it carries itself.
     out = [{"kind": "task", "ref": r["id"], "asker": r["asker"], "title": r["title"] or "", "text": r["body"] or "",
-            "asked": None, "created_at": r["at"]}
-           for r in c.execute("SELECT t.id,t.title,t.body,t.requester_id AS asker,t.created_at AS at FROM tasks t "
+            "asked": H._json(r["questions"], None) or None, "created_at": r["at"]}
+           for r in c.execute("SELECT t.id,t.title,t.body,t.requester_id AS asker,t.created_at AS at,t.questions "
+                              "FROM tasks t "
                               f"WHERE {_OWNER_THEN}=? AND t.created_at>=? AND t.created_at<? "
                               "AND t.requester_id LIKE 'bot:%' AND t.requester_id<>? AND NOT EXISTS "
                               "(SELECT 1 FROM ask_ingest_items i WHERE i.ref=t.id AND i.person=? AND i.kind='task' "
                               f"AND julianday(i.created_at)<=COALESCE({_FIRST_OWNER_CHANGE}, 1e9)) "
-                              "UNION ALL SELECT t.id,t.title,t.body,i.asker,i.created_at FROM ask_ingest_items i "
+                              "UNION ALL SELECT t.id,t.title,t.body,i.asker,i.created_at,t.questions FROM ask_ingest_items i "
                               "JOIN tasks t ON t.id=i.ref WHERE i.person=? AND i.kind='task' AND i.created_at>=? "
                               "AND i.created_at<? AND i.asker LIKE 'bot:%' AND i.asker<>? "
-                              "UNION ALL SELECT t.id,t.title,t.body,h.actor_id,h.created_at FROM history_events h "
+                              "UNION ALL SELECT t.id,t.title,t.body,h.actor_id,h.created_at,t.questions FROM history_events h "
                               "JOIN tasks t ON t.id=h.subject_id WHERE h.subject_type='task' AND h.kind='owner' "
                               "AND h.new=? AND h.actor_id LIKE 'bot:%' AND h.actor_id<>? "
                               "AND h.created_at>=? AND h.created_at<? AND NOT EXISTS "
@@ -939,7 +941,7 @@ def _shown(c, viewer, person, it, can_read=None):
     """Whether `viewer` may read a replayed item's title: the person their own tasks and questions, and a task the
     check kept with its bot only if they may read it; anyone else (an owner or admin) only a task they may read, never
     a bot's question to the person outside any task. `can_read(c, task)` is the full task-read policy for the viewer
-    (auth.task_row: a private task's guests, Read on every bot it involves); without it, privacy alone decides."""
+    (auth.task_row: a private task's readers, Read on every bot it involves); without it, privacy alone decides."""
     if it["kind"] == "loose":
         return viewer in (None, person)
     task = H.task(c, it["ref"])

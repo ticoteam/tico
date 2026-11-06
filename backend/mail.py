@@ -198,9 +198,9 @@ def install_mail(app, store, auth):
         def access(c):
             if not mailbox_access.may(c, who, addr)["organize"]:
                 if mailbox_access.level(c, who, addr) == "read_write":
-                    reason = f"Tico may not organize {addr}: it is off in Settings > Inboxes > Settings > What Tico may do"
+                    reason = f"Tico may not organize {addr}: it is off in Tools > Settings > Email > What Tico may do"
                 else:
-                    reason = f"You may not organize {addr} (Settings > Inboxes: Who can use it)"
+                    reason = f"You may not organize {addr} (Tools > {addr} > Who can use it)"
                 raise Problem("forbidden", reason, 403)
             if google_workspace.authority(c, addr) != "workspace":
                 raise Problem("mailbox", "Live organizing needs Whole Workspace", 422)

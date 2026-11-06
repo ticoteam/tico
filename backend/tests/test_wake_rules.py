@@ -214,9 +214,12 @@ def test_woke_means_a_bot_job_was_queued_and_delivered_means_a_person_got_it(api
     attempt = claim(api, r, "cpo")
     with api.app.state.store.read() as c:
         before = jobs(c, "cpo")
-    # a bot comments on a task whose recipient is a person: delivered, no bot turn
-    told = post(api, f"tasks/{mine['id']}/comments", {"text": "Done, Ana."}, token=attempt["token"])
-    assert told["comment"]["recipient_id"] == "human:ana" and told["woke"] is False and told["delivered"] is True
+    # a bot's plain comment reaches no person who does not follow the task; one that @mentions Ana is delivered, and
+    # neither takes a bot turn
+    plain = post(api, f"tasks/{mine['id']}/comments", {"text": "Done."}, token=attempt["token"])
+    assert plain["woke"] is False and plain["delivered"] is False
+    told = post(api, f"tasks/{mine['id']}/comments", {"text": "Done, @ana."}, token=attempt["token"])
+    assert told["woke"] is False and told["delivered"] is True
     with api.app.state.store.read() as c:
         assert jobs(c, "cpo") == before
     # a person comments to a bot owner: one job
@@ -341,7 +344,7 @@ def test_the_always_wake_list_is_one_list_the_bot_to_bot_rule_reads_first(api):
     from backend import bot_to_bot as B
     setup(api)
     with api.app.state.store.transaction() as c:
-        assert [key for key, _ in W.ALWAYS_WAKE] == ["check_back", "person", "manager", "ask", "approval", "needs_action", "reply", "gate", "handoff"]
+        assert [key for key, _ in W.ALWAYS_WAKE] == ["check_back", "person", "manager", "ask", "approval", "needs_action", "mention", "reply", "gate", "handoff"]
         # A bot's plain fyi to a bot waits (Dev 149); the same words with an always-wake reference do not.
         assert B.can_wait(c, "bot:ops", "bot:cpo", "say", {}, "fyi") is True
         assert B.can_wait(c, "bot:ops", "bot:cpo", "say", {"run_now": True}, "fyi") is False
@@ -396,7 +399,7 @@ def test_the_request_says_whose_write_it_is_and_the_keepers_sweeps_are_nobodys(a
         seen.append((actor, target, W.CAUSE.get()))
         return real(conn, actor, target, *rest)
     monkeypatch.setattr(W, "gate", spy)
-    post(api, f"tasks/{task['id']}/comments", {"text": "Outline drafted."}, token=attempt["token"])
+    post(api, f"tasks/{task['id']}/comments", {"text": "@ops outline drafted."}, token=attempt["token"])
     post(api, f"tasks/{task['id']}/comments", {"text": "Looks good, carry on."})
     assert ("bot:cpo", "bot:ops", "bot:cpo") in seen and ("human:ana", "bot:cpo", "human:ana") in seen
     assert W.CAUSE.get() == ""

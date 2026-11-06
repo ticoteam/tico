@@ -19,7 +19,6 @@ import pytest
 from connectors.mail import policy as mail_policy
 
 ROOT = Path(__file__).resolve().parents[2]
-ON = {"bot": "support", "set": True, "outbound_send": True, "forward_to": [], "updated_by": "human:ana"}
 STAFF = "k" * 32
 URL = "https://hq.example"
 SIGNATURE = re.compile(r"hm-[0-9a-f]{12}")
@@ -188,10 +187,12 @@ def hq():
 @pytest.fixture
 def rig(hq, tmp_path, monkeypatch):
     monkeypatch.chdir(tmp_path)
-    (tmp_path / "bot.yaml").write_text("outbound_send: true\n")
-    # The server-held mail setting (backend/mail_settings.py), as the mail connector reads it: a person turned it on.
-    server = {"row": dict(ON)}
-    monkeypatch.setattr(mail_policy, "SERVER_GET", lambda slug: server["row"])
+    (tmp_path / "bot.yaml").write_text("name: support\n")
+    # The bot's sending policy as Tico answers it (GET bots/<slug>/email-sending-policy): a person set On their own.
+    # A mode of None is a Tico the run cannot reach.
+    server = {"mode": "on_their_own"}
+    monkeypatch.setattr(mail_policy, "HUB_GET", lambda path: {"effective": {"mode": server["mode"]}}
+                        if path == "bots/support/email-sending-policy" and server["mode"] else None)
 
     class Rig:
         env = {"HQ_STAFF_KEY": STAFF, "HQ_URL": URL, "TICO_WATCHER_STATE": str(tmp_path / "state"), "HUB_BOT": "support"}
@@ -328,12 +329,9 @@ def test_an_optional_approval_must_match_exactly_that_text_and_ticket(rig, hq, t
     assert len(hq.seen) == 1
 
 
-@pytest.mark.parametrize("server", [None, {"bot": "support", "set": False, "outbound_send": False, "forward_to": []},
-                                    {**ON, "outbound_send": False}])
-def test_bot_yaml_alone_never_turns_sending_on_even_with_an_approval(rig, hq, tmp_path, server):
-    # bot.yaml says outbound_send: true, but no person turned sending on in Tico, Tico is out of reach, or a person
-    # turned it off: the reply stays a draft.
-    rig.setting["row"] = server
+@pytest.mark.parametrize("mode", [None, "never"])
+def test_never_or_no_answer_from_tico_keeps_the_draft_even_with_an_approval(rig, hq, tmp_path, mode):
+    rig.setting["mode"] = mode
     tid = hq.file("The board will not load")
     reply = tmp_path / "reply.md"
     reply.write_text("Try the latest release.\n")
@@ -343,8 +341,23 @@ def test_bot_yaml_alone_never_turns_sending_on_even_with_an_approval(rig, hq, tm
         code = tickets_cli.main(["reply", tid, str(reply), *extra], rig.env, out=rig.lines.append, opener=hq,
                                 run=approval("approved", "hq-ticket:" + tid, digest))
         text = "\n".join(rig.lines)
-        assert code == 1 and "outbound_send is off for support" in text and "Mail sending" in text, text
+        assert code == 1 and "keep the reply as a draft" in text, text
     assert hq.tickets[tid]["messages"] == [] and hq.seen == []
+
+
+def test_ask_first_posts_only_with_a_matching_approval_and_never_closes_by_signature(rig, hq, tmp_path):
+    rig.setting["mode"] = "ask_first"
+    tid = hq.file("The board will not load")
+    reply = tmp_path / "reply.md"
+    reply.write_text("Try the latest release.\n")
+    code, text = rig.cli("reply", tid, str(reply))
+    assert code == 1 and "Ask first" in text and hq.seen == []
+    code, text = rig.cli("close-signature", "hm-a1b2c3d4e5f6", str(reply))
+    assert code == 1 and "keep the reply as a draft" in text and hq.seen == []
+    rig.lines.clear()
+    code = tickets_cli.main(["reply", tid, str(reply), "--approval", "a1"], rig.env, out=rig.lines.append, opener=hq,
+                            run=approval("approved", "hq-ticket:" + tid, hashlib.sha256(reply.read_bytes()).hexdigest()))
+    assert code == 0 and hq.tickets[tid]["messages"][0]["body"] == reply.read_text().strip()
 
 
 def test_a_run_that_does_not_name_its_bot_keeps_the_draft(rig, hq, tmp_path):
@@ -390,12 +403,7 @@ def test_link_names_the_fix_a_release_will_announce(rig, hq):
     assert rig.cli("link", tid, "PR-712")[0] == 2
 
 
-@pytest.mark.parametrize("manifest", ["outbound_send: true\n", "outbound_send: false\n", "[invalid", None])
-def test_the_person_set_switch_posts_without_a_separate_approval_whatever_bot_yaml_says(rig, hq, tmp_path, manifest):
-    if manifest is None:
-        (tmp_path / "bot.yaml").unlink()
-    else:
-        (tmp_path / "bot.yaml").write_text(manifest)
+def test_on_their_own_posts_without_a_separate_approval(rig, hq, tmp_path):
     reply = tmp_path / "reply.md"
     reply.write_text("Try the latest release.\n")
     tid = hq.file("The board will not load")

@@ -22,7 +22,7 @@ def ask(api, token, review, on="ana", expected=200, question="Is this cut ready?
 
 
 def answer(api, made, labels, other="", token="ana-test", expected=200):
-    return post(api, f"tasks/{made['task']['id']}/answers", {"target": {"comment": made["question"]["id"]},
+    return post(api, f"tasks/{made['task']['id']}/answers", {"target": {"task": made["task"]["id"]},
                 "answers": {"decision": labels}, **({"other": other} if other else {})}, token, expected=expected)
 
 
@@ -38,7 +38,7 @@ def test_approve_binds_to_the_version_and_request_changes_supersedes_it(api):
     v1 = publish(api, bot, "# Cut one")
     made = ask(api, bot, [{"file": v1["id"]}], topic="cut-1")
     refs = made["question"]["refs"]
-    assert [o["label"] for o in made["question"]["ask"]["questions"][0]["options"]] == ["Approve", "Request changes"]
+    assert [o["label"] for o in made["question"]["refs"]["questions"][0]["options"]] == ["Approve", "Request changes"]
     assert refs["review"]["files"][0]["version"] == v1["version"] and refs["attachments"][0]["file_id"] == v1["id"]
     # The asking bot never answers its own review.
     answer(api, made, ["Approve"], token=bot, expected=403)
@@ -66,7 +66,7 @@ def test_a_pick_spend_is_approved_once_and_spent_once(api):
     a, b = publish(api, bot, "# A", "teaser-a.md"), publish(api, bot, "# B", "teaser-b.md")
     made = ask(api, bot, [{"file": a["id"]}, {"file": b["id"]}], pick=True,
                spend={"label": "teaser a", "amount": "12.50", "what": "Render the final cut"})
-    labels = [o["label"] for o in made["question"]["ask"]["questions"][0]["options"]]
+    labels = [o["label"] for o in made["question"]["refs"]["questions"][0]["options"]]
     assert labels == ["teaser a", "teaser b", "Request changes"]
     out = answer(api, made, ["teaser a"])
     assert [r["verdict"] for r in out["answer"]["reviewed"]] == ["approve", "passed"]
@@ -199,9 +199,11 @@ def test_a_reader_who_cannot_open_a_reviewed_file_sees_none_of_its_details_whate
     made = ask(api, bot, [{"file": v1["id"]}], topic="cut-1")
 
     def attachments(who):
-        listed = api.get(f"/api/v2/tasks/{made['task']['id']}/comments", headers=headers(who))
-        assert listed.status_code == 200, listed.text
-        return next(m for m in listed.json()["comments"] if m["id"] == made["question"]["id"])["refs"]["attachments"]
+        shown = api.get(f"/api/v2/tasks/{made['task']['id']}", headers=headers(who))
+        assert shown.status_code == 200, shown.text
+        task = shown.json()["task"]
+        assert "attachments" not in (task["review"] or {})      # only the card's ask carries them, per reader
+        return task["ask"]["refs"]["attachments"]
     [mine] = attachments("ana-test")
     assert mine["title"] and mine["name"] == "launch-cut.md" and mine["size"]
     [theirs] = attachments("cara-test")

@@ -3,8 +3,9 @@ constant (at most one a computer, for a computer's login hold) rather than by a 
 import contextlib
 import random
 import uuid
+from concurrent.futures import ThreadPoolExecutor
 
-from backend import queue_refusals as Q
+from backend import health, queue_refusals as Q
 from backend.store import H, encode
 from backend.tests.test_api import api, headers, post, runner  # noqa: F401  (the api fixture)
 from backend.tests.test_run_backoff import at, setup
@@ -12,26 +13,42 @@ from backend.tests.test_status_reads import busy
 
 
 def counted(api, monkeypatch, path, token="ana-test"):
-    """GET `path` as `token`: the body, and the statements it took. Each request starts from cold roster caches, as a
-    poll from a new process would."""
+    """GET `path` as `token`: the body, and the statements on the page's read snapshot. Each request starts from cold
+    roster caches, as a poll from a new process would."""
     store, seen = api.app.state.store, []
     store.roster_rows.clear()
     with monkeypatch.context() as patched:
-        for name in ("read", "read_transaction"):
-            def traced(opened=getattr(store, name)):
-                @contextlib.contextmanager
-                def borrowed():
-                    with opened() as c:
-                        c.set_trace_callback(seen.append)
-                        try:
-                            yield c
-                        finally:
-                            c.set_trace_callback(None)
-                return borrowed()
-            patched.setattr(store, name, traced)
+        opened = store.read_transaction
+
+        @contextlib.contextmanager
+        def traced():
+            with opened() as c:
+                c.set_trace_callback(seen.append)
+                try:
+                    yield c
+                finally:
+                    c.set_trace_callback(None)
+
+        # Background workers borrow store.read too; their periodic reads are not the page's work.
+        patched.setattr(store, "read_transaction", traced)
         response = api.get(path, headers=headers(token))
     assert response.status_code == 200, response.text
     return response.json(), len(seen)
+
+
+def test_health_statement_count_excludes_background_media_reads(api, monkeypatch):
+    counted(api, monkeypatch, "/api/v2/health")             # warm the token-usage cache and table checks
+    _, quiet = counted(api, monkeypatch, "/api/v2/health")
+    view = health.view
+    with ThreadPoolExecutor(max_workers=1) as worker:
+        def with_media_batch(*args, **kwargs):
+            # Run the real worker's read during measurement, without waiting for its five-second timer.
+            assert worker.submit(api.app.state.file_metadata.batch).result(timeout=5) is False
+            return view(*args, **kwargs)
+
+        monkeypatch.setattr(health, "view", with_media_batch)
+        _, during = counted(api, monkeypatch, "/api/v2/health")
+    assert during == quiet and quiet > 0, (quiet, during)
 
 
 def add_computers(api, monkeypatch, machines, first, last):

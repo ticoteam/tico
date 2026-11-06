@@ -276,8 +276,9 @@ TIMINGS = ROOT / 'scripts' / 'test-timings.json'
 # gate gives them python shards 1-2 (NATIVE_SHARDS), the only python VMs that wait for the native-linux build; the rest start at once.
 NATIVE_TEST = re.compile(r'rust_binary|TICO_RUNNER_BIN|TICO_SCREEN_RELAY_BIN|target/release|"target" / "release"|'
                          r'engine\.current|screen_binary|from runner(?:_support)? import engine|runner(?:_support)?\.engine|'
-                         # scripts/tico runs the checkout's runner (install, status: runner_support/engine.py finds the binary).
-                         r'"scripts" / "tico"\)|scripts/tico"')
+                         # scripts/tico-computer runs the checkout's runner (install, status: runner_support/engine.py finds
+                         # the binary).
+                         r'"scripts" / "tico(?:-computer)?"\)|scripts/tico(?:-computer)?"')
 NATIVE_BINARIES = ('runner-rs/target/release/tico-runner', 'relay-rs/target/release/tico-screen-relay')
 # A test module importing another test module (test_screen borrows test_screen_relay_contract's running_service).
 TEST_IMPORT = re.compile(r'from\s+((?:backend|runner_support|scripts)\.tests(?:\.\w+)*)\s+import\s+([\w, ]+)|'
@@ -640,7 +641,7 @@ def release(args):
     commit = subprocess.run(['git', 'rev-parse', 'HEAD'], cwd=ROOT, capture_output=True, text=True, check=True).stdout.strip()
     logs = Path(tempfile.mkdtemp(prefix='tico-release-check-'))
     ready = logs / 'images-ready'
-    base_env = {**os.environ, 'DOCKER_BUILDKIT': '1'}
+    base_env = {**os.environ, 'DOCKER_BUILDKIT': '1', 'TICO_E2E_CLI_ALL': '1'}   # a release runs every hub command live
     # Alone on its VM the Python slice can use every core; beside builds and browsers, half of them.
     default_workers = (os.cpu_count() or 2) if part == 'python' else max(1, (os.cpu_count() or 2) // 2)
     workers = str(max(1, int(os.environ.get('TICO_PYTHON_WORKERS', default_workers))))

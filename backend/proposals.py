@@ -11,9 +11,9 @@ themselves on the Org tab.
                              person, audited with via `approval:<id>`; the approval is spent and BotOps gets a notice
 
 Payloads: task_cap `{sender, receiver, per_day}`; spend_limit `{bot}` or `{pool: "company"|"group:<id>"}` with
-`per_30m_usd, daily_usd, weekly_usd, monthly_usd`; mail_alert `{bot, outbound_send, forward_to}`, raised by BotOps on the
-Check health task of a bot that asks for mail sending a person has not approved (backend/maintenance_steps/check_health.py).
-Approving it turns that bot's mail sending on as the person who approves (backend/mail_settings.py `update`).
+`per_30m_usd, daily_usd, weekly_usd, monthly_usd`; mail_alert `{bot, outbound_send, forward_to}`, an older ask no
+longer raised (bot.yaml asks for nothing now): approving one still sets that bot's sending policy to On their own as the
+person who approves (backend/mail_settings.py `update`).
 
 The note to BotOps is a hub notice (from `keeper`, kind `notice`, refs `{approval}`), as every hub notice reaches a bot:
 BotOps reads it in its inbox, the owner in BotOps's conversations. Nothing waits in a bot's queue: only work outside
@@ -108,18 +108,13 @@ def _apply_spend(c, auth, settings, who, aid, change):
 
 
 def _apply_mail(c, auth, settings, who, aid, change):
+    """An older mail ask, approved: sending on its own stays on once it is on. Forward addresses are retired (a forward
+    is a send like any other), so they are not kept. As the person who approves: mail_settings.update checks that they
+    manage the bot. No new mail asks are raised: bot.yaml asks for nothing."""
     from . import mail_settings
-    # Additive: the approved addresses join the forward list the bot has, and sending stays on once it is on. The setting
-    # is not replaced by the ask. As the person who approves: mail_settings.update checks that they manage the bot.
-    current = mail_settings.stored(c, change.bot) or {"outbound_send": False, "forward_to": []}
-    targets = list(current["forward_to"])
-    have = {address.lower() for address in targets}
-    for address in change.forward_to:
-        if address.lower() not in have:
-            targets.append(address)
-            have.add(address.lower())
-    on = bool(current["outbound_send"]) or change.outbound_send
-    mail_settings.update(c, auth, who, change.bot, M.MailSettingsUpdate(outbound_send=on, forward_to=targets))
+    from .email_sending import sends_on_own
+    on = sends_on_own(c, change.bot) or change.outbound_send
+    mail_settings.update(c, auth, who, change.bot, M.MailSettingsUpdate(outbound_send=on))
     return f"Mail sending for {_name(c, H.bot_actor(change.bot))} is {'on' if on else 'off'}."
 
 

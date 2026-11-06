@@ -295,7 +295,7 @@ def exhausted(c, send, attempts, status, shown, now):
         c.execute("SAVEPOINT webhook_notice")
         task = H.task_create(c, H.KEEPER, f"Webhook {hook['name']} is not receiving events",
                              f"Tico gave up on a {send['type']} event after {attempts} attempts ({shown}). "
-                             f"Check the endpoint, then retry the send from Settings > Webhooks or "
+                             f"Check the endpoint, then retry the send from Tools › Webhooks or "
                              f"`hub webhook retry {send['id']}`.", hook["created_by"], lint=False)
         c.execute("UPDATE webhooks SET notify_task=? WHERE id=?", (task["id"], hook["id"]))
         c.execute("RELEASE webhook_notice")

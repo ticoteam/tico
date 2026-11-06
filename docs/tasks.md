@@ -10,8 +10,10 @@ dropdown; General shows **Status**. Beside task search, **General** and **Dev ti
 other types. A type is always selected, and Open and Board show only its tasks. The board
 uses that type's steps as columns. Leading backlog steps (open, before the first step with work under
 way) fold into one strip, as do the trailing done, closed and declined steps; click a strip to unfold
-it. A task that finishes leaves the board unless its finished steps are unfolded. Done tasks are under
-**Done**, closed ones under **Closed**. On a desktop, drag a card to another column or to a new place
+it. A task that finishes leaves the board unless its finished steps are unfolded. The tabs are **You**,
+**Open** and **Board**; **More** at the end of the tab row holds **Snoozed**, **Done** (finished tasks) and
+**Closed** (closed ones), and any tab a narrow window or phone has no room for (Board first, then Open). While one
+of its views is open, More shows that view's name. On a desktop, drag a card to another column or to a new place
 in its column: it saves the step and `step_rank` at once, and a card dropped on a folded strip goes to
 the last backlog step or the first finished one. On a phone, change the step in the task's **Step**
 row. A card with an open blocker says **Blocked by** it across its top; click that to show only the
@@ -44,10 +46,12 @@ Your selection is remembered, shared links carry it, and new
 tasks start with that type. Clearing filters keeps the selected type. Older combined views and
 deleted types fall back to General.
 
-**Needs you** counts everything waiting on you across every board: tasks, questions, waits, recent declines,
-approvals, asks, stale checks and nightly memory tidy. The tab and Tasks navigation badges show the
-same count on desktop and phone; the badges hide at zero. Under **Asked by**, approvals, questions
-outside tasks, stale checks and memory tidies lead under **Approvals and questions**, with their own count.
+**You** lists and counts everything that needs you across every board: tasks, questions, waits, recent declines,
+approvals, asks and stale checks. The tab and Tasks navigation badges show the
+same count on desktop and phone; the badges hide at zero. Each row shows one face (whoever asks), the
+title with the bot's ask as a muted line under it, and the age; no status, since everything there is open.
+**Group: Kind** sorts it under **Answer**, **Pay**, **Connect**, **Review** and **Do**. Under **Asked by**, approvals, questions
+outside tasks and stale checks lead under **Approvals and questions**, with their own count.
 **Catch up** opens the answerable cards one at a time. It has no number and appears only when a card is
 available. Other rows open the full task. Board, search and task filters stay with Open and Board and
 never narrow this queue. Folded or merged tasks count only through their card. The count includes unread
@@ -125,7 +129,7 @@ authorship name the manager who acted.
 The two sides keep their distinct rights: an owner bot's manager, bot or person, can
 complete work but not close or reopen it; a requester's manager can close and reopen it. The existing rule protecting a
 person's closure still applies. Managers gain no rights on unrelated private tasks;
-person-only private tasks stay with their parties and guest. Managers gain
+person-only private tasks stay with their parties and readers. Managers gain
 no right to edit or delete someone else's comments or decide a named approval, and
 no new credential, sending, spending, merge or bot administration permissions.
 Publishing a private task still requires its human requester. Task types, labels
@@ -219,7 +223,7 @@ the limit its queued work waits and says so, on every computer.
 
 `hub bot keep-tasks-going <bot> 3` sets a cap; `off` turns it off and `unlimited` restores the default.
 Omit the value to read it. The matching MCP tool and `POST /api/v2/bots/{bot}/keep-tasks-going` use
-the same permissions and revision check. **Settings → System** lists **Start assigned tasks** using
+the same permissions and revision check. **Automations → System jobs** lists **Start assigned tasks** using
 WHEN/THEN wording; its `start_task` catalog action uses the same task delivery and claim checks.
 
 Hand a ready batch of On Deck tickets to builders in one pass. Each assigned ticket already has its
@@ -401,8 +405,8 @@ priority over a negative branch such as "If you do not approve" or "If you agree
 nothing is sent and the task stays as it was. Every refusal is recorded and none counts toward a quarantine.
 A task with an open structured question to the person (`hub task question`) is already the card: it waits on them as itself, and its note is only warned
 about. Only the bot that owns the task or its managers name the person, and a private task can only ask a person who can read it,
-or, on a private task with no person on it, the one person it brings in as its guest (see "A private task with no
-person on it: its guest").
+or, on a private task with no person on it, the one person it brings in as its reader (see "A private task with no
+person on it: the person it reaches").
 
 Bot tasks that were waiting on a person before this rule are moved to it within the hour when their note is a plain
 ask; the rest stay last in the person's Needs you while their bot's task roundup lists the ask to restate it.
@@ -428,7 +432,11 @@ hub task update <task> --status waiting --note "Needs BotOps's disk snapshot"
 
 A note alone wakes nobody. A bot's task waiting with no blocker, subtask, approval, question or
 person goes back to open at once when its last hold clears (unless its due date says to look later), and the update
-that parks it warns the bot.
+that parks it warns the bot. A bot's task parked with nothing tracked to wait on (`cause` `stranded`) goes back to open
+two hours later, with a note on how to wait, unless its due date or snooze is still ahead; the bot is woken once per
+hourly pass however many of its tasks moved. One sent back three times in 24 hours stays waiting, and its manager bot
+(or BotOps, never a person) is told once a day. A move to a waiting step by hand, Engineering's gate, check and
+worktree holds, and people's tasks are never reopened this way.
 
 The task roundup leaves a task off its bot's list while the bot has a run queued or running on it, or while the task
 waits on something recorded: a blocker, an open subtask, a pending approval, an unanswered question, a due date, a
@@ -500,9 +508,15 @@ Decide's readout counts those outcomes and reconciles their calls.
 asked about; an owner or admin sets the team default everyone starts from, and **Use the team default** goes back to
 it. A change applies to the next item; nothing already on a plate moves. It ships as **On**. Off makes no check. A
 stored Rehearsal reads as On. An old stored `chores_budget` is ignored.
-**Replay a day** judges one past day's existing bot items with your settings and your plate as it was then; nothing
-moves. Refused writes have no saved item text to replay. Older items kept with a bot before refusals were introduced
-can still be replayed. An owner or admin replaying someone else's day sees only the titles they may read.
+**Replay a day** judges one past day's existing bot items with your settings. Each item is judged against the tasks you
+own today that were created before it and were open at its time. A snooze on a task also leaves it out while the snooze
+is not yet released and lasts past that item's time, however late it was set; a snooze released by now does not count.
+For a task item, that task is left out of the count; a question item leaves nothing out. Nothing moves. Refused writes
+have no saved item text to replay. Older items kept with a bot before refusals were introduced can still be replayed. A
+bot handing its own task to you (one or many) is judged like a task filed for you. A bot's handoff of a task to you is
+also listed when the filter was Off at the time, because no ask row was written. Replay reads it from the task's owner
+history. A handoff by a person is not listed. Each handoff appears once, on the day the bot handed it over. An owner or
+admin replaying someone else's day sees only the titles they may read.
 
 API: `GET`/`PUT`/`DELETE /api/v2/ask-ingest/settings` (`mode` is `off` or `on`; a `rehearsal` sent is saved as `on`),
 `POST /api/v2/ask-ingest/replay` (`person`, `date`, `offset`, a page of up to 25; the person, or an owner or admin).
@@ -544,11 +558,11 @@ question put before this change still takes **Keep** or **Close** from the perso
 Stale ticket review finds open tasks that look finished or forgotten and suggests what to do with
 them. It only suggests: nothing changes unless the task's owner accepts.
 
-**Turn it on.** Go to **Settings > System** and switch on **Stale ticket review**. It is off by
+**Turn it on.** Go to **Automations > System jobs** and switch on **Stale ticket review**. It is off by
 default, and an owner or an admin can turn it on or off, pick how often it runs, or run it now. (A server started with
 `TICO_STALE_REVIEW=1` has it on by default; a choice saved in Settings wins.)
 
-**What it looks for.** Once an hour (or on the schedule picked in Settings > System), Tico checks every open, doing, waiting and review task that is
+**What it looks for.** Once an hour (or on the schedule picked in Automations > System jobs), Tico checks every open, doing, waiting and review task that is
 not snoozed and has no run going. A task is a candidate when one of these is true:
 
 - every pull request linked to it is merged, closed or shipped;
@@ -580,6 +594,33 @@ arrived since stays on the card.
 ### The question card
 
 Decide and the task's **Needs you** box show the same question card: the same text, picks, and buttons.
+
+#### Question tasks
+
+`hub task question "<question>" --on <person>` (MCP `hub_task_question`) files a **question task**: a task the person
+owns, with the question stored on the task itself (its picks, the recommended pick, what happens if nobody answers,
+files under review, and a spend). The bot sends no separate question message. Asked from one of the bot's own tasks,
+the question task is that task's subtask, and the bot's task is blocked on it (unless the question is private and
+the bot's task is not). Otherwise it is a task on its own for
+that person. A bot never files a question task for another bot: the request is refused and points the bot to a direct
+message instead.
+
+Answering closes the question task, and the answer stays on it:
+
+- A pick, Yes or No, or a note closes it **Done** and records the answer.
+- Declining closes it **Declined**.
+- Done or Declined from the task itself, Decide's buttons, or the Assistant counts as an answer too. A note that names
+  an option ("Yes." or "Yes. Ship it Friday") picks that option.
+- Only the person asked answers, or someone acting for them: an admin or their manager. The bot that asked never
+  does, and a question task never moves to a bot.
+- Reopening an answered question task clears its answer, so it asks again.
+
+The bot hears the answer once, on its own task, or as the question task's requester when there is no parent.
+The question card draws a question task the same way it draws a question message. The same topic rule applies too:
+one open question task per topic per person, and an older question message on that topic gives way to the new
+question task. A question task closes on its date the way a question message does (see
+[When nobody answers a bot's ask](#when-nobody-answers-a-bots-ask)): the default goes ahead as the answer, or the
+task closes and the bot hears why. With no date, it goes back to the bot after two business days.
 The header names the real asker, or **Tico** for a system check. It shows the question's age, such as
 "asked 3 days ago", and **holds up:** with the parent task or roadmap item's title.
 The question comes next, followed by **Why it matters:**.
@@ -687,9 +728,12 @@ is due later or waits on someone else, and the bot hears why. Hourly, `backend/a
 
 ## Wake rules
 
-Whether a message about a task wakes its bot or waits is decided by wake rules, each with an id (`parked`, `own_write`,
-`same_state`, `bot_to_bot`, `batch_*`, `assignment`, `stall`, ...). A person's message, an ask, an approval and a gate
-verdict always wake (a Manager hears of a verdict, and of its subtasks' and blockers' results, as a note). A rule can be set for the whole team, a task type, a department, a bot or one task, and the most
+Who a message in a task's thread reaches comes first: whoever it @mentions or replies to, and the task's
+[followers](#followers), each by the way it was sent (the comments paragraph under
+[Types bots work on](#types-bots-work-on)). A system line (task news, a roundup, a keeper notice) reaches only whom it
+addresses, never the followers. For each bot it reaches, whether it wakes that bot or waits is then decided by wake rules, each with an id (`parked`, `own_write`,
+`same_state`, `bot_to_bot`, `batch_*`, `assignment`, `stall`, ...). A person's message, another bot's @mention, an ask, an
+approval and a gate verdict always wake (a Manager hears of a verdict, and of its subtasks' and blockers' results, as a note). A rule can be set for the whole team, a task type, a department, a bot or one task, and the most
 specific wins (the **What wakes** automations on the Automations page). The message and the run both record the rule, and
 `rule_weekly` in `hub sql` shows how often each woke a bot and how often that run did nothing.
 
@@ -813,8 +857,8 @@ manager gains no snooze permission unless they also manage the owner or requeste
 
 Until that moment:
 
-- it is off the board, the Open list, Needs you, Decide and `hub task list`. The **Snoozed** tab on
-  the Tasks page (shown while something is snoozed), `hub task list --snoozed only|all` and
+- it is off the board, the Open list, Needs you, Decide and `hub task list`. **Snoozed** under the Tasks
+  page's **More** (listed while something is snoozed), `hub task list --snoozed only|all` and
   `GET /api/v2/tasks?snoozed=only|all` list it; a read by id or number always finds it.
 - nothing automatic moves it: no stall wake or status check and no **Due:** reminder. Tico's notices about it reach its owner bot
   deferred, read on the bot's next run instead of starting one, and so does another bot's comment.
@@ -916,15 +960,25 @@ the label, then add it on the task as above.
 Lane and number are a mover's alone ([Permissions](permissions.md#tags)).
 A bot's comment is a message to the people on the task, under the usual rules for reaching them.
 
-A person's comment with no way named is a **Steer** when the bot owns the task (see Conversation below), and is never
-deferred on a task with no bot on it. On a task a bot filed and a person owns, a comment is most often a progress note:
-it is a **Defer** with a 24-hour deadline, reaching the bot that asked on its next turn on the task, or in a day at the
-latest. A comment that @mentions a bot on the task (`@ops`, or its name) is a **Queue**; one from the person the task
-waits on is a Steer. A comment from someone not on the task (not its owner, requester or a mover) is a Defer with no deadline,
-so a reader never spends a bot's turns on a task that is not theirs. A person @mentioned in a
-comment (by id, the part of their email before the @, full name, or first name when no one else
-shares it) gets the comment as a question, which puts the task in their Needs you; when the
-comment also wakes the bot, or names several people, each person gets their own copy of the question.
+A comment is a post in the task's thread and reaches whom any post there reaches: whoever it @mentions, the author of
+the message it replies to, and the task's [followers](#followers), never its author. Nothing is guessed from roles: the
+bot that filed a task is not woken by a comment unless it follows the task or is @mentioned. Each gets the comment by
+the way it was sent (Conversation, below): a live bot follower is steered, queued or deferred, a live person
+follower is notified, and a follower at `mentions` or `muted` gets only a comment that @mentions them or replies to
+them. **Defer never** reaches no follower, but still reaches whom it @mentions, queued.
+Until questions become tasks of their own, three replies keep their old routing: an answer to a person's question
+goes to the task's first bot (owner, requester, origin), a reviewer's verdict goes to the bot that filed the review
+(the result returns once to that bot's task), and the Strategy Bot's relayed answer goes to the bot that asked.
+
+A comment with no way named is a **Steer** (the API, CLI and MCP alike), or a Defer with no deadline from someone not on
+the task (not its owner, requester or a mover), so a reader never spends a bot's turns on a task that is not theirs;
+the people following it are still notified as their level says. Only someone on the task hands the bots it wakes
+party rights on it. An ask or an answer reaches only whom it is for. A
+person or bot @mentioned in a comment (by id or slug, the part of their email before the @, full name, or first name
+when no one else shares it) is reached and follows the task from then on; on a private task they are also added to
+**Who can see**, as a task event anyone on the task can undo. A bot's @mention adds only a teammate in its reach, and
+never a group. A bot's plain comment reaches a following bot on its next turn (the bot-to-bot hold); an @mention or
+`needs_action` wakes it by the comment's way (Steer by default), within the loop guard's bot-caused wakes per hour.
 
 ## Numbers and the order within a step
 
@@ -1290,25 +1344,30 @@ line from the bot's DM shows what happens to it: **Sent**, **Queued** (and why, 
 failed** when the turn errors. It follows the bot your message went to, which on a task you own that a bot asked is that
 bot, and the owner's own runs as before; a bot's message to another bot does not take it. Whoever manages the bot gets
 **Stop** beside it, the same stop as in the bot's DM (`POST /v2/bots/{slug}/stop`). The box at the foot is the thread's
-composer, and what you type there is a comment. Where a bot gets it, the send says how it arrives, in the words a
+composer, and what you type there is a comment. Where bots get it, the send says how it arrives, in the words a
 bot's DM uses ([Steer, queue or defer](using-tico.md#steer-queue-or-defer)): **Steer** goes into the bot's turn running on this task
 now (right after it, if the bot's harness cannot steer); **Queue** goes right after that turn, or now when the bot is
 idle; **Defer** wakes nobody and goes in with the bot's next turn on this task, at the latest after the time picked
 under it (30m to 7d, or Never; 24h unless picked). A Defer sent while the bot works on this task goes in queued; a turn
-on another task does not count. **Set as goal**, apart in the menu, makes the text the goal of the bot's session for
+on another task does not count. Closing, finishing or declining the task cancels every Defer still waiting on it, and
+reopening it does not bring them back. **Set as goal**, apart in the menu, makes the text the goal of the bot's session for
 this task, as `/goal` does in a thread (no files, not public; [chat goals](chat-goals.md)). Only someone on the task (its
 owner, requester or a mover) may steer, queue or set the goal; anyone else may defer. Send's icon shows the way, and the caret
 (or a right-click or long press on Send) opens the ways. The web always sends the shown way: your kept way
 (`compose.send_way`, [Steer, queue or defer](using-tico.md#steer-queue-or-defer)), or the nearest one you may use
 here (Steer becomes Queue; otherwise Defer). Set as goal is for one comment. A comment that names no way (the API, CLI
-or MCP) goes the way the paragraph on comments above says. Before you send, the box says what the chosen way does, and after, if the server
+or MCP) is a Steer, as the paragraph on comments above says. `GET /api/v2/threads/{thread_id}/reach` (with `text`,
+`delivery`, `defer_for`, `in_reply_to`) answers who it would reach, each with its mode, before it is sent: **Reaches
+N** under the box opens that list by name (Now, After its turn, Next turn, Notified), as the chosen way and the
+@mentions you type change. Before you send, the box says what the chosen way does, and after, if the server
 sent it another way (a defer that rode along). With no bot on the task (everyone on it is a person) the send is a plain arrow, and the box says no bot gets the
 message. `GET /v2/tasks/{id}` carries
 this view: each bot reply in `comments` has its `run`; `execution` is the owning bot's newest run in the task's own
 thread, or a newer one for a person's message there, shaped as in a conversation snapshot with `from_person`; `comment_to`
-(`bot`, `wakes`, `mention`) is who your next comment reaches; and `comment_delivery` (`default`, `default_for`,
+(`bot`, `wakes`, `mention`) is the bot your next plain comment wakes first (the first live bot follower; `mention` is
+always empty, as an @mention reaches whoever it names); and `comment_delivery` (`default`, `default_for`,
 `steer`, `queue`, `steers`, `goal`) is how it can reach them: `default` is what a comment without a delivery does
-(`steer`, `queue` or `defer`) and `default_for` that defer's deadline (`24h`, `never`), `steer` and `queue` say you may wake the
+(`steer`, or `defer` for a reader off the task) and `default_for` that defer's deadline (`never`), `steer` and `queue` say you may wake the
 bot, `steers` says the bot's harness can take a message into a running turn, and `goal` says a goal can be set (null
 and false without a bot). A task still in a thread (one filed into a thread before task
 threads) has no `execution` and no goal of its own: that thread's runs and goal belong to the thread, so `goal` is false.
@@ -1389,7 +1448,8 @@ are the `task_relations` table ([Hub SQL](hub-sql.md)).
 Besides its owner, a task can list any number of people or bots, each under a **role**: a short
 name the team chooses (`developer`, `reviewer`, `qa`, `designer` ...). Tico keeps no list of roles
 and gives them no meaning or rights; a client decides what they mean, such as which board column
-waits on the reviewer. One person may hold several roles, and the owner may hold any of them too.
+waits on the reviewer. A role reaches nobody: a comment reaches the task's followers and whom it @mentions,
+whatever their roles ([Followers](#followers)). One person may hold several roles, and the owner may hold any of them too.
 
 ```json
 "roles": {"developer": ["human:bob"], "reviewer": ["human:charlie"], "qa": ["human:matt", "bot:qa-bot"]}
@@ -1460,7 +1520,7 @@ Uploading any file or version requires comment permission. Anyone who may commen
 can answer, except the asker. Read permission alone does not grant comment or answer permission. Answers validate question ids and option labels; Other
 text is accepted only when the question allows it. A dismissal closes the ask too. Every answer
 is retained, oldest first, as an existing answer message and a readable task comment. Answers
-follow the comment wake rule: a bot, task owner or requester, or human mover wakes the task's bot; other teammates' answers wait for its next turn. The Computer receives the comment
+reach the one who asked: a bot, task owner or requester, or human mover wakes it; other teammates' answers wait for its next turn. The Computer receives the comment
 text and one `answer: {...}` block; older Computers still read the text.
 The bot decides what to do and whether to move the step. Ask once per version and act on the
 answer; attach a new version when the work changes.
@@ -1527,11 +1587,11 @@ Pictures linked in task details, comments and threads (`![](https://…)` or a b
 own site, not through Tico. YouTube, Vimeo and Loom links open in the viewer.
 
 On the board, a task with a picture shows the newest one as a cover, and a dot marks an open
-question. **Pin** in the Tasks toolbar keeps the current view and filters under **Pipelines** in
-the left rail, for you only; ✕ on a pin removes it. Pins are links: nothing moves a task's step
+question. **Pin to sidebar** in the Tasks bar's **⋯** menu (beside **Stats**) keeps the current view and filters under **Pipelines** in
+the left rail, for you only; **Unpin** there or ✕ on a pin removes it. Pins are links: nothing moves a task's step
 on its own.
 
-The person picker beside **Filter** says whose tasks the first tab shows. **Me** is Needs you as
+The person picker beside **Filter** says whose tasks the first tab shows. **Me** is the You list as
 always, with its approvals and questions. Pick a teammate (people by team, each with a count; bots
 fold behind one line) to see what is on their plate: an open task whose `waiting_on` is them, or
 that they own when it waits on nobody, or a question asked of them. **Asked by them** shows what
@@ -1542,6 +1602,32 @@ status opens its statuses (or a typed task's steps) to move it; a person's due d
 within two days and red once passed.
 
 
+## Followers
+
+A task's **followers** are the people and bots who follow its thread, each at a level: `live` (everything),
+`mentions`, `digest` or `muted`. Nothing is guessed from roles:
+
+- The owner follows, at `live`. A new owner follows; the old owner stops unless they chose to follow or were
+  @mentioned.
+- Filing a task does not follow it, for people and bots alike. Choose **Follow** on the new-task form, `follow: true`
+  on `POST /api/v2/tasks`, `hub task create --follow`, or `follow` on `hub_task_create`.
+- Commenting does not follow a task either. An @mention does. Under the comment box, **Follow** (shown until you
+  follow) follows the task once your comment is in; it stays ticked or unticked for your next task
+  (`compose.follow.task`).
+- Only someone who can see the task follows it: a private task's followers are its requester, owner, readers and
+  inherited readers who chose to. Someone taken off Who can see is no longer listed.
+- Anyone who can see the task follows or unfollows it and sets their own level. Whoever may change the task (as for
+  readers) adds and takes off others; a bot only teammates in its reach.
+- The task's **Followers** row lists them by name, with the level when it is not live: **Follow** or **Following**
+  (your level, Unfollow) for you, × and + for others.
+- `hub task followers <id>`; `hub task follow <id> [--level live|mentions|digest|muted] [--who X]`;
+  `hub task unfollow <id> [--who X]` (MCP: `hub_task_followers`; `hub_task_follow`, with `unfollow` to stop).
+- API: `GET /api/v2/tasks/{id}/followers`; `PUT` with `{"actor"?: X, "following": true|false, "notify"?: level}`
+  (no `actor`: you). Each answers `{task_id, following, notify, followers: [{actor, notify, reason}]}`, `following`
+  and `notify` being yours; `reason` is `owner`, `manual` (chosen) or `mentioned`. The task's detail carries
+  `followers` too. A task filed into a shared chat has no thread of its own: `followers` is null and a follow is
+  refused (`no-thread`).
+
 ## Company and private tasks
 
 New ordinary tasks are readable by active company people and bots. Reading does not grant
@@ -1549,34 +1635,58 @@ permission to change, reassign or complete work. Type bot settings continue to g
 subtask and work permissions; they cannot override Private or restricted bot activity.
 
 Turn on **Private** in the existing task controls to limit future reads to the requester,
-current assignee and the managers of any bot party. Tasks with only person parties remain
-private to those parties and their guest. The assignee or its managers may tighten visibility; only the human requester
-can publish again. Bots cannot publish a private task, including when acting for a person.
+current assignee, its readers and the managers of any bot party. The assignee or its managers may tighten visibility;
+only the human requester can publish again. Bots cannot publish a private task, including when acting for a person.
 Bot-requested private work stays private until a future explicit human publication mechanism
 exists. Mentions, administrator status, parent ownership and delegations grant no access.
 Reassigning a private task gives the new assignee access and removes the previous assignee's
-future access unless they remain its requester or manage a current bot party. Reassignment never clears Private.
+future access unless they remain its requester, a reader, or manage a current bot party. Reassignment never clears
+Private, and never changes the readers.
 
-### A private task with no person on it: its guest
+### Who can see a private task
+
+A private task is seen by its requester, its owner and its **readers**: people, bots and groups listed on the task.
+A group names everyone in it and in the groups under it, read at each check, so someone who leaves the group stops
+seeing the task. The managers of a bot party, a recorded meeting's participants and Counsel copies of a page also
+read it, as before; they are not listed. A company task is seen by everyone.
+
+- The task's **Who can see** row shows Public, or the requester, owner and readers; × takes a reader off and + adds
+  one (a person, bot or team).
+- Anyone who may change the task changes its readers: its requester, owner, their managers and delegates, a party
+  above it, or a task mover. Each add and remove is in the task's history.
+- A bot adds people and bots within its reach, and from a private run only those who read every private task the run
+  carries. Only a person adds a group. Taking a reader off has no such check.
+- `hub task create --private --reader X` (repeat for more; `group:<id>` for a group) files it with readers.
+  `hub task readers list|add|remove <id> [X ...]` reads and changes them (MCP: `hub_task_readers_list`,
+  `hub_task_readers_add`, `hub_task_readers_remove`).
+- API: `GET /api/v2/tasks/{id}/readers`; `POST` with `{"add": [...], "remove": [...]}`; `PUT` with `{"readers": [...]}`
+  replaces the list. A task create takes `readers` too. Each answers `{private, requester_id, owner_id, readers}`.
+- Readers go only on a private task: a company task refuses them and lists none. Making a task company-visible takes
+  its readers off (each in its history), so making it private again starts from its requester and owner.
+  A task lists at most 50; add a group instead.
+- A reader reads that task only: not the task above it or its other subtasks. Reading a task's thread follows the
+  task's Who can see.
+
+### A private task with no person on it: the person it reaches
 
 A private task between two bots (or a bot's private task to itself) has nobody who could act on it, so its owning
-bot may bring in one person, its **guest**. The first time that bot hands them work from the task, they become its
-guest: a subtask for them under it (`hub task create --owner <person> --parent <task>`), a question to them on it
+bot may bring in one person as a reader. The first time that bot hands them work from the task, they become its
+reader: a subtask for them under it (`hub task create --owner <person> --parent <task>`), a question to them on it
 (`hub task question`), or setting it waiting on them (`--status waiting --on <person>`). The task's history records
-who it reached, and its Private row names them.
+who it reached, and its Who can see row names them.
 
-- The guest reads that task as its requester and owner do: its words, comments and files, even if they may not read
+- They read that task as its requester and owner do: its words, comments and files, even if they may not read
   those bots' activity. Nothing else: not the task above it, its other subtasks, or the bots' other work. Everyone else
   still gets "not found".
 - A run that also carries private work the person cannot read reaches nobody: the subtask, the question and the
   wait are all refused.
-- There is one guest. A hand-off to a different person is refused, naming the guest; hand the work to them instead.
-- Only the bot that owns the task or its managers bring a guest in; the requesting bot cannot. Reassigning the task ends the
-  guest's access; a new bot owner may then bring in one person of its own.
-- When a private task above it has a person on it, only someone who reads that task above can become the guest. From
+- The bot reaches one person. Once a person reads the task, a bot's hand-off to someone else is refused, naming who
+  reads it; hand the work to them, or ask them to add the other person under Who can see.
+- Only the bot that owns the task or its managers bring a person in this way; the requesting bot cannot.
+- When a private task above it has a person on it, only someone who reads that task above can be reached. From
   the task's own private work the hand-off is refused; otherwise the person gets their subtask alone, as before, and
-  does not become the guest.
-- The guest's answer on their subtask or question comes back to the task, and wakes its owner, as on any task.
+  does not become a reader.
+- Their answer on their subtask or question comes back to the task, and wakes its owner, as on any task.
 - Approvals stay refused from private work (they go to the default approver): ask the person with a subtask or
   `hub task question`.
 - `POST /api/v2/tasks/dry-run` makes the same privacy checks as the create and returns the same refusal text.
@@ -1589,7 +1699,7 @@ into it: never the parent (its title, words, comments or id), its other subtasks
 those stays "not found" for it, and its notices and run prompt leave the parent out.
 
 - Every private task the run carries that the other bot cannot read must have no person on it (no person requester,
-  owner or guest), nor any private task above it. Otherwise the create is refused, naming the person: ask them with
+  owner or reader), nor any private task above it. Otherwise the create is refused, naming the person: ask them with
   `hub task question`, or have them file the subtask. When the person is on a task above that the filer cannot read,
   the refusal leaves their name out and says to ask the filer's own requester to file it.
 - The subtask is private; a company-visible one is refused, as for any create from private work.
@@ -1613,7 +1723,7 @@ manager), from its own run, files it **from private work**: `hub task create --f
 criteria; the private task stays sealed.
 
 - The filer must own (or manage the owner of) the parent and every private task the run carries; a bot that is only a
-  reader or guest of one is refused. A person on any of them, or on a private task above one, gets the same refusal
+  reader of one is refused. A person on any of them, or on a private task above one, gets the same refusal
   as a sealed subtask, naming them and the route to them. The task is for a bot; the parent, when given, is private.
 - Its words are checked before it is written, and a failed check is refused naming the check, never the text: no
   secret-shaped value (as for a sealed subtask), no 12 or more words in a row copied from the parent or any private

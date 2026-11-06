@@ -1,4 +1,4 @@
-"""One script and one stylesheet from the many files under ui/, with no build step.
+"""One script and one stylesheet from the many files under ui/, concatenated as the page is served.
 
 ui/index.html lists the files: the <link> tags between `<!-- bundle:css:start -->` and
 `<!-- bundle:css:end -->`, and the <script> tags between `<!-- bundle:js:start -->` and
@@ -18,6 +18,9 @@ gets `?v=<hash of the file>`, and the server keeps that URL for a year (backend/
 needs no round trip to revalidate them. The bundle's first statement marks `tico:bundle-start` for the boot timing
 (ui/app/boot-timing.js).
 
+A file the page lists as TypeScript (`/tico/ui/app/a.ts`) is bundled as its compiled JavaScript (backend/ui_build.py):
+when that is missing or older than the source, the bundle is not built (StaleBuild), and nothing older is served.
+
 Set TICO_UI_BUNDLE=off to serve the separate files as index.html lists them (editing the UI).
 `python3 -m backend.ui_bundle <ui dir> <out dir>` writes the page and both bundles, for the browser tests.
 """
@@ -27,6 +30,8 @@ import os
 import re
 import sys
 from pathlib import Path
+
+from . import ui_build
 
 PREFIX = "/tico/ui/"
 JS_PATH, CSS_PATH = PREFIX + "app.bundle.js", PREFIX + "app.bundle.css"
@@ -110,23 +115,31 @@ def build(ui_dir):
     ui_dir = Path(ui_dir)
     html = (ui_dir / "index.html").read_text()
     files = {"js": [], "css": []}
+    # The TypeScript sources and the manifest their outputs are checked against: an edit to either rebuilds.
+    typed = []
     for m in REGION.finditer(html):
         kind, body = m.group(1), m.group(2)
         for ref in REF.findall(body):
             if not ref.startswith(PREFIX) or ".." in ref.split("/"):
                 raise BundleError(f"{ref}: only files under {PREFIX} can be bundled")
-            path = ui_dir / ref[len(PREFIX):]
+            name = ref[len(PREFIX):]
+            path = ui_dir / name
             if not path.is_file():
                 raise BundleError(f"{ref}: no such file")
-            files[kind].append((ref[len(PREFIX):], path))
+            if kind == "js" and name.endswith(".ts"):
+                typed.append(path)
+                path = ui_build.compiled(ui_dir, name)       # StaleBuild, not a fallback to the separate files
+            files[kind].append((name, path))
     if not files["js"] or not files["css"]:
         raise BundleError("index.html has no bundle regions")
     # One script is one scope for 'use strict': a directive only counts at the top of a script, so the
     # bundle opens with it once, and every file must already be strict.
     js = []
     for name, path in files["js"]:
-        text = path.read_text()
-        if not re.search(r"^'use strict';", text, re.M):
+        # A compiled file's last line names its source map, which maps the file served alone, not a bundle part.
+        text = ui_build.without_map_line(path.read_bytes()).decode() if name.endswith(".ts") else path.read_text()
+        # esbuild writes the directive of a compiled file with double quotes.
+        if not re.search(r"""^(['"])use strict\1;""", text, re.M):
             raise BundleError(f"{name}: not strict, so it cannot share a script")
         js.append(f"// file: {name}\n{text.rstrip()}\n\n".encode())
     css = [f"/* file: {name} */\n{path.read_text().rstrip()}\n\n".encode() for name, path in files["css"]]
@@ -147,6 +160,8 @@ def build(ui_dir):
         page = page.replace(tag, f'src="{url}?v={versions[url]}"')
         standalone.append(path)
     listed = [p for kind in files.values() for _, p in kind] + standalone + [ui_dir / "index.html"]
+    if typed:
+        listed += typed + [ui_build.manifest_path(ui_dir)]
     return Bundle(page.encode(), js_parts, css_parts, versions), listed
 
 
@@ -167,7 +182,8 @@ class UiBundle:
         return out
 
     def get(self):
-        """The current Bundle, or None when the files cannot be bundled (the caller serves them as they are)."""
+        """The current Bundle, or None when the files cannot be bundled (the caller serves them as they are).
+        A TypeScript file without its current compiled output raises StaleBuild: the old bundle is not kept."""
         if self._bundle is not None and self._signature() == self._stamp:
             return self._bundle
         try:
@@ -176,6 +192,9 @@ class UiBundle:
         except (BundleError, OSError) as exc:
             print(f"ui bundle off: {exc}", file=sys.stderr)
             self._bundle = None
+        except ui_build.StaleBuild:
+            self._bundle = None
+            raise
         return self._bundle
 
 
@@ -195,7 +214,10 @@ def build_id(ui_dir):
     empty when the UI is served as separate files."""
     if not enabled():
         return ""
-    bundle = shared(ui_dir).get()
+    try:
+        bundle = shared(ui_dir).get()
+    except ui_build.StaleBuild:
+        return ""
     return bundle.build if bundle else ""
 
 
@@ -204,13 +226,19 @@ def versioned(ui_dir, path, v):
     `v` (a page from before an edit) is the file as it is now, revalidated like any other."""
     if not v or path not in STANDALONE or not enabled():
         return False
-    bundle = shared(ui_dir).get()
+    try:
+        bundle = shared(ui_dir).get()
+    except ui_build.StaleBuild:
+        return False
     return bool(bundle) and bundle.versions.get(path) == v
 
 
 if __name__ == "__main__":
     ui, out = Path(sys.argv[1]), Path(sys.argv[2])
-    bundle, _ = build(ui)
+    try:
+        bundle, _ = build(ui)
+    except ui_build.StaleBuild as exc:
+        raise SystemExit(f"ui bundle: {exc}") from None
     out.mkdir(parents=True, exist_ok=True)
     (out / "index.html").write_bytes(bundle.page)
     for path, body in bundle.parts.items():

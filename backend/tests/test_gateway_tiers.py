@@ -443,7 +443,7 @@ def test_every_held_catalog_model_is_held_by_the_gateway_too():
 
 
 def test_a_services_details_come_through_and_an_older_hqs_rows_have_none():
-    """Settings > Gateway shows each service's details (label and value pairs); a row from an older HQ has none."""
+    """The Gateway card shows each service's details (label and value pairs); a row from an older HQ has none."""
     hq = {**T.SNAPSHOT, "services": json.loads((Path(__file__).parent / "fixtures" / "gateway_catalog_hq.json").read_text())["services"]}
     rows = {row["id"]: row for row in T.validate(hq)["services"]}
     assert rows["search"]["details"][-1] == {"label": "Engines", "value": "Exa, then Parallel"}

@@ -82,9 +82,11 @@ def pending(c, settings, at, failures):
 
 
 def apply(c, change):
+    """Write one observation. True when it was a real change (a new or changed job, reason or start, or one cleared),
+    False for a refresh of the same one or a pass a newer one beat."""
     bot, previous, value = change
     if state(c, bot) != previous:
-        return                         # a newer scheduler pass already refreshed this observation
+        return False                   # a newer scheduler pass already refreshed this observation
     if value and not c.execute("SELECT 1 FROM jobs j JOIN bots b ON b.id=j.bot_id "
                                "JOIN assignments a ON a.bot=b.id WHERE j.id=? AND j.bot_id=? "
                                "AND j.state='queued' AND j.held=0 AND b.state='active' AND a.runner_id=?",
@@ -98,6 +100,8 @@ def apply(c, change):
     if (previous.get('job'), previous.get('reason'), previous.get('since')) != (value.get('job'), value.get('reason'), value.get('since')):
         H.event(c, H.KEEPER, EVENT, value.get('job') or previous['job'],
                 {'reason': value.get('reason'), 'since': value.get('since')})
+        return True
+    return False
 
 
 def observe(c, settings, at=None):

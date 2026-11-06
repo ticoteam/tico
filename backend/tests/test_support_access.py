@@ -79,38 +79,43 @@ def bearer(session):
     return {"Authorization": "Bearer " + support_access._tokens[session["id"]], "Idempotency-Key": "k-" + session["id"]}
 
 
-@pytest.mark.parametrize("hours", [None, 8760])
-def test_default_and_maximum_duration_reach_hq_without_a_cap(environment, hq, hours):
+def test_default_and_maximum_duration_reach_hq_without_a_cap(environment, hq):
     api = environment()
-    response = start(api, **({} if hours is None else {"hours": hours}))
-    assert response.status_code == 200, response.text
-    session = response.json()
-    duration = timedelta(hours=72 if hours is None else hours)
-    assert H.parse_ts(session["expires_at"]) - H.parse_ts(session["started_at"]) == duration
-    opened = json.loads(next(x for x in hq.seen if x.url.path.endswith("/access")).content)
-    assert opened == {"tier": "app", "expires_at": support_access.hq_stamp(session["expires_at"])}
-    with api.app.state.store.read() as c:
-        row = c.execute("SELECT * FROM support_access WHERE id=?", (session["id"],)).fetchone()
-        assert row["expires_at"] == session["expires_at"]
-        assert row["token_hash"] == digest(support_access._tokens[session["id"]])
-        event = c.execute("SELECT actor, detail FROM events WHERE action='support_access.started'").fetchone()
-    assert event["actor"] == "human:morgan"
-    assert json.loads(event["detail"])["hours"] == int(duration.total_seconds() / 3600)
+    for hours in (None, 8760):
+        response = start(api, **({} if hours is None else {"hours": hours}))
+        assert response.status_code == 200, (hours, response.text)
+        session = response.json()
+        duration = timedelta(hours=72 if hours is None else hours)
+        assert H.parse_ts(session["expires_at"]) - H.parse_ts(session["started_at"]) == duration, hours
+        opened = json.loads([x for x in hq.seen if x.url.path.endswith("/access")][-1].content)
+        assert opened == {"tier": "app", "expires_at": support_access.hq_stamp(session["expires_at"])}, hours
+        with api.app.state.store.read() as c:
+            row = c.execute("SELECT * FROM support_access WHERE id=?", (session["id"],)).fetchone()
+            assert row["expires_at"] == session["expires_at"], hours
+            assert row["token_hash"] == digest(support_access._tokens[session["id"]]), hours
+            events = [json.loads(e["detail"]) for e in c.execute(
+                "SELECT detail FROM events WHERE action='support_access.started' ORDER BY rowid")]
+            actor = c.execute("SELECT actor FROM events WHERE action='support_access.started' ORDER BY rowid DESC").fetchone()[0]
+        assert actor == "human:morgan", hours
+        assert events[-1]["hours"] == int(duration.total_seconds() / 3600), hours
+        # One session at a time: stop this one before the next starts.
+        stopped = api.post(f"/api/v2/support/access/{session['id']}/stop", headers=signed_in())
+        assert stopped.status_code == 200, (hours, stopped.text)
     schema = api.app.openapi()["components"]["schemas"]["AccessStart"]["properties"]["hours"]
     assert (schema["minimum"], schema["maximum"], schema["default"]) == (1, 8760, 72)
 
 
-@pytest.mark.parametrize("hours", [0, 8761])
-def test_duration_outside_the_limits_is_refused_before_hq_or_a_grant(environment, hq, hours):
+def test_duration_outside_the_limits_is_refused_before_hq_or_a_grant(environment, hq):
     api = environment()
     tid = ticket(api)
     sent = len(hq.seen)
-    response = api.post("/api/v2/support/access", json={"ticket_id": tid, "hours": hours}, headers=signed_in())
-    assert response.status_code == 422, response.text
-    assert len(hq.seen) == sent
-    with api.app.state.store.read() as c:
-        assert c.execute("SELECT count(*) FROM support_access").fetchone()[0] == 0
-        assert c.execute("SELECT count(*) FROM events WHERE action='support_access.started'").fetchone()[0] == 0
+    for hours in (0, 8761):
+        response = api.post("/api/v2/support/access", json={"ticket_id": tid, "hours": hours}, headers=signed_in())
+        assert response.status_code == 422, (hours, response.text)
+        assert len(hq.seen) == sent, hours
+        with api.app.state.store.read() as c:
+            assert c.execute("SELECT count(*) FROM support_access").fetchone()[0] == 0, hours
+            assert c.execute("SELECT count(*) FROM events WHERE action='support_access.started'").fetchone()[0] == 0, hours
 
 
 def test_a_session_starts_shows_everyone_the_banner_and_stops_at_once(environment, hq):
@@ -284,13 +289,13 @@ def test_full_access_keeps_the_owners_lasting_changes_and_neither_tier_opens_a_p
         assert not (r.status_code == 403 and r.json()["error"]["code"] == "support_access"), (path, r.text)
 
 
-@pytest.mark.parametrize("path", ["/api/v2/me%2Ftokens", "/api/v2/support%2Faccess", "/api/v2/me/tokens%3F",
-                                  "/api/v2/support/access%3Fx", "/api/v2/%73upport/access", "/api/v2/health%3F"])
-def test_an_encoded_address_is_refused_as_sent(environment, hq, path):
+def test_an_encoded_address_is_refused_as_sent(environment, hq):
     api = environment()
     token = bearer(start(api, tier="full").json())
-    r = api.get(path, headers=token)
-    assert r.status_code == 403 and r.json()["error"]["code"] == "support_access", (path, r.status_code, r.text)
+    for path in ["/api/v2/me%2Ftokens", "/api/v2/support%2Faccess", "/api/v2/me/tokens%3F",
+                 "/api/v2/support/access%3Fx", "/api/v2/%73upport/access", "/api/v2/health%3F"]:
+        r = api.get(path, headers=token)
+        assert r.status_code == 403 and r.json()["error"]["code"] == "support_access", (path, r.status_code, r.text)
 
 
 @pytest.mark.parametrize("path", ["/api/v2//support/access", "/api/v2/./me/tokens", "/api/v2/x/../me/tokens",

@@ -157,7 +157,7 @@ def _card(document, instructions):
                            for item in (document.get("onboarding") if isinstance(document.get("onboarding"), list) else [])
                            if isinstance(item, dict)],
             "example_output": str(document.get("example_output") or ""),
-            "approval_required": [],       # compatibility field; sending uses outbound_send
+            "approval_required": [],       # compatibility field; sending follows the sending policy
             "starter": bool(document.get("first_routine")) and bool(document.get("onboarding")),
             "instructions": instructions}
 

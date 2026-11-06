@@ -39,13 +39,11 @@ ORDER = ("collect", "clean_up", "find_stuck", "check_health", "learn", "suggest"
 NAMES = {"collect": "Collect", "clean_up": "Clean up", "check_health": "Check health", "find_stuck": "Find stuck",
          "learn": "Learn", "suggest": "Suggest", "update": "Update", "dream": "Dream"}
 EVERY_RUN = ("collect", "clean_up", "check_health")   # "How often" is every run, and fixed (Find stuck is custom: every 6 hours)
-OLD_TIMER = ()   # every step runs here now; a step listed here would show "on its old timer"
 LIVE = {"collect": collect.run, "clean_up": clean_up.run, "check_health": check_health.run, "find_stuck": find_stuck.run,
         "learn": learn.run, "suggest": suggest.run, "update": update.run, "dream": dream.run}
 SCHEDULES = {"hourly": 1, "2h": 2, "3h": 3, "6h": 6, "12h": 12, "daily": 0}
 MAX_BOTS_STEPS = ("find_stuck", "dream")          # the steps that take "Most bots per run"
 STATUSES = ("ran", "skipped", "failed", "pending")
-OLD_TIMER_REASON = "on its old timer"
 ABANDONED_MINUTES = 30          # a live run with no heartbeat this long is abandoned
 HEARTBEAT_SECONDS = 60
 WINDOW_BACK = timedelta(days=1)    # a step that has never moved its cursor looks back this far
@@ -220,10 +218,10 @@ def _receipt(c, actor, key):
 
 def run_now(store, auth, actor, step=None, wait=False, key=None):
     """Run now (POST /api/v2/maintenance/run, `hub maintenance run`): one run, claimed like a scheduled one. A plain run keeps
-    the due rules. `step` runs only that step, due or not (a switched off step stays off, and a step on its old timer is
-    skipped). A run already live is returned as it is, so Run now and the schedule give one run. With an Idempotency-Key
-    (`key`), the request leaves a receipt, and a repeat of the key returns the run that first request started or joined,
-    even once that run has finished or been recovered, and starts nothing. Returns (run, started)."""
+    the due rules. `step` runs only that step, due or not (a switched off step stays off). A run already live is returned
+    as it is, so Run now and the schedule give one run. With an Idempotency-Key (`key`), the request leaves a receipt, and
+    a repeat of the key returns the run that first request started or joined, even once that run has finished or been
+    recovered, and starts nothing. Returns (run, started)."""
     if step is not None and step not in ORDER:
         raise Problem("invalid", f"No such Maintenance step: {step}", 422)
     now = H.now()
@@ -277,8 +275,6 @@ def _steps(store, auth, run_id, only, tally):
         row = steps[key]
         if not row["enabled"]:
             plan[key] = ("off", "switched off")
-        elif key in OLD_TIMER:
-            plan[key] = ("skipped", OLD_TIMER_REASON)
         elif only is None and not due(row, at):  # a step-only Run now runs that step whether or not it is due
             plan[key] = ("skipped", "not due")
         elif key == "update" and at.astimezone(ZONE).hour < START_HOUR:
@@ -566,7 +562,7 @@ def listing(c, settings, auth, who):
         step = steps[key]
         rows.append({"key": key, "name": NAMES[key], "enabled": bool(step["enabled"]), "frequency": step["frequency"],
                      "custom_every": step["custom_every"], "custom_unit": step["custom_unit"],
-                     "max_bots": step["max_bots"], "fixed": key in EVERY_RUN, "old_timer": key in OLD_TIMER,
+                     "max_bots": step["max_bots"], "fixed": key in EVERY_RUN,
                      "last_started_at": step["last_started_at"], "last_ran_at": step["last_ran_at"],
                      "cursor_at": step["cursor_at"]})
         if key == "learn":

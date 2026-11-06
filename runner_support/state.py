@@ -20,6 +20,8 @@ def session_task(attempt):
 
 def session_key(config, attempt):
     """The provider thread this turn continues (clients/sessions.py), read from a claimed attempt."""
+    if isinstance((attempt.get("make_page") or {}).get("task"), dict):
+        return "make-page:" + attempt["id"]
     conv = attempt.get("conversation") or {}
     return sessions.session_key(config, attempt.get("bot"), session_task(attempt), conv.get("id"),
                                 conv.get("root_id"), conv.get("audience_class"))

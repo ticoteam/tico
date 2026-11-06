@@ -1,4 +1,4 @@
-"""Settings > Inboxes > Settings > What Tico may do in the mail connector (connectors/mail/oauth.py company_allows).
+"""Tools > Settings > Email > What Tico may do in the mail connector (connectors/mail/oauth.py company_allows).
 
 Google's scopes cannot tell Organize mail from Send mail (both are gmail.modify), and a computer's own service-account
 key or a standalone grant never asks the server for a narrowed token. So the connector holds each box itself, from the
@@ -245,7 +245,7 @@ class TheConnectorIsHeldToo(Base):
     def test_the_owner_handle_holds_nothing(self):
         rc, out, _ = self.run_cli("inbox", "--as", access.OWNER, "--mailbox", BOX, "--json")
         self.assertEqual(rc, 2, out)
-        self.assertIn("Settings > Inboxes", out)
+        self.assertIn("Tools > the mailbox > Who can use it", out)
 
     def test_a_connector_run_tico_cannot_be_asked_for_writes_nothing_and_still_reads(self):
         """Without the runner's registration (a terminal) or with Tico down, the connector's writes are refused like a

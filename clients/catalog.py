@@ -10,7 +10,7 @@ this installation calls itself and this bot.
 Pure: no HTTP, no database, no launchd. The runner materializes the two bootstrap bots before
 their first turn (runner_support/catalog_job.py); BotOps materializes every other chosen bot inside a turn
 with `hub bot create` (clients/hubcli.py), and an operator can do it by hand with
-`scripts/tico -e <env> bot create <slug> --template <template>`. `TICO_CATALOG_DIR` overrides
+`scripts/tico-computer -e <env> bot create <slug> --template <template>`. `TICO_CATALOG_DIR` overrides
 where the cards are read from, so a test or a second checkout can hold its own.
 """
 

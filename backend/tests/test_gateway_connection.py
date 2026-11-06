@@ -808,8 +808,8 @@ REFUSED = "Tico AI Gateway refused the request as sent: {message} ({code})"
 
 # What the runner ends a refused Tico run with (runner-rs/src/hosts/pi.rs `plain_error`), and what the bot says.
 @pytest.mark.parametrize("code,error,focus", [
-    ("unknown_model", "Tico AI Gateway: this model isn't offered; Settings > Gateway lists the picks (unknown_model)",
-     "The Tico AI Gateway doesn't offer this model; Settings > Gateway lists the picks"),
+    ("unknown_model", "Tico AI Gateway: this model isn't offered; Settings > Models lists the picks (unknown_model)",
+     "The Tico AI Gateway doesn't offer this model; Settings > Models lists the picks"),
     ("unsupported_field", REFUSED, "The Tico AI Gateway refused the request as sent: " + ERRORS["unsupported_field"][1]),
     ("bad_request", REFUSED, "The Tico AI Gateway refused the request as sent: " + ERRORS["bad_request"][1]),
     ("upstream_refused", REFUSED, "The Tico AI Gateway refused the request as sent: " + ERRORS["upstream_refused"][1]),

@@ -7,18 +7,26 @@ Acme is the fictional company (backend/tests/test_org_rules.py's org): Ana owns 
 import json
 import threading
 import time
-import uuid
 
 import pytest
 
 from backend import call_slots as CS
 from backend import org_rule_check as K
 from backend import threads
+from backend import updates
 from backend.auth import Identity
 from backend.store import H
 from backend.tests.test_api import claim, get, headers, post, setup_attempt  # noqa: F401
 from backend.tests.test_org_rules import api, as_bot, edit, org, rule  # noqa: F401
 from backend import bot_settings as BS
+
+
+@pytest.fixture(autouse=True)
+def _not_a_friday(monkeypatch):
+    """A Friday's update must be a week in review (updates.kind_for); these tests post daily ones, so pin a Tuesday."""
+    from backend import updates as _updates
+    monkeypatch.setattr(_updates, "today", lambda at=None: "2026-09-29")
+
 
 COLOR = "Never tell anyone Acme's favorite color."
 NEEDLE = "favorite color is"
@@ -960,153 +968,13 @@ def test_botops_mail_for_a_person_finds_its_own_hold_and_spends_its_approval_onc
     assert post(api, "bots/botops/mail-check", mail, token="ana-botops")["outcome"] == "held"
 
 
-def test_reported_misses_count_once_however_often_or_concurrently_they_come(ruled):
-    api, _ = ruled
-    color_rule(api)
-    ids = [str(uuid.uuid4()) for _ in range(3)]
-    assert post(api, "bots/ops/mail-check/misses", {"ids": ids[:2]}, token="ops-test") == {"recorded": 2, "known": []}
-    # The reply was lost and the connector sends them again, with a new one.
-    again = post(api, "bots/ops/mail-check/misses", {"ids": ids}, token="ops-test")
-    assert again == {"recorded": 1, "known": ids[:2]}
-    late = str(uuid.uuid4())
-    answers = []
-    threads = [threading.Thread(target=lambda: answers.append(
-        post(api, "bots/ops/mail-check/misses", {"ids": [late]}, token="ops-test")["recorded"])) for _ in range(4)]
-    for t in threads:
-        t.start()
-    for t in threads:
-        t.join()
-    assert sorted(answers) == [0, 0, 0, 1]
-    assert [json.loads(e["detail"])["reason"] for e in events(api, "rules.unchecked")] == ["connector"] * 4
-    assert get(api, "rules/stats")["unchecked_today"] == 4
-    # No rule covers Finance, a person's own mail was never checked, and a bot reports only its own.
-    assert post(api, "bots/finance/mail-check/misses", {"ids": [str(uuid.uuid4())]}, token="finance-test")[
-        "recorded"] == 0
-    assert post(api, "bots/ops/mail-check/misses", {"ids": [str(uuid.uuid4())]}, token="ben-test")["recorded"] == 0
-    post(api, "bots/ops/mail-check/misses", {"ids": [str(uuid.uuid4())]}, token="finance-test", expected=403)
-    post(api, "bots/ops/mail-check/misses", {"ids": ["not-an-id"]}, token="ops-test", expected=422)
-    post(api, "bots/ops/mail-check/misses", {"ids": [str(uuid.uuid4()) for _ in range(101)]}, token="ops-test",
-         expected=422)
-    assert get(api, "rules/stats")["unchecked_today"] == 4
-
-
-@pytest.mark.parametrize("how", ["budget", "error", "stale_lease", "proxy_530", "forbidden"])
-def test_a_send_after_a_failed_check_counts_once_whether_the_route_counted_it_or_never_saw_it(ruled, tmp_path,
-                                                                                            monkeypatch, how):
-    # The connector's own pieces (connectors/mail) against this server: a check with no verdict for the mail tool,
-    # the mail sent and kept by the check's id, then Tico answering again.
-    from connectors.mail import db as mail_db, policy as pl
-    api, judge = ruled
-    color_rule(api)
-    conn = mail_db.connect(tmp_path / "mail.db")
-    before = get(api, "rules/stats")["unchecked_today"]
-    token = "finance-test" if how == "forbidden" else "ops-test"
-
-    def check(path, body, key=None):
-        if how == "budget":
-            api.app.state.store.settings.rules_monthly_usd = 1.0
-            with api.app.state.store.transaction() as c:
-                H.event(c, H.KEEPER, "rules.spend", "rule-check@1", {"cost_usd": 5.0})
-        judge.fail = RuntimeError("provider down") if how == "error" else None
-        if how in ("budget", "error"):
-            # The route counts it unchecked and commits; its answer is lost on the way back.
-            assert post(api, path, body, token=token, key=key)["outcome"] == "unchecked"
-            raise pl.HubFailed("unavailable")
-        if how == "forbidden":
-            post(api, path, body, token=token, key=key, expected=403)       # counted by the route, refused
-            raise pl.HubFailed("forbidden", 403)
-        raise pl.HubFailed(*{"stale_lease": ("http_409", 409), "proxy_530": ("http_530", 530)}[how])
-
-    def tico(path, body, key=None):
-        r = api.post("/api/v2/" + path, json=body, headers=headers(token, key))
-        if r.status_code >= 300:
-            raise pl.HubFailed(f"http_{r.status_code}", r.status_code)
-        return r.json()
-    monkeypatch.setattr(pl, "HUB_POST", check)
-    mail = (["vendor@outside.example"], [], "Hi", "Thanks for the call.")
-    check_id = str(uuid.uuid4())
-    assert pl.rule_check("ops", *mail, key=check_id)["failed"]
-    mail_db.add_mail_check_miss(conn, "ops", check_id)          # the mail went out with no verdict
-    monkeypatch.setattr(pl, "HUB_POST", tico)
-    judge.fail = None
-    api.app.state.store.settings.rules_monthly_usd = 0
-    if how == "forbidden":
-        # The other bot's report is refused too; the route already counted that check.
-        assert pl.report_misses("ops", [check_id]) == []
-        assert get(api, "rules/stats")["unchecked_today"] == before + 1
-        return
-    pending = mail_db.mail_check_misses(conn, "ops")
-    assert pl.report_misses("ops", pending) == pending == [check_id]
-    assert pl.report_misses("ops", pending) == pending           # a repeat, as after a lost reply
-    mail_db.drop_mail_check_misses(conn, pending)
-    assert get(api, "rules/stats")["unchecked_today"] == before + 1
-
-
-def _no_budget(api):
-    api.app.state.store.settings.rules_monthly_usd = 1.0
-    with api.app.state.store.transaction() as c:
-        H.event(c, H.KEEPER, "rules.spend", "rule-check@1", {"cost_usd": 5.0})
-
-
-@pytest.mark.parametrize("how", ["budget", "error"])
-def test_a_report_that_lands_before_its_check_finishes_unchecked_counts_once(ruled, monkeypatch, how):
-    # The mail tool gave up waiting, sent the mail, and reported it; then the check itself finishes as unchecked.
-    api, _ = ruled
-    color_rule(api)
-    check_id = str(uuid.uuid4())
-    assert post(api, "bots/ops/mail-check/misses", {"ids": [check_id]}, token="ops-test")["recorded"] == 1
-    mail = {"to": ["vendor@outside.example"], "subject": "Hi", "body": "Thanks for the call."}
-    if how == "budget":
-        _no_budget(api)
-        assert post(api, "bots/ops/mail-check", mail, token="ops-test", key=check_id)["outcome"] == "unchecked"
-    else:
-        monkeypatch.setattr(K, "mail_approved", lambda *a: (_ for _ in ()).throw(RuntimeError("boom")))
-        with pytest.raises(RuntimeError):
-            api.post("/api/v2/bots/ops/mail-check", json=mail, headers=headers("ops-test", check_id))
-    assert get(api, "rules/stats")["unchecked_today"] == 1
-
-
-def test_a_report_not_counted_is_not_kept_so_its_check_still_counts(ruled):
-    api, _ = ruled
-    color_rule(api, **{"with": {"people": ["ben"]}})
-    check_id = str(uuid.uuid4())
-    assert post(api, "bots/ops/mail-check/misses", {"ids": [check_id]}, token="ops-test") == \
-        {"recorded": 0, "known": []}
-    _no_budget(api)
-    mail = {"to": ["ben@acme.example"], "subject": "Hi", "body": "Thanks for the call."}
-    assert post(api, "bots/ops/mail-check", mail, token="ops-test", key=check_id)["outcome"] == "unchecked"
-    assert post(api, "bots/ops/mail-check/misses", {"ids": [check_id]}, token="ops-test")["known"] == [check_id]
-    assert get(api, "rules/stats")["unchecked_today"] == 1
-
-
-def test_a_report_counts_only_under_a_rule_with_no_with_and_up_to_a_days_cap(ruled, monkeypatch):
-    api, _ = ruled
-    color_rule(api, **{"with": {"people": ["ben"]}})          # only mail to Ben: an id cannot say where a mail went
-    assert post(api, "bots/ops/mail-check/misses", {"ids": [str(uuid.uuid4())]}, token="ops-test")["recorded"] == 0
-    color_rule(api)
-    monkeypatch.setattr(K, "MISSES_DAY_MAX", 3)
-    ids = [str(uuid.uuid4()) for _ in range(4)]
-    assert post(api, "bots/ops/mail-check/misses", {"ids": ids}, token="ops-test") == {"recorded": 3, "known": []}
-    assert post(api, "bots/ops/mail-check/misses", {"ids": [str(uuid.uuid4())]}, token="ops-test")["recorded"] == 0
-    # The one over the cap was not kept: only the counted ones are known.
-    assert post(api, "bots/ops/mail-check/misses", {"ids": ids}, token="ops-test")["known"] == ids[:3]
-    assert get(api, "rules/stats")["unchecked_today"] == 3
-
-
-def test_a_mail_check_that_cannot_run_is_counted_unchecked(ruled, monkeypatch):
+def test_a_mail_check_for_another_bot_is_refused_and_counts_nothing(ruled):
     api, judge = ruled
     color_rule(api)
     mail = {"to": ["vendor@outside.example"], "subject": "Hi", "body": "Our favorite color is gold."}
-    # Another bot's token: refused, and the mail the connector then sends unchecked counts as unchecked.
+    # Another bot's token: refused. The send queue checks each bot's own mail itself, so nothing is counted here.
     post(api, "bots/ops/mail-check", mail, token="finance-test", expected=403)
-    [event] = events(api, "rules.unchecked")
-    assert event["actor"] == "bot:finance" and json.loads(event["detail"])["reason"] == "forbidden"
-    # A server error inside the check: recorded before it surfaces.
-    monkeypatch.setattr(K, "mail_approved", lambda *a: (_ for _ in ()).throw(RuntimeError("boom")))
-    with pytest.raises(RuntimeError):
-        api.post("/api/v2/bots/ops/mail-check", json=mail, headers=headers("ops-test"))
-    assert [json.loads(e["detail"])["reason"] for e in events(api, "rules.unchecked")] == ["forbidden", "error"]
-    assert judge.calls == [] and get(api, "rules/stats")["unchecked_today"] == 2
+    assert events(api, "rules.unchecked") == [] and judge.calls == []
 
 
 def test_an_assistant_mail_is_checked_as_the_person_it_is_written_for(ruled):
@@ -1123,9 +991,6 @@ def test_an_assistant_mail_is_checked_as_the_person_it_is_written_for(ruled):
     assert post(api, f"bots/{settings.assistant_bot}/mail-check", mail, token="ben-assistant")["outcome"] == "held"
     [hold] = sql(api, "SELECT author FROM org_rule_holds WHERE operation='mail'")
     assert hold["author"] == "human:ben" and len(judge.calls) == 1
-    # Its report of a check that gave no verdict counts once, as the person's mail under the rule that covers them.
-    assert post(api, f"bots/{settings.assistant_bot}/mail-check/misses", {"ids": [str(uuid.uuid4())]},
-                token="ben-assistant") == {"recorded": 1, "known": []}
 
 
 def test_a_warned_mail_carries_its_line_and_external_addresses_split_the_cache(ruled):
@@ -1625,11 +1490,12 @@ def ask(api, question, token="ops-test", **more):
     return r.json()
 
 
-def test_chat_updates_and_task_questions_are_held_under_a_block_rule(ruled):
+def test_chat_updates_and_task_questions_are_held_under_a_block_rule(ruled, monkeypatch):
     api, judge = ruled
+    monkeypatch.setattr(updates, "today", lambda at=None: "2026-09-29")  # a Tuesday: a daily, whatever today is
     color_rule(api)
     assert chat(api, "Our favorite color is blue.")["held"]
-    assert post(api, "updates", {"body": "- Our favorite color is blue."}, token="ops-test")["held"]
+    assert post(api, "updates", {"kind": "daily", "body": "- Our favorite color is blue."}, token="ops-test")["held"]
     weekly = {"goal": "Ship the palette", "done": ["Our favorite color is teal"], "focus": ["Launch"],
               "blockers": ["None"]}
     assert post(api, "updates", {"slides": weekly}, token="ops-test")["held"]
@@ -1645,44 +1511,48 @@ def test_chat_updates_and_task_questions_are_held_under_a_block_rule(ruled):
     assert "Our favorite color is teal" in judge.calls[2]["state"]["output"]
 
 
-def test_the_update_tool_answers_with_the_hold_or_the_warning(ruled):
+def test_the_update_tool_answers_with_the_hold_or_the_warning(ruled, monkeypatch):
     from backend.tests.test_org_rules_surfaces import mcp
     api, _ = ruled
+    monkeypatch.setattr(updates, "today", lambda at=None: "2026-09-29")  # a Tuesday: a daily, whatever today is
     made = color_rule(api)
-    error, held = mcp(api, "hub_update_create", {"body": "- Our favorite color is blue."}, token="ops-test")
+    error, held = mcp(api, "hub_update_create", {"kind": "daily", "body": "- Our favorite color is blue."}, token="ops-test")
     assert not error and held["held"]["outcome"] == "blocked"
     edit(api, made["id"], {"if_broken": "warn", "version": made["version"]})
-    error, posted = mcp(api, "hub_update_create", {"body": "- Our favorite color is blue."}, token="ops-test")
+    error, posted = mcp(api, "hub_update_create", {"kind": "daily", "body": "- Our favorite color is blue."}, token="ops-test")
     assert not error and posted["rule_warning"] and posted["body"].startswith("Warning:")
 
 
-def test_chat_updates_and_task_questions_carry_a_warn_rules_line(ruled):
+def test_chat_updates_and_task_questions_carry_a_warn_rules_line(ruled, monkeypatch):
     api, _ = ruled
+    monkeypatch.setattr(updates, "today", lambda at=None: "2026-09-29")  # a Tuesday: a daily, whatever today is
     color_rule(api, if_broken="warn")
     got = chat(api, "Our favorite color is blue.")
     assert got["rule_warning"] and got["message"]["body"].startswith("Warning:")
-    update = post(api, "updates", {"body": "- Our favorite color is blue."}, token="ops-test")
+    update = post(api, "updates", {"kind": "daily", "body": "- Our favorite color is blue."}, token="ops-test")
     assert update["rule_warning"] and update["update"]["body"].startswith("Warning:")
     asked = ask(api, "Ship it?", title="Palette", body="Our favorite color is blue.")
     assert asked["rule_warning"] and asked["question"]["body"].startswith("Warning:")
-    row = sql(api, "SELECT body, note, waiting_on FROM tasks WHERE id=?", (asked["task"]["id"],))[0]
+    row = sql(api, "SELECT body, owner_id, questions FROM tasks WHERE id=?", (asked["task"]["id"],))[0]
     assert row["body"].startswith("Warning:") and row["body"].count("Warning:") == 1
-    assert row["note"].startswith("Warning:") and row["waiting_on"] == "human:ana"
+    # A question task: Ana owns it, and its question leads with the line as the card shows it.
+    assert row["owner_id"] == "human:ana" and json.loads(row["questions"])[0]["question"].startswith("Warning:")
 
 
-def test_send_anyway_delivers_a_held_chat_update_and_task_question_once(ruled):
+def test_send_anyway_delivers_a_held_chat_update_and_task_question_once(ruled, monkeypatch):
     api, judge = ruled
+    monkeypatch.setattr(updates, "today", lambda at=None: "2026-09-29")  # a Tuesday: a daily, whatever today is
     color_rule(api, if_broken="escalate", reviewer="ben")
     holds = [chat(api, "Our favorite color is blue.")["held"]["id"],
-             post(api, "updates", {"body": "- Our favorite color is blue."}, token="ops-test")["held"]["id"],
+             post(api, "updates", {"kind": "daily", "body": "- Our favorite color is blue."}, token="ops-test")["held"]["id"],
              ask(api, "Ship it?", title="Palette", body="Our favorite color is blue.")["held"]["id"]]
     for hold_id in holds:
         assert send_anyway(api, hold_id)["hold"]["state"] == "sent"
     assert len(bodies(api, "favorite color is blue")) == 1           # the chat message
     assert [r["body"] for r in sql(api, "SELECT body FROM updates WHERE bot='ops'")] == \
         ["- Our favorite color is blue."]
-    [task] = sql(api, "SELECT id, waiting_on FROM tasks WHERE title='Palette'")
-    assert task["waiting_on"] == "human:ana"
+    [task] = sql(api, "SELECT id, owner_id FROM tasks WHERE title='Palette' AND questions IS NOT NULL")
+    assert task["owner_id"] == "human:ana"
     assert len([call for call in judge.calls if call["label"].startswith("rule-check")]) == 3
 
 
@@ -1723,14 +1593,15 @@ def test_public_task_text_is_checked_for_the_whole_company(ruled):
 
 def test_with_no_rule_in_force_bot_writes_resolve_no_audience(ruled, monkeypatch):
     api, judge = ruled
+    monkeypatch.setattr(updates, "today", lambda at=None: "2026-09-29")  # a Tuesday: a daily, whatever today is
     rule(api, {"kind": "internal", "text": COLOR, "who": {"bots": ["ops"]}}, token="ops-test")    # suggested only
     resolved = []
     monkeypatch.setattr(K, "company", lambda c: resolved.append("company") or [])
     monkeypatch.setattr(K, "mail_recipients", lambda c, addresses: resolved.append("mail") or [])
-    monkeypatch.setattr(H, "mentioned_people", lambda *a, **k: resolved.append("mentions") or [])
+    monkeypatch.setattr(threads, "mentioned_people", lambda *a, **k: resolved.append("mentions") or [])
     task = task_for_ops(api)
     post(api, f"tasks/{task['id']}/comments", {"text": "Ask @ana or ben@acme.example about it."}, token="ops-test")
-    assert "held" not in post(api, "updates", {"body": "- Shipped the launch note."}, token="ops-test")
+    assert "held" not in post(api, "updates", {"kind": "daily", "body": "- Shipped the launch note."}, token="ops-test")
     aid = post(api, "automations", {"name": "Post", "owner": "bot:finance", "trigger": {"type": "event", "name": "x.y"},
                                     "steps": [{"id": "p", "type": "action", "do": "post_update",
                                                "args": {"text": "- Closed the books."}}]})["id"]
@@ -1776,11 +1647,10 @@ def test_a_question_sent_anyway_under_a_new_warn_rule_leads_its_card_with_the_li
     rule(api, {"kind": "internal", "text": LAUNCH, "who": {"bots": ["ops"]}, "if_broken": "warn"})
     judge.needles[LAUNCH] = "launch is"
     send_anyway(api, hold["held"]["id"])
-    [task] = sql(api, "SELECT id FROM tasks WHERE title='Palette'")
-    [refs] = [json.loads(r["refs"]) for r in sql(api, "SELECT refs FROM messages WHERE kind='ask' AND "
-                                                         "json_extract(refs,'$.task')=?", (task["id"],))]
-    assert refs["questions"][0]["question"].startswith("Warning:")
-    assert refs["questions"][0]["question"].endswith("Ship the palette?")
+    # A question task writes no ask message: the question rides on the task (question_tasks.store).
+    [task] = sql(api, "SELECT id, questions FROM tasks WHERE title='Palette' AND questions IS NOT NULL")
+    [question] = json.loads(task["questions"])
+    assert question["question"].startswith("Warning:") and question["question"].endswith("Ship the palette?")
 
 
 def public_output(api, task_id):
@@ -2143,3 +2013,32 @@ def test_send_anyway_keeps_an_ask_refusal_audit_after_rolling_back_the_send(rule
     [item], [call] = items(api), calls(api)
     assert item["call_id"] == call["id"] and item["outcome"] == ask_ingest.SENT_BACK
     assert hold_row(api, held["id"])["state"] == "held"
+
+
+@pytest.mark.parametrize("if_broken", ["block", "warn"])
+def test_the_send_queue_checks_a_bots_own_email_against_the_rules(ruled, monkeypatch, if_broken):
+    # The mail CLI only queues: POST email/sends runs the org rule check itself (backend/email_sending.py rule_gate).
+    import base64
+    from backend import email_sending as S, mailbox_access as MA
+    from backend.tests.test_email_sending import BOX, mime
+    api, judge = ruled
+    monkeypatch.setattr(S, "classify", lambda *a, **k: {"legal_or_money": False, "review": True, "status": "classified"})
+    with api.app.state.store.transaction() as c:
+        box = MA.ensure_mailbox(c, BOX, person_id="ana", created_by="human:ana")
+        MA.grant(c, "human:ana", box["id"], "bot", "ops", "read_write")
+    color_rule(api, if_broken=if_broken)
+    sent = post(api, "email/sends", {"mailbox": BOX, "raw": mime(body="Our favorite color is gold.")},
+                token="ops-test")["send"]
+    assert len(judge.calls) == 1
+    if if_broken == "block":
+        assert sent["state"] == "blocked" and sent["decision"]["reasons"][0] == "org_rule"
+        [hold] = sql(api, "SELECT author FROM org_rule_holds WHERE operation='mail'")
+        assert hold["author"] == "bot:ops"
+        return
+    [row] = sql(api, "SELECT raw, content_sha256, classification FROM email_sends WHERE id=?", (sent["id"],))
+    text = base64.urlsafe_b64decode(row["raw"] + "=" * (-len(row["raw"]) % 4)).decode()
+    assert "Warning:" in text and "favorite color is gold" in text
+    assert json.loads(row["classification"])["source_sha256"] != row["content_sha256"]
+    # A person's own email is not checked.
+    post(api, "email/sends", {"mailbox": BOX, "raw": mime(body="Our favorite color is gold, says Ana.")})
+    assert len(judge.calls) == 1

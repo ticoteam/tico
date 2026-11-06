@@ -13,7 +13,10 @@ of them changes (`refresh`):
   worktree holds keep their own reconciliation (backend/task_blocked.py).
 
 A task waiting on nothing is measured from the blocked hold's `cleared_at` (when the last hold cleared) or its
-`created_at` (when a wait on nothing began), never from a note: a note cannot keep a task waiting on nothing.
+`created_at` (when a wait on nothing began), never from a note: a note cannot keep a task waiting on nothing. A bot
+that parks its task with nothing tracked (cause `stranded`) gets it back: after GRACE_HOURS the hourly pass (`unstrand`)
+reopens it, unless its due date or snooze says to look later; one that keeps going back to waiting on nothing is left
+waiting and its manager bot, or BotOps, is told.
 
 A task's own holds, its move to Blocked and its snooze, are rows of `task_holds` (migration 0075), one open row of each
 kind; `put`, `change` and `release` below write them, and a task row read through hubdb.TASKS carries the open ones'
@@ -111,7 +114,7 @@ def holds(conn, row):
 
 def _task_hold(conn, row, kind, other):
     """A child or blocker as a hold. A private one is named by neither title nor owner: the reason is shown to everyone
-    who reads the task (its guest and its parties' managers too), and not all of them read the other task."""
+    who reads the task (its readers and its parties' managers too), and not all of them read the other task."""
     from . import hubdb as H
     if H.task_private(conn, other):
         return {"kind": "private", "on": None, "what": "a private task"}
@@ -271,52 +274,97 @@ def _nth(n):
     return {3: "third", 4: "fourth", 5: "fifth"}.get(n, f"{n}th")
 
 
-BACKFILL = "task_holds.backfill"
+# A bot's task waiting on nothing tracked (cause `stranded`) has nothing that will ever move it: a note wakes nobody.
+GRACE_HOURS = 2         # how long it may wait on nothing before it goes back to open
+REOPEN_LIMIT = 3        # reopened this often in 24 hours: it stays parked and its bot's manager is told instead
+PASS_LIMIT = 50         # tasks reopened per hourly pass
+REOPENED = (f"Nothing tracked to wait on for {GRACE_HOURS} h; back to work. File a subtask, relate a blocker, "
+            "name a person with --on, or set --due to wait.")
+TOLD = "stranded_told"  # the task history kind of a manager's notice about one such task
 
 
-def backfill(conn, at=None):
-    """Once, at the first hourly check after this shipped: every waiting task is put right by the same rules. Its
-    reason names what holds it; a bot's task held by nothing goes back to open, and each bot hears once, however many
-    of its tasks moved. Returns {"fixed", "opened", "woken"}, or None when it already ran."""
+def _manager(conn, row):
+    """Who hears about a bot's task that keeps going back to waiting on nothing: its bot's manager when that is an
+    active bot that reads the task, else BotOps; never a person."""
+    from . import hubdb as H
+    config = conn.execute("SELECT reports_to FROM bot_config WHERE bot=?", (H.actor_id(row["owner_id"]),)).fetchone() \
+        if H._has_table(conn, "bot_config") else None
+    target = (config[0] if config else "") or ""
+    target = target if not target or H.actor_kind(target) else H.bot_actor(target)
+    for who in (target, H.bot_actor(H.FLEET_MAINTAINER)):
+        if (who and H.is_bot(who) and who != row["owner_id"]
+                and (H.bot(conn, H.actor_id(who)) or {}).get("state") == "active" and H.bot_reads_task(conn, who, row)):
+            return who
+    return None
+
+
+def unstrand(conn, at=None):
+    """Every hour: a bot's task waiting on nothing tracked for GRACE_HOURS (from when the wait on nothing began or its
+    last hold cleared) goes back to open with a note saying how to wait properly, unless a due date or snooze says to
+    look later. Each bot is woken once, however many of its tasks moved. A task sent back REOPEN_LIMIT times in 24
+    hours is left waiting and its bot's manager (a bot) or BotOps hears once a day instead. A hold by hand, Engineering's
+    own holds, roadmap items and people's tasks are never touched. Returns {"opened", "woken", "told"}."""
     from . import hubdb as H, review_gate, task_blocked
-    if conn.execute("SELECT 1 FROM events WHERE action=? LIMIT 1", (BACKFILL,)).fetchone():
-        return None
     at = at or H.now()
-    fixed, opened = 0, {}
-    for row in H._rows(conn.execute(f"SELECT * FROM {H.TASKS} tasks WHERE status='waiting' AND blocked_since IS NOT NULL "
-                                    "ORDER BY created_at, id")):
-        if not _applies(conn, row):
+    day_ago = H.shift(at, hours=-24)
+    ids = [r[0] for r in conn.execute(
+        "SELECT t.id FROM task_holds h JOIN tasks t ON t.id=h.task_id WHERE h.kind='blocked' AND h.released_at IS NULL "
+        "AND h.cause='stranded' AND t.status='waiting' AND t.owner_id LIKE 'bot:%' "
+        "AND coalesce(h.cleared_at,h.created_at)<=? ORDER BY h.created_at,t.id", (H.shift(at, hours=-GRACE_HOURS),))]
+    opened, told, count = {}, {}, 0
+    for task_id in ids:
+        if count >= PASS_LIMIT:
+            break
+        row = H.task(conn, task_id)
+        if not _applies(conn, row) or row.get("blocked_kind") != "stranded" or H.not_yet_due(row, at):
+            continue
+        if (H.bot(conn, row["owner_id"]) or {}).get("state") != "active":
             continue
         if holds(conn, row):
-            fixed += refresh(conn, row["id"], at=at) == "held"
+            refresh(conn, task_id, at=at)       # a hold its last refresh missed: the words follow, it stays
             continue
-        if review_gate.engineering(conn, row) and row.get("blocked_kind") == "dependency":
-            task_blocked.reconcile(conn, row["id"])
-            if H.task(conn, row["id"])["status"] != "waiting":
-                fixed += 1
-                continue
-        active = H.is_bot(row["owner_id"]) and (H.bot(conn, row["owner_id"]) or {}).get("state") == "active"
-        if active and not H.not_yet_due(row, at):
-            note = ("Back to open: nothing Tico tracks was holding it (no open question, child task, blocker, "
-                    "approval or person to wait on). Continue it, ask, or finish it.")
-            H._set_status(conn, H.KEEPER, row, "open", note=note)
-            conn.execute("UPDATE tasks SET note=? WHERE id=?", (note, row["id"]))
-            task_blocked.bump(conn, row)
-            H._task_event(conn, row["id"], H.KEEPER, "note", row.get("note"), note, "")
-            opened.setdefault(row["owner_id"], []).append(row)
-        else:
-            refresh(conn, row["id"], at=at)
-            fixed += 1
+        again = conn.execute(
+            "SELECT count(*) FROM history_events WHERE subject_type='task' AND subject_id=? AND kind='status' "
+            "AND actor_id=? AND note=? AND created_at>=?", (task_id, H.KEEPER, REOPENED, day_ago)).fetchone()[0]
+        if again >= REOPEN_LIMIT:
+            if not conn.execute("SELECT 1 FROM history_events WHERE subject_type='task' AND subject_id=? AND kind=? "
+                                "AND created_at>=? LIMIT 1", (task_id, TOLD, day_ago)).fetchone():
+                who = _manager(conn, row)
+                if who:
+                    told.setdefault(who, []).append(row)
+                    H._task_event(conn, task_id, H.KEEPER, TOLD, None, who,
+                                  f"Back to waiting on nothing {again} times in 24 hours")
+            continue
+        engineering = review_gate.engineering(conn, row)
+        status = row.get("blocked_from_status") if engineering and row.get("blocked_from_status") in ("open", "doing") \
+            else "open"
+        H._set_status(conn, H.KEEPER, row, status, note=REOPENED)
+        if H.task(conn, task_id)["status"] == "waiting":
+            refresh(conn, task_id, at=at)       # an external hold keeps it (task_blocked.wait)
+            continue
+        conn.execute("UPDATE tasks SET note=? WHERE id=?", (REOPENED, task_id))
+        task_blocked.bump(conn, row)
+        H._task_event(conn, task_id, H.KEEPER, "note", row.get("note"), REOPENED, "")
+        opened.setdefault(row["owner_id"], []).append(row)
+        count += 1
     for owner, rows in opened.items():
         # One wake per bot, in its first task's room: it names only that task, never another task's title.
         more = len(rows) - 1
         H._wake(conn, H.task(conn, rows[0]["id"]), owner,
-                f"Open: {rows[0]['title']}\nNothing Tico tracks was holding it"
-                + (f", nor {more} more of your waiting tasks, now open too" if more else "")
-                + ". Continue each, ask, or finish it.", refs={"news": "assignment"})
-    result = {"fixed": fixed, "opened": sum(len(r) for r in opened.values()), "woken": len(opened)}
-    H.event(conn, H.KEEPER, BACKFILL, "", result)
-    return result
+                f"Open: {rows[0]['title']}\n{REOPENED}"
+                + (f"\n{more} more of your tasks waiting on nothing are open again too." if more else ""),
+                refs={"news": "assignment"})
+    for who, rows in told.items():
+        more = len(rows) - 1
+        first = H.task(conn, rows[0]["id"])
+        H._wake(conn, first, who,
+                f"Stuck: {first['title']}\n{name(conn, first['owner_id'])} has parked this task with nothing tracked "
+                f"to wait on, and it went back to open {REOPEN_LIMIT} times in 24 hours; it now stays waiting. Help: "
+                "file the subtask or blocker it waits on, name the person, set a due date, or close it."
+                + (f"\n{more} more such tasks are left waiting too." if more else ""),
+                refs={"news": "stranded_loop"})
+    return {"opened": sum(len(r) for r in opened.values()), "woken": len(opened),
+            "told": sum(len(r) for r in told.values())}
 
 
 # The holds a task's API view lists (docs/tasks.md, Holds): one per kind, from the task's open task_holds rows. A

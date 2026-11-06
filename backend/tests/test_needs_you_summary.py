@@ -20,17 +20,12 @@ def test_summary_total_is_the_board_count_and_splits_by_bot(api):
     assert sum(b["count"] for b in summary["by_bot"]) <= summary["total"]
     assert all(set(b) >= {"bot", "count"} for b in summary["by_bot"])
 
+    capped = get(api, "needs-you/summary?limit=1")
+    assert len(capped["by_bot"]) <= 1
+    assert capped["bots_left"] >= 0
 
-def test_summary_caps_the_bot_list_and_says_how_many_were_left(api):
-    summary = get(api, "needs-you/summary?limit=1")
-    assert len(summary["by_bot"]) <= 1
-    assert summary["bots_left"] >= 0
-
-
-def test_summary_is_for_people_only(api):
-    _, _, finance = setup_attempt(api, "finance")
     r = api.get("/api/v2/needs-you/summary", headers={"Authorization": "Bearer " + finance["token"]})
-    assert r.status_code in (403, 404), r.text
+    assert r.status_code in (403, 404), r.text   # people only
 
 
 def test_another_persons_private_task_is_not_counted_for_you(api):

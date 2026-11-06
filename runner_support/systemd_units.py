@@ -1,6 +1,6 @@
 """systemd user units for a Linux runner that runs from a git checkout (docs/install.md, docs/updates.md).
 
-`scripts/tico install` gives a Mac launchd jobs with KeepAlive; on Linux it writes these units instead, under
+`scripts/tico-computer install` gives a Mac launchd jobs with KeepAlive; on Linux it writes these units instead, under
 `~/.config/systemd/user`, each with `Restart=always`. Nothing here needs root. The unit carries two variables the
 runner reads: `TICO_SUPERVISED=1` (something starts it again, so it may exit to update) and `TICO_SYSTEMD_UNIT`
 (its own unit name), which `runner_support/release_update.py` uses to restart the runner and the helper jobs through
@@ -21,7 +21,7 @@ DESCRIPTIONS = {"bot": "Tico runner", "connectors": "Tico connectors", "close-ca
 
 
 def unit_name(kind, env_slug=""):
-    """`tico-bot.service`, or `tico-<environment>-bot.service` for a company environment (scripts/tico `label`)."""
+    """`tico-bot.service`, or `tico-<environment>-bot.service` for a company environment (scripts/tico-computer `label`)."""
     return f"tico-{env_slug}-{kind}.service" if env_slug else f"tico-{kind}.service"
 
 

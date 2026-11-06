@@ -4,7 +4,7 @@
   - `doctor --e2e` sends real mail from a real mailbox (it only ever touches the sandbox)
 """
 
-import io, json, sys, unittest
+import io, json, os, sys, unittest
 from datetime import datetime, timedelta
 from pathlib import Path
 from unittest.mock import patch
@@ -32,7 +32,6 @@ class PrivateCalendarHold(Stage2):
         **harness.MANIFESTS,
         "legal": """
 name: legal
-outbound_send: false
 access:
   - service: gmail
     identity: "ana@acme.example"
@@ -89,7 +88,7 @@ class Scheduling(Stage2):
                              when.isoformat(), "--minutes", "20", "--attendee", AVA,
                              "--body-file", f, "--issue", "42", *extra)
 
-    def test_outbound_send_false_puts_nothing_on_the_calendar_at_all(self):
+    def test_a_bot_without_the_send_verb_puts_nothing_on_the_calendar_at_all(self):
         rc, p, err = self.schedule(slug="inbox")
         self.assertEqual(rc, 0, err)
         self.assertFalse(p["scheduled"])
@@ -120,9 +119,16 @@ class Scheduling(Stage2):
 
 class E2E(Stage2):
     def test_e2e_refuses_any_mailbox_that_is_not_the_sandbox(self):
-        rc, out, err = self.run_cli("doctor", "--e2e", "--mailbox", "ana@acme.example")
+        with patch.dict("os.environ", {"TICO_MAIL_SANDBOX": "hub-test@acme.example"}):
+            rc, out, err = self.run_cli("doctor", "--e2e", "--mailbox", "ana@acme.example")
         self.assertEqual(rc, 2)
         self.assertIn("only ever runs against the sandbox mailbox hub-test@acme.example", err)
+
+    def test_e2e_refuses_to_run_with_no_sandbox_named(self):
+        os.environ.pop("TICO_MAIL_SANDBOX", None)       # the harness restores the environment
+        rc, out, err = self.run_cli("doctor", "--e2e")
+        self.assertEqual(rc, 2)
+        self.assertIn("no sandbox mailbox", err)
 
 if __name__ == "__main__":
     unittest.main()

@@ -54,7 +54,7 @@ def test_sql_private_task_inventory_reuses_snapshot_rights_and_sees_revocation(a
         return roster(c)
 
     monkeypatch.setattr(views, "_roster", counted)
-    expected, guests, counts = set(), set(), {}
+    expected, readers, counts = set(), set(), {}
 
     def open_read():
         statements, before = [], len(builds)
@@ -73,9 +73,9 @@ def test_sql_private_task_inventory_reuses_snapshot_rights_and_sees_revocation(a
                 if n % 3 == 0:
                     expected.add(row["id"])
                 elif n % 3 == 2:
-                    c.execute("UPDATE tasks SET guest='human:cara' WHERE id=?", (row["id"],))
+                    c.execute("UPDATE tasks SET readers=json_array('human:cara') WHERE id=?", (row["id"],))
                     expected.add(row["id"])
-                    guests.add(row["id"])
+                    readers.add(row["id"])
         conn, statements, built = open_read()
         try:
             assert ids(conn) == expected
@@ -95,7 +95,7 @@ def test_sql_private_task_inventory_reuses_snapshot_rights_and_sees_revocation(a
         assert ids(held) == expected
         fresh, _, _ = open_read()
         try:
-            assert ids(fresh) == guests
+            assert ids(fresh) == readers
         finally:
             fresh.close()
     finally:

@@ -70,6 +70,12 @@ a.pg-open:hover{background:var(--hover);text-decoration:none}
 .tp-pages{display:flex;flex-direction:column;gap:12px}
 .tp-page{min-width:0}
 .tp-unlink{display:block;margin:4px 0 0 auto}
+.tp-make{display:flex;align-items:center;gap:8px;border:1px solid var(--line);border-radius:8px;padding:8px;min-width:0}
+.tp-make[hidden],.tp-making[hidden],.tp-error[hidden]{display:none}
+.tp-make input{min-width:0;flex:1;width:100%}
+.tp-make button{flex:none;font-size:var(--t-sm)}
+.tp-making{padding:20px 12px;border:1px solid var(--line);border-radius:8px;color:var(--muted);font-size:var(--t-sm)}
+.tp-error{margin:0;font-size:var(--t-sm)}
 
 /* Library › Files */
 .lf{max-width:960px;padding:0 0 48px}

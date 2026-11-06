@@ -17,7 +17,8 @@ HARNESS = r"""
 const fs = require('fs');
 const [file, ...hashes] = process.argv.slice(2);
 const attrs = {}, listeners = {}, seen = [];
-global.document = {documentElement: {clientWidth: 0, setAttribute: (k, v) => { attrs[k] = v; }}};
+global.document = {documentElement: {clientWidth: 0, style: {}, setAttribute: (k, v) => { attrs[k] = v; }}};
+global.getComputedStyle = () => ({backgroundColor: 'rgba(0, 0, 0, 0)', color: 'rgb(0, 0, 0)'});
 global.location = {hash: hashes[0]};
 global.window = {};
 global.addEventListener = (type, fn) => { (listeners[type] = listeners[type] || []).push(fn); };

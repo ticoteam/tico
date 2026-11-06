@@ -321,6 +321,11 @@ html.hidden *, html.hidden *::before, html.hidden *::after { animation-play-stat
 .item .error { color: var(--amber); font-size: 12px; }
 .section > .label.head { margin-bottom: 6px; }
 .section > .label.head .btn { text-transform: none; letter-spacing: 0; color: var(--text-2); font-weight: 500; }
+.section > .label.head .aside { text-transform: none; letter-spacing: 0; font-weight: 400; }
+[data-shared-panel] > .item.live { margin-bottom: 6px; }
+.owner-pick { position: relative; display: inline-flex; }
+.owner-pick select { position: absolute; inset: 0; width: 100%; opacity: 0; cursor: pointer; font-size: 12px; }
+.owner-pick:hover .owner, .owner-pick:focus-within .owner { color: var(--text); background: var(--fill); }
 .items.tasks { margin-bottom: 10px; }
 .item.task .check.done { background: transparent; border-color: var(--text-3); color: var(--text-2); }
 .item.task .title { display: block; }

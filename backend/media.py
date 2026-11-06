@@ -579,6 +579,10 @@ def install_media(app, store, auth, mutate, send_message, task_create, review_pr
         """A task question's cheap checks, run in the read before any upload and again in the write: who decides, and
         the parent the bot may file under."""
         person = H.resolve_actor(c, body.on)
+        if person and H.is_bot(person) and H.bot(c, H.actor_id(person)):
+            # Bots ask bots in a DM, never as a task (D9).
+            raise Problem("validation", f"{body.on} is a bot: a question task is for a person. Ask a bot in a DM: "
+                          f"hub message send {H.actor_id(person)} \"<question>\" --needs-action", 422)
         if not person or not H.is_human(person) or not H.human(c, H.actor_id(person)):
             raise Problem("validation", f"{body.on} is not a person on the team", 422)
         parent = H.task(c, auth.task(c, who, auth.resolve_task(c, who, body.parent))["id"]) if body.parent else None
@@ -598,10 +602,11 @@ def install_media(app, store, auth, mutate, send_message, task_create, review_pr
     def question_readable_by(c, who, person, private, parent):
         """The person reads the task a question makes, by every rule a read checks: a company-visible one by the bot's
         activity access; a private one as its other party, given they read the run's private work. A question under a
-        private task with no person on it, from the bot that owns it, makes the person that task's one guest
-        (task_privacy.guest_for); returned for the write to make."""
-        guest = privacy.guest_for(c, who, person, parent) if private else None
-        if private and not privacy.question_party(c, who, person, parent, guest):
+        private task with no person on it, from the bot that owns it, makes the person that task's reader
+        (task_privacy.reach_for): the question task's create makes it (task_privacy.require_create), as for any
+        subtask the bot files for them, so their answer comes back to that task (hubdb.subtask_flows_up)."""
+        reach = privacy.reach_for(c, who, person, parent) if private else None
+        if private and not privacy.question_party(c, who, person, parent, reach):
             raise question_unreadable(c, person)
         try:
             auth.task_row(c, auth.identity_for_actor(c, person),
@@ -609,7 +614,7 @@ def install_media(app, store, auth, mutate, send_message, task_create, review_pr
                            "private": int(private)})
         except Problem as exc:
             raise question_unreadable(c, person) from exc
-        return guest
+        return reach
 
     def question_text(body, review_text=""):
         """What a task question says, as the org rule check reads it, one output: every line its card and task show
@@ -686,12 +691,14 @@ def install_media(app, store, auth, mutate, send_message, task_create, review_pr
                 **({"review": review_seal} if body.review else {})}
 
     def question_write(c, who, body, option_files, stored, ingest=None, snapshots=None, rc=None, review_checked=None):
-        """One task question, in its write, as the route asks it and Send anyway replays it. `option_files` is each
+        """One task question, in its write, as the route asks it and Send anyway replays it: a question task the person
+        owns (backend/question_tasks.py), with the question on its fields and no ask message. `option_files` is each
         option's (size, name, type) or None, `stored` its blob digest. The org rule check's verdict comes first: held,
-        no task, fold, comment or note is written; warned, its line leads the question the person reads and the task's
-        body. `review_checked` is the digest of what the files under review showed when the check read them: changed
-        since (a file renamed, a new current version), the question is refused as `changed`, never asked unchecked."""
+        nothing is written; warned, its line leads the question the person reads and the task's body.
+        `review_checked` is the digest of what the files under review showed when the check read them: changed since
+        (a file renamed, a new current version), the question is refused as `changed`, never asked unchecked."""
         from . import ask_ingest, file_reviews, org_rule_check
+        from . import question_tasks as QT
         options = body.options or [M.QuestionChoice(label="Yes"), M.QuestionChoice(label="No")]
         question = body.question.strip()
         asked = {"question": question, "why": body.why, "multi": body.multi,
@@ -699,7 +706,7 @@ def install_media(app, store, auth, mutate, send_message, task_create, review_pr
         title = body.title or question
         person, parent = question_checked(c, who, body)
         private = question_private(c, who, body, parent)
-        guest = question_readable_by(c, who, person, private, parent)
+        question_readable_by(c, who, person, private, parent)
         # Files under review (backend/file_reviews.py): versions the person can open, and the options they make. What
         # their card shows is judged with the question.
         review = attachments = None
@@ -717,22 +724,30 @@ def install_media(app, store, auth, mutate, send_message, task_create, review_pr
                 ask_ingest.skipped(c, ingest, "held")
             return org_rule_check.answer(rule)
         said_text = org_rule_check.warned_text(rule, question) if rule else question
-        if guest:
-            H.task_reach(c, who.actor, parent, person)
         topic = H.question_topic(body.topic)
-        # One open question per topic: asked again while the first waits, it joins that one (hubdb.fold_question).
-        found = H.open_question(c, who.actor, person, parent=parent["id"] if parent else None, topic=topic,
-                                private=private)
+        # One open question task per topic: asked again while the first waits, it joins that one (question_tasks.fold).
+        found = QT.open_for(c, who.actor, person, parent=parent["id"] if parent else None, topic=topic,
+                            private=private)
+        made = None
         if found:
-            tid = found["task"]["id"]
+            tid = found["id"]
+            if ingest:
+                ask_ingest.skipped(c, ingest, "folded")     # the question repeats one open on the person: it joins it
         else:
-            # The verdict, already applied, rides into the create: a warning line goes on the new task's body.
+            # The person's own task, under the bot's task when there is one. It counts toward task caps and meets ask
+            # ingest as any task for a person does (D11): merged into an open item, it stays the bot's, with no
+            # question on it. The verdict, already applied, rides into the create: a warning line goes on its body.
             made = task_create(c, who, M.TaskCreate(
-                title=title, body=body.body or question, owner=who.actor, private=body.private,
-                relations=[M.TaskRelationRef(task=body.parent, kind="parent")] if body.parent else []), asked=person,
-                review_prs=snapshots, same=file_reviews.same_versions(review) if review else None,
-                rule=org_rule_check.decided(rule))
+                title=title, body=body.body or question, owner=person, private=body.private,
+                relations=[M.TaskRelationRef(task=body.parent, kind="parent")] if body.parent else []), lint=False,
+                review_prs=snapshots, ingest=ingest if ask_ingest.matches(ingest, person) else None,
+                same=file_reviews.same_versions(review) if review else None, rule=org_rule_check.decided(rule))
+            if ingest and not ask_ingest.matches(ingest, person):
+                ask_ingest.skipped(c, ingest, "target")
             tid = made["task"]["id"]
+            if H.task(c, tid)["owner_id"] != person:
+                return {"task": H.task(c, tid), "folded": False, "question": None,
+                        **({"ingest": made["ingest"]} if made.get("ingest") else {}), **org_rule_check.answer(rule)}
         # The person must be able to read the task by every rule a read checks, or the question would reach
         # them (Slack, mail) while the task stays hidden from them.
         try:
@@ -765,18 +780,13 @@ def install_media(app, store, auth, mutate, send_message, task_create, review_pr
             choices.append(choice)
         from .task_review import check_ask
         ask = check_ask(c, tid, M.ReviewAsk(questions=[M.ReviewQuestion(
-            id="decision", header="", question=question, why=body.why.strip(), options=choices,
+            id=QT.FIRST_ID, header="", question=question, why=body.why.strip(), options=choices,
             multi=body.multi)], who=person, if_no_answer=body.if_no_answer), auth, who, lint=False)
         if rule and rule.get("warn"):
-            # Every card (Needs you, Decide, the Ask panel, the task page) reads the structured question, not the
-            # comment: the line leads it there too. Set on the stored ask, past the model's length cap, which the
-            # question as the bot wrote it met.
+            # Every card (Needs you, Decide, the Ask panel, the task page) reads the structured question: the line
+            # leads it there too. Set on the stored question, past the model's length cap, which the question as the
+            # bot wrote it met.
             ask["questions"][0]["question"] = said_text
-        if topic:
-            ask["topic"] = topic
-        # Set here, after the request's ask is checked: a client cannot send it (the ask model forbids extra fields),
-        # so Replay can tell a task question from a comment ask (ask_ingest._judged_text).
-        ask["task_question"] = True
         if review:
             # A generated pick label keeps its source even after its review attachment is projected away.
             if body.pick:
@@ -795,33 +805,24 @@ def install_media(app, store, auth, mutate, send_message, task_create, review_pr
             if sources:
                 spend["source"] = sources
             ask["spend"] = spend
-        gate = None
         if found:
-            if ingest:
-                ask_ingest.skipped(c, ingest, "folded")     # the question repeats one open on the person: it joins it
             folded_body = org_rule_check.warned_text(rule, body.body) if body.body and rule else body.body
-            said = H.fold_question(c, who.actor, found, said_text, ask, title=body.title or question, body=folded_body)
+            QT.fold(c, who.actor, found, said_text, ask, title=body.title or question, body=folded_body)
         else:
-            # Judged against the plate before the question is on it.
-            gate = ask_ingest.apply(c, ingest) if ask_ingest.matches(ingest, person) else None
-            if ingest and not gate:
-                ask_ingest.skipped(c, ingest, "target")
-            said = H.task_comment(c, who.actor, tid, said_text, ask=ask)
-            if gate:
-                ask_ingest.record(c, ingest, gate, tid, said["id"])
-            if gate and gate["acts"]:
-                H.task_ask_resolve(c, who.actor, tid, said["id"])
-            else:
-                H.task_update(c, who.actor, tid, status="waiting", waiting_on=person, note=said_text)
-        return {"task": H.task(c, tid), "folded": bool(found),
-                "question": next(m for m in H.task_comments(c, tid, actor=who.actor) if m["id"] == said["id"]),
-                **ask_ingest.reply(gate), **org_rule_check.answer(rule)}
+            QT.store(c, tid, ask, topic)
+            QT.file(c, who.actor, H.task(c, tid), parent)
+        # An old ask to them on the same topic (before question tasks) gives way to this one: Needs you counts it once.
+        QT.supersede_legacy(c, who.actor, person, tid, parent=parent["id"] if parent else None, topic=topic,
+                            private=private)
+        card = H.task(c, tid)
+        return {"task": {**card, **QT.fields(card)}, "folded": bool(found), "question": QT.as_ask(card),
+                **({"ingest": made["ingest"]} if made and made.get("ingest") else {}), **org_rule_check.answer(rule)}
 
     @app.post("/api/v2/task-questions")
     def task_question(request: Request, body: M.TaskQuestion):
-        """A bot puts one decision to a person (`hub task question`): the task is the bot's own, the structured
-        question is put to the person and the task waits on them, all in one write, so a refusal or a retry never
-        leaves half a question behind. Option files come in the request and are attached to the new task. Every
+        """A bot puts one decision to a person (`hub task question`): a question task the person owns, the question
+        on its fields (backend/question_tasks.py), under the bot's task when asked from one, all in one write, so a
+        refusal or a retry never leaves half a question behind. A bot never files one for another bot (D9). Option files come in the request and are attached to the new task. Every
         check, including whether the person could read the task, runs first in a read, the bytes are stored with no
         transaction open (an upload never holds the write lock), then the write runs the checks again. A private
         question is a private task whose parties are the bot and the person asked. Bytes stored for a write refused
@@ -858,7 +859,7 @@ def install_media(app, store, auth, mutate, send_message, task_create, review_pr
             raise Problem("validation", "A question's topic needs at least one letter or digit", 422)
         if not body.parent and who.attempt_id:
             # One question, one card: asked from a run on one of the bot's own tasks, it is filed under that task,
-            # which stays the bot's, rather than as a second task of its own.
+            # which is blocked on it, rather than as a task on its own.
             with store.read() as c:
                 own = {t["id"] for t in (H.task(c, tid) for tid in privacy.attempt_tasks(c, who.attempt_id))
                        if t and t["owner_id"] == who.actor and t["status"] in H.ACTIVE_STATUSES}

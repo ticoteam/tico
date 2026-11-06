@@ -300,7 +300,7 @@ def set_access(c, bot, body, org, actor, legacy=False, team_list=False, own_clic
             raise Problem('github_repo', 'Choose a repository in the connected organization', 422)
         existing = c.execute('SELECT enabled,bot_repo FROM repositories WHERE full_name=?', (name,)).fetchone()
         if legacy and not team_list and (not existing or not existing['enabled']):
-            raise Problem('github_repo', 'Ask an Owner or admin to tick it in Settings > Repositories', 422)
+            raise Problem('github_repo', 'Ask an Owner or admin to tick it in Settings > General › Repositories', 422)
         previous = {r['full_name'].lower(): r['access'] for r in before['chosen']}
         bot_repo = name.split('/')[1].lower().startswith('bot-') or any(
             str(repo_of(r[0], org) or '').lower() == name.lower() for r in c.execute('SELECT repo FROM bot_config'))
@@ -319,7 +319,7 @@ def set_access(c, bot, body, org, actor, legacy=False, team_list=False, own_clic
             if value is not None and value != (name.lower() in was[flag]) and (
                     not team_list or not H.is_human(actor) or not own_click):
                 raise Problem('forbidden', 'Only an Owner or admin lets a bot ' + verb + ', themselves in Settings > '
-                              'Repositories', 403)
+                              'General › Repositories', 403)
             # Left out, a grant keeps its setting while it stays write.
             if value or value is None and name.lower() in was[flag] and grant.access == 'write':
                 flagged[flag].add(name.lower())
@@ -344,8 +344,8 @@ def set_access(c, bot, body, org, actor, legacy=False, team_list=False, own_clic
             if value is not None and value != (name.lower() in all_was[flag]) and (
                     not team_list or not H.is_human(actor) or not own_click):
                 raise Problem('forbidden', 'Only an Owner or admin lets a bot ' + verb + ', themselves in Settings > '
-                              'Repositories', 403)
-            # One since unticked in Settings > Repositories may keep its tick or lose it, never gain one.
+                              'General › Repositories', 403)
+            # One since unticked in Settings > General › Repositories may keep its tick or lose it, never gain one.
             if value and name.lower() not in reach and name.lower() not in all_was[flag]:
                 raise Problem('github_repo', name + ' is not one of the ticked repositories All ticked repos reaches', 422)
             if value:
@@ -395,7 +395,7 @@ def set_access(c, bot, body, org, actor, legacy=False, team_list=False, own_clic
         if any(r.get(flag) and r['full_name'].lower() not in had for r in after['effective']) and (
                 not team_list or not H.is_human(actor) or not own_click):
             raise Problem('forbidden', 'Only an Owner or admin lets a bot ' + verb + ', themselves in Settings > '
-                          'Repositories', 403)
+                          'General › Repositories', 403)
     save_extra_repos(c, bot, [r['full_name'] for r in after['chosen'] if r['access'] == 'write'] if body.mode == 'chosen' else [])
     lost = stopped(before, after)
     H.event(c, actor, 'bot.repos_changed', bot, {'before': before, 'after': after, **lost})
@@ -704,7 +704,7 @@ def repository_health(service):
             'SELECT full_name,enabled FROM repositories WHERE reachable=0 ORDER BY full_name')
             if r['full_name'].lower() in confirmed and r['enabled'] and r['full_name'].lower() not in own]
     note_github_token(service.store, '; '.join(missing) or None,
-                      'Refresh Settings > Repositories or check the GitHub App installation.')
+                      'Refresh Settings > General › Repositories or check the GitHub App installation.')
 
 
 def workflow_health(service, accepted, refused=False, flag='run_workflows'):
@@ -1000,12 +1000,12 @@ def install(app, store, service):
                 # The person's Assistant cannot make this change on its words: it is their card in Settings, or one
                 # proposed (`hub assistant propose`) for them to confirm.
                 raise Problem('confirm_required', 'That lets a bot run workflows, edit workflow files or create product '
-                              'repositories: the person confirms it in Settings > Repositories', 403)
+                              'repositories: the person confirms it in Settings > General › Repositories', 403)
             if gains:
                 raise Problem('forbidden', 'Only an Owner or admin lets a bot run workflows, edit workflow files or '
-                              'create product repositories, themselves in Settings > Repositories', 403)
+                              'create product repositories, themselves in Settings > General › Repositories', 403)
             raise Problem('forbidden', 'This takes ' + describe_stopped(result) + ' away from ' + name + '; a person '
-                          'who manages it makes that change in Settings > Repositories', 403)
+                          'who manages it makes that change in Settings > General › Repositories', 403)
 
     def computer(request):
         who = request.state.identity

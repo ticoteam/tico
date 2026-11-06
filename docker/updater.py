@@ -36,6 +36,7 @@ import contextlib
 import hashlib
 import hmac
 import json
+import math
 import os
 import re
 import secrets
@@ -67,7 +68,19 @@ BUNDLE = os.environ.get("TICO_UPDATER_BUNDLE", "always")   # "never" only in doc
 SUPERVISOR_UID = SUPERVISOR_GID = 10002   # ticorun, the runner supervisor (docker/runner-entrypoint.sh)
 SNAPSHOTS = "/data/snapshots"   # inside the server container: the data volume
 KEEP_SNAPSHOTS = int(os.environ.get("TICO_UPDATER_KEEP_SNAPSHOTS", "3"))
-SNAPSHOT_SECONDS = int(os.environ.get("TICO_UPDATER_SNAPSHOT_SECONDS", "900"))
+# The pre-update copy is allowed FLOOR seconds, or PER_GB seconds per gigabyte of hub.sqlite when that is more. Setting
+# TICO_UPDATER_SNAPSHOT_SECONDS replaces the scaled allowance with a fixed one.
+_SNAPSHOT_OVERRIDE = os.environ.get("TICO_UPDATER_SNAPSHOT_SECONDS", "").strip()
+try:
+    SNAPSHOT_SECONDS = int(_SNAPSHOT_OVERRIDE) if _SNAPSHOT_OVERRIDE else None
+    if SNAPSHOT_SECONDS is not None and SNAPSHOT_SECONDS <= 0:
+        raise ValueError(_SNAPSHOT_OVERRIDE)
+except ValueError:
+    print("TICO_UPDATER_SNAPSHOT_SECONDS is not a positive whole number of seconds (%r): using the size-based allowance"
+          % _SNAPSHOT_OVERRIDE, file=sys.stderr, flush=True)
+    SNAPSHOT_SECONDS = None
+SNAPSHOT_FLOOR_SECONDS = 1200
+SNAPSHOT_SECONDS_PER_GB = 300
 SELF_UPDATE = os.environ.get("TICO_UPDATER_SELF", "always")   # "never" leaves this updater on its image
 # The runner's default memory cap is the installer's rule (docker/runner-memory.sh, copied into this image). Inside a
 # container /proc/meminfo is the host's total unless LXCFS is mounted, so the default is the host's, as the installer's is.
@@ -809,26 +822,41 @@ sync_dir(folder)
 """
 
 
+def database_bytes():
+    """The size of the server's hub.sqlite and its write-ahead log, read in its container; None when it cannot be read."""
+    try:
+        size = compose("exec", "-T", SERVICE, "python", "-c",
+                       "import os; p = '/data/hub.sqlite'; print(sum(os.path.getsize(f) for f in (p, p + '-wal') if os.path.exists(f)))",
+                       timeout=INSPECT_SECONDS)   # the write-ahead log is part of what the snapshot copies
+        return int(size.strip())
+    except (RuntimeError, OSError, ValueError, subprocess.SubprocessError):
+        return None
+
+
 def database_note():
     """The note ' on a N GB database' for a status message, from the live database; '' when Docker cannot say."""
-    try:
-        size = int(compose("exec", "-T", SERVICE, "python", "-c",
-                           "import os; p = '/data/hub.sqlite'; print(sum(os.path.getsize(f) for f in (p, p + '-wal') if os.path.exists(f)))",
-                           timeout=INSPECT_SECONDS).strip())   # the write-ahead log is part of what the snapshot copies
-    except (RuntimeError, OSError, ValueError, subprocess.SubprocessError):
-        return ""
-    return " on a %.1f GB database" % (size / 1024 ** 3)
+    size = database_bytes()
+    return "" if size is None else " on a %.1f GB database" % (size / 1024 ** 3)
 
 
-def take_snapshot(previous):
+def snapshot_seconds(size):
+    """How long the pre-update copy may take for a database of `size` bytes."""
+    if SNAPSHOT_SECONDS is not None:
+        return SNAPSHOT_SECONDS
+    if size is None:
+        return SNAPSHOT_FLOOR_SECONDS
+    return max(SNAPSHOT_FLOOR_SECONDS, math.ceil(size / 1024 ** 3 * SNAPSHOT_SECONDS_PER_GB))
+
+
+def take_snapshot(previous, seconds):
     """A consistent copy of the database, made by the running server's own container. Returns its file name."""
     name = "pre-update-%s-%s.sqlite" % (re.sub(r"[^0-9A-Za-z.-]", "", previous) or "unknown", time.strftime("%Y%m%d%H%M%S"))
     note = database_note()
     try:
         compose("exec", "-T", SERVICE, "python", "-c", SNAPSHOT_SCRIPT, SNAPSHOTS, name, str(KEEP_SNAPSHOTS),
-                str(max(SNAPSHOT_SECONDS - 60, SNAPSHOT_SECONDS * 4 // 5)), timeout=SNAPSHOT_SECONDS)
+                str(max(seconds - 60, seconds * 4 // 5)), timeout=seconds)
     except subprocess.TimeoutExpired:   # the Docker call itself outlived the snapshot's whole limit
-        raise RuntimeError("the database snapshot check exceeded %d seconds%s" % (SNAPSHOT_SECONDS, note))
+        raise RuntimeError("the database snapshot check exceeded %d seconds%s" % (seconds, note))
     return name
 
 
@@ -1173,11 +1201,13 @@ def update(version, running=""):
                 # Last thing before the switch, so little is lost if it is undone: a new version may migrate the
                 # schema and then fail its health check, and the old image cannot read a newer schema.
                 try:
-                    set_status(message="Snapshotting the database before switching…")
-                    snapshot = take_snapshot(previous)
+                    size = database_bytes()
+                    set_status(state="snapshotting", snapshot="", message="snapshotting, %s" % (
+                        "%.1f GB" % (size / 1024 ** 3) if size is not None else "the database"))
+                    snapshot = take_snapshot(previous, snapshot_seconds(size))
                 except (RuntimeError, OSError, subprocess.SubprocessError) as exc:
                     raise RuntimeError("could not snapshot the database first (%s)" % exc)
-                set_status(snapshot=snapshot, message="")
+                set_status(state="pulling", snapshot=snapshot, message="")
             if MODE == "runner":
                 # Saved, so an updater stopped during the switch settles it when it starts again (load_status); the
                 # server keeps its old way, since settling there would bring back the old image on a migrated database.
@@ -1331,7 +1361,7 @@ class Handler(BaseHTTPRequestHandler):
         if older_than_running(version, running):   # a bot could otherwise move the box to a release that predates the bot user
             return self.reply(409, {"error": "older than the running version"})
         with lock:
-            if status["state"] in ("pulling", "restarting", "uncertain"):
+            if status["state"] in ("pulling", "snapshotting", "restarting", "uncertain"):
                 return self.reply(409, {"error": "an update is already running", **status})
             # A whole new status, in one step: a read before the thread gets going must not show the last update's
             # "from", snapshot or outcome next to this one's "to". update() settles "from" against the image.

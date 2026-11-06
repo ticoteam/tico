@@ -32,7 +32,7 @@ def held_answers(api, tid, fid, label):
     api.app.state.judge = Judge(api.app.state.store, {text: label})
     rule(api, {"kind": "internal", "text": text, "who": {"people": ["reader"]},
                "if_broken": "escalate", "reviewer": "cara"})
-    cases = [(pick["task"]["id"], {"comment": pick["question"]["id"]}, "decision"),
+    cases = [(pick["task"]["id"], {"task": pick["task"]["id"]}, "decision"),
              (tid, {"comment": comment["id"]}, "verdict"),
              (tid, {"file": sibling["file_id"], "version": 1}, "verdict")]
     holds = []

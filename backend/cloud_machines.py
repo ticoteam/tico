@@ -63,6 +63,14 @@ machine; a shared machine's facts are its member bots' together:
              running often keeps it on by itself, and so does a runner still updating (`runner_updating`).
              With no active bot left on it, it stops, once no turn is out and no update under way: every stop but out
              of credit's waits for both.
+    grow     a running machine whose disk is nearly full (`low_disk`: under GROW_FREE_PCT percent or GROW_FREE_GB free,
+             by its runner's newest performance sample) and whose storage grows (`grows`: Grow storage automatically,
+             on unless the company or the bot turned it off) is set to the next size with more disk (`grow_plan`), never
+             past the largest HQ offers nor HQ's CPU cap. One that cannot grow says why (`disk_full`, on Health).
+    resize   a running machine with another size chosen (a person's or grow's, `resizing`) drains: its runner takes no
+             new turn (`held`), and once no turn is out and no update is under way it stops, Always on too, and starts
+             again at that size (HQ resizes only on a start). Work queued meanwhile runs after. A turn is never cut: a
+             drain that waits past DRAIN_WARN is on Health. HQ refusing the size (SIZE_REFUSALS) starts it at its own.
     guard    a machine woken for one want that saw no activity is not woken again for that same want: a job its
              runner never takes would otherwise start (4 cents) and idle-stop it forever. New work wakes it. An update
              wake is held the same way, for its release, and flags nothing: no bot's work waits on it.
@@ -118,7 +126,8 @@ CREATE TABLE IF NOT EXISTS cloud_machines(
  active_at REAL, heartbeat_at REAL, ttl_s INTEGER, next_try_at REAL, failures INTEGER NOT NULL DEFAULT 0,
  problem TEXT NOT NULL DEFAULT '', problem_at TEXT, wake_key TEXT, woke_at REAL,
  enroll_by REAL, enroll_fails INTEGER NOT NULL DEFAULT 0, changed_by TEXT, updated_at TEXT, stop_until REAL,
- start_asked_at REAL, create_asked_at REAL);
+ start_asked_at REAL, create_asked_at REAL, grow_storage INTEGER, grow_note TEXT NOT NULL DEFAULT '',
+ grow_refused_size TEXT, drain_started_at REAL, grow_blocked_until REAL);
 CREATE TABLE IF NOT EXISTS cloud_machine_codes(
  code_hash TEXT PRIMARY KEY, bot TEXT NOT NULL, created_at TEXT NOT NULL, replacement_for TEXT);
 """
@@ -154,6 +163,15 @@ GOING = ("stopping", "stopped")  # HQ's word for a machine that is going down, o
 UPDATE_WANT = "update:"          # a stopped machine's want to update, keyed "update:" and this server's release
 UPDATE_STALE = 15 * 60           # an update its runner reports with no progress this long has failed (runner-rs follow.rs)
 UPDATE_SPREAD_S = 600            # update wakes spread over this long after a release (`update_due`): no start storm
+GROW_FREE_PCT = 15               # a disk under this much free (percent), or under GROW_FREE_GB, grows (`low_disk`)
+GROW_FREE_GB = 10
+DRAIN_WARN = 30 * 60             # a resize still waiting for turns to finish this long is on Health; it never cuts them
+GROW_RETRY = 60 * 60             # a size refused for now (HQ's CPU cap, a stop that kept failing) is tried again after this
+STOP_TRIES = 3                   # stops refused in a row before a resize gives up and lets the machine run at its size
+STOP_REFUSED = "Stop refused"    # grow_note while a resize's stop is refused (Health says so; the drain still holds)
+# HQ's refusals of a start that are about the size it asked for: the next start goes at the size the machine has.
+SIZE_REFUSALS = ("cpu_cap", "plan_required", "too_small", "invalid_size")
+SIZE_RETRIES = ("cpu_cap",)      # of those, the ones that may pass later (GROW_RETRY); the rest hold until a person acts
 # A claim refusal that only says the machine's last report is stale: a stopped machine is woken for it, and its
 # runner reports afresh (the guard keeps a refusal that stays from waking it again).
 STALE = ("readiness_unknown", "not_ready", "isolation_unknown", "lane_held", "maintaining")
@@ -208,9 +226,11 @@ def parse_size(value):
     idle = value.get("idle_stop_s")
     if type(idle) is not int or idle <= 0:
         raise ValueError("idle_stop_s")
+    disk = value.get("disk_gb")
     return {"name": value["name"], "cpu": _number(value.get("cpu"), 1), "memory_gb": _number(value.get("memory_gb")),
             "usd_per_hour": float(_number(value.get("usd_per_hour"))),
-            "start_usd": float(_number(value.get("start_usd") or 0)), "idle_stop_s": idle}
+            "start_usd": float(_number(value.get("start_usd") or 0)), "idle_stop_s": idle,
+            **({"disk_gb": disk} if type(disk) in (int, float) and disk > 0 else {})}
 
 
 class HQ:
@@ -544,6 +564,103 @@ def sizes(c):
 
 def size_names(c):
     return [s["name"] for s in sizes(c)] or list(SIZES)
+
+
+def listed_caps(c):
+    """HQ's caps for this company as last listed ({max_running, max_cpu, ...}), or {} before it has said."""
+    from .read_cache import metadata
+    found = metadata(c, SIZES_KEY)
+    try:
+        caps = (json.loads(found[0]) or {}).get("caps") or {} if found else {}
+    except (ValueError, TypeError, AttributeError):
+        caps = {}
+    return caps if isinstance(caps, dict) else {}
+
+
+def resizing(current):
+    """Whether machine row `current` is on at one size with another chosen (a person's, or `grow_plan`'s): its runner
+    takes no new turn (`held`) and, once no turn is out, it stops and starts again at the chosen size (`decide`)."""
+    return bool(current["state"] in ON and current["machine_id"] and current["machine_size"]
+                and current["size"] != current["machine_size"])
+
+
+def grows(current, shared=None):
+    """Whether machine row `current` grows its storage when its disk is nearly full: its own choice, else the company's
+    (the shared machine's row), else on."""
+    for found in (current, shared):
+        if found is not None and found.get("grow_storage") is not None:
+            return bool(found["grow_storage"])
+    return True
+
+
+def low_disk(disk):
+    """Whether a disk reading ({free_bytes, total_bytes}) is under GROW_FREE_PCT percent or GROW_FREE_GB free."""
+    if not disk or not disk.get("total_bytes"):
+        return False
+    free, total = disk["free_bytes"], disk["total_bytes"]
+    return free * 100 < GROW_FREE_PCT * total or free < GROW_FREE_GB * 1024 ** 3
+
+
+def bigger(offered, name):
+    """The next size up from `name` that has more disk (the least disk above its own, the fewest CPUs among those), or
+    None at the largest, for a size HQ did not list, or without HQ's disk sizes."""
+    here = next((s for s in offered if s["name"] == name), None)
+    if not here or not here.get("disk_gb"):
+        return None
+    up = [s for s in offered if (s.get("disk_gb") or 0) > here["disk_gb"]]
+    return min(up, key=lambda s: (s["disk_gb"], s["cpu"]))["name"] if up else None
+
+
+def fresh_disk(current, disk):
+    """`disk` (latest_disks' reading) if it was taken since the machine last started (`woke_at`), else None: a reading
+    from before a restart at a bigger size is of the old disk."""
+    if not disk or current.get("woke_at") and (disk.get("at") or 0) < current["woke_at"]:
+        return None
+    return disk
+
+
+def unresized(current, disk, offered):
+    """Whether reading `disk` is clearly smaller than the disk of the size HQ says the machine runs at: HQ changed the
+    size but the disk did not grow with it."""
+    here = next((s for s in offered if s["name"] == current["machine_size"]), None)
+    return bool(here and here.get("disk_gb") and disk["total_bytes"] < 0.8 * here["disk_gb"] * 1e9)
+
+
+def grow_plan(current, disk, offered, caps, others_cpu, at=0):
+    """(size, why, full) for a running machine row `current` whose storage grows, from its runner's newest disk reading
+    `disk`: `size` the next one with more disk to grow to, or None; `why` the words for a machine that cannot grow (the
+    largest offered, or past HQ's CPU cap with `others_cpu` the CPUs of the company's other running machines, or a size
+    HQ refused before and not yet due again, or a disk that did not grow with its size), else None; `full` the disk's
+    percent used. (None, None, None) while the disk has room, and while a size is already waiting for the restart. Pure:
+    the clock is `at`."""
+    if not low_disk(disk) or resizing(current):
+        return None, None, None
+    full = round(100 * (1 - disk["free_bytes"] / disk["total_bytes"]))
+    here = current["machine_size"] or current["size"]
+    if unresized(current, disk, offered):
+        return None, f"Disk {full}% full: disk not resized to {cloud_size_name(here)}", full
+    target = bigger(offered, here)
+    if target is None:
+        return None, f"Disk {full}% full: {cloud_size_name(here)} is the largest size", full
+    until = current.get("grow_blocked_until")
+    if target == current.get("grow_refused_size") and not (until and at >= until):
+        return None, f"Disk {full}% full: Tico refused {cloud_size_name(target)}", full
+    cpu = next(s["cpu"] for s in offered if s["name"] == target)
+    if type(caps.get("max_cpu")) is int and others_cpu + cpu > caps["max_cpu"]:
+        return None, f"Disk {full}% full: {cloud_size_name(target)} is over the company's {caps['max_cpu']} CPU cap", full
+    return target, None, full
+
+
+def cloud_size_name(name):
+    return (name or "")[:1].upper() + (name or "")[1:]
+
+
+def others_cpu(c, key):
+    """The CPUs of the company's running machines other than `key`: the size HQ last said each has, or the one it
+    restarts at when that is bigger."""
+    by = {s["name"]: s["cpu"] for s in sizes(c)}
+    return sum(max(by.get(r["machine_size"], 0), by.get(r["size"], 0)) for r in c.execute(
+        "SELECT size,machine_size FROM cloud_machines WHERE bot<>? AND state IN ('starting','running')", (key,)))
 
 
 def pause_after(current):
@@ -902,8 +1019,10 @@ def decide(current, found, at, idle_s):
         # Work queued for it that its runner has not taken yet is activity: stopping now would only start it again.
         # So is an update under way: stopping it would cut the update short, and the wake for it would be spent.
         last = max(found["activity"] or 0, current["active_at"] or 0, found["want_at"] or 0)
-        if not found["turns"] and not found["updating"] and not current["always_on"] and not booting \
-                and at - last >= idle_s:
+        settled = not found["turns"] and not found["updating"] and not booting
+        if settled and resizing(current):
+            return "stop", None                             # drained (`held`): the next start is at the size chosen
+        if settled and not current["always_on"] and at - last >= idle_s:
             return "stop", None
         if at - (current["heartbeat_at"] or 0) >= HEARTBEAT:
             return "heartbeat", None
@@ -944,15 +1063,20 @@ def reserve(c, settings, key, action, machine_id):
     return {**current, "stop_until": at + STOP_HOLD}
 
 
+RESIZE_HELD = "This cloud machine restarts at a new size once its turns finish. Its bots' work waits for it."
+
+
 def held(c, runner_id):
     """Why the claim gives computer `runner_id` no new turn, or "": it is a cloud machine reserved for a stop
-    (`reserve`, until its reservation lapses), awaiting reconciliation of an unanswered manual deletion, or one HQ
-    says is stopping or stopped. Any other computer: ""."""
+    (`reserve`, until its reservation lapses), awaiting reconciliation of an unanswered manual deletion, one HQ
+    says is stopping or stopped, or one draining to restart at another size (`resizing`): its turns out finish, and the
+    work queued meanwhile runs after the restart. Any other computer: ""."""
     intent = c.execute("SELECT 1 FROM cloud_machine_deletions d LEFT JOIN cloud_machines m ON m.machine_id=d.machine_id "
                        "WHERE d.runner_id=? OR m.runner_id=? LIMIT 1", (runner_id, runner_id)).fetchone()
-    found = c.execute("SELECT state,stop_until FROM cloud_machines WHERE runner_id=? LIMIT 1", (runner_id,)).fetchone()
+    found = c.execute("SELECT state,stop_until,machine_id,size,machine_size FROM cloud_machines WHERE runner_id=? "
+                      "LIMIT 1", (runner_id,)).fetchone()
     if not intent and (not found or not (found["state"] in GOING or (found["stop_until"] or 0) > now())):
-        return ""
+        return RESIZE_HELD if found and resizing(found) else ""
     return "This cloud machine is stopping. Its bots' work waits for it to start again."
 
 
@@ -1260,6 +1384,11 @@ class Manager:
                 if live["machine_id"] == current["machine_id"] and not live["runner_id"] and not live["enroll_by"]:
                     save(c, key, enroll_by=enrollment_deadline(c, key, at))
                 current = row(c, key)
+        current = self.grow(key, current, at)
+        if resizing(current) != bool(current["drain_started_at"]):
+            with self.store.transaction() as c:          # when the drain began, for Health (DRAIN_WARN)
+                save(c, key, drain_started_at=at if resizing(current) else None)
+                current = row(c, key)
         with self.store.read() as c:
             found = facts(c, self.settings, current, at)
         action, problem = decide(current, found, at, pause_after(current))
@@ -1277,6 +1406,42 @@ class Manager:
             self.act(hq, current, action, found, at)
         return action
 
+    def grow(self, key, current, at):
+        """A running machine whose storage grows (`grows`) and whose disk is nearly full (`low_disk`, from its runner's
+        newest sample) is set to the next size with more disk (`grow_plan`); the drain then restarts it at that size
+        without cutting a turn (`decide`, `held`). One that cannot grow says why (`disk_full`) until its disk has room.
+        Returns the row as it is now; writes only when something changes."""
+        if current["state"] not in ON or not current["runner_id"] or current["deleting"] or current["enroll_by"]:
+            return current                              # (HQ may still list a machine whose runner reports as starting)
+        from .performance import latest_disks
+        with self.store.read() as c:
+            disk = fresh_disk(current, latest_disks(c, [current["runner_id"]], at).get(current["runner_id"]))
+            on = grows(current, None if key == SHARED else row(c, SHARED))
+            target, why, full = grow_plan(current, disk, sizes(c), listed_caps(c), others_cpu(c, key), at) if on \
+                else (None, None, None)
+        if target is None and why is None:
+            if current["problem"] != "disk_full" or resizing(current):
+                return current
+            with self.store.transaction() as c:                 # room again, or growing turned off
+                save(c, key, problem="", problem_at=None, grow_note="")
+                return row(c, key)
+        with self.store.transaction() as c:
+            live = row(c, key)
+            if live["size"] != current["size"] or live["machine_size"] != current["machine_size"] \
+                    or live["problem"] not in ("", "disk_full"):
+                return live                                 # a person's change, or a problem that says more
+            if target:
+                save(c, key, size=target, grow_note="",
+                     **({"problem": "", "problem_at": None} if live["problem"] == "disk_full" else {}))
+                H.event(c, H.KEEPER, "cloud_machine.grew", key, {"from": live["machine_size"], "to": target,
+                                                                 "disk_pct": full})
+            elif live["problem"] != "disk_full" or live["grow_note"] != why:
+                save(c, key, problem="disk_full", problem_at=live["problem_at"] or H.now(), grow_note=why)
+                if live["problem"] != "disk_full":
+                    H.event(c, H.KEEPER, "cloud_machine.grow_blocked", key, {"size": live["machine_size"],
+                                                                             "disk_pct": full})
+            return row(c, key)
+
     def act(self, hq, current, action, found, at):
         key = current["bot"]
         replacing = current.get("deleting") or bool(current["machine_id"] and current["state"] in DEAD)
@@ -1286,6 +1451,7 @@ class Manager:
                 current = reserve(c, self.settings, key, action, current["machine_id"])
             if current is None:
                 return                                      # a claim came first, or the facts changed: not now
+        resize = current["size"] if action == "start" and current["size"] != current["machine_size"] else None
         pending_create = False
         if action == "create" and current["create_asked_at"] is not None:
             with self.store.transaction() as c:
@@ -1326,7 +1492,6 @@ class Manager:
             if action == "create":
                 machine = hq.create(key, current["size"], code, self.settings.runner_url)
             elif action == "start":
-                resize = current["size"] if current["size"] != current["machine_size"] else None
                 machine = hq.start(current["machine_id"], resize)
             elif action == "stop":
                 machine = hq.stop(current["machine_id"])
@@ -1371,6 +1536,13 @@ class Manager:
         if action == "start":
             woke_for = wake_for(current, found)[0]
             fields.update(active_at=at, heartbeat_at=at, wake_key=woke_for, woke_at=at)
+            if resize and machine["size"] != resize:
+                # HQ started it at another size: keep that, or every look would drain it to ask again.
+                fields.update(size=machine["size"], grow_refused_size=resize, grow_blocked_until=at + GROW_RETRY,
+                              grow_note=f"Couldn't change to {cloud_size_name(resize)}")
+        if action == "stop" and resizing(current):
+            # Stopped to resize: its next want is fresh, even one it was woken for before the drain held it.
+            fields.update(wake_key=None, drain_started_at=None, grow_note="")
         with self.store.transaction() as c:
             if action == "create":
                 # Enrollment may have arrived while HQ answered. Both recovery paths read it under the write lock.
@@ -1429,12 +1601,30 @@ class Manager:
                 fields["stop_until"] = None                 # HQ said it did not: its runner may take work again
         if action == "start" and 0 < refused.status < 500:
             fields["start_asked_at"] = None                 # a refusal says the start did not happen
+        if action == "start" and current["machine_size"] and current["size"] != current["machine_size"] \
+                and refused.code in SIZE_REFUSALS:
+            # The size, not the start: start again now at the size it has, and grow no more to the one refused.
+            fields.update(size=current["machine_size"], grow_refused_size=current["size"], next_try_at=None,
+                          failures=0, problem="", problem_at=None,
+                          grow_blocked_until=at + GROW_RETRY if refused.code in SIZE_RETRIES else None,
+                          grow_note=f"Couldn't change to {cloud_size_name(current['size'])}")
+        if action == "stop" and resizing(current) and "failures" in fields:
+            if fields["failures"] >= STOP_TRIES:
+                # HQ keeps refusing the stop: run on at the size it has, its runner takes work again, and the size
+                # is tried again after GROW_RETRY.
+                fields.update(size=current["machine_size"], grow_refused_size=current["size"], next_try_at=None,
+                              failures=0, drain_started_at=None, grow_blocked_until=at + GROW_RETRY,
+                              grow_note=f"Couldn't change to {cloud_size_name(current['size'])}")
+            else:
+                fields["grow_note"] = STOP_REFUSED
         with self.store.transaction() as c:
             save(c, key, **fields)
             if refused.status == 402 and current["problem"] != "out_of_credit" or (
-                    "failures" in fields and fields["failures"] == 1):
+                    "failures" in fields and fields["failures"] == 1) or "grow_refused_size" in fields:
                 H.event(c, H.KEEPER, "cloud_machine.refused", key, {"action": action, "code": refused.code,
-                                                                     "status": refused.status})
+                                                                     "status": refused.status,
+                                                                     **({"size": current["size"]}
+                                                                        if "grow_refused_size" in fields else {})})
 
     async def loop(self, stop):
         import asyncio
@@ -1445,8 +1635,9 @@ class Manager:
                 pass
             if stop.is_set():
                 return
+            from . import system_routines as SR    # each look is one run of Cloud machines (Settings > Routines)
             try:
-                await asyncio.to_thread(self.tick)
+                await asyncio.to_thread(SR.pass_of, self.store, "cloud_machines", self.tick)
             except Exception:  # noqa: BLE001 - the next look tries again
                 log.exception("Cloud machines look failed")
 
@@ -1454,7 +1645,7 @@ class Manager:
 # ----------------------------------------------------------------------------- what people see
 PROBLEMS = {"out_of_credit": "Out of credit", "replacing": "Replacing machine", "delete_unknown": "Checking machine deletion",
             "stuck": "Started, but its work did not run there",
-            "no_enroll": "Made, but it never connected to this server"}
+            "no_enroll": "Made, but it never connected to this server", "disk_full": "Disk nearly full"}
 ASLEEP = "asleep; starts when work can run"
 
 
@@ -1514,15 +1705,29 @@ def view(c, bot, settings=None):
     return shown(bot, found.get(bot), assigned, found.get(SHARED))
 
 
-def machine_view(current):
+def shown_note(current):
+    """The grow note people see, only while it asks something of them: the disk is nearly full and cannot grow, or a
+    size was refused and is not due again yet."""
+    until = current.get("grow_blocked_until")
+    if current["problem"] == "disk_full" or current.get("grow_refused_size") and not (until and now() >= until):
+        return current.get("grow_note") or ""
+    return ""
+
+
+def machine_view(current, shared=None):
     """A machine row as people see it: the size the next start uses (`size`), the one HQ last said it has, Always on,
-    its Pause after (the effective minutes, PAUSE_MINUTES when none is set), its state, this month's cost and starts,
-    its computer and what keeps it from starting."""
+    its Pause after (the effective minutes, PAUSE_MINUTES when none is set), Grow storage automatically (`grow_storage`,
+    its own choice or the company's, the `shared` row's) and the last word on it (`grow_note`), whether it waits for its
+    turns to restart at the chosen size (`resizing`), its state, this month's cost and starts, its computer and what keeps
+    it from starting."""
     if current is None:
-        return {"size": "default", "always_on": False, "pause_minutes": PAUSE_MINUTES, "state": "none",
-                "machine_size": None, "cost_month_usd": 0.0, "starts_month": 0, "runner_id": None, "problem": ""}
+        return {"size": "default", "always_on": False, "pause_minutes": PAUSE_MINUTES, "grow_storage": grows(None, shared),
+                "grow_note": "", "resizing": False, "state": "none", "machine_size": None, "cost_month_usd": 0.0,
+                "starts_month": 0, "runner_id": None, "problem": ""}
     return {"size": current["size"], "always_on": bool(current["always_on"]),
-            "pause_minutes": current["pause_minutes"] or PAUSE_MINUTES, "state": current["state"],
+            "pause_minutes": current["pause_minutes"] or PAUSE_MINUTES,
+            "grow_storage": grows(current, shared), "grow_note": shown_note(current),
+            "resizing": resizing(current), "state": current["state"],
             "machine_size": current["machine_size"], "cost_month_usd": round(current["cost_month_usd"] or 0, 2),
             "starts_month": current["starts_month"], "runner_id": current["runner_id"],
             "problem": problem_words(current["problem"])}
@@ -1533,15 +1738,17 @@ def shown(bot, current, assigned, shared=None):
     `placement` which cloud machine, shared or its own, and the rest is that machine's (machine_view). A bot with no row
     yet runs where it was put, or on a cloud machine once it has work."""
     if current is None:
-        return {"mode": "computer" if assigned else "cloud", "placement": "shared", **machine_view(shared)}
+        return {"mode": "computer" if assigned else "cloud", "placement": "shared", **machine_view(shared, shared)}
     machine = shared if current["placement"] == "shared" else current
-    return {"mode": current["mode"], "placement": current["placement"], **machine_view(machine)}
+    return {"mode": current["mode"], "placement": current["placement"], **machine_view(machine, shared)}
 
 
-def change(c, execution, who, bot, mode=None, size=None, always_on=None, placement=None, pause_minutes=None):
+def change(c, execution, who, bot, mode=None, size=None, always_on=None, placement=None, pause_minutes=None,
+           grow_storage=None):
     """A person's choice for the bot: a cloud machine (`mode` cloud), which one (`placement` shared or own), its own
-    machine's size (applied at its next start), Always on and Pause after (`pause_minutes`, whole minutes). None leaves a
-    choice as it is. Moving to another computer is Execution.assign's (which sets `computer`). Those who manage the bot only."""
+    machine's size (a running machine restarts at it once its turns finish), Always on, Pause after (`pause_minutes`,
+    whole minutes) and Grow storage automatically (`grow_storage`; until set, the company's). None leaves a choice as it
+    is. Moving to another computer is Execution.assign's (which sets `computer`). Those who manage the bot only."""
     auth = execution.auth
     manage(c, auth, who, bot)
     if not offered(c, execution.store.settings):
@@ -1570,8 +1777,7 @@ def change(c, execution, who, bot, mode=None, size=None, always_on=None, placeme
         fields.update(placement=placement, wake_key=None)
     if "wake_key" in fields and not before["deleting"] and before["problem"] != "no_enroll":
         fields["problem"] = ""
-    if size is not None:
-        fields["size"] = size
+    fields.update(size_fields(c, before, size, grow_storage))
     if always_on is not None:
         fields["always_on"] = int(always_on)
     if pause_minutes is not None:
@@ -1590,9 +1796,28 @@ def change(c, execution, who, bot, mode=None, size=None, always_on=None, placeme
         if moving and target and chose and MS.is_admin(auth, who):
             lend_plans(c, execution, bot, target, who.actor)
     H.event(c, who.actor, "cloud_machine.changed", bot, {
-        key: after[key] for key in ("mode", "placement", "size", "always_on", "pause_minutes")
+        key: after[key] for key in ("mode", "placement", "size", "always_on", "pause_minutes", "grow_storage")
         if after[key] != before[key]})
     return view(c, bot, execution.store.settings)
+
+
+def size_fields(c, before, size, grow_storage):
+    """A person's size and Grow storage choice as row fields. A real change of either clears a refused size (it may be
+    asked again); the same value again changes nothing. A size with less disk than the machine has is refused: a disk
+    cannot shrink, so HQ would refuse the restart."""
+    fields = {}
+    if size is not None and size != before["size"]:
+        disk = {s["name"]: s.get("disk_gb") for s in sizes(c)}
+        have = before["machine_size"] if before["machine_size"] and before["state"] not in DEAD else None
+        if have and disk.get(size) and disk.get(have) and disk[size] < disk[have]:
+            raise Problem("too_small", f"{cloud_size_name(size)} has less disk than this machine has now "
+                                       f"({disk[have]} GB). A disk cannot shrink.", 422)
+        fields.update(size=size)
+    if grow_storage is not None and int(grow_storage) != before["grow_storage"]:
+        fields.update(grow_storage=int(grow_storage))
+    if fields:
+        fields.update(grow_refused_size=None, grow_blocked_until=None, grow_note="")
+    return fields
 
 
 def shared_view(c):
@@ -1600,8 +1825,9 @@ def shared_view(c):
     return {**machine_view(visible_rows(c).get(SHARED)), "bots": members(c)}
 
 
-def change_shared(c, auth, who, size=None, always_on=None, pause_minutes=None):
-    """The company's choice for the shared machine: its size (applied at its next start), Always on and Pause after.
+def change_shared(c, auth, who, size=None, always_on=None, pause_minutes=None, grow_storage=None):
+    """The company's choice for the shared machine: its size (a running one restarts at it once its turns finish),
+    Always on, Pause after and Grow storage automatically, which is also every own machine's until its bot chooses.
     Owners and admins only: it spends the company's credit for every bot on it. The route checks the company is on
     Tico Cloud."""
     if not auth.bot_admin(who):
@@ -1613,8 +1839,7 @@ def change_shared(c, auth, who, size=None, always_on=None, pause_minutes=None):
     ensure_shared(c)
     before = row(c, SHARED)
     fields = {"changed_by": who.actor}
-    if size is not None:
-        fields["size"] = size
+    fields.update(size_fields(c, before, size, grow_storage))
     if always_on is not None:
         fields["always_on"] = int(always_on)
     if pause_minutes is not None:
@@ -1622,7 +1847,7 @@ def change_shared(c, auth, who, size=None, always_on=None, pause_minutes=None):
     save(c, SHARED, **fields)
     after = row(c, SHARED)
     H.event(c, who.actor, "cloud_machine.changed", SHARED, {
-        key: after[key] for key in ("size", "always_on", "pause_minutes") if after[key] != before[key]})
+        key: after[key] for key in ("size", "always_on", "pause_minutes", "grow_storage") if after[key] != before[key]})
     return shared_view(c)
 
 
@@ -1682,7 +1907,8 @@ def deleted(c, current, actor, changed_by=None, details=None):
          stopped_at=None, cost_month_usd=0, starts_month=0, last_error="", active_at=None, heartbeat_at=None,
          ttl_s=None, next_try_at=None, failures=0, problem="no_enroll" if fails >= ENROLL_TRIES else "",
          problem_at=H.now() if fails >= ENROLL_TRIES else None, wake_key=None, woke_at=None,
-         enroll_by=None, stop_until=None, start_asked_at=None,
+         enroll_by=None, stop_until=None, start_asked_at=None, grow_note="", grow_refused_size=None,
+         drain_started_at=None, grow_blocked_until=None,
          changed_by=current["changed_by"] if changed_by is None else changed_by)
     H.event(c, actor, "cloud_machine.deleted", key, {"machine": current["machine_id"], **(details or {})})
 
@@ -1769,8 +1995,45 @@ def _remove(service, who, auth, key, request, mutate, replace):
                           (current["stop_until"], current["problem"], key, current["machine_id"], hold))
 
 
+def machine_name(c, key):
+    if key == SHARED:
+        return "Shared cloud machine"
+    found = H.bot(c, key) or {}
+    return f"{found.get('slug') or key}'s cloud machine"
+
+
+def disk_words(c):
+    """{computer id: {"disk", "advice"}} for each cloud machine's computer, for Health's disk check: `disk` its reading
+    since it last started, or None to say nothing (stopped, or nothing read since a restart: an older reading is of
+    the old disk); `advice` what happens next or why it cannot grow, and how to let it."""
+    from .performance import latest_disks
+    shared, offered, found = row(c, SHARED), sizes(c), rows(c)
+    disks = latest_disks(c, [m["runner_id"] for m in found.values() if m["runner_id"]])
+    out = {}
+    for key, current in found.items():
+        if not current["runner_id"]:
+            continue
+        disk = fresh_disk(current, disks.get(current["runner_id"])) if current["state"] in ON else None
+        if disk is None:
+            advice = ""
+        elif unresized(current, disk, offered):
+            advice = f"Its disk was not resized to {cloud_size_name(current['machine_size'])}. Free space on it."
+        elif resizing(current):
+            advice = f"It restarts at {cloud_size_name(current['size'])} once its turns finish."
+        elif current["problem"] == "disk_full":
+            advice = f"{current['grow_note'] or 'It cannot grow'}. Free space on it."
+        elif grows(current, None if key == SHARED else shared):
+            advice = "It grows to a bigger size at the next look."
+        else:
+            advice = "Turn on Grow storage, or choose a bigger size."
+        out[current["runner_id"]] = {"disk": disk, "advice": advice}
+    return out
+
+
 def health(c, settings=None):
-    """Name active machine problems and old deletion fences, even after the bot has moved to a fresh id."""
+    """Name active machine problems and old deletion fences, even after the bot has moved to a fresh id, and each machine
+    whose disk is nearly full with no bigger size to grow to, or whose restart at a new size has waited DRAIN_WARN or
+    more for its turns."""
     old = c.execute("SELECT d.machine_id,d.bot,b.slug,count(*) OVER() AS total FROM cloud_machine_deletions d "
                     "LEFT JOIN bots b ON b.id=d.bot WHERE d.created_at<? ORDER BY d.created_at,d.machine_id LIMIT 5",
                     (now() - DELETION_WARN,)).fetchall()
@@ -1779,8 +2042,20 @@ def health(c, settings=None):
     active = {r["id"] for r in c.execute("SELECT b.id FROM bots b LEFT JOIN bot_control bc ON bc.bot=b.id "
                                          "WHERE b.state='active' AND coalesce(bc.draining,0)=0")}
     machines = homes(c)
-    stuck = sorted(bot for bot, machine in machines.items() if bot in active and machine["problem"])
-    if not stuck and not old:
+    # A full disk is the machine's, said once below, not once per bot on it.
+    stuck = sorted(bot for bot, machine in machines.items()
+                   if bot in active and machine["problem"] and machine["problem"] != "disk_full")
+    lines = []
+    for key, current in sorted(rows(c).items()):
+        if current["problem"] == "disk_full" and current["state"] in ON:
+            lines.append(f"{machine_name(c, key)}: {current['grow_note'] or PROBLEMS['disk_full']}.")
+        elif resizing(current) and current["grow_note"] == STOP_REFUSED:
+            lines.append(f"{machine_name(c, key)}: Stop refused. It restarts at {cloud_size_name(current['size'])} once "
+                         f"Tico stops it (try {current['failures']} of {STOP_TRIES}).")
+        elif resizing(current) and current["drain_started_at"] and now() - current["drain_started_at"] >= DRAIN_WARN:
+            lines.append(f"{machine_name(c, key)}: waiting {int(now() - current['drain_started_at']) // 60} minutes for "
+                         f"its turns to finish before it restarts at {cloud_size_name(current['size'])}.")
+    if not stuck and not old and not lines:
         return None
     names = [f"{(H.bot(c, bot) or {}).get('slug') or bot}: {problem_words(machines[bot]['problem'])}"
              for bot in stuck[:5]]
@@ -1791,6 +2066,7 @@ def health(c, settings=None):
         count = old[0]["total"]
         summary.append(f"{count} cloud machine deletion{'s' if count != 1 else ''} waiting over 24 hours: {'; '.join(names)}. "
                        "Old disks may still cost money.")
+    summary.extend(lines[:5])
     return {"status": "warn", "summary": " ".join(summary)}
 
 
@@ -1806,6 +2082,7 @@ class Change(BaseModel):
     size: str | None = Field(None, max_length=20)
     always_on: bool | None = None
     pause_minutes: int | None = None
+    grow_storage: bool | None = None
 
 
 class SharedChange(BaseModel):
@@ -1813,6 +2090,7 @@ class SharedChange(BaseModel):
     size: str | None = Field(None, max_length=20)
     always_on: bool | None = None
     pause_minutes: int | None = None
+    grow_storage: bool | None = None
 
 
 class Empty(BaseModel):
@@ -1944,33 +2222,31 @@ def install(app, settings, store, auth, execution, mutate):
 
     @app.get("/api/v2/cloud-machines")
     def cloud_machine_sizes(request: Request):
-        """Whether bots here may run on cloud machines, the sizes HQ offers (its customer price per hour and one start's
-        price), and the shared machine (`shared`: its size, Always on, Pause after, state and the bots set to run
-        there). `offered` false off Tico Cloud."""
+        """Whether bots here may run on cloud machines, the sizes HQ offers (CPUs, memory, `disk_gb`, its customer price
+        per hour and one start's price), and the shared machine (`shared`: its size, Always on, Pause after,
+        `grow_storage` (on unless turned off; every own machine's too until its bot chooses), state and the bots set to
+        run there). `offered` false off Tico Cloud."""
         who = request.state.identity
         auth.domain(who)
         with store.read() as c:
             if not offered(c, settings):
                 return {"offered": False, "sizes": [], "caps": {}, "shared": None}
-            from .read_cache import metadata
-            found = metadata(c, SIZES_KEY)
-            try:
-                caps = (json.loads(found[0]) or {}).get("caps") or {} if found else {}
-            except (ValueError, TypeError, AttributeError):
-                caps = {}
-            return {"offered": True, "sizes": sizes(c) or [{"name": n} for n in SIZES], "caps": caps,
+            return {"offered": True, "sizes": sizes(c) or [{"name": n} for n in SIZES], "caps": listed_caps(c),
                     "shared": shared_view(c)}
 
     @app.post("/api/v2/cloud-machines/shared")
     def cloud_machine_shared_set(request: Request, body: SharedChange):
-        """The shared cloud machine's `size` (applied at its next start), `always_on` and `pause_minutes` (5 to 1440). Owners and admins only."""
+        """The shared cloud machine's `size` (a running one restarts at it once its turns finish), `always_on`,
+        `pause_minutes` (5 to 1440) and `grow_storage` (the company's: also each own machine's until its bot chooses).
+        Owners and admins only."""
         who = request.state.identity
         auth.domain(who)
 
         def run(c):
             if not offered(c, settings):
                 raise Problem("not_cloud", "Cloud machines are for Tico Cloud companies", 409)
-            return {"shared": change_shared(c, auth, who, body.size, body.always_on, body.pause_minutes)}
+            return {"shared": change_shared(c, auth, who, body.size, body.always_on, body.pause_minutes,
+                                            body.grow_storage)}
         return mutate(request, body, run)
 
     @app.delete("/api/v2/cloud-machines/shared")
@@ -1989,13 +2265,15 @@ def install(app, settings, store, auth, execution, mutate):
     @app.post("/api/v2/bots/{bot}/cloud-machine")
     def cloud_machine_set(bot: str, request: Request, body: Change):
         """Where the bot runs and how: `mode` cloud puts it on a cloud machine (another computer is chosen with a
-        machine transition), `placement` on the shared one or its own; its own machine's `size` applies at that
-        machine's next start, `always_on` keeps it running, and `pause_minutes` (5 to 1440)
-        pauses it after that many idle minutes. Those who manage the bot only; Tico Cloud only."""
+        machine transition), `placement` on the shared one or its own; its own machine's `size` (a running one
+        restarts at it once its turns finish), `always_on` keeps it running, `pause_minutes` (5 to 1440)
+        pauses it after that many idle minutes, and `grow_storage` (until set, the company's) moves it to the next size
+        with more disk when its disk is nearly full. Those who manage the bot only; Tico Cloud only."""
         who = request.state.identity
         auth.domain(who)
         return mutate(request, body, lambda c: {"cloud_machine": change(
-            c, execution, who, _known(c, bot), body.mode, body.size, body.always_on, body.placement, body.pause_minutes)})
+            c, execution, who, _known(c, bot), body.mode, body.size, body.always_on, body.placement, body.pause_minutes,
+            body.grow_storage)})
 
     @app.delete("/api/v2/bots/{bot}/cloud-machine")
     def cloud_machine_delete(bot: str, request: Request):

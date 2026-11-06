@@ -239,9 +239,9 @@ class StarterBots(unittest.TestCase):
             folder, where = self.directory / name, f"template {name}"
             card = read_catalog(self.directory)[name]
             self.assertIs(card["first_routine"]["draft_only"], True, where)
-            self.assertNotIn("approval_required", card, f"{where}: sending uses outbound_send")
+            self.assertNotIn("approval_required", card, f"{where}: sending follows the sending policy")
             manifest = yaml.safe_load((folder / "bot.yaml").read_text())
-            self.assertIs(manifest["outbound_send"], False, where)
+            self.assertNotIn("outbound_send", manifest, where)    # sending is the server's policy, never bot.yaml
             routines = validate_schedules(manifest.get("routines") or [], lambda rel: (folder / rel).read_text())
             self.assertTrue(all(r["enabled"] is False for r in routines), where)     # a bot with no routines has none to arm
             for access in manifest["tools"]:

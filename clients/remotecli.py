@@ -249,7 +249,7 @@ def run(args, who=None):
         return via_tool(client,args)
     if args.cmd == "rules":
         return via_tool(client, _rules_args(args))
-    if args.cmd in ("mail", "email", "letter", "connections", "alerts"):
+    if args.cmd in ("mail", "email", "letter", "alerts") or fn in ("tool index", "tool check"):
         return via_tool(client, args)
     if args.cmd == "maintenance":
         return via_tool(client, args)
@@ -308,7 +308,7 @@ def run(args, who=None):
     if fn in ("tool list", "tool show", "tool query-search") and not (fn == "tool list" and args.bot):
         # Reads a runner credential may make outside a turn; /me would refuse a runner.
         return integrations(client, args)
-    if fn in ("bot copy", "bot update-from-original", "bot suggest-to-original", "skill copy"):
+    if fn in ("bot copy", "bot update-from-original", "bot suggest-to-original", "skill copy", "skill submit"):
         return via_tool(client, args)              # they work in this computer's workspace (clients/botcopy.py)
     if fn == "tool report":
         return via_tool(client, args, tools=json.loads(args.tools))
@@ -436,7 +436,7 @@ def run(args, who=None):
         return hubtools.BY_NAME[tool_name(fn)]["fn"](client, fields)
     if args.cmd == "assistant":
         from clients import hubtools
-        if args.sub in ("read", "send", "learn", "learned", "withdraw", "proposals", "change"):
+        if args.sub in ("read", "send", "learn", "learned", "withdraw", "proposals", "change", "morning"):
             return via_tool(client, args)
         try:
             body = json.loads(args.body or "{}")
@@ -594,6 +594,10 @@ def run(args, who=None):
                 payload["relations"] = [{"task": args.parent, "kind": "parent"}]
             if getattr(args, "private", None) is not None:
                 payload["private"] = args.private
+            if getattr(args, "readers", None):
+                payload["readers"] = list(args.readers)
+            if getattr(args, "follow", None):
+                payload["follow"] = True
             if getattr(args, "from_private", False):
                 payload["from_private"] = True
             for field in ("type", "step", "number", "qa", "change_paths", "qa_not_checkable_live"):
@@ -635,7 +639,7 @@ def run(args, who=None):
                                                    "next_run": bool(args.next_run), "handled": bool(args.handled)})
         if sub == "waive-qa":
             return post(f"tasks/{args.id}/qa-waiver", {"head": args.head, "reason": args.reason})
-        if sub in ("list", "snooze", "unsnooze"):
+        if sub in ("list", "snooze", "unsnooze", "readers", "followers", "follow", "unfollow"):
             return via_tool(client, args)
         if sub == "ask":
             return post(f"tasks/{args.id}/ask", {"text": args.text})

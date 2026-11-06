@@ -12,7 +12,7 @@ and — when the server runs on this Mac — its database, blobs, seed registry,
     runner.json state-<id>/ profiles/    the runner registration, its state, its subscriptions
 
 The legacy setup (`~/.config/tico/runner.json`, no environment directory) keeps working and
-appears in `list` as the legacy default. `scripts/tico -e <slug>` is the operator's entry point;
+appears in `list` as the legacy default. `scripts/tico-computer -e <slug>` is the operator's entry point;
 this module is the part worth testing, so it holds no launchd or process management.
 """
 

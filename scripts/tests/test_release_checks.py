@@ -533,7 +533,7 @@ def test_native_test_files_follow_the_runner_support_package(tmp_path, monkeypat
 
 
 def test_the_screen_relay_borrowers_and_scripts_tico_runs_are_native():
-    # v0.5.59's first validation: test_systemd_units runs scripts/tico install, which needs the runner binary.
+    # v0.5.59's first validation: test_systemd_units runs scripts/tico install (now scripts/tico-computer), which needs the runner binary.
     names = ['backend/tests/test_screen.py', 'backend/tests/test_browser_exit_relay.py',
              'runner_support/tests/test_systemd_units.py', 'backend/tests/test_api.py', 'backend/tests/test_selected_claim.py']
     assert release_checks.native_test_files(names) == set(names[:3])

@@ -1,8 +1,8 @@
 """draft, send, reply and sent-log through the CLI, with a fake Gmail service.
 
 The things this file exists to hold still: a retried draft updates one draft instead of making
-two, a retried send sends nothing, a reply keeps the thread's headers, and every refusal on the
-send path is a downgrade with a reason rather than an error or a silent drop.
+two, a retried send sends nothing, every send reaches Tico's queue (the CLI refuses none itself),
+and a send Tico blocks is a downgrade with Tico's reason rather than an error or a silent drop.
 """
 
 import json, os, sys, unittest
@@ -10,11 +10,14 @@ from unittest import mock
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
-import fake, harness                                                 # noqa: E402
-from harness import CTA, GOOD_BODY, Stage2, gh_answer                # noqa: E402
+import fake                                                          # noqa: E402
+from harness import GOOD_BODY, Stage2                                # noqa: E402
 
-from connectors.mail import compose, db, policy as pl, review as rv  # noqa: E402
+from connectors.mail import compose, db, policy as pl                # noqa: E402
 from connectors.mail import __main__ as cli                          # noqa: E402
+
+REAL_QUEUE_SEND = pl.queue_send                                      # before any test patches it
+APPROVAL = "11111111-2222-3333-4444-555555555555"
 
 AVA, BO = "ava@creator.example", "bo@creator.example"
 INCOMING = {"From": "Ava Reyes <ava@creator.example>", "To": "ana@acme.example",
@@ -28,9 +31,9 @@ class Writing(Stage2):
         return [fake.message("m-ava", "t-ava", INCOMING,
                              body="What is the offer exactly?", epoch_ms=1788364800000)]
 
-    def draft(self, *extra, body=None, slug="influencer"):
+    def draft(self, *extra, body=None, slug="influencer", to=(AVA,)):
         f = self.body_file(body or GOOD_BODY)
-        return self.run_json("draft", "--as", slug, "--to", AVA, "--subject",
+        return self.run_json("draft", "--as", slug, *(x for a in to for x in ("--to", a)), "--subject",
                              "Ava, 6 months of Acme on us", "--body-file", f,
                              "--issue", "42", "--json", *extra)
 
@@ -54,26 +57,56 @@ class Sending(Writing):
         self.assertEqual(self.service.sent, [])
         self.assertIn(did, self.service.drafts_by_id)
 
-    def test_a_warned_mail_freezes_the_warning_line_in_the_queue(self):
+    def test_an_approval_id_reaches_tico_with_the_send(self):
         did = self.make()
-        line = "Warning: this offer needs review."
-        pl.HUB_POST = lambda path, body, key=None: {"outcome": "warn", "warning_line": line,
-                                                   "rule_warning": {"text": "Review needed"}}
-        rc, result, err = self.run_json("send", "--as", "influencer", "--draft", did, "--issue", "42")
-        self.assertEqual(rc, 0, err)
-        self.assertTrue(result["queued"])
-        self.assertIn(line, compose.decode(self.queue_requests[0]["raw"]))
-        self.assertEqual(self.service.sent, [])
+        posted = []
 
-    def test_a_failed_rule_check_is_reported_while_the_server_queue_still_owns_delivery(self):
-        did = self.make()
-        pl.HUB_POST = lambda *a, **kw: (_ for _ in ()).throw(pl.HubFailed("forbidden", status=403))
-        rc, result, err = self.run_json("send", "--as", "influencer", "--draft", did, "--issue", "42")
+        def post(path, body, key=None):
+            posted.append((path, body))
+            return {"send": {"id": "s1", "state": "waiting_approval", "approval_id": body["approval_id"],
+                             "send_after": None, "detail": "", "decision": {"outcome": "ask", "reasons": ["approval"]}}}
+        pl.HUB_POST = post
+        with mock.patch.object(pl, "queue_send", REAL_QUEUE_SEND):
+            rc, out, err = self.run_json("send", "--as", "influencer", "--draft", did, "--issue", "42",
+                                         "--approval", APPROVAL)
         self.assertEqual(rc, 0, err)
-        self.assertTrue(result["queued"])
-        self.assertIn("forbidden", result["rule_check"])
+        self.assertEqual([(path, body["approval_id"], body["draft_id"]) for path, body in posted],
+                         [("email/sends", APPROVAL, did)])
+        self.assertEqual((out["sent"], out["queued"], out["state"], out["approval_id"], out["reasons"]),
+                         (False, True, "waiting_approval", APPROVAL, ["approval"]))
+        self.assertIn("approve this send in Tico", out["note"])
+
+    def test_a_send_tico_blocks_keeps_the_draft_and_says_why(self):
+        did = self.make()
+        self.queue_answer = {"state": "blocked", "detail": "Blocked recipient: ava@creator.example"}
+        rc, out, err = self.run_json("send", "--as", "influencer", "--draft", did, "--issue", "42")
+        self.assertEqual(rc, 0, err)
+        self.assertEqual((out["ok"], out["sent"], out["downgraded"], out["reason"]),
+                         (True, False, "draft", "Blocked recipient: ava@creator.example"))
+        self.assertIn(did, self.service.drafts_by_id)
         self.assertEqual(self.service.sent, [])
-        self.assertEqual(db.mail_check_misses(self.conn(), "influencer"), [])
+        down = [a for a in self.audit_lines() if a["action"] == "send-downgraded"]
+        self.assertEqual(down[-1]["detail"]["reason"], "Blocked recipient: ava@creator.example")
+        self.assertIsNone(self.conn().execute("SELECT 1 FROM queued_drafts WHERE draft_id=?", (did,)).fetchone())
+
+    def test_the_cli_refuses_no_send_itself_two_outside_recipients_reach_tico(self):
+        rc, d, err = self.draft("--cc", "carol@partner.example", to=(AVA, BO))
+        self.assertEqual(rc, 0, err)
+        rc, out, err = self.run_json("send", "--as", "influencer", "--draft", d["draft"], "--issue", "42")
+        self.assertEqual(rc, 0, err)
+        self.assertTrue(out["queued"], out)
+        self.assertEqual(len(self.queue_requests), 1)
+        raw = compose.decode(self.queue_requests[0]["raw"])
+        for addr in (AVA, BO, "carol@partner.example"):
+            self.assertIn(addr, raw)
+
+    def test_a_dry_run_builds_nothing_and_queues_nothing(self):
+        rc, out, err = self.run_json("reply", "--as", "influencer", "--thread", "t-ava", "--body-file",
+                                     self.body_file(GOOD_BODY), "--issue", "42", "--dry-run")
+        self.assertEqual(rc, 0, err)
+        self.assertEqual((out["sent"], out["would_queue"]), (False, True))
+        self.assertEqual(self.queue_requests, [])
+        self.assertEqual(self.service.drafts_by_id, {})
 
     def test_queue_failure_keeps_the_draft_and_never_calls_the_provider(self):
         from connectors.mail import Failure
@@ -83,24 +116,6 @@ class Sending(Writing):
         self.assertEqual(rc, 1)
         self.assertIn(did, self.service.drafts_by_id)
         self.assertEqual(self.service.sent, [])
-
-    def test_outbound_send_false_downgrades_with_the_reason(self):
-        p = self.root / "emp-influencer" / "employee.yaml"
-        p.write_text(p.read_text().replace("outbound_send: true", "outbound_send: false"))
-        did = self.make()
-        rc, out, err = self.run_json("send", "--as", "influencer", "--draft", did, "--issue", "42")
-        self.assertEqual(rc, 0)
-        self.assertFalse(out["sent"])
-        self.assertEqual(out["downgraded"], "draft")
-        self.assertEqual(out["gate"], "outbound_send")
-        self.assertEqual(self.service.sent, [])
-        self.assertIn(did, self.service.drafts_by_id)
-
-    def test_the_kill_switch_downgrades_every_send(self):
-        did = self.make()
-        self.write_policy(harness.POLICY.replace("send_enabled: true", "send_enabled: false"))
-        rc, out, _ = self.run_json("send", "--as", "influencer", "--draft", did, "--issue", "42")
-        self.assertEqual((rc, out["sent"], out["gate"]), (0, False, "global"))
 
 class AttachAndDiscard(Writing):
     @property
@@ -115,11 +130,9 @@ class AttachAndDiscard(Writing):
         self.assertEqual(self.service.drafts_by_id, {}, path)
         return err
 
-    def test_an_attached_draft_still_goes_through_every_send_gate(self):
+    def test_an_attached_draft_is_queued_like_any_other_and_tico_s_answer_names_the_files(self):
         pdf = self.root / "emp-influencer" / "letter.pdf"
         pdf.write_bytes(b"%PDF-1.4 response letter")
-        p = self.root / "emp-influencer" / "employee.yaml"
-        p.write_text(p.read_text().replace("outbound_send: true", "outbound_send: false"))
         rc, d, err = self.draft("--attach", str(pdf), "--reply-to", "t-ava")
         self.assertEqual(rc, 0, err)
         self.assertEqual([(a["name"], a["type"]) for a in d["attachments"]],
@@ -127,9 +140,11 @@ class AttachAndDiscard(Writing):
         raw = compose.decode(self.service.drafts_by_id[d["draft"]]["message"]["raw"])
         self.assertIn('filename="letter.pdf"', raw)
         self.assertIn("In-Reply-To: <ava-1@creator.example>", raw)
+        self.queue_answer = {"state": "blocked", "detail": "Ask first: a person approves files"}
         rc, out, _ = self.run_json("send", "--as", "influencer", "--draft", d["draft"], "--issue", "42")
-        self.assertEqual((rc, out["sent"], out["gate"], out["attachments"]),
-                         (0, False, "outbound_send", ["letter.pdf"]))
+        self.assertEqual((rc, out["sent"], out["downgraded"], out["attachments"]),
+                         (0, False, "draft", ["letter.pdf"]))
+        self.assertIn('filename="letter.pdf"', compose.decode(self.queue_requests[0]["raw"]))
         self.assertEqual(self.service.sent, [])
         down = [a for a in self.audit_lines() if a["action"] == "send-downgraded"]
         self.assertEqual(down[-1]["detail"]["attachments"], ["letter.pdf"])
@@ -160,19 +175,6 @@ class AttachAndDiscard(Writing):
             self.assertIn("never attached", err, name)
         (self.home / "notes.pdf").symlink_to(self.home / ".env")        # a harmless name pointing at one
         self.assertIn("never attached", self.refused(self.home / "notes.pdf"))
-
-    def test_legacy_policy_keys_do_not_prevent_a_workspace_attachment(self):
-        pdf = self.home / "out" / "letter.pdf"
-        pdf.parent.mkdir()
-        pdf.write_bytes(b"%PDF-1.4 response letter")
-        for source in (harness.POLICY.replace("  allow_attachments: false\n", ""), harness.POLICY,
-                       harness.POLICY.replace("allow_attachments: false", "allow_attachments: true")
-                       .replace("ana@acme.example: { paused: false }",
-                                "ana@acme.example: { paused: false, allow_attachments: false }")):
-            self.write_policy(source)
-            for path in (pdf, "out/letter.pdf"):
-                rc, d, err = self.draft("--attach", str(path))
-                self.assertEqual((rc, [a["name"] for a in d["attachments"]]), (0, ["letter.pdf"]), err)
 
     def test_an_oversized_file_is_refused_before_it_is_read(self):
         big = self.home / "big.pdf"

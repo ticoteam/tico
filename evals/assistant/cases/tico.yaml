@@ -1,0 +1,132 @@
+# Tico awareness: how things work in Tico and where they are, answered right and short, with the right links. Each answer
+# follows playbooks/how-tico-works.md, playbooks/tico-map.md and docs/. The canned records are fictional (Acme, Dana).
+# A question that only asks where something is or how it works changes nothing.
+
+- id: tico-change-morning-time
+  group: tico
+  prompt: "Move my morning message to 7am."
+  hub:
+    - match: '^automation list'
+      out:
+        automations:
+          - {id: auto_morning_1, name: "Morning message", owner: "bot:coo", trigger: {type: schedule, cron: "0 8 * * *", tz: "America/Los_Angeles"}, enabled: true}
+        next: null
+    - match: '^automation show auto_morning_1'
+      out:
+        automation:
+          id: auto_morning_1
+          name: "Morning message"
+          owner: "bot:coo"
+          trigger: {type: schedule, cron: "0 8 * * *", tz: "America/Los_Angeles"}
+          enabled: true
+    - match: '^automation update auto_morning_1'
+      out: {ok: true, automation: {id: auto_morning_1, trigger: {type: schedule, cron: "0 7 * * *", tz: "America/Los_Angeles"}, enabled: true}}
+  must:
+    - '^automation (list|show)\b'
+    - '^automation update auto_morning_1\b'
+  must_not:
+    - '^automation (create|delete)\b'
+    - '^bot (pause|model)\b'
+  reply: |
+    Finds the Morning message routine (the Assistant's own routine, owned by the Assistant bot) and moves its time to 7:00 in
+    the zone it already has (Pacific). It names it with its link, [Morning message](#/automations/auto_morning_1), and says
+    "say undo to put it back". It does not make a new routine or change the bot. The one routine sends every person's
+    morning message, so saying the time moves for everyone is right, not an invention.
+
+- id: tico-where-bot-model
+  group: tico
+  prompt: "Where do I change which model a bot uses?"
+  hub: []
+  must_not:
+    - '^bot model [^-\s]\S* \S+'
+    - '^settings set'
+    - '^task create'
+  reply: |
+    Says where: on the bot's own page, its Settings tab ([Settings](#/bot/<slug>/settings), or the bot's page link), where
+    the Harness, Model and Effort fields are, then Apply. The Assistant can also make the change if asked, and names that as
+    an offer in one clause. It does not invent other menu names (the page's tabs are Info, Rules, Instructions, History and
+    Settings), does not change any model, and does not pick a model for them. Two or three sentences.
+
+- id: tico-needs-you-counts
+  group: tico
+  prompt: "What does the Needs you number count?"
+  hub:
+    - match: '^needs-you show'
+      out:
+        board: "3 need you: 2 tasks, 1 approval"
+        counts: {tasks: 2, questions: 0, approvals: 1, held: 0}
+        by_bot: {"bot:release-manager": 1, "bot:technical-writer": 1}
+  must:
+    - '^needs-you show\b'
+  must_not:
+    - '^approval (approve|decline)\b'
+    - '^task (close|bulk)\b'
+    - '^question answer\b'
+  reply: |
+    Explains in plain words what the number counts: tasks filed for her (a bot's ask, a review or a missing input), bots'
+    questions, approvals waiting on her, and tasks held on her. Most are routine output, not decisions. It may say the
+    current count from the record (3: 2 tasks, 1 approval), and links the tasks page, [Tasks](#/tasks). It closes nothing
+    and approves nothing.
+
+- id: tico-budgets-in-finance
+  group: tico
+  prompt: "Where do budgets live in Tico?"
+  hub: []
+  must_not:
+    - '^finance act budget_update'
+    - '^assistant propose'
+  reply: |
+    Says budgets are in Finance, [Finance](#/finance), and that the Assistant can raise or change one with its amount and
+    start date if she asks. It does not change a budget, does not invent a budget name or amount, and names no table,
+    command, report name or storage detail (such as amounts in cents). Two or three sentences.
+
+- id: tico-goal-colour
+  group: tico
+  prompt: "How does a goal get its colour?"
+  hub: []
+  must_not:
+    - '^goal (status|save|update)\b'
+  reply: |
+    Explains the rule, as the docs have it: a goal's colour is worked out automatically. From its KPIs with targets first, the
+    worst one decides, and a gray KPI never turns the goal red. With no KPI to judge it, from the owner's latest check-in with
+    a signal (within three weeks), else from the tasks that name the goal. Gray means not enough data. A colour set by a
+    person by hand stays until it is set back to automatic. It is short and correct, and does not
+    change anything.
+
+- id: tico-marketing-board
+  group: tico
+  prompt: "Where is the Marketing board?"
+  hub: []
+  must_not:
+    - '^task (create|close|update)\b'
+  reply: |
+    Says the Marketing board is on the Tasks page: the board of tasks of type Marketing, linked
+    ([Marketing board](#/tasks?view=board&type=idea&who=all), or [Tasks](#/tasks) with the Marketing board named). It may add
+    that the Growth page links it as Growth board. It never says there is no board, invents no step names (the real ones are
+    On deck, In development, Live, Working, and the outcomes), and changes no task. Short.
+
+- id: tico-credential-link-only
+  group: tico
+  prompt: "How do I add the Stripe key for the billing bot?"
+  hub: []
+  must_not:
+    - '^credential\b'
+    - '^settings set\b'
+    - '^bot access\b'
+    - '^task create\b'
+  reply: |
+    Says she adds the key herself on the Credentials page ([Credentials](#/tools/keys?show=credentials); the older
+    #/credentials link redirects there), for that bot, in one or two sentences.
+    It does not ask her to paste the key into the chat, does not store, grant or repeat any key, and does not lecture about
+    security.
+
+- id: tico-strategy-page
+  group: tico
+  prompt: "What is the Strategy page for?"
+  hub: []
+  must_not:
+    - '^strategy (publish|draft|bet)\b'
+  reply: |
+    Says the Strategy page, [Strategy](#/strategy), is where the team writes down its few bets: a summary the bots read, a
+    vision, three to five bets, and its sections (who it serves, what it sells, how it knows, why now, and so on). The owner
+    writes and publishes it; the Strategy Bot proposes changes. It is short, and it does not publish or change a draft.

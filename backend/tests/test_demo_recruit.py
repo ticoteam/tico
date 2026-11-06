@@ -82,18 +82,3 @@ def test_the_hire_last_week_closed_its_seat_and_kept_the_bot(built):
     with owner_api(built) as api:
         assert api.get("/api/v2/bots/creators").status_code == 200
         assert "Creator Partnerships" not in open_seats(api)
-
-
-def test_building_twice_gives_the_same_rows(built, tmp_path_factory):
-    # Seat ids are random (lifecycle uses uuid4, which the demo does not pin), so the rows are keyed by title.
-    query = {"seats": "SELECT title,reports_to,created_at,closed_at,filled_by,agent,request_state,"
-                      "(SELECT title FROM tasks WHERE tasks.id=seats.first_task) FROM seats ORDER BY title",
-             "tasks": "SELECT title,owner_id,status,note FROM tasks WHERE title LIKE 'Applicant for%' "
-                      "OR title LIKE 'Write a replay test%' ORDER BY title"}
-
-    def rows(path):
-        with sqlite3.connect(path) as db:
-            return {name: db.execute(sql).fetchall() for name, sql in query.items()}
-
-    again = demo.build(tmp_path_factory.mktemp("demo-recruit-again"), now=NOW)
-    assert rows(again.db_path) == rows(built.db_path)

@@ -23,3 +23,10 @@ def seed(b):
         b.write(lambda c: H.say(c, H.task(c, task_id)['owner_id'], 'human:ana',
             "Can we use the meeting's agreed follow-up for the launch? If you agree, I'll add it to the plan.",
             kind='ask', conversation_id=H.task(c, task_id)['conversation_id'], refs={'task': task_id}))
+    # Settings > People shows each person's Tico Recorder (backend/recorder_installs.py); Ana and Cara use one.
+    stamp = lambda at: at.strftime('%Y-%m-%dT%H:%M:%S.%f') + 'Z'  # noqa: E731
+    b.write(lambda c: c.executemany(
+        "INSERT OR REPLACE INTO recorder_installs(person_id,install_id,version,last_seen_at,created_at,updated_at) "
+        "VALUES(?,?,?,?,?,?)",
+        [(person, install, '0.2.0', stamp(b.ago(hours=hours)), stamp(b.ago(days=20)), stamp(b.ago(hours=hours)))
+         for person, install, hours in (('ana', 'a' * 32, 2), ('cara', 'c' * 32, 70))]))

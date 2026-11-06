@@ -35,7 +35,7 @@ def audience(c, auth, *, record=None, live=None):
     return allowed
 
 
-def check(c, auth, who, owner, *, record=None, live_id=None, roles=None, guest=None, requester=None):
+def check(c, auth, who, owner, *, record=None, live_id=None, roles=None, readers=(), requester=None):
     live = None
     if live_id:
         live = c.execute("SELECT * FROM live_meetings WHERE id=?", (live_id,)).fetchone()
@@ -46,10 +46,11 @@ def check(c, auth, who, owner, *, record=None, live_id=None, roles=None, guest=N
         return None
     allowed = audience(c, auth, record=record, live=live)
     requester = requester or who.actor
+    listed = set(readers or ())
     readers = {owner, requester, *[H.resolve_actor(c, a) or a for role, values in (roles or {}).items()
                                   if role.strip().lower() == 'participant' for a in values]}
-    if guest:
-        readers.add(guest)
+    # The task's reader list, each group by its members now.
+    readers |= H.reader_actors(c, {"readers": sorted(listed)}) if listed else set()
     parties = {owner, requester}
     readers.update(actor for actor, _ in actors(c, auth)
                    if task_rights.private_subjects(c, actor) & parties)

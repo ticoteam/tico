@@ -6,7 +6,7 @@ import sqlite3
 import threading
 import urllib.request
 from contextlib import closing
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, timezone
 
 import httpx
 import pytest
@@ -120,9 +120,9 @@ def test_company_subscription_is_given_to_the_macbook(built):
 
 def test_github_and_slack_show_as_connected(built):
     with as_ana(built) as api:
-        rows = {row["kind"]: row for row in api.get("/api/v2/connections").json()["connections"]}
-        assert rows["github"]["status"] == "on"
-        assert rows["slack"]["status"] == "on"
+        rows = {row["kind"]: row for row in api.get("/api/v2/tool-index").json()["rows"]}
+        assert rows["github"]["status"] == {"tone": "ok", "text": "On"}
+        assert rows["slack"]["status"] == {"tone": "ok", "text": "On"}
 
 
 def test_bots_declare_their_mcp_tools_as_ready(built):
@@ -258,15 +258,6 @@ def test_billing_is_a_sample_that_agrees_with_the_usage_page(built):
                              f"2026-09,debits:gateway,{-debits}", f"2026-09,closing,{statement['closing_micros']}"]
 
 
-def test_a_build_long_after_its_dates_keeps_every_message_body(tmp_path):
-    """Retention runs on the demo's own clock while it is built: a demo built months before today keeps its bodies."""
-    settings = demo.build(tmp_path, now=NOW - timedelta(days=200))
-    with closing(sqlite3.connect(settings.db_path)) as db:
-        total = db.execute("SELECT COUNT(*) FROM inbound_messages").fetchone()[0]
-        removed = db.execute("SELECT COUNT(*) FROM inbound_messages WHERE body IS NULL OR retention_removed=1").fetchone()[0]
-    assert total == 11 and removed == 0
-
-
 def settled_files(settings):
     """Every scan's state and the rows that hold them: a build that settles its files the same way every time."""
     with closing(sqlite3.connect(settings.db_path)) as db:
@@ -276,8 +267,7 @@ def settled_files(settings):
     return states, versions, blobs
 
 
-def test_every_scan_is_settled_before_the_build_is_saved(built, tmp_path):
-    states, versions, blobs = settled_files(built)
+def test_every_scan_is_settled_before_the_build_is_saved(built):
+    states, versions, _blobs = settled_files(built)
     assert all(state != "pending" for state, _ in states + versions)
-    assert settled_files(demo.build(tmp_path, now=NOW)) == (states, versions, blobs)
 

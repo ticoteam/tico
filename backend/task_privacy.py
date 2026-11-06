@@ -68,7 +68,7 @@ def _task_rows(c, ids):
     for start in range(0, len(missing), 500):
         chunk = missing[start:start + 500]
         found = {row[0]: row for row in c.execute(
-            "SELECT id,private,owner_id,requester_id,guest FROM tasks WHERE id IN (%s)" % ",".join("?" * len(chunk)), chunk)}
+            "SELECT id,private,owner_id,requester_id,readers FROM tasks WHERE id IN (%s)" % ",".join("?" * len(chunk)), chunk)}
         for tid in chunk:
             known[tid] = found.get(tid)
     return {tid: known[tid] for tid in ids}
@@ -380,6 +380,25 @@ def readable(c, actor, ids):
                for row in rows.values())
 
 
+def make_page_actor(c, actor, message):
+    """The Assistant reads its person's own Make page request with that person's rights."""
+    message = dict(message or {})
+    refs = H._json(message.get("refs"), {}) or {}
+    if (not isinstance(refs, dict) or not isinstance(actor, str) or not actor.startswith("bot:")
+            or actor != message.get("recipient_id")
+            or not isinstance(refs.get("make_page"), dict) or refs.get("assistant") is not True
+            or refs.get("via") or message.get("deleted_at")):
+        return actor
+    from . import rooms
+    room = H.conversation(c, message.get("conversation_id")) or {}
+    owner = room.get("owner_id")
+    if (room.get("scope") == "personal" and room.get("room_key") == rooms.ASSISTANT_ROOM
+            and not room.get("closed_at") and owner == message.get("sender_id")
+            and str(owner).startswith("human:")):
+        return owner
+    return actor
+
+
 def message_readable(c, actor, message, current=False):
     """`current`: `message` is its full messages row, read in this snapshot (a join's `m.*`)."""
     snapshot(c)
@@ -582,6 +601,11 @@ def require_payload(c, who, payload, principal=None, checked_for=None):
             principal = "bot:" + hosted["bot_id"]
         if isinstance(attempt, dict) and attempt.get("bot_id"):
             principal = "bot:" + attempt["bot_id"]
+        if aid:
+            origin = read_cache.one(c, "SELECT m.* FROM attempts a JOIN jobs j ON j.id=a.job_id "
+                                    "JOIN messages m ON m.id=j.message_id WHERE a.id=?", (aid,))
+            principal = make_page_actor(c, principal, origin)
+        if isinstance(attempt, dict) and attempt.get("bot_id"):
             if not attempt_readable(c, principal, attempt.get("id")):
                 raise Problem("privacy", "This execution is no longer available", 403)
     if (who.role == "runner" and principal == who.actor and isinstance(payload, dict)
@@ -711,28 +735,28 @@ def private_execution(c, who):
                 any(H.task_private(c, _task(c, tid)) for tid in attempt_tasks(c, who.attempt_id))))
 
 
-def question_party(c, who, person, parent=None, guest=None):
+def question_party(c, who, person, parent=None, reach=None):
     """Whether `person` may be the other party of a private task a bot's run files to put a question to them
     (backend/media.py task_question): they must already read every private task the run carries, and the parent.
-    Being a party gives them nothing they could not read before, beyond the parent `guest` names (guest_for)."""
-    if parent and not _reads(c, person, parent, guest):
+    Being a party gives them nothing they could not read before, beyond the parent `reach` names (reach_for)."""
+    if parent and not _reads(c, person, parent, reach):
         return False
-    return not who.attempt_id or all(_reads(c, person, H._one(c, f"SELECT * FROM {H.TASKS} tasks WHERE id=?", (tid,)), guest)
+    return not who.attempt_id or all(_reads(c, person, H._one(c, f"SELECT * FROM {H.TASKS} tasks WHERE id=?", (tid,)), reach)
                                      for tid in attempt_tasks(c, who.attempt_id))
 
 
-def _reads(c, actor, row, guest=None):
-    """`actor` reads `row`, counting the guest a write is about to bring in, (task id, person), as already there."""
-    return H.task_private_readable(c, actor, row) or bool(row and guest and guest == (row["id"], actor))
+def _reads(c, actor, row, reach=None):
+    """`actor` reads `row`, counting the reader a write is about to bring in, (task id, person), as already there."""
+    return H.task_private_readable(c, actor, row) or bool(row and reach and reach == (row["id"], actor))
 
 
-def guest_for(c, who, person, parent):
+def reach_for(c, who, person, parent):
     """(parent id, person) when a bot's hand-off to `person` under `parent`, a private task with no person on it that
-    the bot owns, makes them its guest (hubdb.task_reach); None when it does not; Problem when it is refused.
+    the bot owns, makes them its reader (hubdb.task_reach); None when it does not; Problem when it is refused.
 
     The hand-offs are a subtask for them and a question to them (backend/media.py); waiting on them is hubdb's.
-    Outside private work a hand-off the guest rules refuse only for what is above the task goes on as before,
-    without a guest: the person gets the subtask alone. A second, different person is refused either way."""
+    Outside private work a hand-off the reach rules refuse only for what is above the task goes on as before,
+    without a reader: the person gets the subtask alone. A second, different person is refused either way."""
     if not (parent and who.role == "bot" and not who.via and who.actor == parent["owner_id"]
             and H.is_bot(parent["requester_id"]) and H.is_human(person) and H.task_private(c, parent)
             and not H.task_private_readable(c, person, parent)):
@@ -740,7 +764,7 @@ def guest_for(c, who, person, parent):
     refusal = H.task_reach_refusal(c, who.actor, parent, person)
     if refusal is None:
         return parent["id"], person
-    if parent.get("guest") or private_execution(c, who):
+    if any(H.is_human(r) for r in H.task_readers(parent)) or private_execution(c, who):
         raise Problem("privacy", refusal, 403)
     return None
 
@@ -756,7 +780,8 @@ COPIED_WORDS = 12
 
 
 def _person_on(row):
-    return next((row[k] for k in ("requester_id", "owner_id", "guest") if row.get(k) and H.is_human(row[k])), None)
+    named = [row.get("requester_id"), row.get("owner_id")] + H.task_readers(row)
+    return next((p for p in named if p and H.is_human(p)), None)
 
 
 def _person_name(c, person):
@@ -884,7 +909,7 @@ def from_private(c, who, owner, parent):
     """The private tasks a company-visible task filed from private work must keep out of its words: its parent and every
     private task the run carries. Problem when the route is not open to this create: switched off, not a bot's own
     run on private task work, a parent that is not private, a private task the filer neither owns nor manages the owner
-    of (a guest or reader only), or a person on one or above it (named, with the route to them, as for a sealed one)."""
+    of (a reader only), or a person on one or above it (named, with the route to them, as for a sealed one)."""
     if not FROM_PRIVATE:
         raise Problem("privacy", COMPANY_REFUSAL, 403)
     if not (who.role == "bot" and not who.via and not getattr(who, "task_actor", "") and who.attempt_id
@@ -983,7 +1008,7 @@ def require_create(c, who, private, owner, parent, actor=None, title=None, body=
                    texts=(), related=()):
     """The privacy refusals of a task create (app.task_create), in one place so its dry-run gives the create's own
     words. `who` is the caller as authenticated, `actor` the identity the task is filed as (a delegated person).
-    Returns guest_for's (parent id, person) for the create to make with hubdb.task_reach, or None.
+    Returns reach_for's (parent id, person) for the create to make with hubdb.task_reach, or None.
     `from_private_work`: a company-visible task filed from private work (from_private), whose words (`texts`, every
     other text it keeps) are checked here; `related` are the ids of the tasks it is related to besides its parent."""
     if from_private_work:
@@ -998,25 +1023,36 @@ def require_create(c, who, private, owner, parent, actor=None, title=None, body=
     execution = private_execution(c, who)
     if execution and private is False:
         raise Problem("privacy", COMPANY_REFUSAL, 403)
-    guest = guest_for(c, who, owner, parent)
+    reach = reach_for(c, who, owner, parent)
     if execution:
-        kept = None if guest else sealed_for(c, who, owner, parent)
+        kept = None if reach else sealed_for(c, who, owner, parent)
         if kept is not None:
             sealed_words(kept, title, body)
-        require_destination(c, who, owner, None, {}, guest=guest, sealed={r["id"] for r in kept or ()})
-        require_destination(c, who, actor or who.actor, None, {}, guest=guest)
-    return guest
+        require_destination(c, who, owner, None, {}, reach=reach, sealed={r["id"] for r in kept or ()})
+        require_destination(c, who, actor or who.actor, None, {}, reach=reach)
+    return reach
 
 
 def require_wait(c, who, row, waiting_on):
     """A private run's `--status waiting --on <person>` puts its ask in front of that person (hubdb._ask_in_subtask) and,
-    on a private task with no person on it, makes them its guest: so they must read every private task the run carries,
+    on a private task with no person on it, makes them its reader: so they must read every private task the run carries,
     as for a subtask or a question to them (require_create, question_party). Checked in the write's own transaction."""
     person = H.resolve_actor(c, str(waiting_on or "").strip()) if waiting_on else None
     if not person or not H.is_human(person) or not private_execution(c, who):
         return
-    guest = None if H.task_private_readable(c, person, row) else (row["id"], person)
-    require_destination(c, who, person, None, {}, guest=guest)
+    reach = None if H.task_private_readable(c, person, row) else (row["id"], person)
+    require_destination(c, who, person, None, {}, reach=reach)
+
+
+def require_readers(c, who, task_id, readers, shared):
+    """A bot adds readers within its reach (reach.check), and a private run only those who read every private task it
+    carries, the task they are added to counted as read (as require_wait). `readers` are the ones being added;
+    `shared` is the task reach counts them as sharing with the bot: the task itself, or a new task's parent."""
+    from . import reach
+    for reader in readers:
+        reach.check(c, who, reader, "task", task_id=shared)
+        if private_execution(c, who):
+            require_destination(c, who, reader, None, {}, reach=(task_id, reader) if task_id else None)
 
 
 def public_message(c, message):
@@ -1194,18 +1230,18 @@ def _tag_readable(c, who, row, linked, attached):
     linked = set(linked)
     for detail in attached:
         linked.update(references(c, detail))
-    # The parties row (id, private, owner, requester, guest) is all task_readable reads; no body is loaded.
+    # The parties row (id, private, owner, requester, readers) is all task_readable reads; no body is loaded.
     parties = _task_rows(c, linked) if linked and not row.get("is_template") else {}
     return (not linked or bool(row.get("is_template")) or
             any(task_readable(c, who, parties[tid]) for tid in linked)) and content_readable(c, actor(who), row)
 
 
-def require_destination(c, who, to, conversation_id, refs, reply=None, guest=None, sealed=()):
-    """Refuse a write whose audience cannot read every private task it carries. `guest` is the (task id, person) the
-    write itself makes a guest (guest_for), counted as already made so a dry-run refuses what the write would.
+def require_destination(c, who, to, conversation_id, refs, reply=None, reach=None, sealed=()):
+    """Refuse a write whose audience cannot read every private task it carries. `reach` is the (task id, person) the
+    write itself makes a reader (reach_for), counted as already made so a dry-run refuses what the write would.
     `sealed` are the private tasks a sealed subtask for `to` keeps from it (sealed_for): `to` need not read those.
     A private subtask's words may go to its parent's readers when every party of the subtask reads the parent
-    (hubdb.subtask_flows_up): a guest's answer comes back to the task it was asked for."""
+    (hubdb.subtask_flows_up): a reached person's answer comes back to the task it was asked for."""
     conv = H.conversation(c, conversation_id) if conversation_id else None
     if conv and conv.get("audience") and private_execution(c, who):
         # A native thread's readers are its audience, not its participants list: a private run writes into it only as
@@ -1233,7 +1269,7 @@ def require_destination(c, who, to, conversation_id, refs, reply=None, guest=Non
     target = (refs or {}).get("task") if isinstance(refs, dict) else None
     target = _task(c, target) if isinstance(target, str) else None
     for row in private:
-        if all(_reads(c, actor, row, guest) for actor in audience if not (actor == to and row["id"] in sealed)):
+        if all(_reads(c, actor, row, reach) for actor in audience if not (actor == to and row["id"] in sealed)):
             continue
         if not (target and H.subtask_flows_up(c, row, target) and all(_reads(c, actor, target) for actor in audience)):
             raise Problem("privacy", "Private task content stays with its requester and current owner", 403)
@@ -1255,7 +1291,7 @@ APPROVALS_SQL = ("SELECT m.*, a.task_id AS approval_task{by} FROM approvals a JO
 # A long-lived bot's finished company tasks are most of its rows and change nothing.
 STATUS_TASKS_SQL = "(status IN (%s) OR private IS NOT 0)" % ",".join("'%s'" % s for s in H.ACTIVE_STATUSES)
 # The columns `status` reads of them: never the bodies, which were megabytes a status page on a real install.
-STATUS_TASK_COLUMNS = "id,owner_id,requester_id,status,private,guest,waiting_on"
+STATUS_TASK_COLUMNS = "id,owner_id,requester_id,status,private,readers,waiting_on"
 
 
 def status_tasks_sql(match):
