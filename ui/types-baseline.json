@@ -129,7 +129,7 @@
     "ui/app/task-list.js": 61,
     "ui/app/task-live.js": 42,
     "ui/app/task-meetings.js": 6,
-    "ui/app/task-modal.js": 28,
+    "ui/app/task-modal.js": 26,
     "ui/app/task-pipelines.js": 63,
     "ui/app/task-props.js": 35,
     "ui/app/task-runs.js": 1,

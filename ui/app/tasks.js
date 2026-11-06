@@ -29,7 +29,6 @@ let TASKS_ST = null;
 const teamOf = id => botRow(id)?.team || '';
 // A run of a schedule (a routine before it became an automation): not work a person asked for, so Done lists leave it out.
 const isRecurringTask = t => !!t.routine_id || /from schedule/.test(String(t.body || ''));
-const isRecurringIssue = i => (i.labels || []).some(l => /^type:recurring$/i.test(l)) || /_Created by dispatcher from schedule/.test(i.body || '');
 const hasFiles = i => /s3:\/\//.test(i.body || '');
 const canMove = () => !!S.me?.mover;
 const taskFinished = t => ['done', 'closed'].includes(String(t?.status || ''));
@@ -151,10 +150,6 @@ const needsWho = t => {
   return needsWords(pid ? 'human:' + pid : '');
 };
 // One shape for the list, the sort and the columns.
-const issueItem = i => ({kind: 'issue', key: `i${i.number}`, n: i.number, title: i.title || '',
-  slug: i.owner_id, actor: `bot:${i.owner_id}`, team: teamOf(i.owner_id), needs: !!i.needs_human,
-  rank: null, updated_at: i.updatedAt, closed: i.state === 'CLOSED' ? i.closedAt : '', lane: 'company',
-  issue: i});
 const taskItem = t => {
   const slug = actorSlug(t.owner_id);
   return {kind: 'hub', key: `t${t.id}`, id: t.id, title: t.title || '', slug, actor: t.owner_id,
