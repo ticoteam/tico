@@ -104,7 +104,8 @@ Each reader follows a thread at one level. Choose it in the **Notifications** ro
   its unread count is not shown on that teammate's row in the Team list, whether the teammate is a person or a bot. On a
   page that is already open, the count can stay after you turn Off, and a new message in that DM can raise it until you
   reload. In Catch up, an Off thread appears only for a mention, an ask or an assignment that is new since you last read
-  it, or for one from a person, or a bot's ask, mention or reply, that you have not answered. Catch up reads only a limited number of these messages,
+  it, or for a message from a person, or a bot's ask, mention or reply, that is addressed to you and that you have not answered.
+  In a DM with one teammate, only a mention does this. Catch up reads only a limited number of these messages,
   so a muted thread can stay out even when one of them matches. Off lasts until you choose another level. A thread you
   do not follow shows as Off too.
 
@@ -153,8 +154,8 @@ everyone** switch in [Thread settings](#thread-settings)), except a DM with one 
 meeting's; anyone can still unpin it for themselves. Pinned threads lead
 the thread list. Catch up shows every thread with new messages for you, ones that mention you first, each with its new
 messages. A muted thread is left out unless it holds a mention, an ask or an assignment that is new since you last read
-it, or one from a person, or a bot's ask, mention or reply, that you have not answered. Catch up reads only a limited number of
-such messages, so a muted thread can stay out even when one of them matches. A group DM and every other new top-level thread need a
+it, or a message from a person, or a bot's ask, mention or reply, that is addressed to you and that you have not answered. In a DM
+with one teammate, only a mention does this. Catch up reads only a limited number of such messages, so a muted thread can stay out even when one of them matches. A group DM and every other new top-level thread need a
 name. A DM with one teammate and a task's thread may go unnamed. Details:
 [threads contract §10.1](dev/threads-contract.md).
 
