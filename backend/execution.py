@@ -3233,11 +3233,13 @@ class Execution:
                 else (bot["display_name"] if bot else None)) or row["bot_id"]
         by = H.shift(H.now(), hours=HELD_REVIEW_HOURS)[11:16]
         # A refused notice (the chat closed, a rule) must not undo the expiry itself, which would retry every tick.
+        # It names no in_reply_to: a bot message in reply to the request reads as its answer, and the late result or
+        # the resumed turn's real answer would then not be posted.
         c.execute("SAVEPOINT held_notice")
         try:
             H.say(c, "bot:" + row["bot_id"], msg["sender_id"],
                   f"Your {name} stopped: its computer dropped mid-reply. It will check what it did and pick this up "
-                  f"again by {by} UTC.", kind="notice", conversation_id=msg["conversation_id"], in_reply_to=msg["id"],
+                  f"again by {by} UTC.", kind="notice", conversation_id=msg["conversation_id"],
                   refs={"turn_id": row["id"]})
         except (H.Refused, Problem):
             c.execute("ROLLBACK TO held_notice")

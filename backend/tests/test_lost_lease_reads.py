@@ -80,10 +80,40 @@ def test_a_person_turn_that_may_have_acted_is_held_and_the_person_is_told_once(a
     aged(api, attempt['id'])
     assert sweep(api) == [] and sweep(api) == [] and job_state(api, attempt['job_id']) == 'uncertain'
     [notice] = notices(api, attempt)
-    assert notice['sender_id'] == 'bot:ops' and notice['in_reply_to'] == message['id']
+    assert notice['sender_id'] == 'bot:ops' and notice['in_reply_to'] is None     # never read as the answer
     assert 'computer dropped mid-reply' in notice['body'] and 'UTC' in notice['body']
     with api.app.state.store.read() as c:
         assert c.execute("SELECT 1 FROM events WHERE action='job.held' AND target=?", (attempt['id'],)).fetchone()
         detail = json.loads(c.execute("SELECT detail FROM events WHERE action='attempt.expired' AND target=?",
                                       (attempt['id'],)).fetchone()[0])
     assert detail['job_state'] == 'uncertain'
+
+
+def fixture_case(command, host):
+    """A shell call's start event exactly as the runner sends it (runner-rs tests produce the same fixture)."""
+    from backend.tests.test_execution_review import runner_shell_cases
+    return {case['command']: case for case in runner_shell_cases()}[command][host]
+
+
+@pytest.mark.parametrize('command,host,requeued', [
+    ('hub task show 42', 'codex', True),
+    ('cat note.txt', 'claude', True),
+    ('/bin/bash -lc "cd /tmp;gh pr merge 42"', 'claude', False),    # summarized `cd`, but the line merges
+    ('hub webhook send 1', 'claude', False),
+    ('gh pr view 42', 'claude', False),                              # `gh` alone cannot be told from a merge
+])
+def test_real_runner_shell_events_decide_a_lost_lease_turn(api, command, host, requeued):
+    payload = fixture_case(command, host)
+    machine, message, attempt = setup_attempt(api)
+    ready(api, machine, ['ops'], CAPS)
+    post(api, f"attempts/{attempt['id']}/started", {'thread_id': 'same-session'}, machine['token'])
+    post(api, f"attempts/{attempt['id']}/events", {'events': [
+        {'seq': 1, 'kind': 'status', 'payload': {'state': 'active', 'tool_events': True}},
+        {'seq': 2, 'kind': 'tool', 'payload': payload}]}, machine['token'])
+    expire(api, attempt['id'])
+    api.app.state.execution.served_at = None
+    with api.app.state.store.transaction() as c:
+        api.app.state.execution.expire(c)
+    aged(api, attempt['id'])
+    assert [d['state'] for d in sweep(api)] == (['queued'] if requeued else [])
+    assert len(notices(api, attempt)) == (0 if requeued else 1)
