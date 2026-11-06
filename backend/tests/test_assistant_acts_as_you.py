@@ -335,11 +335,12 @@ def test_a_morning_message_is_at_most_two_thousand_characters(api):
     assert r.status_code == 422, r.text
 
 
-def test_the_morning_tool_is_offered_to_the_background_run_and_to_no_one_else():
+def test_the_morning_tool_is_offered_to_the_assistant_and_its_bot_and_to_no_one_else():
     offered = {kind: {t["name"] for t in hubtools.listing(local=True, kind=kind)}
                for kind in ("assistant", "bot", "owner", "admin", "member", "botops", "agent")}
-    assert "hub_assistant_morning" in offered["bot"]
-    assert not any("hub_assistant_morning" in names for kind, names in offered.items() if kind != "bot"), offered.keys()
+    assert "hub_assistant_morning" in offered["assistant"] and "hub_assistant_morning" in offered["bot"]
+    assert not any("hub_assistant_morning" in names
+                   for kind, names in offered.items() if kind not in ("assistant", "bot"))
 
 
 def _turn_message_id(api, attempt):
