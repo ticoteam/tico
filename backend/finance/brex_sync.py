@@ -193,7 +193,7 @@ def connection_create(ctx: Ctx, who: str, p: V.Payload) -> Plan:
         mapped: list[Result] = []
         for a in cash:
             row = _in_base(a, base)
-            if (kept := banking._reuse(ctx, cid, row, "brex")) is not None:
+            if (kept := banking.reuse_money(ctx, cid, row, "brex")) is not None:
                 mapped.append(kept)
                 continue
             bank = banking.by_code(ctx, banking.BANK)
@@ -202,9 +202,9 @@ def connection_create(ctx: Ctx, who: str, p: V.Payload) -> Plan:
             named = F.bare_name(row.get("name") or "Brex", four)
             gl = bank if bank is not None and not used else banking.new_account(
                 ctx, banking.BANK, f"{named} ••{four}" if four else named, "asset", "bank", who)
-            mapped.append(banking._money(ctx, cid, row, "bank", "checking", gl, who, provider="brex"))
+            mapped.append(banking.new_money(ctx, cid, row, "bank", "checking", gl, who, provider="brex"))
         for a in cards:
-            if (kept := banking._reuse(ctx, cid, a, "brex")) is not None:
+            if (kept := banking.reuse_money(ctx, cid, a, "brex")) is not None:
                 mapped.append(kept)
                 continue
             line = banking.by_code(ctx, banking.CARDS)
@@ -213,7 +213,7 @@ def connection_create(ctx: Ctx, who: str, p: V.Payload) -> Plan:
             if gl is None:
                 gl = banking.new_account(ctx, banking.CARDS, "Credit cards" if line is None else "Brex card",
                                          "liability", "credit_card", who)
-            mapped.append(banking._money(ctx, cid, a, "card_program", "credit", gl, who, provider="brex"))
+            mapped.append(banking.new_money(ctx, cid, a, "card_program", "credit", gl, who, provider="brex"))
         return {"connection_id": cid, "money_accounts": mapped, "payments_enabled": False, "approval_note": None}
     return Plan(K.ALLOW, f"Connect Brex ({len(cash)} cash, {len(cards)} card)", apply)
 
