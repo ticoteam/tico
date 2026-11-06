@@ -474,6 +474,7 @@ async function pageBot(slug, tab) {
   </div>
   <div id="pane-settings" role="tabpanel" aria-labelledby="bot-tab-settings" hidden>
     <section class="card"><div class="bot-editor bot-editor-inline" id="bot-editor"><div class="empty">Loading settings…</div></div><div id="bot-settings-panels"></div></section>
+    <div id="bot-builtin-cards">${botBuiltinCardsHTML(slug)}</div>
     <section class="card"><header><h2>Screen</h2></header><dl class="bot-setup" id="bot-screen-settings"></dl></section>
     <section class="card" id="bot-access-card"><header><h2>Access</h2></header>
       ${accessTable(e)}</section>

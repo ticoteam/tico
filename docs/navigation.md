@@ -12,7 +12,7 @@ For example, Repositories says **Ask Ana Rivera to connect GitHub** when Ana own
 | Talk to a bot about one task | Bot's Home → tap the task's row ([Sessions](sessions.md)) |
 | See or link a task's sessions | Task → Sessions +; ⋯ → Copy session ID |
 | Add or edit a Routine | Automations → New automation ([Routines](routines.md)) |
-| See what Tico runs on its own | Settings → System → What Tico runs on its own ([System routines](system-routines.md)) |
+| See what Tico runs on its own | Automations → System jobs ([System routines](system-routines.md)) |
 | Receive a webhook, or send events out | Settings → Webhooks → Incoming or Outgoing ([Webhooks](webhooks.md)) |
 | Keep webhooks while the server is off | Settings → Webhooks → Through Tico Gateway |
 | Stop a hosted server when idle | Settings → Computers → Sleep when idle ([Account](account.md#sleep-when-idle)) |
