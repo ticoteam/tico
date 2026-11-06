@@ -42,7 +42,10 @@ def test_cross_task_provenance_filters_comments_asks_answers_and_mutation_receip
     # A question is its own open ask (hubdb.open_tasks_asks); the parent carries none of its own.
     assert get(api, 'tasks/' + question['id'])['task']['open_asks'] == 1
     assert get(api, 'tasks/' + target['id'])['task']['open_asks'] == 0
-    assert set(derived) <= {m['id'] for m in get(api, 'tasks/' + target['id'] + '/comments')['comments']}
+    # Task comments are say, ask and answer messages; the notice in the loop is not one of them.
+    say_id, notice_id, answer_id = derived
+    comment_ids = {m['id'] for m in get(api, 'tasks/' + target['id'] + '/comments')['comments']}
+    assert {say_id, answer_id} <= comment_ids and notice_id not in comment_ids
     added = post(api, f"tasks/{target['id']}/comments", {'text': 'Ordinary follow-up'}, 'ben-test')
     mid = added['comment']['id']
     responses = [added, post(api, f"tasks/{target['id']}/comments/{mid}", {'text': 'Revised follow-up'}, 'ben-test'),
