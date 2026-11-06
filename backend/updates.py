@@ -1344,7 +1344,11 @@ def _slides_message(problems):
     if not problems:
         return None
     return (
-        "Not a week in review yet: " + "; ".join(problems) + ". " + SLIDES_SHAPE + " Post again with tico_update_create."
+        "Not a week in review yet: "
+        + "; ".join(problems)
+        + ". "
+        + SLIDES_SHAPE
+        + " Post again with tico_update_create."
     )
 
 

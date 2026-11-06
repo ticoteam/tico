@@ -2054,8 +2054,27 @@ R1_SKIP_FILES = ("CHANGELOG.md", "scripts/hub", "scripts/tico", "scripts/tests/t
 # scripts/hub and scripts/tico are written by hand; the dispatch test embeds R0's scripts/tico as history.
 R1_SKIP_DIRS = ("docs/history/", "backend/migrations/", "scripts/cleanup/")
 R1_DETERMINERS = {
-    "the", "a", "an", "your", "our", "its", "this", "that", "my", "their", "any", "every", "each", "one", "whole",
-    "company", "own", "old", "new", "same", "other",
+    "the",
+    "a",
+    "an",
+    "your",
+    "our",
+    "its",
+    "this",
+    "that",
+    "my",
+    "their",
+    "any",
+    "every",
+    "each",
+    "one",
+    "whole",
+    "company",
+    "own",
+    "old",
+    "new",
+    "same",
+    "other",
 }
 R1_FENCE = re.compile(r"^\s*(```|~~~)")
 R1_SPAN = re.compile(r"`[^`\n]*`")
@@ -2104,7 +2123,7 @@ def r1_rewrite(text, tools_re, cmd_re, counts, markdown):
             continue
         spans = [(m.start(), m.end()) for m in R1_SPAN.finditer(line)]
 
-        def cmd(m):
+        def cmd(m, line=line, in_fence=in_fence, spans=spans):  # bound now: the loop moves on after this call
             pos = m.start()
             code = in_fence or any(a <= pos < b for a, b in spans)
             if not code and R1_BEFORE_DETERMINER.search(line[:pos]):
@@ -2191,8 +2210,10 @@ def main():
         counts, changed = r1_hub_to_tico(write=not args.dry_run)
         for rel in changed:
             print(rel)
-        print(f"hub-to-tico{' (dry run)' if args.dry_run else ''}: {len(changed)} files; " + ", ".join(
-            f"{key} {value}" for key, value in sorted(counts.items())))
+        print(
+            f"hub-to-tico{' (dry run)' if args.dry_run else ''}: {len(changed)} files; "
+            + ", ".join(f"{key} {value}" for key, value in sorted(counts.items()))
+        )
         return 0
     if not args.wave:
         parser.error("--wave is required unless --hub-to-tico is given")

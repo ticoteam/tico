@@ -149,7 +149,11 @@ def test_every_thread_tool_is_listed_with_a_schema_a_caller_can_check(api):
         assert set(schema.get("required", [])) <= set(schema["properties"]), name
         assert ("operation_id" in schema["properties"]) == (name in THREAD_WRITES), name
     assert "kind" not in tools["tico_thread_post"]["inputSchema"]["properties"]  # asks are gone: a post is a say
-    assert tools["tico_thread_update"]["inputSchema"]["properties"]["audience"]["enum"] == ["members", "team", "company"]
+    assert tools["tico_thread_update"]["inputSchema"]["properties"]["audience"]["enum"] == [
+        "members",
+        "team",
+        "company",
+    ]
     assert "with" in tools["tico_thread_list"]["inputSchema"]["properties"]
 
 
@@ -419,7 +423,10 @@ def test_a_bot_puts_one_decision_to_a_person_in_one_call(api):
     with api.app.state.store.transaction() as c:
         restrict(c, "ops", people=["ana"])
     err, hidden = call(
-        api, "tico_task_question", {"question": "Renew the vendor contract today?", "on": "cara"}, token=attempt["token"]
+        api,
+        "tico_task_question",
+        {"question": "Renew the vendor contract today?", "on": "cara"},
+        token=attempt["token"],
     )
     assert err and hidden["error"] == "privacy"
     # With a file, the same refusal comes before any bytes are stored.

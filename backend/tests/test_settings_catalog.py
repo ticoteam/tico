@@ -159,7 +159,9 @@ def test_a_confirm_setting_from_botops_is_a_card_and_nothing_changes(api, botops
 
 def test_mail_access_through_botops_waits_for_the_persons_confirmation(api, botops):
     ana = turn(api, botops, person="ana-test", text="Let Ops read our physical mail")
-    err, missing = mcp(api, "tico_settings_set", {"key": "mail.access.bot", "bot": "ops", "value": "read"}, ana["token"])
+    err, missing = mcp(
+        api, "tico_settings_set", {"key": "mail.access.bot", "bot": "ops", "value": "read"}, ana["token"]
+    )
     assert err and "--id" in str(missing), missing
     err, card = mcp(
         api, "tico_settings_set", {"key": "mail.access.bot", "id": "all", "bot": "ops", "value": "read"}, ana["token"]
@@ -242,7 +244,10 @@ def test_an_admin_asking_botops_to_raise_a_group_pool_limit_gets_a_card_the_tap_
     groups(api, "product")
     ben = turn(api, botops, person="ben-test", text="Raise the Engineering pool to $50 a day")
     err, card = mcp(
-        api, "tico_settings_set", {"key": "pool.limit.usd", "id": "groups/eng", "value": {"daily_usd": 50}}, ben["token"]
+        api,
+        "tico_settings_set",
+        {"key": "pool.limit.usd", "id": "groups/eng", "value": {"daily_usd": 50}},
+        ben["token"],
     )
     assert not err and card["needs_confirm"] is True, card
     assert card["action"]["path"] == "/api/v2/usage/pools/groups/eng", card["action"]

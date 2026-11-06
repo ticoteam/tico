@@ -168,7 +168,9 @@ def test_a_folded_step_carries_its_label_and_keeps_its_tool_name():
 
 
 def test_a_hub_phrase_is_the_longest_command_it_starts_with():
-    assert turns.tool_label({"tool": "Bash", "summary": "tico approval read-back"}) == "Preparing approvals for your yes"
+    assert (
+        turns.tool_label({"tool": "Bash", "summary": "tico approval read-back"}) == "Preparing approvals for your yes"
+    )
     assert turns.tool_label({"tool": "mcp__tico__tico_approval_read_back"}) == "Preparing approvals for your yes"
     assert turns.tool_label({"tool": "Bash", "summary": "tico approval approve"}) == "Approving"
     assert turns.tool_label({"tool": "Bash", "summary": "tico needs-you list"}) == "Reading the Needs you list"

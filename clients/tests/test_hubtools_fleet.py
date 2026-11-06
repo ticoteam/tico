@@ -133,7 +133,9 @@ def test_tool_add_and_remove_are_the_requesters_when_botops_calls_them():
         ("POST", "bots/inbox-manager/tools", True),
         ("POST", "bots/inbox-manager/tools/gmail/delete", True),
     ]
-    assert "botops" in hubtools.offered_to(fn["tico_tool_add"]) and "bot" not in hubtools.offered_to(fn["tico_tool_add"])
+    assert "botops" in hubtools.offered_to(fn["tico_tool_add"]) and "bot" not in hubtools.offered_to(
+        fn["tico_tool_add"]
+    )
 
 
 def test_tool_update_changes_only_what_is_sent_and_is_the_requesters_when_botops_calls_it():

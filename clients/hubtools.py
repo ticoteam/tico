@@ -3947,7 +3947,9 @@ def market_spend(api, args):
 
 
 @tool(
-    "tico_market_segment_tree", "The market's segments as an indented tree with each one's size, range and how sure.", {}
+    "tico_market_segment_tree",
+    "The market's segments as an indented tree with each one's size, range and how sure.",
+    {},
 )
 def market_segment_tree(api, args):
     return {"tree": spend_lines(api.get("market/spend"))}
@@ -4576,7 +4578,9 @@ def card_update(api, args):
     )
 
 
-@tool("tico_card_remove", "Remove a card and every pin of it.", {"card": _s("Card id")}, required=("card",), writes=True)
+@tool(
+    "tico_card_remove", "Remove a card and every pin of it.", {"card": _s("Card id")}, required=("card",), writes=True
+)
 def card_remove(api, args):
     return _as_person(api).call("DELETE", "cards/" + args["card"], {}, _key(args))
 
@@ -4840,7 +4844,10 @@ def pages_list(api, args):
 
 
 @tool(
-    "tico_page_show", "Page status and pins. Read HTML with tico_file_read.", {"id": {"type": "string"}}, required=("id",)
+    "tico_page_show",
+    "Page status and pins. Read HTML with tico_file_read.",
+    {"id": {"type": "string"}},
+    required=("id",),
 )
 def pages_show(api, args):
     return api.get("pages/" + args["id"])
@@ -12966,7 +12973,12 @@ AUDIENCE = {
     "tico_repo_product_create": ("owner", "bot", "botops"),  # a bot needs Create product repositories (server)
     **{
         name: REQUESTER
-        for name in ("tico_credential_grant", "tico_credential_revoke", "tico_credential_import", "tico_credential_delete")
+        for name in (
+            "tico_credential_grant",
+            "tico_credential_revoke",
+            "tico_credential_import",
+            "tico_credential_delete",
+        )
     },
     **{
         name: REQUESTER

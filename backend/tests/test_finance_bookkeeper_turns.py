@@ -366,7 +366,10 @@ def test_close_turn(api):
     err, checklist = call(api, "tico_finance_report", {"kind": "close", "month": "2026-10"}, token=token)
     assert not err, checklist
     err, variance = call(
-        api, "tico_finance_report", {"kind": "budget_vs_actual", "start": "2026-10-01", "end": "2026-10-31"}, token=token
+        api,
+        "tico_finance_report",
+        {"kind": "budget_vs_actual", "start": "2026-10-01", "end": "2026-10-31"},
+        token=token,
     )
     assert not err, variance
     # The checklist is not ready: a money account is not reconciled and a settled row waits for a category (spec 11), so

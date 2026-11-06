@@ -54,13 +54,18 @@ def test_a_persons_edits_are_applied_as_they_could(api, botops):
     aid = post(api, "automations", flow(enabled=True), "cara-test")["id"]
     attempt = turn(api, botops, person="cara-test", text="Label receipts first")
     err, edited = mcp(
-        api, "tico_automation_update", {"id": aid, "steps": [LABEL, ARCHIVE], "summary": "Label first"}, attempt["token"]
+        api,
+        "tico_automation_update",
+        {"id": aid, "steps": [LABEL, ARCHIVE], "summary": "Label first"},
+        attempt["token"],
     )
     assert not err and edited["version"] == 2 and "pending" not in edited, edited
     assert get(api, f"automations/{aid}/versions?status=pending", "cara-test")["versions"] == []
     err, paused = mcp(api, "tico_automation_update", {"id": aid, "enabled": False}, attempt["token"])
     assert not err and paused["enabled"] is False, paused
-    err, ran = mcp(api, "tico_automation_run", {"id": aid, "input": {"message": {"subject": "hello"}}}, attempt["token"])
+    err, ran = mcp(
+        api, "tico_automation_run", {"id": aid, "input": {"message": {"subject": "hello"}}}, attempt["token"]
+    )
     assert not err, ran
     err, back = mcp(api, "tico_automation_restore", {"id": aid, "n": 1}, attempt["token"])
     assert not err and back["version"] == 3 and len(back["steps"]) == 1, back

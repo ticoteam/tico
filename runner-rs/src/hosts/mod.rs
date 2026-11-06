@@ -309,8 +309,9 @@ pub fn tool_summary(input: &Value) -> String {
 /// while a program-only display summary cannot distinguish `gh pr view` from `gh pr merge`.
 pub fn shell_outside_actions(command: &str) -> Vec<&'static str> {
     static RULES: OnceLock<Vec<(&'static str, Regex)>> = OnceLock::new();
-    let rules = RULES.get_or_init(|| {
-        [
+    let rules =
+        RULES.get_or_init(|| {
+            [
             (
                 "merge pull request",
                 r"\bgh\s+(?:pr\s+merge\b|api\b[^\n]*\bmerg(?:e|ed|ing)\b)",
@@ -341,7 +342,7 @@ pub fn shell_outside_actions(command: &str) -> Vec<&'static str> {
         .into_iter()
         .map(|(label, pattern)| (label, Regex::new(&format!("(?i){pattern}")).unwrap()))
         .collect()
-    });
+        });
     // Normalize shell quoting as well as scanning the raw command: quoted subcommands and nested shell
     // wrappers must retain their action. Matching mentions can conservatively hold; it never exports them.
     let normalized = shell_words(command)
@@ -2619,7 +2620,10 @@ mod tests {
             ),
             "tico task create"
         );
-        assert_eq!(command_program("tico task note sk-live-1 close"), "tico task");
+        assert_eq!(
+            command_program("tico task note sk-live-1 close"),
+            "tico task"
+        );
         assert_eq!(
             command_program("cd web && npm run build && tico task list"),
             "tico task list"
@@ -2709,7 +2713,10 @@ mod tests {
         );
         assert_eq!(command_program("hub history review"), "tico history");
         assert_eq!(command_program("tico task close 7f3a"), "tico task close");
-        assert_eq!(command_program("tico needs-you show"), "tico needs-you show");
+        assert_eq!(
+            command_program("tico needs-you show"),
+            "tico needs-you show"
+        );
         assert_eq!(
             command_program("tico bot status history"),
             "tico bot status history"

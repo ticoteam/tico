@@ -94,7 +94,10 @@ def test_a_person_turn_that_only_read_goes_back_in_line_after_its_lease_is_lost(
     [
         (READS, 1),  # a hub write: it acted
         ([shell('cat', ['send email'])], 0),  # a named outside action anywhere in the line
-        ([shell('tico task list', reads_only=False)], 0),  # `curl -X POST ... && tico task list`: the summary is no proof
+        (
+            [shell('tico task list', reads_only=False)],
+            0,
+        ),  # `curl -X POST ... && tico task list`: the summary is no proof
         (READS + [shell('git', reads_only=False)], 0),  # one line of several could push
         ([{'summary': 'tico task list', 'outside_actions': []}], 0),  # an older runner that never judged the whole line
         ([{'summary': 'tico task list'}], 0),  # an older still, that never scanned it

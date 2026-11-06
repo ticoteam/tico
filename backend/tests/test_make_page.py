@@ -345,7 +345,10 @@ def test_mcp_offers_page_publish_to_the_assistant_and_keeps_the_person_and_attem
     tools = rpc(api, "tools/list", token=attempt["token"])["result"]["tools"]
     assert "tico_page_publish" in {tool["name"] for tool in tools}
     error, result = call(
-        api, "tico_page_publish", {"name": "alerts.html", "text": HTML.decode(), "task": t["id"]}, token=attempt["token"]
+        api,
+        "tico_page_publish",
+        {"name": "alerts.html", "text": HTML.decode(), "task": t["id"]},
+        token=attempt["token"],
     )
     assert not error, result
     assert result["page"]["updated_by"] == "human:ben"
