@@ -266,7 +266,7 @@ def runs_of(api, key):
 
 SCHEDULER_JOBS = ("heartbeat", "screening", "finance_upkeep", "hourly_deadlines")
 # Quiet on an install with nothing waiting, so four ticks keep one row each.
-QUIET_JOBS = ("heartbeat", "screening", "hourly_deadlines")
+QUIET_JOBS = ("screening", "hourly_deadlines")      # the Heartbeat's quiet beats fold too: checked below
 # The blocks that became Heartbeat steps (backend/heartbeat.py): each on its step row, none on a run row of its own.
 HEARTBEAT_STEPS = ("stall_marks", "run_housekeeping", "ship_deployed", "task_loops", "queue_check", "milestone_waits",
                    "thread_loop_guard", "snooze_ends")
@@ -301,6 +301,8 @@ def test_scheduler_jobs_and_background_passes_record_their_runs(api, monkeypatch
         assert found and all(r["ok"] and r["result"] for r in found), (key, found)
     for key in QUIET_JOBS:
         assert len(runs_of(api, key)) == 1, (key, runs_of(api, key))
+    beats = [r["result"] for r in runs_of(api, "heartbeat")]
+    assert beats.count("All quiet") == 1, beats      # the first beat may do something; the quiet ones after it fold
     steps = step_rows(api)
     for key in HEARTBEAT_STEPS:
         assert steps[key]["last_result"] and not steps[key]["last_error"], (key, steps[key])

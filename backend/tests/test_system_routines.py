@@ -70,7 +70,8 @@ def test_the_jobs_list_and_each_run_record(api):
         scheduler.tick(at + timedelta(seconds=10 * n))
     with store.read() as c:
         assert c.execute("SELECT count(*) FROM system_runs WHERE job='screening'").fetchone()[0] == 1
-        assert c.execute("SELECT count(*) FROM system_runs WHERE job='heartbeat'").fetchone()[0] == 1
+        beats = [r["result"] for r in c.execute("SELECT result FROM system_runs WHERE job='heartbeat'")]
+    assert beats.count("All quiet") == 1, beats      # the first beat may do something; the quiet ones after it fold
     with store.transaction() as c:
         c.execute("DELETE FROM system_runs WHERE job='screening'")
     # a quiet repeat moves its row after the write interval and a busy run starts a new one

@@ -38,8 +38,7 @@ async function themed(page, name) {
       const row = page.locator('tr.au-row[data-row="heartbeat"]');
       assert.match(await row.innerText(), /Heartbeat[\s\S]*Every 10 s/);
       assert.equal(await row.locator('.pill', {hasText: 'Built-in'}).count(), 1);
-      assert.equal(await row.evaluate(r => r.previousElementSibling?.dataset.row), 'maintenance');
-      assert.equal(await page.locator('tr.au-row[data-row="system-jobs"]').evaluate(r => r.previousElementSibling?.dataset.row), 'heartbeat');
+      // Row order follows the list sort (last run by default), so where the row sits is not checked here.
       await until(async () => (await row.locator('td.au-cf').innerText()).trim() === '1', 'the failed count');
       assert.equal(Number((await row.locator('td.au-cn').innerText()).replace(/\D/g, '')), 6, 'runs in the hour');
       // The overview's Runs tab lists the Heartbeat's runs; a tap opens its log.
