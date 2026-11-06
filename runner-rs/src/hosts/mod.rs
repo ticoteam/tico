@@ -484,9 +484,9 @@ fn is_setup_run(run: &str) -> bool {
 fn strip_env(run: &str) -> &str {
     static ENV: OnceLock<Regex> = OnceLock::new();
     let env = ENV.get_or_init(|| {
-        Regex::new(concat!(
-            r#"^[ \t]*env(?:[ \t]+(?:-[i0]|[A-Za-z_][A-Za-z0-9_]*=(?:'[^']*'|"[^"\\$`]*"|[A-Za-z0-9._/:@%+,-])*))*[ \t]+"#
-        ))
+        Regex::new(
+            r#"^[ \t]*env(?:[ \t]+(?:-[i0]|[A-Za-z_][A-Za-z0-9_]*=(?:'[^']*'|"[^"\\$`]*"|[A-Za-z0-9._/:@%+,-])*))*[ \t]+"#,
+        )
         .unwrap()
     });
     match env.find(run) {
