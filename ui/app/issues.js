@@ -122,12 +122,10 @@ function needsYouItem(i, folded, showName = true) {
     // a request for the owner: the Issue body if it is their Issue, else the bot's latest comment
     const text = requestText(i);
     const asker = mine ? (text.match(/Requested by\s*\n+\s*([^\n]+)/i) || [])[1] : null;
-    const parentNo = +((text.match(/Parent:?\**\s*#?(\d+)/i) || [])[1] || 0);
-    const parentOwner = parentNo ? S.issues.find(x => x.number === parentNo)?.owner_id : null;
     const bucketOwner = mine ? (text.match(/s3:\/\/[^/]+\/([^/\s]+)/i) || [])[1] : null;
     const askerSlug = (asker && S.emps.find(e => String(e.display_name || '').toLowerCase() === asker.trim().toLowerCase())?.id)
       || (bucketOwner && botByRef(bucketOwner)?.id)
-      || (mine ? parentOwner : i.owner_id);
+      || (mine ? null : i.owner_id);
     // The title is the plain-English decision. Keep the useful context visible, fold away the
     // handoff boilerplate, and retain the authored request in full below it.
     const parts = requestParts(text);
@@ -164,16 +162,12 @@ function needsYouItem(i, folded, showName = true) {
 }
 
 const CLOSE_WITHOUT_APPROVAL = 'Closed without approval. Do not treat this as authorization to send, publish, spend, or change live systems.';
-const pendingClosedIssues = new Set();
 async function closeIssue(button, n) {
   if (button.disabled) return;
   const label = button.textContent;
   button.disabled = true; button.textContent = 'Closing…';
   try {
     await post(`/issues/${n}/comment`, {body: CLOSE_WITHOUT_APPROVAL, close: true, clear_needs_human: false});
-    pendingClosedIssues.add(n);
-    const issue = S.issues.find(i => i.number === n);
-    if (issue) Object.assign(issue, {state: 'CLOSED', needs_human: false, closedAt: new Date().toISOString()});
     document.querySelectorAll(`.req[data-n="${n}"], .bcard[data-n="${n}"], .trow[data-n="${n}"]`).forEach(el => el.remove());
     if ($('#needs') && !$('#needs .req')) $('#needs').innerHTML = '<div class="empty">Nothing needs you.</div>';
     renderTree();
@@ -277,10 +271,10 @@ document.addEventListener('toggle', async ev => {
   if (!Number.isInteger(n) || n < 1) return;
   details.dataset.fullLoading = 'true';
   try {
-    const issue = await get(`/issues/${n}`), listed = S.issues.find(i => i.number === n);
+    const issue = await get(`/issues/${n}`);
     const comments = Array.isArray(issue.comments) ? issue.comments : [];
     const last = comments.length ? String(comments[comments.length - 1]?.body || '') : '';
-    const text = isHuman(listed?.owner_id) ? String(issue.body || last) : String(last || issue.body || '');
+    const text = String(last || issue.body || '');
     if (original) original.innerHTML = safeMd(text);
     const body = $('.req-body', details), originalDetails = $('.req-original', details);
     const known = new Set([...details.querySelectorAll('[data-preview-key]')].map(el => el.dataset.previewKey));

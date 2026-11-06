@@ -58,7 +58,7 @@
     "ui/app/inboxes-outbox.js": 4,
     "ui/app/inboxes-texts.js": 9,
     "ui/app/integrations.js": 9,
-    "ui/app/issues.js": 52,
+    "ui/app/issues.js": 47,
     "ui/app/learned.js": 1,
     "ui/app/learnings.js": 2,
     "ui/app/liquid-dot.js": 7,

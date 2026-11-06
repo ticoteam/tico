@@ -12,7 +12,6 @@ async function refresh(force) {
   const v2 = v2Refresh(), computers = overviewLoadComputers();
   try {
     // BotOps and other sessions can change the chart. Publish a complete roster together so groups and members agree.
-    // GitHub Issues are retired: /api/issues always answers [], so S.issues stays empty and is not read.
     const seatsDue = force || S.seats === undefined || ++SEATS_POLLS % 5 === 0 || Date.now() - SEATS_AT > 600e3;
     // A forced refresh follows a change: an in-flight read (including startup's notification preference read of
     // /humans) may already hold the old roster. Ask again instead of joining that read.
