@@ -12,7 +12,17 @@ from backend.finance import tab as FT
 from backend.finance.actions import FinanceError
 from backend.finance.store import banking as SK
 from backend.tests.test_api import api, get, headers  # noqa: F401
-from backend.tests.test_finance_fixtures import AT, OWNER, account, act, books, finance_template, spend, store  # noqa: F401
+from backend.tests.test_finance_fixtures import (
+    open_views,
+    AT,
+    OWNER,
+    account,
+    act,
+    books,
+    finance_template,
+    spend,
+    store,
+)  # noqa: F401
 from backend.tests.test_finance_tab import _bank
 
 OCT = ("2026-10-01", "2026-10-31")
@@ -343,6 +353,7 @@ def test_view_as_reaches_lines_expenses_and_budgets_and_only_for_the_owner(api):
         from backend.finance import actions as FA
 
         assert FA.ensure_setup(c, store.settings.owner_email)
+        open_views(c)  # ben sees his own expenses, so viewing as him reads something
         line = account(c, "6100")
     for path in (f"finance/lines/{line}", "finance/expenses", "finance/budgets"):
         get(api, f"{path}?view_as=human:ben")
