@@ -1986,7 +1986,7 @@ def parser():
         if change == "follow":
             s.add_argument("--level", choices=("live", "mentions", "digest", "muted"))
         s.add_argument("--who", help="someone else who sees it (human:<id> or bot:<slug>), when you may change the task")
-        s.set_defaults(fn="task " + change)
+        s.set_defaults(fn="task follow", **({"unfollow": True} if change == "unfollow" else {}))   # one tool: hub_task_follow
     s = task.add_parser("relate", help="relate another task to this one: <id> <kind> <task>")
     s.add_argument("id")
     s.add_argument("task")

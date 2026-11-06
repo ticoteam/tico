@@ -982,8 +982,8 @@ def test_followers_run_from_the_cli_and_its_mcp_tools(monkeypatch):
     for argv, tool in ((["task", "followers", "T1"], "hub_task_followers"),
                        (["task", "follow", "T1", "--level", "digest"], "hub_task_follow"),
                        (["task", "follow", "T1", "--who", "bot:cpo"], "hub_task_follow"),
-                       (["task", "unfollow", "T1", "--who", "ben"], "hub_task_unfollow"),
-                       (["task", "unfollow", "T1"], "hub_task_unfollow")):
+                       (["task", "unfollow", "T1", "--who", "ben"], "hub_task_follow"),
+                       (["task", "unfollow", "T1"], "hub_task_follow")):
         args = hubcli.parser().parse_args(argv)
         assert remotecli.tool_name(args.fn) == tool
         remotecli.run(args)

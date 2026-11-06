@@ -1416,32 +1416,20 @@ def task_readers_remove(api, args):
     return api.post(f"tasks/{args['id']}/readers", {"remove": list(args["readers"])}, key=_key(args))
 
 
-FOLLOW_LEVEL = {"type": "string", "enum": ["live", "mentions", "digest", "muted"],
-                "description": "live: every message; mentions: only what names you; digest: in a batch; muted: "
-                               "nothing is sent"}
-FOLLOWER = {"type": "string", "description": "Someone else who sees the task (human:<id> or bot:<slug>), when you may "
-                                             "change the task; default you"}
+FOLLOW_LEVEL = {"type": "string", "enum": ["live", "mentions", "digest", "muted"]}
 
 
-@tool("hub_task_followers", "Who follows a task, each at their level. Its owner follows by default; filing or "
-      "commenting does not follow.", {"id": TASK_ID}, required=("id",))
+@tool("hub_task_followers", "Who follows a task, at what level.", {"id": TASK_ID}, required=("id",))
 def task_followers(api, args):
     return api.get(f"tasks/{args['id']}/followers")
 
 
-@tool("hub_task_follow", "Follow a task (or set your level). With `who`, follow it for someone else who sees it, when "
-      "you may change the task.", {"id": TASK_ID, "level": FOLLOW_LEVEL, "who": FOLLOWER}, required=("id",),
-      writes=True)
+@tool("hub_task_follow", "Follow a task, set your level, or unfollow. `who`: someone else, if you may change the task.",
+      {"id": TASK_ID, "level": FOLLOW_LEVEL, "who": _s("human:<id> or bot:<slug>"), "unfollow": {"type": "boolean"}},
+      required=("id",), writes=True)
 def task_follow(api, args):
-    body = {"following": True, **({"notify": args["level"]} if args.get("level") else {}),
+    body = {"following": not args.get("unfollow"), **({"notify": args["level"]} if args.get("level") else {}),
             **({"actor": args["who"]} if args.get("who") else {})}
-    return api.call("PUT", f"tasks/{args['id']}/followers", body, key=_key(args))
-
-
-@tool("hub_task_unfollow", "Stop following a task. With `who`, take someone else off, when you may change the task.",
-      {"id": TASK_ID, "who": FOLLOWER}, required=("id",), writes=True)
-def task_unfollow(api, args):
-    body = {"following": False, **({"actor": args["who"]} if args.get("who") else {})}
     return api.call("PUT", f"tasks/{args['id']}/followers", body, key=_key(args))
 
 
@@ -8076,6 +8064,7 @@ ASSISTANT_HIDDEN = frozenset({
     "hub_credential_grant", "hub_credential_revoke", "hub_credential_delete", "hub_credential_set", "hub_credential_import",
     "hub_agent_pair_approve", "hub_agent_pair_decline", "hub_call_token",
     "hub_sql", "hub_support_file", "hub_support_report", "hub_support_send", "hub_trigger_sign", "hub_message_redact",
+    "hub_task_followers",   # task show carries followers
     "hub_task_readers_list",  # hub_task_show has the readers; the Assistant's listing is near its size cliff
 })
 

@@ -1564,7 +1564,7 @@ A task's **followers** are the people and bots who follow its thread, each at a 
 - The task's **Followers** row lists them by name, with the level when it is not live: **Follow** or **Following**
   (your level, Unfollow) for you, × and + for others.
 - `hub task followers <id>`; `hub task follow <id> [--level live|mentions|digest|muted] [--who X]`;
-  `hub task unfollow <id> [--who X]` (MCP: `hub_task_followers`, `hub_task_follow`, `hub_task_unfollow`).
+  `hub task unfollow <id> [--who X]` (MCP: `hub_task_followers`; `hub_task_follow`, with `unfollow` to stop).
 - API: `GET /api/v2/tasks/{id}/followers`; `PUT` with `{"actor"?: X, "following": true|false, "notify"?: level}`
   (no `actor`: you). Each answers `{task_id, following, notify, followers: [{actor, notify, reason}]}`, `following`
   and `notify` being yours; `reason` is `owner`, `manual` (chosen) or `mentioned`. The task's detail carries
