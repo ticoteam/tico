@@ -518,7 +518,7 @@ def sweep_holds(api):
 
 def ben_needs_you(api):
     """The held writes Ben's Needs you lists (thread attention reads the same rows)."""
-    who = SimpleNamespace(actor="ben", via="", task_actor="", role="person")
+    who = SimpleNamespace(actor="human:ben", via="", task_actor="", role="person")
     with api.app.state.store.read() as c:
         return [row["id"] for row in K.held_for(c, who, thread_attention.HELD_OPERATIONS)]
 
@@ -557,7 +557,7 @@ def test_a_hold_a_person_decided_is_not_touched_by_the_sweep(ruled):
     age_holds(api, 48)
     assert sweep_holds(api) == []
     row = hold_row(api, held["id"])
-    assert (row["state"], row["decided_by"]) == ("kept", "ben")
+    assert (row["state"], row["decided_by"]) == ("kept", "human:ben")
     assert sql(api, "SELECT body FROM notes WHERE to_actor='ana' AND body LIKE '%not sent%'") == []
 
 
