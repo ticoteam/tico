@@ -15,7 +15,7 @@ const today = new Date(now).toLocaleDateString('en-CA', {timeZone: 'America/Los_
 // A manager with eight reports (Chris, Oct 19: "a comment icon, unread icon, archive icon, and a '8 dropdown'").
 const EIGHT = [['seo', 'AI SEO'], ['ads', 'Ads Bot'], ['copy', 'Copywriter'], ['social', 'Social Bot'], ['pr', 'PR Bot'],
   ['events', 'Events Bot'], ['brand', 'Brand Bot'], ['email', 'Email Bot']];
-const bots = [['cmo', 'AI CMO'], ...EIGHT, ['writer', 'Writer Bot']].map(([name, display_name]) =>
+const bots = [['cmo', 'AI CMO'], ...EIGHT, ['writer', 'Writer Bot'], ['intern', 'Intern Bot']].map(([name, display_name]) =>
   ({name, display_name, host: 'keeper', status: 'active', can_chat: true, team: 'marketing', owner_id: 'ana'}));
 const update = (id, bot, body, read, more = {}) => ({id, bot, kind: 'daily', day: today, headline: body.slice(2), body, read,
   created_at: iso(-hour), updated_at: iso(-hour), replies: 0, slides: null, ...more});
@@ -36,9 +36,11 @@ const drafted = {goal: 'Open the Northwind office by November', done: ['Signed t
     const seo = {key: 'b:seo', author: 'seo', name: 'AI SEO', direct: false, update: update('u-seo', 'seo', '- Published the checklist page', allSeen), children: []};
     const cmo = {key: 'b:cmo', author: 'cmo', name: 'AI CMO', direct: true,
                  update: update('u-cmo', 'cmo', '- The team shipped the checklist', allSeen), children: [seo]};
-    if (eight) {      // eight reports, one with no update yet and one with a report of its own
+    if (eight) {      // eight reports: three with no update yet (one of them with a report of its own), and one with a report
       cmo.children.push(...EIGHT.slice(1).map(([bot, name], i) => ({key: 'b:' + bot, author: bot, name, direct: false, children: [],
-        update: i === 3 ? null : update('u-' + bot, bot, `- ${name} finished its part of the checklist launch`, allSeen)})));
+        update: i >= 3 && i <= 5 ? null : update('u-' + bot, bot, `- ${name} finished its part of the checklist launch`, allSeen)})));
+      cmo.children.find(k => k.key === 'b:events').children = [{key: 'b:intern', author: 'intern', name: 'Intern Bot', direct: false, children: [],
+        update: update('u-intern', 'intern', '- Booked the venue', allSeen)}];
       seo.children = [{key: 'b:writer', author: 'writer', name: 'Writer Bot', direct: false, update: update('u-writer', 'writer', '- Drafted the checklist page', allSeen), children: []}];
     }
     const ana = {key: 'p:ana', author: 'human:ana', name: 'Ana', direct: false, update: mine, children: [cmo]};
@@ -93,7 +95,10 @@ const drafted = {goal: 'Open the Northwind office by November', done: ['Signed t
     assert.equal(await page.locator('#upd-feed [data-upd="u-seo"]').count(), 0, 'deeper cards start closed');
     const kids = page.locator('#upd-feed [data-upd-kids="b:cmo"]');
     assert.equal(await kids.getAttribute('aria-label'), 'Show 1 report');
-    assert.equal(await cmo.locator('.upd-actions [data-upd-kids]').count(), 1, 'the toggle is in the card\'s action row');
+    // The toggle sits right of Archive on the name's line (no row under the update for it), and never fades with the corner.
+    assert.equal(await cmo.locator('.upd-meta > .upd-corner + [data-upd-kids]').count(), 1, 'the toggle follows the corner on the name line');
+    assert.equal(await cmo.locator('.upd-actions').evaluate(r => getComputedStyle(r).display), 'none', 'no row under the update for the toggle');
+    assert.equal(await kids.evaluate(b => { let o = 1; for (let e = b; e; e = e.parentElement) o *= Number(getComputedStyle(e).opacity); return o; }), 1, 'the toggle is fully visible');
     await kids.click();
     const seo = page.locator('#upd-feed [data-upd="u-seo"]');
     await seo.waitFor();
@@ -199,7 +204,7 @@ const drafted = {goal: 'Open the Northwind office by November', done: ['Signed t
     // width under it; Reply sits on the name line, just left of Mark read and Archive. A "No update yet" row has the
     // same avatar at the same inset, so a thread's avatars line up.
     const dense = async (p, label) => {
-      const cards = await p.locator('#upd-feed .upd-card:not(.upd-edit), #upd-feed .upd-none').evaluateAll(els => els.map(card => {
+      const cards = await p.locator('#upd-feed .upd-card:not(.upd-edit), #upd-feed .upd-none:not(.upd-nones)').evaluateAll(els => els.map(card => {
         const r = card.getBoundingClientRect(), cs = getComputedStyle(card);
         const inL = r.left + card.clientLeft + parseFloat(cs.paddingLeft), inR = r.right - card.clientLeft - parseFloat(cs.paddingRight);
         const box = sel => card.querySelector(sel)?.getBoundingClientRect();
@@ -229,14 +234,15 @@ const drafted = {goal: 'Open the Northwind office by November', done: ['Signed t
       const boss = p.locator('#upd-feed [data-upd="u-cmo"]');
       await boss.waitFor();
       const toggle = boss.locator('[data-upd-kids="b:cmo"]');
-      assert.deepEqual(await boss.locator('.upd-actions .upd-act').evaluateAll(els => els.map(b => b.getAttribute('aria-label'))),
-        ['Show 8 reports'], `${label}: the count alone under the update`);
+      assert.equal(await boss.locator('.upd-actions').evaluate(r => getComputedStyle(r).display), 'none', `${label}: no row under the update`);
       assert.deepEqual(await boss.locator('.upd-corner .upd-act').evaluateAll(els => els.map(b => b.getAttribute('aria-label'))),
         ['Reply', 'Mark unread', 'Archive'], `${label}: comment, unread and archive at the top right`);
       assert.equal(await toggle.evaluate(b => [...b.childNodes].filter(n => !n.classList?.contains('nav-icon')).map(n => n.textContent).join('').trim()), '8');
       assert.equal(await toggle.locator('.nav-icon').textContent(), 'chevron_right');
-      const [row, main] = [await boss.locator('.upd-actions').boundingBox(), await toggle.boundingBox()];
-      assert.ok(Math.abs(row.x + row.width - (main.x + main.width)) < 1 && main.x > row.x + row.width / 2, `${label}: the count sits at the right end of the row`);
+      const [archive, main, meta] = [await boss.locator('[data-upd-archive]').boundingBox(), await toggle.boundingBox(), await boss.locator('.upd-meta').boundingBox()];
+      assert.ok(main.x >= archive.x + archive.width - 0.5 && Math.abs(main.y + main.height / 2 - (archive.y + archive.height / 2)) <= 1,
+        `${label}: the count sits right of Archive, on its line`);
+      assert.ok(Math.abs(main.x + main.width - (meta.x + meta.width + 8)) <= 1, `${label}: the count ends the top line`);
       const words = async () => p.locator('#upd-feed').evaluate(f => [...f.querySelectorAll('*')].filter(e => !e.closest('.nav-icon') && e.childNodes.length)
         .flatMap(e => [...e.childNodes].filter(n => n.nodeType === 3).map(n => n.textContent)).join(' '));
       assert.doesNotMatch(await words(), /\breports?\b/, `${label}: no "8 reports" row`);
@@ -254,7 +260,36 @@ const drafted = {goal: 'Open the Northwind office by November', done: ['Signed t
       await p.locator('#upd-feed [data-upd="u-email"]').waitFor();
       assert.equal(await toggle.getAttribute('aria-expanded'), 'true');
       assert.equal(await toggle.getAttribute('aria-label'), 'Hide 8 reports');
-      assert.equal(await p.locator('#upd-feed .upd-node[data-depth="1"] > .upd-sub > .upd-node').count(), 8, `${label}: the eight cards open under it`);
+      // Five cards, then the three with no update yet on one line: their avatars, named by title, cards first.
+      const subs = p.locator('#upd-feed .upd-node[data-depth="1"] > .upd-sub > .upd-node');
+      assert.equal(await subs.count(), 6, `${label}: five cards and one "No update yet" line open under it`);
+      assert.equal(await subs.nth(5).locator(':scope > .upd-nones').count(), 1, `${label}: the line comes after the cards`);
+      assert.equal(await p.locator('#upd-feed [data-upd-node="b:pr"], #upd-feed [data-upd-node="b:brand"]').count(), 0, `${label}: no row each`);
+      const nones = p.locator('#upd-feed .upd-nones');
+      assert.match(await nones.innerText(), /^\s*No update yet\s*$/, `${label}: one label, no names`);
+      const who = nones.locator('.upd-who');
+      assert.deepEqual(await who.evaluateAll(els => els.map(e => [e.tagName, e.getAttribute('aria-label'), e.getAttribute('title')])),
+        [['A', 'PR Bot', 'PR Bot'], ['BUTTON', 'Events Bot, 1 report', 'Events Bot, 1 report'], ['A', 'Brand Bot', 'Brand Bot']], `${label}: an avatar each, named`);
+      assert.equal(await who.nth(0).getAttribute('href'), '#/bot/pr', `${label}: an avatar goes to its page`);
+      const boxes = await who.evaluateAll(els => els.map(e => e.getBoundingClientRect()).map(r => ({top: r.top, h: r.height})));
+      assert.ok(boxes.every(b => Math.abs(b.top - boxes[0].top) < 1), `${label}: the avatars on one row`);
+      // One with reports carries the count; it opens them under the line (its row, then their cards), and closes them.
+      const events = who.nth(1);
+      assert.equal(await events.locator('.upd-who-n').textContent(), '1');
+      assert.equal(await events.getAttribute('aria-expanded'), 'false');
+      await events.focus();
+      await p.keyboard.press('Enter');
+      await p.locator('#upd-feed [data-upd="u-intern"]').waitFor();
+      assert.equal(await events.getAttribute('aria-expanded'), 'true');
+      assert.equal(await p.evaluate(() => document.activeElement?.dataset.updKids), 'b:events', `${label}: focus stays on the avatar`);
+      assert.equal(await subs.count(), 7);
+      assert.equal(await subs.nth(6).locator(':scope > .upd-none[data-upd-node="b:events"]').count(), 1, `${label}: its row under the line`);
+      assert.equal(await subs.nth(6).locator('.upd-sub [data-upd="u-intern"]').count(), 1, `${label}: its report's card under its row`);
+      if (shots) for (const scheme of ['dark', 'light']) {
+        await p.emulateMedia({colorScheme: scheme});
+        await p.screenshot({path: `${shots}/updates-tree-nones-${label}-${scheme}.png`, fullPage: true});
+      }
+      await p.emulateMedia({colorScheme: null});
       // One line from the manager's avatar down the left of its reports, with an elbow into each one's avatar; it stops
       // at the last (tree-lines.css). Measured from the boxes: the rail runs under the middle of the manager's avatar,
       // and each elbow ends where the report's avatar starts.
@@ -265,7 +300,7 @@ const drafted = {goal: 'Open the Northwind office by November', done: ['Signed t
         return [...sub.children].map((node, i) => {
           const el = node.querySelector(':scope>.upd-none') || node, r = box(el), b = getComputedStyle(el, '::before'), a = getComputedStyle(node, '::after');
           const w = parseFloat(b.borderLeftWidth), left = r.left + el.clientLeft + parseFloat(b.left), top = r.top + el.clientTop + parseFloat(b.top);
-          const av = node.firstElementChild.querySelector('.upd-av .av');
+          const av = node.firstElementChild.querySelector('.upd-av .av, .upd-who .av');
           return {i, railX: left + w / 2, parentCx: mid(parentAv), elbowRight: left + parseFloat(b.width), avLeft: box(av).left,
                   elbowY: top + parseFloat(b.height) - parseFloat(b.borderBottomWidth) / 2, avCy: box(av).top + box(av).height / 2, top,
                   prevBottom: i ? box(sub.children[i - 1]).bottom : sb.top + parentCard.clientTop + parseFloat(stub.top) + parseFloat(stub.height),
@@ -283,6 +318,9 @@ const drafted = {goal: 'Open the Northwind office by November', done: ['Signed t
         assert.equal(n.on, n.i < line.length - 1, `${label}: the line goes on past report ${n.i} only when another follows`);
       }
       assert.ok(Math.abs(line[0].stubX - line[0].railX) <= 1, `${label}: the line leaves the manager's card under its avatar`);
+      await p.keyboard.press('Enter');
+      await p.locator('#upd-feed [data-upd="u-intern"]').waitFor({state: 'detached'});
+      assert.equal(await events.getAttribute('aria-expanded'), 'false', `${label}: pressed again, it closes`);
       // A report's report hangs the same way, one level further in.
       await p.locator('#upd-feed [data-upd-kids="b:seo"]').click();
       await p.locator('#upd-feed [data-upd="u-writer"]').waitFor();
