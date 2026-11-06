@@ -338,11 +338,10 @@ async fn connect_server(app: App, address: String) -> Result<(), String> {
             let state = app.state::<AppState>();
             let mut list = state.orgs.lock().unwrap();
             let existing = list.find_hub(&hub).map(|org| org.id.clone());
-            let id = match existing {
+            match existing {
                 Some(id) => id,
                 None => list.add(&hub)?.id,
-            };
-            id
+            }
         };
         switch_to(&app, &id).map_err(|e| e.to_string())?;
         // The main window may be hidden (macOS keeps it so when closed): the org must be seen once the setup window goes.
@@ -611,7 +610,10 @@ async fn rail_hover(app: App, webview: tauri::Webview, id: Option<String>) -> Re
     only_rail(&webview)?;
     match id {
         Some(id) => windows::prefetch(&app, &id).map_err(|e| e.to_string()),
-        None => Ok(windows::leave(&app)),
+        None => {
+            windows::leave(&app);
+            Ok(())
+        }
     }
 }
 
@@ -710,7 +712,7 @@ fn open_deep_link(app: &App, url: &url::Url) {
 // ----------------------------------------------------------------------------- app menu
 fn build_menu(app: &App) -> tauri::Result<()> {
     let name = config::app_name();
-    let app_menu = Submenu::new(app, &name, true)?;
+    let app_menu = Submenu::new(app, name, true)?;
     app_menu.append(&PredefinedMenuItem::about(
         app,
         Some(&format!("About {name}")),

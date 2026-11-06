@@ -410,7 +410,7 @@ pub(crate) fn sync_rail(app: &App) -> tauri::Result<()> {
         (true, None) => {
             if let Some(window) = main_window(app) {
                 let builder = WebviewBuilder::new(RAIL, WebviewUrl::App("rail.html".into()))
-                    .on_navigation(|url| local_page(url));
+                    .on_navigation(local_page);
                 window.add_child(
                     builder,
                     LogicalPosition::new(0.0, 0.0),
@@ -698,7 +698,7 @@ fn open_org_webview(app: &App, org: &Org, on_screen: bool) -> tauri::Result<bool
         // A hidden WKWebView is an inactive one, and WebKit's default suspends it (macOS 14+): a prefetched page would
         // stop loading until shown. Throttling slows its timers, which the hub's boot runs on, so neither is used.
         .background_throttling(BackgroundThrottlingPolicy::Disabled)
-        .initialization_script(&bridge_script(app))
+        .initialization_script(bridge_script(app))
         .on_new_window(new_window_handler(app, home.clone(), Some(label.clone())))
         .on_navigation(navigate)
         .on_page_load(move |webview, payload| {

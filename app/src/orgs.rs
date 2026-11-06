@@ -259,6 +259,8 @@ pub struct Orgs {
     issued: HashSet<String>,
     /// Whether this is every org saved on this Mac: orgs.json was read, or there was none yet. Not so when the list
     /// was not read (a fixed server, HUB_URL) or could not be (unreadable, set aside as corrupt).
+    // Read only by is_complete, which the macOS sign-in and the tests use; other builds keep the flag all the same.
+    #[cfg_attr(not(any(target_os = "macos", test)), allow(dead_code))]
     complete: bool,
 }
 
@@ -274,6 +276,7 @@ impl Orgs {
     }
 
     /// Whether this is every org saved on this Mac, so a data store none of them uses belongs to no org.
+    #[cfg(any(target_os = "macos", test))]
     pub fn is_complete(&self) -> bool {
         self.complete
     }
@@ -374,6 +377,7 @@ impl Orgs {
     }
 
     /// The org's next page opens on the hub's sign-in: Tico sign-in renewed its session.
+    #[cfg(any(target_os = "macos", test))]
     pub fn mark_sign_in(&mut self, id: &str) {
         let Some(org) = self
             .doc

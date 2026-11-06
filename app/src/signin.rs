@@ -139,6 +139,7 @@ fn issuer(raw: &str, portal: &Url) -> Option<Url> {
 
 /// Whether a cookie belongs to the issuer: its domain, less one leading dot, is the issuer's host. A parent domain or
 /// a subdomain is someone else's.
+#[cfg(any(target_os = "macos", test))]
 pub(crate) fn issuer_cookie(domain: &str, host: &str) -> bool {
     !host.is_empty()
         && domain

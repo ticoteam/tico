@@ -22,6 +22,7 @@ use crate::orgs::{Org, Orgs};
 use crate::windows::{open_approval_window, show_window, Home};
 use crate::{App, AppState};
 
+#[cfg(target_os = "macos")]
 pub(crate) const RECORDER_ID: &str = "team.tico.recorder.native";
 /// The approval page, relative to an org's address.
 const APPROVAL_PATH: &str = "oauth/authorize";
@@ -55,6 +56,7 @@ pub(crate) fn installed() -> bool {
 }
 
 /// The link that opens the Recorder on an org: `tico-recorder://open?server=<org address>`. It starts nothing.
+#[cfg(any(target_os = "macos", test))]
 pub(crate) fn recorder_link(hub: &Url) -> String {
     let mut link = Url::parse("tico-recorder://open").expect("a fixed link");
     link.query_pairs_mut().append_pair("server", hub.as_str());
