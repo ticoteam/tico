@@ -8903,9 +8903,6 @@ def wait_detail(conn, row, *, children=True):
 
     engineering = review_gate.engineering(conn, row)
     open_children = [dict(r) for r in cached_rows(conn, OPEN_CHILDREN_SQL, (row["id"],))] if children else []
-    if not children:
-        # A subtask's result is not held back by its sibling subtasks, but a question a person must answer still is.
-        open_children = [dict(r) for r in conn.execute(OPEN_PERSON_QUESTIONS_SQL, (row["id"],)).fetchall()]
     check = None
     for child in open_children:
         # Pipeline checks are work at the current step, not dependencies preventing it.
@@ -9168,11 +9165,6 @@ def person_sent_sql(alias="m"):
 OPEN_CHILDREN_SQL = (
     f"SELECT id,owner_id,title FROM tasks WHERE id IN ({TR.CHILD_IDS}) AND status NOT IN ('done','closed','declined') "
     "ORDER BY created_at,id"
-)
-OPEN_PERSON_QUESTIONS_SQL = (
-    f"SELECT id,owner_id,title FROM tasks WHERE id IN ({TR.CHILD_IDS}) "
-    "AND status NOT IN ('done','closed','declined') AND questions IS NOT NULL AND answer IS NULL "
-    "AND owner_id LIKE 'human:%' ORDER BY created_at,id"
 )
 
 

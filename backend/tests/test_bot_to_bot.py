@@ -179,6 +179,33 @@ def test_a_bots_comment_flagged_needs_action_wakes_the_task_owner(api):
         assert c.execute("SELECT count(*) FROM jobs WHERE bot_id='cpo'").fetchone()[0] == before + 1
 
 
+def test_a_needs_action_task_comment_gets_no_reply_that_wakes_its_author(api):
+    """A flagged comment on a task is news for its owner, not a question: the owner's final text is not posted back to
+    the commenter as a reply, so nothing wakes the commenter with it (the loop a sweep made on Dev 606)."""
+    r = setup(api)
+    with api.app.state.store.transaction() as c:
+        t = H.task_create(c, "bot:ops", "Ship the export", "Build it", "bot:cpo")
+        comment = H.task_comment(c, "bot:ops", t["id"], "Blocked on your fix.", extra_refs={"needs_action": True})
+    attempt = claim(api, r, "cpo")
+    assert attempt and attempt["task"]["id"] == t["id"]
+    post(api, f"attempts/{attempt['id']}/started", {"thread_id": "cpo-run"}, token=r["token"])
+    post(
+        api,
+        f"attempts/{attempt['id']}/complete",
+        {"outcome": "completed", "text": "The fix is in.", "last_seq": 0},
+        token=r["token"],
+    )
+    with api.app.state.store.read() as c:
+        replies = c.execute(
+            "SELECT count(*) FROM messages WHERE sender_id='bot:cpo' AND in_reply_to=?", (comment["id"],)
+        ).fetchone()[0]
+        woken_by_cpo = c.execute(
+            "SELECT count(*) FROM jobs j JOIN messages m ON m.id=j.message_id "
+            "WHERE j.bot_id='ops' AND m.sender_id='bot:cpo'"
+        ).fetchone()[0]
+    assert replies == 0 and woken_by_cpo == 0
+
+
 def test_never_delayed_questions_gate_verdicts_approvals_and_awaited_replies(api):
     setup(api)
     sha = "a" * 40

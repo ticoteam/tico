@@ -1,6 +1,7 @@
 """A subtask's result reaches its Waiting parent at once: the parent's other open subtasks, the very thing it waits
 for, never hold that result back (execution.job_refusal, auto_tasks.waiting with `result`). Every other notice, and
-every other wait (a snooze, a person, an approval, a worktree, a blocker outside the task), still holds it."""
+every other wait (a snooze, an approval, a worktree, a blocker outside the task), still holds it. A person's question task
+is one of the parent's open subtasks, so it does not hold a sibling's result either."""
 
 import pytest
 
@@ -124,7 +125,7 @@ def test_any_other_notice_on_the_waiting_parent_is_still_held(api):
     assert claim(api, machine, "ops") is None
 
 
-@pytest.mark.parametrize("wait", ["snooze", "approval", "worktree", "blocker", "question", "manual"])
+@pytest.mark.parametrize("wait", ["snooze", "approval", "worktree", "blocker", "manual"])
 def test_a_result_still_waits_for_the_parents_other_waits(api, wait):
     machine, parent, done, still = waiting_parent(api, results=1)
     with api.app.state.store.transaction() as c:
@@ -144,10 +145,6 @@ def test_a_result_still_waits_for_the_parents_other_waits(api, wait):
                 "VALUES(?,?,'bot:ops','acme/app',0,'waiting',?,?)",
                 (H.new_id(), parent, H.now(), H.now()),
             )
-        elif wait == "question":  # read past the skipped subtasks: wait_detail's own checks still hold it
-            from backend import question_tasks
-
-            question_tasks.ask_plain(c, 'bot:ops', 'human:ana', 'Which release?', parent=H.task(c, parent))
         elif wait == "manual":
             set_holds(c, parent, blocked_kind='manual', blocked_reason='Held until the freeze lifts')
         else:  # a task outside this one that it waits on, not one of its subtasks
@@ -156,6 +153,21 @@ def test_a_result_still_waits_for_the_parents_other_waits(api, wait):
     (result,) = results(api, parent)
     assert refusal(api, machine, result) == "task_wait"
     assert claim(api, machine, "ops") is None
+
+
+def test_a_persons_question_task_under_the_parent_does_not_hold_a_sibling_result(api):
+    from backend import question_tasks
+
+    machine, parent, done, still = waiting_parent(api, results=1)
+    with api.app.state.store.transaction() as c:
+        question_tasks.ask_plain(c, "bot:ops", "human:ana", "Which release?", parent=H.task(c, parent))
+    with api.app.state.store.read() as c:
+        asked = [t for t in TR.child_ids(c, parent) if H.task(c, t)["owner_id"] == "human:ana"]
+    assert asked, "the question is one of the parent's open subtasks"
+    (result,) = results(api, parent)
+    assert refusal(api, machine, result) is None
+    turn = claim(api, machine, "ops")
+    assert turn and turn["message"]["refs"]["subtask"] == done[0]
 
 
 def test_a_subtask_that_also_blocks_its_parent_does_not_hold_another_subtasks_result(api):

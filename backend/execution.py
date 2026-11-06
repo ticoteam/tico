@@ -6145,7 +6145,9 @@ class Execution:
             "JOIN jobs active_job ON active_job.id=active_attempt.job_id "
             "JOIN messages active_message ON active_message.id=active_job.message_id "
             "WHERE active_attempt.id=?) OR m.conversation_id=? OR ((m.kind='ask' "
-            "OR json_extract(m.refs,'$.needs_action')=1) AND m.wait_s>0 "
+            # A needs-action DM between bots, not a comment on a task wherever it is filed: that one is news.
+            "OR (json_extract(m.refs,'$.needs_action')=1 AND cv.task_id IS NULL "
+            "AND coalesce(json_extract(m.refs,'$.comment'),0)<>1)) AND m.wait_s>0 "
             "AND m.sender_id LIKE 'bot:%')) ORDER BY m.rowid",
             (attempt["bot_id"], claim_holds.REASON, H.now(), aid, task_room),
         ).fetchall()
@@ -6664,15 +6666,18 @@ class Execution:
             posting = not already and not same
             if source["kind"] in ("say", "ask", "steer") or task:
                 target = source["sender_id"]
-                # A bot is answered only when it asked (a message flagged needs_action; an ask before step 6c), except
-                # where the thread's wake rule chose to start this run for its message (a carrier): the loop guard,
-                # not this rule, bounds bots answering bots there. The reply itself asks nothing back.
-                replyable = (
-                    not str(target).startswith("bot:")
-                    or source["kind"] == "ask"
-                    or carried
-                    or bool(H._json(source.get("refs"), {}).get("needs_action"))
+                # A bot is answered only when it asked (a message flagged needs_action in a DM between bots; an ask before
+                # step 6c), except where the thread's wake rule chose to start this run for its message (a carrier): the
+                # loop guard, not this rule, bounds bots answering bots there. The reply itself asks nothing back. A
+                # flagged comment on a task (its thread, or a shared chat it was filed into) is news for its owner, not a
+                # question to the sender: its reply follows the task's own routing, as it did before step 6c.
+                source_refs = H._json(source.get("refs"), {})
+                flagged_dm = (
+                    bool(source_refs.get("needs_action"))
+                    and conv.get("task_id") is None
+                    and not source_refs.get("comment")
                 )
+                replyable = not str(target).startswith("bot:") or source["kind"] == "ask" or carried or flagged_dm
                 if target == H.KEEPER and task:
                     target = reply_target(source, conv, task)
                     # A task in the bot's chat room always delivers, and so does one filed from a chat into
