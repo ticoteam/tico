@@ -20,8 +20,8 @@ KEPT = (CHOSEN, "mentioned")   # rows an owner change leaves: a choice, or a men
 
 
 def thread_id(conn, row):
-    """The task's own thread, or None for a task that lives in a shared chat."""
-    if not row or not row.get("conversation_id"):
+    """The task's own thread, or None for a task that lives in a shared chat (or a database from before threads)."""
+    if not row or not row.get("conversation_id") or not H._has_table(conn, "thread_followers"):
         return None
     conv = H.conversation(conn, row["conversation_id"])
     return conv["id"] if conv and conv.get("task_id") == row["id"] else None
