@@ -38,8 +38,8 @@ there.
 ## Before you push
 
 `scripts/check.sh` is the fast local gate. It runs each static check that applies to what you changed (the Python
-lint baseline, shellcheck, actionlint, cargo fmt, the migration order, the UI API types and the pyright boundary
-modules), one line per check with its time, and exits non-zero if one fails. It compares against the merge-base
+lint baseline, shellcheck, actionlint, cargo fmt, the migration order, the UI API types and basedpyright on the
+backend against its baseline), one line per check with its time, and exits non-zero if one fails. It compares against the merge-base
 with origin/main, so committed, uncommitted and new files are all checked. `scripts/check.sh --all` runs every check
 on every tracked file; CI runs the same checks. Turn on the pre-push hook once per clone:
 

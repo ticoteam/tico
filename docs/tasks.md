@@ -986,7 +986,9 @@ person or bot @mentioned in a comment (by id or slug, the part of their email be
 when no one else shares it) is reached and follows the task from then on; on a private task they are also added to
 **Who can see**, as a task event anyone on the task can undo. A bot's @mention adds only a teammate in its reach, and
 never a group. A bot's plain comment reaches a following bot on its next turn (the bot-to-bot hold); an @mention or
-`needs_action` wakes it by the comment's way (Steer by default), within the loop guard's bot-caused wakes per hour.
+`needs_action` wakes it by the comment's way (Steer by default), within the loop guard's bot-caused wakes per hour. The
+woken bot's work on the task answers the comment: its run's text is not posted back to the commenting bot. A
+needs-action DM gets that text as its reply.
 
 ## Numbers and the order within a step
 
@@ -1148,8 +1150,8 @@ Subtasks can nest to any depth. Whoever files a subtask, person or bot, is its r
 worker finishes a subtask under a bot-owned task, its result returns directly to the immediate
 parent's owning bot, in that parent's task session. An active turn takes it as an input; otherwise
 the parent's next turn resumes there. That holds while the parent is Waiting on its other open subtasks: they
-do not hold one subtask's result back. Its other waits still do: a snooze, a person it waits on, an unanswered
-question, an undecided approval, a worktree, or a blocker that is not one of its subtasks. The result does not move
+do not hold one subtask's result back, a question task a person filed on it among them. Its other waits still do: a
+snooze, a question its owner asked a person that is still unanswered, an undecided approval, a worktree, or a blocker that is not one of its subtasks. The result does not move
 the parent out of Waiting. There is no requester delivery session on the completed
 subtask and no relay or `hub task run` needed. The worker keeps its own independent task session. A manager completing the worker's delegated
 subtask returns its result to the parent in the same way.

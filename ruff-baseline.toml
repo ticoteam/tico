@@ -11,7 +11,7 @@
 #   B023        78   owner: engineering
 #   B904       131   owner: engineering
 #   B905        29   owner: engineering
-#   BLE001     360   owner: engineering
+#   BLE001     357   owner: engineering
 #   DTZ005       2   owner: engineering
 #   DTZ007       2   owner: engineering
 #   DTZ011       5   owner: engineering
@@ -169,7 +169,7 @@
 "clients/dbquery.py" = ["BLE001", "F401", "S110"]
 "clients/doc_fetch.py" = ["B007", "BLE001"]
 "clients/environments.py" = ["PLW1510"]
-"clients/gateway.py" = ["B018", "BLE001"]
+"clients/gateway.py" = ["B018"]
 "clients/harness_manifests.py" = ["B904"]
 "clients/hermes_agent.py" = ["B904", "BLE001", "PLW1510"]
 "clients/hubcli.py" = ["BLE001"]

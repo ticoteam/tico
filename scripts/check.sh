@@ -5,8 +5,8 @@
 #   scripts/check.sh --all    every tracked file, every check (CI runs these too)
 # Checks: lint.sh (Python baseline), ruff format (once ruff.toml has a [format] section), shell_lint.sh (shellcheck),
 # actionlint (workflows), cargo fmt (the Rust crates scripts/rust_checks.sh formats), migration order,
-# check_ui_types.sh and check_types.sh (the pyright boundary modules), and the OpenAPI document's drift check. Each runs
-# only when its inputs changed.
+# check_ui_types.sh and check_types.sh (basedpyright on the backend against its baseline), and the OpenAPI document's
+# drift check. Each runs only when its inputs changed.
 set -uo pipefail
 cd "$(dirname "$0")/.." || exit 2
 
@@ -189,14 +189,14 @@ else
   skip "ui routes (API paths)" "no UI or backend Python changed"
 fi
 
-# 8. Python types on the boundary modules in pyrightconfig.json's include list (files or folders).
+# 8. Python types: basedpyright on pyrightconfig.json's include list, against its baseline and the strict-module ratchet.
 include_regex=$(python3 -c '
 import json, re
 print("|".join("^" + re.escape(entry) + "(/|$)" for entry in json.load(open("pyrightconfig.json"))["include"]))')
-if [ "$ALL" = 1 ] || changed_matches "$include_regex|^pyrightconfig\.json$|^scripts/check_types\.sh$"; then
-  run "boundary types (pyright)" bash scripts/check_types.sh
+if [ "$ALL" = 1 ] || changed_matches "$include_regex|^pyrightconfig\.json$|^scripts/check_types\.sh$|^scripts/check_pyright_ratchet\.py$|^scripts/pyright-legacy-modules\.txt$|^\.basedpyright/"; then
+  run "types (basedpyright baseline)" bash scripts/check_types.sh
 else
-  skip "boundary types (pyright)" "no typed boundary module changed"
+  skip "types (basedpyright baseline)" "no backend Python or type config changed"
 fi
 
 echo "check: $passed passed, $failed failed, $skipped skipped in $(elapsed "$T0" "$(now)")"
