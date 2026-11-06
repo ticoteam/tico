@@ -155,8 +155,8 @@ const shotsDir = process.env.TICO_SHOTS || '';
     await edit('writer');
     assert.equal(await model.locator('[data-tier-version] option:checked').innerText(), 'Auto (always latest)');
     assert.equal(await model.locator('[data-tier-fast]').isChecked(), true);
-    assert.equal(await model.locator('[data-tier-line]').innerText(), 'DeepSeek V4.1 Flash · $0.45 / $1.80 per 1M',
-      'a fast tier with no source figure shows no window');
+    assert.equal(await model.locator('[data-tier-line]').innerText(), 'DeepSeek V4.1 Flash · 1.05M · $0.45 / $1.80 per 1M',
+      'the tier line shows the model, its window and its price');
 
     // 3. The same pick under Fallback and Task model; the harness list still offers the others.
     await page.evaluate(() => { location.hash = '#/settings'; });
