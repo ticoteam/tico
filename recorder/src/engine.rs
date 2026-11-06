@@ -200,6 +200,9 @@ fn setup_inputs(
                 " Recording meeting audio only."
             });
         }
+        if !warning.is_empty() {
+            crate::diag!("audio: {warning}");
+        }
         inputs.warning(warning);
         Ok(())
     })
@@ -372,9 +375,23 @@ struct Writer {
     chunk_ms: f64,
     /// Live text for this input. It gets a copy of every resampled sample and never blocks.
     feed: Option<Feed>,
+    /// Since when the device has delivered only exact zeros (a muted or seized input).
+    silent_since: Option<Instant>,
+    silence_logged: bool,
 }
 impl Writer {
     fn new(source: Source, started: Instant, offset: u64, feed: Option<Feed>) -> Result<Self> {
+        crate::diag!(
+            "audio: {} started: {} at {} Hz{}",
+            source.channel.as_str(),
+            source.name,
+            source.sample_rate,
+            if source.live_input.is_some() {
+                " with voice processing"
+            } else {
+                ""
+            }
+        );
         let base_ms = offset as f64
             + source
                 .started
@@ -391,6 +408,8 @@ impl Writer {
             base_ms,
             chunk_ms: base_ms,
             feed,
+            silent_since: Some(Instant::now()),
+            silence_logged: false,
         })
     }
     fn pump(&mut self, store: &Store, id: &str) -> Result<()> {
@@ -406,6 +425,7 @@ impl Writer {
                     + packet.start_frame as f64 * 1000. / self.source.sample_rate as f64;
             }
             self.next_frame = Some(packet.start_frame + packet.len as u64);
+            self.watch_silence(&packet.samples[..packet.len]);
             let before = self.pending.len();
             self.resampler
                 .push(&packet.samples[..packet.len], &mut self.pending);
@@ -433,6 +453,31 @@ impl Writer {
             }
         }
         Ok(())
+    }
+    /// Logs an input that delivers only exact zeros for 10 s, and when its signal returns.
+    /// Real microphones always carry some noise, so this means the input was muted or seized.
+    fn watch_silence(&mut self, samples: &[f32]) {
+        let channel = self.source.channel.as_str();
+        if samples.iter().any(|sample| *sample != 0.) {
+            if let Some(since) = self.silent_since.take()
+                && self.silence_logged
+            {
+                crate::diag!(
+                    "audio: {channel} signal back after {} s of silence",
+                    since.elapsed().as_secs()
+                );
+            }
+            self.silence_logged = false;
+            return;
+        }
+        let since = *self.silent_since.get_or_insert_with(Instant::now);
+        if !self.silence_logged && since.elapsed() >= Duration::from_secs(10) {
+            self.silence_logged = true;
+            crate::diag!(
+                "audio: {channel} delivered only silence for 10 s ({})",
+                self.source.name
+            );
+        }
     }
     fn flush(&mut self, store: &Store, id: &str, final_buffer: bool) -> Result<()> {
         loop {
