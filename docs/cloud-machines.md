@@ -97,7 +97,7 @@ HQ or the server gives.
 | Started, but its work did not run there | Tico started the machine for the bot's work, and the work did not run on it. |
 | Made, but it never connected to this server | Three machines in a row never connected, so Tico makes no more until one connects or a person chooses **Replace machine**. |
 
-The other problems clear once the machine can start again.
+**Out of credit** and **Didn't start** clear when Tico next starts or makes the machine. **Couldn't be made or started** clears when a later look runs clean. **Started, but its work did not run there** clears when new work is queued for the bot. **Made, but it never connected** clears only when a machine connects, or when a person chooses **Replace machine**.
 
 ## A stop never lands under a turn
 
