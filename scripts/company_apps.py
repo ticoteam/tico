@@ -204,6 +204,45 @@ def download_icon(icon_url):
         return icon
 
 
+def icon_address(entry):
+    icon_url = entry["icon_url"]
+    if icon_url.startswith("/"):
+        icon_url = entry["url"].rstrip("/") + icon_url
+    return icon_url
+
+
+def write_output(name, value):
+    if os.environ.get("GITHUB_OUTPUT"):
+        with open(os.environ["GITHUB_OUTPUT"], "a", encoding="utf-8") as stream:
+            stream.write(f"{name}={value}\n")
+
+
+def check_icon(entry):
+    # Runs once per company before its builds. A download outage (network, DNS, TLS, timeout or HTTP status
+    # after the retries) skips this company's build and publish with a warning, so the release run stays green.
+    # The company's installed app keeps its current version. A PNG that is invalid or oversized still fails.
+    for value in entry.values():
+        mask(value)
+    try:
+        download_icon(icon_address(entry))
+    except (OSError, IncompleteRead) as exc:
+        print(
+            "::warning::Company app icon unavailable "
+            f"({failure_reason(exc)}); this company's build and publish are skipped and its installed app stays "
+            "on its current version",
+            file=sys.stderr,
+            flush=True,
+        )
+        write_output("available", "false")
+        return 0
+    except Exception as exc:
+        raise OperationFailed(
+            f"Company app icon download (TICO_COMPANY_APPS.icon_url) failed: {failure_reason(exc)}"
+        ) from None
+    write_output("available", "true")
+    return 0
+
+
 def configure(entry, publishing=False):
     # No company identity is passed in process arguments or artifact names.
     base = url(entry.get("runner_url") or entry["url"])
@@ -230,11 +269,8 @@ def configure(entry, publishing=False):
     version = required_env("GITHUB_REF_NAME").removeprefix("v")
     if not re.fullmatch(r"[0-9]+\.[0-9]+\.[0-9]+(?:-[A-Za-z0-9.-]+)?(?:\+[A-Za-z0-9.-]+)?", version):
         raise Invalid("GITHUB_REF_NAME must be a version tag for company builds")
-    icon_url = entry["icon_url"]
-    if icon_url.startswith("/"):
-        icon_url = entry["url"].rstrip("/") + icon_url
     with operation("icon download (TICO_COMPANY_APPS.icon_url)"):
-        icon = download_icon(icon_url)
+        icon = download_icon(icon_address(entry))
     with operation("icon file write"):
         Path("app/company-icon.png").write_bytes(icon)
     updater = {"endpoints": [base + "/download/latest.json"]}
@@ -262,7 +298,7 @@ def configure(entry, publishing=False):
 
 def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("action", choices=("matrix", "configure", "build", "pack", "unpack", "publish"))
+    parser.add_argument("action", choices=("matrix", "icon", "configure", "build", "pack", "unpack", "publish"))
     parser.add_argument("--company")
     parser.add_argument("--target")
     parser.add_argument("--bundles")
@@ -305,6 +341,8 @@ def main(argv=None):
         if args.dry_run:
             print(f"Validated {args.action} for {key(entry)}")
             return 0
+        if args.action == "icon":
+            return check_icon(entry)
         if args.action == "configure":
             configure(entry, args.publishing)
         elif args.action in ("pack", "unpack"):
