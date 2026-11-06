@@ -935,9 +935,9 @@ def test_runner_labels_stay_at_two_or_four_vcpus():
     text = (ROOT / ".github" / "workflows" / "pr-checks.yml").read_text()
     assert set(re.findall(r"runner=(\d+)cpu", text)) <= {"2", "4"}
     families = re.findall(r"runner=\d+cpu-linux-x64(/family=[^/']+)?/", text)
-    assert len(families) == 6 and set(families) == {"/family=m8+m7+m6+c8+c7+c6+r8+r7"}, families
+    assert len(families) == 6 and set(families) == {"/family=m8+m7+m6+r8+r7"}, families
     # The Caddy image takes the same families on amd64 only; arm64 keeps its label.
-    assert "matrix.arch != 'arm64' && '/family=m8+m7+m6+c8+c7+c6+r8+r7' || ''" in text
+    assert "matrix.arch != 'arm64' && '/family=m8+m7+m6+r8+r7' || ''" in text
 
 
 def test_checks_is_the_one_gate_and_fails_on_a_failed_or_cancelled_need_while_skipped_passes():

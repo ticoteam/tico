@@ -19,7 +19,7 @@ Playwright's Chromium. On a small computer (two CPUs, software WebGL) run the sc
 the parallel suite is the release check's job on a full-size machine. The PR checks
 workflow runs only the cheap checks (lint, generated types, the wire contract, workflows, shell scripts) on each push to a
 pull request, on free GitHub-hosted runners; `checks` is the one required check. The merge queue runs the tests, once per
-queue group on the merged result, on RunsOn Spot VMs (4 vCPU; x64 labels take the m, c and r families of generations 6–8) in Tico's own AWS account: the tests a measured static
+queue group on the merged result, on RunsOn Spot VMs (4 vCPU; x64 labels take the m and r families of generations 6–8) in Tico's own AWS account: the tests a measured static
 dependency map (imports, plus files run or read by path) says use the change, the Caddy image job when the change reaches
 it, the Rust and desktop checks when they changed, and the macOS recorder tests when `recorder/` changed. A docs page,
 CHANGELOG.md or GitHub file runs the tests that read it; dependency, conftest, pytest.ini and deleted or unparsable files

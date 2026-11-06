@@ -315,7 +315,7 @@ so they start cold. A pull request's superseded run is canceled; a queue group i
 Python jobs install no npm packages, browsers or apt packages. The browser job caches both browser binaries and
 Ubuntu package indexes/debs under exact runner-image and dependency-lock keys. A warm cache uses apt with
 `--no-download`; a cold cache uses the canonical Ubuntu mirror. Each Install attempt has a five-minute limit with
-one retry. Pip and npm download caches remain enabled. The queue's tests run on 4-vCPU RunsOn Spot VMs in Tico's own AWS account (x64 labels take the m, c and r families of generations 6–8, arm64 labels are unchanged); PR pushes run on GitHub-hosted runners. `scripts/pr_checks.py` sizes the Python and browser groups so each VM
+one retry. Pip and npm download caches remain enabled. The queue's tests run on 4-vCPU RunsOn Spot VMs in Tico's own AWS account (x64 labels take the m and r families of generations 6–8, arm64 labels are unchanged); PR pushes run on GitHub-hosted runners. `scripts/pr_checks.py` sizes the Python and browser groups so each VM
 finishes in about `TICO_CI_JOB_SECONDS` (300, five minutes) including setup, using JUnit per-file and browser per-script timings
 from the latest successful Release validation run (its `test-timings` artifact: the same pytest flags, slow tests
 included), with collected test counts until timings exist. New files use the observed
