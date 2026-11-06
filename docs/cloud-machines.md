@@ -99,7 +99,7 @@ enrolled, every line that sets `TICO_ENROLL_TOKEN` is taken out of `/etc/environ
 the file `TICO_BOOT_ENV_FILE` names, at every boot. A code that survives somewhere still enrolls nothing: it is used
 and expires in 15 minutes.
 
-Saving the same mode and placement again keeps the machine's problem and any retry wait. A real change of mode or placement clears the problem, but a retry wait already running still has to end. The exception is a machine that never connected: any save lets Tico make it again.
+Saving the same mode and placement again keeps the machine's problem and any retry wait. A real change of mode or placement clears the problem, except for a machine that never connected: that one waits until it connects or a person chooses **Replace machine**. A retry wait already running still has to end.
 
 ## The runner on the machine
 
