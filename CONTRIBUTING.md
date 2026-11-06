@@ -45,9 +45,13 @@ on every tracked file; CI runs the same checks. Turn on the pre-push hook once p
 
 ```bash
 git config core.hooksPath .githooks
+git config merge.tico-json.driver 'python3 scripts/json_merge.py %O %A %B'
 ```
 
 After that, each `git push` runs `scripts/check.sh` first. To push without it once, use `git push --no-verify`.
+The second line makes a rebase merge two edits to `docs/openapi/v2.json` by key (`scripts/json_merge.py`), so they stop
+conflicting; without it git merges that file as text. The generated `ui/types/api.d.ts` is not committed:
+`scripts/check_ui_types.sh` writes it.
 shellcheck and actionlint are pinned versions downloaded on first use and checked against their SHA-256 (see
 `scripts/pinned_tool.sh`); they are cached under `~/.cache/tico/tools`.
 
