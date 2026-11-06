@@ -5,7 +5,7 @@ year, and (for the mid-month build) Finance's default month and the early-mornin
 
 import sqlite3
 from contextlib import closing
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, timezone
 
 import time_machine
 from fastapi.testclient import TestClient
@@ -19,7 +19,10 @@ from backend.tests import test_demo_finance as finance
 EARLY = datetime(2027, 1, 15, 8, 30, tzinfo=timezone.utc)
 # The machine's clock when the second demo is built, months after the day it is built for.
 MACHINE = datetime(2026, 11, 6, 18, 30, tzinfo=timezone.utc)
-LONG_AFTER = (MACHINE - timedelta(days=200)).replace(hour=12, minute=0)
+# Chosen for its edges: Sun 2026-03-08 19:00 PDT is already Monday 02:00 in UTC (the UTC date is ahead of the Pacific
+# one, the fix f5a873860 case), a Pacific evening, the Sunday to Monday edge of a growth window, and the night after
+# spring-forward. It is months before MACHINE.
+LONG_AFTER = datetime(2026, 3, 9, 2, 0, tzinfo=timezone.utc)
 # Columns that hold a future time by design: a schedule's next run, a message's expiry, and a task's due date.
 FUTURE_BY_DESIGN = {"next_due_at", "expires_at", "due_at", "check_back_at"}
 
@@ -102,7 +105,7 @@ def test_a_demo_built_early_in_the_day_in_another_year_keeps_its_invariants(tmp_
 
 
 def test_a_demo_built_long_after_its_dates_keeps_its_invariants(tmp_path):
-    label = "built 200 days before the machine's clock"
+    label = "built 2026-03-09 02:00 UTC, months before the machine's clock"
     with time_machine.travel(MACHINE, tick=False):
         settings = demo.build(tmp_path, now=LONG_AFTER)
     nothing_is_dated_after(settings, LONG_AFTER, label, run_on_the_machines_clock=True)
