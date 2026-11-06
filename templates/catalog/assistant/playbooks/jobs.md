@@ -43,12 +43,14 @@ tasks they own. The owned tasks are one kind of many.
 
 1. Count from Needs you only: `hub needs-you show --by kind` (total, per kind), `--by bot` for the split. Its lists stop
    at 10 per bot, so take the ids in step 2.
-2. Ids: owned tasks `hub task list --all`; tasks waiting on them `hub task list --status waiting`; bots' questions
-   `hub message list` (each names its task); approvals `hub approval list --limit 100` (`--offset <next>` until null).
+2. Ids: tasks they own `hub task list --all`; bots' questions `hub message list` (each names its task); approvals
+   `hub approval list --limit 100` (`--offset <next>` until null). A bot's task waiting on them comes up as its question.
 3. Act in this turn, as them, on every item below. "Go" and "whatever you think" are the yes: never close some and ask
    about the rest.
-   - Task they own, waiting task, declined task: `hub task bulk close --where-id <id> --where-id <id> --note "<why>"`
+   - Task they own (open, doing, waiting or declined): `hub task bulk close --where-id <id> --where-id <id> --note "<why>"`
      (up to 200), or `hub task close <id> --note "<why>"`. Undo: `hub task update <id> --status doing`.
+   - A bot's task, even one waiting on them: do not close it, it kills the bot's work. Act on its question instead. Close
+     it only when it is plainly done, a duplicate or replaced, and say so.
    - A bot's question: keep it if it is a real decision (step 4). Otherwise decline it:
      `hub question answer <message id> "No, drop this. Do what you would do if no one answered."` The bot goes on.
      An answer cannot be taken back: say so, with no undo line.
@@ -60,6 +62,8 @@ tasks they own. The owned tasks are one kind of many.
    memory tidy card, a setup or reconnect card. Name the ones left, and say they clear them in Tico. Never guess a command.
 6. Recount: `hub needs-you show --by kind`. Reply in a few lines: the Needs you count before and after; what was closed,
    answered and declined, with counts and links; the kept items; what is left; "say undo to put the tasks back".
+   A walk through each item one by one (`hub needs-you start --all`, `respond`, `commit`, backend/batch.py) works too, but
+   for a big clear the per-kind commands above take fewer calls.
 
 ## Bots and work
 
