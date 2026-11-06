@@ -96,7 +96,8 @@ Open the link in your browser: the app opens on **Finish setup**. Then:
 1. **Choose AI providers** (optional): **Your Claude and ChatGPT subscriptions, plus Tico Gateway** is recommended
    ([the four choices](ai-gateway.md#choose-how-bots-get-their-models)). To choose later, select
    **Your company's plans or API keys**, untick its providers and press **Skip for now**. Bots need a provider
-   to run; until then each bot says "Add an AI provider", and **Settings > Models** adds it.
+   to run; until then each bot says "Add an AI provider". Adding a subscription or the Tico Gateway key in
+   **Settings > Models** adds that provider.
    With a gateway key from Tico, the [Tico AI Gateway](ai-gateway.md) card there adds the Tico picks (department, level, Fast, version).
    With no provider yet, the Bets step needs one bet and one line under **What we won't do**; any short sentence works.
 2. **Name the team**, say what it does, and pick its groups. A few bots are suggested for each group. For the first result
@@ -112,8 +113,8 @@ Open the link in your browser: the app opens on **Finish setup**. Then:
    selected harness to be installed, then press **Sign in** beside it.
    Open the provider link and enter its device code, or paste the returned code into Tico when asked.
    Wait for the computer's model sign-in to show **ready**. Other harnesses use their own terminal sign-in; API credentials and
-   profiles are explained in [Harnesses](harnesses.md). Pick a provider in **Settings > Models** if you skipped it,
-   then choose the starter's model in **Settings > Bots**.
+   profiles are explained in [Harnesses](harnesses.md). If you skipped the provider step, add a subscription or the
+   Tico Gateway key in **Settings > Models**, then choose the starter's model in **Settings > Bots**.
 
 **Unreleased wizard layout:** Provider checkboxes appear only under **Your company's plans or API keys**.
 The Computer step shows sign-in commands for your provider choice ([Finish setup](onboarding.md#the-screens)).
