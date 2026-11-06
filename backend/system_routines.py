@@ -1098,6 +1098,12 @@ def words_of(found, one="change", none="Nothing to do", many=None):
     return count_words(n, one, many) if n else none
 
 
+def nothing(found):
+    """True when a job's return counts nothing, as words_of reads it: an empty list, 0, or a dict whose lists are all
+    empty. A dict of empty lists is truthy, so `not found` would call a quiet pass busy."""
+    return words_of(found, none="") == ""
+
+
 def _repeat(c, run, finished):
     """(the job's last row, whether it was moved under QUIET_WRITE_SECONDS ago) when `run` repeats it, else None: a
     quiet run with the last row's words, or a failure with the last row's reason. A failure every tick is one row that

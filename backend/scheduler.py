@@ -68,7 +68,7 @@ def run_ask_deadlines(store, auth, at, failures=None):
     from . import ask_deadlines
     with store.transaction() as c:
         done = ask_deadlines.sweep(c, stamp(at))
-    return SR.words_of(done, "ask settled", "No asks past their deadline"), not done
+    return SR.words_of(done, "ask settled", "No asks past their deadline"), SR.nothing(done)
 
 
 def run_task_manager_report(store, auth, at, failures=None):
@@ -141,7 +141,7 @@ def run_thread_digest(store, auth, at, failures=None):
     # quiet run: no mail and no write. A Heartbeat step: returns its (words, quiet).
     from . import thread_digest
     sent = thread_digest.sweep(store, thread_digest.sender_for(auth))
-    return SR.words_of(sent, "digest", "No digests to send"), not sent
+    return SR.words_of(sent, "digest", "No digests to send"), SR.nothing(sent)
 
 
 def run_thread_bot_digest(store, auth, at, failures=None):
@@ -149,7 +149,7 @@ def run_thread_bot_digest(store, auth, at, failures=None):
     # model runs only when a batch has something in it. A Heartbeat step: returns its (words, quiet).
     from . import thread_bot_digest
     woken = thread_bot_digest.sweep(store)
-    return SR.words_of(woken, "bot", "No bot digests"), not woken
+    return SR.words_of(woken, "bot", "No bot digests"), SR.nothing(woken)
 
 
 def run_skill_usage_rollup(store, auth, at, failures=None):
@@ -294,7 +294,7 @@ def step_ship_deployed(ctx):
     from .github import ship_deployed
     with ctx.locked("ship_deployed") as c:
         shipped = ship_deployed(c, ctx.settings)
-    return SR.words_of(shipped, "pull request shipped", "Nothing to ship", "pull requests shipped"), not shipped
+    return SR.words_of(shipped, "pull request shipped", "Nothing to ship", "pull requests shipped"), SR.nothing(shipped)
 
 
 def step_task_loops(ctx):
@@ -306,7 +306,7 @@ def step_task_loops(ctx):
             told = flag_task_loops(c)
     if len(ctx.failures) > before:
         raise Failed("Failed: the loop check could not finish")
-    return SR.words_of(told, "looping task told", "No looping tasks", "looping tasks told"), not told
+    return SR.words_of(told, "looping task told", "No looping tasks", "looping tasks told"), SR.nothing(told)
 
 
 def step_snooze_ends(ctx):
@@ -342,7 +342,7 @@ def step_queue_check(ctx):
         with ctx.locked("queue_refusals:" + change[0]) as c:
             with isolated(c, "queue_refusals", change[0], ctx.failures):
                 changed += bool(queue_refusals.apply(c, change))
-    return SR.words_of(changed, "bot's queue noted", "Nothing new", "bots' queues noted"), not changed
+    return SR.words_of(changed, "bot's queue noted", "Nothing new", "bots' queues noted"), SR.nothing(changed)
 
 
 def step_milestone_waits(ctx):
@@ -351,7 +351,7 @@ def step_milestone_waits(ctx):
     from . import milestone_waits
     with ctx.locked("milestone_waits") as c:
         woken = milestone_waits.reconcile(c, ctx.failures)
-    return SR.words_of(woken, "waiting task woken", "Nothing waiting", "waiting tasks woken"), not woken
+    return SR.words_of(woken, "waiting task woken", "Nothing waiting", "waiting tasks woken"), SR.nothing(woken)
 
 
 def step_due_reminders(ctx):
@@ -386,7 +386,7 @@ def step_due_reminders(ctx):
                         H.event(c, H.KEEPER, "task.reminder-refused", row["id"], {"reason": str(exc)[:300]})
                     c.execute("INSERT INTO task_reminders VALUES(?,?,?)", (row["id"], row["due_at"], stamp(at)))
                     reminders += 1
-    return SR.words_of(reminders, "reminder sent", "Nothing due", "reminders sent"), not reminders
+    return SR.words_of(reminders, "reminder sent", "Nothing due", "reminders sent"), SR.nothing(reminders)
 
 
 def step_updates(ctx):
@@ -437,7 +437,7 @@ def step_go_live_expiry(ctx):
     from . import go_live
     with ctx.store.transaction() as c:
         ended = go_live.expire(c, ctx.at)
-    return SR.words_of(ended, "go-live ended", "Nothing to end", "go-lives ended"), not ended
+    return SR.words_of(ended, "go-live ended", "Nothing to end", "go-lives ended"), SR.nothing(ended)
 
 
 def step_stall_checks(ctx):
