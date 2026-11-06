@@ -114,7 +114,9 @@ def test_heartbeat_cleanup_waits_for_prs_restore_and_old_report(prepared):
         H.task_link(c, 'bot:cmo', tid, 'https://github.com/Acme/product/pull/1')
         c.execute("UPDATE task_links SET state='open' WHERE kind='pr'")
         c.execute("UPDATE tasks SET status='closed' WHERE id=?", (tid,))
-    assert post(api, 'runners/heartbeat', body, 'runner-test').json()['worktree_actions'] == []
+    # Closed with its pull request still open, the tree goes at once (its branch is on GitHub already).
+    actions = post(api, 'runners/heartbeat', body, 'runner-test').json()['worktree_actions']
+    assert [a['action'] for a in actions] == ['remove'] and 'release' not in actions[0]
     with api.app_state.store.transaction() as c:
         c.execute("UPDATE task_links SET state='merged' WHERE kind='pr'")
     actions = post(api, 'runners/heartbeat', body, 'runner-test').json()['worktree_actions']
@@ -390,6 +392,26 @@ def test_a_refused_cleanup_keeps_its_error_across_a_computer_restart(prepared):
     report['state'] = 'removed'
     post(api, 'runners/heartbeat', body, 'runner-test')
     assert 'error' not in detail()
+
+
+def test_a_closed_task_removes_its_tree_while_its_pull_request_is_still_open(prepared):
+    api, tid, _ = prepared
+    link = post(api, f'tasks/{tid}/worktrees', {'repo': 'Acme/product'}, 'bot-test').json()
+    assert mark_ready(api, tid, link['link_id']).status_code == 200
+    body = {'version': '0.3.2', 'platform': 'linux', 'readiness': {'schema_version': 1, 'bots': {}, 'worktrees': True},
+            'worktrees': [{'link_id': link['link_id'], 'state': 'present', 'checkout_state': 'ready',
+                           'branch': link['branch'], 'ahead': 1, 'dirty_files': 2, 'last_commit': 'a' * 40}]}
+    with api.app_state.store.transaction() as c:
+        pr = H.task_link(c, 'bot:cmo', tid, 'https://github.com/Acme/product/pull/9')
+        c.execute("UPDATE task_links SET state='open' WHERE id=?", (pr['id'],))
+        c.execute("UPDATE tasks SET status='closed' WHERE id=?", (tid,))
+    actions = post(api, 'runners/heartbeat', body, 'runner-test').json()['worktree_actions']
+    # Not a release: the computer saves the unsaved and unpushed work to its wip/ branch first.
+    assert [(a['action'], a['task_closed'], a['prs_finished'], a.get('release')) for a in actions] == [
+        ('remove', True, False, None)]
+    with api.app_state.store.read() as c:
+        detail = json.loads(c.execute('SELECT detail FROM task_links WHERE id=?', (link['link_id'],)).fetchone()[0])
+    assert detail['restore_on_reopen'] is True, 'a reopened task gets this tree back'
 
 
 def test_finished_pr_releases_an_open_tasks_worktree_and_the_limit_names_it(prepared):
