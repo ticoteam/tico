@@ -8,6 +8,9 @@
 /* The page header has no rule under it, as on Updates, Tasks, Docs and Meetings. */
 .au-ph{display:flex;align-items:center;gap:12px;padding:8px 28px;min-height:48px}
 .au-ph h1{margin:0;font-size:var(--t-lg);font-weight:600}
+/* a phone's two header rows (tabs and range; search, filters and + New); a computer lays their parts out in one row */
+.au-pr{display:contents}
+.au-fbtn,.au-new>.nav-icon{display:none}
 .au-sp{flex:1}
 .au-sp-phone{display:none}
 .au-pad{padding:14px}
@@ -45,7 +48,6 @@
 .au-tabs button[aria-selected="true"]{background:var(--surface2);color:var(--ink)}
 .au-sel{display:flex;align-items:center;gap:6px;color:var(--muted);font-size:var(--t-sm)}
 .au-sel select{width:auto;height:28px;padding:0 6px;font-size:var(--t-sm)}
-.au-ctl .au-fbtn{display:none}
 .au-tbl{flex:1;min-height:0;overflow:auto;container-type:inline-size}
 /* fixed columns: long names and triggers end in "…" so the counts on the right always show */
 .au-tbl-t{width:100%;border-collapse:collapse;table-layout:fixed;font-size:var(--t-base)}
@@ -389,19 +391,39 @@ button.au-chip:hover{background:var(--surface2)}
 @media (max-width:760px){
   #main.au-layout{overflow:auto;height:auto;padding:0 0 calc(var(--mobile-nav-height) + env(safe-area-inset-bottom))}
   .au{height:auto;min-height:0}
-  .au-ph{padding:12px}
-  .au-ph{flex-wrap:wrap}
+  /* the header: Automations | Runs and the range, then the search, the filter button and + New */
+  .au-ph{flex-direction:column;align-items:stretch;gap:8px;padding:8px 12px}
+  .au-ph h1,.au-ph>.au-sp,.au-ph>.docs-ask{display:none}
+  .au-pr{display:flex;align-items:center;gap:8px;min-width:0}
+  .au-pr .au-tabs{flex:none}
+  .au-pr .au-tabs button{height:36px;padding:0 10px}
+  .au-pr .au-range{margin-left:auto}
+  .au-pr .au-range button{height:32px;padding:0 9px}
+  .au-pr .au-s{flex:1;min-width:0;padding:0}
+  .au-pr .au-q{width:100%;min-width:0}
+  .au-fbtn{position:relative;display:inline-flex;align-items:center;justify-content:center;flex:none;width:40px;height:40px;padding:0;border:1px solid var(--line);border-radius:var(--r-ctl);background:var(--surface);color:var(--ink);cursor:pointer}
+  .au-fbtn[aria-expanded="true"]{background:var(--surface2)}
+  .au-fbtn .nav-icon{font-size:18px;width:18px;height:18px}
+  .au-fbn{position:absolute;top:-5px;right:-5px;min-width:16px;height:16px;padding:0 4px;border-radius:999px;background:var(--ink);color:var(--bg);font-size:var(--t-2xs);font-weight:600;line-height:16px;font-variant-numeric:tabular-nums;text-align:center}
+  .au-new{display:inline-flex;align-items:center;justify-content:center;width:40px;height:40px;padding:0}
+  .au-new>.nav-icon{display:block;font-size:22px;width:22px;height:22px}
+  .au-new-w{display:none}
   .au-body{display:block}
   .au-rail,.au-c,.au-side{display:none;border:0}
   .au:not([data-screen="list"]) .au-ph{display:none}
   .au[data-screen="list"].filters-open .au-rail{display:flex;overflow:visible;border-bottom:1px solid var(--line)}
   .au[data-screen="list"] .au-c,.au[data-screen="detail"] .au-c{display:flex}
-  .au-s{padding:0 12px 8px}
-  .au-facets{grid-template-columns:repeat(auto-fill,minmax(160px,1fr));padding:0 12px 12px}
-  .au-fb{min-height:36px}
-  .au-ctl .au-fbtn{display:inline-flex}
-  .au-ctl{padding:8px 12px}
-  .au-ctl .au-sp,.au-sel{display:none}
+  /* the filters: one column of sections, each a header that opens its list */
+  .au-facets{grid-template-columns:minmax(0,1fr);gap:0;padding:0 12px 8px}
+  .au-fg+.au-fg{border-top:1px solid var(--line)}
+  .au-fg>.au-fb:last-child{margin-bottom:8px}
+  .au-fh{display:flex;align-items:center;gap:8px;min-height:44px;padding:0 4px 0 6px;border:0;border-radius:6px;background:none;color:var(--ink);font:inherit;font-size:var(--t-base);font-weight:600;text-align:left;cursor:pointer}
+  .au-fhn{min-width:18px;padding:0 6px;border-radius:999px;background:var(--surface2);color:var(--ink);font-size:var(--t-xs);font-weight:600;line-height:18px;font-variant-numeric:tabular-nums;text-align:center}
+  .au-fh .au-chev{margin-left:auto;font-size:18px;width:18px;height:18px;color:var(--muted)}
+  .au-fh[aria-expanded="true"] .au-chev{transform:var(--chev-open)}
+  .au-fb{min-height:40px}
+  /* the tabs moved to the header and the bar's Group and Sort are a computer's */
+  .au-ctl{display:none}
   /* the table scrolls sideways in its own box; the page scrolls down */
   .au-tbl{flex:none;overflow-x:auto;overflow-y:visible;padding-bottom:24px}
   .au-tbl-t{min-width:820px}
