@@ -1,4 +1,4 @@
-// Library on a real hub: Docs, Meetings and Tools each have an Ask button that opens the Ask panel
+// Library on a real hub: Docs, Meetings and Tools › Keys each have an Ask button that opens the Ask panel
 // (ui/app/ask-panel.js), which sees the page; no Librarian rail, sidebar row or settings link. The Library sidebar
 // group folds behind a chevron (kept per browser, open again inside Library). Phone, then desktop.
 const assert = require('node:assert/strict');
@@ -9,7 +9,7 @@ const at = (page, hash) => go(page, hash).then(() => page.waitForFunction(h => l
 
 run('redesign-library-ask', ['org', 'toured'], async ({hub, browser, phone, tag}) => {
   const page = await open(browser, hub, 'dana', {phone, hash: '#/docs'});
-  for (const [hash, button] of [['#/docs', '#docs-ask'], ['#/meetings', '#meet-ask'], ['#/library/tools', '#lc-ask']]) {
+  for (const [hash, button] of [['#/docs', '#docs-ask'], ['#/meetings', '#meet-ask'], ['#/tools/keys', '#lc-ask']]) {
     await at(page, hash);
     const ask = page.locator(button), panel = page.locator('#ask-panel');
     await ask.waitFor({timeout: t(10000)});

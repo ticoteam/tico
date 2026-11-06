@@ -62,7 +62,8 @@ def policy(api, **values):
 def autonomous(api, **values):
     return policy(api, **{"mode": "on_their_own", "what": "replies_and_new", "ask_new_address": False,
                           "ask_attachments": False, "ask_many_recipients": False, "ask_legal_money": False,
-                          "undo_seconds": 0, "pacing_seconds": 0, **values})
+                          "ask_lint": False, "second_review": False, "undo_seconds": 0, "pacing_seconds": 0,
+                          **values})
 
 
 def queue(api, *, raw=None, actor="human:ana", **values):
@@ -164,12 +165,12 @@ def test_a_tico_approval_without_bcc_releases_the_frozen_send_and_is_consumed(in
         assert H.approval(c, queued["approval_id"])["consumed_at"]
 
 
-def test_a_github_issue_number_asks_for_a_normal_tico_approval(inbox):
-    autonomous(inbox)
-    queued = queue(inbox, approval_id="77")
-    assert queued["state"] == "waiting_approval"
+def test_an_approval_id_tico_does_not_know_neither_approves_nor_blocks(inbox):
+    # A GitHub issue number, say: under Ask first the email waits for a Tico approval of its own.
+    policy(inbox, undo_seconds=0, pacing_seconds=0)
+    queued = queue(inbox, actor="bot:ops", approval_id="77")
+    assert queued["state"] == "waiting_approval" and not queued["decision"]["approved"]
     assert queued["approval_id"] and queued["approval_id"] != "77"
-    assert "github_approval_needs_tico" in queued["decision"]["reasons"]
 
 
 def test_undo_pending_restart_cancel_and_no_recall(inbox, tmp_path):
@@ -370,3 +371,201 @@ def test_reply_history_migration_initializes_fresh_tables_and_preserves_existing
             assert c.execute("SELECT msg_id,body,send_facts FROM mail_messages").fetchall() == [("kept", "Hello", "{}")]
         module.up(c)
         assert c.execute("SELECT count(*) FROM mail_messages").fetchone()[0] == int(existing)
+
+
+def test_a_bot_at_ask_first_cannot_send_without_approval(inbox):
+    policy(inbox, undo_seconds=0, pacing_seconds=0)
+    queued = queue(inbox, actor="bot:ops")
+    assert queued["state"] == "waiting_approval" and "ask_first" in queued["decision"]["reasons"]
+    machine = runner(inbox)
+    assert claim(inbox, machine["token"]) is None and claim(inbox, machine["token"]) is None
+    with inbox.app.state.store.read() as c:
+        assert c.execute("SELECT state FROM email_sends WHERE id=?", (queued["id"],)).fetchone()[0] == "waiting_approval"
+
+
+@pytest.mark.parametrize("second_review", [False, True])
+def test_a_bot_managers_message_approves_the_exact_send_but_not_the_second_review(inbox, second_review):
+    policy(inbox, undo_seconds=0, pacing_seconds=0, ask_lint=False, second_review=second_review)
+    queued = queue(inbox, actor="bot:ops")
+    assert queued["state"] == "waiting_approval"
+    assert inbox.get("/api/v2/email/sends/" + queued["id"], headers=headers()).json()["preview_complete"]
+    note = api_post(inbox, "chat/ops", {"text": "Send it " + queued["id"]})
+    with inbox.app.state.store.transaction() as c:
+        c.execute("UPDATE messages SET created_at=? WHERE id=?", (H.shift(H.now(), seconds=1), note["id"]))
+    machine = runner(inbox)
+    if second_review:
+        # Only a person's card on the frozen email lifts the second reviewer's ask: the message is refused, the card kept.
+        refused = inbox.post("/api/v2/email/sends/" + queued["id"] + "/approve", json={"approval_id": note["id"]},
+                             headers=headers())
+        assert refused.status_code == 409 and "approves it in Tico" in refused.text
+        with inbox.app.state.store.transaction() as c:
+            c.execute("UPDATE email_sends SET approval_id=? WHERE id=?", (note["id"], queued["id"]))
+            row = c.execute("SELECT * FROM email_sends WHERE id=?", (queued["id"],)).fetchone()
+            assert S.approved(c, inbox.app.state.auth, row, S.effective(c, BOX, "ops")) == "message"
+            assert S.decision(c, inbox.app.state.auth, row)["outcome"] == "ask"
+            c.execute("UPDATE email_sends SET approval_id=? WHERE id=?", (queued["approval_id"], queued["id"]))
+        assert claim(inbox, machine["token"]) is None
+        approved(inbox, queued)
+        assert claim(inbox, machine["token"]) is None                # this pass reconciles the card
+        assert claim(inbox, machine["token"])["id"] == queued["id"]
+        return
+    post(inbox, "email/sends/" + queued["id"] + "/approve", {"approval_id": note["id"]})
+    assert claim(inbox, machine["token"]) is None                   # this pass reconciles the approval
+    assert claim(inbox, machine["token"])["id"] == queued["id"]
+
+
+def test_never_refuses_and_names_the_setting(inbox):
+    autonomous(inbox)
+    with inbox.app.state.store.transaction() as c:
+        S.update_policy(c, inbox.app.state.auth.identity_for_actor(c, "human:ana"), "bot:ops", S.PolicyUpdate(mode="never"))
+    queued = queue(inbox, actor="bot:ops", reply_to_id="inbound", thread_id="thread")
+    assert queued["state"] == "blocked" and "never" in queued["decision"]["reasons"]
+    with inbox.app.state.store.read() as c:
+        detail = c.execute("SELECT detail FROM email_sends WHERE id=?", (queued["id"],)).fetchone()[0]
+    assert "never (bot setting)" in detail
+
+
+def workspace(monkeypatch, answer):
+    """The inbox as a Workspace key covers it, and a fake Gmail that answers `answer` to every send."""
+    from backend import gmail_live, google_workspace as GW
+    monkeypatch.setattr(GW, "authority", lambda c, mailbox: "workspace")
+    monkeypatch.setattr(GW, "mint", lambda c, mailbox, service, row=None, scopes=None: {"access_token": "fixture-token"})
+    calls = []
+
+    def send_call(url, *, token, body, content_type):
+        calls.append({"url": url, "token": token, "body": json.loads(body), "type": content_type})
+        return answer
+    monkeypatch.setattr(gmail_live, "send_call", send_call)
+    return calls
+
+
+@pytest.mark.parametrize("answer,state", [((200, {"id": "gmail-1"}), "sent"), ((400, {}), "failed"),
+                                          ((503, {}), "unknown"), ((200, {}), "unknown")])
+def test_the_server_sends_a_workspace_inboxs_mail_itself_once(inbox, monkeypatch, answer, state):
+    autonomous(inbox)
+    calls = workspace(monkeypatch, answer)
+    queued = queue(inbox, reply_to_id="inbound", thread_id="thread")
+    machine = runner(inbox)
+    # No computer leases a Workspace inbox's mail (the computer that syncs it gets None, any other is refused).
+    post(inbox, "connectors/email/sends/claim", {"mailbox": BOX}, token=machine["token"], expected=403)
+    store, auth = inbox.app.state.store, inbox.app.state.auth
+    assert S.drain(store, auth) == int(state == "sent")
+    [call] = calls
+    assert call["token"] == "fixture-token" and call["url"].endswith(BOX.replace("@", "%40") + "/messages/send")
+    assert call["body"] == {"raw": mime(In_Reply_To="<inbound@vendor.example>"), "threadId": "thread"}
+    with store.read() as c:
+        row = c.execute("SELECT * FROM email_sends WHERE id=?", (queued["id"],)).fetchone()
+    assert (row["state"], row["runner_id"], row["raw"]) == (state, S.SERVER, "")
+    assert row["provider_message_id"] == ("gmail-1" if state == "sent" else "")
+    assert S.drain(store, auth) == 0 and len(calls) == 1             # never a second copy
+
+
+def test_a_failing_workspace_key_leaves_the_email_pending(inbox, monkeypatch):
+    from backend import google_workspace as GW
+    from backend.store import Problem
+    autonomous(inbox)
+    calls = workspace(monkeypatch, (200, {"id": "gmail-1"}))
+
+    def refused(*args, **kwargs):
+        raise Problem("not_connected", "The key is failing", 403)
+    monkeypatch.setattr(GW, "mint", refused)
+    queued = queue(inbox, reply_to_id="inbound", thread_id="thread")
+    assert S.drain(inbox.app.state.store, inbox.app.state.auth) == 0 and calls == []
+    with inbox.app.state.store.read() as c:
+        assert c.execute("SELECT state FROM email_sends WHERE id=?", (queued["id"],)).fetchone()[0] == "pending"
+
+
+def test_a_mailbox_the_server_cannot_mint_for_is_still_dispatched_by_its_computer(inbox, monkeypatch):
+    from backend import google_workspace as GW
+    autonomous(inbox)
+    calls = workspace(monkeypatch, (200, {"id": "gmail-1"}))
+    # No Workspace key covers it: the grant its computer holds sends (a personal grant's own computer is the same path).
+    monkeypatch.setattr(GW, "authority", lambda c, mailbox: "legacy")
+    queued = queue(inbox, reply_to_id="inbound", thread_id="thread")
+    assert S.drain(inbox.app.state.store, inbox.app.state.auth) == 0 and calls == []
+    machine = runner(inbox)
+    assert claim(inbox, machine["token"])["id"] == queued["id"]
+    path = "connectors/email/sends/" + queued["id"]
+    assert post(inbox, path + "/dispatch", {"mailbox": BOX}, token=machine["token"])["send"]["id"] == queued["id"]
+    receipt = post(inbox, path + "/result", {"status": "sent", "message": "provider-9"}, token=machine["token"])
+    assert receipt["send"]["provider_message_id"] == "provider-9" and calls == []
+
+
+def one_send_policy():
+    path = next((Path(__file__).parents[1] / "migrations").glob("*_one_send_policy.py"))
+    spec = importlib.util.spec_from_file_location("one_send_policy_migration", path)
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
+def test_the_one_policy_migration_never_widens_what_a_bot_may_send():
+    module = one_send_policy()
+    c = sqlite3.connect(":memory:")
+    c.row_factory = sqlite3.Row
+    c.execute("CREATE TABLE email_sending_policies(scope TEXT PRIMARY KEY, settings TEXT NOT NULL, "
+              "updated_at TEXT NOT NULL, updated_by TEXT NOT NULL)")
+    c.execute("CREATE TABLE bot_mail_settings(bot TEXT PRIMARY KEY, outbound_send INTEGER NOT NULL DEFAULT 0, "
+              "forward_to TEXT NOT NULL DEFAULT '[]', updated_at TEXT NOT NULL, updated_by TEXT NOT NULL)")
+    c.execute("CREATE TABLE org_rule_misses(author TEXT NOT NULL, id TEXT NOT NULL, created_at TEXT NOT NULL)")
+    layers = {"company": {"mode": "on_their_own"},
+              "bot:turned-off": {"mode": "on_their_own", "legacy": True, "daily_cap": 20,
+                                 "legacy_allowances": {BOX: [CONTACT]}},
+              "bot:on": {"mode": "on_their_own", "legacy": True, "daily_cap": 20},
+              "bot:never": {"mode": "never"}, "bot:asks": {"mode": "ask_first"}}
+    for scope, settings in layers.items():
+        c.execute("INSERT INTO email_sending_policies VALUES(?,?,'2026-01-01','migration')", (scope, json.dumps(settings)))
+    switches = {"turned-off": 0, "on": 1, "never": 0, "asks": 1, "quiet": 0, "loud": 1}
+    for bot, on in switches.items():
+        c.execute("INSERT INTO bot_mail_settings VALUES(?,?,?,'2026-01-01','human:ana')",
+                  (bot, on, json.dumps(["me@personal.example"])))
+    rank = {"never": 0, "ask_first": 1, "on_their_own": 2}
+
+    def before(bot):
+        # Before: the bot sent on its own only with its switch on and an On their own policy.
+        mode = S.effective(c, bot=bot)["mode"]
+        return mode if switches[bot] or mode == "never" else "ask_first"
+    was = {bot: before(bot) for bot in switches}
+    module.up(c)
+    now = {bot: S.effective(c, bot=bot)["mode"] for bot in switches}
+    assert all(rank[now[bot]] <= rank[was[bot]] for bot in switches), (was, now)
+    assert now == {"turned-off": "ask_first", "on": "on_their_own", "never": "never", "asks": "ask_first",
+                   "quiet": "ask_first", "loud": "on_their_own"}
+    saved = {r["scope"]: json.loads(r["settings"]) for r in c.execute("SELECT * FROM email_sending_policies")}
+    assert saved["bot:turned-off"] == {"mode": "ask_first", "daily_cap": 20}
+    assert saved["bot:on"] == {"mode": "on_their_own", "daily_cap": 20} and "bot:loud" not in saved
+    assert saved["bot:quiet"] == {"mode": "ask_first"} and saved["company"] == {"mode": "on_their_own"}
+    tables = {r[0] for r in c.execute("SELECT name FROM sqlite_master WHERE type='table'")}
+    assert "bot_mail_settings" not in tables and "org_rule_misses" not in tables
+    module.up(c)                                                    # again, as on a restart: nothing changes
+    assert {bot: S.effective(c, bot=bot)["mode"] for bot in switches} == now
+    fresh = sqlite3.connect(":memory:")
+    module.up(fresh)                                                # a new install has neither table
+
+
+def test_a_retired_registry_mail_policy_carries_its_safeguards_over_once(inbox):
+    import yaml
+    store = inbox.app.state.store
+    path = store.settings.registry_dir / "mail-policy.yaml"
+    path.write_text(yaml.safe_dump({
+        "global": {"send_enabled": True}, "blocklist": {"addresses": ["Spam@Vendor.example"], "domains": ["@rival.example"]},
+        "owner_handles_personally": {"domains": ["bank.example"]}, "mailboxes": {BOX: {"paused": True}},
+        "defaults": {"max_sends_per_day": 5, "max_external_recipients": 3, "per_recipient_cooldown_days": 2}}))
+    with store.transaction() as c:
+        c.execute("DELETE FROM registry_metadata WHERE key=?", (S.IMPORTED,))
+    S.import_registry(store)
+    with store.read() as c:
+        company, found = S.saved(c, "company"), S.effective(c, BOX, "ops")
+    assert company["blocked_recipients"] == ["rival.example", "spam@vendor.example"]
+    assert company["owner_handles"] == ["bank.example"] and company["daily_cap"] == 5
+    assert "max_outside_recipients" not in company                 # 3 is looser than the default 1: not carried
+    assert found["mode"] == "never" and found["sources"]["mode"] == "inbox"
+    # Read once: a person's later change stands, and the file is not read again.
+    with store.transaction() as c:
+        S.update_policy(c, inbox.app.state.auth.identity_for_actor(c, "human:ana"), "inbox:" + BOX,
+                        S.PolicyUpdate(inherit=True))
+    S.import_registry(store)
+    with store.read() as c:
+        assert S.effective(c, BOX, "ops")["mode"] == "ask_first"
+    blocked = queue(inbox, actor="bot:ops", raw=mime(to=["spam@vendor.example"]))
+    assert blocked["state"] == "blocked" and "blocked_recipient" in blocked["decision"]["reasons"]

@@ -213,7 +213,7 @@ impl RecordingHandle {
             .and_then(|config| stream::Plan::from_settings(&config))
             // Keep a settings-watching worker even while live text is off or not connected.
             .or_else(|| stream::Plan::from_settings(&settings::Settings::default()));
-        Self::with_plan(store, id, plan, move |inputs| {
+        Self::with_plan(store, id, plan, meeting_audio, move |inputs| {
             setup_inputs(
                 inputs,
                 || capture::start_microphone_for_meeting(microphone.as_deref(), meeting_audio),
@@ -236,7 +236,7 @@ impl RecordingHandle {
         plan: Option<stream::Plan>,
         factory: impl FnOnce() -> Result<(Vec<Source>, String)> + Send + 'static,
     ) -> Result<Self> {
-        Self::with_plan(store, id, plan, move |inputs| {
+        Self::with_plan(store, id, plan, false, move |inputs| {
             let (sources, warning) = factory()?;
             for source in sources {
                 inputs.ready(source)?;
@@ -251,12 +251,13 @@ impl RecordingHandle {
         id: String,
         factory: impl FnOnce(&InputPublisher) -> Result<()> + Send + 'static,
     ) -> Result<Self> {
-        Self::with_plan(store, id, None, factory)
+        Self::with_plan(store, id, None, false, factory)
     }
     fn with_plan(
         store: Store,
         id: String,
         plan: Option<stream::Plan>,
+        observe_meeting: bool,
         factory: impl FnOnce(&InputPublisher) -> Result<()> + Send + 'static,
     ) -> Result<Self> {
         let existing = store.get(&id)?;
@@ -298,6 +299,7 @@ impl RecordingHandle {
                     factory,
                     canceled_worker,
                     plan,
+                    observe_meeting,
                 );
                 if let Err(error) = &result {
                     let message = error.to_string();
@@ -488,8 +490,21 @@ fn record(
     factory: impl FnOnce(&InputPublisher) -> Result<()> + Send + 'static,
     canceled: Arc<AtomicBool>,
     plan: Option<stream::Plan>,
+    observe_meeting: bool,
 ) -> Result<()> {
     let started = Instant::now();
+    #[cfg(target_os = "macos")]
+    let _speaker_watch = observe_meeting.then(|| {
+        crate::speaker_names::Watch::start(
+            store.clone(),
+            id.to_owned(),
+            started,
+            offset,
+            canceled.clone(),
+        )
+    });
+    #[cfg(not(target_os = "macos"))]
+    let _ = observe_meeting;
     let mut streams = plan.map(|plan| Streams::new(store.clone(), id.to_owned(), plan));
     let _cancel_on_exit = CancelOnDrop(canceled.clone());
     store.mutate(id, |record| {

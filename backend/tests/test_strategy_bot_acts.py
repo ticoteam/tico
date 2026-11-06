@@ -395,8 +395,8 @@ def test_the_log_pages_through_entries_made_in_the_same_instant(api):
     assert sorted(seen) == [f"a{n:02d}" for n in range(53)] and len(seen) == len(set(seen))
 
 
-def test_undo_keeps_a_guest_given_the_task_since_and_says_why_its_owner_stays(api):
-    """A new owner drops a task's guest, so a reassign whose task has a guest now keeps its owner, and Undo says so."""
+def test_undo_puts_the_owner_back_and_keeps_readers_given_the_task_since(api):
+    """Readers survive a new owner, so Undo gives the task back to its owner and the readers stay."""
     strategy_token = with_strategy_bot(api)
     for slug in ("ops", "coo"):
         bot(api, slug)
@@ -404,11 +404,10 @@ def test_undo_keeps_a_guest_given_the_task_since_and_says_why_its_owner_stays(ap
     work = bot_task(api, "ops", "Reconcile the vendor invoices")
     made = decide(api, strategy_token, [{"do": "reassign", "task_id": work, "owner": "coo"}])
     with api.app.state.store.transaction() as c:
-        c.execute("UPDATE tasks SET private=1, visibility='private', guest='human:ben' WHERE id=?", (work,))
+        c.execute("""UPDATE tasks SET private=1, visibility='private', readers=json_array('human:ben') WHERE id=?""", (work,))
     undone = post(api, f"strategy-bot/log/{made['id']}/undo", {})
     after = task(api, work)
-    assert after["owner_id"] == "bot:coo" and after["guest"] == "human:ben"
-    assert "has a guest now, so its owner stays" in undone["undo"]["text"], undone["undo"]["text"]
+    assert after["owner_id"] == "bot:ops" and H.task_readers(after) == ["human:ben"], (after, undone["undo"])
 
 
 def test_a_decision_never_touches_a_company_task_hidden_from_the_strategy_bot_by_its_bots_access(api):

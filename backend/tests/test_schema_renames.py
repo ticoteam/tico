@@ -91,7 +91,9 @@ RETIRED = {"growth_ideas", "growth_idea_channels", "growth_segments", "growth_ch
            "federation_items", "federation_members", "federation_threads", "federation_directory_entries",
            "federation_peerings", "federation_keys", "federation_states",
            # 0064_history_events moves these five logs into history_events (backend/tests/test_history_events.py).
-           "task_events", "goal_events", "market_events", "company_events", "strategy_events"}
+           "task_events", "goal_events", "market_events", "company_events", "strategy_events",
+           # 20261105222012_one_send_policy folds bot_mail_settings into the one sending policy and drops the rule-miss log.
+           "bot_mail_settings", "org_rule_misses"}
 # Moved from runners to runner_states by backend/migrations/0062_runner_states.py after the renames named them.
 RUNNER_STATE = {name for name, _ in importlib.import_module("backend.migrations.0062_runner_states").STATE}
 # Moved out of its table by migration 0070 (backend/migrations/0070_bot_settings.py) into the table named here: the

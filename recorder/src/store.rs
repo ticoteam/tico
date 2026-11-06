@@ -133,53 +133,65 @@ pub struct Recording {
     /// Speaker labels for meeting audio: "" (not run), "running", "done" or the error.
     #[serde(default)]
     pub speakers: String,
+    /// Local AX evidence; loaded from separate tables, never copied into provider metadata.
+    #[serde(default, skip_serializing)]
+    pub meeting_speakers: crate::speaker_names::Timeline,
     /// Stable voice/turn ids to their first displayed label; names can attach to these ids later.
     #[serde(default)]
     pub speaker_labels: BTreeMap<String, String>,
+    /// Labels to the participant names the meeting app showed speaking (`speaker_names::vote`).
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub speaker_names: BTreeMap<String, String>,
 }
 impl Recording {
-    pub(crate) fn register_speakers(&mut self, mut identities: Vec<(String, String)>) {
-        identities.retain(|(id, _)| !id.is_empty());
-        // Reserve model identities first, then bind each stable chunk/turn to that identity.
-        for (_, preferred) in &identities {
-            if !preferred.is_empty() && !self.speaker_labels.contains_key(preferred) {
-                self.reserve_speaker(preferred, preferred);
-            }
+    pub(crate) fn register_speakers(&mut self, identities: Vec<(String, String)>) {
+        register_speakers(&mut self.speaker_labels, identities);
+    }
+}
+/// Binds stable voice/turn ids to display labels, reserving a new "Speaker N" only when needed.
+pub(crate) fn register_speakers(
+    labels: &mut BTreeMap<String, String>,
+    mut identities: Vec<(String, String)>,
+) {
+    identities.retain(|(id, _)| !id.is_empty());
+    // Reserve model identities first, then bind each stable chunk/turn to that identity.
+    for (_, preferred) in &identities {
+        if !preferred.is_empty() && !labels.contains_key(preferred) {
+            reserve_speaker(labels, preferred, preferred);
         }
-        for (id, preferred) in identities {
-            if !id.is_empty() && !self.speaker_labels.contains_key(&id) {
-                let label = self.speaker_labels.get(&preferred).cloned();
-                if let Some(label) = label {
-                    self.speaker_labels.insert(id, label);
-                } else {
-                    self.reserve_speaker(&id, "");
-                }
+    }
+    for (id, preferred) in identities {
+        if !id.is_empty() && !labels.contains_key(&id) {
+            let label = labels.get(&preferred).cloned();
+            if let Some(label) = label {
+                labels.insert(id, label);
+            } else {
+                reserve_speaker(labels, &id, "");
             }
         }
     }
-    fn reserve_speaker(&mut self, id: &str, preferred: &str) {
-        let used = |label: &str| self.speaker_labels.values().any(|v| v == label);
-        let provisional = preferred.starts_with("stream:")
-            || preferred.starts_with("Speaker ")
-            || preferred
-                .strip_prefix('S')
-                .is_some_and(|n| n.parse::<usize>().is_ok());
-        let label = if !preferred.is_empty() && !provisional {
-            preferred.to_owned()
-        } else if preferred.starts_with("Speaker ") && !used(preferred) {
-            preferred.to_owned()
-        } else {
-            let next = self
-                .speaker_labels
-                .values()
-                .filter_map(|v| v.strip_prefix("Speaker ")?.parse::<usize>().ok())
-                .max()
-                .unwrap_or(0)
-                + 1;
-            format!("Speaker {next}")
-        };
-        self.speaker_labels.insert(id.to_owned(), label);
-    }
+}
+fn reserve_speaker(labels: &mut BTreeMap<String, String>, id: &str, preferred: &str) {
+    let used = |label: &str| labels.values().any(|v| v == label);
+    let provisional = preferred.starts_with("stream:")
+        || preferred.starts_with("Speaker ")
+        || preferred
+            .strip_prefix('S')
+            .is_some_and(|n| n.parse::<usize>().is_ok());
+    let label = if !preferred.is_empty() && !provisional {
+        preferred.to_owned()
+    } else if preferred.starts_with("Speaker ") && !used(preferred) {
+        preferred.to_owned()
+    } else {
+        let next = labels
+            .values()
+            .filter_map(|v| v.strip_prefix("Speaker ")?.parse::<usize>().ok())
+            .max()
+            .unwrap_or(0)
+            + 1;
+        format!("Speaker {next}")
+    };
+    labels.insert(id.to_owned(), label);
 }
 /// One recognised word, in recording time. `speaker` is set when diarization named a voice;
 /// `turn` is the transcription service's own speaker label, which only holds within one chunk.
@@ -432,6 +444,7 @@ impl Store {
           CREATE TABLE IF NOT EXISTS live_edits(recording_id TEXT NOT NULL REFERENCES recordings(id) ON DELETE CASCADE,
           destination_id TEXT NOT NULL,seq INTEGER NOT NULL,
           PRIMARY KEY(recording_id,destination_id,seq));")?;
+        crate::speaker_names::migrate(&db)?;
         #[cfg(unix)]
         {
             use std::os::unix::fs::PermissionsExt;
@@ -533,7 +546,9 @@ impl Store {
             chunks: vec![],
             deliveries: vec![],
             speakers: String::new(),
+            meeting_speakers: Default::default(),
             speaker_labels: BTreeMap::new(),
+            speaker_names: BTreeMap::new(),
         };
         self.db()?.execute(
             "INSERT INTO recordings VALUES(?,?)",
@@ -615,7 +630,9 @@ impl Store {
         clean_id(id)?;
         let mut connection = self.db()?;
         let db = connection.transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)?;
-        let value = read_record(&db, id, true)?;
+        let mut value = read_record(&db, id, true)?;
+        value.meeting_speakers = crate::speaker_names::timeline(&db, id)?;
+        crate::speaker_names::settle_names(&db, &mut value)?;
         db.commit()?;
         Ok(value)
     }
@@ -1012,6 +1029,10 @@ impl Store {
         chunk.text = text.trim().into();
         // Edited text replaces the provider's words, and with them any diarized speakers.
         chunk.words.clear();
+        if !chunk.provider.is_object() {
+            chunk.provider = serde_json::json!({});
+        }
+        chunk.provider["source"] = serde_json::json!("edit");
         save_chunk(&transaction, &chunk)?;
         transaction.commit()?;
         Ok(())

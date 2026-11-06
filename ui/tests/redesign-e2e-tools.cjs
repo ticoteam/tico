@@ -1,13 +1,14 @@
-// Journey 8 on a real hub (redesign TESTING.md §L3): Library › Tools lists the tool a computer reported (the
+// Journey 8 on a real hub (redesign TESTING.md §L3): Tools › Keys lists the tool a computer reported (the
 // Engineering Lead's Acme Billing, read and refund, from the runner's heartbeat) under In use, with how many have it, and
 // its row opens the tool: who has it (the Engineering Lead, free to change things there), then its page. The old
-// Tools address (#/integrations) leads here. Phone, then desktop.
+// Tools address (#/integrations) leads to Tools. Phone, then desktop.
 const assert = require('node:assert/strict');
 const {run, open, ok, sideways, shot, t} = require('./support/redesign-e2e.cjs');
 
 run('redesign-e2e-tools', ['org', 'toured', 'connection'], async ({hub, browser, phone, tag}) => {
   const page = await open(browser, hub, 'dana', {phone, hash: '#/integrations'});
-  await page.waitForFunction(() => location.hash.startsWith('#/library/tools'), null, {timeout: t(5000)});
+  await page.waitForFunction(() => location.hash === '#/tools', null, {timeout: t(5000)});
+  await page.evaluate(() => { location.hash = '#/tools/keys'; });
   const tools = await ok(page, 'GET', 'tools');
   assert.ok(JSON.stringify(tools).includes('acme-billing'), `${tag}: the hub lists it`);
   const row = page.locator('.lc-row[data-key="acme-billing"]');
@@ -24,7 +25,7 @@ run('redesign-e2e-tools', ['org', 'toured', 'connection'], async ({hub, browser,
   if (phone) await shot(page, `${tag}-01-list`);
 
   await row.click();
-  await page.waitForFunction(() => location.hash.split('?')[0] === '#/library/tools/acme-billing', null, {timeout: t(5000)});
+  await page.waitForFunction(() => location.hash.split('?')[0] === '#/tools/keys/acme-billing', null, {timeout: t(5000)});
   // On a computer another tool is open beside the list first: wait for this one's page.
   await page.locator('#int-detail h1').filter({hasText: /acme.billing/i}).waitFor({timeout: t(5000)});
   const access = page.locator('.lc-access .lc-who-row');

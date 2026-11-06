@@ -11,10 +11,6 @@ max_run_minutes: 60
 gateway:
   level: low
 
-# Nothing addressed to anyone outside the team leaves until an owner turns this on. Until then
-# a comment on a public issue is a draft; public comments stay drafts until a person turns mail sending on in Tico.
-outbound_send: false
-
 # The first routine is declared off (`enabled: false`) and switched on when a human starts the bot's setup
 # (Start setup, go-live). `hub bot create` seeds it once; from then on Tico's row is the routine (docs/routines.md).
 routines:
@@ -33,7 +29,7 @@ tools:
   - service: github
     identity: "the product repositories the owner lists for this bot"
     can: [read]
-    note: "reads issues; requested label changes need write access, and public comments need outbound_send on"
+    note: "reads issues; requested label changes and public comments need write access"
 # Writing to GitHub is the owner's decision, not the template's: the team's GitHub App token can write issues, so
 # the only thing between this bot and a public comment is what its access and.claude/settings.json allow. To let it
 # apply a requested plan, change `can` to [read, write] and move `Bash(gh issue edit *)` and

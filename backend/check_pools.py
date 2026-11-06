@@ -542,7 +542,7 @@ def _file(c, ticket, step, slug, title, heads, snapshots, why):
     rolled back and the check keeps waiting)."""
     from . import review_gate
     actor = H.KEEPER if step.get("detached") and not H.task_private(c, ticket) else ticket["owner_id"]
-    audience = {"id": "", "private": True, "owner_id": "bot:" + slug, "requester_id": actor, "guest": None}
+    audience = {"id": "", "private": True, "owner_id": "bot:" + slug, "requester_id": actor, "readers": None}
     if not review_gate.can_copy_prs(c, ticket, audience):
         return None
     body = (f"{kind(step)} of {title.split(':', 1)[-1].strip()}"

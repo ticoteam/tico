@@ -1,11 +1,14 @@
-"""Read and organize Workspace mail in Gmail, without retaining messages on the server.
+"""Read, organize and send Workspace mail in Gmail, without retaining messages on the server.
 
-Callers check mailbox access before minting. Only the token cache in google_workspace survives a call;
+Callers check mailbox access before minting. `send` delivers one frozen email the send queue has already permitted
+(backend/email_sending.py `drain`); it never retries. Only the token cache in google_workspace survives a call;
 the connector's pure normalizer supplies the same message fields without loading Google client libraries.
 """
 
+import base64
 import builtins
 import json
+import uuid
 import urllib.error
 import urllib.parse
 import urllib.request
@@ -17,6 +20,9 @@ from . import google_workspace
 from .store import Problem
 
 BASE = "https://gmail.googleapis.com/gmail/v1/users/"
+UPLOAD = "https://gmail.googleapis.com/upload/gmail/v1/users/"
+SEND_SECONDS = 60
+INLINE_RAW_MAX = 4 * 1024 * 1024        # a bigger email goes up as a multipart upload: a JSON body is capped lower
 SECONDS = 10
 LIMIT_MAX = 50
 WORKERS = 10
@@ -200,3 +206,47 @@ def organize(c, mailbox, ids, add=(), remove=()):
         _call(mailbox, "messages/batchModify", token,
               data={"ids": ids[start:start + 1000], "addLabelIds": builtins.list(add),
                     "removeLabelIds": builtins.list(remove)})
+
+
+def send_call(url, *, token, body, content_type):
+    """(status, JSON object) for one messages.send, or status 0 when Gmail did not answer. Tests replace this."""
+    request = urllib.request.Request(url, data=body, headers={"Accept": "application/json", "Content-Type": content_type,
+                                                              "Authorization": "Bearer " + token})
+    try:
+        with urllib.request.urlopen(request, timeout=SEND_SECONDS) as answer:
+            status, raw = answer.status, answer.read(HTTP_MAX_BYTES)
+    except urllib.error.HTTPError as refused:
+        refused.close()
+        return refused.code, {}
+    except (OSError, ValueError):
+        return 0, {}
+    try:
+        found = json.loads(raw)
+    except (ValueError, UnicodeError):
+        return status, {}
+    return status, found if isinstance(found, dict) else {}
+
+
+def send(mailbox, token, raw, thread_id=""):
+    """Send exactly this frozen MIME once: (state, Gmail message id, detail). Gmail refusing it is `failed` (nothing
+    left); no answer, a server error or an answer without an id is `unknown`, never retried into a second copy."""
+    path = urllib.parse.quote(mailbox, safe="") + "/messages/send"
+    if len(raw) <= INLINE_RAW_MAX:
+        body = {"raw": raw, **({"threadId": thread_id} if thread_id else {})}
+        status, found = send_call(BASE + path, token=token, body=json.dumps(body).encode(),
+                                  content_type="application/json")
+    else:
+        padded = raw.replace("-", "+").replace("_", "/")
+        mime = base64.b64decode(padded + "=" * (-len(padded) % 4))
+        boundary = "tico-" + uuid.uuid4().hex
+        meta = json.dumps({"threadId": thread_id} if thread_id else {}).encode()
+        body = (b"--" + boundary.encode() + b"\r\nContent-Type: application/json; charset=UTF-8\r\n\r\n" + meta
+                + b"\r\n--" + boundary.encode() + b"\r\nContent-Type: message/rfc822\r\n\r\n" + mime
+                + b"\r\n--" + boundary.encode() + b"--")
+        status, found = send_call(UPLOAD + path + "?uploadType=multipart", token=token, body=body,
+                                  content_type="multipart/related; boundary=" + boundary)
+    if status in (200, 201) and found.get("id"):
+        return "sent", str(found["id"])[:200], "sent"
+    if 400 <= status < 500:
+        return "failed", "", f"Gmail refused the email (HTTP {status}); nothing was sent"
+    return "unknown", "", "Gmail did not confirm delivery"

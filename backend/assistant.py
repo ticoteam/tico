@@ -106,9 +106,9 @@ def write_allowed(method, path, settings=None, body=b"", actor="", owns=None, di
     # Reversible Gmail labels; the route checks the person's mailbox level and the company organize switch.
     if path == "/api/v2/mail/messages/organize":
         return True
-    # The mail tool's org rule check before a send, and its report of checks Tico never answered, change nothing: a
-    # person's own mail is never checked (backend/org_rule_check.py), and the send itself meets its own checks.
-    if re.fullmatch(r"/api/v2/bots/[^/]+/mail-check(/misses)?", path):
+    # An org rule check of a draft changes nothing: a person's own mail is never checked (backend/org_rule_check.py),
+    # and the send itself meets every check in the send queue.
+    if re.fullmatch(r"/api/v2/bots/[^/]+/mail-check", path):
         return True
     try:
         fields = json.loads(body or b"{}")
@@ -257,6 +257,9 @@ NEVER = [(m, re.compile(p)) for m, p in (
     ("POST", r"/api/v2/me/tokens(/[^/]+/revoke)?"),
     ("POST", r"/api/v2/service-keys(/[^/]+/revoke)?"),
     (None, r"/api/v2/credentials(/.*)?"), (None, r"/api/v2/credential-set"),
+    # An API tool's keys and levels are credentials and grants; its address and auth scheme decide where a key is sent,
+    # so changing, adding or deleting a tool is the person's tap too (backend/api_tools.py). Its check only reads.
+    (None, r"/api/v2/api-tools(/[^/]+(/(keys|access)(/.*)?)?)?"),
     # HQ's cloud-machine support switch grants access just like the support_access team rule.
     ("PUT", r"/api/v2/cloud-machines/support"),
     (None, r"/api/v2/credential-imports(/.*)?"), (None, r"/api/v2/runner-credential-(migration|imports)(/.*)?"),
@@ -290,7 +293,7 @@ NEVER = [(m, re.compile(p)) for m, p in (
     (None, r"/api/v2/google/workspace(/.*)?"), (None, r"/api/v2/google/oauth-client"),
     # What Tico may do in Google: Send mail lets every bot write outside, a person's own word as a bot's Mail sending is.
     (None, r"/api/v2/google/permissions"),
-    # Who can use a mailbox (Settings > Inboxes, backend/mailboxes.py): connecting one, sharing it, each access and
+    # Who can use a mailbox (Tools, backend/mailboxes.py): connecting one, sharing it, each access and
     # stopping it are the person's own tap, never a chat's.
     (None, r"/api/v2/mailboxes(/.*)?"),
     (None, r"/api/v2/letters/(settings|outboxes/.*|bots/.*/settings)"),

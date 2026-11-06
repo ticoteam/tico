@@ -65,7 +65,8 @@ def can_copy_prs(c, parent, child):
         return True
     if not H.task_private(c, child):
         return False
-    readers = {child.get(k) for k in ("owner_id", "requester_id", "guest")} - {None, ""}
+    readers = {child.get(k) for k in ("owner_id", "requester_id")} - {None, ""}
+    readers |= H.reader_actors(c, child)
     readers.update("human:" + r[0] for r in c.execute("SELECT id FROM humans"))
     readers.update("bot:" + r[0] for r in c.execute("SELECT id FROM bots"))
     return all(not H.task_private_readable(c, reader, child) or H.task_private_readable(c, reader, parent)

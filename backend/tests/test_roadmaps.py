@@ -412,8 +412,8 @@ def test_a_ticket_with_no_roadmap_item_tells_its_requester_on_the_ticket(api):
 
 
 def test_a_blocked_notice_is_read_only_by_who_may_read_the_blocker_it_names(api):
-    """A private Dev ticket between two bots has a person as its guest. The notice that names its blocker goes to
-    the requester, who reads the blocker; the guest reads the ticket but not that notice, and a blocker made
+    """A private Dev ticket between two bots has a person as a reader. The notice that names its blocker goes to
+    the requester, who reads the blocker; the reader reads the ticket but not that notice, and a blocker made
     private after its notice takes the notice with it."""
     from backend import task_relations as TR
     dev = _dev_tickets(api)
@@ -446,7 +446,7 @@ def test_a_blocked_notice_is_read_only_by_who_may_read_the_blocker_it_names(api)
         assert [m['body'] for m in H.task_comments(c, ticket['id'], actor='bot:cpo')] == [body for _, _, body, _ in sent]
     assert 'Vendor breach' not in api.get('/api/v2/tasks/' + ticket['id'], headers=headers('ben-test')).text
 
-    # The blocker's audience narrows after its notice: the guest no longer reads it; the requester still does.
+    # The blocker's audience narrows after its notice: the reader no longer reads it; the requester still does.
     with api.app.state.store.transaction() as c:
         H.task_update(c, 'bot:cpo', later['id'], private=True)
     assert 'Zip vendor contract' not in comments('ben-test')

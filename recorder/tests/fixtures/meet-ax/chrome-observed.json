@@ -1,0 +1,365 @@
+{
+  "role": "AXGroup",
+  "classes": [],
+  "children": [
+    {
+      "role": "AXGroup",
+      "classes": [
+        "dkjMxf",
+        "eQJ1qd",
+        "MVbbRb",
+        "tSl2vc"
+      ],
+      "children": [
+        {
+          "role": "AXGroup",
+          "classes": [
+            "oZRSLe"
+          ],
+          "children": [
+            {
+              "role": "AXGroup",
+              "classes": [
+                "koV58",
+                "Zi94Db"
+              ],
+              "children": []
+            },
+            {
+              "role": "AXGroup",
+              "classes": [],
+              "children": [
+                {
+                  "role": "AXGroup",
+                  "classes": [
+                    "tC2Wod",
+                    "ACcyyc",
+                    "eQJ1qd",
+                    "fdKMD"
+                  ],
+                  "children": []
+                }
+              ]
+            },
+            {
+              "role": "AXGroup",
+              "classes": [
+                "ZY8hPc",
+                "eQJ1qd"
+              ],
+              "children": [
+                {
+                  "role": "AXGroup",
+                  "classes": [
+                    "OFfHfd",
+                    "urlhDe",
+                    "eQJ1qd"
+                  ],
+                  "children": [
+                    {
+                      "role": "AXGroup",
+                      "classes": [
+                        "XEazBc",
+                        "adnwBd"
+                      ],
+                      "children": [
+                        {
+                          "role": "AXGroup",
+                          "classes": [],
+                          "children": [
+                            {
+                              "role": "AXStaticText",
+                              "classes": [],
+                              "children": [],
+                              "label": "Participant 1"
+                            }
+                          ]
+                        }
+                      ]
+                    }
+                  ]
+                }
+              ]
+            },
+            {
+              "role": "AXGroup",
+              "classes": [
+                "lH9pqf",
+                "atLQQ",
+                "eQJ1qd"
+              ],
+              "children": []
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "role": "AXGroup",
+      "classes": [
+        "dkjMxf",
+        "eQJ1qd",
+        "MVbbRb",
+        "tSl2vc"
+      ],
+      "children": [
+        {
+          "role": "AXGroup",
+          "classes": [
+            "oZRSLe"
+          ],
+          "children": [
+            {
+              "role": "AXGroup",
+              "classes": [
+                "koV58",
+                "Zi94Db"
+              ],
+              "children": []
+            },
+            {
+              "role": "AXGroup",
+              "classes": [],
+              "children": [
+                {
+                  "role": "AXGroup",
+                  "classes": [
+                    "tC2Wod",
+                    "ACcyyc",
+                    "eQJ1qd",
+                    "fdKMD"
+                  ],
+                  "children": []
+                }
+              ]
+            },
+            {
+              "role": "AXGroup",
+              "classes": [
+                "ZY8hPc",
+                "eQJ1qd"
+              ],
+              "children": [
+                {
+                  "role": "AXGroup",
+                  "classes": [
+                    "OFfHfd",
+                    "urlhDe",
+                    "eQJ1qd"
+                  ],
+                  "children": [
+                    {
+                      "role": "AXGroup",
+                      "classes": [
+                        "XEazBc",
+                        "adnwBd"
+                      ],
+                      "children": [
+                        {
+                          "role": "AXGroup",
+                          "classes": [],
+                          "children": [
+                            {
+                              "role": "AXStaticText",
+                              "classes": [],
+                              "children": [],
+                              "label": "Participant 2"
+                            }
+                          ]
+                        }
+                      ]
+                    }
+                  ]
+                }
+              ]
+            },
+            {
+              "role": "AXGroup",
+              "classes": [
+                "lH9pqf",
+                "atLQQ",
+                "eQJ1qd"
+              ],
+              "children": []
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "role": "AXGroup",
+      "classes": [
+        "dkjMxf",
+        "eQJ1qd",
+        "MVbbRb",
+        "tSl2vc"
+      ],
+      "children": [
+        {
+          "role": "AXGroup",
+          "classes": [
+            "oZRSLe"
+          ],
+          "children": [
+            {
+              "role": "AXGroup",
+              "classes": [
+                "koV58",
+                "Zi94Db"
+              ],
+              "children": []
+            },
+            {
+              "role": "AXGroup",
+              "classes": [],
+              "children": []
+            },
+            {
+              "role": "AXGroup",
+              "classes": [
+                "ZY8hPc",
+                "eQJ1qd"
+              ],
+              "children": [
+                {
+                  "role": "AXGroup",
+                  "classes": [
+                    "OFfHfd",
+                    "urlhDe",
+                    "eQJ1qd"
+                  ],
+                  "children": [
+                    {
+                      "role": "AXGroup",
+                      "classes": [
+                        "XEazBc",
+                        "adnwBd"
+                      ],
+                      "children": [
+                        {
+                          "role": "AXGroup",
+                          "classes": [],
+                          "children": [
+                            {
+                              "role": "AXStaticText",
+                              "classes": [],
+                              "children": [],
+                              "label": "Participant 3"
+                            }
+                          ]
+                        }
+                      ]
+                    }
+                  ]
+                }
+              ]
+            },
+            {
+              "role": "AXGroup",
+              "classes": [
+                "lH9pqf",
+                "atLQQ",
+                "eQJ1qd"
+              ],
+              "children": []
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "role": "AXGroup",
+      "classes": [
+        "dkjMxf",
+        "eQJ1qd",
+        "MVbbRb",
+        "tSl2vc",
+        "kssMZb"
+      ],
+      "children": [
+        {
+          "role": "AXGroup",
+          "classes": [
+            "oZRSLe"
+          ],
+          "children": [
+            {
+              "role": "AXGroup",
+              "classes": [
+                "koV58",
+                "Zi94Db"
+              ],
+              "children": []
+            },
+            {
+              "role": "AXGroup",
+              "classes": [],
+              "children": [
+                {
+                  "role": "AXGroup",
+                  "classes": [
+                    "tC2Wod",
+                    "ACcyyc",
+                    "eQJ1qd",
+                    "fdKMD"
+                  ],
+                  "children": []
+                }
+              ]
+            },
+            {
+              "role": "AXGroup",
+              "classes": [
+                "ZY8hPc",
+                "eQJ1qd"
+              ],
+              "children": [
+                {
+                  "role": "AXGroup",
+                  "classes": [
+                    "OFfHfd",
+                    "urlhDe",
+                    "eQJ1qd"
+                  ],
+                  "children": [
+                    {
+                      "role": "AXGroup",
+                      "classes": [
+                        "XEazBc",
+                        "adnwBd"
+                      ],
+                      "children": [
+                        {
+                          "role": "AXGroup",
+                          "classes": [],
+                          "children": [
+                            {
+                              "role": "AXStaticText",
+                              "classes": [],
+                              "children": [],
+                              "label": "Participant 4"
+                            }
+                          ]
+                        }
+                      ]
+                    }
+                  ]
+                }
+              ]
+            },
+            {
+              "role": "AXGroup",
+              "classes": [
+                "lH9pqf",
+                "atLQQ",
+                "eQJ1qd"
+              ],
+              "children": []
+            }
+          ]
+        }
+      ]
+    }
+  ],
+  "provenance": "Reduced from live Chrome AX roles and AXDOMClassList inspected locally; fictional names replace the name leaves. Visual classes are uninterpreted. No speaking transition was captured."
+}

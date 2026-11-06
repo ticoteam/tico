@@ -331,7 +331,7 @@ def test_the_strategy_bot_and_a_bot_without_the_send_switch_are_refused(api):
             W.publish(c, "custom.x", "s", {}, "bot:ops", only=made["id"])
         with pytest.raises(W.Refused, match="does not exist"):
             W.publish(c, "custom.x", "s", {}, "human:ana", only="ep_missing")
-        c.execute("INSERT INTO bot_mail_settings(bot,outbound_send,forward_to,updated_at,updated_by) VALUES('ops',1,'[]',?,?)",
+        c.execute("INSERT OR REPLACE INTO email_sending_policies VALUES('bot:ops','{\"mode\":\"on_their_own\"}',?,?)",
                   (H.now(), "human:ana"))
         assert W.publish(c, "custom.x", "s", {}, "bot:ops", only=made["id"]) == 1
     post(api, f"webhooks/{made['id']}/pause", {})
@@ -498,7 +498,7 @@ def test_publish_to_one_endpoint_checks_the_actor_against_that_endpoint(api):
         assert W.publish(c, "custom.x", "s", {}, "human:ben", only=bens["id"]) == 1
         assert W.publish(c, "custom.y", "s", {}, "human:ana", only=bens["id"]) == 1     # an admin may
         assert W.publish(c, "custom.z", "s", {}, H.KEEPER, only=bens["id"]) == 1
-        c.execute("INSERT INTO bot_mail_settings(bot,outbound_send,forward_to,updated_at,updated_by) VALUES('ops',1,'[]',?,?)",
+        c.execute("INSERT OR REPLACE INTO email_sending_policies VALUES('bot:ops','{\"mode\":\"on_their_own\"}',?,?)",
                   (H.now(), "human:ana"))
         narrow = W.publish(c, "custom.w", "s", {}, "bot:ops", only=bens["id"])
         assert narrow == 1
