@@ -291,7 +291,7 @@ async function main() {
   await runScripts(files, jobs, run);
   const secs = ((Date.now() - started) / 1000).toFixed(0);
   if (process.env.TICO_UI_TIMINGS) fs.writeFileSync(process.env.TICO_UI_TIMINGS, JSON.stringify(timings, null, 2) + '\n');
-  console.log(failed.length ? `\n${failed.length} of ${files.length} UI scripts failed: ${failed.join(', ')} (${secs}s)`
+  console.log(failed.length ? `\n${failed.length} of ${files.length} UI scripts failed: ${failed.join(', ')} (all ${files.length} took ${secs}s)`
                             : `\n${files.length} UI scripts passed in ${secs}s`);
   process.exit(failed.length ? 1 : 0);
 }
