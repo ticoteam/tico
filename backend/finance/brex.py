@@ -20,7 +20,8 @@ from typing import Any, Protocol, cast
 
 from .mercury import Answer, Opener
 
-BASE = "https://api.brex.com"
+BASE = "https://api.brex.com"          # Brex's production API, the host of its OpenAPI server. There is no fallback host: a
+                                       # connection error is reported, and the token is never sent to a second host
 BASE_ENV = "TICO_BREX_BASE"            # a developer's override: a local fake
 OVERRIDE_HOSTS = frozenset({"127.0.0.1", "localhost", "::1"})  # the only hosts it may name
 log = logging.getLogger(__name__)

@@ -8,18 +8,26 @@ What comes in, and how it maps (read-only; Brex is never written to):
   of this year when the connection has none) and each row is posted by banking.ingest with its signed amount.
 - The one live card account is a card program money account on a credit card liability line, read through the primary
   card transactions. Brex lists no account on a card transaction, so a second live card account stops the sync (its rows
-  would be read to the wrong account): Finance refuses to connect more than one.
+  would be read to the wrong account, or go missing unseen): Finance refuses to connect more than one. A mapped card
+  account that Brex no longer lists as live is skipped and noted (its mapping is kept); the other accounts keep syncing.
 - A card charge (PURCHASE, BNPL_FEE) is money the card owes (negative on the card), a credit back (REFUND, CHARGEBACK,
   REWARDS_CREDIT) positive, and a COLLECTION (a payment toward the card) positive and paired with the bank's CARD_COLLECTION
   debit as Mercury's autopay is (banking._card_payment). The direction comes from the type, not from Brex's sign (see
-  core/feeds.brex_card_txn). Card transactions carry no pending state: Brex lists settled ones only.
-- History is walked once: the backfill keeps each account's cursor between steps, a few pages a step, and completes when
-  every account has reached its end; then each cash account's opening balance is made from the balance (banking.opening_balance).
-  Each later poll re-reads the last CATCH_UP_DAYS (Brex's delayed transactions arrive late); a row already in is updated
-  only when it changed (banking.ingest), so a re-read never duplicates.
-- Known limit: Brex gives dates, not times, so a row posted in the seconds between the balance read and the last history
-  page of the backfill's completing pass can leave the opening off by that row. Reconciling the account to a statement
-  shows it.
+  core/feeds.brex_card_txn). A card type not listed there is posted with Brex's sign under BREX_OTHER (never paired as a
+  payment) and noted in the connection's last_error. Card transactions carry no pending state: Brex lists settled ones only.
+- Cash rows are posted with Brex's sign. BOOK_TRANSFER and INTRA_CUSTOMER_ACCOUNT_BOOK_TRANSFER (money between the
+  company's own Brex accounts) are transfers (F.TRANSFER_KINDS), so a pair across two connected accounts is one transfer,
+  not an expense. Any other cash type posts generic.
+- History is walked once, newest first, a few pages a step. Each cash account's first step brackets its balance with its
+  first page (_bracket, as Stripe does): the page and the balance are read so the newest row is the same before and after
+  the balance is read, the balance is held in the connection's settings, and the page is taken in with it. When every
+  account has reached its end, each cash account's opening is made from its held balance (banking.open_at), not from a
+  later read, so a row posted mid-backfill is left out of the opening and comes in with the catch-up. Each later poll
+  re-reads the last CATCH_UP_DAYS (Brex's delayed transactions arrive late); a row already in is updated only when it
+  changed (banking.ingest), so a re-read never duplicates.
+- Known limit: Brex gives dates, not times. A row that is posted after a bracket and reaches Brex's list only later, and
+  is older than the catch-up window, is never read again, so the books can miss it. Reconciling the account to a
+  statement shows it.
 
 A rehearsal copy calls nothing."""
 import logging
@@ -47,6 +55,7 @@ BACKFILL_PAGES = 4                # pages of one account's history per step: the
 CATCH_UP_PAGES = 50               # pages of one account's recent window per poll
 CATCH_UP_DAYS = 30                # the window every poll re-reads: delayed transactions arrive late
 ACCOUNT_PAGES = 20                # account-list pages read per call
+BRACKET_TRIES = 3                 # reads of a cash account's first page and balance before a backfill step waits
 Make = Callable[[str], Any]       # a factory from the token to a provider (tests pass a fake)
 
 
@@ -244,18 +253,19 @@ def connection(store: Any, vault: Any, cid: str, *, rehearsal: bool = False, mak
     if provider is None:
         _failed(store, cid, "the Brex token is missing; store it again in Settings", now, str(row["status"]))
         return "no_token"
-    problems, live = balances(store, provider, cid, now)
+    problems, live, notes = balances(store, provider, cid, now)
     if not problems:
         problems = walk(store, provider, cid, now, live)
     with store.transaction() as c:
-        going = not problems and not _settings(SK.get(c, "fin_connections", cid)).get("backfilled")
+        conf = _settings(SK.get(c, "fin_connections", cid))
+        going = not problems and not conf.get("backfilled")
         fields: dict[str, object] = {"last_sync_at": now, "updated_at": now,
                                      "next_sync_at": now if going else _after(now, POLL_MINUTES * 60)}
         if problems:
             fields.update({"status": "error", "last_error": problems[0][:300]})
             banking.sync_failed(load(c, now), cid, str(row["status"]), problems[0])
         else:
-            fields.update({"status": "active", "last_error": None, "last_ok_at": now})
+            fields.update({"status": "active", "last_error": _notes(conf, notes), "last_ok_at": now})
             banking.refresh_connection_openings(load(c, now), cid)
         SK.update(c, "fin_connections", cid, fields)
     return "failed" if problems else "ok"
@@ -268,25 +278,36 @@ def _failed(store: Any, cid: str, why: str, now: str, prior: str) -> None:
         banking.sync_failed(load(c, now), cid, prior, why)
 
 
-def balances(store: Any, provider: Provider, cid: str, now: str) -> tuple[list[str], set[str]]:
-    """Each mapped cash account's balance as Brex reports it, in the book's currency only; and the card accounts check: the
-    live card accounts Brex lists must be exactly the card account Finance maps, or the sync stops (its rows would be read
-    to the wrong account, or not at all). Returns the problems and the live cash account ids."""
+def _notes(conf: Mapping[str, Any], notes: list[str]) -> str | None:
+    """What a pass that read is noted as in last_error (the status stays active): this pass's notes, and each Brex card type
+    Finance does not map, kept in the settings from the first row of that type read (`unknown`)."""
+    unknown = [f"Brex card transactions of type {kind} are not mapped: Finance posts them with Brex's sign (first: {first})"
+               for kind, first in dict(conf.get("unknown") or {}).items()]
+    return "; ".join([*notes, *unknown])[:300] or None
+
+
+def balances(store: Any, provider: Provider, cid: str, now: str) -> tuple[list[str], dict[str, set[str]], list[str]]:
+    """Each mapped cash account's balance as Brex reports it, in the book's currency only; and the card accounts check. A
+    live card account Brex lists that Finance does not map stops the sync: its rows would be read to the wrong account, or go
+    missing unseen. A mapped card account Brex no longer lists as live is skipped and noted, its mapping kept. Returns the
+    problems, the live account ids by money kind (`bank`, `card_program`) and the notes."""
     cards, why = _all(provider.card_accounts, ACCOUNT_PAGES)
     if why:
-        return [why], set()
+        return [why], {}, []
     cash, why = _all(provider.cash_accounts, ACCOUNT_PAGES)
     if why:
-        return [why], set()
+        return [why], {}, []
     live_cash = {str(a.get("id") or ""): a for a in cash if _live(a)}
     listed_cards = {str(a.get("id") or "") for a in cards if _live(a)}
     with store.read() as c:
         book = load(c, now).book.id
         mine = [m for m in SK.money_accounts(c, book) if str(m["connection_id"] or "") == cid]
     mapped_cards = {str(m["provider_account_id"] or "") for m in mine if str(m["kind"]) == "card_program"}
-    if listed_cards != mapped_cards:
+    if listed_cards - mapped_cards:
         return [f"Brex's card accounts are not the one Finance maps ({len(listed_cards)} listed); connect Brex again to "
-                "map them"], set(live_cash)
+                "map them"], {}, []
+    notes = [f"Brex card account {aid} is no longer live: its transactions are not read, and its mapping is kept"
+             for aid in sorted(mapped_cards - listed_cards)]
     with store.transaction() as c:
         ctx = load(c, now)
         base = ctx.book.base_currency.upper()
@@ -299,23 +320,24 @@ def balances(store: Any, provider: Provider, cid: str, now: str) -> tuple[list[s
             in_base = currency == base
             banking.set_balance(ctx, str(m["id"]), current if in_base else None,
                                 available if in_base else None, now)
-    return [], set(live_cash)
+    return [], {"bank": set(live_cash), "card_program": listed_cards}, notes
 
 
-def walk(store: Any, provider: Provider, cid: str, now: str, live: set[str]) -> list[str]:
+def walk(store: Any, provider: Provider, cid: str, now: str, live: Mapping[str, set[str]]) -> list[str]:
     """This pass's history: the backfill while it runs (a few pages an account a step, cursors kept), else the recent
-    window of every account. Only the card account and the live cash accounts are read."""
+    window of every account. Only the live accounts are read (`live`, by money kind): a card account Brex no longer
+    lists is not."""
     with store.read() as c:
         row = SK.get(c, "fin_connections", cid)
         ctx = load(c, now)
         mine = [m for m in SK.money_accounts(c, ctx.book.id)
                 if str(m["connection_id"] or "") == cid and str(m["status"] or "active") == "active"
-                and (str(m["kind"]) == "card_program"
-                     or (str(m["kind"]) == "bank" and str(m["provider_account_id"] or "") in live))]
+                and str(m["provider_account_id"] or "") in live.get(str(m["kind"]), set())]
     conf = _settings(row)
     if conf.get("backfilled"):
         return _catch_up(store, provider, cid, now, mine, _start(_days_before(now, CATCH_UP_DAYS)))
-    return _backfill(store, provider, cid, now, mine, _start(str(conf.get("history_from") or f"{now[:4]}-01-01")), conf)
+    return _backfill(store, provider, cid, now, mine, _start(str(conf.get("history_from") or f"{now[:4]}-01-01")), conf,
+                     ctx.book.base_currency)
 
 
 def _page(provider: Provider, m: Any, start: str, cursor: str | None) -> Answer:
@@ -345,19 +367,29 @@ def _catch_up(store: Any, provider: Provider, cid: str, now: str, mine: list[Any
 
 
 def _backfill(store: Any, provider: Provider, cid: str, now: str, mine: list[Any], start: str,
-              conf: Mapping[str, Any]) -> list[str]:
-    """The first history: each account from `start` on, BACKFILL_PAGES pages a step, its cursor saved after every page so a
-    failed page is read again and nothing is skipped. When every account has reached its end, the backfill completes."""
+              conf: Mapping[str, Any], base: str) -> list[str]:
+    """The first history: each account from `start` on, newest first, BACKFILL_PAGES pages a step, its cursor saved after
+    every page so a failed page is read again and nothing is skipped. A cash account's first step brackets its balance
+    with its first page (_bracket), and the balance it holds is saved with that page. When every account has reached its
+    end, the backfill completes."""
     cursors = {str(k): str(v) for k, v in dict(conf.get("cursors") or {}).items()}
     walked = {str(x) for x in list(conf.get("walked") or [])}
+    held: dict[str, int | None] = {str(k): (None if v is None else int(v))
+                                   for k, v in dict(conf.get("held") or {}).items()}
     for m in mine:
         mid = str(m["id"])
         if mid in walked:
             continue
         cursor: str | None = cursors.get(mid)
+        first: Answer | None = None
+        if str(m["kind"]) == "bank" and mid not in held:
+            first, held[mid], why = _bracket(provider, m, start, base)
+            if first is None:
+                return [why]
         done = False
         for _ in range(BACKFILL_PAGES):
-            page = _page(provider, m, start, cursor)
+            page = first if first is not None else _page(provider, m, start, cursor)
+            first = None
             if not page.ok:
                 return [error_text(page)]
             problems = _take(store, cid, m, listed(page), now)
@@ -370,13 +402,50 @@ def _backfill(store: Any, provider: Provider, cid: str, now: str, mine: list[Any
                 cursors.pop(mid, None)
                 walked.add(mid)
                 done = True
-            _save(store, cid, now, {"cursors": cursors, "walked": sorted(walked)})
+            _save(store, cid, now, {"cursors": cursors, "walked": sorted(walked), "held": held})
             if done:
                 break
         if not done:
             return []           # this account goes on from its cursor next step; the others wait their turn
     _complete(store, cid, now)
     return []
+
+
+def _bracket(provider: Provider, m: Any, start: str, base: str) -> tuple[Answer | None, int | None, str]:
+    """A cash account's first page and its balance in the book's currency, read so that they agree (Stripe's bracket,
+    stripe_sync._bracket): the newest row is the same before and after the balance is read, so no row came in between and
+    the balance holds exactly the rows the page starts from. After BRACKET_TRIES disagreements the step gives up and the
+    next one reads again. Returns the page, the balance (None when it is not in the book's currency) and the problem."""
+    for _ in range(BRACKET_TRIES):
+        page = _page(provider, m, start, None)
+        if not page.ok:
+            return None, None, error_text(page)
+        held, why = _balance(provider, str(m["provider_account_id"] or ""), base)
+        if why:
+            return None, None, why
+        again = _page(provider, m, start, None)
+        if not again.ok:
+            return None, None, error_text(again)
+        if _newest(again) == _newest(page):
+            return page, held, ""
+    return None, None, "Brex's balance changed while it was read: it is read again next time"
+
+
+def _balance(provider: Provider, account_id: str, base: str) -> tuple[int | None, str]:
+    """One cash account's current balance as Brex's account list reports it, in the book's currency (None otherwise)."""
+    cash, why = _all(provider.cash_accounts, ACCOUNT_PAGES)
+    if why:
+        return None, why
+    for a in cash:
+        if str(a.get("id") or "") == account_id:
+            amount, currency = _money_of(a.get("current_balance"))
+            return (amount if amount is not None and currency == base.upper() else None), ""
+    return None, f"Brex lists no cash account {account_id}: it is read again next time"
+
+
+def _newest(answer: Answer) -> str:
+    rows = listed(answer)
+    return str(rows[0].get("id") or "") if rows else ""
 
 
 def _save(store: Any, cid: str, now: str, changes: Mapping[str, object]) -> None:
@@ -386,21 +455,24 @@ def _save(store: Any, cid: str, now: str, changes: Mapping[str, object]) -> None
 
 
 def _complete(store: Any, cid: str, now: str) -> None:
-    """The backfill's end: the connection is backfilled, and each cash account with a balance gets its opening (the balance
-    Brex reported less the rows now taken in, banking.opening_balance), recorded as made (banking.mark_opened)."""
+    """The backfill's end: the connection is backfilled, and each cash account whose bracket held a balance gets its opening
+    from that balance, less every row now taken in (banking.open_at), recorded as made (banking.mark_opened). The held
+    balances and the cursors are dropped."""
     with store.transaction() as c:
         conf = _settings(SK.get(c, "fin_connections", cid))
-        done = {k: v for k, v in conf.items() if k not in ("cursors", "walked")}
+        held = dict(conf.get("held") or {})
+        done = {k: v for k, v in conf.items() if k not in ("cursors", "walked", "held")}
         done["backfilled"] = True
         SK.update(c, "fin_connections", cid, {"settings": SK.dump(done), "updated_at": now})
         ctx = load(c, now)
         opened: list[str] = []
         for m in SK.money_accounts(c, ctx.book.id):
-            if str(m["connection_id"] or "") != cid or str(m["kind"]) != "bank":
+            mid = str(m["id"])
+            if str(m["connection_id"] or "") != cid or str(m["kind"]) != "bank" or held.get(mid) is None \
+                    or not m["account_id"]:
                 continue
-            if m["balance"] is not None and m["account_id"]:
-                banking.opening_balance(ctx, str(m["id"]))
-                opened.append(str(m["id"]))
+            banking.open_at(ctx, m, int(held[mid]))
+            opened.append(mid)
         banking.mark_opened(ctx, cid, opened)
 
 
@@ -423,6 +495,7 @@ def _take(store: Any, cid: str, money: Any, rows: list[dict[str, Any]], now: str
     problems: list[str] = []
     is_card = str(money["kind"]) == "card_program"
     account = str(money["provider_account_id"] or "")
+    unknown: dict[str, str] = {}
     with store.transaction() as c:
         ctx = load(c, now)
         base = ctx.book.base_currency.upper()
@@ -443,4 +516,20 @@ def _take(store: Any, cid: str, money: Any, rows: list[dict[str, Any]], now: str
                 problems.append(f"Brex transaction {raw.get('id')}: {why}")
                 break
             ctx.c.execute("RELEASE fin_brex")
+            kind = str(raw.get("type") or "")
+            if is_card and kind not in F.BREX_KNOWN:
+                unknown.setdefault(kind or "none", str(raw.get("id") or ""))
+        if unknown:
+            _note_unknown(c, cid, unknown, now)
     return problems
+
+
+def _note_unknown(c: Any, cid: str, seen: Mapping[str, str], now: str) -> None:
+    """Each Brex card type Finance does not map, with the first row of that type read, kept in the connection's settings
+    (`unknown`) so the connection keeps saying so after the pass that read it."""
+    fresh = _settings(SK.get(c, "fin_connections", cid))
+    known = dict(fresh.get("unknown") or {})
+    new = {kind: first for kind, first in seen.items() if kind not in known}
+    if new:
+        SK.update(c, "fin_connections", cid, {"settings": SK.dump({**fresh, "unknown": {**known, **new}}),
+                                              "updated_at": now})
