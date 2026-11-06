@@ -130,6 +130,7 @@ def test_home_builds_thread_attention_once_for_both_cards_and_rechecks_on_the_ne
     from backend.tests.test_thread_attention import members_thread, say
     tid = members_thread(api)
     mention = say(api, tid, "@ana please check.")
+    say(api, tid, "Which lease?")  # a second message from Cara that names no one: unread for Ana, never needs-you
     calls, addressed = [], thread_attention._addressed
 
     def counted(c, me):
