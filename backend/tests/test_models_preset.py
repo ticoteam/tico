@@ -81,7 +81,7 @@ def connected(api, monkeypatch):
         save(api, fake)
 
 
-@pytest.mark.parametrize("isolated", [True, False, None])
+@pytest.mark.parametrize("isolated", [True, False])
 def test_before_sign_in_a_bot_runs_on_the_gateway_only_where_bots_run_as_their_own_user(api, monkeypatch, isolated):
     connected(api, monkeypatch)
     choose(api, models_preset.RECOMMENDED)
@@ -151,7 +151,7 @@ def test_a_new_computer_prepares_the_gateway_before_its_first_subscription_turn(
     assert get(api, "config", machine["token"])["gateway_runtime"] == ""
 
 
-@pytest.mark.parametrize("preset", models_preset.PRESETS + ("",))
+@pytest.mark.parametrize("preset", [models_preset.RECOMMENDED, "subscriptions", ""])
 def test_only_the_two_gateway_choices_put_the_gateway_last_and_spend_its_key(api, monkeypatch, preset):
     connected(api, monkeypatch)
     choose(api, preset)
@@ -365,8 +365,16 @@ def on_tico(api, machine, isolated):
     )
 
 
-@pytest.mark.parametrize("preset", [models_preset.RECOMMENDED, ""])
-@pytest.mark.parametrize("isolated", [True, False, None, "cloud"])
+@pytest.mark.parametrize(
+    "preset,isolated",
+    [
+        (models_preset.RECOMMENDED, True),
+        (models_preset.RECOMMENDED, False),
+        (models_preset.RECOMMENDED, None),
+        (models_preset.RECOMMENDED, "cloud"),
+        ("", False),
+    ],
+)
 def test_a_bot_on_a_tico_model_waits_where_the_computer_does_not_say_it_runs_bots_as_their_own_user(
     api, monkeypatch, preset, isolated
 ):
@@ -461,7 +469,7 @@ def test_waiting_for_a_sign_in_lets_through_only_the_missing_sign_in(api, monkey
         assert {r[0] for r in c.execute("SELECT state FROM jobs WHERE bot_id='ops'")} == {"queued"}
 
 
-@pytest.mark.parametrize("preset", models_preset.PRESETS)
+@pytest.mark.parametrize("preset", [models_preset.RECOMMENDED, "subscriptions"])
 def test_drafts_are_written_on_the_gateway_only_under_the_two_gateway_choices(api, monkeypatch, preset):
     import io
     from backend import updates

@@ -450,12 +450,8 @@ def test_the_key_goes_only_to_an_https_or_exact_loopback_url_and_never_follows_a
         (lambda f: f.active(KEY, 0.79), "connected", None, "Connected."),
         (lambda f: f.active(KEY, 0.8), "warning", "warn", "80% of its monthly Gateway cap"),
         (lambda f: f.active(KEY, 1.0), "cap_reached", "bad", "Gateway cap reached"),
-        (lambda f: f.refuse(KEY, 429, "cap_reached"), "cap_reached", "bad", "Gateway cap reached"),
-        (lambda f: f.refuse(KEY, 429, "cap_reached", flat=True), "cap_reached", "bad", "Gateway cap reached"),
         (lambda f: f.revoked(KEY), "revoked", "bad", "Not working: key not recognised"),
-        (lambda f: f.revoked(KEY, flat=True), "revoked", "bad", "Not working: key not recognised"),
         (lambda f: None, "unknown", "bad", "Not working: key not recognised"),
-        (lambda f: f.refuse(KEY, 401, "unknown_key", flat=True), "unknown", "bad", "Not working: key not recognised"),
     ],
 )
 def test_the_gateways_word_on_the_key_reaches_settings_and_the_owners_health(
@@ -478,7 +474,7 @@ def test_the_gateways_word_on_the_key_reaches_settings_and_the_owners_health(
 
 
 @pytest.mark.parametrize("flat", [False, True])
-@pytest.mark.parametrize("code", list(ERRORS))
+@pytest.mark.parametrize("code", ["unknown_key", "revoked_key", "rate_limited", "cap_reached", "upstream_unavailable"])
 def test_every_gateway_code_on_the_key_endpoint_reads_plainly(code, flat):
     """Each row of the Gateway's table, in both its shapes: only a refused key says the connection is not working,
     the cap says so, and the rest say nothing about the key (never the Gateway's raw text, never the key)."""

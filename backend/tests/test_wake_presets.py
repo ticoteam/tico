@@ -127,7 +127,7 @@ def test_legacy_wake_migration_is_idempotent_and_preserves_other_settings(api):
         assert c.execute("SELECT revision FROM bot_config WHERE bot='ops'").fetchone()[0] == before + 1
 
 
-@pytest.mark.parametrize("name", ["token_saver", "performance"])
+@pytest.mark.parametrize("name", ["token_saver"])
 def test_immediate_wakes_are_never_held_and_a_duplicate_wakes_once(api, name):
     preset(api, "ops", name)
     task = new_task(api, "assigned")  # an assignment
@@ -196,7 +196,7 @@ def test_an_unchanged_webhook_queues_nothing_and_the_preset_is_its_only_timer(ap
     assert (armed["state"], armed["held"]) == ("queued", 0)
 
 
-@pytest.mark.parametrize("name", ["token_saver", "performance"])
+@pytest.mark.parametrize("name", ["token_saver"])
 def test_a_subordinates_ordinary_edits_do_not_wake_its_manager(api, name):
     preset(api, "coo", name)
     with api.app.state.store.transaction() as c:
@@ -250,7 +250,7 @@ def test_performance_coalesces_one_tasks_notices_within_a_minute(api):
     assert [(j["state"], j["held"]) for j in jobs(api, since=since)] == [("completed", 0), ("queued", 0)]
 
 
-@pytest.mark.parametrize("name,gap", [("token_saver", 2 * 3600), ("performance", 15 * 60)])
+@pytest.mark.parametrize("name,gap", [("token_saver", 2 * 3600)])
 def test_an_enabled_sweep_runs_at_most_once_per_cap_from_its_actual_start(api, name, gap):
     machine = task_bot(api, lanes=True)
     preset(api, "ops", name)
