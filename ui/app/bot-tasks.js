@@ -294,7 +294,7 @@ function botTaskWaitsOn(t) {
 }
 // Questions and approvals remain in Needs You even when its task filter is changed.
 function botNeedsExtras(slug) {
-  return botNeeds(slug).filter(it => ['question', 'ask', 'approval'].includes(it.kind) || it.ask?.recipient_id === myActor());
+  return botNeeds(slug).filter(it => ['question', 'approval'].includes(it.kind) || it.ask?.recipient_id === myActor());
 }
 // An approval or a question asked outside any task, one line in the rail: a tap opens its card (decide.js).
 function botNeedRow(it) {
@@ -316,12 +316,12 @@ function botNeedsPaint(slug) {
     : [...extras, ...botNeeds(slug).filter(it => it.kind === 'waiting' && !extras.some(extra => extra.id === it.id))];
   if (!host || BOT?.slug !== slug) return new Set();
   botTaskCount('cnt-needs', counted ? counted.count + extras.filter(it => !(counted.matched_ids || counted.ids).includes(String(it.id))).length : Math.max(items.length, needsMeCount(slug)));
-  const list = $('#t-needs'), shown = items.filter(it => !decideGone(['ask', 'approval'].includes(it.kind) ? decideItemKey(it) : 'task:' + it.id));
+  const list = $('#t-needs'), shown = items.filter(it => !decideGone(it.kind === 'approval' ? decideItemKey(it) : 'task:' + it.id));
   // Some of this bot's items may be on Needs you pages not read yet.
   const more = needsMoreButton()
     + (counted?.next ? '<button type="button" class="ghost bot-done-more" data-bot-filter-more="needs">Show more</button>' : '');
   list.innerHTML = shown.length || more ? `<div class="bot-task-list">${shown.map(it =>
-    ['ask', 'approval'].includes(it.kind) ? botNeedRow(it) : v2TaskRow(it, slug, true, '', decideCardKey(needsItem(it.id)))).join('')}</div>${more}` : '<div class="rail-empty">Nothing needs you.</div>';
+    it.kind === 'approval' ? botNeedRow(it) : v2TaskRow(it, slug, true, '', decideCardKey(needsItem(it.id)))).join('')}</div>${more}` : '<div class="rail-empty">Nothing needs you.</div>';
   return new Set(items.map(it => String(it.id)));
 }
 // Needs You changed: refresh filter membership and supplement deduplication.

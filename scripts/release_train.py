@@ -26,7 +26,7 @@ A release is published as not latest and marked latest (the GitHub release and t
 canary runs it healthy, so new installs, update checks and desktop apps never get a release the canary has not run. The
 image tags move with `docker buildx imagetools` (the workflow logs in to ghcr.io first).
 
-Windows open at 07:30, 14:00 and 20:30 Los Angeles time on weekdays, and at 07:30 and 15:00 on weekends. A window stays
+Windows open at 07:30, 11:00, 14:00 and 20:30 Los Angeles time on weekdays, and at 07:30 and 15:00 on weekends. A window stays
 open until a vX.Y.Z release is published after it. Nothing is stored: every run works the state out from
 GitHub. Installs are read and updated only through the routes an update key reaches (GET and POST
 /api/v2/system/update, POST /api/v2/system/update/check; backend/service_keys.py), never /healthz, which a proxy may not
@@ -54,10 +54,20 @@ ROOT = Path(__file__).resolve().parents[1]
 ROLLOUT_PATH = ROOT / "templates/catalog/release-notes/software/rollout.py"
 LOS_ANGELES = ZoneInfo("America/Los_Angeles")
 # Window starts in Los Angeles wall-clock time, on weekdays (Monday to Friday) and at weekends.
-WEEKDAY_WINDOWS = ((7, 30), (14, 0), (20, 30))
+WEEKDAY_WINDOWS = ((7, 30), (11, 0), (14, 0), (20, 30))
 WEEKEND_WINDOWS = ((7, 30), (15, 0))
 # GitHub's crons are UTC only: every UTC time a window can start at, under PDT or PST (train.yml lists the same ones).
-CRONS = ["30 3 * * *", "30 4 * * *", "30 14 * * *", "30 15 * * *", "0 21 * * *", "0 22 * * *", "0 23 * * *"]
+CRONS = [
+    "30 3 * * *",
+    "30 4 * * *",
+    "30 14 * * *",
+    "30 15 * * *",
+    "0 18 * * *",
+    "0 19 * * *",
+    "0 21 * * *",
+    "0 22 * * *",
+    "0 23 * * *",
+]
 # A backstop for a missed event (a workflow_run that does not fire, say): it takes a step in an open window like a push
 # does, and never opens one, so it never promotes. Minutes 5, 25 and 45: never a window's minute (00 or 30).
 BACKSTOP_CRON = "5-59/20 * * * *"

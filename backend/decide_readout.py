@@ -113,8 +113,12 @@ def _tier(model):
 
 
 def _on_jev(model):
-    """Whether `model` is Jev: TypeSafe's own name, or a Tico model the Tico AI Gateway answers with on Jev (Low and the
-    classifier). Decide Medium and High are not Jev, whatever the Gateway's list of models says."""
+    """Whether `model` is Jev: TypeSafe's own name, or a Tico model the Tico AI Gateway answers with on Jev (Decide Low;
+    a call recorded under an id from before this lineup counts as the id it is now). Decide Medium and High are not
+    Jev, whatever the Gateway's list of models says."""
+    from .gateway_tiers import new_id
+
+    model = new_id(model)
     return str(model or "").lower().startswith("jev") or (model in J.GATEWAY_MODELS and _tier(model) is None)
 
 
@@ -175,7 +179,7 @@ def readout(c, settings, days=7, at=None):
     days = max(1, min(MAX_DAYS, int(days)))
     end = at or datetime.now(timezone.utc)
     start = end - timedelta(days=days)
-    stamp = lambda t: t.strftime("%Y-%m-%dT%H:%M:%S.%f") + "Z"  # noqa: E731 hubdb.now()'s format
+    stamp = lambda t: t.strftime("%Y-%m-%dT%H:%M:%S.%f") + "Z"  # hubdb.now()'s format
     sets, versions = known_sets(getattr(settings, "registry_dir", None))
     by = {}
     rows = c.execute(

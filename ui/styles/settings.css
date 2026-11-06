@@ -894,11 +894,6 @@ fieldset.brepo>.repo-name+p{margin:-4px 0 4px 24px;font-size:var(--t-xs);line-he
 .settings-tier{display:grid;gap:8px;min-width:0}
 .settings-tier-row{display:flex;flex-wrap:wrap;gap:8px 12px;align-items:flex-end;min-width:0}
 .settings-tier-row label{display:flex;flex-direction:column;gap:3px;min-width:0;font-size:var(--t-sm);color:var(--muted)}
-.settings-tier-seg{display:inline-flex;border:1px solid var(--line);border-radius:6px;overflow:hidden}
-.settings-tier-seg button{border:0;border-radius:0;background:var(--surface);color:var(--ink);padding:7px 12px;font-size:var(--t-base);cursor:pointer}
-.settings-tier-seg button+button{border-left:1px solid var(--line)}
-.settings-tier-seg button[aria-checked=true]{background:var(--ink);color:var(--surface)}
-.settings-tier-seg button:disabled{opacity:.6;cursor:default}
 .settings-tier-row label.settings-tier-fast{flex-direction:row;align-items:center;gap:6px;padding-bottom:7px;color:var(--ink)}
 .settings-tier-line{margin:0;font-size:var(--t-sm);color:var(--muted)}
 .task-rule-form textarea{flex:1 1 100%;min-width:0;width:100%;font-family:var(--mono,ui-monospace,monospace);font-size:var(--t-sm)}

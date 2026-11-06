@@ -56,7 +56,12 @@ def release_entries():
         rows = []
     current = releases.parse(releases.version())
     # A rollback or pinned installation never announces features from a later release.
-    return [dict(row) for row in rows if current is None or releases.parse(row["version"]) <= current]
+    kept = [dict(row) for row in rows if current is None or releases.parse(row["version"]) <= current]
+    for row in kept:
+        published = releases.PUBLISHED.published(row["version"])
+        if published:
+            row["published_at"] = published
+    return kept
 
 
 @lru_cache(maxsize=2)

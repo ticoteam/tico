@@ -855,15 +855,6 @@ STABLE = [
         "CommentResult",
     ),
     (
-        "/api/v2/tasks/{tid}/comments/{mid}/resolve",
-        "post",
-        "Tasks",
-        "resolveTaskQuestion",
-        "Settle an open question answered elsewhere ({quote}: its asker or the task's owner bot), or withdraw it ({}: its "
-        "asker); it leaves every Needs you list and wakes nobody",
-        "CommentResult",
-    ),
-    (
         "/api/v2/tasks/{tid}/relations",
         "post",
         "Tasks",
@@ -995,7 +986,6 @@ STABLE = [
         "starts again from the top, with `restart`); without limit or cursor, the whole list",
         "NeedsYou",
     ),
-    ("/api/v2/messages/{mid}/answer", "post", "Needs you", "answerMessage", "Answer a question a bot asked", None),
     (
         "/api/v2/needs-you/recommended",
         "post",
@@ -1018,14 +1008,6 @@ STABLE = [
         "Needs you",
         "taskSeen",
         "The caller opened the task: its open questions to them are read",
-        None,
-    ),
-    (
-        "/api/v2/needs-you/clarify",
-        "post",
-        "Needs you",
-        "clarifyAsk",
-        "Ask the bot behind a stale question whether it still matters, in clearer words",
         None,
     ),
     (
@@ -2228,7 +2210,7 @@ def items(schema):
     return {"type": "array", "items": schema}
 
 
-ref = lambda name: {"$ref": "#/components/schemas/" + name}  # noqa: E731
+ref = lambda name: {"$ref": "#/components/schemas/" + name}
 ACTORS = {
     "type": "object",
     "additionalProperties": {"type": "string"},
@@ -3288,6 +3270,7 @@ SCHEMAS = {
             "area": "s",
             "kind": {"type": "string", "enum": ["product", "activity"]},
             "shipped_at": "s",
+            "published_at": "s",
             "unread": "b",
             "version": "s",
             "source": "s",
@@ -5431,6 +5414,7 @@ SCHEMAS.update(
                             "grants": items({"type": "object", "additionalProperties": True}),
                             "rights": {"type": ["array", "null"], "items": {"type": "string"}},
                             "may_grant": "b",
+                            "budgets": "i",
                         }
                     )
                 ),
@@ -8702,7 +8686,7 @@ SCHEMAS['BotDreamView'] = obj(
                                         'text': 's',
                                         'mine': {
                                             'type': 'boolean',
-                                            'description': 'The question is put to the caller, who answers it at POST /api/v2/messages/{mid}/answer',
+                                            'description': 'The question is put to the caller, who answers it at POST /api/v2/tasks/{tid}/answers with target {task}',
                                         },
                                     }
                                 ),

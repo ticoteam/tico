@@ -298,7 +298,7 @@ OUTWARD = tuple(
     re.compile(pattern)
     for pattern in (
         r"^/api/v2/gateway/(search|fetch|images)$",  # the Gateway: web search, page fetch, images
-        r"^/api/v2/messages(/[^/]+/answer)?$",  # a message to anyone, or an answer to a question
+        r"^/api/v2/messages$",  # a message to anyone
         r"^/api/v2/conversations/[^/]+/messages$",
         r"^/api/v2/assistant/messages$",
         r"^/api/send$",

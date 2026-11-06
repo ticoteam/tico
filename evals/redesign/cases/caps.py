@@ -178,7 +178,7 @@ def closed_out(f):
     itself reads back as closed."""
     setup(f, "needs_before", "closed", "needs_after", "history")
     tid = task_id_of(got(f, "closed_task"))
-    ids = lambda key: {str(item.get("id")) for item in body(f, key).get("items") or []}  # noqa: E731
+    ids = lambda key: {str(item.get("id")) for item in body(f, key).get("items") or []}
     status = (body(f, "history").get("task") or body(f, "history")).get("status")
     ok = tid in ids("needs_before") and tid not in ids("needs_after") and status == "closed"
     return ok, f"in Needs you before {tid in ids('needs_before')}, after {tid in ids('needs_after')}; status {status}"

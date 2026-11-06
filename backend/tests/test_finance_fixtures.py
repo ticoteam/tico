@@ -14,6 +14,7 @@ import pytest
 from backend import hubdb as H
 from backend.credentials import Vault
 from backend.finance import actions as FA
+from backend.finance.store import access as SA
 from backend.store import Store
 from backend.tests.test_api import api_settings
 from backend import bot_settings as BS
@@ -74,11 +75,28 @@ def store(tmp_path: Path, finance_template: Path) -> Store:
     return s
 
 
+def open_views(c: sqlite3.Connection) -> None:
+    """Open the view defaults up the way an owner can (Access, Edit defaults): managers see what they manage and
+    everyone else their own expenses. Finance starts owner only (backend/finance/core/view.py Defaults); most tests
+    here are about the views those defaults give."""
+    SA.set_default(c, "manager", "team_expenses", OWNER, AT)
+    SA.set_default(c, "member", "own_expenses", OWNER, AT)
+
+
 @pytest.fixture
-def books(store: Store) -> Store:
-    """The hub with Finance set up for the owner."""
+def owner_only_books(store: Store) -> Store:
+    """The hub with Finance set up for the owner, as it starts: nobody else sees anything."""
     with store.transaction() as c:
         FA.setup(c, OWNER, AT)
+    return store
+
+
+@pytest.fixture
+def books(store: Store) -> Store:
+    """The hub with Finance set up for the owner, the view defaults opened up (open_views)."""
+    with store.transaction() as c:
+        FA.setup(c, OWNER, AT)
+        open_views(c)
     return store
 
 

@@ -176,7 +176,6 @@ def test_a_folded_question_gives_the_person_the_teams_days_from_the_latest_wordi
         )
         asked = QT.as_ask(H.task(c, first["task"]["id"]))
         assert H.ask_clock(asked) == asked["refs"]["asked_again_at"] > old
-        assert not H.ask_older(asked)
         later = H.shift(H.now(), days=team_rules.load(c)["go_ahead_days"], hours=1)
         done = ask_deadlines.sweep(c, at=later)
         assert first["question"]["id"] in done["went_ahead"], "due at the team's days from the latest wording"

@@ -88,6 +88,18 @@ def sees_budget(ctx: Ctx, who: str, b: B.Budget) -> bool:
     return sees_scope(ctx, who, b.account_id, b.team, b.teammate)
 
 
+def theirs(b: B.Budget, who: str) -> bool:
+    """Whether a budget is `who`'s own: an active one whose teammate they are."""
+    return bool(who) and b.active and b.teammate == who
+
+
+def reads_budget(ctx: Ctx, who: str, b: B.Budget) -> bool:
+    """Whether `who` may read a budget: one their view covers, or their own, whatever else their view holds. A teammate
+    always sees their own budget (amount, spend, pace; numbers over private lines they lack stay cut, private_scope),
+    and nothing else of Finance unless granted. Writes still ask sees_budget and the rights."""
+    return theirs(b, who) or sees_budget(ctx, who, b)
+
+
 def may_write(ctx: Ctx, who: str, account_id: str, tags: Mapping[str, str]) -> bool:
     """Whether `who` may write a line or scope with these tags on `account_id`. Reads take any slice that covers a line;
     a write checks each tag: the team inside the view on that account, and the teammate the writer, a member of a team
@@ -1534,6 +1546,8 @@ __all__ = [
     "PLANNERS",
     "sees_scope",
     "sees_budget",
+    "reads_budget",
+    "theirs",
     "shows_numbers",
     "private_scope",
     "may_write",

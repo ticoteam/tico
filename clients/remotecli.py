@@ -14,8 +14,8 @@ from pathlib import Path
 
 if __package__ in (None, ""):  # imported by a script run from anywhere
     sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
-from clients import s3links  # noqa: E402
-from clients.tico import APIError, Client  # noqa: E402
+from clients import s3links
+from clients.tico import APIError, Client
 
 
 def tool_name(fn):
@@ -728,28 +728,6 @@ def run(args, who=None):
                 **({"visuals": visuals_from_args(args)} if getattr(args, "visual", None) else {}),
             },
         )
-    if fn == "question answer":
-        return post(
-            f"messages/{args.message_id}/answer",
-            {"text": args.text or args.unknown, "unknown": bool(args.unknown)},
-            delegate=getattr(args, "on_behalf_of", None) or False,
-        )
-    if fn == "question ask":
-        if len(args.words) < 2:
-            raise APIError("usage", 'hub question ask <bot> [<bot>...] "question"')
-        from clients import hubtools
-
-        wait = max(0, min(int(args.wait), hubtools.ASK_WAIT_MAX))
-        fields = {"operation_id": key}
-        pending, failed = hubtools.ask_create(client, args.words[:-1], args.words[-1], wait, fields)
-        # Said before the wait: a shell that kills a long wait still leaves the bot holding each id.
-        for mid, bot in pending.items():
-            if routed := pending.routed.get(bot):
-                print("hub: " + routed["rerouted"], file=sys.stderr, flush=True)
-            print(
-                f"hub: asked {bot}, message {mid}; waiting up to {wait} s for the answer", file=sys.stderr, flush=True
-            )
-        return {**failed, **hubtools.ask_wait(client, pending, wait, fields)}
     if fn == "note create":
         text = Path(args.text_file).read_text() if args.text_file else args.text
         payload = {
@@ -869,14 +847,11 @@ def run(args, who=None):
             return post(f"tasks/{args.id}/qa-waiver", {"head": args.head, "reason": args.reason})
         if sub in ("list", "snooze", "unsnooze", "readers", "followers", "follow", "unfollow"):
             return via_tool(client, args)
-        if sub == "ask":
-            return post(f"tasks/{args.id}/ask", {"text": args.text})
         if sub == "question":
             return via_tool(client, args)
         if sub == "comment":
-            from clients.task_review import ask_from_args, attachment
+            from clients.task_review import attachment
 
-            ask = ask_from_args(args)
             references = list(getattr(args, "file", None) or [])
             for index, path in enumerate(getattr(args, "attach", None) or []):
                 made = post(f"tasks/{args.id}/files", attachment(path), suffix=f":attachment:{index}")
@@ -898,8 +873,6 @@ def run(args, who=None):
             body = {"text": args.text}
             if references:
                 body["attachments"] = references
-            if ask is not None:
-                body["ask"] = ask
             if getattr(args, "needs_action", False):
                 body["needs_action"] = True
             body.update(_delivery(args))
@@ -920,11 +893,6 @@ def run(args, who=None):
             return s3links.annotate(post(f"tasks/{args.id}/comments/{args.comment_id}", body), links)
         if sub == "comment-delete":
             return post(f"tasks/{args.id}/comments/{args.comment_id}/delete", {})
-        if sub == "ask-resolve":
-            return post(
-                f"tasks/{args.id}/comments/{args.comment_id}/resolve",
-                {"quote": args.quote} if args.quote is not None else {},
-            )
         if sub == "delete":
             return post(f"tasks/{args.id}/delete", {})
         if sub == "deleted":
@@ -969,12 +937,7 @@ def run(args, who=None):
             return post("tasks/" + args.id, body, delegate=asked)
         if sub == "attach":
             path = Path(args.file)
-            from clients.task_review import ask_from_args
-
             body = {"name": args.name or path.name}
-            ask = ask_from_args(args)
-            if ask is not None:
-                body["ask"] = ask
             if getattr(args, "note", None) is not None:
                 body["note"] = args.note
             if client.features().get("task_files_multipart"):
@@ -1062,7 +1025,8 @@ def run(args, who=None):
     if fn == "market briefing post":
         body = sys.stdin.read() if args.body_file == "-" else Path(args.body_file).read_text()
         items = json.loads(Path(args.items_file).read_text()) if args.items_file else []
-        return via_tool(client, args, body=body, items=items)
+        answers = json.loads(Path(args.answers_file).read_text()) if args.answers_file else None
+        return via_tool(client, args, body=body, items=items, answers=answers)
     if cmd == "market" and fn in MARKET_SPEND:
         return market_spend(client, args, tool)
     if cmd == "market":
@@ -1595,7 +1559,7 @@ def integrations(client, args):
     return query_search(page["queries"], args.term)
 
 
-from clients.hubtools import query_search  # noqa: E402  (one search, shared with the hub_tool_query_search tool)
+from clients.hubtools import query_search  # (one search, shared with the hub_tool_query_search tool)
 
 
 # ----------------------------------------------------------------------------- decisions
@@ -1718,7 +1682,7 @@ def sql_params(pairs):
 def sql_table(result, width=60):
     """A compact aligned table, one value per cell, with a trailing count line."""
     columns, rows = result["columns"], result["rows"]
-    cell = lambda value: ("" if value is None else " ".join(str(value).split()))[:width]  # noqa: E731
+    cell = lambda value: ("" if value is None else " ".join(str(value).split()))[:width]
     grid = [[cell(v) for v in row] for row in rows]
     widths = [max([len(name)] + [len(row[i]) for row in grid]) for i, name in enumerate(columns)]
     lines = []

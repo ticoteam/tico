@@ -256,7 +256,8 @@ let browser = null;
 
     // The Ask's question, with a thread's composer on screen, is its own row above the composer, never over it.
     // Seed the pending question: askPeek's timer and focusout checks hide a forced ask-on with no matching item.
-    state.needs = [{id: 'q1', kind: 'ask', ask: {id: 'q1', sender_id: 'bot:ops', recipient_id: 'human:ana', body: 'Ready to ship?'}}];
+    state.needs = [{id: 'q1', kind: 'question', ask: {id: 'q1', sender_id: 'bot:ops', recipient_id: 'human:ana', body: 'Ready to ship?',
+      refs: {questions: [{id: 'ship', question: 'Ready to ship?', options: []}]}}}];
     await page.locator('.thv-composer .p-text').blur();
     await page.evaluate(() => v2Refresh());
     // Wait for both visible boxes and read them together; the assertion below checks their ordering.
@@ -282,11 +283,9 @@ let browser = null;
     await page.goto('https://tico-ui.test/#/bot/ops/dm');
     await page.locator('#bot-thread .th-status-working').waitFor();
     assert.equal(await page.locator('#bot-thread .thv-composer .p-text').getAttribute('placeholder'), 'Message Ops', 'the name alone, never its slug');
-    await page.locator('#bot-top #bot-top-acts [data-thv-menu]').waitFor();
-    assert.equal(await page.locator('#bot-top-acts [data-thv-menu]').getAttribute('aria-label'), 'Thread settings');
+    await page.locator('#bot-top #bot-top-acts').waitFor();
+    assert.equal(await page.locator('#bot-top-acts [data-thv-menu]').count(), 0, 'a bot thread has no settings menu');
     assert.equal(await page.locator('#bot-more-btn .nav-icon').count(), 0, 'Info is not a second ⋮ beside the ⋯');
-    const [top, menu] = [await box(page.locator('#bot-top')), await box(page.locator('#bot-top-acts [data-thv-menu]'))];
-    assert.ok(menu.y >= top.y && menu.y + menu.height <= top.y + top.height + 0.5, 'the menu sits in the top line');
     assert.equal(await page.locator('#pane-chat .bot-talk-bar .thv-menu-btn').count(), 0, 'no box of its own under the tabs');
     await themed(page, 'bot-dm-working');
     // /new: the fresh DM starts with nothing of the old one, its status rows and Stop included.

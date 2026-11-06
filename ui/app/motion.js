@@ -69,7 +69,7 @@ function countWatch(root, sel, keyOf, {when = () => true, page = false} = {}) {
 }
 countWatch($('#tree'), '.cnt', b => b.closest('[data-org]')?.dataset.org || '');
 const motionTasksPage = () => /^#\/(tasks|task\/)/.test(location.hash);
-countWatch($('#main'), '.tl-tabs .cnt, .bcol > header .cnt', b => {
+countWatch($('#main'), '.tl-scope .cnt, .bcol > header .cnt', b => {
   const tab = b.closest('[data-view]'), col = b.closest('.bcol');
   return tab ? 'view:' + tab.dataset.view : col ? 'col:' + col.dataset.col : '';
 }, {when: motionTasksPage, page: true});

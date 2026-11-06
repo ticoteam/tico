@@ -123,13 +123,15 @@ function settingsSearchGroup(where = '') {
 function settingsSearchAllowed(setting) {
   const group = settingsSearchGroup(setting.where);
   if (group && !settingsGroupShown(group)) return false;
-  if (setting.who === 'owner' && S.me?.role !== 'owner') return false;
+  if (setting.who === 'owner' && $('#settings-tabs')?.dataset.role !== 'owner') return false;
   if (setting.who === 'admin' && !settingsIsAdmin()) return false;
   return true;
 }
 
+/** @returns {Array<{id: string, status?: string, display_name?: string, slug?: string}>} */
 function settingsSearchVisibleBots() {
-  return (S.emps || []).filter(bot => bot.id && bot.status !== 'archived' &&
+  const employees = /** @type {Array<{id: string, status?: string, display_name?: string, slug?: string}>} */ (S.emps || []);
+  return employees.filter(bot => bot.id && bot.status !== 'archived' &&
     !isHiddenBot(bot.id) && (!botTabs || botTabs(bot.id).includes('settings')));
 }
 
@@ -296,7 +298,8 @@ function settingsSearchRevealRepo() {
   if (!target?.repo) return;
   const repo = REPOS?.repositories?.find(item => item.full_name === target.repo);
   if (!repo) return;
-  let row = [...document.querySelectorAll('#set-repos [data-repo]')].find(item => item.dataset.repo === target.repo);
+  const candidate = [...document.querySelectorAll('#set-repos [data-repo]')].find(item => item.getAttribute('data-repo') === target.repo);
+  let row = candidate instanceof HTMLElement ? candidate : null;
   if (!row) {
     if (!repo.enabled) {
       const filter = $('#set-repos [data-repos-filter]');
@@ -318,5 +321,5 @@ function settingsSearchRevealRepo() {
   row.scrollIntoView({block: 'center'});
   row.classList.add('settings-search-highlight');
   setTimeout(() => row.classList.remove('settings-search-highlight'), 1800);
-  if (control) control.focus({preventScroll: true});
+  if (control instanceof HTMLElement) control.focus({preventScroll: true});
 }

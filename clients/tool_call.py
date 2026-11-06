@@ -17,6 +17,9 @@ import urllib.request
 TOKEN_PREFIX = "tpx1."
 MAX_ANSWER = 1_000_000
 TIMEOUT = 130
+# Cloudflare in front of Tico refuses Python's default User-Agent (error 1010, "browser signature banned") before the
+# proxy sees the call, as clients/hermes_agent.py notes. Seen live on Tico Team: hub_tool_call to Sentry got that 403.
+USER_AGENT = "tico-tool-call/1"
 
 
 class CallError(Exception):
@@ -72,7 +75,7 @@ def call(tool, method, path, data=None, query=(), environ=None):
         pairs.append((key, value))
     if pairs:
         url += ("&" if "?" in url else "?") + urllib.parse.urlencode(pairs)
-    headers = {"Authorization": "Bearer " + token, "Accept": "application/json, */*"}
+    headers = {"Authorization": "Bearer " + token, "Accept": "application/json, */*", "User-Agent": USER_AGENT}
     body = None
     if data is not None:
         body = (data if isinstance(data, str) else json.dumps(data)).encode()

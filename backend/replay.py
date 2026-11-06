@@ -95,7 +95,7 @@ def install(app, store, auth):
         within = (lambda *names: any(n in actors for n in names)) if actors is not None else (lambda *names: True)
         visible_sql = auth.task_sql(c, who)
         access = auth.bot_accesses(c, who)
-        readable_bot = lambda slug: (access.get(slug) or auth.FULL)["read"]  # noqa: E731
+        readable_bot = lambda slug: (access.get(slug) or auth.FULL)["read"]
         task_memo = {}
 
         def tasks_by_id(ids):

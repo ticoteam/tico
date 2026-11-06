@@ -109,7 +109,13 @@ def test_another_bot_may_file_work_and_do_nothing_else(api):
     refused = post(api, "chat/analyst", {"text": "Did you see my ticket?"}, token=stranger, expected=403)
     assert refused["error"]["code"] == "bot_contact"
     assert "takes work as a task and nothing else" in refused["error"]["detail"]
-    post(api, "messages", {"to": "analyst", "text": "Which column?", "kind": "ask"}, token=stranger, expected=403)
+    post(
+        api,
+        "messages",
+        {"to": "analyst", "text": "Which column?", "kind": "say", "needs_action": True},
+        token=stranger,
+        expected=403,
+    )
 
 
 def test_its_manager_and_botops_still_leave_notes_and_another_bot_may_not(api):

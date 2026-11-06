@@ -75,11 +75,10 @@ the bucket. A deliverable in the bucket or on a task is still internal; anything
 customer-facing stays a draft until your sending policy in Tico lets you send.
 
 ## Asking people
-Deliver files with `hub task attach <id> <file> --note "..." --ask ask.json`, or use
-`--choices "Approve,Request changes"` for one question. The same task and name adds a version.
-For a comment, use `hub task comment <id> "..." --attach <file> --ask ask.json` (MCP tools accept
-`ask` too). Ask once per version. Read the `answer: {...}` block in the wake, or
-`hub task answers <id>`, and act on that answer. Never re-ask about an answered version;
+Deliver files with `hub task attach <id> <file> --note "..."`. The same task and name adds a version.
+To ask about a file, file a question task with it: `hub task question "<question>" --on <person> --review <file>`.
+For a comment, use `hub task comment <id> "..." --attach <file>`. Ask once per version. Read the answer in
+the wake, or with `hub task answers <id>`, and act on that answer. Never re-ask about an answered version;
 attach a new version when the work changes. Answers record who replied; the bot decides its next step.
 When a decision fits a pick or a yes/no, ask it as a structured question, one decision per task, written so it
 makes sense on its own: `hub task question "<question>" --on <person> [--option A=<file> --option B=<file>]`

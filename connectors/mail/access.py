@@ -200,7 +200,7 @@ def _connector_answer():
     if RUNNER_ACCESS is not None:
         targets = RUNNER_ACCESS()
     else:
-        from . import oauth  # noqa: PLC0415
+        from . import oauth
 
         try:
             targets = oauth.broker().get("connectors/mail/targets")
@@ -228,7 +228,7 @@ def _hub_answer():
             "A bot's turn has one; a person runs mail with their own Tico token "
             "(HUB_API_URL and HUB_TOKEN). There is no owner bypass.",
         )
-    from clients.tico import Client  # noqa: PLC0415
+    from clients.tico import Client
 
     try:
         return Client(url, token).get("mail/access")

@@ -670,7 +670,6 @@ const HUB_PATHS: &[&str] = &[
     "agent pair approve",
     "agent pair decline",
     "agent pair show",
-    "answer",
     "alerts",
     "alerts company",
     "alerts confirm",
@@ -694,7 +693,6 @@ const HUB_PATHS: &[&str] = &[
     "approvals read-back",
     "approvals request",
     "approvals show",
-    "ask",
     "assistant",
     "assistant change",
     "assistant change list",
@@ -1184,9 +1182,6 @@ const HUB_PATHS: &[&str] = &[
     "proposal decide",
     "proposal list",
     "queries",
-    "question",
-    "question answer",
-    "question ask",
     "readers",
     "readers list",
     "recent",
@@ -1302,8 +1297,6 @@ const HUB_PATHS: &[&str] = &[
     "tag update",
     "task",
     "task answers",
-    "task ask",
-    "task ask-resolve",
     "task attach",
     "task bulk",
     "task cap",
@@ -1369,8 +1362,6 @@ const HUB_PATHS: &[&str] = &[
     "task-manager status",
     "tasks",
     "tasks answers",
-    "tasks ask",
-    "tasks ask-resolve",
     "tasks attach",
     "tasks bulk",
     "tasks cap",
@@ -1757,7 +1748,7 @@ fn starts_word(command: &str, i: usize) -> bool {
 /// `hub` and the command path its words name, read in order from the positional words before the first flag: the first
 /// word only if it is a top-level command, the next only if it is a subcommand of that command, and so on to three words.
 /// Reading stops at the first word that does not continue a path, so an argument, a recipient or a note never reaches the
-/// summary (`hub ask finance "x"` reads `hub ask`; `hub task close 7f3a` reads `hub task close`).
+/// summary (`hub message send finance "x"` reads `hub message send`; `hub task close 7f3a` reads `hub task close`).
 fn hub_summary(words: &[String]) -> String {
     let mut path: Vec<&str> = vec![];
     for word in words[1..]
@@ -2641,8 +2632,8 @@ mod tests {
             "hub task create"
         );
         assert_eq!(
-            command_program("hub ask botops please check the release"),
-            "hub ask"
+            command_program("hub message send botops please check the release"),
+            "hub message send"
         );
         assert_eq!(command_program("FOO=1 && curl x"), "curl");
         assert_eq!(command_program("FOO=1 curl x"), "curl");
@@ -2711,8 +2702,8 @@ mod tests {
     #[test]
     fn a_hub_summary_stops_at_the_first_word_that_does_not_continue_a_command_path() {
         assert_eq!(
-            command_program("hub ask finance \"private question\""),
-            "hub ask"
+            command_program("hub message send finance \"private question\""),
+            "hub message send"
         );
         assert_eq!(command_program("hub history review"), "hub history");
         assert_eq!(command_program("hub task close 7f3a"), "hub task close");
@@ -3005,7 +2996,7 @@ mod tests {
         );
         // A Tico model signs in with the company's gateway key, so it needs no grant of its own.
         assert_eq!(
-            bot_key_problem("pi", &pi("tico-mid-1.0"), "none", &grants),
+            bot_key_problem("pi", &pi("tico-medium-1.0"), "none", &grants),
             None
         );
         let gemini = json!({"runtime": "gemini", "harness": "gemini", "model": "gemini-3.7-flash"});

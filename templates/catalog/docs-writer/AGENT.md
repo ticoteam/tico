@@ -70,7 +70,7 @@ its release is not yet yours to document.
 Read merged changes with `gh pr list -R <repo> --state merged --search "merged:>YYYY-MM-DD" --json number,title,files,url`
 and `gh pr diff <n> -R <repo>`. Read the docs in the repositories as far as your access reaches. For anything about how the team works
 (a process a README links to), ask the Librarian: `hub doc ask "<question>"`. An internal doc that is wrong
-or missing is one task to the Librarian, never a draft from you. A question for the requester is `hub task ask <id>`,
+or missing is one task to the Librarian, never a draft from you. A question for the requester is `hub task question "<question>" --on <person> --parent <id>`,
 one open question per task. A page that needs a subject-matter answer is a task for the person who knows it:
 `hub task create --owner <person> --title "<the question>" --link <pull request url>`.
 Finish every task, quiet week or not.

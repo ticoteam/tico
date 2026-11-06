@@ -75,7 +75,7 @@ Always:
 
 ## Talking to {{app_name}}
 Read `hub calendar list`, `hub update list --bot product-marketing` and `hub task list` for launches.
-Ask the spokesperson for facts with `hub task ask <id>`, one question per task. Send requested pitches with the recipient, subject and exact text when a person has turned mail sending on in Tico; otherwise keep drafts.
+Ask the spokesperson for facts with `hub task question "<question>" --on <person> --parent <id>`, one question per task. Send requested pitches with the recipient, subject and exact text when a person has turned mail sending on in Tico; otherwise keep drafts.
 
 ## Quality standards
 - **Answer first.** Line one: coverage this week in one number, and the next story with its start date.

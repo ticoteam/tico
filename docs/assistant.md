@@ -38,8 +38,7 @@ but draws nothing (a class, not `hidden`), and the dot's flying copy is made onc
 What waits on you from elsewhere comes at the end of the DM as cards: a Confirm card BotOps (or another bot) left in
 its own Home, with its Confirm and Cancel, and up to three bots' questions to you from Needs you. A question with two to
 six picks is answered with a tap, any other with a line of words (a question with several picks at once links to its
-task). You can also just tell the Assistant: "tell BotOps yes" answers BotOps' open question in your words (`hub
-question answer --on-behalf-of turn`, below). A Confirm card needs your own tap. A goal suggestion can also be confirmed by a plain yes in your chat ([below](#goals-agreed-in-words)).
+task). You can also just tell the Assistant: "tell BotOps yes" answers BotOps' open question task in your words, and the Assistant records it as your answer. A Confirm card needs your own tap. A goal suggestion can also be confirmed by a plain yes in your chat ([below](#goals-agreed-in-words)).
 
 ## Helpers through the Assistant
 
@@ -124,7 +123,7 @@ answers. Nothing is answered by keyword or from a fixed reply: "what is waiting 
 did today and how to do something all reach the model, which reads the question and answers it from Tico's own data,
 as you (what you may see, nothing more), with links. A turn takes 30 seconds or more; a greeting is a turn too.
 
-Org rules are checked before a message is written, as for any chat: a held message is not written and nothing is answered. In the Ask panel and the Updates chat your text stays in the box and the panel says "An org rule held this message. Nothing was sent."
+Org rules are checked before a message is written, as for any chat: a held message is not written and nothing is answered. In the Ask panel your text stays in the box and the panel says "An org rule held this message. Nothing was sent."
 
 ## It acts as you, never more
 
@@ -270,7 +269,7 @@ With the setting off, an approve the Assistant tries is refused with `403 approv
 sentence that you can turn it on in Settings > General, then puts it on a card.
 
 **Every proposal is shown for what it is.** The card's title is the server's own plain sentence (what changes and for
-whom, never the bot's words), e.g. "Security Engineer: read-only on tico (was write). Loses access to tico-marketing-site
+whom, never the bot's words), e.g. "Security Engineer: read-only on tico (was write). Loses access to tico-site
 and tico-recorder."; a route with no sentence of its own still gets plain words ("Make a change to bot Ops"), never the method
 and path, and a setting's raw value ("all", "own") is never read out as a word: a field that holds a name (a model, a
 title) shows it, any other only names the field. A repository card made before this wording is titled from the request
@@ -319,7 +318,7 @@ one was given. Only the card's owner can confirm it, and the owner can still Can
 answering a bot) is one bulk card, never one each: `POST /api/v2/assistant/actions` with path `/api/v2/assistant/batch`
 and body `{"actions": [{"method": "POST", "path": "/api/v2/tasks/<id>", "body": {...}}, ...]}`, 1 to 100 task changes,
 comments or links, approval decisions (`/api/v2/approvals/<id>`, `{"decision": "declined", "note": "<reason>"}`) and
-answers to bots' questions (`/api/v2/messages/<id>/answer`), and nothing else (`422`). An approval or question that was
+answers to questions (`/api/v2/tasks/<id>/answers`), and nothing else (`422`). An approval or question that was
 not put to you is refused (`403`), so a card never lists anyone else's. The card first sums the steps up by what they do
 and how old the items are ("Decline 11 publish approvals, over a month old", with the reason when the group shares one),
 then lists one line per item: the task, or the approval's kind, requester, amount or target and age, or the question and

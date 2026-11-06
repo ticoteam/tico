@@ -25,9 +25,11 @@ const {t} = (() => { try { return require('./support/load.cjs'); } catch { retur
 const now = new Date().toISOString();
 const task = (id, title, over) => ({id, title, body: 'Details.', owner_id: 'human:ana', requester_id: 'bot:ops', status: 'open', lane: 'company',
   labels: [], tags: [], links: [], parts: {total: 0, done: 0}, version: 3, created_at: now, updated_at: now, ...over});
-const LOOSE = {kind: 'ask', id: 'm-loose', message_id: 'm-loose', title: 'Is Friday fine for the summary?', first_line: 'Is Friday fine for the summary?',
-  body: 'Is Friday fine for the summary?', requester_id: 'bot:ops', origin_actor: 'bot:ops', created_at: now,
-  ask: {id: 'm-loose', sender_id: 'bot:ops', recipient_id: 'human:ana', body: 'Is Friday fine for the summary?', created_at: now}};
+// A question to Ana outside any task is a question task now: its card is keyed by the task id.
+const LOOSE = {kind: 'question', id: 'm-loose', title: 'Is Friday fine for the summary?', first_line: 'Is Friday fine for the summary?',
+  body: 'Is Friday fine for the summary?', requester_id: 'bot:ops', owner_id: 'human:ana', origin_actor: 'bot:ops', created_at: now,
+  ask: {id: 'm-loose', sender_id: 'bot:ops', recipient_id: 'human:ana', body: 'Is Friday fine for the summary?', created_at: now, question_task: true,
+    refs: {questions: [{id: 'friday', question: 'Is Friday fine for the summary?', options: [{label: 'Yes'}, {label: 'No'}]}]}}};
 
 (async () => {
   const browser = await chromium.launch();
@@ -96,15 +98,17 @@ const LOOSE = {kind: 'ask', id: 'm-loose', message_id: 'm-loose', title: 'Is Fri
   await page.waitForFunction(() => TASKS_ST.since === '12.a' && TASKS_ST.fullAt > 0);
   await settled();
 
-  // A question asked outside any task is one line on Needs you (its answer is on its card); the poll still reads.
-  assert.equal(await page.locator('#task-body [data-need-card="ask:m-loose"]').count(), 1);
+  // A question to Ana is one line on Needs you (its answer is on its card); the poll still reads.
+  assert.equal(await page.locator('#task-body [data-need-card="task:m-loose"]').count(), 1);
   let delta = reads.delta;
   await page.evaluate(() => refresh(false));
   await page.waitForFunction(() => TASKS_ST.since === '13.a', null, {timeout: t(5000)});
   assert.equal(reads.delta, delta + 1, 'the 2-minute refresh reads what changed with a question on the page');
   // The remaining checks deliberately omit changes from the task cursor. Open exercises that task-list fallback;
   // Needs you reads its own current feed, which can already contain a change the task cursor missed.
-  await page.locator('#task-tab-list').click();
+  await page.locator('#task-scope').click();
+  await page.locator(`#task-filter-pop [data-task-type="${await page.evaluate(() => TASKS_ST.type)}"]`).click();
+  await page.waitForFunction(() => TASKS_ST.view === 'list');
 
   // The task changed in a way the delta read does not bring: the list still shows the old copy.
   server.title = 'Draft the final release notes';
@@ -263,7 +267,7 @@ const LOOSE = {kind: 'ask', id: 'm-loose', message_id: 'm-loose', title: 'Is Fri
   // card, over the list, keeps its words.
   server.title = 'Draft the release notes, fifth pass';
   full = reads.full.length;
-  await page.evaluate(() => decideOpen('ask:m-loose'));
+  await page.evaluate(() => decideOpen('task:m-loose'));
   await page.locator('#need-card .dc-note textarea').fill('Friday is fine');
   await page.evaluate(() => { TASKS_ST.fullAt = Date.now() - 16 * 60e3; tasksTick(); });
   await shows('Draft the release notes, fifth pass');

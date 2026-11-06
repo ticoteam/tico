@@ -680,7 +680,7 @@ def install(app, store, auth):
         request: Request,
         range: str = "1h",
         status: str = "",
-        trigger: str = "",  # noqa: A002
+        trigger: str = "",
         owner: str = "",
         ids: str = "",
         limit: int = 50,
@@ -696,7 +696,7 @@ def install(app, store, auth):
             return runs(c, who, range, status, trigger, owner, ids, limit, before, store.settings)
 
     @app.get("/api/v2/automations/stats")
-    def automations_stats(request: Request, range: str = "1h"):  # noqa: A002
+    def automations_stats(request: Request, range: str = "1h"):
         """Runs, failures and cost per automation you may see over the last `range` (5m, 1h, 24h, 7d), each split into
         buckets oldest first (10 of 30s, 12 of 5 min, 24 of an hour, 28 of 6 hours), and the totals the same way."""
         who = request.state.identity

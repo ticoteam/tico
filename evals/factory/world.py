@@ -24,7 +24,7 @@ for name, value in {
 }.items():
     os.environ[name] = value
 
-import time_machine  # noqa: E402
+import time_machine
 
 START = dt.datetime(2026, 10, 20, 9, tzinfo=dt.timezone.utc)
 SECRET = "factory-sim"

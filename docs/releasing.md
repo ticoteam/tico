@@ -44,7 +44,7 @@ Private tickets are counted but not named. The writer skips them; their owners h
 The writer links its open PR on that General task. Tico sends it through the company's ticket review pools
 (Review 1, then Review 2 if configured), recording each verdict at the PR head. A push needs a new review.
 Current-head approvals and green checks wake the writer to merge under the repo's rules, or send the merge to
-an existing repo writer when the writer lacks access. Changes and a needed rebase return to the writer.
+an existing repo writer when the writer lacks access. Changes and a conflict return to the writer.
 Older open bot PRs enter this same route at a limited rate; Health names PRs waiting over 24 hours without a review.
 It is separate from the release command's "Release notes for vX.Y.Z" task. Docs and release notes are not part of
 the pre-release checklist. Only the owner, a person who moves Dev tickets, the Release Manager and the bot that
@@ -52,10 +52,10 @@ manages the Dev tickets type run `hub release now`. Routines can run `on: releas
 
 ## Release windows
 
-Tico's own releases (ticoteam/tico) ship from release windows (three on weekdays, two at weekends), run by
+Tico's own releases (ticoteam/tico) ship from release windows (four on weekdays, two at weekends), run by
 `.github/workflows/train.yml` and `scripts/release_train.py`. No one tags by hand.
 
-- **When.** Windows open at 07:30, 14:00 and 20:30 Los Angeles time on weekdays, and at 07:30 and 15:00 on weekends.
+- **When.** Windows open at 07:30, 11:00, 14:00 and 20:30 Los Angeles time on weekdays, and at 07:30 and 15:00 on weekends.
   A window stays open until a `vX.Y.Z` release is published after it opened. Nothing is stored: every run works this
   out from GitHub, so a late schedule or a missed event costs time, never a wrong release.
 - **At the open**, the canary's release is promoted to stable if the bake gate passes (below). Then, if main has moved
@@ -121,7 +121,7 @@ canary update failed stays published but not latest; the next window ships the n
 ### Hotfixes
 
 A hotfix is for a major production issue only: data loss, a security hole, an outage, an install that cannot update.
-Everything else waits for the next window. Land the fix on main, then:
+Everything else waits for the next window. Land the fix on main through the merge queue (below), then:
 
 ```sh
 gh workflow run hotfix.yml --ref main -f reason="Tasks vanish from the board after an update" [-f sha=<commit>] [-f promote_stable=false] [-f override_hold=true]
@@ -290,44 +290,43 @@ new commit to borrow an old run. Roll back this tooling change by reverting it; 
 
 ## Tests on a PR
 
-Run tests on your computer while you work. On pull requests to main, the PR checks workflow runs the default tests
-that a measured static dependency map says use a changed file: what each tracked file imports (transitively), runs
-by path (scripts, `-m` modules, shell and JavaScript) and reads by path (data files, folders it lists or globs). The
-Caddy image job runs only when a change reaches the image inputs or `backend/caddy_assets.py`; otherwise the plan
-compiles the changed files and runs the Dockerfile's import check itself. A `docs/` page, CHANGELOG.md or a GitHub
-file runs the tests that read it (by path, folder or listing) and the tests of the code that reads it, not everything
-that imports that code. A change to how the checks run (the PR checks workflow, `scripts/ci_install.sh`, the browser
-system packages) runs the tests that read it and one short core browser script, and a workflow change also builds the
-Caddy image. Conftest, `pytest.ini`, dependency pins and deleted or unparsable files fall back to the full default
-Python suite and core browser scripts. A draft pull request runs no checks (every job is skipped); marking it ready
-for review does. Main requires no check, so a skipped run is not a pass: wait until the ready-for-review run's checks
-show passing, not skipped, before merging. Main has no PR-check run of its own: its pull requests tested each change
-and Release validation runs the whole gate on each candidate; a daily PR caches run (`pr-cache.yml`) keeps the
-main-branch caches pull requests restore from fresh. A pull request's superseded run is canceled. Runner/harness changes also run
-slow conformance on the Rust runner and all its fake harnesses; UI changes select their browser scripts, including
-imported-history for chat changes, or every browser script when the UI mapping is uncertain.
+Run tests on your computer while you work, and run the test files your change touches with `scripts/remote.py` before
+you mark the PR ready for review. A push to a pull request runs only the cheap checks on free GitHub-hosted runners:
+lint, the generated UI types, the runner wire contract, the migration names, shell scripts and workflows, and whether
+the recorder changed. The required check `checks` aggregates them. The merge queue runs the tests: once per queue group,
+it selects them from the group's merged change (base to group head) with the measured static dependency map: what each
+tracked file imports (transitively), runs by path (scripts, `-m` modules, shell and JavaScript) and reads by path (data
+files, folders it lists or globs). The Caddy image job runs only when a change reaches the image inputs or
+`backend/caddy_assets.py`; otherwise the plan compiles the changed files and runs the Dockerfile's import check itself.
+A `docs/` page, CHANGELOG.md or a GitHub file runs the tests that read it (by path, folder or listing) and the tests of
+the code that reads it, not everything that imports that code. A change to how the checks run (the PR checks workflow,
+`scripts/ci_install.sh`, the browser system packages) runs the tests that read it and one short core browser script, and
+a workflow change also builds the Caddy image. Conftest, `pytest.ini`, dependency pins and deleted or unparsable files
+fall back to the full default Python suite and core browser scripts. Runner/harness changes also run slow conformance on
+the Rust runner and all its fake harnesses; UI changes select their browser scripts, including imported-history for chat
+changes, or every browser script when the UI mapping is uncertain. The Rust and desktop checks run in the queue when a
+crate or `app/` changed, and the macOS recorder tests when `recorder/` changed. A draft pull request runs no checks
+(every job is skipped); marking it ready for review runs the lint checks. A skipped run is not a pass, so the
+ready-for-review run's `checks` must show passing, not skipped. Main has no check run of its own: the queue tests each
+change on the merged result, and Release validation runs the whole gate on each candidate. A daily cache run
+(`pr-cache.yml`) keeps the main-branch caches the queue restores from fresh; hosted PR runs cannot read RunsOn's cache,
+so they start cold. A pull request's superseded run is canceled; a queue group is never canceled.
 
 Python jobs install no npm packages, browsers or apt packages. The browser job caches both browser binaries and
 Ubuntu package indexes/debs under exact runner-image and dependency-lock keys. A warm cache uses apt with
 `--no-download`; a cold cache uses the canonical Ubuntu mirror. Each Install attempt has a five-minute limit with
-one retry. Pip and npm download caches remain enabled. Checks run on 4-vCPU RunsOn Spot VMs in Tico's own AWS
-account (fork PRs on GitHub-hosted runners). `scripts/pr_checks.py` sizes the Python and browser groups so each VM
-finishes in about `TICO_CI_JOB_SECONDS` (180) including setup, using JUnit per-file and browser per-script timings
+one retry. Pip and npm download caches remain enabled. The queue's tests run on 4-vCPU RunsOn Spot VMs in Tico's own AWS account (x64 labels take the m and r families of generations 6–8, arm64 labels are unchanged); PR pushes run on GitHub-hosted runners. `scripts/pr_checks.py` sizes the Python and browser groups so each VM
+finishes in about `TICO_CI_JOB_SECONDS` (300, five minutes) including setup, using JUnit per-file and browser per-script timings
 from the latest successful Release validation run (its `test-timings` artifact: the same pytest flags, slow tests
 included), with collected test counts until timings exist. New files use the observed
-seconds per test; untimed browser scripts count 20 seconds. The **PR job timings** check links each job and its elapsed seconds in its summary. It also
-fails if a required job failed or was canceled. The target is under ten minutes from start to completed checks;
-hosted run receipts, including cache state, establish whether that target is met.
+seconds per test; untimed browser scripts count 20 seconds. The **PR job timings** check on a queue run links each job and its elapsed seconds in its summary; it gates nothing. The `checks` gate fails when a job it needs failed or was canceled. The target is under ten minutes from the group's start to its completed checks; the queue run's receipt, including cache state, establishes whether that target is met.
 
 Nothing is mapped by hand or by filename: a test that uses a file in a way the map cannot see (a path built at run
 time from a parameter, a subprocess's own reads) must name that file or folder literally, or the change will not
 select it. A file that makes a computed import or lists the repository with `git ls-files` runs on every change.
 The Release validation workflow retains its full candidate gate and never cancels a running validation.
 
-Write unit
-tests while you build and run them as you go; keep every one that guards a real failure, as many as the change needs, and drop the trivial ones. Before merging,
-run the test files for what you touched and the checks the change obviously affects, not the full suite. For each release, run the full
-suite once on its frozen candidate.
+Write unit tests while you build and run them as you go; keep every one that guards a real failure, as many as the change needs, and drop the trivial ones. Before you mark the PR ready, run the test files for what you touched and the checks the change obviously affects with `scripts/remote.py`, not the full suite. For each release, run the full suite once on its frozen candidate.suite once on its frozen candidate.
 
 Use `pytest -ra` to see prerequisite skip reasons. Systemd lifecycle scenarios run on Linux;
 unit rendering still runs on every host. Installer scenarios need Docker and stage their mounts
@@ -344,8 +343,35 @@ That is the default suite: pytest in parallel without the tests marked `@pytest.
 core browser scripts (`CORE` in `scripts/ui-tests.cjs`) with the load-aware concurrency described below. The check records wall time and load; it
 takes about two minutes, and a run over 300 seconds still passes and says it is slow. There is no budget on the
 number of tests: keep every test that guards a real failure, and none of wording or copy. Release validation builds the three images and the Release workflow publishes them with the
-GitHub release. The PR checks workflow runs this full default suite on uncertain PR selections; known PR mappings run the affected tests above. Release validation runs the full gate for an explicitly dispatched immutable candidate. `--release` runs this suite too, along with the
+GitHub release. The merge queue runs this full default suite on uncertain selections; known mappings run the affected tests above. Release validation runs the full gate for an explicitly dispatched immutable candidate. `--release` runs this suite too, along with the
 slow tests and every browser script, and release candidate validation covers that full suite.
+
+## Merge queue
+
+Main takes changes only through its merge queue. Mark the pull request ready for review, then enqueue it with
+`gh pr merge <N> --merge`. The queue adds the pull request to a group, merges the group onto the current main, runs the selected
+checks on that merge commit, and moves main only when they pass.
+
+- **Each push to a pull request** (GitHub-hosted, free): plan, static checks, recorder change detection, and the `checks`
+  gate. Lint only; a draft runs nothing.
+- **A queue group** (RunsOn Spot, 2 and 4 vCPU): plan, static checks again on the merge commit, the selected Python and
+  browser tests, the Caddy image when the change reaches it, Rust lint and the desktop app when those changed, the macOS
+  recorder tests when `recorder/` changed, and the `checks` gate. The group selects from its own base and head.
+- **Required check**: `checks` on main. It fails when a job it needs failed or was cancelled; a skipped job passes.
+
+Agents run the tests they touched with `scripts/remote.py` before they mark a PR ready; the queue runs the selected set
+once per group.
+
+**Enqueue once.** A pull request needs no rebase to be current: the queue merges it onto the current main. Rebase only when
+GitHub reports a conflict. `--admin` and the REST merge endpoint skip the queue; do not use them.
+
+**A red queue run** removes the failing pull request from the queue, and the queue retests the entries behind it. Fix the
+failure on the branch, push, mark the PR ready again if it went back to draft, and enqueue it again. The red run is the first
+place a test failure shows, because a push to a pull request runs only lint.
+
+**Hotfixes do not bypass the queue.** Land the fix through the queue like any change, then dispatch `hotfix.yml` once it
+has landed (see Hotfixes above). The queue itself is a repository ruleset (`merge_queue`, and `checks` as the required
+check), set by a maintainer.
 
 ## Hosted release validation
 
@@ -372,7 +398,7 @@ frozen can check that candidate without changing it. The candidate's `scripts/re
 It can also run one slice of the gate (`--part product|browser|python|desktop`, with `--shard K/N` splitting the Python test
 files, or the browser scripts, into N groups balanced by the times in `scripts/test-timings.json`; refresh the browser
 times with `--record-browser-timings` from a validation's browser logs). The hosted workflow selects product, four browser
-shards, 28 Python shards and desktop. Every part starts with the candidate and runs its setup while the Linux
+shards, 28 Python shards, desktop and seven factory-sim groups (the sim's own VMs). Every part starts with the candidate and runs its setup while the Linux
 binaries build. Product, desktop and Python shards 1–2 wait for those binaries; the other shards start their tests
 immediately. Only product needs the images and waits for the image builds;
 without `--part`, the command runs the whole gate, with desktop only where the Linux app builds. The desktop
@@ -393,7 +419,7 @@ two-minute binary wait rather than adding collection to the critical Python shar
 default collection in `scripts/pr_checks.py`, before affected-file filtering, so the guard adds no collection or job.
 Both guards fail if a collected file is missing from the filesystem plan; extra empty or deselected candidates are
 allowed. The existing no-test-passed check still rejects a release shard that proves nothing.
-Beside the gate, eight `factory-sim` jobs run the factory simulation (`evals/factory`) on seeds 1-3, packed into eight
+Beside the gate, seven `factory-sim` jobs run the factory simulation (`evals/factory`) on seeds 1-3, packed into seven
 groups by `evals/factory/timings.json`. A failed check fails the release; NOTE lines
 (tickets over 24 h, a step over 12 h) go in the job summary for the Release Manager to read.
 Native runner/relay prerequisites are the run's own builds, and their fingerprints are checked before tests. Python and
@@ -754,8 +780,12 @@ The URL must be reachable without authentication from GitHub's build runners and
 of at most 1 MiB. If it is `/api/v2/team/icon`, the owner must upload a team icon on that server
 (Settings > Team, or `POST /api/v2/team/icon`); the endpoint returns 404 until one is set.
 Builds retry transient icon download errors up to eight times, waiting 30, 60, 90, then at most 120 seconds between
-attempts, so a server restarting for the update can recover. Permanent HTTP errors and invalid or oversized PNGs fail
-immediately; retry logs contain no company URL or remote error text.
+attempts, so a server restarting for the update can recover. Permanent HTTP errors and TLS certificate verification
+failures are not retried, because waiting does not change them. Invalid or oversized PNGs fail the run at once. If the
+download still fails after the retries (network, DNS, timeout or HTTP status), or fails on a certificate, the `icon`
+check skips that company's build and publish with a `::warning::` and a job summary line, and the run stays green. The
+public release and other companies are unaffected. The company's bucket manifest is not replaced, so its installed app
+keeps its current version. Retry logs contain no company URL or remote error text.
 The UUID must remain stable across renames to preserve installed preferences and login state.
 
 Company apps put nothing in the macOS menu bar; the Dock shows the company logo with the
@@ -814,7 +844,10 @@ and icon fetching run before installing build dependencies. An icon download err
 status or DNS/TLS/timeout category and names `TICO_COMPANY_APPS.icon_url`; it does not indicate a
 signing or publishing failure. For a 404, verify the icon exists; for 401/403, allow unauthenticated
 icon access. Correct the entry's `icon_url` (and `url` for a relative path) in the repository's
-Settings > Secrets and variables > Actions > `TICO_COMPANY_APPS` if the address is wrong.
+Settings > Secrets and variables > Actions > `TICO_COMPANY_APPS` if the address is wrong. A TLS error means the
+icon host's certificate fails verification from GitHub's runners (expired, incomplete chain or wrong name); fix the
+certificate on that host. The skip warning names the same category. After the fix, run the Release workflow from the
+current tag with `desktop` checked to build and publish that company again.
 Missing configuration fields and required environment variables are named explicitly. Icon generation,
 bundling, Apple certificate import, artifact encryption/decryption and publication have separate
 failure labels; private tool output and raw exception text remain suppressed. An old catch-all

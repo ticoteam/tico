@@ -435,7 +435,10 @@ function settingsShow(tab, {group: picked = false} = {}) {
   });
   const pick = $('#settings-group-pick');
   if (pick) pick.value = SETTINGS_TAB;
-  document.querySelectorAll('.settings-pane[data-settings-group]').forEach(pane => { pane.hidden = pane.dataset.settingsGroup !== SETTINGS_TAB; });
+  document.querySelectorAll('.settings-pane[data-settings-group]').forEach(pane => {
+    if (!(pane instanceof HTMLElement)) return;
+    pane.hidden = pane.dataset.settingsGroup !== SETTINGS_TAB;
+  });
   const on = key => SETTINGS_TAB === key;
   const owner = S.me?.role === 'owner';
   settingsTags();

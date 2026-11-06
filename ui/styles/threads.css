@@ -197,18 +197,20 @@ a.src-name:hover{color:var(--ink);text-decoration:underline}
 
 /* the bot page: Home and DM fill the pane; the link to every thread with the bot sits quietly above */
 #main.bot-chat-layout #pane-chat>.bot-thread{display:flex;flex:1;flex-direction:column;min-height:0;width:100%;max-width:var(--read-width);margin:0 auto}
-/* Home | DM above the thread on a desktop; narrower, the top line's tabs do it */
-.bot-talk-bar{display:none;align-items:center;gap:8px;margin:0 0 4px}
+/* Incognito (a private DM, not the team's Home) above the thread on a desktop; narrower, the top line's tabs do it */
+.bot-talk-bar{display:none;align-items:center;justify-content:flex-end;gap:8px;margin:0 0 4px}
 /* the thread's call, Members and menu, in the page's top line */
 .bot-top-acts{order:3;flex:none;align-self:center;display:inline-flex}
 .bot-top-acts[hidden]{display:none}
 .bot-top-acts .thv-titleline{gap:4px;padding:0}
 @media (max-width:1099px){.bot-top-acts{order:2}}
 #main.bot-chat-layout #pane-chat>.bot-talk-bar{width:100%;max-width:var(--read-width);margin-left:auto;margin-right:auto}
-.bot-talk-switch{display:none;gap:2px;padding:2px;border:1px solid var(--line);border-radius:9px;background:var(--surface2)}
-.bot-talk-switch button{border:0;border-radius:7px;background:none;padding:3px 10px;color:var(--muted);font-weight:600;font-size:var(--t-sm);cursor:pointer}
-.bot-talk-switch button.cur{background:var(--raised);color:var(--ink);box-shadow:0 1px 3px rgba(0,0,0,.12)}
-@media (min-width:1100px){.bot-talk-bar,.bot-talk-switch{display:flex}}
+.bot-incognito{display:inline-flex;align-items:center;gap:5px;padding:3px 8px;border:0;border-radius:7px;background:none;color:var(--muted);font:inherit;font-size:var(--t-sm);cursor:pointer}
+.bot-incognito .nav-icon{font-size:16px}
+.bot-incognito:hover{color:var(--ink);background:var(--hover)}
+.bot-incognito[aria-pressed=true]{color:var(--ink);background:var(--raised);box-shadow:0 1px 3px rgba(0,0,0,.12)}
+.bot-incognito:focus-visible{outline:var(--focus-ring);outline-offset:var(--focus-offset)}
+@media (min-width:1100px){.bot-talk-bar{display:flex}}
 
 /* a person's or a team's Home */
 .home-card .thv-head{display:none}

@@ -90,7 +90,7 @@ Always:
 Work arrives as scheduled tasks and as tasks from the owner. Attach the full batch payload to the task and execute requested items with your Tools when a person has turned mail sending on in Tico; a listing that only the business owner can claim
 is `hub task create --owner <owner> --parent <id>`, one task per listing, with the exact steps;
 the customer list for invitations is a task to Sales. Ask the requester one question with
-`hub task ask <id>`. Never send anything outside the team yourself.
+`hub task question "<question>" --on <person> --parent <id>`. Never send anything outside the team yourself.
 
 ## Working style
 - **The ledger before the opinion.** Every count in a digest is a count of ledger rows.

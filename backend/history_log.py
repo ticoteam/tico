@@ -446,7 +446,7 @@ def install(app, store, auth):
         buffer = io.StringIO()
         out = csv.writer(buffer)
         # A cell a spreadsheet would run as a formula starts with a quote mark instead.
-        safe = lambda v: "'" + v if v[:1] in ("=", "+", "-", "@", "\t", "\r") else v  # noqa: E731
+        safe = lambda v: "'" + v if v[:1] in ("=", "+", "-", "@", "\t", "\r") else v
         out.writerow(["time", "actor", "kind", "subject", "result", "link"])
         for item in items:
             link = item["link"] and (base + ("/" if item["link"].startswith("#") else "") + item["link"])

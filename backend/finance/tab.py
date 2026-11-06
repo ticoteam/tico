@@ -981,7 +981,8 @@ def _default_of(org_led: bool, defaults: VW.Defaults, owner: bool) -> str:
         return "everything"
     if org_led and defaults.manager == "team_expenses":
         return "team_expenses"
-    return "own_expenses" if org_led or defaults.member == "own_expenses" else "none"
+    manages = org_led and defaults.manager != "none"  # "none": a manager sees what everyone else does
+    return "own_expenses" if manages or defaults.member == "own_expenses" else "none"
 
 
 def default_team(org: Org, manager: str) -> str | None:
@@ -1043,6 +1044,10 @@ def access(c: sqlite3.Connection, viewer: str, at: str | None = None) -> Row:
     visible = {t.id for t in org.teams.values() if admin or t.id in led or t.id in shown_teams}
     defaults = SA.defaults(c)
     grants = SA.grants(c, "active") + SA.grants(c, "suspended")
+    own: dict[str, int] = {}  # each teammate's own budgets (handlers.theirs): what their My budget page lists
+    for b in ctx.budgets().values():
+        if b.active and b.teammate:
+            own[b.teammate] = own.get(b.teammate, 0) + 1
     teammates: list[Row] = []
     for m in shown:
         mine = [g for g in grants if VW.applies(org, g, m)]
@@ -1061,6 +1066,7 @@ def access(c: sqlite3.Connection, viewer: str, at: str | None = None) -> Row:
                 "grants": [_grant_row(g, ctx) for g in mine],
                 "rights": rights,
                 "may_grant": _may_grant(ctx, viewer, m, defaults),
+                "budgets": own.get(m, 0),
             }
         )
     teams = [

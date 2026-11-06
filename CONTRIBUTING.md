@@ -27,8 +27,8 @@ npx playwright install chromium
 npm run test:ui                                # the core browser scripts (CORE in scripts/ui-tests.cjs)
 ```
 
-Run both locally before you open a pull request. GitHub Actions runs them again on the pull request (the PR checks
-workflow), so a failure shows there too. The default run leaves out
+Run both locally before you open a pull request. GitHub Actions lints the pull request again (the PR checks workflow), and the merge queue runs the selected
+tests on the merged result before a change lands, so a failure shows there too. The default run leaves out
 tests marked `@pytest.mark.slow` (real git, Docker, servers, long timers) and the browser scripts outside the core
 list; `python -m pytest -q -m slow` and `node scripts/ui-tests.cjs --all` run them, and the release check does. Run
 them too when you change what they cover. To run less while you work: `python -m pytest -q backend/tests/test_x.py`
@@ -45,9 +45,13 @@ on every tracked file; CI runs the same checks. Turn on the pre-push hook once p
 
 ```bash
 git config core.hooksPath .githooks
+git config merge.tico-json.driver 'python3 scripts/json_merge.py %O %A %B'
 ```
 
 After that, each `git push` runs `scripts/check.sh` first. To push without it once, use `git push --no-verify`.
+The second line makes a rebase merge two edits to `docs/openapi/v2.json` by key (`scripts/json_merge.py`), so they stop
+conflicting; without it git merges that file as text. The generated `ui/types/api.d.ts` is not committed:
+`scripts/check_ui_types.sh` writes it.
 shellcheck and actionlint are pinned versions downloaded on first use and checked against their SHA-256 (see
 `scripts/pinned_tool.sh`); they are cached under `~/.cache/tico/tools`.
 
@@ -134,16 +138,20 @@ company already owns, so their commits need no sign-off, and their pull requests
 ## How we work
 
 - Trunk-based: everything lands on `main` through short-lived branches named `<who>/<topic>`, one ticket per PR.
-- Draft PRs run no CI. Mark the PR ready for review to start the checks.
-- The author merges, once the checks are green and the PR is reviewed.
+- Draft PRs run no CI. Mark the PR ready for review to start the lint checks; each later push runs only those.
+- Once the PR is reviewed and the tests you touched pass with `scripts/remote.py`, enqueue it with
+  `gh pr merge <N> --merge`. The merge queue tests the PR merged onto current main before the change lands.
+- Enqueue once. Don't rebase or merge main just to be current; rebase only when GitHub reports a conflict.
+- If the queue removes the PR, read why before you push again. Never use `--admin` or the REST merge endpoint:
+  both skip the queue.
 - If a release candidate goes red because of your merge, fixing it comes before anything else.
 
 ## Releases
 
 Don't edit CHANGELOG.md in a PR. The Technical Writer writes each release's notes after it is published.
 
-A release is a version tag, and contributors do not tag. Tico releases from release windows (weekdays 07:30, 14:00
-and 20:30 Los Angeles time, weekends 07:30 and 15:00):
+A release is a version tag, and contributors do not tag. Tico releases from release windows (weekdays 07:30, 11:00,
+14:00 and 20:30 Los Angeles time, weekends 07:30 and 15:00):
 GitHub Actions validates main's head, ships the first green candidate to Tico Team's install, and promotes it to
 stable after it has baked. A hotfix is for major production issues only. The Release Manager bot no longer tags or
 rolls out Tico releases; it only monitors them. The details are in

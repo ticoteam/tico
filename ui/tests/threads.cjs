@@ -684,22 +684,22 @@ let browser = null;
     assert.ok(!tabs.includes('chat'));
     assert.equal(await page.locator('.bot-threads-link').count(), 0, 'no Threads with link on a Home');
     await shot(page, 'bot-home-desktop');
-    // The Home's actions (the call and the menu) sit in the page's top line; the thread has no title line.
-    await page.locator('#bot-top #bot-top-acts [data-thv-menu]').waitFor();
+    // The Home's actions (the call and Members) sit in the page's top line; the thread has no title line.
+    await page.locator('#bot-top #bot-top-acts').waitFor();
     assert.equal(await page.locator('#bot-thread .thv-title').count(), 0);
-    // Wide, the top tabs give way to Tasks beside the thread; the switch above the thread picks Home or DM.
-    assert.equal(await page.locator('#pane-chat [data-talk="home"]').getAttribute('aria-selected'), 'true');
-    await page.locator('#pane-chat [data-talk="dm"]').click();
+    // Wide, the top tabs give way to Tasks beside the thread; the incognito toggle above the thread picks Home or DM.
+    assert.equal(await page.locator('#bot-incognito').getAttribute('aria-pressed'), 'false');
+    await page.locator('#bot-incognito').click();
     await page.waitForFunction(() => location.hash === '#/bot/ops/dm');
-    await page.locator('#pane-chat [data-talk="dm"][aria-selected="true"]').waitFor();
+    await page.locator('#bot-incognito[aria-pressed="true"]').waitFor();
     await page.locator('#bot-thread .thv-composer .p-text').waitFor();
     await shot(page, 'bot-dm-desktop');
     // A draft survives a switch to Home and back.
     await page.locator('#bot-thread .thv-composer .p-text').fill('Half a thought');
-    await page.locator('#pane-chat [data-talk="home"]').click();
+    await page.locator('#bot-incognito').click();
     await page.getByText('Weekly numbers are in the doc.').waitFor();
-    await page.locator('#pane-chat [data-talk="dm"]').click();
-    await page.locator('#pane-chat [data-talk="dm"][aria-selected="true"]').waitFor();
+    await page.locator('#bot-incognito').click();
+    await page.locator('#bot-incognito[aria-pressed="true"]').waitFor();
     assert.equal(await page.locator('#bot-thread .thv-composer .p-text').inputValue(), 'Half a thought');
 
     // A person's Home under their profile: updates live on the Updates page, never as cards in a Home.
@@ -925,7 +925,7 @@ let browser = null;
     await page.locator('#nav-threads:not([hidden])').waitFor();
     assert.equal(await page.locator('#nav-threads .nav-badge').isVisible(), false);
     assert.equal(await page.locator('.bot-threads-link').count(), 0);
-    assert.equal(await page.locator('#pane-chat [data-talk]').count(), 0);
+    assert.equal(await page.locator('#bot-incognito').count(), 0);
     assert.ok(!seen.homes.includes('bot:ops'), 'the Home is never asked for');
     await shot(page, 'bob-bot-desktop');
     assert.deepEqual(seen.errors, []);

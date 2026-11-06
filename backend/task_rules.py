@@ -250,7 +250,7 @@ def safe(c, task):
         return False
     if c.execute("SELECT 1 FROM approvals WHERE task_id=? AND decision IS NULL LIMIT 1", (task["id"],)).fetchone():
         return False
-    return not H.open_task_asks(c, task)
+    return not H.unanswered_ask(c, task)  # an open question task under or blocking it
 
 
 def close(c, task, rule):
@@ -282,10 +282,13 @@ DUE_SQL = (
     "AND NOT EXISTS (SELECT 1 FROM approvals a WHERE a.task_id=t.id AND a.decision IS NULL) "
     "AND NOT EXISTS (SELECT 1 FROM history_events WHERE subject_type='task' AND subject_id=t.id "
     f"AND {HISTORY_ACTIVITY_SQL} AND created_at>?) "
+    "AND NOT EXISTS (SELECT 1 FROM task_relations wr JOIN tasks wq ON wq.id=wr.from_task WHERE wr.to_task=t.id "
+    "AND wr.kind IN ('parent','blocks') AND wq.questions IS NOT NULL AND wq.answer IS NULL "
+    f"AND wq.status IN ({','.join(repr(x) for x in H.ACTIVE_STATUSES)})) "
     "AND NOT EXISTS (SELECT 1 FROM messages m JOIN conversations cv ON cv.id=m.conversation_id "
     f"WHERE m.conversation_id=t.conversation_id AND {H.MESSAGE_TASK_SQL}=t.id "
-    f"AND ((m.kind='ask' AND {H.OPEN_ASK_SQL}) OR ({MESSAGE_ACTIVITY_SQL} AND "
-    "max(m.created_at,coalesce(m.edited_at,m.created_at),coalesce(m.deleted_at,m.created_at))>?))) "
+    f"AND {MESSAGE_ACTIVITY_SQL} AND "
+    "max(m.created_at,coalesce(m.edited_at,m.created_at),coalesce(m.deleted_at,m.created_at))>?) "
     "ORDER BY t.updated_at,t.id LIMIT ?"
 )
 

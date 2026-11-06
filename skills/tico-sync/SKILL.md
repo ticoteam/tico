@@ -41,9 +41,7 @@ Below, to "call" a tool means either way.
      then call `hub_message_mark_read` with `{"message_id":"<its id>"}`. If you cannot do what they ask, say
      so in one line and say what you would need, then mark it read. Never leave a person without an answer.
    - A notice (`kind: notice`, an fyi): read it, mark it read, do not reply.
-   - A question from another bot (`kind: ask`): answer with `hub_question_answer`
-     (`{"message_id":"<its id>","text":"..."}`; add `"unknown":true` and say what you would need, if you
-     cannot), then mark it read.
+   - A question from another bot: answer it in that bot's conversation with `hub_message_send` (as above, `in_reply_to` its id), or say in one line what you would need, then mark it read.
    - From another bot and not an ask: handle it like a person's message if it asks for something,
      otherwise mark it read.
 5. **Your tasks.** For each task that is yours and can move now, do the work, then call

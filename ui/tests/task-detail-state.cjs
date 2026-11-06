@@ -114,16 +114,18 @@ async function show(page) {
    data.comments[1].refs.target = {file: 'f-notes', version: 2};
    data.files[0].versions[0].ask = {questions: data.comments[1].refs.questions, by: 'bot:eng'};
    await show(page);
-   await page.locator('#task-modal [data-tf-file="f-notes"]').click();
-   await page.locator('#task-modal [data-tf-view] .ask-other').fill('File-specific draft');
    const draft = page.locator('#task-modal .task-comments .ask');
    await draft.locator('[data-label="Tuesday"]').click(); await draft.locator('.ask-other').fill('After the morning release');
-   await page.locator('#task-modal [data-drop-label="checkout"]').click();
+   await page.locator('#task-modal [data-tf-file="f-notes"]').click();
+   await page.locator('#task-modal [data-tf-view] .ask-other').fill('File-specific draft');
+   // the task redraws under the open file (a label change), by script: the file's modal covers the task
+   await page.locator('#task-modal [data-drop-label="checkout"]').dispatchEvent('click');
    await page.waitForFunction(() => document.querySelector('#task-modal').dataset.version === '3' && document.querySelector('#task-modal .ask'));
    assert.equal(await draft.locator('[data-label="Tuesday"]').getAttribute('aria-pressed'), 'true');
    assert.equal(await draft.locator('.ask-other').inputValue(), 'After the morning release');
    assert.equal(await page.locator('#task-modal [data-tf-view] .ask-other').inputValue(), 'File-specific draft');
    await shot(page, 'after-answer-draft');
+   await page.keyboard.press('Escape'); await page.locator('#task-modal [data-tf-view]').waitFor({state: 'hidden'});
    await page.route('**/api/v2/tasks/t-checkout/comments', r => r.fulfill({status: 503, contentType: 'application/json', body: JSON.stringify({error: {detail: 'Service unavailable'}})}));
    await page.locator('#task-modal .task-chat form textarea').fill('Please check the receipt total.');
    await page.locator('#task-modal .task-chat button[type=submit]').click();
@@ -133,6 +135,8 @@ async function show(page) {
    await shot(page, 'after-comment-failure');
    // Losing comment permission clears the pending answer and removes its controls.
    await page.route('**/api/v2/tasks/t-checkout', r => r.fulfill({contentType: 'application/json', body: JSON.stringify({task: data.tasks[0], comments: data.comments, can_comment: false})}));
+   await page.locator('#task-modal [data-tf-file="f-notes"]').click();
+   await page.locator('#task-modal [data-tf-view] button.ask-opt').first().waitFor();
    await page.evaluate(() => taskChatRead(TASK_CHAT));
    assert.equal(await draft.locator('button.ask-opt').count(), 0);
    assert.equal(await page.locator('#task-modal [data-tf-view] button.ask-opt').count(), 0);

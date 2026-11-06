@@ -97,7 +97,7 @@ Open the link in your browser: the app opens on **Finish setup**. Then:
    ([the four choices](ai-gateway.md#choose-how-bots-get-their-models)). To choose later, select
    **Your company's plans or API keys**, untick its providers and press **Skip for now**. Bots need a provider
    to run; until then each bot says "Add an AI provider", and **Settings > Models** adds it.
-   With a gateway key from Tico, the [Tico AI Gateway](ai-gateway.md) card there adds the Tico picks (department, level, Fast, version).
+   With a gateway key from Tico, the [Tico AI Gateway](ai-gateway.md) card there adds the Tico picks (level, Fast, version).
    With no provider yet, the Bets step needs one bet and one line under **What we won't do**; any short sentence works.
 2. **Name the team**, say what it does, and pick its groups. A few bots are suggested for each group. For the first result
    below, pick **Marketing** and keep **Content Marketer** (`content`) checked; untick the other suggestions if you want only it.

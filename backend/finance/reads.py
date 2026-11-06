@@ -32,7 +32,7 @@ from .tax import form_1099_csv as form_1099_csv
 from .tax import form_1099_report as form_1099_report
 from .tax import sales_tax_csv as sales_tax_csv
 from .tax import sales_tax_report as sales_tax_report
-from .handlers import named_reason, private_scope, sees_budget, sees_scope, shows_numbers
+from .handlers import named_reason, private_scope, reads_budget, sees_budget, sees_scope, shows_numbers
 from .store import actions as SX
 from .store import access as SA
 from .store import banking as SK
@@ -1382,7 +1382,7 @@ def _budget_row(b: B.Budget) -> Row:
 
 def _visible(s: _Seen, include_inactive: bool) -> list[B.Budget]:
     return [
-        b for b in s.ctx.budgets().values() if (b.active or include_inactive) and sees_budget(s.ctx, s.view.viewer, b)
+        b for b in s.ctx.budgets().values() if (b.active or include_inactive) and reads_budget(s.ctx, s.view.viewer, b)
     ]
 
 
@@ -1395,7 +1395,7 @@ def budgets(
     at: str | None = None,
     on: str | None = None,
 ) -> Row:
-    """Every budget the viewer sees, with where it stands today, or in the period holding the day `on` (past or
+    """Every budget the viewer sees (their view's, and always their own: handlers.reads_budget), with where it stands today, or in the period holding the day `on` (past or
     future): the amount of the version in effect then, and that period's spend and holds. Spend is read live
     (budgeting's module docstring): in each month a healthy import covers, an ad budget's platform's daily spend
     stands in for its charges and holds there, and each row says its `platform` and its state `pace_end`, `spent_from` and `as_of`."""
@@ -1455,12 +1455,12 @@ def budget_vs_actual(
     pool: dict[str, B.Budget] = {}
     for ctx in [s.ctx, *(x.ctx for _, _, x in trees)]:
         for b in ctx.budgets().values():
-            if b.active and sees_budget(ctx, viewer, b):
+            if b.active and reads_budget(ctx, viewer, b):
                 pool.setdefault(b.id, live.get(b.id, b))
     seen = [
         b
         for b in pool.values()
-        if all(sees_budget(x.ctx, viewer, b) for _, _, x in trees if b.catch_all or b.account_id in x.ctx.accounts)
+        if all(reads_budget(x.ctx, viewer, b) for _, _, x in trees if b.catch_all or b.account_id in x.ctx.accounts)
     ]
     most = max(1, min(int(limit), 500))
     versions = SB.versions(c, [b.id for b in seen[:most]])
@@ -1627,7 +1627,7 @@ def metric(
     today = dates.day(s.ctx.today)
     if name in ("budget_remaining", "budget_pct_used"):
         b = s.ctx.budgets().get(budget_id or "")
-        if b is None or not sees_budget(s.ctx, viewer, b):
+        if b is None or not reads_budget(s.ctx, viewer, b):
             raise FinanceError(NOT_FOUND, NOT_IN_VIEW)
         row = _state_row(s, b, budgeting.state(s.ctx, b.id, today, read=budgeting.Netted(s.view), live=True))
         ads: Row = {

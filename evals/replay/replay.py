@@ -25,7 +25,7 @@ import yaml
 
 HERE = Path(__file__).resolve().parent
 sys.path.insert(0, str(HERE.parent / "botops"))
-import score  # noqa: E402  (the BotOps scorers)
+import score  # (the BotOps scorers)
 
 # A replayed task has settled when it reaches one of these and its bot is not running.
 SETTLED = ("waiting", "review", "ready", "done", "closed", "declined")
@@ -359,7 +359,7 @@ def report(rows, title, prompt_note=""):
     ]
     for r in rows:
         b, a = r.get("before") or {}, r.get("after") or {}
-        pair = lambda k: f"{b.get(k, '—')} → {a.get(k, '—')}"  # noqa: E731
+        pair = lambda k: f"{b.get(k, '—')} → {a.get(k, '—')}"
         lines.append(
             f"| {r['id']} | {r['verdict']} | {pair('status')} | {pair('done')} | {pair('person_steps')} | "
             f"{pair('jargon')} | {pair('duplicates')} | {pair('sent_elsewhere')} | {pair('runs')} | {pair('minutes')} |"

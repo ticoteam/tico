@@ -149,7 +149,7 @@ function qcardDetailsHTML(it, q, {link = true} = {}) {
   const asked = text(it.ask?.body), body = text(it.body);
   const parts = [asked && asked !== text(q.question) ? `<div class="dc-rest md">${safeMd(plainActors(asked))}</div>` : '',
     body && body !== asked && body !== text(it.title) ? `<div class="dc-rest md">${safeMd(plainActors(body))}</div>` : '',
-    link && it.kind !== 'ask' && it.id ? `<p><a href="#/task/${encodeURIComponent(it.id)}">Open the task: ${esc(plainActors(it.title || ''))}</a></p>` : ''];
+    link && it.id ? `<p><a href="#/task/${encodeURIComponent(it.id)}">Open the task: ${esc(plainActors(it.title || ''))}</a></p>` : ''];
   const inner = parts.join('');
   return inner ? `<details class="dc-details qc-details"><summary>Details</summary>${inner}</details>` : '';
 }

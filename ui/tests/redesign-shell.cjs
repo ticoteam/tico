@@ -84,7 +84,7 @@ async function open(browser, {route = '#/updates', viewport = PHONE, goalsDelay 
     if (p.startsWith('/api/v2/usage/')) return json({ok: true});
     if (p === '/api/v2/tasks' && method === 'POST') return json(CAP_409, 409);
     if (p === '/api/v2/market/graph') return json({entities: [], edges: []});
-    if (p === '/api/v2/market/entities') return json({entities: [], total: 0});
+    if (p === '/api/v2/market/entities') return json({entities: [{id: 'company/self', type: 'company', name: 'Acme'}], total: 1});
     if (p === '/api/v2/librarian/setup') return json({market: null});
     return json(unrouted(p));
   });
@@ -165,7 +165,7 @@ const noSideScroll = page => page.evaluate(() => document.documentElement.scroll
       await page.waitForFunction(n => window.__treeRead >= n, goals.asked);
       assert.equal(await page.evaluate(() => location.hash), '#/strategy/market/listening', tag + ': a goal left before it loaded keeps off the address');
       assert.equal(await page.locator('#goal-panel[open]').count(), 0, tag + ': and does not open');
-      assert.equal(await page.locator('.mkt-views [data-market-view="listening"][aria-current="page"]').count(), 1, tag + ': Listening is a Market view');
+      assert.equal(await page.locator('.mkt-pg #mkt-q-saying').count(), 1, tag + ': Listening is a question on Market');
       await page.evaluate(() => { location.hash = '#/automations'; });
       await page.locator('#au-root, #automations-root').first().waitFor({state: 'attached'});
       assert.equal(await page.locator('#side a[data-nav="automations"].cur').count(), 1, tag + ': Automations is current');

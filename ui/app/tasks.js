@@ -3,8 +3,8 @@
 'use strict';
 
 // ----------------------------------------------------------------- tasks (#/tasks)
-// One page for every piece of work the team owes: Tico's tasks, shown as **You** (what needs you), **Open** (a list),
-// a **Board** and **Done**. `#/board` and `#/issues` open the matching view; scheduled work is Automations.
+// One page for every piece of work the team owes: Tico's tasks, shown as **You** (what needs you), a type's open tasks
+// as a list or a **Board**, and the finished ones (**Done**, **Closed**, **Snoozed**). `#/board` and `#/issues` open the matching view; scheduled work is Automations.
 // No priority: every task has a rank in its owner's queue. Labels stand in for projects.
 // A task's thread is comments, not chat: one flat list with the author on every line.
 // The list (ui/app/task-list.js) draws one line per task; this file holds what the list, the board, the
@@ -17,10 +17,9 @@ const COMPANY_COLS = [
 ];
 const STATUS_WORD = {open: 'Open', doing: 'Doing', waiting: 'Waiting', review: 'In review', ready: 'Ready to ship',
                      done: 'Done', closed: 'Closed', declined: 'Declined'};
-// The views: labelled, with counts. The keys are the routes' and the saved preference's. The first three are tabs;
-// the rest are in the tab row's More menu, with any tab the row has no room for (task-list.js tasksTabsFit).
+// The views. The keys are the addresses' (?view=) and the saved preference's. You is the scope menu's first item; Open
+// and Board are a type's open tasks in either layout; Snoozed, Done and Closed are behind the archive button.
 const TASK_VIEWS = [['foryou', 'You'], ['list', 'Open'], ['board', 'Board'], ['snoozed', 'Snoozed'], ['done', 'Done'], ['closed', 'Closed']];
-const TASK_TAB_VIEWS = ['foryou', 'list', 'board'];
 // Done and Closed share one feed of finished tasks, newest first; each shows its own status.
 const tasksFinishedView = view => view === 'done' || view === 'closed';
 const DONE_CAP = 20;                // The Done list shows 20 at a time

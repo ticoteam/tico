@@ -1,37 +1,37 @@
 # Tico AI Gateway
 
 The Tico AI Gateway is Tico's own model service. With a gateway key from Tico, your bots can run on a **pick**: a
-department, a level (Low, Medium or High), Fast or not, and a version. Decide asks the Gateway with the same key. You
+level (X-Low, Low, Medium, High or X-High), Fast or not, and a version. Decide asks the Gateway with the same key. You
 connect it once, in **Settings → Models**, where the **Tico Gateway** card also shows prices and what is in use. How runs reach the Gateway, for developers, is in
 [Harnesses](harnesses.md#the-tico-ai-gateway).
 
 ## The picks
 
-A pick is a name, not a model: Tico can change what runs underneath it. Every department has the same levels.
+A pick is a name, not a model: Tico can change what runs underneath it.
 
 | Level | Version 1.0 runs | Fast runs | For |
 |---|---|---|---|
-| Low | Claude Haiku 5.5 · $0.15 / $0.75 per 1M | DeepSeek V4.1 Flash · $0.45 / $1.80 | Sorting, triage, short replies, routine checks |
+| X-Low | DeepSeek V4 Flash · $0.14 / $0.27 per 1M | Inception Mercury 3 · $0.30 / $1.05 | Bulk sorting, tagging, short checks |
+| Low | Claude Haiku 5.5 · $0.15 / $0.75 | DeepSeek V4.1 Flash · $0.45 / $1.80 | Triage, short replies, routine checks |
 | Medium | Claude Sonnet 5.5 · $2.50 / $12.50 | Claude Opus 5.5 in fast mode · $10 / $50 | Writing, analysis, most turns |
 | High | Claude Opus 5.5 · $5 / $25 | Claude Opus 5.5 in fast mode · $10 / $50 | Hard problems, long plans, careful work |
+| X-High | Claude Fable 5.1 · $12.50 / $62.50 | Claude Fable 5.1 (no fast mode yet) · $12.50 / $62.50 | The hardest problems |
 
 Prices are input and output, USD per 1M tokens. A Low request whose prompt is over 100,000 tokens costs the whole request
 at $0.75 input, $0.075 cached input and $3.75 output, and **Usage** estimates it that way.
 
-Images a bot sends go to the models that read them: every pick except Low Fast.
+Images a bot sends go to the models that read them: Low, Medium, High and X-High, and their Fast picks except Low Fast.
+X-Low and X-Low Fast read text only.
 
-The ids are `tico-<department>-<level>` with `-fast` for Fast: `tico-sales-medium`, `tico-engineering-high-fast`. The
-departments are General, Product, Engineering, Marketing, Sales, Finance, Legal, Science, Operations and Data (the list
-is Tico's and can grow). A bot's department comes from its group on the org chart: Support and People bots use Operations,
-Leadership uses General. That id always means the tier's **current version**. Add the version to pin it:
-`tico-sales-medium-1.0` keeps its model and price when a newer version ships. Settings pins the current version by
-default and also offers older versions and **Auto (always latest)**. Tico publishes the list at
-`GET <gateway url>/catalog`; the server asks for it at most once an hour while the Gateway is connected, ignores an answer
-it cannot read, and otherwise uses the list shipped with its release.
+The ids are `tico-<level>` with `-fast` for Fast: `tico-medium`, `tico-xhigh-fast`. That id always means the tier's
+**current version**. Add the version to pin it: `tico-medium-1.0` keeps its model and price when a newer version ships.
+Settings pins the current version by default and also offers older versions and **Auto (always latest)**. Tico publishes
+the list at `GET <gateway url>/catalog` (schema 2); the server asks for it at most once an hour while the Gateway is
+connected, ignores an answer it cannot read, and otherwise uses the list shipped with its release.
 
-The first picks, **Tico Cheap 1.1**, **Mid 1.0** and **Power 1.0** (and Cheap 1.0), are the **old lineup**. A bot, a
-default or a fallback already on one keeps it, runs on it and pays its old price, shown as "Mid 1.0 (old lineup)". Nothing
-new can pick them.
+Ids from before this lineup (with a department, such as Sales or Engineering, or the first lineup's Cheap, Mid and
+Power) were rewritten once to the level they ran at when the server updated, and an id like that from an older install
+still runs as that level.
 
 ## Choose how bots get their models
 
@@ -43,7 +43,7 @@ The four choices:
 
 - **Your Claude and ChatGPT subscriptions, plus Tico Gateway** (recommended). Bots do their main work on your Claude
   and ChatGPT subscriptions. Personal plans are fine. Sign in with your own Claude and ChatGPT accounts in
-  **Settings → Computers**, and don't share one login across your team. Until you sign in, bots run on Tico Mid 1.0
+  **Settings → Computers**, and don't share one login across your team. Until you sign in, bots run on Tico Medium 1.0
   through the Gateway, and they move to your subscriptions on their next turn once you do, with no restart. When a
   plan runs out, the bot finishes on the Gateway, after any other provider signed in on its computer. Decide and
   update drafts run on the Gateway.
@@ -82,7 +82,7 @@ Only the owner can do this.
    (`TICO_GATEWAY_URL`) follows the same rule, or the key is not sent and the card says **Not working**.
 4. Press **Connect**.
 
-The card shows **Connected**, and Tico Cheap 1.1, Mid 1.0 and Power 1.0 appear in the bot model list. The key field empties as
+The card shows **Connected**, and the Tico levels appear in the bot model list. The key field empties as
 soon as you press **Connect**, and the key is never shown again: the field shows only a short preview, its first and
 last three characters. If the card says **Not working** or **Not ready**, see [What the card says](#what-the-card-says).
 
@@ -177,16 +177,15 @@ not list it.
 
 While the Gateway is connected, choose **Tico AI Gateway** as a bot's harness / provider in **Settings → Bots**
 ([Harness, model, effort and fallback](creating-bots.md#7-harness-model-effort-and-fallback)). The Model list then gives
-way to four controls: **Department** (the bot's group's, marked "(from group)"), **Level** (Low, Medium, High), **Fast**
-and **Version**. One line under them says what runs and the price, for example "Claude Sonnet 5.5 · $2.50 / $12.50 per
+way to three controls: **Level** (X-Low, Low, Medium, High, X-High), **Fast** and **Version**. One line under them says what runs and the price, for example "Claude Sonnet 5.5 · $2.50 / $12.50 per
 1M". Effort, Fallback and Tasks work as for any model. The same controls appear for a fallback or a task model.
 
-A bot on the Gateway with no model of its own, for example one that waits for a sign-in, runs on its department's Medium
-pick at the current version. A template can start a bot on another level: its `bot.yaml` may hold
-`gateway: {level: low, fast: true}` ([Creating bots](creating-bots.md#7-harness-model-effort-and-fallback)).
+A bot on the Gateway with no model of its own, for example one that waits for a sign-in, runs on Medium at the current
+version. A template can start a bot on another level: its `bot.yaml` may hold
+`gateway: {level: low, fast: true}` (level `xlow`, `low`, `medium`, `high` or `xhigh`) ([Creating bots](creating-bots.md#7-harness-model-effort-and-fallback)).
 
 **Settings → Models** has **Decisions**, the level Decide runs at: Low (the default, the fast and cheap
-`tico-decide-1.0`), Medium or High (`tico-decide-medium-1.0`, `tico-decide-high-1.0`: Claude Sonnet 5.5 at $2.50 / $12.50 and Claude Opus 5.5 at $5 / $25 per 1M, with up to 30
+`tico-decide-low`, on Jev), Medium or High (`tico-decide-medium-1.0`, `tico-decide-high-1.0`: Claude Sonnet 5.5 at $2.50 / $12.50 and Claude Opus 5.5 at $5 / $25 per 1M, with up to 30
 seconds per try instead of 8). Higher costs more per question and answers slower.
 
 No bot ever holds the gateway key. For a bot on a Tico model, or with a Tico model as its own fallback, the computer
@@ -250,14 +249,16 @@ saying the Tico AI Gateway cut the reply off.
 
 One card. Its first line says whether the Gateway is connected (and, for the owner only, this month's spend against its
 cap, with a bar) beside the **Use as fallback** switch. Owners and admins also see **prices** per 1M tokens in and out by
-level (Low, Medium, High) and mode (Regular, Fast), without the models underneath; **Picks in use** (name, version or
+level (X-Low to X-High) and mode (Regular, Fast), without the models underneath; **Picks in use** (name, version or
 Auto, number of bots) when a bot uses one; **API keys**, a link for the owner while the Gateway is connected
 ([API keys](#api-keys)); and **Services**, folded, with each service's status (Live, On request, Coming soon), price and
 the tools that use it. The owner's key and Gateway URL are under **Advanced**. The old **Settings → Gateway** address
 (`#/settings/gateway`) opens this card.
 
-Services today: **Decide** and **Classify** (live), **Inbox** email addresses (live) and numbers (on request), **Search** and **Fetch**
-(live), with transcription, sending email, enrichment, voice and physical mail coming soon. Bots and agents read
+Services today: **Decide** (live), **Inbox** email addresses (live) and numbers (on request), **Search**, **Fetch**,
+**Images**, **SVG**, **Video**, **Signals**, **Digest**, **Transcribe** and **Mail** (live), with sending letters and email,
+enrichment and voice coming soon.
+A choice question (which of your labels fits) is a Decide question. Bots and agents read
 the same list with the `hub_gateway_catalog` tool and search the web with `hub_gateway_search` (`hub gateway catalog [query]`,
 `hub gateway search QUERY`, `hub gateway fetch URL`); search is billed like Low tokens plus $0.00875 per answered search, from the same cap. `hub_gateway_fetch` reads a page or PDF by URL, billed like Low tokens plus $0.00125 per page. The
 skill is `skills/gateway/SKILL.md`.
@@ -281,7 +282,7 @@ OpenAI SDK:
 from openai import OpenAI
 
 client = OpenAI(base_url="https://updates.tico.team/v1/gateway", api_key="<key>")
-reply = client.chat.completions.create(model="tico-general-medium",
+reply = client.chat.completions.create(model="tico-medium",
                                        messages=[{"role": "user", "content": "Hello"}])
 ```
 

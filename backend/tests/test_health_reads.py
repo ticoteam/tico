@@ -207,5 +207,7 @@ def test_health_claim_checks_read_every_queued_job_together_and_say_the_same(api
         unprimed.setattr(execution, "_queue_suspects", lambda c, queue: None)
         unprimed.setattr(execution, "prime_job_checks", lambda c, jobs: None)
         alone, slow = counted(api, monkeypatch, "/api/v2/health")
-        assert slow > 1500, slow
+        # The control still reads several times the batched total: its per-task question reads are batched too now
+        # (hubdb.prime_asks), so it is 1,388 where it was over 1,500.
+        assert slow > 1000, slow
         assert api.get("/api/v2/health", headers=headers("ana-test")).content == primed

@@ -387,9 +387,9 @@ MODEL_CATALOG = tuple(
             "efforts": ("low", "high"),
             "default_effort": "low",
         },
-        # The Tico AI Gateway's lineup (backend/gateway_tiers.py): 60 department tiers at their current pinned version, then the
-        # old lineup (retired: it keeps working at its old price, nothing new may pick it). Any other id of the lineup
-        # (an auto id, an older version, one that arrived with HQ's catalog) is found through `MODEL_BY_ID`.
+        # The Tico AI Gateway's lineup (backend/gateway_tiers.py): the ten level tiers at their current pinned version. Any
+        # other id of the lineup (an auto id, an older version, one that arrived with HQ's catalog, an id from before this
+        # lineup) is found through `MODEL_BY_ID`.
         *gateway_tiers.listed_rows(),
         # The meeting model (live-meeting replies): picked in Settings, never a bot's model (`meeting`, see provider_models).
         *gateway_tiers.meeting_rows(),
@@ -547,7 +547,7 @@ PRICES = _Priced(
 # above that) in the same units as PRICES. A request's prompt is all its input, cache reads and cache writes
 # included, and each request is priced on its own. Anthropic's pricing page ("Long context pricing"), read
 # 2026-10-17: only Claude Haiku 5.5; Claude 4.6 and later models bill their whole context at the standard rate.
-# The Gateway's (Low tiers, Cheap 1.1) come from its own price (backend/gateway_tiers.py), not Anthropic's page.
+# The Gateway's (the Low tier) come from its own price (backend/gateway_tiers.py), not Anthropic's page.
 # gpt-6.1-terra's row is Tico's approved long-prompt tier (Product, 2026-11-01), set at or over 272,000 tokens
 # as ruled on 2026-11-03 (Product confirmed the wording that day). OpenRouter's public model list gives
 # openai/gpt-6.1-terra a pricing override at min_prompt_tokens 272000 (read 2026-11-05); its override rates differ.
@@ -688,6 +688,8 @@ def complete_choice(enabled, runtime="", model="", kept=""):
     """
     enabled = normalize_enabled(enabled)
     runtime, model = str(runtime or "").strip(), str(model or "").strip()
+    # A Tico id from before Gateway lineup 3 (an older peer or a saved form) is saved as the id it is now.
+    model, kept = gateway_tiers.new_id(model), gateway_tiers.new_id(str(kept or "").strip())
     if not enabled:
         if runtime or model:
             raise ProviderError("provider", "Enable at least one AI provider before choosing a default model", 422)
@@ -1087,20 +1089,21 @@ def resolve(record, config=None, *, what="This bot"):
     the company default when it is on that runtime, else that provider's recommended model.
     """
     config = config or {}
-    runtime, model = _named(config.get("runtime")), _named(config.get("model"))
+    # A Tico id from before Gateway lineup 3 (written by an older peer) runs as the id it is now.
+    runtime, model = _named(config.get("runtime")), gateway_tiers.new_id(_named(config.get("model")))
     if model and not runtime:
         runtime = (MODEL_BY_ID.get(model) or {}).get("runtime", "")
     if runtime and model:
         return runtime, model
     if runtime:
         if record["runtime"] == runtime and record["model"]:
-            return runtime, record["model"]
+            return runtime, gateway_tiers.new_id(record["model"])
         row = recommended(runtime_provider(runtime))
         if row:
             return runtime, row["id"]
         raise ProviderError("model", f"Choose a model for the {runtime} runtime in Settings", 409)
     if record["runtime"] and record["model"]:
-        return record["runtime"], record["model"]
+        return record["runtime"], gateway_tiers.new_id(record["model"])
     if record["enabled"]:
         row = recommended(record["enabled"][0])
         return row["runtime"], row["id"]

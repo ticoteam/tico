@@ -1479,7 +1479,7 @@ def plan(
     never = way == "defer" and defer_for == "never"
     wanted = {}  # actor -> reason, first reason wins
     for actor, reason in found:
-        wanted.setdefault(actor, "ask" if kind == "ask" and actor == primary else reason)
+        wanted.setdefault(actor, reason)
     if audience in ("personal", "participants") and not thread.get("parent_id"):
         for actor in _dm_members(c, root):
             wanted.setdefault(actor, "dm")
@@ -1493,7 +1493,7 @@ def plan(
     replied = _replied_author(c, root, in_reply_to)
     if replied:
         wanted.setdefault(replied, "reply")
-    if not system and not (on_task and kind in ("ask", "answer")):
+    if not system:
         for actor, notify, reason in _follower_rows(c, thread["id"]):
             if not on_task and actor.startswith("human:") and reason in ("joined", "read"):
                 continue
@@ -1593,18 +1593,14 @@ def deliver(c, thread, message, in_audience, posting, warnings=None):
         if primary.startswith("human:") and reason in ("follower", "digest"):
             # Written to a person who also follows: it addresses them (Needs you lists it), unless only following
             # lets it reach them (a bot's post in a task's thread, hubdb.delivery_counts_sql).
-            written = "ask" if message.get("kind") == "ask" else "addressed"
-            if H.counts_for_person(c, message, written, thread["id"]):
-                reason = written
+            if H.counts_for_person(c, message, "addressed", thread["id"]):
+                reason = "addressed"
         c.execute(
             "UPDATE message_deliveries SET reason=? WHERE message_id=? AND recipient=?",
             (reason if reason in REASONS else "addressed", message["id"], primary),
         )
         # The trigger wrote no row for a bot's post in a task's thread to a person (hubdb.delivery_counts_sql): one that
         # reaches them for a reason that counts gets it here.
-        # An ask's reason is 'ask' here; one that @mentions the person it asks is written as the mention it is.
-        if reason == "ask" and any(a == primary and k == "mention" for a, k in in_audience):
-            reason = "mention"
         if (
             primary.startswith("human:")
             and not c.execute(
@@ -2651,8 +2647,10 @@ def _post(
         duplicate = _duplicate(c, origin, thread)
         if duplicate is not None:
             return duplicate
-    if kind not in ("say", "ask", "answer", "notice", "steer"):
-        raise Problem("kind", "A message is say, ask, answer, notice or steer", 422)
+    if kind in H.OLD_MESSAGE_KINDS:
+        raise Problem("kind", H.ASK_GONE, 422)
+    if kind not in ("say", "notice", "steer"):
+        raise Problem("kind", "A message is say, notice or steer", 422)
     text = str(body or "")
     if not text.strip() and not attachments:
         raise Problem("empty", "Write the message", 422)
@@ -2676,10 +2674,6 @@ def _post(
             raise Problem("not_found", "Unknown recipient", 404)
         if not str(target).startswith(OUTSIDE_PREFIXES) and not audience_has(c, thread, target):
             raise Problem("forbidden", "That teammate cannot read this thread. Add them first.", 403)
-    elif kind == "ask":
-        target = next((a for a, _ in found if audience_has(c, thread, a)), None)
-        if not target:
-            raise Problem("ask", "An ask names who it asks: @mention them", 422)
     elif audience_of(root_of(c, thread)) in ("personal", "participants") and not thread.get("parent_id"):
         others = [a for a in _dm_members(c, root_of(c, thread)) if a != actor]
         target = others[0] if len(others) == 1 else None
@@ -3167,22 +3161,6 @@ def _may_see(c, v, target):
         return teammate_access.levels_for(c, v.who, target, auth=v.auth)["see"]
     except (ValueError, KeyError):
         return False
-
-
-def asks_still_readable(c, actor, messages):
-    """The loose asks to `actor` they may still read. A stored audience is the outer boundary: an ask in a thread they
-    left is off their list until they are back. A row with no stored audience keeps its addressee, who may never have
-    been on its participant list."""
-    v = None
-    out = []
-    for m in messages:
-        root = root_of(c, m["conversation_id"])
-        if root is not None and root.get("audience") in AUDIENCES:
-            v = v or actor_viewer(c, actor)
-            if v is None or not message_readable(c, v, m):
-                continue
-        out.append(m)
-    return out
 
 
 def search(c, v, query, *, limit=20, before=None):

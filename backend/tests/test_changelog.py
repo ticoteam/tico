@@ -7,6 +7,7 @@ import subprocess
 import sys
 from pathlib import Path
 
+import httpx
 import pytest
 
 from backend import changelog, releases
@@ -30,6 +31,26 @@ REVISED = {
     "0.3.58": "95018df598f1d5305f0bdfb094b150ec87958b2a",
     "0.3.64": "bea6bd0adaa4856422b44119370878d3dceb79c2",
 }
+
+
+@pytest.fixture(autouse=True)
+def no_github(monkeypatch):
+    # The release times stay unfetched unless a test asks for them (its clock never moves past the first check).
+    monkeypatch.setattr(releases, "PUBLISHED", releases.Published(clock=lambda: 0.0))
+
+
+def release_times(monkeypatch, handler, tmp_path, notes):
+    monkeypatch.setenv("TICO_VERSION", "0.4.15")
+    monkeypatch.setenv("TICO_UPDATE_CHECK", "on")
+    monkeypatch.delenv("TICO_RELEASES_URL", raising=False)
+    monkeypatch.setattr(releases, "ROOT", tmp_path)
+    (tmp_path / "CHANGELOG.md").write_text(notes)
+    monkeypatch.setattr(releases, "TRANSPORT", httpx.MockTransport(handler))
+    times = releases.Published(clock=lambda: 0.0)
+    times.refresh()
+    monkeypatch.setattr(releases, "PUBLISHED", times)
+    return {row["version"]: row for row in changelog.release_entries()}
+
 
 NOTES = """# Changelog
 ## [Unreleased]
@@ -419,3 +440,38 @@ def test_guard_refuses_lines_that_landed_in_released_sections():
         pytest.skip("no full history in this checkout")
     for squash, version in replays.items():
         assert changes_outside_unreleased(ROOT, main=squash + "^", head=squash) == [version]
+
+
+def test_a_release_takes_its_publish_time_from_github_and_others_stay_date_only(monkeypatch, tmp_path):
+    seen = []
+
+    def handler(request):
+        seen.append(str(request.url))
+        return httpx.Response(
+            200,
+            json=[
+                {"tag_name": "v0.4.15", "published_at": "2026-10-27T22:42:00Z", "draft": False},
+                {"tag_name": "nightly", "published_at": "2026-10-28T00:00:00Z"},
+                {"tag_name": "v0.4.16", "published_at": "2026-10-29T00:00:00Z", "draft": True},
+            ],
+        )
+
+    rows = release_times(
+        monkeypatch,
+        handler,
+        tmp_path,
+        "# Changelog\n## [0.4.15] - 2026-10-27\n- Timed.\n## [0.4.14] - 2026-10-26\n- Untimed.\n",
+    )
+    assert seen == [releases.RELEASES_URL]
+    assert rows["0.4.15"]["published_at"] == "2026-10-27T22:42:00Z"
+    assert rows["0.4.15"]["shipped_at"] == "2026-10-27T00:00:00Z"
+    assert "published_at" not in rows["0.4.14"]
+
+
+def test_github_unreachable_leaves_every_release_date_only(monkeypatch, tmp_path):
+    def handler(request):
+        raise httpx.ConnectError("offline", request=request)
+
+    rows = release_times(monkeypatch, handler, tmp_path, "# Changelog\n## [0.4.15] - 2026-10-27\n- Timed.\n")
+    assert rows["0.4.15"]["shipped_at"] == "2026-10-27T00:00:00Z"
+    assert "published_at" not in rows["0.4.15"]

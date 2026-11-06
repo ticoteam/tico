@@ -11,6 +11,7 @@ const PEOPLE_ROLE = {owner: 'Owner', admin: 'Admin', member: 'Member'};
 const PEOPLE_SOURCE = {google: 'Google Workspace', entra: 'Microsoft Entra ID', scim: 'SCIM'};
 // The team policies (backend/team_rules.py) in Company & policies, under three headings, each switch with one line on
 // what it does: on by default; the owner turns one off to tighten. The lines are the Settings Owner's (Dev 648).
+/** @type {Array<[string, Array<[string, string, string]>]>} */
 const POLICY_GROUPS = [
   ['What bots may do alone', [
     ['assistant_direct', 'Assistant acts without asking', "The Assistant makes tasks, comments and messages to bots, and the task and setting changes a person asks for in chat, without a card first. Off: it asks with a card for anything beyond the person's own tasks."],
@@ -410,7 +411,7 @@ async function renderSettingsPolicies() {
   try { view = await get('/v2/access'); }
   catch (error) { el.innerHTML = `<div class="empty">Couldn't load the policies: ${esc(error.message || 'try again')}</div>`; return; }
   if (!$('#set-policies')) return;
-  const owner = S.me?.role === 'owner';
+  const owner = $('#settings-tabs')?.dataset.role === 'owner';
   const row = ([key, label, line]) => `<label class="people-line policy-line">${peopleSwitch(`data-policy="${key}"`, view.rules?.[key] !== false, false, label)}
     <span><span>${esc(label)}</span><span class="settings-cell-note">${esc(line)}</span></span></label>`;
   const limit = `<label class="people-line policy-line policy-number"><input id="member-bot-limit" type="number" inputmode="numeric" min="0" max="1000" value="${esc(String(view.member_bot_limit))}" aria-label="Bot limit per member">

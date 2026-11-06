@@ -57,12 +57,12 @@ CHANGELOG_REFUSAL = (
     "No PR edits CHANGELOG.md; the Technical Writer writes notes at the release cut. Remove your CHANGELOG.md changes."
 )
 RELEASE_TRAILER = re.compile(r"^Changelog-Release:[ \t]*v?(\d+\.\d+\.\d+)[ \t]*$", re.M)
-# Each check VM has 4 vCPUs and runs 4 test workers. Groups are sized so a VM finishes in about
-# TICO_CI_JOB_SECONDS, setup included: short Spot jobs are rarely interrupted and lose little when one is.
+# Each check VM has 4 vCPUs (the largest size these checks use) and runs 4 test workers. Groups are sized so a VM
+# finishes in about TICO_CI_JOB_SECONDS, setup included. Short Spot jobs are rarely interrupted and lose little when one is.
 # The cap only guards against a runaway plan. At 16 it held the suite to 16 VMs once the measured default suite grew
 # past 16 x 540 s (Oct 23: 3,300 one-worker seconds; Nov 5: 39,900), so every full run's shards took 11-14 minutes.
 WORKERS = 4
-JOB_SECONDS = float(os.environ.get("TICO_CI_JOB_SECONDS", 180))
+JOB_SECONDS = float(os.environ.get("TICO_CI_JOB_SECONDS", 300))
 SETUP_SECONDS = {"python": 45, "browser": 70}  # measured boot, checkout and warm install
 MAX_JOBS = int(os.environ.get("TICO_CI_MAX_JOBS", 64))
 # Python jobs pass the release gate's own flags: restore a worker-local schema snapshot instead of migrating a fresh
@@ -784,11 +784,11 @@ def full_suite(name):
 def selection(changed, event="pull_request", root=ROOT, graph=None, base=None, added=None, core=None):
     """None means the full default suite; an empty list means explicitly unaffected.
 
-    A pull request runs the default tests that use a changed file (DependencyMap) and, of the browser scripts that
-    do, the core ones the full suite runs; a UI change runs its mapped scripts or all of them. A docs page,
-    CHANGELOG.md or a GitHub file runs the tests that read it (read_only); a CI input adds a short browser smoke
-    (CI_INPUTS). `added` names the new files (None: any may be new) and `core` the core browser scripts (None: read
-    from scripts/ui-tests.cjs)."""
+    A pull request or a merge queue group (base to head) runs the default tests that use a changed file
+    (DependencyMap) and, of the browser scripts that do, the core ones the full suite runs; a UI change runs its
+    mapped scripts or all of them. A docs page, CHANGELOG.md or a GitHub file runs the tests that read it
+    (read_only); a CI input adds a short browser smoke (CI_INPUTS). `added` names the new files (None: any may be
+    new) and `core` the core browser scripts (None: read from scripts/ui-tests.cjs)."""
     full = {"python": None, "browser": None, "caddy": True, "contracts": True, "reason": "full default suite"}
     rust = sorted(crate for crate, inputs in RUST_INPUTS.items() if any(p.startswith(inputs) for p in changed))
     runner = bool(rust) or any(
@@ -797,7 +797,7 @@ def selection(changed, event="pull_request", root=ROOT, graph=None, base=None, a
         for p in changed
     )
     full["rust"] = rust
-    if event != "pull_request":
+    if event not in ("pull_request", "merge_group"):
         return {**full, "conformance": runner, "reason": "main runs the full default suite"}
     if not changed:
         return {**full, "conformance": runner, "reason": "empty diff: full default suite", "uncertain": ["empty diff"]}
@@ -964,12 +964,14 @@ def image_checks(changed, root=ROOT):
     subprocess.run([sys.executable, "-c", found.group(1)], cwd=root, check=True)
 
 
-def prepare(event, base, output, timings_path=None):
+def prepare(event, base, output, timings_path=None, head="HEAD"):
+    """`head` is the commit under test: the checkout for a pull request, the queue group's merge commit for a
+    merge_group. A group's base is its own base sha, so it needs no merge_parent or changelog guard."""
     if event == "pull_request":
         base = merge_parent(base)
         guard_changelog(base)
-    changed = changed_files(base) if base else []
-    added = changed_files(base, only="A") if base else None
+    changed = changed_files(base, head) if base else []
+    added = changed_files(base, head, only="A") if base else None
     picked = selection(changed, event, base=base, added=added)
     if picked["python"] is not None and not picked["caddy"]:
         image_checks(changed)
@@ -1170,6 +1172,7 @@ def main():
     plan = sub.add_parser("plan")
     plan.add_argument("--event", required=True)
     plan.add_argument("--base", default="")
+    plan.add_argument("--head", default="HEAD")
     plan.add_argument("--output", default="ci-plan.json")
     plan.add_argument("--timings")
     execute = sub.add_parser("run")
@@ -1179,7 +1182,7 @@ def main():
     sub.add_parser("receipt")
     args = parser.parse_args()
     if args.action == "plan":
-        prepare(args.event, args.base, args.output, args.timings)
+        prepare(args.event, args.base, args.output, args.timings, args.head)
     elif args.action == "run":
         return run(args.plan, args.suite)
     elif args.action == "durations":

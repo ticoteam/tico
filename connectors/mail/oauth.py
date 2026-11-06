@@ -87,7 +87,7 @@ def grants_path(key_path=None):
     if named:
         return Path(named).expanduser()
     if key_path is None:
-        from .auth import key_path as default_key  # noqa: PLC0415
+        from .auth import key_path as default_key
 
         key_path = default_key()
     return Path(key_path).expanduser().with_name(FILE)
@@ -403,13 +403,13 @@ def broker(retries=1):
             "this process was not started by the runner that can ask it",
             "Use mail through the runner: its connectors job, or a bot turn on this computer.",
         )
-    from clients.tico import Client  # noqa: PLC0415
+    from clients.tico import Client
 
     return Client(url, auth, timeout=35, retries=retries)
 
 
 def _broker_call(path, body, mailbox, retries=1):
-    from clients.tico import APIError  # noqa: PLC0415
+    from clients.tico import APIError
 
     try:
         return broker(retries).post(path, body)

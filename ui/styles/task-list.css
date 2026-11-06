@@ -19,35 +19,37 @@
 .tl-status:hover{background:var(--surface2);color:var(--ink)}
 .tl-status:focus-visible{outline:var(--focus-ring);outline-offset:var(--focus-inset)}
 
-/* ---- toolbar: title, labelled tabs with counts and More, search, new task */
-.tl-head{display:flex;flex-wrap:wrap;align-items:center;gap:12px;row-gap:8px;min-height:32px}
+/* ---- the header, one row: title, scope ▾, then whose list, search, filter, layout, finished, Catch up, ⋯ and new task.
+   With no room the search folds to its icon (.s-fold), the finished views move to the chips row, and only then does the
+   row wrap (.wrap); task-list.js tasksHeadFit. */
+.tl-head{position:relative;display:flex;flex-wrap:nowrap;align-items:center;gap:8px;min-height:32px;padding-bottom:6px}
+.tl-head.wrap{flex-wrap:wrap;row-gap:6px}
 .tl-head h1{flex:none;font-size:var(--t-lg);margin:0 4px 0 0;white-space:nowrap}
-.tl-head .spacer,.tl-bar .spacer{flex:1}
-/* The tab row and its More menu (task-list.js tasksTabsFit): it never scrolls; a tab with no room moves into More. */
-.tl-views{flex:none;display:inline-flex;align-items:center;gap:2px;min-width:0;max-width:100%;padding:2px;border:1px solid var(--line);border-radius:8px;background:var(--surface);overflow:hidden}
-#task-view-more-wrap{display:contents}
-.tl-tabs{flex:0 1 auto;display:inline-flex;gap:2px;min-width:0;overflow:hidden}
-.tl-tabs [role=tab][hidden]{display:none}
-.tl-views-more{flex:none;display:inline-flex;align-items:center;gap:4px;height:26px;padding:0 8px 0 10px;border:0;border-radius:6px;background:none;color:var(--muted);font:500 var(--t-base)/var(--lh-none) var(--sans);white-space:nowrap;cursor:pointer}
-.tl-views-more:hover,.tl-views-more[aria-expanded=true]{color:var(--ink)}
-.tl-views-more.on{background:var(--raised);color:var(--ink);box-shadow:0 1px 2px rgba(0,0,0,.22)}
-.tl-views-more:focus-visible{outline:var(--focus-ring);outline-offset:var(--focus-inset)}
-.tl-tabs [role=tab]{display:inline-flex;align-items:center;gap:6px;height:26px;padding:0 10px;border:0;border-radius:6px;background:none;color:var(--muted);font:500 var(--t-base)/var(--lh-none) var(--sans);white-space:nowrap;cursor:pointer}
-.tl-tabs [role=tab]:hover{color:var(--ink)}
-.tl-tabs [role=tab][aria-selected=true]{background:var(--raised);color:var(--ink);box-shadow:0 1px 2px rgba(0,0,0,.22)}
-.tl-tabs [role=tab]:focus-visible{outline:var(--focus-ring);outline-offset:var(--focus-inset)}
-.tl-tabs .cnt{font-size:var(--t-xs);color:var(--muted);font-weight:500}
-.tl-tabs .cnt.hot{color:var(--wait-ink);font-weight:600}
-.tl-type-search{display:flex;align-items:center;gap:10px;flex:1 1 auto;max-width:480px;min-width:0}
-.tl-types{display:inline-flex;align-items:center;flex:none;gap:2px;padding:2px;border:1px solid var(--line);border-radius:8px;background:var(--surface)}
-.tl-types[hidden]{display:none}
-.tl-types button{display:inline-flex;align-items:center;gap:6px;height:26px;padding:0 9px;border:0;border-radius:6px;background:none;color:var(--muted);font:500 var(--t-base)/var(--lh-none) var(--sans);white-space:nowrap;cursor:pointer}
-.tl-types button[aria-pressed=true]{background:var(--raised);color:var(--ink);box-shadow:0 1px 2px rgba(0,0,0,.22)}
-.tl-types button:hover:not(:disabled){color:var(--ink)}
-.tl-types button:focus-visible{outline:var(--focus-ring);outline-offset:var(--focus-inset)}
-.tl-types button:disabled{opacity:.45;cursor:default}
-#task-type-more span{max-width:130px;overflow:hidden;text-overflow:ellipsis}
-.tl-search{flex:1 1 150px;min-width:90px;max-width:180px;display:flex;align-items:center;gap:6px;height:var(--ctl);padding:0 6px 0 9px;border:1px solid var(--line);border-radius:var(--r-ctl);background:var(--surface);color:var(--muted)}
+.tl-head .spacer{flex:1 1 0;min-width:0}
+.tl-head [hidden]{display:none!important}
+.tl-scope{flex:0 1 auto;display:inline-flex;align-items:center;gap:6px;min-width:56px;height:var(--ctl);padding:0 8px 0 10px;border:1px solid var(--line);border-radius:var(--r-ctl);background:var(--surface);color:var(--ink);font:500 var(--t-base)/var(--lh-none) var(--sans);white-space:nowrap;cursor:pointer}
+.tl-scope:hover,.tl-scope[aria-expanded=true]{background:var(--surface2)}
+.tl-scope:focus-visible{outline:var(--focus-ring);outline-offset:var(--focus-inset)}
+.tl-scope-l{min-width:0;overflow:hidden;text-overflow:ellipsis}
+.tl-scope .cnt{flex:none;font-size:var(--t-xs);color:var(--muted);font-weight:500}
+.tl-scope .cnt.hot{color:var(--wait-ink);font-weight:600}
+.tl-scope svg{flex:none;color:var(--muted)}
+/* icon buttons: filter, archive, ⋯; the layout pair and the finished views */
+.tl-ib{position:relative;flex:none;display:inline-grid;place-items:center;width:var(--ctl);height:var(--ctl);padding:0;border:1px solid transparent;border-radius:var(--r-ctl);background:none;color:var(--muted);cursor:pointer}
+.tl-ib:hover,.tl-ib[aria-expanded=true]{background:var(--surface2);color:var(--ink)}
+.tl-ib[aria-pressed=true]{background:var(--raised);border-color:var(--line);color:var(--ink)}
+.tl-ib:focus-visible{outline:var(--focus-ring);outline-offset:var(--focus-inset)}
+.tl-ib.active{color:var(--ink)}
+.tl-fbadge{position:absolute;top:1px;right:0;min-width:15px;height:15px;padding:0 4px;border-radius:8px;background:var(--ink);color:var(--bg);font:600 10px/15px var(--sans);text-align:center}
+.tl-pair{flex:none;display:inline-flex;align-items:center;gap:2px;height:var(--ctl);padding:2px;border:1px solid var(--line);border-radius:var(--r-ctl);background:var(--surface)}
+.tl-pair button{display:inline-grid;place-items:center;min-width:26px;height:100%;padding:0 6px;border:0;border-radius:6px;background:none;color:var(--muted);font:500 var(--t-sm)/var(--lh-none) var(--sans);white-space:nowrap;cursor:pointer}
+.tl-pair button:hover{color:var(--ink)}
+.tl-pair button[aria-pressed=true]{background:var(--raised);color:var(--ink);box-shadow:0 1px 2px rgba(0,0,0,.22)}
+.tl-pair button:focus-visible{outline:var(--focus-ring);outline-offset:var(--focus-inset)}
+.tl-finished-slot,.tl-finished-bar{display:contents}
+.tl-pair[hidden]{display:none}
+.tl-bar .tl-finished{height:26px}
+.tl-search{flex:0 1 200px;min-width:120px;display:flex;align-items:center;gap:6px;height:var(--ctl);padding:0 6px 0 9px;border:1px solid var(--line);border-radius:var(--r-ctl);background:var(--surface);color:var(--muted)}
 .tl-search:focus-within{border-color:var(--focus);outline:var(--focus-halo);outline-offset:0}
 .tl-search svg{flex:none}
 .tl-search input{flex:1;min-width:0;width:0;height:30px;padding:0;border:0;border-radius:0;background:none;box-shadow:none;font-size:var(--t-base);color:var(--ink)}
@@ -55,10 +57,21 @@
 .tl-search input:placeholder-shown::-webkit-search-cancel-button{display:none}   /* an empty field keeps its room for the placeholder */
 .tl-search kbd{flex:none;font:var(--t-xs)/16px var(--sans);padding:0 5px;border:1px solid var(--line);border-radius:4px;color:var(--muted)}
 .tl-search:focus-within kbd{display:none}
+/* folded, the search is its icon; focused it opens over the header's first row; holding words, its icon is marked */
+.tl-head.s-fold .tl-search:not(:focus-within){flex:none;position:relative;width:var(--ctl);min-width:0;padding:0;justify-content:center;border-color:transparent;background:none;cursor:pointer}
+.tl-head.s-fold .tl-search:not(:focus-within):hover{background:var(--surface2);color:var(--ink)}
+.tl-head.s-fold .tl-search:not(:focus-within) input{position:absolute;inset:0;width:100%;height:100%;opacity:0;cursor:pointer}
+.tl-head.s-fold .tl-search:not(:focus-within) kbd{display:none}
+.tl-head.s-fold .tl-search:not(:focus-within):has(input:not(:placeholder-shown)){color:var(--ink);border-color:var(--line)}
+.tl-head.s-fold .tl-search:focus-within{position:absolute;top:0;left:0;right:0;z-index:2;height:var(--ctl);max-width:none;background:var(--surface)}
 .tl-new{flex:none;display:inline-grid;place-items:center;width:var(--ctl);height:var(--ctl);padding:0;border-radius:var(--r-ctl)}
+.tl-who{flex:none;display:inline-flex;align-items:center;gap:3px;height:var(--ctl);padding:0 4px 0 6px;border:1px solid transparent;border-radius:var(--r-ctl);background:none;color:var(--muted);cursor:pointer}
+.tl-who:hover,.tl-who[aria-expanded=true]{background:var(--surface2);color:var(--ink)}
+.tl-who.asked{border-color:var(--line)}
+.tl-who:focus-visible{outline:var(--focus-ring);outline-offset:var(--focus-inset)}
 
-/* ---- the filter bar: removable chips, Filter, Group by */
-.tl-bar{display:flex;align-items:center;gap:8px;min-height:38px;padding:4px 0 6px}
+/* ---- the chips row, only while filters are on (or the finished views have no room in the header) */
+.tl-bar{display:flex;align-items:center;gap:8px;min-height:32px;padding:0 0 6px}
 .tl-bar[hidden]{display:none}
 .tl-filters{display:flex;align-items:center;gap:6px;min-width:0;flex-wrap:wrap}
 .tl-chipset{display:contents}
@@ -69,25 +82,14 @@
 .tl-chip-main:hover,.tl-chip-x:hover{background:var(--surface2)}
 .tl-chip-x{display:grid;place-items:center;width:22px;padding:0;border:0;border-left:1px solid var(--line);background:none;color:var(--muted);cursor:pointer}
 .tl-chip-x:hover{color:var(--ink)}
-.tl-chip button:focus-visible,.tl-addf:focus-visible,.tl-gtoggle:focus-visible,.tl-gact:focus-visible,.tl-chev:focus-visible{outline:var(--focus-ring);outline-offset:var(--focus-inset)}
-.tl-addf{display:inline-flex;align-items:center;gap:5px;height:24px;padding:0 8px;border:1px solid transparent;border-radius:6px;background:none;color:var(--muted);font-size:var(--t-sm);cursor:pointer}
-.tl-addf:hover{background:var(--surface2);color:var(--ink)}
-.tl-addf.active{border-style:dashed;border-color:var(--line)}
-.tl-addf.tl-ic{justify-content:center;width:24px;padding:0}
+.tl-chip button:focus-visible,.tl-gtoggle:focus-visible,.tl-gact:focus-visible,.tl-chev:focus-visible{outline:var(--focus-ring);outline-offset:var(--focus-inset)}
 button.linkish.tl-clear{font-size:var(--t-sm);color:var(--muted);text-decoration:none;padding:0 4px}
 button.linkish.tl-clear:hover{color:var(--ink)}
 .tl-clear[hidden]{display:none}
-.tl-groupby{flex:none;display:inline-flex}
-.tl-groupby[hidden]{display:none}
 .tl-groupchip{gap:6px;padding:0 8px;color:var(--muted)}
 .tl-groupchip .v{color:var(--ink)}
 .tl-groupchip:focus-visible{outline:var(--focus-ring);outline-offset:var(--focus-inset)}
 .tl-who-wrap{flex:none;display:inline-flex}
-.tl-who-wrap[hidden]{display:none}
-.tl-who{gap:6px;padding:0 8px}
-.tl-who .v{max-width:18ch}
-.tl-who svg:last-child{color:var(--muted)}
-.tl-who:focus-visible{outline:var(--focus-ring);outline-offset:var(--focus-inset)}
 .tl-seg{display:flex;gap:2px;margin:0 0 6px;padding:2px;border:1px solid var(--line);border-radius:8px;background:var(--bg)}
 .tl-seg button{flex:1;height:24px;padding:0 6px;border:0;border-radius:6px;background:none;color:var(--muted);font:500 var(--t-sm)/var(--lh-none) var(--sans);white-space:nowrap;cursor:pointer}
 .tl-seg button[aria-pressed=true]{background:var(--raised);color:var(--ink);box-shadow:0 1px 2px rgba(0,0,0,.22)}
@@ -98,8 +100,10 @@ button.linkish.tl-clear:hover{color:var(--ink)}
 .tl-mi-n{margin-left:auto;padding-left:8px;color:var(--muted);font-size:var(--t-sm)}
 .tl-mi-n+.tl-mi-on{margin-left:6px}
 .tl-who-more{color:var(--muted)}
-.tl-selmode[aria-pressed=true]{color:var(--ink);border-color:var(--line)}
-@media (min-width:761px){#task-select-mode{display:none!important}}
+.tl-menu-sep{height:1px;margin:4px 2px;background:var(--line)}
+.tl-gpicks{display:flex;flex-wrap:wrap;gap:4px;padding:0 4px 6px}
+.tl-gpicks .tl-mi.tl-gpick{width:auto;min-height:24px;padding:0 8px;border:1px solid var(--line);font-size:var(--t-sm)}
+.tl-gpicks .tl-gpick[aria-checked=true]{background:var(--raised);border-color:var(--ink)}
 
 /* ---- the list: groups, then one 32px line per task */
 .tl{margin:0 -28px;border-top:1px solid var(--line)}
@@ -277,35 +281,12 @@ button.linkish.tl-clear:hover{color:var(--ink)}
 .tl-bulk .tl-bulk-x{display:inline-flex;align-items:center;gap:5px;color:var(--muted);margin-left:4px}
 
 /* ---- a narrower list (the peek open, a small window): fewer things per line */
-@container tasks (max-width:920px){
-  .tl-head{flex-wrap:wrap;row-gap:8px}
-  .tl-views{order:5;flex-basis:100%}
-  .tl-views-more{margin-left:auto}
-  .tl-type-search{flex:0 1 440px}
-}
 @container tasks (max-width:900px){
-  .tl-search{flex-basis:150px}
   .tl-search kbd{display:none}
   .tl-row .tlabel{display:none}
 }
 @container tasks (max-width:640px){
-  .tl-head{flex-wrap:wrap;row-gap:6px}
-  .tl-head .spacer{display:none}
-  .tl-type-search{order:4;flex:1 0 100%;max-width:100%;gap:6px}
-  /* Type and search share the row whatever the font's widths: both may shrink, the search to 72px */
-  .tl-search{flex:1 1 0;min-width:72px}
-  .tl-head h1{margin-right:auto}
-  .tl-types{flex:0 1 auto;min-width:0;overflow:hidden}
-  .tl-types button{flex:0 1 auto;min-width:0;padding:0 7px;overflow:hidden}
-  #task-type-more span{max-width:80px;min-width:0}
   .tl-note-text,.tl-due{display:none}
-}
-/* A phone: an empty search is its icon, so the type keeps its words; tapped (or holding words) it covers the type row */
-@media (max-width:760px){
-  .tl-type-search{position:relative}
-  .tl-search:not(:focus-within):has(input:placeholder-shown){flex:none;position:relative;width:32px;margin-left:auto;min-width:0;padding:0;justify-content:center;cursor:pointer}
-  .tl-search:not(:focus-within):has(input:placeholder-shown) input{position:absolute;inset:0;width:100%;height:100%;opacity:0;cursor:pointer}
-  .tl-search:focus-within,.tl-search:has(input:not(:placeholder-shown)){position:absolute;inset:0;z-index:1;max-width:none;height:auto}
 }
 
 /* ---- a phone: the peek is a full-screen sheet; rows are dense, the title gets two lines and the note its own
@@ -333,10 +314,20 @@ button.linkish.tl-clear:hover{color:var(--ink)}
   #task-body.has-sel .tl-check-room{display:block;width:18px}
   .tl-chips .tlabel{display:none}
   .tl-bar{overflow-x:auto;scrollbar-width:none;flex-wrap:nowrap}
+  .tl-head{gap:4px}
+  .tl-head h1{margin-right:2px}
+  .tl-head.h-fold h1{position:absolute;width:1px;height:1px;overflow:hidden;clip:rect(0 0 0 0)}   /* the bottom bar already says Tasks */
+  .tl-head .spacer{display:none}
+  .tl-scope{margin-right:auto;padding:0 6px 0 8px;gap:4px}
+  .tl-ib,.tl-new{width:30px}
+  .tl-who{padding:0 2px 0 4px}
+  .tl-head .tl-search:not(:focus-within){flex:none;position:relative;width:30px;min-width:0;padding:0;justify-content:center;border-color:transparent;background:none}
+  .tl-head .tl-search:not(:focus-within) input{position:absolute;inset:0;width:100%;height:100%;opacity:0;cursor:pointer}
+  .tl-head .tl-search:not(:focus-within):has(input:not(:placeholder-shown)){color:var(--ink);border-color:var(--line)}
+  .tl-head .tl-search:focus-within{position:absolute;top:0;left:0;right:0;z-index:2;height:var(--ctl);max-width:none;background:var(--surface)}
+  .tl-pair button{min-width:24px;padding:0 4px}
   .tl-bar.more{-webkit-mask-image:linear-gradient(to left,transparent,#000 28px);mask-image:linear-gradient(to left,transparent,#000 28px)}
   .tl-filters{flex-wrap:nowrap;flex:none}
-  .tl-groupchip .k{display:none}
-  .tl-addf.tl-ic{width:32px;height:32px}
   .tl-parent{display:none}
   #task-body .board{display:flex;overflow-x:auto;scroll-snap-type:x mandatory;gap:8px;margin:4px -12px 0;padding:0 12px 6px}
   .bcol{flex:0 0 max(260px,82vw);scroll-snap-align:start;max-height:none}
@@ -348,9 +339,6 @@ button.linkish.tl-clear:hover{color:var(--ink)}
   #task-peek .prop{min-height:44px}
   #task-peek .tmodal-head{gap:6px;padding-left:12px}
   #task-peek .tmodal-head>.tnum{display:none}
-  .tl-tabs [role=tab]{padding:0 8px;gap:4px}
-  .tl-views-more{padding:0 6px 0 8px}
-  .tl-head{gap:8px}
   body.task-peek-open{overflow:hidden}
   .tl-pop{inset:auto 0 0 0!important;width:100%;max-height:72vh;border-radius:16px 16px 0 0;padding:8px 8px max(12px,env(safe-area-inset-bottom))}
   .tl-pop:popover-open::backdrop{background:rgba(0,0,0,.25)}

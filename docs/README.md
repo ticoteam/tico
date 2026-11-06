@@ -23,7 +23,7 @@ Use `releases/download/vX.Y.Z/install.sh` to pin a release. For a shared server,
 - [Choose and set up bots](creating-bots.md), with the full [Starter catalog](starter-bots.md).
 - [Skills directory](skills.md): propose a skill, approve it once it is screened, and install it for bots and people.
 - [Connect tools](connect-tools.md) (including [a specialist outside Tico](connect-tools.md#work-with-a-specialist-outside-tico) and [hiring an external AI specialist](connect-tools.md#hire-an-external-ai-specialist)), [Credentials](credential-vault.md) and [Permissions](permissions.md).
-  [Tico AI Gateway](ai-gateway.md) runs bots on Tico picks (a department, a level, Fast or not) with one key from Tico.
+  [Tico AI Gateway](ai-gateway.md) runs bots on Tico picks (a level from X-Low to X-High, Fast or not) with one key from Tico.
   Members can have 25 active bots by default; the owner can change the limit.
 - Hosted Tico: [Joining the Tico waitlist](waitlist.md), [Your Tico account page](account.md), and
   [Contact support for more credit](ask-for-credit.md). Account-page help is **unreleased** while deployment is verified.

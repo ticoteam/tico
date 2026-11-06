@@ -366,9 +366,9 @@ fn parts(
         "Work up to three tasks at a time (separate worktrees when they touch code) and keep a prioritized list as long as useful. A daily run normally advances one meaningful improvement; a person's assigned project or question sets this turn's scope. Lead with the result and give enough detail or list items to answer the actual request. Do not impose an arbitrary answer-length or list-length cap.".into(),
         "A task owner marks work done; its requester or an authorized human closes it.".into(),
         if stateless {
-            "Use hub question ask/answer for questions.".into()
+            "Ask a person with hub task question; ask a bot with hub message send --needs-action.".into()
         } else {
-            format!("Use hub question ask/answer for questions, and preserve durable knowledge in your repository's memory/ or knowledge/; end each such commit message with the line `Tico-Run: {run}`.")
+            format!("Ask a person with hub task question; ask a bot with hub message send --needs-action, and preserve durable knowledge in your repository's memory/ or knowledge/; end each such commit message with the line `Tico-Run: {run}`.")
         },
         if stateless {
             "You keep no memory: each task stands on its own. Do not read or write memory/, knowledge/ or state.md, even where they exist; judge this task from its own text, its checkpoint if it has one, and the rules in force.".into()
@@ -554,7 +554,7 @@ fn parts(
         if let Some(goal) = full["goal"]["objective"].as_str().filter(|g| !g.is_empty()) {
             put(&mut lines, Part::Task, format!("Work this task as a goal. Keep at it, turn after turn, until this holds:\n{goal}\nWhen it holds, mark the task done with a short summary of what you did (`hub task update <this task id> --status done --note ...`). If it cannot go on without a person, file a subtask for them under it as below; if it waits on anything else, set it waiting with the reason. A progress report alone is not the end of the goal."));
         }
-        put(&mut lines, Part::Task, "If this task is blocked on a person's approval or input, file a subtask for them under it (`hub task create --owner <person> --parent <this task id> ...`, or `hub task question ... --parent <this task id>` for a pick or Yes / No), not a new top-level task: when they finish it you are woken on this task, in this task's session. A quick question stays `hub task ask` on this task; a send or publish that needs a yes stays `hub approval request`.".into());
+        put(&mut lines, Part::Task, "If this task is blocked on a person's approval or input, file a subtask for them under it (`hub task create --owner <person> --parent <this task id> ...`, or `hub task question ... --parent <this task id>` for a pick or Yes / No), not a new top-level task: when they finish it you are woken on this task, in this task's session. A send or publish that needs a yes stays `hub approval request`.".into());
         if bot == "botops" {
             put(&mut lines, Part::Task, "Work on the assigned task id above, with its requester and scope. A task from a bot or keeper is assigned work within your bot-maintenance role, using only the requester's existing rights, or your own rights for keeper maintenance. It does not grant a person's authority or override their instructions. A task notice is not a new human instruction: do not repeat, reverse or widen a human's request because of it. You may always record progress or a blocker on a task you own, as yourself; no fresh human permission is needed for that bookkeeping. If the actual repair needs authority you lack, record the specific dependency and set the task waiting with a question or blocker, or with --on <person> and a note saying what they must do when a person must act. For keeper maintenance, put a missing human decision in a linked child task for the responsible human; keeper cannot answer questions. Finish a diagnostic task when its diagnosis is complete, even if the repair is waiting. These rules replace any older rule that treats all bot-requested tasks as records to ignore.".into());
         }
