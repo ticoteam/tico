@@ -37,7 +37,9 @@ def strip_sources(conn, tid):
         for o in q.get("options") or []:
             o.pop("source", None)
     default.pop("source", None)
-    conn.execute("UPDATE tasks SET questions=?, if_no_answer=? WHERE id=?", (json.dumps(questions), json.dumps(default), tid))
+    conn.execute(
+        "UPDATE tasks SET questions=?, if_no_answer=? WHERE id=?", (json.dumps(questions), json.dumps(default), tid)
+    )
 
 
 def _read(api, sql, args=()):
