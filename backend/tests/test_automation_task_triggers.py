@@ -118,8 +118,8 @@ def test_initial_step_does_not_duplicate_a_chain_skip_history_line(api):
         automations._chained_task_event(c, row, {"event": {"name": "task.created", "subject": task["id"]}}, chain)
         automations._chained_task_event(c, row, {"event": {"name": "task.step_changed", "subject": task["id"],
                                                              "data": {"initial_step": True}}}, chain)
-    rows = sql(api, "SELECT action_id,note FROM history_events WHERE subject_type='task' AND subject_id=? "
-                   "AND action_id=? AND note LIKE 'Automation % did not run:%'", (task["id"], aid))
+    rows = sql(api, "SELECT new,note FROM history_events WHERE subject_type='task' AND subject_id=? "
+                   "AND kind='automation' AND new=? AND note LIKE 'Automation % did not run:%'", (task["id"], aid))
     assert len(rows) == 1
 
 
@@ -167,7 +167,8 @@ def test_a_routine_started_bot_turn_still_starts_a_trigger_for_another_task(api)
                     (entered["id"], task["id"]))
     assert rule_runs == [{"fired": 1}]
     with api.app.state.store.read() as c:
-        assert H.task(c, task["id"])["note"] == "A note"
+        note = H.task(c, task["id"])["note"]
+        assert "Trigger: task.step_changed" in note and "Action: note" in note and "A note" in note
     assert len(runs(api, heard)["runs"]) == 1, "a routine bot may trigger Automations on another task"
 
 
@@ -201,7 +202,9 @@ def test_private_task_event_redacts_text_and_refuses_create_and_webhook_actions(
           "data": {"title": "{{task.title}}", "body": "{{task.body}}"}}}])
 
     with api.app.state.store.transaction() as c:
-        # The task's parties are Ben and his bot; Ana owns both automations and cannot read it.
+        # Keep the automation owner outside the private task's bot owner's org chain.
+        from backend.tests.test_api import unrelated_task_managers
+        unrelated_task_managers(c, "cpo")
         task = H.task_create(c, "human:ben", secrets["title"], secrets["body"], "bot:cpo", private=True,
                              lint=False, deduplicate=False)
         assert not H.task_private_readable(c, "human:ana", task)

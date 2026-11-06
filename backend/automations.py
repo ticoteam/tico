@@ -1483,8 +1483,8 @@ def _chained_task_event(c, row, payload, chain, *, rule_action=False):
         event = payload.get("event") or {}
         data = event.get("data") or {}
         if data.get("initial_step") and c.execute(
-                "SELECT 1 FROM history_events WHERE subject_type='task' AND subject_id=? AND action_id=? "
-                "AND note LIKE 'Automation % did not run:%' LIMIT 1", (subject, row["id"])).fetchone():
+                "SELECT 1 FROM history_events WHERE subject_type='task' AND subject_id=? AND kind='automation' "
+                "AND new=? AND note LIKE 'Automation % did not run:%' LIMIT 1", (subject, row["id"])).fetchone():
             return
         if rule_action:
             reason = "a Task Trigger Action made this change"

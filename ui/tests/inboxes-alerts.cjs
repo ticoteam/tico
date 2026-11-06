@@ -52,6 +52,7 @@ const {unrouted} = require('./support/routes.cjs');
     });
     await page.goto('https://tico-ui.test/#/settings/company-inbox');
     await page.waitForFunction(() => typeof inboxesAlerts === 'function' && S.me?.id);
+    await page.locator('#tools-root').waitFor(); // The old Settings URL redirects to Tools before this fixture replaces #main.
     const draw = admin => page.evaluate(async admin => {
       let host = document.querySelector('#alerts-test-host');
       if (!host) { document.querySelector('#main').innerHTML = '<div id="alerts-test-host"></div>'; host = document.querySelector('#alerts-test-host'); }

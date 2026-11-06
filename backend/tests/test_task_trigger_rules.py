@@ -93,16 +93,21 @@ def test_created_action_cannot_start_a_same_or_alternate_rule_chain(api):
             assert all("maximum chain depth is one" in e["note"] for e in events)
 
 
-def test_sourceless_create_action_cannot_start_a_task_trigger_chain(api):
+def test_event_rule_created_task_can_start_a_task_trigger_chain(api):
     from backend import rules as R
-    rule(api, "webhook.received", "create_task", {"owner": "ops", "title": "From webhook"})
+    source = rule(api, "webhook.received", "create_task", {"owner": "ops", "title": "From webhook"})
     made = rule(api, action="create_task", params={"owner": "ops", "title": "Must not chain"})
     with api.app.state.store.transaction() as c:
         R.judge_event(c, "webhook.received", {"trigger": "synthetic", "delivery": "one"})
-        assert c.execute("SELECT count(*) FROM tasks").fetchone()[0] == 1
+        assert c.execute("SELECT count(*) FROM tasks").fetchone()[0] == 2
         task = c.execute("SELECT id FROM tasks WHERE title='From webhook'").fetchone()
-        assert history(c, task[0])[0]["new"] == made["id"]
-        assert "maximum chain depth is one" in history(c, task[0])[0]["note"]
+        task_history = history(c, task[0])
+        assert task_history[0]["new"] == made["id"]
+        assert task_history[0]["new"] != source["id"]
+        assert "maximum chain depth is one" not in task_history[0]["note"]
+        child = c.execute("SELECT id FROM tasks WHERE title='Must not chain'").fetchone()
+        assert any(e["new"] == made["id"] and "maximum chain depth is one" in e["note"]
+                   for e in history(c, child[0]))
 
 
 def test_missing_bot_and_throwing_action_preserve_task_and_row_error_time(api, monkeypatch):
