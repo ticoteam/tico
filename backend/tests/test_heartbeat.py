@@ -14,7 +14,7 @@ from backend import heartbeat as HB
 from backend import system_routines as SR
 from backend.scheduler import Scheduler
 from backend.tests.test_api import api, get, put  # noqa: F401  (fixture)
-from backend.tests.test_system_jobs_list import dead_mirror, live, mirrors, sync
+from backend.tests.mirror_rows import dead_mirror, live, mirrors, sync
 
 # Two hours ago: a beat's day counts are read against the clock, and every beat below stays inside the day.
 AT = datetime.now(timezone.utc).replace(microsecond=0) - timedelta(hours=2)

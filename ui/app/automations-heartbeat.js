@@ -226,13 +226,13 @@ const auHeartSwitch = (key, on) => auHeartWrite(async state => {
 function auHeartClick(t) {
   if (AU.id !== AU_HEART) return false;
   if (t.closest('a[href]')) return false;   // the tabs are links
-  let m;
-  if ((m = t.closest('tr[data-hb-beat]'))) {
-    const r = AU.hbLog, id = m.dataset.hbBeat;
+  const beat = t.closest('tr[data-hb-beat]');
+  if (beat) {
+    const r = AU.hbLog, id = beat.dataset.hbBeat;
     if (r) { if (r.open.has(id)) r.open.delete(id); else r.open.add(id); auDrawPane(); }
     return true;
   }
-  if ((m = t.closest('[data-hb-more]'))) { void auHeartMore(AU); return true; }
+  if (t.closest('[data-hb-more]')) { void auHeartMore(AU); return true; }
   return false;
 }
 function auHeartChange(e) {
