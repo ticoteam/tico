@@ -270,8 +270,8 @@ Create product repositories is a wider reach than bot repositories, so:
   bot's Instructions.
 - **The bot gets write to what it made, and the Owner is told** in a notice, for example *Head of Engineering created
   private repo tico-services (acme/tico-services). Head of Engineering has write access to it.* Granting write ticks the
-  repository for the team, so bots set to **All ticked repos** reach it too; the notice names them. A creator on **All
-  ticked repos** with read access moves to **Chosen repos**, keeping read on every repository it reached, so its write
+  repository for the team, so bots set to **All repos in use** reach it too; the notice names them. A creator on **All
+  repos in use** with read access moves to **Chosen repos**, keeping read on every repository it reached, so its write
   stays on what it made; the notice says so, and a repository ticked later reaches it only once chosen. Every creation is
   recorded as `github.product_repo_created` with the bot as the actor, and the grant as `bot.repos_changed`.
 
