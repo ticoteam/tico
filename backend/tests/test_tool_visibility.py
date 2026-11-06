@@ -10,6 +10,7 @@ import json
 import pytest
 
 from backend import api_tools
+from backend.auth import Identity
 from backend.store import Problem
 from backend.tests.test_api import api, get, headers, post, put  # noqa: F401  (fixture)
 from backend.tests.test_api_tools import key, level, tool
@@ -142,8 +143,7 @@ def test_a_listed_group_and_bot_see_it(api):
     assert ("group:" + gid, "Listed", "Treasury") in [(r["subject"], r["why"], r["name"]) for r in get(api, f"api-tools/{tid}")["seen_by"]]
     with api.app.state.store.read() as c:
         admins = api.app.state.vault.admins
-        ops = api.app.state.auth.identity_for_actor(c, "bot:ops")
-        coo = api.app.state.auth.identity_for_actor(c, "bot:coo")
+        ops, coo = Identity("bot:ops", "bot"), Identity("bot:coo", "bot")
         assert api_tools.visible(c, ops, tid, admins) is True
         assert api_tools.visible(c, coo, tid, admins) is False
 
