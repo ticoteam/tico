@@ -3995,22 +3995,24 @@ def market_watch_check(api, args):
     "hub_market_briefing_post",
     "Librarian (the market curator): post the week's market briefing. `body` is Markdown, `items` the "
     "week's findings, each {text, kind: change|signal|theme|size, entity_ids: [market ids it touches]}. The server works out "
-    "which bets cite those ids and tells the Strategy Bot. The same week again replaces it.",
+    "which bets cite those ids and tells the Strategy Bot. `answers` are one-line answers to the Market page's questions, "
+    "keyed changed, money, players, reach, saying (140 characters each); left out, the week's stay. The same week again "
+    "replaces it.",
     {
         "week": _s("ISO week, like 2026-W44"),
         "title": _s("A short title"),
         "body": _s("The briefing in Markdown"),
         "items": {"type": "array", "items": {"type": "object"}, "description": "{text, kind, entity_ids} per finding"},
+        "answers": {"type": "object", "description": "{changed, money, players, reach, saying}: one sentence each"},
     },
     required=("week", "title", "body"),
     writes=True,
 )
 def market_briefing_post(api, args):
-    return api.post(
-        "market/briefings",
-        {"week": args["week"], "title": args["title"], "body": args["body"], "items": args.get("items") or []},
-        key=_key(args),
-    )
+    body = {"week": args["week"], "title": args["title"], "body": args["body"], "items": args.get("items") or []}
+    if args.get("answers") is not None:
+        body["answers"] = args["answers"]
+    return api.post("market/briefings", body, key=_key(args))
 
 
 @tool(

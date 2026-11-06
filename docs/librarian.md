@@ -237,7 +237,7 @@ market reads it, and the tables are readable in hub SQL like the other market ta
   trust it (primary, secondary, estimate, signal). A team adds its own with `hub market sources --add-file`; one with a shipped
   id replaces it.
 
-The owner asks for the work with **Size the market** (`POST /api/v2/market/spend/research {description}`), which files one
+The owner asks for the work with `hub market research` (`POST /api/v2/market/spend/research {description}`), which files one
 Librarian task following `playbooks/size-the-market.md`; asking again while it is open returns the same task. A first market
 setup ends by pointing at the same playbook.
 

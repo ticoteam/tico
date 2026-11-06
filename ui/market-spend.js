@@ -1,19 +1,14 @@
-/* The Market tab's other views (ui/market-page.js): Spend and Buyers, one treemap of what the market spends (by offering,
-   by buyer), with how sure the team is of each box and a panel with the arithmetic behind it; Size vs growth, one dot per
-   segment; and Value chain, who supplies, sells and buys around the team. Drawn from GET /v2/market/spend and
-   /v2/market/value-chain. The layout and the charts are hand-written, with no library. */
+/* The Market page's charts (ui/app/redesign-market.js): "Where is the money going?", one treemap of what the market
+   spends (by offering or by buyer) beside one dot per segment for size against growth, each box and dot opening a panel
+   with the arithmetic behind it; and "How does it reach buyers?", the value chain of who supplies, sells and buys
+   around the team. Drawn from GET /v2/market/spend and /v2/market/value-chain. The layout and the charts are
+   hand-written, with no library. */
 'use strict';
 const MKT_METHODS = {top_down: 'Top down', bottom_up: 'Bottom up', player_sum: 'Player sum', owner: 'Owner'};
 const MKT_KINDS = {reported: 'Reported', estimated: 'Estimated', claimed: 'Claimed'};
 const MKT_METRICS = {revenue: 'Revenue', arr: 'ARR', customers: 'Customers', seats: 'Seats'};
 const MKT_BASES = {product: 'Product', platform: 'Platform'};
 const MKT_COLOURS = 8;
-let MKT = null;          // the open view: {stop}
-
-window.marketViewsStop = function marketViewsStop() {
-  if (MKT) MKT.stop();
-  MKT = null;
-};
 
 const mktSized = data => (data?.segments || []).some(s => s.size);
 const mktOwner = () => S.me?.role === 'owner';
@@ -37,11 +32,6 @@ const mktObject = v => {
 const mktNice = raw => {            // a round step near raw: 1, 2 or 5 times a power of ten
   const p = 10 ** Math.floor(Math.log10(raw || 1)), f = raw / p;
   return (f <= 1 ? 1 : f <= 2 ? 2 : f <= 5 ? 5 : 10) * p;
-};
-
-window.marketViewsMount = function marketViewsMount(host, view) {
-  window.marketViewsStop();
-  MKT = view === 'value-chain' ? mktChain(host) : mktSpend(host, view);
 };
 
 // Squarified treemap (Bruls, Huizing, van Wijk): items {value}, laid into the rectangle in rows that stay near square.
@@ -127,82 +117,91 @@ function mktRestHtml(seg, r) {
       ? `<span class="mkt-n">${esc(label)}</span><span class="mkt-v">${mktMoney(r.value)}</span>` : ''}</div>`;
 }
 
-// ------------------------------------------------------------------ Spend, Buyers and Size vs growth
+// Both charts stand the same height, so side by side they line up.
+const mktChartH = W => Math.round(W < 480 ? W * 1.05 : Math.min(420, Math.max(300, W * 0.7)));
+// "Sure" when every top segment's size is high confidence; otherwise the figures are estimates.
+const mktSure = data => {
+  const tops = mktTree(data).drawn.filter(g => g.seg.size);
+  return tops.length && tops.every(g => g.seg.size.confidence === 'high') ? 'Sure' : 'Estimated';
+};
+const mktSureHtml = data => `<span class="mkt-sure${mktSure(data) === 'Sure' ? ' r' : ''}">${mktSure(data)}</span>`;
+// The segments the growth chart can place: sized, with a growth figure.
+const mktGrowthPts = tree => tree.drawn.filter(g => g.seg.size?.spend_usd != null && Number.isFinite(g.seg.size.growth_pct));
 
-function mktSpend(host, view) {
-  const dimension = view === 'buyers' ? 'buyer' : 'offering';
-  const ctx = {dead: false, data: null, basis: '', sel: '', cite: null, load: 0, observer: null, dialogs: {}};
+// ------------------------------------------------------------------ Where is the money going?
+
+// `first` holds the page's first reads of both dimensions; the switch shows the ones that are sized.
+function mktSpend(host, first) {
+  const dims = [['offering', 'Offering'], ['buyer', 'Buyer']].filter(([key]) => mktSized(first[key]));
+  const ctx = {dead: false, dimension: dims[0][0], data: null, basis: '', sel: '', cite: null, load: 0, observer: null, dialogs: {},
+    cache: new Map(dims.map(([key]) => [key + '|', first[key]]))};
 
   const seg = id => (ctx.data?.segments || []).find(s => s.id === id);
-  const fail = error => { if (!ctx.dead) host.innerHTML = `<p class="market-none">${esc(error.message || 'The market did not load.')}</p>`; };
 
-  async function load() {
-    const mine = ++ctx.load;
-    let data;
-    try {
-      data = await get('/v2/market/spend?' + new URLSearchParams({dimension, ...(ctx.basis ? {basis: ctx.basis} : {})}));
-    } catch (error) { return fail(error); }
-    if (ctx.dead || mine !== ctx.load) return;
+  // A read of the dimension and basis shown; `fresh` after a write, which every copy kept here predates.
+  async function load(fresh = false) {
+    const mine = ++ctx.load, key = ctx.dimension + '|' + ctx.basis;
+    if (fresh) ctx.cache.clear();
+    let data = ctx.cache.get(key);
+    if (!data) {
+      try {
+        data = await get('/v2/market/spend?' + new URLSearchParams({dimension: ctx.dimension, ...(ctx.basis ? {basis: ctx.basis} : {})}), {fresh});
+      } catch (error) { if (!ctx.dead) toast(error.message || 'The market did not load.', true); return; }
+      if (ctx.dead || mine !== ctx.load) return;
+      ctx.cache.set(key, data);
+    }
     ctx.data = data;
     ctx.basis = data.basis || ctx.basis;
     render();
     if (ctx.dialogs.seg?.open) fillPanel();
   }
+  function show(dimension) {
+    if (!dims.some(([key]) => key === dimension) || dimension === ctx.dimension && ctx.data) return;
+    ctx.dimension = dimension; ctx.basis = '';
+    void load();
+  }
 
-  // ---- the page
+  // ---- the section
   function render() {
-    const top = host.scrollTop, data = ctx.data;
+    const data = ctx.data;
     ctx.observer?.disconnect();
-    if (!mktSized(data)) { host.className = 'mkt-host blank'; host.innerHTML = emptyHtml(); bindEmpty(); return; }
-    host.className = 'mkt-host';
-    const tree = ctx.tree = mktTree(data);
-    host.innerHTML = headHtml() + (view === 'growth' ? '<div id="mkt-growth" class="mkt-growth"></div>' : '<div id="mkt-map" class="mkt-map"></div>'
-      + '<p class="mkt-legend"><span class="mkt-key"><i class="mkt-sw low"></i>Low confidence</span><span class="mkt-key"><i class="mkt-sw us"></i>Us</span></p>')
-      + (tree.unsized.length && view !== 'growth' ? unsizedHtml(tree.unsized, 'Not sized yet') : '')
-      + (view === 'growth' ? '' : sureHtml(tree.drawn));
-    const area = $('#mkt-map') || $('#mkt-growth');
-    let frame = 0, width = 0;
-    const draw = () => { frame = 0; width = area.clientWidth; if (width) (view === 'growth' ? drawGrowth : drawMap)(area, width); };
-    ctx.observer = new ResizeObserver(() => { if (area.clientWidth !== width && !frame) frame = requestAnimationFrame(draw); });
-    ctx.observer.observe(area);
+    if (!mktSized(data)) { host.innerHTML = ctlHtml() + '<p class="market-none">Not sized yet.</p>'; return; }
+    const tree = ctx.tree = mktTree(data), growth = mktGrowthPts(tree).length > 0;
+    host.innerHTML = ctlHtml() + `<div class="mkt-two${growth ? '' : ' solo'}">
+        <div class="mkt-card"><div class="mkt-map"></div>
+          <p class="mkt-legend"><span class="mkt-key"><i class="mkt-sw low"></i>Low confidence</span><span class="mkt-key"><i class="mkt-sw us"></i>Us</span></p></div>
+        ${growth ? '<div class="mkt-card"><h4 class="mkt-lab">Size vs growth</h4><div class="mkt-growth"></div></div>' : ''}</div>`
+      + (tree.unsized.length ? unsizedHtml(tree.unsized) : '');
+    const map = host.querySelector('.mkt-map'), area = host.querySelector('.mkt-growth');
+    const widths = () => map.clientWidth + ',' + (area?.clientWidth || 0);
+    let frame = 0, drawn = '';
+    const draw = () => {
+      frame = 0; drawn = widths();
+      if (map.clientWidth) drawMap(map, map.clientWidth);
+      if (area?.clientWidth) drawGrowth(area, area.clientWidth);
+    };
+    ctx.observer = new ResizeObserver(() => { if (widths() !== drawn && !frame) frame = requestAnimationFrame(draw); });
+    ctx.observer.observe(map);
+    if (area) ctx.observer.observe(area);
     draw();
-    host.scrollTop = top;
   }
 
-  function headHtml() {
-    const d = ctx.data, def = d.definition || {}, total = d.total || {};
+  function ctlHtml() {
+    const d = ctx.data || {};
     const bases = [...new Set((d.segments || []).flatMap(s => s.bases || []))];
-    const facts = [d.year, def.geography].filter(Boolean).join(' · ');
-    return `<header class="mkt-head"><div class="mkt-total"><strong>${mktMoney(total.spend_usd)}</strong>
-        <span>${mktRange(total)}${facts ? ' · ' + esc(facts) : ''}</span></div>
-      <div class="mkt-ctl">${bases.length > 1 ? `<div class="mkt-seg" role="group" aria-label="Basis">${bases.map(b =>
+    return `<div class="mkt-ctl">${dims.length > 1 ? `<div class="mkt-seg" role="group" aria-label="Spend by">${dims.map(([key, label]) =>
+        `<button type="button" data-dim="${key}" aria-pressed="${key === ctx.dimension}">${label}</button>`).join('')}</div>` : ''}
+      ${bases.length > 1 ? `<div class="mkt-seg" role="group" aria-label="Basis">${bases.map(b =>
         `<button type="button" data-basis="${esc(b)}" aria-pressed="${b === ctx.basis}">${esc(MKT_BASES[b] || b)}</button>`).join('')}</div>` : ''}
-        ${d.definition ? '<button class="ghost" type="button" data-mkt-def>Definition</button>' : ''}</div>
-      ${def.description ? `<p class="mkt-desc">${esc(def.description)}</p>` : ''}</header>`;
+      <span class="spacer"></span>${mktSized(d) ? mktSureHtml(d) : ''}
+      ${d.definition ? '<button class="ghost small" type="button" data-mkt-def>Definition</button>' : ''}</div>`;
   }
 
-  const unsizedHtml = (list, title) => `<section class="mkt-sec"><h2 class="strat-k">${title}</h2><div class="mkt-chips">${list.map(s =>
-    `<button class="mkt-pick${s.self ? ' self' : ''}" type="button" data-seg="${esc(s.id)}">${esc(s.name)}</button>`).join('')}</div></section>`;
-
-  // How sure are we: one bar per top segment from low to high, the point estimate ticked.
-  function sureHtml(drawn) {
-    const rows = drawn.filter(g => g.seg.size?.spend_usd != null).sort((a, b) => b.value - a.value);
-    if (!rows.length) return '';
-    const max = Math.max(...rows.map(g => Math.max(g.seg.size.high_usd, g.seg.size.spend_usd)));
-    const step = mktNice(max / 4), top = Math.ceil(max / step) * step, ticks = [];
-    for (let t = 0; t <= top + step / 2; t += step) ticks.push(t);
-    const pct = v => (100 * Math.min(v, top) / top).toFixed(2) + '%';
-    const grid = ticks.map(t => `<i style="left:${pct(t)}"></i>`).join('');
-    return `<section class="mkt-sec mkt-sure"><h2 class="strat-k">How sure are we</h2>
-      <div class="mkt-axis" aria-hidden="true"><span></span><div>${ticks.map(t => `<em style="left:${pct(t)}">${t ? mktMoney(t) : '0'}</em>`).join('')}</div><span></span></div>
-      ${rows.map(g => { const z = g.seg.size; return `<div class="mkt-row" role="button" tabindex="0" data-seg="${esc(g.seg.id)}" style="--c:var(--mkt-c${g.colour + 1})">
-        <span class="mkt-lab">${esc(g.seg.name)}</span>
-        <div class="mkt-bar">${grid}<div class="span${z.confidence === 'low' ? ' low' : ''}" style="left:${pct(z.low_usd)};width:calc(${pct(z.high_usd)} - ${pct(z.low_usd)})"></div><div class="mid" style="left:${pct(z.spend_usd)}"></div></div>
-        <span class="mkt-num">${mktRange(z)}</span></div>`; }).join('')}</section>`;
-  }
+  const unsizedHtml = list => `<div class="mkt-sec"><h4 class="mkt-lab">Not sized yet</h4><div class="mkt-chips">${list.map(s =>
+    `<button class="mkt-pick${s.self ? ' self' : ''}" type="button" data-seg="${esc(s.id)}">${esc(s.name)}</button>`).join('')}</div></div>`;
 
   function drawMap(map, W) {
-    const H = Math.round(W < 560 ? W * 1.2 : Math.min(600, W * 0.58));
+    const H = mktChartH(W);
     map.style.height = H + 'px';
     const laid = mktSquarify(ctx.tree.drawn.map(g => ({g, value: g.value})), 0, 0, W, H);
     map.innerHTML = laid.map(mktBoxHtml).join('');
@@ -210,11 +209,8 @@ function mktSpend(host, view) {
 
   // One dot per top segment: spend across (log when the range is wide), growth up, ours filled.
   function drawGrowth(area, W) {
-    const all = ctx.tree.drawn.filter(g => g.seg.size?.spend_usd != null);
-    const pts = all.filter(g => Number.isFinite(g.seg.size.growth_pct));
-    const none = all.filter(g => !pts.includes(g)).map(g => g.seg);
-    if (!pts.length) { area.innerHTML = '<p class="market-none">No growth figures yet.</p>' + (none.length ? unsizedHtml(none, 'No growth figure') : ''); return; }
-    const H = W < 560 ? 340 : 420, m = {l: 46, r: 14, t: 14, b: 34};
+    const pts = mktGrowthPts(ctx.tree);
+    const H = mktChartH(W), m = {l: 46, r: 14, t: 14, b: 34};
     const xs = pts.map(g => g.seg.size.spend_usd), lo = Math.min(...xs), hi = Math.max(...xs);
     const log = lo > 0 && hi / lo > 20;
     const x0 = log ? lo / 1.7 : 0, x1 = log ? hi * 1.7 : hi * 1.1;
@@ -249,39 +245,7 @@ function mktSpend(host, view) {
       <text class="t cap" x="${W - m.r}" y="${H - 2}" text-anchor="end">Spend${log ? ' (log scale)' : ''}</text>
       <text class="t cap" x="${m.l}" y="10">Growth</text>
       ${dots.map(d => `<g class="mkt-dot${d.g.seg.self ? ' self' : ''}" role="button" tabindex="0" data-seg="${esc(d.g.seg.id)}" aria-label="${esc(`${d.g.seg.name}, ${mktMoney(d.g.seg.size.spend_usd)}, growth ${mktTrim(d.g.seg.size.growth_pct, 1)}%`)}">
-        <circle cx="${d.x}" cy="${d.y}" r="${d.r}"/><text x="${d.at.tx}" y="${d.at.ty}" text-anchor="${d.at.anchor}">${esc(d.text)}</text></g>`).join('')}</svg>
-      <p class="mkt-legend"><span class="mkt-key"><i class="mkt-sw us"></i>Us</span></p>${none.length ? unsizedHtml(none, 'No growth figure') : ''}`;
-  }
-
-  // ---- empty: nothing sized yet
-  function emptyHtml() {
-    const description = ctx.data?.definition?.description || '';
-    if (!mktOwner()) return '<p class="market-none">Not sized yet.</p>';
-    return `<form class="market-start mkt-start" data-mkt-size novalidate>
-      <h1><label for="mkt-describe">Describe the market in a sentence</label></h1>
-      <input id="mkt-describe" name="description" type="text" maxlength="400" autocomplete="off" value="${esc(description)}" placeholder="What small offices spend on cleaning services">
-      <p class="err" data-mkt-error role="alert" hidden></p>
-      <div class="market-start-actions"><button class="primary" type="submit">Size the market</button></div></form>`;
-  }
-  function bindEmpty() {
-    const form = host.querySelector('[data-mkt-size]');
-    if (!form) return;
-    form.onsubmit = async ev => {
-      ev.preventDefault();
-      const line = form.querySelector('[data-mkt-error]'), description = form.elements.description.value.trim();
-      if (!description) { line.textContent = 'Say what the market is.'; line.hidden = false; return; }
-      line.hidden = true;
-      form.querySelector('[type=submit]').disabled = true;
-      try {
-        const sent = await post('/v2/market/spend/research', {description});
-        if (ctx.dead) return;
-        host.innerHTML = `<div class="market-researching" data-mkt-researching role="status"><span class="market-spin" aria-hidden="true"></span>
-          <div><strong>On it.</strong>${sent.task_id ? `<p><a href="#/task/${esc(sent.task_id)}">View task</a></p>` : ''}</div></div>`;
-      } catch (error) {
-        form.querySelector('[type=submit]').disabled = false;
-        line.textContent = error.message || 'That did not go through.'; line.hidden = false;
-      }
-    };
+        <circle cx="${d.x}" cy="${d.y}" r="${d.r}"/><text x="${d.at.tx}" y="${d.at.ty}" text-anchor="${d.at.anchor}">${esc(d.text)}</text></g>`).join('')}</svg>`;
   }
 
   // ---- panels
@@ -380,11 +344,13 @@ function mktSpend(host, view) {
   }
 
   async function write(job, ok) {
-    try { await job(); if (ok) toast(ok); await load(); } catch (error) { toast(error.message || 'That did not save', true); }
+    try { await job(); if (ok) toast(ok); await load(true); } catch (error) { toast(error.message || 'That did not save', true); }
   }
 
   // ---- events
   host.addEventListener('click', ev => {
+    const dim = ev.target.closest('[data-dim]');
+    if (dim) { show(dim.dataset.dim); return; }
     const basis = ev.target.closest('[data-basis]');
     if (basis) { if (basis.dataset.basis !== ctx.basis) { ctx.basis = basis.dataset.basis; void load(); } return; }
     if (ev.target.closest('[data-mkt-def]')) { openDefinition(); return; }
@@ -433,10 +399,8 @@ function mktSpend(host, view) {
     } catch (error) { toast(error.message || 'Could not cite it', true); }
   }
 
-  host.className = 'mkt-host';
-  host.innerHTML = '<p class="market-loading">Opening the market…</p>';
   void load();
-  return {stop() {
+  return {show, stop() {
     ctx.dead = true; ctx.observer?.disconnect();
     Object.values(ctx.dialogs).forEach(d => d.remove());
   }};
@@ -444,29 +408,26 @@ function mktSpend(host, view) {
 
 // ------------------------------------------------------------------ Value chain
 
-function mktChain(host) {
-  let dead = false;
-  host.className = 'mkt-host';
-  host.innerHTML = '<p class="market-loading">Opening the market…</p>';
-  get('/v2/market/value-chain').then(data => {
-    if (dead) return;
-    const layers = data.layers || [], edges = data.edges || [];
-    if (!layers.some(l => (l.nodes || []).length)) { host.className = 'mkt-host blank'; host.innerHTML = '<p class="market-none">Nothing here yet.</p>'; return; }
-    host.innerHTML = `<div class="mkt-chain">${layers.map(l => `<section class="mkt-layer" data-layer="${esc(l.key)}"><h2 class="strat-k">${esc(l.title)}</h2>
-        <div class="mkt-nodes">${(l.nodes || []).map(n => `<a class="mkt-node${n.self ? ' self' : ''}" href="${marketHref(n.id)}" data-node="${esc(n.id)}"
-          title="${esc(n.name)}">${esc(n.name)}</a>`).join('') || '<span class="muted">None</span>'}</div></section>`).join('')}</div>`;
-    // A node lit shows what it connects to; the rest step back.
-    const near = new Map();
-    edges.forEach(e => { (near.get(e.src) || near.set(e.src, new Set()).get(e.src)).add(e.dst); (near.get(e.dst) || near.set(e.dst, new Set()).get(e.dst)).add(e.src); });
-    const chain = host.querySelector('.mkt-chain');
-    const light = id => {
-      chain.classList.toggle('lit', !!id);
-      chain.querySelectorAll('.mkt-node').forEach(a => a.classList.toggle('near', !!id && (a.dataset.node === id || !!near.get(id)?.has(a.dataset.node))));
-    };
-    chain.addEventListener('pointerover', ev => { const a = ev.target.closest('.mkt-node'); if (a) light(a.dataset.node); });
-    chain.addEventListener('pointerout', () => light(''));
-    chain.addEventListener('focusin', ev => { const a = ev.target.closest('.mkt-node'); if (a) light(a.dataset.node); });
-    chain.addEventListener('focusout', () => light(''));
-  }).catch(error => { if (!dead) host.innerHTML = `<p class="market-none">${esc(error.message || 'The market did not load.')}</p>`; });
-  return {stop() { dead = true; }};
+// The layers that hold someone, each node a link to its note with the money it has where the page knows it (`money`:
+// id to dollars a year). Empty when no layer holds anyone.
+function mktChainHtml(data, money) {
+  const layers = (data?.layers || []).filter(l => (l.nodes || []).length);
+  if (!layers.length) return '';
+  return `<div class="mkt-chain" style="--n:${layers.length}">${layers.map(l => `<section class="mkt-layer" data-layer="${esc(l.key)}"><h4 class="mkt-lab">${esc(l.title)}</h4>
+      <div class="mkt-nodes">${l.nodes.map(n => `<a class="mkt-node${n.self ? ' self' : ''}" href="${marketHref(n.id)}" data-node="${esc(n.id)}" title="${esc(n.name)}">
+        <span class="mkt-nn">${esc(n.name)}</span>${money.get(n.id) ? `<b>${mktMoney(money.get(n.id))}</b>` : ''}</a>`).join('')}</div></section>`).join('')}</div>`;
+}
+
+// A node lit shows what it connects to; the rest step back.
+function mktChainBind(chain, edges) {
+  const near = new Map();
+  (edges || []).forEach(e => { (near.get(e.src) || near.set(e.src, new Set()).get(e.src)).add(e.dst); (near.get(e.dst) || near.set(e.dst, new Set()).get(e.dst)).add(e.src); });
+  const light = id => {
+    chain.classList.toggle('lit', !!id);
+    chain.querySelectorAll('.mkt-node').forEach(a => a.classList.toggle('near', !!id && (a.dataset.node === id || !!near.get(id)?.has(a.dataset.node))));
+  };
+  chain.addEventListener('pointerover', ev => { const a = ev.target.closest('.mkt-node'); if (a) light(a.dataset.node); });
+  chain.addEventListener('pointerout', () => light(''));
+  chain.addEventListener('focusin', ev => { const a = ev.target.closest('.mkt-node'); if (a) light(a.dataset.node); });
+  chain.addEventListener('focusout', () => light(''));
 }

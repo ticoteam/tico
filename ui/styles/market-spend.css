@@ -1,31 +1,59 @@
-/* ui/styles/market-spend.css — the Market tab's views (ui/market-spend.js): the view switch, the Spend and Buyers
-   treemap, how sure we are, the segment panel, Size vs growth and the Value chain.
+/* ui/styles/market-spend.css — the Market page (ui/app/redesign-market.js, ui/market-spend.js): the header and tiles, the
+   five questions, the treemap and Size vs growth, the players, the segment panel and the value chain.
    The cascade runs in the order index.html links these files; keep rules in order. */
-/* The view switch sits in the section's heading. */
-.mkt-views{display:inline-flex;gap:2px;max-width:100%;padding:3px;overflow-x:auto;scrollbar-width:none;background:var(--surface2);border-radius:999px}
-.mkt-views::-webkit-scrollbar{display:none}
-.mkt-views a{padding:3px 12px;border-radius:999px;color:var(--muted);font-size:var(--t-sm);font-weight:500;text-decoration:none;white-space:nowrap}
-.mkt-views a:hover{color:var(--ink);text-decoration:none}
-.mkt-views a[aria-current=page]{background:var(--raised);color:var(--ink);font-weight:600;box-shadow:0 1px 3px rgba(0,0,0,.12)}
 
 /* Eight segment hues, lifted on the dark ramp and deepened on the light one. A box takes its hue as a tint of the surface. */
 .mkt-host{--mkt-c1:#7fb3f0;--mkt-c2:#a99bf0;--mkt-c3:#6cc48f;--mkt-c4:#e2b25a;--mkt-c5:#e68fb0;--mkt-c6:#ec9a6c;--mkt-c7:#b7c960;--mkt-c8:#8fa0b8;--mkt-tint:22%;--mkt-hover:brightness(1.12)}
 :root[data-theme="light"] .mkt-host{--mkt-c1:#2b6cb0;--mkt-c2:#6b4fc4;--mkt-c3:#2f855a;--mkt-c4:#b7791f;--mkt-c5:#b83b78;--mkt-c6:#c4561a;--mkt-c7:#6f7f12;--mkt-c8:#5b6f8a;--mkt-tint:18%;--mkt-hover:brightness(.95)}
 @media (prefers-color-scheme:light){:root[data-theme="system"] .mkt-host{--mkt-c1:#2b6cb0;--mkt-c2:#6b4fc4;--mkt-c3:#2f855a;--mkt-c4:#b7791f;--mkt-c5:#b83b78;--mkt-c6:#c4561a;--mkt-c7:#6f7f12;--mkt-c8:#5b6f8a;--mkt-tint:18%;--mkt-hover:brightness(.95)}}
 
-.mkt-host{flex:1;min-height:0;overflow:auto;padding:18px 28px 32px;background:var(--bg);color:var(--ink)}
-.mkt-host.blank{display:flex;align-items:center;justify-content:center;padding-bottom:12vh}
-.mkt-head{display:grid;grid-template-columns:minmax(0,1fr) auto;align-items:end;gap:6px 16px;margin:0 0 14px}
-.mkt-total{display:flex;align-items:baseline;gap:10px;flex-wrap:wrap;min-width:0}
-.mkt-total strong{font-size:var(--t-xl);font-weight:600;line-height:var(--lh-display);font-variant-numeric:tabular-nums;letter-spacing:var(--track-tight)}
-.mkt-total span{color:var(--muted);font-size:var(--t-base);font-variant-numeric:tabular-nums}
-.mkt-ctl{display:flex;align-items:center;gap:8px;flex-wrap:wrap}
-.mkt-desc{grid-column:1/-1;max-width:72ch;margin:0;color:var(--muted);font-size:var(--t-base)}
+.mkt-host{flex:1;min-height:0;overflow:auto;padding:18px 28px 40px;background:var(--bg);color:var(--ink)}
+.mkt-pg{max-width:1120px}
+.mkt-top{display:flex;align-items:center;gap:12px;margin:0 0 16px}
+.mkt-top h2{margin:0;font-size:var(--t-xl);font-weight:650;line-height:var(--lh-tight);letter-spacing:var(--track-tight)}
+.mkt-name{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:var(--muted);font-size:var(--t-base)}
+.mkt-top .spacer,.mkt-ctl .spacer{flex:1}
+.mkt-top a{flex:none}
+.mkt-card{min-width:0;box-sizing:border-box;padding:14px;border:1px solid var(--line);border-radius:var(--radius,10px);background:var(--surface)}
+.mkt-lab{margin:0;font-size:var(--t-label);font-weight:600;letter-spacing:var(--track-caps);text-transform:uppercase;color:var(--muted)}
+.mkt-up{color:var(--ok)}
+.mkt-down{color:var(--fail)}
+.mkt-sure{display:inline-block;padding:1px 6px;border-radius:5px;background:var(--wait-bg);color:var(--wait);font-size:var(--t-xs);font-weight:600;white-space:nowrap}
+.mkt-sure.r{background:var(--ok-bg);color:var(--ok)}
+
+/* Three tiles: the market's size, its fastest segment, our share. */
+.mkt-tiles{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:12px}
+.mkt-tile-k{min-width:0;padding:14px;border:1px solid var(--line);border-radius:var(--radius,10px);background:var(--surface)}
+.mkt-big{margin:6px 0 4px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:var(--t-xl);font-weight:650;line-height:var(--lh-tight);font-variant-numeric:tabular-nums;letter-spacing:var(--track-tight)}
+.mkt-small{color:var(--muted);font-size:var(--t-sm);font-variant-numeric:tabular-nums}
+
+/* A question: its title, the briefing's one-line answer beside it, and what backs it. */
+.mkt-q{margin-top:28px;scroll-margin-top:12px}
+.mkt-qh{display:flex;align-items:baseline;flex-wrap:wrap;gap:4px 12px;margin:0 0 10px}
+.mkt-qh h3{margin:0;font-size:var(--t-md);font-weight:600;line-height:var(--lh-tight)}
+.mkt-ans{flex:1 1 280px;min-width:0;margin:0;color:var(--g7);font-size:var(--t-base)}
+.mkt-more{margin-left:auto;color:var(--muted);font-size:var(--t-sm);white-space:nowrap}
+.mkt-more .linkish{font-size:inherit}
+
+/* What changed? */
+.mkt-items{display:grid;gap:10px;margin:0;padding:14px;list-style:none;font-size:var(--t-base)}
+.mkt-items li{display:flex;align-items:baseline;gap:10px;min-width:0}
+.mkt-it{flex:1;min-width:0}
+.mkt-kind{flex:none;padding:1px 6px;border-radius:5px;font-size:var(--t-2xs);font-weight:600;letter-spacing:var(--track-caps);text-transform:uppercase;background:var(--surface2);color:var(--muted)}
+.mkt-kind.k-change{background:var(--run-bg);color:var(--run)}
+.mkt-kind.k-signal{background:var(--ok-bg);color:var(--ok)}
+.mkt-kind.k-theme{background:var(--wait-bg);color:var(--wait)}
+.mkt-bet{flex:none;padding:1px 7px;border:1px solid var(--line);border-radius:999px;color:var(--muted);font-size:var(--t-xs);text-decoration:none;white-space:nowrap}
+.mkt-bet:hover{color:var(--ink);background:var(--surface2);text-decoration:none}
+
+/* Where is the money going? */
+.mkt-ctl{display:flex;align-items:center;gap:8px;flex-wrap:wrap;margin:0 0 10px}
 .mkt-seg{display:inline-flex;padding:3px;background:var(--surface2);border-radius:999px}
 .mkt-seg button{border:0;background:none;border-radius:999px;padding:3px 12px;color:var(--muted);font-size:var(--t-sm);font-weight:500;cursor:pointer}
 .mkt-seg button[aria-pressed=true]{background:var(--raised);color:var(--ink);font-weight:600;box-shadow:0 1px 3px rgba(0,0,0,.12)}
-.mkt-start{width:min(560px,100%)}
-.mkt-start input{width:100%}
+.mkt-two{display:grid;grid-template-columns:minmax(0,1fr) minmax(0,1fr);gap:12px;align-items:start}
+.mkt-two.solo{grid-template-columns:minmax(0,1fr)}
+.mkt-card .mkt-lab+.mkt-growth{margin-top:8px}
 
 /* The treemap: boxes laid out in script, so each is placed by pixel. A box keeps its exact rectangle; the gap between
    boxes is an inner outline in the page colour. */
@@ -62,27 +90,16 @@
 .mkt-sw{display:inline-block;width:14px;height:14px;border:1px solid var(--line);border-radius:3px;background:var(--surface2)}
 .mkt-sw.low{background:repeating-linear-gradient(135deg,transparent 0 3px,color-mix(in srgb,var(--ink) 30%,transparent) 3px 4.5px),var(--surface2)}
 .mkt-sw.us{border-color:var(--accent);box-shadow:inset 0 0 0 2px var(--accent)}
-.mkt-sec{margin-top:22px}
+.mkt-sec{margin-top:14px}
+.mkt-sec .mkt-lab{margin:0 0 8px}
 .mkt-chips{display:flex;flex-wrap:wrap;gap:6px}
 .mkt-pick{padding:3px 10px;border:1px solid var(--line);border-radius:999px;background:var(--surface);color:var(--ink);font-size:var(--t-sm);cursor:pointer}
 .mkt-pick:hover{background:var(--surface2)}
 .mkt-pick.self{border-color:var(--accent)}
 
-/* How sure are we: low to high on one shared axis, the estimate ticked. */
-.mkt-axis,.mkt-row{display:grid;grid-template-columns:minmax(120px,220px) minmax(0,1fr) 112px;align-items:center;gap:10px}
-.mkt-axis{height:18px;color:var(--muted);font-size:var(--t-xs)}
-.mkt-axis>div{position:relative;height:100%}
-.mkt-axis em{position:absolute;top:0;transform:translateX(-50%);font-style:normal;font-variant-numeric:tabular-nums;white-space:nowrap}
-.mkt-axis em:first-child{transform:none}
-.mkt-axis em:last-child{transform:translateX(-100%)}
-.mkt-row{min-height:30px;padding:2px 0;border-radius:6px;cursor:pointer}
-.mkt-row:hover{background:var(--surface2)}
-.mkt-lab{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:var(--t-base)}
-.mkt-num{color:var(--muted);font-size:var(--t-sm);text-align:right;font-variant-numeric:tabular-nums;white-space:nowrap}
+/* The panel's range bar: low to high, the estimate ticked. */
 .mkt-bar{position:relative;height:16px}
-.mkt-bar i{position:absolute;top:0;bottom:0;width:1px;background:var(--line)}
 .mkt-bar .span{position:absolute;top:4px;height:8px;border-radius:4px;background:color-mix(in srgb,var(--c,var(--accent)) 60%,var(--bg))}
-.mkt-bar .span.low{background:repeating-linear-gradient(135deg,transparent 0 3px,color-mix(in srgb,var(--bg) 55%,transparent) 3px 4.5px),color-mix(in srgb,var(--c,var(--accent)) 60%,var(--bg))}
 .mkt-bar .mid{position:absolute;top:1px;width:2px;height:14px;margin-left:-1px;border-radius:1px;background:var(--ink)}
 .mkt-bar.solo{margin:12px 0 4px}
 .mkt-bar.solo::before{content:"";position:absolute;inset:7px 0 auto;height:2px;border-radius:1px;background:var(--line)}
@@ -101,13 +118,36 @@
 .mkt-dot:hover circle,.mkt-dot:focus-visible circle{stroke-width:3.5}
 .mkt-dot:focus-visible circle{stroke:var(--accent)}
 
-/* Value chain */
-.mkt-chain{display:grid;grid-template-columns:repeat(5,minmax(0,1fr));border:1px solid var(--line);border-radius:var(--radius,8px);background:var(--surface)}
+/* Who are we up against? The table scrolls inside its own box on a narrow screen. */
+.mkt-tbl{padding:4px 0;overflow-x:auto}
+.mkt-pl{width:100%;border-collapse:collapse;font-size:var(--t-base)}
+.mkt-pl th{padding:8px 14px;text-align:left;font-size:var(--t-label);font-weight:600;letter-spacing:var(--track-caps);text-transform:uppercase;color:var(--muted);white-space:nowrap}
+.mkt-pl td{padding:8px 14px;border-top:1px solid var(--line);vertical-align:middle}
+.mkt-pl tbody tr{cursor:pointer}
+.mkt-pl tbody tr:hover{background:var(--surface2)}
+.mkt-pl tr.us{background:color-mix(in srgb,var(--accent) 9%,var(--surface))}
+.mkt-pl tr.us .mkt-pn{color:var(--accent)}
+.mkt-pn{padding:0;border:0;background:none;color:var(--ink);font:inherit;font-weight:600;text-align:left;cursor:pointer;white-space:nowrap}
+.mkt-pn:hover{text-decoration:underline}
+.mkt-pn:focus-visible{outline:var(--focus-ring);outline-offset:2px}
+.mkt-sells{color:var(--g7);min-width:140px}
+.mkt-num{color:var(--muted);font-variant-numeric:tabular-nums;white-space:nowrap}
+.mkt-pl th.mkt-sh,.mkt-pl td.mkt-sh{width:22%;min-width:130px}
+td.mkt-sh{white-space:nowrap}
+.mkt-sbar{display:inline-block;vertical-align:middle;width:calc(100% - 52px);height:6px;margin-right:8px;border-radius:3px;background:var(--surface2);overflow:hidden}
+.mkt-sbar i{display:block;height:100%;border-radius:3px;background:var(--g5)}
+.mkt-pl tr.us .mkt-sbar i{background:var(--accent)}
+.mkt-move{min-width:180px;color:var(--g7);font-size:var(--t-sm)}
+.mkt-note .tmodal-body.market-read{padding:8px 20px 20px}
+
+/* How does it reach buyers? */
+.mkt-chain{display:grid;grid-template-columns:repeat(var(--n,5),minmax(0,1fr));border:1px solid var(--line);border-radius:var(--radius,10px);background:var(--surface)}
 .mkt-layer{min-width:0;padding:12px}
 .mkt-layer+.mkt-layer{border-left:1px solid var(--line)}
-.mkt-layer .strat-k{margin:0}
 .mkt-nodes{display:flex;flex-direction:column;gap:6px;margin-top:10px}
-.mkt-node{display:block;padding:6px 9px;border:1px solid var(--line);border-radius:7px;background:var(--bg);color:var(--ink);font-size:var(--t-base);text-decoration:none;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.mkt-node{display:flex;align-items:baseline;justify-content:space-between;gap:8px;min-width:0;padding:6px 9px;border:1px solid var(--line);border-radius:7px;background:var(--bg);color:var(--ink);font-size:var(--t-base);text-decoration:none}
+.mkt-nn{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.mkt-node b{flex:none;color:var(--muted);font-size:var(--t-sm);font-weight:500;font-variant-numeric:tabular-nums}
 .mkt-node:hover{background:var(--surface2);text-decoration:none}
 .mkt-node.self{border-color:var(--accent);box-shadow:inset 0 0 0 1px var(--accent);font-weight:600}
 .mkt-chain.lit .mkt-node:not(.near){opacity:.35}
@@ -157,17 +197,25 @@
   .mkt-nodes{flex-direction:row;flex-wrap:wrap}
   .mkt-node{max-width:100%}
 }
+/* What are buyers saying? The posts per day beside the newest posts. */
+.mkt-say{display:grid;grid-template-columns:minmax(0,1fr) minmax(0,1.25fr);gap:12px;align-items:start}
+
+@media (max-width:900px){
+  .mkt-two,.mkt-say{grid-template-columns:minmax(0,1fr)}
+}
 @media (max-width:700px){
-  #main.market-layout .strat-actions{flex:1 1 100%;min-width:0}
-  .mkt-views a{padding:3px 7px}
   .mkt-panel{margin:auto 0 0;width:100%;height:fit-content;max-height:90dvh;border-radius:14px 14px 0 0}
   .mkt-panel .tmodal-body{max-height:calc(90dvh - 56px)}
 }
 @media (max-width:600px){
   .mkt-host{padding:14px 16px 28px}
-  .mkt-head{grid-template-columns:minmax(0,1fr)}
-  .mkt-axis{grid-template-columns:minmax(0,1fr)}
-  .mkt-axis>span{display:none}
-  .mkt-row{grid-template-columns:minmax(0,1fr) auto;gap:2px 10px;padding:6px 0}
-  .mkt-row .mkt-bar{grid-column:1/-1;order:3}
+  .mkt-tiles{grid-template-columns:minmax(0,1fr);gap:8px}
+  .mkt-tile-k{display:grid;grid-template-columns:minmax(0,1fr) auto;align-items:baseline;gap:2px 12px;padding:10px 12px}
+  .mkt-tile-k .mkt-big{grid-row:span 2;margin:0;text-align:right;font-size:var(--t-lg)}
+  .mkt-q{margin-top:24px}
+  .mkt-ans{flex-basis:100%;order:3}
+  .mkt-items{padding:12px}
+  .mkt-items li{flex-wrap:wrap;gap:4px 8px}
+  .mkt-it{flex-basis:100%;order:2}
+  .mkt-items .mkt-bet{order:3}
 }

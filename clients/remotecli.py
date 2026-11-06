@@ -1062,7 +1062,8 @@ def run(args, who=None):
     if fn == "market briefing post":
         body = sys.stdin.read() if args.body_file == "-" else Path(args.body_file).read_text()
         items = json.loads(Path(args.items_file).read_text()) if args.items_file else []
-        return via_tool(client, args, body=body, items=items)
+        answers = json.loads(Path(args.answers_file).read_text()) if args.answers_file else None
+        return via_tool(client, args, body=body, items=items, answers=answers)
     if cmd == "market" and fn in MARKET_SPEND:
         return market_spend(client, args, tool)
     if cmd == "market":

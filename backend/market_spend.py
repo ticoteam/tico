@@ -662,7 +662,7 @@ def definition_evidence(conn, actor):
         actor,
         evidence_key=MK.evidence_id(DEFINITION_EVIDENCE),
         source_kind="other",
-        our_read="A segment of the market as the team defined it (the market definition on the Spend view).",
+        our_read="A segment of the market as the team defined it (the market definition under Where is the money going?).",
     )
     return row["id"]
 
@@ -822,6 +822,7 @@ def spend(conn, dimension="offering", basis="product", year=None):
         "segments": [],
     }
     tree = _tree(conn, root) if root else {"order": [], "depth": {}, "parent": {}, "rows": {}}
+    result["name"] = (tree["rows"].get(root) or {}).get("name")  # the market's own name: its root segment's
     ids = tree["order"]
     if not ids:
         return result
