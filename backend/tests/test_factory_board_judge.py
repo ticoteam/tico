@@ -112,11 +112,12 @@ def test_the_world_runs_maintenance_inline_so_its_roundup_lands_before_the_round
     """The sim's fake clock moves only between completed passes: World patches maintenance._start to run with wait=True,
     so a roundup cannot arrive after a round's last empty claim and be judged as starvation."""
     from evals.factory.board import dev_board
+    from evals.factory.sim import TEAM
     from evals.factory.world import World
     from backend import maintenance
     calls = []
     monkeypatch.setattr(maintenance, "_start", lambda store, auth, run_id, only, wait: calls.append(wait))
-    with World(dev_board(), {"fleet-01": ("other", "claude")}):
+    with World(dev_board(), TEAM):
         maintenance._start(None, None, "run", None, False)
     assert calls == [True]
 
