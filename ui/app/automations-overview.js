@@ -141,7 +141,7 @@ function auCtlDraw() {
 // A phone's header holds the Automations | Runs tabs and the search, which a computer shows above the table and in the
 // filters: one of each, moved when the width crosses over, so a typed search and the tab's focus stay put.
 function auPlace() {
-  const r = AU.root, rows = r.querySelectorAll('.au-ph .au-pr'), tabs = r.querySelector('.au-tabs'), s = r.querySelector('.au-s');
+  const r = AU.root, rows = r.querySelectorAll('.au-ph .au-hrow'), tabs = r.querySelector('.au-tabs'), s = r.querySelector('.au-s');
   if (auPhone()) { rows[0].insertBefore(tabs, r.querySelector('.au-range')); rows[1].prepend(s); }
   else { r.querySelector('.au-ctl').prepend(tabs); r.querySelector('.au-rail').prepend(s); }
 }
