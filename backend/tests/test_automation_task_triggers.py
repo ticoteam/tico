@@ -104,10 +104,26 @@ def test_a_routine_made_task_starts_no_task_trigger_and_history_says_skipped(api
     why = task_rule_history(api, follow[0]["id"])
     assert len(why) == 1 and why[0]["new"] == heard["id"]
     assert "routine made this change" in why[0]["note"]
-    assert "Skipped" in why[0]["note"] and "starts no task trigger" in why[0]["note"]
+    assert "Skipped" in why[0]["note"] and "this Task Trigger was skipped" in why[0]["note"]
 
 
-def test_a_routine_started_bot_turn_does_not_start_a_task_step_trigger(api):
+def test_initial_step_does_not_duplicate_a_chain_skip_history_line(api):
+    from backend import automations
+
+    task = post(api, "tasks", {"owner": "ops", "title": "Initial step", "body": "Synthetic."})
+    aid = make(api, {"type": "event", "name": "task.step_changed"}, [NOTE])
+    with api.app.state.store.transaction() as c:
+        row = dict(c.execute("SELECT * FROM automations WHERE id=?", (aid,)).fetchone())
+        chain = (aid,)
+        automations._chained_task_event(c, row, {"event": {"name": "task.created", "subject": task["id"]}}, chain)
+        automations._chained_task_event(c, row, {"event": {"name": "task.step_changed", "subject": task["id"],
+                                                             "data": {"initial_step": True}}}, chain)
+    rows = sql(api, "SELECT action_id,note FROM history_events WHERE subject_type='task' AND subject_id=? "
+                   "AND action_id=? AND note LIKE 'Automation % did not run:%'", (task["id"], aid))
+    assert len(rows) == 1
+
+
+def test_a_routine_started_bot_turn_still_starts_a_trigger_for_another_task(api):
     import json
 
     from backend import automations
@@ -119,6 +135,9 @@ def test_a_routine_started_bot_turn_does_not_start_a_task_step_trigger(api):
         typ = task_type(c)
         task = H.task_create(c, "human:ana", "Move in a routine turn", "Synthetic body", "bot:ops",
                              type=typ["id"], step="Open", lint=False, deduplicate=False)
+    qa_step = next(step["id"] for step in typ["steps"] if step["name"] == "In QA")
+    heard = make(api, {"type": "event", "name": "task.step_changed",
+                       "filters": [{"field": "event.data.step", "op": "is", "value": qa_step}]})
 
     enrolled = runner(api)
     now = H.now()
@@ -140,13 +159,68 @@ def test_a_routine_started_bot_turn_does_not_start_a_task_step_trigger(api):
             automations.CHAIN.reset(chain_token)
             H.RUN.reset(run_token)
 
+    api.app.state.store.automations.drain()
     why = task_rule_history(api, task["id"])
     assert len(why) == 1 and why[0]["new"] == entered["id"]
-    assert "routine made this change" in why[0]["note"]
-    assert "Skipped" in why[0]["note"] and "starts no task trigger" in why[0]["note"]
-    runs = sql(api, "SELECT fired FROM rule_task_runs WHERE rule_id=? AND task_id=? AND event='task.step_changed'",
-               (entered["id"], task["id"]))
-    assert runs == [{"fired": 0}]
+    assert "Skipped" not in why[0]["note"]
+    rule_runs = sql(api, "SELECT fired FROM rule_task_runs WHERE rule_id=? AND task_id=? AND event='task.step_changed'",
+                    (entered["id"], task["id"]))
+    assert rule_runs == [{"fired": 1}]
+    with api.app.state.store.read() as c:
+        assert H.task(c, task["id"])["note"] == "A note"
+    assert len(runs(api, heard)["runs"]) == 1, "a routine bot may trigger Automations on another task"
+
+
+def test_a_generic_event_rule_created_task_still_starts_task_event_automations(api):
+    from backend import rules
+    from backend.tests.test_event_rules import rule as event_rule
+
+    heard = make(api, {"type": "event", "name": "task.created"}, [NOTE])
+    event_rule(api, event="webhook.received", then="action",
+               params={"action": "create_task", "owner": "ops", "title": "From generic event rule"})
+    with api.app.state.store.transaction() as c:
+        result = rules.judge_event(c, "webhook.received", {"trigger": "synthetic", "delivery": "generic-rule"})
+    assert len(result) == 1 and result[0]["ok"] is True
+    api.app.state.store.automations.drain()
+    made = sql(api, "SELECT id FROM tasks WHERE title='From generic event rule'")
+    assert len(made) == 1
+    assert len(runs(api, heard)["runs"]) == 1
+
+
+def test_private_task_event_redacts_text_and_refuses_create_and_webhook_actions(api):
+    import json
+
+    from backend.tests.test_webhooks import make as make_webhook
+
+    secrets = {"title": "Private synthetic title", "body": "Private synthetic body"}
+    created = make(api, {"type": "event", "name": "task.created"}, [{"id": "create", "type": "action",
+        "do": "create_task", "args": {"title": "{{task.title}}", "body": "{{task.body}}", "owner": "ops"}}])
+    hook = make_webhook(api, events=["custom.private-task"])
+    webhooked = make(api, {"type": "event", "name": "task.created"}, [{"id": "send", "type": "action",
+        "do": "call_webhook", "args": {"webhook": hook["id"], "type": "custom.private-task",
+          "data": {"title": "{{task.title}}", "body": "{{task.body}}"}}}])
+
+    with api.app.state.store.transaction() as c:
+        # The task's parties are Ben and his bot; Ana owns both automations and cannot read it.
+        task = H.task_create(c, "human:ben", secrets["title"], secrets["body"], "bot:cpo", private=True,
+                             lint=False, deduplicate=False)
+        assert not H.task_private_readable(c, "human:ana", task)
+    api.app.state.store.automations.drain()
+
+    assert len(runs(api, created)["runs"]) == 1
+    assert len(runs(api, webhooked)["runs"]) == 1
+    state = sql(api, "SELECT saved_state FROM automation_runs WHERE automation_id IN (?,?) ORDER BY automation_id",
+                (created, webhooked))
+    assert len(state) == 2
+    for row in state:
+        saved_state = json.loads(row["saved_state"])
+        payload = saved_state["payload"]
+        assert payload["task"].get("title") is None and payload["task"].get("body") is None
+        assert payload["event"]["data"].get("title") is None and payload["event"]["data"].get("body") is None
+        assert all(secret not in json.dumps(saved_state) for secret in secrets.values())
+    assert not sql(api, "SELECT id FROM tasks WHERE title=? OR body LIKE ?", (secrets["title"], "%Private synthetic body%"))
+    sends = sql(api, "SELECT body FROM webhook_sends WHERE webhook_id=?", (hook["id"],))
+    assert sends == []
 
 
 def test_fifty_task_event_runs_an_hour_pause_the_automation_until_it_is_reenabled(api):

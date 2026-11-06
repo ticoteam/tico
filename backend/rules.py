@@ -835,12 +835,11 @@ def carry_out(conn, decision, actor, target, kind, refs, body, conv):
     try:
         tid = H.message_task_id({"refs": refs or {}}, conv)
         row = H.task(conn, tid) if tid else None
-        with TTR.from_action(decision.rule):
-            if decision.outcome == ASK:
-                _ask(conn, decision, row, actor, body)
-            else:
-                _act(conn, decision, row, {"actor": actor, "target": target, "kind": kind, "refs": refs or {},
-                                           "body": body})
+        if decision.outcome == ASK:
+            _ask(conn, decision, row, actor, body)
+        else:
+            _act(conn, decision, row, {"actor": actor, "target": target, "kind": kind, "refs": refs or {},
+                                       "body": body})
         conn.execute("RELEASE rule_carry")
         return Decision(NOTE, decision.rule, HOLD_ROW, decision.params)
     except Exception as exc:  # noqa: BLE001 - fail open: a rule that cannot run wakes the bot as before
@@ -1320,10 +1319,9 @@ def _judge_event(conn, event, ctx, actor):
         elif outcome == ASK:
             ok, detail = _event_ask(conn, row, name, params, values, ctx)
         elif outcome == ACTION and params.get("action") in EVENT_RUNNERS:
-            with TTR.from_action(row["id"]):
-                found = EVENT_RUNNERS[params["action"]](
-                    conn, row["id"], row["created_by"], params, values, event=name,
-                    subject=delivery or name, revision=f"{row['id']}:{name}:{trigger}", ctx=ctx)   # one send per rule, event, trigger and call
+            found = EVENT_RUNNERS[params["action"]](
+                conn, row["id"], row["created_by"], params, values, event=name,
+                subject=delivery or name, revision=f"{row['id']}:{name}:{trigger}", ctx=ctx)   # one send per rule, event, trigger and call
             done.append({"rule_id": row["id"], "outcome": found["outcome"], "target": found["target"],
                          "ok": found["ok"], "detail": found["detail"]})
             continue

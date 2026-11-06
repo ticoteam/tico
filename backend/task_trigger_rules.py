@@ -49,7 +49,7 @@ def pending(conn):
 
 
 def _write_chain(conn):
-    """The automation chain behind this write, read the way automations decide what a write starts."""
+    """The automation that made this task, either in its action or the bot turn it started."""
     from . import automations as A
     return tuple(A.CHAIN.get() or A._turn_chain(conn))
 
@@ -88,7 +88,9 @@ def enqueue(conn, event, task, actor, revision, *, field=None, new=None):
     state = _PENDING.get()
     facts = {"step_id" if field == "step" else field: new} if field in ("step", "status") else {}
     rule_chain = _CHAIN.get()
-    auto_chain = () if rule_chain else _write_chain(conn)
+    auto_chain = ()
+    if not rule_chain and (event == "task.created" or event == "task.step_changed" and str(revision) == "created"):
+        auto_chain = _write_chain(conn)
     item = {"event": event, "task": task, "actor": actor, "revision": str(revision),
             "chain": rule_chain or auto_chain,
             "by": "rule" if rule_chain else ("automation" if auto_chain else ""),
@@ -168,7 +170,7 @@ def judge(conn, item):
                                 (rule["id"], item["task"], item["event"], item["revision"], H.now())).rowcount:
                 continue
             if item["chain"]:
-                why = ("Skipped: a routine made this change; a task a routine makes starts no task trigger"
+                why = ("Skipped: a routine made this change; this Task Trigger was skipped"
                        if item.get("by") == "automation" else
                        "Skipped: an Action already caused this change; maximum chain depth is one")
                 _history(conn, item, rule, action, why)

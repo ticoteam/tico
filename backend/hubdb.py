@@ -6499,13 +6499,14 @@ def task_create(conn, actor, title, body, owner, due=None, parent_id=None, *, de
         from . import threads
         threads._emit_thread_created(conn, conversation(conn, conv["id"]), actor)
     hook(conn, "task.created", row["id"], lambda: _task_facts(conn, row["id"], actor, parent_id=parent_id), actor, revision=0)
+    # Webhook subscribers receive task.created once; the starting step goes to Automations only.
     # Match hook()'s suppression: private reader replies must not wake automation bots.
     if made.get("step_id") and not NO_TRIGGERS.get():
         from . import automations
         automations.on_event(
             conn, "task.step_changed", row["id"],
             lambda: _task_facts(conn, row["id"], actor,
-                                change={"field": "step", "from": None, "to": made["step_id"]}),
+                                change={"field": "step", "from": None, "to": made["step_id"]}, initial_step=True),
             actor)
     from . import task_trigger_rules
     task_trigger_rules.created(conn, row["id"], actor)

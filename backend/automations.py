@@ -1216,17 +1216,22 @@ def fire(c, kind, payload, ref="", match=None, access=None, only=None):
     try:
         from . import task_trigger_rules
 
-        chain = CHAIN.get() or _turn_chain(c)
+        action_chain = CHAIN.get()
+        turn_chain = _turn_chain(c) if not action_chain else ()
+        chain = action_chain or turn_chain
         rule_chain = task_trigger_rules._CHAIN.get()
-        if len(chain) >= MAX_CHAIN:
+        if len(action_chain) >= MAX_CHAIN:
             return []
+        event = payload.get("event") if isinstance(payload, dict) else None
+        event_data = event.get("data") if isinstance(event, dict) else None
+        routine_created_task = bool(turn_chain and isinstance(event, dict) and
+                                    (event.get("name") == "task.created" or
+                                     isinstance(event_data, dict) and event_data.get("initial_step")))
         queued = []
         for row in c.execute("SELECT * FROM automations WHERE deleted_at IS NULL AND enabled=1 AND trigger_type=? "
                              + ("AND id=? " if only else "") + "ORDER BY created_at",
                              (kind, *((only,) if only else ()))).fetchall():
             row = dict(row)
-            if row["id"] in chain:
-                continue
             flow = flow_of(row)
             if flow.get("readonly"):   # a built-in that shows work Tico runs itself
                 continue
@@ -1235,13 +1240,23 @@ def fire(c, kind, payload, ref="", match=None, access=None, only=None):
                 continue
             if row["builtin"] and _stands_down(c, row["id"], trigger):
                 continue
-            if (access and not access(row)) or not F.all_hold(trigger.get("filters") or [], payload):
+            task_trigger = kind == "event" and not row["builtin"] and _task_trigger(trigger)
+            row_chain = chain
+            if turn_chain and task_trigger and not routine_created_task:
+                # A routine's own task is held at creation; its bot may still act on other tasks.
+                row_chain = action_chain
+            if row["id"] in row_chain:
+                continue
+            if len(row_chain) >= MAX_CHAIN:
+                continue
+            heard = _event_payload_for_owner(c, row, payload) if kind == "event" else payload
+            if (access and not access(row)) or not F.all_hold(trigger.get("filters") or [], heard):
                 _count(c, row["id"], "dropped")
                 continue
-            if (chain or rule_chain) and kind == "event" and not row["builtin"] and _task_trigger(trigger):
-                _chained_task_event(c, row, payload, chain, rule_action=bool(rule_chain and not chain))
+            if (row_chain or rule_chain) and task_trigger:
+                _chained_task_event(c, row, heard, row_chain, rule_action=bool(rule_chain and not row_chain))
                 continue
-            rid = queue(c, row, payload, ref, chain=(*chain, row["id"]))
+            rid = queue(c, row, heard, ref, chain=(*row_chain, row["id"]))
             if rid:
                 queued.append(rid)
         return queued
@@ -1256,11 +1271,35 @@ def _task_trigger(trigger):
     return (CAT.canonical(trigger.get("name")) or trigger.get("name")) in TASK_TRIGGER_EVENTS
 
 
+def _event_payload_for_owner(c, row, payload):
+    """A task event keeps its identifying fields, but private text reaches only an automation owner who can read it."""
+    task = payload.get("task") if isinstance(payload, dict) else None
+    tid = task.get("id") if isinstance(task, dict) else None
+    row_task = H.task(c, tid) if tid else None
+    if not row_task or not H.task_private(c, row_task):
+        return payload
+    from . import automation_actions as AA
+    if H.task_private_readable(c, AA.acts_as(c, {"flow": flow_of(row)}), row_task):
+        return payload
+    safe_task = {key: value for key, value in task.items() if key not in ("title", "body")}
+    event = payload.get("event") or {}
+    data = event.get("data")
+    safe_event = {**event, **({"data": {key: value for key, value in data.items() if key not in ("title", "body")}}
+                              if isinstance(data, dict) else {})}
+    return {**payload, "event": safe_event, "task": safe_task}
+
+
 def _chained_task_event(c, row, payload, chain, *, rule_action=False):
     """Skip a task-triggered automation that would extend an existing chain, and name its source in task history."""
     _count(c, row["id"], "dropped")
     subject = (payload.get("event") or {}).get("subject")
     if subject and H.task(c, subject):
+        event = payload.get("event") or {}
+        data = event.get("data") or {}
+        if data.get("initial_step") and c.execute(
+                "SELECT 1 FROM history_events WHERE subject_type='task' AND subject_id=? AND action_id=? "
+                "AND note LIKE 'Automation % did not run:%' LIMIT 1", (subject, row["id"])).fetchone():
+            return
         if rule_action:
             reason = "a Task Trigger Action made this change"
         else:
