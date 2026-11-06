@@ -4,7 +4,7 @@ The team is everyone: humans and bots. A **group** is a sub-team, and groups can
 bot. This page is who is in which group, which bots each group holds, and who each bot is mainly for.
 
 The chart in the app is the **Team** sidebar: each group is a section that opens and closes (its arrow), holding its humans
-and bots, with the groups inside it below them. A group's name opens its team page ([Overview](overview.md)). A human or bot with no group sits at the top. The top of the chart is not drawn as
+and bots, with the groups inside it below them. A group's name opens its team page ([Company](overview.md)). A human or bot with no group sits at the top. The top of the chart is not drawn as
 one more level: the owner, when nobody is above them and they are in no group (else the only human nobody is above), is a
 row of its own, and the groups, then the humans and bots, that report to them sit beside it rather than under it. Any other
 human nobody is above follows as an ordinary row with their reports under them. With no such top person it nests as before. The built-in bots (the Assistant, BotOps, the

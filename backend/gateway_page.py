@@ -1,4 +1,4 @@
-"""What Settings > Gateway shows and what an agent reads about the Tico AI Gateway's lineup.
+"""What the Tico Gateway card on Settings > Models shows and what an agent reads about the Tico AI Gateway's lineup.
 
 The catalog is backend/gateway_tiers.py's (HQ's, refreshed while the Gateway is connected, else this release's). The
 picks in use are counted from the bots' own settings: a bot counts once for each pick it uses, as its model, its
@@ -73,7 +73,7 @@ def _now(tier):
 
 
 def models(cat):
-    """The models table of Settings > Gateway: one row per level with its model and its Fast model. Every department
+    """The models table of the Gateway card: one row per level with its model and its Fast model. Every department
     runs a level on the same model today; if one ever differs, the rows are per department instead (`same` false).
     A tier that runs a held model is not shown (`gateway_tiers.live_row`)."""
     names = {row["id"]: row["name"] for row in cat["departments"]}
@@ -95,7 +95,7 @@ def models(cat):
 
 
 def overview(c, settings=None, *, owner=False):
-    """The Settings > Gateway page: the connection with this month's spend against its cap, the picks in use, the models
+    """The Tico Gateway card on Settings > Models: the connection with this month's spend against its cap, the picks in use, the models
     and the services."""
     cat = catalog(c, settings)
     rows, decide = picks(c, settings)

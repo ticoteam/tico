@@ -1,8 +1,7 @@
 // Settings has no dead ends (settings stage 1). Fixtures only.
 //  - every #/settings/<name> link the app draws opens a real tab: a name Settings doesn't know would land on General
 //    with nothing said, which is how "Picks and services" once opened Updates;
-//  - #/settings/gateway opens Gateway, #/settings/models opens Computers with the Models card in view, and the two links
-//    between them go there;
+//  - #/settings/gateway keeps opening its new home, the Tico Gateway card in AI models;
 //  - while a tab is shown the address bar names it (#/settings/<tab>), so it can be copied or shared: opening an address
 //    shows its tab's own, picking another tab follows without a history step, a reload reopens it, and a redraw
 //    (route() called again, as a status change does) keeps Settings and the tab; the old Rules and Routines
@@ -106,17 +105,16 @@ const address = page => page.evaluate(() => location.hash);
         if (known.tabs.includes(name)) assert.equal(await selected(page), await page.evaluate(n => settingsPlace(n).group, name), `#/settings/${name} opens that tab`);
       }
 
-      // Gateway and Models, by address and by the links between them.
+      // The old Gateway address opens the card's new home on AI models.
       await go(page, '#/settings/gateway');
       assert.equal(await selected(page), 'models');
+      await page.waitForFunction(() => {
+        const card = document.querySelector('#settings-gateway-card[data-drawn]'), r = card?.getBoundingClientRect();
+        return card && r && r.top < innerHeight && r.bottom > 0;
+      });
       await go(page, '#/settings/models');
       assert.equal(await selected(page), 'models');
-      await page.locator('#settings-gateway-card [data-gateway-advanced] > summary').click();
-      await page.locator('#settings-gateway-card a[href="#/settings/gateway"]').click();
-      await page.waitForFunction(() => location.hash === '#/settings/models' && SETTINGS_TAB === 'models');
-      await page.locator('[data-gateway-key-link]').click();
-      await page.waitForFunction(() => location.hash === '#/settings/models' && SETTINGS_TAB === 'models');
-      await page.waitForFunction(() => { const r = document.querySelector('#settings-models')?.getBoundingClientRect(); return r && r.top < innerHeight && r.bottom > 0; });
+      assert.equal(await page.locator('#settings-gateway-card').isVisible(), true, 'the Gateway controls live on Models');
 
       // A Settings address survives a refresh in a new tab: the address, not the last tab, decides.
       const fresh = await context.newPage();

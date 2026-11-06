@@ -76,6 +76,8 @@ const harnessRow = id => HARNESS_ROWS.find(row => row.id === id) || null;
 const harnessCaps = id => harnessRow(id)?.capabilities || {};
 const harnessesWith = test => HARNESS_ROWS.filter(row => row.capabilities && test(row.capabilities));
 const SETTINGS_TAB_KEY = 'tico.settings.tab';
+// A legacy Gateway address waits until its current Models card has rendered before scrolling to it.
+const SETTINGS_GATEWAY_CARD = '#settings-gateway-card[data-drawn]';
 // The group shown (SETTINGS_GROUPS key), remembered per browser tab so a reload lands where the person was; a first
 // visit opens You. Anything else set here (an old tab's name, from a link or the router) is mapped by settingsShow.
 let SETTINGS_TAB = (() => { try { return sessionStorage.getItem(SETTINGS_TAB_KEY) || 'you'; } catch { return 'you'; } })();
@@ -108,7 +110,7 @@ const SETTINGS_PLACES = {
   ceo: ['bots', '#set-strategy-bot-card'], 'strategy-bot': ['bots', '#set-strategy-bot-card'],
   devices: ['computers'], subscriptions: ['models', '#settings-subs'],
   providers: ['models'], chat: ['models'],   // chat: the old Chat tab, then the Models card; Models is AI models' first card
-  gateway: ['models', '#settings-gateway'], 'turn-levels': ['limits', '#settings-limits'],
+  gateway: ['models', '#settings-gateway-card'], 'turn-levels': ['limits', '#settings-limits'],
   billing: ['limits', '#settings-billing'],
   system: ['automation'], recurring: ['automation'], rules: ['automation'], routines: ['automation'],
   tags: ['tasks', '#settings-tags'], types: ['tasks', '#settings-types'],
@@ -248,7 +250,6 @@ function pageSettings() {
   const groups = SETTINGS_GROUPS.filter(g => !g.shown || g.shown());
   const pane = (key, body) => `<div class="settings-pane" id="settings-group-${key}" data-settings-group="${key}" role="tabpanel" aria-label="${esc(SETTINGS_GROUPS.find(g => g.key === key).label)}" hidden>${body}</div>`;
   $('#main').innerHTML = `<div class="meeting-head"><div><h1>Settings</h1>${settingsVersionHTML()}</div></div>
-    <div id="settings-issues"></div>
     <div class="settings-layout">
     <nav class="settings-groups" id="settings-tabs" data-role="${esc(S.me?.role || '')}" data-admin="${settingsIsAdmin()}" aria-label="Settings">
       <div class="settings-search" id="settings-search"></div>
@@ -259,7 +260,8 @@ function pageSettings() {
     </nav>
     <div class="settings-panes">
     <p class="settings-denied" id="settings-denied" role="status" hidden>That page is for admins.</p>
-    ${pane('you', `<section class="card" id="settings-theme-card"><header><h2>Theme</h2></header>${settingsThemeHTML()}</section>
+    ${pane('you', `<section class="card settings-health" id="settings-health-line" aria-label="Health"></section>
+      <section class="card" id="settings-theme-card"><header><h2>Theme</h2></header>${settingsThemeHTML()}</section>
       <section class="card" id="settings-assistant-pane"><header><h2>${esc(assistantName())}</h2><div class="row">
         <a class="ghost" href="${ASSISTANT}">Open chat</a>
         ${settingsCanManageBot(botRow(assistantBot())) ? `<a class="ghost" href="#/bot/${encodeURIComponent(assistantBot())}/more">Bot settings</a>` : ''}
@@ -273,7 +275,6 @@ function pageSettings() {
       <div id="settings-bots"><section class="card settings-bots-card" id="settings-bots-card"><header><h2>Bots</h2>${settingsCanCreateBots() ? '<div class="row"><button class="primary" type="button" id="settings-add-bot" disabled>Add bot</button><button class="ghost" type="button" id="settings-add-catalog" disabled><span class="sb-wide">Add from template</span><span class="sb-narrow">From template</span></button></div>' : ''}</header><div id="set-bots">${skelRows(3, {card: true, dot: false})}</div></section></div>`)}
     ${pane('models', `<div id="settings-models"><section class="card" id="settings-subs"><header><h2>Subscriptions</h2><button class="primary settings-head-act" type="button" id="subs-add" hidden>Add subscription</button></header><div id="set-subs">${skelRows(2, {card: true, dot: false})}</div></section>
       <section class="card" id="settings-gateway-card"><header><h2>Tico Gateway</h2></header><div id="set-gateway-card">${skelRows(1, {card: true, dot: false})}</div></section>
-      ${settingsIsAdmin() ? '<div id="settings-gateway"><div id="set-gateway-page"></div></div>' : ''}
       <section class="card" id="settings-defaults"><header><h2>Defaults</h2></header><div id="set-providers">${skelRows(3, {card: true, dot: false})}</div></section></div>
 `)}
     ${pane('computers', `<div id="settings-devices">
@@ -320,7 +321,8 @@ function pageSettings() {
       <section class="card" id="settings-company"><header><h2>Tico company</h2></header><div id="set-company"></div></section>
       ${S.me?.role === 'owner' ? `<section class="card" id="settings-storage"><header><h2>Storage</h2></header><div id="set-storage">${skelRows(3, {card: true, dot: false})}</div></section>
       <section class="card" id="settings-privacy"><header><h2>Privacy</h2></header><div id="set-privacy">${skelRows(3, {card: true, dot: false})}</div></section>` : ''}`) : ''}
-    ${pane('health', `<div id="settings-health"><div class="hl-page" id="hl-page"></div>
+    ${pane('health', `<div id="settings-health"><a class="settings-back" href="#/settings/you" data-settings-back>‹ You</a>
+      <div id="settings-issues"></div><div class="hl-page" id="hl-page"></div>
       ${hlSetupCheckHTML()}
       <section class="card" id="settings-services-card"><header><h2>Services</h2></header><div id="set-services">${skelRows(3, {card: true, dot: false})}</div></section></div>
       <div id="settings-history"><section class="card"><header><h2>History</h2>
@@ -425,6 +427,7 @@ function settingsShow(tab, {group: picked = false} = {}) {
   const loads = [];
   const load = (...calls) => loads.push(...calls.filter(Boolean));
   if (on('you')) {
+    window.hlSummaryDraw?.();
     load(renderSettingsAssistantApprovals(),
       // The owner's one click when the team has no Assistant (ui/assistant.js): restore it or add it.
       owner && window.assistantChat?.settingsStrip($('#settings-assistant'), {get, post, esc, toast, after: async () => { await refresh(true); renderSettingsBots(); }}),
@@ -433,10 +436,7 @@ function settingsShow(tab, {group: picked = false} = {}) {
   }
   if (on('people') && $('#settings-people') && !formBusy($('#settings-people'))) load(renderSettingsPeople());
   // Before the first load the form has no models or computers to show; loadSettings draws it then.
-  if (on('models')) {
-    if (SETTINGS_DATA.loaded) settingsModelsRender();
-    if ($('#settings-gateway')) load(renderSettingsGateway());
-  }
+  if (on('models') && SETTINGS_DATA.loaded) settingsModelsRender();
   settingsMachinesWatch();
   if (settingsMachinesVisible() && SETTINGS_DATA.loaded) void settingsMachinesRefresh();
   if (on('bots')) load(renderSettingsStrategyBot());

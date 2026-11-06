@@ -102,6 +102,7 @@ const {t} = (() => { try { return require('./support/load.cjs'); } catch { retur
 
     await page.goto('https://tico-ui.test/#/settings');
     // Settings' System checks card has none of these, since BotOps reviews them; Health lists each bot's as a note.
+    await page.waitForFunction(() => document.querySelector('#settings-health-line [data-hl-counts]'));
     await page.locator('[data-settings-tab=health]').click();
     const builderNote = page.locator('#hl-page .hl-notes [data-execution-review="builder"]');
     const writerNote = page.locator('#hl-page .hl-notes [data-execution-review="writer"]');

@@ -26,7 +26,7 @@ Health's **Stuck bots** check and `hub health check` name the bot, its queue spl
 that can start, jobs behind an interrupted run awaiting review, jobs held after repeated refusals until cooldown,
 jobs held on purpose), the oldest age, why it cannot
 start, and a fix or a command to inspect its runs. Work held on purpose never makes a bot stuck. The web Stuck list,
-Overview and the silent-computer line split the queue the same way. **Tasks not progressing** names visible bot tasks
+Company › Campus and the silent-computer line split the queue the same way. **Tasks not progressing** names visible bot tasks
 that nothing is set to move, the tasks Task Manager lists as stalled. Settings > Health shows the same summaries.
 **Questions nobody can read** names held tasks waiting on a system, missing or inactive recipient, or someone who
 can no longer read the task or any source, including bot activity. A synced bot without desktop delivery cannot
